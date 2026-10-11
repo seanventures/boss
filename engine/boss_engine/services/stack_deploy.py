@@ -1043,6 +1043,13 @@ def plan_stack_deploy(engine, settings: Settings, *, project_id: str, target_id:
         if target.get("status") != "active":
             raise StackDeployError(f"Target {target.get('app_name')!r} is {target.get('status')}.",
                                    "Restore the target, or deploy to an active one.")
+        from ..templates.deploy_guard import deploy_refusal
+
+        refused = deploy_refusal(connection, project_id,
+                                 target={**target, "repository": repository or target.get("repo")},
+                                 commit_ref=ref, source_run_id=run_id)
+        if refused:
+            raise StackDeployError(refused, refused.action, status_code=409)
         host = get_host(connection, str(target.get("host_id") or "")) if target.get("host_id") \
             else None
         if not host:

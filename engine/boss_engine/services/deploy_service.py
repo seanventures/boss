@@ -247,7 +247,8 @@ def _kill_process_group(argv: list[str]) -> None:
         pass
 
 
-def _ssh(key_path: str, host: str, user: str, port: int, command: str, timeout: int = 180):
+def _ssh(key_path: str, host: str, user: str, port: int, command: str, timeout: int = 180,
+         stdin_text: Optional[str] = None):
     """Run a command on the host. A host that does not answer is a RESULT, not an exception.
 
     Every caller here checks `returncode` — bootstrap, destroy, the deploy itself. Only one
@@ -271,13 +272,15 @@ def _ssh(key_path: str, host: str, user: str, port: int, command: str, timeout: 
             "-o", "ServerAliveInterval=10", "-o", "ServerAliveCountMax=3",
             # Never read the caller's stdin: an ssh that inherits a terminal can block waiting
             # on it forever, and BOSS runs these from API threads with no terminal at all.
-            "-n",
+            # (`stdin_text` is the one exception: a secret travels on stdin, never in argv.)
+            *([] if stdin_text is not None else ["-n"]),
             "-p", str(port), f"{user}@{host}", command]
     try:
         # start_new_session puts ssh in its OWN process group, so the timeout path can kill the
         # whole tree rather than just the process Python is holding.
         result = owned_process.run(argv, capture_output=True, text=True, timeout=timeout,
-                                   start_new_session=True)
+                                   start_new_session=True,
+                                   **({"input": stdin_text} if stdin_text is not None else {}))
         from .host_key_pin import note_result
 
         changed = note_result(result.returncode, result.stderr or "")
@@ -376,8 +379,23 @@ def _rm_rf_cmd(path: str) -> str:
             f"true")
 
 
+def app_env_file(remote: str) -> str:
+    """Where a deploy writes the app's secrets for `docker run --env-file` (mode 600, outside dist
+    so a release or a rollback never moves it)."""
+    return f"{remote}/.boss/app.env"
+
+
+def _app_env_text(values: dict) -> str:
+    """docker's --env-file format: KEY=VALUE, literal, one per line (no quoting, no newlines)."""
+    for key, value in values.items():
+        if "\n" in str(value) or "\r" in str(value):
+            raise ValueError(f"app secret {key} holds a line break, which a container environment "
+                             "cannot carry; set it again as a single line")
+    return "".join(f"{k}={v}\n" for k, v in values.items())
+
+
 def _docker_run_cmd(app: str, app_port: int, remote: str, mode: str = "static",
-                    entry: str = "") -> str:
+                    entry: str = "", env_file: str = "") -> str:
     """Start the app container, tolerating the port not being free *yet*.
 
     `entry` (mode "py") is the shell command that starts the app from /app, as
@@ -393,6 +411,7 @@ def _docker_run_cmd(app: str, app_port: int, remote: str, mode: str = "static",
     """
     app_q = shlex.quote(app)
     remote_q = shlex.quote(remote)
+    env_opt = f"--env-file {shlex.quote(env_file)} " if env_file else ""
     if mode == "node":
         # A Node server, run the way its own package.json says to.
         #
@@ -404,7 +423,7 @@ def _docker_run_cmd(app: str, app_port: int, remote: str, mode: str = "static",
         #
         # Same contract as the py mode: writable mount for code, a SEPARATE /data mount that
         # deploys never replace, HOST/PORT from the environment.
-        run = (f"docker run -d --name {app_q} --restart unless-stopped -p {int(app_port)}:80 "
+        run = (f"docker run -d --name {app_q} --restart unless-stopped {env_opt}-p {int(app_port)}:80 "
                f"{_OWNERSHIP_LABELS.format(app=app_q)} "
                f"-v {remote_q}/dist:/app -v {remote_q}/data:/data -w /app "
                f"-e PORT=80 -e HOST=0.0.0.0 -e DATA_DIR=/data -e NODE_ENV=production "
@@ -421,13 +440,13 @@ def _docker_run_cmd(app: str, app_port: int, remote: str, mode: str = "static",
         # DATA_DIR is a SEPARATE mount that deploys never touch, so an app can keep state that
         # survives a release. Anything written under /app is replaced by the next deployment —
         # which is correct for code and destructive for data.
-        run = (f"docker run -d --name {app_q} --restart unless-stopped -p {int(app_port)}:80 "
+        run = (f"docker run -d --name {app_q} --restart unless-stopped {env_opt}-p {int(app_port)}:80 "
                f"{_OWNERSHIP_LABELS.format(app=app_q)} "
                f"-v {remote_q}/dist:/app -v {remote_q}/data:/data -w /app "
                f"-e PORT=80 -e HOST=0.0.0.0 -e DATA_DIR=/data -e PYTHONDONTWRITEBYTECODE=1 "
                f"python:3.12-slim sh -c {shlex.quote(entry)}")
     else:
-        run = (f"docker run -d --name {app_q} --restart unless-stopped -p {int(app_port)}:80 "
+        run = (f"docker run -d --name {app_q} --restart unless-stopped {env_opt}-p {int(app_port)}:80 "
                f"{_OWNERSHIP_LABELS.format(app=app_q)} "
                f"-v {remote_q}/dist:/usr/share/nginx/html:ro nginx:alpine")
     return (
@@ -485,7 +504,8 @@ def _await_healthy(key_path, host: str, user: str, ssh_port: int, app_port: int,
     return code, int(time.monotonic() - started)
 
 def _rollback_remote(key_path: str, host: str, user: str, ssh_port: int, *, remote: str,
-                     app: str, app_port: int, mode: str = "static", entry: str = ""):
+                     app: str, app_port: int, mode: str = "static", entry: str = "",
+                     env_file: str = ""):
     """Restore staged previous dist and ensure a container is serving it.
 
     Called after transfer wipe, docker-run failure (live container already removed), or a
@@ -498,7 +518,7 @@ def _rollback_remote(key_path: str, host: str, user: str, ssh_port: int, *, remo
         f"if [ -d {remote_q}/dist.prev ]; then "
         f"{_rm_rf_cmd(remote + '/dist')} && mv {remote_q}/dist.prev {remote_q}/dist; fi; "
         f"if docker inspect {app_q} >/dev/null 2>&1; then docker restart {app_q}; "
-        f"else {_docker_run_cmd(app, app_port, remote, mode, entry)}; fi || true",
+        f"else {_docker_run_cmd(app, app_port, remote, mode, entry, env_file)}; fi || true",
         timeout=180,
     )
 
@@ -751,7 +771,8 @@ def deploy_ssh(engine, settings: Settings, run_id: str, *, host: str, user: str 
                ref: Optional[str] = None, key_material: Optional[str] = None,
                source: Optional[dict] = None,
                app_entry: Optional[str] = None,
-               governance: Optional[dict] = None) -> dict:
+               governance: Optional[dict] = None,
+               app_env: Optional[dict] = None) -> dict:
     """Actuate the deploy plan on a real host: build dist -> transfer -> nginx -> health-gate.
     On transfer/docker/health failure after staging, ROLL BACK to the previous build (Phase 3).
     Gated behind the outward-action flag + an SSH key; NEVER touches a host otherwise.
@@ -804,6 +825,7 @@ def deploy_ssh(engine, settings: Settings, run_id: str, *, host: str, user: str 
     # Bound before the try: the rollback paths below read them, and a build that raises would
     # otherwise turn a deploy failure into a NameError that hides it.
     mode, entry = "static", ""
+    env_file = ""
     needs_rollback = False
     rolled_back = False
     try:
@@ -863,16 +885,32 @@ def deploy_ssh(engine, settings: Settings, run_id: str, *, host: str, user: str 
             shell=True, capture_output=True, text=True, timeout=600)
         if tar.returncode != 0:
             _rollback_remote(key_path, host, user, ssh_port, remote=remote, app=app,
-                             app_port=app_port, mode=mode, entry=entry)
+                             app_port=app_port, mode=mode, entry=entry, env_file=env_file)
             rolled_back = True
             raise RuntimeError(f"transfer failed: {(tar.stderr or '')[:900]}")
+        if app_env:                                                             # 5a app secrets
+            # The app's deploy secrets (templates.secrets.values_for_env, read by the governed
+            # apply) go to the host on ssh's STDIN into a mode-600 file — never into argv, a
+            # log line, the run record or the ChangeSet.
+            env_file = app_env_file(remote)
+            q = shlex.quote(env_file)
+            wrote = _ssh(key_path, host, user, ssh_port,
+                         f"set -e; umask 077; mkdir -p {shlex.quote(remote + '/.boss')}; "
+                         f"cat > {q}.tmp; mv {q}.tmp {q}; chmod 600 {q}; echo BOSS_ENV_WRITTEN",
+                         timeout=60, stdin_text=_app_env_text(app_env))
+            if wrote.returncode != 0 or "BOSS_ENV_WRITTEN" not in (wrote.stdout or ""):
+                _rollback_remote(key_path, host, user, ssh_port, remote=remote, app=app,
+                                 app_port=app_port, mode=mode, entry=entry)
+                rolled_back = True
+                raise RuntimeError("could not write the app's environment on the host: "
+                                   f"{(wrote.stderr or '')[:300]}")
         dep = _ssh(key_path, host, user, ssh_port,                              # 5 deploy nginx
                    f"docker rm -f {shlex.quote(app)} 2>/dev/null; "
-                   f"{_docker_run_cmd(app, app_port, remote, mode, entry)}")
+                   f"{_docker_run_cmd(app, app_port, remote, mode, entry, env_file)}")
         if dep.returncode != 0:
             # Live container was removed above — restore previous dist and re-run nginx.
             _rollback_remote(key_path, host, user, ssh_port, remote=remote, app=app,
-                             app_port=app_port, mode=mode, entry=entry)
+                             app_port=app_port, mode=mode, entry=entry, env_file=env_file)
             rolled_back = True
             with begin(engine) as c:
                 emit_event(c, project_id, "deploy.rolled_back", "boss", "code_task_run", run_id,
@@ -882,7 +920,7 @@ def deploy_ssh(engine, settings: Settings, run_id: str, *, host: str, user: str 
         code, waited = _await_healthy(key_path, host, user, ssh_port, int(app_port))  # 6 health gate
         if not code.startswith("2"):                                           # Phase 3 rollback
             _rollback_remote(key_path, host, user, ssh_port, remote=remote, app=app,
-                             app_port=app_port, mode=mode, entry=entry)
+                             app_port=app_port, mode=mode, entry=entry, env_file=env_file)
             rolled_back = True
             with begin(engine) as c:
                 emit_event(c, project_id, "deploy.rolled_back", "boss", "code_task_run", run_id,
@@ -914,7 +952,7 @@ def deploy_ssh(engine, settings: Settings, run_id: str, *, host: str, user: str 
         if needs_rollback and not rolled_back:
             try:
                 _rollback_remote(key_path, host, user, ssh_port, remote=remote, app=app,
-                                 app_port=app_port, mode=mode, entry=entry)
+                                 app_port=app_port, mode=mode, entry=entry, env_file=env_file)
             except Exception:  # noqa: BLE001 — never mask the original failure
                 pass
         raise

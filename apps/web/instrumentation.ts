@@ -26,9 +26,8 @@ export async function register(): Promise<void> {
 
   // THE PERSON, NOT A KEY (lib/identity/forward.ts): every server-side call to the API carries
   // the browser's identity cookies, and a write also carries the session's CSRF token and the
-  // browser's origin. The token is read from /v1/identity/me once per session and kept briefly
-  // (it is an HMAC of the session id, so it cannot change while the session lives).
-  const csrfBySession = new Map<string, { token: string; at: number }>();
+  // browser's origin. The token comes from the render's own /me (forward.ts sessionCsrf); a
+  // second /me is asked only when nothing in this process has seen the session's.
   forward.installIdentityResolver(async (writing, target) => {
     const incoming = await headers();
     // The client's address through the trusted-proxy rule (B2): every server-side call carries it.
@@ -47,21 +46,7 @@ export async function register(): Promise<void> {
     const origin = forward.forwardedWriteOrigin(incoming, { pageRead });
     let csrf = incoming.get(forward.CSRF_HEADER_LC);
     const session = forward.parseIdentityCookies(cookie)[forward.SESSION_COOKIE];
-    if (writing && !csrf && session && API_URL) {
-      const kept = csrfBySession.get(session);
-      if (kept && Date.now() - kept.at < 60_000) csrf = kept.token;
-      else {
-        const me = await fetch(`${API_URL}/v1/identity/me`, { cache: "no-store" });
-        if (me.ok) {
-          const token = String(((await me.json()) as { csrf_token?: unknown }).csrf_token ?? "");
-          if (token) {
-            csrf = token;
-            if (csrfBySession.size > 500) csrfBySession.clear();
-            csrfBySession.set(session, { token, at: Date.now() });
-          }
-        }
-      }
-    }
+    if (writing && !csrf && session && API_URL) csrf = await forward.sessionCsrf(session, API_URL);
     return { cookie, csrf: csrf ?? null, origin, consoleOrigin: forward.consoleOriginOf(incoming), clientHop };
   });
 }

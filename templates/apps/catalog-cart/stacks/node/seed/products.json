@@ -1,0 +1,222 @@
+[
+  {
+    "id": "p01",
+    "sku": "SKU-001",
+    "name": "Canvas tote bag",
+    "description": "A sturdy cotton canvas tote with an inner pocket.",
+    "price_cents": 1999,
+    "currency": "usd",
+    "image_url": "/images/products/p01.jpg",
+    "stock": 40,
+    "active": true
+  },
+  {
+    "id": "p02",
+    "sku": "SKU-002",
+    "name": "Ceramic mug",
+    "description": "A 350 ml stoneware mug, dishwasher safe.",
+    "price_cents": 1450,
+    "currency": "usd",
+    "image_url": "/images/products/p02.jpg",
+    "stock": 25,
+    "active": true
+  },
+  {
+    "id": "p03",
+    "sku": "SKU-003",
+    "name": "Enamel pin set",
+    "description": "Three enamel pins in a gift card.",
+    "price_cents": 1200,
+    "currency": "usd",
+    "image_url": "/images/products/p03.jpg",
+    "stock": 3,
+    "active": true
+  },
+  {
+    "id": "p04",
+    "sku": "SKU-004",
+    "name": "Linen notebook",
+    "description": "A5 notebook, 192 dotted pages, lay-flat binding.",
+    "price_cents": 2400,
+    "currency": "usd",
+    "image_url": "/images/products/p04.jpg",
+    "stock": 60,
+    "active": true
+  },
+  {
+    "id": "p05",
+    "sku": "SKU-005",
+    "name": "Brass pen",
+    "description": "A solid brass ballpoint pen that refills with standard cartridges.",
+    "price_cents": 3850,
+    "currency": "usd",
+    "image_url": "/images/products/p05.jpg",
+    "stock": 15,
+    "active": true
+  },
+  {
+    "id": "p06",
+    "sku": "SKU-006",
+    "name": "Desk lamp",
+    "description": "An aluminium desk lamp with a warm LED.",
+    "price_cents": 6900,
+    "currency": "usd",
+    "image_url": "/images/products/p06.jpg",
+    "stock": 8,
+    "active": true
+  },
+  {
+    "id": "p07",
+    "sku": "SKU-007",
+    "name": "Wool beanie",
+    "description": "A merino wool beanie, one size.",
+    "price_cents": 2800,
+    "currency": "usd",
+    "image_url": "/images/products/p07.jpg",
+    "stock": 30,
+    "active": true
+  },
+  {
+    "id": "p08",
+    "sku": "SKU-008",
+    "name": "Water bottle",
+    "description": "A 750 ml insulated steel bottle.",
+    "price_cents": 2999,
+    "currency": "usd",
+    "image_url": "/images/products/p08.jpg",
+    "stock": 50,
+    "active": true
+  },
+  {
+    "id": "p09",
+    "sku": "SKU-009",
+    "name": "Cork coaster set",
+    "description": "Four cork coasters.",
+    "price_cents": 999,
+    "currency": "usd",
+    "image_url": "/images/products/p09.jpg",
+    "stock": 100,
+    "active": true
+  },
+  {
+    "id": "p10",
+    "sku": "SKU-010",
+    "name": "Plant pot",
+    "description": "A terracotta pot with a saucer, 12 cm.",
+    "price_cents": 1599,
+    "currency": "usd",
+    "image_url": "/images/products/p10.jpg",
+    "stock": 20,
+    "active": true
+  },
+  {
+    "id": "p11",
+    "sku": "SKU-011",
+    "name": "Travel adapter",
+    "description": "A universal travel adapter with two USB-C ports.",
+    "price_cents": 3499,
+    "currency": "usd",
+    "image_url": "/images/products/p11.jpg",
+    "stock": 12,
+    "active": true
+  },
+  {
+    "id": "p12",
+    "sku": "SKU-012",
+    "name": "Sticker pack",
+    "description": "Ten weatherproof vinyl stickers.",
+    "price_cents": 699,
+    "currency": "usd",
+    "image_url": "/images/products/p12.jpg",
+    "stock": 200,
+    "active": true
+  },
+  {
+    "id": "p13",
+    "sku": "SKU-013",
+    "name": "Canvas apron",
+    "description": "A waxed canvas apron with leather straps.",
+    "price_cents": 4500,
+    "currency": "usd",
+    "image_url": "/images/products/p13.jpg",
+    "stock": 10,
+    "active": true
+  },
+  {
+    "id": "p14",
+    "sku": "SKU-014",
+    "name": "Wall calendar",
+    "description": "A 12-month wall calendar printed on recycled paper.",
+    "price_cents": 1800,
+    "currency": "usd",
+    "image_url": "/images/products/p14.jpg",
+    "stock": 35,
+    "active": true
+  },
+  {
+    "id": "p15",
+    "sku": "SKU-015",
+    "name": "Bamboo cutlery set",
+    "description": "A fork, knife, spoon and chopsticks in a pouch.",
+    "price_cents": 1350,
+    "currency": "usd",
+    "image_url": "/images/products/p15.jpg",
+    "stock": 45,
+    "active": true
+  },
+  {
+    "id": "p16",
+    "sku": "SKU-016",
+    "name": "Scented candle",
+    "description": "A soy wax candle, 40 hours.",
+    "price_cents": 2250,
+    "currency": "usd",
+    "image_url": "/images/products/p16.jpg",
+    "stock": 18,
+    "active": true
+  },
+  {
+    "id": "p17",
+    "sku": "SKU-017",
+    "name": "Phone stand",
+    "description": "An adjustable aluminium phone stand.",
+    "price_cents": 1999,
+    "currency": "usd",
+    "image_url": "/images/products/p17.jpg",
+    "stock": 0,
+    "active": true
+  },
+  {
+    "id": "p18",
+    "sku": "SKU-018",
+    "name": "Card game",
+    "description": "A card game for two to six players.",
+    "price_cents": 2499,
+    "currency": "usd",
+    "image_url": "/images/products/p18.jpg",
+    "stock": 22,
+    "active": true
+  },
+  {
+    "id": "p19",
+    "sku": "SKU-019",
+    "name": "Retired poster",
+    "description": "A poster that is no longer sold.",
+    "price_cents": 1500,
+    "currency": "usd",
+    "image_url": "/images/products/p19.jpg",
+    "stock": 5,
+    "active": false
+  },
+  {
+    "id": "p20",
+    "sku": "SKU-020",
+    "name": "Old mug design",
+    "description": "A mug design that has been withdrawn.",
+    "price_cents": 1300,
+    "currency": "usd",
+    "image_url": "/images/products/p20.jpg",
+    "stock": 7,
+    "active": false
+  }
+]

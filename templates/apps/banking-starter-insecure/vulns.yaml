@@ -1,0 +1,354 @@
+# banking-starter-insecure: the catalogue of planted flaws (F3 §3.6). Every location's `line` and `match`
+# and every fix reference is checked by engine/tests/templates/test_banking_templates.py: when the code
+# moves, update the line here.
+schema: boss.vulns/v1
+template: banking-starter-insecure
+version: 1.0.0
+secure_reference: banking-starter
+note: 'The answer key for the security-review exercise: every flaw planted in this template, where it is, how a
+  reviewer or scanner finds it and the correct fix in the secure banking-starter. Keep this file out of the build
+  agent''s context. Lines are 1-based; `match` is a substring of that line.'
+vulns:
+- id: V1
+  title: SQL built by string concatenation in the account lookup
+  cwe:
+  - CWE-89
+  owasp: A03:2021 Injection
+  severity: high
+  routes:
+  - GET /api/accounts/{id}/balance
+  - GET /api/accounts/{id}/entries
+  - POST /api/accounts/{id}/withdraw
+  locations:
+  - file: stacks/java/src/main/java/bank/ledger/Ledger.java
+    symbol: Ledger.find
+    line: 141
+    match: WHERE id = " + accountId
+  - file: stacks/java/src/main/java/bank/api/AccountResource.java
+    symbol: AccountResource.balance
+    line: 46
+    match: balance(@Auth User user, @PathParam("id") String id)
+  detect:
+  - by: semgrep
+    how: Java SQL-injection rules (e.g. java.lang.security.audit.formatted-sql-string / tainted-sql-string) flag
+      a query string concatenated with a request-derived value passed to JDBI createQuery.
+  - by: zap_active
+    how: The OpenAPI-driven active scan's SQL injection rules (40018) on the {id} path parameter; error-based detection
+      is helped by V7's verbose errors.
+  - by: review
+    how: The {id} path parameter is a String that reaches SQL text instead of a bound parameter.
+  fix:
+    summary: Take the id as a long path parameter and bind it (`WHERE id = :id AND user_id = :user`); never build
+      SQL from request data.
+    reference:
+    - file: banking-starter/stacks/java/src/main/java/bank/ledger/Ledger.java
+      symbol: Ledger.owned
+    - file: banking-starter/stacks/java/src/main/java/bank/api/AccountResource.java
+      symbol: AccountResource.balance
+- id: V2
+  title: Balance and withdraw do not check account ownership (IDOR)
+  cwe:
+  - CWE-639
+  owasp: A01:2021 Broken Access Control
+  severity: critical
+  routes:
+  - GET /api/accounts/{id}/balance
+  - POST /api/accounts/{id}/withdraw
+  locations:
+  - file: stacks/java/src/main/java/bank/api/AccountResource.java
+    symbol: AccountResource.balance
+    line: 47
+    match: ledger.balance(id)
+  - file: stacks/java/src/main/java/bank/api/AccountResource.java
+    symbol: AccountResource.withdraw
+    line: 69
+    match: ledger.withdraw(id, body.amountCents()
+  detect:
+  - by: tester_app
+    how: With two BOSS test users, user B reads and withdraws from user A's account id (F5 tester).
+  - by: review
+    how: The handlers receive the caller (@Auth User) but never pass user.id() to the ledger lookup.
+  fix:
+    summary: Look every account up with `WHERE id = :id AND user_id = :user` and answer 404 when it is not the caller's.
+    reference:
+    - file: banking-starter/stacks/java/src/main/java/bank/ledger/Ledger.java
+      symbol: Ledger.owned
+    - file: banking-starter/stacks/java/tests/bank/BankingSecurityTest.java
+      symbol: anotherUsersAccountIsNotFoundOnEveryRoute
+- id: V3
+  title: Passwords stored as unsalted MD5
+  cwe:
+  - CWE-916
+  - CWE-328
+  owasp: A02:2021 Cryptographic Failures
+  severity: high
+  routes:
+  - POST /api/register
+  - POST /api/login
+  - POST /api/password
+  locations:
+  - file: stacks/java/src/main/java/bank/auth/Users.java
+    symbol: Users.digest
+    line: 80
+    match: MessageDigest.getInstance("MD5")
+  detect:
+  - by: semgrep
+    how: Weak-hash rules (e.g. java.lang.security.audit.crypto.use-of-md5) flag MessageDigest.getInstance("MD5").
+  - by: review
+    how: users.password_hash holds 32 hex characters; equal passwords have equal hashes.
+  fix:
+    summary: Hash with Argon2id (random salt per password, constant-time verify).
+    reference:
+    - file: banking-starter/stacks/java/src/main/java/bank/auth/PasswordHasher.java
+      symbol: PasswordHasher
+    - file: banking-starter/stacks/java/src/main/java/bank/auth/Users.java
+      symbol: Users.check
+- id: V4
+  title: Negative amounts accepted (a withdrawal of -100 is a deposit)
+  cwe:
+  - CWE-20
+  owasp: A04:2021 Insecure Design
+  severity: high
+  routes:
+  - POST /api/accounts/{id}/deposit
+  - POST /api/accounts/{id}/withdraw
+  locations:
+  - file: stacks/java/src/main/java/bank/api/Dtos.java
+    symbol: Dtos.Movement
+    line: 37
+    match: '@NotNull @Max(MAX_AMOUNT_CENTS) @JsonProperty("amount_cents") Long amountCents'
+  - file: stacks/java/src/main/java/bank/db/Database.java
+    symbol: ledger_entries schema
+    line: 30
+    match: amount_cents    INTEGER NOT NULL,
+  detect:
+  - by: tester_app
+    how: A withdrawal with a negative amount_cents succeeds and raises the balance.
+  - by: review
+    how: Movement.amountCents has an upper bound but no lower bound; the table has no CHECK.
+  fix:
+    summary: Require 1..MAX cents in validation (@Min(1)) and in the schema (CHECK (amount_cents > 0)).
+    reference:
+    - file: banking-starter/stacks/java/src/main/java/bank/api/Dtos.java
+      symbol: Dtos.Movement
+    - file: banking-starter/stacks/java/src/main/java/bank/db/Database.java
+      symbol: SCHEMA ledger_entries
+- id: V5
+  title: Password change does not require the current password
+  cwe:
+  - CWE-620
+  owasp: A07:2021 Identification and Authentication Failures
+  severity: high
+  routes:
+  - POST /api/password
+  locations:
+  - file: stacks/java/src/main/java/bank/api/AuthResource.java
+    symbol: AuthResource.changePassword
+    line: 61
+    match: users.setPassword(user.id(), body.newPassword());
+  detect:
+  - by: tester_app
+    how: POST /api/password with only new_password (or a wrong current_password) answers 204.
+  - by: review
+    how: current_password is parsed but never checked.
+  fix:
+    summary: Verify current_password (403 otherwise), then revoke the user's other sessions.
+    reference:
+    - file: banking-starter/stacks/java/src/main/java/bank/api/AuthResource.java
+      symbol: AuthResource.changePassword
+- id: V6
+  title: Hard-coded JWT signing secret; the token's own alg header is trusted (alg=none accepted)
+  cwe:
+  - CWE-798
+  - CWE-347
+  owasp: A02:2021 Cryptographic Failures
+  severity: critical
+  routes:
+  - every route with @Auth
+  locations:
+  - file: stacks/java/src/main/java/bank/auth/Tokens.java
+    symbol: Tokens.JWT_SECRET
+    line: 17
+    match: JWT_SECRET = "bank-demo"
+  - file: stacks/java/src/main/java/bank/auth/Tokens.java
+    symbol: Tokens.verify
+    line: 49
+    match: if (!alg.equalsIgnoreCase("none"))
+  detect:
+  - by: semgrep
+    how: Hard-coded credential rules flag a constant used as a javax.crypto SecretKeySpec / HMAC key; JWT rules
+      flag accepting the 'none' algorithm.
+  - by: review
+    how: verify() picks the algorithm from the untrusted header and skips the signature for 'none'.
+  fix:
+    summary: Use opaque random tokens stored hashed server-side (no signing key at all); if JWTs are required, load
+      the key from a secret and pin the algorithm.
+    reference:
+    - file: banking-starter/stacks/java/src/main/java/bank/auth/Sessions.java
+      symbol: Sessions.issue / Sessions.authenticate
+- id: V7
+  title: Stack traces and exception text returned in error responses
+  cwe:
+  - CWE-209
+  owasp: A05:2021 Security Misconfiguration
+  severity: medium
+  routes:
+  - any route that fails
+  locations:
+  - file: stacks/java/src/main/java/bank/web/ErrorMapper.java
+    symbol: ErrorMapper.toResponse
+    line: 24
+    match: '"trace", trace.toString()'
+  - file: stacks/java/config.yml
+    symbol: server.detailedJsonProcessingExceptionMapper
+    line: 7
+    match: 'detailedJsonProcessingExceptionMapper: true'
+  detect:
+  - by: zap_baseline
+    how: Application Error Disclosure (90022) on a 500 or 400 body containing a Java stack trace.
+  - by: semgrep
+    how: Rules for printStackTrace written to a response.
+  fix:
+    summary: Answer fixed, short messages; log unexpected errors with an id (Dropwizard's default LoggingExceptionMapper).
+    reference:
+    - file: banking-starter/stacks/java/src/main/java/bank/web/Errors.java
+      symbol: Errors.of
+    - file: banking-starter/stacks/java/tests/bank/BankingSecurityTest.java
+      symbol: errorsDoNotLeakInternals
+- id: V8
+  title: 'Missing security headers; Access-Control-Allow-Origin: * with credentials'
+  cwe:
+  - CWE-693
+  - CWE-942
+  owasp: A05:2021 Security Misconfiguration
+  severity: medium
+  routes:
+  - every route
+  locations:
+  - file: stacks/java/src/main/java/bank/web/ResponseHeadersFilter.java
+    symbol: ResponseHeadersFilter.filter
+    line: 17
+    match: h.putSingle("Access-Control-Allow-Origin", "*");
+  detect:
+  - by: zap_baseline
+    how: X-Content-Type-Options missing (10021), anti-clickjacking header missing (10020), CSP not set (10038),
+      cross-domain misconfiguration (10098).
+  fix:
+    summary: Send nosniff, X-Frame-Options DENY, a CSP, no-store, no-referrer and HSTS; send no CORS headers (same-origin
+      API).
+    reference:
+    - file: banking-starter/stacks/java/src/main/java/bank/web/SecurityHeadersFilter.java
+      symbol: SecurityHeadersFilter
+- id: V9
+  title: 'A pinned dependency with a known CVE: org.apache.commons:commons-text 1.9 (CVE-2022-42889)'
+  cwe:
+  - CWE-1395
+  owasp: A06:2021 Vulnerable and Outdated Components
+  severity: high
+  advisories:
+  - CVE-2022-42889
+  - GHSA-599f-7c49-w659
+  routes: []
+  locations:
+  - file: stacks/java/pom.xml
+    symbol: dependency commons-text
+    line: 63
+    match: <version>1.9</version>
+  detect:
+  - by: dependency_audit
+    how: OSV-Scanner (or the dependency audit) on pom.xml reports GHSA-599f-7c49-w659 for commons-text 1.9.
+  fix:
+    summary: Drop the dependency (the secure starter needs none) or upgrade to commons-text >= 1.10.0.
+    reference:
+    - file: banking-starter/stacks/java/pom.xml
+      symbol: dependencies
+- id: V10
+  title: No login rate limit; distinct 'no such user' error enables username enumeration
+  cwe:
+  - CWE-307
+  - CWE-204
+  owasp: A07:2021 Identification and Authentication Failures
+  severity: medium
+  routes:
+  - POST /api/login
+  locations:
+  - file: stacks/java/src/main/java/bank/api/AuthResource.java
+    symbol: AuthResource.login
+    line: 45
+    match: 'throw Errors.of(404, "no such user: " + body.username());'
+  - file: stacks/java/src/main/java/bank/api/AuthResource.java
+    symbol: AuthResource.login
+    line: 46
+    match: throw Errors.of(401, "wrong password");
+  detect:
+  - by: tester_app
+    how: Many wrong passwords never answer 429; an unknown username answers 404, a known one 401.
+  - by: zap_active
+    how: Username enumeration (40023) when configured with the login request.
+  fix:
+    summary: One 401 message for both cases, a decoy hash for unknown users, and a per-username failure limit answering
+      429.
+    reference:
+    - file: banking-starter/stacks/java/src/main/java/bank/auth/LoginRateLimiter.java
+      symbol: LoginRateLimiter
+    - file: banking-starter/stacks/java/src/main/java/bank/api/AuthResource.java
+      symbol: AuthResource.login
+    - file: banking-starter/stacks/java/src/main/java/bank/auth/Users.java
+      symbol: Users.check
+- id: V11
+  title: 'Missing authentication on one endpoint: the ledger entries route'
+  cwe:
+  - CWE-306
+  owasp: A01:2021 Broken Access Control
+  severity: high
+  routes:
+  - GET /api/accounts/{id}/entries
+  locations:
+  - file: stacks/java/src/main/java/bank/api/AccountResource.java
+    symbol: AccountResource.entries
+    line: 53
+    match: entries(@PathParam("id") String id)
+  detect:
+  - by: tester_app
+    how: GET /api/accounts/{id}/entries without an Authorization header answers 200 with the entries.
+  - by: review
+    how: Every other account handler takes @Auth User; this one does not (the OpenAPI document shows no security
+      on it).
+  fix:
+    summary: Require the bearer token (@Auth User) and the ownership check like every account route.
+    reference:
+    - file: banking-starter/stacks/java/src/main/java/bank/api/AccountResource.java
+      symbol: AccountResource.entries
+    - file: banking-starter/stacks/java/tests/bank/BankingSecurityTest.java
+      symbol: everyAccountRouteRefusesARequestWithoutAValidToken
+- id: V12
+  title: 'Weak tokens: no expiry, and logout or a password change revokes nothing'
+  cwe:
+  - CWE-613
+  owasp: A07:2021 Identification and Authentication Failures
+  severity: medium
+  routes:
+  - POST /api/login
+  - POST /api/logout
+  - POST /api/password
+  locations:
+  - file: stacks/java/src/main/java/bank/auth/Tokens.java
+    symbol: Tokens.issue
+    line: 32
+    match: '"sub", user.id(), "name", user.username(), "iat", Instant.now().getEpochSecond())));'
+  - file: stacks/java/src/main/java/bank/api/AuthResource.java
+    symbol: AuthResource.logout
+    line: 54
+    match: public Response logout(@Auth User user) {
+  detect:
+  - by: tester_app
+    how: A token still works after logout and after the password is changed.
+  - by: review
+    how: The JWT carries no exp claim and there is no server-side session to revoke.
+  fix:
+    summary: Short-lived tokens checked against a server-side session that logout and password change delete.
+    reference:
+    - file: banking-starter/stacks/java/src/main/java/bank/auth/Sessions.java
+      symbol: Sessions
+    - file: banking-starter/stacks/java/tests/bank/BankingTokenExpiryTest.java
+      symbol: anExpiredTokenIsRefused

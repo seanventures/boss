@@ -133,7 +133,8 @@ def live_state(db: Any, *, org_id: str, mode: RunMode, sub: str, chain: ActorCha
         if not grants.is_live(grant):
             raise _invalid("grant_inactive")
         if not agents or not grants.names_agent(grant, agents[0].agent_id):
-            raise _invalid("grant_does_not_name_agent")
+            # WHICH agent, so the refusal a person reads can name it (an agent id is no secret).
+            raise _invalid("grant_does_not_name_agent:" + (agents[0].agent_id if agents else "none"))
         if not grants.run_matches(grant, task.run_id):
             raise _invalid("grant_task_mismatch")
         if task.project_id and task.project_id not in grant.project_ids:

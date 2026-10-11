@@ -1,0 +1,193 @@
+{
+ "version": "2.1.0",
+ "runs": [
+  {
+   "invocations": [
+    {
+     "executionSuccessful": true,
+     "toolExecutionNotifications": []
+    }
+   ],
+   "results": [
+    {
+     "fingerprints": {
+      "matchBasedId/v1": "requires login"
+     },
+     "locations": [
+      {
+       "physicalLocation": {
+        "artifactLocation": {
+         "uri": "server.js",
+         "uriBaseId": "%SRCROOT%"
+        },
+        "region": {
+         "endColumn": 22,
+         "endLine": 11,
+         "snippet": {
+          "text": "const app = express();"
+         },
+         "startColumn": 7,
+         "startLine": 11
+        }
+       }
+      }
+     ],
+     "message": {
+      "text": "A CSRF middleware was not detected in your express application. Ensure you are either using one such as `csurf` or `csrf` (see rule references) and/or you are properly doing CSRF validation in your routes with a token or cookies."
+     },
+     "properties": {},
+     "ruleId": "opt.toolchains.security.semgrep-rules.javascript.express.security.audit.express-check-csurf-middleware-usage"
+    },
+    {
+     "fingerprints": {
+      "matchBasedId/v1": "requires login"
+     },
+     "locations": [
+      {
+       "physicalLocation": {
+        "artifactLocation": {
+         "uri": "server.js",
+         "uriBaseId": "%SRCROOT%"
+        },
+        "region": {
+         "endColumn": 91,
+         "endLine": 29,
+         "snippet": {
+          "text": "  const rows = db.exec(\"SELECT id, name, email FROM users WHERE name = '\" + req.query.name + \"'\");"
+         },
+         "startColumn": 77,
+         "startLine": 29
+        }
+       }
+      }
+     ],
+     "message": {
+      "text": "Detected user input used to manually construct a SQL string. This is usually bad practice because manual construction could accidentally result in a SQL injection. An attacker could use a SQL injection to steal or modify contents of the database. Instead, use a parameterized query which is available by default in most database engines. Alternatively, consider using an object-relational mapper (ORM) such as Sequelize which will protect your queries."
+     },
+     "properties": {},
+     "ruleId": "opt.toolchains.security.semgrep-rules.javascript.express.security.injection.tainted-sql-string"
+    },
+    {
+     "fingerprints": {
+      "matchBasedId/v1": "requires login"
+     },
+     "locations": [
+      {
+       "physicalLocation": {
+        "artifactLocation": {
+         "uri": "server.js",
+         "uriBaseId": "%SRCROOT%"
+        },
+        "region": {
+         "endColumn": 83,
+         "endLine": 34,
+         "snippet": {
+          "text": "  const token = jwt.sign({ sub: req.query.user }, \"s4-proof-hardcoded-signing-key\", { expiresIn: \"1h\" });"
+         },
+         "startColumn": 51,
+         "startLine": 34
+        }
+       }
+      }
+     ],
+     "message": {
+      "text": "A hard-coded credential was detected. It is not recommended to store credentials in source-code, as this risks secrets being leaked and used by either an internal or external malicious adversary. It is recommended to use environment variables to securely provide credentials or retrieve credentials from a secure vault or HSM (Hardware Security Module)."
+     },
+     "properties": {},
+     "ruleId": "opt.toolchains.security.semgrep-rules.javascript.jsonwebtoken.security.hardcoded-jwt-secret"
+    }
+   ],
+   "tool": {
+    "driver": {
+     "name": "Semgrep OSS",
+     "rules": [
+      {
+       "defaultConfiguration": {
+        "level": "note"
+       },
+       "fullDescription": {
+        "text": "A CSRF middleware was not detected in your express application. Ensure you are either using one such as `csurf` or `csrf` (see rule references) and/or you are properly doing CSRF validation in your routes with a token or cookies."
+       },
+       "help": {
+        "markdown": "A CSRF middleware was not detected in your express application. Ensure you are either using one such as `csurf` or `csrf` (see rule references) and/or you are properly doing CSRF validation in your routes with a token or cookies.\n\n<b>References:</b>\n - [https://www.npmjs.com/package/csurf](https://www.npmjs.com/package/csurf)\n - [https://www.npmjs.com/package/csrf](https://www.npmjs.com/package/csrf)\n - [https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html](https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html)\n",
+        "text": "A CSRF middleware was not detected in your express application. Ensure you are either using one such as `csurf` or `csrf` (see rule references) and/or you are properly doing CSRF validation in your routes with a token or cookies."
+       },
+       "id": "opt.toolchains.security.semgrep-rules.javascript.express.security.audit.express-check-csurf-middleware-usage",
+       "name": "opt.toolchains.security.semgrep-rules.javascript.express.security.audit.express-check-csurf-middleware-usage",
+       "properties": {
+        "precision": "very-high",
+        "tags": [
+         "CWE-352: Cross-Site Request Forgery (CSRF)",
+         "LOW CONFIDENCE",
+         "OWASP-A01:2021 - Broken Access Control",
+         "OWASP-A01:2025 - Broken Access Control",
+         "security"
+        ]
+       },
+       "shortDescription": {
+        "text": "Semgrep Finding: opt.toolchains.security.semgrep-rules.javascript.express.security.audit.express-check-csurf-middleware-usage"
+       }
+      },
+      {
+       "defaultConfiguration": {
+        "level": "error"
+       },
+       "fullDescription": {
+        "text": "Detected user input used to manually construct a SQL string. This is usually bad practice because manual construction could accidentally result in a SQL injection. An attacker could use a SQL injection to steal or modify contents of the database. Instead, use a parameterized query which is available by default in most database engines. Alternatively, consider using an object-relational mapper (ORM) such as Sequelize which will protect your queries."
+       },
+       "help": {
+        "markdown": "Detected user input used to manually construct a SQL string. This is usually bad practice because manual construction could accidentally result in a SQL injection. An attacker could use a SQL injection to steal or modify contents of the database. Instead, use a parameterized query which is available by default in most database engines. Alternatively, consider using an object-relational mapper (ORM) such as Sequelize which will protect your queries.\n\n<b>References:</b>\n - [https://owasp.org/www-community/attacks/SQL_Injection](https://owasp.org/www-community/attacks/SQL_Injection)\n",
+        "text": "Detected user input used to manually construct a SQL string. This is usually bad practice because manual construction could accidentally result in a SQL injection. An attacker could use a SQL injection to steal or modify contents of the database. Instead, use a parameterized query which is available by default in most database engines. Alternatively, consider using an object-relational mapper (ORM) such as Sequelize which will protect your queries."
+       },
+       "id": "opt.toolchains.security.semgrep-rules.javascript.express.security.injection.tainted-sql-string",
+       "name": "opt.toolchains.security.semgrep-rules.javascript.express.security.injection.tainted-sql-string",
+       "properties": {
+        "precision": "very-high",
+        "tags": [
+         "CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')",
+         "LOW CONFIDENCE",
+         "OWASP-A01:2017 - Injection",
+         "OWASP-A03:2021 - Injection",
+         "OWASP-A05:2025 - Injection",
+         "security"
+        ]
+       },
+       "shortDescription": {
+        "text": "Semgrep Finding: opt.toolchains.security.semgrep-rules.javascript.express.security.injection.tainted-sql-string"
+       }
+      },
+      {
+       "defaultConfiguration": {
+        "level": "warning"
+       },
+       "fullDescription": {
+        "text": "A hard-coded credential was detected. It is not recommended to store credentials in source-code, as this risks secrets being leaked and used by either an internal or external malicious adversary. It is recommended to use environment variables to securely provide credentials or retrieve credentials from a secure vault or HSM (Hardware Security Module)."
+       },
+       "help": {
+        "markdown": "A hard-coded credential was detected. It is not recommended to store credentials in source-code, as this risks secrets being leaked and used by either an internal or external malicious adversary. It is recommended to use environment variables to securely provide credentials or retrieve credentials from a secure vault or HSM (Hardware Security Module).\n\n<b>References:</b>\n - [https://cheatsheetseries.owasp.org/cheatsheets/Secrets_Management_Cheat_Sheet.html](https://cheatsheetseries.owasp.org/cheatsheets/Secrets_Management_Cheat_Sheet.html)\n",
+        "text": "A hard-coded credential was detected. It is not recommended to store credentials in source-code, as this risks secrets being leaked and used by either an internal or external malicious adversary. It is recommended to use environment variables to securely provide credentials or retrieve credentials from a secure vault or HSM (Hardware Security Module)."
+       },
+       "id": "opt.toolchains.security.semgrep-rules.javascript.jsonwebtoken.security.hardcoded-jwt-secret",
+       "name": "opt.toolchains.security.semgrep-rules.javascript.jsonwebtoken.security.hardcoded-jwt-secret",
+       "properties": {
+        "precision": "very-high",
+        "tags": [
+         "CWE-798: Use of Hard-coded Credentials",
+         "HIGH CONFIDENCE",
+         "OWASP-A07:2021 - Identification and Authentication Failures",
+         "OWASP-A07:2025 - Authentication Failures",
+         "security"
+        ]
+       },
+       "shortDescription": {
+        "text": "Semgrep Finding: opt.toolchains.security.semgrep-rules.javascript.jsonwebtoken.security.hardcoded-jwt-secret"
+       }
+      }
+     ],
+     "semanticVersion": "1.180.0"
+    }
+   }
+  }
+ ],
+ "$schema": "https://docs.oasis-open.org/sarif/sarif/v2.1.0/os/schemas/sarif-schema-2.1.0.json"
+}

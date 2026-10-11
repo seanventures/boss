@@ -55,6 +55,7 @@ export const IDENTITY_PAGES: readonly IdentityPage[] = [
   { path: "/identity/agents", label: "Agents", tip: "Passports, ceilings and who agents act for", access: { permission: "agent_passport:read" }, tab: true },
   { path: "/identity/agents/[id]", label: "Passport", tip: "An agent's ceiling, sponsor and lineage", access: { permission: "agent_passport:read" } },
   { path: "/identity/agents/delegations/[id]", label: "Delegation", tip: "The chain, its tokens and egress, and revoke", access: { authenticated: true } },
+  { path: "/identity/app-sign-in", label: "App sign-in", tip: "BOSS as the sign-in for your apps: pools, clients, users, roles", access: { anyScope: "oidc_client:read" }, tab: true },
   { path: "/identity/sign-in", label: "Sign-in & SSO", tip: "Providers, SCIM and the security policy", access: { permission: "identity_provider:read" }, tab: true },
   { path: "/identity/audit", label: "Audit", tip: "Every security event, hash-chained and verifiable", access: { permission: "audit:read" }, tab: true },
   { path: "/account", label: "Security", tip: "Your password, passkeys, MFA and recovery codes", access: { authenticated: true }, tab: true },

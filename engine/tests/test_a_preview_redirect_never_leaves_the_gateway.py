@@ -40,3 +40,17 @@ def test_a_redirect_is_read_the_way_the_browser_reads_it():
     assert _gateway_location("prev_1", "login") == "login"
     # Another host stays the app's business, in the browser's form.
     assert _gateway_location("prev_1", "\\\\cdn.example.com/x") == "//cdn.example.com/x"
+
+
+def test_a_redirect_to_boss_own_sign_in_on_a_local_install_is_not_glued_under_the_preview(monkeypatch):
+    """Sign in with BOSS inside a preview: on a local install BOSS's issuer is loopback too; its
+    /oidc/ paths at BOSS's own public origin pass unchanged. Anything else on loopback (another
+    port, BOSS's other paths) is still pointed back through the gateway."""
+    from boss_engine.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "public_url", "http://localhost:53760")
+    to_boss = "http://localhost:53760/oidc/org_1/authorize?client_id=c&state=s"
+    assert _gateway_location("prev_1", to_boss) == to_boss
+    assert _gateway_location("prev_1", "http://localhost:53760/v1/identity/me") == f"{P}/v1/identity/me"
+    assert _gateway_location("prev_1", "http://localhost:5000/oidc/x") == f"{P}/oidc/x"
+    assert _gateway_location("prev_1", "http://127.0.0.1:53760/oidc/x") == f"{P}/oidc/x"

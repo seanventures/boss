@@ -561,7 +561,11 @@ class OwnedPopen(subprocess.Popen):
         # that holds a sandbox uid runs AS that uid, never as the control plane's. `sandboxed=False`
         # is for BOSS's own operations on the run (its git with a credential the agent must not see).
         self.sandbox = None
-        if sandboxed is not False and self.owner is not None and self.owner.kind in WORKLOAD_KINDS:
+        # Keyed on the BOUND IDENTITY, not on the owner's kind: an owner that holds a sandbox uid
+        # (sandbox_identity.bind/acquire, on it or any owner enclosing it) is running a workload,
+        # whatever it is called. Gating on WORKLOAD_KINDS let the template trial (owner kind
+        # `template_trial`) bind a uid and still run the template's code as the API's uid.
+        if sandboxed is not False and self.owner is not None:
             from . import sandbox_identity
 
             self.sandbox = sandbox_identity.for_owner(self.owner)

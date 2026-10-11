@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { API_URL, authHeaders } from "../../../lib/client";
 import { apiWrite } from "../../../lib/api-write";
+import { rawRequestUrl } from "../../../lib/raw-request-url";
 
 /**
  * The end-of-run report: what each step cost, who did it, and what went wrong.
@@ -13,7 +14,7 @@ import { apiWrite } from "../../../lib/api-write";
 export const dynamic = "force-dynamic";
 
 function ids(req: Request) {
-  const params = new URL(req.url).searchParams;
+  const params = rawRequestUrl(req).searchParams;
   return {
     runId: (params.get("run_id") ?? "").trim(),
     projectId: (params.get("project_id") ?? "").trim(),

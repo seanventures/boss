@@ -229,6 +229,48 @@ export function parseIdentityCookies(cookieHeader: string | null | undefined): R
   return out;
 }
 
+/**
+ * A SESSION'S CSRF TOKEN, LEARNED FROM THE /me THE RENDER ALREADY MADE.
+ *
+ * A server-side write (or a POST read twin) needs the session's CSRF token. It used to be read
+ * with a SECOND /v1/identity/me whenever the kept copy was over 60 s old, so a render past that
+ * mark asked /me twice (perf: `overview duplicate_calls 1`). The token is an HMAC of the session
+ * id and cannot change while the session lives, so the render's own /me — which every render
+ * still makes, fresh (the-live-proof-cannot-be-borrowed.test.ts) — refreshes it here
+ * (server-fetch.ts), and sessionCsrf() asks /me only when nothing in this process has seen it.
+ * Never the browser; never an empty token (a cross-context /me answers "").
+ */
+const CSRF_STORE_KEY = "__bossCsrfBySession";
+export const CSRF_KEEP_MS = 60_000;
+
+function csrfStore(): Map<string, { token: string; at: number }> {
+  const g = globalThis as Record<string, unknown>;
+  return (g[CSRF_STORE_KEY] ??= new Map()) as Map<string, { token: string; at: number }>;
+}
+
+export function keepCsrf(session: string, token: unknown): void {
+  if (!session || typeof token !== "string" || !token) return;
+  const store = csrfStore();
+  if (store.size > 500) store.clear();
+  store.set(session, { token, at: Date.now() });
+}
+
+export function keptCsrf(session: string): string | null {
+  const kept = session ? csrfStore().get(session) : undefined;
+  return kept && Date.now() - kept.at < CSRF_KEEP_MS ? kept.token : null;
+}
+
+/** The session's CSRF token: kept (from this render's own /me), else one /me of its own. */
+export async function sessionCsrf(session: string, apiUrl: string): Promise<string | null> {
+  const kept = keptCsrf(session);
+  if (kept || !session || !apiUrl) return kept;
+  const me = await fetch(`${apiUrl}/v1/identity/me`, { cache: "no-store" });
+  if (!me.ok) return null;
+  const token = ((await me.json()) as { csrf_token?: unknown }).csrf_token;
+  keepCsrf(session, token);
+  return keptCsrf(session);
+}
+
 /** Does this browser carry a session at all? Routing only (middleware); the API decides. */
 export function hasSessionCookie(cookieHeader: string | null | undefined): boolean {
   return Boolean(parseIdentityCookies(cookieHeader)[SESSION_COOKIE]);

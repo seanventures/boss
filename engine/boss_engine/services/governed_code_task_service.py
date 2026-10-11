@@ -453,7 +453,7 @@ _ALL_PANEL_SEATS = ("review_code", "security_check", "regression", "consistency_
 # and that is where the weakened-tests verdict already blocks (_pull_request_ci_gate's
 # blocked_weakened_existing_tests hard stop). Holding the PR back as well meant the operator
 # got nothing to look at, which is how "22 runs, 2 PRs" happened. Findings ride ON the PR.
-_ADVISORY_HARD_FLOOR = ("code_written", "app_serves")
+_ADVISORY_HARD_FLOOR = ("code_written", "app_serves", "template_tests", "no_committed_secrets")
 
 # Gates no autonomy setting may ship past. `app_serves` is not a reviewer's opinion: BOSS
 # started the build's own run command and nothing answered HTTP. The Lead Triage Inbox build
@@ -461,7 +461,47 @@ _ADVISORY_HARD_FLOOR = ("code_written", "app_serves")
 # ImportError on its first line — and the operator found out from a preview timeout. A build
 # whose app does not run is not done, so exhausting the repairs BLOCKS with the app's own
 # error (and the partial PR rescue keeps the work), rather than shipping with dissent.
-_NEVER_SHIP_PAST = frozenset({"app_serves"})
+_NEVER_SHIP_PAST = frozenset({"app_serves", "template_tests", "no_committed_secrets"})
+_TEMPLATE_GATE_SET = frozenset({"template_tests", "no_committed_secrets"})
+
+# THE TEMPLATE HOLD (F2 §2.3, S2.1). A build that applies a template carries two mechanical
+# gates (`_template_gates`): its tests ran and passed, and its diff holds no secret. Neither is a
+# reviewer's opinion, so no autonomy setting ships past them (both are in _NEVER_SHIP_PAST and the
+# advisory floor above), and a human waiver cannot either (factory_view.UNWAIVABLE_GATES).
+#
+# Blocking the PR at the end is not enough: a build pushes its work to the branch as it goes
+# (stage commits, checkpoints, the repair hand-off, the partial-PR rescue), and an apply builds
+# onto the app's branch, whose PR is already open — so a committed secret was on the PR minutes
+# before any gate looked at it. So for such a build EVERY push waits for these gates: nothing it
+# wrote reaches the remote, the branch or a PR until both have passed. A held build that fails
+# keeps its result on the run (gates, evidence) but no diff with a secret in it.
+TEMPLATE_GATES = ("template_tests", "no_committed_secrets")
+
+
+def template_push_hold(applies_template: bool, gates: Optional[dict]) -> Optional[str]:
+    """Why a push of this build's work must not happen now, or None when it may.
+
+    `applies_template` is True also when BOSS could not tell (fail closed). `gates` is None until
+    the gates ran."""
+    if not applies_template:
+        return None
+    if gates is None:
+        return "this build applies a template: nothing is pushed before its gates pass"
+    failing = [g for g in TEMPLATE_GATES if gates.get(g) is not True]
+    if failing:
+        return f"this build applies a template and its gates failed ({', '.join(failing)}): nothing is pushed"
+    return None
+
+
+def _applies_template(engine, run: dict) -> bool:
+    """Does this build apply a template? An error reading it counts as yes (fail closed)."""
+    from ..templates import gate as template_gate
+
+    try:
+        with _transaction(engine) as c:
+            return template_gate.applied_template(c, run) is not None
+    except Exception:  # noqa: BLE001 — unknown is held, never pushed
+        return True
 
 
 def app_serves_check_skip_reason(fctx: dict, *, command_runtime: str = "subprocess",
@@ -519,8 +559,8 @@ def _app_serves_sentence(record: Optional[dict]) -> str:
     return app_serves_failure_sentence(record)
 
 
-def blocked_gate_messages(qg_id: str, failing: list, app_serves_record: Optional[dict]
-                          ) -> tuple[str, str]:
+def blocked_gate_messages(qg_id: str, failing: list, app_serves_record: Optional[dict],
+                          template_tests_record: Optional[dict] = None) -> tuple[str, str]:
     """(code_task_runs.error, partial-PR rescue reason) for a run the quality gate blocked.
 
     The error used to name the failing gates only — "failing gates: ['app_serves']" — so an
@@ -537,7 +577,22 @@ def blocked_gate_messages(qg_id: str, failing: list, app_serves_record: Optional
         sentence = _app_serves_sentence(app_serves_record)
         error += f" The app does not serve HTTP. {sentence[:700]}"
         reason = "the app does not serve HTTP, so the build is not done"
+    # The template gate's own words (e.g. "cannot run on the micro-VM build substrate: …"), so a
+    # blocked apply says WHY and what to do, not only the gate's name.
+    why = str((template_tests_record or {}).get("error") or "")
+    if "template_tests" in (failing or []) and why:
+        error += f" Template tests: {why[:700]}"
+        if "app_serves" not in (failing or []):
+            reason = "the applied template's tests did not pass, so the build is not done"
     return error, reason
+
+
+def review_repair_rounds(settings: Any) -> int:
+    """BOSS_CODE_REVIEW_REPAIR_MAX_ROUNDS. A missing/blank value must never SILENTLY disable the
+    moat (2), but an explicit 0 is the documented "block on the first failure" and is honoured:
+    `int(x or 2)` turned it into 2."""
+    value = getattr(settings, "code_review_repair_max_rounds", 2)
+    return max(0, int(2 if value in (None, "") else value))
 
 
 def resolve_gate_failure_action(
@@ -549,8 +604,14 @@ def resolve_gate_failure_action(
     open_pr: bool = True,
     never_block: bool = True,
     faults: Optional[dict[str, str]] = None,
+    template_repair_max: Optional[int] = None,
 ) -> str:
     """Decide what to do after a non-passing quality gate.
+
+    ``template_repair_max`` is the build's own repair budget (``repair_max``: the run's
+    ``repair_retries``, else BOSS_CODE_REPAIR_MAX_RETRIES). A failed TEMPLATE gate is mechanical
+    and unwaivable, so it is repaired only within that budget: at 0 the build goes straight to
+    ``block`` (never `repairing`), and once the budget is spent it blocks too.
 
     Returns one of:
       - ``"ship"``              — open the PR (hard pass, or advisory first-pass)
@@ -605,6 +666,9 @@ def resolve_gate_failure_action(
     # and those remaining gates can themselves be harness faults.
     if faults and failing and all(faults.get(g) == "HARNESS" for g in failing):
         return "inconclusive"
+    if (template_repair_max is not None and rounds_used >= max(0, int(template_repair_max))
+            and any(g in _TEMPLATE_GATE_SET for g in failing)):
+        return "block"
     if rounds_used < max_repair_rounds and open_pr:
         return "repair"
     if any(g in _NEVER_SHIP_PAST and (faults or {}).get(g) != "HARNESS" for g in failing):
@@ -716,6 +780,56 @@ _IAC_QA_GUIDANCE = (
     "authoritative Terraform verification (fmt, validate, lint, security scan, plan) "
     "is BOSS's separate IaC verify lane — do not shell out to terraform yourself.\n"
 )
+
+
+def _template_gates(engine, run: dict, sandbox, *, root, cwd, changed_files: dict,
+                    tests_passed: bool, use_microvm: bool) -> Optional[dict]:
+    """THE TEMPLATE HOOK (APP_TEMPLATES_AND_SECURITY_LOOP.md §2.3, stream S2; the one function this
+    file holds for F2, coordinated with S1's toolchain code).
+
+    A build started by POST /v1/templates/{id}/apply carries `input.template` on its workflow
+    run. For such a build this ADDS two mechanical gates to the ones every build runs (it never
+    replaces one, S2.1): `template_tests` (the template's own test command for the stack, run in
+    this sandbox, at least `min_tests` passing in its JUnit report, and its test files in the
+    diff) and `no_committed_secrets` (the secret scan over the diff, including the values the
+    app's build bindings hold). Returns {"gates": {...}, "evidence": {...}} or None for a build
+    that applies no template. Fails CLOSED: any error reading the template is a failed gate."""
+    from ..templates import gate as template_gate
+
+    try:
+        with _transaction(engine) as c:
+            applied = template_gate.applied_template(c, run)
+    except Exception as exc:  # noqa: BLE001 — never let a lookup error pass the gate
+        return {"gates": {"template_tests": False, "no_committed_secrets": False},
+                "evidence": {"template_error": f"{type(exc).__name__}: {exc}"[:300]}}
+    if applied is None:
+        return None
+    if applied.get("error"):
+        return {"gates": {"template_tests": False, "no_committed_secrets": False},
+                "evidence": {"template": {k: applied.get(k) for k in ("id", "key", "version", "digest")},
+                             "template_error": applied["error"]}}
+    bound: dict = {}
+    try:
+        from ..templates.secrets import values_for_env
+
+        with _transaction(engine) as c:
+            org = c.execute(sql("SELECT w.org_id FROM projects p JOIN workspaces w ON w.id = p.workspace_id "
+                                "WHERE p.id = :p"), {"p": run.get("project_id")}).scalar()
+            if org and applied.get("app_key"):
+                bound, _withheld = values_for_env(c, org_id=org, project_id=run["project_id"],
+                                                  app_key=applied["app_key"], env="build")
+    except Exception:  # noqa: BLE001 — the scan still runs on every common format
+        bound = {}
+
+    def _run(command: str, where) -> object:
+        return sandbox.run(command, cwd=str(where))
+
+    result = template_gate.evaluate(
+        template=applied, files=applied.get("files") or {}, changed=changed_files,
+        cwd=None if use_microvm else Path(cwd), run_command=None if use_microvm else _run,
+        bound_values=bound, tests_passed=bool(tests_passed),
+        substrate="microvm" if use_microvm else "local")
+    return {"gates": result.gates, "evidence": result.evidence}
 
 
 def _ctx_block(title, instructions, criteria, *, service: bool = False) -> str:
@@ -1877,6 +1991,20 @@ def _provision_build_services(engine, settings: Settings, run_id: str, project_i
 # --------------------------------------------------------------------------- #
 #  The governed job handler                                                   #
 # --------------------------------------------------------------------------- #
+def _authority_refused(engine, budget, project_id: str, reservation_id: Optional[str], run_id: str,
+                       exc: BaseException):
+    """The build was refused its authority before anything ran: its budget reservation goes back
+    and the refusal (code_task_service.AuthorityRefused) is what the caller raises."""
+    from .code_task_service import AuthorityRefused
+
+    try:
+        with _transaction(engine) as c:
+            _release(budget, c, project_id, reservation_id, "authority refused", run_id=run_id)
+    except Exception:  # noqa: BLE001 — the refusal is the answer either way
+        pass
+    return AuthorityRefused(getattr(exc, "reason", None) or type(exc).__name__)
+
+
 def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                            *, fencing_token: Optional[str] = None) -> dict:
     """One governed attempt, with the MCP servers of the agent it runs as (skills-mcp E6).
@@ -1899,10 +2027,14 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # AND RUNS AS ITS OWN UID (sandbox_identity, IDENTITY.md §7.6): the agent, its commands
         # and its seats never run as the control plane's uid.
         from .sandbox_identity import bind as _sandbox_bind
+        from ..app_links.run_env import for_run as _link_env
+        from ..templates.run_ref import for_run as _template_files
 
         with owned_process.owner_scope("code_run", run_id,
                                        project_id=(run or {}).get("project_id"), fresh=True), \
-                _sandbox_bind(run_id) as _sbx:
+                _sandbox_bind(run_id, project_id=(run or {}).get("project_id")) as _sbx, \
+                _link_env(engine, run_id, (run or {}).get("project_id")), \
+                _template_files(engine, run, _sbx):
             if mcp is not None and _sbx is not None:
                 mcp.move_into(_sbx)
             return _run_governed_code_task(engine, settings, jobs, run_id,
@@ -2334,6 +2466,21 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
     guest_vm_ids: list[str] = []          # for release-on-success / retain-on-failure
     accumulated: dict[str, str] = {}      # path -> content committed so far (the PR diff)
     guest_base = base_branch              # advances to work_branch once commits exist
+    # THE TEMPLATE HOLD (template_push_hold): every push below asks _push_held first.
+    _tpl_applies = _applies_template(engine, run)
+    _tpl_gates: Optional[dict] = None     # the template gates' verdicts, once they ran
+
+    def _push_held(where: str) -> bool:
+        reason = template_push_hold(_tpl_applies, _tpl_gates)
+        if reason is None:
+            return False
+        try:
+            with _transaction(engine) as c:
+                emit_event(c, project_id, "code_task.push_held", "boss", "code_task_run", run_id,
+                           {"where": where, "reason": reason})
+        except Exception:  # noqa: BLE001 — the hold holds whether or not it was recorded
+            pass
+        return True
     _app_id = verification_target.official_app_id(spec, fctx)
 
     def _guest_stage(step: str, stage_name: str, prompt: str, *, test_cmds: list[str],
@@ -2423,6 +2570,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         nonlocal guest_base
         if not files:
             return
+        if _push_held("stage_commit"):
+            return
         sf.github.ensure_branch(work_branch, base_branch)
         for fc in files:
             sf.github.upsert_file(work_branch, fc.path, fc.content, message)
@@ -2451,6 +2600,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                      else {fc.path: fc.content for fc in sandbox.diff()})
             entry = declare_app_entry(list(built.keys()), built.get)
             if not entry:
+                return
+            if _push_held("declare_preview_app"):
                 return
             sf.github.upsert_file(
                 work_branch, DECLARED_APP_FILE, entry + "\n",
@@ -2701,6 +2852,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         again later cannot open two PRs. Returns the url or None; never raises.
         """
         try:
+            if _push_held("partial_pr"):
+                return None
             n = _checkpoint("exit")
             if not n:
                 return None
@@ -2771,6 +2924,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         """
         if use_microvm:
             return 0  # that path already commits per stage
+        if _push_held(f"checkpoint:{label}"):
+            return 0
         try:
             files = sandbox.diff()
         except Exception:  # noqa: BLE001 — a dead sandbox must not mask the real failure
@@ -2843,7 +2998,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             engine, task_run_id=run_id, project_id=project_id, owner=owner, repo=repo,
             role_key=identity_runs.code_task_builder(spec, fctx), job_id=job_id)
     except Exception as exc:  # noqa: BLE001 — refused authority fails the build, never widens
-        raise RuntimeError(f"authority refused: {getattr(exc, 'reason', None) or type(exc).__name__}") from exc
+        raise _authority_refused(engine, budget, project_id, reservation_id, run_id, exc) from exc
     egress_access = identity_run[1] if identity_run is not None else None
     if identity_run is not None:
         token = ""
@@ -2899,13 +3054,14 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         if _gate_plan0.source != "task":
             verify_commands = list(_gate_plan0.commands)
             test_cmd = ((verification_target.manifest_display(root, _pinned_manifest)
-                         if _gate_plan0.from_manifest else " && ".join(verify_commands))
+                         if _gate_plan0.from_manifest else _gate_plan0.description
+                         if _gate_plan0.runs_steps else " && ".join(verify_commands))
                         or test_cmd)
         _web_verify = (
             verification_target.detect_kind(spec, title) == "web"
             or str(test_cmd or "").startswith("npm ")
             or bool(_app_id)
-        ) and not _gate_plan0.from_manifest
+        ) and not _gate_plan0.runs_steps
         last_verify_cwd = None
         last_verify_output = ""
 
@@ -2984,7 +3140,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 last_verify_cwd = str(cwd.relative_to(root)) if cwd != root else "."
             except ValueError:
                 last_verify_cwd = str(cwd)
-            if plan.from_manifest:
+            if plan.runs_steps:
                 return _run_manifest_verify(plan, record=record)
             try:
                 verification_target.ensure_verify_script(cwd)
@@ -4293,6 +4449,15 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         elif tests_passed:
             app_serves_record = _check_app_serves(changed_files)
             gates["app_serves"] = bool(app_serves_record.get("ok"))
+        # F2: an applied template's two gates, ADDED to the above (stream S2, §2.3).
+        _template_record = _template_gates(
+            engine, run, sandbox, root=root,
+            cwd=(root / last_verify_cwd) if last_verify_cwd and not Path(str(last_verify_cwd)).is_absolute()
+            else verification_target.resolve_verify_cwd(root, app_id=_app_id, changed=list(changed_files)),
+            changed_files=changed_files, tests_passed=bool(tests_passed), use_microvm=use_microvm)
+        if _template_record:
+            gates.update(_template_record["gates"])
+        _tpl_gates = dict(gates) if _template_record else ({} if _tpl_applies else None)
 
         if _weakened and _retirement_allowed:
             with _transaction(engine) as c:
@@ -4374,6 +4539,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             **({"weakened_existing_tests": _weakened[:20]} if _weakened else {}),
             # What BOSS started, and whether it answered — the receipt for the app_serves gate.
             "app_serves": app_serves_record,
+            # F2: the applied template's gates' receipt (which template, its tests, the scan).
+            **({"template": _template_record["evidence"]} if _template_record else {}),
             "steps_run": steps_run,
             "cost_usd_micros": cost,
             "stage_costs": {
@@ -4732,7 +4899,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
 
             rounds_used = max(0, int(fctx.get("attempt", 1)) - 1)
             # Fallback 2 (not 0): a missing/blank config field must never SILENTLY disable the moat.
-            max_repair_rounds = max(0, int(getattr(settings, "code_review_repair_max_rounds", 2) or 2))
+            max_repair_rounds = review_repair_rounds(settings)
             gate_faults = classify_gate_faults(failing=failing, evidence=evidence)
             # Non-final decomposition slices suppress the PR and advance the chain on
             # completed_no_pr. They must NOT take ship_with_dissent: that path marks the
@@ -4751,6 +4918,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 open_pr=_can_ship_pr,
                 never_block=bool(getattr(settings, "code_gate_never_block", True)),
                 faults=gate_faults,
+                template_repair_max=max_repair,
             )
             if action == "inconclusive":
                 # The checks never finished, so nothing is known about the code. Re-run the
@@ -4811,7 +4979,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         rounds_used=rounds_used, max_repair_rounds=max_repair_rounds,
                         open_pr=_can_ship_pr,
                         never_block=bool(getattr(settings, "code_gate_never_block", True)),
-                        faults=gate_faults)
+                        faults=gate_faults, template_repair_max=max_repair)
                 if action == "inconclusive":
                     # Escalations exhausted: ship, recording that the code was NOT reviewed.
                     # Still respect _can_ship_pr — a non-final slice / open_pr=false run must
@@ -4905,7 +5073,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 try:
                     _files = (list(accumulated.items()) if use_microvm
                               else [(fc.path, fc.content) for fc in sandbox.diff()])
-                    if _files:
+                    if _files and not _push_held("repair_handoff"):
                         sf.github.ensure_branch(work_branch, base_branch)
                         for _path, _content in _files:
                             sf.github.upsert_file(
@@ -4956,27 +5124,59 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             elif action == "block":
                 _finish_vms(success=False)  # retain the stage VMs for inspection
                 _blocked_error, _blocked_reason = blocked_gate_messages(
-                    qg_id, failing, app_serves_record)
+                    qg_id, failing, app_serves_record,
+                    ((_template_record or {}).get("evidence") or {}).get("template_tests"))
                 # Human escape hatch: preserve the produced diff so an operator can WAIVE the failing
                 # gate(s) and open the PR without a re-run. Governance is kept — gates the human does
                 # NOT waive still block, and the PR still carries its own merge-gate Decision.
                 pending = ([{"path": p, "content": content} for p, content in accumulated.items()]
                            if use_microvm else
                            [{"path": fc.path, "content": fc.content} for fc in sandbox.diff()])
+                if "no_committed_secrets" in failing:
+                    # A diff with a secret in it is not kept anywhere a person or a waiver could
+                    # ship it from (the gate is unwaivable): the run keeps the gate's findings.
+                    pending = []
                 with _transaction(engine) as c:
                     _release(budget, c, project_id, reservation_id, f"quality gate failed: {qg_id}", run_id=run_id)
                     ctx = {**fctx, "pending_diff": pending, "failing_gates": failing,
                            "quality_gate_id": qg_id, "pr_summary": r2.get("summary", "")[:600],
                            **({"sandbox_task_id": guest_vm_ids[-1]} if guest_vm_ids else {})}
+                    # A TEMPLATE GATE CANNOT BE WAIVED (factory_view.UNWAIVABLE_GATES), so a build
+                    # it stopped is not waiting on anybody's waiver: blocked and done, saying why
+                    # and what to do. Parked at awaiting_gate_override, the workflow above it
+                    # waited for a waiver nobody could give.
+                    from ..templates.gate import hold_outcome as _tpl_hold_outcome
+
+                    _held = _tpl_hold_outcome(failing)
+                    if _held is not None:
+                        ctx["template_hold"] = _held
                     c.execute(sql(
-                        "UPDATE code_task_runs SET status='blocked', phase='awaiting_gate_override', "
+                        "UPDATE code_task_runs SET status='blocked', phase=:ph, "
                         "error=:e, finalize_ctx=CAST(:fc AS JSONB), updated_at=now() WHERE id=:id"),
-                        {"e": _blocked_error, "fc": json.dumps(ctx), "id": run_id})
+                        {"e": _held["error"] if _held else _blocked_error,
+                         "ph": "done" if _held else "awaiting_gate_override",
+                         "fc": json.dumps(ctx), "id": run_id})
                 _rescue_pr(_blocked_reason)
-                return {"status": "blocked", "done": True, "awaiting_gate_override": True,
+                return {"status": "blocked", "done": True, "awaiting_gate_override": _held is None,
                         "quality_gate_id": qg_id, "failing_gates": failing}
 
         # GATE PASSED — open the PR via the existing software-factory path.
+        if _push_held("pull_request"):
+            # Unreachable by design (a failing template gate never ships), kept as the last
+            # door: a template build whose gates did not pass opens no PR, whatever led here.
+            with _transaction(engine) as c:
+                _release(budget, c, project_id, reservation_id, "template gates did not pass",
+                         run_id=run_id)
+                from ..templates.gate import hold_outcome as _tpl_hold_outcome
+
+                _held = _tpl_hold_outcome([g for g in TEMPLATE_GATES
+                                           if (_tpl_gates or {}).get(g) is not True])
+                c.execute(sql("UPDATE code_task_runs SET status='blocked', phase='done', error=:e, "
+                              "updated_at=now() WHERE id=:id"),
+                          {"e": (_held or {}).get("error") or template_push_hold(_tpl_applies, _tpl_gates),
+                           "id": run_id})
+            return {"status": "blocked", "done": True, "failing_gates": [
+                g for g in TEMPLATE_GATES if (_tpl_gates or {}).get(g) is not True]}
         _finish_vms(success=True)
         _declare_preview_app()
         # ONE APPROVAL PER BUILD, not per slice. A decomposed build breaks a product into ordered

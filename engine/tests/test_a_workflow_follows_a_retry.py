@@ -103,7 +103,8 @@ class TestWhatCountsAsTheSameWork:
     def test_the_governing_run_is_actually_passed_in(self):
         """The signal is worthless if the caller does not supply it."""
         body = inspect.getsource(runner.resume_awaited)
-        assert body.count("_successor_attempt(connection, project_id, awaited_id, run_id)") == 2
+        # a failed step, a dead build, and a build that is repairing / did not pass
+        assert body.count("_successor_attempt(connection, project_id, awaited_id, run_id)") == 3
 
     def test_an_empty_workflow_id_does_not_match_everything(self):
         """`finalize_ctx->>'workflow_run_id' = ''` would be false for real rows, but the guard

@@ -4,6 +4,7 @@ import { describeApiError } from "../../../lib/api-error";
 import { API_URL, authHeaders } from "../../../lib/client";
 import { apiWrite, type WriteMethod } from "../../../lib/api-write";
 import { loadPath } from "../../../lib/writing-get";
+import { rawRequestUrl } from "../../../lib/raw-request-url";
 
 /**
  * MCP servers for the Library (skills-mcp spec §5.5): list, the curated catalogue, test what was
@@ -41,7 +42,7 @@ async function forward(path: string, init: { method: "GET" | WriteMethod; body?:
 }
 
 export async function GET(req: Request) {
-  const url = new URL(req.url);
+  const url = rawRequestUrl(req);
   const projectId = (url.searchParams.get("project_id") ?? "").trim();
   if (url.searchParams.get("view") === "catalogue") {
     return forward(`/v1/mcp/catalogue?project_id=${q(projectId)}`, { method: "GET" });

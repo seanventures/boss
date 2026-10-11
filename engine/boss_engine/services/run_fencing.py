@@ -179,8 +179,66 @@ def guarded_status(
     ).scalar()
     if not transition_allowed(current, status):
         return False
-    clause = "status = :st" + (f", {extra_set}" if extra_set else "")
     p = dict(params or {})
+    if status == "completed":
+        held = template_hold(connection, run_id)
+        if held is not None:
+            # A BUILD A TEMPLATE GATE STOPPED IS NEVER COMPLETED, whichever path got here. The
+            # tester's Stripe apply read "Done · no PR" with Template tests ✕, its application
+            # stayed "building" and the workflow walked on to "Ship it". Blocked, with why and
+            # what to do next: the workflow step above it fails and nothing downstream runs.
+            import json as _json
+
+            status = "blocked"
+            extra_set = ("phase='done', error=:tpl_hold_error, finalize_ctx="
+                         "COALESCE(finalize_ctx,'{}'::jsonb) || jsonb_build_object("
+                         "'template_hold', CAST(:tpl_hold AS JSONB), "
+                         "'failing_gates', CAST(:tpl_gates AS JSONB))")
+            p = {"tpl_hold_error": held["error"], "tpl_hold": _json.dumps(held),
+                 "tpl_gates": _json.dumps(held["gates"])}
+    clause = "status = :st" + (f", {extra_set}" if extra_set else "")
     p["st"] = status
     guarded_update(connection, run_id, token_hash, clause, p, where=f"status->{status}")
     return True
+
+
+def template_hold(connection, run_id: str) -> Optional[dict[str, Any]]:
+    """The template gate hold for `run_id` (templates.gate.held_run), or None. An error reading
+    it is None: the pipeline's own block path still holds, and this check must never be the
+    thing that stops an ordinary build finishing."""
+    from ..templates.gate import held_run
+
+    try:
+        with connection.begin_nested():
+            return held_run(connection, run_id)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def build_not_passed(connection, run_id: str) -> Optional[str]:
+    """Why a FINISHED build must not be treated as a passed one (None when it passed).
+
+    One rule for every consumer that turns "the build finished" into "ship it" (the workflow
+    step that awaited it, deploy_build): a build a template gate stopped, or an attempt whose
+    checks failed and whose work went to a repair round, did not pass, whatever its status says.
+    """
+    held = template_hold(connection, run_id)
+    if held is not None:
+        return held["error"]
+    try:
+        with connection.begin_nested():
+            row = connection.execute(sql(
+                "SELECT status, finalize_ctx->>'review_repair_next_run' AS nxt, "
+                "finalize_ctx->'failing_gates' AS failing FROM code_task_runs WHERE id = :i"),
+                {"i": run_id}).mappings().first()
+    except Exception:  # noqa: BLE001
+        return None
+    if row is None:
+        return None
+    if str(row["status"] or "") == "repairing" or row["nxt"]:
+        failing = row["failing"] if isinstance(row["failing"], list) else []
+        return ("Blocked: this attempt failed its checks"
+                + (f" ({', '.join(str(g) for g in failing)})" if failing else "")
+                + (f"; its repair continued in {row['nxt']}" if row["nxt"] else "")
+                + ". It is not a passed build, so nothing ships from it.")
+    return None

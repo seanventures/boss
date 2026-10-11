@@ -2,13 +2,14 @@ import { NextResponse } from "next/server";
 
 import { API_URL, authHeaders } from "../../../../lib/client";
 import { apiErrorText } from "../../../../lib/api-error";
+import { rawRequestUrl } from "../../../../lib/raw-request-url";
 
 /** One agent's detail. The roster card had nowhere to go; this is what is behind it now. */
 export const dynamic = "force-dynamic";
 
 export async function GET(req: Request, ctx: { params: Promise<{ role: string }> }) {
   const { role } = await ctx.params;
-  const projectId = new URL(req.url).searchParams.get("project_id")?.trim();
+  const projectId = rawRequestUrl(req).searchParams.get("project_id")?.trim();
   if (!role) return NextResponse.json({ error: "missing role" }, { status: 400 });
   if (!projectId) return NextResponse.json({ error: "missing project_id" }, { status: 400 });
   try {

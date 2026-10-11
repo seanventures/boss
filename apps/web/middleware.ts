@@ -6,6 +6,7 @@ import {
 } from "./lib/console-session";
 import { hasSessionCookie, isPreviewCapabilityPath } from "./lib/identity/forward";
 import { machineRequest, protocolKind } from "./lib/identity/protocol-proxy";
+import { isOidcPath } from "./lib/oidc-proxy";
 import { isPublicConsolePath, PATH_HEADER } from "./lib/identity/pages";
 import { githubWebOrigins, HANDOFF_PATH } from "./lib/identity/github-manifest";
 import { INTENT_HEADER, intentFromActionBody } from "./lib/api-write";
@@ -79,6 +80,11 @@ export async function middleware(request: NextRequest) {
       : NextResponse.json({ detail: "scim_is_server_to_server" }, { status: 403, headers: { "Cache-Control": "no-store" } });
   }
   if (protocol === "saml-metadata" || protocol === "saml-acs") return NextResponse.next();
+  // BOSS AS AN OIDC PROVIDER (lib/oidc-proxy.ts): the issuer's endpoints, exactly. Apps call
+  // token/userinfo server to server and post logout forms cross-site by design; the API checks
+  // each step's own credential (client auth, PKCE, the session plus the consent CSRF token) and
+  // sets its pages' CSP, so no console session check or console CSP applies here.
+  if (isOidcPath(path)) return NextResponse.next();
   // The sign-in pages and the public sign-in API (rate-limited and CSRF-checked by the API).
   if (isPublicConsolePath(path)) return passThrough(request);
   // A NETWORK-TRUSTED INSTALL (shared-server, before and up to 30 days after its claim) has no

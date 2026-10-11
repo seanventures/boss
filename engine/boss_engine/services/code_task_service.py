@@ -566,8 +566,7 @@ def start_code_task(
 
         from boss_engine.identity import runs as _identity_runs
 
-        builder = (_identity_runs.code_task_builder({"role_key": role}, finalize_ctx)
-                   or _consent.DEFAULT_BUILDER)
+        builder = _identity_runs.resolved_builder({"role_key": role}, finalize_ctx)
         parent_run = str((finalize_ctx or {}).get("parent_run_id") or "").strip()
         if parent_run:
             # A retry keeps the grant its parent ran under (never the re-enqueuer's identity).
@@ -1623,6 +1622,13 @@ def retry_code_task(
                           # workflow for is a new piece of work following that path.
                           **({"workflow_version_id": workflow_version_id}
                              if workflow_version_id else {}),
+                          # THE SAME WORKFLOW RUN ASKED FOR THIS ATTEMPT. Without the link a
+                          # repair of a template build lost its template (templates.gate reads
+                          # it from the workflow run's input), so the child ran WITHOUT the
+                          # template gates, and the application never saw the attempt.
+                          **({"workflow_run_id": fctx_prev["workflow_run_id"]}
+                             if fctx_prev.get("workflow_run_id") and not workflow_version_id
+                             else {}),
                           "feedback_history": history,
                           # UNRESOLVED REVIEW COMMENTS FOLLOW THE WORK, NOT THE ATTEMPT.
                           #
@@ -1725,13 +1731,16 @@ def override_code_task(engine, settings: Settings, jobs, run_id: str, *,
     waive = list(waive_gates or [])
     if "*" in waive or "all" in waive:
         waive = list(failing)
-    from .factory_view import UNWAIVABLE_GATES
+    from .factory_view import UNWAIVABLE_GATES, UNWAIVABLE_WHY
     unwaivable = [g for g in waive if g in UNWAIVABLE_GATES] + [
         g for g in failing if g in UNWAIVABLE_GATES and g not in waive]
     if unwaivable:
-        # A PR for an app that does not start is not a PR anyone can review (factory §4.2.1).
-        raise ValueError("refused: can't be waived: the app must start "
-                         f"({', '.join(sorted(set(unwaivable)))})")
+        # A PR for an app that does not start is not a PR anyone can review (factory §4.2.1);
+        # a template's failed tests or a committed secret never reach one either (F2 §2.3).
+        names = sorted(set(unwaivable))
+        raise ValueError("refused: can't be waived: "
+                         + "; ".join(UNWAIVABLE_WHY.get(g, g) for g in names)
+                         + f" ({', '.join(names)})")
     not_waived = [g for g in failing if g not in waive]
     if not_waived:
         raise ValueError(f"refused: failing gates not waived: {not_waived}. "
@@ -2168,6 +2177,54 @@ def _consent_repos(owner: Optional[str], repo: Optional[str], repo_host: Optiona
     return [f"{owner}/{repo}"]
 
 
+class AuthorityRefused(RuntimeError):
+    """The build has no authority to act (identity.runs.start_code_task_run refused it: no grant,
+    a grant that no longer covers, an agent with no Passport). A REFUSAL, never a crash: the run
+    ends `blocked` with what to do, and the worker gets an answer (not a 500 it retries)."""
+
+    def __init__(self, reason: str):
+        self.reason = str(reason or "refused")
+        super().__init__(f"authority refused: {self.reason}")
+
+
+def authority_refusal_words(reason: str, agent_name: Optional[str] = None) -> str:
+    """What a person reads on a build refused for want of authority, and what to do about it.
+    `agent_name` names the agent a `grant_does_not_name_agent:<id>` refusal is about."""
+    r = (reason or "").lower()
+    if "grant_does_not_name_agent" in r:
+        who = agent_name or (reason.split(":", 1)[1] if ":" in reason else "the agent that builds it")
+        return (f"The grant this build runs under does not let {who} act, and {who} is the agent "
+                "that builds it. Retry it from the console (in a workflow run, Retry on the build "
+                f"step): you will be asked to consent again, this time for {who} too.")
+    if "no_grant" in r or "no grant" in r or r == "noauthority":
+        return ("No one's authority covers this build: it was started by BOSS itself (or a key) and no "
+                "person's grant lets its builder act. Start it again from the console as a person "
+                "(you will be asked to consent), or give the builder a standing grant under "
+                "My account ▸ Agents acting for me.")
+    if "passport" in r:
+        return ("The builder has no Passport, so it cannot act for anyone. An Owner can give it one "
+                "under Identity ▸ Agents; then start the build again.")
+    if "revoked" in r or "expired" in r or "suspended" in r or "covers" in r or "outside" in r:
+        return ("The grant this build was started under no longer covers it (revoked, expired or "
+                "narrowed). Start it again from the console; you will be asked to consent.")
+    return ("This build was refused the authority to act (" + reason[:80] + "). Start it again from the "
+            "console as a person; you will be asked to consent if a grant is needed.")
+
+
+def _refused_agent_name(engine, reason: str) -> Optional[str]:
+    """The display name of the agent a `grant_does_not_name_agent:<id>` refusal names."""
+    if ":" not in str(reason or "") or "grant_does_not_name_agent" not in str(reason):
+        return None
+    agent_id = str(reason).split(":", 1)[1].strip()
+    try:
+        with _transaction(engine) as c:
+            name = c.execute(sql("SELECT display_name FROM identity_principals WHERE id = :i"),
+                             {"i": agent_id}).scalar()
+    except Exception:  # noqa: BLE001 — the id still says who
+        return None
+    return f"{name} ({agent_id})" if name else None
+
+
 def run_code_task(engine, settings: Settings, jobs, run_id: str,
                   *, fencing_token: Optional[str] = None) -> dict:
     """Execute one full code-task attempt. Safe to re-run after a crash.
@@ -2176,11 +2233,13 @@ def run_code_task(engine, settings: Settings, jobs, run_id: str,
     (sandbox_identity, IDENTITY.md §7.6) — never as the control plane's."""
     from . import owned_process
     from .sandbox_identity import bind as _sandbox_bind
+    from ..app_links.run_env import for_run as _link_env
 
     from .sandbox_identity import SandboxUnavailable
 
     try:
-        with owned_process.owner_scope("code_run", run_id, fresh=True), _sandbox_bind(run_id):
+        with owned_process.owner_scope("code_run", run_id, fresh=True), _sandbox_bind(run_id), \
+                _link_env(engine, run_id, _run_project(engine, run_id)):
             return _run_code_task(engine, settings, jobs, run_id, fencing_token=fencing_token)
     except SandboxUnavailable as exc:
         # Fail closed: a build never runs unisolated when isolation is required.
@@ -2190,8 +2249,28 @@ def run_code_task(engine, settings: Settings, jobs, run_id: str,
                 return _fail(c, run_id, run["project_id"], f"Sandbox unavailable: {exc}",
                              status="blocked", failure_class="needs_human", reason_code="sandbox_unavailable")
         return {"status": "blocked", "done": True, "reason": "sandbox_unavailable"}
+    except AuthorityRefused as exc:
+        # A refusal, said as one: the run is blocked with what to do; the worker is answered.
+        words = authority_refusal_words(exc.reason, _refused_agent_name(engine, exc.reason))
+        with _transaction(engine) as c:
+            run = load_code_task_run(c, run_id)
+            if run is not None and run["status"] not in ("completed", "failed", "cancelled", "blocked"):
+                _fail(c, run_id, run["project_id"], words, status="blocked", failure_class="needs_human",
+                      reason_code="no_authority")
+        return {"status": "blocked", "done": True, "reason": "no_authority", "authority": exc.reason,
+                "message": words}
     finally:
         owned_process.terminate_owner(run_id, reason="run_ended", grace=2.0)
+
+
+def _run_project(engine, run_id: str) -> Optional[str]:
+    """The run's project, for its link environment (app_links.run_env); None if unreadable."""
+    try:
+        with _transaction(engine) as c:
+            run = load_code_task_run(c, run_id)
+        return (run or {}).get("project_id")
+    except Exception:  # noqa: BLE001 — the attempt reads the run itself and reports what is wrong
+        return None
 
 
 def _run_code_task(engine, settings: Settings, jobs, run_id: str,
@@ -2344,7 +2423,7 @@ def _run_code_task(engine, settings: Settings, jobs, run_id: str,
                     role_key=identity_runs.code_task_builder(spec, fctx),
                     job_id=fctx.get("created_by_job_id"))
             except Exception as exc:  # noqa: BLE001 — refused authority fails the build, never widens
-                raise RuntimeError(f"authority refused: {getattr(exc, 'reason', None) or type(exc).__name__}") from exc
+                raise AuthorityRefused(getattr(exc, 'reason', None) or type(exc).__name__) from exc
             if identity_run is not None:
                 token = ""
         if hasattr(provider, "run_code_task"):

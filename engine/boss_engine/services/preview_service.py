@@ -9,6 +9,7 @@ macOS where container host-networking is awkward. Containerized isolation is the
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import shlex
 import logging
@@ -43,6 +44,109 @@ from .scheduling import low_priority
 logger = logging.getLogger(__name__)
 
 PREVIEW_ROOT = Path(os.environ.get("BOSS_PREVIEW_ROOT", "/tmp/boss-previews"))
+
+
+# ------------------------------------------------------------------------------------------ #
+# THE PREVIEW SANDBOX. A preview runs an app an agent (or a template, or a deliberately insecure
+# demo) wrote. It ran as the control plane's own uid, so it could read whatever the API can: the
+# identity master key, /proc/<api>/environ (DATABASE_URL, provider keys), every other run's
+# directory, the database over the network. Now every process preview runs the way a build does
+# (sandbox_identity, IDENTITY.md §7.6): its own pool uid, leased for the preview's life
+# (`acquire`, released by `_teardown`), its tree inside that uid's 2770 run directory, the
+# sandbox environment (no control-plane variable), and the entrypoint's network fence: loopback
+# and its OWN preview port, the API and egress (allowlisted outbound) and the link gateway; never
+# another preview's port, the database or anything else. Its log lives OUTSIDE its tree (the app
+# could otherwise swap the log for a link to a BOSS file and have BOSS read it back).
+# ------------------------------------------------------------------------------------------ #
+
+def _preview_root() -> Path:
+    PREVIEW_ROOT.mkdir(parents=True, exist_ok=True)
+    with contextlib.suppress(OSError):
+        os.chmod(PREVIEW_ROOT, 0o700)
+    return PREVIEW_ROOT
+
+
+def preview_log_path(preview_id: str) -> str:
+    """Where a preview's output goes: BOSS's directory, never the app's tree."""
+    return str(_preview_root() / f"{preview_id}.log")
+
+
+def _preview_sandbox(preview_id: str):
+    """The preview's own sandbox uid, held until `_teardown` (None when isolation is off, or
+    `auto` without the helper). Raises SandboxUnavailable when isolation is required and
+    impossible: the preview then fails, it never runs as the control plane."""
+    from . import sandbox_identity
+
+    return sandbox_identity.acquire(preview_id, what="preview")
+
+
+def _release_preview_sandbox(preview_id: Optional[str]) -> None:
+    if not preview_id:
+        return
+    with contextlib.suppress(Exception):
+        from . import sandbox_identity
+
+        sandbox_identity.release(str(preview_id))
+
+
+def _preview_workdir(preview_id: str, ident) -> Path:
+    if ident is not None:
+        return ident.workspace(f"{preview_id}-")
+    return Path(tempfile.mkdtemp(prefix=f"{preview_id}-", dir=str(_preview_root())))
+
+
+def _open_to_sandbox(root: Path) -> None:
+    """What BOSS copied into a sandboxed preview's tree becomes editable by its uid (npm install
+    writes beside the sources). Only that uid and BOSS can enter the 2770 run directory, so this
+    opens nothing to anyone else. Never follows a symlink."""
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+        with contextlib.suppress(OSError):
+            os.chmod(dirpath, 0o2777)
+        for name in filenames:
+            path = os.path.join(dirpath, name)
+            if not os.path.islink(path):
+                with contextlib.suppress(OSError):
+                    os.chmod(path, os.stat(path).st_mode | 0o666)
+
+
+def _sandboxed_preview_port(ident) -> int:
+    """The port the fence opens to this preview's own uid (BOSS_PREVIEW_SELF), when free; any
+    free preview port otherwise (the app then cannot call itself on its port)."""
+    if ident is not None:
+        from .sandbox_identity import preview_port_for_uid
+
+        own = preview_port_for_uid(ident.uid)
+        if own is not None:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+                # As servers bind (SO_REUSEADDR): the last preview's closed connections in
+                # TIME_WAIT do not make the port busy; a live listener still does.
+                probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                try:
+                    probe.bind(("0.0.0.0", own))
+                    return own
+                except OSError:
+                    pass
+    return app_preview_port()
+
+
+def ports_listened_by(uid: int, tables: tuple[str, ...] = ("/proc/net/tcp", "/proc/net/tcp6")
+                      ) -> Optional[set[int]]:
+    """TCP ports with a LISTEN socket owned by `uid` (/proc/net/tcp, tcp6), or None where /proc
+    cannot say (a developer's Mac: no sandbox there either)."""
+    found: set[int] = set()
+    seen_any = False
+    for table in tables:
+        try:
+            with open(table, encoding="ascii", errors="ignore") as fh:
+                next(fh, None)
+                seen_any = True
+                for line in fh:
+                    f = line.split()
+                    if len(f) > 7 and f[3] == "0A" and f[7] == str(int(uid)):
+                        found.add(int(f[1].rsplit(":", 1)[1], 16))
+        except OSError:
+            continue
+    return found if seen_any else None
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -152,6 +256,22 @@ def preview_origin_for(host_header: Optional[str], scheme: str = "http") -> str:
         return ""
     hostname = found.group(1)
     return f"{'https' if scheme == 'https' else 'http'}://{hostname}:{port}"
+
+
+def public_preview_url(preview_id: str, host_header: Optional[str] = None, scheme: str = "http",
+                       *, settings: Optional[Settings] = None) -> str:
+    """The ABSOLUTE address a person's browser (or a provider calling back) reaches this
+    preview at — the preview origin, else BOSS_PREVIEW_PUBLIC_BASE — or "" when BOSS cannot
+    say one. Never `app_previews.url`: that is the app's port inside the API container
+    (http://127.0.0.1:19769), reachable from nowhere a browser or a webhook runs."""
+    from urllib.parse import quote
+
+    path = f"/v1/previews/{quote(str(preview_id), safe='')}/web"
+    origin = preview_origin_for(host_header, scheme)
+    if origin:
+        return origin + path
+    base = _preview_public_base(None, settings=settings)
+    return base + path if base else ""
 
 
 def operator_preview_open_url(
@@ -318,6 +438,69 @@ def _free_port() -> int:
     port = s.getsockname()[1]
     s.close()
     return port
+
+
+def app_preview_port() -> int:
+    """A free port for a PREVIEW's app, from BOSS_PREVIEW_PORTS (default 19000-19999). Previews live in
+    their own range so the sandbox fence can refuse it to every build (a build reaches another
+    app's preview only through the link gateway, F5 §5.4) and the link gateway can refuse
+    anything outside it as an upstream. Falls back to any free port only if the range is full."""
+    import random
+
+    from ..app_links.service import preview_ports
+
+    pool = preview_ports()
+    span = pool.high - pool.low + 1
+    start = random.randrange(span)
+    for i in range(span):
+        port = pool.low + (start + i) % span
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            try:
+                probe.bind(("0.0.0.0", port))
+            except OSError:
+                continue
+        return port
+    logger.warning("BOSS_PREVIEW_PORTS is full; this preview takes an ephemeral port")
+    return _free_port()
+
+
+def preview_link_environment(engine, *, project_id: str, run_id: Optional[str], preview_id: str,
+                             expires_at, rotate: bool) -> dict[str, str]:
+    """What cross-app links add to a preview (F5 §5.3): as a consumer, BOSS_LINK_<ALIAS>_* and
+    this preview's link pass; as a provider, BOSS_TEST_USERS (rotated on a NEW preview). Never
+    fails the preview: a link that cannot be resolved is logged by name and left out. Also the
+    app's own template environment (preview_app_environment); links win on a name clash."""
+    try:
+        from ..app_links import service as _links
+
+        with begin(engine) as c:
+            env = _links.workload_environment(c, project_id=project_id, run_id=run_id, env="preview",
+                                              consumer_kind="preview", consumer_id=preview_id,
+                                              expires_at=expires_at, rotate=rotate)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("preview %s starts without its link environment (%s)", preview_id, type(exc).__name__)
+        return preview_app_environment(engine, project_id=project_id, run_id=run_id, preview_id=preview_id)
+    if env:
+        logger.info("preview %s gets %s", preview_id, ", ".join(sorted(env)))
+    return {**preview_app_environment(engine, project_id=project_id, run_id=run_id, preview_id=preview_id),
+            **env}
+
+
+def preview_app_environment(engine, *, project_id: str, run_id: Optional[str], preview_id: str) -> dict[str, str]:
+    """What the app's templates give a preview (F2 §2.4, F6): its `preview` secrets (never live),
+    APP_BASE_URL, and its Sign in with BOSS redirect URI registered for this preview. Never fails the
+    preview: logged by kind and left out."""
+    try:
+        from ..oidc_provider.app_sign_in import preview_environment
+
+        with begin(engine) as c:
+            env = preview_environment(c, project_id=project_id, run_id=run_id, preview_id=preview_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("preview %s starts without its app secrets (%s)", preview_id, type(exc).__name__)
+        return {}
+    if env:
+        logger.info("preview %s gets %s", preview_id, ", ".join(sorted(env)))
+    return env
 
 
 def _low_priority(command: list[str]) -> list[str]:
@@ -1011,6 +1194,12 @@ def resolve_app_entry(workdir: Path, changed: Optional[list[str]] = None) -> tup
     # it produced a preview that could never serve.
     if not candidates and (workdir / "package.json").exists() and _node_dir_can_build("."):
         candidates.append(("node", "."))
+    # A Java service at the root (pom.xml / build.gradle): build the jar and run it.
+    if not candidates:
+        from . import toolchains
+
+        if toolchains.detect_java(workdir):
+            return ("java", ".")
     if len(candidates) == 1:
         return candidates[0]
     if candidates:
@@ -1114,7 +1303,7 @@ def how_app_runs(workdir: Path, changed: Optional[list[str]] = None) -> Optional
     # workspaces root: "Build failed in 6ms | Could not resolve entry module index.html",
     # nothing listened, "app did not serve HTTP within timeout" — for an app that was never
     # started.
-    if kind == "py" and value:
+    if kind in ("py", "java") and value:
         command = command_for_entry(workdir, kind, value)
         return AppRun(command, "resolved", entry) if command else None
     if kind in {"node", "static"} and value not in {"", "."}:
@@ -1324,6 +1513,18 @@ def command_for_entry(workdir: Path, kind: str, value: str) -> Optional[list[str
         if run_dir == ".":
             return argv
         return ["sh", "-lc", f"cd {shlex.quote(run_dir)} && {shlex.join(argv)}"]
+    if kind == "java":
+        from . import toolchains
+
+        app_root = workdir if value in (".", "") else workdir / value
+        build = toolchains.detect_java(app_root)
+        if build is None:
+            return None
+        if not toolchains.has("java"):
+            return ["sh", "-lc", "echo " + shlex.quote(toolchains.missing_message(
+                "java", toolchains.build_file(build))) + " >&2; exit 78"]
+        argv = toolchains.java_preview_command(app_root, build)
+        return argv if value in (".", "") else ["sh", "-lc", f"cd {shlex.quote(value)} && {argv[2]}"]
     if kind == "static":
         # A static site still needs a SERVER — ES modules refuse to load over file:// — so a
         # bare index.html is a runnable app, not a library.
@@ -1394,8 +1595,32 @@ def _url_ok(url: str, *, headers: Optional[dict[str, str]] = None, check_body: b
         return False
 
 
-def _http_ok(port: int) -> bool:
-    return _url_ok(f"http://127.0.0.1:{port}", check_body=True)
+HEALTH_DECLARATION_FILE = "boss.preview.health"
+
+
+def preview_health_path(workdir: Optional[Path]) -> str:
+    """The path a preview's health check asks for: `/`, or the one line of boss.preview.health
+    (an API with nothing at `/`, e.g. a Dropwizard service: `/hello`)."""
+    try:
+        line = (Path(workdir) / HEALTH_DECLARATION_FILE).read_text(errors="ignore").strip()
+    except (OSError, TypeError):
+        return "/"
+    line = line.splitlines()[0].strip() if line else ""
+    return line if line.startswith("/") and "://" not in line and len(line) < 300 else "/"
+
+
+def preview_start_timeout(workdir: Optional[Path], default: float = 180.0) -> float:
+    """A Java service builds its jar (and downloads its dependencies) before it binds."""
+    from . import toolchains
+
+    try:
+        return max(default, 600.0) if workdir and toolchains.detect_java(workdir) else default
+    except OSError:
+        return default
+
+
+def _http_ok(port: int, path: str = "/") -> bool:
+    return _url_ok(f"http://127.0.0.1:{port}{path if path != '/' else ''}", check_body=True)
 
 
 def _diagnose_listening_port(log_path: str, port_hint: int) -> Optional[str]:
@@ -1563,21 +1788,31 @@ def _why_it_failed(log_path: str, limit: int = 900) -> str:
 
 
 def _discover_working_port(log_path: str, port_hint: int, timeout: float = 20.0,
-                           proc: Optional[subprocess.Popen] = None) -> Optional[int]:
+                           proc: Optional[subprocess.Popen] = None,
+                           health_path: str = "/", listener_uid: Optional[int] = None) -> Optional[int]:
     """Return the port the app actually serves HTTP on — its log-announced port first, then the
     injected PORT — each health-checked, so a neighboring local service is never mistaken for it.
 
     Given the process, stop waiting the moment it exits: an app that died on an ImportError at
     import time will never bind, and waiting out the full window only delays the real error."""
+    def candidates() -> list[int]:
+        ports = _candidate_ports(log_path, port_hint)
+        if listener_uid is None:
+            return ports
+        # A SANDBOXED preview's port is one ITS uid listens on. The log is the app's to write:
+        # "listening on 8000" must not make BOSS's own API (or another preview) its preview.
+        mine = ports_listened_by(listener_uid)
+        return ports if mine is None else [p for p in ports if p in mine]
+
     deadline = time.time() + timeout
     while time.time() < deadline:
-        for port in _candidate_ports(log_path, port_hint):
-            if _http_ok(port):
+        for port in candidates():
+            if _http_ok(port, health_path):
                 return port
         if proc is not None and proc.poll() is not None:
             # One last look: a server that forked and exited its parent may be up by now.
-            for port in _candidate_ports(log_path, port_hint):
-                if _http_ok(port):
+            for port in candidates():
+                if _http_ok(port, health_path):
                     return port
             return None
         time.sleep(0.8)
@@ -1596,7 +1831,7 @@ def _is_model_or_credential(name: str) -> bool:
     return upper.startswith(_MODEL_CREDENTIAL_PREFIXES) or any(m in upper for m in SECRET_SHAPED)
 
 
-def app_environment(workdir: Path, port: int) -> dict[str, str]:
+def app_environment(workdir: Path, port: int, extra: Optional[dict[str, str]] = None) -> dict[str, str]:
     """The environment an app BOSS starts (preview or serve proof) runs with.
 
     Agent-written code, so the agent's rules: agent_environment withholds DATABASE_URL, deploy
@@ -1628,12 +1863,16 @@ def app_environment(workdir: Path, port: int) -> dict[str, str]:
         "npm_config_update_notifier": "false"})
     env = {k: v for k, v in env.items() if not _is_model_or_credential(k)}
     env.update({"PORT": str(port), "HOST": "0.0.0.0", "HOME": str(workdir)})
+    # Cross-app links (F5): values BOSS computed for THIS launch (preview_link_environment),
+    # added after the filter like PORT, never inherited.
+    env.update(extra or {})
     return env
 
 
 def launch_app(workdir: Path, command: list[str], log_path: str, *,
                owner: Optional["owned_process.Owner"] = None,
-               expires_at=None) -> tuple[subprocess.Popen, int]:
+               expires_at=None, port: Optional[int] = None,
+               extra_env: Optional[dict[str, str]] = None) -> tuple[subprocess.Popen, int]:
     """Start ONE app the way a preview does: PORT/HOST injected, output to log_path, low
     priority, its own process group. Returns (process, the PORT it was given).
 
@@ -1641,9 +1880,10 @@ def launch_app(workdir: Path, command: list[str], log_path: str, *,
     call it, so "it served when the build checked" and "it serves in preview" are the same
     claim about the same invocation, not two launchers that can drift apart.
     """
-    port_hint = _free_port()
-    env = app_environment(workdir, port_hint)
-    logf = open(log_path, "w")
+    port_hint = port or _free_port()
+    env = app_environment(workdir, port_hint, extra_env)
+    logf = os.fdopen(os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0),
+                             0o600), "w")
     try:
         # OWNED (owned_process): the serve proof belongs to the build that runs it (the
         # enclosing owner scope) and dies with it; a preview passes its own `owner`, so it
@@ -1875,7 +2115,9 @@ def prove_app_serves(workdir: Path, changed: Optional[list[str]], *,
         log_path = str(tree / ".boss-serve-proof.log")
         proc, port_hint = launch_app(tree, plan.command, log_path)
         try:
-            port = _discover_working_port(log_path, port_hint, timeout=timeout, proc=proc)
+            port = _discover_working_port(log_path, port_hint,
+                                          timeout=preview_start_timeout(tree, timeout), proc=proc,
+                                          health_path=preview_health_path(tree))
             exit_code = proc.poll()
             if port is not None:
                 record.update(proven=True, port=port)
@@ -2001,15 +2243,15 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
     project_id = run["project_id"]
     preview_id = make_id("prev")
 
-    PREVIEW_ROOT.mkdir(parents=True, exist_ok=True)
-    workdir = Path(tempfile.mkdtemp(prefix=f"{preview_id}-", dir=str(PREVIEW_ROOT)))
-    log_path = str(workdir / "_preview.log")
+    log_path = preview_log_path(preview_id)
+    workdir = Path(tempfile.gettempdir())     # set below, once the sandbox is held
 
     def _fail(msg: str, *, command: Optional[str] = None, exited: Optional[bool] = None) -> dict:
         # THE LAUNCH COMMAND IS PART OF THE RECORD. app_previews.command was empty on every
         # failed row, so "it crashed" could not be followed by "running WHAT" — the one fact
         # needed to reproduce it by hand.
         failure_kind, suggested_action = _classify_start_failure(msg, exited=exited)
+        _release_preview_sandbox(preview_id)
         with begin(engine) as c:
             c.execute(text(
                 "INSERT INTO app_previews (id,project_id,run_id,repo,branch,command,substrate,"
@@ -2035,6 +2277,13 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
         return {"id": preview_id, "status": "failed", "error": msg, "command": command,
                 "failure_kind": failure_kind, "suggested_action": suggested_action}
 
+    from .sandbox_identity import SandboxUnavailable
+
+    try:
+        ident = _preview_sandbox(preview_id)
+    except SandboxUnavailable as exc:
+        return _fail(f"the preview sandbox is unavailable: {exc}")
+    workdir = _preview_workdir(preview_id, ident)
     local_ws = None if (run.get("pull_request_url") or "") else find_local_run_workspace(run_id)
     if local_ws is not None:
         src = local_ws / "bugbox" if (local_ws / "bugbox" / "package.json").is_file() else local_ws
@@ -2044,6 +2293,8 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
             )
         except OSError as exc:
             return _fail(f"copy local workspace failed: {exc}")
+        if ident is not None:
+            _open_to_sandbox(workdir)
     else:
         # NOT settings.github_token. That field is the old install-wide way of naming a
         # target repo and is empty wherever the repository was connected through the
@@ -2062,7 +2313,9 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
                                         owner=owner, repo=repo, project_id=project_id, token=_token) as _access:
             clone_url = _access.url
             clone = owned_process.boss_run(["git", "clone", "--depth", "1", "--branch", branch, clone_url, str(workdir)],
-                               capture_output=True, text=True, timeout=120, env=_access.environ())
+                               capture_output=True, text=True, timeout=120, env=_access.boss_environ(),
+                               # BOSS's git, writing a tree the preview's uid must be able to edit
+                               **({"umask": 0} if ident is not None else {}))
         if clone.returncode != 0:
             return _fail(f"git clone failed: {(clone.stderr or '')[-300:]}")
 
@@ -2071,12 +2324,19 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
         tests: execute the suite one-shot, capture output, and return the result so the user sees
         it work, instead of a misleading 'add a preview command' error."""
         try:
-            proc = owned_process.run(["sh", "-lc", cmd_str], cwd=str(workdir),
+            # The app's own tests: its code, so the preview's sandbox uid and the app's
+            # environment, never the control plane's.
+            env = app_environment(workdir, 0)
+            env.pop("PORT", None)
+            proc = owned_process.run(["sh", "-lc", cmd_str], cwd=str(workdir), env=env,
+                                  owner=owned_process.Owner("preview", preview_id, project_id),
                                   capture_output=True, text=True, timeout=300)
             output = (proc.stdout or "") + (proc.stderr or "")
             exit_code = proc.returncode
         except subprocess.TimeoutExpired:
             output, exit_code = "test run exceeded 300s and was stopped", 124
+        finally:
+            _release_preview_sandbox(preview_id)
         try:
             Path(log_path).write_text(output, encoding="utf-8")
         except OSError:
@@ -2123,17 +2383,22 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
             "target, or a Python entrypoint/tests)"
         )
 
+    _expires = datetime.now(timezone.utc) + timedelta(minutes=ttl_minutes)
     proc, port_hint = launch_app(
         workdir, command, log_path,
         owner=owned_process.Owner("preview", preview_id, project_id),
-        expires_at=datetime.now(timezone.utc) + timedelta(minutes=ttl_minutes))
+        expires_at=_expires, port=_sandboxed_preview_port(ident),
+        extra_env=preview_link_environment(engine, project_id=project_id, run_id=run_id,
+                                           preview_id=preview_id, expires_at=_expires, rotate=True))
 
     # Web builds do `npm install` + `vite build` before the static server binds — well past the
     # default 20s window — so give discovery generous headroom (it returns as soon as the port
     # answers, so this never slows the fast case).
     # Given the process, discovery stops the moment it exits — an app that died on an
     # ImportError never binds, and waiting out three minutes only delayed the real error.
-    port = _discover_working_port(log_path, port_hint, timeout=180.0, proc=proc)
+    port = _discover_working_port(log_path, port_hint, timeout=preview_start_timeout(workdir),
+                                  proc=proc, health_path=preview_health_path(workdir),
+                                  listener_uid=ident.uid if ident is not None else None)
     if port is None:
         # NAME WHICH FAILURE THIS IS before killing the process — once it is dead, the
         # difference between "never bound" and "bound and served the wrong thing" is gone.
@@ -2315,7 +2580,7 @@ def start_container_preview(engine, settings: Settings, run_id: str, *, ttl_minu
                                     owner=owner, repo=repo, project_id=project_id, token=_token) as _access:
         clone_url = _access.url
         clone = owned_process.boss_run(["git", "clone", "--depth", "1", "--branch", branch, clone_url, str(workdir)],
-                           capture_output=True, text=True, timeout=120, env=_access.environ())
+                           capture_output=True, text=True, timeout=120, env=_access.boss_environ())
     if clone.returncode != 0:
         return _fail(f"git clone failed: {(clone.stderr or '')[-300:]}")
 
@@ -2485,9 +2750,9 @@ def _respawn_process_preview(engine, settings: Settings, preview_id: str) -> Non
         branch = row["branch"]
         if not owner or not repo or not branch:
             return
-        PREVIEW_ROOT.mkdir(parents=True, exist_ok=True)
-        workdir = Path(tempfile.mkdtemp(prefix=f"{preview_id}-", dir=str(PREVIEW_ROOT)))
-        log_path = str(workdir / "_preview.log")
+        ident = _preview_sandbox(preview_id)       # SandboxUnavailable: stays stopped (below)
+        workdir = _preview_workdir(preview_id, ident)
+        log_path = preview_log_path(preview_id)
         # NOT settings.github_token. That field is the old install-wide way of naming a
         # target repo and is empty wherever the repository was connected through the
         # wizard, so this handed git an anonymous URL for a private repo and every clone
@@ -2506,21 +2771,31 @@ def _respawn_process_preview(engine, settings: Settings, preview_id: str) -> Non
             clone_url = _access.url
             clone = owned_process.run(
             ["git", "clone", "--depth", "1", "--branch", branch, clone_url, str(workdir)],
-            capture_output=True, text=True, timeout=120, env=_access.environ(), sandboxed=False)
+            capture_output=True, text=True, timeout=120, env=_access.boss_environ(), sandboxed=False,
+            **({"umask": 0} if ident is not None else {}))
         if clone.returncode != 0:
+            _release_preview_sandbox(preview_id)
             return
         _changed = lineage_impl_files(engine, {"id": row["run_id"]})
         command = _detect_command(workdir, _changed)
         if not command:
+            _release_preview_sandbox(preview_id)
             return
         # The one launcher, so a respawned preview gets the same filtered environment as the
         # first start (app_environment) instead of the worker's own.
         proc, port_hint = launch_app(
             workdir, command, log_path,
-            owner=owned_process.Owner("preview", preview_id, row.get("project_id")))
-        port = _discover_working_port(log_path, port_hint, timeout=180.0)
+            owner=owned_process.Owner("preview", preview_id, row.get("project_id")),
+            port=_sandboxed_preview_port(ident),
+            extra_env=preview_link_environment(engine, project_id=project_id, run_id=row.get("run_id"),
+                                               preview_id=preview_id, expires_at=row.get("expires_at"),
+                                               rotate=False))
+        port = _discover_working_port(log_path, port_hint, timeout=preview_start_timeout(workdir),
+                                      health_path=preview_health_path(workdir),
+                                      listener_uid=ident.uid if ident is not None else None)
         if port is None:
             _kill(proc.pid)
+            _release_preview_sandbox(preview_id)
             return
         url = f"http://127.0.0.1:{port}"
         with begin(engine) as c:
@@ -2529,6 +2804,7 @@ def _respawn_process_preview(engine, settings: Settings, preview_id: str) -> Non
                 "log_path=:lg WHERE id=:id"),
                 {"pid": proc.pid, "port": port, "url": url, "lg": log_path, "id": preview_id})
     except Exception:  # noqa: BLE001 — best-effort; a failed respawn just leaves it 'stopped'
+        _release_preview_sandbox(preview_id)
         return
 
 
@@ -2970,10 +3246,17 @@ def proxy_preview(engine, preview_id: str, subpath: str, method: str,
                   query_string: str = "", body: Optional[bytes] = None,
                   content_type: Optional[str] = None,
                   sandbox_token: str = "",
-                  incoming_headers: Optional[dict] = None):
-    """Reverse-proxy a request to a running preview's loopback port → (status, content_type, bytes).
-    Only the api can reach the preview's 127.0.0.1 port, so this exposes it via the api's own
-    (tailnet-routed) URL. HTML responses get the root-relative path-rewrite shim."""
+                  incoming_headers: Optional[dict] = None,
+                  app_cookie_header: Optional[str] = None):
+    """Reverse-proxy a request to a running preview's loopback port → (status, content_type, bytes,
+    headers). Only the api can reach the preview's 127.0.0.1 port, so this exposes it via the api's
+    own (tailnet-routed) URL. HTML responses get the root-relative path-rewrite shim.
+
+    Cookies (preview_cookies): `app_cookie_header` is the app's OWN cookies, already filtered and
+    untagged by the caller (the incoming Cookie header is never forwarded); the app's Set-Cookie
+    answers come back under headers["Set-Cookie"] as a LIST, each tagged and scoped to this
+    preview's path, the ones naming a BOSS cookie or another path dropped."""
+    from .preview_cookies import outbound_set_cookie
     import urllib.error
     with begin(engine) as c:
         row = c.execute(text("SELECT url,status,mode FROM app_previews WHERE id=:id"),
@@ -2997,9 +3280,18 @@ def proxy_preview(engine, preview_id: str, subpath: str, method: str,
         incoming_headers, content_type=content_type
     ).items():
         req.add_header(header_name, header_value)
+    if app_cookie_header:
+        req.add_header("Cookie", app_cookie_header)
     if row["mode"] == "rootfs" and sandbox_token:
         req.add_header("X-Sandbox-Token", sandbox_token)
-    response_headers: dict[str, str] = {}
+    response_headers: dict = {}
+
+    def _cookies_of(message) -> None:
+        made = [c for c in (outbound_set_cookie(preview_id, v) for v in (message.get_all("Set-Cookie") or []))
+                if c]
+        if made:
+            response_headers["Set-Cookie"] = made
+
     try:
         resp = urllib.request.build_opener(_NoRedirect()).open(req, timeout=25)
         status = resp.status
@@ -3007,10 +3299,12 @@ def proxy_preview(engine, preview_id: str, subpath: str, method: str,
         data = resp.read()
         if resp.headers.get("Location"):
             response_headers["Location"] = resp.headers["Location"]
+        _cookies_of(resp.headers)
     except urllib.error.HTTPError as e:
         status, ctype, data = e.code, e.headers.get("Content-Type", "text/plain"), e.read()
         if e.headers.get("Location"):
             response_headers["Location"] = e.headers["Location"]
+        _cookies_of(e.headers)
     except Exception as e:  # noqa: BLE001 — process gone (e.g. after an api restart): self-heal
         try:
             with begin(engine) as c2:
@@ -3031,6 +3325,22 @@ def proxy_preview(engine, preview_id: str, subpath: str, method: str,
     if "text/html" in (ctype or ""):
         data = _inject_shim(data, f"/v1/previews/{preview_id}/web")
     return status, ctype, data, response_headers
+
+
+def _is_boss_oidc(parsed: urllib.parse.SplitResult) -> bool:
+    """A redirect to BOSS's OWN OIDC provider (Sign in with BOSS) at its public origin. On a local
+    install that origin is loopback too (http://localhost:<port>), and the loopback rule below would
+    glue the authorize URL under the preview's prefix: every sign-in inside a preview broke."""
+    try:
+        from ..config import get_settings
+
+        own = urllib.parse.urlsplit(str(get_settings().public_url or "").strip())
+    except Exception:  # noqa: BLE001
+        return False
+    if not own.scheme or not own.netloc:
+        return False
+    return (parsed.scheme.lower(), parsed.netloc.lower()) == (own.scheme.lower(), own.netloc.lower()) \
+        and parsed.path.startswith("/oidc/")
 
 
 def _gateway_location(preview_id: str, location: str) -> str:
@@ -3064,7 +3374,7 @@ def _gateway_location(preview_id: str, location: str) -> str:
             return location   # `login`, `../x`: resolved against the gateway URL it came from
         # javascript:, data:, file:… never a place a preview may send the browser.
         return f"{prefix}/"
-    if _is_loopback_url(parsed.geturl()):
+    if _is_loopback_url(parsed.geturl()) and not _is_boss_oidc(parsed):
         rest = parsed.path or "/"
         return f"{prefix}{rest}" + (f"?{parsed.query}" if parsed.query else "") + (
             f"#{parsed.fragment}" if parsed.fragment else "")
@@ -3162,6 +3472,8 @@ def _teardown(row, settings: Optional[Settings] = None) -> None:
             MicroVMProvider(settings).release(sandbox_id)
     else:
         _kill(row.get("pid"))
+        # The preview's uid: every process it left is killed, its tree removed, the uid freed.
+        _release_preview_sandbox(row.get("id"))
 
 
 def stop_preview(engine, preview_id: str, settings: Optional[Settings] = None) -> dict:
@@ -3174,6 +3486,25 @@ def stop_preview(engine, preview_id: str, settings: Optional[Settings] = None) -
             raise ValueError("preview not found")
         _teardown(dict(row), settings)
         c.execute(text("UPDATE app_previews SET status='stopped' WHERE id=:id"), {"id": preview_id})
+    # Its link passes die with it (the gateway also refuses a stopped preview on every request).
+    try:
+        from ..app_links import service as _links
+
+        with begin(engine) as c:
+            _links.revoke_passes_of(c, "preview", preview_id)
+    except Exception:  # noqa: BLE001 — a schema without links has no passes to revoke
+        pass
+    # Its Sign in with BOSS redirect URI goes with it.
+    try:
+        from ..oidc_provider.app_sign_in import preview_stopped
+
+        with begin(engine) as c:
+            run_id = c.execute(text("SELECT run_id, project_id FROM app_previews WHERE id = :id"),
+                               {"id": preview_id}).first()
+            if run_id is not None:
+                preview_stopped(c, project_id=run_id[1], run_id=run_id[0], preview_id=preview_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("preview %s: its sign-in redirect was not removed (%s)", preview_id, type(exc).__name__)
     return {"id": preview_id, "status": "stopped"}
 
 

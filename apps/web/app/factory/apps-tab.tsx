@@ -28,6 +28,11 @@ import { areaHref, costWord } from "./cockpit-util";
 import { formatMonthDay } from "../../lib/datetime";
 import { GatedButton } from "../../components/gated";
 import { NEW_BUILD_TIP } from "../../lib/compose-links";
+import { LINKS_TIP, LinksSheet } from "./links-sheet";
+import { SecuritySheet, readSecurityParam, writeSecurityParam } from "./security/security-sheet";
+import { SIGN_IN_TIP, SignInSheet } from "./sign-in-sheet";
+import { AppSetupSheet } from "../../components/v2/templates/setup-sheet";
+import { LabLinks } from "./lab-links";
 
 /** Where "＋ Add a feature" goes: New project, in add mode, with this app chosen. */
 export function addFeatureHref(appKey: string, previewId?: string | null): string {
@@ -54,6 +59,10 @@ export type AppRow = {
    *  whether it ran on a subscription only, its repo, its brief and when it last moved. */
   prNumber?: number; prUrl?: string; prState?: PrState; costUsd?: number; included?: boolean;
   repo?: string; brief?: string; at?: string;
+  /** The app's id (finalize_ctx.app_id): what app-level surfaces — App › Security — address. */
+  appId?: string;
+  /** The app's key (its name's identity key): what templates, secrets, Setup and links address. */
+  appKey?: string;
 };
 
 const BUILT = new Set(["pr_open", "merged", "deployed", "done_no_pr"]);
@@ -129,7 +138,7 @@ export function parseApps(w: unknown): AppRow[] {
       rank: rankOf(word),
       prNumber: numOrU(o.pr_number), prUrl: opt(o.pr_url), prState: prStateOf(o.pr_state),
       costUsd: num(o.cost_usd), included: o.included === true, repo: opt(o.repo), brief: opt(o.brief),
-      at: opt(o.at),
+      at: opt(o.at), appId: opt(o.app_id), appKey: opt(o.app_key),
     };
   });
 }
@@ -250,6 +259,15 @@ export function AppsTab({ projectId, runs, previews, query = "", onOpen, onNew }
   const [open, setOpen] = useState<string | null>(null);
   /** The app whose row menu is open. */
   const [menu, setMenu] = useState<string | null>(null);
+  /** App ▸ Links (F5): the app whose links sheet is open. */
+  const [linksOf, setLinksOf] = useState<AppRow | null>(null);
+  /** App ▸ Sign-in (F6): the app whose Sign in with BOSS sheet is open. */
+  const [signInOf, setSignInOf] = useState<AppRow | null>(null);
+  /** App ▸ Setup (F2): the app whose templates, secrets and guide are open. */
+  const [setupOf, setSetupOf] = useState<AppRow | null>(null);
+  /** App › Security: the app id it is open on (`?security=<app id>`, so it can be linked). */
+  const [security, setSecurity] = useState<string | null>(() => readSecurityParam());
+  const openSecurity = (appId: string | null) => { setSecurity(appId); writeSecurityParam(appId); };
   // A row menu closes on a press anywhere else, or Esc.
   useEffect(() => {
     if (!menu) return undefined;
@@ -263,6 +281,7 @@ export function AppsTab({ projectId, runs, previews, query = "", onOpen, onNew }
   if (!apps.length) {
     return (
       <div className="fx-apps" data-testid="fx-apps">
+        <LabLinks projectId={projectId} />
         <div className="ag-empty fx-empty" data-testid="fx-no-apps">
           <span>No apps yet</span>
           <GatedButton permission="workflow_run:start" type="button" className="ag-btn ag-btn-primary" onClick={onNew}
@@ -279,6 +298,8 @@ export function AppsTab({ projectId, runs, previews, query = "", onOpen, onNew }
     </span>
   );
   return (
+    <>
+    <LabLinks projectId={projectId} />
     <div className="fx-apps" data-testid="fx-apps" role="table" aria-label="Apps">
       <div className="fx-apps-head fx-app-grid" role="row">
         <span className="fx-apps-th fx-c-chev" role="columnheader" aria-label="Builds of the app" />
@@ -343,6 +364,19 @@ export function AppsTab({ projectId, runs, previews, query = "", onOpen, onNew }
                             e.stopPropagation(); setMenu(null);
                             onOpen(opens, (e.currentTarget as HTMLElement).closest("li"));
                           }}>Open its build</button>
+                          <button type="button" role="menuitem" title="Its templates, secrets and setup guide"
+                                  data-testid={`fx-app-menu-setup-${a.key}`}
+                                  onClick={(e) => { e.stopPropagation(); setMenu(null); setSetupOf(a); }}>Setup</button>
+                          <button type="button" role="menuitem" title={LINKS_TIP} data-testid={`fx-app-menu-links-${a.key}`}
+                                  onClick={(e) => { e.stopPropagation(); setMenu(null); setLinksOf(a); }}>Links</button>
+                          <button type="button" role="menuitem" title={SIGN_IN_TIP} data-testid={`fx-app-menu-signin-${a.key}`}
+                                  onClick={(e) => { e.stopPropagation(); setMenu(null); setSignInOf(a); }}>Sign-in</button>
+                          {a.appId ? (
+                            <button type="button" role="menuitem" data-testid={`fx-app-menu-security-${a.key}`}
+                                    title="Scans, findings and security reviews of this app" onClick={(e) => {
+                              e.stopPropagation(); setMenu(null); openSecurity(a.appId ?? null);
+                            }}>Security</button>
+                          ) : null}
                         </span>
                       ) : null}
                     </span>
@@ -404,6 +438,24 @@ export function AppsTab({ projectId, runs, previews, query = "", onOpen, onNew }
           );
         })}
       </ul>
+      {linksOf ? (
+        <LinksSheet projectId={projectId} appKey={linksOf.key} app={linksOf.app}
+                    others={apps.filter((o) => o.key !== linksOf.key).map((o) => ({ key: o.key, app: o.app }))}
+                    onClose={() => setLinksOf(null)} />
+      ) : null}
+      {signInOf ? (
+        <SignInSheet projectId={projectId} appKey={signInOf.key} app={signInOf.app} onClose={() => setSignInOf(null)} />
+      ) : null}
+      {setupOf ? (
+        <AppSetupSheet projectId={projectId} appKey={setupOf.appKey ?? null} runId={builtBuild(setupOf.builds)?.runId ?? setupOf.key}
+                       appName={setupOf.app} onClose={() => setSetupOf(null)} />
+      ) : null}
+      {security ? (
+        <SecuritySheet projectId={projectId} appKey={security}
+                       appName={apps.find((a) => a.appId === security)?.app}
+                       onClose={() => openSecurity(null)} />
+      ) : null}
     </div>
+    </>
   );
 }

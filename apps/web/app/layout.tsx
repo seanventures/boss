@@ -19,6 +19,8 @@ import "./skills/kit.css";
 // Factory (Floor, Line, Apps, the cockpit): fx- classes.
 import "./factory/factory.css";
 import "./factory/cockpit.css";
+import "./factory/security/security.css";
+import "../components/v2/templates/templates.css";
 import "./activity/log.css";
 import "./govern/govern.css";
 // Identity: the identity screens, My account and the sign-in sheet (idn- classes).
@@ -29,6 +31,7 @@ import "./identity/identity-agents.css";
 import "./identity/identity-auth.css";
 import "./identity/identity-account.css";
 import "./identity/identity-sso.css";
+import "./identity/identity-app-sign-in.css";
 import type { Metadata } from "next";
 import { Toaster } from "./client-forms";
 

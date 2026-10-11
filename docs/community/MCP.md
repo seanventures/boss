@@ -5,7 +5,7 @@ BOSS Community speaks the Model Context Protocol, so agent clients can discover 
 | Session | Authority | Tools | Start with |
 |---|---|---|---|
 | **API-backed** | A service account pinned to one project, with its own key; every call goes through the HTTP API | API search and invocation tools; native engine tools are hidden | `make mcp-setup`, then `make mcp` |
-| **Engine-only** | The engine's local database authority | The engine's 106 native tools (61 read, 45 write) | `python -m boss_engine ... serve-mcp` |
+| **Engine-only** | The engine's local database authority | The engine's 123 native tools (71 read, 52 write) | `python -m boss_engine ... serve-mcp` |
 
 The engine's typed tool registry is shared by MCP, the native agent, and `python -m boss_engine call`. MCP is an agent interface to the engine; the HTTP control plane remains the complete API for BOSS administration and integrations.
 
@@ -110,7 +110,7 @@ python -m boss_engine --project boss-dogfood serve-mcp --http --allow-writes --h
 
 ## Native engine tools
 
-The engine registry has 106 tools: 61 read and 45 write. Examples:
+The engine registry has 123 tools: 71 read and 52 write. Examples:
 
 | Activity | MCP tools |
 |---|---|
@@ -120,6 +120,8 @@ The engine registry has 106 tools: 61 read and 45 write. Examples:
 | Review gates | `list_decisions`, `propose_action`, `read_pull_request`, `list_review_comments` |
 | Inspect delivery | `list_previews`, `read_preview_log`, `list_deployments`, `preflight_deployment_target` |
 | Author workflows | `list_capabilities`, `list_skills`, `draft_workflow`, `describe_workflow` |
+| App templates | `list_templates`, `describe_template`, `apply_template`, `template_status` |
+| Security loop | `run_security_scan`, `security_scan_status`, `list_security_findings`, `security_report`, `security_review_status` (start a full review with `start_workflow`, `workflow_key=security_review`) |
 
 ### Tools paused or scoped in Community
 

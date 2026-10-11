@@ -7495,7 +7495,7 @@ CREATE TABLE IF NOT EXISTS identity_vault_items (
   org_id             TEXT NOT NULL REFERENCES orgs(id),
   owner_principal_id TEXT,                               -- NULL = org-level (GitHub App key)
   kind               TEXT NOT NULL CHECK (kind IN ('oauth_user','app_private_key','provider_credential',
-                       'oidc_client_secret','totp_secret','signing_key','legacy_pat')),
+                       'oidc_client_secret','totp_secret','signing_key','legacy_pat','app_secret')),
   provider           TEXT,
   provider_subject   TEXT,
   connection_name    TEXT,
@@ -7517,6 +7517,23 @@ CREATE INDEX IF NOT EXISTS identity_vault_items_owner ON identity_vault_items (o
 -- Revoked here but not yet at the provider (it was unreachable): kept, unusable, until a retry
 -- succeeds; only then is the ciphertext shredded.
 ALTER TABLE identity_vault_items ADD COLUMN IF NOT EXISTS provider_revoke_pending BOOLEAN NOT NULL DEFAULT false;
+-- AMENDMENT (APP_TEMPLATES_AND_SECURITY_LOOP.md §2.4, stream S2): kind `app_secret`, an app's
+-- secret per environment (app_secret_bindings in the F2 block). Widened in place on an install
+-- whose table predates it; the AAD binds such an item to (org, project, app, env, name) through
+-- its `provider` column (identity/vault.py app_secret_provider).
+DO $$ BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'identity_vault_items_kind_check'
+      AND pg_get_constraintdef(oid) NOT LIKE '%app_secret%'
+  ) THEN
+    ALTER TABLE identity_vault_items DROP CONSTRAINT identity_vault_items_kind_check;
+    ALTER TABLE identity_vault_items
+      ADD CONSTRAINT identity_vault_items_kind_check
+      CHECK (kind IN ('oauth_user','app_private_key','provider_credential','oidc_client_secret',
+                      'totp_secret','signing_key','legacy_pat','app_secret'));
+  END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS identity_signing_keys (        -- JWKS for run and actor tokens; two published at a time
   kid                   TEXT PRIMARY KEY,
@@ -8287,3 +8304,457 @@ CREATE TABLE IF NOT EXISTS subscription_accounts (
   learned_weekly_allowance_usd  NUMERIC,
   updated_at                    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- =================================================================================================
+-- APP PLATFORM (docs/product/APP_TEMPLATES_AND_SECURITY_LOOP.md). One delimited block per feature,
+-- created by stream S0 on day 1 (§8.2): each stream edits ONLY inside its own block, so no two
+-- streams touch the same lines. F1 (toolchains) and F3 (templates) define no tables.
+-- =================================================================================================
+
+-- BEGIN F2 (template system; owner: stream S2; spec §2.4, §2.7) --------------------------------
+-- A template version known to an org: a built-in (templates/apps/<id>/) or an import pinned to a
+-- commit SHA and digest (§2.5). `manifest` is the validated boss-template.yaml
+-- (engine/boss_engine/templates/manifest.py, schema boss.template/v1).
+CREATE TABLE IF NOT EXISTS app_templates (
+  id            TEXT PRIMARY KEY,
+  org_id        TEXT NOT NULL REFERENCES orgs(id),
+  template_key  TEXT NOT NULL,
+  version       TEXT NOT NULL,
+  source        TEXT NOT NULL CHECK (source IN ('builtin', 'git')),
+  git_url       TEXT,
+  commit_sha    TEXT,
+  digest        TEXT,
+  manifest      JSONB NOT NULL DEFAULT '{}'::jsonb,
+  status        TEXT NOT NULL DEFAULT 'pending_review'
+                CHECK (status IN ('active', 'pending_review', 'rejected', 'hidden')),
+  validation    JSONB NOT NULL DEFAULT '{}'::jsonb,
+  trial         JSONB,
+  imported_by   TEXT,
+  approved_by   TEXT,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  approved_at   TIMESTAMPTZ,
+  UNIQUE (org_id, template_key, version)
+);
+
+-- One apply of a template to an app: a governed build (§2.3).
+CREATE TABLE IF NOT EXISTS app_template_applications (
+  id                TEXT PRIMARY KEY,
+  project_id        TEXT NOT NULL REFERENCES projects(id),
+  app_key           TEXT NOT NULL,
+  template_id       TEXT NOT NULL REFERENCES app_templates(id),
+  version           TEXT NOT NULL,
+  stack             TEXT NOT NULL,
+  framework         TEXT,
+  workflow_run_id   TEXT,
+  code_task_run_id  TEXT,
+  status            TEXT NOT NULL DEFAULT 'building'
+                    CHECK (status IN ('building', 'pr_open', 'applied', 'failed', 'blocked', 'abandoned')),
+  created_by        TEXT,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS app_template_applications_app ON app_template_applications (project_id, app_key);
+-- A build a template gate stopped is BLOCKED (not "building" for ever, not "failed"): the reason
+-- and the next step are on the row. Widened in place on an install whose table predates it.
+ALTER TABLE app_template_applications ADD COLUMN IF NOT EXISTS blocked_reason TEXT;
+DO $$ BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'app_template_applications_status_check'
+      AND pg_get_constraintdef(oid) NOT LIKE '%blocked%'
+  ) THEN
+    ALTER TABLE app_template_applications DROP CONSTRAINT app_template_applications_status_check;
+    ALTER TABLE app_template_applications
+      ADD CONSTRAINT app_template_applications_status_check
+      CHECK (status IN ('building', 'pr_open', 'applied', 'failed', 'blocked', 'abandoned'));
+  END IF;
+END $$;
+
+-- An app's secret, per environment (§2.4). The value lives in the vault (kind app_secret); this row
+-- holds presence and mode only. `live` is never handed to a build sandbox or a preview.
+CREATE TABLE IF NOT EXISTS app_secret_bindings (
+  id             TEXT PRIMARY KEY,
+  project_id     TEXT NOT NULL REFERENCES projects(id),
+  app_key        TEXT NOT NULL,
+  env            TEXT NOT NULL CHECK (env IN ('build', 'preview', 'deploy')),
+  name           TEXT NOT NULL,
+  vault_item_id  TEXT,
+  mode           TEXT NOT NULL,
+  set_by         TEXT,
+  set_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_used_at   TIMESTAMPTZ,
+  UNIQUE (project_id, app_key, env, name),
+  -- table-level, not inline: the column reconcile (db._safe_add_column_def) cuts a column
+  -- definition at the word GENERATED, so an inline CHECK naming 'generated' would not parse.
+  CONSTRAINT app_secret_bindings_mode CHECK (mode IN ('test', 'live', 'generated', 'stub'))
+);
+-- S2: the files of a template version (built-in or imported), so the API, the worker and the
+-- build gate read the SAME pinned content without a shared volume. Imported content is
+-- untrusted: it is read as data (the brief enveloped, the tests run only inside a build).
+CREATE TABLE IF NOT EXISTS app_template_files (
+  template_id  TEXT NOT NULL REFERENCES app_templates(id) ON DELETE CASCADE,
+  path         TEXT NOT NULL,
+  content      BYTEA NOT NULL,
+  PRIMARY KEY (template_id, path)
+);
+-- S2: a live binding is usable for deploy only once a person holding app_secret:live approved
+-- this decision (§2.4).
+ALTER TABLE app_secret_bindings ADD COLUMN IF NOT EXISTS live_decision_id TEXT;
+-- S2: the shape verdict computed when the value was written (matches_test_pattern |
+-- matches_live_pattern | unknown), so reading presence never decrypts.
+ALTER TABLE app_secret_bindings ADD COLUMN IF NOT EXISTS shape TEXT;
+-- END F2 ------------------------------------------------------------------------------------------
+
+-- BEGIN F4 (security review; owner: stream S4; spec §4.4) -----------------------------------------
+CREATE TABLE IF NOT EXISTS security_scans (
+  id               TEXT PRIMARY KEY,
+  project_id       TEXT NOT NULL REFERENCES projects(id),
+  app_key          TEXT NOT NULL,
+  commit_sha       TEXT,
+  workflow_run_id  TEXT,
+  target           JSONB NOT NULL DEFAULT '{}'::jsonb,
+  tools            JSONB NOT NULL DEFAULT '[]'::jsonb,  -- [{name, version, image_digest, rules_digest, exit, duration_ms}]
+  status           TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued', 'running', 'done', 'failed')),
+  counts           JSONB NOT NULL DEFAULT '{}'::jsonb,
+  triggered_by     TEXT,
+  started_at       TIMESTAMPTZ,
+  ended_at         TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS security_scans_app ON security_scans (project_id, app_key);
+
+-- fingerprint = sha256(tool | rule_id | normalised location | normalised snippet) (§4.4).
+CREATE TABLE IF NOT EXISTS security_findings (
+  id                  TEXT PRIMARY KEY,
+  scan_id             TEXT NOT NULL REFERENCES security_scans(id),
+  fingerprint         TEXT NOT NULL,
+  tool                TEXT NOT NULL,
+  rule_id             TEXT NOT NULL,
+  title               TEXT NOT NULL,
+  severity            TEXT NOT NULL CHECK (severity IN ('critical', 'high', 'medium', 'low', 'info')),
+  confidence          TEXT,
+  cwe                 TEXT,
+  owasp               TEXT,
+  location            JSONB NOT NULL DEFAULT '{}'::jsonb,  -- {file, line} | {url, method, param}
+  evidence            JSONB NOT NULL DEFAULT '{}'::jsonb   -- redacted
+                      CHECK (octet_length(evidence::text) <= 4096),
+  status              TEXT NOT NULL DEFAULT 'open'
+                      CHECK (status IN ('open', 'fixed', 'accepted', 'false_positive')),
+  triaged_by          TEXT,
+  triage_reason       TEXT,
+  first_seen_scan_id  TEXT,
+  UNIQUE (scan_id, fingerprint)
+);
+
+CREATE TABLE IF NOT EXISTS security_recommendations (
+  id               TEXT PRIMARY KEY,
+  workflow_run_id  TEXT,
+  meeting_id       TEXT,
+  title            TEXT NOT NULL,
+  fix              TEXT,
+  priority         TEXT,
+  effort           TEXT,
+  fingerprints     TEXT[] NOT NULL DEFAULT '{}',
+  selected         BOOLEAN NOT NULL DEFAULT false,
+  decided_by       TEXT
+);
+-- The security_review workflow (S4-workflow): which project and scan a recommendation answers,
+-- whether the Panel wrote it or BOSS derived it from findings the Panel left uncovered, the
+-- Panel's risk and false-positive notes, its place in the list, and when a person decided.
+ALTER TABLE security_recommendations ADD COLUMN IF NOT EXISTS project_id TEXT;
+ALTER TABLE security_recommendations ADD COLUMN IF NOT EXISTS scan_id TEXT;
+ALTER TABLE security_recommendations ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'panel';
+ALTER TABLE security_recommendations ADD COLUMN IF NOT EXISTS risk_if_unfixed TEXT;
+ALTER TABLE security_recommendations ADD COLUMN IF NOT EXISTS false_positive_reason TEXT;
+ALTER TABLE security_recommendations ADD COLUMN IF NOT EXISTS position INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE security_recommendations ADD COLUMN IF NOT EXISTS decided_at TIMESTAMPTZ;
+ALTER TABLE security_recommendations ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now();
+CREATE INDEX IF NOT EXISTS security_recommendations_run ON security_recommendations (workflow_run_id);
+-- END F4 ------------------------------------------------------------------------------------------
+
+-- BEGIN F5 (cross-app links; owner: stream S5; spec §5.2) -----------------------------------------
+-- Same-project only in v1 (D7). The consumer gets BOSS_LINK_<ALIAS>_* at build, preview and deploy.
+-- One gateway port per active link (D8), from BOSS_LINK_PORTS. An alias is unique among a
+-- consumer's ACTIVE links only, so a revoked link's alias can be linked again.
+CREATE TABLE IF NOT EXISTS app_links (
+  id                 TEXT PRIMARY KEY,
+  project_id         TEXT NOT NULL REFERENCES projects(id),
+  consumer_app_key   TEXT NOT NULL,
+  provider_app_key   TEXT NOT NULL,
+  alias              TEXT NOT NULL CHECK (alias ~ '^[A-Z][A-Z0-9_]{1,30}$'),
+  env                TEXT NOT NULL CHECK (env IN ('preview', 'deploy')),
+  credentials        TEXT NOT NULL DEFAULT 'none' CHECK (credentials IN ('none', 'test_users', 'client')),
+  status             TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'revoked')),
+  gateway_port       INTEGER,
+  created_by         TEXT,
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  revoked_at         TIMESTAMPTZ,
+  revoked_by         TEXT,
+  last_used_at       TIMESTAMPTZ,
+  CHECK (consumer_app_key <> provider_app_key)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS app_links_active_alias
+  ON app_links (project_id, consumer_app_key, alias, env) WHERE status = 'active';
+CREATE UNIQUE INDEX IF NOT EXISTS app_links_active_port ON app_links (gateway_port) WHERE status = 'active';
+-- A link pass: what one consumer workload (a build run, or a preview) presents to the gateway as
+-- X-Boss-Link. Only its hash is stored. Revoked with its link, expired with its workload.
+CREATE TABLE IF NOT EXISTS app_link_passes (
+  token_hash     TEXT PRIMARY KEY,
+  link_id        TEXT NOT NULL REFERENCES app_links(id),
+  project_id     TEXT NOT NULL,
+  consumer_kind  TEXT NOT NULL CHECK (consumer_kind IN ('run', 'preview')),
+  consumer_id    TEXT NOT NULL,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  expires_at     TIMESTAMPTZ NOT NULL,
+  revoked_at     TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS app_link_passes_link ON app_link_passes (link_id);
+-- A provider app's generated test users (BOSS_TEST_USERS), per env: the values are in the vault
+-- (identity_vault_items, provider 'boss_test_users'); this row is presence, count and rotation.
+CREATE TABLE IF NOT EXISTS app_test_users (
+  project_id     TEXT NOT NULL,
+  app_key        TEXT NOT NULL,
+  env            TEXT NOT NULL CHECK (env IN ('preview', 'deploy')),
+  vault_item_id  TEXT NOT NULL,
+  user_count     INTEGER NOT NULL,
+  generation     INTEGER NOT NULL DEFAULT 1,
+  rotated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (project_id, app_key, env)
+);
+-- A link a NEW app asked for when it was started (the composer's "Talks to", §5.5): the app does
+-- not exist until its first build, so the start records the request (checked then: app_link:manage,
+-- the provider in this project, the alias) and that build creates the link. Written only by
+-- POST /v1/delivery-workflows/start, never from a run's input, so no caller can forge one.
+CREATE TABLE IF NOT EXISTS app_link_requests (
+  id                 TEXT PRIMARY KEY,
+  project_id         TEXT NOT NULL REFERENCES projects(id),
+  workflow_run_id    TEXT NOT NULL,
+  provider_app_key   TEXT NOT NULL,
+  alias              TEXT NOT NULL CHECK (alias ~ '^[A-Z][A-Z0-9_]{1,30}$'),
+  env                TEXT NOT NULL CHECK (env IN ('preview', 'deploy')),
+  credentials        TEXT NOT NULL DEFAULT 'none' CHECK (credentials IN ('none', 'test_users')),
+  requested_by       TEXT,
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  outcome            TEXT CHECK (outcome IN ('created', 'refused')),
+  outcome_detail     TEXT,
+  link_id            TEXT,
+  resolved_at        TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS app_link_requests_run ON app_link_requests (workflow_run_id);
+-- END F5 ------------------------------------------------------------------------------------------
+
+-- BEGIN F6 (BOSS as an OIDC provider; owner: stream S6; spec §6.3) --------------------------------
+CREATE TABLE IF NOT EXISTS oidc_user_pools (
+  id               TEXT PRIMARY KEY,
+  org_id           TEXT NOT NULL REFERENCES orgs(id),
+  name             TEXT NOT NULL,
+  kind             TEXT NOT NULL CHECK (kind IN ('workforce', 'customer')),
+  signup           TEXT NOT NULL DEFAULT 'closed' CHECK (signup IN ('closed', 'invite', 'open', 'domain')),
+  signup_domains   TEXT[] NOT NULL DEFAULT '{}',
+  mfa              TEXT NOT NULL DEFAULT 'optional' CHECK (mfa IN ('off', 'optional', 'required')),
+  passkeys         BOOLEAN NOT NULL DEFAULT true,
+  password_policy  JSONB NOT NULL DEFAULT '{}'::jsonb,
+  -- The pool's pairwise-subject key (§6.2): random, in the vault (kind signing_key), made with the pool.
+  subject_key_vault_item_id TEXT,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- id IS the client_id. The secret lives in the vault; the API returns presence only (§6.5).
+-- id_token_alg: RS256 by default, EdDSA opt-in per client (D10; IDENTITY.md amendment A-D10).
+CREATE TABLE IF NOT EXISTS oidc_clients (
+  id                          TEXT PRIMARY KEY,
+  org_id                      TEXT NOT NULL REFERENCES orgs(id),
+  project_id                  TEXT NOT NULL REFERENCES projects(id),   -- a client is one app's
+  app_key                     TEXT NOT NULL,
+  pool_id                     TEXT NOT NULL REFERENCES oidc_user_pools(id),
+  name                        TEXT NOT NULL,
+  type                        TEXT NOT NULL CHECK (type IN ('confidential', 'public')),
+  redirect_uris               TEXT[] NOT NULL DEFAULT '{}',
+  post_logout_redirect_uris   TEXT[] NOT NULL DEFAULT '{}',
+  allowed_scopes              TEXT[] NOT NULL DEFAULT '{openid}',
+  token_endpoint_auth_method  TEXT NOT NULL,
+  jwks                        JSONB,
+  secret_vault_item_id        TEXT,
+  id_token_alg                TEXT NOT NULL DEFAULT 'RS256' CHECK (id_token_alg IN ('RS256', 'EdDSA')),
+  subject_type                TEXT NOT NULL DEFAULT 'pairwise' CHECK (subject_type IN ('pairwise', 'public')),
+  require_mfa                 BOOLEAN NOT NULL DEFAULT false,
+  first_party                 BOOLEAN NOT NULL DEFAULT false,
+  -- The access token's `aud` (RFC 9068): the app's resource identifier; NULL means the client_id.
+  resource                    TEXT,
+  status                      TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled', 'deleted')),
+  created_by                  TEXT,
+  created_at                  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  rotated_at                  TIMESTAMPTZ
+);
+
+-- Customer pools only: a separate principal kind that can never hold a BOSS permission.
+CREATE TABLE IF NOT EXISTS oidc_pool_users (
+  id               TEXT PRIMARY KEY,
+  pool_id          TEXT NOT NULL REFERENCES oidc_user_pools(id),
+  email            TEXT NOT NULL,
+  email_verified   BOOLEAN NOT NULL DEFAULT false,
+  name             TEXT,
+  status           TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('pending', 'active', 'disabled')),
+  password_hash    TEXT,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_sign_in_at  TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX IF NOT EXISTS oidc_pool_users_email ON oidc_pool_users (pool_id, lower(email));
+
+CREATE TABLE IF NOT EXISTS oidc_app_roles (
+  pool_id    TEXT NOT NULL REFERENCES oidc_user_pools(id),
+  client_id  TEXT NOT NULL REFERENCES oidc_clients(id),
+  role_key   TEXT NOT NULL,
+  name       TEXT NOT NULL,
+  PRIMARY KEY (pool_id, client_id, role_key)
+);
+
+CREATE TABLE IF NOT EXISTS oidc_role_assignments (
+  pool_id      TEXT NOT NULL REFERENCES oidc_user_pools(id),
+  subject_ref  TEXT NOT NULL,
+  client_id    TEXT NOT NULL REFERENCES oidc_clients(id),
+  role_key     TEXT NOT NULL,
+  PRIMARY KEY (pool_id, subject_ref, client_id, role_key)
+);
+
+CREATE TABLE IF NOT EXISTS oidc_consents (
+  subject_ref  TEXT NOT NULL,
+  client_id    TEXT NOT NULL REFERENCES oidc_clients(id),
+  scopes       TEXT[] NOT NULL DEFAULT '{}',
+  granted_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  revoked_at   TIMESTAMPTZ,
+  PRIMARY KEY (subject_ref, client_id)
+);
+
+-- Codes and refresh tokens are stored hashed only; a code is single-use, 60 s.
+-- A grant is one sign-in of one subject to one client: the code, every access token (claim `sid`)
+-- and the refresh family hang off it, so revoking it (code replay, refresh reuse, logout, consent
+-- revoke, user disable) ends all of them at once.
+CREATE TABLE IF NOT EXISTS oidc_grants (
+  id              TEXT PRIMARY KEY,
+  org_id          TEXT NOT NULL REFERENCES orgs(id),
+  client_id       TEXT NOT NULL REFERENCES oidc_clients(id),
+  pool_id         TEXT NOT NULL REFERENCES oidc_user_pools(id),
+  subject_ref     TEXT NOT NULL,             -- usr_ (workforce) or opu_ (customer); never sent to an app
+  session_ref     TEXT,                      -- the BOSS console session (workforce) or app session
+  scopes          TEXT[] NOT NULL DEFAULT '{}',
+  acr             TEXT,
+  amr             TEXT[] NOT NULL DEFAULT '{}',
+  auth_time       TIMESTAMPTZ NOT NULL,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  revoked_at      TIMESTAMPTZ,
+  revoked_reason  TEXT
+);
+CREATE INDEX IF NOT EXISTS oidc_grants_subject ON oidc_grants (client_id, subject_ref) WHERE revoked_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS oidc_auth_codes (
+  code_hash       TEXT PRIMARY KEY,
+  client_id       TEXT NOT NULL REFERENCES oidc_clients(id),
+  grant_id        TEXT NOT NULL REFERENCES oidc_grants(id),
+  subject_ref     TEXT NOT NULL,
+  redirect_uri    TEXT NOT NULL,
+  code_challenge  TEXT NOT NULL,
+  nonce           TEXT,
+  scopes          TEXT[] NOT NULL DEFAULT '{}',
+  acr             TEXT,
+  auth_time       TIMESTAMPTZ NOT NULL,
+  expires_at      TIMESTAMPTZ NOT NULL,
+  used_at         TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS oidc_refresh_tokens (
+  token_hash   TEXT PRIMARY KEY,
+  family_id    TEXT NOT NULL,             -- = the grant id: one rotating family per grant
+  client_id    TEXT NOT NULL REFERENCES oidc_clients(id),
+  subject_ref  TEXT NOT NULL,
+  scopes       TEXT[] NOT NULL DEFAULT '{}',
+  expires_at   TIMESTAMPTZ NOT NULL,
+  rotated_at   TIMESTAMPTZ,
+  revoked_at   TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS oidc_refresh_tokens_family ON oidc_refresh_tokens (family_id);
+
+-- Pending authorization requests (sign-in, consent): the browser carries only the id (hashed here).
+CREATE TABLE IF NOT EXISTS oidc_interactions (
+  id_hash      TEXT PRIMARY KEY,
+  org_id       TEXT NOT NULL REFERENCES orgs(id),
+  client_id    TEXT NOT NULL REFERENCES oidc_clients(id),
+  params       JSONB NOT NULL,             -- the validated authorization request
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  expires_at   TIMESTAMPTZ NOT NULL,
+  used_at      TIMESTAMPTZ
+);
+
+-- The `oidc` signing-key family (D10, IDENTITY.md D35): per org, RS256 (default) and EdDSA, in its
+-- own table so no BOSS-internal verifier (identity_signing_keys) can ever find one of these keys.
+CREATE TABLE IF NOT EXISTS oidc_signing_keys (
+  kid                    TEXT PRIMARY KEY,
+  org_id                 TEXT NOT NULL REFERENCES orgs(id),
+  alg                    TEXT NOT NULL CHECK (alg IN ('RS256', 'EdDSA')),
+  public_jwk             JSONB NOT NULL,
+  private_vault_item_id  TEXT NOT NULL,
+  status                 TEXT NOT NULL CHECK (status IN ('next', 'active', 'retiring', 'retired')),
+  created_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
+  activated_at           TIMESTAMPTZ,
+  retire_after           TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX IF NOT EXISTS oidc_signing_keys_one_active ON oidc_signing_keys (org_id, alg) WHERE status = 'active';
+
+-- private_key_jwt client assertions are single-use (RFC 7523 §3): the jti, hashed, until it expires.
+CREATE TABLE IF NOT EXISTS oidc_client_assertion_jtis (
+  jti_hash    TEXT PRIMARY KEY,
+  client_id   TEXT NOT NULL REFERENCES oidc_clients(id),
+  expires_at  TIMESTAMPTZ NOT NULL
+);
+
+-- Customer pools (phase 2): a pool user's factors, the same shapes as identity's TOTP and WebAuthn.
+CREATE TABLE IF NOT EXISTS oidc_pool_user_factors (
+  id                    TEXT PRIMARY KEY,
+  pool_user_id          TEXT NOT NULL REFERENCES oidc_pool_users(id),
+  kind                  TEXT NOT NULL CHECK (kind IN ('totp', 'webauthn', 'recovery_code')),
+  secret_vault_item_id  TEXT,              -- totp
+  credential_id         BYTEA,             -- webauthn
+  public_key            BYTEA,             -- webauthn (COSE)
+  sign_count            BIGINT NOT NULL DEFAULT 0,
+  last_used_step        BIGINT,            -- totp replay prevention
+  code_hash             TEXT,              -- recovery_code
+  label                 TEXT,
+  created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_used_at          TIMESTAMPTZ,
+  used_at               TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX IF NOT EXISTS oidc_pool_user_factors_cred ON oidc_pool_user_factors (credential_id) WHERE credential_id IS NOT NULL;
+
+-- Customer-pool sessions (phase 2): cookie __Host-boss_app_session, Path=/oidc/; never identity_sessions.
+CREATE TABLE IF NOT EXISTS oidc_sessions (
+  id                   TEXT PRIMARY KEY,
+  token_hash           TEXT NOT NULL UNIQUE,
+  pool_id              TEXT NOT NULL REFERENCES oidc_user_pools(id),
+  pool_user_id         TEXT NOT NULL REFERENCES oidc_pool_users(id),
+  auth_methods         TEXT[] NOT NULL DEFAULT '{}',
+  mfa_at               TIMESTAMPTZ,
+  created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_seen_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  idle_expires_at      TIMESTAMPTZ NOT NULL,
+  absolute_expires_at  TIMESTAMPTZ NOT NULL,
+  revoked_at           TIMESTAMPTZ,
+  ip                   INET,
+  user_agent           TEXT
+);
+
+-- Customer-pool challenges, bound to the pre-auth cookie __Host-boss_app_preauth (hashed here):
+-- the second factor after a password, a pending TOTP enrolment, a passkey ceremony, an emailed
+-- code (verification, reset). Never identity_auth_challenges: a pool user is not a principal.
+CREATE TABLE IF NOT EXISTS oidc_app_challenges (
+  id_hash       TEXT PRIMARY KEY,
+  binding_hash  TEXT NOT NULL,
+  pool_id       TEXT NOT NULL REFERENCES oidc_user_pools(id),
+  pool_user_id  TEXT REFERENCES oidc_pool_users(id),
+  purpose       TEXT NOT NULL CHECK (purpose IN ('mfa', 'enrol_totp', 'passkey', 'verify_email', 'reset')),
+  payload       JSONB NOT NULL DEFAULT '{}'::jsonb,
+  attempts      INTEGER NOT NULL DEFAULT 0,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  expires_at    TIMESTAMPTZ NOT NULL,
+  used_at       TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS oidc_app_challenges_binding ON oidc_app_challenges (binding_hash);
+-- END F6 ------------------------------------------------------------------------------------------

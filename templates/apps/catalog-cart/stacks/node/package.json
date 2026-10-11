@@ -1,0 +1,15 @@
+{
+  "name": "boss-template-catalog-cart",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Reference implementation of the catalog-cart template (Express). Merge the dependency and the two test:catalog-cart scripts into the app's package.json.",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "start": "node server.mjs",
+    "pretest:catalog-cart": "npm install --no-audit --no-fund --loglevel=error",
+    "test:catalog-cart": "node --test --test-reporter=junit --test-reporter-destination=boss-template-junit.xml --test-reporter=spec --test-reporter-destination=stdout tests/template_catalog_cart/catalog.test.mjs"
+  },
+  "dependencies": {
+    "express": "5.2.1"
+  }
+}

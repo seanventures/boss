@@ -27,9 +27,10 @@ EXPECTED_EXCLUDED = {
       for p in ("/v1/previews/{preview_id}/web", "/v1/previews/{preview_id}/web/{path:path}")},
 }
 
-# Mutating routes outside /v1/ speak someone else's protocol (SCIM, SAML ACS); the identity
-# provider defines their retry semantics, and they are outside this contract by design.
-FOREIGN_PROTOCOL_PREFIXES = ("/scim/v2/", "/saml/v2/")
+# Mutating routes outside /v1/ speak someone else's protocol (SCIM, SAML ACS, and OpenID Connect
+# where BOSS is the provider for its apps); that protocol defines their retry semantics (an OIDC
+# code is single-use by design), and they are outside this contract.
+FOREIGN_PROTOCOL_PREFIXES = ("/scim/v2/", "/saml/v2/", "/oidc/")
 
 
 def _mutating_routes():

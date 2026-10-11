@@ -211,6 +211,13 @@ def deploy_build(engine, settings: Settings, *, project_id: str, run_id: str,
                     "reason": f"run {run_id} is '{run['status']}', not a successful build. "
                               "Deploying is not a way to finish a build — rebuild first, "
                               "which costs money and is a separate decision."}
+        from .run_fencing import build_not_passed
+
+        not_passed = build_not_passed(c, run_id)
+        if not_passed:
+            # COMPLETED IS NOT PASSED: a build a template gate stopped (or an attempt whose
+            # checks failed and went to repair) is never released, whatever its status says.
+            return {"status": "failed", "reason": not_passed}
 
         if target_id:
             target = c.execute(

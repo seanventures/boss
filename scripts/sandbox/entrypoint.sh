@@ -4,7 +4,14 @@
 #
 #   1. Network: processes of the sandbox uid pool (61000-61999) may reach loopback, and on the
 #      container's own networks ONLY the BOSS API (8000) and boss-egress (8090 git/API proxy,
-#      8091 the allowlisted CONNECT proxy that is the model gateway and package mirror route).
+#      8091 the allowlisted CONNECT proxy that is the model gateway and package mirror route,
+#      and the link gateway's ports BOSS_LINK_PORTS, 18100-18199: one per cross-app link, F5).
+#      App previews listen in BOSS_PREVIEW_PORTS (19000-19999), refused to the pool even on
+#      loopback: a build reaches another app's preview only through the link gateway, which
+#      checks the build's link pass. Previews themselves run as a pool uid too (preview_service),
+#      so the same rules fence them; the one exception is a preview's OWN port: pool uid
+#      61000+i may reach port <first preview port>+i on loopback, which is the port
+#      preview_service gives the preview holding that uid (an app calling itself, e.g. SSR).
 #      Everything else — the database, Infisical, the host, the internet — is rejected.
 #      BOSS_SANDBOX_NETWORK=enforce (default): when the rules cannot be installed (rootless
 #      Docker, gVisor, some WSL2 and VPS kernels without iptables owner match), BOSS STILL STARTS,
@@ -23,6 +30,8 @@ UID_RANGE="61000-61999"
 RUN_ROOT="${BOSS_SANDBOX_RUN_ROOT:-/var/lib/boss/sandboxes}"
 SHIM_ROOT="/run/boss-shim"
 PORTS="${BOSS_SANDBOX_ALLOWED_PORTS:-8000,8090,8091}"
+LINK_PORTS="$(echo "${BOSS_LINK_PORTS:-18100-18199}" | tr '-' ':')"
+PREVIEW_PORTS="$(echo "${BOSS_PREVIEW_PORTS:-19000-19999}" | tr '-' ':')"
 # Build services (build_services.py): the per-run Postgres server's port, never the BOSS
 # database's 5432. A run reaches only its own database there (its own role; CONNECT revoked).
 BSVC_PORT="${BOSS_BUILD_SERVICES_SANDBOX_PORT:-}"
@@ -44,6 +53,23 @@ fence_network() {
   # Loopback ADDRESSES only (127/8: the API on this container, Docker's DNS, the build's own dev
   # servers). Traffic to this container's own network address also rides `lo`, and is held to the
   # same port rules as any other address below.
+  # Previews first: no build or preview reaches an app's preview directly, on any address
+  # (F5 §5.4), except a preview its own port on loopback (BOSS_PREVIEW_SELF, one rule per uid).
+  preview_self_rules() {
+    uid_low=${UID_RANGE%%-*}; uid_high=${UID_RANGE##*-}
+    port_low=${PREVIEW_PORTS%%:*}; port_high=${PREVIEW_PORTS##*:}
+    echo "*filter"
+    echo ":BOSS_PREVIEW_SELF - [0:0]"
+    i=0
+    while [ $((uid_low + i)) -le "$uid_high" ] && [ $((port_low + i)) -le "$port_high" ]; do
+      echo "-A BOSS_PREVIEW_SELF -o lo -p tcp -m owner --uid-owner $((uid_low + i)) --dport $((port_low + i)) -j ACCEPT"
+      i=$((i + 1))
+    done
+    echo "COMMIT"
+  }
+  preview_self_rules | iptables-restore --noflush || return 1
+  iptables -A BOSS_SANDBOX -p tcp --dport "$PREVIEW_PORTS" -j BOSS_PREVIEW_SELF || return 1
+  iptables -A BOSS_SANDBOX -p tcp --dport "$PREVIEW_PORTS" -j REJECT || return 1
   iptables -A BOSS_SANDBOX -o lo -d 127.0.0.0/8 -j ACCEPT || return 1
   iptables -A BOSS_SANDBOX -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT || return 1
   # The container's own (non-default-route) networks: the compose network, by subnet.
@@ -59,12 +85,17 @@ with open("/proc/net/route") as fh:
         print(f"{socket.inet_ntoa(struct.pack('<I', dest))}/{bin(mask).count('1')}")
 PY
   ); do
-    iptables -A BOSS_SANDBOX -d "$net" -p tcp -m multiport --dports "$PORTS" -j ACCEPT || return 1
+    iptables -A BOSS_SANDBOX -d "$net" -p tcp -m multiport --dports "$PORTS,$LINK_PORTS" -j ACCEPT || return 1
   done
   iptables -A BOSS_SANDBOX -j REJECT || return 1
   iptables -A OUTPUT -m owner --uid-owner "$UID_RANGE" -j BOSS_SANDBOX || return 1
   if command -v ip6tables >/dev/null 2>&1 && ip6tables -L >/dev/null 2>&1; then
     ip6tables -N BOSS_SANDBOX 2>/dev/null || ip6tables -F BOSS_SANDBOX
+    # The same preview rules on ::1 (a Node app listening on `::` is reachable there too).
+    if preview_self_rules | ip6tables-restore --noflush; then
+      ip6tables -A BOSS_SANDBOX -p tcp --dport "$PREVIEW_PORTS" -j BOSS_PREVIEW_SELF
+    fi
+    ip6tables -A BOSS_SANDBOX -p tcp --dport "$PREVIEW_PORTS" -j REJECT
     ip6tables -A BOSS_SANDBOX -o lo -d ::1/128 -j ACCEPT
     ip6tables -A BOSS_SANDBOX -j REJECT
     ip6tables -A OUTPUT -m owner --uid-owner "$UID_RANGE" -j BOSS_SANDBOX

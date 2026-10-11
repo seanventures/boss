@@ -1,0 +1,16 @@
+{
+  "name": "s4-vulnapp",
+  "version": "1.0.0",
+  "private": true,
+  "description": "DELIBERATELY VULNERABLE: the F4 security-scan proof's target. Never deploy.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "4.22.3",
+    "jsonwebtoken": "9.0.3",
+    "lodash": "4.17.20",
+    "sql.js": "1.14.2"
+  }
+}

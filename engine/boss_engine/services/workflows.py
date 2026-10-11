@@ -246,6 +246,46 @@ def validate_input_schema(raw: Any) -> dict[str, Any]:
     return raw
 
 
+def consent_task_title(connection: Connection, project_id: str, definition_id: str,
+                       input_data: Any) -> str:
+    """What the consent sheet says the person is agreeing to run: the WORKFLOW and the APP.
+
+    The sheet said "To run this workflow run" when the input had no title (a security review
+    is started with only the app), naming neither. Now: "Security review for Member portal",
+    or "<workflow>: <title>" for a titled run, the app resolved from any of its handles.
+    """
+    data = input_data if isinstance(input_data, dict) else {}
+    try:
+        workflow = str(connection.execute(
+            text("SELECT name FROM workflow_definitions WHERE id = :d"),
+            {"d": definition_id}).scalar() or "").strip()
+    except Exception:  # noqa: BLE001 — a title must never stop a start
+        workflow = ""
+    workflow = workflow or "this workflow"
+    tpl = data.get("template") if isinstance(data.get("template"), dict) else {}
+    handle = str(data.get("app_name") or data.get("app") or data.get("app_key")
+                 or tpl.get("app_key") or "").strip()
+    app = ""
+    if handle:
+        try:
+            from ..app_links.service import app_index, resolve_app_key
+
+            with connection.begin_nested():
+                key = resolve_app_key(connection, project_id, handle)
+                app = app_index(connection, project_id)[1].get(key or "", "") if key else ""
+        except Exception:  # noqa: BLE001
+            app = ""
+        app = app or handle
+    titled = str(data.get("title") or data.get("directive") or "").strip()
+    if app and titled and app.casefold() not in titled.casefold():
+        return f"{workflow} for {app}: {titled}"[:200]
+    if titled:
+        return f"{workflow}: {titled}"[:200]
+    if app:
+        return f"{workflow} for {app}"[:200]
+    return workflow
+
+
 def missing_required_inputs(spec: dict[str, Any], input_data: dict[str, Any]) -> list[str]:
     """Declared inputs a run was started without. Empty when it can proceed.
 
@@ -2764,7 +2804,8 @@ def start_run(
     identity_acting = _consent.require_for_workflow(
         connection, project_id=project_id, spec=spec, input_data=input_data, run_id=run_id,
         parent_run_id=parent_run_id,
-        title=str((input_data or {}).get("title") or (input_data or {}).get("directive") or ""))
+        title=consent_task_title(connection, project_id, version["workflow_definition_id"],
+                                 input_data))
     policy_snapshot = _consent.record_on_run(policy_snapshot, identity_acting)
     if parent_run_id:
         parent = connection.execute(
@@ -4741,6 +4782,19 @@ def retry_failed_step(
     from .workflow_run_actions import require
 
     require(connection, project_id, run_id, "retry_step", step_id=step_id)
+    # A RETRY RUNS UNDER AUTHORITY THAT COVERS IT. When the grant recorded on the run no longer
+    # covers what the run needs (an agent it never named, a narrowed grant), the person is asked
+    # again (409 consent_required, the start's own sheet) and the covering grant is recorded on
+    # the run — never a retry that is refused again for the same reason.
+    from boss_engine.identity import consent as _consent
+
+    version = _version_row(connection, project_id, run["workflow_version_id"])
+    if version is not None:
+        _consent.require_for_retry(
+            connection, project_id=project_id, run_id=run_id,
+            spec=_json(version["spec"], {}), input_data=_json(run["input"], {}),
+            title=consent_task_title(connection, project_id, run["workflow_definition_id"],
+                                     _json(run["input"], {})))
     # A PERSON'S TRY AGAIN STARTS THE WAITS AFRESH, as it does the attempts. `waiting.count`
     # bounds how often one step waits for the budget (wait_step); kept across a Retry, a step
     # stopped after MAX_STEP_WAITS failed again at its very next wait — the person raised the

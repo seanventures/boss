@@ -302,6 +302,92 @@ CAPABILITIES: dict[str, Capability] = {
             produces=("decision_id",),
             is_gate=True,
         ),
+        # ── THE SECURITY REVIEW (spec §4.2; services/security_review_steps.py) ──────────────
+        # scan -> panel -> decide -> fix -> rescan -> rereview (x2 rounds) -> report. Real tools
+        # find; a Panel recommends; a person chooses; a build fixes; the same tools re-scan; the
+        # re-review passes only when every targeted finding is gone and no new high appeared.
+        _cap(
+            key="security_scan",
+            captain="security_reviewer",
+            label="Security scan",
+            summary="Scan the app with Semgrep, OSV-Scanner and ZAP (in its own sandbox). On a "
+                    "re-scan, the same tools and rules as the first.",
+            tool="run_security_scan",
+            risk_tier=1,
+            required_inputs=("app_key",),
+            optional_inputs=("tools", "zap_mode", "after"),
+            produces=("scan_id", "counts", "commit_sha"),
+            typical_minutes=10,
+            is_async=True,
+        ),
+        _cap(
+            key="security_panel",
+            captain="security_reviewer",
+            label="Security panel",
+            summary="A panel chaired by the security lens turns the findings into a short, "
+                    "prioritised list of fixes. It may call a finding a false positive; it "
+                    "cannot remove one.",
+            tool="request_meeting",
+            risk_tier=1,
+            optional_inputs=("app_key", "focus"),
+            produces=("meeting_run_id", "prd_markdown"),
+            typical_minutes=15,
+            is_async=True,
+            needs_model=True,
+        ),
+        _cap(
+            key="security_decide",
+            captain="security_reviewer",
+            label="Choose the fixes",
+            summary="A person ticks which recommendations to fix (P0 and P1 start ticked) and may "
+                    "accept the rest with a reason.",
+            tool=None,
+            risk_tier=2,
+            optional_inputs=("approver_role",),
+            produces=("decision_id",),
+            is_gate=True,
+        ),
+        _cap(
+            key="security_fix",
+            captain="engineering_captain",
+            label="Build the fixes",
+            summary="The app's next build: the chosen fixes, with the findings each must make "
+                    "disappear. Round 2 gets exactly what the re-scan still found.",
+            tool="create_code_task",
+            risk_tier=1,
+            required_inputs=("app_key",),
+            optional_inputs=("round", "after_review"),
+            produces=("code_task_run_id", "pull_request_url"),
+            typical_minutes=45,
+            is_async=True,
+            needs_model=True,
+            cost_note="A build of the app: implement, review, test. Runs a second time only "
+                      "when the first fix leaves a targeted finding behind.",
+        ),
+        _cap(
+            key="security_rereview",
+            captain="security_reviewer",
+            label="Security re-review",
+            summary="Passes only when every targeted finding is gone from the re-scan (or "
+                    "justified by a person) and no new high or critical finding appeared.",
+            tool=None,
+            risk_tier=1,
+            optional_inputs=("app_key", "after", "round", "final"),
+            produces=("passed", "summary", "after_scan_id"),
+            typical_minutes=1,
+        ),
+        _cap(
+            key="security_report",
+            captain="security_reviewer",
+            label="Security report",
+            summary="The before/after: what was fixed, what remains, what is new, with tool "
+                    "versions and commits. Shown in the Factory; downloadable as Markdown.",
+            tool=None,
+            risk_tier=0,
+            optional_inputs=("app_key",),
+            produces=("artifact_id", "passed", "summary"),
+            typical_minutes=1,
+        ),
         _cap(
             key="plrr",
             # readiness to go to production

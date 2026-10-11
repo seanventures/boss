@@ -91,6 +91,22 @@ EVENT_TYPES: frozenset[str] = frozenset({
     "legacy.api_key_used", "legacy.network_used", "legacy.claimed_actor_ignored",
     "legacy.path_retired", "catalogue.permission_removed", "audit.exported", "audit.verified",
     "audit.checkpoint",
+    # cross-app links (APP_TEMPLATES_AND_SECURITY_LOOP.md §5.6, D9; stream S5 of the app platform)
+    "app_link.created", "app_link.revoked", "app_link.test_users_revealed",
+    # BOSS as an OIDC provider for the apps it builds (APP_TEMPLATES_AND_SECURITY_LOOP.md §6.6
+    # S6.8; amendment AP-4). Never logged: codes, tokens, secrets, passwords.
+    "oidc.signin", "oidc.consent.granted", "oidc.consent.revoked", "oidc.token.issued",
+    "oidc.token.refreshed", "oidc.token.revoked", "oidc.token.reuse_detected", "oidc.code.replayed",
+    "oidc.logout", "oidc.client.created", "oidc.client.updated", "oidc.client.deleted",
+    "oidc.client.secret_rotated", "oidc.client.auth_failed", "oidc.client.locked",
+    "oidc.pool.created", "oidc.pool.updated", "oidc.pool.deleted", "oidc.pool_user.created",
+    "oidc.pool_user.updated", "oidc.pool_user.disabled", "oidc.role.created", "oidc.role.assigned",
+    "oidc.role.unassigned", "oidc.keys.provisioned", "oidc.keys.rotated",
+    # customer pools (amendment AP-5): a pool user is never a principal; actor_kind = pool_user
+    "oidc.pool_user.login_failed", "oidc.pool_user.locked", "oidc.pool_user.signed_up",
+    "oidc.pool_user.email_verified", "oidc.pool_user.mfa_enrolled", "oidc.pool_user.mfa_failed",
+    "oidc.pool_user.passkey_added", "oidc.pool_user.factor_removed", "oidc.pool_user.password_reset",
+    "oidc.pool_user.signed_out",
 })
 
 #: hash of "no previous event" for the first row of an org's chain.

@@ -163,6 +163,16 @@ export type TryRun = {
   pill: Pill;
 };
 
+export type Toolchain = {
+  name: string;
+  label: string;
+  installed: boolean;
+  builtin: boolean;
+  versions: Record<string, string>;
+  /** How to turn it on, when it is off. */
+  enable?: string | null;
+};
+
 export type SetupView = {
   project_id: string;
   ready: boolean;
@@ -179,6 +189,8 @@ export type SetupView = {
   routing?: Routing | null;
   budget: Budget;
   try: { workflow_key: string; last_run: TryRun | null; done?: boolean };
+  /** Build toolchains in this install's image. Absent on an older API. */
+  toolchains?: Toolchain[];
   /** "Give builds a database (Postgres)" — the project setting build_services. Absent on an older API. */
   build_database?: { key: string; mode?: "auto" | "always" | "never"; enabled: boolean; source: "project" | "default"; configured: boolean;
                      permission: string } | null;

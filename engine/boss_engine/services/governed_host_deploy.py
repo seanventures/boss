@@ -205,6 +205,45 @@ def _redact(value: str, hidden: list[str]) -> str:
     return redact(value or "", hidden)
 
 
+def _app_key_for(connection: Connection, project_id: str, target: dict,
+                 release_packet: Optional[dict]) -> Optional[str]:
+    """The app this deployment ships, the way every app view names it (its build, then its name)."""
+    from ..app_links.service import resolve_app_key
+    from .agent_assignment import app_key
+
+    for raw in ((release_packet or {}).get("code_task_run_id"), target.get("app_name")):
+        if not raw:
+            continue
+        try:
+            with connection.begin_nested():
+                found = resolve_app_key(connection, project_id, str(raw))
+        except Exception:  # noqa: BLE001 — falls back to the name's key below
+            found = None
+        if found:
+            return found
+    name = str(target.get("app_name") or "").strip()
+    return app_key(name) if name else None
+
+
+def app_secret_problem(connection: Connection, project_id: str, target: dict,
+                       release_packet: Optional[dict]) -> tuple[Optional[str], list[dict], Optional[str]]:
+    """(app_key, the app secrets a deploy passes BY NAME, the refusal in words or None)."""
+    from ..templates.secrets import deploy_secrets
+
+    key = _app_key_for(connection, project_id, target, release_packet)
+    if not key:
+        return None, [], None
+    passed, missing = deploy_secrets(connection, project_id=project_id, app_key=key)
+    if not missing:
+        return key, passed, None
+    app = target.get("app_name") or key
+    return key, passed, (f"{app} cannot deploy: " + "; ".join(missing) + ".")
+
+
+APP_SECRET_ACTION = ("Set the missing secret for environment deploy in the app's Secrets (a live key "
+                     "also needs its decision approved in Approvals), then deploy again.")
+
+
 # ── Plan ─────────────────────────────────────────────────────────────────────────────────────
 
 def plan_problem(connection: Connection, target: dict) -> Optional[dict[str, str]]:
@@ -274,9 +313,18 @@ def plan_host_deployment(rp, connection: Connection, *, project_id: str, target:
     Called by ResourcePlaneService.plan_deployment_run for ssh/container targets once the
     environment policy and the surface lease have passed. Returns the deployment run.
     """
+    from ..templates.deploy_guard import deploy_refusal
     from .budget import BudgetGovernor
     from .deployment_connectors import _app_port, _split_ref
 
+    refused = deploy_refusal(connection, project_id, target=target, commit_ref=commit_ref,
+                             release_packet=release_packet)
+    if refused:
+        raise GovernedHostDeployError(refused, refused.action)
+    _key, app_secrets, secret_refusal = app_secret_problem(connection, project_id, target,
+                                                           release_packet)
+    if secret_refusal:
+        raise GovernedHostDeployError(secret_refusal, APP_SECRET_ACTION)
     host = _host_for(connection, target) or {}
     app = str(target.get("app_name") or target.get("repo") or "app")
     environment = str(target.get("environment") or "")
@@ -309,6 +357,9 @@ def plan_host_deployment(rp, connection: Connection, *, project_id: str, target:
         "health_checks": target.get("health_checks") or [],
         # References only. The connector resolves them at the moment of use.
         "secret_refs": refs,
+        # The app's own secrets (vault kind app_secret, env deploy): NAMES and modes only; the
+        # values are read at apply and reach the host as its environment, nowhere else.
+        "app_secrets": app_secrets,
         "rollback_to": ({"deployment_run_id": previous["id"],
                          "commit_ref": previous.get("commit_ref")} if previous else None),
         "release_artifact_id": release_artifact_id,
@@ -333,6 +384,7 @@ def plan_host_deployment(rp, connection: Connection, *, project_id: str, target:
         "address": address, "commit_ref": commit_ref, "repo": target.get("repo"),
         "app_port": app_port, "url": url,
         "secret_refs": [{"name": r["name"], "ref": r["ref"]} for r in refs],
+        "app_secrets": [{"name": a["name"], "mode": a["mode"]} for a in app_secrets],
         "steps": ["Preflight the host (read-only)", "Build the app at the commit",
                   "Transfer and start it", "Health check"],
         "rollback": rollback_plan,
@@ -641,9 +693,38 @@ def _apply_on_host(engine, settings: Settings, *, row: dict, governance: dict,
                          {"t": row["deployment_target_id"]}).mappings().first()
         if not trow:
             return {"status": "failed", "reason": "the deployment target no longer exists"}
+        # Again at apply: an approval recorded before an insecure template was applied must
+        # still not ship it (templates.deploy_guard).
+        from ..templates.deploy_guard import deploy_refusal
+
+        refused = deploy_refusal(c, row.get("project_id") or trow.get("project_id"), target=dict(trow),
+                                 commit_ref=row.get("commit_ref"),
+                                 release_packet=row.get("release_packet") or {})
+        if refused:
+            return {"status": "blocked", "reason": refused}
         target = target_for_apply(c, dict(trow))
         # Resolved ONLY to redact it from every log line; never stored or returned.
         hidden: list[str] = []
+        # The app's deploy secrets, checked again (a live key's approval can be withdrawn after
+        # the plan) and read only here, for the host's environment.
+        project_id = row.get("project_id") or trow.get("project_id")
+        app_key, _names, secret_refusal = app_secret_problem(
+            c, project_id, dict(trow), row.get("release_packet") or {})
+        if secret_refusal:
+            return {"status": "blocked", "reason": secret_refusal}
+        app_env: dict[str, str] = {}
+        address: dict[str, Any] = {}
+        if app_key:
+            # THE ONE READER of a deployed app's environment (templates.base_url): its deploy
+            # secrets plus APP_BASE_URL, the address this target serves it at, for every
+            # template that declares it — never left at the template's localhost default.
+            from ..app_links.service import project_org
+            from ..templates.base_url import BASE_URL_ENV, deploy_environment
+
+            app_env, _withheld, address = deploy_environment(
+                c, org_id=project_org(c, project_id) if _names else None,
+                project_id=project_id, app_key=app_key, target=target)
+            hidden.extend(v for k, v in app_env.items() if k != BASE_URL_ENV)
         try:
             material = resolve_target_secret(c, target, "ssh_key", settings)
             if material:
@@ -660,9 +741,12 @@ def _apply_on_host(engine, settings: Settings, *, row: dict, governance: dict,
 
     try:
         with rec.step("resolve") as h:
+            from ..templates.base_url import address_lines
+
             say(h, f"target={target.get('app_name')} env={target.get('environment')}\n"
                    f"repo={target.get('repo')} ref={row.get('commit_ref') or '(default branch)'}\n"
-                   f"host={target.get('target_ref')}\nchangeset={row['changeset_id']}")
+                   f"host={target.get('target_ref')}\nchangeset={row['changeset_id']}"
+                   + (f"\n{address_lines(address)}" if address else ""))
         with rec.step("preflight") as h:
             with begin(engine) as c:
                 pre = preflight(target, settings, c)
@@ -678,7 +762,8 @@ def _apply_on_host(engine, settings: Settings, *, row: dict, governance: dict,
             say(h, f"strategy={plan.get('strategy', '')}\nbranch={plan.get('branch', '')}")
         with rec.step("transfer", label="Build, transfer and release") as h:
             applied = conn.apply(engine, settings, target, code_task_run, plan,
-                                 ref=row.get("commit_ref"), governance=governance) or {}
+                                 ref=row.get("commit_ref"), governance=governance,
+                                 **({"app_env": app_env} if app_env else {})) or {}
             say(h, {k: v for k, v in applied.items() if k not in ("plan", "rollback_point")})
             applied_status = str(applied.get("status") or "")
             if applied_status != "deployed":
@@ -734,7 +819,8 @@ def _apply_on_host(engine, settings: Settings, *, row: dict, governance: dict,
                                  else " The rollback did not complete: check the host.")}
         rec.finish()
         return {"status": "succeeded", "applied": applied, "health": health,
-                "url": applied.get("url") or (target.get("domains") or [None])[0]}
+                "url": applied.get("url") or (target.get("domains") or [None])[0],
+                **({"app_address": address} if address else {})}
     except Exception as exc:  # noqa: BLE001 — a sentence, never a stack trace or a secret
         log.warning("governed host deploy %s failed", run_id, exc_info=True)
         rec.finish()

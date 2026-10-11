@@ -3,13 +3,14 @@ import { NextResponse } from "next/server";
 import { API_URL, authHeaders } from "../../../lib/client";
 import { apiWrite } from "../../../lib/api-write";
 import { apiErrorText } from "../../../lib/api-error";
+import { rawRequestUrl } from "../../../lib/raw-request-url";
 
 /** Route handler rather than a server action: the console takes seconds to re-render, and a
  *  drag whose effect appears only after a full re-render reads as a drag that did nothing. */
 export const dynamic = "force-dynamic";
 
 export async function GET(req: Request) {
-  const projectId = new URL(req.url).searchParams.get("project_id")?.trim();
+  const projectId = rawRequestUrl(req).searchParams.get("project_id")?.trim();
   if (!projectId) return NextResponse.json({ error: "missing project_id" }, { status: 400 });
   try {
     const r = await fetch(
@@ -51,7 +52,7 @@ export async function PUT(req: Request) {
 }
 
 export async function DELETE(req: Request) {
-  const params = new URL(req.url).searchParams;
+  const params = rawRequestUrl(req).searchParams;
   const projectId = params.get("project_id")?.trim();
   const agentId = params.get("agent_id")?.trim();
   const actor = params.get("actor")?.trim() || "operator";

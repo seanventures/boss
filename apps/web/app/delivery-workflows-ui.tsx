@@ -699,7 +699,7 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
   const [startExample, setStartExample] =
     useState<{ title?: string; directive?: string } | null>(null);
   /** What a compose link asked for: the mode, the app, and a running preview of it. */
-  const [compose, setCompose] = useState<{ mode: "new" | "add" | null; app: string | null;
+  const [compose, setCompose] = useState<{ mode: "new" | "add" | "template" | null; app: string | null;
                                            preview: string | null; n: number } | null>(null);
   /** EVERY START OPENS THE FORM: the composer on that workflow, with its readiness. A run is
    *  never started blind on a sample directive (boss-1 map, 2026-10-02). */

@@ -83,4 +83,6 @@ def test_the_preview_path_still_waits_too():
     """The twin. If either drifts back to a fixed sleep, this whole class of failure returns."""
     from boss_engine.services import preview_service as ps
     src = inspect.getsource(ps)
-    assert "timeout=180.0" in src
+    # 180s, or more for a Java service that builds its jar first (preview_start_timeout).
+    assert "def preview_start_timeout(workdir: Optional[Path], default: float = 180.0)" in src
+    assert "timeout=preview_start_timeout(workdir)" in src

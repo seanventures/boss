@@ -107,7 +107,10 @@ export function consentFromBody(raw: unknown): ConsentRequest | null {
 export function consentFromError(e: unknown): ConsentRequest | null {
   if (!e || typeof e !== "object") return null;
   const x = e as { status?: unknown; code?: unknown; body?: unknown };
-  if (x.status !== 409 || x.code !== "consent_required") return null;
+  // Read from the BODY, not only the code: a route that raises the consent request as FastAPI's
+  // `detail` ({"detail": {"error": "consent_required", …}}) has no top-level code, and its 409
+  // reached the person as a raw "consent_required" with no sheet (tester P0-4, template apply).
+  if (x.status !== 409) return null;
   return consentFromBody(x.body);
 }
 

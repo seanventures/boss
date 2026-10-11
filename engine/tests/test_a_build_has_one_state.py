@@ -156,6 +156,19 @@ def test_a_preview_is_live_only_when_it_has_finished_booting():
     assert fv.preview_flag(up, NOW) == {"status": "running", "url": "http://x"}
 
 
+def test_a_passed_over_fallback_does_not_hold_a_running_preview_at_starting():
+    """Tester P1-4: `auto` records a substrate that could not serve as `failed`, then the next one
+    serves. The preview runs (health 200) and must read as running with its link, not
+    "Starting… 1 of 3" forever."""
+    java = {"status": "running", "url": "http://x", "steps": [
+        {"step": "start_rootfs_preview", "status": "failed"},
+        {"step": "start_container_preview", "status": "failed"},
+        {"step": "start_preview", "status": "ok"}]}
+    assert fv.preview_flag(java, NOW) == {"status": "running", "url": "http://x"}
+    still = {**java, "steps": [*java["steps"][:2], {"step": "start_preview", "status": "running"}]}
+    assert fv.preview_flag(still, NOW) == {"status": "starting", "url": None}
+
+
 def test_counts_in_words_are_singular_for_one():
     """`Not ready · 1 check failed`, `1 of 1 command passed`: never `1 checks`."""
     assert fv._plural(1, "check failed", "checks failed") == "1 check failed"

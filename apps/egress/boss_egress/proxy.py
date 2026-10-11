@@ -109,6 +109,25 @@ def _credential(req: EgressRequest) -> Optional[str]:
     return None
 
 
+#: Why no credential could be had for a repo that the org's GitHub connection simply does not
+#: cover (or there is none). Anything else (a revoked run, a refused grant, GitHub down) still
+#: refuses.
+_UNCOVERED = ("github_not_connected", "app_not_installed", "repo_outside_org_token")
+
+
+def anonymous_read_allowed(provider: str, decision: Any, code: str, perms: Mapping[str, str]) -> bool:
+    """A READ-ONLY run's git read (upload-pack: clone/fetch) of a repository no credential of the
+    org covers goes to GitHub with no credential: what anyone on the internet may read, nothing
+    more (a public template's import, through BOSS's system repo reader). Never a write, never
+    the REST API, never a run that may write (a build whose token was refused stays refused),
+    never when the refusal is about the run or the grant."""
+    if provider != "github" or tuple(getattr(decision, "need", None) or ()) != ("contents", "read"):
+        return False
+    if any(level not in ("read", "none") for level in (perms or {}).values()):
+        return False
+    return code in _UNCOVERED or code.startswith("mint_failed_4")
+
+
 class EgressProxy:
     def __init__(self, engine: Any, *, upstream: Optional[Upstream] = None):
         self.engine = engine
@@ -184,7 +203,12 @@ class EgressProxy:
             try:
                 token = installation_token()
             except github_app.GitHubRefused as exc:
-                return self._refuse(db, claims, provider, req.method, template, exc.code)
+                if not anonymous_read_allowed(provider, decision, exc.code, perms):
+                    return self._refuse(db, claims, provider, req.method, template, exc.code)
+                # A READ of a repository no credential of this org covers (a public template, a
+                # public dependency): forwarded with no credential at all. GitHub serves it only
+                # if it is public; the run's rules above still decided the repo and the method.
+                token = ""
             if provider == "github" and rest.endswith("/git-receive-pack") and req.method.upper() == "POST":
                 if req.headers.get("content-encoding"):
                     return self._refuse(db, claims, provider, req.method, template, "encoded_push")
@@ -273,8 +297,9 @@ class EgressProxy:
         headers = {k: v for k, v in req.headers.items() if k.lower() in _FORWARD}
         if provider == "github":
             base = (os.environ.get(GIT_UPSTREAM_ENV) or "https://github.com").rstrip("/")
-            basic = base64.b64encode(f"x-access-token:{token}".encode()).decode()
-            headers["Authorization"] = f"Basic {basic}"
+            if token:                       # "" = an anonymous read (anonymous_read_allowed)
+                basic = base64.b64encode(f"x-access-token:{token}".encode()).decode()
+                headers["Authorization"] = f"Basic {basic}"
         else:
             base = github_app.api_base()
             headers["Authorization"] = f"Bearer {token}"

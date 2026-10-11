@@ -35,7 +35,7 @@ from .core import emit_event, now_utc
 # string literal repeated wherever the question is asked.
 from .decisions import SYSTEM_ACTOR as DECISION_SYSTEM_ACTOR
 from .run_decisions import open_step_decision
-from . import workflow_outcomes
+from . import security_review_steps, workflow_outcomes
 from .workflow_capabilities import CAPABILITY_KEYS, get as get_capability
 
 log = logging.getLogger(__name__)
@@ -1923,6 +1923,10 @@ def _execute_step(
                 "capability": key, "tool": None, "status": "not_applicable",
                 "note": "No PRD to approve — this build was started as a direct change.",
             }, {})
+        if key == "security_decide" and not security_review_steps.has_choices(
+                connection, project_id, context):
+            return workflow_outcomes.apply(key, security_review_steps.not_applicable(
+                key, "Nothing to choose: the scan found nothing to fix."), {})
         adopted_gate = _adopted_gate(connection, key, context)
         if adopted_gate:
             return workflow_outcomes.apply(key, {
@@ -2184,6 +2188,11 @@ def _perform_capability(
                 capability, key, _start_ci_wait(connection, project_id, context, inputs))
         # Same shape as `document`: no tool because it commissions nothing — it READS what the
         # run has already recorded and leaves a document behind.
+        # THE RE-REVIEW AND THE SECURITY REPORT (services/security_review_steps.py).
+        if key == "security_rereview":
+            return _security_rereview(connection, ctx, project_id, context, inputs)
+        if key == "security_report":
+            return _security_report(connection, ctx, project_id, context, inputs)
         if key == "report":
             # A REPORT THAT WAS NOT WRITTEN IS A STEP THAT FAILED.
             #
@@ -2453,6 +2462,18 @@ def _perform_capability(
                 f"{architecture}"
             ).strip()}
 
+    # THE SECURITY REVIEW'S TOOL-BACKED STEPS (services/security_review_steps.py): the scan, the
+    # panel and the fix build their tool's arguments from what the run produced — or say why
+    # there is nothing to do (no findings, nothing chosen, round 1 already passed).
+    if key in security_review_steps.TOOL_KEYS:
+        try:
+            prepared = security_review_steps.prepare(connection, project_id, key, context, inputs)
+        except security_review_steps.StepRefused as refused:
+            raise SettledCapabilityError(str(refused)) from refused
+        if "args" not in prepared:
+            return prepared
+        inputs = prepared["args"]
+
     # WHOSE WORK THIS IS. A step may name a captain, overriding the capability's default —
     # the console already shows it as "the captain this WORKFLOW named for this step", and
     # validate_captain already refuses one the workforce does not have. Nothing read it at
@@ -2486,6 +2507,28 @@ def _perform_capability(
 
     # STARTED IS NOT FINISHED. See `_settle_started_work`.
     return _settle_started_work(capability, key, result)
+
+
+def _security_step(connection: Connection, ctx: Any, project_id: str, key: str,
+                   context: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
+    """A security review step with no tool. A refusal is SETTLED, not retried: the same two scans
+    give the same verdict, and the operator decides what happens next (Retry after another fix,
+    or stop the run)."""
+    try:
+        return security_review_steps.perform(connection, getattr(ctx, "settings", None),
+                                             project_id, key, context, inputs)
+    except security_review_steps.StepRefused as refused:
+        raise SettledCapabilityError(str(refused)) from refused
+
+
+def _security_rereview(connection: Connection, ctx: Any, project_id: str,
+                       context: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
+    return _security_step(connection, ctx, project_id, "security_rereview", context, inputs)
+
+
+def _security_report(connection: Connection, ctx: Any, project_id: str,
+                     context: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
+    return _security_step(connection, ctx, project_id, "security_report", context, inputs)
 
 
 #: An async tool reporting that the work is already over. Rare but real — a capability can find
@@ -2525,6 +2568,11 @@ _AWAIT_KINDS: dict[str, tuple[str, tuple[str, ...]]] = {
     # {"run_id": <the new attempt>}}` the moment the attempt is queued; the step waits on that
     # attempt as `build` waits on the first.
     "retry_build": ("code_task", ("code_task_run_id", "run_id", "id")),
+    # THE SECURITY REVIEW: a scan is done when the worker has run every tool; the panel is a
+    # meeting; the fix is a build of the app.
+    "security_scan": ("security_scan", ("scan_id", "id")),
+    "security_panel": ("meeting", ("meeting_run_id", "run_id", "id")),
+    "security_fix": ("code_task", ("code_task_run_id", "run_id", "id")),
     # WAITING FOR CI IS WAITING. The step records a ci_waits row and parks on it; every tick
     # takes one look at GitHub (with backoff) until the checks finish or the wait times out.
     "wait_for_ci": ("ci_wait", ("ci_wait_id", "id")),
@@ -2717,6 +2765,17 @@ def _build_waits_on_a_person(connection: Any, run_id: str) -> bool:
         return False
     if not row:
         return False
+    if str(row["phase"] or "") == "awaiting_gate_override":
+        # A failed TEMPLATE gate cannot be waived: nobody can answer that wait, so the build is
+        # blocked, not waiting (templates.gate.held_run), and the step above it fails with why.
+        from ..templates.gate import held_run
+
+        try:
+            with connection.begin_nested():
+                if held_run(connection, run_id) is not None:
+                    return False
+        except Exception:  # noqa: BLE001
+            pass
     return (str(row["phase"] or "") in ("awaiting_plan_approval", "awaiting_gate_override")
             or str(row["reason"] or "") == "budget_denied")
 
@@ -2756,6 +2815,9 @@ _AWAIT_TABLES: dict[str, tuple[str, frozenset[str], frozenset[str]]] = {
     "stack_deployment": ("stack_deployments",
                          frozenset({"healthy"}),
                          frozenset({"failed", "rejected"})),
+    # A scan with every tool run is `done`; one whose tools all failed (or that could not run)
+    # is `failed`, with why in counts.error.
+    "security_scan": ("security_scans", frozenset({"done"}), frozenset({"failed"})),
     # An architecture is done when a PERSON approved it. `awaiting_approval`,
     # `revision_requested` and `drafting` are in flight: nobody has answered, or the architect
     # is writing the version a person asked for.
@@ -2771,7 +2833,8 @@ _AWAIT_TABLES: dict[str, tuple[str, frozenset[str], frozenset[str]]] = {
 
 #: Where a table keeps the reason its run ended, when it is not a column called `error`.
 _REASON_COLUMN: dict[str, str] = {"ci_waits": "summary", "deployment_runs": "failure_reason",
-                                  "stack_deployments": "failure_reason"}
+                                  "stack_deployments": "failure_reason",
+                                  "security_scans": "counts->>'error'"}
 
 
 def _terminal_evidence(
@@ -2908,6 +2971,20 @@ def _terminal_evidence(
                     "approver_role": decided["approver_role"],
                 }
             return evidence
+        if kind == "security_scan":
+            # WHAT THE SCAN FOUND, so the run card reads "12 findings" and the panel, the
+            # re-scan and the re-review find the scan by its id.
+            row = connection.execute(
+                text("SELECT counts, commit_sha FROM security_scans WHERE id = :r"),
+                {"r": awaited_id},
+            ).mappings().first()
+            if not row:
+                return {}
+            counts = row["counts"] if isinstance(row["counts"], dict) else {}
+            return {"scan_id": awaited_id, "counts": counts, "commit_sha": row["commit_sha"],
+                    "note": f"{int(counts.get('total') or 0)} findings"
+                            + (f"; tools that failed: {', '.join(counts['failed_tools'])}"
+                               if counts.get("failed_tools") else "")}
         if kind == "agent_run":
             # WHAT THE AGENT ACTUALLY PRODUCED, read after the approval, not the snapshot
             # taken when it stopped. The snapshot is missing the skill that needed a person
@@ -3092,6 +3169,42 @@ def resume_awaited(
             # checks to waive or a budget to raise is the build's own card; failing the step
             # above it added a second card for the same wait ("Build, review and test failed").
             continue
+        if kind == "code_task" and (status == "repairing" or status in ok_states):
+            # A REPAIRED ATTEMPT IS NOT THE RESULT, AND A FINISHED BUILD IS NOT A PASSED ONE.
+            # `repairing` means the attempt failed its checks and handed its work to a repair
+            # round: follow that attempt. A `completed` build a template gate stopped (or an
+            # attempt superseded by its repair) did not pass: fail the step with why, so the
+            # deploy after it never offers a release for it.
+            from .run_fencing import build_not_passed
+
+            not_passed = None if status == "repairing" else build_not_passed(
+                connection, awaited_id)
+            if status == "repairing" or not_passed:
+                successor = _successor_attempt(connection, project_id, awaited_id, run_id)
+                if successor:
+                    workflows.repoint_waiting_step(
+                        connection, project_id=project_id, step_run_id=step["id"],
+                        handle={**handle, "id": successor},
+                        note=(f"the build failed its checks and is being repaired; this step "
+                              f"now follows {successor} (the earlier attempt {awaited_id})"),
+                    )
+                    done.append({"run_id": run_id, "step_id": step["step_id"],
+                                 "outcome": "following_retry", "awaited": kind,
+                                 "was": awaited_id, "now": successor})
+                    continue
+                if status == "repairing":
+                    continue  # the repair round is being started; the shepherd ends a dead one
+                workflows.force_fail_waiting_step(
+                    connection, project_id=project_id, step_run_id=step["id"],
+                    error=str(not_passed)[:500],
+                    output={**output, "status": "failed", "awaited_status": status,
+                            "reached_before_failing": _evidence_quietly(
+                                connection, kind, awaited_id)},
+                )
+                done.append({"run_id": run_id, "step_id": step["step_id"],
+                             "outcome": "failed", "awaited": kind, "awaited_status": status,
+                             "because": not_passed})
+                continue
         if status in ok_states:
             # `completed` IS the inner pipeline's success. A missing pull request is not a
             # refusal — reviewer refusal lands as `blocked` / `failed`, already handled below.
@@ -3419,13 +3532,17 @@ def _successor_attempt(
             text(
                 """
                 WITH target AS (
-                    SELECT COALESCE(NULLIF(finalize_ctx->>'root_run_id', ''), id) AS root
+                    SELECT COALESCE(NULLIF(finalize_ctx->>'root_run_id', ''), id) AS root,
+                           created_at AS born
                     FROM code_task_runs WHERE id = :awaited
                 )
                 SELECT r.id
                 FROM code_task_runs r, target t
                 WHERE r.project_id = :p
                   AND r.id <> :awaited
+                  -- A later attempt, never an earlier one: a blocked repair must not send
+                  -- the step back to the attempt it repaired.
+                  AND r.created_at > t.born
                   AND r.status IN ('running', 'queued', 'completed')
                   AND (
                         COALESCE(NULLIF(r.finalize_ctx->>'root_run_id', ''), r.id) = t.root
@@ -3706,6 +3823,9 @@ def _gate_subject(
     if capability.is_gate:
         if _no_prd_to_approve(key, context):
             return None  # runs as ordinary work below and records "no PRD"
+        if key == "security_decide" and context is not None and not \
+                security_review_steps.has_choices(connection, project_id, context):
+            return None  # nothing to choose from: runs as ordinary work and records why
         if context is not None and _adopted_gate(connection, key, context):
             # Already answered. Returning None sends it down the ordinary path, where
             # execute_step records the approval it was started with.
@@ -3861,6 +3981,13 @@ def _open_gate(
     # a fact about where the email went.
     if capability_key in {"deploy", "redeploy", "monitor"}:
         recommendation_extra["environment"] = str(run_input.get("environment") or "staging")
+    if capability_key == "security_decide":
+        # Where the checklist is: App › Security draws the recommendations as the choice this
+        # approval records (approving without opening it takes the P0/P1 pre-ticks).
+        recommendation_extra["security_review"] = {
+            "run_id": run["id"], "app_key": str(run_input.get("app_key") or ""),
+            "recommendations": len(security_review_steps.review.list_recommendations(
+                connection, run["id"]))}
     decision_id = subject.get("decision_id") or open_step_decision(
         connection,
         project_id,
@@ -4144,6 +4271,35 @@ def _resume_answered_gates(
         )
         acted.append({"run_id": run["id"], "step_id": row["step_id"], "outcome": outcome})
     return acted
+
+
+def projects_with_work(connection: Connection, asked: str) -> list[str]:
+    """`asked` first, then every other project with a product workflow run to advance.
+
+    The worker ticks the project it is configured for. A template LAB is a project of its own
+    (templates.lab), so its workflow sat at `build: ready` for ever: nothing ever ticked that
+    project. Every project with live work is advanced, whichever one the worker names.
+    """
+    others = [str(r[0]) for r in connection.execute(
+        text(
+            """
+            SELECT DISTINCT r.project_id
+            FROM workflow_runs r
+            JOIN workflow_definitions d ON d.id = r.workflow_definition_id
+            WHERE r.project_id <> :asked
+              AND COALESCE(d.namespace, 'system') = 'product'
+              AND (r.status IN ('running', 'waiting')
+                   OR (r.status = 'failed' AND EXISTS (
+                         SELECT 1 FROM workflow_step_runs s
+                         WHERE s.workflow_run_id = r.id AND s.status = 'failed'
+                           AND s.output->'await'->>'kind' = 'code_task')))
+            ORDER BY r.project_id
+            LIMIT 50
+            """
+        ),
+        {"asked": asked},
+    ).all()]
+    return [asked, *others]
 
 
 def tick(

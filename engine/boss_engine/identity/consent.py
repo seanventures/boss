@@ -209,6 +209,15 @@ def _repos_for(db: Any, project_id: str, input_data: Any) -> list[str]:
     owner, repo = str(data.get("owner") or "").strip(), str(data.get("repo") or "").strip()
     if owner and repo:
         return [f"{owner}/{repo}"]
+    app_key = str(data.get("app_key") or "").strip()
+    if app_key:
+        # Work on an existing app (a security review's fix, a template's build) builds in THAT
+        # app's repository: the grant names it, not every repository of the project.
+        row = db.execute(text("SELECT spec->>'owner', spec->>'repo' FROM code_task_runs WHERE project_id = :p "
+                              "AND finalize_ctx->>'app_id' = :a ORDER BY created_at DESC LIMIT 1"),
+                         {"p": project_id, "a": app_key}).first()
+        if row and row[0] and row[1]:
+            return [f"{row[0]}/{row[1]}"]
     if db.execute(text("SELECT to_regclass('github_repository_bindings') IS NOT NULL")).scalar():
         rows = db.execute(text("SELECT full_name FROM github_repository_bindings WHERE project_id = :p "
                                "AND COALESCE(status, 'active') = 'active' ORDER BY full_name"), {"p": project_id}).scalars().all()
@@ -243,18 +252,56 @@ def workflow_needs(db: Any, project_id: str, spec: Any, input_data: Any) -> tupl
             from . import runs
             if runs.agent_for_role(db, project_id, cap_captain):
                 candidates.append(cap_captain)
-        is_build = cap_key in BUILD_CAPABILITIES or step.get("kind") == "code_task"
+        is_build = cap_key in BUILD_CAPABILITIES or step.get("kind") == "code_task" or _capability_builds(cap_key)
         if is_build:
             builds = True
-            if not any(candidates):
-                candidates.append(DEFAULT_BUILDER)
+            # The agent this step's code task will RUN AS — not its captain, not a seat: the
+            # same resolution the build's run token uses (runs.resolved_builder).
+            candidates.extend(build_step_builders(db, project_id, step, input_data))
         for c in candidates:
             key = str(c or "").strip().lower()
             if key and key != "human" and key not in roles:
                 roles.append(key)
     if builds:
         perms |= CODE_TASK_PERMISSIONS
+        # Repository work a step does OUTSIDE a delegated chain (a preview's or a deploy's clone,
+        # a review's checkout run as the person: runs.repo_access) runs as the default builder.
+        default = _resolved_builder()
+        if default not in roles:
+            roles.append(default)
     return roles, frozenset(perms), (_repos_for(db, project_id, input_data) if builds else [])
+
+
+def _resolved_builder(named: Optional[str] = None) -> str:
+    from . import runs
+
+    return runs.resolved_builder(None, {"agent": {"role_key": named}} if named else None)
+
+
+def build_step_builders(db: Any, project_id: Optional[str], step: Any, input_data: Any = None) -> list[str]:
+    """The agent(s) a BUILD step's code task runs as, by the runtime's own rules: the step runs as
+    the agent it names (step_agents.resolve, after the start card's pick: with_run_agent), the
+    build tool hands the task to that agent (finalize_ctx.agent), and the run token is minted for
+    runs.resolved_builder of that — the default builder when the step names nobody, and also when
+    the name is only the catalogue's soft default (an off-duty default falls back to Auto, which
+    runs as the person, whose build is the default builder's). The consent sheet asks for exactly
+    these, so a build is never refused `grant_does_not_name_agent` after the person consented."""
+    from ..services import step_agents
+
+    as_run = step if not isinstance(step, dict) else dict(step)
+    if db is not None and project_id and isinstance(step, dict):
+        try:
+            as_run = step_agents.with_run_agent(db, project_id, step, input_data)
+        except Exception:  # noqa: BLE001 — cannot read the card's pick: the step as published
+            as_run = step
+    named = step_agents.named_agent(as_run) if isinstance(as_run, dict) else ""
+    named = "" if named == "human" else named
+    out = [_resolved_builder(named or None)]
+    if not named or step_agents.is_default_captain(as_run):
+        default = _resolved_builder()
+        if default not in out:
+            out.append(default)
+    return out
 
 
 _REGISTRY: list = []
@@ -264,6 +311,27 @@ def _registry(build):
     if not _REGISTRY:
         _REGISTRY.append(build())
     return _REGISTRY[0]
+
+
+#: The tools that start a build: a capability that calls one IS a build step, whatever it is
+#: called (security_fix was not in BUILD_CAPABILITIES, so a security review's consent asked for
+#: no build authority and its fix build was refused at start: "authority refused: no_grant").
+BUILD_TOOLS = frozenset({"create_code_task", "retry_code_task"})
+
+
+def _capability_builds(cap_key: str) -> bool:
+    if not cap_key:
+        return False
+    try:
+        from ..services import workflow_capabilities
+
+        cap = workflow_capabilities.CAPABILITIES.get(cap_key)
+    except Exception:  # noqa: BLE001 — unknown here: the hardcoded set still decides
+        return False
+    if cap is None:
+        return False
+    return (getattr(cap, "tool", None) in BUILD_TOOLS
+            or "code_task_run_id" in tuple(getattr(cap, "produces", ()) or ()))
 
 
 def _capability_needs(cap_key: str) -> tuple[Optional[str], Optional[str]]:
@@ -425,6 +493,56 @@ def require_for_workflow(db: Any, *, project_id: str, spec: Any, input_data: Any
             g, agent_ids=agent_ids, permissions=needed, project_id=project_id, repos=repos, run_id=wf_run):
         raise AuthorityLost("grant_no_longer_covers")
     return Acting(principal_id=ambient.principal_id, org_id=ambient.org_id, grant_id=g.id, run_id=wf_run)
+
+
+def require_for_retry(db: Any, *, project_id: str, run_id: str, spec: Any, input_data: Any,
+                      title: Optional[str] = None) -> Optional[Acting]:
+    """A person's Try again on a run whose RECORDED grant no longer covers what the run needs
+    (a grant consented before the consent asked for every agent that acts — D1, 2026-10-10:
+    the builder was missing and the build was refused `grant_does_not_name_agent` — or one the
+    person narrowed since): ask again, exactly as at start, and record the covering grant on the
+    run. Otherwise the retry would re-run the step under the same grant and be refused again.
+
+    None (nothing to do) when the run has no recorded authority, the caller is not that run's own
+    person in a console session, or the recorded grant still covers. Raises ConsentRequired with
+    the same body as a start; a task grant made from it is claimed for this run (`run_wf:<id>`)."""
+    from sqlalchemy import text
+
+    from . import grants, lineage
+
+    recorded = recorded_authority(db, run_id)
+    if recorded is None or not recorded.grant_id or recorded.chain:
+        return None
+    ctx = lineage.current_context()
+    if ctx is None or ctx.run_token is not None or not ctx.is_human_session \
+            or ctx.principal.id != recorded.principal_id:
+        return None
+    wf_run = recorded.run_id or f"run_wf:{run_id}"
+    role_keys, needed, repos = workflow_needs(db, project_id, spec, input_data)
+    agents = _agents(db, project_id, role_keys)
+    if not agents:
+        return None
+    needed = frozenset(k for k in needed if catalogue.is_known(k) and catalogue.meta(k).delegable)
+    agent_ids = [p.agent_id for p in agents]
+    current = grants.load(recorded.grant_id, db=db)
+    if current is not None and current.user_principal_id == recorded.principal_id and grants.covers(
+            current, agent_ids=agent_ids, permissions=needed, project_id=project_id, repos=repos, run_id=wf_run):
+        return None
+    grant = grants.find_covering(ctx.principal.id, agent_ids=agent_ids, permissions=needed, project_id=project_id,
+                                 repos=repos, run_id=wf_run, db=db)
+    if grant is None:
+        missing = [p for p in agents if current is None or not grants.names_agent(current, p.agent_id)]
+        body = _consent_body(db, ctx_person=ctx.principal.id, org_id=ctx.principal.org_id, agents=agents,
+                             needed=needed, project_id=project_id, repos=repos,
+                             task=title or "this workflow run", scope="workflow_run", standing_only=False)
+        if missing:
+            body["hint"] = ("The grant this run was started under does not let "
+                            + ", ".join(_name(db, p.agent_id) for p in missing)
+                            + " act, and this run needs it. Consent again to retry.")
+        raise ConsentRequired(body)
+    db.execute(text("UPDATE workflow_runs SET grant_id = :g, updated_at = now() WHERE id = :r"),
+               {"g": grant.id, "r": run_id})
+    return Acting(principal_id=recorded.principal_id, org_id=recorded.org_id, grant_id=grant.id, run_id=wf_run)
 
 
 class ParentNotYours(_Base):  # type: ignore[misc,valid-type]

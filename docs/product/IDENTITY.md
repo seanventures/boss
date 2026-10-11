@@ -688,6 +688,8 @@ effective(hop_n) = perms_live(user, scope)
 
 Signing keys live in `identity_signing_keys`, with the private key encrypted under the vault KEK. They rotate every 30 days. **Two keys are published at a time**, at `/.well-known/boss-jwks.json`. BOSS refuses to boot without its keys and never generates an ephemeral key silently. A silent ephemeral key is a common flaw.
 
+**EdDSA only is for BOSS's own tokens (D35).** Every rule here that says EdDSA (the families above, `alg must be EdDSA` in the exchange, D3) covers the tokens BOSS issues to and accepts from itself: run tokens and actor assertions. When BOSS is the OpenID Connect provider for the apps it builds (APP_TEMPLATES_AND_SECURITY_LOOP.md §6), it signs those apps' ID tokens with **RS256 by default**, because OIDC Core requires a provider to support it and every client library does, and offers EdDSA per client. That family (`oidc`) has its own keys, its own JWKS under the issuer `/oidc/<org_slug>`, and its own `typ`; BOSS's internal verifiers never accept an `oidc` key or token, and the OIDC endpoints never accept a BOSS-internal one. RS256 is never accepted for a BOSS-internal token.
+
 **The exchange.** `POST /v1/identity/token`, with `grant_type=urn:ietf:params:oauth:grant-type:token-exchange`:
 
 | Parameter | Value |
@@ -1701,7 +1703,7 @@ Per BOSS practice:
 |---|---|---|
 | D1 | **The API is the only authority. Next.js is a pass-through.** | Two enforcement layers that disagree, and a fallback to unverified claims, are a common flaw. With one authority there is one bug surface. |
 | D2 | **Opaque server-side sessions, not JWTs, for people.** | Instant revocation, no claim staleness, no key-confusion surface. The console never needs a self-contained token. |
-| D3 | **JWTs only for run tokens: 5 minutes, EdDSA, DPoP-bound, one audience, separate key families.** | That is where self-contained tokens earn their keep (sandboxes, the proxy). Everything else is opaque. |
+| D3 | **JWTs only for run tokens: 5 minutes, EdDSA, DPoP-bound, one audience, separate key families.** | That is where self-contained tokens earn their keep (sandboxes, the proxy). Everything else is opaque. Scoped to BOSS's own tokens by D35. |
 | D4 | **The catalogue is a YAML file in code, generating Python, TS, SQL and docs. No runtime-created permissions, no wildcards.** | It removes drifting copies, seeder bugs and typo-creates-permission bugs. A permission added later never flows silently into a custom role. |
 | D5 | **Deny by default at boot.** An undeclared route stops the API from starting. | A CI test can be skipped. A server that won't start cannot be. |
 | D6 | **Page permission = the read permission of the page's primary resource.** No separate `page:*` keys. | A page you can open but whose data you can't read, or the reverse, is a broken state. Role maps for pages are derived and shown in the role editor. |
@@ -1738,6 +1740,7 @@ Per BOSS practice:
 | D32 | **Self sign-up exists but is off by default**, with an optional domain allow-list; "New here? Create account" appears only when an Owner enables it. Otherwise: "Ask an admin to invite you". | §4.10, §4.15, §9.7, A91. |
 | D33 | **The sign-in page layout, in BOSS style:** mark and welcome, configured social/SSO icon row (hidden when none), prominent passkey button, "or use email", tabs Password \| Magic link \| Email code. | §9.7; mockup `signin`. |
 | D34 | **Operator includes `workflow:publish` and `deployment:create`.** Production keeps `deployment:production` and its approval gate. | Catalogue unchanged from the draft (it already did); pinned by `test_operator_includes_publish_and_non_production_deploys`. |
+| D35 | **"EdDSA only" covers BOSS's own internal tokens. The ID tokens BOSS issues as an OIDC provider for the apps it builds are RS256 by default, EdDSA opt-in per client**, signed by a separate `oidc` key family that BOSS's own verifiers never accept. | App-platform decision D10 (2026-10-08, APP_TEMPLATES_AND_SECURITY_LOOP.md §6.2): OIDC Core requires providers to support RS256 and every client library does, so EdDSA-only would break the apps BOSS builds. The internal rule's reasons (one algorithm, no confusion between families) hold because the families never cross (§7 token families). Recorded in `oidc_clients.id_token_alg` (`RS256` or `EdDSA`). |
 
 ---
 

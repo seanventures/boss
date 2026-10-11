@@ -22,6 +22,7 @@ CODE_TASK = "code_task"
 #: tool -> {argument: object kind (or kinds)}. A kind is an identity.object_kinds entry.
 CONFINED: dict[str, dict[str, str | tuple[str, ...]]] = {
     "add_review_comment": {"run_id": CODE_TASK},
+    "apply_template": {"extends_run_id": CODE_TASK},
     "cancel_code_task": {"run_id": CODE_TASK},
     "cancel_job": {"job_id": "job"},
     "create_code_task": {"task_id": "task", "workflow_run_id": "workflow_run",
@@ -45,6 +46,7 @@ CONFINED: dict[str, dict[str, str | tuple[str, ...]]] = {
     "link_run_origin": {"run_id": CODE_TASK, "meeting_run_id": ("meeting_run", "discovery_run"),
                         "task_id": "task"},
     "list_review_comments": {"run_id": CODE_TASK},
+    "list_security_findings": {"scan_id": "security_scan"},
     "list_source": {"run_id": CODE_TASK},
     "preflight_deployment_target": {"run_id": CODE_TASK},
     "provider_audit": {"run_id": CODE_TASK},
@@ -56,11 +58,14 @@ CONFINED: dict[str, dict[str, str | tuple[str, ...]]] = {
     "redeploy": {"run_id": CODE_TASK},
     "register_repository": {"connection_id": "github_connection"},
     "request_meeting": {"task_id": "task"},
+    "run_security_scan": {"workflow_run_id": "workflow_run"},
     "resolve_review_comment": {"run_id": CODE_TASK},
     "retarget_app": {"target_id": "deployment_target", "host_id": "deployment_host"},
     "retry_code_task": {"run_id": CODE_TASK},
     "retry_workflow_step": {"run_id": "workflow_run"},
     "search_code": {"run_id": CODE_TASK},
+    "security_review_status": {"run_id": "workflow_run"},
+    "security_scan_status": {"scan_id": "security_scan"},
     "send_feedback": {"run_id": CODE_TASK},
     "set_job_priority": {"job_id": "job"},
     "skip_workflow_step": {"run_id": "workflow_run"},
@@ -77,6 +82,10 @@ CONFINED: dict[str, dict[str, str | tuple[str, ...]]] = {
 #: tool -> {argument: why it cannot reach another project}. `project_id` is never listed: the
 #: identity gate checks the tool's permission AT the project_id argument when one is given.
 UNCONFINED: dict[str, dict[str, str]] = {
+    # Templates belong to the ORG, not a project: the handler reads them only in the org that
+    # holds the call's project, so another org's template id names nothing.
+    "apply_template": {"template_id": "an org's template, read only in the call's project's org"},
+    "describe_template": {"template_id": "an org's template, read only in the call's project's org"},
     "merge_apps": {"keep_app_id": "an app id is a finalize_ctx label, matched only within the "
                                   "call's project by the handler",
                    "merge_app_ids": "same: matched only within the call's project"},

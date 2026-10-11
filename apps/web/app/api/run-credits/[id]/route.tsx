@@ -8,6 +8,7 @@ import { apiWrite } from "../../../../lib/api-write";
 import { loadPath } from "../../../../lib/writing-get";
 import { toChain } from "../../../agents/act-wire";
 import { CARD_COLOURS as C, creditsCard, type CreditsCard } from "../../../agents/credits-card";
+import { rawRequestUrl } from "../../../../lib/raw-request-url";
 
 /**
  * Run Credits as a 1200×630 PNG: "Made by 5 agents", faces in chain order (spec §3.6, §11.1).
@@ -84,7 +85,7 @@ function chainPath(id: string): string {
 
 export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }) {
   const { id } = await ctx.params;
-  const params = new URL(req.url).searchParams;
+  const params = rawRequestUrl(req).searchParams;
   const projectId = (params.get("project_id") ?? "").trim();
   if (!ID.test(id)) return NextResponse.json({ error: "missing run id" }, { status: 400 });
   let chain: Chain;

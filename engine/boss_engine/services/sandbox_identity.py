@@ -266,27 +266,47 @@ def current() -> Optional[SandboxIdentity]:
 
 
 @contextlib.contextmanager
-def bind(owner_id: str) -> Iterator[Optional[SandboxIdentity]]:
+def bind(owner_id: str, *, project_id: Optional[str] = None) -> Iterator[Optional[SandboxIdentity]]:
     """Give the run `owner_id` its own uid and directory for the block. Everything spawned under
     that owner (owned_process) runs as it. Yields None when isolation is off, or `auto` with no
-    helper (logged); raises SandboxUnavailable when it is `required` and impossible."""
-    m = mode()
-    if m == "off":
-        yield None
-        return
-    if not available():
-        if m == "required":
-            raise SandboxUnavailable(unavailable_reason())
-        log.warning("SANDBOX NOT ISOLATED: run %s runs as the control plane's uid (no boss-sandbox-exec; "
-                    "BOSS_SANDBOX_ISOLATION=auto). Never run this way with untrusted code.", owner_id)
-        yield None
-        return
+    helper (logged); raises SandboxUnavailable when it is `required` and impossible.
+
+    With `project_id` and an opt-in toolchain (services.toolchains), the run's HOME starts with
+    that project's dependency caches from its earlier runs, and they are kept when it ends —
+    per project, never another project's."""
     with _ACTIVE_LOCK:
         existing = _ACTIVE.get(owner_id)
     if existing is not None:                 # nested bind of the same run (a redelivery in-process)
         yield existing
         return
-    key = hashlib.sha256(owner_id.encode()).hexdigest()[:24]
+    ident = acquire(owner_id, project_id=project_id)
+    try:
+        yield ident
+    finally:
+        if ident is not None:
+            release(owner_id, project_id=project_id)
+
+
+def acquire(owner_id: str, *, project_id: Optional[str] = None,
+            what: str = "run") -> Optional[SandboxIdentity]:
+    """`bind` for a workload that outlives the call that starts it (an app PREVIEW): the uid and
+    directory are held until `release(owner_id)`. Same rules: None when isolation is off (or
+    `auto` with no helper, logged loudly); SandboxUnavailable when it is `required` and
+    impossible. Idempotent: a second acquire of a held owner returns the same identity."""
+    m = mode()
+    if m == "off":
+        return None
+    if not available():
+        if m == "required":
+            raise SandboxUnavailable(unavailable_reason())
+        log.warning("SANDBOX NOT ISOLATED: %s %s runs as the control plane's uid (no boss-sandbox-exec; "
+                    "BOSS_SANDBOX_ISOLATION=auto). Never run this way with untrusted code.", what, owner_id)
+        return None
+    with _ACTIVE_LOCK:
+        existing = _ACTIVE.get(owner_id)
+    if existing is not None:
+        return existing
+    key = owner_key(owner_id)
     uid, lock_fd = _lease_uid(key)
     ident = SandboxIdentity(key=key, uid=uid, run_dir=run_root() / key, _lock_fd=lock_fd)
     try:
@@ -302,18 +322,66 @@ def bind(owner_id: str) -> Iterator[Optional[SandboxIdentity]]:
         finally:
             os.umask(old)
         _seed_cli_logins(ident)
+        _seed_toolchains(ident, project_id)
         ident._helper("adopt", str(uid), str(ident.run_dir))
-        with _ACTIVE_LOCK:
-            _ACTIVE[owner_id] = ident
-        log.info("sandbox run=%s uid=%s", owner_id, uid)
-        yield ident
-    finally:
-        with _ACTIVE_LOCK:
-            _ACTIVE.pop(owner_id, None)
+    except BaseException:
         ident.killall()
         _purge(ident)
         with contextlib.suppress(OSError):
             os.close(lock_fd)
+        raise
+    with _ACTIVE_LOCK:
+        _ACTIVE[owner_id] = ident
+    log.info("sandbox %s=%s uid=%s", what, owner_id, uid)
+    return ident
+
+
+def release(owner_id: str, *, project_id: Optional[str] = None) -> None:
+    """End what `acquire` started: every process of the uid is killed, the directory removed and
+    the uid freed. Idempotent; never raises. A lease this process does not hold (an API restart)
+    is still cleaned up from its directory: its owner is the uid that held it."""
+    with _ACTIVE_LOCK:
+        ident = _ACTIVE.pop(owner_id, None)
+    if ident is None:
+        with contextlib.suppress(Exception):
+            run_dir = run_root() / owner_key(owner_id)
+            st = os.lstat(run_dir)
+            if UID_BASE <= st.st_uid < UID_BASE + UID_COUNT:
+                orphan = SandboxIdentity(key=run_dir.name, uid=st.st_uid, run_dir=run_dir)
+                orphan.killall()
+                _purge(orphan)
+        return
+    ident.killall()
+    if project_id:
+        with contextlib.suppress(Exception):
+            from . import toolchains
+
+            toolchains.save_cache(ident.home, project_id)
+    _purge(ident)
+    if ident._lock_fd is not None:
+        with contextlib.suppress(OSError):
+            os.close(ident._lock_fd)
+
+
+def owner_key(owner_id: str) -> str:
+    """The run directory's name for an owner (also what a later process finds it by)."""
+    return hashlib.sha256(owner_id.encode()).hexdigest()[:24]
+
+
+def preview_port_for_uid(uid: int) -> Optional[int]:
+    """The preview port a pool uid owns (scripts/sandbox/entrypoint.sh BOSS_PREVIEW_SELF: uid
+    UID_BASE+i may reach the i-th port of BOSS_PREVIEW_PORTS on loopback, and no other preview
+    port). None when the range has no port for it."""
+    from ..app_links.service import preview_ports
+
+    pool = preview_ports()
+    port = pool.low + (int(uid) - UID_BASE)
+    return port if UID_BASE <= int(uid) < UID_BASE + UID_COUNT and pool.low <= port <= pool.high else None
+
+
+def held(owner_id: str) -> Optional[SandboxIdentity]:
+    with _ACTIVE_LOCK:
+        return _ACTIVE.get(owner_id)
 
 
 def _seed_cli_logins(ident: SandboxIdentity) -> None:
@@ -332,6 +400,18 @@ def _seed_cli_logins(ident: SandboxIdentity) -> None:
             if os.path.isfile(path):
                 shutil.copyfile(path, dst / name)
                 os.chmod(dst / name, 0o644)
+
+
+def _seed_toolchains(ident: SandboxIdentity, project_id: Optional[str]) -> None:
+    """Opt-in toolchains (Java): the egress proxy in Maven's and Gradle's own config (they ignore
+    HTTPS_PROXY), and this project's dependency caches. Never fails the run."""
+    try:
+        from . import toolchains
+
+        toolchains.write_proxy_config(ident.home, os.environ.get(EGRESS_CONNECT_ENV))
+        toolchains.restore_cache(ident.home, project_id)
+    except Exception as exc:  # noqa: BLE001 — a cold cache is slower, not broken
+        log.warning("toolchain setup for run %s failed: %s", ident.key, exc)
 
 
 def _purge(ident: SandboxIdentity) -> None:

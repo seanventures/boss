@@ -6,6 +6,7 @@ BOSS runs code it did not write: every build, test and agent step. This page exp
 
 - **Their own user.** Each build runs as its own unprivileged user (uid 61000–61999), never as BOSS itself. It can enter only its own directory.
 - **A fenced network.** A build can reach only the BOSS API (port 8000) and boss-egress (ports 8090 and 8091). The database, the secret store, the host and the internet are refused.
+- **Previews too.** An app preview runs the same way: its own user for as long as the preview lives, its files in its own directory, none of BOSS's environment, and the same fence. It may also reach its own preview port, never another preview's.
 - **No credentials.** A build holds no GitHub token or provider key. boss-egress adds them to each allowed request (see [Agents and access](AGENTS_AND_ACCESS.md#github-access-for-builds)).
 
 To set up the fence, the api container starts as root with the `NET_ADMIN` capability, installs iptables rules that match the build users, then becomes the `boss` user for good. It can never become root again.

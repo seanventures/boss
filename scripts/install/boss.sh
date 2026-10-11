@@ -72,6 +72,13 @@ Commands:
                         host-key              issue a new key for these host tools (kept in .env)
                         legacy status         the shared credentials still in use, with end dates
                         posture | audit verify | migrate
+  toolchains [list]   Build toolchains: which this install has (Python and Node always)
+  toolchains enable java|security | disable java|security
+                      Turn an opt-in toolchain on or off: saves BOSS_TOOLCHAINS in .env,
+                      rebuilds the api and worker images and restarts them. Java adds a
+                      pinned Temurin JDK 21, Maven and Gradle (about 0.5 GB); security adds
+                      Semgrep, OSV-Scanner and OWASP ZAP on top of Java. See
+                      docs/community/TOOLCHAINS.md
   version             Installed release and commit
 
 Environment: BOSS_INSTALL_DIR selects another install.
@@ -338,6 +345,42 @@ cmd_update() {
   # The installer reads the remembered release from .boss-release, so this cannot move to main.
   bash "$INSTALL_DIR/install.sh" --dir "$INSTALL_DIR" --yes "$@"
   post_deploy_prune
+}
+
+
+# ---- toolchains ------------------------------------------------------------------------------
+
+KNOWN_TOOLCHAINS=(java security)
+
+cmd_toolchains() {
+  need_install
+  local action="${1:-list}" name="${2:-}" current wanted
+  current="$(env_value BOSS_TOOLCHAINS)"; current="${current:-none}"
+  case "$action" in
+    list|status)
+      printf 'Configured in .env: BOSS_TOOLCHAINS=%s\n' "$current"
+      printf 'Always installed:   python, node\n'
+      printf 'In the running image: '
+      compose exec -T api cat /opt/toolchains/manifest.json </dev/null 2>/dev/null \
+        || printf '(api not running)\n'
+      return 0 ;;
+    enable|disable) ;;
+    *) die "unknown toolchains action: $action (list, enable NAME, disable NAME)" ;;
+  esac
+  [[ " ${KNOWN_TOOLCHAINS[*]} " == *" $name "* ]] \
+    || die "unknown toolchain: ${name:-(none given)}. Known: ${KNOWN_TOOLCHAINS[*]}"
+  if [[ "$action" == enable ]]; then wanted="$name"; else wanted=none; fi
+  if [[ "$current" == "$wanted" ]]; then
+    printf 'BOSS_TOOLCHAINS is already %s; nothing to change.\n' "$wanted"
+    return 0
+  fi
+  set_env_value BOSS_TOOLCHAINS "$wanted"
+  printf 'Saved BOSS_TOOLCHAINS=%s in .env. Rebuilding the api and worker images...\n' "$wanted"
+  if ! compose build api worker </dev/null; then
+    printf '  ✗ The image build failed. .env says BOSS_TOOLCHAINS=%s; fix the cause and run: boss update\n' "$wanted"
+    return 1
+  fi
+  apply_env "Toolchains ($wanted)"
 }
 
 
@@ -1211,6 +1254,7 @@ case "$COMMAND" in
   uninstall) cmd_uninstall "$@" ;;
   prune) cmd_prune "$@" ;;
   host-sample) cmd_host_sample "$@" ;;
+  toolchains) cmd_toolchains "$@" ;;
   version|--version) cmd_version ;;
   *) printf 'boss: unknown command %s\n\n' "$COMMAND" >&2; usage >&2; exit 2 ;;
 esac

@@ -54,6 +54,7 @@ import {
   seatGist, seatsOf, shortTitle, took, usd, SEAT_ORDER, type StageState,
 } from "../lib/research-panels";
 import { AgentAvatar } from "./agent-avatar";
+import { ReviewChecklist } from "./factory/security/review-checklist";
 
 export const ROLE_ORDER = SEAT_ORDER;
 
@@ -241,7 +242,12 @@ function Synthesis({ meeting }: { meeting: Meeting }) {
           {open || !gist?.headline ? <div className="rp-full"><Markdown text={meeting.synthesis} /></div> : null}
         </div>
       ) : <div />}
-      {typed ? <TypedResult meeting={meeting} /> : meeting.prd_markdown ? (
+      {meeting.security_review?.run_id ? (
+        <div className="rp-prd" data-testid="meeting-security-checklist">
+          <div className="rp-card-h"><b title="The panel's recommendations: tick what to fix">Recommendations</b></div>
+          <ReviewChecklist runId={meeting.security_review.run_id} />
+        </div>
+      ) : typed ? <TypedResult meeting={meeting} /> : meeting.prd_markdown ? (
         <div className="rp-prd" data-testid="meeting-prd">
           <div className="rp-card-h">
             <b>The PRD</b><span className="rp-spacer" />

@@ -218,6 +218,12 @@ VERDICTS: dict[str, Callable[[Mapping[str, Any], Mapping[str, Any]], Verdict]] =
     "wait_for_ci": awaited_work,
     "teardown_preview": finished_tool,
     "cost_check": finished_tool,
+    "security_scan": awaited_work,
+    "security_panel": awaited_work,
+    "security_decide": answered_gate,
+    "security_fix": awaited_work,
+    "security_rereview": observed,
+    "security_report": written,
 }
 
 

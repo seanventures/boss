@@ -12,6 +12,10 @@ app.env
 **/.env.local
 **/.env.*.local
 .pytest_cache
+# Python's bytecode caches from a local test run: inside templates/apps they made every built-in
+# with Python tests "invalid" (a binary file) in the image, so the gallery silently lost them.
+**/__pycache__
+**/*.pyc
 .ruff_cache
 .venv
 artifacts

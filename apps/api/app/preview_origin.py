@@ -12,10 +12,13 @@ port is the default preview origin, BOSS_PREVIEW_ORIGIN overrides it) and:
   - serves ONLY the preview capability paths, `/v1/previews/<id>/web[/...]` and
     `/v1/previews/<id>/feedback`, judged on the DECODED path as the router will see it, and on
     the raw path too; anything else is a 404 that never reaches the API;
-  - STRIPS every credential before the request reaches anything: Cookie (cookies are not
-    port-scoped, so the browser DOES send the console's session cookie here), Authorization,
-    every X-Boss-* header, and every header a proxy uses to assert identity;
-  - never relays Set-Cookie, and always answers with the sandbox CSP, whatever the handler said.
+  - STRIPS every credential before the request reaches anything: Authorization, every X-Boss-*
+    header, every header a proxy uses to assert identity, and every cookie but the previewed
+    app's OWN (cookies are not port-scoped, so the browser DOES send the console's session cookie
+    here): only cookies carrying this preview's tag pass (boss_engine.services.preview_cookies);
+  - relays a Set-Cookie only when it is one the preview gateway made for THIS preview (tagged,
+    Path exactly `/v1/previews/<id>/`, no Domain), and always answers with the sandbox CSP,
+    whatever the handler said.
 
 It delegates to the API's own preview handlers (apps/api/app/main.py preview_web_proxy,
 preview_websocket_proxy, submit_preview_feedback_endpoint), so there is one preview gateway.
@@ -29,6 +32,7 @@ import os
 import re
 from typing import Any, Awaitable, Callable, Optional
 
+from boss_engine.services.preview_cookies import is_relayable_set_cookie, own_cookie_pairs
 from boss_engine.services.preview_service import PREVIEW_SANDBOX_CSP
 
 Scope = dict[str, Any]
@@ -37,7 +41,7 @@ Send = Callable[[dict], Awaitable[None]]
 ASGIApp = Callable[[Scope, Receive, Send], Awaitable[None]]
 
 #: The capability paths, and nothing else. The id is one segment that is not a dot segment.
-PREVIEW_PATH = re.compile(r"^/v1/previews/(?!\.{1,2}/)[^/]+/(?:web(?:/.*)?|feedback/?)$", re.S)
+PREVIEW_PATH = re.compile(r"^/v1/previews/(?!\.{1,2}/)([^/]+)/(?:web(?:/.*)?|feedback/?)$", re.S)
 
 #: Headers that could carry a credential or name a principal. Dropped before anything sees them.
 _IDENTITY_HEADER = re.compile(
@@ -56,15 +60,31 @@ def is_preview_capability_path(path: str) -> bool:
     return bool(PREVIEW_PATH.match(path or ""))
 
 
-def stripped_headers(headers: list[tuple[bytes, bytes]]) -> list[tuple[bytes, bytes]]:
-    """The request headers with every credential and identity assertion removed."""
-    return [(k, v) for k, v in headers if not _IDENTITY_HEADER.match(k.decode("latin-1"))]
+def preview_id_of(path: str) -> Optional[str]:
+    found = PREVIEW_PATH.match(path or "")
+    return found.group(1) if found else None
 
 
-def _isolated_response_headers(headers: list[tuple[bytes, bytes]]) -> list[tuple[bytes, bytes]]:
+def stripped_headers(headers: list[tuple[bytes, bytes]],
+                     preview_id: Optional[str] = None) -> list[tuple[bytes, bytes]]:
+    """The request headers with every credential and identity assertion removed. With a
+    `preview_id`, that preview's OWN cookies (still tagged) come back as one Cookie header."""
+    out = [(k, v) for k, v in headers if not _IDENTITY_HEADER.match(k.decode("latin-1"))]
+    if preview_id:
+        cookies = [v.decode("latin-1") for k, v in headers if k.lower() == b"cookie"]
+        own = own_cookie_pairs(preview_id, cookies)
+        if own:
+            out.append((b"cookie", "; ".join(f"{n}={v}" for n, v in own).encode("latin-1")))
+    return out
+
+
+def _isolated_response_headers(headers: list[tuple[bytes, bytes]],
+                               preview_id: Optional[str] = None) -> list[tuple[bytes, bytes]]:
     out = [(k, v) for k, v in headers
            if k.lower() not in (b"set-cookie", b"content-security-policy",
-                                b"access-control-allow-credentials")]
+                                b"access-control-allow-credentials")
+           or (k.lower() == b"set-cookie" and preview_id
+               and is_relayable_set_cookie(preview_id, v.decode("latin-1")))]
     out.append((b"content-security-policy", PREVIEW_SANDBOX_CSP.encode()))
     return out
 
@@ -131,7 +151,10 @@ def preview_only(app: ASGIApp) -> ASGIApp:
             await _preflight(scope, send)
             return
         inner = dict(scope)
-        inner["headers"] = stripped_headers(list(scope.get("headers") or []))
+        # The id both spellings agree on: the browser scoped the preview's cookies to the raw path.
+        preview_id = preview_id_of(path) if preview_id_of(path) == preview_id_of(raw) else None
+        inner["headers"] = stripped_headers(list(scope.get("headers") or []),
+                                            preview_id if kind == "http" else None)
         # The previewed app answers here, never the API's authenticated surface: mark the scope so
         # the handler can tell (and so nothing downstream mistakes it for a console request).
         inner.setdefault("state", {})
@@ -139,7 +162,8 @@ def preview_only(app: ASGIApp) -> ASGIApp:
 
         async def isolated_send(message: dict) -> None:
             if message.get("type") == "http.response.start":
-                message = {**message, "headers": _isolated_response_headers(list(message.get("headers") or []))}
+                message = {**message, "headers": _isolated_response_headers(
+                    list(message.get("headers") or []), preview_id if kind == "http" else None)}
             await send(message)
 
         await app(inner, receive, isolated_send)

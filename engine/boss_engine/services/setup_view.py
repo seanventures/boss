@@ -959,9 +959,17 @@ def _build(connection: Connection, settings: Any, project_id: str, *,
         "routing": _routing(connection, settings, project_id),
         "budget": budget,
         "try": trying,
+        # Build toolchains in this image (Python and Node always; Java when turned on).
+        "toolchains": _toolchains(),
         "build_database": build_database(connection, settings, project_id),
         "generated_at": now.isoformat(),
     }
+
+
+def _toolchains() -> list[dict[str, Any]]:
+    from . import toolchains
+
+    return toolchains.setup_summary()
 
 
 def build_database(connection: Connection, settings: Any, project_id: str) -> dict[str, Any]:

@@ -290,6 +290,13 @@ class GatePlan:
     def from_manifest(self) -> bool:
         return self.source in ("manifest", "manifest_error")
 
+    @property
+    def runs_steps(self) -> bool:
+        """Run as `steps` from the repo root, no web scaffold repair: a manifest plan, or a
+        stack plan from an opt-in toolchain (services.toolchains), including the one that says
+        the toolchain is missing."""
+        return self.from_manifest or self.source in ("toolchain", "toolchain_missing")
+
 
 def resolve_gate_plan(
     spec: dict[str, Any],
@@ -339,6 +346,22 @@ def resolve_gate_plan(
                             timeout_seconds=plan.timeout_seconds, suites=plan.suites,
                             steps=[(c, base / d if d != "." else base) for c, d in plan.steps],
                             uncovered=list(plan.uncovered))
+    # A JAVA BUILD at the root (pom.xml / build.gradle) and no Node app there: Maven or Gradle
+    # tests and builds it. Without the toolchain the gate says so in words, not "mvn: not found".
+    from . import toolchains
+
+    node_here = (base / "package.json").is_file() \
+        or str(spec.get("project_kind", "")).lower() in _WEB_KINDS
+    java = None if node_here else toolchains.detect_java(base)
+    if java:
+        if not toolchains.has("java"):
+            message = toolchains.missing_message("java", toolchains.build_file(java))
+            return GatePlan([], base, "toolchain_missing", message, error=message)
+        commands = toolchains.java_gate_commands(java)
+        # A first build downloads its dependencies through egress: give it the manifest's room.
+        return GatePlan(commands, base, "toolchain", " && ".join(commands),
+                        timeout_seconds=toolchains.GATE_TIMEOUT_SECONDS,
+                        steps=[(c, base) for c in commands])
     commands = default_test_commands(spec, title)
     cwd = _cwd(commands)
     if commands == [PYTHON_TEST_CMD] and is_pytest_project(cwd):

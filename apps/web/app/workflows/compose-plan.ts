@@ -8,8 +8,9 @@
  * screens that drift.
  */
 
-/** The composer's two jobs. Adding to an app that exists is the everyday one. */
-export type ComposeMode = "new" | "add";
+/** The composer's three jobs. Adding to an app that exists is the everyday one; "template"
+ *  starts a new app from an approved template (the gallery, APP_TEMPLATES §2.8). */
+export type ComposeMode = "new" | "add" | "template";
 
 /** A path card. `key` is a workflow key, or `@quick` / `@spec` for the two change routes that
  *  are not workflows (the feedback proposal and the spec-first panel). */
@@ -328,7 +329,8 @@ const MODE_KEY = "boss.compose.mode";
 /** The mode last used, per browser. A convenience: anything unreadable is "new". */
 export function rememberedMode(): ComposeMode {
   try {
-    return window.localStorage.getItem(MODE_KEY) === "add" ? "add" : "new";
+    const m = window.localStorage.getItem(MODE_KEY);
+    return m === "add" || m === "template" ? m : "new";
   } catch {
     return "new";
   }

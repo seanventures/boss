@@ -126,6 +126,9 @@ services:
       args:
         BOSS_SOURCE_SHA: ${BOSS_SOURCE_SHA:-unknown}
         BOSS_BUILT_AT: ${BOSS_BUILT_AT:-unknown}
+        # Opt-in build toolchains (docs/community/TOOLCHAINS.md): none, or java. Every image
+        # built from python-runtime takes the same value, so that stage is built once.
+        BOSS_TOOLCHAINS: ${BOSS_TOOLCHAINS:-none}
     image: boss-community-api:${BOSS_COMMUNITY_IMAGE_TAG:-boss-community}
     restart: unless-stopped
     # THE SANDBOX BOUNDARY (IDENTITY.md §7.6). Builds run in this container, each as its own
@@ -315,6 +318,8 @@ services:
     volumes:
       - boss_community_artifacts:/var/lib/boss/artifacts
       - boss_community_identity:/var/lib/boss/identity
+      # Per-project Maven/Gradle downloads the build sandbox keeps between runs (toolchains).
+      - boss_community_toolchain_cache:/var/lib/boss/toolchain-cache
       - boss_community_build_services_secret:/run/boss-build-services
       # ONE Codex session shared by api and worker. A subscription CLI holds a rotating
       # credential: every refresh revokes the previous one, so two containers each holding
@@ -350,6 +355,9 @@ services:
       args:
         BOSS_SOURCE_SHA: ${BOSS_SOURCE_SHA:-unknown}
         BOSS_BUILT_AT: ${BOSS_BUILT_AT:-unknown}
+        # Opt-in build toolchains (docs/community/TOOLCHAINS.md): none, or java. Every image
+        # built from python-runtime takes the same value, so that stage is built once.
+        BOSS_TOOLCHAINS: ${BOSS_TOOLCHAINS:-none}
     image: boss-community-worker:${BOSS_COMMUNITY_IMAGE_TAG:-boss-community}
     restart: unless-stopped
     # AN INIT AS PID 1 (stability spec §4a.4). Agents, builds and previews are this
@@ -470,6 +478,8 @@ services:
     volumes:
       - boss_community_artifacts:/var/lib/boss/artifacts
       - boss_community_identity:/var/lib/boss/identity
+      # Per-project Maven/Gradle downloads the build sandbox keeps between runs (toolchains).
+      - boss_community_toolchain_cache:/var/lib/boss/toolchain-cache
       # ONE Codex session shared by api and worker. A subscription CLI holds a rotating
       # credential: every refresh revokes the previous one, so two containers each holding
       # their own copy revoke each other — api detects, worker builds, and whichever runs
@@ -496,6 +506,9 @@ services:
       args:
         BOSS_SOURCE_SHA: ${BOSS_SOURCE_SHA:-unknown}
         BOSS_BUILT_AT: ${BOSS_BUILT_AT:-unknown}
+        # Opt-in build toolchains (docs/community/TOOLCHAINS.md): none, or java. Every image
+        # built from python-runtime takes the same value, so that stage is built once.
+        BOSS_TOOLCHAINS: ${BOSS_TOOLCHAINS:-none}
     image: boss-community-mcp-tools:${BOSS_COMMUNITY_IMAGE_TAG:-boss-community}
     restart: unless-stopped
     # AN INIT AS PID 1 (stability spec §4a.4). Agents, builds and previews are this
@@ -535,6 +548,9 @@ services:
       args:
         BOSS_SOURCE_SHA: ${BOSS_SOURCE_SHA:-unknown}
         BOSS_BUILT_AT: ${BOSS_BUILT_AT:-unknown}
+        # Opt-in build toolchains (docs/community/TOOLCHAINS.md): none, or java. Every image
+        # built from python-runtime takes the same value, so that stage is built once.
+        BOSS_TOOLCHAINS: ${BOSS_TOOLCHAINS:-none}
     image: boss-community-egress:${BOSS_COMMUNITY_IMAGE_TAG:-boss-community}
     restart: unless-stopped
     init: true
@@ -621,3 +637,4 @@ volumes:
   boss_community_pg:
   boss_community_artifacts:
   boss_community_identity:
+  boss_community_toolchain_cache:

@@ -1739,6 +1739,20 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                     "type": "string",
                     "description": "the workflow this panel is part of, by name.",
                 },
+                "seats": {
+                    "type": "array", "items": {"type": "string"},
+                    "description": "meeting role keys to seat, chair first (a workflow's "
+                                   "security review seats security, engineer, architect). "
+                                   "Unknown or disabled keys are left out; none left = the "
+                                   "project's default panel.",
+                },
+                "purpose": {
+                    "type": "string", "enum": ["prd", "security_review"],
+                    "description": "what the panel's document is: a PRD (the default; "
+                                   "approving it publishes it) or a security review's "
+                                   "recommendations (read by the workflow, never published "
+                                   "as a PRD and never auto-built).",
+                },
             },
             ["directive"],
         ),
@@ -1803,6 +1817,9 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                 brief=brief,
                 # Who convened it (agent_acts.origin): its seats sit under that work.
                 origin=services_module("agent_acts").current_origin(actor),
+                role_keys=[str(k) for k in (args.get("seats") or []) if str(k).strip()][:8] or None,
+                constraints=({"purpose": "security_review"}
+                             if args.get("purpose") == "security_review" else None),
             )
         return {"status": "running", "meeting": _json_safe(result), "project_id": pid}
 
@@ -1839,6 +1856,51 @@ def _register_write_tools(reg: ToolRegistry) -> None:
             # with a stack trace. Mirrors the console, which hides the button until a PR exists.
             return {"preview": None, **exc.as_detail()}
         return {"preview": _json_safe(rec)}
+
+    @reg.tool(
+        "run_security_scan",
+        "Scan one app of this project with the pinned security tools: Semgrep (its code), "
+        "OSV-Scanner (its dependencies) and OWASP ZAP (the app started in the scan's own sandbox, "
+        "or a running preview of the same app). Queues a worker job and returns its scan_id; "
+        "findings land normalised and redacted (GET /v1/security/scans/{id}/findings). Never "
+        "scans a URL: the target is `sandbox` or `preview:<id>`.",
+        _obj(
+            {
+                "app_key": {"type": "string", "description": "the app id builds stamp on runs"},
+                "ref": {"type": "string",
+                        "description": "the app's branch (default) or a commit sha on it"},
+                "tools": {"type": "array", "items": {"type": "string",
+                                                      "enum": ["semgrep", "osv", "zap"]}},
+                "zap_mode": {"type": "string", "enum": ["baseline", "api"],
+                             "description": "api = active scan, only against BOSS's own targets"},
+                "zap_target": {"type": "string",
+                               "description": "`sandbox` (default) or `preview:<id>`"},
+                "workflow_run_id": {"type": "string",
+                                    "description": "the security_review run this scan belongs to"},
+                "project_id": {"type": "string"},
+            },
+            ["app_key"],
+        ),
+        kind="write",
+        reversibility="safe", permission="security_scan:run")
+    def run_security_scan(ctx, *, project_id, actor, args):
+        from ..security_scan import scope as scan_scope
+        from ..security_scan import service as scan_service
+
+        pid = args.get("project_id") or project_id
+        zap = {k: v for k, v in (("mode", args.get("zap_mode")), ("target", args.get("zap_target")))
+               if v}
+        try:
+            with ctx.begin() as c:
+                scan = scan_service.request_scan(
+                    c, project_id=pid, app_key=str(args.get("app_key") or ""),
+                    ref=args.get("ref") or None, tools=args.get("tools") or None,
+                    zap=zap or None, triggered_by=actor,
+                    workflow_run_id=args.get("workflow_run_id") or None,
+                    settings=getattr(ctx, "settings", None))
+        except scan_scope.ScopeRefused as exc:
+            return {"ok": False, "status": "refused", "code": exc.code, "error": f"{exc.code}: {exc}"}
+        return {"status": "queued", "scan_id": scan["id"], "scan": _json_safe(scan)}
 
 
 # ---------------------------------------------------------------------------
@@ -6865,6 +6927,10 @@ def build_default_registry() -> ToolRegistry:
     from .agent_tools import register_agent_tools
 
     register_agent_tools(reg)
+    # App templates and the security loop's reads (APP_TEMPLATES_AND_SECURITY_LOOP.md §2.6, §4.3).
+    from .app_platform_tools import register_app_platform_tools
+
+    register_app_platform_tools(reg)
     return reg
 
 
@@ -6911,6 +6977,8 @@ def build_default_registry() -> ToolRegistry:
 # owning eighteen tools and being allowed five.
 _DISCUSS_OPERATIONS_TOOLS: frozenset[str] = frozenset({
     "deploy_app",
+    # "Scan my app" from chat: the pinned scanners on the app's own code, BOSS's own targets only.
+    "run_security_scan",
     # SETUP REPAIR, because a diagnosis with no matching capability is a loop — and setup is
     # where that loop hurts most, since it is the first thing a customer touches. Asked twice
     # about the same failed GitHub connection, BOSS explained it correctly and then told the
@@ -7021,6 +7089,9 @@ _DISCUSS_OPERATIONS_TOOLS: frozenset[str] = frozenset({
     # standing page for one because nobody should be starting them individually. The workflow is
     # the unit of work and its document is the outcome.
     "start_workflow",
+    # ...and its narrower twin: "add Stripe checkout to the shop" is a build onto the app's
+    # branch through the same governed start, gated by the template's own tests.
+    "apply_template",
     # Delivery and environment
     # A shell on the operator's own host. Gated a second time by BOSS_AGENT_HOST_SHELL, so
     # admitting it here does not by itself hand anybody a shell.

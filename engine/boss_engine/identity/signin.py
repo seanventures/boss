@@ -280,7 +280,22 @@ def first_factor_grant(db: Any, user: users.UserRow, *, mfa: bool,
         {"p": user.principal_id}).scalar()
     if user.last_login_at is None or (pending is not None and pending > now):
         return now + timedelta(seconds=FIRST_FACTOR_WINDOW_SECONDS)
+    if nobody_can_reset(db, user):
+        # THE ONLY OWNER, WITH NO FACTOR, IS NEVER STRANDED. Resetting an Owner's MFA needs ANOTHER
+        # Owner, so "ask an admin to reset your second factor" had nobody to ask: a claiming Owner
+        # who did not finish enrolling on the claim was locked out of every later sign-in, and
+        # nobody could approve a tier-2 deploy. Their own sign-in may enrol their first factor.
+        return now + timedelta(seconds=FIRST_FACTOR_WINDOW_SECONDS)
     return None
+
+
+def nobody_can_reset(db: Any, user: users.UserRow) -> bool:
+    """Is this person the org's ONLY Owner? Then nobody can reset their second factor (an Owner's
+    reset needs another Owner, and nobody resets their own)."""
+    from . import bindings
+
+    owners = bindings.owner_ids(db, user.org_id)
+    return user.principal_id in owners and not (owners - {user.principal_id})
 
 
 def grant_first_factor_after_reset(db: Any, principal_id: str) -> None:

@@ -259,6 +259,12 @@ KINDS: tuple[ObjectKind, ...] = (
                                  "UNION SELECT project_id FROM receipts WHERE dedupe_key = :id "
                                  "AND NOT EXISTS (SELECT 1 FROM receipts WHERE id = :id)"),
     SecurityScanRunKind(),
+    # The app platform (APP_TEMPLATES_AND_SECURITY_LOOP.md; S0 day-1 interfaces)
+    ObjectKind("security_scan", "security_scans"),
+    ObjectKind("security_finding", "security_findings",
+               project="(SELECT s.project_id FROM security_scans s WHERE s.id = t.scan_id)"),
+    ObjectKind("app_link", "app_links"),
+    ObjectKind("oidc_client", "oidc_clients"),
     AccessRequestKind(),
 )
 

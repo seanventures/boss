@@ -4,6 +4,7 @@ import { describeApiError } from "../../../lib/api-error";
 import { API_URL, authHeaders } from "../../../lib/client";
 import { apiWrite, type WriteMethod } from "../../../lib/api-write";
 import { loadPath } from "../../../lib/writing-get";
+import { rawRequestUrl } from "../../../lib/raw-request-url";
 
 /**
  * The Kit's reads and writes (Skills & MCP, skills-mcp spec §6.3).
@@ -44,7 +45,7 @@ async function forward(path: string, init: { method: "GET" | WriteMethod; body?:
 }
 
 export async function GET(req: Request) {
-  const url = new URL(req.url);
+  const url = rawRequestUrl(req);
   const projectId = (url.searchParams.get("project_id") ?? "").trim();
   if (!projectId) return NextResponse.json({ error: "project_id is required" }, { status: 400 });
   const ability = (url.searchParams.get("ability") ?? "").trim();

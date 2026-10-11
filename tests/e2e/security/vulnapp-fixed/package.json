@@ -1,0 +1,16 @@
+{
+  "name": "s4-vulnapp",
+  "version": "1.0.0",
+  "private": true,
+  "description": "The F4 proof app after its fix.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "4.22.3",
+    "jsonwebtoken": "9.0.3",
+    "lodash": "4.18.1",
+    "sql.js": "1.14.2"
+  }
+}

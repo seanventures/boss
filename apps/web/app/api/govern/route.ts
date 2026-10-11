@@ -4,6 +4,7 @@ import { API_URL, authHeaders } from "../../../lib/client";
 import { apiWrite } from "../../../lib/api-write";
 import { apiErrorText } from "../../../lib/api-error";
 import { GOVERN_OPS as OPS } from "../../../lib/govern-ops";
+import { rawRequestUrl } from "../../../lib/raw-request-url";
 
 /**
  * Govern's reads and writes, off the Server Action path (a Server Action waits on a full
@@ -29,7 +30,7 @@ const READS: Record<string, (q: URLSearchParams) => string> = {
 };
 
 export async function GET(req: Request) {
-  const q = new URL(req.url).searchParams;
+  const q = rawRequestUrl(req).searchParams;
   const view = READS[q.get("view") || "limits"];
   if (!q.get("project_id")?.trim() || !view) {
     return NextResponse.json({ error: "project_id and a view are required" }, { status: 400 });

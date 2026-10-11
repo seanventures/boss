@@ -1234,7 +1234,12 @@ def _finalize_meeting(connection, settings, run_id) -> dict:
          "purpose": "Cross-functional PRD review and drafting",
          "parts": json.dumps([p["title"] for p in personas] + [FACILITATOR_TITLE]), "min": minutes_artifact_id},
     )
-    decision_id = create_blocking_decision(connection, project_id, task_id,
+    # A SECURITY REVIEW'S PANEL WRITES RECOMMENDATIONS, NOT A PRD. Its document is read by the
+    # security_review workflow, whose own gate is the person's choice of fixes; a "publish this
+    # PRD" decision beside it would publish findings into the repository and could auto-start a
+    # build nobody chose. So it raises none (security_scan/review.py).
+    security_review = (run.get("constraints") or {}).get("purpose") == "security_review"
+    decision_id = None if security_review else create_blocking_decision(connection, project_id, task_id,
         _PRD_DECISION_QUESTION,
         {"action": "execute_agent_tool", "tool": "publish_document", "start_code_task": True,
          "args": {"title": "PRD: " + meeting_title(run.get("title"), run["directive"]), "markdown": state.get("prd_markdown") or "",
@@ -1257,7 +1262,7 @@ def _finalize_meeting(connection, settings, run_id) -> dict:
     # readable on the card, and the audit trail records `auto_approval` as the actor, so a
     # reader can always tell which approvals a human made. The follow-on (start the governed
     # build) is the same code path a human approval runs.
-    if getattr(settings, "meeting_prd_auto_approve", False):
+    if decision_id and getattr(settings, "meeting_prd_auto_approve", False):
         from .decisions import SYSTEM_ACTOR, DecisionService
 
         try:

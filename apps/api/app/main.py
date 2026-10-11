@@ -9474,15 +9474,23 @@ def plan_manual_deploy(payload: dict) -> dict:
             ref = ((spec_row or {}).get("spec") or {}).get("base_branch") or "main"
         ref = ref or "main"
 
-        planned = ResourcePlaneService(settings).plan_deployment_run(
-            connection,
-            project_id=target["project_id"], deployment_target_id=target_id,
-            commit_ref=ref,
-            release_packet={"source": "manual_deploy", "repo": target["repo"],
-                            "requested_by": actor,
-                            **({"code_task_run_id": source_run} if source_run else {})},
-            expected_cost_usd_micros=expected_cost,
-            reservation_id=reservation_id, actor=actor)
+        from .services.governed_host_deploy import GovernedHostDeployError
+
+        try:
+            planned = ResourcePlaneService(settings).plan_deployment_run(
+                connection,
+                project_id=target["project_id"], deployment_target_id=target_id,
+                commit_ref=ref,
+                release_packet={"source": "manual_deploy", "repo": target["repo"],
+                                "requested_by": actor,
+                                **({"code_task_run_id": source_run} if source_run else {})},
+                expected_cost_usd_micros=expected_cost,
+                reservation_id=reservation_id, actor=actor)
+        except GovernedHostDeployError as refused:
+            # A plan BOSS refuses before recording anything (an insecure-by-design template's
+            # app, a budget refusal): said in words, never a 500.
+            raise HTTPException(status_code=409,
+                                detail=f"{refused.headline} {refused.action}") from refused
         run_id = planned.get("deployment_run_id") or planned.get("id")
         connection.execute(text("UPDATE deployment_runs SET trigger='manual' WHERE id=:i"),
                            {"i": run_id})
@@ -11536,17 +11544,24 @@ async def preview_web_proxy(preview_id: str, request: Request, path: str = ""):
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.", headers=isolation)
     from .services.preview_service import proxy_preview
+    from boss_engine.services.preview_cookies import inbound_cookie_header
     body = await request.body()
+    # The app's OWN cookies only (tagged for this preview); never BOSS's, never another preview's.
     status, ctype, data, headers = proxy_preview(
         engine, preview_id, path, request.method, request.url.query,
         body or None, request.headers.get("content-type"), settings.sandbox_token,
         incoming_headers=dict(request.headers),
+        app_cookie_header=inbound_cookie_header(preview_id, request.headers.get("cookie")),
     )
+    set_cookies = list((headers or {}).pop("Set-Cookie", None) or [])
     # The previewed app's own CSP / CORS answers never replace the isolation.
     headers = {k: v for k, v in (headers or {}).items()
                if k.lower() not in {"content-security-policy", "access-control-allow-origin",
-                                    "access-control-allow-credentials"}}
-    return Response(content=data, status_code=status, media_type=ctype, headers={**headers, **isolation})
+                                    "access-control-allow-credentials", "set-cookie"}}
+    answer = Response(content=data, status_code=status, media_type=ctype, headers={**headers, **isolation})
+    for cookie in set_cookies:   # already tagged and scoped by preview_cookies.outbound_set_cookie
+        answer.headers.append("set-cookie", cookie)
+    return answer
 
 
 @app.websocket("/v1/previews/{preview_id}/web/")
@@ -23293,46 +23308,56 @@ def approve_decision_card(
     """approve_decision, for callers inside the API.
 
     A route handler is FastAPI's to call (test_no_code_calls_a_route_handler)."""
-    with begin(engine) as connection:
-        # Ordinary keys use their bound principal; exact MCP confirmations use
-        # the independently authenticated human reviewer.
-        payload.actor = _decision_route_actor(connection, decision_id, payload.actor)
-        require_decision_actor_binding(connection, decision_id, payload.actor)
-        from boss_engine.identity.approvals import ApprovalPending
+    from boss_engine.identity.approvals import ApprovalPending
 
+    with begin(engine) as connection:
         try:
-            row = decisions.transition(
-                connection,
-                decision_id,
-                action="approve",
-                actor=payload.actor,
-                note=payload.note,
-                delegate_to=payload.delegate_to,
-                external_ref=payload.external_ref,
-                content_hash=payload.content_hash,
-                # A person overriding the merge gate (CI failed or could not be read), with the
-                # note transition() requires. Never a deploy: ci_gate refuses a forced deploy.
-                force=payload.force,
-            )
+            row = approve_decision_in(connection, decision_id, payload)
         except ApprovalPending as pending:
             # §6.13: the first of two approvals of a tier-3 decision is recorded (this transaction
             # commits it); the decision stays pending for a second person.
             return JSONResponse(status_code=202, content=pending.body())
-        except DecisionNotFoundError as error:
-            raise HTTPException(status_code=404, detail=str(error)) from error
-        except InvalidDecisionTransitionError as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
-        except (ProjectMemberNotFoundError, ProjectMemberPermissionError) as error:
-            raise_decision_actor_error(decision_id, payload.actor, error)
-        _record_governed(
-            connection,
-            project_id=row["project_id"],
-            actor=payload.actor,
-            effect_kind="decision.approve",
-            dedupe_parts=[decision_id],
-            payload={"decision_id": decision_id, "status": row.get("status")},
-        )
         return decision_card_from_row(row)
+
+
+def approve_decision_in(connection, decision_id: str, payload: DecisionActionRequest) -> dict:
+    """The approval itself, inside the caller's transaction (POST /v1/decisions/{id}/approve, and
+    an action that must record something AND approve in one commit, e.g. a security review's
+    "Fix selected"). Raises HTTPException for a refusal, ApprovalPending for a first of two
+    approvals; the caller's transaction then rolls back or commits as a whole."""
+    # Ordinary keys use their bound principal; exact MCP confirmations use
+    # the independently authenticated human reviewer.
+    payload.actor = _decision_route_actor(connection, decision_id, payload.actor)
+    require_decision_actor_binding(connection, decision_id, payload.actor)
+    try:
+        row = decisions.transition(
+            connection,
+            decision_id,
+            action="approve",
+            actor=payload.actor,
+            note=payload.note,
+            delegate_to=payload.delegate_to,
+            external_ref=payload.external_ref,
+            content_hash=payload.content_hash,
+            # A person overriding the merge gate (CI failed or could not be read), with the
+            # note transition() requires. Never a deploy: ci_gate refuses a forced deploy.
+            force=payload.force,
+        )
+    except DecisionNotFoundError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except InvalidDecisionTransitionError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except (ProjectMemberNotFoundError, ProjectMemberPermissionError) as error:
+        raise_decision_actor_error(decision_id, payload.actor, error)
+    _record_governed(
+        connection,
+        project_id=row["project_id"],
+        actor=payload.actor,
+        effect_kind="decision.approve",
+        dedupe_parts=[decision_id],
+        payload={"decision_id": decision_id, "status": row.get("status")},
+    )
+    return row
 
 
 @app.post("/v1/decisions/{decision_id}/reject", response_model=DecisionCard)
@@ -26342,10 +26367,19 @@ def start_delivery_workflow_endpoint(payload: WorkflowStartBody) -> dict:
     return start_delivery_workflow(payload)
 
 
-def start_delivery_workflow(payload: WorkflowStartBody) -> dict:
-    """Launch a piece of work on a workflow: the one door, for HTTP and the chat's start card.
+def start_delivery_workflow(payload: WorkflowStartBody, connection_in: Any = None) -> dict:
+    """THE start path behind POST /v1/delivery-workflows/start: the one door, for HTTP and the
+    chat's start card (a route handler is FastAPI's to call: test_no_code_calls_a_route_handler).
 
-    A route handler is FastAPI's to call (test_no_code_calls_a_route_handler)."""
+    `connection_in`: run every read and the start itself in the CALLER's transaction (a
+    template apply writes its secret bindings and application row in the same one, so a refusal
+    here — consent, readiness, a 404 — rolls all of it back: a refused apply writes nothing)."""
+    import contextlib as _contextlib
+
+    def _tx():
+        return (_contextlib.nullcontext(connection_in) if connection_in is not None
+                else begin(engine))
+
     payload = payload.payload()
     project_id = str(payload.get("project_id") or "").strip()
     work_class = str(payload.get("work_class") or "").strip()
@@ -26353,7 +26387,7 @@ def start_delivery_workflow(payload: WorkflowStartBody) -> dict:
     actor = _delivery_workflow_actor(payload)
     if not project_id:
         raise HTTPException(status_code=400, detail="project_id is required")
-    with begin(engine) as connection:
+    with _tx() as connection:
         require_project_actor(connection, project_id, actor, "workflow_execute")
     run_input = payload.get("input") if isinstance(payload.get("input"), dict) else {}
     # ADOPTION IS NOT SOMETHING A CALLER GETS TO ASSERT.
@@ -26370,6 +26404,25 @@ def start_delivery_workflow(payload: WorkflowStartBody) -> dict:
     # it cannot be got wrong.
     dropped = sorted(k for k in run_input if k.startswith("adopt_"))
     run_input = {k: v for k, v in run_input.items() if not k.startswith("adopt_")}
+
+    # "TALKS TO" (APP_TEMPLATES_AND_SECURITY_LOOP.md §5.5): links the new app asks for. Checked
+    # NOW, before anything is spent — app_link:manage on top of workflow_run:start (an agent's
+    # delegated start cannot link apps: the permission is not delegable), each provider an app of
+    # this project, the aliases valid — and recorded as requests the run's first build turns into
+    # links (app_links.service.create_requested_links). Never kept in the run's input.
+    asked_links = run_input.pop("app_links", None)
+    requested_links: list = []
+    if asked_links:
+        from boss_engine.app_links import service as _links
+        from .routers.identity_access import require_permission as _require_permission
+
+        _require_permission(None, P.APP_LINK_MANAGE.value, project_id, label="delivery_start_links")
+        with begin(engine) as connection:
+            try:
+                requested_links = _links.requested_links(connection, project_id, asked_links)
+            except _links.LinkError as error:
+                raise HTTPException(status_code=error.status,
+                                    detail={"error": error.code, "message": error.detail}) from error
 
     # CARRY FINISHED RESEARCH FORWARD INSTEAD OF PAYING FOR IT TWICE.
     #
@@ -26400,7 +26453,7 @@ def start_delivery_workflow(payload: WorkflowStartBody) -> dict:
         # (review of 0fd6c45).
         from boss_engine.services import workflow_run_actions as _run_actions
 
-        with begin(engine) as connection:
+        with _tx() as connection:
             try:
                 found = _run_actions.research_to_adopt(
                     connection, project_id, from_run=source_run, from_discovery=source_discovery)
@@ -26446,7 +26499,7 @@ def start_delivery_workflow(payload: WorkflowStartBody) -> dict:
             catalogue_work_class, sample_for, why_no_sample,
         )
 
-        with begin(engine) as connection:
+        with _tx() as connection:
             wanted = work_class or (
                 catalogue_work_class(workflow_key) if workflow_key else ""
             )
@@ -26473,7 +26526,7 @@ def start_delivery_workflow(payload: WorkflowStartBody) -> dict:
         )
         from boss_engine.services.factory_view import app_name
 
-        with begin(engine) as connection:
+        with _tx() as connection:
             parent = load_code_task_run(connection, extends_run_id)
         if not parent or str(parent.get("project_id")) != project_id:
             raise HTTPException(status_code=404, detail="that app is not in this project")
@@ -26489,7 +26542,7 @@ def start_delivery_workflow(payload: WorkflowStartBody) -> dict:
     # alongside extends_run_id, and only a preview of this project.
     preview_id = str(run_input.pop("preview_id", None) or "").strip()
     if preview_id and extends_run_id:
-        with begin(engine) as connection:
+        with _tx() as connection:
             seen = connection.execute(
                 text("SELECT id FROM app_previews WHERE id = :i AND project_id = :p"),
                 {"i": preview_id, "p": project_id}).scalar()
@@ -26497,7 +26550,7 @@ def start_delivery_workflow(payload: WorkflowStartBody) -> dict:
             raise HTTPException(status_code=404, detail="that preview is not in this project")
         run_input["preview_id"] = preview_id
         extends["preview_id"] = preview_id
-    with begin(engine) as connection:
+    with _tx() as connection:
         require_project_actor(connection, project_id, actor, "workflow_execute")
         _authorize_delivery_target_input(connection, project_id, actor, run_input)
         version_id = None
@@ -26570,12 +26623,21 @@ def start_delivery_workflow(payload: WorkflowStartBody) -> dict:
 
         if not run.get("duplicate"):
             record_started_anyway(connection, project_id, actor, run.get("id") or "", readiness)
+            if requested_links:
+                from boss_engine.app_links import service as _links
+
+                who = identity_guard.REQUEST_IDENTITY.get()
+                _links.record_requests(
+                    connection, project_id=project_id, workflow_run_id=str(run.get("id") or ""),
+                    requested=requested_links,
+                    requested_by=who.principal.id if who is not None else actor)
         # Named in the response rather than dropped in silence: a caller that asked for
         # adoption and did not get it should be able to see that, not wonder why its run
         # behaved differently from the one it copied.
         return {"run": run, **({"ignored_input": dropped} if dropped else {}),
                 **({"readiness": readiness} if readiness.get("missing") else {}),
-                **({"extends": extends} if extends else {})}
+                **({"extends": extends} if extends else {}),
+                **({"app_links": requested_links} if requested_links else {})}
 
 
 def _delivery_readiness_or_409(
@@ -26681,18 +26743,34 @@ def run_delivery_capabilities(payload: open_bodies.DeliveryCapabilitiesRunBody) 
     if not project_id:
         raise HTTPException(status_code=400, detail="project_id is required")
     ctx = EngineContext.create()
+    worker_id = str(payload.get("worker_id") or "capability-runner")
     with begin(engine) as connection:
-        advanced = workflow_capability_runner.tick(
-            connection, ctx, project_id=project_id,
-            worker_id=str(payload.get("worker_id") or "capability-runner"),
-        )
-        # Same tick: a gate whose SLA has run out is as much "work that is ready" as a step
-        # waiting to execute, and running it on a separate schedule would mean two places to
-        # look when a workflow is not moving.
-        timeouts = workflow_capability_runner.sweep_gate_timeouts(
-            connection, project_id=project_id
-        )
-    return {**advanced, "gate_timeouts": timeouts}
+        projects = workflow_capability_runner.projects_with_work(connection, project_id)
+    advanced: dict[str, Any] = {}
+    timeouts: Any = None
+    others: dict[str, Any] = {}
+    # EVERY PROJECT WITH LIVE WORK, not only the one the worker is configured for: a template's
+    # lab project is a project of its own, and its build sat `ready` for ever. Each project in
+    # its own transaction, so one that cannot advance never stops the rest.
+    for pid in projects:
+        try:
+            with begin(engine) as connection:
+                result = workflow_capability_runner.tick(connection, ctx, project_id=pid,
+                                                         worker_id=worker_id)
+                # Same tick: a gate whose SLA has run out is as much "work that is ready" as a
+                # step waiting to execute, and running it on a separate schedule would mean two
+                # places to look when a workflow is not moving.
+                swept = workflow_capability_runner.sweep_gate_timeouts(connection, project_id=pid)
+        except Exception as error:  # noqa: BLE001
+            if pid == project_id:
+                raise
+            others[pid] = {"error": type(error).__name__}
+            continue
+        if pid == project_id:
+            advanced, timeouts = result, swept
+        else:
+            others[pid] = {**result, "gate_timeouts": swept}
+    return {**advanced, "gate_timeouts": timeouts, **({"other_projects": others} if others else {})}
 
 
 @app.get("/v1/workflows", response_model=WorkflowDefinitionListResponse)
@@ -30573,6 +30651,18 @@ app.add_middleware(RequestMemoMiddleware)
 from .routers.identity_access import declare_framework_routes  # noqa: E402  (identity S2)
 
 declare_framework_routes(app)
+
+# The app platform (docs/product/APP_TEMPLATES_AND_SECURITY_LOOP.md §8.2): one router module per
+# feature, each owned by its stream. Day-1 stubs answer 501 not_implemented_yet.
+from .routes_templates import build_templates_router  # noqa: E402  (F2, stream S2)
+from .routes_security import build_security_router  # noqa: E402  (F4, stream S4)
+from .routes_links import build_links_router  # noqa: E402  (F5, stream S5)
+from .oidc_routes import build_oidc_router  # noqa: E402  (F6, stream S6)
+
+app.include_router(build_templates_router())
+app.include_router(build_security_router())
+app.include_router(build_links_router())
+app.include_router(build_oidc_router())
 
 paid_router = None
 mount_edition_routers(app, settings.boss_edition, paid_router=paid_router)

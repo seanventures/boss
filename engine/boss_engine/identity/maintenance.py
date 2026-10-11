@@ -8,7 +8,8 @@ two processes never run it at once:
     an expired grant only failed its next live check — nothing halted;
   * "for this run" grants of a WORKFLOW run end when the run ends (completed, failed, cancelled…),
     through the same cascade (#14); a code task's end at run end is runs.end_run's;
-  * signing keys rotate when due (30 days) and retiring keys retire (signing_keys.rotate_if_due);
+  * signing keys rotate when due (30 days) and retiring keys retire (signing_keys.rotate_if_due),
+    and so do the apps' `oidc` keys, every org's (signing_keys.rotate_oidc_family_if_due, F6);
   * provider revocations that failed are retried, and shredded once they succeed (vault);
   * (the audit chain's rows from before the keyed chain are re-keyed ONCE, at boot, by
     `rekey_at_boot` — never on this timer (N4): a re-key rewrites hashes, so it runs only when
@@ -77,6 +78,8 @@ def tick(engine: Any, *, now: Optional[datetime] = None, force: bool = False) ->
             ("ended_workflow_grants", lambda c: end_finished_workflow_grants(db=c)),
             ("grant_reminders", lambda c: grants.remind_expiring(db=c, now=now)),
             ("rotated_keys", lambda c: _rotate(c)),
+            # The `oidc` family (apps' ID/access tokens, F6; D35): its own table, every org.
+            ("rotated_oidc_keys", lambda c: _rotate_oidc(c, now=now)),
             ("provider_revocations", lambda c: vault.retry_provider_revocations(db=c)),
             ("dpop_purged", lambda c: c.execute(text("DELETE FROM identity_dpop_replay WHERE expires_at < now()")).rowcount),
             ("retired_permissions", lambda c: _per_org(c, hygiene.retire_removed_permissions)),
@@ -102,6 +105,16 @@ def _per_org(db: Any, step: Any, **kw: Any) -> Any:
 
     org = migration.default_org(db)
     return step(db, org_id=org, **kw) if org else None
+
+
+def _rotate_oidc(db: Any, *, now: Optional[datetime] = None) -> list[str]:
+    from sqlalchemy import text
+
+    from . import signing_keys
+
+    if not db.execute(text("SELECT to_regclass('oidc_signing_keys') IS NOT NULL")).scalar():
+        return []
+    return signing_keys.rotate_oidc_family_if_due(db=db, now=now)
 
 
 def _rotate(db: Any) -> list[str]:

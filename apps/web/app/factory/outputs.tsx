@@ -15,7 +15,7 @@ import { plural } from "../../lib/factory-floor";
 import React, { useEffect, useState } from "react";
 
 import type { CodeTaskRun, PreviewRec } from "@boss/api-client";
-import type { Cockpit, CockpitOutputs, ReviewComment } from "../../lib/cockpit";
+import type { Cockpit, CockpitOutputs, PreviewOutput, ReviewComment } from "../../lib/cockpit";
 import { previewWebHref } from "../../lib/browser-links";
 import { isGitHubUrl, repoUrl } from "../../lib/github-urls";
 import { callAction } from "../../lib/call-action";
@@ -430,6 +430,27 @@ function CommentsBody({ c, actor, onRefresh }: { c: Cockpit; actor: string; onRe
   );
 }
 
+/**
+ * A FALLBACK THAT WAS PASSED OVER IS NOT A FAILURE (tester P1-4). A preview tries its ways of
+ * running in order (retained rootfs, a container, a host process); one that cannot serve here is
+ * recorded `failed` before the next one serves. Once a later step is done, or the preview runs,
+ * that step is "passed over", not a red ✗ beside a working preview.
+ */
+export function isPassedOver(p: Pick<PreviewOutput, "status" | "steps">, i: number): boolean {
+  const x = p.steps[i];
+  if (!x || x.status !== "failed") return false;
+  return p.status === "running" || p.steps.slice(i + 1).some((y) => y.status === "ok");
+}
+
+/** The steps toggle's words: how it is running once it runs; how far it got while it boots. */
+export function stepsWord(p: Pick<PreviewOutput, "status" | "steps" | "stepsDone" | "stepsTotal">): string {
+  const serving = [...p.steps].reverse().find((x) => x.status === "ok");
+  if (p.status === "running") return serving ? `Running · ${serving.label}` : "How it started";
+  const finished = p.steps.filter((x) => x.status === "ok" || x.status === "skipped" || x.status === "failed").length;
+  const total = p.stepsTotal ?? p.steps.length;
+  return `${Math.min(finished || p.stepsDone || 0, total)} of ${plural(total, "step")}`;
+}
+
 function PreviewBody({ c, actor, onLogs, onRefresh }: { c: Cockpit; actor: string; onLogs: () => void; onRefresh: () => void }) {
   const p = c.outputs.preview;
   const [busy, setBusy] = useState(false);
@@ -468,7 +489,12 @@ function PreviewBody({ c, actor, onLogs, onRefresh }: { c: Cockpit; actor: strin
     setBusy(false);
     if (!r.ok) setError(r.error ?? ""); else { notifyChanged("previews"); onRefresh(); }
   };
-  const canRun = ["pr_open", "merged", "deployed", "done_no_pr"].includes(c.state.state);
+  // A PREVIEW RUNS A BRANCH: a build that opened no PR has none, and the press answered with an
+  // internal error (tester P2). Disabled, and it says why.
+  const canRun = ["pr_open", "merged", "deployed"].includes(c.state.state);
+  const cannotRun = canRun ? undefined : c.state.state === "done_no_pr"
+    ? "This build opened no PR, so there is no branch to preview"
+    : "Runs once the build has opened its PR";
   const err = error ? <span className="fx-err" role="alert" title={error}>Couldn't start</span> : null;
   const passed = note ? (
     <span className="fx-out-col" data-testid="fx-preview-note">
@@ -481,8 +507,9 @@ function PreviewBody({ c, actor, onLogs, onRefresh }: { c: Cockpit; actor: strin
     return (
       <span className="fx-out-links">
         {booting ? <span className="fx-muted" data-testid="fx-preview-starting">Starting…</span> : null}
+        {cannotRun ? <span className="fx-muted" data-testid="fx-preview-why">{c.state.state === "done_no_pr" ? "No PR to preview" : "After the PR"}</span> : null}
         <GatedButton permission="preview:manage" type="button" className="ag-btn" disabled={busy || !canRun} data-testid="fx-preview-run"
-                title={canRun ? undefined : "Runs once the build has finished"} onClick={() => void start()}>
+                title={cannotRun} onClick={() => void start()}>
           Run preview
         </GatedButton>
         {err}
@@ -503,23 +530,33 @@ function PreviewBody({ c, actor, onLogs, onRefresh }: { c: Cockpit; actor: strin
       {typeof p.stepsDone === "number" && p.stepsTotal ? (
         <button type="button" className="ag-link" aria-expanded={showSteps} data-testid="fx-preview-steps"
                 disabled={!p.steps.length} onClick={() => setShowSteps((v) => !v)}>
-          {p.stepsDone} of {plural(p.stepsTotal, "step")} {p.steps.length ? (showSteps ? "▴" : "▾") : ""}
+          {stepsWord(p)} {p.steps.length ? (showSteps ? "▴" : "▾") : ""}
         </button>
       ) : null}
-      {p.error ? <span className="fx-err" title={p.error}>Failed</span> : null}
+      {p.error && !running ? (
+        // A preview BOSS stopped (idle, expired) is not a failure: its reason is the tooltip.
+        p.status === "stopped" || p.status === "expired"
+          ? <span className="fx-muted" title={p.error} data-testid="fx-preview-stopped">Stopped</span>
+          : <span className="fx-err" title={p.error}>Failed</span>
+      ) : null}
       {err}
       {passed}
       {showSteps && p.steps.length ? (
         <span className="fx-out-col" data-testid="fx-preview-ledger">
-          {p.steps.map((x, i) => (
-            <span key={i} className="fx-cmd" data-ok={x.status === "failed" ? "false" : undefined}>
-              <span aria-hidden>{x.status === "ok" ? "✓" : x.status === "failed" ? "✗" : x.status === "skipped" ? "–" : "…"} </span>
-              <span className="ag-sr">{x.status}</span>
+          {p.steps.map((x, i) => {
+            const passedOver = isPassedOver(p, i);
+            return (
+            <span key={i} className="fx-cmd" data-ok={x.status === "failed" && !passedOver ? "false" : undefined}
+                  title={passedOver ? "Tried first; it could not serve here, so the next way was used" : undefined}>
+              <span aria-hidden>{x.status === "ok" ? "✓" : passedOver || x.status === "skipped" ? "–" : x.status === "failed" ? "✗" : "…"} </span>
+              <span className="ag-sr">{passedOver ? "passed over" : x.status}</span>
               <span data-user-text>{x.label}</span>
+              {passedOver ? <span className="fx-muted"> · passed over</span> : null}
               {x.durationMs ? <span className="fx-muted"> · {secondsWord(Math.round(x.durationMs / 1000))}</span> : null}
               {x.log ? <span className="fx-muted fx-trunc" title={x.log} data-user-text> · {x.log}</span> : null}
             </span>
-          ))}
+            );
+          })}
         </span>
       ) : null}
     </span>
