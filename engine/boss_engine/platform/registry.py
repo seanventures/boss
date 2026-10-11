@@ -294,8 +294,8 @@ class Registry:
             if support_level and p.support_level != support_level:
                 continue
             out.append(p)
-        rank = {SupportLevel.CERTIFIED: 0, SupportLevel.EXPERIMENTAL: 1, SupportLevel.COMMUNITY: 2}
-        return sorted(out, key=lambda p: (rank[p.support_level], p.id, tuple(-x if isinstance(x, int) else 0
+        from ..support_levels import rank
+        return sorted(out, key=lambda p: (rank(p.support_level.value), p.id, tuple(-x if isinstance(x, int) else 0
                                                                                for x in parse_version(p.version)[:3])))
 
     def resolve_version(self, plugin_id: str, pin: Optional[str] = None) -> RegisteredPlugin:

@@ -44,6 +44,8 @@ from typing import Any, Callable, Literal, Optional, Protocol, Union, get_args, 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
+from ..support_levels import PLUGIN_LEVELS
+
 API_VERSION = "boss.plugin/v1"
 #: The version of this contract module. Additive changes bump MINOR; nothing here is removed or
 #: renamed under boss.plugin/v1.
@@ -73,10 +75,11 @@ ENTRYPOINT = r"^[A-Za-z_][A-Za-z0-9_.]*:[A-Za-z_][A-Za-z0-9_]*$"
 
 
 class SupportLevel(StrEnum):
-    """What BOSS promises about a plugin (spec §3). Shown on every surface that lists one."""
-    CERTIFIED = "certified"        # every lifecycle stage tested in CI against pinned versions
-    EXPERIMENTAL = "experimental"  # a documented subset works; some stages unverified
-    COMMUNITY = "community"        # third-party; no BOSS-maintainer certification promise
+    """What BOSS promises about a plugin (spec §3). Shown on every surface that lists one. The
+    words come from the one vocabulary the stack adapter registry shares (support_levels.py)."""
+    CERTIFIED = PLUGIN_LEVELS[0]     # every lifecycle stage tested in CI against pinned versions
+    EXPERIMENTAL = PLUGIN_LEVELS[1]  # a documented subset works; some stages unverified
+    COMMUNITY = PLUGIN_LEVELS[2]     # third-party; no BOSS-maintainer certification promise
 
 
 class PluginSource(StrEnum):

@@ -282,7 +282,7 @@
       "type": "object"
     },
     "SupportLevel": {
-      "description": "What BOSS promises about a plugin (spec \u00a73). Shown on every surface that lists one.",
+      "description": "What BOSS promises about a plugin (spec \u00a73). Shown on every surface that lists one. The\nwords come from the one vocabulary the stack adapter registry shares (support_levels.py).",
       "enum": [
         "certified",
         "experimental",

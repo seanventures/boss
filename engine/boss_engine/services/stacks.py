@@ -388,9 +388,11 @@ _NEGATION = re.compile(r"\b(?:not|no|never|without|instead of|avoid|rather than|
 # the same entries the gate plans and runs with. docs/community/SUPPORTED_STACKS.md is rendered
 # from it (render_supported_stacks_md) and a test holds the file to it.
 
-SUPPORT_LEVELS = ("certified", "experimental", "best_effort", "unsupported")
-LEVEL_WORDS = {"certified": "certified", "experimental": "experimental",
-               "best_effort": "best effort", "unsupported": "not supported"}
+# The vocabulary is shared with the infrastructure plugin registry (support_levels.py).
+from ..support_levels import STACK_LEVELS as SUPPORT_LEVELS  # noqa: E402
+from ..support_levels import WORDS as _LEVEL_WORDS  # noqa: E402
+
+LEVEL_WORDS = {k: _LEVEL_WORDS[k] for k in SUPPORT_LEVELS}
 #: How an adapter is promoted. A person changes the level in ADAPTERS; nothing promotes itself.
 PROMOTION_RULE = (
     "An experimental adapter becomes certified only when a recorded benchmark run for its id "

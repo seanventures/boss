@@ -138,3 +138,14 @@ def test_idempotency_key_is_stable_and_plan_bound():
     a = c.idempotency_key("official.postgres", "0.1.0", "deploy/a/db", "provision", "sha256:x")
     assert a == c.idempotency_key("official.postgres", "0.1.0", "deploy/a/db", c.Hook.PROVISION, "sha256:x")
     assert a != c.idempotency_key("official.postgres", "0.1.0", "deploy/a/db", "provision", "sha256:y")
+
+
+def test_support_levels_share_one_vocabulary_with_the_stack_registry():
+    from boss_engine import support_levels
+    from boss_engine.services import stacks
+
+    assert tuple(s.value for s in c.SupportLevel) == support_levels.PLUGIN_LEVELS
+    assert stacks.SUPPORT_LEVELS == support_levels.STACK_LEVELS
+    for words in (support_levels.PLUGIN_LEVELS, support_levels.STACK_LEVELS):
+        assert set(words) <= set(support_levels.LEVELS)
+        assert sorted(words, key=support_levels.rank) == list(words)
