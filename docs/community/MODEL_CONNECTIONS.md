@@ -81,6 +81,8 @@ The connection method determines when BOSS calls the model:
 
 A proof's receipt records what is known. A successful paid proof settles from typed cost or priced usage evidence. A known rejection or cancellation before contact releases its unused reservation; an uncertain submission or cost retains its financial hold for reconciliation. A quote controls BOSS admission, not the provider's eventual invoice. API keys and coding subscriptions remain distinct sources. The console's **Re-check** also calls models: use it when you are ready for a small test, and inspect the resulting status and receipt.
 
+An earlier uncertain attempt can also hold new paid work after an older release discarded its reservation. The [historical financial hold guide](LEGACY_FINANCIAL_HOLD.md) explains the separate budget warning, its labelled estimate and why raising a cap or repeating a connection test does not reconcile that attempt.
+
 ### RC9 source: durable proof authority
 
 The RC9 source commits a worker job lease, model lease, reservation and receipt before a connection proof reaches the provider. It heartbeats both leases during the proof, pins the actual source, and pins the candidate API credential or allowlisted environment reference. An official CLI continues to own its existing authenticated session; this does not freeze its OAuth material or prove internal CLI retry behavior. A refused budget or capacity makes no model call. The proof shares capacity with ordinary work using that connection; it does not create an extra concurrent slot.
@@ -162,5 +164,5 @@ See the [installer guide](https://github.com/seanventures/boss/blob/main/scripts
 ## Next steps
 
 - [Quickstart](QUICKSTART.md), if the console is not running yet.
-- [Console access](CONSOLE_AUTH.md), for the owner password.
+- [Console access](CONSOLE_AUTH.md), for claiming this install and signing in as yourself.
 - [Guide index](README.md), for the terminal, feedback, and security.
