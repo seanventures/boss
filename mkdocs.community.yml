@@ -79,6 +79,9 @@ nav:
       - Architecture approval and spending: ARCHITECTURE_GOVERNANCE.md
       - Hearing an agent's voice: AGENT_VOICE_TESTS.md
       - Conversation costs and retries: CONVERSATION_STREAMS.md
+      - Provider apply and recovery: PROVIDER_RECOVERY.md
+      - Restored data and startup holds: RESTORED_STATE_HOLD.md
+      - Historical financial exposure: LEGACY_FINANCIAL_HOLD.md
       - Identity administration: IDENTITY_ADMIN.md
       - Connect models: MODEL_CONNECTIONS.md
       - Use cases: use-cases.md

@@ -8,6 +8,8 @@ Current recovery tools leave restored application startup held. The hold lives o
 
 Use current `scripts/install/restore.sh` against a new project and a clean checkout at the archive's exact revision. Archive checksums, complete manifest, cached immutable database/API image identities and key pairing must pass. Normal recovery additionally checks the guarded image interface, source revision and exact guard/entrypoint file hashes before creating target data resources. It never builds or pulls an image.
 
+Run the current reviewed recovery tool from its current checkout. The `--dir` argument names a separate, fresh checkout matching the archive's revision. Do not run the old archive's restore script; older tools do not provide this startup hold.
+
 ```bash
 ./scripts/install/restore.sh --backup /absolute/path/to/private-backup \
   --dir /absolute/path/to/matching-fresh-checkout --project boss-recovered

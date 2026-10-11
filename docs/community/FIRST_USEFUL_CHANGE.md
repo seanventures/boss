@@ -109,7 +109,7 @@ The RC8 screenshots and published RC8 release predate these controls. On an earl
 | An unanswered provider call or held receipt | Preserve its IDs and observed usage. Reconcile what the provider accepted before another attempt. Ask for help if the record has no safe resolution. |
 | Stop requested | Check the run and linked jobs for the actual stopping state. A request already submitted may complete and charge; a Stop button is not proof of zero remaining work. |
 | Cleanup pending | Keep the pending state visible and inspect the cleanup evidence. Do not treat it as released capacity or successful cleanup until confirmed. |
-| A restored backup predates external work | Hold those effect paths until later external effects have been reconciled. Restored local records cannot prove that later provider effects did not happen. |
+| A restored backup predates external work | Keep the [restored startup hold](RESTORED_STATE_HOLD.md) while checking the [provider recovery evidence](PROVIDER_RECOVERY.md). Restored local records cannot prove that later provider effects did not happen. |
 
 The [Architecture spending guide](ARCHITECTURE_GOVERNANCE.md), [sandbox guide](SANDBOX.md) and [RC8 validation](RC8_VALIDATION.md) describe current limits. Do not use a blind full rerun to resolve an uncertain attempt.
 
