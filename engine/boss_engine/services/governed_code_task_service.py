@@ -30,7 +30,7 @@ import re
 import threading
 from concurrent.futures import ThreadPoolExecutor, wait as _futures_wait
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from ..config import Settings
 from ..ports import sql
@@ -523,6 +523,24 @@ def saved_workspace_files(run: Optional[dict]) -> list[dict]:
             return [f for f in files if isinstance(f, dict) and workspace_keepable(f.get("path"))
                     and isinstance(f.get("content"), str)]
     return []
+
+
+def layered_workspace_files(load: Callable[[str], Optional[dict]], run: Optional[dict],
+                            depth: int = 12) -> list[dict]:
+    """The WHOLE workspace an attempt ended with. An attempt seeded from an earlier one saves
+    only what it changed (the seed is its starting point), so crun_fe2dbbc8, which fixed every
+    gate but one, saved 11 files and its retry fell back to an older, worse attempt. The whole
+    tree is its seed's whole tree with its own files laid on top, newest wins."""
+    if run is None or depth <= 0:
+        return []
+    own = saved_workspace_files(run)
+    src = str(((run.get("finalize_ctx") or {}).get("seed_workspace_from")) or "").strip()
+    if not src or src == run.get("id"):
+        return own
+    base = {f["path"]: f for f in layered_workspace_files(load, load(src), depth - 1)}
+    for f in own:
+        base[f["path"]] = f
+    return list(base.values())
 
 
 def seed_workspace(root: Path, files: list[dict]) -> int:
@@ -3382,8 +3400,10 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         _seeded = 0
         _seed_from = str(fctx.get("seed_workspace_from") or "").strip()
         if _seed_from:
-            with _transaction(engine) as c:
-                _seed_files = saved_workspace_files(load_code_task_run(c, _seed_from))
+            def _load(rid: str) -> Optional[dict]:
+                with _transaction(engine) as c:
+                    return load_code_task_run(c, rid)
+            _seed_files = layered_workspace_files(_load, _load(_seed_from))
             if use_microvm:
                 _seed_files = []  # each guest stage clones the branch; nothing to seed into
             _seeded = seed_workspace(root, _seed_files) if _seed_files else 0

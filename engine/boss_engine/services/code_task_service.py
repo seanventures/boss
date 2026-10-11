@@ -1654,7 +1654,7 @@ def retry_code_task(
     # CONTINUE FROM THE FAILED ATTEMPT'S WORKSPACE when it saved one (a held template build
     # pushes nothing, so the branch cannot carry it): the child seeds its sandbox from it and
     # goes straight to repair (governed_code_task_service.saved_workspace_files).
-    from .governed_code_task_service import saved_workspace_files
+    from .governed_code_task_service import layered_workspace_files, saved_workspace_files
 
     # WHICH SAVED WORKSPACE TO CONTINUE FROM. The newest attempt in the lineage whose kept
     # files still hold the app, i.e. at least half of the fullest recent attempt's. An attempt
@@ -1668,7 +1668,10 @@ def retry_code_task(
         for _ in range(12):
             if node is None or node.get("status") == "completed":
                 break
-            window.append((node_id, len(saved_workspace_files(node))))
+            def _ld(rid: str):
+                with _transaction(engine) as c:
+                    return load_code_task_run(c, rid)
+            window.append((node_id, len(layered_workspace_files(_ld, node))))
             node_id = str((node.get("finalize_ctx") or {}).get("parent_run_id") or "")
             if not node_id:
                 break

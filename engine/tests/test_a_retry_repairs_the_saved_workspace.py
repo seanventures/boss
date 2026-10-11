@@ -92,7 +92,7 @@ def test_a_seeded_retry_skips_design_write_tests_and_the_first_implement():
     seed = SOURCE[SOURCE.index('_seed_from = str(fctx.get("seed_workspace_from")'):]
     seed = seed[:seed.index("# BUILD SERVICES")]
     assert "seed_workspace(root, _seed_files)" in seed
-    assert "saved_workspace_files(load_code_task_run(c, _seed_from))" in seed
+    assert "layered_workspace_files(_load, _load(_seed_from))" in seed
     assert "code_task.workspace_seed_missing" in seed, "a missing workspace says so"
     # Seeded after the verify manifest is pinned, never before.
     assert SOURCE.index("_pinned_manifest = verification_target.pin_verify_manifest(root)") \
@@ -127,7 +127,7 @@ def test_a_retry_after_an_attempt_that_saved_nothing_seeds_from_the_nearest_ance
     src = inspect.getsource(cts.retry_code_task)
     assert "seed_from" in src
     walk = src[src.index("seed_from = 0, run_id") if "seed_from = 0, run_id" in src else src.index("seed_from = run_id"):src.index("history = list(")]
-    assert "parent_run_id" in walk and "saved_workspace_files(node)" in walk
+    assert "parent_run_id" in walk and "layered_workspace_files(_ld, node)" in walk
     assert "n * 2 >= fullest" in walk  # a husk (5 of 75 files) is skipped
     assert '{"seed_workspace_from": seed_from}' in src
 
@@ -153,3 +153,17 @@ def test_seeded_files_are_group_writable_and_workaround_copies_are_dropped(tmp_p
     assert stat.S_IMODE(f.stat().st_mode) & 0o002
     assert stat.S_IMODE(f.parent.stat().st_mode) & 0o002
     assert not (tmp_path / "helpdesk-ai-locked").exists()
+
+
+def test_an_attempts_whole_workspace_is_its_seed_plus_its_own_changes():
+    """crun_fe2dbbc8 saved only its 11 changed files (seeded from crun_cb6e15f4's 75)."""
+    from boss_engine.services.governed_code_task_service import layered_workspace_files
+
+    runs = {
+        "old": {"id": "old", "finalize_ctx": {"saved_workspace": {"files": [
+            {"path": "app/a.ts", "content": "1"}, {"path": "app/b.ts", "content": "1"}]}}},
+        "new": {"id": "new", "finalize_ctx": {"seed_workspace_from": "old", "saved_workspace": {
+            "files": [{"path": "app/b.ts", "content": "2"}, {"path": "app/c.ts", "content": "2"}]}}},
+    }
+    files = {f["path"]: f["content"] for f in layered_workspace_files(runs.get, runs["new"])}
+    assert files == {"app/a.ts": "1", "app/b.ts": "2", "app/c.ts": "2"}
