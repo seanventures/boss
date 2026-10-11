@@ -378,8 +378,8 @@ def explain_failure(step: str, returncode: int, output: str, *,
                           "passwordless sudo), then deploy again."}
     if "no space left on device" in lowered:
         return {"headline": f"{host} ran out of disk space during {step}.",
-                "action": "Free space on the host (docker system prune, old releases), then "
-                          "deploy again."}
+                "action": "Inspect Docker disk use on the host with `docker system df`. "
+                          "Remove only confirmed BOSS-owned, unused resources, then deploy again."}
     if step == "health":
         return {"headline": f"The app did not answer as expected at {url} within {timeout}s.",
                 "action": "Read the log tail for what the install printed, fix it and deploy "
