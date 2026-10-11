@@ -32,7 +32,7 @@ STAGE_STATION: dict[str, str] = {
     "standards": "plan", "spec": "plan", "plan": "plan", "review_plan": "plan", "design": "plan",
     "provisioning": "plan", "queued": "plan",
     "awaiting_plan_approval": "you_plan",
-    "write_tests": "tests",
+    "write_tests": "tests", "fixture_repair": "tests",
     "implement": "build", "solo": "build", "guest": "build", "repair": "build", "coding": "build",
     "run_tests": "check", "check_tests": "check", "run_all_tests": "check", "iac_verify": "check",
     "serve_check": "check", "validating": "check", "test_arbitration": "check",

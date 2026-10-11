@@ -3538,6 +3538,10 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             do_review = True
             advisory_gate = advisory_gate or risk_tier < 2
 
+        # WHO OWNS THE TESTS. With a separate test author the implementer may not edit the
+        # suite, so a secret-gate finding in a test file is QA's to repair (fixture_secret_repair),
+        # including on a repair/retry that skips write_tests and reuses the lineage's suite.
+        _qa_authors_tests = do_separate_tests
         # DESIGN PHASE (tier >= 2): standards -> spec -> plan -> review plan, BEFORE any code.
         # Spec-driven: the refined spec + plan are fed into the downstream coding steps. (The human
         # approve-plan gate is Wire-Phase 2b; for now review plan records a PLAN: OK/REVISE note.)
@@ -4669,6 +4673,67 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             stack_plan=_last_stack_plan[0])
         if _template_record:
             gates.update(_template_record["gates"])
+        # A SECRET IN QA'S FIXTURE GOES BACK TO QA. The coder may not edit tests and QA was never
+        # re-run, so this finding used to survive every repair round (crun_b4613dcf,
+        # crun_ce7e8841). One narrow test-author turn changes only the flagged lines, then the
+        # gates re-run unchanged. Findings in implementation files stay the coder's.
+        fixture_repair_record: Optional[dict] = None
+        if _template_record and gates.get("no_committed_secrets") is False:
+            from . import fixture_secret_repair as _fsr
+
+            _scan = ((_template_record.get("evidence") or {}).get("secret_scan") or {})
+            _qa_f, _coder_f = _fsr.split_secret_findings(
+                _scan.get("findings") or [],
+                qa_owns=lambda p: _qa_authors_tests and _is_test_path(p))
+            if _qa_f:
+                _retry_of_secret_fail = _fsr.parent_failed_on_test_secrets(fctx)
+                if use_microvm:
+                    fixture_repair_record = {
+                        "attempted": False, "findings": _qa_f,
+                        "skipped": "the micro-VM lane has no in-place QA turn; findings stand"}
+                else:
+                    with _transaction(engine) as c:
+                        _phase(c, "fixture_repair")
+                        emit_event(c, project_id, "code_task.fixture_repair_started", "boss",
+                                   "code_task_run", run_id,
+                                   {"findings": _qa_f[:20], "coder_findings": len(_coder_f),
+                                    "retry_of_secret_failure": _retry_of_secret_fail})
+
+                    def _fixture_qa_turn(prompt: str) -> dict:
+                        nonlocal cost
+                        set_llm_context(stage="write_tests")
+                        _a, _m = _route("write_tests")  # the TEST AUTHOR's role, not the coder's
+                        _r = _a.run_role(prompt, root, model=_m)
+                        cost += int(_r.get("cost_usd_micros") or 0)
+                        return _r
+
+                    from ..templates.secret_scan import scan_files as _scan_files
+
+                    fixture_repair_record = _fsr.repair_fixture_secrets(
+                        root=root, findings=_qa_f, run_qa=_fixture_qa_turn,
+                        rerun_tests=lambda: bool(_run_verify(record=False).ok),
+                        tests_passed_before=bool(tests_passed), test_cmd=test_cmd,
+                        rescan=lambda files: _scan_files(files))
+                fixture_repair_record["retry_of_secret_failure"] = _retry_of_secret_fail
+                fixture_repair_record["coder_findings"] = len(_coder_f)
+                if fixture_repair_record.get("attempted") and not fixture_repair_record.get("reverted"):
+                    # THE GATES RE-RUN, exactly as strict, on the repaired tree.
+                    changed_files = {fc.path: fc.content for fc in sandbox.diff()}
+                    _template_record = _template_gates(
+                        engine, run, sandbox, root=root,
+                        cwd=(root / last_verify_cwd) if last_verify_cwd and not Path(str(last_verify_cwd)).is_absolute()
+                        else verification_target.resolve_verify_cwd(root, app_id=_app_id, changed=list(changed_files)),
+                        changed_files=changed_files, tests_passed=bool(tests_passed),
+                        use_microvm=use_microvm, stack_plan=_last_stack_plan[0])
+                    if _template_record:
+                        gates.update(_template_record["gates"])
+                    fixture_repair_record["gate_after"] = bool(gates.get("no_committed_secrets"))
+                with _transaction(engine) as c:
+                    emit_event(c, project_id, "code_task.fixture_repair_finished", "boss",
+                               "code_task_run", run_id,
+                               {k: fixture_repair_record.get(k) for k in
+                                ("repaired", "reverted", "reasons", "gate_after", "skipped",
+                                 "changed_files", "cost_usd_micros")})
         _tpl_gates = dict(gates) if _template_record else ({} if _tpl_applies else None)
 
         if _weakened and _retirement_allowed:
@@ -4755,6 +4820,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             "app_serves": app_serves_record,
             # F2: the applied template's gates' receipt (which template, its tests, the scan).
             **({"template": _template_record["evidence"]} if _template_record else {}),
+            # The QA fixture repair of a secret-gate finding in its own tests, when one ran.
+            **({"fixture_repair": fixture_repair_record} if fixture_repair_record else {}),
             "steps_run": steps_run,
             "cost_usd_micros": cost,
             "stage_costs": {

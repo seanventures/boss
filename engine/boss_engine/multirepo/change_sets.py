@@ -56,6 +56,7 @@ _PHASE_STEP = {
     "design": 1, "write_tests": 1, "implement": 1, "coding": 1, "iac_verify": 1, "plan": 1,
     "awaiting_plan_approval": 1,
     "run_tests": 2, "check_tests": 2, "test_arbitration": 2, "serve_check": 2, "validating": 2,
+    "fixture_repair": 2,
     "review_code": 3, "review_panel": 3, "consistency_check": 3, "awaiting_gate_override": 3,
     "opening_pr": 4, "waiting_for_ci": 4,
 }
