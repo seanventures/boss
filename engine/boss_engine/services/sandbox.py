@@ -696,14 +696,35 @@ class EphemeralSandbox:
         (the contents API path handles text upserts)."""
         self._require_provisioned()
         summary = self.diff_summary()
+        from .governed_code_task_service import workspace_keepable
+        from .repo_files import RepoFileRefused
+        from . import workspace_perms
+
+        # A test run (not only an agent turn) leaves files only the sandbox uid can read;
+        # tidy the tree before BOSS reads it, as every agent turn already does.
+        workspace_perms.normalize(self.path)
+
         changes: list[FileChange] = []
+        self.unreadable_paths: list[str] = []
         reader = self._repo_files or RepoFiles(self.path)
         try:
             for path in summary.paths:
+                # Dependencies and build/test OUTPUT are not the work: a test run's
+                # test-results/.last-run.json (made by the sandbox uid, unreadable to BOSS's)
+                # killed the HelpDesk repair crun_bcbec2f6 here. They never belong in a PR.
+                if not workspace_keepable(path):
+                    continue
                 try:
                     content = reader.read_text(path, errors="strict")
                 except (FileNotFoundError, UnicodeDecodeError):
                     continue  # absent/deleted or binary; unsafe files fail visibly
+                except RepoFileRefused as exc:
+                    # A file BOSS's uid may not read is reported and left out; a symlink or a
+                    # path outside the repository (no PermissionError behind it) still fails.
+                    if isinstance(exc.__cause__, PermissionError):
+                        self.unreadable_paths.append(path)
+                        continue
+                    raise
                 changes.append(FileChange(path=path, content=content))
         finally:
             if reader is not self._repo_files:
