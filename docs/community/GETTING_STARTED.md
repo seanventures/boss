@@ -236,7 +236,7 @@ A project in Mission Control is one piece of software you want built. Each one r
 
 3. Press **Build →** (or Ctrl+Enter, ⌘+Enter on a Mac). The hint under the button reads "Down the governed path — a panel, a PRD you approve, then code". BOSS replies **Started.** and opens the run on the **Workflow** page.
 
-The **+ New project** button in the top bar does the same thing as a four-step form: **What you are building**, **How it gets built**, **Where it lives**, and **Review**. Leave **Which path should it take?** at the default. In **Where it lives**, pick the repository you connected in step 4. If none is connected, the form says a build needs one and links to the **Repository** card. Then press **Start the project**.
+The **+ New build** button opens a single form. Choose **New app**, enter a **Brief**, and add checks under **Done when**. Review the **Workflow** and **Repository**, then press **Start the project**. To extend an app BOSS has already built, choose **Add a feature**. If setup is incomplete, **Setup needed** lists the missing requirements; **Setup details** explains each fix and **Open setup** takes you to it. Starting spends model budget, and the form shows the approval steps before you start.
 
 ### From a terminal instead
 
