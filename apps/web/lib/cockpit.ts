@@ -7,6 +7,7 @@
  */
 
 import { parseRoutes, type RouteRow } from "./model-routes";
+import { parseSummary, type BuildSummary } from "./build-detail";
 import { parseAttention, type AttentionItem } from "./agents-live-board";
 import {
   arr, num, obj, opt, parseOrigin, parseStation, roleOf, str, usePolled,
@@ -149,6 +150,8 @@ export type Cockpit = {
   outputs: CockpitOutputs;
   /** The model router's decision per stage ("Why this model"). */
   routes: RouteRow[];
+  /** What the build is doing now (build_detail.now_summary); null from an older API. */
+  summary: BuildSummary | null;
 };
 
 // ── Parsers ─────────────────────────────────────────────────────────────────────────────────
@@ -328,6 +331,7 @@ export function parseCockpit(w: unknown): Cockpit {
                                    arg: opt(now.arg), at: str(now.at) } : null,
     outputs: parseOutputs(o.outputs),
     routes: parseRoutes(o.routes),
+    summary: parseSummary(o.summary),
   };
 }
 

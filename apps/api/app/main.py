@@ -30103,6 +30103,23 @@ def code_task_cockpit_endpoint(run_id: str, request: Request, response: Response
     return _etagged(request, response, jsonable_encoder(body))
 
 
+@app.get("/v1/code-tasks/{run_id}/tool-log")
+@permit(P.CODE_TASK_READ, scope=Scope.of("code_task", path="run_id"))
+def code_task_tool_log_endpoint(run_id: str, project_id: Optional[str] = None) -> dict:
+    """Every tool call of one build in a line — the command or the path, how long, the exit code,
+    a failed call's error — and the verify output: what the build page lists and searches.
+    Clipped, and redacted of credentials, from the turns BOSS captured (agent_turns)."""
+    from boss_engine.services import build_detail
+
+    _acts_reader(project_id or "")
+    with begin(engine) as connection:
+        owner = require_code_task_reader(connection, run_id)
+        if project_id and project_id.strip() != owner:
+            raise HTTPException(status_code=404, detail="code task not found")
+        return build_detail.tool_log(connection, owner, run_id,
+                                     acts=build_detail.acts_of(connection, owner, run_id))
+
+
 @app.get("/v1/code-tasks/{run_id}/acts")
 @permit(P.CODE_TASK_READ, scope=Scope.of("code_task", path="run_id"))
 def code_task_acts_endpoint(run_id: str, viewer: Optional[str] = None) -> dict:
