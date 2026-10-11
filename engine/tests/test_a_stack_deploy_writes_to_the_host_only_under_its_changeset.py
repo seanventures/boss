@@ -209,6 +209,16 @@ def test_failures_are_explained_in_words():
         "prepare", 127, "the `ssh` client is not installed")["action"]
 
 
+def test_a_full_deployment_host_gets_read_only_disk_inspection_guidance():
+    advice = explain_failure("install", 1, "no space left on device", host="shared-host")
+    assert "shared-host ran out of disk space" in advice["headline"]
+    assert "`docker system df`" in advice["action"]
+    assert "confirmed BOSS-owned, unused resources" in advice["action"]
+    assert "system prune" not in advice["action"]
+    # An arbitrary application target need not have the BOSS CLI installed.
+    assert "boss prune" not in advice["action"]
+
+
 @pytest.mark.parametrize("edition", ["community", "oss", "local"])
 def test_community_keeps_the_ungoverned_one_container_ssh_deploy_closed(edition):
     from boss_engine.services.deploy_service import deploy_ssh
