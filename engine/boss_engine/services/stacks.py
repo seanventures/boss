@@ -1007,7 +1007,22 @@ def find_stack_root(root: Path | str, changed: Optional[list[str]] = None,
     root_changed = any(len(PurePosixPath(str(rel)).parts) == 1
                        and PurePosixPath(str(rel)).name in root_manifests
                        for rel in (changed or []))
-    if (aid and (base / aid).is_dir()) or (changed and not root_changed):
+    # And never on no evidence: an empty change list (a repair seeded from a saved workspace
+    # whose own diff is empty, crun_03e44800) fell through to the root and 'needed Java' again.
+    # A root laid out as a full-stack app (backend/ + frontend/ under it) is the app when the
+    # change touches TWO OR MORE of its services; a change inside one app folder never is.
+    if not root_changed and not (aid and (base / aid).is_dir()):
+        try:
+            service_dirs = {svc.rel.split("/", 1)[0] for svc in detect_services(base)
+                            if svc.rel not in ("", ".")}
+        except OSError:
+            service_dirs = set()
+        touched = {PurePosixPath(str(r)).parts[0] for r in (changed or [])
+                   if len(PurePosixPath(str(r)).parts) > 1}
+        if len(touched & service_dirs) >= 2:
+            return base if ok(base) else None
+        return None
+    if aid and (base / aid).is_dir():
         return None
     return base if ok(base) else None
 

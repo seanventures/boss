@@ -522,3 +522,22 @@ def test_an_app_folder_build_never_falls_back_to_a_shared_repository_root(tmp_pa
     assert stacks.find_stack_root(tmp_path, changed + [".github/workflows/helpdesk-ci.yml",
                                                       "README.md"]) is None
     assert stacks.find_stack_root(tmp_path, [], app_id="helpdesk-ai") is None
+    # No change list at all is no evidence the root is the app (crun_03e44800).
+    assert stacks.find_stack_root(tmp_path, []) is None
+    assert stacks.find_stack_root(tmp_path, None) is None
+
+
+def test_a_full_stack_app_at_the_root_is_still_planned_from_the_root(tmp_path):
+    import json
+
+    from boss_engine.services import stacks
+
+    (tmp_path / "backend").mkdir()
+    (tmp_path / "backend" / "requirements.txt").write_text("fastapi\n")
+    (tmp_path / "backend" / "main.py").write_text("from fastapi import FastAPI\napp = FastAPI()\n")
+    (tmp_path / "frontend").mkdir()
+    (tmp_path / "frontend" / "package.json").write_text(json.dumps(
+        {"name": "web", "dependencies": {"react": "18"}, "devDependencies": {"vite": "5"},
+         "scripts": {"build": "vite build"}}))
+    got = stacks.find_stack_root(tmp_path, ["backend/main.py", "frontend/src/App.tsx"])
+    assert got == tmp_path
