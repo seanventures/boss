@@ -161,6 +161,9 @@ class WorkflowStartBody(ProjectBody):
     #: started — one transaction — so a refused re-run leaves the original running. The
     #: console stopped first and started second, and a refused start left no run at all.
     replaces_run: str | None = None
+    #: Start a building workflow whose brief asks for a stack BOSS cannot build (services.stacks)
+    #: anyway: the refusal `stack_unsupported` was shown and the person chose to go on.
+    allow_unsupported_stack: bool | None = None
 
 
 class WorkflowScheduleBody(ProjectBody):

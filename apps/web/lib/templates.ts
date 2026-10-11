@@ -304,3 +304,25 @@ export async function installedStacks(): Promise<Set<string> | null> {
     return null;
   }
 }
+
+/** What `GET /v1/stacks?text=` says about a brief: can BOSS build what it asks for here? */
+export type StackCheck = { ok: boolean; message: string; unsupported: string[] };
+
+export function parseStackCheck(body: unknown): StackCheck | null {
+  const c = obj(obj(body).check);
+  if (typeof c.ok !== "boolean") return null;
+  return { ok: c.ok, message: str(c.message), unsupported: strs(c.unsupported) };
+}
+
+/** Ask before Start whether the words name a stack BOSS cannot build (services.stacks), so the
+ *  person reads it while typing rather than from a refusal or a failed build. null: no answer. */
+export async function checkStack(projectId: string, text: string, stack?: string): Promise<StackCheck | null> {
+  if (!projectId || (!text.trim() && !stack)) return null;
+  try {
+    const p = new URLSearchParams({ project_id: projectId, text: text.slice(0, 8000) });
+    if (stack) p.set("stack", stack);
+    return parseStackCheck(await idGet(`/v1/stacks?${p}`));
+  } catch {
+    return null;
+  }
+}

@@ -393,10 +393,16 @@ def _research_blob(research: dict) -> str:
 
 # ---- prompt builders (shared by all phases) ----------------------------------
 def _make_base(directive: str, constraints: dict, research: dict, url: str) -> str:
+    # WHAT BOSS CAN BUILD (services.stacks), in every seat's prompt and the synthesis and PRD
+    # drafts — the Chief Architect's seat included — so the panel never settles on a stack the
+    # build cannot build. Shared by every phase, so one place.
+    from .stacks import prompt_block
+
     return (
         f"DIRECTIVE: {directive}\n\n"
         f"CONSTRAINTS: {json.dumps(constraints or {})}\n\n"
-        f"SHARED RESEARCH (from a live crawl of {url or 'n/a'}):\n{_research_blob(research or {})}\n"
+        f"SHARED RESEARCH (from a live crawl of {url or 'n/a'}):\n{_research_blob(research or {})}\n\n"
+        f"{prompt_block()}\n"
     )
 
 

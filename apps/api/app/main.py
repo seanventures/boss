@@ -26578,6 +26578,17 @@ def start_delivery_workflow(payload: WorkflowStartBody, connection_in: Any = Non
                     if isinstance(payload.get("start_anyway"), list)]
         if repeats:
             accepted = sorted({*accepted, *accepted_by_run(connection, project_id, repeats)})
+        # CAN BOSS BUILD WHAT IT ASKS FOR — a brief naming Go, or Java on an install without
+        # the toolchain, is refused here, before a panel is paid for, unless the caller says to
+        # start anyway (services.stacks). A workflow with no build step is never refused.
+        from boss_engine.services import stacks as _stacks
+
+        try:
+            _stacks.refuse_unsupported_start(
+                connection, version_id=version_id, run_input=run_input,
+                allow=bool(payload.get(_stacks.OVERRIDE_FIELD)))
+        except _stacks.StackUnsupported as refused:
+            raise HTTPException(status_code=409, detail=refused.detail()) from refused
         # CAN IT RUN HERE — asked before anything is spent, and before anything is STOPPED.
         # See workflow_readiness.
         readiness = _delivery_readiness_or_409(

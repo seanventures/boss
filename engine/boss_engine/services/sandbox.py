@@ -28,7 +28,7 @@ from typing import Any, Optional
 from ..config import Settings
 from . import owned_process
 from ..schemas import FileChange
-from .agent_env import agent_environment
+from .agent_env import SECRET_SHAPED, agent_environment
 from .scheduling import low_priority
 from .repo_files import RepoFiles
 
@@ -505,8 +505,14 @@ class EphemeralSandbox:
         self.path = None
 
     # -- commands -----------------------------------------------------------
-    def run(self, command: str, *, timeout: Optional[int] = None, cwd: Optional[str] = None) -> CommandResult:
-        """Run an allowlisted build/test command inside the sandbox cwd (or an app subdir)."""
+    def run(self, command: str, *, timeout: Optional[int] = None, cwd: Optional[str] = None,
+            env: Optional[dict[str, str]] = None) -> CommandResult:
+        """Run an allowlisted build/test command inside the sandbox cwd (or an app subdir).
+
+        `env`: values BOSS chose for THIS command (a multi-service app's e2e phase is told where
+        the backend it started listens: stack_verify). Added after the allow-list, never a
+        credential: a credential-shaped name is dropped."""
+        extra_env = dict(env or {})
         self._require_provisioned()
         argv = shlex.split(command)
         if not argv:
@@ -532,6 +538,8 @@ class EphemeralSandbox:
         except Exception as exc:  # noqa: BLE001 — verify must still run
             restore_note = f"[boss] sandbox.restore failed {type(exc).__name__}: {exc}\n"
         env = agent_environment(os.environ, {"CI": "1", **_shared_tool_caches()})
+        env.update({k: str(v) for k, v in extra_env.items()
+                    if not any(m in k.upper() for m in SECRET_SHAPED)})
         # Image-global `playwright` (browser install CLI) has no `test` command.
         # Prefer the app's node_modules/.bin so @playwright/test / vite win.
         try:

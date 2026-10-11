@@ -69,6 +69,11 @@ WEB_TEST_COMMANDS = [NPM_INSTALL_CMD, *_WEB_STEPS]
 #: Display only — the console shows the sequence as one line. Never execute this.
 WEB_TEST_CMD = " && ".join(WEB_TEST_COMMANDS)
 
+#: One step of a multi-service plan: an install that downloads a toolchain's dependencies, a
+#: Playwright browser install or a full e2e suite.
+STACK_STEP_TIMEOUT_SECONDS = 900
+
+
 def run_until_failure(sandbox, commands):
     """Run verification commands in order and STOP at the first failure.
 
@@ -285,6 +290,10 @@ class GatePlan:
     steps: list[tuple[str, Path]] = field(default_factory=list)
     #: Manifest plans only: changed code files no planned test covers. The gate fails on them.
     uncovered: list[str] = field(default_factory=list)
+    #: Multi-service plans only (source "stack"): the services.stacks.StackPlan — each
+    #: service's own steps, then the backend started and the e2e run against it
+    #: (services.stack_verify).
+    stack: Any = None
 
     @property
     def from_manifest(self) -> bool:
@@ -295,7 +304,8 @@ class GatePlan:
         """Run as `steps` from the repo root, no web scaffold repair: a manifest plan, or a
         stack plan from an opt-in toolchain (services.toolchains), including the one that says
         the toolchain is missing."""
-        return self.from_manifest or self.source in ("toolchain", "toolchain_missing")
+        return self.from_manifest or self.source in ("toolchain", "toolchain_missing", "stack",
+                                                     "stack_missing")
 
 
 def resolve_gate_plan(
@@ -306,6 +316,7 @@ def resolve_gate_plan(
     app_id: str | None = None,
     changed: list[str] | None = None,
     pinned: PinnedVerifyManifest | None = None,
+    layout: Any = None,
 ) -> GatePlan:
     """The verify plan for a provisioned checkout.
 
@@ -346,6 +357,31 @@ def resolve_gate_plan(
                             timeout_seconds=plan.timeout_seconds, suites=plan.suites,
                             steps=[(c, base / d if d != "." else base) for c, d in plan.steps],
                             uncovered=list(plan.uncovered))
+    # A MULTI-SERVICE APP (services.stacks): a backend and a web front end — or two backends —
+    # each in its own directory with its own manifest. Each is installed, built and unit-tested
+    # in its own toolchain, then the backend is started and the e2e runs against it. Treating
+    # it as one npm package is how a FastAPI + React app was tested with a Playwright harness
+    # at its root and a backend nobody started (crun_78d197f7614f40f38993). A single-service
+    # app never matches and keeps everything below.
+    from . import stacks
+
+    stack_root = stacks.find_stack_root(base, changed, app_id)
+    if stack_root is not None:
+        stack = stacks.stack_plan(stack_root)
+        return GatePlan([c for c, _ in stack.steps + stack.e2e_steps], stack_root, "stack",
+                        stack.describe(base), timeout_seconds=STACK_STEP_TIMEOUT_SECONDS,
+                        error=stack.error, steps=list(stack.steps), stack=stack)
+    if layout is not None:
+        # The brief (or the approved architecture) asked for a backend and a front end in their
+        # own directories, and the tree does not hold them: the gate says what is missing
+        # rather than testing the app as whatever it happens to look like.
+        message = (
+            "This app is meant to be a "
+            f"{stacks.LANGUAGES[layout.backend_language].label} backend in "
+            f"{layout.backend_dir}/ and a Node web front end in {layout.frontend_dir}/, each with "
+            "its own manifest (requirements.txt / pom.xml / package.json), and the change does "
+            "not have both yet. Put each service in its own directory under the app directory.")
+        return GatePlan([], base, "stack_missing", message, error=message)
     # A JAVA BUILD at the root (pom.xml / build.gradle) and no Node app there: Maven or Gradle
     # tests and builds it. Without the toolchain the gate says so in words, not "mvn: not found".
     from . import toolchains

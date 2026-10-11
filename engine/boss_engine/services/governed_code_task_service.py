@@ -504,6 +504,49 @@ def _applies_template(engine, run: dict) -> bool:
         return True
 
 
+def _app_id_hint(spec: dict, fctx: dict, layout) -> Optional[str]:
+    """Where the app lives, for the layout prompt: the named app, else the app name the brief
+    gives as a directory (`helpdesk-ai/`), else None (the prompt says "the app directory")."""
+    named = verification_target.official_app_id(spec, fctx)
+    if named:
+        return named
+    text = str((spec or {}).get("instructions") or "")
+    m = re.search(r"\b([a-z0-9][a-z0-9_-]{1,60})/\s*\((?:" + re.escape(layout.backend_dir)
+                  + r"|" + re.escape(layout.frontend_dir) + r")/", text)
+    return m.group(1) if m else None
+
+
+class StackUnsupportedError(RuntimeError):
+    """The build asks for a stack BOSS cannot build here (services.stacks). Raised before the
+    sandbox is provisioned, so the refusal costs nothing."""
+
+
+def _stack_context(engine, run: dict, title: str, instructions: str) -> dict:
+    """What the build is meant to be, before any file exists (services.stacks): the applied
+    template's stack and test command, the full-stack layout the brief or the approved
+    architecture asks for (None for a single-service app: today's behaviour), and the verdict of
+    the last guard before money is spent."""
+    from . import stacks
+    from ..templates import gate as template_gate
+
+    tpl: dict = {}
+    try:
+        with _transaction(engine) as c:
+            tpl = template_gate.applied_template(c, run) or {}
+    except Exception:  # noqa: BLE001 — the template gates fail closed on their own
+        tpl = {}
+    t_stack = str(tpl.get("stack") or "") or None
+    t_fw = str(tpl.get("framework") or "") or None
+    manifest = tpl.get("manifest") if isinstance(tpl.get("manifest"), dict) else {}
+    tests = (manifest.get("tests") or {}).get(t_stack or "") if isinstance(manifest, dict) else None
+    t_cmd = str((tests or {}).get("command") or "") or None if isinstance(tests, dict) else None
+    layout = stacks.build_layout(instructions, title, template_stack=t_stack,
+                                 template_framework=t_fw)
+    verdict = stacks.check_build(instructions, template_stack=t_stack)
+    return {"template_stack": t_stack, "template_framework": t_fw, "template_command": t_cmd,
+            "layout": layout, "verdict": verdict}
+
+
 def app_serves_check_skip_reason(fctx: dict, *, command_runtime: str = "subprocess",
                                  use_microvm: bool = False) -> Optional[str]:
     """Why the app_serves gate does not apply to this run, or None when it does.
@@ -783,7 +826,7 @@ _IAC_QA_GUIDANCE = (
 
 
 def _template_gates(engine, run: dict, sandbox, *, root, cwd, changed_files: dict,
-                    tests_passed: bool, use_microvm: bool) -> Optional[dict]:
+                    tests_passed: bool, use_microvm: bool, stack_plan=None) -> Optional[dict]:
     """THE TEMPLATE HOOK (APP_TEMPLATES_AND_SECURITY_LOOP.md §2.3, stream S2; the one function this
     file holds for F2, coordinated with S1's toolchain code).
 
@@ -821,14 +864,42 @@ def _template_gates(engine, run: dict, sandbox, *, root, cwd, changed_files: dic
     except Exception:  # noqa: BLE001 — the scan still runs on every common format
         bound = {}
 
-    def _run(command: str, where) -> object:
-        return sandbox.run(command, cwd=str(where))
+    import contextlib as _contextlib
 
-    result = template_gate.evaluate(
-        template=applied, files=applied.get("files") or {}, changed=changed_files,
-        cwd=None if use_microvm else Path(cwd), run_command=None if use_microvm else _run,
-        bound_values=bound, tests_passed=bool(tests_passed),
-        substrate="microvm" if use_microvm else "local")
+    session_env: dict = {}
+    backend_note: dict = {}
+    with _contextlib.ExitStack() as held:
+        # A MULTI-SERVICE APP: the template's tests run in the service of the template's stack
+        # (the FastAPI backend, not the app directory a Playwright harness sat in), with that
+        # backend STARTED and its URL in BOSS_BACKEND_URL / BACKEND_URL.
+        if stack_plan is not None and not use_microvm:
+            service = stack_plan.service_for(str(applied.get("stack") or ""))
+            if service is not None:
+                cwd = stack_plan.dir_of(service)
+            if tests_passed and stack_plan.backend is not None:
+                from .stack_verify import BackendDidNotStart, backend_running
+
+                try:
+                    session = held.enter_context(backend_running(stack_plan))
+                    session_env = session.env()
+                    backend_note = {"backend_url": session.url, "backend_command": session.command}
+                except BackendDidNotStart as exc:
+                    backend_note = {"backend_error": str(exc)[:1500]}
+
+        def _run(command: str, where) -> object:
+            if session_env:
+                from .stack_verify import run_in
+
+                return run_in(sandbox, command, Path(where), env=session_env)
+            return sandbox.run(command, cwd=str(where))
+
+        result = template_gate.evaluate(
+            template=applied, files=applied.get("files") or {}, changed=changed_files,
+            cwd=None if use_microvm else Path(cwd), run_command=None if use_microvm else _run,
+            bound_values=bound, tests_passed=bool(tests_passed),
+            substrate="microvm" if use_microvm else "local")
+    if backend_note and isinstance(result.evidence.get("template_tests"), dict):
+        result.evidence["template_tests"].update(backend_note)
     return {"gates": result.gates, "evidence": result.evidence}
 
 
@@ -880,8 +951,29 @@ def _ctx_block(title, instructions, criteria, *, service: bool = False) -> str:
     )
 
 
-def _qa_prompt(title, instructions, criteria, test_cmd, *, iac=False, web=False, app_root=None):
+def _qa_prompt(title, instructions, criteria, test_cmd, *, iac=False, web=False, app_root=None,
+               stack_note=""):
     service = bool(web or app_root)
+    if stack_note:
+        # A MULTI-SERVICE APP: each service's tests in its own toolchain, browser tests in the
+        # front end — never a JS harness at the root of a Python app (crun_78d197f7614f40f38993).
+        return (
+            _ctx_block(title, instructions, criteria, service=True)
+            + "You are a QA engineer for an app made of a backend and a web front end. Your ONLY "
+            "job is to author the tests BOSS will run, BEFORE the implementation exists.\n\n"
+            "RULES:\n"
+            "- Backend tests in the backend's own test framework, inside the backend's "
+            "directory. Browser (Playwright) e2e specs inside the front end's e2e/ directory, "
+            "driving the real UI against the started backend.\n"
+            "- You MAY create what a test runner needs to find the tests: the front end's "
+            "package.json scripts and playwright.config, the backend's test dependencies.\n"
+            "- Do NOT create the product implementation.\n"
+            f"- Do NOT run anything and do NOT commit. (BOSS will run: {test_cmd}.)\n"
+            "- End with a one-line summary of the cases you wrote.\n"
+            + _metrics_tests_clause(title, instructions, service=True)
+            + (_IAC_GUIDANCE + _IAC_QA_GUIDANCE if iac else "")
+            + stack_note
+        )
     if web:
         scope = f"`{app_root}/`" if app_root else "the app directory"
         return (
@@ -2469,6 +2561,20 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
     # THE TEMPLATE HOLD (template_push_hold): every push below asks _push_held first.
     _tpl_applies = _applies_template(engine, run)
     _tpl_gates: Optional[dict] = None     # the template gates' verdicts, once they ran
+    # A MULTI-SERVICE APP (services.stacks): the layout the brief asks for, so the test author
+    # and the coder are told the per-service layout and commands, and the gate checks for it.
+    _stack_ctx = _stack_context(engine, run, title, instructions)
+    _stack_layout = _stack_ctx["layout"]
+    _stack_note = ""
+    if _stack_layout is not None:
+        from . import stacks as _stacks
+
+        _stack_note = _stacks.layout_prompt(
+            _stack_layout, _app_id_hint(spec, fctx, _stack_layout),
+            template_command=_stack_ctx["template_command"],
+            template_stack=_stack_ctx["template_stack"])
+    _last_stack_plan: list = [None]      # the newest verify's StackPlan, for the later gates
+    _stack_record: dict = {}
 
     def _push_held(where: str) -> bool:
         reason = template_push_hold(_tpl_applies, _tpl_gates)
@@ -3007,6 +3113,12 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                                if kv[0] != "credential.helper"],
                                 "credential": identity_run[0].egress_credential}
     try:
+        # THE LAST GUARD BEFORE ANYTHING IS SPENT (services.stacks): a build that asks for a
+        # stack BOSS cannot build — Go, or Java on an install without the toolchain — is refused
+        # here, in words, before a sandbox, an agent or a model call. Start, the panel's prompt
+        # and the architecture approval are the earlier, cheaper places this is caught.
+        if not _stack_ctx["verdict"].ok:
+            raise StackUnsupportedError(_stack_ctx["verdict"].message)
         sandbox = provider.acquire(task_id=run_id, tenant_id=project_id)
         with _transaction(engine) as c:
             _phase(c, "provisioning")
@@ -3039,7 +3151,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # from the tree the implementer edits (see verification_target.PinnedVerifyManifest).
         _pinned_manifest = verification_target.pin_verify_manifest(root)
         _gate_plan0 = verification_target.resolve_gate_plan(
-            spec, title, root, app_id=_app_id, pinned=_pinned_manifest)
+            spec, title, root, app_id=_app_id, pinned=_pinned_manifest, layout=_stack_layout)
         # BUILD SERVICES (build_services): the run's own throwaway Postgres when the repo
         # declares `services: [postgres]` or the project's setting asks for it. Provisioned
         # before any agent, so the agents and every verify command see DATABASE_URL; a run that
@@ -3057,11 +3169,19 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                          if _gate_plan0.from_manifest else _gate_plan0.description
                          if _gate_plan0.runs_steps else " && ".join(verify_commands))
                         or test_cmd)
+        if _stack_layout is not None and _gate_plan0.source in ("stack", "stack_missing"):
+            # What the prompts say BOSS runs: each service's own steps, then the e2e against the
+            # started backend — not the "missing services" sentence a still-empty tree gets.
+            test_cmd = (_gate_plan0.description if _gate_plan0.source == "stack" else
+                        f"each service's install, build and unit tests in its own directory, "
+                        f"then the backend started from {_stack_layout.backend_dir}/"
+                        f"boss.preview.command and `npm run test:e2e` in "
+                        f"{_stack_layout.frontend_dir}/ against it")
         _web_verify = (
             verification_target.detect_kind(spec, title) == "web"
             or str(test_cmd or "").startswith("npm ")
             or bool(_app_id)
-        ) and not _gate_plan0.runs_steps
+        ) and not _gate_plan0.runs_steps and _stack_layout is None
         last_verify_cwd = None
         last_verify_output = ""
 
@@ -3080,6 +3200,22 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             nonlocal last_verify_output
             from .sandbox import CommandResult
 
+            if plan.source == "stack" and not plan.error:
+                from .stack_verify import run_stack_plan
+
+                results, record_ = run_stack_plan(sandbox, plan.stack,
+                                                  timeout=plan.timeout_seconds)
+                _stack_record.clear()
+                _stack_record.update({**plan.stack.as_dict(root), **record_})
+                result = results[-1] if results else CommandResult(
+                    command="", argv=[], exit_code=0, duration_ms=0, timed_out=False,
+                    stdout=plan.description + "\n", stderr="")
+                output = (f"[boss] {plan.description}\n" + "".join(
+                    ((item.stdout or "") + "\n" + (item.stderr or "") + "\n")
+                    for item in results))[-4000:]
+                if record:
+                    last_verify_output = output
+                return result
             if plan.error or not plan.commands:
                 # A manifest that does not validate fails closed with its own message. A plan
                 # that runs nothing passes only when nothing it leaves out is code (a docs-only
@@ -3134,7 +3270,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                      timed_out=False, stdout="", stderr=tampered_manifest)
             plan = verification_target.resolve_gate_plan(
                 spec, title, root, app_id=_app_id, changed=_changed_paths(),
-                pinned=_pinned_manifest)
+                pinned=_pinned_manifest, layout=_stack_layout)
+            _last_stack_plan[0] = plan.stack if plan.source == "stack" else None
             cwd = plan.cwd
             try:
                 last_verify_cwd = str(cwd.relative_to(root)) if cwd != root else "."
@@ -3501,7 +3638,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 nonlocal cost
                 prompt = _qa_prompt(
                     title, instructions, criteria, test_cmd,
-                    iac=iac_task, web=_web_verify, app_root=_app_id,
+                    iac=iac_task, web=_web_verify, app_root=_app_id, stack_note=_stack_note,
                 )
                 # AUGMENT, DON'T RE-AUTHOR. On a repair the prior attempt's tests are ALREADY in
                 # the working tree (the retry clones the lineage branch), and the review names the
@@ -3654,7 +3791,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                             if do_separate_tests
                             else _solo_prompt(
                                 title, instructions, criteria, test_cmd,
-                                iac=iac_task, web=_web_verify, app_root=_app_id))
+                                iac=iac_task, web=_web_verify, app_root=_app_id)) + _stack_note
         max_repair = max(0, min(5, int(
             spec.get("repair_retries", settings.code_repair_max_retries) or 0)))
         repair_attempts = 0
@@ -4390,7 +4527,18 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # recorded below whether allowed or not, so the PR always states what went
         }
         _web_contract: dict | None = None
-        if _web_verify:
+        if _last_stack_plan[0] is not None:
+            # A MULTI-SERVICE APP: the contract is the FRONT END's package.json, not the app
+            # directory's (which, laid out right, has none). No front end, no web package.
+            _sp = _last_stack_plan[0]
+            if _sp.frontend is not None:
+                try:
+                    _web_contract = verification_target.evaluate_web_package_contract(
+                        _sp.dir_of(_sp.frontend))
+                except Exception:  # noqa: BLE001
+                    _web_contract = {"ok": False, "stubs": ["unreadable"], "missing_runners": []}
+                gates["web_package_honest"] = bool(_web_contract.get("ok"))
+        elif _web_verify:
             try:
                 _web_contract = verification_target.evaluate_web_package_contract(
                     verification_target.resolve_verify_cwd(root, app_id=_app_id)
@@ -4454,7 +4602,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             engine, run, sandbox, root=root,
             cwd=(root / last_verify_cwd) if last_verify_cwd and not Path(str(last_verify_cwd)).is_absolute()
             else verification_target.resolve_verify_cwd(root, app_id=_app_id, changed=list(changed_files)),
-            changed_files=changed_files, tests_passed=bool(tests_passed), use_microvm=use_microvm)
+            changed_files=changed_files, tests_passed=bool(tests_passed), use_microvm=use_microvm,
+            stack_plan=_last_stack_plan[0])
         if _template_record:
             gates.update(_template_record["gates"])
         _tpl_gates = dict(gates) if _template_record else ({} if _tpl_applies else None)
@@ -4533,6 +4682,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             "risk_tier": risk_tier,
             "profile": profile["name"],
             **({"web_package_contract": _web_contract} if _web_contract is not None else {}),
+            # A multi-service app: its services, the backend BOSS started and what ran against it.
+            **({"stack_verify": dict(_stack_record)} if _stack_record else {}),
             # Named here (not written earlier) because `evidence` does not exist until this
             # point — writing to it above was a latent crash that would have fired precisely
             # when a run DID weaken an existing test, i.e. when the gate matters most.
