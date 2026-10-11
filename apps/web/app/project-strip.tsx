@@ -72,9 +72,13 @@ export function ProjectStrip({ projectId, area }: { projectId: string; area?: st
   const [refreshing, setRefreshing] = useState(false);
 
   const scopeGeneration = useRef(0);
+  // Visibility and polling can overlap the first request; only the newest request may settle it.
+  const requestSequence = useRef(0);
 
   const load = useCallback(async (mode: "first" | "refresh") => {
     const generation = scopeGeneration.current;
+    const request = ++requestSequence.current;
+    const isCurrent = () => generation === scopeGeneration.current && request === requestSequence.current;
     if (!projectId) return;
     if (mode === "refresh") setRefreshing(true);
     try {
@@ -82,15 +86,17 @@ export function ProjectStrip({ projectId, area }: { projectId: string; area?: st
         `/api/projects-strip?project_id=${encodeURIComponent(projectId)}`, { cache: "no-store" });
       const body = (await r.json()) as
         { projects?: StripProject[]; total?: number; error?: string };
-      if (generation !== scopeGeneration.current) return;
+      if (!isCurrent()) return;
       if (!r.ok) {
         // A FAILED REFRESH MUST NOT EMPTY A GOOD STRIP.
         //
         // Blanking what is already on screen because a later poll failed is worse than showing
         // slightly stale rows: the operator loses the list they were reading, for a reason they
-        // cannot see. Only the first load is allowed to end in the failed state.
+        // cannot see. Before any result arrives, a failed refresh is still an initial-load failure.
         if (mode === "first") {
           setState("failed");
+        } else {
+          setState((current) => current === "loading" ? "failed" : current);
         }
         setConfirmedEmpty(false);
         setError(body.error ?? `API returned ${r.status}`);
@@ -111,12 +117,13 @@ export function ProjectStrip({ projectId, area }: { projectId: string; area?: st
       setState("ready");
       setError(null);
     } catch (e) {
-      if (generation !== scopeGeneration.current) return;
+      if (!isCurrent()) return;
       if (mode === "first") setState("failed");
+      else setState((current) => current === "loading" ? "failed" : current);
       setConfirmedEmpty(false);
       setError(String((e as Error)?.message ?? e));
     } finally {
-      if (generation === scopeGeneration.current) setRefreshing(false);
+      if (isCurrent()) setRefreshing(false);
     }
   }, [projectId]);
 
