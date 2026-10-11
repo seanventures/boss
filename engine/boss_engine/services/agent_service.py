@@ -153,7 +153,7 @@ class AgentService:
         }
         # A SHARED THREAD THAT ALREADY EXISTS IS USED, NEVER A CRASH.
         #
-        # goldeneye's database kept the old 3-column unique index on (project, surface,
+        # An existing install's database kept the old 3-column unique index on (project, surface,
         # external_ref) — `CREATE INDEX IF NOT EXISTS` never redefines one (db._converge_indexes
         # now does) — so the lookup above, keyed on the agent too, found nothing, this INSERT hit
         # the stale index, and "Ask Program Manager" failed on every turn with a raw

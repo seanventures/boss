@@ -926,7 +926,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
         setTrail(Array.isArray(d.tool_calls) ? (d.tool_calls as ToolCall[]) : []);
         refreshThreads();
       } else {
-        // THE SENTENCE, NOT THE EXCEPTION. This fenced the raw error as code, and on goldeneye
+        // THE SENTENCE, NOT THE EXCEPTION. This fenced the raw error as code, and on an existing install
         // that was "IntegrityError: (psycopg.errors.UniqueViolation) … [SQL: INSERT INTO …".
         // The API now says a failed turn in one sentence; its technical line sits under a
         // collapsed Details below the message.

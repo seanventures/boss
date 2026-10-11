@@ -1798,7 +1798,7 @@ def _block_for_plan_approval(engine, budget, *, run_id, project_id, task_id, res
             risk_tier=risk_tier)
         # A PLAN GATE HOLDS ITS BUILD; IT DOES NOT TIME OUT. Every blocking decision gets a 24h
         # hold deadline, and an expired plan question dropped out of "Needs you" while the build
-        # sat at "Needs you · plan" for weeks (goldeneye, 2026-10). No deadline: it waits for
+        # sat at "Needs you · plan" for weeks on an existing install. No deadline: it waits for
         # the person, and every surface counts it (decisions.expire_overdue keeps it so).
         c.execute(sql("UPDATE decisions SET deadline_at = NULL WHERE id = :d"), {"d": dec_id})
         c.execute(sql("UPDATE code_task_runs SET status='blocked', phase='awaiting_plan_approval', "

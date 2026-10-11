@@ -27,7 +27,7 @@ export const STUB_COOKIES: readonly string[] = ["boss_stub_claim", "boss_stub_ba
 
 export const CSRF_HEADER_LC = "x-boss-csrf";
 /**
- * Tells the API this console is a network-trusted build (BOSS_CONSOLE_AUTH=network, goldeneye),
+ * Tells the API this console is a network-trusted build (BOSS_CONSOLE_AUTH=network),
  * so S5's network bridge applies even where the API's own env cannot be changed. The API honours
  * it only from a trusted proxy. Sent by the console itself on every call when — and only when —
  * the console runs that way; any client-sent copy is stripped like every X-Boss-* header.

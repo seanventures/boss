@@ -16,8 +16,8 @@ export function safeNext(value: string | null): string {
 /**
  * NETWORK-TRUSTED CONSOLE: no sign-in of its own. Only an image BUILT with
  * BOSS_CONSOLE_AUTH=network (a Dockerfile build arg baked into the web image) runs this way —
- * for a host whose network or SSO proxy already decides who reaches it, as the console on
- * goldeneye did before it had a sign-in. Never the default, never a runtime toggle someone can
+ * for a host whose network or SSO proxy already decides who reaches it, before the console
+ * has its own sign-in. Never the default, never a runtime toggle someone can
  * set by accident: every other build keeps the password, the session and the HTTPS check.
  * Cross-site writes are still refused (sameOriginMutation).
  */

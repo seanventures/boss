@@ -571,7 +571,7 @@ def group_old_findings(attention: list[Mapping[str, Any]], now: datetime,
                        ) -> tuple[list[Mapping[str, Any]], Optional[dict[str, Any]]]:
     """ELEVEN CARDS OF HISTORY WERE ONE FACT. Shepherd's questions about builds stuck weeks ago
     ("stuck in `coding` … 53894 minutes. Let it continue, or cancel it?") filled Needs you on
-    goldeneye. Those older than OLD_FINDING — and only the ones system_doctor.clean_up_old can
+    an existing install. Those older than OLD_FINDING — and only the ones system_doctor.clean_up_old can
     clear, so the row and its button agree — become one `cleanup` row. A critical finding and
     anything recent stay cards. Pure."""
     keep: list[Mapping[str, Any]] = []

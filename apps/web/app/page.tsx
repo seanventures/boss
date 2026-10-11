@@ -437,7 +437,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   // shared with the shell's link handler (app/legacy-areas.ts).
   //
   // RENDERED, NOT REDIRECTED. A redirect() here runs after the shell has started streaming and
-  // reached the browser as a 500 on goldeneye (`?area=govern`, `?area=workflows`). The page
+  // reached the browser as a 500 on an existing install (`?area=govern`, `?area=workflows`). The page
   // renders what the URL MEANS (consoleParams: aliases resolved, an unknown area → the Command
   // Center); the middleware's 307 and the shell's URL sync rewrite the address bar.
   const resolvedSearchParams: Record<string, string> = Object.fromEntries(

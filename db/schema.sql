@@ -6996,7 +6996,7 @@ CREATE TABLE IF NOT EXISTS telemetry_batches (
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- THE COLLECTOR (collector mode only; goldeneye for now). Keyed by the random install id; no IP
+-- THE COLLECTOR (collector mode only). Keyed by the random install id; no IP
 -- address, hostname or name is ever stored. 18 months, then rolled into tm_rollups and deleted.
 CREATE TABLE IF NOT EXISTS tm_installs (
   install_id     TEXT PRIMARY KEY,

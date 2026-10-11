@@ -1,6 +1,6 @@
 """The collector: where installs' heartbeats and "Improve BOSS" batches land (collector mode).
 
-docs/product/RUN_SCORECARDS.md ("Collector"). Part of BOSS itself for now, running on goldeneye,
+docs/product/RUN_SCORECARDS.md ("Collector"). Part of BOSS itself, running on the configured host,
 active only when an operator turns Collector mode on in Govern › Sharing; every route answers
 404 otherwise. Unauthenticated by design (installs have no account), so everything that arrives
 is bounded and validated before it is stored:
