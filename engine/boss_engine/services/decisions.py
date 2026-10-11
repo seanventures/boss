@@ -970,6 +970,12 @@ class DecisionService:
             from .stack_deploy import on_decision_approved
 
             on_decision_approved(connection, self.settings, row, actor)
+        elif action == "infra_operation":
+            # A destroy/restore of a provisioned resource held for a person (platform/
+            # operations.py): approving it queues the leased `infra.operation` job.
+            from ..platform.operations import on_decision_approved as approve_infra_operation
+
+            approve_infra_operation(connection, self.settings, row, actor)
         elif action == "review_architecture":
             # A person approved an architecture: recorded on its review, which the waiting
             # workflow step reads at the next tick.

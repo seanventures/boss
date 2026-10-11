@@ -1015,6 +1015,44 @@ def _deployment_ctx(target: dict, host: dict, commit: str, ref: str) -> dict[str
                                      f"http://{host['address']}")}
 
 
+def _plan_infrastructure(engine, *, project_id: str, target: dict, run_id: Optional[str],
+                         manifest: DeployManifest, access: Any
+                         ) -> tuple[Optional[dict[str, Any]], Optional[str]]:
+    """`resources:` resolved and planned (platform/planner.py), or (None, None) without any.
+    Raises StackDeployError, in words, for anything to fix before an approval is asked for."""
+    if not manifest.resources:
+        return None, None
+    from ..platform.contract import ContractError
+    from ..platform.deploy import StackHostRunner, plan_for_deploy
+    from .governed_host_deploy import _app_key_for
+
+    with engine.begin() as connection:
+        app = _app_key_for(connection, project_id, target,
+                           {"code_task_run_id": run_id} if run_id else None)
+    if not app:
+        raise StackDeployError("This target names no app, so its resources have no owner.",
+                               "Give the target an app name in Infra, then deploy again.")
+    try:
+        doc = plan_for_deploy(engine, project_id=project_id, app_key=app,
+                              environment=str(target.get("environment") or "deploy"),
+                              resources=list(manifest.resources), host=StackHostRunner(access))
+    except ContractError as exc:
+        raise StackDeployError("resources in boss.deploy.yaml cannot be planned: "
+                               + "; ".join(exc.reasons) + ".",
+                               "Enable a plugin that provides it in Infra › Plugins, or fix "
+                               "resources: in boss.deploy.yaml.")
+    if doc["refusals"]:
+        raise StackDeployError("Policy refuses this infrastructure plan: "
+                               + "; ".join(r["message"] for r in doc["refusals"]) + ".",
+                               "Fix resources: in boss.deploy.yaml and deploy again.")
+    clash = sorted(set(doc["bindings"]) & set(manifest.env_keys()))
+    if clash:
+        raise StackDeployError(f"{', '.join(clash)} is set both by env: and by a resource binding.",
+                               "Remove it from env: (the resource provides it), or rename the "
+                               "binding with bindings: under the resource.")
+    return doc, app
+
+
 def plan_stack_deploy(engine, settings: Settings, *, project_id: str, target_id: str,
                       repository: Optional[str], ref: str, actor: str,
                       run_id: Optional[str] = None, workflow_run_id: Optional[str] = None,
@@ -1108,6 +1146,9 @@ def plan_stack_deploy(engine, settings: Settings, *, project_id: str, target_id:
         more = f" (and {len(problems) - 1} more)" if len(problems) > 1 else ""
         raise StackDeployError(first["headline"] + more, first["action"])
 
+    infra_doc, infra_app = _plan_infrastructure(engine, project_id=project_id, target=target,
+                                                run_id=run_id, manifest=manifest, access=access)
+
     deployment_id = make_id("sdep")
     short = commit[:12]
     summary = manifest.summary()
@@ -1173,6 +1214,11 @@ def plan_stack_deploy(engine, settings: Settings, *, project_id: str, target_id:
         from .run_decisions import open_step_decision
 
         question = f"Deploy {owner}/{repo}@{short} to {host['name']} ({manifest.dir})?"
+        if infra_doc:
+            from ..platform.deploy import preview as _infra_preview
+            from ..platform.planner import summary_words
+
+            question += f" Infrastructure: {summary_words(infra_doc)}."
         recommendation = {"action": "deploy_stack", "deployment_id": deployment_id,
             "changeset_id": changeset["id"], "target_id": target_id,
             "repository": f"{owner}/{repo}", "ref": ref, "commit": commit,
@@ -1184,7 +1230,12 @@ def plan_stack_deploy(engine, settings: Settings, *, project_id: str, target_id:
             # A workflow's deploy step has no gate of its own when it ships to a stack: THIS
             # decision is that gate. So it carries the step's approver and where it came
             # from, and approving it here is approving the release (one approval, not two).
-            **({"approver_role": approver_role} if approver_role else {})}
+            **({"approver_role": approver_role} if approver_role else {}),
+            # The infrastructure plan (resources, bindings by name, ports, public access,
+            # destructive actions, cost) IS part of what is approved: the decision preview shows
+            # it and its content hash is pinned like any approved content (action_preview).
+            **({"infra_plan": infra_doc, "action_preview": _infra_preview(infra_doc)}
+               if infra_doc else {})}
         cost = {"expected_cost_usd_micros": 0, "reservation_id": reservation["reservation_id"],
                 "cost_confidence": "no_provider_spend"}
         if workflow_run_id:
@@ -1228,6 +1279,13 @@ def plan_stack_deploy(engine, settings: Settings, *, project_id: str, target_id:
              "open": rendered["open_url"], "pf": json.dumps({"ok": True, "host": host["name"]}),
              "wr": workflow_run_id, "cr": run_id, "rb": rollback_of, "by": actor,
              "dir": manifest.dir})
+        if infra_doc:
+            from ..platform.deploy import link_decision, store_plan
+
+            plan_id = store_plan(connection, project_id=project_id, app_key=str(infra_app),
+                                 environment=str(target.get("environment") or "deploy"),
+                                 doc=infra_doc, deployment_id=deployment_id, actor=actor)
+            link_decision(connection, plan_id, decision_id)
         emit_event(connection, project_id, "deployment.stack_planned", actor,
                    "stack_deployment", deployment_id,
                    {"target_id": target_id, "repository": f"{owner}/{repo}", "ref": ref,
@@ -1645,6 +1703,35 @@ def apply_on_host(engine, settings: Settings, *, deployment_id: str, apply_token
         except Exception:  # noqa: BLE001 — progress is for watching; the verdict is phase 3
             log.warning("stack deploy %s: progress not recorded", deployment_id, exc_info=True)
 
+    infra: list[dict[str, Any]] = []
+    if manifest.resources:
+        # Infrastructure first (platform/deploy.py): the approved, hash-pinned plan runs through
+        # receipts under THIS leased apply; the app's env file then gets its bindings, resolved
+        # from the vault now and redacted like every other value.
+        from ..platform.contract import ContractError
+        from ..platform.deploy import StackHostRunner, apply_and_env
+        from ..platform.executor import ApplyRefused
+        from .host_key_pin import pinned as _pinned
+
+        def lost() -> bool:
+            with engine.begin() as c:
+                return c.execute(text("SELECT 1 FROM stack_deployments WHERE id = :i AND "
+                                      "apply_token = :t AND status = 'running'"),
+                                 {"i": deployment_id, "t": apply_token}).first() is None
+        try:
+            with _pinned(engine, deployment.get("host_id")):
+                infra, bound = apply_and_env(
+                    engine, deployment_id=deployment_id, project_id=project_id,
+                    resources=list(manifest.resources), actor_id=deployment.get("created_by"),
+                    is_cancelled=lost,
+                    host=StackHostRunner(access, changeset_id=str(deployment["changeset_id"])))
+        except (ApplyRefused, ContractError) as exc:
+            raise _ApplyFailed(f"Infrastructure: {redact(str(exc), hidden)}",
+                               "Fix the resource or its plugin, then deploy again (a new plan "
+                               "needs a new approval).")
+        env_values.update(bound)
+        hidden = hidden + list(bound.values())
+
     try:
         applier = StackApplier(
             access=access, rendered=rendered, commit=deployment["commit_sha"],
@@ -1668,6 +1755,7 @@ def apply_on_host(engine, settings: Settings, *, deployment_id: str, apply_token
                            applier.steps if applier else None, applier.log if applier else None)
     return {
         **outcome,
+        **({"infrastructure": infra} if infra else {}),
         "provider_result": {
             "provider_ref": f"ssh://{access.user}@{access.host}{manifest.dir}@"
                             f"{deployment['commit_sha'][:12]}",

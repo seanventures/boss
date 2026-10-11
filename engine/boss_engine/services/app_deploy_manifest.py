@@ -23,6 +23,14 @@ So the application declares it, at the root of its repository:
     teardown: ["docker compose down"]
     requires: {sudo: false, docker: true}
     metrics: {path: /metrics}          # optional: BOSS scrapes it after deploy (app_metrics)
+    resources:                         # optional: infrastructure by capability (boss.plugin/v1)
+      db: {capability: database.relational, engine: postgres, backups: true, public: false}
+      legacy: {capability: database.relational, mode: attached,
+               attach: {bindings: {LEGACY_DATABASE_URL: LEGACY_DB_URL}}}
+
+`resources:` entries are ResourceRequests (engine/boss_engine/platform/contract.py). A plugin
+provides each; its bindings (DATABASE_URL, ...) reach the app as vault REFERENCES, never values
+in this file.
 
 This module only PARSES and RENDERS. It never touches a host: `stack_deploy` does that, and
 only inside an approved Resource Plane ChangeSet. Every error is a sentence an operator can act
@@ -105,6 +113,7 @@ class DeployManifest:
     compose_file: Optional[str] = None
     compose_project: Optional[str] = None
     metrics: Optional[dict[str, Any]] = None
+    resources: tuple[Any, ...] = ()        # platform.contract.ResourceRequest, in file order
     source_text: str = field(default="", repr=False, compare=False)
 
     def env_keys(self) -> list[str]:
@@ -134,6 +143,8 @@ class DeployManifest:
             # The scrape declaration travels on the deploy record (stack_deployments.manifest),
             # which is where the monitor reads it: the HEALTHY deploy's declaration counts.
             "metrics": dict(self.metrics) if self.metrics else None,
+            "resources": [{"name": r.name, "capability": r.capability, "mode": r.mode.value,
+                           "provider": r.provider, "public": r.public} for r in self.resources],
         }
 
 
@@ -356,8 +367,19 @@ def _metrics(raw: Any) -> Optional[dict[str, Any]]:
 
 _TOP_LEVEL = frozenset({
     "version", "name", "kind", "compose", "env", "install", "update", "health", "open",
-    "teardown", "requires", "dir", "metrics",
+    "teardown", "requires", "dir", "metrics", "resources",
 })
+
+
+def _resources(raw: Any) -> tuple[Any, ...]:
+    """`resources:` as ResourceRequests; every problem named, one per line."""
+    if raw is None:
+        return ()
+    from ..platform.contract import ContractError, validate_resources
+    try:
+        return tuple(validate_resources(raw))
+    except ContractError as exc:
+        raise ManifestError("resources is not valid: " + "; ".join(exc.reasons))
 
 
 def parse_manifest(data: Any, *, source_text: str = "") -> DeployManifest:
@@ -451,7 +473,7 @@ def parse_manifest(data: Any, *, source_text: str = "") -> DeployManifest:
         open_url=open_url, teardown=teardown, requires_sudo=requires_sudo,
         requires_docker=requires_docker, compose_file=compose_file,
         compose_project=compose_project, metrics=_metrics(data.get("metrics")),
-        source_text=source_text,
+        resources=_resources(data.get("resources")), source_text=source_text,
     )
 
 

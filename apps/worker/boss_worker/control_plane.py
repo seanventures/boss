@@ -179,6 +179,14 @@ class ControlPlaneClient:
         response.raise_for_status()
         return response.json()
 
+    def run_infra_operation(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Ask the API to run one leased infrastructure operation (vault and host keys live there)."""
+        response = self._client.post(
+            "/v1/infra/platform/operations/execute",
+            json={key: payload[key] for key in ("job_id", "worker_id", "lease_token")})
+        response.raise_for_status()
+        return response.json()
+
     def run_host_deploy(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Ask the API to apply one leased host deployment — the host key lives there."""
         response = self._client.post(

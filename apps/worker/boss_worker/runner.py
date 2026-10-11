@@ -367,6 +367,7 @@ def capabilities() -> list[str]:
         # this job's lease. Declared here or the worker never leases it and the deploy sits
         # `running` at step one.
         "deployment.stack_apply",
+        "infra.operation",
         # An approved host deployment (services/governed_host_deploy.py): the API applies its
         # ChangeSet through the SSH connector under this job's lease.
         "deployment.host_apply",
@@ -828,6 +829,14 @@ def execute_job(job: LeasedJob, client: ControlPlaneClient) -> dict[str, Any]:
         # Waiting on the target (another deployment is writing it) is not a failure: the API
         # has already handed the job back to the queue without spending an attempt, so there
         # is nothing to complete or fail here (see the job_deferred check after execution).
+        return result
+    if job.kind == "infra.operation":
+        # One lifecycle hook on one provisioned resource (platform/operations.py); the API runs
+        # it under this lease and writes its receipt.
+        result = client.run_infra_operation({"job_id": job.id, "worker_id": client.worker_id,
+                                             "lease_token": job.lease_token})
+        if result.get("status") == "failed" and result.get("retry"):
+            raise RuntimeError(result.get("error") or "Infrastructure operation failed.")
         return result
     if job.kind == "deployment.host_apply":
         # One app to a verified host through the SSH connector; the API owns the apply and the
