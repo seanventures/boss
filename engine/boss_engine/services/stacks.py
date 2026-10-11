@@ -995,6 +995,15 @@ def find_stack_root(root: Path | str, changed: Optional[list[str]] = None,
     aid = str(app_id or "").strip().strip("/")
     if aid and ok(base / aid):
         return base / aid
+    # THE REPOSITORY ROOT ONLY FOR WORK THAT LIVES THERE. A build whose changes all sit inside
+    # one app directory (or that names its app) is that app, even when it is single-service:
+    # the root of a shared repository holds OTHER apps. HelpDesk (helpdesk-ai/, one npm
+    # project) was refused "needs Java" because paramg/boss-sandbox's root has a pom.xml.
+    tops = {PurePosixPath(str(rel)).parts[0] for rel in (changed or [])
+            if len(PurePosixPath(str(rel)).parts) > 1}
+    rooted = any(len(PurePosixPath(str(rel)).parts) == 1 for rel in (changed or []))
+    if (aid and (base / aid).is_dir()) or (len(tops) == 1 and not rooted):
+        return None
     return base if ok(base) else None
 
 

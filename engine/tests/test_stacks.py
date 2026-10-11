@@ -501,3 +501,21 @@ def test_test_output_and_unreadable_dirs_are_never_services(tmp_path, monkeypatc
     monkeypatch.setattr(Path, "is_file", is_file)
     (tmp_path / "locked").mkdir()
     assert stacks._service_in(tmp_path / "locked", "locked") is None
+
+
+def test_an_app_folder_build_never_falls_back_to_a_shared_repository_root(tmp_path):
+    """HelpDesk (helpdesk-ai/, one npm project) was refused 'needs Java': the shared repo's
+    root holds a pom.xml, package.json and Python from other apps."""
+    import json
+
+    from boss_engine.services import stacks
+
+    (tmp_path / "pom.xml").write_text("<project/>")
+    (tmp_path / "package.json").write_text(json.dumps({"name": "root", "scripts": {"start": "x"}}))
+    (tmp_path / "serve.py").write_text("app = None")
+    app = tmp_path / "helpdesk-ai"
+    app.mkdir()
+    (app / "package.json").write_text(json.dumps({"name": "helpdesk", "scripts": {"start": "node s"}}))
+    changed = ["helpdesk-ai/package.json", "helpdesk-ai/src/server.ts"]
+    assert stacks.find_stack_root(tmp_path, changed) is None
+    assert stacks.find_stack_root(tmp_path, [], app_id="helpdesk-ai") is None
