@@ -519,14 +519,39 @@ def saved_workspace_files(run: Optional[dict]) -> list[dict]:
 def seed_workspace(root: Path, files: list[dict]) -> int:
     """Write a saved workspace into a freshly provisioned sandbox. Paths are confined to `root`
     (they were written by an agent); returns how many files were written."""
+    import os as _os
+    import re as _re
+
     base = Path(root).resolve()
     written = 0
     for f in files:
-        target = (base / str(f["path"])).resolve()
+        rel = str(f["path"])
+        # A COPY THE AGENT MADE TO WORK AROUND A READ-ONLY SEED is not the work: seeded files
+        # used to land BOSS-owned 0644, the agent could not edit them, so it copied the app to
+        # `<app>-locked/`, `<app>__orig_readonly/`, `<app>__prev_readonly_snapshot/`, and every
+        # retry carried the copies forward (HelpDesk: 147 → 219 → 291 files).
+        if _re.search(r"(?:-locked|__orig_readonly|__prev_readonly_snapshot|__readonly)$",
+                      rel.split("/", 1)[0]):
+            continue
+        target = (base / rel).resolve()
         if base != target and base not in target.parents:
             continue
+        # Directories and files the run's uid can write: group-writable, as a fresh checkout
+        # is (the sandbox uid works through group boss, setgid on directories).
+        missing = [d for d in [target.parent, *target.parent.parents]
+                   if base in d.parents or d == base]
         target.parent.mkdir(parents=True, exist_ok=True)
+        for d in missing:
+            if d != base:
+                try:
+                    _os.chmod(d, 0o2775)
+                except OSError:
+                    pass
         _ws_write(target, f["content"])
+        try:
+            _os.chmod(target, 0o664)
+        except OSError:
+            pass
         written += 1
     return written
 

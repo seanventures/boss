@@ -129,3 +129,23 @@ def test_a_retry_after_an_attempt_that_saved_nothing_seeds_from_the_nearest_ance
     walk = src[src.index("seed_from = run_id"):src.index("history = list(")]
     assert "parent_run_id" in walk and "saved_workspace_files(older)" in walk
     assert '{"seed_workspace_from": seed_from}' in src
+
+
+def test_seeded_files_are_group_writable_and_workaround_copies_are_dropped(tmp_path):
+    """HelpDesk retries seeded BOSS-owned 0644 files the sandbox uid could not edit; the agent
+    copied the app to helpdesk-ai-locked/ etc., and each retry carried the copies forward."""
+    import stat
+
+    from boss_engine.services.governed_code_task_service import seed_workspace
+
+    n = seed_workspace(tmp_path, [
+        {"path": "helpdesk-ai/src/app.ts", "content": "ok"},
+        {"path": "helpdesk-ai-locked/src/app.ts", "content": "copy"},
+        {"path": "helpdesk-ai__orig_readonly/src/app.ts", "content": "copy"},
+        {"path": "helpdesk-ai__prev_readonly_snapshot/src/app.ts", "content": "copy"},
+    ])
+    assert n == 1
+    f = tmp_path / "helpdesk-ai" / "src" / "app.ts"
+    assert stat.S_IMODE(f.stat().st_mode) & 0o020
+    assert stat.S_IMODE(f.parent.stat().st_mode) & 0o020
+    assert not (tmp_path / "helpdesk-ai-locked").exists()
