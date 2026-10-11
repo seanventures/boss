@@ -94,6 +94,65 @@ def run_until_failure(sandbox, commands):
     return results
 
 
+#: How much of a verify run is kept as its evidence (code_task_runs.state.last_verify_output).
+VERIFY_LOG_LIMIT = 4000
+#: When the tail is all BOSS's own bookkeeping, how many of the failing command's last lines are
+#: added back, whatever came before them.
+VERIFY_FAILURE_LINES = 40
+_ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+
+
+def _meaningful_lines(text: str) -> list[str]:
+    """The lines a person would read: no ANSI colour, no blank lines, no BOSS bookkeeping."""
+    out = []
+    for line in _ANSI.sub("", text or "").splitlines():
+        line = line.rstrip()
+        if line.strip() and not line.lstrip().startswith("[boss]"):
+            out.append(line)
+    return out
+
+
+def verify_log(header: str, results, *, error: str | None = None,
+               limit: int = VERIFY_LOG_LIMIT) -> str:
+    """THE ONE RECORD of a verify run: what last_verify_output holds and the repair reads.
+
+    A failed HelpDesk build saved "[boss] \n\n\n" (crun_b4613dcfd3a44e5fba3f): a stack plan that
+    refused had an empty description, its failure was written from that description instead of
+    its error, and every command's output was empty — so the real reason was lost. Here:
+
+      * the header is the plan's description, or its error when the description says nothing;
+      * every command's stdout and stderr follow, and the TAIL is kept (errors print last);
+      * when what is kept holds no line of the failing command's own output, its last lines and
+        its exit (or timeout) are appended, so the record never ends at "[boss]";
+      * credentials are redacted (redaction.redact_secrets, which also removes a run's own
+        build-service password), never the code or file paths the repair needs.
+    """
+    from .redaction import redact_secrets
+
+    results = list(results or [])
+    head = (header or "").strip() or (error or "").strip()
+    body = "".join(((getattr(r, "stdout", "") or "") + "\n" + (getattr(r, "stderr", "") or "") + "\n")
+                   for r in results)
+    text = (f"[boss] {head}\n" + body)[-limit:]
+    failing = next((r for r in reversed(results) if not getattr(r, "ok", False)), None)
+    if failing is not None or error:
+        own = _meaningful_lines(((getattr(failing, "stdout", "") or "") + "\n"
+                                 + (getattr(failing, "stderr", "") or "")) if failing else "")
+        if not own or not any(line in text for line in own[-3:]):
+            command = (getattr(failing, "command", "") or "").strip() if failing else ""
+            if failing is not None and getattr(failing, "timed_out", False):
+                how = "timed out"
+            elif failing is not None:
+                how = f"exit {getattr(failing, 'exit_code', None)}"
+            else:
+                how = "refused"
+            said = own[-VERIFY_FAILURE_LINES:] or [
+                (error or "").strip() or "(the command printed nothing)"]
+            tail = (f"[boss] {command or 'the check'} {how}:\n" + "\n".join(said) + "\n")
+            text = (text.rstrip("\n") + "\n" + tail)[-limit:]
+    return redact_secrets(text)
+
+
 def run_steps_until_failure(sandbox, steps, *, timeout=None):
     """``run_until_failure`` for steps that each name their directory (a manifest plan)."""
     results = []

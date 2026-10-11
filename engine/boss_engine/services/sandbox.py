@@ -760,4 +760,11 @@ class EphemeralSandbox:
 
         output = scrub(output)
         limit = self.settings.sandbox_validation_output_limit_chars
-        return output if len(output) <= limit else output[:limit] + "\n…[truncated]"
+        if len(output) <= limit:
+            return output
+        # Keep the TAIL as well as the head: a failing command prints its error last, and a
+        # head-only cut kept npm's progress lines and dropped the reason (verification_target
+        # .verify_log keeps the tail of what survives here).
+        head = limit // 4
+        return (output[:head] + f"\n…[truncated {len(output) - limit} chars]…\n"
+                + output[-(limit - head):])

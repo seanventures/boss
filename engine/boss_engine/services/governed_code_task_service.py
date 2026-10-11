@@ -3266,9 +3266,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 result = results[-1] if results else CommandResult(
                     command="", argv=[], exit_code=0, duration_ms=0, timed_out=False,
                     stdout=plan.description + "\n", stderr="")
-                output = (f"[boss] {plan.description}\n" + "".join(
-                    ((item.stdout or "") + "\n" + (item.stderr or "") + "\n")
-                    for item in results))[-4000:]
+                output = verification_target.verify_log(plan.description, results,
+                                                         error=plan.error)
                 if record:
                     last_verify_output = output
                 return result
@@ -3280,7 +3279,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 result = CommandResult(
                     command="", argv=[], exit_code=1 if failed else 0, duration_ms=0,
                     timed_out=False, stdout="" if failed else plan.description + "\n",
-                    stderr=plan.description if failed else "")
+                    # The ERROR, not the description: a refused stack plan has no description.
+                    stderr=(plan.error or plan.description) if failed else "")
                 results = [result]
             else:
                 results = verification_target.run_steps_until_failure(
@@ -3295,11 +3295,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     command="", argv=[], exit_code=1, duration_ms=0, timed_out=False,
                     stdout="", stderr=message)
                 results.append(result)
-            output = (
-                f"[boss] {plan.description}\n"
-                + "".join(((item.stdout or "") + "\n" + (item.stderr or "") + "\n")
-                          for item in results)
-            )[-4000:]
+            output = verification_target.verify_log(plan.description, results, error=plan.error)
             if record:
                 last_verify_output = output
             return result
@@ -3372,12 +3368,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 )
                 _emit_cmd("install dependencies", install)
                 if install.exit_code != 0:
-                    last_verify_output = (
-                        prep_note
-                        + (install.stdout or "")
-                        + "\n"
-                        + (install.stderr or "")
-                    )[-4000:]
+                    last_verify_output = verification_target.verify_log(
+                        prep_note.removeprefix("[boss] ").rstrip("\n"), [install])
                     return install
                 # BROWSERS ARE BOSS'S, ONCE PER INSTALL (playwright_cache): the first build that
                 # needs a Playwright version downloads its Chromium into the shared cache, every
@@ -3438,13 +3430,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 )
             else:
                 result = results[-1]
-            output = (
-                prep_note
-                + "".join(
-                    ((item.stdout or "") + "\n" + (item.stderr or "") + "\n")
-                    for item in results
-                )
-            )[-4000:]
+            output = verification_target.verify_log(
+                prep_note.removeprefix("[boss] ").rstrip("\n"), results or [result])
             if record:
                 last_verify_output = output
             if result.ok and verification_target.verify_output_disproves_pass(output):
