@@ -15,8 +15,8 @@ spec:
   features: [traces, metrics, logs, otlp-http, otlp-grpc, forward]
   engines: [otel-collector]
   engineVersions: ["0.135.0 (contrib)"]
-  runtime: {type: python, entrypoint: "boss_engine.infra_plugins.opentelemetry:OpenTelemetryPlugin"}
-  permissions: {secrets: [write-scoped], network: [declared-services], docker: true, subprocess: true}
+  runtime: {type: python, entrypoint: "plugin:OpenTelemetryPlugin"}
+  permissions: {secrets: [write-scoped], network: [declared-services], docker: true}
   configSchema:
     type: object
     additionalProperties: false

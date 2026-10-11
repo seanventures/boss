@@ -1,18 +1,19 @@
 """official.pgvector: the `vector` extension on a database official.postgres provisioned.
 
-Not a vector database: it is PostgreSQL with one extension, so it shares the database's backups,
-role and network. The request names its database with `config.database` (and `dependsOn`); BOSS hands
-the plugin that resource's state as `ctx.state["upstream"]`.
+Not a vector database: PostgreSQL with one extension, sharing the database's backups, role and
+network. `config.database` names that resource (also listed in `dependsOn`); the plugin finds its
+container on the host by label, so it needs no other resource's secrets or state.
 
-provision  CREATE EXTENSION IF NOT EXISTS vector (as the database owner's superuser).
-verify     AS THE APP: an HNSW index and nearest-neighbour queries by L2 and cosine distance on a
-           temporary table, in a transaction that is rolled back.
+provision  CREATE EXTENSION IF NOT EXISTS vector, as the superuser over the container's local
+           socket (pgvector is not a trusted extension).
+verify     AS THE DATABASE'S APP ROLE: an HNSW index and nearest-neighbour queries by L2 and
+           cosine distance on a temporary table, in a transaction that is rolled back.
 destroy    DROP EXTENSION vector RESTRICT: refused while any column still uses the type.
 """
 from __future__ import annotations
 
 from ..platform.contract import HookContext, OperationResult, OperationStatus, PlannedChange
-from ._runtime import HookFailure, OfficialPlugin, Session, evidence
+from ._runtime import HookFailure, OfficialPlugin, Session, evidence, resource_id_of
 
 VERIFY_SQL = """
 BEGIN;
@@ -25,50 +26,51 @@ SELECT id FROM boss_vec ORDER BY v <=> '[0,0.2,1]' LIMIT 1;
 SELECT extversion FROM pg_extension WHERE extname = 'vector';
 ROLLBACK;
 """
+PSQL = ["psql", "-X", "-q", "-At", "-v", "ON_ERROR_STOP=1"]
 
 
 class PgvectorPlugin(OfficialPlugin):
     directory = "pgvector"
 
     def _validate(self, ctx: HookContext) -> list[str]:
-        on = ctx.resource.config.get("database")
-        if on and on not in ctx.resource.dependsOn:
-            return [f"config.database names {on!r}; list it in dependsOn too, so it is provisioned first"]
+        db = ctx.resource.config.get("database")
+        if db and db not in ctx.resource.dependsOn:
+            return [f"config.database names {db!r}; list it in dependsOn too, so it is provisioned first"]
         return []
 
     def _changes(self, ctx: HookContext) -> list[PlannedChange]:
         return [PlannedChange(action="create", target=f"extension:vector@{ctx.resource.config['database']}",
                               detail="CREATE EXTENSION IF NOT EXISTS vector")]
 
-    def upstream(self, ctx: HookContext) -> dict:
-        up = ctx.state.get("upstream") or {}
-        if not up.get("adminUrlRef"):
-            raise HookFailure("not_provisioned", f"database {ctx.resource.config['database']!r} has not been provisioned; "
-                              "pgvector needs it first")
-        if "pgvector" not in str(up.get("image", "")):
-            raise HookFailure("invalid_request", f"database {ctx.resource.config['database']!r} runs an image without "
-                              "pgvector; add `features: [pgvector]` to it and provision it again")
-        return up
-
-    def psql(self, s: Session, up: dict, url: str, sql: str, what: str) -> str:
-        proc = s.probe(up["image"], ["-c", 'exec psql -X -q -At -v ON_ERROR_STOP=1 -d "$BOSS_PG_URL" -f -'],
-                       env={"BOSS_PG_URL": url}, stdin=sql.encode(), network=up["network"], entrypoint="sh", what=what)
-        return s.text(proc).strip()
+    def database(self, ctx: HookContext, s: Session) -> tuple[str, str, str]:
+        """(container id, database, app role) of the postgres resource named in config.database."""
+        name = ctx.resource.config["database"]
+        cid = s.container_id("", rid=resource_id_of(ctx, name))
+        if not cid:
+            raise HookFailure("not_provisioned", f"database {name!r} has not been provisioned; pgvector needs it first")
+        fmt = '{{.Config.Image}}|{{index .Config.Labels "boss.pg.database"}}|{{index .Config.Labels "boss.pg.role"}}'
+        image, db, role = s.run(["docker", "inspect", "-f", fmt, cid], what="reading the database").stdout.strip().split("|")
+        if "pgvector" not in image:
+            raise HookFailure("invalid_request", f"database {name!r} runs an image without pgvector; add "
+                              "`features: [pgvector]` to it and provision it again")
+        return cid, db, role
 
     def do_provision(self, ctx: HookContext, s: Session) -> OperationResult:
-        up = self.upstream(ctx)
-        version = self.psql(s, up, s.get(up["adminUrlRef"]), "CREATE EXTENSION IF NOT EXISTS vector;\n"
-                            "SELECT extversion FROM pg_extension WHERE extname = 'vector';", "creating the extension")
-        state = {"upstream": up, "extension": "vector", "version": version}
-        return ctx.result(state=state, evidence=[evidence("extension", True, "config", f"vector {version}")])
+        cid, db, _role = self.database(ctx, s)
+        out = s.exec(cid, PSQL + ["-U", "postgres", "-d", db, "-f", "-"], what="creating the extension",
+                     stdin="CREATE EXTENSION IF NOT EXISTS vector;\nSELECT extversion FROM pg_extension WHERE extname = 'vector';")
+        version = s.text(out).strip()
+        return ctx.result(state={**ctx.state, "extension": "vector", "version": version, "database": db},
+                          evidence=[evidence("extension", True, "config", f"vector {version} in {db}")])
 
     def do_verify(self, ctx: HookContext, s: Session) -> OperationResult:
-        up = self.upstream(ctx)
-        out = self.psql(s, up, s.get(up["urlRef"]), VERIFY_SQL, "verifying pgvector").splitlines()
+        cid, db, role = self.database(ctx, s)
+        out = s.text(s.exec(cid, PSQL + ["-U", role, "-d", db, "-f", "-"], stdin=VERIFY_SQL,
+                            what="verifying pgvector")).strip().splitlines()
         l2_ok = len(out) >= 1 and out[0] == "a,d,b,c"
         cos_ok = len(out) >= 2 and out[1] == "c"
         ev = [evidence("l2_nearest_neighbours", l2_ok, "connection",
-                       f"order by <-> gave {out[0] if out else 'nothing'} (want a,d,b,c), HNSW index"),
+                       f"as {role}: <-> through an HNSW index gave {out[0] if out else 'nothing'} (want a,d,b,c)"),
               evidence("cosine_nearest", cos_ok, "connection", f"<=> nearest {out[1] if len(out) > 1 else '-'} (want c)"),
               evidence("extension_version", len(out) >= 3, "config", f"vector {out[2] if len(out) > 2 else '?'}")]
         if l2_ok and cos_ok:
@@ -78,14 +80,15 @@ class PgvectorPlugin(OfficialPlugin):
 
     def do_destroy(self, ctx: HookContext, s: Session) -> OperationResult:
         self.guard_destroy(ctx)
-        up = self.upstream(ctx)
-        proc = s.probe(up["image"], ["-c", 'exec psql -X -q -At -v ON_ERROR_STOP=1 -d "$BOSS_PG_URL" -f -'],
-                       env={"BOSS_PG_URL": s.get(up["adminUrlRef"])}, stdin=b"DROP EXTENSION IF EXISTS vector RESTRICT;",
-                       network=up["network"], entrypoint="sh", check=False, what="dropping the extension")
-        if proc.returncode != 0:
-            raise HookFailure("has_dependents", "the vector extension is still used by a column: "
-                              + s.scrub(proc.stderr.decode(errors="replace"))[-300:], status=OperationStatus.REFUSED)
+        try:
+            cid, db, _role = self.database(ctx, s)
+        except HookFailure as exc:
+            if exc.code == "not_provisioned":  # the database is already gone, and the extension with it
+                return ctx.result(evidence=[evidence("removed", True, "cleanup", "database already removed")], state={})
+            raise
+        out = s.exec(cid, PSQL + ["-U", "postgres", "-d", db, "-c", "DROP EXTENSION IF EXISTS vector RESTRICT"],
+                     check=False, what="dropping the extension")
+        if out.returncode != 0:
+            raise HookFailure("has_dependents", "the vector extension is still used: " + s.scrub(out.stderr)[-300:],
+                              status=OperationStatus.REFUSED)
         return ctx.result(evidence=[evidence("removed", True, "cleanup", "extension:vector")], state={})
-
-
-Plugin = PgvectorPlugin

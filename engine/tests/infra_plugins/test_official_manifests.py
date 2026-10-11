@@ -21,13 +21,14 @@ def test_every_official_plugin_has_a_valid_manifest_and_entrypoint():
         assert m.id == f"official.{directory}"
         assert REQUIRED_HOOKS <= set(m.spec.hooks)
         assert m.spec.supportLevel in (SupportLevel.CERTIFIED, SupportLevel.EXPERIMENTAL)
-        plugin = load_plugin(directory)
+        plugin = load_plugin(directory)  # through the registry, as BOSS loads it
         assert isinstance(plugin, InfraPlugin) and plugin.manifest.id == m.id
+        assert m.spec.runtime.entrypoint.startswith("plugin:") and not m.spec.permissions.subprocess
         for hook in m.spec.hooks:
             assert hasattr(plugin, f"do_{hook.value}"), f"{m.id} declares {hook.value} but does not implement it"
 
 
-@pytest.mark.parametrize("module", sorted(set(OFFICIAL.values())))
+@pytest.mark.parametrize("module", ["postgres", "pgvector", "sqlite", "valkey", "minio_s3", "docker_compose", "caddy", "opentelemetry"])
 def test_every_image_is_pinned_by_digest(module):
     mod = importlib.import_module(f"boss_engine.infra_plugins.{module}")
     for name, value in vars(mod).items():

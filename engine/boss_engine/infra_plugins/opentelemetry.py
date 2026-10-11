@@ -29,7 +29,7 @@ class OpenTelemetryPlugin(OfficialPlugin):
     directory = "opentelemetry"
 
     def image(self, ctx: HookContext) -> str:
-        return ctx.state.get("image") or ctx.resource.config.get("image") or IMAGE
+        return ctx.resource.config.get("image") or IMAGE
 
     def _validate(self, ctx: HookContext) -> list[str]:
         to = ctx.resource.config.get("exportTo")
@@ -76,19 +76,17 @@ class OpenTelemetryPlugin(OfficialPlugin):
 
     def do_provision(self, ctx: HookContext, s: Session) -> OperationResult:
         svc = service_name(ctx)
-        ref = ctx.state.get("endpointRef") or s.put("OTEL_EXPORTER_OTLP_ENDPOINT", f"http://{svc}:4318").secretRef
-        s.write_fragment(self.fragment(ctx))
-        s.compose_up(svc, {}, wait=True, timeout=120)
-        state = {**ctx.state, "endpointRef": ref, "service": svc, "image": self.image(ctx),
-                 "fragment": f"compose/{ctx.resource.name}.yaml"}
-        return ctx.result(bindings=self.bindings(ctx, {"OTEL_EXPORTER_OTLP_ENDPOINT": ref}), state=state,
-                          artifacts=[state["fragment"]], evidence=[evidence("container", True, "healthcheck", f"{svc} running")])
+        refs = self.store_bindings(ctx, s, {"OTEL_EXPORTER_OTLP_ENDPOINT": f"http://{svc}:4318"})
+        fragment = self.fragment(ctx)
+        s.compose_up(fragment, svc, wait=True, timeout=120)
+        state = {**ctx.state, "bindingRefs": refs, "service": svc, "image": self.image(ctx), "fragment": fragment}
+        return ctx.result(bindings=self.as_bindings(refs), state=state,
+                          evidence=[evidence("container", True, "healthcheck", f"{svc} running")])
 
     def do_configure(self, ctx: HookContext, s: Session) -> OperationResult:
-        if not ctx.state.get("endpointRef"):
+        if not self.ref(ctx, "OTEL_EXPORTER_OTLP_ENDPOINT"):
             raise HookFailure("not_provisioned", f"{ctx.resource_id} has not been provisioned")
-        return ctx.result(bindings=self.bindings(ctx, {"OTEL_EXPORTER_OTLP_ENDPOINT": ctx.state["endpointRef"]}),
-                          state=ctx.state, evidence=[evidence("binding", True, "config",
+        return ctx.result(bindings=self.as_bindings(ctx.state["bindingRefs"]), state=ctx.state, evidence=[evidence("binding", True, "config",
                                                               "OTEL_EXPORTER_OTLP_ENDPOINT is a vault reference")])
 
     def accepted_spans(self, ctx: HookContext, s: Session) -> int:
@@ -100,9 +98,9 @@ class OpenTelemetryPlugin(OfficialPlugin):
         return total
 
     def do_verify(self, ctx: HookContext, s: Session) -> OperationResult:
-        if not ctx.state.get("endpointRef"):
+        if not self.ref(ctx, "OTEL_EXPORTER_OTLP_ENDPOINT"):
             raise HookFailure("not_provisioned", f"{ctx.resource_id} has not been provisioned")
-        endpoint = s.get(ctx.state["endpointRef"])
+        endpoint = s.get(self.ref(ctx, "OTEL_EXPORTER_OTLP_ENDPOINT"))
         trace, span = _secrets.token_hex(16), _secrets.token_hex(8)
         now = time.time_ns()
         body = json.dumps({"resourceSpans": [{
@@ -115,7 +113,7 @@ class OpenTelemetryPlugin(OfficialPlugin):
         while time.monotonic() < deadline:
             proc = s.probe(CURL, ["-c", 'curl -sS -o /dev/null -w "%{http_code}" -H "Content-Type: application/json" '
                                   '--data-binary @- "$OTEL_EXPORTER_OTLP_ENDPOINT/v1/traces"'],
-                           entrypoint="sh", env={"OTEL_EXPORTER_OTLP_ENDPOINT": endpoint}, stdin=body.encode(),
+                           entrypoint="sh", env={"OTEL_EXPORTER_OTLP_ENDPOINT": endpoint}, stdin=body,
                            check=False, what="sending a test span")
             code = s.text(proc).strip()
             if code == "200":
@@ -141,11 +139,7 @@ class OpenTelemetryPlugin(OfficialPlugin):
 
     def do_destroy(self, ctx: HookContext, s: Session) -> OperationResult:
         self.guard_destroy(ctx)
-        removed = s.compose_destroy(service_name(ctx))
-        if ref := ctx.state.get("endpointRef"):
-            ctx.secrets.delete(ref)
-            removed.append("secret:OTEL_EXPORTER_OTLP_ENDPOINT")
-        return ctx.result(evidence=[evidence("removed", True, "cleanup", ", ".join(removed))], state={})
+        removed = s.compose_destroy(service_name(ctx)) + self.delete_bindings(ctx)
+        return ctx.result(evidence=[evidence("removed", True, "cleanup", ", ".join(removed) or "nothing left")],
+                          state={})
 
-
-Plugin = OpenTelemetryPlugin

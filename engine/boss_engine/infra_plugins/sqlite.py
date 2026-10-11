@@ -1,7 +1,9 @@
 """official.sqlite: a SQLite file for local and development use.
 
-No server and no container: the file lives under the app's workdir (`config.path`, default
-`data/<name>.sqlite3`), in WAL mode. Refused for a production environment: one writer, one host.
+No server and no container: the file lives where BOSS runs, under `BOSS_INFRA_SQLITE_DIR`
+(default `~/.boss/infra/sqlite`) / <app> / `config.path` (default `<name>.sqlite3`), in WAL mode,
+because a hook's workdir does not outlive the hook. Refused for a production environment: one
+writer, one machine.
 
 verify   opens the existing file read-write, writes and reads a row in a transaction that is rolled
          back, and runs PRAGMA quick_check.
@@ -12,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sqlite3
 from contextlib import closing
 from datetime import datetime, timezone
@@ -37,21 +40,25 @@ def _fingerprint(conn: sqlite3.Connection) -> dict:
 class SqlitePlugin(OfficialPlugin):
     directory = "sqlite"
 
+    def root(self, ctx: HookContext) -> Path:
+        base = Path(os.environ.get("BOSS_INFRA_SQLITE_DIR") or Path.home() / ".boss" / "infra" / "sqlite")
+        return (base / ctx.app_key).resolve()
+
     def rel(self, ctx: HookContext) -> str:
-        return ctx.resource.config.get("path") or f"data/{ctx.resource.name}.sqlite3"
+        return ctx.resource.config.get("path") or f"{ctx.resource.name}.sqlite3"
 
     def path(self, ctx: HookContext) -> Path:
-        base = Path(ctx.workdir).resolve()
+        base = self.root(ctx)
         p = (base / self.rel(ctx)).resolve()
         if not str(p).startswith(str(base)):
-            raise HookFailure("invalid_request", "config.path must stay inside the app's workdir")
+            raise HookFailure("invalid_request", "config.path must stay inside the app's SQLite directory")
         return p
 
     def _validate(self, ctx: HookContext) -> list[str]:
         if ctx.resource.environment in PRODUCTION:
             return ["official.sqlite is for local and development use; use official.postgres in production"]
         if ".." in Path(self.rel(ctx)).parts or Path(self.rel(ctx)).is_absolute():
-            return ["config.path must be a relative path inside the app's workdir"]
+            return ["config.path must be a relative path"]
         return []
 
     def _changes(self, ctx: HookContext) -> list[PlannedChange]:
@@ -71,15 +78,15 @@ class SqlitePlugin(OfficialPlugin):
     def do_provision(self, ctx: HookContext, s: Session) -> OperationResult:
         with closing(self.connect(ctx, create=True)) as conn:
             mode = conn.execute("PRAGMA journal_mode = WAL").fetchone()[0]
-        ref = ctx.state.get("urlRef") or s.put("DATABASE_URL", f"sqlite:///{self.path(ctx)}").secretRef
-        state = {**ctx.state, "urlRef": ref, "path": self.rel(ctx)}
-        return ctx.result(bindings=self.bindings(ctx, {"DATABASE_URL": ref}), state=state,
+        refs = self.store_bindings(ctx, s, {"DATABASE_URL": lambda: f"sqlite:///{self.path(ctx)}"})
+        state = {**ctx.state, "bindingRefs": refs, "path": self.rel(ctx)}
+        return ctx.result(bindings=self.as_bindings(refs), state=state,
                           evidence=[evidence("file", True, "config", f"{self.rel(ctx)}, journal_mode {mode}")])
 
     def do_configure(self, ctx: HookContext, s: Session) -> OperationResult:
-        if not ctx.state.get("urlRef"):
+        if not self.ref(ctx, "DATABASE_URL"):
             raise HookFailure("not_provisioned", f"{ctx.resource_id} has not been provisioned")
-        return ctx.result(bindings=self.bindings(ctx, {"DATABASE_URL": ctx.state["urlRef"]}), state=ctx.state,
+        return ctx.result(bindings=self.as_bindings(ctx.state["bindingRefs"]), state=ctx.state,
                           evidence=[evidence("binding", True, "config", "DATABASE_URL is a vault reference")])
 
     def do_verify(self, ctx: HookContext, s: Session) -> OperationResult:
@@ -109,7 +116,7 @@ class SqlitePlugin(OfficialPlugin):
     def do_backup(self, ctx: HookContext, s: Session) -> OperationResult:
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
         rel = f"backups/{ctx.resource.name}-{stamp}.sqlite3"
-        dest = Path(ctx.workdir) / rel
+        dest = self.root(ctx) / rel
         dest.parent.mkdir(parents=True, exist_ok=True)
         with closing(self.connect(ctx)) as src:
             with closing(sqlite3.connect(dest)) as out:
@@ -134,9 +141,9 @@ class SqlitePlugin(OfficialPlugin):
 
     def do_restore(self, ctx: HookContext, s: Session) -> OperationResult:
         rel = ctx.resource.config.get("restoreFrom") or ctx.state.get("lastBackup")
-        src = (Path(ctx.workdir) / (rel or "")).resolve()
-        if not rel or not str(src).startswith(str(Path(ctx.workdir).resolve())) or not src.is_file():
-            raise HookFailure("invalid_request", "nothing to restore: no backup file in the app's workdir")
+        src = (self.root(ctx) / (rel or "")).resolve()
+        if not rel or not str(src).startswith(str(self.root(ctx))) or not src.is_file():
+            raise HookFailure("invalid_request", "nothing to restore: no backup of this resource")
         manifest_path = src.with_suffix(".json")
         manifest = json.loads(manifest_path.read_text()) if manifest_path.is_file() else {}
         with closing(sqlite3.connect(f"file:{src}?mode=ro", uri=True)) as b:
@@ -156,10 +163,10 @@ class SqlitePlugin(OfficialPlugin):
             if f.exists():
                 f.unlink()
                 removed.append(f"file:{f.name}")
-        if ref := ctx.state.get("urlRef"):
-            ctx.secrets.delete(ref)
-            removed.append("secret:DATABASE_URL")
+        backups = self.root(ctx) / "backups"
+        for f in sorted(backups.glob(f"{ctx.resource.name}-*")) if backups.is_dir() else []:
+            f.unlink()
+            removed.append(f"backup:{f.name}")
+        removed += self.delete_bindings(ctx)
         return ctx.result(evidence=[evidence("removed", True, "cleanup", ", ".join(removed))], state={})
 
-
-Plugin = SqlitePlugin

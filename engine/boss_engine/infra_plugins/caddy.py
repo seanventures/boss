@@ -114,14 +114,13 @@ class CaddyPlugin(OfficialPlugin):
 
     def do_provision(self, ctx: HookContext, s: Session) -> OperationResult:
         svc = service_name(ctx)
-        s.write_fragment(self.fragment(ctx))
-        s.compose_up(svc, {}, wait=True, timeout=90)
+        fragment = self.fragment(ctx)
+        s.compose_up(fragment, svc, wait=True, timeout=90)
         c = self.cfg(ctx)
         scheme, port = ("https", c["httpsPort"]) if self.tls(ctx) else ("http", c["httpPort"])
         url = f"{scheme}://{c.get('hostname') or c['bindAddress']}:{port}/"
-        state = {**ctx.state, "service": svc, "volume": self.volume(ctx), "url": url,
-                 "fragment": f"compose/{ctx.resource.name}.yaml"}
-        return ctx.result(state=state, artifacts=[state["fragment"]],
+        state = {**ctx.state, "service": svc, "volume": self.volume(ctx), "url": url, "fragment": fragment}
+        return ctx.result(state=state,
                           evidence=[evidence("container", True, "healthcheck", f"{svc} running")])
 
     def do_verify(self, ctx: HookContext, s: Session) -> OperationResult:
@@ -135,7 +134,7 @@ class CaddyPlugin(OfficialPlugin):
         else:
             target = f"http://{host or svc}{c['verifyPath']}"
             route = ["--connect-to", f"{host}:80:{svc}:80"] if host else []
-        ca = b""
+        ca = ""
         if self.tls(ctx) and c["tls"] == "internal":
             for _ in range(30):
                 proc = s.run(["docker", "exec", s.container_id(svc), "cat", "/data/caddy/pki/authorities/local/root.crt"],
@@ -156,7 +155,7 @@ class CaddyPlugin(OfficialPlugin):
             m = re.search(r"^HTTP/\S+ (\d{3})", text, re.M)
             status = int(m.group(1)) if m else 0
             header = bool(re.search(r"^x-boss-route:\s*" + re.escape(ctx.resource.name), text, re.M | re.I))
-            detail = s.scrub(proc.stderr.decode(errors="replace").strip())[-200:]
+            detail = s.scrub(proc.stderr.strip())[-200:]
             if (status and status not in (502, 503, 504)) or time.monotonic() > deadline:
                 break
             time.sleep(1.5)
@@ -173,8 +172,7 @@ class CaddyPlugin(OfficialPlugin):
 
     def published(self, ctx: HookContext, s: Session) -> dict:
         c = self.cfg(ctx)
-        proc = s.run(["docker", "port", s.container_id(service_name(ctx))], check=False)
-        got = s.text(proc)
+        got = " ".join(s.published_ports(s.container_id(service_name(ctx))))
         want = [f"{c['bindAddress']}:{c['httpPort']}"] + ([f"{c['bindAddress']}:{c['httpsPort']}"] if self.tls(ctx) else [])
         ok = all(w in got for w in want)
         return evidence("ports_as_planned", ok, "config", f"published {', '.join(want)}" if ok else f"docker port: {got[:200]}")
@@ -184,5 +182,3 @@ class CaddyPlugin(OfficialPlugin):
         removed = s.compose_destroy(service_name(ctx), [self.volume(ctx)])
         return ctx.result(evidence=[evidence("removed", True, "cleanup", ", ".join(removed))], state={})
 
-
-Plugin = CaddyPlugin

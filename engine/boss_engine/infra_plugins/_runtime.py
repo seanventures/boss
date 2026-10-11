@@ -1,28 +1,33 @@
-"""What every official plugin shares: Docker/Compose calls, probes, secrets, redaction, naming.
+"""What every official plugin shares: commands on the host, compose, probes, secrets, redaction.
 
-One code path for every provider. A plugin renders a COMPOSE FRAGMENT (the same file format
-`boss.deploy.yaml kind: compose` already deploys) and brings it up with `docker compose` against
-the Docker endpoint of the process (`DOCKER_HOST` reaches a remote host the same way). The
-`official.docker-compose` environment provider assembles every fragment of an app into the one
-file the existing stack deploy runs, so nothing here is a second deploy path.
+Contract 1.1 facts this module is built around:
 
-Rules this module enforces for every plugin, so no plugin can forget one:
+  * WHERE: every command runs through `ctx.host.run(...)`: the deploy's host over BOSS's
+    governed SSH, or this machine (LocalHost) in the harness. A plugin never opens its own
+    connection, so nothing here calls subprocess.
+  * WHAT LASTS: `ctx.workdir` is a fresh temporary directory per hook and `ctx.state` is the
+    only thing BOSS keeps between hooks. Anything durable lives on the HOST (compose services,
+    named volumes, backups inside a volume) or in state (non-secret facts and secret REFS).
+  * SECRETS: the broker stores only the binding names a manifest declares. So a plugin keeps
+    no admin password: admin work runs INSIDE the resource container (`docker exec`, the
+    database's local socket), and a resource service that needs a value reads the app's own
+    binding (`${REDIS_URL}`-style interpolation), never a second secret.
 
-  * a secret value enters through `Session.put` / `Session.get` and is REMEMBERED; every log line,
-    error message and subprocess output is scrubbed of every remembered value before it leaves;
-  * a value reaches a container only through the subprocess ENVIRONMENT (`${VAR}` interpolation
-    in the fragment, `-e NAME` with no value on a probe), never argv and never a written file;
-  * every container, volume and probe carries `boss.plugin`, `boss.resource`, `boss.app` and the
-    caller's labels, so cleanup is checkable by label;
-  * data services publish NO port. Verify reaches them the way the app does: a short-lived probe
-    container on the app's compose network, using the binding the app gets.
+How a value travels: `run(argv, env=...)` sends the env as a base64 line on stdin, the remote
+shell exports it and `exec`s the command; `docker run -e NAME` (no `=value`) then reads it from
+that environment. A value is never in a command line, a written file or a fragment.
+
+Every container, volume and probe carries `boss.plugin`, `boss.resource`, `boss.app` and the
+caller's labels (`ctx.labels`), so cleanup is checkable by label. Data services publish NO port:
+verify reaches them the way the app does, with a probe container on the app's compose network
+using the app's binding.
 """
 from __future__ import annotations
 
-import os
+import base64
 import re
 import secrets as _secrets
-import subprocess
+import shlex
 import time
 from pathlib import Path
 from typing import Any, Iterable, Optional, Union
@@ -30,10 +35,12 @@ from typing import Any, Iterable, Optional, Union
 import yaml
 
 from ..platform.contract import (
-    Hook, HookContext, InfraPlugin, OperationResult, OperationStatus, PlannedChange, PortSpec, ResourceMode, ResourcePlan, SecretRef, load_manifest,
+    Hook, HookContext, InfraPlugin, LocalHost, OperationResult, OperationStatus, PlannedChange,
+    PortSpec, ResourceMode, ResourcePlan, SecretRef,
 )
 
-#: A pinned container image: `name@sha256:<64 hex>` or `name:Tag@sha256:<64 hex>` (tags may hold upper case).
+#: A pinned container image: `name@sha256:<64 hex>` or `name:Tag@sha256:<64 hex>` (tags may hold
+#: upper case, e.g. MinIO's RELEASE.*).
 _PINNED = re.compile(r"^[a-z0-9][a-z0-9._/-]*(:[A-Za-z0-9_.-]{1,128})?@sha256:[0-9a-f]{64}$")
 #: Never shorter than this is a value worth scrubbing (a 1-char "secret" would scrub every log).
 _MIN_SCRUB = 6
@@ -41,7 +48,7 @@ DEFAULT_TIMEOUT = 180
 
 
 class HookFailure(Exception):
-    """Raised inside a hook; `OfficialPlugin.run` turns it into a scrubbed `failed` result."""
+    """Raised inside a hook; `OfficialPlugin.run` turns it into a scrubbed result."""
 
     def __init__(self, code: str, message: str, *, retryable: bool = False,
                  status: OperationStatus = OperationStatus.FAILED) -> None:
@@ -50,17 +57,9 @@ class HookFailure(Exception):
 
 
 def official_dir() -> Path:
-    """Where the official manifests live: `plugins/official/` at the repository (or image) root,
-    found the way `templates.service.builtin_dir` finds `templates/apps`."""
-    configured = os.environ.get("BOSS_OFFICIAL_PLUGINS_DIR")
-    if configured:
-        return Path(configured)
-    here = Path(__file__).resolve()
-    for parent in here.parents:
-        candidate = parent / "plugins" / "official"
-        if candidate.is_dir():
-            return candidate
-    return here.parents[3] / "plugins" / "official"
+    """`plugins/official/`, under the registry's plugins root."""
+    from ..platform.registry import plugins_root
+    return plugins_root() / "official"
 
 
 # ---------------------------------------------------------------------------------------------
@@ -88,13 +87,9 @@ def service_name(ctx_or_name: Union[HookContext, str]) -> str:
     return f"res-{_slug(name, 48)}"
 
 
-def env_prefix(ctx: HookContext) -> str:
-    return "BOSS_" + re.sub(r"[^A-Z0-9]+", "_", ctx.resource.name.upper())
-
-
-def secret_name(ctx: HookContext, key: str) -> str:
-    """The vault name for one of this resource's values: `DB_ADMIN_PASSWORD`."""
-    return re.sub(r"[^A-Z0-9]+", "_", ctx.resource.name.upper()) + "_" + key
+def resource_id_of(ctx: HookContext, name: str) -> str:
+    """The resource id of ANOTHER resource of the same app and environment."""
+    return f"{ctx.resource.environment}/{ctx.app_key}/{name}"
 
 
 def labels(ctx: HookContext, plugin_id: str) -> dict[str, str]:
@@ -103,8 +98,13 @@ def labels(ctx: HookContext, plugin_id: str) -> dict[str, str]:
     return out
 
 
+def env_name(ctx: HookContext, binding: str) -> str:
+    """The env name the app gets for one of this plugin's bindings (the request may rename)."""
+    return ctx.resource.bindings.get(binding, binding)
+
+
 def new_password(nbytes: int = 24) -> str:
-    """URL-safe without percent-encoding: hex."""
+    """Hex: URL-safe with no percent-encoding."""
     return _secrets.token_hex(nbytes)
 
 
@@ -118,15 +118,13 @@ _TYPES = {"string": str, "integer": int, "boolean": bool, "object": dict, "array
 
 def schema_problems(value: Any, schema: dict, where: str = "config") -> list[str]:
     """type, properties, required, additionalProperties: false, enum, pattern, minimum, maximum,
-    items. Enough for every official plugin; a community plugin's richer schema is checked by
-    the platform's validator, not here."""
+    items: enough for every official manifest."""
     out: list[str] = []
     t = schema.get("type")
     if t:
-        py = _TYPES[t]
         if isinstance(value, bool) and t in ("integer", "number"):
             return [f"{where} must be {t}"]
-        if not isinstance(value, py):
+        if not isinstance(value, _TYPES[t]):
             return [f"{where} must be {t}"]
     if "enum" in schema and value not in schema["enum"]:
         out.append(f"{where} must be one of {', '.join(map(str, schema['enum']))}")
@@ -154,30 +152,36 @@ def schema_problems(value: Any, schema: dict, where: str = "config") -> list[str
 
 
 # ---------------------------------------------------------------------------------------------
-# The per-hook session: secrets remembered for redaction, subprocesses, compose, probes.
+# The per-hook session
 # ---------------------------------------------------------------------------------------------
+
+class Outcome:
+    def __init__(self, returncode: int, stdout: str, stderr: str) -> None:
+        self.returncode, self.stdout, self.stderr = returncode, stdout, stderr
+
 
 class Session:
     def __init__(self, ctx: HookContext, plugin_id: str) -> None:
         self.ctx = ctx
         self.plugin_id = plugin_id
         self._values: set[str] = set()
-        self.lines: list[str] = []
+        self.host = getattr(ctx, "host", None) or LocalHost()
 
     # -- secrets ------------------------------------------------------------------------------
     def remember(self, value: Optional[str]) -> None:
         if value and len(value) >= _MIN_SCRUB:
             self._values.add(value)
 
-    def put(self, key: str, value: str) -> SecretRef:
+    def put(self, binding: str, value: str) -> SecretRef:
+        """Store a binding value; the broker files it under the (renamed) env name."""
         self.remember(value)
-        ref = self.ctx.secrets.put(secret_name(self.ctx, key), value)
+        ref = self.ctx.secrets.put(binding, value)
         return ref if isinstance(ref, SecretRef) else SecretRef(secretRef=str(ref))
 
     def get(self, ref: Union[str, SecretRef, None]) -> str:
         if not ref:
-            raise HookFailure("state_lost", "a secret reference this resource needs is missing from "
-                              "its state; run provision again or restore the state record")
+            raise HookFailure("state_lost", "a binding this resource needs is missing from its state; "
+                              "provision it again")
         value = self.ctx.secrets.resolve(ref)
         self.remember(value)
         return value
@@ -187,13 +191,12 @@ class Session:
         for v in sorted(self._values, key=len, reverse=True):
             s = s.replace(v, "[redacted]")
         # a URL's userinfo is a credential even when this session never saw the value
-        return re.sub(r"(://[^:/@\s]+:)[^@\s]+@", r"\1[redacted]@", s)
+        # (no '/', quote or space in either part, so a scheme in JSON never reaches a later '@')
+        return re.sub(r"(://[^:/@\s\"']*:)[^@\s/\"']+@", r"\1[redacted]@", s)
 
     def log(self, line: str) -> None:
-        clean = self.scrub(line)
-        self.lines.append(clean)
         try:
-            self.ctx.log(clean)
+            self.ctx.log(self.scrub(line))
         except Exception:  # a logger must never fail the operation
             pass
 
@@ -201,73 +204,74 @@ class Session:
         if self.ctx.is_cancelled():
             raise HookFailure("cancelled", "the operation was cancelled", status=OperationStatus.CANCELLED)
 
-    def _timeout(self, timeout: Optional[float]) -> float:
+    def _timeout(self, timeout: Optional[float]) -> int:
         t = float(timeout or DEFAULT_TIMEOUT)
         if self.ctx.deadline is not None:
             t = min(t, max(1.0, self.ctx.deadline - time.monotonic()))
-        return t
+        return max(1, int(t))
 
-    # -- processes ----------------------------------------------------------------------------
-    def run(self, argv: list[str], *, env: Optional[dict[str, str]] = None, stdin: Optional[bytes] = None,
-            timeout: Optional[float] = None, check: bool = True, what: str = "") -> subprocess.CompletedProcess:
-        """argv only (no shell). `env` values are remembered and passed in the ENVIRONMENT."""
+    # -- commands on the host -----------------------------------------------------------------
+    def run(self, argv: list[str], *, env: Optional[dict[str, str]] = None, stdin: str = "",
+            timeout: Optional[float] = None, check: bool = True, what: str = "") -> Outcome:
+        """One command on ctx.host. `env` values travel on stdin (base64), never in the command."""
         self.check_cancel()
         for v in (env or {}).values():
             self.remember(v)
-        full_env = {**os.environ, **(env or {})}
-        try:
-            proc = subprocess.run(argv, input=stdin, capture_output=True, env=full_env,
-                                  timeout=self._timeout(timeout))
-        except subprocess.TimeoutExpired:
-            raise HookFailure("timeout", f"{what or argv[0]} did not finish in time", retryable=True) from None
-        except FileNotFoundError:
-            raise HookFailure("missing_tool", f"{argv[0]} is not installed where BOSS runs this plugin") from None
-        if check and proc.returncode != 0:
-            err = self.scrub(proc.stderr.decode(errors="replace").strip() or
-                             proc.stdout.decode(errors="replace").strip())[-600:]
-            raise HookFailure("command_failed", f"{what or ' '.join(argv[:3])} failed: {err}",
-                              retryable=True)
-        return proc
+        command = "exec " + shlex.join(argv)
+        stdin_text = stdin or None
+        if env:
+            exports = "".join(f"export {k}={shlex.quote(v)}\n" for k, v in env.items())
+            command = ('IFS= read -r __boss_env && eval "$(printf %s "$__boss_env" | base64 -d)" && '
+                       "unset __boss_env && " + command)
+            stdin_text = base64.b64encode(exports.encode()).decode() + "\n" + (stdin or "")
+        raw = self.host.run(command, timeout=self._timeout(timeout), stdin_text=stdin_text)
+        out = Outcome(int(getattr(raw, "returncode", 1)), str(getattr(raw, "stdout", "") or ""),
+                      str(getattr(raw, "stderr", "") or ""))
+        if out.returncode == 124 and "timed out" in out.stderr:
+            raise HookFailure("timeout", f"{what or argv[0]} did not finish in time", retryable=True)
+        if check and out.returncode != 0:
+            err = self.scrub(out.stderr.strip() or out.stdout.strip())[-600:]
+            raise HookFailure("command_failed", f"{what or ' '.join(argv[:3])} failed: {err}", retryable=True)
+        return out
 
-    def text(self, proc: subprocess.CompletedProcess) -> str:
-        return self.scrub(proc.stdout.decode(errors="replace"))
+    def text(self, out: Outcome) -> str:
+        return self.scrub(out.stdout)
 
     # -- compose ------------------------------------------------------------------------------
-    def fragment_path(self) -> Path:
-        d = Path(self.ctx.workdir) / "compose"
-        d.mkdir(parents=True, exist_ok=True)
-        return d / f"{self.ctx.resource.name}.yaml"
-
-    def write_fragment(self, fragment: dict) -> Path:
+    def check_fragment(self, fragment: dict) -> str:
         """The fragment holds `${VAR}` placeholders, never a value: checked, not hoped."""
         text = yaml.safe_dump(fragment, sort_keys=False)
         for v in self._values:
             if v in text:
-                raise HookFailure("secret_in_file", "a secret value reached a compose fragment; refusing to write it")
-        p = self.fragment_path()
-        p.write_text(text, encoding="utf-8")
-        return p
+                raise HookFailure("secret_in_file", "a secret value reached a compose fragment; refused")
+        return text
 
-    def compose(self, args: list[str], *, files: Optional[list[Path]] = None,
-                env: Optional[dict[str, str]] = None, timeout: Optional[float] = None,
-                check: bool = True, what: str = "") -> subprocess.CompletedProcess:
-        argv = ["docker", "compose", "-p", project_name(self.ctx)]
-        for f in files or [self.fragment_path()]:
-            argv += ["-f", str(f)]
-        return self.run(argv + args, env=env, timeout=timeout, check=check, what=what or "docker compose")
+    def compose(self, args: list[str], fragment: dict, *, env: Optional[dict[str, str]] = None,
+                timeout: Optional[float] = None, check: bool = True, what: str = "") -> Outcome:
+        """`docker compose -p <project> -f - <args>`: the fragment travels on stdin, so nothing is
+        written on the host and the same call works locally and over SSH."""
+        return self.run(["docker", "compose", "-p", project_name(self.ctx), "-f", "-"] + args,
+                        env=env, stdin=self.check_fragment(fragment), timeout=timeout, check=check,
+                        what=what or "docker compose")
 
-    def compose_up(self, service: str, env: dict[str, str], *, wait: bool = True,
-                   timeout: float = 240) -> None:
-        args = ["up", "-d"]
-        if wait:
-            args += ["--wait", "--wait-timeout", str(int(timeout))]
-        self.compose(args + [service], env=env, timeout=timeout + 30, what=f"starting {service}")
+    def compose_up(self, fragment: dict, service: str, env: Optional[dict[str, str]] = None, *,
+                   wait: bool = True, timeout: float = 240) -> None:
+        args = ["up", "-d"] + (["--wait", "--wait-timeout", str(int(timeout))] if wait else []) + [service]
+        self.compose(args, fragment, env=env, timeout=timeout + 30, what=f"starting {service}")
 
-    def container_id(self, service: str) -> Optional[str]:
-        proc = self.run(["docker", "ps", "-aq", "--filter", f"label=com.docker.compose.project={project_name(self.ctx)}",
-                         "--filter", f"label=com.docker.compose.service={service}"], check=False)
-        ids = proc.stdout.decode().split()
+    def container_id(self, service: str, *, rid: Optional[str] = None) -> Optional[str]:
+        """The container of `service` in this app's project (or of resource `rid`, any service)."""
+        flt = (["--filter", f"label=boss.resource={rid}"] if rid else
+               ["--filter", f"label=com.docker.compose.project={project_name(self.ctx)}",
+                "--filter", f"label=com.docker.compose.service={service}"])
+        ids = self.run(["docker", "ps", "-aq"] + flt, check=False).stdout.split()
         return ids[0] if ids else None
+
+    def require_container(self, service: str) -> str:
+        cid = self.container_id(service)
+        if not cid:
+            raise HookFailure("not_provisioned", f"{self.ctx.resource_id} has no {service} container")
+        return cid
 
     def compose_destroy(self, service: str, volumes: Iterable[str] = ()) -> list[str]:
         """Remove the service's container, its named volumes and, when nothing else uses it, the
@@ -278,29 +282,26 @@ class Session:
             self.run(["docker", "rm", "-f", "-v", cid], what=f"removing {service}")
             removed.append(f"container:{service}")
         for vol in volumes:
-            full = f"{project_name(self.ctx)}_{vol}"
-            proc = self.run(["docker", "volume", "rm", "-f", full], check=False)
-            if proc.returncode == 0:
+            if self.run(["docker", "volume", "rm", "-f", f"{project_name(self.ctx)}_{vol}"], check=False).returncode == 0:
                 removed.append(f"volume:{vol}")
         self.remove_network_if_unused()
-        frag = self.fragment_path()
-        if frag.exists():
-            frag.unlink()
-            removed.append(f"file:compose/{frag.name}")
         return removed
 
     def remove_network_if_unused(self) -> None:
         net = network_name(self.ctx)
-        proc = self.run(["docker", "network", "inspect", net, "--format", "{{len .Containers}}"], check=False)
-        if proc.returncode == 0 and proc.stdout.decode().strip() == "0":
+        out = self.run(["docker", "network", "inspect", net, "--format", "{{len .Containers}}"], check=False)
+        if out.returncode == 0 and out.stdout.strip() == "0":
             self.run(["docker", "network", "rm", net], check=False)
 
-    # -- probes -------------------------------------------------------------------------------
-    def probe(self, image: str, argv: list[str], *, env: Optional[dict[str, str]] = None,
-              stdin: Optional[bytes] = None, network: Optional[str] = None, entrypoint: Optional[str] = None,
-              timeout: float = 90, check: bool = True, what: str = "probe") -> subprocess.CompletedProcess:
-        """A throwaway container on the app's network. Values travel as `-e NAME` (no `=value`)
-        so they are read from this process's environment and never appear in argv."""
+    def published_ports(self, cid: str) -> list[str]:
+        out = self.run(["docker", "port", cid], check=False)
+        return [line.strip() for line in out.stdout.splitlines() if line.strip()]
+
+    # -- probes and exec ----------------------------------------------------------------------
+    def probe(self, image: str, argv: list[str], *, env: Optional[dict[str, str]] = None, stdin: str = "",
+              network: Optional[str] = None, entrypoint: Optional[str] = None, timeout: float = 90,
+              check: bool = True, what: str = "probe") -> Outcome:
+        """A throwaway container on the app's network, connecting as the app would."""
         cmd = ["docker", "run", "--rm", "-i", "--network", network or network_name(self.ctx)]
         for k, v in {**labels(self.ctx, self.plugin_id), "boss.probe": "1"}.items():
             cmd += ["--label", f"{k}={v}"]
@@ -310,34 +311,50 @@ class Session:
             cmd += ["--entrypoint", entrypoint]
         return self.run(cmd + [image] + argv, env=env, stdin=stdin, timeout=timeout, check=check, what=what)
 
+    def exec(self, cid: str, argv: list[str], *, env: Optional[dict[str, str]] = None, stdin: str = "",
+             timeout: float = 120, check: bool = True, what: str = "") -> Outcome:
+        """A command INSIDE a resource container (admin work over its local socket)."""
+        cmd = ["docker", "exec", "-i"]
+        for k in (env or {}):
+            cmd += ["-e", k]
+        return self.run(cmd + [cid] + argv, env=env, stdin=stdin, timeout=timeout, check=check, what=what)
+
 
 # ---------------------------------------------------------------------------------------------
 # The base class
 # ---------------------------------------------------------------------------------------------
 
+def _hook_method(hook: Hook):
+    def method(self: "OfficialPlugin", ctx: HookContext) -> OperationResult:
+        ctx.hook = hook
+        return self.run(ctx)
+    method.__name__ = hook.value
+    method.__doc__ = f"The {hook.value} hook (OfficialPlugin.run dispatches it to do_{hook.value})."
+    return method
+
+
 class OfficialPlugin(InfraPlugin):
     """An official plugin: the manifest is `plugins/official/<directory>/boss-plugin.yaml`.
 
-    Subclasses implement `_validate`, `_changes` and the hook methods prefixed `do_`; this class
-    owns schema checks, the attached-mode and approved-plan guards, timing and redaction."""
+    Subclasses implement `_validate`, `_changes`, `_ports`, `_risks` and the `do_<hook>` methods;
+    this class owns schema checks, attached-mode handling, timing and redaction."""
 
     directory: str = ""
-    #: `boss.plugin` label value and receipts; read from the manifest.
-    _session: Optional[Session] = None
 
     def __init__(self) -> None:
-        if self.manifest is None:
+        if type(self).manifest is None:
+            from ..platform.contract import load_manifest
             type(self).manifest = load_manifest(official_dir() / self.directory)
 
     @property
     def plugin_id(self) -> str:
-        return self.manifest.id if self.manifest else self.directory
+        return self.manifest.id if self.manifest else f"official.{self.directory}"
 
     # -- dispatch -----------------------------------------------------------------------------
     def run(self, ctx: HookContext) -> OperationResult:
         ctx.plugin_id = ctx.plugin_id or self.plugin_id
-        ctx.plugin_version = ctx.plugin_version or (self.manifest.version if self.manifest else "")
-        session = Session(ctx, self.plugin_id)
+        ctx.plugin_version = ctx.plugin_version or self.manifest.version
+        s = Session(ctx, self.plugin_id)
         started = time.monotonic()
         if not self.manifest.implements(ctx.hook):
             result = ctx.result(OperationStatus.UNSUPPORTED)
@@ -347,25 +364,25 @@ class OfficialPlugin(InfraPlugin):
                     problems = self.problems(ctx)
                     if problems:
                         raise HookFailure("invalid_request", "; ".join(problems))
-                if (ctx.resource.mode is ResourceMode.ATTACHED
-                        and ctx.hook in (Hook.PROVISION, Hook.CONFIGURE)):
-                    # Nothing to create: the app binds to the vault secrets the operator set.
-                    result = ctx.result(bindings=self.attached_bindings(ctx), state={"mode": "attached"},
-                                        evidence=[evidence("attach", True, "config", "bound to existing secrets")])
-                elif ctx.resource.mode is ResourceMode.ATTACHED and ctx.hook in (Hook.BACKUP, Hook.RESTORE):
-                    raise HookFailure("attached_resource", "BOSS does not back up or restore a resource it "
-                                      "did not create", status=OperationStatus.REFUSED)
+                if ctx.resource.mode is ResourceMode.ATTACHED and ctx.hook in (Hook.PROVISION, Hook.CONFIGURE):
+                    # Nothing to create: BOSS binds the vault secrets the operator already set.
+                    result = ctx.result(state={"mode": "attached"},
+                                        evidence=[evidence("attach", True, "config",
+                                                           "nothing created; bound to existing secrets")])
+                elif ctx.resource.mode is ResourceMode.ATTACHED and ctx.hook in (Hook.BACKUP, Hook.RESTORE,
+                                                                                  Hook.DESTROY):
+                    raise HookFailure("attached_resource", f"{ctx.resource_id} is attached: BOSS did not create "
+                                      f"it and never runs {ctx.hook.value} on it", status=OperationStatus.REFUSED)
                 else:
-                    result = getattr(self, f"do_{ctx.hook.value}")(ctx, session)
+                    result = getattr(self, f"do_{ctx.hook.value}")(ctx, s)
             except HookFailure as exc:
-                result = ctx.result(exc.status, errors=[{"code": exc.code, "message": session.scrub(exc.message),
+                result = ctx.result(exc.status, errors=[{"code": exc.code, "message": s.scrub(exc.message)[:1000],
                                                          "retryable": exc.retryable}])
             except Exception as exc:  # a plugin bug is a failed operation, never a crashed worker
-                result = ctx.fail("plugin_error", session.scrub(f"{type(exc).__name__}: {exc}")[:900])
+                result = ctx.fail("plugin_error", s.scrub(f"{type(exc).__name__}: {exc}")[:900])
         result.durationMs = int((time.monotonic() - started) * 1000)
-        # Last line of defence: nothing the session saw leaves in the result.
         dumped = result.model_dump_json()
-        if session.scrub(dumped) != dumped:
+        if s.scrub(dumped) != dumped:  # last line of defence
             return ctx.fail("secret_in_result", "the result carried a secret value; it was withheld")
         return result
 
@@ -413,12 +430,11 @@ class OfficialPlugin(InfraPlugin):
     def do_plan(self, ctx: HookContext, s: Session) -> OperationResult:
         r = ctx.resource
         if ctx.state.get("desired") == "absent":
-            if r.mode is ResourceMode.ATTACHED:
-                changes = [PlannedChange(action="noop", target=ctx.resource_id,
-                                         detail="attached: BOSS never deletes a resource it did not create")]
-            else:
-                changes = [PlannedChange(action="delete", target=ctx.resource_id, destructive=True,
-                                         detail="remove the resource and its data")]
+            changes = ([PlannedChange(action="noop", target=ctx.resource_id,
+                                      detail="attached: BOSS never deletes a resource it did not create")]
+                       if r.mode is ResourceMode.ATTACHED else
+                       [PlannedChange(action="delete", target=ctx.resource_id, destructive=True,
+                                      detail="remove the resource and its data")])
         elif r.mode is ResourceMode.ATTACHED:
             changes = [PlannedChange(action="attach", target=ctx.resource_id,
                                      detail="bind to the existing resource's vault secrets")]
@@ -428,41 +444,50 @@ class OfficialPlugin(InfraPlugin):
         plan = ResourcePlan(
             resourceId=ctx.resource_id, pluginId=self.plugin_id, pluginVersion=self.manifest.version,
             mode=r.mode, changes=changes, ports=ports, publicAccess=any(p.public for p in ports),
-            bindings=[r.bindings.get(b, b) for b in self.manifest.spec.bindings],
+            bindings=[env_name(ctx, b) for b in self.manifest.spec.bindings],
             dependsOn=list(r.dependsOn), risks=self._risks(ctx),
             limitations=list(self.manifest.spec.limitations),
             cost={"monthlyUsd": 0.0, "basis": "runs on the app's own host; no metered service"})
         return ctx.result(plan=plan)
 
-    # -- guards -------------------------------------------------------------------------------
+    # -- guards and bindings ------------------------------------------------------------------
     def guard_destroy(self, ctx: HookContext) -> None:
-        """Refuse an attached resource, one other resources still depend on, and any destroy
-        without an approved plan that deletes THIS resource."""
-        if ctx.resource.mode is ResourceMode.ATTACHED:
-            raise HookFailure("attached_resource", f"{ctx.resource_id} is attached: BOSS did not create it "
-                              "and never destroys it", status=OperationStatus.REFUSED)
+        """Refuse a resource other resources still depend on (`state.dependents`). Attached
+        resources never get here (run() refuses them). Approval is BOSS's: the executor runs a
+        mutating hook only with the approved plan's digest."""
         dependents = [d for d in (ctx.state.get("dependents") or []) if d]
         if dependents:
             raise HookFailure("has_dependents", f"{ctx.resource_id} is still used by {', '.join(dependents)}; "
                               "destroy those first", status=OperationStatus.REFUSED)
-        plan = ctx.plan
-        if plan is None or not any(c.action == "delete" and c.target == ctx.resource_id for c in plan.changes):
-            raise HookFailure("needs_approved_plan", "destroy runs only against an approved plan that deletes "
-                              f"{ctx.resource_id}", status=OperationStatus.REFUSED)
 
-    def bindings(self, ctx: HookContext, refs: dict[str, Union[SecretRef, str]]) -> dict[str, SecretRef]:
-        """Plugin binding names -> the env names the app gets (the request's rename map)."""
-        out = {}
-        for name, ref in refs.items():
-            out[ctx.resource.bindings.get(name, name)] = ref if isinstance(ref, SecretRef) else SecretRef(secretRef=str(ref))
-        return out
+    def store_bindings(self, ctx: HookContext, s: Session, mint: dict[str, Any]) -> dict[str, str]:
+        """Env name -> ref for this plugin's bindings: refs already in state are kept (the value
+        is never minted twice); a missing one is minted by calling `mint[binding]()` and stored."""
+        refs = dict(ctx.state.get("bindingRefs") or {})
+        for binding, make in mint.items():
+            name = env_name(ctx, binding)
+            if name not in refs:
+                refs[name] = s.put(binding, make() if callable(make) else make).secretRef
+        return refs
 
-    def attached_bindings(self, ctx: HookContext) -> dict[str, SecretRef]:
-        """An attached resource's bindings are the vault secrets the operator already set."""
-        base = f"app_secret://{ctx.resource.environment}/{ctx.app_key}/"
-        return {env: SecretRef(secretRef=base + secret) for env, secret in ctx.resource.attach.bindings.items()}
+    def ref(self, ctx: HookContext, binding: str) -> Optional[str]:
+        return (ctx.state.get("bindingRefs") or {}).get(env_name(ctx, binding))
+
+    @staticmethod
+    def as_bindings(refs: dict[str, str]) -> dict[str, SecretRef]:
+        return {name: SecretRef(secretRef=ref) for name, ref in refs.items()}
+
+    def delete_bindings(self, ctx: HookContext) -> list[str]:
+        removed = []
+        for name, ref in (ctx.state.get("bindingRefs") or {}).items():
+            ctx.secrets.delete(ref)
+            removed.append(f"secret:{name}")
+        return removed
+
+
+for _hook in Hook:
+    setattr(OfficialPlugin, _hook.value, _hook_method(_hook))
 
 
 def evidence(check: str, passed: bool, kind: str = "other", detail: str = "") -> dict:
-    return {"check": check, "passed": passed, "kind": kind, "detail": detail[:500]}
-
+    return {"check": check, "passed": bool(passed), "kind": kind, "detail": detail[:500]}

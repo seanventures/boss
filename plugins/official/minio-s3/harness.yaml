@@ -1,0 +1,1 @@
+resource: {name: files, capability: object-storage, engine: minio}

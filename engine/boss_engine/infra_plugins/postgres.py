@@ -1,18 +1,22 @@
-"""official.postgres: PostgreSQL as a compose service on the app's private network.
+"""official.postgres: PostgreSQL 17 as a compose service on the app's private network.
 
-provision  a `res-<name>` service, a named data volume, NO published port; a LOGIN role that owns
-           one database (not a superuser). The superuser is kept for the plugin's own work.
-configure  DATABASE_URL as a vault reference; applies `config.migrations.dir/*.sql` in name order,
-           each in one transaction, recorded with its checksum in `boss_schema_migrations`.
-verify     a real round trip AS THE APP (with DATABASE_URL, over the app's network): who am I,
-           which database, a write and a read in a transaction that is rolled back.
-backup     pg_dump (custom format) to `backups/`, then a TESTED RESTORE: a disposable server
-           from the same image, pg_restore into it, and every table's row count and content
-           checksum compared with the source. A backup that does not restore is a failed backup.
-restore    pg_restore --clean into the resource, then the same comparison against the backup's
-           manifest.
-destroy    refused for an attached resource, one others depend on, or without an approved
-           delete plan; otherwise the container, its volume and its vault secrets.
+provision  `res-<name>` with a data volume and a backups volume, NO published port; a LOGIN role
+           that owns one database (not a superuser). The only secret is the app's DATABASE_URL.
+           The superuser has a random password nobody keeps (set at init, never stored): admin
+           work runs inside the container over the local socket (`docker exec ... psql -U postgres`).
+configure  applies `config.migrations.dir/*.sql` (from the app tree BOSS stages in the workdir)
+           in name order, each in one transaction AS THE APP, recorded with its checksum in
+           `boss_schema_migrations`.
+verify     a real round trip AS THE APP (DATABASE_URL, over the app's network): who am I, which
+           database, not a superuser, a write and a read in a transaction that is rolled back.
+backup     pg_dump (custom format) into the backups volume on the host, then a TESTED RESTORE: a
+           disposable server (no network) mounts that volume read-only, pg_restore runs into it,
+           and every table's row count and content md5 is compared with the source. A backup
+           whose restore does not match is a failed backup.
+restore    checks the dump's sha256 against its manifest, pg_restore --clean into the resource,
+           then the same comparison against the manifest.
+destroy    refused while others depend on it; otherwise the container, both volumes (backups
+           included) and the binding.
 """
 from __future__ import annotations
 
@@ -25,7 +29,7 @@ from pathlib import Path
 
 from ..platform.contract import HookContext, OperationResult, OperationStatus, PlannedChange
 from ._runtime import (
-    HookFailure, OfficialPlugin, Session, env_prefix, evidence, labels, network_name, new_password,
+    HookFailure, OfficialPlugin, Session, env_name, evidence, labels, network_name, new_password,
     project_name, service_name,
 )
 
@@ -34,8 +38,8 @@ IMAGE = "postgres:17.6-alpine@sha256:ef257d85f76e48da1c64832459b59fcaba1a4dac97b
 PGVECTOR_IMAGE = ("pgvector/pgvector:0.8.1-pg17-bookworm"
                   "@sha256:3e8b3adfd27b5707128f60956f62a793c3c9326ea8cfaf0eab7adccb5d700b21")
 
-#: Every user table, its exact row count and an md5 of its sorted rows, one `schema.table|n|md5`
-#: line each. Both sides of every backup/restore comparison run THIS query.
+#: Every user table, its exact row count and an md5 of its sorted rows: `schema.table|n|md5`.
+#: Both sides of every backup/restore comparison run THIS query.
 FINGERPRINT_SQL = r"""
 SELECT format('%I.%I', table_schema, table_name) || '|' ||
   (xpath('/row/n/text()', query_to_xml(format('SELECT count(*) AS n FROM %I.%I', table_schema, table_name), false, true, '')))[1]::text || '|' ||
@@ -44,9 +48,13 @@ FROM information_schema.tables
 WHERE table_type = 'BASE TABLE' AND table_schema NOT IN ('pg_catalog', 'information_schema')
 ORDER BY 1;
 """
+#: The superuser password is set at init from the kernel's random source and kept by nobody.
+START = 'export POSTGRES_PASSWORD="$$(cat /proc/sys/kernel/random/uuid)"; exec docker-entrypoint.sh postgres'
 
 _IDENT = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
 _MIGRATION = re.compile(r"^[0-9A-Za-z_.-]{1,120}\.sql$")
+_BACKUP = re.compile(r"^[a-z0-9-]{1,60}-\d{8}T\d{12}Z\.dump$")
+PSQL = ["psql", "-X", "-q", "-At", "-v", "ON_ERROR_STOP=1"]
 
 
 def _ident(value: str) -> str:
@@ -63,13 +71,18 @@ def _fingerprint(text: str) -> dict[str, dict]:
     return out
 
 
+def _password_of(url: str) -> str:
+    m = re.match(r"^postgresql://[^:]+:([^@]+)@", url)
+    if not m:
+        raise HookFailure("state_lost", "DATABASE_URL in the vault is not a postgresql:// URL with a password")
+    return m.group(1)
+
+
 class PostgresPlugin(OfficialPlugin):
     directory = "postgres"
 
     # -- naming -------------------------------------------------------------------------------
     def image(self, ctx: HookContext) -> str:
-        if ctx.state.get("image"):
-            return ctx.state["image"]
         cfg = ctx.resource.config
         if cfg.get("image"):
             return cfg["image"]
@@ -82,8 +95,11 @@ class PostgresPlugin(OfficialPlugin):
     def role(self, ctx: HookContext) -> str:
         return ctx.resource.config.get("user") or _ident(ctx.resource.name) + "_app"
 
-    def volume(self, ctx: HookContext) -> str:
+    def data_volume(self, ctx: HookContext) -> str:
         return f"{service_name(ctx)}-data"
+
+    def backups_volume(self, ctx: HookContext) -> str:
+        return f"{service_name(ctx)}-backups"
 
     # -- validate / plan ----------------------------------------------------------------------
     def _validate(self, ctx: HookContext) -> list[str]:
@@ -92,19 +108,20 @@ class PostgresPlugin(OfficialPlugin):
             v = ctx.resource.config.get(key)
             if v and not _IDENT.fullmatch(v):
                 out.append(f"config.{key} must be a lower-case SQL identifier")
-        if v := ctx.resource.engineVersion:
-            if not str(v).split(".")[0] == "17":
-                out.append("official.postgres certifies PostgreSQL 17 (engineVersion: \"17\")")
+        v = ctx.resource.engineVersion
+        if v and str(v).split(".")[0] != "17":
+            out.append("official.postgres certifies PostgreSQL 17 (engineVersion: \"17\")")
         return out
 
     def _changes(self, ctx: HookContext) -> list[PlannedChange]:
         out = [
             PlannedChange(action="create", target=f"service:{service_name(ctx)}",
                           detail=f"{self.image(ctx).split('@')[0]}, no published port"),
-            PlannedChange(action="create", target=f"volume:{self.volume(ctx)}", detail="data, kept until destroy"),
+            PlannedChange(action="create", target=f"volume:{self.data_volume(ctx)}", detail="data, kept until destroy"),
+            PlannedChange(action="create", target=f"volume:{self.backups_volume(ctx)}", detail="pg_dump archives"),
             PlannedChange(action="create", target=f"database:{self.database(ctx)}",
                           detail=f"owned by LOGIN role {self.role(ctx)}, not a superuser"),
-            PlannedChange(action="create", target="secret:DATABASE_URL", detail="vault reference"),
+            PlannedChange(action="create", target="binding:DATABASE_URL", detail="vault reference"),
         ]
         if mig := ctx.resource.config.get("migrations"):
             out.append(PlannedChange(action="update", target=f"schema:{self.database(ctx)}",
@@ -116,87 +133,66 @@ class PostgresPlugin(OfficialPlugin):
             return ["persistent data without backups: set backups: true for pg_dump with a tested restore"]
         return []
 
-    # -- secrets and state --------------------------------------------------------------------
-    def _secrets(self, ctx: HookContext, s: Session) -> dict:
-        """Mint once, reuse forever: refs live in state, values in the vault."""
-        st = ctx.state or {}
-        if st.get("adminPasswordRef"):
-            return {"admin": s.get(st["adminPasswordRef"]), "app": s.get(st["appPasswordRef"]),
-                    "refs": {k: st[k] for k in ("adminPasswordRef", "appPasswordRef", "adminUrlRef", "urlRef")}}
-        if s.container_id(service_name(ctx)):
-            raise HookFailure("state_lost", f"{service_name(ctx)} exists but its secret references are not in "
-                              "the state BOSS handed back; refusing to mint a password its data does not know")
-        admin, app = new_password(), new_password()
-        db, role, host = self.database(ctx), self.role(ctx), service_name(ctx)
-        refs = {
-            "adminPasswordRef": s.put("ADMIN_PASSWORD", admin).secretRef,
-            "appPasswordRef": s.put("APP_PASSWORD", app).secretRef,
-            "adminUrlRef": s.put("ADMIN_URL", f"postgresql://postgres:{admin}@{host}:5432/{db}").secretRef,
-            "urlRef": s.put("DATABASE_URL", f"postgresql://{role}:{app}@{host}:5432/{db}").secretRef,
-        }
-        return {"admin": admin, "app": app, "refs": refs}
-
-    def _state(self, ctx: HookContext, refs: dict) -> dict:
-        return {**ctx.state, **refs, "project": project_name(ctx), "network": network_name(ctx),
-                "service": service_name(ctx), "volume": self.volume(ctx), "image": self.image(ctx),
-                "database": self.database(ctx), "role": self.role(ctx),
-                "fragment": f"compose/{ctx.resource.name}.yaml",
-                "env": {f"{env_prefix(ctx)}_ADMIN_PASSWORD": refs["adminPasswordRef"]}}
-
-    def _require(self, ctx: HookContext) -> None:
-        if not ctx.state.get("urlRef"):
-            raise HookFailure("not_provisioned", f"{ctx.resource_id} has not been provisioned (no state)")
-
-    # -- psql, over the app's network, the URL in the environment ------------------------------
-    def psql(self, ctx: HookContext, s: Session, url: str, sql: str, *, env: dict | None = None,
-             single_tx: bool = False, what: str = "psql", timeout: float = 90) -> str:
-        flags = "-X -q -At -v ON_ERROR_STOP=1" + (" --single-transaction" if single_tx else "")
-        proc = s.probe(self.image(ctx), ["-c", f'exec psql {flags} -d "$BOSS_PG_URL" -f -'],
-                       env={"BOSS_PG_URL": url, **(env or {})}, stdin=sql.encode(), entrypoint="sh",
-                       timeout=timeout, what=what)
-        return s.text(proc).strip()
-
-    def wait_ready(self, ctx: HookContext, s: Session, url: str, seconds: float = 60) -> None:
-        deadline, last = time.monotonic() + seconds, ""
-        while time.monotonic() < deadline:
-            try:
-                self.psql(ctx, s, url, "SELECT 1;", what="waiting for postgres", timeout=20)
-                return
-            except HookFailure as exc:
-                last = exc.message
-                time.sleep(1.5)
-        raise HookFailure("not_ready", f"postgres did not accept connections: {last}", retryable=True)
-
-    # -- provision ----------------------------------------------------------------------------
+    # -- compose ------------------------------------------------------------------------------
     def fragment(self, ctx: HookContext) -> dict:
-        svc, vol, lab = service_name(ctx), self.volume(ctx), labels(ctx, self.plugin_id)
+        svc, lab = service_name(ctx), labels(ctx, self.plugin_id)
+        data, backups = self.data_volume(ctx), self.backups_volume(ctx)
         return {
             "services": {svc: {
                 "image": self.image(ctx),
                 "restart": "unless-stopped",
-                "environment": {"POSTGRES_USER": "postgres", "POSTGRES_DB": self.database(ctx),
-                                "POSTGRES_PASSWORD": f"${{{env_prefix(ctx)}_ADMIN_PASSWORD}}"},
-                "volumes": [f"{vol}:/var/lib/postgresql/data"],
+                "entrypoint": ["sh", "-c", START],
+                "environment": {"POSTGRES_USER": "postgres", "POSTGRES_DB": self.database(ctx)},
+                "volumes": [f"{data}:/var/lib/postgresql/data", f"{backups}:/backups"],
                 "healthcheck": {"test": ["CMD-SHELL", f"pg_isready -U postgres -d {self.database(ctx)}"],
                                 "interval": "2s", "timeout": "3s", "retries": 60},
-                "labels": lab,
+                "labels": {**lab, "boss.pg.database": self.database(ctx), "boss.pg.role": self.role(ctx)},
             }},
-            "volumes": {vol: {"labels": lab}},
+            "volumes": {data: {"labels": lab}, backups: {"labels": lab}},
         }
 
+    def _require(self, ctx: HookContext, s: Session) -> str:
+        if not self.ref(ctx, "DATABASE_URL"):
+            raise HookFailure("not_provisioned", f"{ctx.resource_id} has not been provisioned")
+        return s.require_container(service_name(ctx))
+
+    # -- psql: as the app over the network, or as admin inside the container -------------------
+    def psql_app(self, ctx: HookContext, s: Session, url: str, sql: str, *, single_tx: bool = False,
+                 what: str = "psql") -> str:
+        flags = " ".join(PSQL[1:]) + (" --single-transaction" if single_tx else "")
+        out = s.probe(self.image(ctx), ["-c", f'exec psql {flags} -d "$BOSS_PG_URL" -f -'],
+                      env={"BOSS_PG_URL": url}, stdin=sql, entrypoint="sh", what=what)
+        return s.text(out).strip()
+
+    def psql_admin(self, ctx: HookContext, s: Session, cid: str, sql: str, *, env: dict | None = None,
+                   database: str = "", what: str = "psql") -> str:
+        out = s.exec(cid, PSQL + ["-U", "postgres", "-d", database or self.database(ctx), "-f", "-"],
+                     env=env, stdin=sql, what=what)
+        return s.text(out).strip()
+
+    def wait_ready(self, ctx: HookContext, s: Session, cid: str, seconds: float = 90) -> None:
+        deadline, last = time.monotonic() + seconds, ""
+        while time.monotonic() < deadline:
+            out = s.exec(cid, PSQL + ["-U", "postgres", "-d", self.database(ctx), "-c", "SELECT 1"], check=False)
+            if out.returncode == 0:
+                return
+            last = s.scrub(out.stderr)[-200:]
+            time.sleep(1.5)
+        raise HookFailure("not_ready", f"postgres did not accept connections: {last}", retryable=True)
+
+    # -- provision ----------------------------------------------------------------------------
     def do_provision(self, ctx: HookContext, s: Session) -> OperationResult:
-        sec = self._secrets(ctx, s)
-        svc = service_name(ctx)
+        svc, db, role = service_name(ctx), self.database(ctx), self.role(ctx)
+        refs = self.store_bindings(ctx, s, {
+            "DATABASE_URL": lambda: f"postgresql://{role}:{new_password()}@{svc}:5432/{db}"})
+        app_pw = _password_of(s.get(refs[env_name(ctx, "DATABASE_URL")]))
         before = s.container_id(svc)
-        s.write_fragment(self.fragment(ctx))
-        s.compose_up(svc, {f"{env_prefix(ctx)}_ADMIN_PASSWORD": sec["admin"]})
-        state = self._state(ctx, sec["refs"])
-        ctx.state = state
-        admin_url = s.get(state["adminUrlRef"])
-        self.wait_ready(ctx, s, admin_url)
-        role, db = self.role(ctx), self.database(ctx)
+        fragment = self.fragment(ctx)
+        s.compose_up(fragment, svc)
+        cid = s.require_container(svc)
+        self.wait_ready(ctx, s, cid)
         # Idempotent: the role is created once; its password is (re)set to the vault's value.
-        self.psql(ctx, s, admin_url, f"""
+        self.psql_admin(ctx, s, cid, f"""
 \\getenv app_pw BOSS_APP_PW
 DO $$ BEGIN
   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '{role}') THEN
@@ -208,17 +204,18 @@ ALTER DATABASE {db} OWNER TO {role};
 ALTER SCHEMA public OWNER TO {role};
 REVOKE CONNECT ON DATABASE {db} FROM PUBLIC;
 GRANT CONNECT ON DATABASE {db} TO {role};
-""", env={"BOSS_APP_PW": sec["app"]}, what="creating the app role")
-        after = s.container_id(svc)
-        s.log(f"{svc} {'already running' if before and before == after else 'started'}; {role} owns {db}")
-        return ctx.result(bindings=self.bindings(ctx, {"DATABASE_URL": state["urlRef"]}), state=state,
-                          artifacts=[state["fragment"]],
+""", env={"BOSS_APP_PW": app_pw}, what="creating the app role")
+        state = {**ctx.state, "bindingRefs": refs, "service": svc, "project": project_name(ctx),
+                 "network": network_name(ctx), "image": self.image(ctx), "database": db, "role": role,
+                 "backupsVolume": f"{project_name(ctx)}_{self.backups_volume(ctx)}", "fragment": fragment}
+        s.log(f"{svc} {'already running' if before and before == cid else 'started'}; {role} owns {db}")
+        return ctx.result(bindings=self.as_bindings(refs), state=state,
                           evidence=[evidence("container", True, "healthcheck", f"{svc} healthy"),
                                     evidence("app_role", True, "config", f"{role} owns {db}; not a superuser")])
 
-    # -- configure: bindings + migrations -----------------------------------------------------
+    # -- configure: migrations ----------------------------------------------------------------
     def do_configure(self, ctx: HookContext, s: Session) -> OperationResult:
-        self._require(ctx)
+        self._require(ctx, s)
         ev = [evidence("binding", True, "config", "DATABASE_URL is a vault reference")]
         state = dict(ctx.state)
         if mig := ctx.resource.config.get("migrations"):
@@ -226,20 +223,22 @@ GRANT CONNECT ON DATABASE {db} TO {role};
             state["migrations"] = total
             ev.append(evidence("migrations", True, "migration",
                                f"{len(applied)} applied ({', '.join(applied) or 'none pending'}); {len(total)} total"))
-        return ctx.result(bindings=self.bindings(ctx, {"DATABASE_URL": state["urlRef"]}), state=state, evidence=ev)
+        return ctx.result(bindings=self.as_bindings(ctx.state["bindingRefs"]), state=state, evidence=ev)
 
     def migrate(self, ctx: HookContext, s: Session, directory: str) -> tuple[list[str], list[str]]:
-        base = (Path(ctx.workdir) / directory).resolve()
-        if not str(base).startswith(str(Path(ctx.workdir).resolve())):
-            raise HookFailure("invalid_request", "config.migrations.dir must stay inside the app's workdir")
+        root = Path(ctx.workdir).resolve()
+        base = (root / directory).resolve()
+        if not str(base).startswith(str(root)):
+            raise HookFailure("invalid_request", "config.migrations.dir must stay inside the app tree")
         if not base.is_dir():
-            raise HookFailure("invalid_request", f"migrations directory {directory!r} does not exist")
+            raise HookFailure("migrations_missing", f"migrations directory {directory!r} is not in the app tree "
+                              "BOSS staged for this operation")
         files = sorted(p for p in base.iterdir() if p.is_file() and p.suffix == ".sql")
         bad = [p.name for p in files if not _MIGRATION.fullmatch(p.name)]
         if bad:
             raise HookFailure("invalid_request", f"migration file names must be [0-9A-Za-z_.-]+.sql: {', '.join(bad)}")
-        url = s.get(ctx.state["urlRef"])
-        done = self.psql(ctx, s, url, """
+        url = s.get(self.ref(ctx, "DATABASE_URL"))
+        done = self.psql_app(ctx, s, url, """
 CREATE TABLE IF NOT EXISTS boss_schema_migrations (
   version text PRIMARY KEY, checksum text NOT NULL, applied_at timestamptz NOT NULL DEFAULT now());
 SELECT version || '|' || checksum FROM boss_schema_migrations ORDER BY version;
@@ -254,18 +253,18 @@ SELECT version || '|' || checksum FROM boss_schema_migrations ORDER BY version;
                     raise HookFailure("migration_changed", f"{p.name} was applied with a different checksum; "
                                       "add a new migration instead of editing an applied one")
                 continue
-            self.psql(ctx, s, url, body + f"\nINSERT INTO boss_schema_migrations (version, checksum) "
-                      f"VALUES ('{p.name}', '{digest}');\n", single_tx=True, what=f"migration {p.name}")
+            self.psql_app(ctx, s, url, body + f"\nINSERT INTO boss_schema_migrations (version, checksum) "
+                          f"VALUES ('{p.name}', '{digest}');\n", single_tx=True, what=f"migration {p.name}")
             applied.append(p.name)
             s.log(f"applied migration {p.name}")
         return applied, [p.name for p in files]
 
     # -- verify / observe ---------------------------------------------------------------------
     def do_verify(self, ctx: HookContext, s: Session) -> OperationResult:
-        self._require(ctx)
-        url = s.get(ctx.state["urlRef"])
+        cid = self._require(ctx, s)
+        url = s.get(self.ref(ctx, "DATABASE_URL"))
         nonce = new_password(6)
-        out = self.psql(ctx, s, url, f"""
+        out = self.psql_app(ctx, s, url, f"""
 SELECT current_user || '|' || current_database() || '|' || current_setting('server_version') || '|' ||
        (SELECT CASE WHEN rolsuper THEN 'super' ELSE 'plain' END FROM pg_roles WHERE rolname = current_user);
 BEGIN;
@@ -273,145 +272,124 @@ CREATE TEMP TABLE boss_verify (id int, note text) ON COMMIT DROP;
 INSERT INTO boss_verify VALUES (1, '{nonce}');
 SELECT note FROM boss_verify WHERE id = 1;
 ROLLBACK;
-""", what="verifying postgres")
-        lines = out.splitlines()
-        who = lines[0].split("|") if lines else []
-        ok_rw = len(lines) >= 2 and lines[1] == nonce
+""", what="verifying postgres").splitlines()
+        who = out[0].split("|") if out else []
+        published = s.published_ports(cid)
         ev = [evidence("connect_as_app", len(who) == 4, "connection",
                        f"user {who[0]} on {who[1]}, PostgreSQL {who[2]}" if len(who) == 4 else "no answer"),
-              evidence("write_read_row", ok_rw, "connection", "wrote and read a row; rolled back"),
+              evidence("write_read_row", len(out) >= 2 and out[1] == nonce, "connection",
+                       "wrote and read a row; rolled back"),
               evidence("app_not_superuser", len(who) == 4 and who[3] == "plain", "config", "the app role is not a superuser"),
-              self.no_public_port(ctx, s)]
-        return ctx.result(evidence=ev, state=ctx.state) if all(e["passed"] for e in ev) else \
-            ctx.result(OperationStatus.FAILED, evidence=ev, errors=[{"code": "verify_failed",
-                                                                     "message": "postgres did not pass verify"}])
-
-    def no_public_port(self, ctx: HookContext, s: Session) -> dict:
-        cid = s.container_id(service_name(ctx))
-        if not cid:
-            return evidence("no_public_port", False, "config", "container not found")
-        proc = s.run(["docker", "inspect", "-f", "{{json .NetworkSettings.Ports}}", cid], what="inspecting ports")
-        ports = json.loads(proc.stdout.decode() or "{}") or {}
-        published = [k for k, v in ports.items() if v]
-        return evidence("no_public_port", not published, "config",
-                        "no host port published" if not published else f"published: {', '.join(published)}")
+              evidence("no_public_port", not published, "config",
+                       "no host port published" if not published else f"published: {', '.join(published)}")]
+        if all(e["passed"] for e in ev):
+            return ctx.result(evidence=ev, state=ctx.state)
+        return ctx.result(OperationStatus.FAILED, evidence=ev,
+                          errors=[{"code": "verify_failed", "message": "postgres did not pass verify"}])
 
     def do_observe(self, ctx: HookContext, s: Session) -> OperationResult:
-        self._require(ctx)
-        url = s.get(ctx.state["urlRef"])
-        out = self.psql(ctx, s, url, """
+        self._require(ctx, s)
+        out = self.psql_app(ctx, s, s.get(self.ref(ctx, "DATABASE_URL")), """
 SELECT numbackends || '|' || pg_database_size(datname) || '|' || xact_commit || '|' || xact_rollback
 FROM pg_stat_database WHERE datname = current_database();
 """, what="observing postgres")
         n = (out.split("|") + ["0"] * 4)[:4]
-        observed = {"healthy": True, "connections": int(n[0]), "sizeBytes": int(n[1]),
-                    "commits": int(n[2]), "rollbacks": int(n[3])}
-        return ctx.result(observed=observed, evidence=[evidence("stats", True, "observe", "pg_stat_database read")])
+        return ctx.result(observed={"healthy": True, "connections": int(n[0]), "sizeBytes": int(n[1]),
+                                    "commits": int(n[2]), "rollbacks": int(n[3])},
+                          evidence=[evidence("stats", True, "observe", "pg_stat_database read")])
 
     # -- backup with a tested restore ---------------------------------------------------------
-    def fingerprint(self, ctx: HookContext, s: Session, url: str) -> dict:
-        return _fingerprint(self.psql(ctx, s, url, FINGERPRINT_SQL, what="fingerprinting tables"))
+    def fingerprint(self, ctx: HookContext, s: Session, cid: str) -> dict:
+        return _fingerprint(self.psql_admin(ctx, s, cid, FINGERPRINT_SQL, what="fingerprinting tables"))
 
     def do_backup(self, ctx: HookContext, s: Session) -> OperationResult:
-        self._require(ctx)
-        admin_url = s.get(ctx.state["adminUrlRef"])
-        before = self.fingerprint(ctx, s, admin_url)
-        proc = s.probe(self.image(ctx), ["-c", 'exec pg_dump --format=custom --no-password -d "$BOSS_PG_URL"'],
-                       env={"BOSS_PG_URL": admin_url}, entrypoint="sh", timeout=600, what="pg_dump")
-        after = self.fingerprint(ctx, s, admin_url)
-        dump = proc.stdout
-        if not dump.startswith(b"PGDMP"):
-            raise HookFailure("backup_failed", "pg_dump did not produce a custom-format archive")
+        cid = self._require(ctx, s)
+        db = self.database(ctx)
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-        rel = f"backups/{ctx.resource.name}-{stamp}.dump"
-        path = Path(ctx.workdir) / rel
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(dump)
-        sha = hashlib.sha256(dump).hexdigest()
+        name = f"{re.sub('[^a-z0-9-]', '-', ctx.resource.name)}-{stamp}.dump"
+        before = self.fingerprint(ctx, s, cid)
+        out = s.exec(cid, ["sh", "-c", 'pg_dump -U postgres -Fc -d "$1" -f "/backups/$2" && '
+                           'sha256sum "/backups/$2" && wc -c < "/backups/$2"', "sh", db, name],
+                     timeout=900, what="pg_dump").stdout.split()
+        after = self.fingerprint(ctx, s, cid)
+        sha, size = out[0], int(out[-1])
+        restored = self.test_restore(ctx, s, name)
         quiet = before == after
-        restored = self.test_restore(ctx, s, path)
         if quiet:
             match = restored == before
-            detail = (f"restored {len(restored)} tables, {sum(t['rows'] for t in restored.values())} rows; "
-                      "every row count and content checksum matches the source" if match else
-                      f"restored copy differs from the source: {self._diff(before, restored)}")
-        else:  # writes landed during the dump: the snapshot is consistent, the comparison is not
+            detail = (f"restored {len(restored)} tables, {sum(t['rows'] for t in restored.values())} rows in a "
+                      "disposable server; every row count and content checksum matches the source" if match else
+                      f"the restored copy differs from the source: {self._diff(before, restored)}")
+        else:  # writes landed during the dump: the dump is a consistent snapshot, the comparison is not
             match = set(restored) == set(before)
-            detail = (f"source changed during the dump; restored {len(restored)} tables "
+            detail = (f"the source changed during the dump; restored {len(restored)} tables "
                       "(table set matches; row checksums not comparable)")
-        manifest = {"file": rel, "sha256": sha, "bytes": len(dump), "image": self.image(ctx),
-                    "database": self.database(ctx), "created": stamp, "tables": restored if match else before}
-        (path.with_suffix(".json")).write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
-        ev = [evidence("pg_dump", True, "backup", f"{len(dump)} bytes, sha256 {sha[:16]}"),
+        manifest = {"file": name, "sha256": sha, "bytes": size, "image": self.image(ctx), "database": db,
+                    "created": stamp, "tables": before if quiet else restored}
+        s.exec(cid, ["sh", "-c", 'cat > "/backups/$1"', "sh", name[:-5] + ".json"],
+               stdin=json.dumps(manifest, sort_keys=True), what="writing the backup manifest")
+        artifact = f"volume:{ctx.state.get('backupsVolume')}:{name}"
+        ev = [evidence("pg_dump", True, "backup", f"{size} bytes, sha256 {sha[:16]}"),
               evidence("tested_restore", match, "restore", detail)]
-        state = {**ctx.state, "lastBackup": rel}
+        state = {**ctx.state, "lastBackup": name}
         if not match:
-            return ctx.result(OperationStatus.FAILED, evidence=ev, artifacts=[rel, rel[:-5] + ".json"], state=state,
+            return ctx.result(OperationStatus.FAILED, evidence=ev, artifacts=[artifact], state=state,
                               errors=[{"code": "restore_test_failed", "message": detail[:1000]}])
-        s.log(f"backup {rel}: {detail}")
-        return ctx.result(evidence=ev, artifacts=[rel, rel[:-5] + ".json"], state=state)
+        s.log(f"backup {name}: {detail}")
+        return ctx.result(evidence=ev, artifacts=[artifact, artifact[:-5] + ".json"], state=state)
 
     @staticmethod
     def _diff(a: dict, b: dict) -> str:
-        out = []
-        for t in sorted(set(a) | set(b)):
-            if a.get(t) != b.get(t):
-                out.append(f"{t}: source {a.get(t, {}).get('rows', 'absent')} rows, "
-                           f"restored {b.get(t, {}).get('rows', 'absent')}")
-        return "; ".join(out)[:400]
+        return "; ".join(f"{t}: source {a.get(t, {}).get('rows', 'absent')} rows, restored "
+                         f"{b.get(t, {}).get('rows', 'absent')}" for t in sorted(set(a) | set(b)) if a.get(t) != b.get(t))[:400]
 
-    def test_restore(self, ctx: HookContext, s: Session, dump: Path) -> dict:
-        """Restore into a DISPOSABLE server (no network, removed after) and fingerprint it."""
-        lab = {**labels(ctx, self.plugin_id), "boss.disposable": "restore-test"}
-        cmd = ["docker", "run", "-d", "--network", "none", "-e", "POSTGRES_HOST_AUTH_METHOD=trust"]
-        for k, v in lab.items():
+    def test_restore(self, ctx: HookContext, s: Session, name: str) -> dict:
+        """Restore into a DISPOSABLE server (no network, backups mounted read-only), fingerprint it,
+        remove it."""
+        cmd = ["docker", "run", "-d", "--network", "none", "-e", "POSTGRES_HOST_AUTH_METHOD=trust",
+               "-v", f"{ctx.state['backupsVolume']}:/backups:ro"]
+        for k, v in {**labels(ctx, self.plugin_id), "boss.disposable": "restore-test"}.items():
             cmd += ["--label", f"{k}={v}"]
-        cid = s.run(cmd + [self.image(ctx)], what="starting a disposable postgres").stdout.decode().strip()
+        tmp = s.run(cmd + [self.image(ctx)], what="starting a disposable postgres").stdout.strip()
         try:
             deadline = time.monotonic() + 90
-            while time.monotonic() < deadline:
-                # pg_isready answers during initdb's temporary server; ask for the final one.
-                ready = s.run(["docker", "exec", cid, "sh", "-c",
-                               "pg_isready -U postgres -h 127.0.0.1 && psql -U postgres -h 127.0.0.1 -XAtc 'select 1'"],
-                              check=False)
-                if ready.returncode == 0:
+            while True:
+                # pg_isready also answers initdb's temporary server; a TCP query needs the final one
+                ok = s.run(["docker", "exec", tmp, "psql", "-U", "postgres", "-h", "127.0.0.1", "-XAtc", "SELECT 1"],
+                           check=False).returncode == 0
+                if ok:
                     break
+                if time.monotonic() > deadline:
+                    raise HookFailure("restore_test_failed", "the disposable postgres never became ready", retryable=True)
                 time.sleep(1)
-            else:
-                raise HookFailure("restore_test_failed", "the disposable postgres never became ready", retryable=True)
-            s.run(["docker", "exec", "-i", cid, "pg_restore", "-U", "postgres", "-h", "127.0.0.1", "--create",
-                   "--no-owner", "--no-privileges", "--exit-on-error", "-d", "postgres"],
-                  stdin=dump.read_bytes(), timeout=600, what="pg_restore into the disposable server")
-            out = s.run(["docker", "exec", "-i", cid, "psql", "-U", "postgres", "-h", "127.0.0.1", "-X", "-q", "-At",
-                         "-v", "ON_ERROR_STOP=1", "-d", self.database(ctx), "-f", "-"],
-                        stdin=FINGERPRINT_SQL.encode(), what="fingerprinting the restored copy")
+            s.exec(tmp, ["pg_restore", "-U", "postgres", "-h", "127.0.0.1", "--create", "--no-owner", "--no-privileges",
+                         "--exit-on-error", "-d", "postgres", f"/backups/{name}"], timeout=900,
+                   what="pg_restore into the disposable server")
+            out = s.exec(tmp, PSQL + ["-U", "postgres", "-h", "127.0.0.1", "-d", self.database(ctx), "-f", "-"],
+                         stdin=FINGERPRINT_SQL, what="fingerprinting the restored copy")
             return _fingerprint(s.text(out))
         finally:
-            s.run(["docker", "rm", "-f", "-v", cid], check=False)
+            s.run(["docker", "rm", "-f", "-v", tmp], check=False)
 
     # -- restore into the resource ------------------------------------------------------------
     def do_restore(self, ctx: HookContext, s: Session) -> OperationResult:
-        self._require(ctx)
-        rel = ctx.resource.config.get("restoreFrom") or ctx.state.get("lastBackup")
-        if not rel:
-            raise HookFailure("invalid_request", "nothing to restore: no config.restoreFrom and no backup in state")
-        path = (Path(ctx.workdir) / rel).resolve()
-        if not str(path).startswith(str(Path(ctx.workdir).resolve())) or not path.is_file():
-            raise HookFailure("invalid_request", f"backup {rel!r} is not a file in the app's workdir")
-        manifest_path = path.with_suffix(".json")
-        manifest = json.loads(manifest_path.read_text()) if manifest_path.is_file() else {}
-        data = path.read_bytes()
-        if manifest.get("sha256") and hashlib.sha256(data).hexdigest() != manifest["sha256"]:
-            raise HookFailure("backup_corrupt", f"{rel} does not match the checksum recorded when it was taken")
-        admin_url = s.get(ctx.state["adminUrlRef"])
-        s.probe(self.image(ctx), ["-c", 'exec pg_restore --clean --if-exists --exit-on-error -d "$BOSS_PG_URL"'],
-                env={"BOSS_PG_URL": admin_url}, stdin=data, entrypoint="sh", timeout=600, what="pg_restore")
-        now = self.fingerprint(ctx, s, admin_url)
+        cid = self._require(ctx, s)
+        name = ctx.resource.config.get("restoreFrom") or ctx.state.get("lastBackup")
+        if not name or not _BACKUP.fullmatch(name):
+            raise HookFailure("invalid_request", "nothing to restore: name a backup taken by this plugin "
+                              "(config.restoreFrom) or take one first")
+        manifest = json.loads(s.exec(cid, ["cat", f"/backups/{name[:-5]}.json"], what="reading the backup manifest").stdout)
+        sha = s.exec(cid, ["sha256sum", f"/backups/{name}"], what="checking the backup").stdout.split()[0]
+        if sha != manifest.get("sha256"):
+            raise HookFailure("backup_corrupt", f"{name} does not match the checksum recorded when it was taken")
+        s.exec(cid, ["pg_restore", "-U", "postgres", "--clean", "--if-exists", "--exit-on-error",
+                     "-d", self.database(ctx), f"/backups/{name}"], timeout=900, what="pg_restore")
+        now = self.fingerprint(ctx, s, cid)
         want = manifest.get("tables")
-        match = want is None or now == want
+        match = now == want
         detail = (f"{len(now)} tables, {sum(t['rows'] for t in now.values())} rows match the backup" if match
-                  else f"restored data differs from the backup: {self._diff(want, now)}")
-        ev = [evidence("pg_restore", True, "restore", f"restored {rel}"),
+                  else f"restored data differs from the backup: {self._diff(want or {}, now)}")
+        ev = [evidence("pg_restore", True, "restore", f"restored {name}"),
               evidence("rows_match_backup", match, "restore", detail)]
         if not match:
             return ctx.result(OperationStatus.FAILED, evidence=ev, errors=[{"code": "restore_mismatch", "message": detail}])
@@ -420,13 +398,7 @@ FROM pg_stat_database WHERE datname = current_database();
     # -- destroy ------------------------------------------------------------------------------
     def do_destroy(self, ctx: HookContext, s: Session) -> OperationResult:
         self.guard_destroy(ctx)
-        removed = s.compose_destroy(service_name(ctx), [self.volume(ctx)])
-        for key in ("urlRef", "adminUrlRef", "appPasswordRef", "adminPasswordRef"):
-            if ref := ctx.state.get(key):
-                ctx.secrets.delete(ref)
-                removed.append(f"secret:{key}")
+        removed = s.compose_destroy(service_name(ctx), [self.data_volume(ctx), self.backups_volume(ctx)])
+        removed += self.delete_bindings(ctx)
         return ctx.result(evidence=[evidence("removed", True, "cleanup", ", ".join(removed) or "nothing left")],
                           state={})
-
-
-Plugin = PostgresPlugin

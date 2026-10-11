@@ -16,8 +16,8 @@ spec:
   engines: [postgres]
   engineVersions: ["pgvector 0.8.1 on PostgreSQL 17"]
   requires: [database.relational]
-  runtime: {type: python, entrypoint: "boss_engine.infra_plugins.pgvector:PgvectorPlugin"}
-  permissions: {secrets: [read-scoped], network: [declared-services], docker: true, subprocess: true}
+  runtime: {type: python, entrypoint: "plugin:PgvectorPlugin"}
+  permissions: {secrets: [read-scoped], network: [declared-services], docker: true}
   configSchema:
     type: object
     additionalProperties: false

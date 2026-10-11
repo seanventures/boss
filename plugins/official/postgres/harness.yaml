@@ -1,0 +1,6 @@
+# The contract harness's request: python -m boss_engine.platform test plugins/official/postgres
+resource:
+  name: db
+  capability: database.relational
+  engine: postgres
+  backups: true

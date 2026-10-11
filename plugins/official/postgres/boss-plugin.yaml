@@ -8,16 +8,16 @@ metadata:
   license: Apache-2.0
   description: >-
     PostgreSQL 17 as a compose service on the app's private network, a non-superuser app role,
-    DATABASE_URL as a vault reference, SQL migrations, and pg_dump backups whose restore is tested
-    in a disposable server before the backup is reported good.
+    DATABASE_URL as its only secret (a vault reference), SQL migrations, and pg_dump backups kept in
+    a volume on the host whose restore is tested in a disposable server before the backup counts.
 spec:
   supportLevel: certified
   capabilities: [database.relational, database.migrations, database.backup-restore]
   features: [migrations, backup, restore, pgvector]
   engines: [postgres]
   engineVersions: ["17.6"]
-  runtime: {type: python, entrypoint: "boss_engine.infra_plugins.postgres:PostgresPlugin", timeoutSeconds: 900}
-  permissions: {secrets: [read-scoped, write-scoped], network: [declared-services], filesystem: [workspace-artifacts], docker: true, subprocess: true}
+  runtime: {type: python, entrypoint: "plugin:PostgresPlugin", timeoutSeconds: 900}
+  permissions: {secrets: [read-scoped, write-scoped], network: [declared-services], filesystem: [workspace-artifacts], docker: true}
   configSchema:
     type: object
     additionalProperties: false
@@ -42,3 +42,5 @@ spec:
     - "No published port: only services on the app's compose network reach it."
     - "No automatic rollback: a failed migration is rolled back alone (one transaction per file); earlier ones stay applied."
     - "A backup taken while writes land is consistent (pg_dump snapshot) but its row comparison is limited to the table set."
+    - "Backups live in a volume on the same host: copy them off-host for disaster recovery. Destroy deletes them."
+    - "Migrations come from the app tree BOSS stages in the hook's workdir."

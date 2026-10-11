@@ -7,7 +7,7 @@ metadata:
   owner: BOSS maintainers
   license: Apache-2.0
   description: >-
-    A SQLite file in the app's workdir for local and development use, WAL mode, with online-API
+    A SQLite file for local and development use, WAL mode, with online-API
     backups whose copy is integrity-checked and compared row for row.
 spec:
   supportLevel: certified
@@ -15,7 +15,7 @@ spec:
   features: [backup, restore]
   engines: [sqlite]
   engineVersions: ["3 (Python's bundled SQLite)"]
-  runtime: {type: python, entrypoint: "boss_engine.infra_plugins.sqlite:SqlitePlugin"}
+  runtime: {type: python, entrypoint: "plugin:SqlitePlugin"}
   permissions: {secrets: [write-scoped], filesystem: [workspace-artifacts]}
   configSchema:
     type: object
@@ -28,3 +28,4 @@ spec:
   limitations:
     - "Local and development only: refused for a production environment."
     - "One host, one writer at a time; no network access."
+    - "The file lives where BOSS runs (BOSS_INFRA_SQLITE_DIR, default ~/.boss/infra/sqlite), not on a deploy host."

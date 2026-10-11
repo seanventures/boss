@@ -8,7 +8,7 @@ import pytest
 from boss_engine.infra_plugins import load_plugin
 from boss_engine.platform.contract import OperationStatus, ResourceRequest
 
-from ._harness import WHOAMI, Harness, app_compose, compose_up_app, docker_ok, free_port
+from ._harness import WHOAMI, Harness, app_compose, compose_up, docker_ok, free_port
 
 needs_docker = pytest.mark.skipif(not docker_ok(), reason="BOSS_RUN_DOCKER_LIFECYCLE_TEST=1 and Docker needed")
 
@@ -44,7 +44,7 @@ def test_caddyfile_has_tls_only_with_a_hostname(tmp_path):
 @pytest.mark.parametrize("tls", ["off", "internal"])
 def test_caddy_routes_to_the_app(tmp_path, tls):
     h = Harness(load_plugin("caddy"), tmp_path)
-    compose_up_app(h, app_compose(h, {"app": {"image": WHOAMI}}), "app")
+    compose_up(h, [app_compose(h, {"app": {"image": WHOAMI}})], "app")
     config = {"httpPort": free_port(), "httpsPort": free_port()}
     if tls == "internal":
         config.update(hostname="helpdesk.boss.test", tls="internal")

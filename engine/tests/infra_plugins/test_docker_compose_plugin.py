@@ -1,5 +1,9 @@
-"""official.docker-compose assembles a real app with a real resource and brings it up."""
+"""official.docker-compose: assemble a real resource into an override, then deploy it with an app
+the way the stack deploy does, and check nothing is recreated and the app gets its binding."""
 from __future__ import annotations
+
+import json
+import subprocess
 
 import pytest
 import yaml
@@ -7,21 +11,19 @@ import yaml
 from boss_engine.infra_plugins import load_plugin
 from boss_engine.platform.contract import OperationStatus, ResourceRequest
 
-from ._harness import WHOAMI, Harness, app_compose, docker_ok
+from ._harness import WHOAMI, Harness, app_compose, compose_up, docker_ok
 
 needs_docker = pytest.mark.skipif(not docker_ok(), reason="BOSS_RUN_DOCKER_LIFECYCLE_TEST=1 and Docker needed")
 
 ENV = ResourceRequest.model_validate({"name": "env", "capability": "environment.compose",
-                                      "config": {"appCompose": "app/docker-compose.yml"}})
+                                      "config": {"appServices": ["app"]}})
 
 
-def test_a_resource_colliding_with_an_app_service_is_refused(tmp_path):
+def test_no_resources_and_name_collisions_are_refused(tmp_path):
     h = Harness(load_plugin("docker-compose"), tmp_path)
-    app_compose(h, {"res-cache": {"image": WHOAMI}})
-    (tmp_path / "compose").mkdir()
-    (tmp_path / "compose" / "cache.yaml").write_text(yaml.safe_dump({"services": {"res-cache": {"image": "x"}}}))
-    out = h.call("provision", ENV, state={"resources": {"cache": {"fragment": "compose/cache.yaml"}}})
-    assert out.status is OperationStatus.FAILED and out.errors[0].code == "conflict"
+    assert h.call("provision", ENV).errors[0].code == "no_resources"
+    clash = {"cache": {"fragment": {"services": {"app": {"image": "x"}}}, "bindings": {}}}
+    assert h.call("provision", ENV, state={"resources": clash}).errors[0].code == "conflict"
 
 
 @needs_docker
@@ -30,22 +32,31 @@ def test_compose_environment_lifecycle(tmp_path):
     creq = ResourceRequest.model_validate({"name": "cache", "capability": "cache"})
     c = cache.call("provision", creq)
     assert c.ok, c.errors
-    h = Harness(load_plugin("docker-compose"), tmp_path, app_key=cache.app_key, broker=cache.broker)
-    app_compose(h, {"app": {"image": WHOAMI}})
-    resources = {"cache": {**c.state, "bindings": c.model_dump(mode="json")["bindings"]}}
+    h = Harness(load_plugin("docker-compose"), tmp_path, app_key=cache.app_key)
+    resources = {"cache": {"fragment": c.state["fragment"], "bindings": c.model_dump(mode="json")["bindings"]}}
 
     def between(state):
-        assembled = yaml.safe_load((tmp_path / ".boss" / "compose.yaml").read_text())
-        app = assembled["services"]["app"]
-        assert app["environment"]["REDIS_URL"] == "${REDIS_URL}"
-        assert app["depends_on"]["res-cache"]["condition"] == "service_healthy"
-        assert state["deploy"]["env"]["REDIS_URL"] == {"secret": "CACHE_REDIS_URL"}
-        plan = h.call("plan", ENV, state={**state, "desired": "absent"}).plan
-        refused = h.call("destroy", ENV, state=state, plan=plan)
+        override = yaml.safe_load(state["compose"])
+        app = override["services"]["app"]
+        assert app["environment"] == {"REDIS_URL": "${REDIS_URL}"}
+        assert app["depends_on"] == {"res-cache": {"condition": "service_healthy"}}
+        assert state["deploy"]["env"] == {"REDIS_URL": {"secret": "REDIS_URL"}}
+        # What the stack deploy does: the app's compose + the override, the env file's values.
+        files = [app_compose(h, {"app": {"image": WHOAMI}}), tmp_path / "override.yaml"]
+        files[1].write_text(state["compose"])
+        before = cache.container_id("res-cache")
+        compose_up(h, files, env={"REDIS_URL": cache.broker.store[c.bindings["REDIS_URL"].secretRef]})
+        assert cache.container_id("res-cache") == before, "deploying the override recreated the resource"
+        env = json.loads(subprocess.run(["docker", "inspect", "-f", "{{json .Config.Env}}", h.container_id("app")],
+                                        capture_output=True, text=True).stdout)
+        assert any(e.startswith("REDIS_URL=redis://") for e in env)
+        refused = h.call("destroy", ENV, state=state)
         assert refused.status is OperationStatus.REFUSED and refused.errors[0].code == "has_dependents"
         cplan = cache.call("plan", creq, state={**c.state, "desired": "absent"}).plan
         assert cache.call("destroy", creq, state=c.state, plan=cplan).ok
         return state
 
-    summary = h.lifecycle(ENV, state={"resources": resources}, between=between, container_service="app")
+    summary = h.lifecycle(ENV, state={"resources": resources}, between=between)
+    cache.assert_clean()
+    cache.assert_redacted()
     h.record("docker-compose", summary)

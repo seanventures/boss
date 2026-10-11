@@ -15,8 +15,8 @@ spec:
   features: [bucket, scoped-credentials]
   engines: [minio, s3]
   engineVersions: ["RELEASE.2026-08-04T00-00-00Z (pgsty/minio build)"]
-  runtime: {type: python, entrypoint: "boss_engine.infra_plugins.minio_s3:MinioS3Plugin"}
-  permissions: {secrets: [read-scoped, write-scoped], network: [declared-services], docker: true, subprocess: true}
+  runtime: {type: python, entrypoint: "plugin:MinioS3Plugin"}
+  permissions: {secrets: [read-scoped, write-scoped], network: [declared-services], docker: true}
   configSchema:
     type: object
     additionalProperties: false
@@ -31,3 +31,4 @@ spec:
     - "No backup hook in P0: mirror the bucket with mc mirror if the objects matter."
     - "MinIO no longer publishes community images; the pinned image is the maintained pgsty/minio build of the same source."
     - "No published port: only services on the app's compose network reach it."
+    - "The root password is generated in the container and kept in its own volume; it never leaves the host."

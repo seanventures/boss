@@ -15,8 +15,8 @@ spec:
   features: [ttl, lru]
   engines: [valkey, redis]
   engineVersions: ["8.1.3"]
-  runtime: {type: python, entrypoint: "boss_engine.infra_plugins.valkey:ValkeyPlugin"}
-  permissions: {secrets: [read-scoped, write-scoped], network: [declared-services], docker: true, subprocess: true}
+  runtime: {type: python, entrypoint: "plugin:ValkeyPlugin"}
+  permissions: {secrets: [read-scoped, write-scoped], network: [declared-services], docker: true}
   configSchema:
     type: object
     additionalProperties: false
