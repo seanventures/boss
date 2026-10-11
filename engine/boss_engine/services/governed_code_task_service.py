@@ -57,6 +57,8 @@ from .iac_verify import IacVerifyResult, detect_iac_files, is_iac_task, run_iac_
 from .llm_telemetry import clear_llm_context, record_llm_call, set_llm_context
 
 logger = logging.getLogger(__name__)
+
+from .crash_frames import log_caught as _log_caught  # noqa: E402 — every caught exception keeps its traceback
 from .pipeline_profile_service import resolve_for_run
 from .project_settings import effective_review_lanes, effective_review_rounds
 from .factory_quality_loop import (
@@ -237,6 +239,7 @@ def take_pending_guidance(engine, run_id: str, stage: Optional[str] = None) -> l
             try:
                 fctx = json.loads(fctx)
             except Exception:  # noqa: BLE001
+                _log_caught(logger)
                 return []
         pending = list(fctx.get("pending_guidance") or [])
         if not pending:
@@ -251,6 +254,7 @@ def take_pending_guidance(engine, run_id: str, stage: Optional[str] = None) -> l
                                              project_id=None, code_task_run_id=run_id,
                                              stage=stage)
             except Exception:  # noqa: BLE001 — an acknowledgement never blocks the guidance
+                _log_caught(logger)
                 read_by = None
             from datetime import datetime as _dt, timezone as _tz
             stamp = _dt.now(_tz.utc).isoformat()
@@ -312,6 +316,7 @@ def _kill_stray_review_processes(*roots) -> int:
         out = _owned.run(["ps", "-axo", "pid=,command="], capture_output=True, text=True,
                       timeout=10).stdout
     except Exception:  # noqa: BLE001 — best effort; never sink the run
+        _log_caught(logger)
         return 0
     for line in out.splitlines():
         line = line.strip()
@@ -352,6 +357,7 @@ def _kill_stray_review_processes(*roots) -> int:
             except ProcessLookupError:
                 break
             except Exception:  # noqa: BLE001
+                _log_caught(logger)
                 continue
     return killed
 
@@ -502,6 +508,7 @@ def _applies_template(engine, run: dict) -> bool:
         with _transaction(engine) as c:
             return template_gate.applied_template(c, run) is not None
     except Exception:  # noqa: BLE001 — unknown is held, never pushed
+        _log_caught(logger)
         return True
 
 
@@ -535,6 +542,7 @@ def _stack_context(engine, run: dict, title: str, instructions: str) -> dict:
         with _transaction(engine) as c:
             tpl = template_gate.applied_template(c, run) or {}
     except Exception:  # noqa: BLE001 — the template gates fail closed on their own
+        _log_caught(logger)
         tpl = {}
     t_stack = str(tpl.get("stack") or "") or None
     t_fw = str(tpl.get("framework") or "") or None
@@ -785,12 +793,14 @@ def _retry_after_infra_failure(engine, settings, jobs, run_id: str, project_id: 
                         "error, not on its code; retrying once automatically"})
         return {**result, "auto_retry_run_id": new_id}
     except Exception as exc:  # noqa: BLE001 — the original failure stands
+        _log_caught(logger)
         try:
             with _transaction(engine) as c:
                 emit_event(c, project_id, "code_task.auto_retry_failed", "boss",
                            "code_task_run", run_id,
                            {"error": f"{type(exc).__name__}: {exc}"[:300]})
         except Exception:  # noqa: BLE001
+            _log_caught(logger)
             pass
         return {**result, "auto_retry": "refused",
                 "next_step": "BOSS could not retry this build automatically; press Retry."}
@@ -887,6 +897,7 @@ def _template_gates(engine, run: dict, sandbox, *, root, cwd, changed_files: dic
         with _transaction(engine) as c:
             applied = template_gate.applied_template(c, run)
     except Exception as exc:  # noqa: BLE001 — never let a lookup error pass the gate
+        _log_caught(logger)
         return {"gates": {"template_tests": False, "no_committed_secrets": False},
                 "evidence": {"template_error": f"{type(exc).__name__}: {exc}"[:300]}}
     if applied is None:
@@ -906,6 +917,7 @@ def _template_gates(engine, run: dict, sandbox, *, root, cwd, changed_files: dic
                 bound, _withheld = values_for_env(c, org_id=org, project_id=run["project_id"],
                                                   app_key=applied["app_key"], env="build")
     except Exception:  # noqa: BLE001 — the scan still runs on every common format
+        _log_caught(logger)
         bound = {}
 
     import contextlib as _contextlib
@@ -1151,6 +1163,7 @@ def _comment_signers(c, run_id: str, review_seat) -> dict:
             "AND code_task_run_id = :r AND step_id IN ('review_code','security_check',"
             "'consistency_check') ORDER BY started_at"), {"r": run_id}).mappings().all()
     except Exception:  # noqa: BLE001 — a signature is never worth losing the comments
+        _log_caught(logger)
         return out
     for r in rows:
         stage = r["step_id"]
@@ -1218,6 +1231,7 @@ def _record_review_comments(engine, run_id: str, project_id: str, evidence: dict
                         "anchored": sum(1 for a in added if a.get("path") and a.get("line"))})
         return len(added)
     except Exception as exc:  # noqa: BLE001 — a review must not die recording its own output
+        _log_caught(logger)
         logger.warning("code_task.review_comments_not_recorded run=%s %s: %s",
                        run_id, type(exc).__name__, exc)
         return 0
@@ -1248,6 +1262,7 @@ def _open_operator_comments(engine, run_id: str, project_id: str,
                 "SELECT finalize_ctx FROM code_task_runs WHERE id=:id AND project_id=:p"),
                 {"id": run_id, "p": project_id}).mappings().first()
     except Exception as exc:  # noqa: BLE001 — a repair must not die reading an optional input
+        _log_caught(logger)
         logger.warning("code_task.operator_comments_unreadable run=%s %s: %s",
                        run_id, type(exc).__name__, exc)
         return []
@@ -1262,6 +1277,7 @@ def _open_operator_comments(engine, run_id: str, project_id: str,
         try:
             out.append(review_comments.ReviewComment.from_dict(entry))
         except Exception:  # noqa: BLE001 — one malformed row must not hide the rest
+            _log_caught(logger)
             continue
     return out
 
@@ -1274,12 +1290,14 @@ def _all_review_comments(engine, run_id: str, project_id: str) -> list:
                 "SELECT finalize_ctx FROM code_task_runs WHERE id=:id AND project_id=:p"),
                 {"id": run_id, "p": project_id}).mappings().first()
     except Exception:  # noqa: BLE001
+        _log_caught(logger)
         return []
     out = []
     for entry in (((row or {}).get("finalize_ctx") or {}).get("review_comments") or []):
         try:
             out.append(review_comments.ReviewComment.from_dict(entry))
         except Exception:  # noqa: BLE001
+            _log_caught(logger)
             continue
     return out
 
@@ -1358,6 +1376,7 @@ def _post_review_comments_to_pr(sf, proposal: dict, evidence: dict, engine, proj
                 "unanchored": len(comments) - len(inline),
                 "review_url": getattr(result, "url", None)}
     except Exception as exc:  # noqa: BLE001 — never block a passing PR on a comment
+        _log_caught(logger)
         with _transaction(engine) as c:
             emit_event(c, project_id, "code_task.review_comments_failed", "boss",
                        "code_task_run", run_id,
@@ -1372,6 +1391,7 @@ def _with_ci_static(rr: dict, files) -> dict:
     try:
         block = ci_gate.findings_block(ci_gate.static_review(files))
     except Exception:  # noqa: BLE001
+        _log_caught(logger)
         block = ""
     return {**(rr or {}), "summary": ((rr or {}).get("summary") or "") + block} if block else rr
 
@@ -1411,6 +1431,7 @@ def _wait_for_ci(engine, settings, sf, proposal: dict, project_id: str, run_id: 
         out = {"id": got["id"], "status": got["status"], "summary": got["summary"],
                "failing_url": got.get("failing_url")}
     except Exception as exc:  # noqa: BLE001 — never lose the PR to a CI read; FAIL CLOSED
+        _log_caught(logger)
         return _ci_unreadable(engine, project_id, run_id, repository, url,
                               sha if isinstance(sha, str) else "",
                               f"{type(exc).__name__}: {str(exc)[:200]}")
@@ -1435,6 +1456,7 @@ def _ci_unreadable(engine, project_id: str, run_id: str, repository: str, url, s
             emit_event(c, project_id, "code_task.ci_waited", "boss", "code_task_run", run_id,
                        {"pull_request_url": url, **out})
     except Exception:  # noqa: BLE001 — recording must never sink the finished PR
+        _log_caught(logger)
         logger.warning("could not record unreadable CI for %s", run_id, exc_info=True)
     return out
 
@@ -1697,6 +1719,7 @@ def _already_spawned_followup(engine, parent_run_id: str) -> bool:
         with _transaction(engine) as c:
             return has_event(c, parent_run_id, "code_task.deferred_findings_task")
     except Exception:  # noqa: BLE001 — a check that cannot run must not block a shipped PR
+        _log_caught(logger)
         logger.exception("could not check for an existing follow-up on %s", parent_run_id)
         return False
 
@@ -2086,6 +2109,7 @@ def _provision_build_services(engine, settings: Settings, run_id: str, project_i
         with _transaction(engine) as c:
             setting = _effective_setting(c, project_id, settings, build_services.SETTING_KEY)
     except Exception:  # noqa: BLE001 — the repo's declaration still stands
+        _log_caught(logger)
         setting = None
     design = None
     try:
@@ -2095,6 +2119,7 @@ def _provision_build_services(engine, settings: Settings, run_id: str, project_i
         state = json.loads(state) if isinstance(state, str) else state
         design = (state or {}).get("design") if isinstance(state, dict) else None
     except Exception:  # noqa: BLE001 — no plan yet: the other signals decide
+        _log_caught(logger)
         design = None
     decision = build_services.decide(declared, setting, spec=spec, title=title, root=root, design=design)
     wanted = decision["services"]
@@ -2108,6 +2133,7 @@ def _provision_build_services(engine, settings: Settings, run_id: str, project_i
                       {"d": json.dumps({"postgres": "postgres" in wanted, "mode": decision["mode"],
                                         "why": decision["why"][:5]}), "id": run_id})
     except Exception:  # noqa: BLE001 — the record is for display; the build goes on
+        _log_caught(logger)
         logger.debug("build_database decision not recorded", exc_info=True)
     if "postgres" not in wanted:
         return None
@@ -2126,6 +2152,7 @@ def _provision_build_services(engine, settings: Settings, run_id: str, project_i
         with _transaction(engine) as c:
             install = install_id(c)
     except Exception:  # noqa: BLE001 — an unlabelled lease is still reaped by its run tag
+        _log_caught(logger)
         install = ""
     lease = build_services.provision(run_id, install=install)
     with _transaction(engine) as c:
@@ -2149,6 +2176,7 @@ def _authority_refused(engine, budget, project_id: str, reservation_id: Optional
         with _transaction(engine) as c:
             _release(budget, c, project_id, reservation_id, "authority refused", run_id=run_id)
     except Exception:  # noqa: BLE001 — the refusal is the answer either way
+        _log_caught(logger)
         pass
     return AuthorityRefused(getattr(exc, "reason", None) or type(exc).__name__)
 
@@ -2266,6 +2294,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 },
             )
     except Exception:  # noqa: BLE001 — never block a run on plane bookkeeping
+        _log_caught(logger)
         pass
     title = run["title"]
     # APP-3 (#93): when the task didn't specify tests, resolve the target from the project type —
@@ -2369,6 +2398,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         try:
             token = sf.github._auth_token()  # noqa: SLF001 — intentional dual-plane share
         except Exception:  # noqa: BLE001
+            _log_caught(logger)
             token = None
     if not token:
         # Same third source as the ungoverned path: the credential this project registered in
@@ -2402,6 +2432,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
 
             get_harness(_pinned_engine)
         except Exception:  # noqa: BLE001 — an unknown engine is not a pin
+            _log_caught(logger)
             _pinned_engine = ""
     # The project's choices, layered over the deployment's, ONCE — every `settings.*_engine`
     # read below and in the functions this calls then sees them. Credentials for several
@@ -2476,6 +2507,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             _budget_state = str(budget.status_for_project(c, project_id).get(
                 "budget_state") or "green")
     except Exception:
+        _log_caught(logger)
         _budget_state = "green"
 
     # THE MODEL ROUTER (docs/product/MODEL_ROUTER.md). Every stage boundary asks it. In Fixed
@@ -2553,6 +2585,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                {"step": step, "from": failed, "to": nxt.engine,
                                 "model": nxt.model, "why": kind})
             except Exception:  # noqa: BLE001 — the record of a reroute is not the reroute
+                _log_caught(logger)
                 pass
 
         return FailoverAgent(agent, model, eng, reroute, on_hop), model
@@ -2641,6 +2674,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 emit_event(c, project_id, "code_task.push_held", "boss", "code_task_run", run_id,
                            {"where": where, "reason": reason})
         except Exception:  # noqa: BLE001 — the hold holds whether or not it was recorded
+            _log_caught(logger)
             pass
         return True
     _app_id = verification_target.official_app_id(spec, fctx)
@@ -2773,6 +2807,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 emit_event(c, project_id, "code_task.preview_app_declared", "boss",
                            "code_task_run", run_id, {"entry": entry})
         except Exception as exc:  # noqa: BLE001 — a declaration must never sink a finished build
+            _log_caught(logger)
             logger.warning("could not declare the preview app for %s: %s", run_id, exc)
 
     _lease_owner_at_start: dict[str, Optional[str]] = {"v": None}
@@ -2783,6 +2818,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 return c.execute(sql(
                     "SELECT lease_owner FROM jobs WHERE id=:j"), {"j": job_id}).scalar()
         except Exception:  # noqa: BLE001
+            _log_caught(logger)
             return _lease_owner_at_start["v"]  # unknown -> assume unchanged, never false-abort
 
     def _emit_cmd(label: str, result) -> None:
@@ -2812,6 +2848,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                      "timed_out": bool(getattr(result, "timed_out", False))},
                 )
         except Exception:  # noqa: BLE001 — instrumentation never fails a run
+            _log_caught(logger)
             pass
 
     def _record_stage_timing(stage_name: str, step: str, *, waited_ms: int, work_ms: int,
@@ -2859,6 +2896,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     {"entry": json.dumps(entry), "id": run_id},
                 )
         except Exception:  # noqa: BLE001 — instrumentation never fails a run
+            _log_caught(logger)
             pass
 
     def _phase(c, name: str) -> None:
@@ -2943,6 +2981,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         END""",
                     {}, where="phase->close")
         except Exception:  # noqa: BLE001 — a timing entry must never cost a finished run its PR
+            _log_caught(logger)
             pass
 
     def _fenced_status(status: str, extra_set: str = "", params: Optional[dict] = None) -> bool:
@@ -2966,6 +3005,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 st = c.execute(sql("SELECT status FROM code_task_runs WHERE id=:id"),
                                {"id": run_id}).scalar()
         except Exception:  # noqa: BLE001 — never let the check itself break a run
+            _log_caught(logger)
             return
         # ANY terminal status stops this executor, not just `cancelled`.
         # crun_ccfc0212 was marked FAILED with its job deadlettered, and kept working: it
@@ -2983,6 +3023,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             with _transaction(engine) as c:
                 stop = pending_stop(c, run_id)
         except Exception:  # noqa: BLE001
+            _log_caught(logger)
             stop = None
         if stop:
             raise CodeTaskCancelled(f"stopped by {stop.get('actor')}; stopping at {where}")
@@ -3044,12 +3085,14 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                {"url": url, "files": n, "reason": reason[:200]})
                     return url
         except Exception as exc:  # noqa: BLE001 — a failed rescue must never mask the real exit
+            _log_caught(logger)
             try:
                 with _transaction(engine) as c:
                     emit_event(c, project_id, "code_task.partial_pr_failed", "boss",
                                "code_task_run", run_id,
                                {"error": f"{type(exc).__name__}: {exc}"[:200]})
             except Exception:  # noqa: BLE001
+                _log_caught(logger)
                 pass
         return None
 
@@ -3070,6 +3113,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     "), updated_at=now() WHERE id=:id"),
                     {"s": stage, "id": run_id})
         except Exception:  # noqa: BLE001 — bookkeeping must never fail a run
+            _log_caught(logger)
             pass
 
     def _checkpoint(label: str) -> int:
@@ -3091,6 +3135,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         try:
             files = sandbox.diff()
         except Exception:  # noqa: BLE001 — a dead sandbox must not mask the real failure
+            _log_caught(logger)
             return 0
         if not files:
             return 0
@@ -3111,6 +3156,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                            {"after": label, "files": len(files), "branch": work_branch})
             return len(files)
         except Exception as exc:  # noqa: BLE001 — losing a checkpoint must not fail the run
+            _log_caught(logger)
             with _transaction(engine) as c:
                 emit_event(c, project_id, "code_task.checkpoint_failed", "boss",
                            "code_task_run", run_id,
@@ -3130,6 +3176,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         try:
             _checkpoint("cancelled")
         except Exception:  # noqa: BLE001
+            _log_caught(logger)
             pass
         with _transaction(engine) as c:
             _release(budget, c, project_id, reservation_id, "cancelled by operator", run_id=run_id)
@@ -3142,6 +3189,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             with _transaction(engine) as c:
                 honour_stop_request(c, run_id)
         except Exception:  # noqa: BLE001 — the executor has stopped either way
+            _log_caught(logger)
             pass
         return {"status": "cancelled", "done": True, "reason": str(exc)}
 
@@ -3160,6 +3208,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             engine, task_run_id=run_id, project_id=project_id, owner=owner, repo=repo,
             role_key=identity_runs.code_task_builder(spec, fctx), job_id=job_id)
     except Exception as exc:  # noqa: BLE001 — refused authority fails the build, never widens
+        _log_caught(logger)
         raise _authority_refused(engine, budget, project_id, reservation_id, run_id, exc) from exc
     egress_access = identity_run[1] if identity_run is not None else None
     if identity_run is not None:
@@ -3248,6 +3297,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 try:
                     paths.update(sandbox.diff_summary().paths)
                 except Exception:  # noqa: BLE001 — scope falls back to the whole suite
+                    _log_caught(logger)
                     pass
             return sorted(paths)
 
@@ -3334,6 +3384,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             try:
                 verification_target.ensure_verify_script(cwd)
             except Exception:  # noqa: BLE001 — never fail a run on script bookkeeping
+                _log_caught(logger)
                 pass
             prep_note = ""
             try:
@@ -3343,6 +3394,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     app_id=_app_id,
                 )
             except Exception as exc:  # noqa: BLE001
+                _log_caught(logger)
                 prep = {
                     "install_command": verification_target.NPM_INSTALL_CMD,
                     "browser_install_command": verification_target.PLAYWRIGHT_INSTALL_CMD,
@@ -3410,6 +3462,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     f"changed={(forced.get('changed') or [])[:16]}\n"
                 )
             except Exception as exc:  # noqa: BLE001
+                _log_caught(logger)
                 prep_note += f"[boss] pre-verify restore failed: {type(exc).__name__}: {exc}\n"
             class _CwdSandbox:
                 def run(self, command):
@@ -3463,11 +3516,13 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         {"app_root": _app_id, "kind": "fullstack"},
                     )
             except Exception:  # noqa: BLE001 — missing seed must not sink the run
+                _log_caught(logger)
                 pass
         elif _app_id:
             try:
                 verification_target.ensure_verify_script(root / _app_id)
             except Exception:  # noqa: BLE001
+                _log_caught(logger)
                 pass
 
         # REGRESSION FLOOR — applies at EVERY tier, costs no agent time.
@@ -3964,6 +4019,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                             {"f": json.dumps([p for p in accumulated
                                               if not _is_test_path(p)]), "id": run_id})
                 except Exception:  # noqa: BLE001 — bookkeeping never fails a run
+                    _log_caught(logger)
                     pass
                 if not attempt:
                     _mark_stage_done("implement")
@@ -3995,6 +4051,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                             _repair_resume_prompt(evidence_text, attempt), root,
                             model=m, resume_session_id=resume_sid)
                     except Exception:
+                        _log_caught(logger)
                         r2 = a.run_role(impl_prompt, root, model=m)
                 else:
                     r2 = a.run_role(impl_prompt, root, model=m)
@@ -4029,6 +4086,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                             root, model=m, resume_session_id=impl_session_id,
                             max_turns=int(getattr(settings, "code_agent_max_turns", 40) or 40))
                     except Exception:
+                        _log_caught(logger)
                         break
                     cost += int(rc.get("cost_usd_micros") or 0)
                     impl_session_id = rc.get("session_id") or impl_session_id
@@ -4113,6 +4171,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 workspace_evidence, last_verify_output
             )
         except Exception:  # noqa: BLE001
+            _log_caught(logger)
             workspace_evidence = {}
         if should_run_quality_pass(
             workspace_evidence, tests_passed=bool(tests_passed and impl_files),
@@ -4162,6 +4221,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                             fc.path for fc in sandbox.diff() if not _is_test_path(fc.path)
                         ] or impl_files
             except Exception:  # noqa: BLE001 — quality pass must not sink a green run
+                _log_caught(logger)
                 q_ok = False
             reverted = False
             if not q_ok and snapshot:
@@ -4180,6 +4240,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             try:
                 workspace_evidence = collect_workspace_evidence_from_root(root, app_id=_app_id)
             except Exception:  # noqa: BLE001
+                _log_caught(logger)
                 pass
 
         # REVIEW PANEL (tier >= 2). The read-only checks — adversarial review, security review, and
@@ -4210,6 +4271,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             _ci_files = ci_gate.workflow_changes(
                 accumulated if use_microvm else {fc.path: fc.content for fc in sandbox.diff()})
         except Exception:  # noqa: BLE001 — an unreadable diff is reviewed as tiered
+            _log_caught(logger)
             _ci_files = {}
         _ci_static = ci_gate.findings_block(ci_gate.static_review(_ci_files)) if _ci_files else ""
         if _ci_files and not do_review:
@@ -4378,6 +4440,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 if _seats_now is not None:
                     max_workers = min(max_workers, _seats_now)
             except Exception:  # noqa: BLE001 — an unread level never changes the panel
+                _log_caught(logger)
                 pass
             panel_parallel = max_workers > 1
             # Safe defaults so a check that times out / errors DEGRADES instead of crashing or
@@ -4398,6 +4461,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         with _op.owner_scope("review_seat", f"{run_id}:{label}"):
                             fn()
                     except Exception as exc:  # noqa: BLE001 — a failed review must not crash the run
+                        _log_caught(logger)
                         with lock:
                             review_errors.append(f"{label}: {exc.__class__.__name__}: {exc}"[:200])
                 _run.seat_label = label  # type: ignore[attr-defined]
@@ -4603,6 +4667,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                  if _sp.frontend.framework == "next"
                                  else ("vite", "@playwright/test")))
                 except Exception:  # noqa: BLE001
+                    _log_caught(logger)
                     _web_contract = {"ok": False, "stubs": ["unreadable"], "missing_runners": []}
                 gates["web_package_honest"] = bool(_web_contract.get("ok"))
         elif _web_verify:
@@ -4611,6 +4676,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     verification_target.resolve_verify_cwd(root, app_id=_app_id)
                 )
             except Exception:  # noqa: BLE001
+                _log_caught(logger)
                 _web_contract = {"ok": False, "stubs": ["unreadable"], "missing_runners": []}
             gates["web_package_honest"] = bool(_web_contract.get("ok"))
 
@@ -4634,6 +4700,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             try:
                 lineage = lineage_impl_files(engine, run)
             except Exception as exc:  # noqa: BLE001 — a fact about BOSS, not about the code
+                _log_caught(logger)
                 record = {"ok": False, "harness": True, "command": None, "source": "none",
                           "error": f"could not read this app's lineage to check it: "
                                    f"{type(exc).__name__}: {exc}"[:600]}
@@ -5172,6 +5239,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     if set(failing) - {"code_review_passed", "consistent", "app_serves"}:
                         break  # a non-judgment gate regressed — legacy handling below
               except Exception as exc:  # noqa: BLE001
+                _log_caught(logger)
                 with _transaction(engine) as c:
                     emit_event(c, project_id, "code_task.inrun_convergence_degraded", "boss",
                                "code_task_run", run_id,
@@ -5367,6 +5435,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                         "why": "so the repair patches this tree instead of "
                                                "rebuilding it from nothing"})
                 except Exception as exc:  # never let persistence failure block the repair
+                    _log_caught(logger)
                     with _transaction(engine) as c:
                         emit_event(c, project_id, "code_task.work_persist_failed", "boss",
                                    "code_task_run", run_id,
@@ -5524,6 +5593,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                               "the spend already occurred, so the PR proceeds",
                                     "reservation_id": reservation_id})
             except Exception as exc:  # never let bookkeeping sink finished work
+                _log_caught(logger)
                 emit_event(c, project_id, "code_task.reservation_renew_failed", "boss",
                            "code_task_run", run_id, {"error": f"{type(exc).__name__}: {exc}"[:200]})
             # THE STOP WINS WHEN IT CAN (factory walk D1). The PR step is one long transaction
@@ -5573,6 +5643,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                  "attempt": _pr_attempt, "reservation_id": reservation_id},
                             )
                 except Exception as exc:  # never let bookkeeping sink finished work
+                    _log_caught(logger)
                     emit_event(
                         c, project_id, "code_task.reservation_renew_failed", "boss",
                         "code_task_run", run_id,
@@ -5594,6 +5665,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         evidence=evidence, quality_gate_id=qg_id, run_id=run_id)
                     status = proposal.get("status")
                 except Exception as exc:  # noqa: BLE001
+                    _log_caught(logger)
                     emit_event(c, project_id, "code_task.pr_retry_failed", "boss",
                                "code_task_run", run_id,
                                {"attempt": _pr_attempt, "error": f"{type(exc).__name__}: {exc}"[:200]})
@@ -5668,6 +5740,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             with _transaction(engine) as c:
                 _record_retrospective(c, project_id, run_id)
         except Exception:  # noqa: BLE001
+            _log_caught(logger)
             logger.warning("retrospective not recorded for %s", run_id, exc_info=True)
 
         # AUTO-PREVIEW FOR APPS. Operator: previews matter for an APP — a service can be
@@ -5696,6 +5769,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                             {"i": run_id}).mappings().first()
                     _built = _lineage_files(engine, dict(_row)) if _row else []
                 except Exception:  # noqa: BLE001
+                    _log_caught(logger)
                     _built = []
                 if not _built:
                     _built = [pth for pth in accumulated if not _is_test_path(pth)]
@@ -5716,6 +5790,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                    {"why": "service/library build — no browsable entrypoint; "
                                            "exercise it via tests or a container deploy in CI/CD"})
         except Exception as _pvexc:  # noqa: BLE001 — never let a preview affect the PR
+            _log_caught(logger)
             with _transaction(engine) as c:
                 emit_event(c, project_id, "code_task.auto_preview_failed", "boss",
                            "code_task_run", run_id,
@@ -5740,6 +5815,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                {"followup_run_id": followup_run_id,
                                 "findings": deferred_findings[:20]})
             except Exception as exc:  # noqa: BLE001 — never fail a shipped PR on follow-up bookkeeping
+                _log_caught(logger)
                 with _transaction(engine) as c:
                     emit_event(c, project_id, "code_task.deferred_findings_task_failed", "boss",
                                "code_task_run", run_id,
@@ -5763,11 +5839,25 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                            run_id, {"detail": str(exc)[:200],
                                     "note": "duplicate execution stood down; owner continues"})
         except Exception:  # noqa: BLE001
+            _log_caught(logger)
             pass
         return {"status": "superseded", "done": True, "reason": str(exc)}
     except CodeTaskCancelled as exc:
         return _honour_cancel(exc)
     except Exception as exc:  # noqa: BLE001 — fail the run gracefully on any agent/model error
+        # WHERE IT DIED, NOT ONLY WHAT IT SAID (crash_frames): crun_944194c4 failed with a bare
+        # "I/O operation on closed file." and no traceback anywhere. The log gets the whole
+        # (redacted) traceback; the run keeps its last frames — file, line, function, no values.
+        _log_caught(logger, f"run {run_id} failed")
+        try:
+            from .crash_frames import record as _crash_record
+
+            with _transaction(engine) as c:
+                c.execute(sql("UPDATE code_task_runs SET state = COALESCE(state, '{}'::jsonb) || "
+                              "jsonb_build_object('crash_frames', CAST(:f AS jsonb)) WHERE id = :id"),
+                          {"f": json.dumps(_crash_record(exc)), "id": run_id})
+        except Exception:  # noqa: BLE001 — the record must never mask the failure itself
+            _log_caught(logger, "storing crash_frames")
         # A STAGE THAT DIED OF A STOP IS A STOP. Cancel now ends the build's processes at once
         # (owned_process.terminate_owner, from the API's stop watch), so the stage in flight
         # fails with "agent exited -15" — which must read as the cancel it is, not a failure.
@@ -5861,6 +5951,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         {"decision_id": decision_id, "reason_code": rcode},
                     )
                 except Exception:  # noqa: BLE001 — never mask the original failure
+                    _log_caught(logger)
                     pass
             result = _fail(c, run_id, project_id, reason,
                            failure_class=fclass, reason_code=rcode)

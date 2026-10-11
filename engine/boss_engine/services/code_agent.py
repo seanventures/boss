@@ -86,6 +86,26 @@ def _idle_timeout_seconds() -> float:
         return float(_IDLE_TIMEOUT_DEFAULT)
 
 
+def _end_child(child, reap_seconds: float = 10.0) -> None:
+    """Kill a child whose pipes _drain's reader threads own, and reap it. Never raises.
+
+    NEVER `child.communicate()` here. The readers close stdout/stderr when they finish, and a
+    prompt sent on stdin was written and CLOSED before the drain began; Popen.communicate()
+    then calls `stdin.flush()` on that closed pipe and raises ValueError("I/O operation on
+    closed file."), which escaped as the whole build's failure in place of the timeout it was
+    handling (crun_944194c4c2ec4534b84e: an implement stage that ran past its limit with a
+    >96 KB prompt on stdin failed the run as "I/O operation on closed file."). Reaping is
+    `wait`, bounded: a zombie must not hold the seat, and nothing may hang the run."""
+    try:
+        child.kill()
+    except Exception:  # noqa: BLE001 — already gone
+        pass
+    try:
+        child.wait(timeout=reap_seconds)
+    except Exception:  # noqa: BLE001 — best effort; the caller is already failing
+        pass
+
+
 def _drain(child, *, timeout: Optional[float], on_line=None) -> tuple[str, str]:
     """Read a child's stdout/stderr as they arrive, returning the full text of each.
 
@@ -159,7 +179,11 @@ def _drain(child, *, timeout: Optional[float], on_line=None) -> tuple[str, str]:
     idle_limit = _idle_timeout_seconds()
     try:
         if not idle_limit:
-            child.wait(timeout=timeout)
+            try:
+                child.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                _end_child(child)
+                raise
         else:
             deadline = (time.monotonic() + timeout) if timeout else None
             while True:
@@ -169,6 +193,7 @@ def _drain(child, *, timeout: Optional[float], on_line=None) -> tuple[str, str]:
                 except subprocess.TimeoutExpired:
                     now = time.monotonic()
                     if deadline and now > deadline:
+                        _end_child(child)
                         raise
                     silent_for = now - last_output_at[0]
                     if silent_for > idle_limit:
@@ -177,13 +202,7 @@ def _drain(child, *, timeout: Optional[float], on_line=None) -> tuple[str, str]:
                             "stalled rather than waiting out the run timeout",
                             int(silent_for), int(idle_limit),
                         )
-                        child.kill()
-                        # Reap it. Raising straight after kill() leaves a zombie holding its
-                        # pipes, and the seat reaper then finds a pid that is "still there".
-                        try:
-                            child.wait(timeout=10)
-                        except Exception:  # noqa: BLE001 — best effort; we are already failing
-                            pass
+                        _end_child(child)
                         raise subprocess.TimeoutExpired(
                             cmd="claude", timeout=silent_for,
                             output=f"agent stalled: no output for {int(silent_for)}s",
@@ -897,8 +916,8 @@ class ClaudeCodeAgent:
                     # none for BOSS either.
                     out, err = _drain(child, timeout=timeout, on_line=on_line)
                 except subprocess.TimeoutExpired:
-                    child.kill()
-                    child.communicate()
+                    # _drain has killed and reaped it; its readers own (and closed) the pipes.
+                    _end_child(child, reap_seconds=2.0)
                     raise
                 finally:
                     release_seat(child.pid)
