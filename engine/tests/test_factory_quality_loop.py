@@ -238,8 +238,26 @@ def test_web_qa_prompt_does_not_ask_for_python_unittest():
 def test_governed_pipeline_restores_impl_when_quality_pass_fails():
     src = _governed_pipeline_source()
     assert "if not q_ok and snapshot:" in src
-    assert ".write_text(_qc" in src
+    # The restore goes through workspace_perms.write_text (chmod-and-retry on EACCES, 9f7c5fb7),
+    # never a bare Path.write_text: a read-only file the coder copied in must not kill the build.
+    assert "from .workspace_perms import write_text as _ws_write" in src
+    assert "_ws_write(root / _qp, _qc)" in src
+    assert ".write_text(_qc" not in src
     assert "reverted = True" in src
+
+
+def test_quality_pass_restore_rewrites_a_read_only_file(tmp_path):
+    import os
+    import stat
+
+    from boss_engine.services.workspace_perms import write_text
+
+    f = tmp_path / "app" / "config.mjs"
+    f.parent.mkdir()
+    f.write_text("broken\n", encoding="utf-8")
+    os.chmod(f, stat.S_IRUSR | stat.S_IRGRP)
+    write_text(f, "restored\n")
+    assert f.read_text(encoding="utf-8") == "restored\n"
 
 
 def test_governed_pipeline_writes_ui_ux_evidence_into_run_state():
