@@ -1202,6 +1202,18 @@ class LegacyFinancialHold(BaseModel):
     message: str
 
 
+class LegacyProviderHold(BaseModel):
+    reservation_id: str
+    changeset_id: str
+    operation_id: str
+    resource_receipt_id: str
+    receipt_id: str
+    original_reservation_status: Literal["expired", "released"]
+    original_estimate_usd_micros: int = Field(gt=0)
+    decision_id: Optional[str] = None
+    message: str
+
+
 class BudgetStatusResponse(BaseModel):
     scope_type: str
     scope_id: str
@@ -1239,6 +1251,7 @@ class BudgetStatusResponse(BaseModel):
     budget_timezone: Optional[str] = None
     periods: dict[str, dict[str, Any]] = Field(default_factory=dict)
     legacy_financial_hold: Optional[LegacyFinancialHold] = None
+    legacy_provider_hold: Optional[LegacyProviderHold] = None
 
 
 class BudgetForecastResponse(BaseModel):

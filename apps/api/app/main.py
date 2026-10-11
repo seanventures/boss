@@ -22697,6 +22697,7 @@ def budget_status(scope_type: str, scope_id: str) -> BudgetStatusResponse:
             budget_timezone=snapshot.get("budget_timezone"),
             periods=snapshot.get("periods") or {},
             legacy_financial_hold=snapshot.get("legacy_financial_hold"),
+            legacy_provider_hold=snapshot.get("legacy_provider_hold"),
         )
 
 

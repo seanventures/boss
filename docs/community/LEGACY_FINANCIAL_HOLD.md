@@ -1,4 +1,4 @@
-# Historical model exposure
+# Historical model and provider exposure
 
 This describes the RC9 source candidate. Earlier releases could expire or release a positive budget reservation while its model invocation remained unfinished. Updating the software does not prove that the provider never accepted that work.
 
@@ -18,4 +18,12 @@ Record the project and hold IDs, keep the old execution authority revoked, and i
 
 This release adds a model-history admission fence, not a universal reconciliation writer. Accounting-only correction or a documented proof of no effect requires a reviewed provider-specific procedure, canonical authority and an immutable audit. Existing settlement mechanisms retain their existing preconditions; this hold does not make an expired lease valid for completion.
 
-Failed legacy provider receipts are a separate ambiguity: an operation that failed before acceptance and one whose response was lost after acceptance can leave the same local failure record. A model-history scan cannot distinguish those cases or recover receipts erased by an older database snapshot. See [Provider apply and recovery](PROVIDER_RECOVERY.md). Restored application startup and any external-effect resumption require their separate recovery hold and reconciliation qualification.
+## Discarded provider attempts
+
+An operation that failed before acceptance and one whose response was lost after acceptance can leave the same failed local receipts. BOSS conservatively quarantines both when a positive expired/released reservation links to the same project's ChangeSet, write operation and receipts without complete settlement evidence. A failed status, missing provider reference, generic resolved decision or transport-error message cannot prove that the provider never accepted it. Unexpected historical receipt states also stay held.
+
+Budget status and Govern expose a separate nullable `legacy_provider_hold`: reservation, ChangeSet, operation, resource receipt and base receipt IDs; original reservation status and estimate; optional decision ID; and a fixed explanation. If both model and provider holds exist, both remain visible. Neither example is a total or an invoice. The same positive admission/reuse/start fence and conservative exact-zero included exception apply, with original states and ordinary money totals preserved.
+
+The no-contact exclusion requires the complete server-recorded no-dispatch protocol: matching failed base/resource receipts with `provider_not_dispatched`, the corresponding audit event, and every sibling operation accounted for with no ambiguous attempt. A partial apply cannot use a later no-dispatch result to erase earlier exposure. The settlement exclusion requires an applied ChangeSet with all operations and receipts succeeded, plus its same-project, same-reservation `resource_plane.changeset.apply` cost receipt tied to a receipt of that ChangeSet. The existing protocol settles the whole ChangeSet through one cost receipt; BOSS does not demand one per operation.
+
+Some genuine no-effect historical failures will therefore remain paid-blocked until provider-specific reconciliation can establish the outcome. This release does not add a generic Resume action or an accounting correction writer. Terminal failed model invocations are outside the separate unfinished-model predicate, and missing or erased historical linkage cannot be reconstructed by either scan. See [Provider apply and recovery](PROVIDER_RECOVERY.md). Restored application startup and any external-effect resumption require their separate recovery hold and reconciliation qualification.
