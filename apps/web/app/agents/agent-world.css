@@ -634,6 +634,10 @@
   color: var(--faint); font: 500 0.57895rem var(--sans); cursor: pointer; padding: 0; }
 .ag-chain-sub { display: inline-flex; align-items: center; padding: 4px 6px; border-radius: var(--r); background: var(--surface);
   border: 1px solid var(--border); }
+/* A retried step's attempts, one per row, each with its own inner work. */
+.ag-chain-tries { align-self: center; color: var(--muted); }
+.ag-chain-attempts { flex-direction: column; align-items: flex-start; gap: 6px; }
+.ag-chain-attempt-n { font-size: 0.57895rem; color: var(--faint); }
 
 /* ── The step drawer, signed ── */
 .ag-signed { display: flex; flex-direction: column; gap: 10px; margin: 12px 0; }

@@ -5,7 +5,7 @@
 import { avatarSvg } from "../../lib/agent-avatar";
 import { agentIdentity } from "../../lib/agent-identity";
 import type { Chain } from "../../lib/agent-world-types";
-import { costLabel, creditWho, minutesLabel, personName, roleWords } from "./chain-model";
+import { creditWho, minutesLabel, personName, roleWords, spendLabel } from "./chain-model";
 
 /** Base colours (globals.css :root), spelled out: an image has no stylesheet. */
 export const CARD_COLOURS = { bg: "#090D17", surface: "#101A30", border: "#26365C", ink: "#EEF3FB", muted: "#B4C4E0",
@@ -23,11 +23,11 @@ function tone(key: string): string {
   return TONES[Math.abs(h) % TONES.length];
 }
 
-function face(credit: Chain["credits"][number], accountable: string): CreditFace {
+function face(credit: Chain["credits"][number], accountable: string, people: Chain["people"] = {}): CreditFace {
   const { roleKey, line } = credit;
   if (!roleKey) {
     // The same rule as the dialog (creditWho), with no viewer: nobody on a shared image is "You".
-    const name = personName(creditWho(credit, accountable, ""));
+    const name = personName(creditWho(credit, accountable, "", people));
     return { roleKey, name, role: name, line, svg: null, initials: "", tone: C.faint };
   }
   let name = roleWords(roleKey);
@@ -48,15 +48,15 @@ function face(credit: Chain["credits"][number], accountable: string): CreditFace
 export function creditsCard(chain: Chain, title: string): CreditsCard {
   const credits = chain.credits.length ? chain.credits
     : [...new Set(chain.acts.map((a) => a.roleKey).filter((k): k is string => !!k))].map((roleKey) => ({ roleKey, line: "" }));
-  const faces = credits.map((c) => face(c, chain.accountable));
+  const faces = credits.map((c) => face(c, chain.accountable, chain.people));
   return {
     title: title.slice(0, 80) || "This run",
     faces: faces.slice(0, 8),
     agents: faces.filter((f) => f.roleKey).length,
     steps: chain.totals.steps,
     time: minutesLabel(chain.totals.minutes),
-    cost: costLabel(chain.totals.cost),
-    accountable: chain.accountable || "—",
+    cost: spendLabel(chain.totals.cost, chain.totals.included),
+    accountable: chain.people?.[chain.accountable] || chain.accountable || "—",
   };
 }
 

@@ -1959,15 +1959,33 @@ def _live_cost(connection: Connection, act_ids: list[str]) -> dict[str, tuple[in
         return {}
     rows = connection.execute(
         text("SELECT act_id, sum(prompt_tokens) pt, sum(completion_tokens) ct, "
-             "sum(cost_usd_micros) micros FROM llm_calls WHERE act_id = ANY(:a) GROUP BY act_id"),
+             # money only, as close_act rolls it up: a subscription call costs nothing
+             "sum(cost_usd_micros) FILTER (WHERE NOT included_in_subscription) micros "
+             "FROM llm_calls WHERE act_id = ANY(:a) GROUP BY act_id"),
         {"a": act_ids},
     ).mappings().all()
     return {r["act_id"]: (int(r["pt"] or 0), int(r["ct"] or 0), int(r["micros"] or 0) / 1e6)
             for r in rows}
 
 
+def _included_cost(connection: Connection, act_ids: list[str]) -> dict[str, float]:
+    """The list-price value of each act's calls a subscription answered (included_spend.py).
+
+    Not money, so never in `cost_usd`; but never dropped either. A build on a Claude Code
+    subscription records ~$30 of work per attempt here and $0 of money, and a card that showed
+    only the money said "$0.00" for a nine-hour build (operator report, wfr_47b4e27e9a3c)."""
+    if not act_ids:
+        return {}
+    rows = connection.execute(
+        text("SELECT act_id, sum(cost_usd_micros) FILTER (WHERE included_in_subscription) micros "
+             "FROM llm_calls WHERE act_id = ANY(:a) GROUP BY act_id"),
+        {"a": act_ids},
+    ).mappings().all()
+    return {r["act_id"]: int(r["micros"] or 0) / 1e6 for r in rows if r["micros"]}
+
+
 def serialize(act: dict[str, Any], live: Optional[tuple[int, int, float]] = None, *,
-              viewer: Optional[str] = None) -> dict[str, Any]:
+              viewer: Optional[str] = None, included: float = 0) -> dict[str, Any]:
     """The wire shape (snake_case; lib/agent-world.ts maps it to the web's Act).
 
     `viewer` is the person reading: an edge a person made reads "you" only for that person."""
@@ -2003,6 +2021,7 @@ def serialize(act: dict[str, Any], live: Optional[tuple[int, int, float]] = None
         "tokens_in": tokens_in,
         "tokens_out": tokens_out,
         "cost_usd": round(cost, 6),
+        "included_usd": round(float(included or 0), 6),
         "reconstructed": bool(act.get("reconstructed")),
         "seat": act.get("seat"),
         "started_at": _iso(act.get("started_at")),
@@ -2015,10 +2034,12 @@ def serialize(act: dict[str, Any], live: Optional[tuple[int, int, float]] = None
 def _serialized(connection: Connection, rows: list[dict[str, Any]], *,
                 viewer: Optional[str] = None) -> list[dict[str, Any]]:
     live = _live_cost(connection, [r["act_id"] for r in rows if r.get("ended_at") is None])
+    included = _included_cost(connection, [r["act_id"] for r in rows])
     verbs = verbs_for(connection, rows)
     out = []
     for r in rows:
-        wire = serialize(r, live.get(r["act_id"]), viewer=viewer)
+        wire = serialize(r, live.get(r["act_id"]), viewer=viewer,
+                         included=included.get(r["act_id"], 0))
         wire["verb"] = verbs.get(str(r["act_id"]), wire["verb"])
         out.append(wire)
     return out
@@ -2353,12 +2374,229 @@ def chain_for_code_task(connection: Connection, project_id: str, code_task_run_i
                      ids={"workflow_run_id": None, "code_task_run_id": code_task_run_id})
 
 
+#: Ids that name BOSS's own machinery, not a person, wherever an approver or starter is recorded.
+SYSTEM_ACTORS = frozenset({BOSS, "auto_approval", "system", "workflow_runner",
+                           "legacy_workflow_runner", "decision_model", "scheduler", "shepherd"})
+#: A person nobody named (step_agents.HUMAN): the one case a face honestly reads "A person".
+UNNAMED_HUMAN = "human"
+
+
+def _person_actor(person: Optional[str], people: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
+    """A recorded person id as a face: BOSS when it is BOSS's machinery, a named person when the
+    identity store knows them, an unnamed person only when nothing names them."""
+    pid = str(person or "").strip()
+    if not pid or pid in SYSTEM_ACTORS:
+        return {"kind": "boss", "role_key": None, "person_id": None, "name": "BOSS"}
+    known = people.get(pid) or {}
+    if known.get("kind") == "system":
+        return {"kind": "boss", "role_key": None, "person_id": None, "name": "BOSS"}
+    if pid == UNNAMED_HUMAN:
+        return {"kind": "person", "role_key": None, "person_id": None, "name": None}
+    return {"kind": "person", "role_key": None, "person_id": pid,
+            "name": known.get("name") or None}
+
+
+def _agent_actor(role_key: str) -> dict[str, Any]:
+    return {"kind": "agent", "role_key": role_key, "person_id": None, "name": None}
+
+
+def resolve_actors(rows: list[dict[str, Any]], *, approvers: Mapping[str, Optional[str]],
+                   panels: Mapping[str, list[str]],
+                   people: Mapping[str, Mapping[str, Any]]) -> dict[str, dict[str, Any]]:
+    """WHO EACH ACT'S FACE IS, from everything BOSS recorded — not only the act's role_key.
+
+    A built-in step (a panel, a build, a gate) is signed `run_actor` with no role: BOSS ran its
+    own tool on the starter's behalf. Drawing that as the starter put "A person" on a panel, a
+    PRD gate and a nine-hour build (operator report, wfr_47b4e27e9a3c). The doer is recorded
+    elsewhere, and this is the one place that reads it:
+
+      * an act with a role is that agent;
+      * a build step is its code task's builder — the agent of its latest engineering stage;
+      * a panel step is its panel, fronted by the first seat (the chair);
+      * a gate, and an approval, is the decision's approver: a person by name, BOSS for an
+        automatic approval;
+      * the run is the person who started it;
+      * anything else no agent did is BOSS's own machinery, and says BOSS.
+    """
+    by_parent: dict[Optional[str], list[dict[str, Any]]] = {}
+    for r in rows:
+        by_parent.setdefault(r.get("parent_act_id"), []).append(r)
+
+    def own_work(act_id: str) -> list[dict[str, Any]]:
+        """The act's own nested work, oldest first: never the next step or another run."""
+        out: list[dict[str, Any]] = []
+        stack = list(by_parent.get(act_id, []))
+        while stack:
+            c = stack.pop(0)
+            if c["kind"] in ("step", "run"):
+                continue
+            out.append(c)
+            stack.extend(by_parent.get(c["act_id"], []))
+        return sorted(out, key=lambda c: (str(c.get("started_at") or ""), c["act_id"]))
+
+    actors: dict[str, dict[str, Any]] = {}
+    for r in rows:
+        aid = r["act_id"]
+        if r.get("role_key"):
+            actors[aid] = _agent_actor(str(r["role_key"]))
+            continue
+        kind = r["kind"]
+        if kind == "run":
+            person = r.get("handed_by_id") if r.get("handed_by_kind") == "person" else None
+            actors[aid] = _person_actor(person or r.get("accountable"), people)
+            continue
+        decision = r.get("decision_id")
+        if kind == "approval":
+            approver = approvers.get(decision) if decision else None
+            actors[aid] = _person_actor(
+                approver or (r.get("handed_by_id") if r.get("handed_by_kind") == "person" else None),
+                people)
+            continue
+        if kind == "step":
+            work = own_work(aid)
+            if r.get("code_task_run_id"):
+                stages = [c for c in work if c["kind"] == "stage" and c.get("role_key")]
+                builders = [c for c in stages if c.get("step_id") in ENGINEERING_STAGES]
+                if builders:
+                    actors[aid] = _agent_actor(str(builders[-1]["role_key"]))
+                    continue
+            if r.get("meeting_run_id"):
+                seats = [s for s in (panels.get(str(r["meeting_run_id"])) or []) if s]
+                seats = seats or [str(c["role_key"]) for c in work
+                                  if c["kind"] == "seat" and c.get("role_key")]
+                if seats:
+                    actors[aid] = {**_agent_actor(seats[0]), "panel": seats}
+                    continue
+            if decision and decision in approvers:
+                actors[aid] = _person_actor(approvers[decision], people)
+                continue
+        actors[aid] = _person_actor(None, people)
+    return actors
+
+
+def step_spend(rows: list[dict[str, Any]], wire: Mapping[str, Mapping[str, Any]],
+               recorded: Optional[Mapping[str, tuple[float, float]]] = None) -> dict[str, dict[str, Any]]:
+    """WHAT EACH STEP SPENT, across every attempt it started.
+
+    A step's model calls land on its build stages and panel seats, not on the step's own act,
+    and a retried step is a new act per attempt. So a step's spend is the sum over every act
+    for that step_id and all of their own nested work — the next step hangs under a step act
+    too, and is never counted. `wire` is the serialized act by id (cost_usd, included_usd).
+
+    `recorded` is the (money, included) the work's own record holds per step act — a panel's
+    `meeting_runs.usage`, a build's `code_task_runs.usage` — for work whose model calls never
+    reached `llm_calls` (a panel's never do). It counts only for an attempt whose acts carry no
+    calls, so nothing is counted twice."""
+    by_parent: dict[Optional[str], list[dict[str, Any]]] = {}
+    for r in rows:
+        by_parent.setdefault(r.get("parent_act_id"), []).append(r)
+    out: dict[str, dict[str, Any]] = {}
+    for r in rows:
+        if r["kind"] != "step" or not r.get("step_id"):
+            continue
+        entry = out.setdefault(str(r["step_id"]), {"cost_usd": 0.0, "included_usd": 0.0,
+                                                    "recorded": [0.0, 0.0], "attempts": 0,
+                                                    "act_ids": []})
+        entry["attempts"] += 1
+        entry["act_ids"].append(r["act_id"])
+        money = included = 0.0
+        stack = [r]
+        while stack:
+            a = stack.pop()
+            w = wire.get(a["act_id"]) or {}
+            money += float(w.get("cost_usd") or 0)
+            included += float(w.get("included_usd") or 0)
+            stack.extend(c for c in by_parent.get(a["act_id"], []) if c["kind"] not in ("step", "run"))
+        if not money and not included and recorded and r["act_id"] in recorded:
+            money, included = recorded[r["act_id"]]
+            entry["recorded"][0] += money
+            entry["recorded"][1] += included
+        entry["cost_usd"] += money
+        entry["included_usd"] += included
+    for entry in out.values():
+        entry["cost_usd"] = round(entry["cost_usd"], 6)
+        entry["included_usd"] = round(entry["included_usd"], 6)
+        # What came from the work's own record rather than its acts: the totals add it.
+        entry["recorded"] = [round(entry["recorded"][0], 6), round(entry["recorded"][1], 6)]
+    return out
+
+
+def _recorded_spend(connection: Connection,
+                    rows: list[dict[str, Any]]) -> dict[str, tuple[float, float]]:
+    """(money, included) from the usage each step's panel or build recorded on itself."""
+    from .included_spend import usage_is_included
+
+    out: dict[str, tuple[float, float]] = {}
+    for table, column in (("code_task_runs", "code_task_run_id"), ("meeting_runs", "meeting_run_id")):
+        ids = {str(r[column]): r["act_id"] for r in rows if r["kind"] == "step" and r.get(column)}
+        if not ids:
+            continue
+        for u in connection.execute(text(f"SELECT id, usage FROM {table} WHERE id = ANY(:i)"),
+                                    {"i": sorted(ids)}).mappings().all():
+            usage = _json(u["usage"], {}) or {}
+            amount = int(usage.get("cost_usd_micros") or 0) / 1e6 if isinstance(usage, dict) else 0
+            if amount:
+                out[ids[str(u["id"])]] = (0.0, amount) if usage_is_included(usage) else (amount, 0.0)
+    return out
+
+
+def _actor_facts(connection: Connection, rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """What resolve_actors reads beyond the acts: approvers, panels, and people's names."""
+    decisions = sorted({str(r["decision_id"]) for r in rows if r.get("decision_id")})
+    meetings = sorted({str(r["meeting_run_id"]) for r in rows
+                       if r.get("meeting_run_id") and r["kind"] == "step"})
+    approvers: dict[str, Optional[str]] = {}
+    if decisions:
+        for d in connection.execute(
+                text("SELECT id, approved_by FROM decisions WHERE id = ANY(:d)"),
+                {"d": decisions}).mappings().all():
+            approvers[str(d["id"])] = d["approved_by"]
+    panels: dict[str, list[str]] = {}
+    if meetings:
+        for m in connection.execute(
+                text("SELECT id, role_keys FROM meeting_runs WHERE id = ANY(:m)"),
+                {"m": meetings}).mappings().all():
+            seats: list[str] = []
+            for key in _json(m["role_keys"], []) or []:
+                role = resolve_role(str(key))
+                if role and role not in seats:
+                    seats.append(role)
+            panels[str(m["id"])] = seats
+    ids = {str(v) for v in approvers.values() if v}
+    ids |= {str(r[k]) for r in rows for k in ("handed_by_id", "accountable") if r.get(k)}
+    people: dict[str, dict[str, Any]] = {}
+    if ids:
+        try:
+            with connection.begin_nested():
+                found = connection.execute(
+                    text("SELECT id, kind, display_name, legacy_member_ids FROM identity_principals "
+                         "WHERE id = ANY(:i) OR legacy_member_ids && CAST(:i AS TEXT[])"),
+                    {"i": sorted(ids)}).mappings().all()
+            for p in found:
+                facts = {"kind": p["kind"], "name": p["display_name"]}
+                people[str(p["id"])] = facts
+                for legacy in p["legacy_member_ids"] or []:
+                    people.setdefault(str(legacy), facts)
+        except Exception as error:  # noqa: BLE001 — a name is never worth a failed chain
+            log.warning("agent acts: no people names for a chain: %s", type(error).__name__)
+    return {"approvers": approvers, "panels": panels, "people": people}
+
+
 def _chain_of(connection: Connection, ordered: list[tuple[dict[str, Any], int]],
               root: Mapping[str, Any], *, viewer: Optional[str],
               ids: dict[str, Any]) -> dict[str, Any]:
     wire = _serialized(connection, [a for a, _ in ordered], viewer=viewer)
     for item, (_, depth) in zip(wire, ordered):
         item["depth"] = depth
+    rows = [a for a, _ in ordered]
+    facts = _actor_facts(connection, rows)
+    actors = resolve_actors(rows, **facts)
+    for item in wire:
+        item["actor"] = actors.get(item["act_id"])
+    recorded = _recorded_spend(connection, rows)
+    steps = step_spend(rows, {w["act_id"]: w for w in wire}, recorded)
+    rec_money = sum(v["recorded"][0] for v in steps.values())
+    rec_included = sum(v["recorded"][1] for v in steps.values())
     started = min((a["started_at"] for a, _ in ordered), default=None)
     ended = max(((a.get("ended_at") or _now()) for a, _ in ordered), default=None)
     minutes = round((ended - started).total_seconds() / 60, 1) if started and ended else 0
@@ -2390,7 +2628,13 @@ def _chain_of(connection: Connection, ordered: list[tuple[dict[str, Any], int]],
         "accountable": root["accountable"],
         "totals": {"steps": sum(1 for a, _ in ordered if a["kind"] == "step"),
                    "minutes": minutes,
-                   "cost": round(sum(w["cost_usd"] for w in wire), 6)},
+                   # Every act's calls, plus what a panel or build recorded only on itself.
+                   "cost": round(sum(w["cost_usd"] for w in wire) + rec_money, 6),
+                   "included": round(sum(w["included_usd"] for w in wire) + rec_included, 6)},
+        "steps": steps,
+        # The people this chain names, by id: Credits and the accountable line say who.
+        "people": {pid: str(p["name"]) for pid, p in facts["people"].items()
+                   if p.get("name") and p.get("kind") != "system"},
         "credits": credits,
     }
 

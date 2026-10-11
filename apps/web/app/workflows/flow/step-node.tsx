@@ -53,7 +53,7 @@ export function AgentAvatar({ agent, size, state }: { agent: StepView["agent"]; 
  */
 function RanBy({ view, ran }: { view: StepView["agent"]; ran: LaneAgent }) {
   useIdentityVersion(); // names and faces below are resolved at render: repaint when identities load
-  const named = nameOf(ran.roleKey, ran.variant);
+  const named = nameOf(ran.roleKey, ran.variant, ran.personId, ran.name);
   const morph = view.kind === "auto" && ran.variant === "agent";
   // A callsign is shown beside its role, never instead of it: the tooltip says both.
   const who = named.callsign && named.role !== named.name ? `${named.name} · ${named.role}` : named.name;

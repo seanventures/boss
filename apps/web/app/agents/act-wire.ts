@@ -6,7 +6,7 @@
  * THE EDGE LABEL IS THE SERVER'S. An act without `edge_label` maps to "" and shows no How; the
  * browser never composes one.
  */
-import type { Act, ActHow, ActKind, ActStatus, Chain } from "../../lib/agent-world-types";
+import type { Act, ActActor, ActHow, ActKind, ActStatus, Chain, StepSpend } from "../../lib/agent-world-types";
 
 export type Wire = Record<string, unknown>;
 
@@ -81,16 +81,66 @@ export function toAct(w: Wire): Act {
     startedAt: String(pick(w, "started_at", "startedAt") ?? ""),
     ...(str(pick(w, "ended_at", "endedAt")) ? { endedAt: str(pick(w, "ended_at", "endedAt")) } : {}),
     ...(typeof version === "number" ? { version } : {}),
+    ...(num(pick(w, "included_usd", "includedUsd")) ? { includedUsd: num(pick(w, "included_usd", "includedUsd")) } : {}),
+    ...(toActor(pick(w, "actor")) ? { actor: toActor(pick(w, "actor")) } : {}),
   };
+}
+
+/** The server's resolved actor (agent_acts.resolve_actors), or undefined. */
+function toActor(v: unknown): ActActor | undefined {
+  if (!v || typeof v !== "object") return undefined;
+  const a = v as Wire;
+  const kind = String(a.kind ?? "");
+  if (kind !== "agent" && kind !== "person" && kind !== "boss") return undefined;
+  const roleKey = str(a.role_key ?? a.roleKey) ?? null;
+  if (kind === "agent" && !roleKey) return undefined;
+  const personId = str(a.person_id ?? a.personId);
+  const name = str(a.name);
+  const panel = Array.isArray(a.panel) ? (a.panel as unknown[]).filter((x): x is string => typeof x === "string" && !!x) : [];
+  return {
+    kind, roleKey,
+    ...(personId ? { personId } : {}),
+    ...(kind === "person" && name ? { name } : {}),
+    ...(panel.length ? { panel } : {}),
+  };
+}
+
+function toSteps(v: unknown): Record<string, StepSpend> {
+  const out: Record<string, StepSpend> = {};
+  if (!v || typeof v !== "object") return out;
+  for (const [id, raw] of Object.entries(v as Wire)) {
+    if (!raw || typeof raw !== "object") continue;
+    const e = raw as Wire;
+    out[id] = {
+      costUsd: num(e.cost_usd ?? e.costUsd), includedUsd: num(e.included_usd ?? e.includedUsd),
+      attempts: num(e.attempts),
+      actIds: Array.isArray(e.act_ids ?? e.actIds) ? ((e.act_ids ?? e.actIds) as unknown[]).map(String) : [],
+    };
+  }
+  return out;
+}
+
+/** Principal id → display name, from every person the chain's actors name. */
+function toPeople(acts: Act[], given: unknown): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (given && typeof given === "object") {
+    for (const [id, name] of Object.entries(given as Wire)) if (typeof name === "string" && name) out[id] = name;
+  }
+  for (const a of acts) if (a.actor?.personId && a.actor.name) out[a.actor.personId] ??= a.actor.name;
+  return out;
 }
 
 /** `GET /v1/workflow-runs/{id}/chain`, mapped. Acts keep the API's order. */
 export function toChain(w: Wire): Chain {
   const totals = (w.totals ?? {}) as Wire;
+  const acts = Array.isArray(w.acts) ? (w.acts as Wire[]).map(toAct).filter((a) => a.actId) : [];
   return {
-    acts: Array.isArray(w.acts) ? (w.acts as Wire[]).map(toAct).filter((a) => a.actId) : [],
+    acts,
     accountable: String(w.accountable ?? ""),
-    totals: { steps: num(totals.steps), minutes: num(totals.minutes), cost: num(totals.cost) },
+    totals: { steps: num(totals.steps), minutes: num(totals.minutes), cost: num(totals.cost),
+              ...(num(totals.included) ? { included: num(totals.included) } : {}) },
+    steps: toSteps(w.steps),
+    people: toPeople(acts, w.people),
     credits: Array.isArray(w.credits)
       ? (w.credits as Wire[]).map((c) => {
         const personId = str(c.person_id ?? c.personId);

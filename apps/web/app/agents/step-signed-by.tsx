@@ -43,7 +43,7 @@ export function StepSignedBy({ act, approval, projectId, viewer, failure, questi
   useIdentityVersion(); // names and faces below are resolved at render: repaint when identities load
   const detail = useActDetail(projectId, act.actId);
   const who = whoDid(act, viewer);
-  const named = nameOf(who.roleKey, who.variant, who.personId);
+  const named = nameOf(who.roleKey, who.variant, who.personId, who.name);
   const stuck = act.status === "error" || act.status === "stale" || !!failure;
   const reason = (failure || "").trim();
   const said = detail?.turns ?? [];

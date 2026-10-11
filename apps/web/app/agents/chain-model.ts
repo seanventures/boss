@@ -20,8 +20,8 @@ export function roleWords(roleKey: string): string {
     .map((w) => ACRONYMS[w.toLowerCase()] ?? (w.charAt(0).toUpperCase() + w.slice(1))).join(" ");
 }
 
-/** Who a hop is: an agent by role key, or a person. BOSS hands work over; it never does it. */
-export type Who = { roleKey: string | null; variant: AvatarVariant; personId?: string };
+/** Who a hop is: an agent by role key, a person (by name when BOSS knows it), or BOSS. */
+export type Who = { roleKey: string | null; variant: AvatarVariant; personId?: string; name?: string };
 
 export type Hop = {
   kind: "hop";
@@ -34,6 +34,9 @@ export type Hop = {
   insideCount: number;
   /** "Build" in "+5 inside Build". */
   insideOf: string;
+  /** A retried step: every attempt, oldest first, each with its own inner work. The hop itself
+   *  is the latest; the chain says the step once, with the count (`Forge · 7 attempts`). */
+  attempts?: Hop[];
 };
 export type Loop = { kind: "loop"; key: string; a: Hop; b: Hop; rounds: number; acts: Act[] };
 export type ChainItem = Hop | Loop;
@@ -55,9 +58,22 @@ export function actState(act: Pick<Act, "status" | "kind">): AvatarState {
   }
 }
 
-/** Who did this act. A NULL role is a person: "You" when it is the viewer. */
+/**
+ * Who did this act. The server's resolved actor first (agent_acts.resolve_actors: a build step's
+ * builder, a panel's chair, a gate's approver, or BOSS), so a built-in step that ran BOSS's
+ * tool is never drawn as the person who started the run. A person is "You" only when they are
+ * the viewer, by name when BOSS knows it, and "A person" only when nothing names them.
+ */
 export function whoDid(act: Act, viewer: string): Who {
   if (act.roleKey) return { roleKey: act.roleKey, variant: "agent" };
+  const a = act.actor;
+  if (a?.kind === "agent" && a.roleKey) return { roleKey: a.roleKey, variant: "agent" };
+  if (a?.kind === "boss") return { roleKey: null, variant: "boss" };
+  if (a?.kind === "person") {
+    const you = !!viewer && !!a.personId && a.personId === viewer;
+    return { roleKey: null, variant: you ? "you" : "person",
+             ...(a.personId ? { personId: a.personId } : {}), ...(a.name ? { name: a.name } : {}) };
+  }
   const person = act.kind === "run" || act.kind === "approval"
     ? (act.handedBy.kind === "person" ? act.handedBy.id : undefined) ?? act.accountable
     : act.accountable || act.handedBy.id;
@@ -66,7 +82,7 @@ export function whoDid(act: Act, viewer: string): Who {
 }
 
 function whoKey(w: Who): string {
-  return w.roleKey ?? `person:${w.personId ?? ""}`;
+  return w.roleKey ?? (w.variant === "boss" ? "boss" : `person:${w.personId ?? ""}`);
 }
 
 /** "Build" out of "Build · Ship it #182". */
@@ -180,7 +196,29 @@ export function chainItems(chain: Pick<Chain, "acts">, viewer: string): ChainIte
     return { items: collapseLoops(all.map((a) => hopOf([a], viewer))), count: all.length };
   };
 
-  const main = byStart(acts.filter((a) => a !== root && !nestedUnderWork(a)));
+  const top = byStart(acts.filter((a) => a !== root && !nestedUnderWork(a)));
+  // ONE STEP, ONE HOP. A retry — by a person or BOSS's own — is a new act for the same step,
+  // and every attempt shares the parent the step came from, so they stacked as "parallel"
+  // work: seven identical faces for one build. The step is said once, by its latest attempt,
+  // with the attempts folded under it.
+  const attemptsOf = new Map<string, Act[]>();
+  for (const a of top) {
+    if (a.kind !== "step" || !a.links.step_id) continue;
+    const list = attemptsOf.get(a.links.step_id) ?? [];
+    list.push(a);
+    attemptsOf.set(a.links.step_id, list);
+  }
+  const latest = (a: Act): boolean => {
+    const list = a.kind === "step" && a.links.step_id ? attemptsOf.get(a.links.step_id) : undefined;
+    return !list || list[list.length - 1] === a;
+  };
+  const main = top.filter(latest);
+  const withAttempts = (hop: Hop): Hop => {
+    const a = hop.acts[0];
+    const list = hop.acts.length === 1 && a.kind === "step" && a.links.step_id ? attemptsOf.get(a.links.step_id) : undefined;
+    if (!list || list.length < 2) return hop;
+    return { ...hop, attempts: list.map((x) => { const { items: sub, count } = inner(x); return hopOf([x], viewer, sub, count); }) };
+  };
   const items: ChainItem[] = [hopOf([root], viewer)];
   for (let i = 0; i < main.length; i += 1) {
     const column = [main[i]];
@@ -192,7 +230,7 @@ export function chainItems(chain: Pick<Chain, "acts">, viewer: string): ChainIte
     }
     if (column.length === 1) {
       const { items: sub, count } = inner(column[0]);
-      items.push(hopOf(column, viewer, sub, count));
+      items.push(withAttempts(hopOf(column, viewer, sub, count)));
     } else {
       items.push(hopOf(column, viewer));
     }
@@ -220,6 +258,8 @@ export function approvalOf(chain: Pick<Chain, "acts"> | null, stepAct: Act | nul
 export type LaneAgent = {
   roleKey: string | null; variant: AvatarVariant; how: ActHow | string; edgeLabel: string;
   state: AvatarState; considered: number;
+  /** A person: who, and their name when BOSS knows it. */
+  personId?: string; name?: string;
 };
 
 /** What the runtime recorded about who ran a step (`output.ran_as`). */
@@ -244,7 +284,8 @@ export function laneAgentOf(output: unknown, act: Act | null, viewer: string): L
   if (act && act.kind === "step") {
     const who = whoDid(act, viewer);
     return { roleKey: who.roleKey, variant: who.variant, how: act.how, edgeLabel: act.edgeLabel,
-             state: actState(act), considered: act.considered.length };
+             state: actState(act), considered: act.considered.length,
+             ...(who.personId ? { personId: who.personId } : {}), ...(who.name ? { name: who.name } : {}) };
   }
   // A GATE NOBODY HAD TO ANSWER. An automatic approval was drawn as "A person" on the lane
   // (the gate's planned actor) while BOSS approved it; it is BOSS's.
@@ -268,16 +309,24 @@ export function laneAgentOf(output: unknown, act: Act | null, viewer: string): L
  * dialog, its copied text and the PNG all name people through this; the PNG passes no viewer,
  * because an image is for other people and nobody on it is "You".
  */
-export function creditWho(credit: Chain["credits"][number], accountable: string, viewer: string): Who {
+export function creditWho(credit: Chain["credits"][number], accountable: string, viewer: string,
+                          people: Chain["people"] = {}): Who {
   if (credit.roleKey) return { roleKey: credit.roleKey, variant: "agent" };
   const person = credit.personId || accountable || undefined;
   const you = !!viewer && !!person && person === viewer;
-  return { roleKey: null, variant: you ? "you" : "person", ...(person ? { personId: person } : {}) };
+  const name = person ? people?.[person] : undefined;
+  return { roleKey: null, variant: you ? "you" : "person", ...(person ? { personId: person } : {}),
+           ...(name ? { name } : {}) };
 }
 
-/** A person as a credit names them. */
+/** A person as a credit names them: You, their name, or "A person" when nothing names them. */
 export function personName(who: Who): string {
-  return who.variant === "you" ? "You" : "A person";
+  return who.variant === "you" ? "You" : who.variant === "boss" ? "BOSS" : who.name || "A person";
+}
+
+/** Distinct agents behind a chain's acts, by who did each (a build step is its builder). */
+export function agentKeys(chain: Pick<Chain, "acts">): string[] {
+  return [...new Set(chain.acts.map((a) => whoDid(a, "").roleKey).filter((k): k is string => !!k))];
 }
 
 /** Distinct agents that did work in this chain (people are not counted as agents). */
@@ -301,3 +350,17 @@ export function minutesLabel(minutes: number): string {
 export function costLabel(cost: number): string {
   return usd(cost);
 }
+
+/**
+ * What work cost, said truthfully: money, and what a subscription covered beside it. A build
+ * on a Claude Code subscription spends no money and ~$30 of list-price work per attempt; "$0.00"
+ * alone said nothing happened (included_spend.py keeps the two apart, and so does this).
+ */
+export function spendLabel(cost: number, included = 0): string {
+  if (included > 0 && cost > 0) return `${usd(cost)} + ${usd(included)} included`;
+  if (included > 0) return `${usd(included)} included`;
+  return usd(cost);
+}
+
+/** The tooltip that says what "included" means wherever spendLabel says it. */
+export const INCLUDED_TIP = "Included: list-price value of work a subscription covered. Not money, not counted against budgets.";

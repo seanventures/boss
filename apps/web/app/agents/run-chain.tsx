@@ -18,7 +18,7 @@ import React, { useRef, useState } from "react";
 
 import type { Act, Chain } from "../../lib/agent-world-types";
 import { ActFace } from "./act-card";
-import { chainItems, whoDid, type ChainItem, type Hop } from "./chain-model";
+import { agentKeys, chainItems, whoDid, type ChainItem, type Hop } from "./chain-model";
 import { nameOf } from "./run-face";
 import { useIdentityVersion } from "../../lib/use-agent-identities";
 
@@ -49,26 +49,48 @@ function Edge({ acts, parallel, fresh }: { acts: Act[]; parallel?: boolean; fres
 function Name({ act, viewer }: { act: Act; viewer: string }) {
   useIdentityVersion(); // names and faces below are resolved at render: repaint when identities load
   const who = whoDid(act, viewer);
-  const n = nameOf(who.roleKey, who.variant, who.personId);
+  const n = nameOf(who.roleKey, who.variant, who.personId, who.name);
   return <span className="ag-chain-name" data-tip={n.role !== n.name ? n.role : undefined}>{n.name}</span>;
 }
 
-function HopView({ hop, viewer, fresh, depth }: {
+function HopView({ hop, viewer, fresh, depth, attempt }: {
   hop: Hop; viewer: string; fresh: Set<string>; depth: number;
+  /** "Attempt 3", when this hop is one attempt of a retried step. */
+  attempt?: number;
 }) {
   const [open, setOpen] = useState(false);
+  const [tries, setTries] = useState(false);
+  const attempts = hop.attempts ?? [];
   return (
     <span className="ag-chain-hop" data-testid="ag-chain-hop" data-stack={hop.acts.length > 1 ? "true" : undefined}
-          data-roles={hop.acts.map((a) => a.roleKey ?? "").join(",")}>
+          data-roles={hop.who.map((w) => w.roleKey ?? "").join(",")}>
       <span className="ag-chain-col">
         {hop.acts.map((a) => (
           <span className="ag-chain-who" key={a.actId}>
             <ActFace act={a} viewer={viewer} size={depth ? 20 : 24} />
+            {attempt ? <span className="ag-chain-attempt-n">Attempt {attempt}</span> : null}
             <Name act={a} viewer={viewer} />
+            {attempts.length > 1 ? (
+              // ONE STEP, ONE FACE: the attempts fold into a count, and open into each attempt.
+              <button type="button" className="ag-chain-fold ag-chain-tries" aria-expanded={tries}
+                      data-testid="ag-chain-attempts" onClick={() => setTries((v) => !v)}
+                      data-tip="Each attempt at this step, with its own work">
+                · {attempts.length} attempts
+                {tries ? <CaretDown size={10} weight="bold" aria-hidden /> : <CaretRight size={10} weight="bold" aria-hidden />}
+              </button>
+            ) : null}
           </span>
         ))}
+        {tries && attempts.length > 1 ? (
+          <span className="ag-chain-sub ag-chain-attempts" data-testid="ag-chain-attempt-list">
+            {attempts.map((h, n) => (
+              <HopView key={h.key} hop={h} viewer={viewer} fresh={fresh} depth={depth + 1} attempt={n + 1} />
+            ))}
+          </span>
+        ) : null}
       </span>
-      {hop.insideCount > 0 ? (
+      {/* Open attempts each carry their own inner work: the latest's is not said twice. */}
+      {hop.insideCount > 0 && !(tries && attempts.length > 1) ? (
         <span className="ag-chain-inside">
           <button type="button" className="ag-chain-fold" aria-expanded={open} data-testid="ag-chain-fold"
                   onClick={() => setOpen((v) => !v)}>
@@ -141,7 +163,7 @@ export function RunChain({ chain, viewer, defaultOpen = true }: {
   if (seen.current === null) seen.current = new Set(chain.acts.map((a) => a.actId));
   const fresh = new Set(chain.acts.filter((a) => !seen.current!.has(a.actId)).map((a) => a.actId));
   const items = chainItems(chain, viewer);
-  const agents = new Set(chain.acts.map((a) => a.roleKey).filter(Boolean)).size;
+  const agents = agentKeys(chain).length;
   return (
     <section className="ag-chain" data-testid="ag-chain" data-open={open ? "true" : undefined}
              aria-label="Who handed work to whom">
