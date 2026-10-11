@@ -71,7 +71,10 @@ export function ProjectStrip({ projectId, area }: { projectId: string; area?: st
   // its own "loading" state, and showing both makes the header flicker twice.
   const [refreshing, setRefreshing] = useState(false);
 
+  const scopeGeneration = useRef(0);
+
   const load = useCallback(async (mode: "first" | "refresh") => {
+    const generation = scopeGeneration.current;
     if (!projectId) return;
     if (mode === "refresh") setRefreshing(true);
     try {
@@ -79,6 +82,7 @@ export function ProjectStrip({ projectId, area }: { projectId: string; area?: st
         `/api/projects-strip?project_id=${encodeURIComponent(projectId)}`, { cache: "no-store" });
       const body = (await r.json()) as
         { projects?: StripProject[]; total?: number; error?: string };
+      if (generation !== scopeGeneration.current) return;
       if (!r.ok) {
         // A FAILED REFRESH MUST NOT EMPTY A GOOD STRIP.
         //
@@ -107,15 +111,26 @@ export function ProjectStrip({ projectId, area }: { projectId: string; area?: st
       setState("ready");
       setError(null);
     } catch (e) {
+      if (generation !== scopeGeneration.current) return;
       if (mode === "first") setState("failed");
       setConfirmedEmpty(false);
       setError(String((e as Error)?.message ?? e));
     } finally {
-      setRefreshing(false);
+      if (generation === scopeGeneration.current) setRefreshing(false);
     }
   }, [projectId]);
 
-  useEffect(() => { void load("first"); }, [load]);
+  useEffect(() => {
+    // ConsoleShell reuses this header across projects. Only the current scope may confirm
+    // emptiness, report an error, or finish a refresh; old requests can settle after a switch.
+    scopeGeneration.current += 1;
+    setState("loading");
+    setConfirmedEmpty(false);
+    setError(null);
+    setRefreshing(false);
+    void load("first");
+    return () => { scopeGeneration.current += 1; };
+  }, [load]);
 
   // IT HAS TO KEEP PULLING.
   //

@@ -3,7 +3,7 @@ import React, { act, useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ProjectStrip } from "../app/project-strip";
 import { ReadinessPanel, type Readiness } from "../app/workflow-readiness-ui";
-import { $, click, mount, settle, unmount } from "./_helpers/live-render";
+import { $, click, mount, rerender, settle, unmount } from "./_helpers/live-render";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 afterEach(() => { unmount(); vi.unstubAllGlobals(); });
@@ -32,6 +32,51 @@ describe("the secondary build row", () => {
     await act(async () => { document.dispatchEvent(new Event("visibilitychange")); });
     await settle();
     expect($("[role=status]")?.textContent).toContain("Could not refresh — Offline");
+  });
+
+  it.each(["empty", "error", "reject"] as const)(
+    "shows the new project's pending load and ignores the old refresh: %s", async (late) => {
+      let finishOld!: (response: Response) => void;
+      let rejectOld!: (error: Error) => void;
+      let finishNew!: (response: Response) => void;
+      const oldRefresh = new Promise<Response>((resolve, reject) => { finishOld = resolve; rejectOld = reject; });
+      const newLoad = new Promise<Response>((resolve) => { finishNew = resolve; });
+      const fetch = vi.fn().mockResolvedValueOnce(Response.json({ projects: [], total: 0 }))
+        .mockReturnValueOnce(oldRefresh).mockReturnValueOnce(newLoad);
+      vi.stubGlobal("fetch", fetch);
+      await mount(<ProjectStrip projectId="A" />);
+      expect($("[data-testid=bx-strip]")).toBeNull();
+      await act(async () => { document.dispatchEvent(new Event("visibilitychange")); });
+      await rerender(<ProjectStrip projectId="B" />);
+      expect(fetch.mock.calls[2][0]).toContain("project_id=B");
+      expect($("[data-state=loading]")?.textContent).toContain("Loading");
+      await act(async () => {
+        if (late === "reject") rejectOld(new Error("Old scope offline"));
+        else finishOld(late === "error" ? Response.json({ error: "Old scope offline" }, { status: 503 })
+          : Response.json({ projects: [], total: 0 }));
+      });
+      await settle();
+      expect($("[data-state=loading]")?.textContent).toContain("Loading");
+      expect(document.body.textContent).not.toContain("Old scope offline");
+      await act(async () => { finishNew(Response.json({ error: "B offline" }, { status: 503 })); });
+      await settle();
+      expect($("[data-state=failed]")?.textContent).toContain("B offline");
+    },
+  );
+
+  it("does not replace the new project's work with a late empty response", async () => {
+    let finishOld!: (response: Response) => void;
+    const oldLoad = new Promise<Response>((resolve) => { finishOld = resolve; });
+    vi.stubGlobal("fetch", vi.fn().mockReturnValueOnce(oldLoad).mockResolvedValueOnce(Response.json({
+      projects: [{ id: "b", title: "B review", status: "GATED", stage: "Review", pct: 50, latest_run_id: "runB" }], total: 1,
+    })));
+    await mount(<ProjectStrip projectId="A" />);
+    await rerender(<ProjectStrip projectId="B" />);
+    await act(async () => { finishOld(Response.json({ projects: [], total: 0 })); });
+    await settle();
+    expect($("[data-testid=bx-strip]")?.textContent).toContain("1 need attention");
+    await click($(".bx-project-trigger"));
+    expect($("[data-testid=bx-strip-b]")?.textContent).toContain("B review");
   });
 
   it("retains loading, failure, and an unconfirmed empty list", async () => {
