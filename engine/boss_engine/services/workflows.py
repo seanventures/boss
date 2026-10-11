@@ -4782,6 +4782,19 @@ def retry_failed_step(
     from .workflow_run_actions import require
 
     require(connection, project_id, run_id, "retry_step", step_id=step_id)
+    # A RETRY RUNS UNDER AUTHORITY THAT COVERS IT. When the grant recorded on the run no longer
+    # covers what the run needs (an agent it never named, a narrowed grant), the person is asked
+    # again (409 consent_required, the start's own sheet) and the covering grant is recorded on
+    # the run — never a retry that is refused again for the same reason.
+    from boss_engine.identity import consent as _consent
+
+    version = _version_row(connection, project_id, run["workflow_version_id"])
+    if version is not None:
+        _consent.require_for_retry(
+            connection, project_id=project_id, run_id=run_id,
+            spec=_json(version["spec"], {}), input_data=_json(run["input"], {}),
+            title=consent_task_title(connection, project_id, run["workflow_definition_id"],
+                                     _json(run["input"], {})))
     # A PERSON'S TRY AGAIN STARTS THE WAITS AFRESH, as it does the attempts. `waiting.count`
     # bounds how often one step waits for the budget (wait_step); kept across a Retry, a step
     # stopped after MAX_STEP_WAITS failed again at its very next wait — the person raised the

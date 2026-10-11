@@ -566,8 +566,7 @@ def start_code_task(
 
         from boss_engine.identity import runs as _identity_runs
 
-        builder = (_identity_runs.code_task_builder({"role_key": role}, finalize_ctx)
-                   or _consent.DEFAULT_BUILDER)
+        builder = _identity_runs.resolved_builder({"role_key": role}, finalize_ctx)
         parent_run = str((finalize_ctx or {}).get("parent_run_id") or "").strip()
         if parent_run:
             # A retry keeps the grant its parent ran under (never the re-enqueuer's identity).
@@ -2188,9 +2187,15 @@ class AuthorityRefused(RuntimeError):
         super().__init__(f"authority refused: {self.reason}")
 
 
-def authority_refusal_words(reason: str) -> str:
-    """What a person reads on a build refused for want of authority, and what to do about it."""
+def authority_refusal_words(reason: str, agent_name: Optional[str] = None) -> str:
+    """What a person reads on a build refused for want of authority, and what to do about it.
+    `agent_name` names the agent a `grant_does_not_name_agent:<id>` refusal is about."""
     r = (reason or "").lower()
+    if "grant_does_not_name_agent" in r:
+        who = agent_name or (reason.split(":", 1)[1] if ":" in reason else "the agent that builds it")
+        return (f"The grant this build runs under does not let {who} act, and {who} is the agent "
+                "that builds it. Retry it from the console (in a workflow run, Retry on the build "
+                f"step): you will be asked to consent again, this time for {who} too.")
     if "no_grant" in r or "no grant" in r or r == "noauthority":
         return ("No one's authority covers this build: it was started by BOSS itself (or a key) and no "
                 "person's grant lets its builder act. Start it again from the console as a person "
@@ -2204,6 +2209,20 @@ def authority_refusal_words(reason: str) -> str:
                 "narrowed). Start it again from the console; you will be asked to consent.")
     return ("This build was refused the authority to act (" + reason[:80] + "). Start it again from the "
             "console as a person; you will be asked to consent if a grant is needed.")
+
+
+def _refused_agent_name(engine, reason: str) -> Optional[str]:
+    """The display name of the agent a `grant_does_not_name_agent:<id>` refusal names."""
+    if ":" not in str(reason or "") or "grant_does_not_name_agent" not in str(reason):
+        return None
+    agent_id = str(reason).split(":", 1)[1].strip()
+    try:
+        with _transaction(engine) as c:
+            name = c.execute(sql("SELECT display_name FROM identity_principals WHERE id = :i"),
+                             {"i": agent_id}).scalar()
+    except Exception:  # noqa: BLE001 — the id still says who
+        return None
+    return f"{name} ({agent_id})" if name else None
 
 
 def run_code_task(engine, settings: Settings, jobs, run_id: str,
@@ -2232,7 +2251,7 @@ def run_code_task(engine, settings: Settings, jobs, run_id: str,
         return {"status": "blocked", "done": True, "reason": "sandbox_unavailable"}
     except AuthorityRefused as exc:
         # A refusal, said as one: the run is blocked with what to do; the worker is answered.
-        words = authority_refusal_words(exc.reason)
+        words = authority_refusal_words(exc.reason, _refused_agent_name(engine, exc.reason))
         with _transaction(engine) as c:
             run = load_code_task_run(c, run_id)
             if run is not None and run["status"] not in ("completed", "failed", "cancelled", "blocked"):

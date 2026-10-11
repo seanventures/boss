@@ -538,6 +538,16 @@ def code_task_builder(spec: Any, finalize_ctx: Any = None) -> Optional[str]:
     return None
 
 
+def resolved_builder(spec: Any = None, finalize_ctx: Any = None) -> str:
+    """THE agent a code task runs as, resolved to a role key: `code_task_builder`, else BOSS's
+    default builder. Both sides of a build's authority ask this ONE function — the consent sheet
+    (consent.workflow_needs / require_authority: the agents the person is asked to let act) and
+    the build's run token (start_code_task_run, repo_access: the agent the grant must name) — so
+    the two can never disagree (D1, 2026-10-10: a build step that named no agent was consented
+    for its capability's captain and then ran as the default builder: grant_does_not_name_agent)."""
+    return code_task_builder(spec, finalize_ctx) or _default_builder()
+
+
 @dataclass(frozen=True)
 class OwnGit:
     """How BOSS's OWN git (the clone, checkpoints, the final push) gets the run's egress
@@ -784,7 +794,7 @@ def start_code_task_run(engine: Any, *, task_run_id: str, project_id: str, owner
         _no_authority("no_grant" if acting is not None else "no_principal", task_run_id=task_run_id)
         return None
     with engine.begin() as db:
-        agent_id = agent_for_role(db, project_id, role_key or _default_builder())
+        agent_id = agent_for_role(db, project_id, resolved_builder({"role_key": role_key}))
         if not agent_id:
             _no_authority("builder_has_no_passport", task_run_id=task_run_id)
             return None
@@ -868,7 +878,7 @@ def repo_access(engine: Any, *, host: str, owner: str, repo: str, project_id: Op
         shim = None
         with engine.begin() as db:
             agent_id = (acting.chain[-1].split("#", 1)[0] if acting.chain
-                        else agent_for_role(db, project_id, role_key or _default_builder()))
+                        else agent_for_role(db, project_id, resolved_builder({"role_key": role_key})))
             if agent_id:
                 rid = _nested_run_id(acting, "git", secrets.token_hex(6))
                 shim = start_run(subject_for(acting, db=db),
