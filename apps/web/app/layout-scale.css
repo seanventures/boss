@@ -2,15 +2,23 @@
  *
  * Pages once hard-coded their own widths (1240px here, 1120px there, 760px for reading), so a
  * 2560px monitor showed a 1240px column of 13px text with half the screen empty. Every page and
- * section container now takes its width from these tokens, and the type takes its size from the
- * root font below. tests/a-page-width-is-a-layout-token.test.ts keeps a raw px width >640px from
- * coming back on a page container, and keeps px type out of the console's CSS.
+ * section container takes its width from these tokens, and the type takes its size from the root
+ * font below. tests/a-page-width-is-a-layout-token.test.ts keeps a raw px width >640px from coming
+ * back on a page container, and keeps px type out of the console's CSS.
  *
- * At ≤1440px wide every token equals the width it replaced and the root stays 19px: nothing
- * moves on a laptop or a phone. Wider than that, --page-grow spends most of the extra width on
- * the page (up to +520px at ~2090px), and the root font grows ~10% at 1920 and ~15% from ~2075.
+ * At ≤1440px wide every token equals the width it replaced and the root stays 19px: nothing moves
+ * on a laptop or a phone.
+ *
+ * Wider than 1440px a page is not a column floating in its area: the shell fills the area beside
+ * the sidebar (3% gutters from 1600px, so the page is ~94% of it) and every page and inner
+ * container token is 100%, so what is inside a panel fills the panel — lists and rows stretch,
+ * grids add columns. Only reading measure stays capped (--page-max-narrow, --prose-max), left-
+ * aligned with its section. (An earlier scale grew the outer containers by up to 520px while the
+ * inner columns kept their own caps, which left a narrow column off-centre inside a wide panel.)
+ *
  * The type grows with the root, not with `zoom` or `transform: scale`: those blur text or put
- * every JS-positioned popover, drag and chart hover in the wrong place.
+ * every JS-positioned popover, drag and chart hover in the wrong place. Every console size is rem,
+ * so body, labels and headings grow by the same factor: +20% at 1920, +30% from 2560.
  */
 :root {
   --page-grow: clamp(0px, calc((100vw - 1440px) * 0.8), 520px);
@@ -19,18 +27,42 @@
   /* The shell's content column (every area sits in it). */
   --shell-max: calc(1440px + var(--page-grow));
   /* A full page: Command Center, Infra, Research. */
-  --page-max: calc(1240px + var(--page-grow));
+  --page-max: 1240px;
   /* A page that was a little wider: the Factory cockpit, a template's own page (outside the shell). */
-  --page-max-wide: calc(1280px + var(--page-grow));
+  --page-max-wide: 1280px;
   /* A denser page that was a little narrower on a laptop: Factory, Govern, Agent Studio. */
-  --page-max-compact: calc(1120px + var(--page-grow));
+  --page-max-compact: 1120px;
   /* A settings page or a column of decision cards: Repo and models, Approvals. */
-  --page-max-mid: calc(960px + var(--page-grow) * 0.6);
-  /* Reading and forms: a line of prose, a form column. Grows less, so a line stays readable. */
+  --page-max-mid: 960px;
+  /* Reading and forms: a line of prose, a form column. Grows a little, so a line stays readable. */
   --page-max-narrow: calc(760px + var(--page-grow) * 0.35);
+  /* A paragraph of prose inside a wide section: about 80 characters, never centred on its own. */
+  --prose-max: 80ch;
 }
 
-/* One root size; every console size is rem (19px at ≤1600px). */
+@media (min-width: 1441px) {
+  :root {
+    --shell-max: none;
+    --page-max: 100%;
+    --page-max-wide: 100%;
+    --page-max-compact: 100%;
+    --page-max-mid: 100%;
+  }
+  /* Prose in a page that now fills the screen keeps a reading measure, left-aligned where its
+     section starts. A section head's note sits beside the title, not pushed to the far edge.
+     A callout drawn as a box (a tinted note with a rule) is a component, not prose: it keeps its
+     card's width, so boxes in a list line up; it opts out with data-callout or is listed here. */
+  .bx-content p:not([data-callout], .dq-effect) { max-width: var(--prose-max); }
+  .bx-content .section-head > p { margin-inline-end: auto; }
+}
+
+@media (min-width: 1600px) {
+  /* A percentage padding resolves against the area beside the sidebar: 3% each side → ~94%. */
+  :root { --page-gutter: 3%; }
+}
+
+/* One root size; every console size is rem. 19px to 1440px, 22.8px (+20%) at 1920, 24.7px (+30%)
+ * from 2560: two straight lines, the steeper one first, so a 1920 monitor reads like a laptop. */
 html {
-  font-size: clamp(19px, calc(19px + (100vw - 1600px) * 0.006), 21.85px);
+  font-size: clamp(19px, min(calc(19px + (100vw - 1440px) * 0.0079167), calc(22.8px + (100vw - 1920px) * 0.0029688)), 24.7px);
 }

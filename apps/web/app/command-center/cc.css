@@ -116,7 +116,10 @@
 .cc-help-rows li { display: inline-flex; gap: 6px; align-items: baseline; }
 .cc-help-rows b { color: var(--ink); }
 
-.cc-headline { font: 600 2rem/1.12 var(--display); letter-spacing: -.015em; max-width: 520px; color: var(--ink); }
+.cc-headline { font: 600 2rem/1.12 var(--display); letter-spacing: -.015em; max-width: max(520px, 13.7em); color: var(--ink); }
+/* A wide screen gives the next action a wider measure (in em, so it grows with its own type): the
+   headline reads in one or two lines instead of a tall stack of big words beside an empty hero. */
+@media (min-width: 1441px) { .cc-headline { max-width: 26em; } }
 .cc-headline em {
   font-style: normal; color: transparent;
   background: linear-gradient(110deg, #5EEAD4, #5B8CFF 60%, #A78BFA);
