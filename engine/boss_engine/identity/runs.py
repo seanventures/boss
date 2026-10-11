@@ -762,6 +762,31 @@ def _build_needs(db: Any, project_id: str, owner: str, repo: str) -> dict[str, s
         return dict(BUILD_GITHUB_NEEDS)
 
 
+def _workflow_build_authority(engine: Any, acting: Any) -> Any:
+    """A build a workflow STEP started belongs to the WORKFLOW RUN, not to the step's token.
+
+    A step that names an agent runs under a short delegated run (`run_wf:<W>/step:<s>`, the
+    agent for the person: workflow_capability_runner._step_authority) that ends when the step's
+    tool returns. The build it queued runs later, in the worker, and was minted as a CHILD of
+    that ended run: `parent_run_not_live`, so every shipped workflow whose build step names its
+    default captain (Helm) was refused after the person consented — and a builder that IS the
+    step's agent would be its own child (a cycle). The consent at start names the builder
+    (consent.build_step_builders) under the run's grant, so the build runs as exactly what a step
+    run as the person gets: a child of the workflow run, under the run's recorded authority,
+    when that authority is the same person and grant. Anything else is left as it was."""
+    if not getattr(acting, "chain", None) or not str(getattr(acting, "run_id", "") or "").startswith("run_wf:"):
+        return acting
+    from . import consent
+
+    workflow_run_id = str(acting.run_id)[len("run_wf:"):].split("/", 1)[0]
+    with engine.begin() as db:
+        recorded = consent.acting_for_workflow_run(db, workflow_run_id)
+    if recorded is None or recorded.chain or recorded.principal_id != acting.principal_id \
+            or recorded.grant_id != acting.grant_id:
+        return acting
+    return recorded
+
+
 def start_code_task_run(engine: Any, *, task_run_id: str, project_id: str, owner: str, repo: str,
                         role_key: Optional[str], acting: Any = None,
                         job_id: Optional[str] = None) -> Optional[tuple[Shim, CloneAccess]]:
@@ -793,6 +818,7 @@ def start_code_task_run(engine: Any, *, task_run_id: str, project_id: str, owner
     if acting is None or getattr(acting, "system", False) or not acting.grant_id:
         _no_authority("no_grant" if acting is not None else "no_principal", task_run_id=task_run_id)
         return None
+    acting = _workflow_build_authority(engine, acting)
     with engine.begin() as db:
         agent_id = agent_for_role(db, project_id, resolved_builder({"role_key": role_key}))
         if not agent_id:

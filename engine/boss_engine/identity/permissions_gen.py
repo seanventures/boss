@@ -7,7 +7,7 @@ from enum import StrEnum
 from .catalogue import AccessRoleMeta, PassportPreset, PermissionMeta, SystemPrincipalMeta
 
 CATALOGUE_VERSION = 1
-CATALOGUE_FINGERPRINT = "d6bf9e57e315751c"
+CATALOGUE_FINGERPRINT = "f46f8e68bee3d9ef"
 
 
 class Permission(StrEnum):
@@ -1026,9 +1026,9 @@ PASSPORT_PRESETS: dict[str, PassportPreset] = {
     "reviewer": PassportPreset(key="reviewer", name="Reviewer", agents=('vera', 'rook', 'sentry', 'weave', 'muse'), permissions=('code_task:read', 'code_task:steer', 'repository:read', 'github:read', 'preview:read', 'artifact:read', 'assurance:read', 'assurance:run', 'workflow_run:read', 'skill:read', 'skill:invoke', 'memory:read', 'spend:reserve', 'security_scan:run', 'meeting:read', 'meeting:convene'), external_ceiling={"github": {"contents": "read", "pull_requests": "write"}}),
     "planner": PassportPreset(key="planner", name="Planner", agents=('juno', 'atlas', 'keystone', 'rally', 'vector', 'cadence'), permissions=('code_task:read', 'code_task:create', 'meeting:read', 'meeting:convene', 'discovery:read', 'discovery:create', 'workflow:read', 'workflow:create', 'workflow_run:read', 'workflow_run:start', 'work_item:read', 'work_item:manage', 'decision:read', 'memory:read', 'memory:manage', 'spend:reserve'), external_ceiling={"github": {"contents": "read", "issues": "write"}}),
     "operator_agent": PassportPreset(key="operator_agent", name="Operator agent", agents=('harbor', 'pilot', 'bedrock', 'relay', 'beacon'), permissions=('deployment:read', 'deployment:create', 'host:read', 'infra:read', 'observability:read', 'reliability:read', 'reliability:respond', 'preview:read', 'preview:manage', 'workflow_run:read', 'workflow_run:control', 'spend:reserve', 'secret:lease'), external_ceiling={}),
-    "analyst": PassportPreset(key="analyst", name="Analyst", agents=('ledger', 'meter', 'conduit', 'sweep'), permissions=('budget:read', 'model_provider:read', 'infra:read', 'observability:read', 'activity:read', 'spend:reserve'), external_ceiling={}),
-    "writer": PassportPreset(key="writer", name="Writer and publisher", agents=('quill', 'herald', 'splice'), permissions=('artifact:read', 'artifact:rebuild', 'discovery:read', 'comms:read', 'comms:send', 'memory:read', 'spend:reserve'), external_ceiling={}),
-    "guardian": PassportPreset(key="guardian", name="Guardian", agents=('warden', 'vault', 'halo'), permissions=('agent:read', 'agent_passport:read', 'activity:read', 'policy:read', 'secret:read_metadata'), external_ceiling={}),
+    "analyst": PassportPreset(key="analyst", name="Analyst", agents=('ledger', 'meter', 'conduit', 'sweep'), permissions=('budget:read', 'model_provider:read', 'infra:read', 'observability:read', 'activity:read', 'spend:reserve', 'workflow_run:read'), external_ceiling={}),
+    "writer": PassportPreset(key="writer", name="Writer and publisher", agents=('quill', 'herald', 'splice'), permissions=('artifact:read', 'artifact:rebuild', 'discovery:read', 'comms:read', 'comms:send', 'memory:read', 'spend:reserve', 'workflow_run:read'), external_ceiling={}),
+    "guardian": PassportPreset(key="guardian", name="Guardian", agents=('warden', 'vault', 'halo'), permissions=('agent:read', 'agent_passport:read', 'activity:read', 'policy:read', 'secret:read_metadata', 'workflow_run:read'), external_ceiling={}),
 }
 
 SYSTEM_PRINCIPALS: dict[str, SystemPrincipalMeta] = {

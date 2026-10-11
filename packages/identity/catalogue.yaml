@@ -90,6 +90,10 @@ system_principals:
     replaces: "BOSS_EGRESS_SERVICE_KEY (the egress proxy's shared key; it authenticates to /v1/identity/introspect with a boss_sak_ key of its own)"
 
 # Agent Passport ceiling presets (IDENTITY_PERMISSIONS.md §4). Delegable permissions only.
+# EVERY PRESET HOLDS workflow_run:read: any agent may be a workflow step's agent, and the consent a
+# run starts with always grants workflow_run:read (consent.WORKFLOW_BASE_PERMISSIONS). A preset
+# without it made a tool-less step's token empty (person ∩ ceiling ∩ grant = {}), and the step
+# failed `empty_scope` after the person had consented (a Document step run by Quill).
 passport_presets:
   - key: builder
     name: Builder
@@ -127,18 +131,19 @@ passport_presets:
     name: Analyst
     agents: [ledger, meter, conduit, sweep]
     permissions: [budget:read, model_provider:read, infra:read, observability:read, activity:read,
-                  spend:reserve]
+                  spend:reserve, workflow_run:read]
     external_ceiling: {}
   - key: writer
     name: Writer and publisher
     agents: [quill, herald, splice]
     permissions: [artifact:read, artifact:rebuild, discovery:read, comms:read, comms:send, memory:read,
-                  spend:reserve]
+                  spend:reserve, workflow_run:read]
     external_ceiling: {}
   - key: guardian
     name: Guardian
     agents: [warden, vault, halo]
-    permissions: [agent:read, agent_passport:read, activity:read, policy:read, secret:read_metadata]
+    permissions: [agent:read, agent_passport:read, activity:read, policy:read, secret:read_metadata,
+                  workflow_run:read]
     external_ceiling: {}
 
 categories:

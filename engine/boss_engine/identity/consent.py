@@ -233,7 +233,16 @@ def _repos_for(db: Any, project_id: str, input_data: Any) -> list[str]:
     owner, repo = str(data.get("owner") or "").strip(), str(data.get("repo") or "").strip()
     if owner and repo:
         return [f"{owner}/{repo}"]
-    app_key = str(data.get("app_key") or "").strip()
+    extends = str(data.get("extends_run_id") or "").strip()
+    if extends:
+        # A feature for an app that exists (the composer's "Add to an existing app", a template
+        # applied to an app: templates.apply.plan) is that app's next build, in ITS repository.
+        row = db.execute(text("SELECT spec->>'owner', spec->>'repo' FROM code_task_runs WHERE id = :r "
+                              "AND project_id = :p"), {"r": extends, "p": project_id}).first()
+        if row and row[0] and row[1]:
+            return [f"{row[0]}/{row[1]}"]
+    template = data.get("template") if isinstance(data.get("template"), dict) else {}
+    app_key = str(data.get("app_key") or template.get("app_key") or "").strip()
     if app_key:
         # Work on an existing app (a security review's fix, a template's build) builds in THAT
         # app's repository: the grant names it, not every repository of the project.
