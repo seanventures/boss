@@ -79,6 +79,33 @@ describe("the secondary build row", () => {
     expect($("[data-testid=bx-strip-b]")?.textContent).toContain("B review");
   });
 
+  it("keeps newer attention when an older same-project request returns empty", async () => {
+    let finishOld!: (response: Response) => void;
+    vi.stubGlobal("fetch", vi.fn().mockReturnValueOnce(new Promise<Response>((resolve) => { finishOld = resolve; }))
+      .mockResolvedValueOnce(Response.json({ projects: [{ id: "new", title: "New review", status: "GATED", stage: "Review", pct: 50,
+        latest_run_id: "runNew" }], total: 1 })));
+    await mount(<ProjectStrip projectId="A" />);
+    await act(async () => { document.dispatchEvent(new Event("visibilitychange")); });
+    await settle();
+    expect($("[data-testid=bx-strip]")?.textContent).toContain("1 need attention");
+    await act(async () => { finishOld(Response.json({ projects: [], total: 0 })); });
+    await settle();
+    expect($("[data-testid=bx-strip]")?.textContent).toContain("1 need attention");
+  });
+
+  it("shows the newest request's failure during initial loading and ignores late emptiness", async () => {
+    let finishOld!: (response: Response) => void;
+    vi.stubGlobal("fetch", vi.fn().mockReturnValueOnce(new Promise<Response>((resolve) => { finishOld = resolve; }))
+      .mockResolvedValueOnce(Response.json({ error: "Latest request offline" }, { status: 503 })));
+    await mount(<ProjectStrip projectId="A" />);
+    await act(async () => { document.dispatchEvent(new Event("visibilitychange")); });
+    await settle();
+    expect($("[data-state=failed]")?.textContent).toContain("Latest request offline");
+    await act(async () => { finishOld(Response.json({ projects: [], total: 0 })); });
+    await settle();
+    expect($("[data-state=failed]")?.textContent).toContain("Latest request offline");
+  });
+
   it("retains loading, failure, and an unconfirmed empty list", async () => {
     vi.stubGlobal("fetch", vi.fn(() => new Promise(() => {})));
     await mount(<ProjectStrip projectId="p1" />);
