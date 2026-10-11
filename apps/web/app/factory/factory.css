@@ -59,7 +59,12 @@
   border-color: color-mix(in srgb, var(--amber) 45%, var(--border));
 }
 .fx-row[data-state="failed"], .fx-row[data-state="blocked"] { border-color: color-mix(in srgb, var(--red) 45%, var(--border)); }
-.fx-row-name { display: flex; flex-direction: column; min-width: 0; }
+/* The name cell is a row (name, then a BOSS tag): its text truncates inside the cell. It was once a
+   centred column too (a later rule made it inline-flex), which pushed a long title out of the row
+   on both sides, over the faces beside it. */
+.fx-row-name { display: flex; flex-direction: row; align-items: center; gap: 6px; min-width: 0; }
+.fx-row-name > * { min-width: 0; }
+.fx-row-name > .fx-internal { flex: none; }
 .fx-row-open {
   display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 0; border: 0; background: none;
   color: var(--ink); font: inherit; font-weight: 650; font-size: 0.88rem; text-align: left; cursor: pointer;
@@ -75,7 +80,7 @@
 .fx-row-go { justify-self: end; }
 .fx-row[data-density="compact"] { min-height: 40px; grid-template-columns: minmax(4.73684rem, 7.36842rem) minmax(0, 1fr) minmax(7.89474rem, auto) 2.52632rem auto; }
 .fx-stopped { grid-template-columns: minmax(6.31579rem, 10.52632rem) 1.68421rem minmax(0, 1fr) auto auto; }
-.fx-prebuild { grid-template-columns: minmax(6.31579rem, 10.52632rem) minmax(0, 1fr) minmax(8.94737rem, auto) 2.94737rem auto; }
+.fx-prebuild { grid-template-columns: minmax(0, 3fr) minmax(0, 1fr) minmax(8.94737rem, auto) 2.94737rem auto; }
 .fx-group { list-style: none; }
 .fx-group-head { display: inline-flex; align-items: center; gap: 6px; padding: 8px 4px; border: 0; background: none; color: var(--ink); font: inherit; font-weight: 650; font-size: 0.86rem; cursor: pointer; }
 
@@ -300,7 +305,6 @@
   flex: none; font-size: 0.66rem; letter-spacing: 0.06em; padding: 1px 6px; border-radius: var(--r-sm);
   border: 1px solid var(--border-strong); color: var(--muted);
 }
-.fx-row-name { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
 
 /* From a benchmark (walk D12): one row per example app, Factory words and tokens. */
 .fx-bench { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }

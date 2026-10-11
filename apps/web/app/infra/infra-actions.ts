@@ -137,6 +137,13 @@ export const stopPreview = (previewId: string, actor: string) =>
 export const restartPreview = (projectId: string, previewId: string, actor: string) =>
   send("POST", `/v1/infra/previews/${enc(previewId)}/restart`, { project_id: projectId, actor }, P(`infra-preview-${previewId}`, "Restart"));
 
+// ── plugins (Infra › Plugins; install-wide registry) ─────────────────────────────────────────
+
+export const enablePlugin = (pluginId: string) =>
+  send("POST", `/v1/infra/plugins/${enc(pluginId)}/enable`, {}, P(`infra-plugin-${pluginId}`, "On"));
+export const disablePlugin = (pluginId: string) =>
+  send("POST", `/v1/infra/plugins/${enc(pluginId)}/disable`, {}, P(`infra-plugin-${pluginId}`, "Off"));
+
 // ── secrets (§4.3 `+ Add › Secret`, Deploys `⋯ › Secrets`, target SECRETS) ──────────────────
 
 export type SecretRow = {
@@ -191,6 +198,8 @@ declareAction(redeployDelivery, "deployment:create");
 declareAction(runHealthCheck, "deployment:create");
 declareAction(saveEnvironmentPolicy, "deployment_target:manage");
 declareAction(stopPreview, "preview:manage");
+declareAction(enablePlugin, "setup:manage");
+declareAction(disablePlugin, "infra:provision");
 declareAction(restartPreview, "preview:manage");
 declareAction(listSecrets, "secret:read_metadata");
 declareAction(putSecret, "secret:manage");

@@ -203,8 +203,7 @@ COPY engine/boss_engine ./engine/boss_engine
 # The built-in app templates (F2): boss_engine.templates.service.builtin_dir() finds them at
 # /app/templates/apps; without this the image offers no built-in template at all.
 COPY templates ./templates
-# The official infrastructure plugins' manifests (boss.plugin/v1): infra_plugins.official_dir() finds
-# them at /app/plugins/official; their hooks are engine code (boss_engine/infra_plugins).
+# Infrastructure plugins (boss.plugin/v1): platform/registry.plugins_root() finds /app/plugins.
 COPY plugins ./plugins
 COPY packages/specpack ./packages/specpack
 COPY scripts/metatron_tui.py ./scripts/metatron_tui.py

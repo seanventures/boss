@@ -83,6 +83,9 @@ _EXCLUDED_EXACT = {
     "/v1/deployments/stack/{deployment_id}/execute": "stack_deploy_worker_lease_protocol",
     # The same for an approved host deployment (services/governed_host_deploy.py).
     "/v1/delivery/deployments/{deployment_run_id}/apply": "host_deploy_worker_lease_protocol",
+    # The worker hands its leased infra.operation job (platform/operations.py) to the API, which
+    # runs one lifecycle hook under that lease: a worker protocol.
+    "/v1/infra/platform/operations/execute": "infra_operation_worker_lease_protocol",
     "/v1/github/code-sync-runs/{sync_run_id}/apply": "github_worker_lease_protocol",
     "/v1/github/resolution-plans/{plan_id}/apply": "github_worker_lease_protocol",
     "/v1/github/merge-authorizations/{authorization_id}/apply": "github_worker_lease_protocol",

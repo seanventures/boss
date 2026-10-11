@@ -8921,3 +8921,61 @@ CREATE TABLE IF NOT EXISTS cross_repo_checks (
   at             TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS cross_repo_checks_set ON cross_repo_checks (change_set_id, at DESC);
+
+-- Infrastructure platform (boss.plugin/v1, engine/boss_engine/platform). Install-wide plugin
+-- state: enable/disable, an operator's version pin, and the tree checksum the operator approved
+-- when enabling (a community plugin whose files change is disabled again until re-approved).
+CREATE TABLE IF NOT EXISTS infra_plugin_state (
+  plugin_id          TEXT PRIMARY KEY,
+  enabled            BOOLEAN NOT NULL DEFAULT false,
+  pinned_version     TEXT,
+  approved_checksum  TEXT,
+  updated_by         TEXT,
+  updated_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+-- A resolved declarative plan for an app's `resources:`. `digest` is what the deploy approval
+-- pins (action_preview content hash); the apply refuses a plan whose digest moved.
+CREATE TABLE IF NOT EXISTS infra_plans (
+  id             TEXT PRIMARY KEY,
+  project_id     TEXT NOT NULL REFERENCES projects(id),
+  app_key        TEXT NOT NULL,
+  environment    TEXT NOT NULL,
+  digest         TEXT NOT NULL,
+  plan           JSONB NOT NULL,
+  status         TEXT NOT NULL DEFAULT 'awaiting_approval',
+  decision_id    TEXT,
+  deployment_id  TEXT,
+  created_by     TEXT,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS infra_plans_app ON infra_plans (project_id, app_key, created_at DESC);
+CREATE INDEX IF NOT EXISTS infra_plans_deployment ON infra_plans (deployment_id);
+-- The resources BOSS provisioned (owned) or connected to (attached). Ownership decides what
+-- destroy may touch: an attached resource is never destroyed. `bindings` holds secret
+-- REFERENCES by env name, never a value; `state` is the plugin's non-secret observed state.
+CREATE TABLE IF NOT EXISTS infra_platform_resources (
+  id                 TEXT PRIMARY KEY,
+  project_id         TEXT NOT NULL REFERENCES projects(id),
+  resource_id        TEXT NOT NULL,
+  app_key            TEXT NOT NULL,
+  name               TEXT NOT NULL,
+  environment        TEXT NOT NULL,
+  capability         TEXT NOT NULL,
+  plugin_id          TEXT NOT NULL,
+  plugin_version     TEXT NOT NULL,
+  plugin_checksum    TEXT,
+  mode               TEXT NOT NULL CHECK (mode IN ('owned', 'attached')),
+  status             TEXT NOT NULL DEFAULT 'planned',
+  public_access      BOOLEAN NOT NULL DEFAULT false,
+  state              JSONB NOT NULL DEFAULT '{}'::jsonb,
+  bindings           JSONB NOT NULL DEFAULT '{}'::jsonb,
+  evidence           JSONB NOT NULL DEFAULT '[]'::jsonb,
+  last_plan_digest   TEXT,
+  last_operation_id  TEXT,
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  destroyed_at       TIMESTAMPTZ,
+  UNIQUE (project_id, resource_id)
+);
+CREATE INDEX IF NOT EXISTS infra_platform_resources_app ON infra_platform_resources (project_id, app_key);

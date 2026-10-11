@@ -1,0 +1,34 @@
+apiVersion: boss.plugin/v1
+kind: Plugin
+metadata:
+  id: community.example-cache
+  name: Example cache (Valkey)
+  version: 0.1.0
+  owner: BOSS community
+  license: Apache-2.0
+  description: A single Valkey container bound to 127.0.0.1. The reference community plugin.
+spec:
+  supportLevel: community
+  capabilities: [cache]
+  features: [ttl]
+  engines: [valkey]
+  engineVersions: ["8.1.3"]
+  runtime:
+    type: python
+    entrypoint: plugin:ExampleCache
+    timeoutSeconds: 300
+  permissions:
+    secrets: [write-scoped]
+    docker: true
+    network: [declared-services]
+  configSchema:
+    type: object
+    additionalProperties: false
+    properties:
+      maxmemory: {type: string, description: "e.g. 64mb"}
+  hooks: [validate, plan, provision, configure, verify, observe, destroy]
+  bindings: [CACHE_URL]
+  ports: [6379]
+  limitations:
+    - single node, no replication
+    - no backup or restore

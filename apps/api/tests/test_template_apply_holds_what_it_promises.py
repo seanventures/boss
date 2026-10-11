@@ -172,6 +172,11 @@ def test_an_insecure_template_goes_only_into_its_own_new_lab_project(world, peop
         return {"run": {"id": f"wfr_{uuid.uuid4().hex[:8]}"}}
 
     monkeypatch.setattr(main, "start_delivery_workflow", fake_start)
+    # The training bank is a Java template: an install builds it only with Java turned on
+    # (services.stacks refuses it at apply otherwise, saying how to turn it on).
+    toolchain_manifest = tmp_path / "toolchains.json"
+    toolchain_manifest.write_text('{"java": {"jdk": "21"}}')
+    monkeypatch.setenv("BOSS_TOOLCHAINS_MANIFEST", str(toolchain_manifest))
     existing = _app_run(engine, world.project_a, "Real Bank")
     with as_(world, people["owner"]):
         r = client.post("/v1/templates/banking-starter-insecure/apply", json={

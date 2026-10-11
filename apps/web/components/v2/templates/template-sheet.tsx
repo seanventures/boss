@@ -26,12 +26,13 @@ import { useGuardedCall } from "../../identity/identity-provider";
 import { withConsent } from "../../../lib/identity/consent";
 import { IdentityError } from "../../../lib/identity/api";
 import {
-  INSECURE, refusalCode, refusalWords, secretWord, stackLabel, templatesApi, testedWord,
+  INSECURE, levelWord, refusalCode, refusalWords, secretWord, stackLabel, templatesApi, testedWord,
   type BuildWorkflow, type TemplateCard, type TemplateDetail,
 } from "../../../lib/templates";
 import { ReadinessPanel, asReadiness, unaccepted, type Readiness } from "../../../app/workflow-readiness-ui";
-import { LabelChips, stackTip, useInstalledStacks } from "./gallery";
+import { LabelChips, stackTip, useInstalledStacks, useStackLevels } from "./gallery";
 import { SideSheet } from "./side-sheet";
+import { StackWarning, useStackCheck } from "./stack-warning";
 import { consoleHref } from "../../../app/console-href";
 
 /** Where the template goes: a new app (named here), or an app that exists. */
@@ -65,6 +66,7 @@ export function TemplateSheet({ projectId, card, target, onStarted, onClose }: {
   const [detail, setDetail] = useState<TemplateDetail | null>(null);
   const [loadError, setLoadError] = useState("");
   const installed = useInstalledStacks(projectId);
+  const levels = useStackLevels();
   const [stack, setStack] = useState<string>("");
   const [name, setName] = useState("");
   const [note, setNote] = useState("");
@@ -116,7 +118,10 @@ export function TemplateSheet({ projectId, card, target, onStarted, onClose }: {
   const stackOff = !!installed && !!stack && !installed.has(stack);
   // A new app has no keys yet, so its test keys are asked for up front; an existing app may
   // hold them already, and the API says which it still needs (secrets_needed).
+  // The note may ask for a stack BOSS cannot build ("in Go"): said here, before Start.
+  const stackCheck = useStackCheck(projectId, note);
   const blocker = applyBlocker({ target, name, stack, egress, egressOk, needs: target.kind === "new" ? needs : [], typed, stackOff })
+    || (stackCheck.blocks ? "BOSS cannot build the stack the note asks for." : "")
     || (unaccepted(refusal, startAnyway).length ? "Not ready here yet: see the checklist." : "");
 
   const body = () => ({
@@ -126,6 +131,7 @@ export function TemplateSheet({ projectId, card, target, onStarted, onClose }: {
     ...(workflowKey && workflowKey !== defaultWorkflow?.key ? { workflow_key: workflowKey } : {}),
     ...(egress.length ? { accept_egress: egress } : {}),
     ...(startAnyway.length ? { start_anyway: startAnyway } : {}),
+    ...(stackCheck.refused && stackCheck.allowed ? { allow_unsupported_stack: true } : {}),
   });
 
   /** Store the typed test keys for `names` under the app's key, build and preview, write-only. */
@@ -232,9 +238,10 @@ export function TemplateSheet({ projectId, card, target, onStarted, onClose }: {
             const off = !!installed && !installed.has(s);
             return (
               <button key={s} type="button" role="radio" className="tpl-chip" aria-checked={stack === s}
-                      aria-disabled={off || undefined} data-off={off || undefined} title={stackTip(s, installed)}
+                      aria-disabled={off || undefined} data-off={off || undefined} data-level={levels[s] || undefined}
+                      title={stackTip(s, installed) + (levels[s] ? ` Support: ${levelWord(levels[s])}.` : "")}
                       data-testid={`tpl-stack-${s}`} onClick={() => { if (!off) { setStack(s); setPicked(true); } }}>
-                {stackLabel(s)}{off ? " · off" : ""}
+                {stackLabel(s)}{levels[s] ? ` · ${levelWord(levels[s])}` : ""}{off ? " · off" : ""}
               </button>
             );
           })}
@@ -320,6 +327,7 @@ export function TemplateSheet({ projectId, card, target, onStarted, onClose }: {
         <textarea rows={2} maxLength={4000} value={note} data-testid="tpl-note" placeholder="Anything about your app it should know"
                   onChange={(e) => setNote(e.target.value)} />
       </label>
+      <StackWarning state={stackCheck} testId="tpl-stack-warning" />
 
       {refusal ? (
         <div data-testid="tpl-readiness">

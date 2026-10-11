@@ -61,6 +61,7 @@ JOB_KIND_PERMISSIONS: dict[str, str] = {
     # deployments and infrastructure
     "deployment.stack_apply": P.DEPLOYMENT_CREATE,
     "deployment.host_apply": P.HOST_MANAGE,
+    "infra.operation": P.INFRA_PROVISION,           # platform/operations.py (destroy is approved first)
     "infra.droplet.create": P.INFRA_PROVISION,
     "infra.droplet.delete": P.INFRA_TERMINATE,
     # outside systems

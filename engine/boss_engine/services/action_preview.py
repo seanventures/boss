@@ -275,12 +275,47 @@ def preview_fields(inputs: dict[str, Any], redact: _Redactor, _lookup: _Lookup) 
     return {"kind": "fields", "fields": fields}
 
 
+def preview_infra_plan(inputs: dict[str, Any], redact: _Redactor, _lookup: _Lookup) -> dict[str, Any]:
+    """A deploy's infrastructure plan (platform/planner.py) as labelled lines: what is
+    provisioned or attached, which env names the app gets (names, never values), ports, public
+    access, destructive actions, expected cost and what needs this approval."""
+    doc = inputs.get("infra_plan") if isinstance(inputs.get("infra_plan"), dict) else {}
+    lines: list[tuple[str, str, str]] = []
+    for r in doc.get("resources") or []:
+        verb = "Remove" if r.get("removed") else ("Attach" if r.get("mode") == "attached" else "Provision")
+        lines.append((f"resource_{r.get('name')}", f"{verb} {r.get('name')}",
+                      f"{r.get('capability') or ''} via {r.get('pluginId')} {r.get('pluginVersion')}".strip()))
+    bindings = doc.get("bindings") or {}
+    lines.append(("bindings", "App gets", ", ".join(f"{k} (from {v})" for k, v in sorted(bindings.items()))
+                  or "nothing"))
+    ports = doc.get("ports") or []
+    lines.append(("ports", "Ports", ", ".join(
+        f"{p.get('resource')}:{p.get('containerPort')}" + (" PUBLIC" if p.get("public") else " private")
+        for p in ports) or "none exposed"))
+    lines.append(("public_access", "Public access", "YES" if doc.get("publicAccess") else "no"))
+    destructive = doc.get("destructive") or []
+    lines.append(("destructive", "Destructive", "; ".join(
+        f"{d.get('action')} {d.get('target')}" for d in destructive) or "none"))
+    cost = doc.get("cost") or {}
+    lines.append(("cost", "Expected cost", f"${cost['monthlyUsd']}/month" if cost.get("monthlyUsd") is not None
+                  else "unknown (no plugin estimate)"))
+    for f in doc.get("approvalsRequired") or []:
+        lines.append((f"approval_{f.get('code')}_{f.get('resource')}", "Needs approval", str(f.get("message"))))
+    for f in doc.get("refusals") or []:
+        lines.append((f"refusal_{f.get('code')}_{f.get('resource')}", "Refused", str(f.get("message"))))
+    lines.append(("plan_digest", "Plan digest", str(doc.get("digest") or "")))
+    fields = [{"name": n, "label": label, "value": redact.text(value), "truncated": False}
+              for n, label, value in lines[:MAX_ITEMS]]
+    return {"kind": "fields", "fields": fields, "infra_plan": True}
+
+
 #: Skill id -> the preview that reads its inputs. Anything absent gets `preview_fields`.
 PREVIEWERS: dict[str, Previewer] = {
     "email.send_real_guarded": preview_email,
     "email.send_real": preview_email,
     "tracker.issues.create": preview_issues,
     "publish_youtube": preview_publish,
+    "infra.plan": preview_infra_plan,
 }
 
 

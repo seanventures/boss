@@ -1,0 +1,5 @@
+# The request the contract harness provisions (python -m boss_engine.platform test <dir>).
+resource:
+  capability: cache
+  engine: valkey
+  public: false

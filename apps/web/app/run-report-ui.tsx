@@ -67,7 +67,48 @@ export type RunReport = {
   product?: Product;
   next_steps?: NextStep[];
   host?: { state?: string };
+  /** The run's benchmark record (GET /v1/workflow-runs/{id}/benchmark): measured, null = unmeasured. */
+  benchmark?: Benchmark | null;
 };
+
+export type Benchmark = {
+  scenario: string | null; stack: string | null; source_commit: string | null; models: string[];
+  run_id: string; result: "success" | "failure" | null; pr_url: string | null;
+  tests_passed: number | null; tests_total: number | null; human_approvals: number | null;
+  manual_interventions: number | null; elapsed_minutes: number | null; model_cost_usd: number | null;
+  retries: number | null; deployment_smoke_test: "pass" | "fail" | "not-run" | null;
+};
+
+/** The benchmark record's rows, in the §8 order. A value BOSS did not measure reads "not measured". */
+export function benchmarkRows(b: Benchmark): [string, string][] {
+  const v = (x: unknown): string => (x === null || x === undefined || x === "" ? "not measured"
+    : Array.isArray(x) ? (x.length ? x.join(", ") : "not measured") : String(x));
+  return [
+    ["Scenario", v(b.scenario)], ["Stack", v(b.stack)], ["Source commit", v(b.source_commit)],
+    ["Models", v(b.models)], ["Run", v(b.run_id)], ["Result", v(b.result ?? "still running")],
+    ["Pull request", v(b.pr_url)],
+    ["Tests", b.tests_total === null || b.tests_passed === null ? "not measured" : `${b.tests_passed}/${b.tests_total} passed`],
+    ["Human approvals", v(b.human_approvals)], ["Manual interventions", v(b.manual_interventions)],
+    ["Elapsed", b.elapsed_minutes === null ? "not measured" : `${b.elapsed_minutes} min`],
+    ["Model cost", b.model_cost_usd === null ? "not measured" : `$${b.model_cost_usd.toFixed(2)}`],
+    ["Retries", v(b.retries)], ["Deployment smoke test", v(b.deployment_smoke_test)],
+  ];
+}
+
+export function BenchmarkRecord({ benchmark }: { benchmark: Benchmark }) {
+  return (
+    <details className="rr-section" data-testid="run-report-benchmark">
+      <summary>Benchmark record</summary>
+      <table className="rr-table">
+        <tbody>
+          {benchmarkRows(benchmark).map(([k, val]) => (
+            <tr key={k}><td>{k}</td><td data-user-text>{val}</td></tr>
+          ))}
+        </tbody>
+      </table>
+    </details>
+  );
+}
 
 const AREA_TITLES: Record<string, string> = {
   system: "System",
@@ -421,6 +462,7 @@ export function RunReportPanel(
           </tbody>
         </table>
       </details>
+      {report.benchmark ? <BenchmarkRecord benchmark={report.benchmark} /> : null}
     </details>
   );
 }

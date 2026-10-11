@@ -779,6 +779,11 @@ def workflow_markdown(report: dict[str, Any]) -> str:
         lines.append(f"*{note['finding']}.*")
     if auto:
         lines.append("")
+    # THE BENCHMARK RECORD (services.benchmark), last: measured values, null where unmeasured.
+    if isinstance(report.get("benchmark"), dict):
+        from .benchmark import as_yaml
+
+        lines += ["## Benchmark record", "", "```yaml", as_yaml(report["benchmark"]), "```", ""]
 
     return "\n".join(lines) + "\n"
 
