@@ -682,8 +682,27 @@ class EphemeralSandbox:
         status = self._git(["status", "--porcelain"])
         return bool(status.strip())
 
+    def undo_agent_commits(self) -> bool:
+        """Put an agent's own commits back into the index: HEAD returns to the tree this run
+        started from, every change stays staged. Every stage after it (the reviewers, the
+        security check, the PR) then sees the real diff against HEAD. crun_86902c82's agent
+        committed; its reviewer reported "no changes relative to HEAD, nothing to review" on a
+        77-file pull request. Never raises."""
+        base = getattr(self, "diff_base_sha", None)
+        if not base or self.path is None:
+            return False
+        try:
+            head = self._git(["rev-parse", "HEAD"]).strip()
+            if head and head != base:
+                self._git(["reset", "--soft", base])
+                return True
+        except Exception:  # noqa: BLE001 — the diff below still measures from the base
+            pass
+        return False
+
     def diff_summary(self) -> DiffSummary:
         self._require_provisioned()
+        self.undo_agent_commits()
         self._git(["add", "-A"])
         base = getattr(self, "diff_base_sha", None)
         numstat = self._git(["diff", "--cached", "--numstat", *([base] if base else [])]).strip()
