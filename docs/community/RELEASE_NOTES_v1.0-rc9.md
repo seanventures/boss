@@ -1,9 +1,10 @@
 # BOSS Community 1.0.0-rc.9 candidate
 
-RC9 builds on the published RC8 candidate and preserves the RC6.2 changes and Command Center design refresh. This branch is being qualified; RC8 remains the published release until an RC9 tag and download are available.
+RC9 builds on the published RC8 candidate and preserves the RC6.2 changes and Command Center design refresh. This is a test candidate. The release download identifies the exact published source; install, provider and human-use checks have separate results in the validation record.
 
 ## What changed
 
+- Reinstalling unchanged agent packs and modules keeps their roles and teams without adding duplicate agent audit artifacts.
 - **Review the task before starting it.** The [work agreement](WORK_AGREEMENT.md) shows the selected workflow, repository, prerequisites and recorded approval requirements. Confirmation binds that exact plan to the current account and project. A changed workflow requires another review. If a start response is lost, check the existing run before trying again.
 - **Review the delivered revision.** The [result review](RESULT_REVIEW.md) brings the recorded revision, checks, cost evidence and human decision together. Accepting records your review of that exact snapshot. Requesting a revision creates a bounded proposal; starting it remains a separate action.
 - **Reuse your accepted checks.** Save the current accepted result’s recorded criteria, edit an append-only revision, and copy a starting point for a fresh task. [Saved checks](ACCEPTANCE_CHECKS.md) carry provenance and grant no execution authority.
@@ -30,13 +31,13 @@ RC9 builds on the published RC8 candidate and preserves the RC6.2 changes and Co
 - **Make build forms easier to scan.** Headings are shorter, setup explanations expand when needed, and the phone footer follows the form. New build opens at the first field, and the narrow phone header keeps its actions in view. The secondary build row appears when work or a loading/error state needs attention. Required acceptance, budget notices and setup actions stay visible.
 - **Start setup with the GitHub App.** Fresh setup leads with the recommended App, while confirmed unused model sources share an unselected Add source chooser; connected sources, sessions and unknown states stay visible.
 - **Read model setup at a glance.** Each source has a readable name. Expand it for technical details; connection controls, warnings and current sessions stay visible.
-- Models now groups model setup and source connections, with source statuses that match their authentication method.
+- Models groups setup and source connections, with statuses that match their authentication method. Database and Routing headings are shorter, source names come before statuses, and duplicate empty-status text is reduced.
 
 The first-use website and manual focus on one accountable software change, with actual installed-console screenshots and explicit setup requirements. The separate website release preserves its existing signup and mail service; local website preparation is not hosted deployment.
 
 ## Install and upgrade
 
-Until RC9 is published, use the [published RC8 instructions](RELEASE_NOTES_v1.0-rc8.md). A source checkout must record the exact selected commit, and an existing install should take a complete protected backup before upgrading. Changing the checkout back does not undo database migrations.
+For an available RC9 release, select `v1.0-rc9` explicitly with the installer’s `--ref` option and use the installer from that same tag. Check the release download and checksum before running it. A source checkout must record the exact selected commit, and an existing install should take a complete protected backup before upgrading. Changing the checkout back does not undo database migrations. The [RC8 instructions](RELEASE_NOTES_v1.0-rc8.md) remain the reference for RC8.
 
 Protect backup archives as credentials. Do not attach an archive, your `.env`, session cookies or model credentials to a bug report.
 

@@ -12,7 +12,7 @@ import { act } from "react";
 
 import { overBudget } from "./_helpers/copy-budget";
 import { entitlementSessionsWire, entitlementSourcesWire } from "./_helpers/obs-fixtures";
-import { board } from "./_helpers/setup-fixtures";
+import { board, firstRun } from "./_helpers/setup-fixtures";
 import { click, mountBoard, q, type, type Mounted } from "./_helpers/setup-board";
 import { completeBody, stateOf, type CapSource } from "../app/setup/capacity-row";
 import type { SetupView } from "../lib/setup-types";
@@ -415,4 +415,70 @@ describe("model and source anchors share the model section", () => {
       } finally { scroll.mockRestore(); }
     });
   }
+});
+
+// The CSS hides only the generic waiting summary when a rendered source states absence.
+// Happy-dom ignores :has in querySelector; these cases prove only marker/state preservation.
+// Actual CSS visibility and phone reflow require the final browser render.
+describe("compact Models waiting summary", () => {
+  it("a shown disconnected source replaces the duplicate while keeping its name, state and action", async () => {
+    const calls = api(firstRun(), freshCatalogSources(), { items: [] });
+    mounted = await mountBoard(firstRun());
+    const fallback = document.querySelector(".su-model-empty");
+    expect(fallback?.textContent).toBe("Not connected");
+    expect(document.querySelector(".su-model-sources [data-connection-summary]")).not.toBeNull();
+    const local = src("approved_local_model_host");
+    expect(local.querySelector('[role="status"]')?.textContent).toBe("Not configured");
+    expect(local.querySelector(".su-cap-head")?.firstElementChild?.tagName).toBe("DETAILS");
+    await click(q(document.body, "setup-cap-add")?.querySelector("summary") ?? null);
+    await choose("anthropic_api");
+    expect(src("anthropic_api").querySelector('[role="status"]')?.textContent).toBe("Needs key");
+    expect(q(src("anthropic_api"), "setup-cap-key-open")?.closest("details")).toBeNull();
+    expect(calls.filter(x => x.method !== "GET")).toEqual([]);
+  });
+
+  for (const state of ["unknown", "blocked", "unsupported", "failed"] as const) {
+    it(`${state} alone keeps the waiting fallback and its actual source status`, async () => {
+      const sources = unusedKeySources([state]);
+      if (state === "failed") sources.items[0].connection_status = "failed";
+      else sources.items[0].effective_status = state;
+      api(firstRun(), sources, { items: [] });
+      mounted = await mountBoard(firstRun());
+      expect(document.querySelector(".su-model-sources [data-connection-summary]")).toBeNull();
+      expect(document.querySelector(".su-model-empty")?.textContent).toBe("Not connected");
+      expect(src(state).querySelector('[role="status"]')?.textContent).toBe(state[0].toUpperCase() + state.slice(1));
+    });
+  }
+
+  for (const failed of [false, true]) {
+    it(`${failed ? "failed" : "empty"} source reads keep the waiting fallback and visible explanation`, async () => {
+      api(firstRun(), { items: [] }, { items: [] }, 200, failed ? 503 : 200);
+      mounted = await mountBoard(firstRun());
+      expect(document.querySelector(".su-model-sources [data-connection-summary]")).toBeNull();
+      expect(document.querySelector(".su-model-empty")?.textContent).toBe("Not connected");
+      expect(q(document.body, "setup-entitlements")?.textContent).toContain(failed ? "Can't load model sources" : "No sources yet");
+    });
+  }
+
+  it("an unfamiliar long source state keeps every word and never marks confirmed absence", async () => {
+    const sources = unusedKeySources(["future-state"]);
+    const state = "a very long unrecognized connection state ".repeat(6).trim();
+    sources.items[0].effective_status = state;
+    api(firstRun(), sources, { items: [] });
+    mounted = await mountBoard(firstRun());
+    expect(src("future-state").querySelector('[role="status"]')?.textContent?.trim().toLowerCase()).toBe(state);
+    expect(document.querySelector(".su-model-sources [data-connection-summary]")).toBeNull();
+    expect(document.querySelector(".su-model-empty")?.textContent).toBe("Not connected");
+  });
+
+  it("loading source reads keep the waiting fallback until a specific source state exists", async () => {
+    api(firstRun(), { items: [] }, { items: [] });
+    const readyFetch = globalThis.fetch;
+    vi.stubGlobal("fetch", vi.fn((input: string | URL, init?: RequestInit) =>
+      String(input).startsWith("/v1/entitlements/sources?") ? new Promise<Response>(() => {}) : readyFetch(input, init)));
+    mounted = await mountBoard(firstRun());
+    expect(document.querySelector(".su-model-sources [data-connection-summary]")).toBeNull();
+    expect(document.querySelector(".su-model-empty")?.textContent).toBe("Not connected");
+    expect(q(document.body, "setup-entitlements")?.textContent).toContain("Loading");
+  });
 });

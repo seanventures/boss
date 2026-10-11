@@ -449,7 +449,7 @@ export const RoutingRow = forwardRef<HTMLElement, { mode: string; focused: boole
     const smart = routing?.mode === "smart";
     const none = view.models.length === 0;
     return (
-      <SetupRow ref={ref} row="jobs" label="Model routing" mode={collapsed ? "collapsed" : "open"}
+      <SetupRow ref={ref} row="jobs" label="Routing" mode={collapsed ? "collapsed" : "open"}
                 focused={focused} tip="Which model runs each piece of work.">
         {!routing ? (
           // An API without the router: the jobs, as overrides, and nothing else.

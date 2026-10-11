@@ -1,6 +1,19 @@
 # RC9 validation in progress
 
-RC9 starts from published RC8 `cb278010b4cef68c55a9684c3e9bd74b14c8b520`. RC9 has not yet been published or deployed. This record states the scope of completed checks and will be updated after the integrated program and release assets are frozen.
+RC9 starts from published RC8 `cb278010b4cef68c55a9684c3e9bd74b14c8b520`. This record captures preparation before the final build attempt. The release download, pull request and Plane release issue record the exact final source and the outcome of that attempt. Source publication, hosted deployment and acceptance by friends-and-family testers are separate milestones.
+
+## Final build scope — 11 October 2026
+
+The scope is frozen for this thread’s last build attempt. It includes the completed installer, first-use, setup, documentation and governance changes described below, followed by the final two source repairs:
+
+- Agent pack/module reseeding preserves module-owned roles and shipped teams. The maintained production-service regression passed nine focused cases, including a meaningful negative control against the original source. These use selected synthetic state sinks and do not certify real database preservation.
+- Setup uses one Models section, shorter Database and Routing labels, source names before statuses, and wrapped phone statuses. The final author selection passed 79 overlapping mounted cases across four suites. Its DOM environment cannot certify the CSS relational selector; final installed rendering remains required.
+
+The preceding `486f0d8a` source preview was checked at 320px, 390px and desktop width: one Models section, no observed horizontal scrolling, clear key/sign-in statuses and visible keyboard focus. It predates the final density patch and is not a final native-image claim. The nested source anchor still obscures the parent heading at 320px; this and broader visual refinements remain followups.
+
+A prior default-sudo installer run completed its installer command but failed preservation qualification after additional audit/vault records and an environment-byte change. Existing captured rows were retained; the additions and environment semantics remain unclassified. The source reseed correction does not clear that historical hold. Published-RC8 upgrade/restore, a useful real-provider result and uncoached human first use also remain distinct checks.
+
+The separate website candidate `c83d5f79` passed its genuine native build, 123 copied-file checks, 122 anonymous routes and two inert mail-stream checks. It is not hosted deployment or the final BOSS image proof. Final attempt results and checksums belong to the exact published artifact and are recorded in the release progress report.
 
 ## Integrated source checks
 

@@ -351,6 +351,8 @@ class SpecPackService:
         shipped = self._shipped_role_identity(role_key)
         if shipped.get("persona") and "persona" not in role_spec:
             role_spec["persona"] = shipped["persona"]
+        if shipped.get("team") and not str(role_spec.get("team") or "").strip():
+            role_spec["team"] = shipped["team"]
         if shipped.get("mcp_servers"):
             permissions = dict(role_spec.get("permissions") or {})
             permissions.setdefault("mcp_servers", shipped["mcp_servers"])
@@ -393,7 +395,7 @@ class SpecPackService:
         if not isinstance(payload, dict):
             return {}
         permissions = payload.get("permissions") or {}
-        return {"persona": payload.get("persona"),
+        return {"persona": payload.get("persona"), "team": payload.get("team"),
                 "mcp_servers": permissions.get("mcp_servers"),
                 "abilities": permissions.get("abilities"),
                 "recommended_abilities": permissions.get("recommended_abilities")}
@@ -409,6 +411,7 @@ class SpecPackService:
         source_module_id: str | None = None,
         source_module_version: str | None = None,
         born_from: dict[str, Any] | None = None,
+        preserve_module_owned_role: bool = False,
     ) -> dict[str, Any]:
         display_name = role_spec.get("display_name", role_key.replace("_", " ").title())
         autonomy_level = int(((role_spec.get("autonomy") or {}).get("level")) or 0)
@@ -489,6 +492,11 @@ class SpecPackService:
             status = "installed"
         elif operator_edited:
             pass
+        elif preserve_module_owned_role and existing_role.get("source_module_id"):
+            # The pack seeds a base role; an installed module owns its effective remit.
+            # Do not reset it before the following module seed restores the same spec.
+            source_module_id = existing_role["source_module_id"]
+            source_module_version = existing_role.get("source_module_version")
         else:
             spec_changed = (
                 existing_role["display_name"] != display_name
@@ -1822,6 +1830,7 @@ class SpecPackService:
                 role_key,
                 self.load_role_spec(role_key),
                 actor,
+                preserve_module_owned_role=True,
                 # The Passport's "From": which pack, which version (not a module it never had).
                 born_from={"kind": "pack", "pack_id": pack_id,
                            "module_version": str(pack_spec.get("version") or "0.0.0")},
