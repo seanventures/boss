@@ -467,6 +467,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="HTTP only: expose write tools; requires BOSS_MCP_HTTP_TOKEN",
     )
     m.set_defaults(func=_cmd_serve_mcp)
+
+    from .platform.__main__ import add_commands as _plugin_commands
+    pl = sub.add_parser("plugin", help="infrastructure plugins: init, validate, test")
+    _plugin_commands(pl.add_subparsers(dest="plugin_cmd", required=True))
+    pl.set_defaults(func=lambda a: int(a.run(a)))
     return p
 
 

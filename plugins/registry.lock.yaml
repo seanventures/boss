@@ -1,0 +1,13 @@
+# Verified plugin pins (engine/boss_engine/platform/registry.py).
+#
+# A plugin under plugins/verified/ is loaded only when its id, version and tree checksum are
+# pinned here by a maintainer; a changed file changes the checksum and the plugin is refused.
+# Built-in plugins (plugins/official/) are reviewed with BOSS and need no pin; community
+# plugins (plugins/community/) are approved per install when an operator enables them.
+#
+#   plugins:
+#     - id: verified.acme-queue
+#       version: 1.2.0
+#       checksum: sha256:<python -m boss_engine.platform checksum plugins/verified/acme-queue>
+#       source: https://github.com/acme/boss-queue-plugin
+plugins: []
