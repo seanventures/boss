@@ -49,6 +49,7 @@ export const IDENTITY_PAGES: readonly IdentityPage[] = [
   { path: "/identity/requests", label: "Access requests", tip: "Requests for access waiting on you", access: { anyScope: "role_binding:assign" }, tab: true },
   { path: "/identity/groups", label: "Groups", tip: "Sets of people who share access roles", access: { permission: "group:read" }, tab: true },
   { path: "/identity/groups/[id]", label: "Group", tip: "Members and the roles they inherit", access: { permission: "group:read" } },
+  { path: "/identity/seats", label: "Approval seats", tip: "Who approves decisions at each risk tier", access: { permission: "role_binding:read" }, tab: true },
   { path: "/identity/roles", label: "Access roles", tip: "Named sets of permissions you bind to people", access: { permission: "access_role:read" }, tab: true },
   { path: "/identity/roles/[id]", label: "Access role", tip: "Edit permissions, preview who it affects", access: { permission: "access_role:read" } },
   { path: "/identity/service-accounts", label: "Service accounts", tip: "Non-human accounts for CI, scripts and integrations", access: { permission: "service_account:read" }, tab: true },

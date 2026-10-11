@@ -31,6 +31,11 @@ export async function act(
     // a failure of the action.
     const identity = error instanceof ApiRefusal ? error.identity : identityOfThrown(error);
     if (identity) return failResult(identitySentence(identity), { data: { identity } });
+    // A REFUSAL THAT SAYS WHO TO ASK AND WHERE (e.g. seat_required: the seat's holders and
+    // Identity › Approval seats) is shown as written, with its link — never followed by the
+    // generic "ask an Admin", which sent people to the wrong person.
+    const pointed = pointedRefusal(error);
+    if (pointed) return failResult(pointed.message, { href: pointed.href, hrefLabel: pointed.hrefLabel });
     // Logged on the server as well: the operator sees the sentence, the log keeps the stack.
     console.error("server action failed", error);
     return failResult(describeActionError(error));
@@ -47,6 +52,18 @@ export function isNextControlFlow(error: unknown): boolean {
   const digest = (error as { digest?: unknown } | null)?.digest;
   return typeof digest === "string"
     && /^(NEXT_|DYNAMIC_SERVER_USAGE|BAILOUT_TO_CLIENT_SIDE_RENDERING)/.test(digest);
+}
+
+/** A refusal whose body names where to go (`href`, a console path) and says what to do there. */
+export function pointedRefusal(error: unknown): { message: string; href: string; hrefLabel: string } | null {
+  if (!error || typeof error !== "object") return null;
+  const body = (error as { body?: unknown }).body;
+  if (!body || typeof body !== "object") return null;
+  const b = body as { message?: unknown; href?: unknown; href_label?: unknown };
+  if (typeof b.message !== "string" || !b.message.trim()) return null;
+  if (typeof b.href !== "string" || !b.href.startsWith("/") || b.href.startsWith("//")) return null;
+  return { message: b.message.trim(), href: b.href,
+    hrefLabel: typeof b.href_label === "string" && b.href_label ? b.href_label : "Open" };
 }
 
 /** The typed client's BossApiError (status + parsed body) as an identity refusal, if it is one. */

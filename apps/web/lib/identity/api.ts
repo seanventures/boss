@@ -26,7 +26,9 @@ export class IdentityError extends Error {
   /** The whole refusal body as the API sent it (e.g. a 409 consent_required's fields). */
   readonly body: Record<string, unknown>;
   constructor(status: number, code: IdentityErrorCode, extra: { permission?: unknown; attempts_left?: unknown; retryAfter?: number | null; body?: Record<string, unknown> } = {}) {
-    super(errorSentence(status, code, extra.permission));
+    // A seat refusal names who holds the seat and where seats are changed: its own sentence.
+    super(code === "seat_required" && typeof extra.body?.message === "string" && extra.body.message
+      ? extra.body.message : errorSentence(status, code, extra.permission));
     this.name = "IdentityError";
     this.status = status;
     this.code = code;

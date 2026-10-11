@@ -18,6 +18,7 @@ CONSOLE_PAGES: tuple[tuple[str, str, str], ...] = (
     ("/identity/requests", "Access requests", "role_binding:assign"),
     ("/identity/groups", "Groups", "group:read"),
     ("/identity/groups/[id]", "Group", "group:read"),
+    ("/identity/seats", "Approval seats", "role_binding:read"),
     ("/identity/roles", "Access roles", "access_role:read"),
     ("/identity/roles/[id]", "Access role", "access_role:read"),
     ("/identity/service-accounts", "Service accounts", "service_account:read"),

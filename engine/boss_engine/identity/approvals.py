@@ -207,6 +207,33 @@ def recorded(db: Any, decision_id: str) -> list[dict[str, Any]]:
              "seat_key": r["seat_key"], "at": r["approved_at"].isoformat()} for r in rows]
 
 
+#: The console screen where seat holders are changed (apps/web/app/identity/seats).
+SEATS_SCREEN = "/identity/seats"
+
+
+def _people_words(names: list[str]) -> str:
+    return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " or " + names[-1]
+
+
+def seat_refusal(db: Any, org_id: str, tier: int, wanted: tuple[str, ...]) -> ApprovalRefused:
+    """Who to ask, not just "ask an Admin": the refusal names the people who hold the seat(s) now
+    and where seats are changed (Identity › Approval seats). A vacant seat says an Owner stands in."""
+    held = holders(db, org_id)
+    ids = list(dict.fromkeys(pid for seat in wanted for pid in held.get(seat, ())))
+    names = _names(db, ids)
+    listed = [{"principal_id": pid, "display_name": names.get(pid, pid)} for pid in ids]
+    seat_words = " or ".join(wanted)
+    if listed:
+        who = (f"held by {_people_words([h['display_name'] for h in listed])}. Ask "
+               f"{'them' if len(listed) == 1 else 'one of them'} to approve it")
+    else:
+        who = "which nobody holds, so an Owner approves it"
+    message = (f"A tier-{tier} decision is approved by the {seat_words} seat, {who}, or change who "
+               f"holds the seat in Identity › Approval seats ({SEATS_SCREEN}).")
+    return ApprovalRefused(403, "seat_required", message, seats=list(wanted), tier=tier,
+                           holders=listed, href=SEATS_SCREEN, href_label="Approval seats")
+
+
 @dataclass(frozen=True)
 class Approval:
     approver: str
@@ -248,9 +275,7 @@ def require_approval(db: Any, ctx: AuthContext, decision: dict[str, Any], *,
     if wanted:
         mine = seats_held(db, org, approver, wanted)
         if not mine:
-            raise ApprovalRefused(403, "seat_required",
-                                  f"A tier-{tier} decision is approved by the {' or '.join(wanted)} seat.",
-                                  seats=list(wanted), tier=tier)
+            raise seat_refusal(db, org, tier, wanted)
         seat = mine[0]
     if tier in TWO_PERSON_TIERS and not waiver(db, org)["effective"]:
         decision_id = str(decision["id"])
