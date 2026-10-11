@@ -2231,7 +2231,32 @@ def run_code_task(engine, settings: Settings, jobs, run_id: str,
                   *, fencing_token: Optional[str] = None) -> dict:
     """Execute one full code-task attempt. Safe to re-run after a crash.
 
-    Everything the attempt starts is owned by the run and runs as the run's own sandbox uid
+    ONCE PER PROCESS. A redelivered job for a run this api is STILL executing (its lease lapsed
+    and another worker slot reclaimed it) joins the live execution instead of starting a second
+    one. The second one used to crash on entry and its cleanup — terminate_owner(run_id) — sent
+    SIGTERM to the first execution's live agent: crun_1839849d, killed three times in ten
+    minutes, "claude code agent exited 143" (run_liveness)."""
+    from . import run_liveness
+
+    def _joined() -> None:
+        logger.warning("code_task_redelivery_joined run_id=%s — this run is already executing "
+                       "here; the redelivery waits for it instead of starting it again", run_id)
+        with _transaction(engine) as c:
+            run = load_code_task_run(c, run_id)
+            if run is not None:
+                emit_event(c, run["project_id"], "code_task.redelivery_joined", "boss",
+                           "code_task_run", run_id,
+                           {"reason": "already executing in this process; not started twice"})
+
+    return run_liveness.run_once(
+        run_id,
+        lambda: _run_code_task_once(engine, settings, jobs, run_id, fencing_token=fencing_token),
+        on_join=_joined)
+
+
+def _run_code_task_once(engine, settings: Settings, jobs, run_id: str,
+                        *, fencing_token: Optional[str] = None) -> dict:
+    """Everything the attempt starts is owned by the run and runs as the run's own sandbox uid
     (sandbox_identity, IDENTITY.md §7.6) — never as the control plane's."""
     from . import owned_process
     from .sandbox_identity import bind as _sandbox_bind

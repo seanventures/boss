@@ -2093,6 +2093,9 @@ class WorkerHeartbeatResponse(BaseModel):
     job_id: str
     status: str
     lease_expires_at: str
+    # For a code.task: is the run it carries alive and making progress (run_liveness)? The
+    # worker's runtime ceiling never lets the lease of progressing work lapse.
+    progressing: Optional[bool] = None
 
 
 class WorkerCompleteRequest(BaseModel):

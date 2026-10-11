@@ -50,6 +50,10 @@ _CRASH = re.compile(
 )
 _STUB_LOG = re.compile(r"process\.exit\(0\)|^\s*>\s*exit\s+0\b|webServer was not able to start", re.I | re.M)
 
+#: Floor only. The real threshold is the configured agent timeout plus grace
+#: (run_liveness.stall_horizon_seconds), carried on the snapshot as `stall_minutes`: one
+#: implement turn may legitimately run BOSS_CODE_AGENT_TIMEOUT_SECONDS (5400s on the laptop),
+#: and a fixed 25 minutes called a build that was streaming agent turns "stalled".
 PHASE_STALL_MINUTES = 25
 HEARTBEAT_STALE_MINUTES = 22
 PROCESS_WAIT_LONG_MINUTES = 45
@@ -83,6 +87,18 @@ def diagnose_flow(snap: dict[str, Any]) -> dict[str, Any]:
     process_status = str(snap.get("process_status") or "")
     minutes_phase = snap.get("minutes_in_phase")
     minutes_hb = snap.get("minutes_since_heartbeat")
+    try:
+        stall_minutes = max(float(PHASE_STALL_MINUTES),
+                            float(snap.get("stall_minutes") or PHASE_STALL_MINUTES))
+    except (TypeError, ValueError):
+        stall_minutes = float(PHASE_STALL_MINUTES)
+    try:
+        minutes_activity = (float(snap["minutes_since_activity"])
+                            if snap.get("minutes_since_activity") is not None else None)
+    except (TypeError, ValueError):
+        minutes_activity = None
+    # Recent agent turns are progress, however long the phase has run.
+    active = minutes_activity is not None and minutes_activity < stall_minutes
     try:
         minutes_phase = float(minutes_phase) if minutes_phase is not None else None
     except (TypeError, ValueError):
@@ -165,7 +181,8 @@ def diagnose_flow(snap: dict[str, Any]) -> dict[str, Any]:
         status == "running"
         and phase not in {"queued", ""}
         and minutes_phase is not None
-        and minutes_phase >= PHASE_STALL_MINUTES
+        and minutes_phase >= stall_minutes
+        and not active
     ):
         return _finding(
             "phase_stall",
@@ -308,6 +325,8 @@ class FactoryFlowService:
     def snapshot(
         self, connection: Any, project_id: str, row: dict[str, Any],
     ) -> dict[str, Any]:
+        from . import run_liveness
+
         state = _as_dict(row.get("state"))
         fctx = _as_dict(row.get("finalize_ctx"))
         run_id = row.get("id")
@@ -318,6 +337,11 @@ class FactoryFlowService:
             phase_started = fctx.get("phase_started_at")
         elif job.get("updated_at"):
             phase_started = job.get("updated_at")
+        try:
+            secs_quiet = (run_liveness.seconds_since_activity(connection, str(run_id))
+                          if run_id else None)
+        except Exception:  # noqa: BLE001 — no activity evidence: judge on the phase clock alone
+            secs_quiet = None
         snap = {
             "id": run_id,
             "title": row.get("title"),
@@ -331,6 +355,8 @@ class FactoryFlowService:
             "phase_timings": fctx.get("phase_timings") or [],
             "minutes_in_phase": _minutes_since(phase_started or row.get("updated_at")),
             "minutes_since_heartbeat": _minutes_since(job.get("heartbeat_at") or job.get("updated_at")),
+            "stall_minutes": run_liveness.stall_horizon_seconds(self.settings) / 60.0,
+            "minutes_since_activity": (secs_quiet / 60.0) if secs_quiet is not None else None,
             "job_status": job.get("status"),
             "process_run_id": (process or {}).get("id"),
             "process_status": (process or {}).get("status"),

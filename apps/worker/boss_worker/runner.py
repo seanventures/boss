@@ -38,6 +38,14 @@ def _wait_in_slices(stop: threading.Event, seconds: float, slice_s: float = 1.0)
     return False
 
 
+def job_progressing(heartbeat_response: Any) -> bool:
+    """Did the control plane say this job's work is alive and making progress?
+
+    Only an explicit True counts: an older control plane, a non-code job or an unreadable answer
+    all mean "no evidence", and the runtime ceiling applies as before."""
+    return isinstance(heartbeat_response, dict) and heartbeat_response.get("progressing") is True
+
+
 class RetryableJobError(RuntimeError):
     """A transient effect failure that should use the durable job backoff path."""
 
@@ -1298,6 +1306,8 @@ def run_worker_cycle(client: ControlPlaneClient, settings: WorkerSettings) -> bo
         beats = 0
         max_runtime = max(0, int(getattr(settings, "job_max_runtime_seconds", 5400) or 0))
         started_at = time.monotonic()
+        progressing = False
+        ceiling_noted = False
         # SLICED, so a stop request is noticed within a second rather than up to half a lease
         # TTL later. Docker's grace period before SIGKILL is ~10s: a renewal interval of 150s
         # would mean the process is dead long before the loop next looks at anything.
@@ -1308,7 +1318,21 @@ def run_worker_cycle(client: ControlPlaneClient, settings: WorkerSettings) -> bo
                 _hand_back_on_shutdown()
                 return
             elapsed = time.monotonic() - started_at
-            if max_runtime and elapsed > max_runtime:
+            if max_runtime and elapsed > max_runtime and progressing:
+                # THE CEILING IS FOR HUNG WORK, NOT LONG WORK. A build's single implement turn
+                # may itself run BOSS_CODE_AGENT_TIMEOUT_SECONDS (5400s on the laptop), so a
+                # whole build routinely outlives a fixed job ceiling. Letting that lease lapse
+                # got the job reclaimed while it ran and its live agent SIGTERMed
+                # (crun_1839849d). The control plane says whether the run is still producing
+                # agent turns; while it is, the lease is renewed.
+                if not ceiling_noted:
+                    LOGGER.warning(
+                        "lease_renewal_past_ceiling_progressing worker_id=%s job_id=%s kind=%s "
+                        "elapsed_s=%d max_s=%d — past the runtime ceiling but the control plane "
+                        "reports progress; renewing", settings.worker_id, job.id, job.kind,
+                        int(elapsed), max_runtime)
+                    ceiling_noted = True
+            elif max_runtime and elapsed > max_runtime:
                 LOGGER.error(
                     "lease_renewal_stopped_runtime_exceeded worker_id=%s job_id=%s "
                     "kind=%s elapsed_s=%d max_s=%d — job exceeded its runtime ceiling; "
@@ -1317,10 +1341,11 @@ def run_worker_cycle(client: ControlPlaneClient, settings: WorkerSettings) -> bo
                 )
                 return
             try:
-                hb_client.heartbeat(
+                beat = hb_client.heartbeat(
                     settings.worker_id, job.id, job.lease_token,
                     settings.lease_ttl_seconds,
                 )
+                progressing = job_progressing(beat)
                 beats += 1
                 misses = 0
                 # Every beat for the first few, then one a minute's worth apart, so a long job

@@ -28,6 +28,8 @@ from ..ports import sql
 from . import decision_actions
 from .core import emit_event, make_id
 from .jobs import JOB_PRIORITY_BACKGROUND
+#: `r` is the row judged; `n` a newer attempt of the same work.
+from .run_liveness import SUPERSEDES_SQL as _SUPERSEDES
 
 logger = logging.getLogger(__name__)
 
@@ -1029,8 +1031,17 @@ def act(engine, settings: Settings, jobs, run_id: str, *,
     if p.get("error"):
         return p
 
+    from . import run_liveness
+
+    with begin(engine) as c:
+        newer = run_liveness.superseded_by(c, run_id)
+        live = run_liveness.progressing(c, settings, run_id)
     refusal = None
-    if p["class"] not in AUTONOMOUS_CLASSES:
+    if newer:
+        refusal = f"superseded by {newer}: a newer attempt of this work already exists"
+    elif live:
+        refusal = "the run is making progress; automatic remedies never touch live work"
+    elif p["class"] not in AUTONOMOUS_CLASSES:
         refusal = f"class {p['class']} ({p['class_name']}) is not in the autonomous set"
     elif not p["confirmed"]:
         refusal = "the hypothesis was not corroborated; not spending on an unconfirmed diagnosis"
@@ -1411,15 +1422,20 @@ def calibration(connection, project_id: str) -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 # Phase 4 — watching work that is still running
 # --------------------------------------------------------------------------- #
-def _inflight_snapshots(connection, project_id: str, limit: int = 50) -> list:
+def _inflight_snapshots(connection, project_id: str, limit: int = 50, *,
+                        horizon_seconds: Optional[float] = None) -> list:
     """Facts about every in-flight run in this project, in one pass.
 
     One query on purpose. Asking per-run invites a shepherd that is itself the slow thing on
     the box, and the duplicate check needs the whole set anyway — "is there an older run like
     this one" is not answerable a row at a time.
     """
+    from . import run_liveness
     from .code_task_service import work_fingerprint
     from .shepherd_watch import ORPHAN_LEASE_MINUTES, RunSnapshot
+
+    if horizon_seconds is None:
+        horizon_seconds = run_liveness.stall_horizon_seconds(None)
 
     rows = connection.execute(
         sql("""
@@ -1433,7 +1449,13 @@ def _inflight_snapshots(connection, project_id: str, limit: int = 50) -> list:
                    j.lease_owner, j.ever_leased, j.deferred_mins, j.ended_mins, j.last_error_msg,
                    EXTRACT(EPOCH FROM (now() - COALESCE(j.heartbeat_at, j.created_at)))/60.0
                      AS mins_since_heartbeat,
-                   j.status AS job_status
+                   j.status AS job_status,
+                   EXTRACT(EPOCH FROM (now() - GREATEST(r.updated_at, COALESCE(
+                       (SELECT max(t.created_at) FROM agent_turns t
+                        WHERE t.code_task_run_id = r.id), r.updated_at))))
+                     AS secs_since_activity,
+                   (SELECT n.id FROM code_task_runs n WHERE """ + _SUPERSEDES + """
+                    ORDER BY n.created_at DESC LIMIT 1) AS superseded_by
             FROM code_task_runs r
             LEFT JOIN LATERAL (
                 SELECT lease_owner, heartbeat_at, created_at, status,
@@ -1531,6 +1553,13 @@ def _inflight_snapshots(connection, project_id: str, limit: int = 50) -> list:
             was_leased=bool(row["ever_leased"]),
             minutes_since_any_lease=since_lease,
             median_minutes=median, sample_size=samples,
+            progressing=run_liveness.is_progressing(
+                status=row["status"],
+                seconds_since_activity=(float(row["secs_since_activity"])
+                                        if row["secs_since_activity"] is not None else None),
+                horizon_seconds=horizon_seconds,
+                executing=run_liveness.executing_here(row["id"])),
+            superseded_by=row["superseded_by"],
         ))
     return snaps
 
@@ -1662,8 +1691,17 @@ def _retry_run(engine, settings, jobs, run_id: str, reason: str) -> int:
     Returns 1 when a new attempt exists, 0 when it does not, so the caller can tell a real
     remedy from an announcement.
     """
+    from ..db import begin
+    from . import run_liveness
     from .code_task_service import retry_code_task
 
+    # Never retry what has already been retried: a newer attempt (lineage, a person's Retry on
+    # the workflow step, the same work) is the live one, and a second retry only races it.
+    with begin(engine) as c:
+        newer = run_liveness.superseded_by(c, run_id)
+    if newer:
+        logger.info("shepherd: not retrying %s — superseded by %s", run_id, newer)
+        return 0
     try:
         # No actor parameter: retry_code_task records lineage, not authorship. The
         # shepherd.retry event below is what attributes this to the shepherd.
@@ -1830,8 +1868,11 @@ def watch(engine, settings: Settings, project_id: str, *, dry_run: bool = False,
         LIVE, MAX_ACTIONS_PER_SWEEP, HEALTHY, act_now, assess, mode_for)
 
     acted, escalated, ineffective, seen = [], [], [], 0
+    from . import run_liveness
+
     with begin(engine) as c:
-        snaps = _inflight_snapshots(c, project_id)
+        snaps = _inflight_snapshots(
+            c, project_id, horizon_seconds=run_liveness.stall_horizon_seconds(settings))
     for snap in snaps:
         seen += 1
         verdict = assess(snap)

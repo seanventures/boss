@@ -23166,7 +23166,24 @@ def worker_heartbeat(payload: WorkerHeartbeatRequest) -> WorkerHeartbeatResponse
             )
         except LeaseNotFoundError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
+        result = dict(result)
+        result["progressing"] = _code_task_job_progressing(connection, payload.job_id)
         return WorkerHeartbeatResponse(**result)
+
+
+def _code_task_job_progressing(connection, job_id: str) -> Optional[bool]:
+    """None for any job that does not carry a code task; else run_liveness's verdict."""
+    try:
+        row = connection.execute(
+            text("SELECT payload->>'run_id' FROM jobs WHERE id = :j AND kind = 'code.task'"),
+            {"j": job_id}).first()
+        if row is None or not row[0]:
+            return None
+        from boss_engine.services import run_liveness
+        return run_liveness.progressing(connection, settings, str(row[0]))
+    except Exception:  # noqa: BLE001 — a heartbeat never fails over its own diagnostics
+        LOGGER.warning("heartbeat_progress_unknown job_id=%s", job_id, exc_info=True)
+        return None
 
 
 @app.post("/v1/worker/complete", response_model=WorkerCompleteResponse)

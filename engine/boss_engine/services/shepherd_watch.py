@@ -144,6 +144,12 @@ class RunSnapshot:
     # Measured baseline for comparable finished runs in this project.
     median_minutes: Optional[float] = None
     sample_size: int = 0
+    # Alive and making progress (run_liveness): an agent turn or state change within the stall
+    # horizon (agent timeout + grace). No automatic remedy may cancel, fail or requeue it.
+    progressing: bool = False
+    # A newer attempt of the same work (retry lineage, a person's step retry, same fingerprint).
+    # A run that has been superseded is history: retrying it again only duplicates the newer one.
+    superseded_by: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -185,6 +191,15 @@ def assess(snap: RunSnapshot) -> WatchVerdict:
     # queued)`, so a failed run was outside its field of view entirely, and its vocabulary was
     # cancel/requeue/fail/escalate -- no retry. It was built to unstick live work and was
     # therefore structurally unable to respond to work that had already died.
+    if snap.status == "failed" and snap.superseded_by:
+        # Someone — a person's Retry on the workflow step, or an earlier retry — already started
+        # this work again. Retrying the dead attempt as well raced the live one (crun_944194c4,
+        # retried by the shepherd every two minutes while its successor was building).
+        return WatchVerdict(
+            HEALTHY,
+            f"superseded by {snap.superseded_by}; a newer attempt of this work exists",
+            action="none", autonomous=False,
+            evidence={**ev, "superseded_by": snap.superseded_by})
     if snap.status == "failed":
         if is_code_verdict(snap.run_error):
             # A verdict is repairable, so it is fixed rather than filed.
@@ -516,6 +531,8 @@ def permitted(verdict: WatchVerdict) -> bool:
 # the case where acting FAST is the entire value — a duplicate caught after twenty minutes has
 # already cost twenty minutes of a governed pipeline.
 DESTRUCTIVE_ACTIONS = frozenset({"cancel", "fail"})
+#: Actions that interrupt an attempt in flight. Never taken on a run that is progressing.
+LIVE_WORK_ACTIONS = frozenset({"cancel", "fail", "requeue"})
 MIN_AGE_FOR_DESTRUCTIVE_MINUTES = 30.0
 
 
@@ -528,6 +545,11 @@ def act_now(verdict: "WatchVerdict", snap: "RunSnapshot") -> tuple[bool, str]:
     """
     if not permitted(verdict):
         return False, "not an autonomous action"
+    if verdict.action in LIVE_WORK_ACTIONS and snap.progressing:
+        # Checked before every exemption, the duplicate one included: a run streaming agent
+        # turns is doing work, and no clock or classifier out here outranks that.
+        return False, ("the run is making progress (recent agent turns); automatic remedies "
+                       "never stop live work")
     if verdict.klass == REDUNDANT_DUPLICATE:
         return True, "duplicate — the earlier identical run continues"
     if (verdict.action in DESTRUCTIVE_ACTIONS
