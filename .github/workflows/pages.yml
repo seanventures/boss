@@ -1,36 +1,28 @@
-name: Docs site
+name: Product docs
 
-# Build-only check. The site is served from https://boss.sean.network/ (landing)
-# and https://boss.sean.network/docs/ (manual); this workflow never deploys.
+# Build-only check for the product manual. Marketing website source and deployment
+# are maintained separately.
 on:
   pull_request:
-    paths:
-      - "docs/community/**"
-      - "docs/landing/**"
-      - "mkdocs.community.yml"
-      - ".github/workflows/pages.yml"
   push:
     branches: [main]
-    paths:
-      - "docs/community/**"
-      - "docs/landing/**"
-      - "mkdocs.community.yml"
-      - ".github/workflows/pages.yml"
   workflow_dispatch:
 
 concurrency:
-  group: docs-site-${{ github.ref }}
+  group: product-docs-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   build:
-    # The private source repository has its own manual; only the public repository checks this site.
+    # The private source repository has its own manual.
     if: github.repository == 'seanventures/boss'
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@v4
+      - name: Check repository scope
+        run: test -z "$(git ls-files -- docs/landing website boss-website site)"
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -38,7 +30,5 @@ jobs:
         run: pip install mkdocs==1.6.1 mkdocs-material==9.6.15
       - name: Build the docs strictly
         run: mkdocs build -f mkdocs.community.yml --strict -d _site/docs
-      - name: Add the landing page
-        run: cp -R docs/landing/. _site/
-      - name: Check the site layout
-        run: test -f _site/index.html && test -f _site/docs/index.html
+      - name: Check the manual
+        run: test -f _site/docs/index.html
