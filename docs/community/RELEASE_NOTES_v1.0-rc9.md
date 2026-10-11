@@ -24,6 +24,9 @@ RC9 builds on the published RC8 candidate and preserves the RC6.2 changes and Co
 - **Reject oversized public requests early.** SAML/SCIM proxy requests use a capped stream reader; an absent or understated length cannot make the proxy read the complete oversized request first. Existing protocol and response-stream behavior is retained.
 - **Keep an unknown repository explicit.** Factory displays “Repository unknown” when the reported owner or repository is incomplete. Its tooltip preserves the source and reported reason and points to Connect for access checks.
 - **Correct a stalled first navigation.** The web dependency includes the upstream React fix for a synchronous response that could leave a new area suspended. The final visible-browser response check remains part of release qualification.
+- **Build installer images one at a time.** Each active service build completes before the next starts. A failed build stops installation before later builds or application startup. Disk guidance distinguishes the installation volume from the Docker image store and reports unavailable storage information as unknown.
+- **Preview cleanup before removing resources.** Low-disk advice points to read-only inspection and a BOSS cleanup preview. It limits removal to confirmed BOSS-owned, unused resources.
+- **Keep simulated QA explicit.** Fresh startup no longer automatically creates simulated canary results. Explicit QA fixtures and existing history remain available; simulated receipts do not establish a real model or provider outcome.
 
 The first-use website and manual focus on one accountable software change, with actual installed-console screenshots and explicit setup requirements. The separate website release preserves its existing signup and mail service; local website preparation is not hosted deployment.
 
