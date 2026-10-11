@@ -13,7 +13,7 @@
  */
 import { logHref } from "../../lib/log-url";
 import { CaretDown, CaretRight } from "@phosphor-icons/react";
-import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import type { ReviewComment, StoryAct, StoryBoss, StoryRow, StoryYou, NowLine } from "../../lib/cockpit";
 import { plural, type Station, type StationKey } from "../../lib/factory-floor";
@@ -23,6 +23,9 @@ import { useNow } from "../agents/live-util";
 import { fetchTools } from "./cockpit-actions";
 import { areaHref, clockOf, costWord, secondsWord, spanOf, whoName } from "./cockpit-util";
 import { useIdentityVersion } from "../../lib/use-agent-identities";
+import { buildIndex, type LogLine, type ToolLog } from "../../lib/build-detail";
+import { ToolList } from "./tool-log";
+import { SearchBox, SearchResults, useLogSearch } from "./log-search";
 
 
 
@@ -43,7 +46,12 @@ export type StoryProps = {
   pending?: { id: string; text: string; at: string }[];
   /** Live updates are paused: rows still render, nothing moves. */
   still?: boolean;
+  /** Every tool call of the build, one line each (GET …/tool-log); null until read. */
+  log?: ToolLog | null;
 };
+
+/** A search match chosen: open this act's tool calls at this call. */
+type Jump = { actId: string; call: number; n: number };
 
 const ACT_STATE: Record<string, "working" | "needs_you" | "done" | "stuck" | "idle"> = {
   active: "working", pending: "idle", awaiting_input: "needs_you", complete: "done", error: "stuck", stale: "stuck", skipped: "idle",
@@ -63,7 +71,36 @@ function Fold({ label, testId, children, count }: { label: string; testId: strin
   );
 }
 
-function ToolsFold({ projectId, runId, act }: { projectId: string; runId: string; act: StoryAct }) {
+function ToolsFold({ projectId, runId, act, log, jump }: { projectId: string; runId: string; act: StoryAct; log?: ToolLog | null; jump?: Jump | null }) {
+  const [open, setOpen] = useState(false);
+  const mine = useMemo(() => (log ? log.items.filter((t) => t.actId === act.actId) : null), [log, act.actId]);
+  const focus = jump && jump.actId === act.actId ? jump.call : null;
+  useEffect(() => { if (focus !== null) setOpen(true); }, [focus, jump?.n]);
+  if (mine && mine.length) {
+    const n = Math.max(act.toolCalls, mine.length);
+    const bad = mine.filter((t) => t.ok === false).length;
+    return (
+      <span className="fx-fold fx-fold-wide">
+        <button type="button" className="ag-link fx-fold-btn" aria-expanded={open} data-testid={`fx-tools-${act.actId}`}
+                onClick={() => setOpen((v) => !v)}>
+          {n} tool {n === 1 ? "call" : "calls"}
+          {bad ? <span className="fx-fold-bad"> · {bad} failed</span> : null}
+          {" "}{open ? <CaretDown size={10} weight="bold" aria-hidden /> : <CaretRight size={10} weight="bold" aria-hidden />}
+        </button>
+        {open ? (
+          <span className="fx-fold-body fx-fold-tools">
+            <ToolList key={jump?.n ?? 0} calls={mine} focus={focus} testId={`fx-tools-body-${act.actId}`} />
+            <a className="ag-link" href={logHref({ run: runId })} data-testid="fx-tools-log">Open in Activity log ↗</a>
+          </span>
+        ) : null}
+      </span>
+    );
+  }
+  return <ToolsCount projectId={projectId} runId={runId} act={act} />;
+}
+
+/** An API without the tool log: names and outcomes only (the earlier fold). */
+function ToolsCount({ projectId, runId, act }: { projectId: string; runId: string; act: StoryAct }) {
   const [open, setOpen] = useState(false);
   const [tools, setTools] = useState<ToolCalls | null>(null);
   const [failed, setFailed] = useState(false);
@@ -113,7 +150,7 @@ function CommentList({ items }: { items: ReviewComment[] }) {
   );
 }
 
-function ActRow({ row, props, live, enter }: { row: StoryAct; props: StoryProps; live: NowLine | null; enter?: boolean }) {
+function ActRow({ row, props, live, enter, jump }: { row: StoryAct; props: StoryProps; live: NowLine | null; enter?: boolean; jump?: Jump | null }) {
   useIdentityVersion(); // names and faces re-resolve when the install's identities load
   const face = useRef<HTMLButtonElement>(null);
   // A running act's span ticks from a clock that exists only after mount (hydration-safe).
@@ -131,7 +168,8 @@ function ActRow({ row, props, live, enter }: { row: StoryAct; props: StoryProps;
     : [];
   const fixed = row.commentsFixed > 0 ? props.comments.filter((c) => c.status === "addressed" && c.round < row.round) : [];
   return (
-    <li className="fx-ck-row" data-enter={enter || undefined} data-type="act" data-status={row.status} data-testid={`fx-story-${row.id}`} data-role={row.roleKey ?? undefined}>
+    <li className="fx-ck-row" data-enter={enter || undefined} data-type="act" data-status={row.status} data-testid={`fx-story-${row.id}`} data-role={row.roleKey ?? undefined}
+        data-act={row.actId}>
       <time className="fx-ck-time" dateTime={row.startedAt} title={row.startedAt}>{clockOf(row.startedAt)}</time>
       <button ref={face} type="button" className="fx-row-face" aria-label={`${whoName(row.roleKey)}: who did this`}
               data-testid={`fx-story-face-${row.id}`} onClick={() => face.current && props.onFace(row.actId, face.current)}>
@@ -147,7 +185,7 @@ function ActRow({ row, props, live, enter }: { row: StoryAct; props: StoryProps;
           <Fold label={plural(row.files?.length ?? 0, "file")} count={row.files?.length ?? 0} testId={`fx-files-${row.id}`}>
             {() => <span className="fx-files">{(row.files ?? []).map((f) => <span key={f} className="fx-mono" data-user-text>{f}</span>)}</span>}
           </Fold>
-          <ToolsFold projectId={props.projectId} runId={props.runId} act={row} />
+          <ToolsFold projectId={props.projectId} runId={props.runId} act={row} log={props.log} jump={jump} />
           <Fold label={plural(authored.length || row.commentsAuthored, "comment")} count={row.commentsAuthored} testId={`fx-authored-${row.id}`}>
             {() => <CommentList items={authored} />}
           </Fold>
@@ -294,6 +332,41 @@ export function Story(props: StoryProps) {
   const label = (key: StationKey | null) => (key ? stations.find((s) => s.key === key)?.label ?? key : "");
   const groups = groupByStation(shown, stations);
 
+  // SEARCH: one index over the Story, the tool calls and the verify output.
+  const actTitle = useMemo(() => {
+    const by = new Map(rows.filter((r): r is StoryAct => r.type === "act").map((r) => [r.actId, r.title]));
+    return (id: string | null) => (id ? by.get(id) ?? "" : "");
+  }, [rows]);
+  const index = useMemo(() => buildIndex(rows, props.log ?? null,
+    (k) => (k ? stations.find((s) => s.key === k)?.label ?? "" : ""), actTitle), [rows, props.log, stations, actTitle]);
+  const search = useLogSearch(index);
+  const input = useRef<HTMLInputElement>(null);
+  const [jump, setJump] = useState<Jump | null>(null);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "/" || e.altKey || e.metaKey || e.ctrlKey || e.defaultPrevented) return;
+      const t = e.target as HTMLElement | null;
+      if (t?.closest?.("input, textarea, select, [contenteditable='true']")) return;
+      e.preventDefault();
+      input.current?.focus();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, []);
+  const pick = (hit: LogLine, i: number) => {
+    search.setCurrent(i);
+    if (hit.call === undefined) return;
+    const call = props.log?.items[hit.call];
+    if (!call?.actId) return;
+    // Show it where it happened: leave the search, open that act's calls at this one.
+    search.setState({ query: "", filter: null });
+    if (filter) props.onClearFilter();
+    setJump((j) => ({ actId: call.actId as string, call: hit.call as number, n: (j?.n ?? 0) + 1 }));
+    window.requestAnimationFrame(() => {
+      list.current?.querySelector(`[data-act="${call.actId}"]`)?.scrollIntoView({ block: "start" });
+    });
+  };
+
   return (
     <section className="fx-story" aria-labelledby="fx-story-h" data-testid="fx-story">
       <header className="fx-sec-head">
@@ -305,13 +378,20 @@ export function Story(props: StoryProps) {
             {label(filter)} ×
           </button>
         ) : null}
+        <SearchBox value={search.state} onChange={search.setState} count={search.hits.length} current={search.current}
+                   onStep={search.step} inputRef={input} />
       </header>
-      <div ref={list} className="fx-story-list" onScroll={onScroll} data-testid="fx-story-list">
+      {search.active ? (
+        <div className="fx-story-list fx-hits-wrap" data-testid="fx-story-hits">
+          <SearchResults hits={search.hits} query={search.state.query} current={search.current} onPick={pick} />
+        </div>
+      ) : null}
+      <div ref={list} className="fx-story-list" onScroll={onScroll} data-testid="fx-story-list" hidden={search.active}>
         {groups.map((g, gi) => (
           <div key={`${g.key}-${gi}`} className="fx-story-group" data-station={g.key ?? undefined}>
             {g.key ? <h3 className="fx-story-station">{label(g.key)}</h3> : null}
             <ol className="fx-story-rows">
-              {g.rows.map((r) => r.type === "act" ? <ActRow key={r.id} row={r} props={props} live={props.now} enter={entering(r.id)} />
+              {g.rows.map((r) => r.type === "act" ? <ActRow key={r.id} row={r} props={props} live={props.now} enter={entering(r.id)} jump={jump} />
                 : r.type === "you" ? <YouRow key={r.id} row={r} viewer={props.viewer} enter={entering(r.id)} />
                 : <BossRow key={r.id} row={r} enter={entering(r.id)} />)}
             </ol>

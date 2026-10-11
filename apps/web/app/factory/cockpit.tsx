@@ -45,6 +45,8 @@ import { ActPopover, StationFaceView, areaHref, money, secondsWord, spanOf } fro
 import { LogsDrawer, type LogTab } from "./logs-drawer";
 import { Outputs, defaultOpen, type OutputKey } from "./outputs";
 import { StationLine } from "./station-line";
+import { NowBand } from "./now-band";
+import { useToolLog } from "./tool-log";
 import { Story, bayLabel } from "./story";
 import { plural } from "../../lib/factory-floor";
 import { useIdentityVersion } from "../../lib/use-agent-identities";
@@ -340,6 +342,9 @@ function CockpitView({ c, projectId, runId, actor, onClose, onOpenBuild, refresh
   const { chain } = useRunChain(projectId, c.run.id, c.live);
   const latestDeploy = (c.outputs.deploy.items[0]?.id as string | undefined) ?? null;
   const stopTip = "Keeps the work so far. Retry resumes it.";
+  // The tool log, read again whenever the build has made more tool calls.
+  const toolCount = c.story.reduce((n, r) => n + (r.type === "act" ? r.toolCalls : 0), 0);
+  const { log } = useToolLog(projectId, c.run.id, `${toolCount}:${c.live}:${c.run.updatedAt ?? ""}`);
   const steerTip = "Guide the agents. They read it between stations.";
 
   return (
@@ -487,8 +492,10 @@ function CockpitView({ c, projectId, runId, actor, onClose, onOpenBuild, refresh
         ))}
       </ol>
 
+      <NowBand c={c} now={now} />
+
       <div className="fx-body">
-        <Story projectId={projectId} runId={c.run.id} viewer={actor} rows={c.story} stations={c.stations} now={c.now}
+        <Story log={log} projectId={projectId} runId={c.run.id} viewer={actor} rows={c.story} stations={c.stations} now={c.now}
                comments={c.outputs.comments.items} filter={filter} onClearFilter={() => setFilter(null)}
                onFace={onFace} onLogs={() => setLogs("build")} pending={pending} still={still} />
         <Outputs projectId={projectId} actor={actor} cockpit={c} open={open} onOpen={setOpen}

@@ -80,6 +80,8 @@ class Station(TypedDict, total=False):
     loop_with: Optional[str]       # the other role in a repair loop (`Forge ↔ Rook ×2`)
     links: list[StationLink]       # PR / preview / per-env deploy marks
     stopped: bool                  # skipped because the build was stopped (still planned)
+    kept: bool                     # carried from an earlier attempt's workspace, not re-run
+    kept_from: Optional[int]       # that attempt's number (`Kept from #4`)
 
 
 # ── one state per build (§4.4) ──────────────────────────────────────────────────────────────
@@ -328,6 +330,7 @@ class Cockpit(TypedDict, total=False):
     story: list[dict[str, Any]]    # StoryAct | StoryYou | StoryBoss, oldest first
     now: Optional[Now]
     outputs: dict[str, Any]        # see apps/web/lib/cockpit.ts CockpitOutputs
+    summary: dict[str, Any]        # build_detail.now_summary: what it is doing now
 
 
 # ── labels and sentences (§5.1) ─────────────────────────────────────────────────────────────
@@ -408,6 +411,8 @@ import re  # noqa: E402
 from datetime import datetime, timedelta, timezone  # noqa: E402
 
 from sqlalchemy import text  # noqa: E402
+
+from .build_detail import kept_stations, kept_word, now_summary  # noqa: E402
 
 CORE_STATIONS: tuple[str, ...] = ("plan", "tests", "build", "check", "review", "pr", "preview",
                                   "ship")
@@ -1003,6 +1008,7 @@ def stations_for(run: Mapping[str, Any], *, acts: Optional[list[Mapping[str, Any
     else:
         here_i = len(order) if finished else -1
     rounds = _rounds(acts)
+    kept = kept_stations(fctx)
     review_acts = by_station.get("review", [])
     out: list[Station] = []
     for i, key in enumerate(order):
@@ -1040,7 +1046,12 @@ def stations_for(run: Mapping[str, Any], *, acts: Optional[list[Mapping[str, Any
             s["status"] = status
         elif before or (finished and key in ("plan", "tests", "build", "check", "review")):
             # Passed without an act of its own.
-            if key in AGENT_STATIONS and key != "build":
+            if key in AGENT_STATIONS and key != "build" and key in kept:
+                # CARRIED, NOT SKIPPED: a retry seeded from a saved workspace (or handed the
+                # last plan) has this station's work already; "Skipped" read as never done.
+                s.update(status="done", face="none", tip=kept[key]["tip"],
+                         kept_from=kept[key].get("attempt"), kept=True)
+            elif key in AGENT_STATIONS and key != "build":
                 s.update(status="skipped", face="none", tip=_skip_tip(key, evidence, spec))
             else:
                 s.update(status="done", face="boss" if key in MACHINE_STATIONS else "none",
@@ -1136,6 +1147,8 @@ def stations_for(run: Mapping[str, Any], *, acts: Optional[list[Mapping[str, Any
             else STATION_VERB.get(key, "Working"))
         if key == "ship" and state_key == "merged":
             s["word"] = "Merged"
+        if s.get("kept") and s["status"] == "done":
+            s["word"] = kept_word(kept[key])
         out.append(s)
     if state_key in ("queued", "budget_wait") and not any(
             x["status"] in ("working", "waiting", "stuck", "needs_you") for x in out):
@@ -2588,6 +2601,9 @@ def cockpit(connection: Any, settings: Any, project_id: str, run_id: str, *,
                         viewer),
         "now": _now_line(connection, acts) if live else None,
         "outputs": _outputs(connection, run, facts, st, row["stations"], comments, decision, now),
+        # WHAT IT IS DOING NOW, said at the top of the page (build_detail.now_summary).
+        "summary": now_summary(connection, settings, project_id, run, acts=acts,
+                               gate_labels=gate_label),
         # WHY THIS MODEL (docs/product/MODEL_ROUTER.md): the router's decision per stage.
         "routes": _routes(connection, run_id),
     }

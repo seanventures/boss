@@ -36,7 +36,7 @@ describe("Outputs", () => {
     // contract and meta rows, kept (a-build-page-keeps-what-the-old-page-said.test.tsx).
     expect($$(".fx-out .fx-out-label").map((l) => l.textContent)).toEqual(
       ["Brief", "Pull request", "Checks", "Tests", "Changes", "Comments", "Preview", "Deploy", "Cost"]);
-    expect($('[data-testid="fx-out-value-pr"]')?.textContent).toBe("Not yet");
+    expect($('[data-testid="fx-out-value-pr"]')?.textContent).toBe("Held until the gates pass");
     expect($('[data-testid="fx-out-value-checks"]')?.textContent).toBe("After review");
     expect($('[data-testid="fx-out-value-tests"]')?.textContent).toBe("2 of 2 commands passed");
     expect($('[data-testid="fx-out-value-deploy"]')?.textContent).toBe("Not set up");

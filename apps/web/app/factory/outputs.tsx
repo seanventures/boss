@@ -32,6 +32,8 @@ import { fetchCalls, resolveComment, stopPreview, type ModelCall } from "./cockp
 import { areaHref, costWord, kilo, money, secondsWord, whoName } from "./cockpit-util";
 import { localWith } from "../../lib/local-time";
 import { useIdentityVersion } from "../../lib/use-agent-identities";
+import { missingWord } from "../../lib/build-detail";
+import { nowInput } from "./now-band";
 
 export type OutputKey = "brief" | "pr" | "checks" | "tests" | "changes" | "comments" | "preview" | "deploy" | "cost";
 
@@ -68,7 +70,15 @@ export function briefWord(c: Pick<Cockpit, "brief">): string {
   return b.repo || b.workflow?.name || "—";
 }
 
+/** Why a row has nothing yet, when the server's word only says that it hasn't (lib/build-detail). */
+function missingOf(key: OutputKey, c: Cockpit): { word: string; tip?: string } | null {
+  if (key !== "pr" && key !== "tests" && key !== "changes" && key !== "preview" && key !== "cost") return null;
+  return missingWord(key, { ...nowInput(c), outputs: c.outputs });
+}
+
 function valueOf(key: OutputKey, o: CockpitOutputs, c: Cockpit): string {
+  const missing = missingOf(key, c);
+  if (missing) return missing.word;
   switch (key) {
     case "brief": return briefWord(c);
     case "pr": return o.pr?.word || "Not yet";
@@ -127,9 +137,9 @@ export function Outputs({ projectId, actor, cockpit: c, open, onOpen, onLogs, on
                       onClick={() => onOpen(isOpen ? null : k)}>
                 <span className="fx-out-label">{LABELS[k]}</span>
                 <span className="fx-out-value" data-testid={`fx-out-value-${k}`}
-                      title={k === "cost" && o.cost.word === "Included in plan" ? "Ran on a subscription. No metered spend."
+                      title={missingOf(k, c)?.tip ?? (k === "cost" && o.cost.word === "Included in plan" ? "Ran on a subscription. No metered spend."
                         : k === "cost" ? "Metered model spend so far"
-                        : k === "checks" && c.outputs.checks?.advisory ? "First pass: checks advise, they don't block" : undefined}>
+                        : k === "checks" && c.outputs.checks?.advisory ? "First pass: checks advise, they don't block" : undefined)}>
                   {valueOf(k, o, c)}
                 </span>
                 <span className="fx-out-maker">{makers[k]}</span>

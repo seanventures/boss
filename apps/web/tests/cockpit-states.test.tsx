@@ -69,7 +69,7 @@ describe("the cockpit header says one state", () => {
     expect($('[data-testid="fx-cost"]')).toBeNull();
   });
 
-  it("queued: all stations pending, outputs say Not yet", async () => {
+  it("queued: all stations pending, outputs say why they are empty", async () => {
     stubFetch(cockpit({ state: { state: "queued", word: "Queued", tip: "Waiting for a worker", verb: "Waiting", station: null, k: 0, n: 8, rounds: 0, preview: null },
                         stations: stations(null), story: [], now: null,
                         outputs: { merge_ready: { ready: false, word: "Building" }, comments: { word: "None", items: [] },
@@ -78,8 +78,8 @@ describe("the cockpit header says one state", () => {
     expect(text('[data-testid="fx-state"] .fx-state-word')).toBe("Queued");
     expect(text('[data-testid="fx-k"]')).toBe("0 of 8");
     expect($$(".fx-bay").every((b) => b.dataset.status === "pending")).toBe(true);
-    expect(text('[data-testid="fx-out-value-pr"]')).toBe("Not yet");
-    expect(text('[data-testid="fx-out-value-tests"]')).toBe("Not run");
+    expect(text('[data-testid="fx-out-value-pr"]')).toBe("Held until the gates pass");
+    expect(text('[data-testid="fx-out-value-tests"]')).toBe("After the build");
   });
 
   it("checks failed: the strip with Retry and Waive…, Review stuck, Checks open with labels and reviewer faces", async () => {
