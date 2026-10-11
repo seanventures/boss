@@ -2913,6 +2913,15 @@ select.input:focus,
   max-width: var(--page-max-mid);
 }
 .dq-row + .dq-row { border-top: 1px solid var(--panel-border); }
+/* A large screen (layout-scale.css): the queue is cards two abreast across the page, not one
+   reading column; each card keeps a readable line. */
+@media (min-width: 1800px) {
+  .dq { max-width: var(--page-max); border: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: start; }
+  .dq > .dq-row { border: 1px solid var(--panel-border); }
+  .dq-row + .dq-row { border-top: 1px solid var(--panel-border); }
+  .dq > :not(.dq-row) { grid-column: 1 / -1; }
+  .dq-digest { max-width: var(--page-max); }
+}
 .dq-body {
   display: flex;
   align-items: flex-start;

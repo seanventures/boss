@@ -573,3 +573,25 @@ svg.su-dot { background: none; width: 12px; height: 12px; color: var(--muted); }
   /* The box itself is the touch target (the 390 px walk measures the input): 44 px. */
   .mr-always input, .mr-section .su-consent input { width: 44px; height: 44px; margin: 0; }
 }
+
+/* ── A large screen: two columns of rows, not one reading column (layout-scale.css) ──────────
+   The page takes the full width; each row keeps its own readable measure. The rows that hold
+   a table or side-by-side cards (Repository, GitHub access, Capacity, Routing) span both
+   columns, so the pairs that remain (Build database | Models, Budget | Try, Toolchains |
+   Public URL) keep the setup order. */
+@media (min-width: 1800px) {
+  .su-board {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
+    gap: 12px 16px;
+    max-width: var(--page-max);
+  }
+  .su-board > :not(.su-row),
+  .su-board > [data-testid="su-row-repository"],
+  .su-board > [data-testid="su-row-github-access"],
+  .su-board > [data-testid="su-row-capacity"],
+  .su-board > [data-testid="su-row-jobs"] { grid-column: 1 / -1; }
+  .su-board > .su-row { height: 100%; }
+  .su-board .su-row-body p { max-width: 75ch; }
+}

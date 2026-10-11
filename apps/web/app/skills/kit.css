@@ -253,3 +253,12 @@
   .kit-list-row > :nth-child(3), .kit-list-row > :nth-child(4), .kit-list-row > :nth-child(6) { display: none; }
   .kit-search { flex: 1 1 100%; }
 }
+
+/* A large screen (layout-scale.css): the ability groups sit two abreast instead of leaving a
+   strip of four cards and a wide empty right-hand side; the Who-can matrix spreads its columns. */
+@media (min-width: 1800px) {
+  .kit-home:not([data-drawer="open"]) .kit-main { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 16px 24px; }
+  .kit-home:not([data-drawer="open"]) .kit-main > :not(.kit-group) { grid-column: 1 / -1; }
+  .kit-matrix { width: 100%; }
+  .kit-matrix thead th { width: auto; max-width: none; }
+}
