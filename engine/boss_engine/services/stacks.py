@@ -827,11 +827,20 @@ def check_architecture(markdown: str) -> StackVerdict:
     declared = declared_stack(markdown)
     if declared:
         langs = [_normalise_language(d["language"]) for d in declared]
-        unsupported = [k for k in langs if k not in LANGUAGES]
-        unsupported = [next((u.key for u in UNSUPPORTED if u.key == k or u.label.lower() == k), k)
-                       for k in unsupported]
-        off = [k for k in langs if k in LANGUAGES and not language_ready(k)]
-        return verdict(unsupported, off, where="The architecture")
+        # Only a language BOSS can NAME is a verdict. A `Stack:` line written as prose ("one npm
+        # project in helpdesk-ai/ …") is not a language called "one npm project": refusing it
+        # stopped a Node build that BOSS builds. Words it cannot place are read as text below.
+        unknown = [k for k in langs if k not in LANGUAGES
+                   and not any(u.key == k or u.label.lower() == k for u in UNSUPPORTED)]
+        if not unknown:
+            unsupported = [next(u.key for u in UNSUPPORTED if u.key == k or u.label.lower() == k)
+                           for k in langs if k not in LANGUAGES]
+            off = [k for k in langs if k in LANGUAGES and not language_ready(k)]
+            return verdict(unsupported, off, where="The architecture")
+        line = _STACK_LINE.search(str(markdown or ""))
+        named = check_text(line.group(1) if line else "", where="The architecture")
+        if not named.ok or languages_named(line.group(1) if line else ""):
+            return named
     from .architecture_docs import parse_sections
 
     sections = parse_sections(markdown or "")

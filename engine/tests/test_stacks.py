@@ -470,3 +470,16 @@ def test_supported_stacks_doc_matches_the_registry():
     assert doc == stacks.render_supported_stacks_md(), (
         "docs/community/SUPPORTED_STACKS.md is stale: run `python3 -m boss_engine.services.stacks "
         "--write-docs ../docs/community/SUPPORTED_STACKS.md` from engine/")
+
+
+def test_a_prose_stack_line_is_read_as_text_not_refused_as_a_language():
+    """The HelpDesk architecture said `Stack: one npm project in helpdesk-ai/ — Express + React`;
+    the build was refused as asking for a language called "one npm project"."""
+    from boss_engine.services import stacks
+
+    prose = ("## Context\nStack: one npm project in `helpdesk-ai/` — Express API + React/Vite "
+             "frontend, PostgreSQL\n")
+    assert stacks.check_architecture(prose).ok
+    assert stacks.check_build(prose).ok
+    assert not stacks.check_architecture("Stack: one service written in Go\n").ok
+    assert not stacks.check_architecture("Stack: api=go/gin\n").ok

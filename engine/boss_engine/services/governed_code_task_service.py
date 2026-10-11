@@ -5725,6 +5725,10 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         from .code_task_service import classify_pipeline_exception
         from .spend_cap_failover import apply_spend_cap_failover
         fclass, rcode = classify_pipeline_exception(reason)
+        if isinstance(exc, StackUnsupportedError):
+            # A stack refusal is a decision about the design, not a platform fault: it must not
+            # read as `infra`, which starts an automatic retry that is refused all over again.
+            fclass, rcode = "needs_human", "stack_unsupported"
         # SHIP WHAT EXISTS, EVEN ON A FAILURE — same helper every other exit uses, so the
         # rule lives in exactly one place and cannot drift between paths again.
         _partial_pr = _rescue_pr(reason)
