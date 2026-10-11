@@ -24,6 +24,7 @@ import {
 
 import { callAction } from "../lib/call-action";
 import { GatedButton } from "../components/gated";
+import { useOnScreen } from "../lib/area-shown";
 type Reasoning = {
   id: string; task_ref: string; step_no: number; observe: string;
   hypothesis: string | null; confidence: number | null;
@@ -98,11 +99,14 @@ export function ShepherdConsole({ initial }: { initial?: Overview | null }) {
     if (next.error) setErr(next.error);
     else if (next.data) { setData(next.data); setErr(null); }
   };
+  // Off screen, nothing is asked (lib/area-shown.ts); back on screen, it reads at once.
+  const onScreen = useOnScreen();
   useEffect(() => {
+    if (!onScreen) return;
     load();
     const t = setInterval(load, 20000);
     return () => clearInterval(t);
-  }, []);
+  }, [onScreen]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const sweep = async () => {
     setBusy(true);

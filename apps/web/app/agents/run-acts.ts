@@ -19,6 +19,8 @@
 
 import { useEffect, useRef, useState } from "react";
 
+import { useOnScreen } from "../../lib/area-shown";
+
 import type { Chain } from "../../lib/agent-world-types";
 import { toActDetail, toChain, type ActDetail } from "./act-wire";
 
@@ -63,6 +65,9 @@ export function useRunChain(projectId: string, runId: string | null, live: boole
   const [state, setState] = useState<{ id: string; chain: Chain | null } | null>(null);
   const liveRef = useRef(live);
   liveRef.current = live;
+  const onScreen = useOnScreen();   // off screen, nothing is asked (lib/area-shown.ts)
+  const onScreenRef = useRef(onScreen);
+  onScreenRef.current = onScreen;
   useEffect(() => {
     if (!runId) return;
     let alive = true;
@@ -74,7 +79,7 @@ export function useRunChain(projectId: string, runId: string | null, live: boole
     const tick = () => {
       timer = window.setTimeout(async () => {
         if (!alive) return;
-        if (typeof document === "undefined" || document.visibilityState !== "hidden") await load();
+        if (onScreenRef.current) await load();
         if (alive && liveRef.current) tick();
       }, POLL_MS);
     };

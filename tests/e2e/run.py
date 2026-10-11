@@ -6,7 +6,9 @@
   status      print where the running stack is
   workflows   drive every catalogue template and opt-in example to succeeded or its gate
   console     sign in and walk every console area and primary action in a browser
-  all         up, workflows, console, down — the default; exits non-zero on any failure
+  budget      the navigation budget (harness/nav_budget.py): rail clicks timed in a browser,
+              API calls per page load, no polling storm, no step-up on view; blocks a release
+  all         up, workflows, console, budget, down — the default; exits non-zero on any failure
 
   --target live   point at an existing install (boss-1) instead; see tests/e2e/README.md
 """
@@ -118,6 +120,11 @@ def cmd_all(args: argparse.Namespace) -> int:
         code = cmd_workflows(args)
         if not args.no_web:
             code = max(code, cmd_console(args))
+            # THE NAVIGATION BUDGET BLOCKS A RELEASE (harness/nav_budget.py): what a person waits
+            # for after a rail click, calls per page load, no polling storm, no step-up on view.
+            from e2e.harness import nav_budget
+
+            code = max(code, nav_budget.main(["--seed"]))
     finally:
         if args.keep:
             print(f"--keep: the stack is still up; `scripts/e2e.sh down` stops it. "
@@ -143,6 +150,12 @@ def main(argv: list[str] | None = None) -> int:
         from e2e.harness import perf
 
         return perf.main(args_in[1:])
+    if args_in[:1] == ["budget"]:
+        # The navigation budget (harness/nav_budget.py): rail clicks timed in a browser, API calls
+        # per page load, no polling storm, no step-up on view. `budget --help`.
+        from e2e.harness import nav_budget
+
+        return nav_budget.main(args_in[1:])
     parser = argparse.ArgumentParser(prog="scripts/e2e.sh", description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("command", nargs="?", default="all",

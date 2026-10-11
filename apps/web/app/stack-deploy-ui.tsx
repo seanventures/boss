@@ -25,6 +25,7 @@ import {
   stepText, targetFormProblem, targetManifestPath, targetPublicUrl, targetRepository,
   type DeployHost, type Repository, type StackDeployment, type StackTarget,
 } from "../lib/stack-deploy";
+import { useOnScreen } from "../lib/area-shown";
 
 /** How often a moving deployment is re-read. A deploy takes minutes; a step takes seconds. */
 export const POLL_MS = 3000;
@@ -381,11 +382,12 @@ export function StackDeploymentView({ deploymentId, actor, initial, onChanged, o
   useEffect(() => { if (!initial) void refresh(); }, [initial, refresh]);
 
   const live = isLive(d?.status);
+  const onScreen = useOnScreen();   // off screen, nothing is asked (lib/area-shown.ts)
   useEffect(() => {
-    if (!live) return;
+    if (!live || !onScreen) return;
     const timer = window.setInterval(() => { void refresh(); }, pollMs);
     return () => window.clearInterval(timer);
-  }, [live, refresh, pollMs]);
+  }, [live, refresh, pollMs, onScreen]);
 
   if (!d) {
     return (

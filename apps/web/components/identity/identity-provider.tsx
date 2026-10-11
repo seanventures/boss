@@ -26,6 +26,7 @@ import { IdentityError, idGet, setCsrfToken } from "../../lib/identity/api";
 import { StepUpSheet } from "./step-up-sheet";
 import { currentMirror, installMirror } from "../../lib/identity/mirror";
 import { installReadGate } from "../../lib/identity/read-gates";
+import { installGestureTracking, isInteractive } from "../../lib/user-gesture";
 
 export const EPOCH_EVENT = "boss:identity-epoch";
 
@@ -129,7 +130,17 @@ export function IdentityProvider({ me: initialMe, org: initialOrg, project: init
     mirrored ? checkWith(org, project, pid === undefined ? projectId : pid, permission) : UNMIRRORED.check(permission, pid),
   [org, project, projectId, mirrored]);
 
-  const stepUp = useCallback((reason: string) => new Promise<boolean>((resolve) => setAsk({ reason, resolve })), []);
+  // THE SHEET IS FOR A PRESS, NEVER FOR A PAGE VIEW (lib/user-gesture.ts). Every step-up path —
+  // apiWrite, callAction, useGuardedCall, the client forms — asks through here, so this is the
+  // one place that decides: a write the person did not start in the last few seconds (an
+  // effect, a timer, a background sync) is answered "not confirmed" at once and its caller
+  // shows its own inline state. "Confirm it's you" no longer appears on a plain refresh.
+  useEffect(() => { installGestureTracking(); }, []);
+  const stepUp = useCallback((reason: string) => {
+    installGestureTracking();
+    if (!isInteractive()) return Promise.resolve(false);
+    return new Promise<boolean>((resolve) => setAsk({ reason, resolve }));
+  }, []);
 
   // Code outside components (lib/call-action.ts, the read gate) mirrors through the same check
   // and step-up. Installed DURING RENDER as well as in the effect: a child's mount effect (the

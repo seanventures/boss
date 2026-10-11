@@ -109,6 +109,7 @@ export function failingGatesOf(ctx: Record<string, unknown> | null | undefined):
 }
 
 import { callAction } from "../../lib/call-action";
+import { useOnScreen } from "../../lib/area-shown";
 export function RetryControls(
   { runId, failingGates = [], compact = false }:
   { runId: string; failingGates?: string[]; compact?: boolean },
@@ -620,8 +621,9 @@ const PHASE_LABEL: Record<string, string> = {
 // so the phase/activity updates live instead of needing a manual refresh.
 export function useLiveRefresh(active: boolean, intervalMs = 4000, reload?: () => void | Promise<void>) {
   const refresh = useConsoleRefresh();
+  const onScreen = useOnScreen();   // off screen, nothing is asked (lib/area-shown.ts)
   useEffect(() => {
-    if (!active) return;
+    if (!active || !onScreen) return;
     const t = setInterval(() => {
       // Both: the console refresh updates every other server-rendered panel, and `reload`
       // re-reads the one list this component owns. The refresh alone was demonstrably not
@@ -632,7 +634,7 @@ export function useLiveRefresh(active: boolean, intervalMs = 4000, reload?: () =
       void reload?.();
     }, intervalMs);
     return () => clearInterval(t);
-  }, [active, intervalMs, refresh, reload]);
+  }, [active, intervalMs, refresh, reload, onScreen]);
 }
 
 export function statusTone(status: string): string {
@@ -1289,11 +1291,12 @@ export function DeploymentLine({ run, projectId, actor, deployable }: {
   // keeps a browser and an API busy describing a deployment that finished yesterday.
   const latest = deploys[0];
   const live = latest && ["running", "in_progress", "deploying"].includes(latest.status);
+  const onScreen = useOnScreen();   // off screen, nothing is asked (lib/area-shown.ts)
   useEffect(() => {
-    if (!live) return;
+    if (!live || !onScreen) return;
     const t = window.setInterval(() => { void reload(); }, 4000);
     return () => window.clearInterval(t);
-  }, [live, reload]);
+  }, [live, reload, onScreen]);
 
   // No deployment yet. That is either "no destination" (offer to link one) or "linked but
   // never shipped" (offer the first deployment plan). Rendering nothing here is what left an already
@@ -1858,6 +1861,7 @@ export function CodeTaskSteps({ runId, live, phaseTimings, currentPhase, current
   const hostAdvice = useHostAdvice(PROJECT_ID);
   const [calls, setCalls] = useState<LlmCallRow[]>([]);
   const [loaded, setLoaded] = useState(false);
+  const onScreen = useOnScreen();   // off screen, nothing is asked (lib/area-shown.ts)
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
@@ -1865,9 +1869,9 @@ export function CodeTaskSteps({ runId, live, phaseTimings, currentPhase, current
       if (!cancelled) { setCalls(data); setLoaded(true); }
     };
     void load();
-    const id = live ? setInterval(load, 4000) : undefined;
+    const id = live && onScreen ? setInterval(load, 4000) : undefined;
     return () => { cancelled = true; if (id) clearInterval(id); };
-  }, [runId, live]);
+  }, [runId, live, onScreen]);
 
   // Phases carry the WALL CLOCK; calls carry who did it and what it cost. Nesting the calls
   // under their phase is what makes this one table instead of two lists of the same work.

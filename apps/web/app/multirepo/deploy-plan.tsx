@@ -21,6 +21,7 @@ import {
   changeTone, changeWord, multirepo, refusalMessage, shortName, type ChangeSetView, type DeployPlan,
 } from "../../lib/multirepo";
 import { showToast } from "../client-forms";
+import { useOnScreen } from "../../lib/area-shown";
 
 const RELEASE_STATES = ["merged", "deploying", "live", "rolled_back"];
 const cap = (s: string) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
@@ -79,11 +80,12 @@ export function DeployPlanView({ projectId, changeSetId, onBack }: { projectId: 
   }, [projectId, changeSetId]);
   useEffect(() => { void load(); }, [load]);
   const moving = plan?.state === "deploying" || plan?.state === "merging";
+  const onScreen = useOnScreen();   // off screen, nothing is asked (lib/area-shown.ts)
   useEffect(() => {
-    if (!moving) return undefined;
+    if (!moving || !onScreen) return undefined;
     const t = window.setInterval(() => { if (document.visibilityState !== "hidden") void load(); }, 5000);
     return () => window.clearInterval(t);
-  }, [moving, load]);
+  }, [moving, load, onScreen]);
 
   const back = (
     <button type="button" className="mr-ui-link" onClick={onBack} data-testid="mr-dp-back"><ArrowLeft size={12} aria-hidden /> Deploys</button>

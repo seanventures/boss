@@ -17,6 +17,7 @@ import {
   type Binding,
 } from "../../lib/v2/deploy-controls";
 import { apiWrite } from "../../lib/api-write";
+import { useOnScreen } from "../../lib/area-shown";
 
 /**
  * Set target, unbind, deploy, retry — the four controls the parity map flags as highest risk.
@@ -87,11 +88,12 @@ export function DeployControls({
 
   // Poll only while something is actually moving. A card that polls forever keeps a browser
   // and an API busy describing a deployment that finished yesterday.
+  const onScreen = useOnScreen();   // off screen, nothing is asked (lib/area-shown.ts)
   useEffect(() => {
-    if (!live) return;
+    if (!live || !onScreen) return;
     const t = window.setInterval(() => void reload(), 4000);
     return () => window.clearInterval(t);
-  }, [live, reload]);
+  }, [live, reload, onScreen]);
 
   const post = async (
     kind: "deploy" | "retry",

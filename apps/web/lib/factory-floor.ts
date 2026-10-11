@@ -11,6 +11,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { onChanged } from "../app/changed";
 import { isConsoleLive, subscribeConsoleLive } from "./console-live";
+import { useAreaShown } from "./area-shown";
 import { parseAttention, type AttentionItem } from "./agents-live-board";
 
 // ── Stations (§4.3) ─────────────────────────────────────────────────────────────────────────
@@ -274,6 +275,11 @@ export function usePolled<T>(url: string | null, parse: (w: unknown) => T,
   parser.current = parse;
   const cadence = useRef(everyMs);
   cadence.current = everyMs;
+  // An area off screen polls nothing (lib/area-shown.ts); coming back on screen asks at once.
+  const shown = useAreaShown();
+  const shownRef = useRef(shown);
+  shownRef.current = shown;
+  useEffect(() => { if (shown) kick.current(); }, [shown]);
 
   useEffect(() => {
     // The seed belongs to the first url only: a later url starts empty, as it always did.
@@ -294,7 +300,7 @@ export function usePolled<T>(url: string | null, parse: (w: unknown) => T,
     const tick = async (mine: number) => {
       if (stopped || mine !== gen) return;
       let wait = cadence.current(latest.current);
-      if (!hidden() && isConsoleLive() && !inflight) {
+      if (!hidden() && isConsoleLive() && !inflight && (shownRef.current || latest.current === null)) {
         inflight = true;
         try {
           const r = await fetch(url, {
@@ -326,7 +332,7 @@ export function usePolled<T>(url: string | null, parse: (w: unknown) => T,
       if (!stopped && mine === gen) timer = setTimeout(() => void tick(mine), wait);
     };
     const restart = () => {
-      if (stopped || hidden() || !isConsoleLive()) return;
+      if (stopped || hidden() || !isConsoleLive() || !shownRef.current) return;
       if (timer) clearTimeout(timer);
       gen += 1;
       void tick(gen);

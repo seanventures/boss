@@ -8,6 +8,7 @@
 import React, { useEffect, useId, useState } from "react";
 
 import { parseRoutes, shortLabel, type RouteRow } from "../lib/model-routes";
+import { useOnScreen } from "../lib/area-shown";
 
 export type { RouteRow };
 
@@ -49,6 +50,7 @@ export function WhyThisModel({ route, title }: { route: RouteRow; title?: string
 /** A run's routes, read once and again while it is live (every 15s, only when visible). */
 export function useRunRoutes(projectId: string, unitId: string | undefined, live = false): RouteRow[] {
   const [routes, setRoutes] = useState<RouteRow[]>([]);
+  const onScreen = useOnScreen();   // off screen, nothing is asked (lib/area-shown.ts)
   useEffect(() => {
     if (!unitId || !projectId) { setRoutes([]); return; }
     let stopped = false;
@@ -62,12 +64,12 @@ export function useRunRoutes(projectId: string, unitId: string | undefined, live
       } catch { /* "Why this model" is an extra; the step renders without it */ }
     };
     void read();
-    if (!live) return () => { stopped = true; };
+    if (!live || !onScreen) return () => { stopped = true; };
     const timer = window.setInterval(() => {
       if (document.visibilityState === "visible") void read();
     }, 15_000);
     return () => { stopped = true; window.clearInterval(timer); };
-  }, [projectId, unitId, live]);
+  }, [projectId, unitId, live, onScreen]);
   return routes;
 }
 

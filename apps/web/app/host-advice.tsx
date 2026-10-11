@@ -5,6 +5,7 @@ import React, { useEffect, useState } from "react";
 // warning glyph to keep in step with the rest of the console for no gain.
 import { Warning } from "@phosphor-icons/react";
 import { Check, Copy } from "@phosphor-icons/react";
+import { useOnScreen } from "../lib/area-shown";
 
 /**
  * "This computer is out of memory" — said to the person who can fix it, and ONLY when it is.
@@ -41,6 +42,7 @@ export type HostAdvice = {
 export function useHostAdvice(projectId: string, pollMs = 60_000, initial?: HostAdvice): HostAdvice {
   const [advice, setAdvice] = useState<HostAdvice>({ show: false });
   const given = initial !== undefined;
+  const onScreen = useOnScreen();   // off screen, nothing is asked (lib/area-shown.ts)
   useEffect(() => {
     if (given) return undefined;
     let alive = true;
@@ -58,9 +60,9 @@ export function useHostAdvice(projectId: string, pollMs = 60_000, initial?: Host
       }
     };
     read();
-    const timer = setInterval(read, pollMs);
-    return () => { alive = false; clearInterval(timer); };
-  }, [projectId, pollMs, given]);
+    const timer = onScreen ? setInterval(read, pollMs) : undefined;
+    return () => { alive = false; if (timer) clearInterval(timer); };
+  }, [projectId, pollMs, given, onScreen]);
   return given ? (initial ?? { show: false }) : advice;
 }
 

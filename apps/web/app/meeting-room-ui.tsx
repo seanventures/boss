@@ -55,6 +55,7 @@ import {
 } from "../lib/research-panels";
 import { AgentAvatar } from "./agent-avatar";
 import { ReviewChecklist } from "./factory/security/review-checklist";
+import { useOnScreen } from "../lib/area-shown";
 
 export const ROLE_ORDER = SEAT_ORDER;
 
@@ -114,6 +115,7 @@ function useMeeting(id: string, projectId: string, listed: Meeting | null): { me
   const current = mine && listed && !meetingLive(listed) && meetingLive(mine) ? listed : mine ?? listed;
   const live = current ? meetingLive(current) : false;
   const have = Boolean(current);
+  const onScreen = useOnScreen();   // off screen, nothing is asked (lib/area-shown.ts)
   useEffect(() => {
     let cancelled = false;
     const load = () => (byTask ? fetchMeetingForTask(id.slice(5), projectId) : fetchMeetingRoom(id, projectId))
@@ -122,10 +124,10 @@ function useMeeting(id: string, projectId: string, listed: Meeting | null): { me
         if (res.ok) { setLoaded(res.meeting); setError(null); } else setError(res.error);
       });
     if (!have) void load();
-    if (!live) return () => { cancelled = true; };
+    if (!live || !onScreen) return () => { cancelled = true; };
     const t = setInterval(() => { void load(); }, 4000);
     return () => { cancelled = true; clearInterval(t); };
-  }, [id, projectId, live, have, byTask]);
+  }, [id, projectId, live, have, byTask, onScreen]);
   return { meeting: current ?? null, error: current ? null : error };
 }
 
