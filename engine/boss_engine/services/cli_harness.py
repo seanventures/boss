@@ -40,6 +40,7 @@ import tomllib
 from typing import Optional
 
 from . import owned_process
+from .workspace_perms import tidies_workspace
 
 _log = logging.getLogger(__name__)
 
@@ -1381,6 +1382,7 @@ class GenericCliCodeAgent:
         """
         return self._resolve_secret(self.spec.token_env)
 
+    @tidies_workspace
     def run_role(self, prompt: str, cwd: Path, *, read_only: bool = False,
                  model: Optional[str] = None, resume_session_id: Optional[str] = None,
                  **_ignored) -> dict:

@@ -78,6 +78,7 @@ from .pipeline_profiles import (
 )
 from .sandbox_provider import LocalSubprocessProvider, MicroVMProvider
 from .software_factory import SoftwareFactoryService
+from .workspace_perms import write_text as _ws_write
 
 _DEFAULT_TEST_CMD = "python3 -m unittest discover -v"
 
@@ -750,6 +751,49 @@ def _record_quality_gate(connection, *, run_id, project_id, task_id, job_id, evi
                {"status": status, "gates_passed": passed, "gates_failed": failed,
                 "code_task_run_id": run_id})
     return qg_id, status
+
+
+AUTO_INFRA_RETRY_KEY = "auto_infra_retry"
+
+
+def _retry_after_infra_failure(engine, settings, jobs, run_id: str, project_id: str,
+                               fctx: dict, result: dict) -> dict:
+    """ONE AUTOMATIC RETRY FOR A BUILD THAT DIED OF BOSS, NOT OF ITS CODE.
+
+    crun_966aa44e ran an hour and then failed `infra` on a permission error in BOSS's own
+    bookkeeping; the operator's only way on was to notice and press Retry. A failure_class=infra
+    run now starts one new attempt in the same lineage at once (retry_code_task: the branch's
+    work, the approved design and the completed stages are carried), and the workflow step that
+    waited on it follows the new attempt. An attempt that is itself the automatic retry is not
+    retried again: the second infra failure stays failed, with Retry offered and a plain reason.
+    Never raises; the failure it was given is returned unchanged when no retry starts."""
+    if (fctx or {}).get(AUTO_INFRA_RETRY_KEY):
+        return {**result, "auto_retry": "not_again",
+                "next_step": ("BOSS already retried this build once after a platform error. "
+                              "Fix the cause shown above, then press Retry.")}
+    try:
+        from .code_task_service import retry_code_task
+
+        retried = retry_code_task(engine, settings, jobs, run_id)
+        new_id = str(retried.get("run_id") or "")
+        with _transaction(engine) as c:
+            c.execute(sql("UPDATE code_task_runs SET finalize_ctx = COALESCE(finalize_ctx,'{}'::jsonb)"
+                          " || jsonb_build_object(CAST(:k AS text), true) WHERE id=:id"),
+                      {"k": AUTO_INFRA_RETRY_KEY, "id": new_id})
+            emit_event(c, project_id, "code_task.auto_retried", "boss", "code_task_run", run_id,
+                       {"retry_run_id": new_id, "why": "the build stopped on a BOSS platform "
+                        "error, not on its code; retrying once automatically"})
+        return {**result, "auto_retry_run_id": new_id}
+    except Exception as exc:  # noqa: BLE001 — the original failure stands
+        try:
+            with _transaction(engine) as c:
+                emit_event(c, project_id, "code_task.auto_retry_failed", "boss",
+                           "code_task_run", run_id,
+                           {"error": f"{type(exc).__name__}: {exc}"[:300]})
+        except Exception:  # noqa: BLE001
+            pass
+        return {**result, "auto_retry": "refused",
+                "next_step": "BOSS could not retry this build automatically; press Retry."}
 
 
 def _run_iac_lane(settings: Settings, *, files: dict[str, str], workdir) -> IacVerifyResult:
@@ -3263,7 +3307,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 if _pinned_manifest.text is None:
                     _manifest_path.unlink(missing_ok=True)
                 else:
-                    _manifest_path.write_text(_pinned_manifest.text, encoding="utf-8")
+                    _ws_write(_manifest_path, _pinned_manifest.text)
                 if record:
                     last_verify_output = f"[boss] {tampered_manifest}\n"
                 return CommandResult(command="", argv=[], exit_code=1, duration_ms=0,
@@ -3323,14 +3367,29 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         + (install.stderr or "")
                     )[-4000:]
                     return install
-                _emit_cmd("install browsers", sandbox.run(
-                    str(
-                        prep.get("browser_install_command")
-                        or verification_target.PLAYWRIGHT_INSTALL_CMD
-                    ),
-                    cwd=str(cwd),
-                    timeout=install_timeout,
-                ))
+                # BROWSERS ARE BOSS'S, ONCE PER INSTALL (playwright_cache): the first build that
+                # needs a Playwright version downloads its Chromium into the shared cache, every
+                # later build finds it there and skips the install. Only an app whose version
+                # cannot be read falls back to installing inside its own sandbox.
+                from . import playwright_cache
+                from .sandbox import CommandResult as _PwResult
+
+                _pw = playwright_cache.ensure(playwright_cache.project_version(cwd))
+                if _pw.get("ok"):
+                    _emit_cmd("install browsers", _PwResult(
+                        command=f"boss: {_pw.get('detail')}", argv=[], exit_code=0,
+                        duration_ms=int(float(_pw.get("seconds") or 0) * 1000),
+                        timed_out=False, stdout="", stderr=""))
+                else:
+                    prep_note += f"[boss] shared browser cache: {_pw.get('detail')}\n"
+                    _emit_cmd("install browsers", sandbox.run(
+                        str(
+                            prep.get("browser_install_command")
+                            or verification_target.PLAYWRIGHT_INSTALL_CMD
+                        ),
+                        cwd=str(cwd),
+                        timeout=max(install_timeout, playwright_cache.install_timeout()),
+                    ))
             # npm install / the implementer can recreate leftover Playwright
             # configs. Force the official HookWatch tree again immediately
             # before the authoritative command so e2e cannot start itty-router
@@ -4022,7 +4081,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 # to their authored content so the next attempt starts from the real spec.
                 if not use_microvm:
                     for p, content in tests_orig.items():
-                        (root / p).write_text(content, encoding="utf-8")
+                        _ws_write(root / p, content)
             else:
                 evidence_text = verification_target.attach_failing_sources(
                     f"$ {test_cmd} (exit {test_exit_code})\n{fail_output[-3000:]}",
@@ -4105,7 +4164,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             if not q_ok and snapshot:
                 for _qp, _qc in snapshot.items():
                     try:
-                        (root / _qp).write_text(_qc, encoding="utf-8")
+                        _ws_write(root / _qp, _qc)
                     except OSError:
                         pass
                 reverted = True
@@ -4454,7 +4513,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         mut = _run_verify(record=False)
                         mutation_caught = not bool(mut.ok)
                         for p, content in orig.items():
-                            (root / p).write_text(content, encoding="utf-8")
+                            # The mutation probe's restore: crun_966aa44e died HERE on a
+                            # file the coder had copied in read-only (workspace_perms).
+                            _ws_write(root / p, content)
                         last_verify_output = implement_verify_output
                         tests_passed = implement_tests_passed
                         test_exit_code = implement_test_exit
@@ -5735,7 +5796,12 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                            failure_class=fclass, reason_code=rcode)
             if decision_id:
                 result = {**result, "decision_id": decision_id}
-            return result
+        if fclass == "infra":
+            # Committed first: the retry reads this run as failed, and the workflow step that
+            # waits on it follows the successor (workflow_capability_runner._successor_attempt).
+            result = _retry_after_infra_failure(engine, settings, jobs, run_id, project_id,
+                                                fctx, result)
+        return result
     finally:
         try:
             if identity_run is not None:

@@ -234,6 +234,7 @@ from .sandbox import (
     CommandResult, DiffSummary, EphemeralSandbox, _shared_tool_caches,
 )
 from .agent_env import agent_environment
+from .workspace_perms import tidies_workspace
 from . import owned_process
 
 # --------------------------------------------------------------------------- #
@@ -1010,6 +1011,7 @@ class ClaudeCodeAgent:
             usage["rate_limit"] = data["_rate_limit"]
         return usage, cost_micros
 
+    @tidies_workspace
     def run_role(
         self, prompt: str, cwd: Path, *, read_only: bool = False, model: Optional[str] = None,
         resume_session_id: Optional[str] = None, max_turns: Optional[int] = None,
@@ -1407,6 +1409,7 @@ class NativeCodeAgent:
             "files_touched": sorted(set(toolset.written_paths)),
         }
 
+    @tidies_workspace
     def run_role(
         self, prompt: str, cwd: Path, *, read_only: bool = False, model: Optional[str] = None,
         resume_session_id: Optional[str] = None,  # accepted for interface parity; native has no session store

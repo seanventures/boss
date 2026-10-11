@@ -158,6 +158,26 @@ def _failed(message: str):
                          stdout="", stderr=message)
 
 
+def _ensure_browsers(plan: Any, record: dict) -> set:
+    """The e2e steps that install Playwright's browsers and are now covered by the shared cache.
+    Never raises; an uncovered step runs in the sandbox as before."""
+    covered: set = set()
+    try:
+        from . import playwright_cache
+        from .verification_target import PLAYWRIGHT_INSTALL_CMD
+
+        for command, cwd in plan.e2e_steps:
+            if command != PLAYWRIGHT_INSTALL_CMD:
+                continue
+            got = playwright_cache.ensure(playwright_cache.project_version(cwd))
+            record["browsers"] = {k: got.get(k) for k in ("ok", "cached", "seconds", "detail")}
+            if got.get("ok"):
+                covered.add((command, str(cwd)))
+    except Exception as exc:  # noqa: BLE001
+        record["browsers"] = {"ok": False, "detail": f"{type(exc).__name__}: {exc}"[:300]}
+    return covered
+
+
 def run_stack_plan(sandbox, plan: StackPlan, *, timeout: Optional[int] = None,
                    start_timeout: Optional[float] = None) -> tuple[list[Any], dict[str, Any]]:
     """Run the plan, stopping at the first failure. (results, record)."""
@@ -181,10 +201,16 @@ def run_stack_plan(sandbox, plan: StackPlan, *, timeout: Optional[int] = None,
             return results, record
     if plan.backend is None:
         return results, record
+    # The browsers come from BOSS's install-wide cache (playwright_cache), fetched BEFORE the
+    # backend starts — a first download is minutes, and must not run against a live backend's
+    # start timeout. A step it covered is not run in the sandbox at all.
+    cached_steps = _ensure_browsers(plan, record)
     try:
         with backend_running(plan, timeout=start_timeout) as session:
             record.update(session.record)
             for command, cwd in plan.e2e_steps:
+                if (command, str(cwd)) in cached_steps:
+                    continue
                 result = run_in(sandbox, command, cwd, timeout=timeout, env=session.env())
                 results.append(result)
                 if not getattr(result, "ok", False):

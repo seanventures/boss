@@ -86,6 +86,17 @@ def _shared_tool_caches() -> dict:
         _log.warning("sandbox tool cache unavailable at %s (%s); running uncached",
                      _TOOL_CACHE_ROOT, exc)
         return {}
+    # The browsers: BOSS's shared, install-wide copy on the toolchain cache volume when this
+    # process has one (playwright_cache — downloaded once, read-only to builds), else the old
+    # per-container directory.
+    try:
+        from .playwright_cache import browsers_dir
+
+        shared = browsers_dir()
+        if shared is not None:
+            pw = shared
+    except Exception:  # noqa: BLE001 — a cache is an optimisation
+        pass
     return {
         "npm_config_cache": str(npm),
         "PLAYWRIGHT_BROWSERS_PATH": str(pw),

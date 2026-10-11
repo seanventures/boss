@@ -25,6 +25,12 @@ class RepoFileRefused(ValueError):
     """An unsafe or unbounded repository read; callers must surface this refusal."""
 
 
+class RepoFileNotWritable(RepoFileRefused):
+    """The path is a real repository file or directory that the OS will not let us write
+    (EACCES/EPERM): e.g. a template reference copied in read-only. Not a safety refusal — the
+    caller may make it writable (workspace_perms.make_writable) and try once more."""
+
+
 def _parts(raw: str, *, directory: bool = False) -> tuple[str, ...]:
     if directory and raw in ("", ".", "./"):
         return ()
@@ -146,6 +152,10 @@ class RepoFiles:
                 os.ftruncate(stream.fileno(), 0)
                 stream.write(data)
             return existed
+        except PermissionError as exc:
+            raise RepoFileNotWritable(
+                f"{path!r} is not writable (permission denied) — it, or its folder, is "
+                "read-only") from exc
         except OSError as exc:
             raise _refused(path) from exc
 

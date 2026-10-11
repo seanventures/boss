@@ -40,7 +40,7 @@ import time
 from typing import Callable, Optional
 
 from . import owned_process
-from .repo_files import MAX_SCAN_BYTES, RepoFileRefused, RepoFiles
+from .repo_files import MAX_SCAN_BYTES, RepoFileNotWritable, RepoFileRefused, RepoFiles
 
 _MAX_READ_BYTES = 60_000
 _MAX_GREP_RESULTS = 120
@@ -234,9 +234,26 @@ class SandboxToolset:
                 "Report what you found; do not change files."
             )
 
+    def _write(self, path: str, content: str) -> bool:
+        """One write into the workspace. A file the OS will not let us write (the agent copied a
+        read-only template file in) is made writable and tried once more; if it still cannot be
+        written the MODEL is told, as a tool error — never a dead build (crun_966aa44e)."""
+        try:
+            return self._files.write_text(path, content)
+        except RepoFileNotWritable:
+            from .workspace_perms import make_writable
+
+            make_writable(self.root / path, within=self.root)
+            try:
+                return self._files.write_text(path, content)
+            except RepoFileNotWritable as exc:
+                raise ToolError(
+                    f"{exc}. Make it writable first (bash: chmod u+w {path} and its folder), "
+                    "or write a different path.") from None
+
     def write_file(self, path: str, content: str) -> str:
         self._require_writable("write_file")
-        existed = self._files.write_text(path, content if content is not None else "")
+        existed = self._write(path, content if content is not None else "")
         rel = path
         self.written_paths.append(rel)
         n = len((content or "").splitlines())
@@ -262,7 +279,7 @@ class SandboxToolset:
             )
         updated = (original.replace(old_string, new_string)
                    if replace_all else original.replace(old_string, new_string, 1))
-        self._files.write_text(path, updated)
+        self._write(path, updated)
         self.written_paths.append(rel)
         return f"edited {rel} ({count if replace_all else 1} replacement(s))"
 
