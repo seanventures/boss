@@ -81,6 +81,11 @@ export type CoordinatorOptions = {
   watchdogMs?: (kind: RefreshKind, lastDurationMs: number) => number;
   /** How many times one refresh is unstuck before only the ceiling is left. */
   maxUnsticks?: number;
+  /** How long this server took to render the document the console loaded with (navigation
+   *  timing), before any refresh has been measured. A refresh is never unstuck before 1.5x
+   *  this: a slow server's first refresh is still being answered, and restarting it only
+   *  makes the server render it again (rc9 merge, scratchpad/rc9/MERGE.md). 0 = unknown. */
+  serverMs?: number;
 };
 
 export function createRefreshCoordinator(options: CoordinatorOptions): RefreshCoordinator {
@@ -102,10 +107,11 @@ export function createRefreshCoordinator(options: CoordinatorOptions): RefreshCo
   let disposed = false;
   const listeners = new Set<() => void>();
   const notify = () => { for (const l of [...listeners]) l(); };
+  const floor = Math.max(700, (options.serverMs ?? 0) * 1.5);
   const watchdogFor = options.watchdogMs
     ?? ((kind: RefreshKind, last: number) => (kind === "now"
-      ? Math.min(3_000, Math.max(700, last * 2))
-      : Math.max(3_000, last * 3)));
+      ? Math.min(Math.max(3_000, floor), Math.max(floor, last * 2))
+      : Math.max(3_000, floor, last * 3)));
   const maxUnsticks = options.maxUnsticks ?? 3;
   let generation = 0;
 

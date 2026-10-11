@@ -343,6 +343,23 @@ describe("a refresh that never lands is unstuck, not waited out (2026-10-10)", (
     expect(c.busy()).toBe(false);
   });
 
+  // rc9 merge: a refresh that is only SLOW is not stuck. Before any refresh is measured, the
+  // watchdog waits at least 1.5x what the server took for the page load, so a 1.5 s server's
+  // first refresh is answered rather than restarted (and rendered again) at 0.7 s.
+  it("never unsticks a first refresh before the server could have answered it", () => {
+    for (const [serverMs, firstUnstickAfter] of [[0, 700], [1_500, 2_250], [4_000, 6_000]]) {
+      const time = fakeTime();
+      let unsticks = 0;
+      const c = createRefreshCoordinator({ start: () => {}, unstick: () => { unsticks += 1; }, ...time, serverMs });
+      c.request("now");
+      time.run(firstUnstickAfter - 1);
+      expect(unsticks, `serverMs=${serverMs}`).toBe(0);
+      time.run(firstUnstickAfter);    // fakeTime runs to an absolute time
+      expect(unsticks, `serverMs=${serverMs}`).toBe(1);
+      c.dispose();
+    }
+  });
+
   it("a refresh that lands in time is never unstuck", () => {
     const time = fakeTime();
     let unsticks = 0;

@@ -382,6 +382,17 @@ function RefreshState({ coordinator, fallback, children }: {
   return <>{children(busy || fallback)}</>;
 }
 
+/** How long the server took to send the document this console loaded with (0 = unknown). */
+function documentServerMs(): number {
+  try {
+    const nav = performance.getEntriesByType?.("navigation")?.[0] as PerformanceNavigationTiming | undefined;
+    const ms = nav ? nav.responseEnd - nav.requestStart : 0;
+    return Number.isFinite(ms) && ms > 0 ? ms : 0;
+  } catch {
+    return 0;
+  }
+}
+
 function ConsoleShellInner({
   status,
   scope,
@@ -603,6 +614,9 @@ function ConsoleShellInner({
     // Long enough for a slow render under load; short enough that a refresh Next discarded (a
     // navigation raced it) does not stop the console refreshing for minutes.
     ceilingMs: 30_000,
+    // What this server is measured to take, so the watchdog never restarts a refresh that is
+    // only slow (the unstick is for one Next never completes).
+    serverMs: documentServerMs(),
   }), [router, tokenDriven]);
   // A URL RESTORE DISCARDS THE REFRESH IN FLIGHT (rc9). Next prioritizes a URL restore over a
   // pending refresh and discards its response. That response cannot acknowledge our
@@ -895,7 +909,12 @@ function ConsoleShellInner({
     deferredUrl.current = null;
     if (active !== due.id) return;
     try {
-      window.history.pushState(null, "", due.href);
+      // From the URL as it is NOW, not as it was at the click: a filter or a restore that
+      // committed while the area loaded (`&state=pending`) is kept, never overwritten.
+      const url = new URL(window.location.href);
+      url.searchParams.set("area", due.id);
+      if (url.toString() === window.location.href) return;
+      window.history.pushState(null, "", `${url.pathname}${url.search}${url.hash}`);
       window.dispatchEvent(new PopStateEvent("popstate"));
     } catch { /* non-browser */ }
   }, [loadedAreas, active]);
