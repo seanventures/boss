@@ -3,7 +3,7 @@
   setup token       fresh install: 32 random bytes, SHA-256 at rest, 1 hour; printed to the logs and
                     by `boss identity setup-link`; the claim URL carries it in the FRAGMENT
   legacy password   an install with BOSS_CONSOLE_PASSWORD: the shared password proves "operator"
-  network bridge    a BOSS_CONSOLE_AUTH=network install (shared-server): the request is bridged to
+  network bridge    a BOSS_CONSOLE_AUTH=network install: the request is bridged to
                     usr_network_operator by S5's legacy.bridge; the claim binds the browser's
                     origin (Origin == Host, https) as the public origin — no env, no logs
 

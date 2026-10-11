@@ -13059,7 +13059,7 @@ def _run_agent_chat(payload: AgentChatRequest, request: Request, *, endpoint: st
             # opposite. Five words that name nothing could not be acted on; the replacement,
             # the exception's class and text, put "IntegrityError: (psycopg.errors.
             # UniqueViolation) duplicate key value … [SQL: INSERT INTO agent_threads …" in the
-            # dock on shared-server. One explainer (model_failures.explain_turn_failure) turns any
+            # dock on an existing install. One explainer (model_failures.explain_turn_failure) turns any
             # failure into a sentence; the technical line rides along for a collapsed Details,
             # and the whole traceback goes to the log.
             LOGGER.exception("agent chat failed on %s", endpoint)
