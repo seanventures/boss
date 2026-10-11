@@ -150,6 +150,7 @@ import { fetchSandboxFeed } from "../lib/sandboxes";
 import { SandboxesHome } from "./sandboxes-ui";
 import { AreaLink } from "./area-link";
 import { Suspense } from "react";
+import { AreaFrame } from "./area-frame";
 import { fetchOrgs } from "../lib/orgs";
 import { OrgGate, OrgReconnect } from "./org-gate";
 import { fetchApprovalRules } from "../lib/approval-rules";
@@ -980,8 +981,10 @@ export default async function HomePage({ searchParams }: HomePageProps) {
       signOutAvailable={!networkTrustedConsole()}
       identity={{ me: identity.me, org: identity.org, project: identity.project, stub: identityStubEnabled(), unavailable: identityUnavailable }}
       loadedAreas={[...loadedAreas]}
+      // Fresh on every render: the shell's signal that a refresh landed (ConsoleShell).
+      renderToken={`${Date.now().toString(36)}.${Math.random().toString(36).slice(2, 8)}`}
     >
-      <div className="frame">
+      <AreaFrame>
         {otherProject ? (
           <ProjectAway name={otherProject.name}
                        homeName={otherProjectFeed?.items.find((p) => p.id === selectedOrg.project_id)?.name
@@ -3659,7 +3662,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           <ApprovalRulesView rules={approvalRules.rules} apiReachable={approvalRules.apiReachable} />
         </section>
         ) : null}
-      </div>
+      </AreaFrame>
     </ConsoleShell>
   );
 }

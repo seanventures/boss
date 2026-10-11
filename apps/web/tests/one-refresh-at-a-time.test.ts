@@ -185,12 +185,16 @@ describe("nothing refreshes the console behind the coordinator's back", () => {
       const code = codeOnly(file);
       const routers = new Set(["router", ...[...code.matchAll(/\b(?:const|let)\s+(\w+)\s*=\s*useRouter\(\)/g)].map((m) => m[1])]);
       const n = [...code.matchAll(/\b(\w+)\.refresh\(\s*\)/g)].filter((m) => routers.has(m[1])).length;
-      const allowed = file === "lib/console-refresh.ts" || file === "app/ConsoleShell.tsx" ? 1 : 0;
+      // The shell's are all handed to the coordinator: its `start` (bare, or inside the
+      // transition on a route page without a render token) and its `unstick` (a refresh Next
+      // never completed is re-navigated and asked again; lib/console-refresh.ts).
+      const allowed = file === "app/ConsoleShell.tsx" ? 3 : file === "lib/console-refresh.ts" ? 1 : 0;
       if (n > allowed) offenders.push(`${file} (${n})`);
     }
     expect(offenders, "ask through useConsoleRefresh() (lib/console-refresh.ts)").toEqual([]);
     const shell = codeOnly("app/ConsoleShell.tsx");
-    expect(shell).toMatch(/createRefreshCoordinator\(\{\s*start: \(\) => startRefresh\(\(\) => \{ router\.refresh\(\); \}\)/);
+    expect(shell).toMatch(/createRefreshCoordinator\(\{\s*start: tokenDriven\s*\? \(\) => \{ router\.refresh\(\); \}\s*: \(\) => startRefresh\(\(\) => \{ router\.refresh\(\); \}\),/);
+    expect(shell).toMatch(/unstick: \(\) => \{\s*router\.replace\(/);
   });
 
   it("the area loader and its retry ask the coordinator, and a retry waits for it to be idle", () => {
@@ -200,7 +204,83 @@ describe("nothing refreshes the console behind the coordinator's back", () => {
     expect(ensure).toContain('refreshCoordinator.request("now")');
     const retry = shell.slice(shell.indexOf("const areaRetries"), shell.indexOf("const [loadSlow"));
     expect(retry).toContain("refreshCoordinator.busy()");
-    expect(retry).toContain("refreshPending");
+    // `refreshing`: the coordinator's own in-flight state, not React's transition flag (which
+    // settles within a frame of router.refresh() and let a retry overlap the refresh it retried).
+    expect(retry).toContain("refreshing");
     expect(shell).not.toContain("startAreaLoad");
+  });
+});
+
+describe("a refresh that never lands is unstuck, not waited out (2026-10-10)", () => {
+  // Next 15.5 sometimes never completes a router.refresh() issued in the first seconds after a
+  // load: 7 of 9 first area clicks on the laptop install sat on "Loading Factory…" for 20 s,
+  // until the background poll. A navigation drops the stuck action; the shell's `unstick` does one.
+  it("unsticks a refresh that has not landed in time, a bounded number of times", () => {
+    const time = fakeTime();
+    let starts = 0;
+    let unsticks = 0;
+    const c = createRefreshCoordinator({
+      start: () => { starts += 1; }, unstick: () => { unsticks += 1; }, ...time,
+      watchdogMs: () => 1_000, maxUnsticks: 2, ceilingMs: 60_000,
+    });
+    c.request("now");
+    time.run(999);
+    expect(unsticks).toBe(0);
+    time.run(1_000);
+    expect(unsticks).toBe(1);
+    time.run(10_000);
+    expect(unsticks).toBe(2);           // capped
+    expect(starts).toBe(1);             // an unstick is not a second refresh in the queue
+    c.landed();
+    expect(c.busy()).toBe(false);
+  });
+
+  it("a refresh that lands in time is never unstuck", () => {
+    const time = fakeTime();
+    let unsticks = 0;
+    const c = createRefreshCoordinator({ start: () => {}, unstick: () => { unsticks += 1; }, ...time });
+    c.request("now");
+    time.run(300);
+    c.landed();
+    time.run(60_000);
+    expect(unsticks).toBe(0);
+  });
+
+  it("an area load is unstuck within a second; a poll is given three times what the last took", () => {
+    const time = fakeTime();
+    const at: number[] = [];
+    const c = createRefreshCoordinator({ start: () => {}, unstick: () => { at.push(time.now()); }, ...time,
+                                         maxUnsticks: 1 });
+    c.request("now");
+    time.run(5_000);
+    expect(at[0]).toBeLessThanOrEqual(1_000);
+    c.landed();                          // lastDuration = 5 s
+    at.length = 0;
+    time.run(200_000);
+    c.request("poll");
+    time.run(260_000);
+    expect(at[0] - 200_000).toBe(15_000);
+  });
+
+  it("the shell lands a refresh on the server's new render, not on React's transition flag", () => {
+    const shell = codeOnly("app/ConsoleShell.tsx");
+    expect(shell).toContain("renderToken");
+    expect(shell).toMatch(/lastToken\.current = renderToken;\s*refreshCoordinator\.landed\(\);/);
+    expect(codeOnly("app/page.tsx")).toMatch(/renderToken=\{/);
+  });
+});
+
+
+describe("an area not yet in the document is opened with a page load (2026-10-10)", () => {
+  // A router.refresh() that fetched the area into the open page was left uncommitted by Next
+  // 15.5 for most first clicks (Command Center to Activity: 4 in 4); a document load of the area
+  // took 0.38-0.41 s every time. The refresh is kept only where a page load would lose a draft.
+  it("loads the document unless something was typed since it loaded", () => {
+    const shell = codeOnly("app/ConsoleShell.tsx");
+    const ensure = shell.slice(shell.indexOf("const ensureLoaded = useCallback"),
+                               shell.indexOf("const activeLoading"));
+    expect(ensure).toMatch(/if \(!typedSinceLoad\.current\) \{[\s\S]*window\.location\.assign\(url\.toString\(\)\);/);
+    expect(ensure).toContain('refreshCoordinator.request("now")');
+    expect(shell).toMatch(/document\.addEventListener\("input", onInput, true\)/);
   });
 });

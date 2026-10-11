@@ -6,12 +6,13 @@ import { isInConsoleLink } from "./console-href";
 import { consoleParams, resolveLegacyArea } from "./legacy-areas";
 import { SETUP_BADGE_EVENT } from "../lib/setup-stepper";
 import { onChanged } from "./changed";
-import { createRefreshCoordinator, registerConsoleRefresh } from "../lib/console-refresh";
+import { createRefreshCoordinator, registerConsoleRefresh, type RefreshCoordinator } from "../lib/console-refresh";
 import {
   cookieWith,
   loadedAreasCookie,
   loadedAreasCookieValue,
 } from "../lib/area-loading";
+import { ActiveAreaContext } from "./area-frame";
 import { ConsoleToggle } from "../components/v2/ConsoleToggle";
 import { AgentChat } from "./agent-ui";
 import { dockChatKey, dockSpeaker } from "../lib/dock-subject";
@@ -33,6 +34,7 @@ import React, {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   useTransition,
   type ReactNode,
 } from "react";
@@ -331,6 +333,9 @@ export type ConsoleShellProps = {
    *  in the DOM yet: opening it shows a loading state and asks the server for it. Absent means
    *  every area was rendered, which is how this shell behaved before areas went lazy. */
   loadedAreas?: string[];
+  /** A value the server makes fresh on EVERY render (page.tsx). Its change is how the shell
+   *  knows a refresh has landed: React's transition flag is not (see refreshLanded below). */
+  renderToken?: string;
   /** Who is signed in and what they hold, read on the server (lib/identity/server.ts), so the
    *  rail and every control mirror the API from the first paint. */
   identity?: {
@@ -368,6 +373,15 @@ export default function ConsoleShell(props: ConsoleShellProps) {
   );
 }
 
+/** Whether a console refresh is in flight, re-rendering only its own children (see the
+ *  coordinator comment in ConsoleShellInner). `fallback` is the transition flag on a route page. */
+function RefreshState({ coordinator, fallback, children }: {
+  coordinator: RefreshCoordinator; fallback: boolean; children: (refreshing: boolean) => React.ReactNode;
+}) {
+  const busy = useSyncExternalStore(coordinator.subscribe, coordinator.busy, () => false);
+  return <>{children(busy || fallback)}</>;
+}
+
 function ConsoleShellInner({
   status,
   scope,
@@ -376,6 +390,7 @@ function ConsoleShellInner({
   initialArea,
   signOutAvailable = false,
   loadedAreas,
+  renderToken,
   routeMode = false,
   title,
   children,
@@ -549,9 +564,48 @@ function ConsoleShellInner({
   // renders every pending transition together and waits for the newest — which is how the
   // Discovery area sat on "Loading…" forever on boss-1 while the server rendered it four times.
   // This is the one `router.refresh()` in the console; panels ask via useConsoleRefresh().
+  //
+  // A REFRESH HAS LANDED WHEN THE SERVER'S NEW RENDER IS ON SCREEN — NOT WHEN `useTransition`
+  // SAYS SO. router.refresh() dispatches into Next's own action queue, so the transition around it
+  // settles within a frame (measured: "Syncing" on for 15 ms of a 900 ms refresh). The shell took
+  // that as landed, its area-load retry 250 ms later started a SECOND router.refresh while the
+  // first was still streaming, and Next 15 dropped the first and left the tree suspended on it —
+  // so the area sat on "Loading Factory…" until the next background poll, 20 s later. Measured on
+  // the laptop install, 2026-10-10: 7 of 9 first clicks on an area after a page load took
+  // 20.1-20.2 s; the server answered each in under a second.
+  //
+  // So the page renders a fresh `renderToken` every time, and its change is the landing. A
+  // shell without one (a route page) keeps the transition flag.
+  //
+  // AND THE SHELL DOES NOT RE-RENDER WHEN ONE STARTS. useTransition's pending flag (and a
+  // "syncing" state after it) re-rendered this whole shell — every mounted area — in the same
+  // tick Next dispatched the refresh, and a refresh that answered while that render was still
+  // running was the one Next never completed: rail clicks from a heavy screen (Command Center,
+  // Decisions) to a cheap area (Activity, Govern) hung 4 times in 4, from a light one 0 in 4.
+  // So the refresh is dispatched bare, and the Syncing chip and the edge line read the
+  // coordinator through their own small subscriber (<RefreshState>).
+  const tokenDriven = renderToken !== undefined;
   const refreshCoordinator = useMemo(() => createRefreshCoordinator({
-    start: () => startRefresh(() => { router.refresh(); }),
-  }), [router]);
+    start: tokenDriven
+      ? () => { router.refresh(); }
+      : () => startRefresh(() => { router.refresh(); }),
+    // A refresh Next never completed (lib/console-refresh.ts): a navigation to the same URL
+    // drops it from Next's queue, and the refresh after it brings what was asked for.
+    unstick: () => {
+      router.replace(`${window.location.pathname}${window.location.search}${window.location.hash}`,
+                     { scroll: false });
+      router.refresh();
+    },
+    // Long enough for a slow render under load; short enough that a refresh Next discarded (a
+    // navigation raced it) does not stop the console refreshing for minutes.
+    ceilingMs: 30_000,
+  }), [router, tokenDriven]);
+  const lastToken = useRef(renderToken);
+  useEffect(() => {
+    if (lastToken.current === renderToken) return;
+    lastToken.current = renderToken;
+    refreshCoordinator.landed();
+  }, [renderToken, refreshCoordinator]);
   useEffect(() => {
     const unregister = registerConsoleRefresh(refreshCoordinator);
     return () => { unregister(); refreshCoordinator.dispose(); };
@@ -559,9 +613,11 @@ function ConsoleShellInner({
   // The transition settling IS the refresh landing: React committed what it fetched.
   const refreshWasPending = useRef(false);
   useEffect(() => {
-    if (refreshWasPending.current && !refreshPending) refreshCoordinator.landed();
+    if (!tokenDriven && refreshWasPending.current && !refreshPending) refreshCoordinator.landed();
     refreshWasPending.current = refreshPending;
-  }, [refreshPending, refreshCoordinator]);
+  }, [refreshPending, refreshCoordinator, tokenDriven]);
+  // Only for a shell without a render token (a route page): there the transition flag stands in.
+  const refreshing = tokenDriven ? false : refreshPending;
   useEffect(() => {
     if (!live) return;
     let cancelled = false;
@@ -643,9 +699,48 @@ function ConsoleShellInner({
   const loadedRef = useRef<string[] | undefined>(loadedAreas);
   loadedRef.current = loadedAreas;
   const [areaLoadAsked, setAreaLoadAsked] = useState<{ id: string; at: number } | null>(null);
+  const deferredUrl = useRef<{ id: string; href: string } | null>(null);
+  // A DRAFT ON SCREEN: something typed into the console since this document loaded. Opening an
+  // area is a page load unless a draft would be lost by one (ensureLoaded below).
+  const typedSinceLoad = useRef(false);
+  useEffect(() => {
+    const onInput = (event: Event) => {
+      const el = event.target as HTMLElement | null;
+      if (el && typeof el.closest === "function" && el.closest("main.bx-content, .bx-dock")) {
+        typedSinceLoad.current = true;
+      }
+    };
+    document.addEventListener("input", onInput, true);
+    return () => document.removeEventListener("input", onInput, true);
+  }, []);
   const ensureLoaded = useCallback((id: string) => {
     const loaded = loadedRef.current;
     if (!loaded || loaded.includes(id)) return;
+    // AN AREA NOT YET IN THIS DOCUMENT IS OPENED WITH A PAGE LOAD (2026-10-10).
+    //
+    // Fetching it into the open page is a router.refresh(), and Next 15.5 left that refresh
+    // uncommitted far too often: measured on a seeded stack, rail clicks from the Command Center
+    // to Activity hung 4 times in 4, to the Factory 4 in 4 — the RSC arrived whole, React never
+    // committed it, and the operator read "Loading Factory…" until the 20 s background poll
+    // (7 of 9 first clicks on the laptop install). A document load of the area is deterministic
+    // and fast — 0.38-0.41 s to content for every area on the same stack — so it is the path.
+    // The refresh stays for one case only: something typed on screen that a page load would
+    // throw away. That path keeps every mounted area (the cookie below) and is unstuck by the
+    // coordinator's watchdog if Next drops it.
+    if (!typedSinceLoad.current) {
+      try {
+        const url = new URL(window.location.href);
+        if (url.searchParams.get("area") === id) window.location.replace(url.toString());
+        else {
+          url.searchParams.set("area", id);
+          window.location.assign(url.toString());
+        }
+        setAreaLoadAsked({ id, at: Date.now() });
+        return;
+      } catch {
+        /* no location (a test): fall through to the refresh */
+      }
+    }
     try {
       // The first document renders its area without adding it to the cookie. Preserve every
       // mounted area before fetching another, so that refresh cannot discard an unsaved draft.
@@ -680,7 +775,7 @@ function ConsoleShellInner({
   // because a refresh in flight (or owed) is already going to bring the area.
   const areaRetries = useRef<{ id: string; n: number }>({ id: "", n: 0 });
   useEffect(() => {
-    if (!activeLoading || refreshPending || refreshCoordinator.busy()
+    if (!activeLoading || refreshing || refreshCoordinator.busy()
         || areaLoadAsked?.id !== active) return;
     if (areaRetries.current.id !== active) areaRetries.current = { id: active, n: 0 };
     if (areaRetries.current.n >= 5) return;
@@ -689,7 +784,8 @@ function ConsoleShellInner({
       setAreaLoadAsked(null);  // the effect above sees an area not yet asked for, and asks
     }, 250);
     return () => window.clearTimeout(t);
-  }, [activeLoading, refreshPending, refreshCoordinator, areaLoadAsked, active]);
+    // renderToken: a refresh that landed WITHOUT the area changes nothing else this reads.
+  }, [activeLoading, refreshing, refreshCoordinator, areaLoadAsked, active, renderToken]);
   const [loadSlow, setLoadSlow] = useState(false);
   useEffect(() => {
     setLoadSlow(false);
@@ -735,14 +831,36 @@ function ConsoleShellInner({
       const url = new URL(window.location.href);
       url.searchParams.set("area", id);
       if (url.toString() !== window.location.href) {
-        window.history.pushState(null, "", `${url.pathname}${url.search}`);
-        window.dispatchEvent(new PopStateEvent("popstate"));
+        // AN AREA STILL TO BE FETCHED GETS ITS URL WHEN IT ARRIVES. A pushState is a router
+        // action in Next 15 (it syncs the router's URL); one issued just before the area's
+        // refresh made that refresh hang far more often (lib/console-refresh.ts: most first
+        // clicks after a load, against ~1 in 5 for a refresh alone). The refresh asks for the
+        // area through the session cookie, not the URL, so the URL can follow it.
+        const loaded = loadedRef.current;
+        if (loaded && !loaded.includes(id)) {
+          deferredUrl.current = { id, href: `${url.pathname}${url.search}` };
+        } else {
+          deferredUrl.current = null;
+          window.history.pushState(null, "", `${url.pathname}${url.search}`);
+          window.dispatchEvent(new PopStateEvent("popstate"));
+        }
       }
     } catch {
       /* non-browser / unsupported — the area is already set above, so the console still moves */
     }
     window.scrollTo({ top: 0, behavior: "smooth" });
   }, [routeMode]);
+  // The deferred URL, once the area it names is on screen (and is still the one being shown).
+  useEffect(() => {
+    const due = deferredUrl.current;
+    if (!due || !loadedAreas?.includes(due.id)) return;
+    deferredUrl.current = null;
+    if (active !== due.id) return;
+    try {
+      window.history.pushState(null, "", due.href);
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    } catch { /* non-browser */ }
+  }, [loadedAreas, active]);
 
   // The Identity area lives at /identity: however it was opened here (a link, Back, the
   // palette), go there.
@@ -1321,11 +1439,12 @@ function ConsoleShellInner({
             </button>
           ) : null}
 
+          <RefreshState coordinator={refreshCoordinator} fallback={refreshing}>{(refreshing) => (
           <button
             type="button"
             className="bx-live-status"
             title={live
-              ? (refreshPending
+              ? (refreshing
                  ? "Fetching the latest data — click to pause live updates"
                  : "Live: auto-refreshing — click to pause")
               : "Paused — click to resume live updates"}
@@ -1335,8 +1454,8 @@ function ConsoleShellInner({
             {/* A refresh in flight shows HERE: same chip, no layout shift, gone when it
                 lands. Enough to answer "is it updating?" without occupying the page. */}
             <span className={live ? "dot green bx-pulse" : "dot"} />
-            {live ? (refreshPending ? "Syncing" : "Live") : "Paused"}
-          </button>
+            {live ? (refreshing ? "Syncing" : "Live") : "Paused"}
+          </button>)}</RefreshState>
 
           <button type="button" className="bx-kbd" onClick={() => setPaletteOpen(true)}>
             <span>Jump to</span>
@@ -1391,10 +1510,11 @@ function ConsoleShellInner({
             refreshes. A two-pixel line at the very edge cannot become furniture: it occupies
             no layout, moves nothing when it appears, and is unmistakably progress rather than
             content. */}
-        {refreshPending ? (
+        <RefreshState coordinator={refreshCoordinator} fallback={refreshing}>{(refreshing) => (
+        refreshing ? (
           <div className="bx-refresh-line" role="status" aria-live="polite"
                aria-label="Refreshing data" data-testid="console-refreshing" />
-        ) : null}
+        ) : null)}</RefreshState>
 
         {settling ? (
           <div className="bx-loading" role="status" aria-live="polite"
@@ -1423,6 +1543,7 @@ function ConsoleShellInner({
             a slow area looks like a dead click on the old screen. A hairline across the top is
             the smallest honest signal that the press was taken and work is in flight. */}
         <style data-testid="bx-area-visibility" dangerouslySetInnerHTML={{ __html: AREA_VISIBILITY_CSS }} />
+        <ActiveAreaContext.Provider value={routeMode ? null : active}>
         <main className="bx-content" data-testid="console-area" data-active={active} aria-label={activeDef.label}
               data-dock={dockedRun ? "open" : undefined}
               style={dockedRun ? { paddingRight: dockWidth + 16 } : undefined}>
@@ -1452,6 +1573,7 @@ function ConsoleShellInner({
               : children;
           })() : children}
         </main>
+        </ActiveAreaContext.Provider>
         {dockedRun ? (
           <aside className="bx-dock" aria-label="Ask BOSS about this app"
                  style={{ width: dockWidth }}>

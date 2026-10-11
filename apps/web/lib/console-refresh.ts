@@ -25,7 +25,19 @@
  * never overlaps.
  *
  * Pure: the shell supplies `start` (a refresh inside its transition) and reports `landed()`
- * when that transition settles. Timers and the clock are injectable, so it is tested for real.
+ * when the server's new render is on screen. Timers and the clock are injectable, so it is
+ * tested for real.
+ *
+ * A REFRESH THAT NEVER LANDS IS UNSTUCK, NOT WAITED OUT (2026-10-10). Next 15.5's router
+ * sometimes never completes a refresh issued in the first seconds after a page load: the RSC
+ * response arrives whole (same bytes as a good one), React's transition lane stays suspended,
+ * and every later refresh queues behind the stuck one. Measured on a seeded stack: 3 of 16
+ * refreshes issued 1-2.5 s after load, 0 of 8 issued after 6 s; on the laptop install it was
+ * 7 of 9 first area clicks after a load, each sitting on "Loading Factory…" until the 20 s
+ * background poll. A NAVIGATION discards the stuck action at once (Next's action queue drops a
+ * pending refresh for a navigate), so when a refresh has not landed within `watchdogMs` the
+ * shell's `unstick` re-navigates to the current URL and refreshes again — at most
+ * `maxUnsticks` times, then the ceiling stands.
  */
 
 export type RefreshKind = "poll" | "now";
@@ -37,6 +49,9 @@ export type RefreshCoordinator = {
   landed(): void;
   /** A refresh is in flight. */
   busy(): boolean;
+  /** Hear `busy()` change (a refresh starting or landing): the Syncing chip subscribes, so the
+   *  shell itself never re-renders for it (lib/console-refresh.ts header). */
+  subscribe(listener: () => void): () => void;
   /** How long the last refresh took, start to landing. 0 before the first. */
   lastDurationMs(): number;
   dispose(): void;
@@ -53,6 +68,15 @@ export type CoordinatorOptions = {
   ceilingMs?: number;
   /** The longest a poll waits after the last refresh. */
   maxCooldownMs?: number;
+  /** Called when the refresh in flight has landed (or was given up on at the ceiling). */
+  onSettled?: () => void;
+  /** Re-issue a refresh that has not landed (the shell: navigate to the same URL, refresh). */
+  unstick?: () => void;
+  /** How long a refresh of this kind may take before `unstick`; a function of the last
+   *  refresh's measured duration. Default: "now" 2x the last (0.7-3 s), "poll" 3x the last (min 3 s). */
+  watchdogMs?: (kind: RefreshKind, lastDurationMs: number) => number;
+  /** How many times one refresh is unstuck before only the ceiling is left. */
+  maxUnsticks?: number;
 };
 
 export function createRefreshCoordinator(options: CoordinatorOptions): RefreshCoordinator {
@@ -69,19 +93,43 @@ export function createRefreshCoordinator(options: CoordinatorOptions): RefreshCo
   let owed: RefreshKind | null = null;
   let cooldown: Timer | null = null;
   let ceiling: Timer | null = null;
+  let watchdog: Timer | null = null;
+  let unsticks = 0;
   let disposed = false;
+  const listeners = new Set<() => void>();
+  const notify = () => { for (const l of [...listeners]) l(); };
+  const watchdogFor = options.watchdogMs
+    ?? ((kind: RefreshKind, last: number) => (kind === "now"
+      ? Math.min(3_000, Math.max(700, last * 2))
+      : Math.max(3_000, last * 3)));
+  const maxUnsticks = options.maxUnsticks ?? 3;
 
   const merge = (a: RefreshKind | null, b: RefreshKind): RefreshKind =>
     a === "now" || b === "now" ? "now" : "poll";
 
-  function fire() {
+  function arm(kind: RefreshKind) {
+    if (!options.unstick) return;
+    if (watchdog !== null) clearTimer(watchdog);
+    watchdog = setTimer(() => {
+      watchdog = null;
+      if (!inFlight || disposed || unsticks >= maxUnsticks) return;
+      unsticks += 1;
+      options.unstick!();
+      arm(kind);
+    }, watchdogFor(kind, lastDuration) * (1 + unsticks));
+  }
+
+  function fire(kind: RefreshKind = "poll") {
     if (disposed) return;
     if (cooldown !== null) { clearTimer(cooldown); cooldown = null; }
     inFlight = true;
     owed = null;
     startedAt = now();
     ceiling = setTimer(() => { ceiling = null; landed(); }, ceilingMs);
+    unsticks = 0;
     options.start();
+    arm(kind);
+    notify();
   }
 
   function request(kind: RefreshKind = "poll") {
@@ -91,19 +139,22 @@ export function createRefreshCoordinator(options: CoordinatorOptions): RefreshCo
       const wait = Math.min(maxCooldownMs, lastDuration) - (now() - landedAt);
       if (wait > 0) {
         owed = merge(owed, kind);
-        if (cooldown === null) cooldown = setTimer(() => { cooldown = null; fire(); }, wait);
+        if (cooldown === null) cooldown = setTimer(() => { cooldown = null; fire("poll"); }, wait);
         return;
       }
     }
-    fire();
+    fire(kind);
   }
 
   function landed() {
     if (!inFlight) return;
     inFlight = false;
     if (ceiling !== null) { clearTimer(ceiling); ceiling = null; }
+    if (watchdog !== null) { clearTimer(watchdog); watchdog = null; }
     landedAt = now();
     lastDuration = landedAt - startedAt;
+    options.onSettled?.();
+    notify();
     if (owed !== null) {
       const kind = owed;
       owed = null;
@@ -115,11 +166,16 @@ export function createRefreshCoordinator(options: CoordinatorOptions): RefreshCo
     request,
     landed,
     busy: () => inFlight,
+    subscribe(listener: () => void) {
+      listeners.add(listener);
+      return () => { listeners.delete(listener); };
+    },
     lastDurationMs: () => lastDuration,
     dispose() {
       disposed = true;
       if (cooldown !== null) clearTimer(cooldown);
       if (ceiling !== null) clearTimer(ceiling);
+      if (watchdog !== null) clearTimer(watchdog);
     },
   };
 }

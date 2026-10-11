@@ -96,12 +96,13 @@ describe("the console says when it is still filling up", () => {
     // indicator that cannot be dismissed and explains nothing is furniture.
     expect(SHELL).toContain("{settling ? (");
     expect(SHELL).not.toContain("{settling || refreshPending ?");
+    expect(SHELL).not.toContain("{settling || refreshing ?");
   });
 
   it("puts refresh feedback in the Live chip instead", () => {
     // Same chip, no layout shift, gone when it lands. Enough to answer "is it updating?"
     // without occupying the page.
-    expect(SHELL).toContain('refreshPending ? "Syncing" : "Live"');
+    expect(SHELL).toContain('refreshing ? "Syncing" : "Live"');
   });
 
   it("is a bar, not a blocking overlay", () => {

@@ -134,7 +134,8 @@ describe("a background refresh is visible without hunting for it", () => {
     // The Syncing chip existed and was easy to miss: one small pill among six, and carrying
     // `hide-sm`, so on a narrow window it was not rendered at all.
     expect(SHELL).toContain("bx-refresh-line");
-    expect(SHELL).toContain("{refreshPending ? (");
+    // Read from the coordinator by its own small subscriber, so the shell does not re-render.
+    expect(SHELL).toMatch(/<RefreshState coordinator=\{refreshCoordinator\} fallback=\{refreshing\}>\{\(refreshing\) => \(\s*refreshing \? \(\s*<div className="bx-refresh-line"/);
   });
 
   it("it cannot become the permanent furniture the last one became", () => {
@@ -152,6 +153,7 @@ describe("a background refresh is visible without hunting for it", () => {
     const settlingBlock = SHELL.slice(SHELL.indexOf("{settling ? ("),
                                       SHELL.indexOf("<ProjectStrip"));
     expect(settlingBlock).not.toContain("refreshPending");
+    expect(settlingBlock).not.toContain("refreshing");
   });
 });
 
