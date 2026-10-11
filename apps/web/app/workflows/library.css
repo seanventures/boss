@@ -131,6 +131,22 @@
 .wf-tag[data-kind="yours"] { color: var(--green); border-color: var(--green); }
 .wf-tag[data-kind="standard"] { color: var(--accent); border-color: var(--accent); }
 .wf-tag[data-kind="from"] { max-width: 160px; }
+/* A TAG THAT IS A BUTTON (a run's Agents and Credits). `.wf-tag` was written for a span and sets
+   no background, so on a <button> the browser's own button face showed through: a white pill
+   with grey text on the dark run card (operator report, 2026-10-11). Every button that wears
+   the tag is a dark chip with readable ink, and says when it is on
+   (tests/a-tag-button-is-a-dark-chip.test.ts holds the contrast). */
+button.wf-tag {
+  appearance: none;
+  padding: 3px 10px;
+  background: var(--surface-3);
+  border-color: var(--border-strong);
+  color: var(--ink-soft);
+  cursor: pointer;
+}
+button.wf-tag:hover { border-color: var(--accent-line); color: var(--ink); }
+button.wf-tag[aria-pressed="true"], button.wf-tag[aria-expanded="true"] { background: var(--accent-soft); border-color: var(--accent); color: var(--ink); }
+button.wf-tag:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 .wf-lib-muted { color: var(--faint); font: 0.8125rem var(--sans); margin: 0; }
 .wf-lib-error {

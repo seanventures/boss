@@ -11,20 +11,21 @@ import { Copy, DownloadSimple, Image as ImageIcon, X } from "@phosphor-icons/rea
 import React, { useCallback, useEffect, useRef, useState } from "react";
 
 import type { AvatarVariant, Chain } from "../../lib/agent-world-types";
-import { costLabel, creditWho, minutesLabel } from "./chain-model";
+import { creditWho, INCLUDED_TIP, minutesLabel, spendLabel } from "./chain-model";
 import { AiBadge, nameOf, RunFace } from "./run-face";
 import { useIdentityVersion } from "../../lib/use-agent-identities";
 
 export type CreditRow = { roleKey: string | null; variant: AvatarVariant; name: string; role: string; line: string };
 
 /** Who made it, in chain order. People are credited too: "You" only when it was the viewer. */
-export function creditRows(chain: Pick<Chain, "credits" | "acts"> & Partial<Pick<Chain, "accountable">>, viewer: string): CreditRow[] {
+export function creditRows(chain: Pick<Chain, "credits" | "acts"> & Partial<Pick<Chain, "accountable" | "people">>, viewer: string): CreditRow[] {
   const rows = chain.credits.length
     ? chain.credits
     : [...new Set(chain.acts.map((a) => a.roleKey).filter((k): k is string => !!k))].map((roleKey) => ({ roleKey, line: "" }));
   return rows.map((c) => {
-    const who = creditWho(c, chain.accountable ?? "", viewer);
-    const n = nameOf(who.roleKey, who.variant);
+    const who = creditWho(c, chain.accountable ?? "", viewer, chain.people);
+    // By name when BOSS knows it; never the raw principal id on a credit someone will share.
+    const n = nameOf(who.roleKey, who.variant, undefined, who.name);
     return { roleKey: c.roleKey, variant: who.variant, name: n.name, role: n.role, line: c.line };
   });
 }
@@ -36,8 +37,8 @@ export function creditsText(chain: Chain, viewer: string, title: string): string
   return [
     `${title} — made by ${agents} ${agents === 1 ? "agent" : "agents"}`,
     ...rows.map((r) => `• ${r.name}${r.role !== r.name ? ` (${r.role})` : ""}${r.line ? ` — ${r.line}` : ""}`),
-    `${chain.totals.steps} steps · ${minutesLabel(chain.totals.minutes)} · ${costLabel(chain.totals.cost)}`,
-    `Accountable: ${chain.accountable === viewer ? viewer || "you" : chain.accountable}`,
+    `${chain.totals.steps} steps · ${minutesLabel(chain.totals.minutes)} · ${spendLabel(chain.totals.cost, chain.totals.included)}`,
+    `Accountable: ${chain.accountable === viewer ? viewer || "you" : chain.people?.[chain.accountable] || chain.accountable}`,
     "Built with BOSS · open source",
   ].join("\n");
 }
@@ -154,9 +155,9 @@ export function CreditsDialog({ chain, runId, projectId, viewer, title, onClose 
           <div><dt>Agents</dt><dd data-testid="ag-credits-agents">{agents}</dd></div>
           <div><dt>Steps</dt><dd>{chain.totals.steps}</dd></div>
           <div><dt>Time</dt><dd>{minutesLabel(chain.totals.minutes)}</dd></div>
-          <div><dt>Cost</dt><dd>{costLabel(chain.totals.cost)}</dd></div>
+          <div><dt>Cost</dt><dd data-testid="ag-credits-cost" data-tip={chain.totals.included ? INCLUDED_TIP : undefined}>{spendLabel(chain.totals.cost, chain.totals.included)}</dd></div>
           <div><dt>Accountable</dt><dd data-testid="ag-credits-accountable">
-            {chain.accountable && chain.accountable === viewer ? "You" : chain.accountable || "—"}
+            {chain.accountable && chain.accountable === viewer ? "You" : chain.people?.[chain.accountable] || chain.accountable || "—"}
           </dd></div>
         </dl>
         <footer className="ag-credits-actions">
@@ -207,7 +208,7 @@ export function CreditsButton({ chain, runId, projectId, viewer, title, live, au
   return (
     <>
       <button type="button" className={className ?? "wf-tag ag-credits-btn"} data-testid="ag-credits-open"
-              data-tip="Who made this run" aria-haspopup="dialog"
+              data-tip="Who made this run" aria-haspopup="dialog" aria-expanded={open}
               onClick={() => { markShown(runId); setOpen(true); }}>
         Credits
       </button>

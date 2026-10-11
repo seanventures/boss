@@ -50,7 +50,21 @@ export type Act = {
   artifacts: { kind: string; ref: string; url?: string }[];
   tokensIn: number; tokensOut: number; costUsd: number; reconstructed: boolean; startedAt: string; endedAt?: string;
   version?: number;
+  /** List-price value of calls a subscription answered: not money, never dropped. */
+  includedUsd?: number;
+  /** Who the act's face is, resolved by the server from what BOSS recorded (agent_acts.
+   *  resolve_actors): a build step's builder, a panel's chair, a gate's approver, or BOSS. */
+  actor?: ActActor;
 };
+export type ActActor = {
+  kind: "agent" | "person" | "boss"; roleKey: string | null;
+  /** A person's principal id, and their display name when the identity store has one. */
+  personId?: string; name?: string;
+  /** A panel step: every seat, chair first. */
+  panel?: string[];
+};
+/** What one step spent over every attempt it started (money, and what a subscription covered). */
+export type StepSpend = { costUsd: number; includedUsd: number; attempts: number; actIds: string[] };
 export type Passport = {
   agentId: string; roleKey: string; displayName: string; persona: Persona;
   born: { at: string; by: string; from: Record<string, unknown> };
@@ -59,7 +73,11 @@ export type Passport = {
   presence: Presence; identity: { mode: "local"; tokens: false };
 };
 export type Chain = {
-  acts: Act[]; accountable: string; totals: { steps: number; minutes: number; cost: number };
+  acts: Act[]; accountable: string; totals: { steps: number; minutes: number; cost: number; included?: number };
+  /** Each step's spend across its attempts, by step id. */
+  steps?: Record<string, StepSpend>;
+  /** People the chain names, principal id → display name. */
+  people?: Record<string, string>;
   /** A person's credit (roleKey null) may name them: `person_id` on the wire. */
   credits: { roleKey: string | null; line: string; personId?: string }[];
 };

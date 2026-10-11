@@ -19,7 +19,7 @@
 import { WhyThisModel, type RouteRow } from "../why-this-model";
 import React, { useState } from "react";
 
-import type { Act, AvatarVariant } from "../../lib/agent-world-types";
+import type { Act, AvatarVariant, StepSpend } from "../../lib/agent-world-types";
 import type { StepView } from "../../lib/workflow-editor-types";
 import type { ActivityLog, ActivityLogItem } from "../../lib/activity-log";
 import { useConsoleLive } from "../../lib/console-live";
@@ -27,9 +27,8 @@ import { fetchLogPage } from "../../lib/log-api";
 import { usePolledRead } from "../../lib/log-stream";
 import { clock as logClock, utcTitle } from "../../lib/log-time";
 import { logHref } from "../../lib/log-url";
-import { usd } from "../../lib/money";
 import { isLoopbackPreviewUrl } from "../../lib/code-tasks";
-import { laneAgentOf, type LaneAgent } from "../agents/chain-model";
+import { INCLUDED_TIP, laneAgentOf, spendLabel, type LaneAgent } from "../agents/chain-model";
 import { nameOf, RunFace } from "../agents/run-face";
 import { StepSignedBy } from "../agents/step-signed-by";
 import { RanAs } from "../step-agents-ui";
@@ -49,11 +48,14 @@ export function stepLogHref(search: string, workflowRunId: string, stepId: strin
 
 /* ── Who ─────────────────────────────────────────────────────────────────────────── */
 
-export type StepActor = { roleKey: string | null; variant: AvatarVariant; ran: boolean };
+export type StepActor = { roleKey: string | null; variant: AvatarVariant; ran: boolean; personId?: string; name?: string };
 
 /** The one answer to "who does this step": who RAN it, else who the workflow assigns it to. */
 export function stepActor(ran: LaneAgent | undefined, planned: StepView["agent"] | undefined): StepActor | null {
-  if (ran) return { roleKey: ran.roleKey, variant: ran.variant, ran: true };
+  if (ran) {
+    return { roleKey: ran.roleKey, variant: ran.variant, ran: true,
+             ...(ran.personId ? { personId: ran.personId } : {}), ...(ran.name ? { name: ran.name } : {}) };
+  }
   if (!planned) return null;
   if (planned.kind === "named") return { roleKey: planned.role_key ?? null, variant: "agent", ran: false };
   if (planned.kind === "auto") {
@@ -65,7 +67,7 @@ export function stepActor(ran: LaneAgent | undefined, planned: StepView["agent"]
 
 /** The name a step's actor is called by, wherever a step shows it (callsign beside role). */
 export function actorName(actor: StepActor): string {
-  return nameOf(actor.roleKey, actor.variant).name;
+  return nameOf(actor.roleKey, actor.variant, actor.personId, actor.name).name;
 }
 
 /* ── Output ──────────────────────────────────────────────────────────────────────── */
@@ -297,7 +299,7 @@ export function actorVerb(phase: string, status: string): string {
 /** "Done by <face> <name> · $0.03 · model", the step's facts, and the agent's card below them. */
 export function StepDoneBy({ act, approval, output, phase, status, planned, viewer, projectId, failure,
                              question, cost, calls, model, onAsk, stepId, facts, skipped,
-                             askBossTip = "Ask about this step", route = null }: {
+                             askBossTip = "Ask about this step", route = null, spend = null }: {
   act: Act | null; approval?: Act | null; output: unknown;
   /** phaseOf(step), and the raw status for Queued vs Doing. */
   phase: string; status: string;
@@ -316,6 +318,8 @@ export function StepDoneBy({ act, approval, output, phase, status, planned, view
   skipped?: string;
   /** The model router's route for this step ("Why this model"), when it recorded one. */
   route?: RouteRow | null;
+  /** What the step spent over every attempt it started (chain.steps), when the chain has it. */
+  spend?: StepSpend | null;
 }) {
   useIdentityVersion();
   const [open, setOpen] = useState(false);
@@ -331,9 +335,12 @@ export function StepDoneBy({ act, approval, output, phase, status, planned, view
     );
   }
   const actor = stepActor(laneAgentOf(output, act, viewer), planned);
-  const named = actor ? nameOf(actor.roleKey, actor.variant) : null;
-  const priced = !!act || calls > 0;
-  const spent = act?.costUsd || cost;
+  const named = actor ? nameOf(actor.roleKey, actor.variant, actor.personId, actor.name) : null;
+  const priced = !!act || calls > 0 || !!spend;
+  // EVERY ATTEMPT'S SPEND. The step's own act holds none of it — the calls land on its build
+  // stages and panel seats, and a retry is a new act — so the chain's per-step sum comes first.
+  const spent = spend ? spend.costUsd : act?.costUsd || cost;
+  const included = spend ? spend.includedUsd : act?.includedUsd ?? 0;
   const hasCard = !!act || !!(output && typeof output === "object" && (output as { ran_as?: unknown }).ran_as);
   return (
     <div className="wf-doneby" data-testid="dw-step-doneby">
@@ -347,7 +354,13 @@ export function StepDoneBy({ act, approval, output, phase, status, planned, view
           </span>
           {priced || model || route ? (
             <span className="wf-doneby-facts">
-              {priced ? <span className="wf-doneby-fact" data-testid="dw-step-cost">{usd(spent)}</span> : null}
+              {priced ? (
+                <span className="wf-doneby-fact" data-testid="dw-step-cost"
+                      data-tip={[spend && spend.attempts > 1 ? `Across ${spend.attempts} attempts` : "",
+                                 included > 0 ? INCLUDED_TIP : ""].filter(Boolean).join("\n") || undefined}>
+                  {spendLabel(spent, included)}
+                </span>
+              ) : null}
               {route ? <span className="wf-doneby-fact" data-testid="dw-step-route"><WhyThisModel route={route} /></span>
                 : model ? <span className="wf-doneby-fact" data-testid="dw-step-model" data-user-text>{model}</span> : null}
             </span>

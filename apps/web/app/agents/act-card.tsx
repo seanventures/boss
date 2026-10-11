@@ -144,7 +144,7 @@ export function ActCard({ act, viewer, inline, onClose, askless }: {
 }) {
   useIdentityVersion(); // names and faces below are resolved at render: repaint when identities load
   const who = whoDid(act, viewer);
-  const named = nameOf(who.roleKey, who.variant, who.personId);
+  const named = nameOf(who.roleKey, who.variant, who.personId, who.name);
   const state = actState(act);
   const handedName = act.handedBy.kind === "boss" ? "BOSS"
     : act.handedBy.kind === "person"
@@ -279,7 +279,7 @@ export function ActFace({ act, viewer, size = 24, label, children, state }: {
   const card = useRef<HTMLDivElement>(null);
   const id = useId();
   const who = whoDid(act, viewer);
-  const named = nameOf(who.roleKey, who.variant, who.personId);
+  const named = nameOf(who.roleKey, who.variant, who.personId, who.name);
   const close = useCallback(() => { setOpen(false); button.current?.focus(); }, []);
   useLayoutEffect(() => {
     if (open && button.current && card.current) setAt(place(button.current, card.current));

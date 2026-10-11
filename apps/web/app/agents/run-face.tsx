@@ -35,12 +35,14 @@ export type FaceName = { name: string; role: string; callsign?: string; tagline?
  * How an agent is named on these surfaces: its callsign beside its role when it has one
  * ("Vera" · "QA Lead"), its role otherwise. Callsigns are shown next to the role, never instead.
  */
-export function nameOf(roleKey: string | null, variant: AvatarVariant = "agent", personId?: string): FaceName {
+export function nameOf(roleKey: string | null, variant: AvatarVariant = "agent", personId?: string,
+                       personName?: string): FaceName {
   if (!roleKey || variant !== "agent") {
     if (variant === "you") return { name: "You", role: "You" };
     if (variant === "boss") return { name: "BOSS", role: "BOSS" };
     if (variant === "auto") return { name: "Auto", role: "Auto" };
-    return { name: "A person", role: personId || "A person" };
+    // A person by name when BOSS knows it; "A person" only when nothing names them.
+    return { name: personName || "A person", role: personName || personId || "A person" };
   }
   try {
     const id = agentIdentity(roleKey);

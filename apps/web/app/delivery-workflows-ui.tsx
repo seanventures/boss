@@ -33,7 +33,7 @@ import { StepActivity, StepDoneBy, StepOutputFacts, StepSection, stepFacts, step
          useStepActivity } from "./workflows/step-run";
 import type { StepView } from "../lib/workflow-editor-types";
 import { viewOf } from "./workflows/flow/node-facts";
-import type { Act } from "../lib/agent-world-types";
+import type { Act, StepSpend } from "../lib/agent-world-types";
 import { browserHref } from "../lib/browser-links";
 import { StackDeployStep, stackDeployOf, type StepStackDeploy } from "./workflow-stack-deploy-step";
 import { DefineStepForm } from "./workflows/define-step-form";
@@ -2020,6 +2020,7 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onSkipStep, 
             return spec ? viewOf(spec, lanePalette).agent : undefined;
           })()}
           approval={approvalOf(chain, stepActOf(chain, current.step_id))}
+          spend={chain?.steps?.[current.step_id] ?? null}
           onRunPreview={onRunPreview}
           onBound={onBound}
           projectId={projectId}
@@ -2847,8 +2848,10 @@ export function buildStageOf(steps: Array<Pick<RunStep, "capability" | "status">
 function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onRetry, onSkip,
                      actions, actor = "", act = null, approval: gateAnswer = null, planned,
                      onSetTarget, onPrepareTarget, onRunPreview, onBound, projectId, buildRunId,
-                     workflowRunId, previewStarting, busy, panelBuild }: {
+                     workflowRunId, previewStarting, busy, panelBuild, spend = null }: {
   projectId: string;
+  /** What this step spent over every attempt (chain.steps). */
+  spend?: StepSpend | null;
   /** The run's build step, as the panel step's "Build" stage shows it. */
   panelBuild?: "done" | "now" | "todo" | "stopped" | "skipped";
   /** Who is acting — what a stack deployment's Approve/Reject is recorded as. */
@@ -3130,7 +3133,7 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
                   failure={phase === "failed" ? step.error : null} question={question}
                   cost={activity.cost} calls={activity.calls} model={activity.model}
                   onAsk={ask} askBossTip="Ask BOSS about this step" stepId={step.step_id} facts={facts}
-                  route={routeForStep(stepRoutes, step.step_id)}
+                  route={routeForStep(stepRoutes, step.step_id)} spend={spend}
                   skipped={phase === "skipped" ? (skippedBy(step) || skipReason(step) || "Did not apply to this run") : undefined} />
 
       {/* A STEP THAT SUCCEEDED IS NOT SHOWING YOU A FAILURE.
