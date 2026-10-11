@@ -1172,8 +1172,8 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
                   + "Nothing could move yet — each run is waiting on a person or on work in flight.");
               await load();
             })}
-            onRetryStep={(runId, stepId) =>
-              act("Retry", "retry_step", { run_id: runId, step_id: stepId })}
+            onRetryStep={(runId, stepId, note) =>
+              act("Retry", "retry_step", { run_id: runId, step_id: stepId, ...(note ? { note } : {}) })}
             // SKIP AND PROCEED. Going on without a failed step is a decision, so the step asks
             // why and the reason is kept on the step and in the run's history.
             onSkipStep={(runId, stepId, reason) =>
@@ -1461,7 +1461,7 @@ export function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilit
   onAdvance: () => void;
   busy: string | null;
   capabilities: Capability[];
-  onRetryStep: (runId: string, stepId: string) => void;
+  onRetryStep: (runId: string, stepId: string, note?: string) => void;
   /** Go on without a failed step, for the reason the operator gave. */
   onSkipStep: (runId: string, stepId: string, reason: string) => void;
   onRerun: (run: Run) => void;
@@ -1617,7 +1617,7 @@ export function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilit
                                    capability={stoppedCapability} busy={busy}
                                    actions={stepActions(run, stopped.step_id)}
                                    idPrefix="dw-run-stopped"
-                                   onRetry={() => onRetryStep(run.id, stopped.step_id)}
+                                   onRetry={(note) => onRetryStep(run.id, stopped.step_id, note)}
                                    onSkip={(reason) => onSkipStep(run.id, stopped.step_id, reason)} />
               </div>
             ) : run.blocked_reason ? (
@@ -1634,7 +1634,7 @@ export function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilit
             ) : null}
             {open ? (
               <StepPath run={run} onOpenWorkflow={onOpenWorkflow} actor={actor} roles={roles} capabilities={capabilities} targets={targets} hosts={hosts}
-                        onRetryStep={(stepId) => onRetryStep(run.id, stepId)}
+                        onRetryStep={(stepId, note) => onRetryStep(run.id, stepId, note)}
                         onSkipStep={(stepId, reason) => onSkipStep(run.id, stepId, reason)}
                         onRerun={() => onRerun(run)} onRecheck={() => onRecheck(run)}
                         onStop={() => onStop(run)}
@@ -1798,7 +1798,7 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onSkipStep, 
   run: Run; capabilities: Capability[]; targets: DeployTarget[]; hosts: DeployHost[];
   /** Open the workflow this run follows in the editor. */
   onOpenWorkflow?: (workflowKey: string) => void;
-  onRetryStep: (stepId: string) => void; onRerun: () => void; onRecheck: () => void;
+  onRetryStep: (stepId: string, note?: string) => void; onRerun: () => void; onRecheck: () => void;
   onSkipStep: (stepId: string, reason: string) => void;
   /** Stop a live run — the work it started, not only its bookkeeping. */
   onStop: () => void;
@@ -2008,7 +2008,7 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onSkipStep, 
           runInput={run.input ?? {}}
           actions={stepActions(run, current.step_id)}
           actor={actor}
-          onRetry={() => onRetryStep(current.step_id)}
+          onRetry={(note) => onRetryStep(current.step_id, note)}
           onSkip={(reason) => onSkipStep(current.step_id, reason)}
           onSetTarget={(targetId) => onSetTarget(targetId)}
           onPrepareTarget={onPrepareTarget}
@@ -2685,14 +2685,21 @@ function useLearned(topic: string): [boolean, () => void] {
  *  ONE COMPONENT, TWO PLACES. The step's own detail, and the run card itself — where a stopped
  *  run says why it stopped and offers both answers without being opened first. `idPrefix`
  *  keeps the two sets of test ids distinct when both are on screen. */
+/** The longest retry note the API accepts (WorkflowRetryStepBody.note). */
+export const RETRY_NOTE_LIMIT = 4000;
+
 export function FailedStepActions({ step, capability, actions, busy, onRetry, onSkip,
                             idPrefix = "dw-step" }: {
   step: RunStep; capability?: Capability; busy: string | null;
   /** This step's Try again and Skip, as the server decided them (`stepActions`). Whichever is
    *  absent is not rendered; whichever is disabled says why. Nothing here reads a status. */
   actions: { retry?: RunAction; skip?: RunAction };
-  onRetry: () => void; onSkip: (reason: string) => void; idPrefix?: string;
+  onRetry: (note?: string) => void; onSkip: (reason: string) => void; idPrefix?: string;
 }) {
+  // RETRY WITH A NOTE. Try again opens one optional field first — what should change — and the
+  // note goes with the retry; a retried build hands it to the builder, verbatim.
+  const [retryOpen, setRetryOpen] = useState(false);
+  const [retryNote, setRetryNote] = useState("");
   // The reason box for "Skip and proceed" — open only after the operator asks to skip, so the
   // decision is two deliberate acts: choose to skip, then say why.
   const [skipOpen, setSkipOpen] = useState(false);
@@ -2704,13 +2711,15 @@ export function FailedStepActions({ step, capability, actions, busy, onRetry, on
     <div className="dw-step-decide" data-testid={`${idPrefix}-decide`}>
       {retry ? (
         <>
-          <GatedButton permission="workflow_run:control" type="button" className="cap-btn primary" onClick={onRetry}
-                  disabled={!!busy || !retry.enabled} title={retry.reason ?? undefined}
+          <GatedButton permission="workflow_run:control" type="button" className="cap-btn primary"
+                  onClick={() => setRetryOpen(true)}
+                  disabled={!!busy || retryOpen || !retry.enabled} title={retry.reason ?? undefined}
                   data-testid={`${idPrefix}-retry`}>
             {busy === "Retry" ? "Queueing…" : retry.label}
           </GatedButton>
           <Explain label="What retrying this step does">
-            {retry.enabled ? "Runs this step only; everything before it stays done."
+            {retry.enabled ? "Runs this step only; everything before it stays done. "
+              + "You can say what should change — a build gets your note."
               : `Not available: ${retry.reason}.`}
           </Explain>
         </>
@@ -2729,6 +2738,30 @@ export function FailedStepActions({ step, capability, actions, busy, onRetry, on
               + "have produced are told it was skipped — never handed a made-up value."
             : `Not available: ${skip.reason}.`}
         </Explain>
+      ) : null}
+      {retry?.enabled && retryOpen ? (
+        <form className="dw-skip-why" data-testid={`${idPrefix}-retry-form`}
+              onSubmit={(e) => {
+                e.preventDefault();
+                const note = retryNote.trim();
+                onRetry(note || undefined);
+                setRetryOpen(false);
+                setRetryNote("");
+              }}>
+          <label title="Optional. Sent with the retry; a build gets it as instructions.">
+            What should change? (optional){" "}
+            <textarea value={retryNote} autoFocus rows={2} maxLength={RETRY_NOTE_LIMIT}
+                      data-testid={`${idPrefix}-retry-note`}
+                      placeholder="e.g. the login test fails — fix the redirect"
+                      onChange={(e) => setRetryNote(e.target.value)} />
+          </label>
+          <button type="submit" className="cap-btn primary" disabled={!!busy}
+                  data-testid={`${idPrefix}-retry-confirm`}>
+            Retry
+          </button>
+          <button type="button" className="linklike"
+                  onClick={() => { setRetryOpen(false); setRetryNote(""); }}>Cancel</button>
+        </form>
       ) : null}
       {skip?.enabled && skipOpen ? (
         <form className="dw-skip-why" data-testid={`${idPrefix}-skip-form`}
@@ -2834,7 +2867,7 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
   stepIndex?: number;
   step: RunStep; capability?: Capability; targets: DeployTarget[]; hosts: DeployHost[];
   runInput: Record<string, unknown>;
-  onRetry: () => void; onSetTarget: (targetId: string) => void;
+  onRetry: (note?: string) => void; onSetTarget: (targetId: string) => void;
   /** Skip this failed step and let the run proceed. Never offered on an approval gate. */
   onSkip: (reason: string) => void;
   onPrepareTarget: (hostId: string) => void;

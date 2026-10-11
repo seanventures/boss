@@ -26173,7 +26173,9 @@ def retry_delivery_step(run_id: str, payload: WorkflowRetryStepBody) -> dict:
         try:
             return workflow_runtime.retry_failed_step(
                 connection, project_id=project_id, run_id=run_id, step_id=step_id,
-                actor=actor)
+                actor=actor, note=str(payload.get("note") or ""))
+        except workflow_runtime.WorkflowValidationError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
         except workflow_runtime.WorkflowNotFoundError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
         except workflow_runtime.WorkflowConflictError as error:

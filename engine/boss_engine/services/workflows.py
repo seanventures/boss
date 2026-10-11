@@ -4753,8 +4753,14 @@ def retry_failed_step(
     run_id: str,
     step_id: str,
     actor: str,
+    note: str = "",
 ) -> dict[str, Any]:
     """Put ONE failed, dead-lettered or cancelled step back in the queue.
+
+    `note` is "Retry with a note": what the operator wants changed this time (at most
+    RETRY_NOTE_LIMIT characters). It is stored on the step run as `output.retry_note` and in the
+    `workflow.step_retried` event, and a build step hands it, verbatim, to the builder it starts
+    (workflow_capability_runner._retried_build).
 
     ONE IMPLEMENTATION. The console's "Try … again" (POST .../retry-step) and the agent's
     `retry_workflow_step` tool each carried their own copy of this UPDATE, and only the tool's
@@ -4768,6 +4774,10 @@ def retry_failed_step(
     # Stop committing between the check below and the write in `_set_moving_again` was undone:
     # a cancelled run set running again, the incident this rule exists to end. Run before step,
     # the order every other operation locks in, so Try again and Skip cannot deadlock.
+    note = str(note or "").strip()
+    if len(note) > RETRY_NOTE_LIMIT:
+        raise WorkflowValidationError(
+            f"The note is {len(note)} characters; keep it under {RETRY_NOTE_LIMIT}.")
     run = _run_row(connection, run_id, lock=True)
     if run is None or run["project_id"] != project_id:
         raise WorkflowNotFoundError("Workflow run not found.")
@@ -4804,19 +4814,26 @@ def retry_failed_step(
     # had said no to. The answer is cleared (it stays in the step's history as
     # `refused_decision_id`), and the step opens a fresh decision when it is reached.
     refused = bool((_json(row["output"], {}) or {}).get("rejected_by_approver"))
+    # WHAT THE NEXT ATTEMPT IS TOLD. The operator's note, and which build the failed attempt
+    # was — so a retried build resumes that lineage instead of starting blind from main.
+    previous = _json(row["output"], {}) or {}
+    retry_marker = {"retry_note": note, "retried_by": actor,
+                    "retried_from_code_task_run_id": _code_task_of(previous)}
     connection.execute(
         text("UPDATE workflow_step_runs SET status='ready', attempt=0, last_error=NULL, "
              "lease_owner=NULL, lease_expires_at=NULL, run_after=now(), updated_at=now(), "
-             "output = (COALESCE(output, '{}'::jsonb) - 'waiting'"
+             "output = ((COALESCE(output, '{}'::jsonb) - 'waiting'"
              + (" - 'rejected_by_approver' - 'outcome') || jsonb_build_object("
-                "'refused_decision_id', CAST(decision_id AS text)), decision_id = NULL "
-                if refused else ") ")
+                "'refused_decision_id', CAST(decision_id AS text))) "
+                "|| CAST(:retry AS JSONB), decision_id = NULL "
+                if refused else ") || CAST(:retry AS JSONB)) ")
              + "WHERE id=:id"),
-        {"id": row["id"]},
+        {"id": row["id"], "retry": json.dumps(retry_marker)},
     )
     emit_event(connection, project_id, "workflow.step_retried", actor, "workflow_run", run_id,
                {"step_id": step_id, "was": row["status"],
-                "workflow_step_run_id": row["id"]})
+                "workflow_step_run_id": row["id"],
+                **({"note": note} if note else {})})
     # The run moves again — unless it is paused, or until it reaches another failed step the
     # operator has not decided about. See `_set_moving_again`.
     run_status = _set_moving_again(connection, run_id)
@@ -4826,6 +4843,22 @@ def retry_failed_step(
             "run_status": run_status,
             # The words the console shows for it: short, never a server fragment.
             "message": f"Asking again: {named}" if asks_again else f"Retrying {named}"}
+
+
+#: The longest "Retry with a note" note a step accepts.
+RETRY_NOTE_LIMIT = 4000
+
+
+def _code_task_of(output: dict[str, Any]) -> Optional[str]:
+    """The code task a step's output says it started or waited on, if any."""
+    if not isinstance(output, dict):
+        return None
+    found = output.get("code_task_run_id")
+    awaited = output.get("await")
+    if not found and isinstance(awaited, dict) and awaited.get("kind") == "code_task":
+        found = awaited.get("id")
+    found = str(found or "").strip()
+    return found or None
 
 
 def _is_gate_step(template: dict[str, Any]) -> bool:

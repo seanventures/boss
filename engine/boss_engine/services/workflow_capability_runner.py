@@ -2487,6 +2487,16 @@ def _perform_capability(
                 f"{architecture}"
             ).strip()}
 
+    # RETRY WITH A NOTE. A build the operator retried resumes the failed attempt's lineage
+    # (its branch, its design, its findings and failure) with their note as the feedback; a
+    # retry with nothing to resume carries the note into the new build's instructions.
+    retry_note = ""
+    if key == "build":
+        resumed, inputs, retry_note = _retried_build(
+            connection, ctx, project_id, step, context, inputs)
+        if resumed is not None:
+            return _settle_started_work(capability, key, resumed)
+
     # THE SECURITY REVIEW'S TOOL-BACKED STEPS (services/security_review_steps.py): the scan, the
     # panel and the fix build their tool's arguments from what the run produced — or say why
     # there is nothing to do (no findings, nothing chosen, round 1 already passed).
@@ -2522,7 +2532,9 @@ def _perform_capability(
         output = _invoke_tool(ctx, capability.tool, project_id, step_actor, inputs)
     result = {"capability": key, "tool": capability.tool, **output,
               "ran_as": {**ran_as, "tool": capability.tool,
-                         "skills_offered": [], "skills_used": []}}
+                         "skills_offered": [], "skills_used": []},
+              # Kept on the step run: the step's output is replaced when it parks.
+              **({"retry_note": retry_note} if retry_note else {})}
     skipped = _preview_not_permitted(key, result, step_actor)
     if skipped:
         return skipped
@@ -2532,6 +2544,74 @@ def _perform_capability(
 
     # STARTED IS NOT FINISHED. See `_settle_started_work`.
     return _settle_started_work(capability, key, result)
+
+
+#: The heading the operator's retry note is given under, in every build it reaches.
+RETRY_NOTE_HEADING = "## What to change on this retry (from the operator)"
+
+#: A previous attempt in one of these states is resumed by a retry, never rebuilt from scratch.
+_RESUMABLE_BUILD = frozenset({"failed", "blocked", "cancelled", "error", "rejected",
+                              "awaiting_gate_override"})
+
+
+def _retried_build(
+    connection: Connection, ctx: Any, project_id: str, step: dict[str, Any],
+    context: dict[str, Any], inputs: dict[str, Any],
+) -> tuple[Optional[dict[str, Any]], dict[str, Any], str]:
+    """A build step the operator retried (workflows.retry_failed_step): what it starts.
+
+    Returns (result, inputs, note). `result` is the resumed attempt when the failed build is resumed
+    — `code_task_service.retry_code_task`, the same operation as the code task's own Retry, so
+    the new attempt keeps the branch and the design (code_task.design_resumed) and is told the
+    previous findings, the gates that failed and the verify output's tail, with the note as the
+    operator's feedback. Otherwise None, and `inputs` carry the note into a fresh build.
+    """
+    run_id = str(context.get("run_id") or "")
+    step_id = str(step.get("id") or "")
+    if not run_id or not step_id or connection is None:
+        return None, inputs, ""
+    try:
+        row = connection.execute(
+            text("SELECT output FROM workflow_step_runs WHERE workflow_run_id=:r "
+                 "AND project_id=:p AND step_id=:s ORDER BY created_at DESC LIMIT 1"),
+            {"r": run_id, "p": project_id, "s": step_id}).mappings().first()
+    except Exception as error:  # noqa: BLE001 — a retry falls back to a fresh build
+        log.warning("cannot read step %s of %s for a retry: %s", step_id, run_id, error)
+        return None, inputs, ""
+    output = (row or {}).get("output") if row else None
+    if isinstance(output, str):
+        try:
+            output = json.loads(output)
+        except ValueError:
+            output = None
+    if not isinstance(output, dict) or "retried_by" not in output:
+        return None, inputs, ""
+    note = str(output.get("retry_note") or "").strip()
+    previous = str(output.get("retried_from_code_task_run_id") or "").strip()
+    from . import code_task_service as cts
+
+    prev = cts.load_code_task_run(connection, previous) if previous else None
+    if prev is not None and str(prev.get("project_id")) == str(project_id) and (
+            str(prev.get("status") or "") in _RESUMABLE_BUILD or note):
+        try:
+            result = cts.retry_code_task(
+                ctx.engine, getattr(ctx, "settings", None) or get_settings(), ctx.jobs,
+                previous, fix_note=note)
+        except ValueError as error:
+            raise CapabilityExecutionError(
+                f"could not resume the previous build {previous}: {error}") from error
+        emit_event(connection, project_id, "workflow.build_resumed", "boss", "workflow_run",
+                   run_id, {"step_id": step_id, "from_code_task_run_id": previous,
+                            "code_task_run_id": result.get("run_id"),
+                            "with_note": bool(note)})
+        return ({"capability": "build", "tool": "retry_code_task", **result,
+                 "resumed_from_code_task_run_id": previous,
+                 **({"retry_note": note} if note else {})}, inputs, note)
+    if not note:
+        return None, inputs, ""
+    instructions = str(inputs.get("instructions") or "").strip()
+    return (None, {**inputs, "instructions": f"{instructions}\n\n{RETRY_NOTE_HEADING}\n{note}"},
+            note)
 
 
 def _security_step(connection: Connection, ctx: Any, project_id: str, key: str,
