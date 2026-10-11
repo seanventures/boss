@@ -189,7 +189,7 @@ export const ModelsRow = forwardRef<HTMLElement, {
       </span>
     );
   } else if (mode === "waiting") {
-    body = <span className="su-faint">Not connected</span>;
+    body = <span className="su-faint su-model-empty">Not connected</span>;
   } else if (mode === "current" && view.models.length === 0) {
     body = (
       <div>

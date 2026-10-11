@@ -332,8 +332,7 @@ export const CapacityRow = forwardRef<HTMLElement, { actor?: string; focused: bo
           const editing = open === src.sourceId;
           return (
             <div key={src.sourceId} className="su-cap" data-testid="setup-cap-source" data-source={src.sourceId}>
-              <div className="su-line">
-                <span className={`su-pill su-tone-${st.tone}`} role="status"><Dot tone={st.tone} />{st.label}</span>
+              <div className="su-line su-cap-head">
                 <details className="mr-criteria" style={{ minWidth: 0, maxWidth: "100%" }} data-testid="setup-cap-details">
                   <summary style={{ maxWidth: "100%", overflowWrap: "anywhere" }}><span data-user-text>{sourceName(src.sourceId)}</span><span className="su-sr"> details</span></summary>
                   <div className="su-stack su-faint" style={{ overflowWrap: "anywhere" }}>
@@ -343,6 +342,10 @@ export const CapacityRow = forwardRef<HTMLElement, { actor?: string; focused: bo
                     {src.models.length ? <span>Models: <span className="su-mono" data-user-text>{src.models.join(", ")}</span></span> : null}
                   </div>
                 </details>
+                <span className={`su-pill su-tone-${st.tone}`} role="status"
+                      data-connection-summary={["Needs key", "Needs sign-in", "Not configured", "Not connected"].includes(st.label) || undefined}>
+                  <Dot tone={st.tone} />{st.label}
+                </span>
                 {src.capacity !== "unknown" ? <Tip tip="The capacity this source last reported." className="su-faint">{words(src.capacity)}</Tip> : null}
                 <span className="su-spacer" />
                 {takesKey(src) && onBoard.has(src.sourceId) ? (
