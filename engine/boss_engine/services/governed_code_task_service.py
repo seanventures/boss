@@ -3398,6 +3398,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # skips the design chain, write_tests and the first implement: its first pass is the
         # repair, fed the parent's failing gates, verify output and the operator's note.
         _seeded = 0
+        _seeded_paths: list[str] = []
         _seed_from = str(fctx.get("seed_workspace_from") or "").strip()
         if _seed_from:
             def _load(rid: str) -> Optional[dict]:
@@ -3407,6 +3408,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             if use_microvm:
                 _seed_files = []  # each guest stage clones the branch; nothing to seed into
             _seeded = seed_workspace(root, _seed_files) if _seed_files else 0
+            _seeded_paths[:] = [str(f["path"]) for f in _seed_files if _seeded]
             with _transaction(engine) as c:
                 emit_event(c, project_id,
                            "code_task.workspace_seeded" if _seeded
@@ -3454,6 +3456,11 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         def _changed_paths() -> list[str]:
             """Every path this run has changed: what is checkpointed plus the live tree."""
             paths = set(accumulated)
+            # A REPAIR SEEDED FROM A SAVED WORKSPACE: the seeded files are this lineage's work
+            # against the base branch, even when the live diff reports nothing (crun_cc365333
+            # planned its tests at the repository root: changed was empty, so the app folder
+            # was never found and npm ran on another app's package.json).
+            paths.update(_seeded_paths)
             if not use_microvm:
                 try:
                     paths.update(sandbox.diff_summary().paths)

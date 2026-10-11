@@ -179,3 +179,15 @@ def test_a_retry_continues_from_the_attempt_that_got_furthest():
     src = inspect.getsource(cts.retry_code_task)
     assert 'st.get("tests_passed") is True' in src and 'fctx_n.get("failing_gates")' in src
     assert "max(whole, key=lambda w: w[2])" in src
+
+
+def test_a_seeded_repair_counts_its_seeded_files_as_changed():
+    """crun_cc365333 planned its tests at the repo root: its change list was empty."""
+    import inspect
+
+    from boss_engine.services import governed_code_task_service as g
+
+    src = inspect.getsource(g)
+    helper = src[src.index("def _changed_paths"):][:900]
+    assert "paths.update(_seeded_paths)" in helper
+    assert '_seeded_paths[:] = [str(f["path"]) for f in _seed_files if _seeded]' in src
