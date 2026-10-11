@@ -218,13 +218,13 @@ export function SetupBoard({ projectId, actor, initialView = null }: {
                }}
                title="Describe one small change; BOSS opens a pull request on your repository."
                data-tip="Describe one small change; BOSS opens a pull request on your repository.">
-              Next: open your first PR
+              Next: open a PR
             </a>
           ) : view.ready ? (
             <a className="su-link" href="?area=skills&setup=1" data-testid="su-next-skills"
                title="Choose what your agents can do: research, tickets, email."
                data-tip="Choose what your agents can do: research, tickets, email.">
-              Next: give your crew skills
+              Next: add skills
             </a>
           ) : null}
           <span className="su-spacer" />

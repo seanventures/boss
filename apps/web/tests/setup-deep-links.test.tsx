@@ -97,13 +97,13 @@ describe("the seam to Skills and MCP", () => {
     fakeApi(board());
     mounted = await mountBoard(board());
     const next = q(document.body, "su-next-skills") as HTMLAnchorElement | null;
-    expect(next?.textContent).toBe("Next: give your crew skills");
+    expect(next?.textContent).toBe("Next: add skills");
     expect(next?.getAttribute("href")).toBe("?area=skills&setup=1");
     mounted.unmount(); mounted = null; document.body.innerHTML = "";
     fakeApi(tryStep());
     mounted = await mountBoard(tryStep());
     const first = q(document.body, "su-next-try") as HTMLAnchorElement | null;
-    expect(first?.textContent).toBe("Next: open your first PR");
+    expect(first?.textContent).toBe("Next: open a PR");
     expect(q(document.body, "su-next-skills")).toBeNull();
     mounted.unmount(); mounted = null; document.body.innerHTML = "";
     fakeApi(firstRun());

@@ -111,7 +111,7 @@ function KeyForm({ src, onSave }: { src: CapSource; onSave: (value: string, back
   const [value, setValue] = useState("");
   const [backend, setBackend] = useState(BACKENDS[0].id);
   const [busy, setBusy] = useState(false);
-  const label = src.credentialPresent ? "Rotate credential" : "Store credential";
+  const label = src.credentialPresent ? "Replace key" : "Save key";
   return (
     <form className="su-line su-cap-form" data-testid="setup-cap-key-form"
           onSubmit={async (e) => {
@@ -159,7 +159,7 @@ function StartForm({ src, onStart }: { src: CapSource; onStart: (mode: string, s
         <input value={scopes} aria-label="Scopes" placeholder="Comma separated" onChange={(e) => setScopes(e.target.value)} />
       </label>
       <GatedButton permission="entitlement:manage" type="submit" className="su-btn su-btn-sm" disabled={busy} data-testid="setup-cap-start"
-              title="Get the official login steps for this plan" data-tip="Get the official login steps for this plan">Start official session</GatedButton>
+              title="Get the official login steps for this plan" data-tip="Get the official login steps for this plan">Get sign-in steps</GatedButton>
     </form>
   );
 }
@@ -292,7 +292,7 @@ export const CapacityRow = forwardRef<HTMLElement, { actor?: string; focused: bo
                 {takesKey(src) && !onBoard.has(src.sourceId) ? (
                   <GatedButton permission="entitlement:manage" type="button" className="su-btn su-btn-sm" aria-expanded={editing} data-testid="setup-cap-key-open"
                           onClick={() => setOpen(editing ? null : src.sourceId)}>
-                    {src.credentialPresent ? "Rotate credential" : "Store credential"}
+                    {src.credentialPresent ? "Replace key" : "Add key"}
                   </GatedButton>
                 ) : null}
                 {isLogin(src) && src.connection === "connected" ? (
@@ -301,7 +301,7 @@ export const CapacityRow = forwardRef<HTMLElement, { actor?: string; focused: bo
                 ) : null}
                 {isLogin(src) && src.connection !== "connected" ? (
                   <GatedButton permission="entitlement:manage" type="button" className="su-btn su-btn-sm" aria-expanded={editing} data-testid="setup-cap-start-open"
-                          onClick={() => setOpen(editing ? null : src.sourceId)}>Start official session</GatedButton>
+                          onClick={() => setOpen(editing ? null : src.sourceId)}>Sign in</GatedButton>
                 ) : null}
               </div>
               {editing && takesKey(src) ? (

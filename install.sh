@@ -1227,6 +1227,37 @@ export COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-boss-community}"
 # The image tag follows this compose project. A second install on the same
 # machine must not replace the images this one is running.
 export BOSS_COMMUNITY_IMAGE_TAG="${BOSS_COMMUNITY_IMAGE_TAG:-$COMPOSE_PROJECT_NAME}"
+# ---- build metadata -------------------------------------------------------
+# Describe this installed source, not a caller's stale build environment. This
+# identifies a clean Git checkout; it is not a content attestation for an image.
+set_build_metadata() {
+  local source_root="" source_head="" source_status="" built_at=""
+  BOSS_SOURCE_SHA=unknown
+  BOSS_BUILT_AT=unknown
+  if [[ -d "$INSTALL_DIR/.git" || -f "$INSTALL_DIR/.git" ]] &&
+     source_root="$(git -C "$INSTALL_DIR" rev-parse --show-toplevel 2>/dev/null)" &&
+     [[ "$source_root" == "$(cd "$INSTALL_DIR" && pwd -P)" ]] &&
+     source_head="$(git -C "$INSTALL_DIR" rev-parse --verify HEAD 2>/dev/null)" &&
+     [[ "$source_head" =~ ^[0-9a-f]{40}$ ]] &&
+     source_status="$(GIT_OPTIONAL_LOCKS=0 git -c core.fsmonitor=false -C "$INSTALL_DIR" status --porcelain --untracked-files=normal 2>/dev/null)" &&
+     [[ -z "$source_status" ]]; then
+    BOSS_SOURCE_SHA="$source_head"
+  fi
+  # One UTC build-invocation timestamp for all roles, not a completion timestamp.
+  if built_at="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)" &&
+     [[ "$built_at" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
+    BOSS_BUILT_AT="$built_at"
+  fi
+  export BOSS_SOURCE_SHA BOSS_BUILT_AT
+  if [[ "$BOSS_SOURCE_SHA" == unknown ]]; then
+    ui_warn "Build source revision is unknown: a clean Git checkout is required."
+  fi
+  if [[ "$BOSS_BUILT_AT" == unknown ]]; then
+    ui_warn "Build timestamp is unknown: the local UTC clock could not be read."
+  fi
+}
+set_build_metadata
+# ---- end build metadata ---------------------------------------------------
 # One blocking build per service also serializes image export/load. Compose's
 # parallel limit alone does not prevent a single multi-service build from
 # exporting several large images at once. Keep normal cache/platform behavior.
@@ -1256,9 +1287,12 @@ fi
 while IFS= read -r _build_service; do
   [[ -n "$_build_service" ]] || continue
   ui_info "Building $_build_service (one image at a time)"
+  # Pass observed metadata as build arguments: sudo may reset exported variables.
   # shellcheck disable=SC2086
   "${COMPOSE[@]}" -f scripts/install/community-compose.yml --env-file "$ENV_FILE" \
-    $COMPOSE_PROFILES build "$_build_service" </dev/null
+    $COMPOSE_PROFILES build \
+    --build-arg "BOSS_SOURCE_SHA=$BOSS_SOURCE_SHA" \
+    --build-arg "BOSS_BUILT_AT=$BOSS_BUILT_AT" "$_build_service" </dev/null
 done <<< "$BUILD_SERVICES"
 # ---- end serial image builds ----------------------------------------------
 
