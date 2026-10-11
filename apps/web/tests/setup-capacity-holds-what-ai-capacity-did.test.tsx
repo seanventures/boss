@@ -14,7 +14,7 @@ import { overBudget } from "./_helpers/copy-budget";
 import { entitlementSessionsWire, entitlementSourcesWire } from "./_helpers/obs-fixtures";
 import { board } from "./_helpers/setup-fixtures";
 import { click, mountBoard, q, type, type Mounted } from "./_helpers/setup-board";
-import { completeBody } from "../app/setup/capacity-row";
+import { completeBody, stateOf, type CapSource } from "../app/setup/capacity-row";
 import type { SetupView } from "../lib/setup-types";
 
 let mounted: Mounted | null = null;
@@ -56,7 +56,7 @@ describe("Capacity on Repo and models", () => {
     expect(ids).toEqual(["anthropic_api", "openai_gateway", "claude_max", "chatgpt_pro"]);
     expect(src("anthropic_api").querySelector(".su-pill")?.textContent).toBe("Active");
     expect(src("openai_gateway").querySelector(".su-pill")?.textContent).toBe("Blocked");
-    expect(src("claude_max").querySelector(".su-pill")?.textContent).toBe("Needs login");
+    expect(src("claude_max").querySelector(".su-pill")?.textContent).toBe("Needs sign-in");
     expect(q(document.body, "setup-entitlement-session")?.textContent).toContain("1 · 1 waiting");
     expect(q(document.body, "setup-broker-skills-link")?.getAttribute("href")).toBe("?area=skills");
     expect(overBudget(q(document.body, "setup-entitlements") as HTMLElement)).toEqual([]);
@@ -233,7 +233,7 @@ describe("unused model sources", () => {
     const ids = sources.items.slice(0, 11).map(x => x.source_id);
     const calls = api(firstRunView(), sources, { items: [] });
     mounted = await mountBoard(firstRunView());
-    expect(q(document.body, "su-row-capacity")?.getAttribute("aria-label")).toBe("Model sources");
+    expect(q(document.body, "su-row-capacity")?.getAttribute("aria-label")).toBe("Source connections");
     expect([...document.querySelectorAll('[data-testid="setup-cap-source"]')].map(x => x.getAttribute("data-source")))
       .toEqual(["approved_local_model_host", "managed_cloud_model_gateway"]);
     expect((q(document.body, "setup-cap-add") as HTMLDetailsElement).open).toBe(false);
@@ -354,3 +354,65 @@ describe("unused model sources", () => {
   });
 });
 function firstRunView(): SetupView { const view = board(); view.models = []; return view; }
+
+// Disconnected is a transport state, not evidence that every source needs an OAuth login.
+describe("source verdict precedence", () => {
+  const base: CapSource = {
+    sourceId: "source", provider: "provider", kind: "official_api", effective: "declared",
+    auth: "api_key", connection: "not_connected", credentialPresent: false, credentialAbsent: true,
+    capacity: "unknown", models: [], modes: [], scopes: [], pooled: false,
+  };
+  const cases: [Partial<CapSource>, string][] = [
+    [{}, "Needs key"],
+    [{ auth: "gateway_token" }, "Needs key"],
+    [{ auth: "official_cli_oauth" }, "Needs sign-in"],
+    [{ auth: "official_device_oauth" }, "Needs sign-in"],
+    [{ auth: "local_host" }, "Not configured"],
+    [{ auth: "account_connect" }, "Not connected"],
+    [{ credentialAbsent: false }, "Not connected"],
+    [{ credentialPresent: true, credentialAbsent: false }, "Not connected"],
+    [{ effective: "unknown" }, "Unknown"],
+    [{ effective: "" }, "Unknown"],
+    [{ effective: "unsupported" }, "Unsupported"],
+    [{ effective: "runtime_unavailable" }, "Runtime unavailable"],
+    [{ effective: "disabled" }, "Disabled"],
+    [{ effective: "failed" }, "Failed"],
+    [{ effective: "blocked" }, "Blocked"],
+    [{ connection: "failed" }, "Failed"],
+    [{ connection: "expired", auth: "official_cli_oauth" }, "Expired"],
+    [{ connection: "revoked", auth: "official_cli_oauth" }, "Revoked"],
+    [{ effective: "active", connection: "connected", credentialPresent: true, credentialAbsent: false }, "Active"],
+  ];
+  for (const [patch, label] of cases) {
+    it(`${JSON.stringify(patch)} retains ${label}`, () => {
+      expect(stateOf({ ...base, ...patch }).label).toBe(label);
+    });
+  }
+});
+
+describe("model and source anchors share the model section", () => {
+  for (const focus of ["models", "capacity"] as const) {
+    it(`${focus} preserves its own target and source controls before repository setup`, async () => {
+      const view = board();
+      view.models = [];
+      view.repository.repos = [];
+      view.repository.connection = null;
+      view.next = "repository";
+      const calls = api(view, freshCatalogSources(), { items: [] });
+      const landed: HTMLElement[] = [];
+      const scroll = vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(function (this: HTMLElement) { landed.push(this); });
+      try {
+        mounted = await mountBoard(view, `?area=setup&focus=${focus}`);
+        const models = q(document.body, "su-row-models")!;
+        const capacity = q(document.body, "su-row-capacity")!;
+        expect(capacity.closest('[data-testid="su-row-models"]')).toBe(models);
+        expect(landed[0]).toBe(focus === "models" ? models : capacity);
+        expect(models.getAttribute("data-focused")).toBe("true");
+        await click(q(document.body, "setup-cap-add")?.querySelector("summary") ?? null);
+        await choose("openai_codex_chatgpt");
+        expect(q(src("openai_codex_chatgpt"), "setup-cap-start-open")?.textContent).toBe("Sign in");
+        expect(calls.filter(x => x.method !== "GET")).toEqual([]);
+      } finally { scroll.mockRestore(); }
+    });
+  }
+});

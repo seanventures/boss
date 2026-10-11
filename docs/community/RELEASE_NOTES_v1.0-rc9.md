@@ -30,6 +30,7 @@ RC9 builds on the published RC8 candidate and preserves the RC6.2 changes and Co
 - **Make build forms easier to scan.** Headings are shorter, setup explanations expand when needed, and the phone footer follows the form. New build opens at the first field, and the narrow phone header keeps its actions in view. The secondary build row appears when work or a loading/error state needs attention. Required acceptance, budget notices and setup actions stay visible.
 - **Start setup with the GitHub App.** Fresh setup leads with the recommended App, while confirmed unused model sources share an unselected Add source chooser; connected sources, sessions and unknown states stay visible.
 - **Read model setup at a glance.** Each source has a readable name. Expand it for technical details; connection controls, warnings and current sessions stay visible.
+- Models now groups model setup and source connections, with source statuses that match their authentication method.
 
 The first-use website and manual focus on one accountable software change, with actual installed-console screenshots and explicit setup requirements. The separate website release preserves its existing signup and mail service; local website preparation is not hosted deployment.
 

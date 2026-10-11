@@ -247,10 +247,11 @@ export function SetupBoard({ projectId, actor, initialView = null }: {
         {view.repository.repos.length ? <GitHubAccessRow /> : null}
         <BuildDatabaseRow />
         <ModelsRow ref={ref("models")} mode={rowMode(view, "models")}
-                   step={stepNumber(view, "models")} focused={focus === "models"}
+                   step={stepNumber(view, "models")} focused={focus === "models" || focus === "capacity"}
                    add={params.add} source={params.source}
-                   onAddHandled={() => setParams((p) => ({ ...p, add: null }))} />
-        <CapacityRow ref={ref("capacity")} actor={actor} focused={focus === "capacity"} />
+                   onAddHandled={() => setParams((p) => ({ ...p, add: null }))}>
+          <CapacityRow ref={ref("capacity")} actor={actor} focused={focus === "capacity"} />
+        </ModelsRow>
         {/* Model routing — where "Who does what" lived; its rows are "Pin a job" inside. */}
         <RoutingRow ref={ref("jobs")} mode={rowMode(view, "jobs")} focused={focus === "jobs"} />
         <BudgetRow ref={ref("budget")} mode={rowMode(view, "budget")} focused={focus === "budget"} />
