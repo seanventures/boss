@@ -158,8 +158,8 @@ function ModelLine({ entry, menuOpen, onReplace }: {
 
 export const ModelsRow = forwardRef<HTMLElement, {
   mode: string; step: number | null; focused: boolean; add: string | null; source: string | null;
-  onAddHandled: () => void;
-}>(function ModelsRow({ mode, step, focused, add, source, onAddHandled }, ref) {
+  onAddHandled: () => void; children?: React.ReactNode;
+}>(function ModelsRow({ mode, step, focused, add, source, onAddHandled, children }, ref) {
   const { view } = useBoard();
   const [drawer, setDrawer] = useState<{ provider: string; sourceId?: string } | null>(null);
   const opening = drawer ?? (add ? { provider: add } : null);
@@ -215,7 +215,7 @@ export const ModelsRow = forwardRef<HTMLElement, {
   }
   const showDrawer = opening && !(mode === "current" && view.models.length === 0);
   return (
-    <SetupRow ref={ref} row="models" label={mode === "open" ? "Models" : "Model"} step={step}
+    <SetupRow ref={ref} row="models" label="Models" step={step}
               mode={mode} done={mode === "done"} focused={focused}
               tip="What BOSS thinks with: subscriptions, keys and local models.">
       {body}
@@ -227,6 +227,7 @@ export const ModelsRow = forwardRef<HTMLElement, {
                          replaceSourceId={drawer?.sourceId} />
         </Drawer>
       ) : null}
+      {children}
     </SetupRow>
   );
 });

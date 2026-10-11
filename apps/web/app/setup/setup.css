@@ -581,3 +581,8 @@ svg.su-dot { background: none; width: 12px; height: 12px; color: var(--muted); }
 .su-add-source .su-field { margin-top: 8px; }
 .su-add-source select { width: 100%; min-width: 0; max-width: 100%; min-height: 36px; border: 1px solid var(--border); border-radius: var(--r); background: var(--surface); color: var(--ink); font: inherit; }
 @media (max-width: 760px) { .su-ways-alternatives { grid-template-columns: minmax(0, 1fr); } }
+
+/* Models and its source controls share one heading and panel. Connection controls stay
+   readable while the repository step is waiting; their permission gates still apply. */
+#su-models[data-mode="waiting"] { opacity: 1; }
+.su-model-sources { margin-top: 16px; min-width: 0; scroll-margin-top: 80px; }

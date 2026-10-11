@@ -2,7 +2,7 @@
 
 /**
  * Capacity: where model capacity comes from (was System Configuration › AI Capacity; operator
- * decision §11.2 moved it here, beside the Model row it overlaps).
+ * decision §11.2 moved it here, now under the Models heading).
  *
  * Source names open optional identity/model details. Status, reported capacity and actions
  * stay visible, as do every session and its completion controls.
@@ -25,7 +25,6 @@ import { apiWrite } from "../../lib/api-write";
 import { fetchSetup } from "../../lib/setup-client";
 import { toast, useBoard } from "./parts";
 import { Dot, Tip } from "./pill";
-import { SetupRow } from "./setup-row";
 import { useLocalTime } from "../../lib/local-time";
 
 // ── the wire, parsed ────────────────────────────────────────────────────────────────────────
@@ -83,7 +82,17 @@ const KIND: Record<string, string> = { api_key: "key", gateway: "gateway", subsc
 export function stateOf(src: CapSource): { label: string; tone: "green" | "amber" | "red" | "grey" } {
   if (src.effective === "active") return { label: "Active", tone: "green" };
   if (src.effective === "blocked") return { label: "Blocked", tone: "red" };
-  if (src.effective === "needs_connection" || src.connection === "not_connected") return { label: "Needs login", tone: "amber" };
+  // A disconnected flag must not replace an unknown, unsupported or failed verdict.
+  const unused = ["declared", "needs_connection", "missing_credentials", "missing_oauth_connection"].includes(src.effective);
+  if (unused && src.connection === "not_connected") {
+    if (takesKey(src) && src.credentialAbsent) return { label: "Needs key", tone: "amber" };
+    if (isLogin(src)) return { label: "Needs sign-in", tone: "amber" };
+    if (src.auth === "local_host") return { label: "Not configured", tone: "amber" };
+    return { label: "Not connected", tone: "amber" };
+  }
+  if (unused && ["failed", "expired", "revoked"].includes(src.connection)) {
+    return { label: words(src.connection), tone: src.connection === "failed" ? "red" : "amber" };
+  }
   return { label: words(src.effective || "unknown"), tone: "grey" };
 }
 const SESSION_WORD: Record<string, string> = {
@@ -297,8 +306,8 @@ export const CapacityRow = forwardRef<HTMLElement, { actor?: string; focused: bo
   };
 
   return (
-    <SetupRow ref={ref} row="capacity" label="Model sources" focused={focused} mode="open"
-              tip="Where model capacity comes from: keys, plans and official logins.">
+    <section ref={ref} className="su-model-sources" id="su-capacity" data-testid="su-row-capacity"
+             data-focused={focused || undefined} aria-label="Source connections">
       <div className="su-stack" data-testid="setup-entitlements">
         {sources === null ? <span className="su-faint">Loading…</span> : null}
         {locked ? <LockedPanel inline reason={locked} testId="setup-entitlements-locked" /> : null}
@@ -416,6 +425,6 @@ export const CapacityRow = forwardRef<HTMLElement, { actor?: string; focused: bo
           <a className="su-link" href="?area=skills" data-testid="setup-broker-skills-link">Skills ↗</a>
         </div>
       </div>
-    </SetupRow>
+    </section>
   );
 });
