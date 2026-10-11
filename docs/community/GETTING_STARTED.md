@@ -17,7 +17,7 @@ The command output and messages quoted below were recorded on a fresh Ubuntu 24.
 ## What you need
 
 - An Ubuntu 22.04 or 24.04, or Debian 12 or 13, machine with `curl` and `sudo`. macOS with Docker Desktop also works; see the [Quickstart](QUICKSTART.md#before-you-begin) for the full list.
-- About 100 GB of free disk. The installer warns below 80 GB.
+- About 100 GB of working disk capacity is recommended, not a hard minimum; actual needs vary. The installer builds one service image at a time and warns below about 80 GB free. Install files and Docker images can live on different filesystems. Docker Desktop or remote-daemon free space may be unknown to the installer; check that Docker store separately.
 - A GitHub account and a repository that BOSS is allowed to push to. BOSS writes code on a branch and opens a pull request. It does not build into a local folder, so step 6 cannot finish without a repository.
 - A model. If you have no API key or subscription, the installer can set up a free local model with Ollama.
 

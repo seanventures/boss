@@ -377,11 +377,13 @@ The BOSS source URL the installer uses is not an operator repository binding. Fr
 
 | | Need | Why |
 |---|---|---|
-| **Disk** | **100 GB** | Images are about 11.5 GB (api 4.1, infisical 3.8, web 1.6, worker 1.5, postgres 0.4). Building them uses tens of GB of layer cache. A run can also clone a repository and install browsers. The installer warns below 80 GB. |
+| **Disk** | **About 100 GB recommended working capacity** | Images, build cache and agent repositories need space; the amount varies by selected services and workload. The installer reports the install filesystem separately from an accessible local Linux Docker image store, with an advisory below about 80 GB free. This is not a hard minimum. |
 | **RAM** | **8 GB minimum, 16 GB comfortable** | The six containers idle at about 1.6 GB. Coding work runs inside the API container and adds whatever that task installs. Less than 8 GB will swap. |
 | **CPU** | 4 cores | Reviewers run in parallel. |
 
 If the host starts swapping, runs stall and BOSS records `host.stalled` on that machine. Add memory or free disk, then retry; retrying on a swapping host does not fix the stall.
+
+The installer builds and loads one selected service image at a time to reduce overlapping disk use. This does not guarantee a build will fit. Docker Desktop and remote daemons have separate storage limits; when their free space cannot be measured locally, the installer reports it as unknown. Check the selected Docker host or Docker Desktop disk settings as well as the install volume.
 
 ### Ports
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import json
+import re
 import tarfile
 import shlex
 import subprocess
@@ -213,9 +214,10 @@ def install_pair(tmp_path: Path) -> tuple[Path, str, str, dict[str, str], Path]:
     docker = bin_dir / "docker"
     docker.write_text(
         "#!/usr/bin/env bash\n"
-        "if [[ $1 == info ]]; then exit 0; fi\n"
+        "if [[ $1 == info || $1 == context ]]; then exit 0; fi\n"
         "if [[ $1 == image && $2 == inspect ]]; then exit 0; fi\n"
         "if [[ $1 == compose && $2 == version ]]; then echo 'Docker Compose test'; exit 0; fi\n"
+        "if [[ $* == *'config --format json' ]]; then echo '{\"services\":{\"api\":{\"build\":{}}}}'; exit 0; fi\n"
         "printf '%s\\n' \"$*\" >> \"$BOSS_TEST_DOCKER_TRACE\"\n"
         "exit 86\n"
     )
@@ -254,7 +256,7 @@ def _stopped_database_backend(tmp: Path, env: dict[str, str]) -> None:
     env["BOSS_TEST_EMPTY_TAR"] = str(empty_tar)
     layout = {
         "services": {
-            "api": {"image": "fixture-api:local", "volumes": [
+            "api": {"build": {}, "image": "fixture-api:local", "volumes": [
                 {"type": "volume", "target": "/var/lib/boss/identity", "source": "identity"},
                 {"type": "volume", "target": "/var/lib/boss/artifacts", "source": "artifacts"}]},
             "db": {"volumes": [{"type": "volume", "target": "/var/lib/postgresql/data", "source": "pg"}]}},
@@ -299,7 +301,7 @@ def _stopped_database_backend(tmp: Path, env: dict[str, str]) -> None:
         "    echo stopped > \"$BOSS_TEST_WORKER_STATE\"; echo stop-worker >> \"$BOSS_TEST_DOCKER_TRACE\" ;;\n"
         "  *' start worker')\n"
         "    echo running > \"$BOSS_TEST_WORKER_STATE\"; echo start-worker >> \"$BOSS_TEST_DOCKER_TRACE\" ;;\n"
-        "  *' build') echo build >> \"$BOSS_TEST_DOCKER_TRACE\"; exit 86 ;;\n"
+        "  *' build api') echo build >> \"$BOSS_TEST_DOCKER_TRACE\"; exit 86 ;;\n"
         "  *) echo \"unexpected Docker command: $args\" >&2; exit 90 ;;\n"
         "esac\n"
     )
@@ -537,6 +539,9 @@ def test_published_git_checkout_pins_its_commit_and_stops_on_clone_failure(
     remote = tmp / "missing-origin.git" if clone_fails else origin
     command = _published_git_checkout_command().replace(
         "https://github.com/seanventures/boss.git", shlex.quote(str(remote)))
+    # The private fixture remote contains its own two commits, not the public
+    # release object named by the guide. Preserve the exact-SHA checkout contract.
+    command = re.sub(r"BOSS_RELEASE_COMMIT=[0-9a-f]{40}", f"BOSS_RELEASE_COMMIT={new}", command)
     command = command.replace(
         './install.sh --dir "$PWD" --ref "$BOSS_RELEASE_COMMIT"',
         './install.sh --dir "$PWD" --ref "$BOSS_RELEASE_COMMIT" '
