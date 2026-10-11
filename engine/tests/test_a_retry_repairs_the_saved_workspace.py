@@ -125,9 +125,10 @@ def test_a_retry_after_an_attempt_that_saved_nothing_seeds_from_the_nearest_ance
     from boss_engine.services import code_task_service as cts
 
     src = inspect.getsource(cts.retry_code_task)
-    assert "seed_from = run_id" in src
-    walk = src[src.index("seed_from = run_id"):src.index("history = list(")]
-    assert "parent_run_id" in walk and "saved_workspace_files(older)" in walk
+    assert "seed_from" in src
+    walk = src[src.index("seed_from = 0, run_id") if "seed_from = 0, run_id" in src else src.index("seed_from = run_id"):src.index("history = list(")]
+    assert "parent_run_id" in walk and "saved_workspace_files(node)" in walk
+    assert "n * 2 >= fullest" in walk  # a husk (5 of 75 files) is skipped
     assert '{"seed_workspace_from": seed_from}' in src
 
 

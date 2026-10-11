@@ -498,10 +498,19 @@ _WORKSPACE_SKIP_PARTS = frozenset({
 })
 
 
+#: A top-level folder an agent made as a COPY of the app to work around a permission it lacked
+#: (helpdesk-ai-locked/, helpdesk-ai__orig_readonly/, helpdesk-ai-locked-orig/ ...): not the
+#: work, never seeded, never counted, never in a pull request.
+_WORKAROUND_COPY = re.compile(r"(?:[-_]+(?:locked|orig|original|readonly|read[-_]only|snapshot|"
+                              r"backup|bak|copy|prev|old))+$", re.I)
+
+
 def workspace_keepable(path: str) -> bool:
-    """Whether a changed path is part of the work (kept), not dependencies or build output."""
+    """Whether a changed path is part of the work (kept), not dependencies, build output or a
+    workaround copy of the app."""
     parts = [p for p in str(path or "").replace("\\", "/").split("/") if p]
-    return bool(parts) and not any(p in _WORKSPACE_SKIP_PARTS for p in parts)
+    return (bool(parts) and not any(p in _WORKSPACE_SKIP_PARTS for p in parts)
+            and not (len(parts) > 1 and _WORKAROUND_COPY.search(parts[0])))
 
 
 def saved_workspace_files(run: Optional[dict]) -> list[dict]:

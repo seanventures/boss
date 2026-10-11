@@ -1656,26 +1656,29 @@ def retry_code_task(
     # goes straight to repair (governed_code_task_service.saved_workspace_files).
     from .governed_code_task_service import saved_workspace_files
 
-    seed_files = len(saved_workspace_files(prev)) if prev.get("status") != "completed" else 0
-    seed_from = run_id
-    # THE NEAREST ATTEMPT THAT SAVED ONE. An attempt refused before it ran (no authority, a
-    # stack refusal) saves nothing; its retry rebuilt the whole app from scratch although the
-    # attempt before it had kept 75 files (HelpDesk, crun_7f9367c9 after crun_3f3d6b5a after
-    # crun_bbc5629f). Walk back through the lineage to the newest attempt with a workspace.
-    if not seed_files and prev.get("status") != "completed":
-        ancestor = fctx_prev.get("parent_run_id")
+    # WHICH SAVED WORKSPACE TO CONTINUE FROM. The newest attempt in the lineage whose kept
+    # files still hold the app, i.e. at least half of the fullest recent attempt's. An attempt
+    # refused before it ran saved nothing (crun_3f3d6b5a); one whose agent moved the app into a
+    # copy folder kept almost nothing once copies are filtered (crun_953d5879: 5 files after
+    # crun_cb6e15f4's 75). Either is skipped instead of rebuilding or repairing a husk.
+    seed_files, seed_from = 0, run_id
+    if prev.get("status") != "completed":
+        window: list[tuple[str, int]] = []
+        node, node_id = prev, run_id
         for _ in range(12):
-            if not ancestor:
+            if node is None or node.get("status") == "completed":
+                break
+            window.append((node_id, len(saved_workspace_files(node))))
+            node_id = str((node.get("finalize_ctx") or {}).get("parent_run_id") or "")
+            if not node_id:
                 break
             with _transaction(engine) as c:
-                older = load_code_task_run(c, str(ancestor))
-            if older is None or older.get("status") == "completed":
+                node = load_code_task_run(c, node_id)
+        fullest = max((n for _, n in window), default=0)
+        for rid, n in window:  # newest first
+            if n and n * 2 >= fullest:
+                seed_files, seed_from = n, rid
                 break
-            found = len(saved_workspace_files(older))
-            if found:
-                seed_files, seed_from = found, str(ancestor)
-                break
-            ancestor = (older.get("finalize_ctx") or {}).get("parent_run_id")
     history = list(fctx_prev.get("feedback_history") or [])
     history.append({
         "attempt": attempt, "parent_run_id": run_id, "prev_status": prev.get("status"),
