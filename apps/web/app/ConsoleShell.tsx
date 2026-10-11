@@ -1141,7 +1141,6 @@ function ConsoleShellInner({
           />
           <span className="bx-brand-copy">
             <span className="bx-brand-name">BOSS</span>
-            <span className="bx-brand-tag">Orchestration OS</span>
           </span>
           <button
             type="button"

@@ -310,7 +310,7 @@ function AppCard({ status, reload, back = false, repos = [] }: {
                 data-testid="gh-app-create" title="Opens GitHub with the App's permissions filled in."
                 data-tip="Opens GitHub with the App's permissions filled in.">
           {busy ? <CircleNotch className="su-spin" size={12} aria-hidden /> : <GithubLogo size={14} aria-hidden />}
-          Create the App on GitHub
+          Create GitHub App
         </GatedButton>
       </>
     );

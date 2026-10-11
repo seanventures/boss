@@ -133,7 +133,7 @@ Under `BOSS_AUTHZ_MODE=enforce` a build's sandbox holds no GitHub credential: bo
 
 | Way | What egress uses | How to set it up |
 | --- | --- | --- |
-| **GitHub App** (recommended) | A token per build, for that build's repositories and permissions only, revoked when the build ends. | **Create the App on GitHub**: BOSS posts an App manifest (contents and pull requests write; checks, statuses, metadata, issues and actions read; never administration or workflows). GitHub sends you back; the App's private key and client secret go into the vault. Then **Install on GitHub** and pick the repositories, or **Pick installation**. In **Repository**, **Use the GitHub App** lists the repositories it can reach; no token is pasted. |
+| **GitHub App** (recommended) | A token per build, for that build's repositories and permissions only, revoked when the build ends. | **Create GitHub App**: BOSS posts an App manifest (contents and pull requests write; checks, statuses, metadata, issues and actions read; never administration or workflows). GitHub sends you back; the App's private key and client secret go into the vault. Then **Install on GitHub** and pick the repositories, or **Pick installation**. In **Repository**, **Use the GitHub App** lists the repositories it can reach; no token is pasted. |
 | **As me** | The person's own GitHub connection (My account › Agents for me), only for runs whose grant says "act as me on GitHub". | Each person connects their own account. |
 | **Fine-grained token** (less safe) | The token, from the vault, only for the repositories it was given. It is long-lived and acts as whoever made it. | Paste it in **Repository**; it is kept as the org's connection for the repositories you pick. |
 

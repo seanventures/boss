@@ -1206,7 +1206,7 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
                 </span>
               </div>
             ) : (
-              <div className="np-base np-base-empty">Pick an app on the left.</div>
+              <div className="np-base np-base-empty">Pick an app.</div>
             )}
           </div>
         ) : null}
