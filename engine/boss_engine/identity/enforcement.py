@@ -70,6 +70,11 @@ def coverage_policy(*, global_mode: str, coverage: str = "") -> CoveragePolicy:
 
 # ---- evaluation ------------------------------------------------------------------------------------
 
+#: The request lacks the value its declaration is scoped by (scope.ScopeUnresolved): 422, never a
+#: 403 naming a permission the caller may well hold.
+SCOPE_UNRESOLVED = "scope_unresolved"
+
+
 @dataclass(frozen=True)
 class Outcome:
     """What the enforcement point concluded for one request."""
@@ -97,6 +102,11 @@ class Outcome:
         return DENY_STATUS.get(self.reason or DenyReason.MISSING_PERMISSION, 403)
 
     def error_body(self) -> dict[str, Any]:
+        if self.authn_code == SCOPE_UNRESOLVED:
+            missing = self.detail.removeprefix("scope: ")
+            return {"error": SCOPE_UNRESOLVED,
+                    "detail": f"This request does not say where it applies: {missing}. "
+                              "Send it and try again."}
         if self.authn_status is not None and self.authn_status != 401 and self.authn_code:
             return {"error": self.authn_code}
         if self.decision is not None:
@@ -175,8 +185,13 @@ def evaluate(
     except ScopeNotFound:
         return Outcome(False, DenyReason.NOT_FOUND, access.permission, access.describe(), kind)
     except ScopeUnresolved as exc:
+        # A request that does not name what its declaration is scoped by (no `project_id` in the
+        # body) is a malformed request, not a permission question: answering 403 {"permission":
+        # "workflow_run:control"} told a Seed Owner they lacked a permission the Owner role holds.
+        # 422 with the missing value, decided before anything is checked (no access is implied).
         return Outcome(False, DenyReason.MISSING_PERMISSION, access.permission, access.describe(),
-                       kind, detail=f"scope: {exc}")
+                       kind, detail=f"scope: {exc}", authn_status=422,
+                       authn_code=SCOPE_UNRESOLVED)
     except NotImplementedError as exc:
         return _not_evaluated(access, f"scope: {exc}", access.permission)
     except Exception as exc:  # noqa: BLE001
