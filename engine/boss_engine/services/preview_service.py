@@ -1949,7 +1949,23 @@ def _proof_tree(workdir: Path) -> Path:
     may write is shared with the build: the whole tree is copied, links inside it kept as links
     (npm's .bin entries and workspace links are relative, so they resolve inside the copy).
     """
-    proof = Path(tempfile.mkdtemp(prefix="boss-serve-proof-"))
+    # INSIDE THE RUN'S OWN DIRECTORY when the build is isolated. The app is launched as the run's
+    # uid, and a mkdtemp under /tmp is BOSS-owned 0700: the run could not even cd into it, so
+    # every declared command failed "can't cd to helpdesk-ai" and the app read as not serving
+    # (crun_fe2dbbc8, crun_44005c92). The run directory is <uid>:boss 2770, so the copy is
+    # reachable by the run and by BOSS and by no other uid.
+    run_dir = None
+    try:
+        from . import sandbox_identity
+
+        ident = sandbox_identity.current()
+        if ident is not None and Path(workdir).resolve().is_relative_to(Path(ident.run_dir).resolve()):
+            run_dir = Path(ident.run_dir)
+    except Exception:  # noqa: BLE001 — not isolated: the old place
+        run_dir = None
+    proof = Path(tempfile.mkdtemp(prefix="boss-serve-proof-", dir=str(run_dir) if run_dir else None))
+    if run_dir is not None:
+        os.chmod(proof, 0o2777)
     from .resource_ledger import claim_dir
     claim_dir(proof)
     shutil.copytree(workdir, proof, dirs_exist_ok=True, symlinks=True,
