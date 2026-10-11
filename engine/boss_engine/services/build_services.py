@@ -234,7 +234,14 @@ def detect(spec: Any = None, title: str = "", root: Any = None, design: Any = No
     brief = " ".join([title or "", *[t for k, v in spec.items()
                                      if k not in ("template", "plan", "services", "instructions")
                                      for t in _texts(v)]])
-    if _PG_WORDS.search(brief):
+    # THE BRIEF ITSELF. `instructions` was skipped whole (it carries an applied template's
+    # reference material, which names databases it does not need), so a new app whose brief and
+    # approved architecture both say PostgreSQL got no database and its tests failed against
+    # nothing (HelpDesk, crun_b4613dcf). The operator's text is read, the template's is not.
+    from .stacks import operator_text
+
+    own = operator_text(str(spec.get("instructions") or ""))
+    if _PG_WORDS.search(brief) or _PG_WORDS.search(own):
         reasons.append("the brief names PostgreSQL")
     template = spec.get("template") if isinstance(spec.get("template"), dict) else {}
     for key in ("services", "needs"):

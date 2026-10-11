@@ -995,6 +995,18 @@ def _ctx_block(title, instructions, criteria, *, service: bool = False) -> str:
     )
 
 
+#: The test author writes no credential literal. BOSS's no_committed_secrets gate scans tests too,
+#: and the coder may not edit them, so a password the QA stage typed into a fixture blocked every
+#: repair round of the HelpDesk build (crun_b4613dcf: 8 findings, all in tests).
+_NO_SECRETS_IN_TESTS = (
+    "- NEVER write a password, token, API key or secret as a literal in a test or fixture. "
+    "Generate it at run time (crypto.randomUUID(), secrets.token_urlsafe()) or read it from an "
+    "environment variable the test harness sets for itself (e.g. process.env.DEMO_PASSWORD ?? "
+    "a value generated once per run). BOSS blocks any committed secret-looking literal, in tests "
+    "too, and the implementer is not allowed to edit your tests.\n"
+)
+
+
 def _qa_prompt(title, instructions, criteria, test_cmd, *, iac=False, web=False, app_root=None,
                stack_note=""):
     service = bool(web or app_root)
@@ -1034,7 +1046,7 @@ def _qa_prompt(title, instructions, criteria, test_cmd, *, iac=False, web=False,
             "- Do NOT create the product implementation.\n"
             f"- Do NOT run anything and do NOT commit. (BOSS will run `{test_cmd}` inside {scope}.)\n"
             "- End with a one-line summary of the cases you wrote.\n"
-            + _metrics_tests_clause(title, instructions, service=service)
+            + _NO_SECRETS_IN_TESTS + _metrics_tests_clause(title, instructions, service=service)
             + (_IAC_GUIDANCE + _IAC_QA_GUIDANCE if iac else "")
         )
     return (
@@ -1048,7 +1060,7 @@ def _qa_prompt(title, instructions, criteria, test_cmd, *, iac=False, web=False,
         "- Cover: happy path, the most likely failure, boundary/edge cases, and validation/error paths.\n"
         f"- Do NOT run anything and do NOT commit. (BOSS will run `{test_cmd}`.)\n"
         "- End with a one-line summary of the cases you wrote.\n"
-        + _metrics_tests_clause(title, instructions, service=service)
+        + _NO_SECRETS_IN_TESTS + _metrics_tests_clause(title, instructions, service=service)
         + (_IAC_GUIDANCE + _IAC_QA_GUIDANCE if iac else "")
     )
 
