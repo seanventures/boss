@@ -45,6 +45,8 @@ _FIND_FIX = (
     '\\( \\( -type d ! -perm -0770 -exec chmod ug+rwx {} + \\) '
     '-o \\( -type f ! -perm -0660 -exec chmod ug+rw {} + \\) \\) 2>/dev/null; true'
 )
+#: As the run's uid: every file and directory it owns under "$1" readable (and dirs enterable).
+_READABLE = 'find "$1" -user "$(id -u)" ! -perm -o+r -exec chmod a+rX {} + 2>/dev/null; true'
 #: The lazy form: exactly the named paths (a file and its parent), as the run's uid.
 _CHMOD_PATHS = 'for p in "$@"; do if [ -d "$p" ]; then chmod ug+rwx "$p"; else chmod ug+rw "$p"; fi; done 2>/dev/null; true'
 
@@ -98,7 +100,7 @@ def _fix_one(path: Path, st: os.stat_result, me: int) -> Optional[bool]:
     return False if mode & want == want else None
 
 
-def normalize(root: Any) -> int:
+def normalize(root: Any, *, readable_by_boss: bool = True) -> int:
     """Make the workspace at `root` writable again (see the module doc). Returns how many entries
     needed fixing. Never raises: a workspace BOSS cannot tidy is reported by the write that
     follows, not by this."""
@@ -128,10 +130,16 @@ def normalize(root: Any) -> int:
             elif res:
                 fixed += 1
         # A directory BOSS could not enter/list is walked as the run's uid below.
-    if foreign:
-        ident = _identity(base)
-        if ident is not None:
-            _as_run_uid(ident, _FIND_FIX, str(base))
+    ident = _identity(base) if foreign or readable_by_boss else None
+    if foreign and ident is not None:
+        _as_run_uid(ident, _FIND_FIX, str(base))
+    if readable_by_boss and ident is not None:
+        # EVERYTHING the run made is readable by BOSS, whatever its group: a tool that writes
+        # 0600 / 0700 (or a file whose group is the run uid's own) left BOSS unable to read the
+        # template's junit report, dist/ and node_modules/ (HelpDesk crun_8e9b3b0e, after five
+        # earlier crashes of the same class). Others gain nothing: the run directory is
+        # <uid>:boss 2770, so no other uid can enter it.
+        _as_run_uid(ident, _READABLE, str(base))
     if fixed:
         log.info("workspace permissions: %d entr%s under %s made writable", fixed,
                  "y" if fixed == 1 else "ies", base)

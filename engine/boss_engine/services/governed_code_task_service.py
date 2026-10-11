@@ -963,6 +963,10 @@ def _template_gates(engine, run: dict, sandbox, *, root, cwd, changed_files: dic
     app's build bindings hold). Returns {"gates": {...}, "evidence": {...}} or None for a build
     that applies no template. Fails CLOSED: any error reading the template is a failed gate."""
     from ..templates import gate as template_gate
+    from . import workspace_perms as _wsp
+
+    # The template's junit report is written by the run's uid; BOSS reads it next.
+    _wsp.normalize(root)
 
     try:
         with _transaction(engine) as c:
@@ -4830,6 +4834,10 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # A failure is a WORK gate with the app's own error, fed back to the implementer.
         def _check_app_serves(files: dict) -> dict:
             from .preview_service import lineage_impl_files, prove_app_serves
+            # BOSS copies dist/ and node_modules/ to prove the app serves: everything the run
+            # made must be readable to it first (crun_8e9b3b0e: Permission denied on both).
+            from . import workspace_perms as _wsp
+            _wsp.normalize(root)
 
             with _transaction(engine) as c:
                 _phase(c, "serve_check")
