@@ -11,7 +11,7 @@ metadata:
     and bindings, into one override file BOSS's existing stack deploy adds to the app's compose
     file; bindings stay ${NAME}, resolved from the vault when the deploy writes its env file.
 spec:
-  supportLevel: certified
+  supportLevel: experimental
   capabilities: [environment.compose]
   features: [assemble, depends-on, bindings]
   engines: [docker-compose]

@@ -18,16 +18,27 @@ from ._runtime import (
     HookFailure, OfficialPlugin, Session, env_name, evidence, labels, new_password, service_name,
 )
 
-#: MinIO stopped publishing community images in 2025; pgsty/minio is a maintained build of the
-#: same AGPL source and ships `mc`. Pinned by digest.
-IMAGE = ("pgsty/minio:RELEASE.2026-08-04T00-00-00Z"
-         "@sha256:b6bfe7239bfc83fb90d31612d9704d86039dd714f7904b3f1ad68f211e602372")
+#: MinIO no longer publishes community images anonymously (minio/minio and quay.io/minio/minio
+#: refuse anonymous pulls). The default is Chainguard's MinIO from its own registry: built from the
+#: upstream source, multi-arch (amd64 + arm64), signed with Sigstore cosign and shipped with an
+#: SBOM, so its provenance is verifiable:
+#:   cosign verify cgr.dev/chainguard/minio@<digest> \
+#:     --certificate-oidc-issuer=https://token.actions.githubusercontent.com \
+#:     --certificate-identity=https://github.com/chainguard-images/images/.github/workflows/release.yaml@refs/heads/main
+#: Pinned by the multi-arch index digest (minio RELEASE.2026-09-22T19-25-18Z). An operator with a
+#: MinIO subscription image (or any S3-compatible MinIO build) supplies it as `config.image`,
+#: pinned by digest. The image must provide `sh` and `mc`.
+IMAGE = ("cgr.dev/chainguard/minio:latest"
+         "@sha256:7df55d002b698e4494a131b848dd553361bbe58b7e19f62d9623c29af1ba9ccf")
 _BUCKET = re.compile(r"^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$")
-START = ('f=/boss-root/password; [ -s "$$f" ] || (cat /proc/sys/kernel/random/uuid /proc/sys/kernel/random/uuid '
-         '| tr -d "\\n-" > "$$f"); export MINIO_ROOT_USER=boss-root MINIO_ROOT_PASSWORD="$$(cat "$$f")"; '
-         'exec minio server /data --address :9000')
+#: The root password lives in its own volume, mounted as the (non-root) image user's home, so the
+#: image's own user can write it whichever image runs.
+ROOT_DIR = "/home/nonroot"
+START = (f'f={ROOT_DIR}/.boss-root-password; [ -s "$$f" ] || (cat /proc/sys/kernel/random/uuid '
+         '/proc/sys/kernel/random/uuid | tr -d "\\n-" > "$$f"); export MINIO_ROOT_USER=boss-root '
+         'MINIO_ROOT_PASSWORD="$$(cat "$$f")"; exec minio server /data --address :9000')
 #: inside the container: an mc alias for the root user, from the password file
-ROOT = 'export MC_HOST_root="http://boss-root:$(cat /boss-root/password)@127.0.0.1:9000"; '
+ROOT = f'export MC_HOST_root="http://boss-root:$(cat {ROOT_DIR}/.boss-root-password)@127.0.0.1:9000"; '
 BINDINGS = ("S3_ENDPOINT_URL", "S3_BUCKET", "S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY")
 
 
@@ -64,8 +75,8 @@ class MinioS3Plugin(OfficialPlugin):
                 "image": self.image(ctx), "restart": "unless-stopped",
                 "entrypoint": ["sh", "-c", START],
                 "environment": {"MINIO_BROWSER": "off"},
-                "volumes": [f"{data}:/data", f"{root}:/boss-root"],
-                "healthcheck": {"test": ["CMD", "curl", "-fsS", "http://127.0.0.1:9000/minio/health/live"],
+                "volumes": [f"{data}:/data", f"{root}:{ROOT_DIR}"],
+                "healthcheck": {"test": ["CMD-SHELL", ROOT.replace("$", "$$") + "mc ready root >/dev/null"],
                                 "interval": "2s", "timeout": "3s", "retries": 30},
                 "labels": lab,
             }},

@@ -10,11 +10,11 @@ metadata:
     MinIO on the app's private network: one bucket and an access key scoped to it. Endpoint, bucket
     and key reach the app as vault references.
 spec:
-  supportLevel: certified
+  supportLevel: experimental
   capabilities: [object-storage, object-storage.s3]
   features: [bucket, scoped-credentials]
   engines: [minio, s3]
-  engineVersions: ["RELEASE.2026-08-04T00-00-00Z (pgsty/minio build)"]
+  engineVersions: ["RELEASE.2026-09-22T19-25-18Z (cgr.dev/chainguard/minio)"]
   runtime: {type: python, entrypoint: "plugin:MinioS3Plugin"}
   permissions: {secrets: [read-scoped, write-scoped], network: [declared-services], docker: true}
   configSchema:
@@ -22,13 +22,13 @@ spec:
     additionalProperties: false
     properties:
       bucket: {type: string, pattern: "^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$"}
-      image: {type: string}
+      image: {type: string, description: "Your own MinIO image, pinned by digest (name@sha256:...); must provide sh and mc"}
   hooks: [validate, plan, provision, configure, verify, observe, destroy]
   bindings: [S3_ENDPOINT_URL, S3_BUCKET, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY]
   ports: [9000]
   limitations:
     - "S3 API compatibility as MinIO implements it; AWS IAM, lifecycle and replication semantics are not certified."
     - "No backup hook in P0: mirror the bucket with mc mirror if the objects matter."
-    - "MinIO no longer publishes community images; the pinned image is the maintained pgsty/minio build of the same source."
+    - "MinIO no longer publishes community images anonymously. The default is Chainguard's signed, multi-arch MinIO (cgr.dev/chainguard/minio, cosign-verifiable), pinned by digest; an operator may supply their own MinIO image as config.image, pinned by digest (it must provide sh and mc)."
     - "No published port: only services on the app's compose network reach it."
     - "The root password is generated in the container and kept in its own volume; it never leaves the host."

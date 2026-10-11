@@ -11,7 +11,7 @@ metadata:
     DATABASE_URL as its only secret (a vault reference), SQL migrations, and pg_dump backups kept in
     a volume on the host whose restore is tested in a disposable server before the backup counts.
 spec:
-  supportLevel: certified
+  supportLevel: experimental
   capabilities: [database.relational, database.migrations, database.backup-restore]
   features: [migrations, backup, restore, pgvector]
   engines: [postgres]

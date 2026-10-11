@@ -10,7 +10,7 @@ metadata:
     An OpenTelemetry Collector on the app's private network receiving OTLP traces, metrics and
     logs; the app's SDK gets OTEL_EXPORTER_OTLP_ENDPOINT. Verify proves a test span arrives.
 spec:
-  supportLevel: certified
+  supportLevel: experimental
   capabilities: [observability.telemetry, observability.tracing]
   features: [traces, metrics, logs, otlp-http, otlp-grpc, forward]
   engines: [otel-collector]

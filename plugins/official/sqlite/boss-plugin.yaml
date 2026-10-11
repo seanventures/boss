@@ -10,7 +10,7 @@ metadata:
     A SQLite file for local and development use, WAL mode, with online-API
     backups whose copy is integrity-checked and compared row for row.
 spec:
-  supportLevel: certified
+  supportLevel: experimental
   capabilities: [database.relational]
   features: [backup, restore]
   engines: [sqlite]

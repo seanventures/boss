@@ -10,7 +10,7 @@ metadata:
     The vector extension on a database official.postgres provisioned (with features: [pgvector]).
     Verify runs real nearest-neighbour queries through an HNSW index as the app.
 spec:
-  supportLevel: certified
+  supportLevel: experimental
   capabilities: [database.vector]
   features: [similarity-search, hnsw]
   engines: [postgres]

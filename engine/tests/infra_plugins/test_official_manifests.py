@@ -20,7 +20,10 @@ def test_every_official_plugin_has_a_valid_manifest_and_entrypoint():
         m = load_manifest(official_dir() / directory)
         assert m.id == f"official.{directory}"
         assert REQUIRED_HOOKS <= set(m.spec.hooks)
-        assert m.spec.supportLevel in (SupportLevel.CERTIFIED, SupportLevel.EXPERIMENTAL)
+        # Certified (spec §3) needs pinned CI on amd64 AND arm64, upgrade/rollback hooks and a run
+        # through the real executor; scratchpad EVIDENCE lists what passes today. Promote one
+        # plugin at a time, with that evidence, by changing this line for it.
+        assert m.spec.supportLevel is SupportLevel.EXPERIMENTAL, f"{m.id} claims {m.spec.supportLevel}"
         plugin = load_plugin(directory)  # through the registry, as BOSS loads it
         assert isinstance(plugin, InfraPlugin) and plugin.manifest.id == m.id
         assert m.spec.runtime.entrypoint.startswith("plugin:") and not m.spec.permissions.subprocess

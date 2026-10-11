@@ -10,7 +10,7 @@ metadata:
     The app's HTTP entry point: a route to an app service, HTTPS whenever a hostname exists (ACME,
     or Caddy's local CA for internal names and IPs). Verify sends a request through Caddy to the app.
 spec:
-  supportLevel: certified
+  supportLevel: experimental
   capabilities: [network.ingress, network.tls]
   features: [https, acme, internal-ca, reverse-proxy]
   engines: [caddy]

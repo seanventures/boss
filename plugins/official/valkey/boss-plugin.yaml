@@ -10,7 +10,7 @@ metadata:
     A Valkey cache on the app's private network, Redis protocol, password in the vault. A cache:
     no persistence, no backups, LRU eviction. Never the only copy of anything.
 spec:
-  supportLevel: certified
+  supportLevel: experimental
   capabilities: [cache]
   features: [ttl, lru]
   engines: [valkey, redis]
