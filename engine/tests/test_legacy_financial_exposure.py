@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
+import json
 import os
 import subprocess
 import sys
@@ -105,19 +106,59 @@ def legacy(engine, p, *, status="expired", amount=80000):
     return ident
 
 
+def failed_typed(engine, p, *, status="released"):
+    """The exact historical post-call owner record, without inventing actual cost."""
+    old = legacy(engine, p, status=status)
+    with engine.begin() as c:
+        c.execute(
+            text(
+                "UPDATE model_gateway_invocations SET status='failed',error=CAST(:error AS JSONB) WHERE id=:id"
+            ),
+            {"id": old, "error": json.dumps({"reason": "owned response lost"})},
+        )
+        c.execute(
+            text(
+                "UPDATE receipts SET status='failed',dedupe_key=:dedupe,error=CAST(:error AS JSONB) WHERE id=:id"
+            ),
+            {
+                "id": old,
+                "dedupe": f"model-gateway:{p}:{old}",
+                "error": json.dumps({"reason": "owned response lost"}),
+            },
+        )
+        c.execute(
+            text(
+                "INSERT INTO events(id,project_id,event_type,actor,entity_type,entity_id,data) VALUES(:id,:p,'typed_decision.attempt_failed','owned-owner','typed_decision_attempt',:id,CAST(:data AS JSONB))"
+            ),
+            {
+                "id": old,
+                "p": p,
+                "data": json.dumps(
+                    {"attempt": 1, "receipt_id": old, "message": "owned response lost"}
+                ),
+            },
+        )
+    return old
+
+
+def historical(engine, p, history, *, status="expired"):
+    return (failed_typed if history == "typed_failed" else legacy)(engine, p, status=status)
+
+
 def reserve(c, p, amount=30000):
     return BudgetGovernor(Settings(_env_file=None)).reserve(
         c, p, "model", amount, "owned financial qualification", 15
     )
 
 
+@pytest.mark.parametrize("history", ["in_progress", "typed_failed"])
 @pytest.mark.parametrize("status", ["expired", "released"])
 @pytest.mark.parametrize("period", ["day", "month"])
 def test_legacy_hold_denies_independent_of_cap_period_without_reviving_authority(
-    database, status, period
+    database, status, period, history
 ):
     p = new_project(database)
-    old = legacy(database, p, status=status)
+    old = historical(database, p, history, status=status)
     g = BudgetGovernor(Settings(_env_file=None))
     with database.begin() as c:
         c.execute(
@@ -169,9 +210,12 @@ def test_legacy_hold_denies_independent_of_cap_period_without_reviving_authority
         )
 
 
-def test_rolled_back_refusal_remains_blocked_and_committed_status_records_one_decision(database):
+@pytest.mark.parametrize("history", ["in_progress", "typed_failed"])
+def test_rolled_back_refusal_remains_blocked_and_committed_status_records_one_decision(
+    database, history
+):
     p = new_project(database)
-    legacy(database, p)
+    historical(database, p, history)
     with database.connect() as c:
         transaction = c.begin()
         assert reserve(c, p)["refusal"] == "legacy_reconciliation_required"
@@ -535,3 +579,297 @@ def test_zero_included_lease_without_actual_reservation_cannot_start(database):
         )
         with pytest.raises(ModelCapacityDeniedError, match="historical unresolved"):
             start(c, p, g, ident)
+
+
+@pytest.mark.parametrize(
+    "mismatch",
+    [
+        "missing_event",
+        "foreign_event",
+        "event_type",
+        "entity_type",
+        "entity_id",
+        "receipt_id",
+        "receipt_dedupe",
+        "receipt_status",
+        "typed_decision.cancelled",
+        "typed_decision.lease_expired",
+        "architecture.cancelled_before_submission",
+        "connection.cancelled_before_submission",
+    ],
+)
+def test_failed_history_requires_exact_postcontact_owner_event(database, mismatch):
+    p = new_project(database)
+    other = new_project(database)
+    old = failed_typed(database, p)
+    with database.begin() as c:
+        if mismatch == "missing_event":
+            c.execute(text("DELETE FROM events WHERE id=:id"), {"id": old})
+        elif mismatch == "foreign_event":
+            c.execute(
+                text("UPDATE events SET project_id=:other WHERE id=:id"),
+                {"id": old, "other": other},
+            )
+        elif mismatch == "receipt_id":
+            c.execute(
+                text(
+                    "UPDATE events SET data=jsonb_set(data,'{receipt_id}','\"other-receipt\"') WHERE id=:id"
+                ),
+                {"id": old},
+            )
+        elif mismatch == "receipt_dedupe":
+            c.execute(
+                text("UPDATE receipts SET dedupe_key='owned-unrelated-receipt' WHERE id=:id"),
+                {"id": old},
+            )
+        elif mismatch == "receipt_status":
+            c.execute(text("UPDATE receipts SET status='in_progress' WHERE id=:id"), {"id": old})
+        elif mismatch in {"event_type", "entity_type", "entity_id"}:
+            c.execute(
+                text("UPDATE events SET " + mismatch + "='owned-unrelated' WHERE id=:id"),
+                {"id": old},
+            )
+        else:
+            c.execute(
+                text("UPDATE events SET event_type=:kind WHERE id=:id"),
+                {"id": old, "kind": mismatch},
+            )
+        # Deliberate limit: missing/other-owner histories do not imply no contact,
+        # but this bounded predicate cannot reconstruct them.
+        assert (
+            BudgetGovernor(Settings(_env_file=None)).status_for_project(c, p)[
+                "legacy_financial_hold"
+            ]
+            is None
+        )
+        assert reserve(c, p, 1)["status"] == "reserved"
+        assert reserve(c, other, 1)["status"] == "reserved"
+
+
+@pytest.mark.parametrize(
+    "proof_case",
+    [
+        "complete",
+        "error_string",
+        "invocation_only",
+        "receipt_missing",
+        "event_missing",
+        "mismatched_event",
+        "project_id",
+        "invocation_id",
+        "receipt_id",
+        "reservation_id",
+        "version",
+        "kind",
+        "provider",
+        "http_403",
+        "http_string",
+        "http_bool",
+        "extra_field",
+        "additional_unproven_event",
+    ],
+)
+def test_only_exact_triple_auth_refusal_proof_excludes_failed_typed_history(database, proof_case):
+    p = new_project(database)
+    old = failed_typed(database, p)
+    proof = {
+        "version": 1,
+        "project_id": p,
+        "invocation_id": old,
+        "receipt_id": old,
+        "reservation_id": old,
+        "kind": "provider_auth_rejected",
+        "provider": "typesafe",
+        "http_status": 401,
+    }
+    if proof_case in {
+        "project_id",
+        "invocation_id",
+        "receipt_id",
+        "reservation_id",
+        "kind",
+        "provider",
+    }:
+        proof[proof_case] = "owned-wrong"
+    if proof_case == "version":
+        proof["version"] = 2
+    if proof_case in {"http_403", "http_string", "http_bool"}:
+        proof["http_status"] = {"http_403": 403, "http_string": "401", "http_bool": True}[
+            proof_case
+        ]
+    if proof_case == "extra_field":
+        proof["unverified"] = True
+    with database.begin() as c:
+        error = {"reason": "HTTP401: no acceptance; actual zero"}
+        if proof_case != "error_string":
+            error["typed_decision_nonacceptance"] = proof
+        c.execute(
+            text("UPDATE model_gateway_invocations SET error=CAST(:error AS JSONB) WHERE id=:id"),
+            {"id": old, "error": json.dumps(error)},
+        )
+        if proof_case not in {"invocation_only", "receipt_missing"}:
+            c.execute(
+                text("UPDATE receipts SET error=CAST(:error AS JSONB) WHERE id=:id"),
+                {"id": old, "error": json.dumps(error)},
+            )
+        event_proof = dict(proof)
+        if proof_case == "mismatched_event":
+            event_proof["reservation_id"] = "owned-wrong"
+        if proof_case not in {"error_string", "invocation_only", "event_missing"}:
+            c.execute(
+                text("UPDATE events SET data=data || CAST(:data AS JSONB) WHERE id=:id"),
+                {"id": old, "data": json.dumps({"typed_decision_nonacceptance": event_proof})},
+            )
+        if proof_case == "additional_unproven_event":
+            c.execute(
+                text(
+                    "INSERT INTO events(id,project_id,event_type,actor,entity_type,entity_id,data) VALUES(:extra,:p,'typed_decision.attempt_failed','owned-owner','typed_decision_attempt',:id,CAST(:data AS JSONB))"
+                ),
+                {
+                    "id": old,
+                    "extra": old + "_extra",
+                    "p": p,
+                    "data": json.dumps({"receipt_id": old}),
+                },
+            )
+        result = reserve(c, p, 1)
+        if proof_case == "complete":
+            assert result["status"] == "reserved"
+            assert (
+                BudgetGovernor(Settings(_env_file=None)).status_for_project(c, p)[
+                    "legacy_financial_hold"
+                ]
+                is None
+            )
+        else:
+            assert result["refusal"] == "legacy_reconciliation_required"
+        assert (
+            c.execute(
+                text("SELECT status FROM budget_reservations WHERE id=:id"), {"id": old}
+            ).scalar_one()
+            == "released"
+        )
+        assert (
+            c.execute(
+                text("SELECT status FROM model_gateway_invocations WHERE id=:id"), {"id": old}
+            ).scalar_one()
+            == "failed"
+        )
+        assert (
+            c.execute(
+                text("SELECT count(*) FROM cost_receipts WHERE project_id=:p"), {"p": p}
+            ).scalar_one()
+            == 0
+        )
+
+
+@pytest.mark.parametrize("cost_match", [True, False])
+def test_failed_typed_settlement_requires_matching_cost_receipt(database, cost_match):
+    p = new_project(database)
+    old = failed_typed(database, p)
+    with database.begin() as c:
+        c.execute(
+            text(
+                "INSERT INTO cost_receipts(id,project_id,reservation_id,receipt_id,category,skill_or_model_id,estimated_usd_micros,actual_usd_micros,status) VALUES(:id,:p,:id,:receipt,'model','owned-fixture',80000,7000,'actual')"
+            ),
+            {"id": old, "p": p, "receipt": old if cost_match else None},
+        )
+        result = reserve(c, p, 1)
+        assert result["status"] == ("reserved" if cost_match else "denied")
+        if not cost_match:
+            assert result["refusal"] == "legacy_reconciliation_required"
+
+
+@pytest.mark.parametrize("unused", ["cancelled", "lease_expired"])
+def test_actual_typed_before_call_cleanup_does_not_match_postcontact_history(database, unused):
+    from boss_engine.services.entitlements import EntitlementBrokerService
+    from boss_engine.services.typed_decision_spend import (
+        TypedDecisionCancelled,
+        TypedDecisionSpend,
+        TypedDecisionSpendError,
+    )
+    from engine.tests.test_architecture_governance import metered
+    from engine.tests.test_typed_decision_spend import _binding
+
+    p = new_project(database)
+    settings = Settings(_env_file=None).model_copy(
+        update={"local_model_enabled": True, "local_model_id": "owned-fixture"}
+    )
+    with database.begin() as c:
+        EntitlementBrokerService(settings).seed_default_sources(c, p)
+    metered((database, p, settings))
+    spender = TypedDecisionSpend.for_runner(
+        settings,
+        engine=database,
+        project_id=p,
+        run_id="owned-no-call",
+        step_id="owned-step",
+        attempt=1,
+        actor="owned-owner",
+        worker_id="owned-worker",
+    )
+    calls = []
+
+    class Decider:
+        backend = "owned-inert"
+        source_id = "approved_local_model_host"
+
+        def decide(self, context, questions):
+            calls.append(True)
+            raise AssertionError("a positively unused attempt must not contact the adapter")
+
+    spender.decider_factory = lambda role, bound: Decider()
+
+    def before_call():
+        with database.begin() as c:
+            assert (
+                c.execute(
+                    text(
+                        "SELECT sum(amount_usd_micros) FROM budget_reservations WHERE project_id=:p AND status='active'"
+                    ),
+                    {"p": p},
+                ).scalar_one()
+                > 0
+            )
+            if unused == "lease_expired":
+                c.execute(
+                    text(
+                        "UPDATE model_gateway_leases SET expires_at=now()-interval '1 second' WHERE project_id=:p"
+                    ),
+                    {"p": p},
+                )
+        if unused == "cancelled":
+            raise TypedDecisionCancelled("owned before-dispatch cancellation")
+
+    spender.before_provider_call = before_call
+    with pytest.raises(TypedDecisionSpendError):
+        spender.execute(settings, _binding(), "owned inert input", fallback=False)
+    assert not calls
+    with database.begin() as c:
+        assert (
+            c.execute(
+                text(
+                    "SELECT count(*) FROM events WHERE project_id=:p AND event_type='typed_decision.attempt_failed'"
+                ),
+                {"p": p},
+            ).scalar_one()
+            == 0
+        )
+        assert (
+            c.execute(
+                text("SELECT count(*) FROM events WHERE project_id=:p AND event_type=:kind"),
+                {"p": p, "kind": "typed_decision." + unused},
+            ).scalar_one()
+            == 1
+        )
+        assert (
+            c.execute(
+                text(
+                    "SELECT count(*) FROM model_gateway_invocations WHERE project_id=:p AND status='failed'"
+                ),
+                {"p": p},
+            ).scalar_one()
+            == 1
+        )
+        assert BudgetGovernor(settings).status_for_project(c, p)["legacy_financial_hold"] is None
+        assert reserve(c, p, 1)["status"] == "reserved"

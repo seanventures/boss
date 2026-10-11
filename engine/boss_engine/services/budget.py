@@ -256,7 +256,21 @@ class BudgetGovernor:
             "JOIN model_gateway_invocations i ON i.model_gateway_lease_id=l.id AND i.project_id=r.project_id "
             "JOIN receipts receipt ON receipt.id=i.receipt_id AND receipt.project_id=r.project_id "
             "WHERE r.project_id=:p AND r.status IN ('expired','released') AND r.amount_usd_micros>0 "
-            "AND i.status='in_progress' AND NOT EXISTS (SELECT 1 FROM cost_receipts c "
+            # The old typed owner emits attempt_failed only after _call begins.
+            # Do not infer post-contact exposure from arbitrary failed rows or reasons.
+            "AND (i.status='in_progress' OR (i.status='failed' AND receipt.status='failed' "
+            "AND receipt.dedupe_key='model-gateway:' || r.project_id || ':' || i.dedupe_key "
+            "AND EXISTS (SELECT 1 FROM events e WHERE e.project_id=r.project_id "
+            "AND e.event_type='typed_decision.attempt_failed' AND e.entity_type='typed_decision_attempt' "
+            "AND e.entity_id=i.dedupe_key AND e.data->>'receipt_id'=i.receipt_id "
+            # Only the new owner's exact structured proof, persisted atomically in
+            # both canonical errors and this event, establishes a TypeSafe 401 refusal.
+            "AND NOT COALESCE(i.error->'typed_decision_nonacceptance'=jsonb_build_object("
+            "'version',1,'project_id',r.project_id,'invocation_id',i.id,'receipt_id',i.receipt_id,"
+            "'reservation_id',r.id,'kind','provider_auth_rejected','provider','typesafe','http_status',401) "
+            "AND receipt.error->'typed_decision_nonacceptance'=i.error->'typed_decision_nonacceptance' "
+            "AND e.data->'typed_decision_nonacceptance'=i.error->'typed_decision_nonacceptance',false)))) "
+            "AND NOT EXISTS (SELECT 1 FROM cost_receipts c "
             "WHERE c.project_id=r.project_id AND c.reservation_id=r.id AND c.receipt_id=i.receipt_id) LIMIT 1")
         row = connection.execute(query, {"p": project_id}).mappings().first()
         if not row:
