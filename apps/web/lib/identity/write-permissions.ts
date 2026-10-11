@@ -122,7 +122,7 @@ export const WRITE_OPS: Readonly<Record<string, Readonly<Record<string, WriteGat
   // lib/setup-client.ts `setupWrite(projectId, op, …)` → /api/setup → /v1/setup/*
   "lib/setup-client.ts#setupWrite": {
     checks: "setup:manage", repo_token: "github:connect", repo_select: "repository:register",
-    repo_app: "github:connect", repo_default: "repository:manage", repo_remove: "repository:manage",
+    repo_app: "github:connect", repo_signin: "github:connect", repo_default: "repository:manage", repo_remove: "repository:manage",
     models: "model_provider:manage", model_catalogue: "model_provider:manage", source_model: "model_provider:manage",
     model_remove: "model_provider:manage", job: "setup:manage", budget: "budget:manage", try: "workflow_run:start",
     decision_key: "model_provider:manage", routing: "setup:manage", routing_catalogue: "model_provider:manage",

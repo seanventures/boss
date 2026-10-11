@@ -13,7 +13,7 @@ import { newFineGrainedTokenUrl } from "../../lib/github-urls";
 import { fetchRepos, fetchSetup, SetupFailure, setupWrite } from "../../lib/setup-client";
 import { ageLabel, daysUntil } from "../../lib/setup-stepper";
 import type { CheckResult, RepoEntry, SetupRefusal, SetupView, TokenFound } from "../../lib/setup-types";
-import { CiWorkflowsToggle } from "./ci-workflows-toggle";
+import { INSTALL_TIP, installLabel, type InstallNeeded } from "../../lib/identity/github-signin";
 import { Drawer } from "./drawer";
 import { statusOf } from "./github-access-row";
 import { AskBoss, CONSENT_REFUSAL, Consent, RowMenu, toast, useBoard } from "./parts";
@@ -47,8 +47,107 @@ function refusalOf(error: unknown): SetupRefusal {
   return { state: "failed", headline: "Check failed", fix: String((error as Error)?.message ?? error) };
 }
 
+type SigninFound = TokenFound & { install_needed?: InstallNeeded[]; read_only?: number };
+
+/** "Install BOSS on <org>": each account of yours where the BOSS app is not installed yet. */
+export function InstallNeededLinks({ needed, onCheck, busy }: {
+  needed: InstallNeeded[]; onCheck: () => void; busy: boolean;
+}) {
+  if (!needed.length) return null;
+  return (
+    <div className="su-line" data-testid="gh-install-needed">
+      {needed.map((n) => (n.install_url ? (
+        <Out key={n.account} href={n.install_url} testid={`gh-install-${n.account}`}
+             tip={`BOSS isn't on ${n.account} yet. ${INSTALL_TIP}`}>{installLabel(n)}</Out>
+      ) : null))}
+      <button type="button" className="su-link" onClick={onCheck} disabled={busy} data-testid="gh-install-recheck"
+              title="Ask GitHub again after installing." data-tip="Ask GitHub again after installing.">
+        Check again
+      </button>
+    </div>
+  );
+}
+
+/** Pick repos after "Sign in with GitHub": only repos you can push to where BOSS is installed. */
+function SigninPicker({ onDone, makeDefault }: { onDone?: () => void; makeDefault: boolean }) {
+  const { projectId, view, apply } = useBoard();
+  const selectGate = useGate("repository:register");
+  const [found, setFound] = useState<SigninFound | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [refusal, setRefusal] = useState<SetupRefusal | null>(null);
+  const load = async () => {
+    setBusy(true);
+    setRefusal(null);
+    try {
+      setFound(await setupWrite<SigninFound>(projectId, "repo_signin", {},
+                                             { label: "Pick repos", background: true }));
+    } catch (error) { setRefusal(refusalOf(error)); } finally { setBusy(false); }
+  };
+  useEffect(() => { void load(); }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
+  const connect = async (fullName: string) => {
+    if (!found || !selectGate.allowed) return;
+    setBusy(true);
+    try {
+      const next = await setupWrite<SetupView>(projectId, "repo_select", {
+        connection_id: found.connection_id, full_name: fullName, make_default: makeDefault,
+      }, { label: "Connect" });
+      apply(next);
+      const row = next.repository.repos.find((r) => r.full_name === fullName);
+      if (row?.pill.tone === "green") toast("Connected · Working");
+      onDone?.();
+    } catch (error) { setRefusal(refusalOf(error)); } finally { setBusy(false); }
+  };
+  if (!found) {
+    return refusal ? <Refusal headline={refusal.headline} fix={refusal.fix} />
+      : <span className="su-faint su-line"><CircleNotch className="su-spin" size={12} />Asking GitHub…</span>;
+  }
+  const readOnly = found.read_only ?? 0;
+  return (
+    <div className="su-form" data-testid="su-signin-picker">
+      <div className="su-line">
+        <span className="su-dot su-tone-green" aria-hidden="true" />
+        <span>Your repos as <span className="su-mono" data-user-text>@{found.account_login}</span></span>
+        {readOnly ? (
+          <Tip tip="BOSS writes branches, so only repos you can push to are listed."
+               className="su-faint" testid="su-signin-read-only">{readOnly} read-only hidden</Tip>
+        ) : null}
+      </div>
+      {found.repos?.length ? (
+        <RepoPicker repos={found.repos} busy={busy} onConnect={connect}
+                    exclude={view.repository.repos.filter((r) => r.binding_id).map((r) => r.full_name)} />
+      ) : <span className="su-faint" data-testid="su-signin-no-repos">No repos BOSS can reach yet</span>}
+      <InstallNeededLinks needed={found.install_needed ?? []} onCheck={() => void load()} busy={busy} />
+      {refusal ? <Refusal headline={refusal.headline} fix={refusal.fix} /> : null}
+    </div>
+  );
+}
+
 /** Paste a token → signed in → pick a repository → Connect. `connectionId` means Replace. */
 export function TokenForm({ connectionId, onDone, makeDefault = true }: {
+  connectionId?: string | null; onDone?: () => void; makeDefault?: boolean;
+}) {
+  const { signin } = useBoard();
+  const [otherWays, setOtherWays] = useState(false);
+  // THE ONE SIGN-IN FIRST: with "Sign in with GitHub" offered here, repos come from it; a token
+  // and the org's App stay one click away ("Use a token instead").
+  if (!connectionId && signin?.configured && !otherWays) {
+    const signedIn = signin.me?.status === "active";
+    return (
+      <div className="su-stack">
+        {signedIn ? <SigninPicker onDone={onDone} makeDefault={makeDefault} />
+          : <span className="su-faint" data-testid="su-signin-first">Sign in with GitHub above</span>}
+        <button type="button" className="su-link" onClick={() => setOtherWays(true)} data-testid="su-use-token"
+                title="Paste a fine-grained token, or use the org's own GitHub App."
+                data-tip="Paste a fine-grained token, or use the org's own GitHub App.">
+          Use a token instead
+        </button>
+      </div>
+    );
+  }
+  return <PasteTokenForm connectionId={connectionId} onDone={onDone} makeDefault={makeDefault} />;
+}
+
+function PasteTokenForm({ connectionId, onDone, makeDefault = true }: {
   connectionId?: string | null; onDone?: () => void; makeDefault?: boolean;
 }) {
   const { projectId, view, apply } = useBoard();
@@ -277,7 +376,6 @@ function RepoLine({ repo, onReplace }: { repo: RepoEntry; onReplace: () => void 
           </Tip>
         ) : null}
       </div>
-      {repo.binding_id ? <CiWorkflowsToggle bindingId={repo.binding_id} /> : null}
       {red || pill.tone === "amber" ? (
         <div className="su-line su-fix">
           {repo.pill.action === "fix_link" && repo.pill.fix_url ? (
@@ -359,7 +457,7 @@ function AddRepo({ connectionId, onDone }: { connectionId: string; onDone: () =>
 export const RepositoryRow = forwardRef<HTMLElement, {
   mode: string; step: number | null; focused: boolean;
 }>(function RepositoryRow({ mode, step, focused }, ref) {
-  const { view } = useBoard();
+  const { view, signin } = useBoard();
   const repos = view.repository.repos;
   const connection = view.repository.connection;
   const [drawer, setDrawer] = useState<null | "connect" | "replace">(null);
@@ -384,16 +482,13 @@ export const RepositoryRow = forwardRef<HTMLElement, {
         ]} />
       </div>
     );
-    // The CI setting stays reachable on a finished row: it is chosen after setup, not during it.
-    if (first.binding_id) {
-      body = <div className="su-stack">{body}<CiWorkflowsToggle bindingId={first.binding_id} /></div>;
-    }
+    // The CI setting lives in Advanced › CI permission: asked for only when a build needs it.
   } else if (mode === "waiting") {
     body = <span className="su-faint">Not connected</span>;
   } else if (repos.length === 0) {
     body = mode === "current" ? (
       <div>
-        <span className="su-row-title">Connect GitHub</span>
+        <span className="su-row-title">{signin?.configured ? "Pick repos" : "Connect GitHub"}</span>
         <TokenForm />
       </div>
     ) : (
@@ -428,9 +523,9 @@ export const RepositoryRow = forwardRef<HTMLElement, {
     );
   }
   return (
-    <SetupRow ref={ref} row="repository" label="Repository" step={step} mode={mode}
+    <SetupRow ref={ref} row="repository" label="Repos" step={step} mode={mode}
               done={mode === "done"} focused={focused}
-              tip="Where BOSS writes code and opens pull requests.">
+              tip="Pick the repos BOSS writes code in and opens pull requests on.">
       {body}
       {connection?.builds && connection.builds.ok === false ? (
         <p className="su-builds-warn" data-testid="su-repo-builds" role="status">

@@ -30,6 +30,7 @@ from typing import Any, Optional
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from egress import CertificateAuthority, GitRemotes, host_route  # noqa: E402
 from github_fake import GitHubFake  # noqa: E402
+from github_device_fake import DeviceFlowFake  # noqa: E402
 import github_probes  # noqa: E402
 
 
@@ -156,6 +157,8 @@ class Handler(BaseHTTPRequestHandler):
     ca: Optional[CertificateAuthority] = None
     git: Optional[GitRemotes] = None
     github: Optional[GitHubFake] = None
+    #: "Sign in with GitHub" (device flow) and a user token's reach (github_device_fake.py).
+    device: Optional[DeviceFlowFake] = None
     server_version = "boss-e2e-fakes/1"
     protocol_version = "HTTP/1.1"
     _tunnel_host: Optional[str] = None
@@ -215,6 +218,13 @@ class Handler(BaseHTTPRequestHandler):
         if host is not None:
             self._egress(method, host, path, query, raw)
             return
+        if path.startswith(("/gh-web/", "/gh-api/")):
+            # GitHub reached by BASE URL instead of the proxy (BOSS_GITHUB_WEB_URL /
+            # BOSS_GITHUB_API_URL pointed here, as identity's SSRF-safe client needs): the same
+            # answers as github.com and api.github.com through the proxy.
+            gh_host = "github.com" if path.startswith("/gh-web/") else "api.github.com"
+            self._egress(method, gh_host, path[len("/gh-web"):], query, raw)
+            return
         body = self._json(raw)
         self._extra_headers = {}
         status, payload, ctype = self._dispatch(method, path, body)
@@ -260,6 +270,13 @@ class Handler(BaseHTTPRequestHandler):
                                         f"answers this host, and a scripted run must not reach "
                                         f"the real one"})
             return
+        if route in ("git", "github-api") and self.device is not None:
+            answered = self.device.handle(method, path, dict(self.headers.items()), raw)
+            if answered is not None:
+                entry["status"] = answered[0]
+                self.world.record(entry)
+                self._send(answered[0], answered[1])
+                return
         if route == "git" and self.git is not None:
             headers = {k.lower(): v for k, v in self.headers.items()}
             status, out_headers, payload = self.git.serve(method, path, query, headers, raw)
@@ -372,6 +389,9 @@ class Handler(BaseHTTPRequestHandler):
             with w.lock:
                 w.checks[key] = [dict(run) for run in body.get("check_runs") or []]
             return 200, {"ok": True, "key": key}, json_t
+        if path == "/github/_device" and method == "POST" and isinstance(body, dict) and self.device:
+            # The test plays the person at github.com/login/device: approve, deny, expire, slow_down.
+            return 200, self.device.control(body), json_t
         if path.startswith("/github"):
             return self._github(method, path[len("/github"):] or "/", body)
         if path.startswith("/plane"):
@@ -539,6 +559,10 @@ def make_servers(port: int, smtp_port: int, state_dir: Optional[Path] = None,
         bound["ca"] = CertificateAuthority(state_dir / "tls")
         bound["git"] = GitRemotes(state_dir / "git")
         bound["github"] = GitHubFake(bound["git"], world)
+        bound["device"] = DeviceFlowFake()
+        # The probes' full-access profile (github_probes.py), so Repo and models' Read / Write /
+        # Pull-request checks pass on a repository picked after "Sign in with GitHub".
+        bound["device"].fixed_token = "ghp_e2e_full"
     http = ThreadingHTTPServer((host, port), type("BoundHandler", (Handler,), bound))
     http.daemon_threads = True
     socketserver.ThreadingTCPServer.allow_reuse_address = True

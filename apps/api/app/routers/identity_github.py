@@ -12,6 +12,12 @@
   DELETE /v1/identity/github/token
   POST   /v1/identity/github/token/migrate-env      move BOSS_GITHUB_TOKEN into the vault (then unread under enforce)
 
+Sign in with GitHub (device flow, one published App; engine: identity/github_device.py):
+  GET    /v1/identity/github/signin                 is it configured here, and am I signed in
+  POST   /v1/identity/github/device/start           a code to type at github.com/login/device
+  POST   /v1/identity/github/device/poll            pending | connected | expired | denied | failed
+  GET    /v1/identity/github/reach                  repos I can push to where BOSS is installed; installs needed
+
 Every credential lands in the vault and is used only by boss-egress; nothing here returns one.
 """
 from __future__ import annotations
@@ -25,7 +31,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from boss_engine.config import get_settings
 from boss_engine.db import begin
-from boss_engine.identity import P, PublicReason, Scope, github_app, github_setup, permit, public
+from boss_engine.identity import P, PublicReason, Scope, github_app, github_device, github_setup, permit, public
 from boss_engine.identity.authn import AuthnError
 from boss_engine.identity.authn_support import default_org_id, public_origin
 
@@ -51,6 +57,10 @@ class TokenBody(_Body):
 
 class MigrateBody(_Body):
     repos: list[str] = Field(min_length=1, max_length=100)
+
+
+class DevicePollBody(_Body):
+    handle: str = Field(min_length=10, max_length=2000)
 
 
 def _err(exc: Exception) -> JSONResponse:
@@ -204,6 +214,55 @@ def build_identity_github_router() -> APIRouter:
                 out = github_setup.migrate_env_token(repos=body.repos, org_id=ctx.principal.org_id, db=db,
                                                      by=ctx.principal.id, settings=get_settings())
                 return {k: v for k, v in out.items() if k != "id"}
+        except Exception as exc:  # noqa: BLE001
+            return _err(exc)
+
+    # ---- Sign in with GitHub (device flow) — a person's own connection, never the org's ----------------
+    def _person(request: Request, db: Any):
+        ctx = current_context(request, db)
+        if not getattr(ctx, "is_human_session", False):
+            raise github_app.GitHubRefused("people_only", 403)
+        return ctx
+
+    @router.get("/v1/identity/github/signin")
+    @permit(P.CONNECTION_USE_OWN, scope=Scope.org())
+    def signin_status(request: Request):
+        try:
+            with begin() as db:
+                ctx = current_context(request, db)
+                return github_device.status(ctx.principal.id, db=db)
+        except Exception as exc:  # noqa: BLE001
+            return _err(exc)
+
+    @router.post("/v1/identity/github/device/start")
+    @permit(P.CONNECTION_USE_OWN, scope=Scope.org())
+    def device_start(request: Request):
+        try:
+            with begin() as db:
+                ctx = _person(request, db)
+            return github_device.start(ctx.principal.id)
+        except Exception as exc:  # noqa: BLE001
+            return _err(exc)
+
+    @router.post("/v1/identity/github/device/poll")
+    @permit(P.CONNECTION_USE_OWN, scope=Scope.org())
+    def device_poll(body: DevicePollBody, request: Request):
+        try:
+            with begin() as db:
+                ctx = _person(request, db)
+                out = github_device.poll(person_id=ctx.principal.id, org_id=ctx.principal.org_id,
+                                         handle=body.handle, db=db)
+            return {k: v for k, v in out.items() if k != "item"}
+        except Exception as exc:  # noqa: BLE001
+            return _err(exc)
+
+    @router.get("/v1/identity/github/reach")
+    @permit(P.CONNECTION_USE_OWN, scope=Scope.org())
+    def my_reach(request: Request):
+        try:
+            with begin() as db:
+                ctx = current_context(request, db)
+                return github_device.reach(ctx.principal.id, db=db)
         except Exception as exc:  # noqa: BLE001
             return _err(exc)
 

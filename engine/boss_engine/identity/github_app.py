@@ -369,8 +369,16 @@ def _oauth_refresh(refresh_token: str) -> tuple[str, Optional[str], int]:
 
     cid, secret = _client_credentials()
     if not cid or not secret:
+        # A device-flow sign-in (github_device) used the PUBLISHED App, whose secret no install
+        # holds: ask with the client id alone. GitHub refusing it is needs_reauth (sign in again).
+        cid, secret = os.environ.get(CLIENT_ID_ENV) or cid, None
+    if not cid:
         raise vault.RefreshRejected("client_not_configured")
-    body = f"client_id={cid}&client_secret={secret}&grant_type=refresh_token&refresh_token={refresh_token}"
+    from urllib.parse import urlencode
+
+    fields = {"client_id": cid, **({"client_secret": secret} if secret else {}),
+              "grant_type": "refresh_token", "refresh_token": refresh_token}
+    body = urlencode(fields)
     resp = TRANSPORT("POST", github_urls.oauth_access_token(),
                      {"Accept": "application/json", "Content-Type": "application/x-www-form-urlencoded"},
                      body.encode())

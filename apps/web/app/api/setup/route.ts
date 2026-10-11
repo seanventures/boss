@@ -28,6 +28,7 @@ const OPS: Record<string, Op> = {
   repo_token: { method: "POST", path: () => "/v1/setup/repository/token" },
   repo_select: { method: "POST", path: () => "/v1/setup/repository/select" },
   repo_app: { method: "POST", path: () => "/v1/setup/repository/app" },
+  repo_signin: { method: "POST", path: () => "/v1/setup/repository/signin" },
   repo_default: { method: "POST", path: (b) => `/v1/setup/repository/${enc(b.binding_id)}/default`,
                   query: ["project_id"] },
   repo_remove: { method: "DELETE", path: (b) => `/v1/setup/repository/${enc(b.binding_id)}`,

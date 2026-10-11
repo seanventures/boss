@@ -199,6 +199,10 @@ class RepositoryAppBody(_Body):
     """Use the GitHub App connected in GitHub access (no fields beyond the project)."""
 
 
+class RepositorySigninBody(_Body):
+    """Use the signed-in person's own GitHub (device flow): list what they can push to."""
+
+
 class RepositorySelectBody(_Body):
     connection_id: str
     full_name: str

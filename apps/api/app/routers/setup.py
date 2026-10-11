@@ -16,7 +16,7 @@ from fastapi import APIRouter, HTTPException, Request
 from boss_engine.db import begin
 
 from ..schemas_setup import (
-    BudgetBody, ChecksBody, JobBody, ModelConnectBody, RepositoryAppBody, RepositorySelectBody,
+    BudgetBody, ChecksBody, JobBody, ModelConnectBody, RepositoryAppBody, RepositorySelectBody, RepositorySigninBody,
     RepositoryTokenBody, RoutingBody, SetupView, SourceModelBody, TryBody, dump,
 )
 
@@ -35,6 +35,18 @@ def build_setup_router(
 
     def actor_for(claimed: Optional[str]) -> str:
         return str(principal() or claimed or "ceo").strip() or "ceo"
+
+    def _signed_in_person() -> Optional[str]:
+        """The PERSON behind this request (the identity context), whatever legacy member name the
+        shadow-mode checks see. A repository picked after "Sign in with GitHub" uses their token."""
+        try:
+            from boss_engine.identity import lineage
+
+            ctx = lineage.current_context()
+        except Exception:  # noqa: BLE001
+            return None
+        pid = getattr(getattr(ctx, "principal", None), "id", None)
+        return str(pid) if pid else None
 
     def view(connection, project_id: str) -> dict[str, Any]:
         return dump(setup_view.build(connection, get_settings(), project_id))
@@ -95,6 +107,22 @@ def build_setup_router(
             try:
                 return setup_actions.repository_from_app(connection, get_settings(), body.project_id,
                                                          actor=actor)
+            except setup_actions.SetupActionError as error:
+                fail(error)
+        raise AssertionError("unreachable")
+
+    @router.post("/v1/setup/repository/signin")
+    @permit(P.GITHUB_CONNECT, scope=Scope.project(body="project_id"))
+    def post_repository_signin(body: RepositorySigninBody) -> dict[str, Any]:
+        """After "Sign in with GitHub": list what THIS person can push to where BOSS is installed,
+        and keep one project connection that uses their own sign-in (never the org's token)."""
+        actor = actor_for(body.actor)
+        person = _signed_in_person() or str(principal() or "")
+        with begin(engine) as connection:
+            require_actor(connection, body.project_id, actor, "github_manage")
+            try:
+                return setup_actions.repository_from_signin(connection, get_settings(), body.project_id,
+                                                            person_id=person, actor=actor)
             except setup_actions.SetupActionError as error:
                 fail(error)
         raise AssertionError("unreachable")

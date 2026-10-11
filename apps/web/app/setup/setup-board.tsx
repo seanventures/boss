@@ -7,7 +7,10 @@
  * whatever the last form said: eight GETs on load, five verdicts that disagreed, a paragraph per
  * patch. This renders ONE server view (GET /v1/setup) and replaces it whole after every write; the
  * server decides every pill. While setup is unfinished the board runs as a stepper —
- * 1 Repository, 2 Model, 3 Try it — and after the first pull request it is a board.
+ * 1 GitHub (the one "Sign in with GitHub"), 2 Repos, 3 Model, 4 Try it — and after the first pull
+ * request it is a board. Everything else (the org's own GitHub App, the multi-repo registry, CI
+ * permission, build database, toolchains, capacity, routing, budget, public URL) folds under
+ * ADVANCED, each with one plain line; a deep link to any of them opens the fold on it.
  *
  * Deep links: `?area=setup&focus=repository|repositories|models|jobs|routing|budget|try` (routing = jobs), `&add=<provider>` opens Add a
  * model on that provider, `&source=<id>` opens that model's menu, legacy `step=github|model` maps
@@ -19,14 +22,14 @@ import { ArrowClockwise } from "@phosphor-icons/react";
 
 import { fetchSetup, SetupFailure, setupWrite } from "../../lib/setup-client";
 import {
-  readParams, rowMode, SETUP_BADGE_EVENT, stepNumber, summarize, type SetupParams,
+  ADVANCED_ROWS, readParams, rowMode, SETUP_BADGE_EVENT, stepNumber, summarize, type SetupParams,
 } from "../../lib/setup-stepper";
 import type { RowKey, SetupView } from "../../lib/setup-types";
 import { BudgetRow } from "./budget-row";
 import { BuildDatabaseRow } from "./build-database-row";
 import { CapacityRow } from "./capacity-row";
 import { ModelsRow } from "./models-row";
-import { BoardContext, toast } from "./parts";
+import { BoardContext, toast, useBoard } from "./parts";
 import { Dot, localView } from "./pill";
 import { GitHubAccessRow, SETUP_TESTED_EVENT } from "./github-access-row";
 import { RepositoryRow } from "./repository-row";
@@ -36,6 +39,50 @@ import { TryRow } from "./try-row";
 import { PublicUrlRow } from "./public-url-row";
 import { ToolchainsRow } from "./toolchains-row";
 import { SharingAsk } from "../improve/sharing-ask";
+import { CiWorkflowsToggle } from "./ci-workflows-toggle";
+import { GitHubSigninRow, useSignin } from "./github-signin-row";
+import { Tip } from "./pill";
+import { SectionLabel } from "../section-label";
+
+/** One plain line per Advanced item (≤ 6 words), the detail in its tooltip. */
+const ADVANCED: Record<string, { line: string; tip: string }> = {
+  github_app: { line: "Org admin: per-build tokens, one repo",
+                tip: "Your org's own GitHub App: each build gets a token for its repo only." },
+  repositories: { line: "Which repos projects may use",
+                  tip: "The org's list of repositories BOSS may build in." },
+  ci: { line: "Let builds edit CI workflows",
+        tip: "Off by default. Asked for only when a build needs to change CI." },
+  build_database: { line: "Postgres for builds that need it", tip: "Auto, Always or Never." },
+  toolchains: { line: "What builds can compile and run", tip: "Python and Node always; others on the host." },
+  capacity: { line: "Model logins and subscriptions", tip: "Every model seat BOSS knows, and how to sign in." },
+  jobs: { line: "Which model does which job", tip: "Pin a model to a job, or let BOSS route." },
+  budget: { line: "Monthly spend cap", tip: "BOSS pauses model spend at the cap." },
+  public_url: { line: "Address used in emailed links", tip: "Sign-in, passkeys and emailed links use it." },
+};
+
+function Why({ id }: { id: keyof typeof ADVANCED }) {
+  const a = ADVANCED[id];
+  return <Tip tip={a.tip} className="su-adv-why su-faint" testid={`su-adv-why-${id}`}>{a.line}</Tip>;
+}
+
+/** Advanced › CI permission: the per-repository opt-in, one line per connected repository. */
+function CiPermission() {
+  const { view } = useBoard();
+  const bound = view.repository.repos.filter((r) => r.binding_id);
+  return (
+    <section className="su-row" data-testid="su-row-ci" aria-label="CI permission" id="su-ci">
+      <div className="su-row-label"><SectionLabel as="span" tip="Builds may change .github/workflows (per repo).">CI permission</SectionLabel></div>
+      <div className="su-row-body su-stack">
+        {bound.length ? bound.map((r) => (
+          <div key={r.binding_id} className="su-stack" data-testid={`su-ci-${r.full_name}`}>
+            <span className="su-mono" data-user-text>{r.full_name}</span>
+            <CiWorkflowsToggle bindingId={r.binding_id as string} />
+          </div>
+        )) : <span className="su-faint">Connect a repo first</span>}
+      </div>
+    </section>
+  );
+}
 
 function staleTargets(view: SetupView): string[] {
   return [
@@ -165,9 +212,22 @@ export function SetupBoard({ projectId, actor, initialView = null }: {
     return () => window.removeEventListener("beforeunload", warn);
   }, [checking]);
 
+  const { status: signin } = useSignin();
+  // ADVANCED IS FOLDED unless a link lands inside it, or GitHub just sent the person back from
+  // the org App's install (that row reads `?github=` itself).
+  const [advancedOpen, setAdvancedOpen] = useState<boolean>(() => {
+    try {
+      const sp = new URLSearchParams(window.location.search);
+      const f = readParams(window.location.search).focus;
+      return Boolean(sp.get("github")) || (f !== null && ADVANCED_ROWS.includes(f));
+    } catch { return false; }
+  });
+  useEffect(() => {
+    if (params.focus && ADVANCED_ROWS.includes(params.focus)) setAdvancedOpen(true);
+  }, [params.focus]);
   const ctx = useMemo(() => view ? {
-    projectId, view, apply: setView, checking, setChecking,
-  } : null, [projectId, view, checking, setChecking]);
+    projectId, view, apply: setView, checking, setChecking, signin,
+  } : null, [projectId, view, checking, setChecking, signin]);
 
   if (!view || !ctx) {
     return (
@@ -198,6 +258,8 @@ export function SetupBoard({ projectId, actor, initialView = null }: {
   };
   const focus = params.focus;
   const ref = (row: RowKey) => (el: HTMLElement | null) => { refs.current[row] = el; };
+  // With "Sign in with GitHub" shown as ①, the stepper's rows move down one: ② Repos ③ Model ④ Try it.
+  const shift = (n: number | null) => (n && signin ? n + 1 : n);
 
   return (
     <BoardContext.Provider value={ctx}>
@@ -241,25 +303,43 @@ export function SetupBoard({ projectId, actor, initialView = null }: {
             Test all
           </GatedButton>
         </header>
+        {/* ① GitHub — the one sign-in (absent on an API without it: then Repos is step ①). */}
+        <GitHubSigninRow ref={ref("github")} status={signin} focused={focus === "github"}
+                         step={signin && stepNumber(view, "repository") ? 1 : null}
+                         mode={view.next === "repository" && !view.repository.repos.length
+                           && !(signin?.me?.status === "active") ? "current" : "open"}
+                         onAdvanced={() => {
+                           setAdvancedOpen(true);
+                           window.setTimeout(() => refs.current.github_app?.scrollIntoView?.({ behavior: "smooth", block: "start" }), 50);
+                         }} />
         <RepositoryRow ref={ref("repository")} mode={rowMode(view, "repository")}
-                       step={stepNumber(view, "repository")} focused={focus === "repository"} />
-        <GitHubAccessRow />
-        {/* The org's registry: which repositories BOSS may use at all (multi-repo screen 1).
-            `focus=repositories` lands on it; it hides itself on an API without it. */}
-        <RepositoryRegistry projectId={projectId} />
-        <BuildDatabaseRow />
+                       step={shift(stepNumber(view, "repository"))} focused={focus === "repository"} />
         <ModelsRow ref={ref("models")} mode={rowMode(view, "models")}
-                   step={stepNumber(view, "models")} focused={focus === "models"}
+                   step={shift(stepNumber(view, "models"))} focused={focus === "models"}
                    add={params.add} source={params.source}
                    onAddHandled={() => setParams((p) => ({ ...p, add: null }))} />
-        <CapacityRow ref={ref("capacity")} actor={actor} focused={focus === "capacity"} />
-        {/* Model routing — where "Who does what" lived; its rows are "Pin a job" inside. */}
-        <RoutingRow ref={ref("jobs")} mode={rowMode(view, "jobs")} focused={focus === "jobs"} />
-        <BudgetRow ref={ref("budget")} mode={rowMode(view, "budget")} focused={focus === "budget"} />
-        <TryRow ref={ref("try")} mode={rowMode(view, "try")} step={stepNumber(view, "try")}
+        <TryRow ref={ref("try")} mode={rowMode(view, "try")} step={shift(stepNumber(view, "try"))}
                 focused={focus === "try"} />
-        <ToolchainsRow />
-        <PublicUrlRow />
+        <details className="su-advanced" data-testid="su-advanced" ref={ref("advanced")} open={advancedOpen}
+                 onToggle={(e) => setAdvancedOpen((e.currentTarget as HTMLDetailsElement).open)}>
+          <summary className="su-advanced-summary" data-testid="su-advanced-toggle"
+                   title="The org's own GitHub App, CI, builds, models' routing and budget."
+                   data-tip="The org's own GitHub App, CI, builds, models' routing and budget.">
+            Advanced
+          </summary>
+          <div className="su-adv-item" ref={ref("github_app")}><Why id="github_app" /><GitHubAccessRow /></div>
+          {/* The org's registry: which repositories BOSS may use at all (multi-repo screen 1).
+              `focus=repositories` lands on it; it hides itself on an API without it. */}
+          <div className="su-adv-item" ref={ref("repositories")}><Why id="repositories" /><RepositoryRegistry projectId={projectId} /></div>
+          <div className="su-adv-item" ref={ref("ci")}><Why id="ci" /><CiPermission /></div>
+          <div className="su-adv-item" ref={ref("build_database")}><Why id="build_database" /><BuildDatabaseRow /></div>
+          <div className="su-adv-item" ref={ref("toolchains")}><Why id="toolchains" /><ToolchainsRow /></div>
+          <div className="su-adv-item"><Why id="capacity" /><CapacityRow ref={ref("capacity")} actor={actor} focused={focus === "capacity"} /></div>
+          {/* Model routing — where "Who does what" lived; its rows are "Pin a job" inside. */}
+          <div className="su-adv-item"><Why id="jobs" /><RoutingRow ref={ref("jobs")} mode={rowMode(view, "jobs")} focused={focus === "jobs"} /></div>
+          <div className="su-adv-item"><Why id="budget" /><BudgetRow ref={ref("budget")} mode={rowMode(view, "budget")} focused={focus === "budget"} /></div>
+          <div className="su-adv-item" ref={ref("public_url")}><Why id="public_url" /><PublicUrlRow /></div>
+        </details>
         {/* The end of setup: Improve BOSS, asked once, and the heartbeat with its opt-out. */}
         <SharingAsk projectId={projectId} actor={actor ?? ""} />
       </div>

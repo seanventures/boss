@@ -108,6 +108,16 @@ def install_app(slug: str, *, state: Optional[str] = None) -> Optional[str]:
     return _q(f"{base}/installations/new", {"state": state} if state else None) if base else None
 
 
+def install_app_on(slug: str, target_id: object = None) -> Optional[str]:
+    """GitHub's install page for the App aimed at ONE account (a person or an organisation, by its
+    numeric id): "Install BOSS on <org>". Without an id, the plain install page (GitHub asks)."""
+    tid = str(target_id or "").strip()
+    base = install_app(slug)
+    if not base or not tid.isdigit():
+        return base
+    return f"{base}/permissions?{urlencode({'target_id': tid})}"
+
+
 # ---- OAuth (a person's own connection; GitHub as a sign-in provider) ------------------------------------
 
 def oauth_authorize(params: Optional[dict[str, str]] = None) -> str:
@@ -116,6 +126,16 @@ def oauth_authorize(params: Optional[dict[str, str]] = None) -> str:
 
 def oauth_access_token() -> str:
     return f"{web_base()}/login/oauth/access_token"
+
+
+def device_code() -> str:
+    """Device flow, step 1: BOSS asks for a code (no callback URL: it works on any host)."""
+    return f"{web_base()}/login/device/code"
+
+
+def device_verify() -> str:
+    """Device flow, step 2: where the person types the code, in any browser."""
+    return f"{web_base()}/login/device"
 
 
 #: github.com itself, for GitHub as an SSO provider (never a GitHub Enterprise host).

@@ -45,7 +45,13 @@ export function stepNumber(view: SetupView, row: RowKey): number | null {
 
 export type SetupParams = { focus: RowKey | null; add: string | null; source: string | null };
 
-const ROWS: RowKey[] = ["repository", "models", "capacity", "jobs", "budget", "try"];
+const ROWS: RowKey[] = ["github", "repository", "models", "capacity", "jobs", "budget", "try",
+                        "advanced", "github_app", "repositories", "ci", "build_database", "toolchains",
+                        "public_url"];
+
+/** Rows folded under Advanced: a deep link to one opens the fold first. */
+export const ADVANCED_ROWS: readonly RowKey[] = ["advanced", "github_app", "repositories", "ci", "build_database",
+                                                 "toolchains", "capacity", "jobs", "budget", "public_url"];
 
 /** `?area=setup[&focus=…][&add=<provider>][&source=<id>]`, plus the legacy `step=` names. */
 export function readParams(search: string): SetupParams {
@@ -56,6 +62,9 @@ export function readParams(search: string): SetupParams {
   if (focus === ("model" as RowKey)) focus = "models";
   // Model routing is the row "Who does what" became; both names land on it.
   if (focus === ("routing" as RowKey)) focus = "jobs";
+  // Older names for the rows that moved under Advanced.
+  if (focus === ("github-access" as RowKey) || focus === ("github_access" as RowKey)) focus = "github_app";
+  if (focus === ("ci-workflows" as RowKey)) focus = "ci";
   const add = params.get("add");
   const source = params.get("source");
   return {

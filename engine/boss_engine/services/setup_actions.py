@@ -246,6 +246,79 @@ def repository_from_app(connection: Connection, settings: Any, project_id: str, 
             "connection_id": current["id"], "rechecked": [], "source": "github_app"}
 
 
+SIGNIN_LABEL = "GitHub (signed in)"
+SIGNIN_REF_PREFIX = "identity_github:user:"
+
+
+def _signin_refusal(error: Exception) -> SetupActionError:
+    code = getattr(error, "code", "")
+    if code in ("not_signed_in", "signin_expired"):
+        return SetupActionError(409, code, "Sign in with GitHub", "Sign in with GitHub first.")
+    return SetupActionError(502, "unreachable", "GitHub unreachable",
+                            "GitHub did not list your repositories. Try again.")
+
+
+def repository_from_signin(connection: Connection, settings: Any, project_id: str, *, person_id: str,
+                           actor: str = "ceo", list_repos: bool = True) -> dict[str, Any]:
+    """Pick repos after "Sign in with GitHub" (identity/github_device): the picker lists what THIS
+    person can push to where the BOSS App is installed — GitHub's own answer for their token. The
+    project gets one connection whose credential is that person's own sign-in
+    (`identity_github:user:<person>`): it is NOT mirrored into the org's GitHub token, so no other
+    person's build is lent it, and builds still need the person's grant to say "act as me"."""
+    from ..identity import github_app, github_device
+
+    if not str(person_id or "").startswith("usr_"):
+        raise SetupActionError(403, "people_only", "Sign in first",
+                               "Only a signed-in person can connect their own GitHub.")
+    try:
+        found = github_device.reach(person_id, db=connection) if list_repos else {"repos": [], "login": None}
+    except github_app.GitHubRefused as error:
+        raise _signin_refusal(error) from None
+    service = _service(settings)
+    ref = f"{SIGNIN_REF_PREFIX}{person_id}"
+    ref_kind, _, ref_key = ref.partition(":")
+    have_ref = connection.execute(
+        text("SELECT id FROM secret_refs WHERE project_id = :p AND ref_kind = :k AND ref_key = :r"),
+        {"p": project_id, "k": ref_kind, "r": ref_key}).scalar()
+    if have_ref is None:
+        service.secret_refs.create_secret_ref(
+            connection, project_id=project_id, ref_kind=ref_kind, ref_key=ref_key, provider="github",
+            status="active", metadata={"source": "github_signin"}, actor=actor)
+    else:
+        connection.execute(text("UPDATE secret_refs SET status = 'active', revoked_at = NULL WHERE id = :i"),
+                           {"i": have_ref})
+    existing = connection.execute(
+        text("SELECT id, status FROM github_connections WHERE project_id = :p AND credential_ref = :r "
+             "ORDER BY created_at DESC LIMIT 1"), {"p": project_id, "r": ref}).mappings().first()
+    if existing is None:
+        current = service.create_connection(
+            connection, project_id=project_id, connection_label=f"{SIGNIN_LABEL} · {person_id}"[:120],
+            auth_method="personal_access_token", credential_ref=ref, app_id=None,
+            installation_id=None, api_base_url=_api_base(settings),
+            required_permissions=["pull", "push", "triage"],
+            metadata={"setup": "repo_and_models", "source": "github_signin"}, actor=actor)
+    else:
+        current = dict(existing)
+        if current["status"] in ("disabled", "revoked", "error"):
+            connection.execute(text("UPDATE github_connections SET status = 'configured', "
+                                    "disabled_at = NULL, revoked_at = NULL WHERE id = :id"),
+                               {"id": current["id"]})
+    if found.get("login"):
+        connection.execute(text("UPDATE github_connections SET account_login = :l, updated_at = now() "
+                                "WHERE id = :id"), {"l": found["login"], "id": current["id"]})
+    return {"account_login": found.get("login"), "expires_at": None, "repos": found.get("repos") or [],
+            "connection_id": current["id"], "rechecked": [], "source": "github_signin",
+            "install_needed": found.get("install_needed") or [], "read_only": found.get("read_only") or 0}
+
+
+def _signin_person(connection: Connection, project_id: str, connection_id: str) -> Optional[str]:
+    """The person whose own sign-in this connection is, or None for any other connection."""
+    ref = connection.execute(text("SELECT credential_ref FROM github_connections WHERE project_id = :p "
+                                  "AND id = :c"), {"p": project_id, "c": connection_id}).scalar()
+    ref = str(ref or "")
+    return ref[len(SIGNIN_REF_PREFIX):] if ref.startswith(SIGNIN_REF_PREFIX) else None
+
+
 def _is_app_connection(connection: Connection, project_id: str, connection_id: str) -> bool:
     ref = connection.execute(text("SELECT credential_ref FROM github_connections WHERE project_id = :p "
                                   "AND id = :c"), {"p": project_id, "c": connection_id}).scalar()
@@ -257,6 +330,10 @@ def connection_repos(connection: Connection, settings: Any, project_id: str,
     """`+ Add repo`: the repositories the STORED token can see (no paste needed)."""
     if _is_app_connection(connection, project_id, connection_id):
         out = repository_from_app(connection, settings, project_id)
+        return {k: out[k] for k in ("account_login", "expires_at", "repos", "connection_id")}
+    person = _signin_person(connection, project_id, connection_id)
+    if person:
+        out = repository_from_signin(connection, settings, project_id, person_id=person)
         return {k: out[k] for k in ("account_login", "expires_at", "repos", "connection_id")}
     service = _service(settings)
     try:
@@ -296,6 +373,20 @@ def select_repository(connection: Connection, settings: Any, project_id: str, co
     service = _service(settings)
     current = service.get_connection(connection, project_id, connection_id)
     _owner, _name, full = service._normalize_repository(full_name)
+    person = _signin_person(connection, project_id, connection_id)
+    if person:
+        # PICK, SCOPED ON THE SERVER: a signed-in person's connection binds only a repository
+        # GitHub lists for THEIR token (pushable, where the BOSS App is installed) — never one
+        # typed into the request that they cannot reach.
+        from ..identity import github_app, github_device
+
+        try:
+            ok = github_device.reachable(person, full, db=connection)
+        except github_app.GitHubRefused as error:
+            raise _signin_refusal(error) from None
+        if not ok:
+            raise SetupActionError(403, "repo_not_reachable", "Not one of yours",
+                                   f"{full} is not a repository you can push to where BOSS is installed.")
     row = connection.execute(
         text("SELECT id, status FROM github_repository_bindings "
              "WHERE project_id = :p AND lower(full_name) = lower(:f)"),
@@ -335,6 +426,8 @@ def _mirror_token_into_vault(connection: Connection, service: Any, project_id: s
 
     if _is_app_connection(connection, project_id, connection_id):
         return                             # the App's own tokens: nothing to keep
+    if _signin_person(connection, project_id, connection_id):
+        return                             # a person's own sign-in: never lent to the org's builds
     org_of_project = connection.execute(
         text("SELECT w.org_id FROM projects p JOIN workspaces w ON w.id = p.workspace_id "
              "WHERE p.id = :p"), {"p": project_id}).scalar()

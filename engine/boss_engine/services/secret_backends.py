@@ -845,9 +845,23 @@ class IdentityGitHubBackend:
         from boss_engine.db import begin
         from boss_engine.identity import github_setup
 
+        from .env_refs import provider_binding, register_host_credential
+
+        if key.startswith("user:"):
+            # `identity_github:user:<principal>`: the repository a person picked after "Sign in
+            # with GitHub" (github_device) is reached with THAT person's own token — never
+            # mirrored into the org's token, so nobody else's build is lent it.
+            from boss_engine.identity import vault
+
+            person = key[len("user:"):]
+            with begin() as db:
+                token = vault.token_for_access_check(person, provider="github", db=db) if person else None
+            if not token:
+                raise SecretUnavailable("the person who signed in with GitHub must sign in again")
+            register_host_credential(token, provider_binding("github"), "A person's GitHub sign-in")
+            return token
         if key != "app":
             raise SecretUnavailable("identity_github references name the App: identity_github:app")
-        from .env_refs import provider_binding, register_host_credential
 
         try:
             with begin() as db:

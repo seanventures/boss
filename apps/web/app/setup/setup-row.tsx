@@ -11,7 +11,7 @@ import { Check } from "@phosphor-icons/react";
 import type { RowKey } from "../../lib/setup-types";
 import { SectionLabel } from "../section-label";
 
-const CIRCLED = ["①", "②", "③"];
+const CIRCLED = ["①", "②", "③", "④"];
 
 export const SetupRow = forwardRef<HTMLElement, {
   row: RowKey;

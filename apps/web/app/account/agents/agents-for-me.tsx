@@ -19,6 +19,11 @@ import type { CascadePreview, Connection, Delegation, Ref } from "../../../lib/i
 import { CanButton, useGuardedCall, useIdentity } from "../../../components/identity/identity-provider";
 import { Ago, ErrorLine, Perm, Pill, Sheet, shortDate, useNow } from "../../../components/identity/kit";
 import { showToast } from "../../client-forms";
+import { fetchSignin } from "../../../lib/identity/github-signin";
+
+/** ONE SURFACE PER JOB: with "Sign in with GitHub" offered (the published BOSS app), connecting
+ *  or reconnecting your GitHub here goes to that one sign-in in Repo and models. */
+export const SIGNIN_HREF = "/?area=setup&focus=github";
 
 /** Plain-English abilities, each a set of delegable permissions (§7.3 "abilities"). */
 export const ABILITIES: { id: string; label: string; tip: string; permissions: Permission[] }[] = [
@@ -148,8 +153,15 @@ function Connections({ connections: initial, outcome, failed = false }: { connec
   const [busy, setBusy] = useState(false);
   const outcomeLine = connectOutcomeLine(outcome);
   const github = connections.find((c) => c.provider.toLowerCase() === "github" && c.status !== "revoked");
-  const connect = () => guarded("Connecting GitHub stores a token for you.", () => idPost<{ redirect: string }>("/v1/identity/me/connections", { provider: "github" }))
-    .then((r) => window.location.assign(r.redirect)).catch((e) => setError(said(e)));
+  const [deviceFlow, setDeviceFlow] = useState(false);
+  useEffect(() => {
+    let live = true;
+    fetchSignin().then((s) => { if (live) setDeviceFlow(Boolean(s?.configured)); }).catch(() => undefined);
+    return () => { live = false; };
+  }, []);
+  const connect = () => deviceFlow ? Promise.resolve(window.location.assign(SIGNIN_HREF))
+    : guarded("Connecting GitHub stores a token for you.", () => idPost<{ redirect: string }>("/v1/identity/me/connections", { provider: "github" }))
+      .then((r) => window.location.assign(r.redirect)).catch((e) => setError(said(e)));
   const disconnect = async (c: Connection) => {
     setBusy(true); setError(null);
     try {

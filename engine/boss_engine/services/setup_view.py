@@ -386,8 +386,14 @@ def _builds_reach(connection: Connection, project_id: str, connection_id: str,
         current = github_setup.org_token(connection, str(org_id))
         if current is not None and full_name.lower() in [r.lower() for r in current["repos"]]:
             return {"ok": True}
+        ref = str(connection.execute(text("SELECT credential_ref FROM github_connections WHERE id = :c"),
+                                     {"c": connection_id}).scalar() or "")
     except Exception:  # noqa: BLE001 - an unreadable vault is not a reason to hide the row
         return {"ok": True}
+    if ref.startswith("identity_github:user:"):
+        # "Sign in with GitHub": a person's own sign-in is never lent to the org's builds.
+        return {"ok": False, "message": "Builds use your sign-in only when you grant agents “as me”.",
+                "next": "For everyone's builds, an org admin adds the GitHub App under Advanced."}
     said = _latest_event(connection, project_id, "github.org_token_unchanged", connection_id)
     message = str((said or {}).get("message") or "").strip() or (
         "Builds can't use this token yet: it is not the organisation's GitHub token, which "

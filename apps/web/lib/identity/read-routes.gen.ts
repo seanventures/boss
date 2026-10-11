@@ -285,6 +285,8 @@ export const READ_ROUTES: ReadonlyArray<readonly [string, Permission]> = [
   ["identity/delegations", "delegation:read_all"],
   ["identity/github", "github:read"],
   ["identity/github/app/installations", "github:read"],
+  ["identity/github/reach", "connection:use_own"],
+  ["identity/github/signin", "connection:use_own"],
   ["identity/groups", "group:read"],
   ["identity/groups/{}", "group:read"],
   ["identity/invitations", "user:read"],

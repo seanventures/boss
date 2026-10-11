@@ -424,7 +424,8 @@ describe("My account", () => {
     await click(el.querySelector("[data-testid='grant-dlg_01JB7Q'] button.danger"));
     expect(document.querySelector("[data-testid='cascade']")?.textContent).toContain("Halts running agents");
     expect(document.querySelector("[data-testid='revoke-confirm']")?.textContent).toContain("Revoke and halt 3 runs");
-    expect(calls[0].body).toEqual({ dry_run: true });
+    // (the page also asks whether "Sign in with GitHub" is offered: the revoke is the first write)
+    expect(calls.find((c) => String(c.url).endsWith("/revoke"))!.body).toEqual({ dry_run: true });
   });
 });
 

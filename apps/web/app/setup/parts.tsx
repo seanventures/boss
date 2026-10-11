@@ -10,6 +10,7 @@ import { DotsThree, Sparkle } from "@phosphor-icons/react";
 import { TOAST_EVENT } from "../../lib/api-write";
 import { openDockAbout } from "../../lib/dock-subject";
 import type { SetupView } from "../../lib/setup-types";
+import type { SigninStatus } from "../../lib/identity/github-signin";
 
 export type SetupCtx = {
   projectId: string;
@@ -19,6 +20,8 @@ export type SetupCtx = {
   /** Rows a check is running on right now (the board shows `Checking…` for them). */
   checking: Set<string>;
   setChecking: (key: string, on: boolean) => void;
+  /** "Sign in with GitHub" here (null: not offered by this API, or not read yet). */
+  signin?: SigninStatus | null;
 };
 
 export const BoardContext = createContext<SetupCtx | null>(null);

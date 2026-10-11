@@ -294,10 +294,11 @@ def service_env(state: StackState, *, extra: Optional[dict[str, str]] = None) ->
     })
     # A walk that needs more of the install configured (another provider pointed at the model
     # stub, a subscription token) says so here: a JSON object, `{model}` standing for the
-    # model stub's URL. Used by the model router's walk (docs/product/MODEL_ROUTER.md).
+    # model stub's URL and `{fakes}` for the fakes' (e.g. BOSS_GITHUB_WEB_URL={fakes}/gh-web for
+    # "Sign in with GitHub", whose SSRF-safe client goes by base URL, not the proxy). Used by the model router's walk (docs/product/MODEL_ROUTER.md).
     more = os.environ.get("BOSS_E2E_SERVICE_ENV", "").strip()
     if more:
-        env.update({str(k): str(v).replace("{model}", model)
+        env.update({str(k): str(v).replace("{model}", model).replace("{fakes}", fakes)
                     for k, v in json.loads(more).items()})
     if extra:
         env.update(extra)

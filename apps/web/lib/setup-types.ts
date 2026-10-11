@@ -221,4 +221,6 @@ export type TokenFound = {
 };
 
 /** Rows on the board. */
-export type RowKey = "repository" | "models" | "capacity" | "jobs" | "budget" | "try";
+export type RowKey = "github" | "repository" | "models" | "capacity" | "jobs" | "budget" | "try"
+  /** Advanced: the rows folded under it (`focus=` opens the fold on that row). */
+  | "advanced" | "github_app" | "repositories" | "ci" | "build_database" | "toolchains" | "public_url";
