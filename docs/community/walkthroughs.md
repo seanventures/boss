@@ -1,6 +1,6 @@
 # Walkthroughs
 
-Three guided walks through a new BOSS install: getting it running on your machine, submitting a first goal in Command Center, and querying the control plane from the terminal. Each walk uses real commands and names the console areas you will see.
+Start with [one useful software change](FIRST_USEFUL_CHANGE.md), then use these walks to find the installation, console and terminal controls. Each walk uses real commands and names the console areas you will see.
 
 For the task-oriented view of the same features, see [use cases](use-cases.md). Install details not repeated here are in the [quickstart](QUICKSTART.md) and the [installer guide](https://github.com/seanventures/boss/blob/main/scripts/install/README.md).
 
@@ -19,7 +19,7 @@ During install you can enter a model key you already have, or press Enter to con
 !!! warning
     Never put a key on the command line. Use the installer's hidden prompt or the process environment instead.
 
-To install without a checkout, run `curl -fsSL https://boss.sean.network/install.sh | bash`. It installs the newest release into `~/boss`; see [install without git](QUICKSTART.md#install-without-git).
+For a release candidate, start from the [pinned release checkout](QUICKSTART.md#install). The website installer and hosted manual are deployed separately; a source release alone does not verify their version.
 
 ### Sign in
 
@@ -36,7 +36,7 @@ Leave the tunnel open, then open [http://127.0.0.1:3000](http://127.0.0.1:3000) 
 The first time, the console asks you to **claim** BOSS: you become its first Owner. The console password created on the install machine proves it is you. From the install directory, show it in a terminal (so it is not piped into a log):
 
 ```sh
-python3 scripts/install/console_password.py show
+boss password
 ```
 
 Then enter it on the claim screen with your name and email, and add a passkey. From then on you sign in as yourself, and invite your team in **Identity › People**. Never paste the password or a key into a ticket.
@@ -51,11 +51,11 @@ Single sign-on against an identity provider you run can be set up later: see [Si
 
 2. Type one concrete goal and choose a path.
 
-    **Talk to BOSS** answers and starts nothing unless you say so. **Build** follows the governed path: a panel drafts a PRD, and code is written only after the PRD is approved. By default that approval is automatic, and **Approvals** records it as **AUTO-APPROVED**. The build itself needs a connected GitHub repository; [Getting started](GETTING_STARTED.md) covers the whole path. The research step that opens the default path runs governed web research when a Claude Code subscription is connected. Without one, it shows as skipped with the reason, and the run goes on to the panel. If no model is connected, model work shows as unavailable while the control plane stays up.
+    **Talk to BOSS** answers and starts nothing unless you say so. **Build** follows the governed path: a panel drafts a PRD, and code is written only after the PRD is approved. On an enforced install, PRD automatic approval is off by default and an authorized person reviews it. An Owner can explicitly enable automatic approval; that decision is then recorded as **AUTO-APPROVED**. The build itself needs a connected GitHub repository; [Getting started](GETTING_STARTED.md) covers the whole path. The research step that opens the default path runs governed web research when a Claude Code subscription is connected. Without one, it shows as skipped with the reason, and the run goes on to the panel. If no model is connected, model work shows as unavailable while the control plane stays up.
 
-3. Read the reply as a plan.
+3. Follow the actual run.
 
-    After you accept a build path, the governed code task may appear in Software Factory pages and APIs. They do not run unattended, and a preview or sandbox record does not mean a live app has opened.
+    Open its steps in **Workflows** and its code work in **Factory**. Work can proceed within the selected policy and approved authority. A preview or sandbox record alone does not mean a live app has opened. Review the delivered revision and its checks before accepting the result.
 
 4. Open **Approvals**.
 
@@ -64,6 +64,16 @@ Single sign-on against an identity provider you run can be set up later: see [Si
 5. Open **Activity log**.
 
     Under the heading, the page reads "Central log of events, steps, jobs, receipts, and deadletters." It shows only rows BOSS recorded for this project. An empty log means no records exist yet. If the log cannot load, it says so explicitly and shows no placeholder rows. A row here records that something happened; it does not prove later work finished.
+
+### The installed console
+
+![Actual installed Command Center showing repository and model setup actions.](assets/screenshots/home-28d75d69.jpg){ .boss-walk-shot }
+
+This unedited capture shows a new named Owner's Home on a fresh disposable install using the qualified RC8 API and web images. It does not show a completed live-provider task. **Fix in Repo and models** opens the missing repository setup; the model setup hold is also visible.
+
+![Actual RC8 local Help drawer on a phone-sized viewport.](assets/screenshots/help-rc8.png){ .boss-walk-shot }
+
+Local **Help** explains the current page. This capture demonstrates the drawer, not the completed workflow described in its text. [Capture provenance](assets/screenshots/provenance.json)
 
 ### Other areas you will see
 

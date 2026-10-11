@@ -40,5 +40,10 @@ export function openNewProject(): void {
     }
     window.history.pushState(null, "", `/?${url.searchParams}`);
     window.dispatchEvent(new PopStateEvent("popstate"));
+    // The shell switches its visible area on popstate. Reset after that render,
+    // so a build opened from scrolled setup starts at its heading and Brief.
+    window.requestAnimationFrame(() => {
+      window.scrollTo({ top: 0, left: 0, behavior: "instant" });
+    });
   } catch { /* non-browser */ }
 }

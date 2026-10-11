@@ -133,14 +133,18 @@ describe("the Build route", () => {
     const post = (body: Record<string, unknown>) => POST(new Request("http://console/api/builds", {
       method: "POST", body: JSON.stringify(body) }));
 
-    const refused = await post({ project_id: "p", directive: "Shift swap board" });
+    const binding = { agreement_content_hash: "1".repeat(64), agreement_binding_token: `123.${"1".repeat(64)}.${"3".repeat(32)}.${"2".repeat(64)}` };
+    const unreviewed = await post({ project_id: "p", directive: "Shift swap board" });
+    expect(unreviewed.status).toBe(409);
+    expect(sent).toEqual([]);
+    const refused = await post({ project_id: "p", directive: "Shift swap board", ...binding });
     expect(refused.status).toBe(409);
     const body = await refused.json();
     expect(body.error).toBe("This workflow cannot run here yet.");
     expect(body.readiness.missing[0].key).toBe("deployment_target");
 
     const started = await post({ project_id: "p", directive: "Shift swap board",
-                                 start_anyway: ["deployment_target"] });
+                                 start_anyway: ["deployment_target"], ...binding });
     expect(started.status).toBe(200);
     expect((sent[1] as { start_anyway?: string[] }).start_anyway).toEqual(["deployment_target"]);
     expect((sent[0] as { start_anyway?: string[] }).start_anyway).toBeUndefined();

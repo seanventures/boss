@@ -159,9 +159,9 @@ def _converge_indexes(raw_connection, sql: str) -> tuple[list[str], list[str]]:
     """INDEX DRIFT. `CREATE INDEX IF NOT EXISTS` never redefines an index that exists, so an
     install whose database predates a change to an index keeps the OLD definition forever.
 
-    Seen on shared-server: schema.sql widened `idx_agent_threads_surface_external` from
+    Seen on an existing install: schema.sql widened `idx_agent_threads_surface_external` from
     (project_id, surface, external_ref) to (…, agent_role) so each agent keeps its own thread on
-    a shared subject; shared-server kept the 3-column index, and the second agent asked about a
+    a shared subject; that install kept the 3-column index, and the second agent asked about a
     subject hit a unique violation on every turn.
 
     For each index schema.sql declares that exists under that name: build the DECLARED index on

@@ -32,6 +32,10 @@ class ControlPlaneClient:
     ):
         self.base_url = base_url.rstrip("/")
         self.worker_id: Optional[str] = None
+        # Lease-control requests must not inherit the two-hour execution read timeout.
+        # httpx bounds each network phase; long execution calls retain their own timeout.
+        self.lease_timeout_seconds = max(0.1, min(float(timeout), 30.0))
+        self._lease_timeout = httpx.Timeout(self.lease_timeout_seconds)
         headers = {"Accept": "application/json"}
         if api_key and api_key.strip():
             headers["Authorization"] = f"Bearer {api_key.strip()}"
@@ -89,7 +93,7 @@ class ControlPlaneClient:
         }
         if handing_back:
             body["handing_back"] = True
-        response = self._client.post("/v1/worker/heartbeat", json=body)
+        response = self._client.post("/v1/worker/heartbeat", json=body, timeout=self._lease_timeout)
         response.raise_for_status()
         return response.json()
 
@@ -108,6 +112,7 @@ class ControlPlaneClient:
                 "lease_token": lease_token,
                 "result": result,
             },
+            timeout=self._lease_timeout,
         )
         response.raise_for_status()
         return response.json()
@@ -554,6 +559,7 @@ class ControlPlaneClient:
                 "retryable": retryable,
                 "retry_delay_seconds": retry_delay_seconds,
             },
+            timeout=self._lease_timeout,
         )
         response.raise_for_status()
         return response.json()

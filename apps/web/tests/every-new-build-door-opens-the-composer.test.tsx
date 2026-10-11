@@ -17,6 +17,7 @@ import { join } from "node:path";
 import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { openNewProject } from "../lib/compose-links";
 import { parseFloor } from "../lib/factory-floor";
 import { emptyFloor } from "./_helpers/factory-fixtures";
 import { $, click, mount, unmount } from "./_helpers/live-render";
@@ -87,5 +88,37 @@ describe("no New build door opens the agent chat", () => {
     expect(talks).toEqual([]);
     const url = new URLSearchParams(window.location.search);
     expect([url.get("area"), url.get("compose")]).toEqual(["delivery_workflows", "new"]);
+  });
+});
+
+describe("New build starts at the document origin", () => {
+  it("resets both axes after announcing the composer, without changing its route", () => {
+    const frames: FrameRequestCallback[] = [];
+    const order: string[] = [];
+    const raf = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      order.push("frame queued");
+      frames.push(callback);
+      return frames.length;
+    });
+    const scroll = vi.spyOn(window, "scrollTo").mockImplementation(() => {});
+    const onPop = () => order.push("composer announced");
+    window.addEventListener("popstate", onPop);
+    window.history.replaceState(null, "", "/?org=org_boss&area=setup&compose=add&app=old&build=old");
+    try {
+      openNewProject();
+      const params = new URLSearchParams(window.location.search);
+      expect([params.get("org"), params.get("area"), params.get("compose")])
+        .toEqual(["org_boss", "delivery_workflows", "new"]);
+      expect([params.get("app"), params.get("build")]).toEqual([null, null]);
+      expect(order).toEqual(["composer announced", "frame queued"]);
+      expect(scroll).not.toHaveBeenCalled();
+      expect(frames).toHaveLength(1);
+      frames[0](0);
+      expect(scroll.mock.calls).toEqual([[{ top: 0, left: 0, behavior: "instant" }]]);
+    } finally {
+      window.removeEventListener("popstate", onPop);
+      scroll.mockRestore();
+      raf.mockRestore();
+    }
   });
 });

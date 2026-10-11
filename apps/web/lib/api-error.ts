@@ -68,7 +68,7 @@ function describe(detail: unknown): string {
  *
  * The API says a failed turn as one sentence in `detail` and puts the database's or the
  * exception's own line in `failure.technical` (model_failures.explain_turn_failure). The raw
- * text used to BE the message: shared-server's dock showed "IntegrityError: (psycopg.errors.
+ * text used to BE the message: an existing install's dock showed "IntegrityError: (psycopg.errors.
  * UniqueViolation) … [SQL: INSERT INTO agent_threads …" to the operator.
  */
 export function apiErrorTechnical(body: unknown): string {

@@ -2,7 +2,7 @@
 /**
  * THE SIGN-IN PAGE HAS ITS WHOLE SHAPE, AND NO FAKE BUTTONS (operator, round 3 redesign).
  *
- * Every option is always on the page: the four social providers, a passkey button, the three
+ * Every option remains available on the page: the four social providers, a passkey button, the three
  * email methods, "Forgot?" and "Create account". What /v1/auth/options says isn't set up is
  * disabled, and its tooltip (and, on a tap, a line of words) says exactly what turns it on.
  * Nothing disabled ever navigates or posts. No phone, no SMS.
@@ -16,6 +16,7 @@ import type { AuthOptions } from "../lib/identity/types";
 import { methodWhyNot, passkeyWhyNot, providerOffers } from "../lib/identity/sign-in-offers";
 import { PASSKEY_NEEDS_DOMAIN_WORDS } from "../lib/identity/passkey-support";
 import { identityCopyAudit } from "./_helpers/identity-copy";
+import * as webauthn from "../lib/identity/webauthn";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }), useSearchParams: () => new URLSearchParams(), usePathname: () => "/" }));
@@ -30,6 +31,7 @@ afterEach(() => {
   root = null;
   calls.length = 0;
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 /** All off: an IP install, no SMTP, no providers, sign-up off. */
@@ -68,6 +70,20 @@ const tipOf = (el: Element, target: Element | null) => {
 const click = (b: Element | null) => act(async () => { (b as HTMLElement).click(); });
 
 describe("all off: the page keeps its shape and says what turns each thing on", () => {
+  it("keeps the password form outside a closed catalog of unavailable external methods", async () => {
+    const el = await mount(OFF);
+    const catalog = el.querySelector<HTMLDetailsElement>("[data-testid='other-signin-options']")!;
+    expect(catalog.open).toBe(false);
+    expect(catalog.querySelector("summary")?.textContent).toBe("Other sign-in options");
+    expect(catalog.querySelectorAll(".idn-idp").length).toBe(4);
+    expect(catalog.querySelector("[data-testid='passkey-sign-in']")?.getAttribute("aria-disabled")).toBe("true");
+    expect(catalog.contains(el.querySelector("#email"))).toBe(false);
+    expect(catalog.contains(el.querySelector("#password"))).toBe(false);
+    expect(catalog.contains(el.querySelector("[data-testid='email-submit']"))).toBe(false);
+    expect(el.querySelectorAll("[role='tab']").length).toBe(3);
+    expect(calls).toEqual([]);
+  });
+
   it("an unclaimed install says how to claim it without the logs: the host's setup-link command", async () => {
     await mount({ ...OFF, claim: { path: "setup_token", seats: [], expires_at: null } as unknown as AuthOptions["claim"] });
     const how = document.querySelector("[data-testid='claim-how']")!;
@@ -146,6 +162,21 @@ describe("all off: the page keeps its shape and says what turns each thing on", 
 });
 
 describe("all on: every option is live", () => {
+  it("keeps even one configured provider prominent without hiding the unavailable setup reasons", async () => {
+    const el = await mount({ ...OFF, providers: [ON.providers[0]] });
+    expect(el.querySelector("[data-testid='other-signin-options']")).toBeNull();
+    expect(el.querySelector("a.idn-idp")?.getAttribute("href")).toBe("/v1/auth/sso/g/start?next=%2Fprojects");
+    expect(el.querySelectorAll("button.idn-idp[aria-disabled='true']").length).toBe(3);
+  });
+
+  it("keeps a usable passkey prominent when no social provider is configured", async () => {
+    vi.spyOn(webauthn, "webauthnAvailable").mockReturnValue(true);
+    const el = await mount({ ...ON, providers: [] });
+    expect(el.querySelector("[data-testid='other-signin-options']")).toBeNull();
+    expect(el.querySelector("[data-testid='passkey-sign-in']")?.getAttribute("aria-disabled")).toBeNull();
+    expect(calls).toEqual([]);
+  });
+
   it("providers link to their single sign-on start, carrying where you were going", async () => {
     const el = await mount(ON);
     const links = [...el.querySelectorAll<HTMLAnchorElement>("a.idn-idp")];

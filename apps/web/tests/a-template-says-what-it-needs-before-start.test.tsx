@@ -48,7 +48,7 @@ describe("the start form shows what is missing, with the fix", () => {
     <ReadinessPanel readiness={NOT_READY} accepted={[]} onAccept={() => {}} />);
 
   it("names each missing thing, the step that needs it and how to fix it", () => {
-    expect(html).toContain("This cannot run here yet");
+    expect(html).toContain("Setup needed");
     expect(html).toContain("Somewhere to deploy: a verified deployment host");
     // Why it is needed sits behind the item's "Why" (said once, short: independent test D6).
     expect(html).toContain("Needed by Deploy");
@@ -74,7 +74,7 @@ describe("the start form shows what is missing, with the fix", () => {
       <ReadinessPanel readiness={{ ready: true, checked: [need({ ok: true })], missing: [] }}
                       accepted={[]} onAccept={() => {}} />);
     expect(ok).toContain("Ready to run here");
-    expect(ok).not.toContain("This cannot run here yet");
+    expect(ok).not.toContain("Setup needed");
   });
 
   it("only what the operator accepted stops blocking", () => {

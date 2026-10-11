@@ -3645,3 +3645,9 @@ select.input:focus,
 .ap-long { white-space: pre-wrap; display: block; max-height: 120px; overflow: auto; }
 .ap-more, .ap-redacted, .ap-unresolved { font-size: 12px; color: var(--muted); margin: 6px 0 0; }
 .dw-step-decide .ap { flex-basis: 100%; }
+
+/* Keep every header control visible on the narrowest phone layout. */
+@media (max-width: 360px) {
+  .bx-topbar { padding-inline: 8px; gap: 4px; }
+  .bx-topbar > .bx-topbar-spacer { min-width: 0; }
+}

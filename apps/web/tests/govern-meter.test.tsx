@@ -7,7 +7,7 @@
 import React from "react";
 import { afterEach, describe, expect, it } from "vitest";
 
-import type { Meter } from "../lib/govern";
+import type { LegacyFinancialHold, LegacyProviderHold, Meter } from "../lib/govern";
 import { governView } from "./_helpers/govern-fixtures";
 import { $, mount, unmount } from "./_helpers/live-render";
 
@@ -15,6 +15,17 @@ import { $, mount, unmount } from "./_helpers/live-render";
 const { GovernMeter } = await import("../app/govern/meter");
 
 const METER = governView().meter as Meter;
+const LEGACY_HOLD: LegacyFinancialHold = {
+  reservation_id: "old-reservation", lease_id: "old-lease", invocation_id: "unfinished-call", receipt_id: "old-receipt",
+  original_reservation_status: "released", original_estimate_usd_micros: 80_000,
+  decision_id: "review-old-call", message: "Historical exposure needs reconciliation.",
+};
+const PROVIDER_HOLD: LegacyProviderHold = {
+  reservation_id: "old-provider-reservation", changeset_id: "old-change", operation_id: "old-operation",
+  resource_receipt_id: "old-resource-receipt", receipt_id: "old-provider-receipt",
+  original_reservation_status: "expired", original_estimate_usd_micros: 70_000,
+  decision_id: "review-old-provider", message: "Earlier provider acceptance needs reconciliation.",
+};
 afterEach(() => unmount());
 
 describe("the meter draws real numbers", () => {
@@ -63,5 +74,102 @@ describe("the meter draws real numbers", () => {
     unmount();
     await mount(<GovernMeter meter={METER} error="" onRetry={() => {}} />);
     expect($("[data-testid=gv-forecast]")!.getAttribute("title")).toBe("Spend over 24h plus reservations, projected");
+  });
+
+  it("shows a historical paid-work hold even when settled money and active reservations are zero", async () => {
+    await mount(<GovernMeter meter={{ ...METER, actual_usd_micros: 0, reserved_usd_micros: 0, committed_usd_micros: 0,
+      active_reservations_count: 0, legacy_financial_hold: LEGACY_HOLD }} error="" onRetry={() => {}} />);
+    expect($("[data-testid=gv-meter-state]")!.textContent).toBe("Paid work held");
+    expect($("[data-testid=gv-meter-state]")!.getAttribute("data-state")).toBe("held");
+    expect($("[data-testid=gv-legacy-hold]")!.textContent).toContain("Earlier estimate $0.08;");
+    expect($("[data-testid=gv-legacy-hold]")!.textContent).toContain("actual charge unknown.");
+    expect($("[data-testid=gv-legacy-hold]")!.textContent).toContain("A cap reset will not clear this hold.");
+    expect($("[data-testid=gv-meter-amount]")!.textContent).toBe("$0.00 of $10.00");
+    expect($("[data-testid=gv-bar-fill]")!.getAttribute("style")).toContain("width: 0.00%");
+    expect($("[data-testid=gv-bar-held]")).toBeNull();
+  });
+
+  it("keeps the reconciliation link in the current organization and names the recorded decision", async () => {
+    const previous = window.location.href;
+    window.history.replaceState(null, "", "?org=my-org&project=p1&area=budget&run=old-run");
+    try {
+      await mount(<GovernMeter meter={{ ...METER, legacy_financial_hold: LEGACY_HOLD }} error="" onRetry={() => {}} />);
+      const link = $("[data-testid=gv-legacy-hold] a")!;
+      const target = new URL(link.getAttribute("href")!, window.location.href);
+      expect(target.searchParams.get("org")).toBe("my-org");
+      expect(target.searchParams.get("project")).toBe("p1");
+      expect(target.searchParams.get("area")).toBe("decisions");
+      expect(target.searchParams.get("decision")).toBe(LEGACY_HOLD.decision_id);
+      expect(target.searchParams.has("run")).toBe(false);
+    } finally { window.history.replaceState(null, "", previous); }
+  });
+
+  it("does not offer a made-up decision or a resume action when the hold has no committed decision", async () => {
+    await mount(<GovernMeter meter={{ ...METER, legacy_financial_hold: { ...LEGACY_HOLD, decision_id: null } }} error="" onRetry={() => {}} />);
+    expect($("[data-testid=gv-legacy-hold]")).not.toBeNull();
+    expect($("[data-testid=gv-legacy-hold] a")).toBeNull();
+    expect($("[data-testid=gv-legacy-hold] button")).toBeNull();
+  });
+
+  it("preserves ordinary cap presentation when there is no historical hold", async () => {
+    await mount(<GovernMeter meter={{ ...METER, legacy_financial_hold: null, legacy_provider_hold: null }} error="" onRetry={() => {}} />);
+    expect($("[data-testid=gv-legacy-hold]")).toBeNull();
+    expect($("[data-testid=gv-legacy-provider-hold]")).toBeNull();
+    expect($("[data-testid=gv-meter-state]")!.textContent).toBe("Under cap");
+  });
+
+  it("shows an uncertain earlier provider action without inventing settled or reserved money", async () => {
+    await mount(<GovernMeter meter={{ ...METER, actual_usd_micros: 0, reserved_usd_micros: 0, committed_usd_micros: 0,
+      active_reservations_count: 0, legacy_financial_hold: null, legacy_provider_hold: PROVIDER_HOLD }} error="" onRetry={() => {}} />);
+    expect($("[data-testid=gv-meter-state]")!.textContent).toBe("Paid work held");
+    expect($("[data-testid=gv-meter-state]")!.getAttribute("data-state")).toBe("held");
+    const banner = $("[data-testid=gv-legacy-provider-hold]")!;
+    expect(banner.textContent).toContain("An earlier provider action may have been accepted.");
+    expect(banner.textContent).toContain("Earlier estimate $0.07;");
+    expect(banner.textContent).toContain("actual charge unknown.");
+    expect(banner.textContent).toContain("A cap reset will not clear this hold.");
+    expect($("[data-testid=gv-legacy-hold]")).toBeNull();
+    expect($("[data-testid=gv-meter-amount]")!.textContent).toBe("$0.00 of $10.00");
+    expect($("[data-testid=gv-bar-fill]")!.getAttribute("style")).toContain("width: 0.00%");
+    expect($("[data-testid=gv-bar-held]")).toBeNull();
+  });
+
+  it("opens the provider's recorded decision with the current organization and project", async () => {
+    const previous = window.location.href;
+    window.history.replaceState(null, "", "?org=my-org&project=p1&area=budget&run=old-run");
+    try {
+      await mount(<GovernMeter meter={{ ...METER, legacy_provider_hold: PROVIDER_HOLD }} error="" onRetry={() => {}} />);
+      const link = $("[data-testid=gv-legacy-provider-hold] a")!;
+      const target = new URL(link.getAttribute("href")!, window.location.href);
+      expect(target.searchParams.get("org")).toBe("my-org");
+      expect(target.searchParams.get("project")).toBe("p1");
+      expect(target.searchParams.get("area")).toBe("decisions");
+      expect(target.searchParams.get("decision")).toBe(PROVIDER_HOLD.decision_id);
+      expect(target.searchParams.has("run")).toBe(false);
+      expect(link.textContent).toContain("Review provider attempt");
+    } finally { window.history.replaceState(null, "", previous); }
+  });
+
+  it("keeps simultaneous model and provider uncertainty separate without adding their estimates to money", async () => {
+    await mount(<GovernMeter meter={{ ...METER, legacy_financial_hold: LEGACY_HOLD,
+      legacy_provider_hold: PROVIDER_HOLD }} error="" onRetry={() => {}} />);
+    expect($("[data-testid=gv-legacy-hold]")!.textContent).toContain("Earlier estimate $0.08;");
+    expect($("[data-testid=gv-legacy-provider-hold]")!.textContent).toContain("Earlier estimate $0.07;");
+    expect($("[data-testid=gv-legacy-hold] a")!.getAttribute("href")).toContain("decision=review-old-call");
+    expect($("[data-testid=gv-legacy-provider-hold] a")!.getAttribute("href")).toContain("decision=review-old-provider");
+    expect($("[data-testid=gv-meter-state]")!.textContent).toBe("Paid work held");
+    expect($("[data-testid=gv-meter-amount]")!.textContent).toBe("$3.52 of $10.00");
+    expect($("[data-testid=gv-bar-fill]")!.getAttribute("style")).toContain("width: 31.20%");
+    expect($("[data-testid=gv-bar-held]")!.getAttribute("style")).toContain("width: 4.00%");
+    expect(document.querySelectorAll(".gv-legacy-hold button")).toHaveLength(0);
+  });
+
+  it("keeps an uncommitted provider hold visible without an invented decision or resume control", async () => {
+    await mount(<GovernMeter meter={{ ...METER, legacy_provider_hold: { ...PROVIDER_HOLD, decision_id: null } }}
+      error="" onRetry={() => {}} />);
+    expect($("[data-testid=gv-legacy-provider-hold]")).not.toBeNull();
+    expect($("[data-testid=gv-legacy-provider-hold] a")).toBeNull();
+    expect($("[data-testid=gv-legacy-provider-hold] button")).toBeNull();
+    expect($("[data-testid=gv-meter-state]")!.textContent).toBe("Paid work held");
   });
 });

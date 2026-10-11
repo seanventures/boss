@@ -8,6 +8,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { shipItChain } from "./_helpers/run-acts-fixtures";
 
+const originalFetch = globalThis.fetch;
+
 // The test runner compiles JSX classically; Next compiles the route with the automatic runtime.
 (globalThis as Record<string, unknown>).React = React;
 const { GET } = await import("../app/api/run-credits/[id]/route");
@@ -21,7 +23,11 @@ function call(id: string, query = "project_id=p1&title=Ship%20it") {
 describe("the Credits image", () => {
   it("is a 1200×630 PNG of the run's credits", async () => {
     const asked: string[] = [];
-    vi.stubGlobal("fetch", vi.fn(async (input: unknown) => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      // next/og loads its embedded WASM through fetch; keep real image generation local.
+      if (String(input).startsWith("data:application/octet-stream;base64,AGFzbQ")) {
+        return originalFetch(input, init);
+      }
       asked.push(String(input));
       return Response.json(shipItChain());
     }));
@@ -34,18 +40,21 @@ describe("the Credits image", () => {
     const view = new DataView(bytes.buffer);
     expect([view.getUint32(16), view.getUint32(20)]).toEqual([1200, 630]);
     // A workflow run's chain is a writing GET: read by its POST twin (lib/writing-get.ts).
-    expect(asked[0]).toMatch(/\/v1\/workflow-runs\/wfr_1\/chain\/load\?project_id=p1$/);
+    expect(asked).toEqual([expect.stringMatching(/\/v1\/workflow-runs\/wfr_1\/chain\/load\?project_id=p1$/)]);
   }, 60_000);
 
   it("credits a build from the build's own chain, not the run around it", async () => {
     const asked: string[] = [];
-    vi.stubGlobal("fetch", vi.fn(async (input: unknown) => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).startsWith("data:application/octet-stream;base64,AGFzbQ")) {
+        return originalFetch(input, init);
+      }
       asked.push(String(input));
       return Response.json(shipItChain());
     }));
     const r = await call("crun_1");
     expect(r.status).toBe(200);
-    expect(asked[0]).toMatch(/\/v1\/code-tasks\/crun_1\/chain\?project_id=p1$/);
+    expect(asked).toEqual([expect.stringMatching(/\/v1\/code-tasks\/crun_1\/chain\?project_id=p1$/)]);
   }, 60_000);
 
   it("refuses a run with nobody to credit, and a malformed id", async () => {

@@ -1,12 +1,12 @@
 {
   "schema_version": 2,
   "distribution": "BOSS Community",
-  "release": "v1.0-rc8",
+  "release": "v1.0-rc9",
   "public_baseline": {
-    "tag": "v1.0-rc6.2",
-    "commit": "d51b1ca99b65feb03ece6f2b684cd1247c0e1048"
+    "tag": "v1.0-rc8",
+    "commit": "cb278010b4cef68c55a9684c3e9bd74b14c8b520"
   },
   "mechanically_complete": true,
   "publication_scope": "incremental-community-release",
-  "validation_record": "docs/community/RC8_VALIDATION.md"
+  "validation_record": "docs/community/RC9_VALIDATION.md"
 }

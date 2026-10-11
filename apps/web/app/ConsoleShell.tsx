@@ -526,6 +526,10 @@ function ConsoleShellInner({
   const paletteInput = useRef<HTMLInputElement>(null);
   const router = useRouter();
   const searchParams = useSearchParams();
+  const queryString = searchParams.toString();
+  const loadedRef = useRef<string[] | undefined>(loadedAreas);
+  loadedRef.current = loadedAreas;
+  const [areaLoadAsked, setAreaLoadAsked] = useState<{ id: string; at: number } | null>(null);
 
   // Live auto-refresh: re-fetch server data on an interval so async worker
   // changes (new decisions, budget moves, events) appear without manual reload.
@@ -556,12 +560,36 @@ function ConsoleShellInner({
     const unregister = registerConsoleRefresh(refreshCoordinator);
     return () => { unregister(); refreshCoordinator.dispose(); };
   }, [refreshCoordinator]);
-  // The transition settling IS the refresh landing: React committed what it fetched.
-  const refreshWasPending = useRef(false);
+  const committedQuery = useRef(queryString);
+  const canceledInThisCommit = useRef(false);
   useEffect(() => {
-    if (refreshWasPending.current && !refreshPending) refreshCoordinator.landed();
-    refreshWasPending.current = refreshPending;
-  }, [refreshPending, refreshCoordinator]);
+    if (committedQuery.current === queryString) return;
+    committedQuery.current = queryString;
+    // Next prioritizes a URL restore over a pending refresh and discards its response.
+    // That response cannot acknowledge our coordinator, even if the server finishes it.
+    // Release its logical bookkeeping only after the new URL commits, then load the
+    // current area. Previously loaded areas still need the discarded read replaced.
+    if (!refreshCoordinator.busy()) return;
+    refreshCoordinator.cancel();
+    canceledInThisCommit.current = true;
+    setAreaLoadAsked(null);
+    const requested = new URLSearchParams(queryString).get("area");
+    if (requested && loadedRef.current?.includes(requested)) refreshCoordinator.request("now");
+  }, [queryString, refreshCoordinator]);
+  // Dispatching router.refresh() can finish this shell's transition before Next delivers
+  // its server response. A transition ending is not an acknowledgment: retrying then queues
+  // another refresh while the first response is still arriving. Only newly committed server
+  // props acknowledge the refresh. Both objects come from the page's server render; local
+  // shell state changes keep their references and cannot release the coordinator.
+  const serverSnapshot = useRef({ status, loadedAreas });
+  useEffect(() => {
+    const canceled = canceledInThisCommit.current;
+    canceledInThisCommit.current = false;
+    const previous = serverSnapshot.current;
+    if (previous.status === status && previous.loadedAreas === loadedAreas) return;
+    serverSnapshot.current = { status, loadedAreas };
+    if (!canceled) refreshCoordinator.landed();
+  }, [status, loadedAreas, refreshCoordinator, queryString]);
   useEffect(() => {
     if (!live) return;
     let cancelled = false;
@@ -610,7 +638,6 @@ function ConsoleShellInner({
   // Depend on the query STRING (stable across router.refresh(), changes on real
   // navigation) so the area syncs from the URL on deep links like "View in Work →"
   // without the 7s auto-refresh snapping the user back.
-  const queryString = searchParams.toString();
   useEffect(() => {
     // A RETIRED SURFACE IS REWRITTEN BEFORE ANYTHING READS IT. The server redirects these too;
     // this covers the URL changing under a mounted console (Back, a pushState from a panel).
@@ -640,9 +667,6 @@ function ConsoleShellInner({
   // (lib/area-loading.ts). One that is not in the DOM yet is added to the session cookie and
   // the page refreshes; the areas already on screen keep their tree positions, so they update
   // rather than remount. Every later click on it is the pure reveal below.
-  const loadedRef = useRef<string[] | undefined>(loadedAreas);
-  loadedRef.current = loadedAreas;
-  const [areaLoadAsked, setAreaLoadAsked] = useState<{ id: string; at: number } | null>(null);
   const ensureLoaded = useCallback((id: string) => {
     const loaded = loadedRef.current;
     if (!loaded || loaded.includes(id)) return;
@@ -664,9 +688,13 @@ function ConsoleShellInner({
   const activeLoading = !!loadedAreas && !loadedAreas.includes(active);
   useEffect(() => {
     // Opened by a deep link, Back/Forward or anything else that set `active` without going
-    // through go(): the same fetch, once.
-    if (activeLoading && areaLoadAsked?.id !== active) ensureLoaded(active);
-  }, [activeLoading, active, areaLoadAsked, ensureLoaded]);
+    // through go(): the same fetch, once. First wait for Next's URL restore to commit:
+    // a restore prioritizes itself over a pending refresh and discards that response.
+    // The urgent area reveal can precede useSearchParams, so loading immediately would
+    // fetch the right URL but lose the payload when the router catches up.
+    if (activeLoading && areaLoadAsked?.id !== active
+        && new URLSearchParams(queryString).get("area") === active) ensureLoaded(active);
+  }, [activeLoading, active, areaLoadAsked, ensureLoaded, queryString]);
   // A REFRESH THAT CAME BACK WITHOUT THE AREA IS ASKED AGAIN AT ONCE.
   //
   // The area-load refresh can settle without the area in it (it raced another refresh in
@@ -689,7 +717,7 @@ function ConsoleShellInner({
       setAreaLoadAsked(null);  // the effect above sees an area not yet asked for, and asks
     }, 250);
     return () => window.clearTimeout(t);
-  }, [activeLoading, refreshPending, refreshCoordinator, areaLoadAsked, active]);
+  }, [activeLoading, refreshPending, refreshCoordinator, areaLoadAsked, active, status, loadedAreas]);
   const [loadSlow, setLoadSlow] = useState(false);
   useEffect(() => {
     setLoadSlow(false);
@@ -1113,7 +1141,6 @@ function ConsoleShellInner({
           />
           <span className="bx-brand-copy">
             <span className="bx-brand-name">BOSS</span>
-            <span className="bx-brand-tag">Orchestration OS</span>
           </span>
           <button
             type="button"

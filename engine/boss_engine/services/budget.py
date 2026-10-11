@@ -241,6 +241,188 @@ class BudgetGovernor:
     def __init__(self, settings: Settings):
         self.settings = settings
 
+    def legacy_model_reconciliation(self, connection: Connection, project_id: str) -> Optional[dict]:
+        """Fence identifiable discarded liability without reviving expired authority.
+
+        Only one unresolved example is needed to stop paid admission. The original
+        estimate is evidence, never an invoice or a newly active reservation.
+        Decision writes participate in the caller's transaction; the row predicate
+        remains authoritative even if a refusing caller rolls that transaction back.
+        """
+        query = text(
+            "SELECT r.id AS reservation_id,r.status AS original_reservation_status,r.amount_usd_micros AS original_estimate_usd_micros,"
+            "l.id AS lease_id,i.id AS invocation_id,i.receipt_id "
+            "FROM budget_reservations r JOIN model_gateway_leases l ON l.budget_reservation_id=r.id AND l.project_id=r.project_id "
+            "JOIN model_gateway_invocations i ON i.model_gateway_lease_id=l.id AND i.project_id=r.project_id "
+            "JOIN receipts receipt ON receipt.id=i.receipt_id AND receipt.project_id=r.project_id "
+            "WHERE r.project_id=:p AND r.status IN ('expired','released') AND r.amount_usd_micros>0 "
+            # The old typed owner emits attempt_failed only after _call begins.
+            # Do not infer post-contact exposure from arbitrary failed rows or reasons.
+            "AND (i.status='in_progress' OR (i.status='failed' AND receipt.status='failed' "
+            "AND receipt.dedupe_key='model-gateway:' || r.project_id || ':' || i.dedupe_key "
+            "AND EXISTS (SELECT 1 FROM events e WHERE e.project_id=r.project_id "
+            "AND e.event_type='typed_decision.attempt_failed' AND e.entity_type='typed_decision_attempt' "
+            "AND e.entity_id=i.dedupe_key AND e.data->>'receipt_id'=i.receipt_id "
+            # Only the new owner's exact structured proof, persisted atomically in
+            # both canonical errors and this event, establishes a TypeSafe 401 refusal.
+            "AND NOT COALESCE(i.error->'typed_decision_nonacceptance'=jsonb_build_object("
+            "'version',1,'project_id',r.project_id,'invocation_id',i.id,'receipt_id',i.receipt_id,"
+            "'reservation_id',r.id,'kind','provider_auth_rejected','provider','typesafe','http_status',401) "
+            "AND receipt.error->'typed_decision_nonacceptance'=i.error->'typed_decision_nonacceptance' "
+            "AND e.data->'typed_decision_nonacceptance'=i.error->'typed_decision_nonacceptance',false)))) "
+            "AND NOT EXISTS (SELECT 1 FROM cost_receipts c "
+            "WHERE c.project_id=r.project_id AND c.reservation_id=r.id AND c.receipt_id=i.receipt_id) LIMIT 1")
+        row = connection.execute(query, {"p": project_id}).mappings().first()
+        if not row:
+            return None
+        locked = connection.execute(text(
+            "SELECT pg_try_advisory_xact_lock(hashtextextended('boss-budget:' || :p, 0))"),
+            {"p": project_id}).scalar_one()
+        if not locked:
+            return {"status": "denied", "refusal": "admission_busy", "transient": True,
+                    "retry_after_seconds": 1, "decision_id": None, "budget_state": "unknown",
+                    "message": ADMISSION_BUSY_MESSAGE, "legacy_exposure": dict(row)}
+        # A settlement may have committed while the admission lock was acquired.
+        row = connection.execute(query, {"p": project_id}).mappings().first()
+        if not row:
+            return None
+        evidence = dict(row)
+        decision = connection.execute(text(
+            "SELECT id,status FROM decisions WHERE project_id=:p "
+            "AND recommendation->>'action'='reconcile_legacy_model_exposure' "
+            "AND recommendation->>'invocation_id'=:i LIMIT 1"),
+            {"p": project_id, "i": row['invocation_id']}).mappings().first()
+        if decision:
+            decision_id = decision['id']
+            if decision['status'] != 'pending':
+                connection.execute(text("UPDATE decisions SET status='pending',resolution_note=NULL,updated_at=now() WHERE id=:id"),
+                                   {"id": decision_id})
+                emit_event(connection, project_id, 'budget.legacy_reconciliation_reopened', 'budget_governor',
+                           'decision', decision_id, {"invocation_id": row['invocation_id']})
+        else:
+            decision_id = create_blocking_decision(
+                connection, project_id, None, "Reconcile historical unresolved model exposure before paid work",
+                {"action": "reconcile_legacy_model_exposure", **evidence},
+                {"original_estimate_usd_micros": int(row['original_estimate_usd_micros']), "actual_cost_known": False},
+                "legacy_model_outcome_unknown")
+            emit_event(connection, project_id, 'budget.legacy_reconciliation_required', 'budget_governor',
+                       'budget_reservation', row['reservation_id'], {"decision_id": decision_id, **evidence})
+        return {"status": "denied", "refusal": "legacy_reconciliation_required", "transient": False,
+                "decision_id": decision_id, "budget_state": "unknown", "legacy_exposure": evidence,
+                "message": "Paid work is held for historical unresolved model exposure. Reconcile the recorded attempt; raising a cap or resolving this decision alone does not authorize new spend."}
+
+    def legacy_provider_reconciliation(self, connection: Connection, project_id: str) -> Optional[dict]:
+        """Quarantine discarded provider exposure; a failed response is not no contact.
+
+        Whole-ChangeSet settlement uses one cost receipt, not one per operation.
+        Only the durable all-not-dispatched owner protocol proves no call. Keep
+        the original money/authority states unchanged and return one example.
+        """
+        query = text("""
+            SELECT r.id AS reservation_id, r.status AS original_reservation_status,
+                   r.amount_usd_micros AS original_estimate_usd_micros,
+                   cs.id AS changeset_id, op.id AS operation_id,
+                   rr.id AS resource_receipt_id, rr.receipt_id
+            FROM budget_reservations r
+            JOIN changesets cs ON cs.reservation_id=r.id AND cs.project_id=r.project_id
+            JOIN resource_receipts rr ON rr.changeset_id=cs.id AND rr.project_id=r.project_id
+            JOIN changeset_operations op ON op.id=rr.operation_id
+                AND op.changeset_id=cs.id AND op.project_id=r.project_id
+            JOIN receipts receipt ON receipt.id=rr.receipt_id AND receipt.project_id=r.project_id
+            WHERE r.project_id=:p AND r.status IN ('expired','released')
+              AND r.amount_usd_micros>0
+              AND NOT (op.action IN ('read','sync') AND rr.action IN ('read','sync'))
+              AND NOT (
+                cs.status='applied'
+                AND EXISTS (
+                    SELECT 1 FROM cost_receipts cost
+                    JOIN resource_receipts paid_rr ON paid_rr.receipt_id=cost.receipt_id
+                        AND paid_rr.project_id=cs.project_id AND paid_rr.changeset_id=cs.id
+                    JOIN receipts paid_receipt ON paid_receipt.id=paid_rr.receipt_id
+                        AND paid_receipt.project_id=cs.project_id
+                    WHERE cost.project_id=cs.project_id AND cost.reservation_id=r.id
+                      AND cost.category='provider'
+                      AND cost.skill_or_model_id='resource_plane.changeset.apply'
+                      AND paid_rr.status='succeeded' AND paid_receipt.status='succeeded')
+                AND NOT EXISTS (
+                    SELECT 1 FROM changeset_operations sibling_op
+                    LEFT JOIN resource_receipts sibling ON sibling.operation_id=sibling_op.id
+                        AND sibling.changeset_id=cs.id AND sibling.project_id=cs.project_id
+                    LEFT JOIN receipts sibling_receipt ON sibling_receipt.id=sibling.receipt_id
+                        AND sibling_receipt.project_id=cs.project_id
+                    WHERE sibling_op.changeset_id=cs.id AND (
+                        sibling_op.project_id<>cs.project_id OR sibling_op.status<>'succeeded'
+                        OR sibling.id IS NULL OR sibling.status<>'succeeded'
+                        OR sibling_receipt.id IS NULL OR sibling_receipt.status<>'succeeded'))
+                AND NOT EXISTS (
+                    SELECT 1 FROM resource_receipts extra WHERE extra.changeset_id=cs.id
+                    AND NOT EXISTS (SELECT 1 FROM changeset_operations linked
+                        WHERE linked.id=extra.operation_id AND linked.changeset_id=cs.id
+                          AND linked.project_id=cs.project_id AND extra.project_id=cs.project_id)))
+              AND NOT (
+                cs.status='deadlettered'
+                AND EXISTS (SELECT 1 FROM events e WHERE e.project_id=cs.project_id
+                    AND e.entity_type='changeset' AND e.entity_id=cs.id
+                    AND e.event_type='changeset.not_dispatched'
+                    AND e.data->>'code'='provider_not_dispatched')
+                AND NOT EXISTS (
+                    SELECT 1 FROM changeset_operations sibling_op
+                    LEFT JOIN resource_receipts sibling ON sibling.operation_id=sibling_op.id
+                        AND sibling.changeset_id=cs.id AND sibling.project_id=cs.project_id
+                    LEFT JOIN receipts sibling_receipt ON sibling_receipt.id=sibling.receipt_id
+                        AND sibling_receipt.project_id=cs.project_id
+                    WHERE sibling_op.changeset_id=cs.id AND (
+                        sibling_op.project_id<>cs.project_id OR sibling_op.status<>'failed'
+                        OR sibling.id IS NULL OR sibling.status<>'failed'
+                        OR sibling_receipt.id IS NULL OR sibling_receipt.status<>'failed'
+                        OR COALESCE(sibling.error->>'code','')<>'provider_not_dispatched'
+                        OR COALESCE(sibling_receipt.error->>'code','')<>'provider_not_dispatched'))
+                AND NOT EXISTS (
+                    SELECT 1 FROM resource_receipts extra WHERE extra.changeset_id=cs.id
+                    AND NOT EXISTS (SELECT 1 FROM changeset_operations linked
+                        WHERE linked.id=extra.operation_id AND linked.changeset_id=cs.id
+                          AND linked.project_id=cs.project_id AND extra.project_id=cs.project_id)))
+            LIMIT 1
+        """)
+        row = connection.execute(query, {"p": project_id}).mappings().first()
+        if not row:
+            return None
+        locked = connection.execute(text(
+            "SELECT pg_try_advisory_xact_lock(hashtextextended('boss-budget:' || :p, 0))"),
+            {"p": project_id}).scalar_one()
+        if not locked:
+            return {"status": "denied", "refusal": "admission_busy", "transient": True,
+                    "retry_after_seconds": 1, "decision_id": None, "budget_state": "unknown",
+                    "message": ADMISSION_BUSY_MESSAGE, "legacy_exposure": dict(row)}
+        # A settlement may have committed while the admission lock was acquired.
+        row = connection.execute(query, {"p": project_id}).mappings().first()
+        if not row:
+            return None
+        evidence = dict(row)
+        decision = connection.execute(text(
+            "SELECT id,status FROM decisions WHERE project_id=:p "
+            "AND recommendation->>'action'='reconcile_legacy_provider_exposure' "
+            "AND recommendation->>'resource_receipt_id'=:i LIMIT 1"),
+            {"p": project_id, "i": row['resource_receipt_id']}).mappings().first()
+        if decision:
+            decision_id = decision['id']
+            if decision['status'] != 'pending':
+                connection.execute(text("UPDATE decisions SET status='pending',resolution_note=NULL,updated_at=now() WHERE id=:id"),
+                                   {"id": decision_id})
+                emit_event(connection, project_id, 'budget.legacy_reconciliation_reopened', 'budget_governor',
+                           'decision', decision_id, {"resource_receipt_id": row['resource_receipt_id']})
+        else:
+            decision_id = create_blocking_decision(
+                connection, project_id, None, "Reconcile historical unresolved provider exposure before paid work",
+                {"action": "reconcile_legacy_provider_exposure", **evidence},
+                {"original_estimate_usd_micros": int(row['original_estimate_usd_micros']), "actual_cost_known": False},
+                "legacy_provider_outcome_unknown")
+            emit_event(connection, project_id, 'budget.legacy_reconciliation_required', 'budget_governor',
+                       'budget_reservation', row['reservation_id'], {"decision_id": decision_id, **evidence})
+        return {"status": "denied", "refusal": "legacy_reconciliation_required", "transient": False,
+                "decision_id": decision_id, "budget_state": "unknown", "legacy_exposure": evidence,
+                "message": "Paid work is held for historical unresolved provider exposure. Reconcile the recorded attempt; raising a cap or resolving this decision alone does not authorize new spend."}
+
     def expire_stale_reservations(
         self, connection: Connection, project_id: Optional[str] = None
     ) -> list[str]:
@@ -322,6 +504,14 @@ class BudgetGovernor:
         `periods` carries both. `now` is injectable so a test can stand on either side of a
         reset."""
         now = now or now_utc()
+        legacy_hold = self.legacy_model_reconciliation(connection, project_id)
+        legacy_summary = ({**legacy_hold['legacy_exposure'], 'decision_id': legacy_hold['decision_id'],
+                           'message': "Paid work is held for historical unresolved model exposure. The original estimate is not an invoice; reconcile the recorded attempt."}
+                          if legacy_hold else None)
+        provider_hold = self.legacy_provider_reconciliation(connection, project_id)
+        provider_summary = ({**provider_hold['legacy_exposure'], 'decision_id': provider_hold['decision_id'],
+                             'message': "Paid work is held for an earlier provider attempt that may have been accepted. The original estimate is not an invoice; reconcile the specific provider outcome."}
+                            if provider_hold else None)
         self.expire_stale_reservations(connection, project_id)
         policy_row = connection.execute(
             text(
@@ -369,6 +559,8 @@ class BudgetGovernor:
                 "resets_at_label": day["resets_at_label"],
                 "budget_timezone": BUDGET_TIMEZONE,
                 "periods": {},
+                "legacy_financial_hold": legacy_summary,
+                "legacy_provider_hold": provider_summary,
             }
 
         soft = float(policy_row["soft_cap_pct"])
@@ -524,6 +716,8 @@ class BudgetGovernor:
             "resets_in_seconds": binding["resets_in_seconds"],
             "budget_timezone": BUDGET_TIMEZONE,
             "periods": periods,
+            "legacy_financial_hold": legacy_summary,
+            "legacy_provider_hold": provider_summary,
         }
 
     def cap_refusal(self, snapshot: dict, amount_usd_micros: int) -> Optional[dict[str, Any]]:
@@ -923,6 +1117,14 @@ class BudgetGovernor:
             return refused
         self.expire_stale_reservations(connection, project_id)
         snapshot = self.status_for_project(connection, project_id)
+        if amount_usd_micros > 0 and (snapshot.get('legacy_financial_hold') or snapshot.get('legacy_provider_hold')):
+            hold = snapshot.get('legacy_financial_hold') or snapshot['legacy_provider_hold']
+            refused = {"status": "denied", "refusal": "legacy_reconciliation_required", "transient": False,
+                       "decision_id": hold['decision_id'], "budget_state": snapshot['budget_state'],
+                       "message": hold['message']}
+            record_refusal(connection, project_id, refused, category=category, reason=reason,
+                           amount_usd_micros=amount_usd_micros, snapshot=snapshot)
+            return refused
 
         # BOSS-280: freeze_tier2_pct, actually enforced. Past the threshold, HIGH-RISK work
         # (tier >= 2) is refused even while cheaper/lower-risk work still fits under the cap —
@@ -1544,6 +1746,9 @@ class BudgetGovernor:
         ).mappings().first()
 
         if not row or row["status"] != "active" or row["expires_at"] <= now_utc():
+            return None
+        if row['amount_usd_micros'] > 0 and (self.legacy_model_reconciliation(connection, project_id)
+                or self.legacy_provider_reconciliation(connection, project_id)):
             return None
         return dict(row)
 

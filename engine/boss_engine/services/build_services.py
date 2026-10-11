@@ -47,6 +47,10 @@ ENDING. The run's own ``finally`` drops the database (WITH FORCE: open sessions 
 the role. A run whose process died never gets there: the resource reaper (``reap``) drops any
 database/role of this prefix and install whose run is no longer live and that is older than a
 grace period. Each database is also an ``owned_resources`` row (kind ``build_database``).
+If DROP succeeds but its ledger update fails, a new reaper process can reconcile an open
+row after proving both database and role absent on the same configured server. Rows alone
+never authorize DROP. Ledger recording is best effort: unwritten rows cannot be recovered
+after both catalog ownership comments are gone.
 
 UNAVAILABLE IS SAID, NEVER PAPERED OVER. A run that asked for Postgres when no server is
 configured, the server is unreachable, or the run's commands cannot reach a network (the docker
@@ -391,6 +395,9 @@ _LEASES: dict[str, PostgresLease] = {}
 # Ended runs stop receiving credentials immediately; failed deletion remains retryable.
 _PENDING_CLEANUP: dict[str, PostgresLease] = {}
 _LOCK = threading.Lock()
+_LEDGER_SCAN_BATCH = 100
+_LEDGER_SCAN_CURSORS: dict[tuple[str, str], tuple[Any, str]] = {}
+_LEDGER_SCAN_ENDPOINTS = 16
 
 
 def _run_endpoint(srv: _Server) -> tuple[str, int]:
@@ -471,7 +478,8 @@ def provision(run_id: str, *, install: str = "", server_url: Optional[str] = Non
         from . import resource_ledger
 
         resource_ledger.record(RESOURCE_KIND, lease.ledger_handle, owner=owner,
-                               meta={"database": name, "service": "postgres"})
+                               meta={"database": name, "service": "postgres",
+                                     "install": install or ""})
     _log.info("build-services run=%s %s", run_id, lease.describe())
     return lease
 
@@ -551,6 +559,99 @@ def brief(lease: Optional[PostgresLease]) -> str:
 
 
 # --------------------------------------------------------------------------------- reaping
+def _reconcile_absent_ledger_entries(conn: Any, srv: _Server, *, live: set[str], mine: set[str],
+                                    install: str, pre: str, min_age: float,
+                                    skip: set[str]) -> dict[str, Any]:
+    """Recover a lost ledger retry after restart, without gaining DROP authority."""
+    from . import owned_process, resource_ledger
+
+    ledger = owned_process.ledger()
+    if not isinstance(ledger, resource_ledger.DbLedger):
+        return {}
+    endpoint = f"pg:{srv.host}:{srv.port}/"
+    scope = (endpoint + pre, install)
+    with _LOCK:
+        after = _LEDGER_SCAN_CURSORS.get(scope)
+    try:
+        page = ledger.open_resources(RESOURCE_KIND, endpoint + pre,
+                                     limit=_LEDGER_SCAN_BATCH + 1, after=after)
+    except Exception as exc:  # noqa: BLE001 — no SQL text, credentials or exception message
+        _log.warning("build-services ledger reconciliation pending (%s)", type(exc).__name__)
+        return {"ledger_cleanup_error": type(exc).__name__}
+    more = len(page) > _LEDGER_SCAN_BATCH
+    rows = page[:_LEDGER_SCAN_BATCH]
+    reconciled: list[str] = []
+    pending: list[str] = []
+    kept = 0
+    now = time.time()
+    for row in rows:
+        handle = row["handle"]
+        name = handle.removeprefix(endpoint)
+        if name in skip:
+            continue
+        meta = row["meta"]
+        owners = row["owner_chain"]
+        # A row in this install's ledger is only a retry candidate. Unknown
+        # owner/age/metadata remains held; the exact namespace cannot broaden.
+        if (not re.fullmatch(re.escape(pre) + r"[0-9a-f]{16}", name)
+                or not isinstance(meta, dict) or meta.get("database") != name
+                or meta.get("service") != "postgres"
+                or (install and meta.get("install") and meta["install"] != install)
+                or not row["owner_id"] or not isinstance(owners, (list, tuple))
+                or any(not isinstance(owner, str) or not owner for owner in owners)
+                or not (row["owner_kind"] == "code_run" or
+                        (row["owner_kind"] in ("sandbox", "review_seat") and owners))):
+            kept += 1
+            continue
+        try:
+            age = now - row["created_at"].timestamp()
+        except (AttributeError, TypeError, ValueError, OverflowError):
+            kept += 1
+            continue
+        if age < min_age or name in mine or live.intersection([row["owner_id"], *owners]):
+            kept += 1
+            continue
+        try:
+            present = conn.execute(
+                "SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname=%s), "
+                "EXISTS(SELECT 1 FROM pg_roles WHERE rolname=%s)", (name, name),
+            ).fetchone()
+            if present != (False, False):
+                kept += 1
+                continue
+            changed = ledger.release_owned_row(row["id"], RESOURCE_KIND, handle,
+                                               "reconciled_absent")
+            if changed != 1:
+                raise BuildServicesUnavailable("ledger row changed during reconciliation")
+        except Exception as exc:  # noqa: BLE001 — absence/read/write failure stays durable
+            pending.append(name)
+            _log.warning("build-services ledger cleanup pending for %s (%s)",
+                         name, type(exc).__name__)
+            continue
+        reconciled.append(name)
+    result: dict[str, Any] = {}
+    # Advance past held/failed rows, then wrap after the final page. Durable rows
+    # remain the retry record; losing this bounded in-memory cursor only restarts
+    # the scan. An old live/ambiguous row cannot permanently starve later rows.
+    with _LOCK:
+        if more:
+            if scope not in _LEDGER_SCAN_CURSORS and len(_LEDGER_SCAN_CURSORS) >= _LEDGER_SCAN_ENDPOINTS:
+                _LEDGER_SCAN_CURSORS.pop(next(iter(_LEDGER_SCAN_CURSORS)))
+            _LEDGER_SCAN_CURSORS[scope] = (rows[-1]["created_at"], rows[-1]["id"])
+        else:
+            _LEDGER_SCAN_CURSORS.pop(scope, None)
+    if rows or after is not None:
+        result["ledger_scan"] = {"scanned": len(rows), "limit": _LEDGER_SCAN_BATCH, "more": more}
+    if reconciled:
+        result["reconciled"] = reconciled
+        _log.info("build-services reconciled %d absent database ledger row(s)", len(reconciled))
+    if pending:
+        result["ledger_pending"] = pending
+    if kept:
+        result["ledger_kept"] = kept
+    return result
+
+
 def reap(live_run_ids: Iterable[str], *, install: str = "", server_url: Optional[str] = None,
          min_age: float = REAP_MIN_AGE_SECONDS) -> dict[str, Any]:
     """Drop every database/role of this prefix (and install) whose run is not live and that is
@@ -563,6 +664,7 @@ def reap(live_run_ids: Iterable[str], *, install: str = "", server_url: Optional
         return {"dropped": [], "kept": "unknown liveness"}
     live_tags = {run_tag(r) for r in live}
     with _LOCK:
+        live |= set(_LEASES)
         live_tags |= {run_tag(r) for r in _LEASES}
         mine = {lease.name for lease in _LEASES.values()}
     pre = prefix()
@@ -624,9 +726,14 @@ def reap(live_run_ids: Iterable[str], *, install: str = "", server_url: Optional
                              "the reaper will retry", name, type(exc).__name__)
                 continue
             dropped.append(name)
+        reconciliation = _reconcile_absent_ledger_entries(
+            conn, srv, live=live, mine=mine, install=install, pre=pre,
+            min_age=min_age, skip=set(dropped + failed),
+        )
+        failed.extend(reconciliation.pop("ledger_pending", []))
     if dropped:
         _log.info("build-services reaped %d orphaned database(s): %s", len(dropped), dropped)
-    return {"dropped": dropped, "pending": failed}
+    return {"dropped": dropped, "pending": failed, **reconciliation}
 
 
 def reap_tick(engine: Any) -> dict[str, Any]:

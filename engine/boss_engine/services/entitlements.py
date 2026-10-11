@@ -2038,6 +2038,10 @@ class EntitlementBrokerService:
             # and no other. Every policy check below still applies to it.
             if only_source_id and source["source_id"] != only_source_id:
                 continue
+            if (self._connection_metadata(source).get("proof_only")
+                    and not (skill_id == "connection.proof" and only_source_id == source["source_id"])):
+                self._reject_source(rejected_sources, source, "source_reserved_for_connection_proof")
+                continue
             # A decisions-only source (TypeSafe Jev) cannot write code; never offer it for
             # anything but a typed decision, however cheap it scores.
             if (self._connection_metadata(source).get("decisions_only")

@@ -17,7 +17,7 @@ The command output and messages quoted below were recorded on a fresh Ubuntu 24.
 ## What you need
 
 - An Ubuntu 22.04 or 24.04, or Debian 12 or 13, machine with `curl` and `sudo`. macOS with Docker Desktop also works; see the [Quickstart](QUICKSTART.md#before-you-begin) for the full list.
-- About 100 GB of free disk. The installer warns below 80 GB.
+- About 100 GB of working disk capacity is recommended, not a hard minimum; actual needs vary. The installer builds one service image at a time and warns below about 80 GB free. Install files and Docker images can live on different filesystems. Docker Desktop or remote-daemon free space may be unknown to the installer; check that Docker store separately.
 - A GitHub account and a repository that BOSS is allowed to push to. BOSS writes code on a branch and opens a pull request. It does not build into a local folder, so step 6 cannot finish without a repository.
 - A model. If you have no API key or subscription, the installer can set up a free local model with Ollama.
 
@@ -195,12 +195,12 @@ The jobs BOSS set (**Build**, **Review**, **Hard problems**, and **Routine work*
 
 ## 4. Connect a GitHub repository
 
-BOSS writes code on a branch named `boss/code/...` and opens a pull request. It never pushes to your default branch. It needs a repository that already exists and a token that can push branches and open pull requests in it.
+BOSS writes code on a branch named `boss/code/...` and opens a pull request. It never pushes to your default branch. It needs a repository that already exists and GitHub access that can push branches and open pull requests in it.
 
 1. On GitHub, create a repository for BOSS to build in. Tick **Add a README file** so the repository has a default branch.
-2. In Mission Control, open **Settings → Repo and models**. Until setup is finished it is a three-step page: **1 Repository**, **2 Model**, **3 Try it**.
-3. In **Repository**, press **Create token ↗**. GitHub opens a new fine-grained token with **Contents** and **Pull requests** already set to *Read and write*. Under **Repository access** choose *Only select repositories* and pick the repository (for an organization's repository, pick the organization as the owner first), then generate the token and copy it. GitHub shows it once.
-4. Paste the token into **Paste token**. BOSS shows **Signed in as @you** and lists the repositories the token can see. Pick one and press **Connect**.
+2. In Mission Control, open **Settings → Repo and models**. Until setup is finished it is a three-step page: **1 Repository**, **2 Models**, **3 Try it**.
+3. In **GitHub access**, use the recommended **GitHub App**. Press **Create GitHub App**, finish GitHub's steps, install it on the account and repositories you want, then return to BOSS. On a fresh setup, **Other ways** contains personal access and the fine-grained token alternative.
+4. In **Repository**, choose the connected App and pick a repository. For token access, use **Create token ↗**, grant **Contents** and **Pull requests** *Read and write* for only the repositories you select, then paste the token. Pick a repository and press **Connect**.
 5. BOSS runs three checks against the repository — **Read**, **Write** (a blob nothing references, so no branch moves and no CI runs) and **Pull requests** (asking to open one for a branch that does not exist, so none is created) — and the row says **Working**.
 
 **Check that it worked:** the Repository row reads **Working** with **Read ✓ Write ✓ Pull requests ✓**, and `boss doctor` reports the repository.
@@ -236,7 +236,7 @@ A project in Mission Control is one piece of software you want built. Each one r
 
 3. Press **Build →** (or Ctrl+Enter, ⌘+Enter on a Mac). The hint under the button reads "Down the governed path — a panel, a PRD you approve, then code". BOSS replies **Started.** and opens the run on the **Workflow** page.
 
-The **+ New project** button in the top bar does the same thing as a four-step form: **What you are building**, **How it gets built**, **Where it lives**, and **Review**. Leave **Which path should it take?** at the default. In **Where it lives**, pick the repository you connected in step 4. If none is connected, the form says a build needs one and links to the **Repository** card. Then press **Start the project**.
+The **+ New build** button opens a single form. Choose **New app**, enter a **Brief**, and add checks under **Done when**. Review the **Workflow** and **Repository**, then press **Start the project**. To extend an app BOSS has already built, choose **Add a feature**. If setup is incomplete, **Setup needed** lists the missing requirements; **Setup details** explains each fix and **Open setup** takes you to it. Starting spends model budget, and the form shows the approval steps before you start.
 
 ### From a terminal instead
 
@@ -293,7 +293,7 @@ blindly restart research or assume the held budget has been released.
 
 ## 7. Review the pull request and run the software
 
-When the build step finishes, Factory shows the task as done with a link to the pull request, and a merge approval appears in **Approvals**: "Approve code change: <title> (PR #N)". BOSS does not merge on its own.
+When the build step finishes, Factory shows the task as done with a link to the pull request, and a merge approval appears in **Approvals**: `Approve code change: <title> (PR #N)`. BOSS does not merge on its own.
 
 Before you approve, review:
 

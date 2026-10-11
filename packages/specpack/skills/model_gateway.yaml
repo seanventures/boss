@@ -171,3 +171,29 @@ skills:
       requires_budget_reservation: true
       requires_review_packet: true
       requires_provider_rule_compliance: true
+
+  - id: connection.proof
+    kind: model
+    risk_tier: 1
+    mock_mode: false
+    description: Prove one explicitly selected encrypted candidate connection on a committed reservation, worker/model lease and receipt; unknown acceptance requires reconciliation.
+    data_boundary: internal
+    input_schema:
+      intent: string
+      provider: string
+    output_schema:
+      ok: boolean
+      receipt_id: string
+    cost:
+      estimator: fixed
+      category: model
+    permissions:
+      allowed_callers: [control_plane]
+      required_permissions: [model_invoke]
+    policy:
+      requires_budget_reservation: true
+      requires_router_log: true
+      requires_provider_rule_compliance: true
+    retry:
+      max_attempts: 1
+      backoff: none

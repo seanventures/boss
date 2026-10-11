@@ -218,13 +218,13 @@ export function SetupBoard({ projectId, actor, initialView = null }: {
                }}
                title="Describe one small change; BOSS opens a pull request on your repository."
                data-tip="Describe one small change; BOSS opens a pull request on your repository.">
-              Next: open your first PR
+              Next: open a PR
             </a>
           ) : view.ready ? (
             <a className="su-link" href="?area=skills&setup=1" data-testid="su-next-skills"
                title="Choose what your agents can do: research, tickets, email."
                data-tip="Choose what your agents can do: research, tickets, email.">
-              Next: give your crew skills
+              Next: add skills
             </a>
           ) : null}
           <span className="su-spacer" />
@@ -239,15 +239,19 @@ export function SetupBoard({ projectId, actor, initialView = null }: {
             Test all
           </GatedButton>
         </header>
-        <RepositoryRow ref={ref("repository")} mode={rowMode(view, "repository")}
-                       step={stepNumber(view, "repository")} focused={focus === "repository"} />
-        <GitHubAccessRow />
+        {!view.repository.repos.length ? (
+          <GitHubAccessRow ref={ref("repository")} focused={focus === "repository"} />
+        ) : null}
+        <RepositoryRow ref={view.repository.repos.length ? ref("repository") : undefined} mode={rowMode(view, "repository")}
+                       step={stepNumber(view, "repository")} focused={focus === "repository" && view.repository.repos.length > 0} />
+        {view.repository.repos.length ? <GitHubAccessRow /> : null}
         <BuildDatabaseRow />
         <ModelsRow ref={ref("models")} mode={rowMode(view, "models")}
-                   step={stepNumber(view, "models")} focused={focus === "models"}
+                   step={stepNumber(view, "models")} focused={focus === "models" || focus === "capacity"}
                    add={params.add} source={params.source}
-                   onAddHandled={() => setParams((p) => ({ ...p, add: null }))} />
-        <CapacityRow ref={ref("capacity")} actor={actor} focused={focus === "capacity"} />
+                   onAddHandled={() => setParams((p) => ({ ...p, add: null }))}>
+          <CapacityRow ref={ref("capacity")} actor={actor} focused={focus === "capacity"} />
+        </ModelsRow>
         {/* Model routing — where "Who does what" lived; its rows are "Pin a job" inside. */}
         <RoutingRow ref={ref("jobs")} mode={rowMode(view, "jobs")} focused={focus === "jobs"} />
         <BudgetRow ref={ref("budget")} mode={rowMode(view, "budget")} focused={focus === "budget"} />

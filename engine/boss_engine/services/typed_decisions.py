@@ -61,6 +61,17 @@ class TypedDecisionGovernanceHold(RuntimeError):
     """A workflow must not spend before its model authority is durable."""
 
 
+class TypeSafeAuthenticationRefused(RuntimeError):
+    """A single TypeSafe request returned its documented authentication refusal.
+
+    This is evidence of nonacceptance, not a provider invoice. Only the adapter's
+    observed 401 response may produce it; error text and other statuses cannot.
+    """
+
+    def __init__(self):
+        super().__init__("TypeSafe 401: authentication refused")
+
+
 class Decider(Protocol):
     def decide(self, context: str, questions: list[Question]) -> DecisionBatch: ...
 
@@ -150,9 +161,32 @@ class TypeSafeDecider:
                     time.sleep(float(resp.headers.get("retry-after") or 2 ** attempt))
                     continue
                 if resp.status_code >= 400:
-                    raise RuntimeError(f"TypeSafe {resp.status_code}: {resp.text[:300]}")
-                return resp.json()
+                    # https://docs.typesafe.ai/api documents 401 as missing/invalid
+                    # credentials. Only a single-attempt call proves this request
+                    # was refused; earlier attempts could have unknown outcomes.
+                    if resp.status_code == 401 and self._attempts == 1:
+                        raise TypeSafeAuthenticationRefused()
+                    # A provider may echo the supplied key in an error body. Remove
+                    # its exact value before truncation, even for unrecognized formats.
+                    detail = resp.text.replace(self._key, "[SECRET]")
+                    raise RuntimeError(f"TypeSafe {resp.status_code}: {detail[:300]}")
+                try:
+                    return resp.json()
+                except (ValueError, UnicodeError) as error:
+                    raise RuntimeError(
+                        f"TypeSafe response decoding failed ({type(error).__name__})"
+                    ) from None
             raise RuntimeError("TypeSafe kept rate-limiting")
+        except TypeSafeAuthenticationRefused:
+            raise
+        except Exception as error:
+            # Transport errors can echo an unrecognized credential too. Keep
+            # ordinary error types; scrub exact-key echoes before they escape.
+            message = str(error)
+            if self._key in message:
+                safe = message.replace(self._key, "[SECRET]")
+                raise RuntimeError(f"TypeSafe {type(error).__name__}: {safe}") from None
+            raise
         finally:
             if self._client is None:
                 client.close()
@@ -166,24 +200,36 @@ class TypeSafeDecider:
         }
         started = time.monotonic()
         data = self._post(body)
-        answers = data.get("answers") or {}
-        decisions: dict[str, Decision] = {}
-        for q in questions:
-            a = answers.get(q.key) or {}
-            choice = a.get("choice")
-            if choice not in q.options:
-                decisions[q.key] = Decision(None, None, error=f"answer {choice!r} is not an option")
-                continue
-            conf = a.get("confidence")
-            decisions[q.key] = Decision(choice, float(conf) if conf is not None else None)
-        usage = data.get("usage") or {}
-        # $0.042 per million input tokens, output free (docs.typesafe.ai/models.md). An
-        # estimate: the bill is TypeSafe's, and their price can change.
-        cost = int(round(int(usage.get("input_tokens") or 0) * 0.042))
-        return DecisionBatch(decisions=decisions, backend=self.backend,
-                             model=str(data.get("model") or self.model),
-                             latency_ms=int((time.monotonic() - started) * 1000),
-                             cost_usd_micros=cost, usage=usage)
+        try:
+            answers = data.get("answers") or {}
+            decisions: dict[str, Decision] = {}
+            for q in questions:
+                a = answers.get(q.key) or {}
+                choice = a.get("choice")
+                if choice not in q.options:
+                    detail = f"answer {choice!r} is not an option".replace(self._key, "[SECRET]")
+                    decisions[q.key] = Decision(None, None, error=detail)
+                    continue
+                conf = a.get("confidence")
+                decisions[q.key] = Decision(choice, float(conf) if conf is not None else None)
+            usage = data.get("usage") or {}
+            # $0.042 per million input tokens, output free (docs.typesafe.ai/models.md). An
+            # estimate: the bill is TypeSafe's, and their price can change.
+            # Omitted or malformed usage is not evidence of zero billed tokens.
+            input_tokens = usage.get("input_tokens")
+            known_input = (isinstance(input_tokens, int) and not isinstance(input_tokens, bool)
+                           and input_tokens >= 0)
+            cost = int(round(input_tokens * 0.042)) if known_input else None
+            return DecisionBatch(decisions=decisions, backend=self.backend,
+                                 model=str(data.get("model") or self.model),
+                                 latency_ms=int((time.monotonic() - started) * 1000),
+                                 cost_usd_micros=cost, usage=usage)
+        except (AttributeError, TypeError, ValueError, OverflowError) as error:
+            # Parsed values can also echo a credential (for example a malformed
+            # confidence). Report the parser category without retaining its body.
+            raise RuntimeError(
+                f"TypeSafe response parsing failed ({type(error).__name__})"
+            ) from None
 
 
 def _typesafe_key(settings: Settings) -> Optional[str]:
@@ -295,7 +341,12 @@ class ClaudeDecider:
         cost, usage, decisions = 0, {}, {}
         for _ in range(self._attempts):
             _, text, usage = self._adapter.create_text_response(prompt)
-            cost += int(usage.get("cost_usd_micros") or 0)
+            reported_cost = usage.get("cost_usd_micros")
+            known_cost = (isinstance(reported_cost, int) and not isinstance(reported_cost, bool)
+                          and reported_cost >= 0)
+            # Unknown in any attempt keeps the combined cost unknown. The
+            # governed path makes one attempt and requires paid cost evidence.
+            cost = cost + reported_cost if cost is not None and known_cost else None
             decisions = _parse(text, questions)
             if all(d.answer is not None for d in decisions.values()):
                 break
