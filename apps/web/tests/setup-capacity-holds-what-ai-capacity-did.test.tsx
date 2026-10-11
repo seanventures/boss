@@ -21,7 +21,7 @@ let mounted: Mounted | null = null;
 afterEach(() => { mounted?.unmount(); mounted = null; vi.unstubAllGlobals(); });
 
 type Rec = { url: string; method: string; body: Record<string, unknown> };
-function api(view: SetupView, sources = entitlementSourcesWire()) {
+function api(view: SetupView, sources: unknown = entitlementSourcesWire(), sessions: unknown = entitlementSessionsWire(), sessionStatus = 200, sourceStatus = 200) {
   const calls: Rec[] = [];
   vi.stubGlobal("fetch", vi.fn(async (input: string | URL, init?: RequestInit) => {
     const url = String(input);
@@ -29,9 +29,12 @@ function api(view: SetupView, sources = entitlementSourcesWire()) {
     let body: Record<string, unknown> = {};
     try { body = init?.body ? JSON.parse(String(init.body)) : {}; } catch { /* none */ }
     calls.push({ url, method, body });
-    const json = (b: unknown) => new Response(JSON.stringify(b), { status: 200, headers: { "Content-Type": "application/json" } });
-    if (url.startsWith("/v1/entitlements/sources?")) return json(sources);
-    if (url.startsWith("/v1/entitlement-connection-sessions?")) return json(entitlementSessionsWire());
+    const json = (b: unknown, status = 200) => new Response(JSON.stringify(b), { status, headers: { "Content-Type": "application/json" } });
+    if (url.startsWith("/v1/entitlements/sources?")) return json(sources, sourceStatus);
+    if (url.startsWith("/v1/entitlement-connection-sessions?")) {
+      if (sessionStatus === 0) throw new Error("Network failure");
+      return json(sessions, sessionStatus);
+    }
     if (method !== "GET") return json({ ok: true });
     return json(view);
   }));
@@ -182,3 +185,172 @@ describe("Capacity on Repo and models", () => {
     });
   });
 });
+
+// Exact-ed providers.yaml auth/source metadata, projected into an absent-credential read fixture.
+// Catalog metadata is fixture data; no live provider or API is contacted.
+// A hosted gateway row is conditional on the catalog returned by the install, not Community capacity.
+const FRESH_CATALOG = [
+  {"source_id": "openai_codex_chatgpt", "source_kind": "official_cli", "auth_method": "official_cli_oauth", "connection_ref": "BOSS_OPENAI_CODEX_OAUTH_SESSION_REF", "multi_tenant_allowed": false, "supported_models": ["codex"], "provider": "openai", "oauth_scopes": ["codex.local", "codex.agentic_usage"], "connection_metadata": {"login_command": "codex login", "supported_connection_modes": ["browser_oauth"], "official_auth_surface": "Codex CLI Sign in with ChatGPT"}, "credential_ref": "BOSS_OPENAI_CODEX_OAUTH_SESSION_REF"},
+  {"source_id": "openai_api", "source_kind": "official_api", "auth_method": "api_key", "connection_ref": "OPENAI_API_KEY", "multi_tenant_allowed": true, "supported_models": ["gpt-5.2-codex", "gpt-5.2-codex-coder"], "provider": "openai", "oauth_scopes": [], "connection_metadata": {}, "credential_ref": "OPENAI_API_KEY"},
+  {"source_id": "anthropic_claude_code", "source_kind": "official_cli", "auth_method": "official_cli_oauth", "connection_ref": "BOSS_ANTHROPIC_CLAUDE_OAUTH_SESSION_REF", "multi_tenant_allowed": false, "supported_models": ["claude-sonnet", "claude-opus"], "provider": "anthropic", "oauth_scopes": ["claude_code.local", "claude_subscription_usage"], "connection_metadata": {"login_command": "claude login", "supported_connection_modes": ["browser_oauth"], "official_auth_surface": "Claude Code Pro or Max plan login"}, "credential_ref": "BOSS_ANTHROPIC_CLAUDE_OAUTH_SESSION_REF"},
+  {"source_id": "anthropic_api", "source_kind": "official_api", "auth_method": "api_key", "connection_ref": "ANTHROPIC_API_KEY", "multi_tenant_allowed": true, "supported_models": ["claude-sonnet", "claude-opus"], "provider": "anthropic", "oauth_scopes": [], "connection_metadata": {}, "credential_ref": "ANTHROPIC_API_KEY"},
+  {"source_id": "typesafe_jev", "source_kind": "official_api", "auth_method": "api_key", "connection_ref": "TYPESAFE_API_KEY", "multi_tenant_allowed": false, "supported_models": ["jev"], "provider": "typesafe", "oauth_scopes": [], "connection_metadata": {"decisions_only": true}, "credential_ref": "TYPESAFE_API_KEY"},
+  {"source_id": "google_gemini_cli", "source_kind": "official_cli", "auth_method": "official_cli_oauth", "connection_ref": "GOOGLE_GEMINI_CLI_SESSION", "multi_tenant_allowed": false, "supported_models": ["gemini-cli"], "provider": "google", "oauth_scopes": [], "connection_metadata": {"login_command": "gemini", "supported_connection_modes": ["browser_oauth"], "official_auth_surface": "Gemini CLI Sign in with Google prompt"}, "credential_ref": null},
+  {"source_id": "google_api", "source_kind": "official_api", "auth_method": "api_key", "connection_ref": "GOOGLE_API_KEY", "multi_tenant_allowed": true, "supported_models": ["gemini-pro", "gemini-flash"], "provider": "google", "oauth_scopes": [], "connection_metadata": {}, "credential_ref": "GOOGLE_API_KEY"},
+  {"source_id": "cursor_cli", "source_kind": "official_coding_agent", "auth_method": "official_cli_oauth", "connection_ref": "BOSS_CURSOR_CLI_ENABLED", "multi_tenant_allowed": false, "supported_models": ["cursor-auto", "openai", "anthropic", "google", "xai"], "provider": "cursor", "oauth_scopes": [], "connection_metadata": {"login_command": "cursor-agent login", "status_command": "cursor-agent status", "supported_connection_modes": ["browser_oauth"], "official_auth_surface": "Cursor Agent CLI browser login"}, "credential_ref": "BOSS_CURSOR_CLI_ENABLED"},
+  {"source_id": "cursor_api", "source_kind": "official_coding_agent", "auth_method": "api_key", "connection_ref": "CURSOR_API_KEY", "multi_tenant_allowed": false, "supported_models": ["cursor-auto"], "provider": "cursor", "oauth_scopes": [], "connection_metadata": {}, "credential_ref": null},
+  {"source_id": "xai_grok_build", "source_kind": "official_cli", "auth_method": "official_device_oauth", "connection_ref": "BOSS_XAI_GROK_OAUTH_SESSION_REF", "multi_tenant_allowed": false, "supported_models": ["grok-4.3", "grok-code-fast"], "provider": "xai", "oauth_scopes": ["grok_build.local", "grok_code_proxy"], "connection_metadata": {"login_command": "grok login --device-auth", "supported_connection_modes": ["browser_oidc", "device_oauth"], "official_auth_surface": "Grok Build auth.x.ai OAuth2/OIDC"}, "credential_ref": "BOSS_XAI_GROK_OAUTH_SESSION_REF"},
+  {"source_id": "xai_api", "source_kind": "official_api", "auth_method": "api_key", "connection_ref": "XAI_API_KEY", "multi_tenant_allowed": true, "supported_models": ["grok-4.3", "grok-code-fast"], "provider": "xai", "oauth_scopes": [], "connection_metadata": {}, "credential_ref": "XAI_API_KEY"},
+  {"source_id": "approved_local_model_host", "source_kind": "approved_local_model", "auth_method": "local_host", "connection_ref": "BOSS_LOCAL_MODEL_ID", "multi_tenant_allowed": false, "supported_models": ["approved-local"], "provider": "local", "oauth_scopes": [], "connection_metadata": {}, "credential_ref": "BOSS_LOCAL_MODEL_ID"},
+  {"source_id": "managed_cloud_model_gateway", "source_kind": "managed_cloud_model_gateway", "auth_method": "account_connect", "connection_ref": "BOSS_ACCOUNT_CONNECT_URL", "multi_tenant_allowed": true, "supported_models": ["managed-cloud-gateway-auto"], "provider": "boss", "oauth_scopes": [], "connection_metadata": {"required_env": ["BOSS_MANAGED_CLOUD_MODEL_GATEWAY_ENABLED", "BOSS_ACCOUNT_CONNECT_URL", "BOSS_ACCOUNT_CONNECT_TOKEN"], "execution_boundary": "boss_cloud_managed_gateway_adapter"}, "credential_ref": "BOSS_ACCOUNT_CONNECT_TOKEN"},
+];
+function freshCatalogSources(includeHosted = true) {
+  return { project_id: "p", items: FRESH_CATALOG
+    .filter((x) => includeHosted || x.source_id !== "managed_cloud_model_gateway")
+    .map((x) => ({ ...x, id: `catalog:${x.source_id}`, project_id: "p",
+      status: ["openai_api", "typesafe_jev"].includes(x.source_id) ? "missing_credentials" : "declared",
+      effective_status: ["openai_api", "typesafe_jev"].includes(x.source_id) ? "missing_credentials" : "declared",
+      connection_status: "not_connected", credential_secret_ref_id: null,
+      observed_capacity: { credential_present: false, capacity_state: "unknown" },
+    })) };
+}
+
+// Synthetic key-only records exercise absence/error cases without claiming catalog coverage.
+const unusedKeySources = (ids: string[]) => ({ project_id: "p", items: ids.map((id) => ({
+  ...entitlementSourcesWire().items[0], source_id: id, effective_status: "missing_credentials",
+  connection_status: "not_connected", observed_capacity: { credential_present: false, capacity_state: "unknown" },
+  credential_ref: "OPENAI_API_KEY", connection_ref: "OPENAI_API_KEY", credential_secret_ref_id: null as string | null,
+})) });
+async function choose(id: string) {
+  const select = q(document.body, "setup-cap-chooser") as HTMLSelectElement;
+  select.value = id;
+  await act(async () => { select.dispatchEvent(new Event("change", { bubbles: true })); });
+}
+
+describe("unused model sources", () => {
+  it("offers eleven unselected actions from the thirteen-source catalog, preserving local and account rows without a write", async () => {
+    const sources = freshCatalogSources();
+    const ids = sources.items.slice(0, 11).map(x => x.source_id);
+    const calls = api(firstRunView(), sources, { items: [] });
+    mounted = await mountBoard(firstRunView());
+    expect(q(document.body, "su-row-capacity")?.getAttribute("aria-label")).toBe("Model sources");
+    expect([...document.querySelectorAll('[data-testid="setup-cap-source"]')].map(x => x.getAttribute("data-source")))
+      .toEqual(["approved_local_model_host", "managed_cloud_model_gateway"]);
+    expect((q(document.body, "setup-cap-add") as HTMLDetailsElement).open).toBe(false);
+    const chooser = q(document.body, "setup-cap-chooser") as HTMLSelectElement;
+    expect(chooser.value).toBe("");
+    expect([...chooser.options].map(x => x.value)).toEqual(["", ...ids]);
+    expect(chooser.options[1].textContent).toBe("Codex (ChatGPT)");
+    await click(q(document.body, "setup-cap-add")?.querySelector("summary") ?? null);
+    await choose("openai_api");
+    expect([...document.querySelectorAll('[data-testid="setup-cap-source"]')].map(x => x.getAttribute("data-source"))).toEqual(["openai_api", "approved_local_model_host", "managed_cloud_model_gateway"]);
+    expect(q(src("openai_api"), "setup-cap-key-open")?.textContent).toBe("Add key");
+    expect(calls.filter(x => x.method !== "GET")).toEqual([]);
+    await click(q(src("openai_api"), "setup-cap-key-open"));
+    await type(q(src("openai_api"), "setup-cap-key"), "entered-value");
+    const field = q(src("openai_api"), "setup-cap-key");
+    await click(q(document.body, "setup-cap-add")?.querySelector("summary") ?? null);
+    await click(q(document.body, "setup-cap-add")?.querySelector("summary") ?? null);
+    await choose("anthropic_api");
+    expect(q(src("openai_api"), "setup-cap-key")).toBe(field);
+    expect((field as HTMLInputElement).value).toBe("entered-value");
+    expect(calls.filter(x => x.method !== "GET")).toEqual([]);
+  });
+
+  for (const id of ["openai_codex_chatgpt", "anthropic_claude_code", "google_gemini_cli", "cursor_cli", "xai_grok_build"]) {
+    it(`catalog OAuth chooser preserves ${id} sign-in modes and scope controls without incidental writes`, async () => {
+      const sources = freshCatalogSources();
+      const expected = sources.items.find(x => x.source_id === id)!;
+      const calls = api(firstRunView(), sources, { items: [] });
+      mounted = await mountBoard(firstRunView());
+      await click(q(document.body, "setup-cap-add")?.querySelector("summary") ?? null);
+      await choose(id);
+      const row = src(id);
+      expect(q(row, "setup-cap-key-open")).toBeNull();
+      expect(q(row, "setup-cap-start-open")?.textContent).toBe("Sign in");
+      expect(calls.filter(x => x.method !== "GET")).toEqual([]);
+      await click(q(row, "setup-cap-start-open"));
+      const form = q(row, "setup-cap-start-form")!;
+      const modes = form.querySelector('[aria-label="Login"]') as HTMLSelectElement;
+      const scopes = form.querySelector('[aria-label="Scopes"]') as HTMLInputElement;
+      expect([...modes.options].map(x => x.value)).toEqual(expected.connection_metadata.supported_connection_modes);
+      expect(scopes.value).toBe(expected.oauth_scopes.join(", "));
+      expect(calls.filter(x => x.method !== "GET")).toEqual([]);
+      if (id === "xai_grok_build") {
+        modes.value = "device_oauth";
+        await act(async () => { modes.dispatchEvent(new Event("change", { bubbles: true })); });
+      }
+      expect(calls.filter(x => x.method !== "GET")).toEqual([]);
+      await click(q(row, "setup-cap-start"));
+      expect(calls.filter(x => x.method !== "GET")).toEqual([{
+        url: `/v1/entitlements/sources/${id}/connection-sessions`, method: "POST",
+        body: { project_id: "p", connection_mode: id === "xai_grok_build" ? "device_oauth" : "browser_oauth",
+          requested_scopes: expected.oauth_scopes, actor: "ceo" },
+      }]);
+    });
+  }
+
+  it("does not add hosted capability when the returned catalog omits its gateway", async () => {
+    api(firstRunView(), freshCatalogSources(false), { items: [] });
+    mounted = await mountBoard(firstRunView());
+    const chooser = q(document.body, "setup-cap-chooser") as HTMLSelectElement;
+    expect(chooser.options).toHaveLength(12); // Empty choice plus eleven key/OAuth actions.
+    expect([...chooser.options].map(x => x.value)).not.toContain("managed_cloud_model_gateway");
+    expect([...document.querySelectorAll('[data-testid="setup-cap-source"]')].map(x => x.getAttribute("data-source")))
+      .toEqual(["approved_local_model_host"]);
+  });
+
+  it("keeps unknown fields, connection states, credentials, models, blocked status and reported capacity visible", async () => {
+    const ids = ["missing-field", "unknown", "connected", "key", "model", "blocked", "unsupported", "limited", "failed", "stored-secret", "no-action", "normal"];
+    const sources = unusedKeySources(ids);
+    sources.items[0].observed_capacity = {} as typeof sources.items[0]["observed_capacity"];
+    sources.items[1].effective_status = "unknown";
+    sources.items[2].connection_status = "connected";
+    sources.items[3].observed_capacity.credential_present = true;
+    sources.items[5].effective_status = "blocked";
+    sources.items[6].effective_status = "unsupported";
+    sources.items[7].observed_capacity.capacity_state = "limited";
+    sources.items[8].connection_status = "failed";
+    sources.items[9].credential_secret_ref_id = "secret-id";
+    sources.items[10].auth_method = "none";
+    const view = firstRunView();
+    view.models = [{ ...board().models[0], source_id: "model" }];
+    api(view, sources, { items: [] });
+    mounted = await mountBoard(view);
+    expect([...document.querySelectorAll('[data-testid="setup-cap-source"]')].map(x => x.getAttribute("data-source"))).toEqual(ids.slice(0, -1));
+    expect(q(src("model"), "setup-cap-replace")).not.toBeNull();
+  });
+
+  for (const failure of ["failed", "network failure", "malformed", "full page"] as const) {
+    it(`${failure} session reads never hide sources or claim None on failure`, async () => {
+      const sources = unusedKeySources(["unused"]);
+      const sessions = failure === "full page" ? { items: Array.from({ length: 20 }, (_, i) => ({
+        ...entitlementSessionsWire().items[0], id: `s${i}`, source_id: "other",
+      })) } : failure === "malformed" ? {} : { items: [] };
+      api(firstRunView(), sources, sessions, failure === "failed" ? 503 : failure === "network failure" ? 0 : 200);
+      mounted = await mountBoard(firstRunView());
+      expect(src("unused")).not.toBeNull();
+      expect(q(document.body, "setup-cap-add")).toBeNull();
+      if (failure !== "full page") expect(q(document.body, "setup-entitlement-session")?.textContent).toContain("Can't load sessions");
+    });
+  }
+
+  it("a failed source read cannot create an unused chooser", async () => {
+    api(firstRunView(), unusedKeySources(["unused"]), { items: [] }, 200, 503);
+    mounted = await mountBoard(firstRunView());
+    expect(q(document.body, "setup-entitlements")?.textContent).toContain("Can't load model sources");
+    expect(q(document.body, "setup-cap-add")).toBeNull();
+  });
+
+  it("keeps pending, failed, expired and completion sessions beside their sources", async () => {
+    const states = ["pending", "failed", "expired", "operator_action_required"];
+    const sources = unusedKeySources(states);
+    api(firstRunView(), sources, { items: states.map(status => ({ ...entitlementSessionsWire().items[0], id: status, source_id: status, status })) });
+    mounted = await mountBoard(firstRunView());
+    expect(document.querySelectorAll('[data-testid="setup-cap-source"]')).toHaveLength(4);
+    expect(document.querySelectorAll('[data-testid="setup-cap-session-row"]')).toHaveLength(4);
+    expect(q(src("operator_action_required"), "setup-cap-complete")).not.toBeNull();
+    expect(q(document.body, "setup-cap-add")).toBeNull();
+  });
+});
+function firstRunView(): SetupView { const view = board(); view.models = []; return view; }
