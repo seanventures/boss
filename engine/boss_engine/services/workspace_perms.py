@@ -192,3 +192,22 @@ def tidies_workspace(fn: Callable[..., Any]) -> Callable[..., Any]:
 
     run_role.__boss_tidies_workspace__ = True  # type: ignore[attr-defined]
     return run_role
+
+
+def tidies_after_command(fn: Callable[..., Any]) -> Callable[..., Any]:
+    """For a sandbox's `run(command, ...)`: after EVERY command (install, build, the test run),
+    the workspace is normalized, as an agent turn's is. A Playwright run leaves test-results/
+    readable only by the sandbox uid, and BOSS then crashed reading it three times in a row
+    (node_modules/.bin, test-results/.last-run.json, test-results/go.mod)."""
+
+    @functools.wraps(fn)
+    def run(self, *args, **kwargs):
+        try:
+            return fn(self, *args, **kwargs)
+        finally:
+            with contextlib.suppress(Exception):
+                if getattr(self, "path", None):
+                    normalize(self.path)
+
+    run.__boss_tidies_after_command__ = True  # type: ignore[attr-defined]
+    return run

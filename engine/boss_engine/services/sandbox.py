@@ -239,6 +239,20 @@ class DiffSummary:
     paths: list[str] = field(default_factory=list)
 
 
+
+def _tidies_after_command(fn):
+    """workspace_perms.tidies_after_command, imported late (no import cycle at module load)."""
+    import functools
+
+    @functools.wraps(fn)
+    def run(self, *args, **kwargs):
+        from .workspace_perms import tidies_after_command
+        return tidies_after_command(fn)(self, *args, **kwargs)
+
+    run.__boss_tidies_after_command__ = True
+    return run
+
+
 class EphemeralSandbox:
     """One isolated clone per task. Use as a context manager so the working tree
     is always torn down, even on failure::
@@ -516,6 +530,7 @@ class EphemeralSandbox:
         self.path = None
 
     # -- commands -----------------------------------------------------------
+    @_tidies_after_command
     def run(self, command: str, *, timeout: Optional[int] = None, cwd: Optional[str] = None,
             env: Optional[dict[str, str]] = None) -> CommandResult:
         """Run an allowlisted build/test command inside the sandbox cwd (or an app subdir).
