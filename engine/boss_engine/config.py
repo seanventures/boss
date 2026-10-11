@@ -1102,6 +1102,11 @@ class Settings(BaseSettings):
     # but too few for APP-SCALE work (scaffolding a whole Vite/React app is more file-writes than
     # that) — a too-low cap surfaces as error_max_turns and fails the task. 90 fits real app tasks.
     code_agent_max_turns: int = Field(default=90, alias="BOSS_CODE_AGENT_MAX_TURNS")
+    # THE CAPTAIN'S OWN IMPROVE PASSES are opt-in (first-run walk, 2026-10-10): right after a new
+    # install's first PR the Captain started "QUALITY IMPROVE PASS" builds nobody asked for, each
+    # one real model spend. 0 = the Captain proposes, never starts one; Govern turns it on per
+    # project (project_settings `captain_auto_improve`). Installs that predate this keep theirs on.
+    captain_auto_improve: int = Field(default=0, alias="BOSS_CAPTAIN_AUTO_IMPROVE")
     # Turn cap for the MICRO-VM GUEST agent (a separate limit from the host cap above). BOSS sends
     # this in the sandbox submit contract; the sandbox-service must honor it to take effect (else it
     # falls back to the service's own ~40 default). Higher lets app-scale tasks finish.

@@ -121,7 +121,7 @@ describe("every route handler GET that reaches a twin writes it through apiWrite
   });
   it("instrumentation.ts takes a write's origin from forwardedWriteOrigin, not the raw header", () => {
     const src = readFileSync(join(WEB, "instrumentation.ts"), "utf8");
-    expect(src).toMatch(/const origin = forward\.forwardedWriteOrigin\(incoming\)/);
+    expect(src).toMatch(/const origin = forward\.forwardedWriteOrigin\(incoming[,)]/);
     expect(src).not.toMatch(/incoming\.get\("origin"\)/);
   });
 });

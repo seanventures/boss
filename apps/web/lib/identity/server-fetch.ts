@@ -27,8 +27,8 @@ export function installIdentityFetch(apiUrl: string): void {
     if (!url.startsWith(apiUrl)) return inner(input as RequestInfo, init);
     const method = (init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
     const given = init?.headers ?? (input instanceof Request ? input.headers : undefined);
-    const headers = await withForwardedIdentity(method, given);
     const path = new URL(url).pathname;
+    const headers = await withForwardedIdentity(method, given, path);
     if (identityStubEnabled() && isIdentityPath(path)) {
       return answerFromStub(method, url, headers, init?.body ?? null);
     }

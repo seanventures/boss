@@ -2196,7 +2196,7 @@ def approve_by_policy(connection: Connection, decision_id: str, *, project_id: s
         {"id": decision_id, "p": project_id}).mappings().first()
     if row is None or row["status"] != "pending":
         return False
-    if row["action"] == "review_architecture":
+    if row.get("action") == "review_architecture":
         # An architecture is approved by a person, never by a setting (architecture_docs).
         return False
     tier = int(row["risk_tier"] or 0)

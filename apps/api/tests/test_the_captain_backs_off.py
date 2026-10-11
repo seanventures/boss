@@ -97,6 +97,10 @@ def test_a_held_launch_starts_no_build(engine, monkeypatch):
     from boss_engine.services.metatron_captain import MetatronCaptain
 
     _pass(engine, status="blocked", phase="awaiting_plan_approval")
+    from boss_engine.services import project_settings as ps
+
+    with engine.begin() as c:   # opted in (Govern), so the backoff is what holds it
+        ps.set_one(c, fx.PROJECT, "captain_auto_improve", 1, "ceo")
     started = []
     monkeypatch.setattr(code_task_service, "start_code_task",
                         lambda *a, **k: started.append(k) or "crun_x")
@@ -107,3 +111,5 @@ def test_a_held_launch_starts_no_build(engine, monkeypatch):
             verify_run=None, directive=None)
     assert out["status"] == "rejected" and not started, out
     assert "{" not in out["error"] and "blocked" in out["error"], out
+    with engine.begin() as c:
+        c.execute(text("DELETE FROM project_settings WHERE key = 'captain_auto_improve'"))

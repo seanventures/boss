@@ -42,6 +42,16 @@ KNOBS: dict[str, dict[str, Any]] = {
                 "project, not only benchmark runs. 1 to lead, 0 to leave builds unled.",
         "kind": "int", "min": 0, "max": 1,
     },
+    # OPT-IN, OFF ON A NEW INSTALL (Settings.captain_auto_improve). An operator's own "drive"
+    # with a directive and a focused agent someone created are asked for; this governs only the
+    # passes the Captain decides to start itself (metatron_captain.captain_launch_gate).
+    "captain_auto_improve": {
+        "attr": "captain_auto_improve",
+        "label": "Captain improves on its own",
+        "help": "Lets the Captain start its own quality-improve builds when a build's scorecard "
+                "shows gaps. Each one spends model budget. Off: it only proposes them.",
+        "kind": "int", "min": 0, "max": 1,
+    },
     "code_review_inrun_max_rounds": {
         "attr": "code_review_inrun_max_rounds",
         "label": "Review rounds",
@@ -473,6 +483,7 @@ GOVERN_NAMES: dict[str, str] = {
     "code_agent_max_turns": "Turn budget",
     "code_review_inrun_max_rounds": "Review rounds",
     "captain_leads_projects": "Captain leads",
+    "captain_auto_improve": "Captain self-improves",
 }
 
 

@@ -200,7 +200,7 @@ describe("states", () => {
     // D8: rows still read as names, never raw keys.
     expect($$("[data-testid^=gv-control-] .gv-name").map((n) => n.textContent)).toEqual([
       "Daily cap", "Monthly cap", "Burst", "Pace", "Review lanes", "Turn budget", "Review rounds",
-      "Captain leads", "Jobs at once", "Workers", "Project default", "Per step"]);
+      "Captain leads", "Captain self-improves", "Jobs at once", "Workers", "Project default", "Per step"]);
   });
 
   it("frozen: one line above the board, with the way out", async () => {
@@ -225,5 +225,15 @@ describe("states", () => {
     for (const moving of [".gv-bar-fill", ".gv-row[data-focused]", ".gv-value[data-pulsed]", ".gv-chip[data-passed]"]) {
       expect(still).toContain(moving);
     }
+  });
+});
+
+describe("the Captain's own improve builds are a Govern switch (first-run walk 2026-10-10)", () => {
+  it("reads Off on a fresh install, says in one line what it does, and saves as 0/1", async () => {
+    await mount(<GovernHome projectId="p1" actor="ceo" />);
+    expect(t("[data-testid=gv-value-captain_auto_improve]")).toBe("Off");
+    const label = $("[data-testid=gv-control-captain_auto_improve] span[title]")!;
+    expect(label.textContent).toBe("Captain self-improves");
+    expect(label.getAttribute("title")).toMatch(/^Off: the Captain only proposes improve builds\. On: it starts them, spending budget\.$/);
   });
 });
