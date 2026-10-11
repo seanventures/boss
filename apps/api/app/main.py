@@ -30679,6 +30679,9 @@ app.include_router(build_oidc_router())
 from .routes_multirepo import build_multirepo_router  # noqa: E402  (multi-repo apps)
 
 app.include_router(build_multirepo_router())
+from .routes_infra_platform import build_infra_platform_router  # noqa: E402  (infra plugins)
+
+app.include_router(build_infra_platform_router())
 
 paid_router = None
 mount_edition_routers(app, settings.boss_edition, paid_router=paid_router)

@@ -316,6 +316,8 @@ def clean_tables(engine):
             "project_members",
             "org_members",
             "infra_resources",
+            "infra_platform_resources",
+            "infra_plans",
             "feature_catalog",
             "event_subscriptions",
             "inbound_webhooks",

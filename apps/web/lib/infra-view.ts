@@ -375,14 +375,64 @@ export function parseCloud(w: unknown): CloudBody {
   };
 }
 
+// ── Plugins (GET /v1/infra/plugins, boss.plugin/v1 registry) ─────────────────────────────────
+
+export type SupportLevel = "certified" | "experimental" | "community";
+export type PluginSource = "builtin" | "verified" | "community";
+export type PluginRow = {
+  id: string; version: string; name: string; description: string; owner: string;
+  source: PluginSource; supportLevel: SupportLevel; claimedSupportLevel: SupportLevel | null;
+  capabilities: string[]; features: string[]; engines: string[]; hooks: string[]; bindings: string[];
+  permissions: { secrets: string[]; network: string[]; filesystem: string[]; docker: boolean; subprocess: boolean; cloud: string[] };
+  runtime: string | null; checksum: string; enabled: boolean; usable: boolean;
+  pinnedVersion: string | null; problems: string[]; limitations: string[];
+};
+export type PluginList = { rows: PluginRow[] };
+const LEVELS = new Set(["certified", "experimental", "community"]);
+const SOURCES = new Set(["builtin", "verified", "community"]);
+const strs = (v: unknown): string[] => arr(v).map((x) => str(x)).filter(Boolean);
+const level = (v: unknown): SupportLevel | null => (LEVELS.has(str(v)) ? str(v) as SupportLevel : null);
+export function parsePlugin(raw: unknown): PluginRow {
+  const o = obj(raw);
+  const perm = obj(o.permissions);
+  return {
+    id: str(o.id), version: str(o.version), name: str(o.name) || str(o.id),
+    description: str(o.description), owner: str(o.owner),
+    source: (SOURCES.has(str(o.source)) ? str(o.source) : "community") as PluginSource,
+    supportLevel: level(o.supportLevel) ?? "community", claimedSupportLevel: level(o.claimedSupportLevel),
+    capabilities: strs(o.capabilities), features: strs(o.features), engines: strs(o.engines),
+    hooks: strs(o.hooks), bindings: strs(o.bindings),
+    permissions: { secrets: strs(perm.secrets), network: strs(perm.network), filesystem: strs(perm.filesystem),
+                   docker: perm.docker === true, subprocess: perm.subprocess === true, cloud: strs(perm.cloud) },
+    runtime: opt(o.runtime) ?? null, checksum: str(o.checksum),
+    enabled: o.enabled === true, usable: o.usable === true,
+    pinnedVersion: opt(o.pinnedVersion) ?? null, problems: strs(o.problems), limitations: strs(o.limitations),
+  };
+}
+export function parsePluginList(raw: unknown): PluginList {
+  return { rows: arr(obj(raw).plugins).map(parsePlugin).filter((p) => p.id) };
+}
+/** What a person reviews before turning a plugin on: every permission it declares, in words. */
+export function permissionWords(p: PluginRow): string[] {
+  const out: string[] = [];
+  if (p.permissions.docker) out.push("start and remove containers");
+  if (p.permissions.subprocess) out.push("run programs");
+  for (const s of p.permissions.secrets) out.push(s === "write-scoped" ? "store its own secrets" : "read its own secrets");
+  for (const n of p.permissions.network) out.push(n === "declared-services" ? "reach the services it declares" : `reach ${n.replace(/^egress:/, "")}`);
+  for (const f of p.permissions.filesystem) out.push(f === "workspace-artifacts" ? "write workspace artifacts" : f);
+  for (const c of p.permissions.cloud) out.push(`use cloud: ${c}`);
+  return out;
+}
+
 // ── URL state (§4.1) ────────────────────────────────────────────────────────────────────────
 
-export type InfraTab = "fleet" | "deploys" | "previews" | "cloud";
+export type InfraTab = "fleet" | "deploys" | "previews" | "cloud" | "plugins";
 export const INFRA_TABS: { key: InfraTab; label: string; tip: string }[] = [
   { key: "fleet", label: "Fleet", tip: "Machines and what runs on them" },
   { key: "deploys", label: "Deploys", tip: "Every deploy, newest first" },
   { key: "previews", label: "Previews", tip: "Running previews and when they end" },
   { key: "cloud", label: "Cloud", tip: "Cloud accounts, resources, capacity and spend" },
+  { key: "plugins", label: "Plugins", tip: "Infrastructure plugins: what each provides and whether it is on" },
 ];
 export type InfraUrl = {
   view: InfraTab;
@@ -425,6 +475,8 @@ export const deploysUrl = (projectId: string, f: { state?: string | null; app?: 
   `/v1/infra/deploys?${q(projectId, f)}`;
 export const deployUrl = (projectId: string, deployRef: string) => `/v1/infra/deploys/${encodeURIComponent(deployRef)}?${q(projectId)}`;
 export const previewsUrl = (projectId: string) => `/v1/infra/previews?${q(projectId)}`;
+/** Install-wide: the plugin registry is not per project (routes_infra_platform.py). */
+export const pluginsUrl = () => "/v1/infra/plugins?include_disabled=true";
 export const cloudUrl = (projectId: string, view: CloudView, filters: Record<string, string | null | undefined> = {}) =>
   `/v1/infra/cloud?${q(projectId, { view, ...filters })}`;
 
@@ -436,6 +488,7 @@ export const DEPLOYS_LIVE_POLL_MS = 8_000;
 export const DEPLOYS_IDLE_POLL_MS = 30_000;
 export const DEPLOY_LIVE_POLL_MS = 3_000;
 export const PREVIEWS_POLL_MS = 10_000;
+export const PLUGINS_POLL_MS = 60_000;
 export const CLOUD_POLL_MS = 60_000;
 const NEVER = 24 * 3600_000;
 
@@ -458,6 +511,8 @@ export const useDeployDetail = (projectId: string, deployRef: string | null): Po
             (d) => (d === null || d.live ? DEPLOY_LIVE_POLL_MS : NEVER));
 export const usePreviews = (projectId: string): Polled<PreviewList> =>
   usePolled(projectId ? previewsUrl(projectId) : null, parsePreviewList, () => PREVIEWS_POLL_MS);
+export const usePlugins = (projectId: string): Polled<PluginList> =>
+  usePolled(projectId ? pluginsUrl() : null, parsePluginList, () => PLUGINS_POLL_MS);
 export const useCloud = (projectId: string, view: CloudView, filters: Record<string, string | null | undefined> = {}): Polled<CloudBody> =>
   usePolled(projectId ? cloudUrl(projectId, view, filters) : null, parseCloud, () => CLOUD_POLL_MS);
 
