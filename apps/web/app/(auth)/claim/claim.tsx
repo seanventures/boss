@@ -6,7 +6,7 @@
  *
  *   setup_token      the link from the install output (`#t=`), valid an hour;
  *   legacy_password  the shared console password proves you are the operator (D25);
- *   network_bridge   being on this network proves it (goldeneye, D27). The claim binds BOSS to
+ *   network_bridge   being on this trusted network proves it (D27). The claim binds BOSS to
  *                    the origin shown, and a passkey is required.
  *
  * Then a passkey on this device (an authenticator app only where the browser has no passkeys),

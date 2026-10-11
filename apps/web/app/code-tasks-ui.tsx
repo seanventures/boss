@@ -205,11 +205,20 @@ function NewBuildButton({ open, setOpen, onPlan, onDirect, onBenchmark, hasBench
   );
 }
 
-/** Where this Factory's PRs go, as the old list said it (the GitHub plane in force). */
-function githubTip(plane: string, label?: string | null, repo?: string | null): string {
-  if (plane === "mission_control_binding") return `PRs open through the project's GitHub binding${repo ? ` on ${repo}` : ""}`;
-  if (plane === "legacy_env") return `PRs open with the settings token${repo ? ` on ${repo}` : ""}. Connect GitHub for the project binding.`;
-  return label || `GitHub: ${plane}`;
+/** A displayable owner/repository pair is not proof of credentials or access. */
+function completeGithubRepository(value?: string | null): string | null {
+  const name = value?.trim();
+  return name && /^[^/\s]+\/[^/\s]+$/.test(name) ? name : null;
+}
+
+function githubTip(plane?: string | null, label?: string | null, repo?: string | null): string {
+  const source = plane === "mission_control_binding"
+    ? `Project GitHub binding${repo ? ` for ${repo}` : ""}.`
+    : plane === "legacy_env"
+      ? `Repository from settings${repo ? `: ${repo}` : ""}.`
+      : `GitHub binding source is unknown.${repo ? ` Repository: ${repo}.` : ""}`;
+  return [source, repo ? null : "No complete repository is reported.", label?.trim(),
+    "Check GitHub access in Connect before starting a build."].filter(Boolean).join(" ");
 }
 
 export function CodeTasksHome({ projectId, orgId, codeTasks, codeTaskTotal, apiReachable, previews = [], previewBlockedReason, benchmarks = [],
@@ -308,6 +317,7 @@ export function CodeTasksHome({ projectId, orgId, codeTasks, codeTaskTotal, apiR
   const lastSpec = runs[0]?.spec;
   const counts = floor.data?.counts;
   const needs = counts?.needsYou ?? 0;
+  const githubRepository = completeGithubRepository(githubFullName);
 
   if (!apiReachable) {
     return (
@@ -343,11 +353,9 @@ export function CodeTasksHome({ projectId, orgId, codeTasks, codeTaskTotal, apiR
             Newest {codeTasks.length} of {codeTaskTotal}
           </span>
         ) : null}
-        {githubPlane ? (
-          <span className="fx-muted fx-head-gh" data-testid="fx-github-plane" title={githubTip(githubPlane, githubPlaneLabel, githubFullName)}>
-            GitHub{githubFullName ? <> · <span data-user-text>{githubFullName}</span></> : null}
-          </span>
-        ) : null}
+        <span className="fx-muted fx-head-gh" data-testid="fx-github-plane" title={githubTip(githubPlane, githubPlaneLabel, githubRepository)}>
+          GitHub · {githubRepository ? <span data-user-text>{githubRepository}</span> : "Repository unknown"}
+        </span>
         {previewBlockedReason ? (
           <span className="fx-err" role="status" data-testid="fx-preview-list-error" title={previewBlockedReason}>Previews unavailable</span>
         ) : null}

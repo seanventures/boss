@@ -43,7 +43,7 @@ export function BuildDatabaseRow() {
   };
   return (
     <section className="su-row" data-testid="su-row-build-database" aria-label="Build database" id="su-build-database">
-      <div className="su-row-label"><SectionLabel as="span" tip={TIP}>Build database</SectionLabel></div>
+      <div className="su-row-label"><SectionLabel as="span" tip={TIP}>Database</SectionLabel></div>
       <div className="su-row-body su-stack">
         <div className="su-line" role="radiogroup" aria-label="Build database">
           {MODES.map((m) => (
@@ -54,7 +54,7 @@ export function BuildDatabaseRow() {
               {m.label}
             </GatedButton>
           ))}
-          <span className="su-faint">{mode === "auto" ? "Postgres per build when the app needs one" : mode === "always" ? "Postgres for every build" : "No build database"}</span>
+          <span className="su-faint">{mode === "auto" ? "Postgres when needed" : mode === "always" ? "Postgres for every build" : "No build database"}</span>
         </div>
         {mode !== "never" && !db.configured ? (
           <span className="su-line" data-testid="su-build-database-unconfigured">

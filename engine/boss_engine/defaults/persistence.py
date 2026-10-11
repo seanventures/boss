@@ -38,6 +38,15 @@ class InMemoryPersistence:
             current = self._runs.setdefault(run_id, {"id": run_id})
             current.update(deepcopy(state))
 
+    def first_code_task_job(self, run_id: str) -> Optional[dict[str, Any]]:
+        """This run-only adapter stores no job authority to carry to a retry.
+
+        Run metadata is not a delegated grant. The caller must still perform its
+        normal consent check when no original job authority is available.
+        """
+        del run_id
+        return None
+
     def execute(self, statement: Any, parameters: Any = None) -> Any:
         del statement, parameters
         raise RuntimeError(

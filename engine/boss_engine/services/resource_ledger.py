@@ -104,6 +104,41 @@ class DbLedger:
             _log.debug("owned_resources release_handle failed", exc_info=True)
             return 0
 
+    def open_resources(self, resource_kind: str, handle_prefix: str, *, limit: int = 100,
+                       after: Optional[tuple[Any, str]] = None) -> list[dict[str, Any]]:
+        """Read a bounded keyset page; a read failure is not an empty ledger.
+
+        Network-resource owners may reconcile a prior process's rows. Their own
+        substrate, ownership and liveness checks must precede any row release.
+        """
+        if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 1000:
+            raise ValueError("ledger page limit must be between 1 and 1000")
+        params: dict[str, Any] = {"kind": resource_kind, "prefix": handle_prefix, "limit": limit}
+        cursor_sql = ""
+        if after is not None:
+            cursor_sql = " AND (created_at, id) > (:created, :id)"
+            params.update(created=after[0], id=after[1])
+        with self.engine.connect() as c:
+            return [dict(row) for row in c.execute(text(
+                "SELECT id, owner_kind, owner_id, owner_chain, handle, meta, created_at "
+                "FROM owned_resources WHERE resource_kind=:kind AND released_at IS NULL "
+                "AND starts_with(handle, :prefix)" + cursor_sql +
+                " ORDER BY created_at, id LIMIT :limit"), params).mappings()]
+
+    def release_owned_row(self, row_id: str, resource_kind: str, handle: str, reason: str) -> int:
+        """Strictly close only the inspected row, never a later duplicate handle.
+
+        Exceptions propagate so the cleanup owner reports pending reconciliation.
+        Existing best-effort release methods keep their contracts.
+        """
+        with self.engine.begin() as c:
+            return int(c.execute(text(
+                "UPDATE owned_resources SET released_at=now(), release_reason=:reason "
+                "WHERE id=:id AND resource_kind=:kind AND handle=:handle "
+                "AND released_at IS NULL"),
+                {"id": row_id, "kind": resource_kind, "handle": handle,
+                 "reason": (reason or "")[:200]}).rowcount or 0)
+
 
 def record(resource_kind: str, handle: str, *, owner: Any = None, expires_at: Any = None,
            meta: Optional[dict[str, Any]] = None) -> Optional[str]:

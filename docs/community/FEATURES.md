@@ -147,7 +147,7 @@ Community installs and runs without Plane, an ops token, or a private registry. 
 | Work orchestration / portfolio | ✅ |
 | Meetings / multi-agent panels | ✅ |
 | Agent process handoffs | ◐ Authorable role sequences (natural-language compile, manual builder, Metatron/chat). Default sequence: PRD → architect/CTO/VP-PM review → improve → captain build → QA → UI/UX → captain verify → panel certify → captain accept. Simulated runs complete without spend. |
-| Project Manager steward | ◐ Operates, tests, validates, and proposes changes over process runs (`/v1/process-manager`, worker every 60s). Metrics are evidence-only; templates are never silently rewritten. |
+| Project Manager steward | ◐ Observes process runs, advances existing work, and proposes changes (`/v1/process-manager`, worker every 60s). It ensures the default template but does not automatically start simulated delivery runs. Explicit QA fixtures remain labeled as simulated; templates are never silently rewritten. |
 | Assurance / ground-truth runtime | ✅ |
 | Self-improvement automation routes | ✦ Enterprise mount |
 

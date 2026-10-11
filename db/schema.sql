@@ -3489,6 +3489,22 @@ CREATE TABLE IF NOT EXISTS code_task_runs (
 );
 CREATE INDEX IF NOT EXISTS idx_code_task_runs_project ON code_task_runs(project_id, status, updated_at DESC);
 
+-- Append-only human usefulness reviews of a recorded delivery. No execution authority.
+CREATE TABLE IF NOT EXISTS deliverable_reviews (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  run_id TEXT NOT NULL REFERENCES code_task_runs(id) ON DELETE CASCADE,
+  actor TEXT NOT NULL,
+  outcome TEXT NOT NULL CHECK (outcome IN ('accepted', 'changes_requested')),
+  note TEXT NOT NULL DEFAULT '',
+  snapshot_hash TEXT NOT NULL,
+  snapshot JSONB NOT NULL,
+  submission_id TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (project_id, run_id, submission_id)
+);
+CREATE INDEX IF NOT EXISTS idx_deliverable_reviews_run ON deliverable_reviews(project_id, run_id, created_at DESC);
+
 -- Durable, versioned measurements derived from terminal QA benchmark runs.  These are
 -- analysis snapshots only: a low score may trigger a visible recommendation, but cannot
 -- alter a routing/workflow baseline or create an applied change by itself.
@@ -6475,6 +6491,10 @@ CREATE TABLE IF NOT EXISTS api_idempotency_keys (
 );
 ALTER TABLE api_idempotency_keys
   ADD COLUMN IF NOT EXISTS response_headers JSONB NOT NULL DEFAULT '[]'::jsonb;
+-- A committed voice model intent stays fenced even after a disconnect or API restart.
+-- Expiry of generic HTTP bookkeeping cannot prove an accepted provider call did not run.
+ALTER TABLE api_idempotency_keys
+  ADD COLUMN IF NOT EXISTS durable_effect BOOLEAN NOT NULL DEFAULT FALSE;
 CREATE INDEX IF NOT EXISTS idx_api_idempotency_keys_expiry
   ON api_idempotency_keys (expires_at);
 
@@ -6976,7 +6996,7 @@ CREATE TABLE IF NOT EXISTS telemetry_batches (
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- THE COLLECTOR (collector mode only; goldeneye for now). Keyed by the random install id; no IP
+-- THE COLLECTOR (collector mode only). Keyed by the random install id; no IP
 -- address, hostname or name is ever stored. 18 months, then rolled into tm_rollups and deleted.
 CREATE TABLE IF NOT EXISTS tm_installs (
   install_id     TEXT PRIMARY KEY,

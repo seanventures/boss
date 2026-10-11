@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "screenshots": [
+    {
+      "file": "home-28d75d69.jpg",
+      "sha256": "8d175b4c9e76384dfbe92806b97eb2f970e229c903f096d2c438e2dc6b8b9cc8",
+      "source_commit": "28d75d69",
+      "kind": "actual installed console capture",
+      "environment": "fresh seeded disposable RC9 baseline with the qualified RC8 API and web images",
+      "observed": "named Owner Home, repository and model setup holds, zero in-flight work",
+      "limitations": [
+        "no live provider result",
+        "no customer acceptance or full journey proof"
+      ],
+      "transform": "none"
+    },
+    {
+      "file": "help-rc8.png",
+      "sha256": "5ee792b1deb537122bca901258d338f61273f646b3261e551b246a283625db08",
+      "source_commit": "28d75d69",
+      "kind": "actual installed console capture",
+      "environment": "disposable RC8 qualification install",
+      "observed": "local Help drawer",
+      "limitations": [
+        "test records shown",
+        "no live provider result",
+        "no customer acceptance or full journey proof"
+      ],
+      "transform": "none"
+    }
+  ]
+}

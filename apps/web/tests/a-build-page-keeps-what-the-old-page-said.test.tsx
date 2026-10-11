@@ -316,7 +316,7 @@ describe("the Factory says what it is a window onto", () => {
     await settle();
     expect(text('[data-testid="fx-window"]')).toBe("Newest 1 of 244");
     expect(text('[data-testid="fx-github-plane"]')).toBe("GitHub · acme/sandbox");
-    expect($('[data-testid="fx-github-plane"]')?.title).toBe("PRs open through the project's GitHub binding on acme/sandbox");
+    expect($('[data-testid="fx-github-plane"]')?.title).toBe("Project GitHub binding for acme/sandbox. Check GitHub access in Connect before starting a build.");
     expect($('[data-testid="fx-preview-list-error"]')?.title).toBe("the previews API answered 502");
   });
 });

@@ -15,11 +15,14 @@ import pytest
 from sqlalchemy import text
 
 from boss_engine.services.agent_world_types import AI_DISCLOSURE
+from boss_engine.services.model_routing import ModelChoice
+from apps.api.tests.test_agent_voice_stream_intent import connect_owned
 
 PROJECT = "boss-dogfood"
 
 
 class StubModel:
+    _boss_choice = ModelChoice("ollama", "owned inert fixture", "approved_local_model_host")
     """Answers each call from a queue; remembers what it was asked."""
 
     def __init__(self, *replies: str):
@@ -29,13 +32,14 @@ class StubModel:
     def create_text_response(self, prompt, system_prompt=None, model=None):
         self.calls.append({"prompt": prompt, "system": system_prompt or ""})
         reply = self.replies.pop(0) if self.replies else "{}"
-        return ("stub", reply, {"model": "stub", "prompt_tokens": 10, "completion_tokens": 20})
+        return ("stub", reply, {"model": "stub", "prompt_tokens": 10, "completion_tokens": 20, "cost_usd_micros": 0})
 
 
 @pytest.fixture
-def model(monkeypatch):
+def model(monkeypatch, engine):
     from boss_engine.services import agent_voice, model_routing
 
+    connect_owned(engine, monkeypatch)
     stub = StubModel()
     monkeypatch.setattr(agent_voice, "model_ready", lambda *_a, **_k: True)
     monkeypatch.setattr(model_routing, "project_chat_adapter", lambda *_a, **_k: stub)
@@ -46,7 +50,8 @@ def _sse(response) -> list[tuple[str, dict]]:
     events = []
     for block in response.text.strip().split("\n\n"):
         lines = dict(line.split(": ", 1) for line in block.splitlines() if ": " in line)
-        events.append((lines["event"], json.loads(lines["data"])))
+        if "data" in lines:
+            events.append((lines["event"], json.loads(lines["data"])))
     return events
 
 
@@ -120,10 +125,13 @@ def test_an_unsaved_voice_can_be_heard_before_save(client, model):
     assert after["persona"] == before["persona"] and after["version"] == before["version"]
 
 
-def test_a_model_failure_is_explained_not_a_500(client, monkeypatch):
+def test_a_model_failure_is_explained_not_a_500(client, monkeypatch, engine):
     from boss_engine.services import agent_voice, model_routing
 
+    connect_owned(engine, monkeypatch, paid=True)
+
     class Broken:
+        _boss_choice = StubModel._boss_choice
         def create_text_response(self, *_a, **_k):
             raise RuntimeError("401 invalid api key")
 
@@ -174,9 +182,10 @@ class PricedModel(StubModel):
 
 
 @pytest.fixture
-def priced(monkeypatch):
+def priced(monkeypatch, engine):
     from boss_engine.services import agent_voice, model_routing
 
+    connect_owned(engine, monkeypatch, paid=True)
     stub = PricedModel()
     monkeypatch.setattr(agent_voice, "model_ready", lambda *_a, **_k: True)
     monkeypatch.setattr(model_routing, "project_chat_adapter", lambda *_a, **_k: stub)
@@ -185,13 +194,14 @@ def priced(monkeypatch):
 
 def _spend(engine, receipt_id: str) -> dict:
     with engine.connect() as c:
-        row = c.execute(text(
-            "SELECT r.status AS receipt_status, r.effect_kind, c.actual_usd_micros, "
-            "c.reservation_id, b.status AS hold FROM receipts r "
-            "LEFT JOIN cost_receipts c ON c.receipt_id = r.id "
-            "LEFT JOIN budget_reservations b ON b.id = c.reservation_id "
-            "WHERE r.id = :r"), {"r": receipt_id}).mappings().first()
-    return dict(row or {})
+        row = c.execute(text("SELECT status AS receipt_status,effect_kind,result FROM receipts WHERE id=:r"),
+                        {"r":receipt_id}).mappings().one()
+        ids=row["result"].get("receipt_ids") or []
+        calls=c.execute(text("SELECT c.actual_usd_micros,b.status AS hold FROM cost_receipts c "
+            "JOIN budget_reservations b ON b.id=c.reservation_id WHERE c.receipt_id=ANY(:ids)"),
+            {"ids":ids}).mappings().all()
+    return {**row,"actual_usd_micros":sum(r["actual_usd_micros"] for r in calls),
+            "holds":[r["hold"] for r in calls]}
 
 
 def test_a_test_settles_both_its_calls_against_a_real_receipt(client, engine, priced):
@@ -203,7 +213,7 @@ def test_a_test_settles_both_its_calls_against_a_real_receipt(client, engine, pr
     assert spent["receipt_status"] == "succeeded"
     assert spent["effect_kind"] == "model.agent_voice_test"
     assert spent["actual_usd_micros"] == 2 * 1234, "the reply AND the judge are paid for"
-    assert spent["hold"] == "consumed"
+    assert spent["holds"] == ["consumed", "consumed"]
 
 
 def test_a_draft_settles_against_a_real_receipt(client, engine, priced):
@@ -212,13 +222,16 @@ def test_a_draft_settles_against_a_real_receipt(client, engine, priced):
         "project_id": PROJECT, "actor": "ceo", "field": "tagline"}).json()
     spent = _spend(engine, body["receipt_id"])
     assert spent["receipt_status"] == "succeeded" and spent["actual_usd_micros"] == 1234
-    assert spent["hold"] == "consumed"
+    assert spent["holds"] == ["consumed"]
 
 
-def test_a_failed_draft_releases_its_hold_and_records_the_failure(client, engine, monkeypatch):
+def test_an_unclassified_provider_failure_retains_its_hold_for_reconciliation(client, engine, monkeypatch):
     from boss_engine.services import agent_voice, model_routing
 
+    connect_owned(engine, monkeypatch, paid=True)
+
     class Broken:
+        _boss_choice = StubModel._boss_choice
         def create_text_response(self, *_a, **_k):
             raise RuntimeError("401 invalid api key")
 
@@ -227,11 +240,11 @@ def test_a_failed_draft_releases_its_hold_and_records_the_failure(client, engine
     assert client.post("/v1/agents/qa/persona/draft", json={
         "project_id": PROJECT, "actor": "ceo", "field": "tagline"}).status_code == 502
     with engine.connect() as c:
-        row = c.execute(text(
-            "SELECT status FROM budget_reservations WHERE project_id = :p "
-            "AND reason = 'Draft tagline for qa' ORDER BY created_at DESC LIMIT 1"),
-            {"p": PROJECT}).scalar()
-    assert row == "released"
+        row = c.execute(text("SELECT b.status,r.status FROM model_gateway_invocations i "
+            "JOIN model_gateway_leases l ON l.id=i.model_gateway_lease_id "
+            "JOIN budget_reservations b ON b.id=l.budget_reservation_id "
+            "JOIN receipts r ON r.id=i.receipt_id WHERE i.project_id=:p"), {"p":PROJECT}).one()
+    assert tuple(row) == ("active", "in_progress"), "an exception string does not prove no accepted call"
 
 
 def test_a_client_that_drops_mid_stream_still_pays_for_what_it_heard(client, engine, priced,
@@ -249,6 +262,7 @@ def test_a_client_that_drops_mid_stream_still_pays_for_what_it_heard(client, eng
                       "proven by a test someone can rerun.", "{}"]
     stream = api_main.agent_voice_test_endpoint("qa", api_main.AgentVoiceTestBody(
         project_id=PROJECT, actor="ceo", probe="intro"))
+    assert next(stream).startswith(": voice intent admitted")
     first = next(stream)
     assert first.startswith("event: token")
     stream.close()  # what the server does when the client goes away
@@ -256,7 +270,7 @@ def test_a_client_that_drops_mid_stream_still_pays_for_what_it_heard(client, eng
         row = c.execute(text(
             "SELECT b.status, c.actual_usd_micros FROM budget_reservations b "
             "JOIN cost_receipts c ON c.reservation_id = b.id WHERE b.project_id = :p "
-            "AND b.reason = 'Test intro for qa' ORDER BY b.created_at DESC LIMIT 1"),
+            "AND b.job_id IS NOT NULL ORDER BY b.created_at DESC LIMIT 1"),
             {"p": PROJECT}).first()
     assert row is not None, "the hold was left on the budget"
     assert row[0] == "consumed" and row[1] == 1234

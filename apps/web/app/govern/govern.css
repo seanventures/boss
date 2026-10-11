@@ -23,6 +23,9 @@
 .gv-state[data-state="yellow"], .gv-state[data-state="orange"] { color: var(--amber); }
 .gv-state[data-state="yellow"]::before, .gv-state[data-state="orange"]::before { background: var(--amber); }
 .gv-state[data-state="red"] { color: var(--red); } .gv-state[data-state="red"]::before { background: var(--red); }
+.gv-state[data-state="held"] { color: var(--amber); } .gv-state[data-state="held"]::before { background: var(--amber); }
+.gv-legacy-hold { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px 16px; margin: 10px 0; color: var(--amber); font-size: 0.85rem; line-height: 1.5; }
+.gv-legacy-hold > span { flex: 1 1 28rem; }
 .gv-reset { font-size: 0.78rem; color: var(--faint); }
 .gv-meta { display: inline-flex; gap: 12px; font-size: 0.78rem; color: var(--muted); }
 .gv-bar { position: relative; height: 12px; border-radius: 999px; background: var(--surface-3); overflow: visible; }

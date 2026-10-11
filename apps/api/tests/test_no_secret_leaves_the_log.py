@@ -25,7 +25,7 @@ TOKENS = {
     "github": "ghp_Zq8xWv7uTs6rQp5oNm4lKj3iHg2fEd1cBa0",
     "github_pat": "github_pat_11AAQ7ZPY0Zq8xWv7uTs6r_Qp5oNm4lKj3iHg2fEd1cBa0",
     "aws": "AKIAZQ8XWV7UTS6RQP5O",
-    "gitlab": "glpat-Zq8xWv7uTs6rQp5oNm4l",
+    "gitlab": "glpat-" + ("fixture0" * 3),
     "google": "AIzaSyZq8xWv7uTs6rQp5oNm4lKj3iHg2fEd1cBa0",
     "assignment": "hunter2-correct-horse",
     "jwt": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJib3NzLXRlc3QifQ.Zq8xWv7uTs6rQp5oNm4lKj3i",

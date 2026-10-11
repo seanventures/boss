@@ -8,6 +8,8 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+const originalFetch = globalThis.fetch;
+
 vi.mock("../lib/client", () => ({
   API_URL: "http://api.test",
   authHeaders: (extra?: Record<string, string>) => ({ Authorization: "Bearer test", ...(extra ?? {}) }),
@@ -27,8 +29,12 @@ afterEach(() => vi.unstubAllGlobals());
 describe("the share card route", () => {
   it("answers a 1200×630 PNG, drawn from the passport and the card", async () => {
     const seen: string[] = [];
-    vi.stubGlobal("fetch", vi.fn(async (input: unknown) => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
+      // Only the embedded WASM may use real fetch; HTTP stays inside the API fixture.
+      if (url.startsWith("data:application/octet-stream;base64,AGFzbQ")) {
+        return originalFetch(input, init);
+      }
       seen.push(url);
       if (url.includes("/passport")) return Response.json(PASSPORT);
       if (url.includes("/card")) return Response.json({ skills: [{ id: "qa.run_tests", name: "Run tests" }] });

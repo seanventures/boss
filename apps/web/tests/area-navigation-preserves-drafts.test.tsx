@@ -4,10 +4,10 @@ import React, { act, useEffect, useState, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
-const router = vi.hoisted(() => ({ refresh: vi.fn() }));
+const router = vi.hoisted(() => ({ refresh: vi.fn(), query: null as string | null }));
 vi.mock("next/navigation", () => ({
   useRouter: () => router,
-  useSearchParams: () => new URLSearchParams(window.location.search),
+  useSearchParams: () => new URLSearchParams(router.query ?? window.location.search),
 }));
 
 // Keep the actual shell, area selection, cookies, coordinator and React reconciliation.
@@ -33,6 +33,7 @@ vi.mock("../components/identity/identity-provider", () => {
 });
 
 import ConsoleShell from "../app/ConsoleShell";
+import { requestConsoleRefresh } from "../lib/console-refresh";
 import {
   areasToRender, loadedAreasCookie, loadedAreasCookieValue, parseLoadedAreas,
 } from "../lib/area-loading";
@@ -41,6 +42,11 @@ let host: HTMLDivElement;
 let root: Root;
 let draftMounts: number;
 let draftUnmounts: number;
+let serverDelayMs: number;
+let omitNextArea: boolean;
+let discardRestoredResponse: boolean;
+let commitServer: ((loaded: string[]) => void) | null = null;
+const fixtureStatus = { apiReachable: true, budgetState: "green", deadletters: 0, pendingDecisions: 0 };
 
 function Draft() {
   const [draft, setDraft] = useState("");
@@ -56,15 +62,29 @@ function ServerBoundary() {
   const [loaded, setLoaded] = useState(() => [...areasToRender({
     requested: "overview", cookie: loadedAreasCookieValue(document.cookie), fullDocument: true,
   })]);
+  commitServer = setLoaded;
   // The RSC transport is a service double. Its selection rule is the actual page's rule;
   // omitting an area removes its subtree, as the server's shows(area) gate does.
-  router.refresh.mockImplementation(() => setLoaded([...areasToRender({
-    requested: new URLSearchParams(window.location.search).get("area") ?? "overview",
-    cookie: loadedAreasCookieValue(document.cookie), fullDocument: false,
-  })]));
+  router.refresh.mockImplementation(() => {
+    const requested = new URLSearchParams(window.location.search).get("area") ?? "overview";
+    const cookie = loadedAreasCookieValue(document.cookie);
+    const omitted = omitNextArea;
+    omitNextArea = false;
+    const url = window.location.search;
+    const deliver = () => {
+      // Next's ACTION_RESTORE drops an older pending refresh, including a successful
+      // response. A discarded response must never update this server-prop boundary.
+      if (discardRestoredResponse && window.location.search !== url) return;
+      setLoaded(omitted ? ["overview"] : [...areasToRender({
+        requested, cookie, fullDocument: false,
+      })]);
+    };
+    if (serverDelayMs) window.setTimeout(deliver, serverDelayMs);
+    else deliver();
+  });
   return <ConsoleShell initialArea="overview" loadedAreas={loaded}
     scope={{ project: "owned-navigation-fixture", actor: "owned-fixture" }}
-    status={{ apiReachable: true, budgetState: "green", deadletters: 0, pendingDecisions: 0 }}>
+    status={fixtureStatus}>
     {loaded.map((area) => <section key={area} data-area={area}>
       {area === "overview" ? <Draft /> : <span>{area}</span>}
     </section>)}
@@ -76,8 +96,12 @@ beforeEach(() => {
     .IS_REACT_ACT_ENVIRONMENT = true;
   vi.useFakeTimers();
   router.refresh.mockReset();
+  router.query = null;
   draftMounts = 0;
   draftUnmounts = 0;
+  serverDelayMs = 0;
+  omitNextArea = false;
+  discardRestoredResponse = true;
   window.localStorage.clear();
   window.history.replaceState(null, "", "/?area=overview");
   document.cookie = loadedAreasCookie("");
@@ -121,4 +145,131 @@ it.each(["", "setup"])("retains the initial area's mounted draft with remembered
   expect(host.querySelector("textarea[aria-label='Unsaved plan']")).toBe(draft);
   expect(draft.value).toBe("A plan that has not been submitted");
   expect(draftUnmounts).toBe(0);
+});
+
+// A router refresh is dispatched synchronously; a shell transition can settle before its
+// RSC response arrives. Only actual server props may acknowledge the refresh.
+it("waits for server data before retrying an unloaded area", async () => {
+  serverDelayMs = 1500;
+  await act(async () => root.render(<ServerBoundary />));
+  const draft = host.querySelector<HTMLTextAreaElement>("textarea[aria-label='Unsaved plan']")!;
+  await act(async () => {
+    draft.value = "Keep this unsubmitted plan";
+    draft.dispatchEvent(new Event("input", { bubbles: true }));
+    window.dispatchEvent(new CustomEvent("boss:navigate", { detail: "decisions" }));
+  });
+  expect(host.querySelector("[data-testid='area-loading']")).not.toBeNull();
+  await act(async () => vi.advanceTimersByTime(1000));
+  expect(router.refresh).toHaveBeenCalledTimes(1);
+  await act(async () => vi.advanceTimersByTime(500));
+  expect(host.querySelector("[data-testid='area-loading']")).toBeNull();
+  expect(router.refresh).toHaveBeenCalledTimes(1);
+  expect(host.querySelector("textarea[aria-label='Unsaved plan']")).toBe(draft);
+  expect(draft.value).toBe("Keep this unsubmitted plan");
+  expect(draftMounts).toBe(1);
+  expect(draftUnmounts).toBe(0);
+});
+
+it("loads a second area when the router discards the first area's response", async () => {
+  serverDelayMs = 1500;
+  await act(async () => root.render(<ServerBoundary />));
+  const draft = host.querySelector<HTMLTextAreaElement>("textarea[aria-label='Unsaved plan']")!;
+  await act(async () => window.dispatchEvent(new CustomEvent("boss:navigate", { detail: "decisions" })));
+  await act(async () => vi.advanceTimersByTime(250));
+  await act(async () => window.dispatchEvent(new CustomEvent("boss:navigate", { detail: "setup" })));
+  expect(router.refresh).toHaveBeenCalledTimes(2);
+  await act(async () => vi.advanceTimersByTime(1250));
+  expect(host.querySelector("[data-testid='area-loading']")).not.toBeNull();
+  expect(router.refresh).toHaveBeenCalledTimes(2);
+  await act(async () => vi.advanceTimersByTime(1500));
+  expect(host.querySelector("[data-testid='area-loading']")).toBeNull();
+  expect(host.querySelector("[data-testid='console-area']")?.getAttribute("data-active")).toBe("setup");
+  expect(router.refresh).toHaveBeenCalledTimes(2);
+  expect(host.querySelector("textarea[aria-label='Unsaved plan']")).toBe(draft);
+  expect(draftMounts).toBe(1);
+  expect(draftUnmounts).toBe(0);
+});
+
+it("replaces a discarded read when returning to an already mounted area", async () => {
+  serverDelayMs = 1500;
+  await act(async () => root.render(<ServerBoundary />));
+  const draft = host.querySelector<HTMLTextAreaElement>("textarea[aria-label='Unsaved plan']")!;
+  await act(async () => window.dispatchEvent(new CustomEvent("boss:navigate", { detail: "decisions" })));
+  await act(async () => vi.advanceTimersByTime(250));
+  await act(async () => window.dispatchEvent(new CustomEvent("boss:navigate", { detail: "overview" })));
+  expect(host.querySelector("[data-testid='area-loading']")).toBeNull();
+  expect(router.refresh).toHaveBeenCalledTimes(2);
+  await act(async () => vi.advanceTimersByTime(1500));
+  expect(router.refresh).toHaveBeenCalledTimes(2);
+  expect(host.querySelector("textarea[aria-label='Unsaved plan']")).toBe(draft);
+  expect(draftMounts).toBe(1);
+  expect(draftUnmounts).toBe(0);
+});
+
+it("retries when newly committed server data still omits the requested area", async () => {
+  serverDelayMs = 100;
+  omitNextArea = true;
+  await act(async () => root.render(<ServerBoundary />));
+  await act(async () => window.dispatchEvent(new CustomEvent("boss:navigate", { detail: "decisions" })));
+  await act(async () => vi.advanceTimersByTime(100));
+  expect(host.querySelector("[data-testid='area-loading']")).not.toBeNull();
+  expect(router.refresh).toHaveBeenCalledTimes(1);
+  await act(async () => vi.advanceTimersByTime(250));
+  expect(router.refresh).toHaveBeenCalledTimes(2);
+  await act(async () => vi.advanceTimersByTime(100));
+  expect(host.querySelector("[data-testid='area-loading']")).toBeNull();
+  expect(router.refresh).toHaveBeenCalledTimes(2);
+});
+
+it("waits for the router URL snapshot before starting the first-area refresh", async () => {
+  serverDelayMs = 1500;
+  router.query = "area=overview";
+  await act(async () => root.render(<ServerBoundary />));
+  const draft = host.querySelector<HTMLTextAreaElement>("textarea[aria-label='Unsaved plan']")!;
+  await act(async () => window.dispatchEvent(new CustomEvent("boss:navigate", { detail: "decisions" })));
+  expect(host.querySelector("[data-testid='console-area']")?.getAttribute("data-active")).toBe("decisions");
+  await act(async () => vi.advanceTimersByTime(1000));
+  expect(router.refresh).not.toHaveBeenCalled();
+  router.query = window.location.search;
+  await act(async () => root.render(<ServerBoundary />));
+  expect(router.refresh).toHaveBeenCalledTimes(1);
+  await act(async () => vi.advanceTimersByTime(1500));
+  expect(host.querySelector("[data-testid='area-loading']")).toBeNull();
+  expect(router.refresh).toHaveBeenCalledTimes(1);
+  expect(host.querySelector("textarea[aria-label='Unsaved plan']")).toBe(draft);
+  expect(draftMounts).toBe(1);
+  expect(draftUnmounts).toBe(0);
+});
+
+// URL filters and server props can commit together while a read is pending.
+it("replaces a discarded first-area read after a same-area query filter restore", async () => {
+  serverDelayMs = 1500;
+  await act(async () => root.render(<ServerBoundary />));
+  await act(async () => window.dispatchEvent(new CustomEvent("boss:navigate", { detail: "decisions" })));
+  await act(async () => vi.advanceTimersByTime(250));
+  await act(async () => {
+    window.history.replaceState(null, "", "/?area=decisions&state=pending");
+    root.render(<ServerBoundary />);
+  });
+  expect(router.refresh).toHaveBeenCalledTimes(2);
+  await act(async () => vi.advanceTimersByTime(1500));
+  expect(host.querySelector("[data-testid='area-loading']")).toBeNull();
+  expect(router.refresh).toHaveBeenCalledTimes(2);
+});
+
+it("does not acknowledge a replacement read with server props committed alongside URL restore", async () => {
+  serverDelayMs = 1500;
+  await act(async () => root.render(<ServerBoundary />));
+  await act(async () => window.dispatchEvent(new CustomEvent("boss:navigate", { detail: "decisions" })));
+  expect(router.refresh).toHaveBeenCalledTimes(1);
+  await act(async () => {
+    // The earlier result reached the router before RESTORE; React batches both state updates.
+    // It belongs to the previous query, not the replacement started by the restore effect.
+    commitServer!(["overview", "decisions"]);
+    window.history.replaceState(null, "", "/?area=decisions&state=pending");
+    root.render(<ServerBoundary />);
+  });
+  expect(router.refresh).toHaveBeenCalledTimes(2);
+  await act(async () => requestConsoleRefresh(router, "now"));
+  expect(router.refresh).toHaveBeenCalledTimes(2); // Current replacement should still be busy.
 });

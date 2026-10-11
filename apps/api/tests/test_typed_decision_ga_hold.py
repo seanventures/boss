@@ -107,7 +107,15 @@ def test_typesafe_key_proof_is_reserved_and_receipted_before_the_call(client, en
 
 def test_a_rejected_key_leaves_the_typesafe_source_as_it_was(client, engine, monkeypatch):
     def rejected(self, context, questions):
-        raise RuntimeError("TypeSafe HTTP 401 unauthorized")
+        import httpx
+
+        # Exercise the adapter's actual single-attempt authentication refusal;
+        # an arbitrary exception containing "401" proves no provider outcome.
+        with httpx.Client(transport=httpx.MockTransport(
+            lambda request: httpx.Response(401, json={"error": "unauthorized"}),
+        ), trust_env=False) as inert:
+            self._client = inert
+            return self._post({})
 
     monkeypatch.setattr(typed_decisions.TypeSafeDecider, "decide", rejected)
     response = client.post("/v1/setup/decision-model/key", json={

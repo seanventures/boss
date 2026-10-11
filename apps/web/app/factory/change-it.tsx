@@ -80,12 +80,14 @@ function useWorkflows(projectId: string): Workflow[] {
   return items;
 }
 
-export function ChangeIt({ projectId, runId, actor, onClose, onStarted, app = "", repo = "", previewId = null }: {
+export function ChangeIt({ projectId, runId, actor, onClose, onStarted, app = "", repo = "", previewId = null, initialMessage = "" }: {
   projectId: string; runId: string; actor: string; onClose: () => void;
   /** The app and its repo, for a spec-first change (the panel is told which app it is). */
   app?: string; repo?: string;
   /** A live preview: the change is anchored to it, as the old feedback form did. */
   previewId?: string | null;
+  /** A saved human result-review note; still requires Propose and Start. */
+  initialMessage?: string;
   /** A new build (or workflow run) started from the proposal. */
   onStarted?: (runId: string) => void;
 }) {
@@ -96,7 +98,7 @@ export function ChangeIt({ projectId, runId, actor, onClose, onStarted, app = ""
   const steerGate = useGate("code_task:steer");
   const conveneGate = useGate("meeting:convene");
   const [picked, setPicked] = useState<string | null>(null);
-  const [message, setMessage] = useState("");
+  const [message, setMessage] = useState(initialMessage);
   const [expected, setExpected] = useState("");
   const [through, setThrough] = useState("");
   const [busy, setBusy] = useState(false);

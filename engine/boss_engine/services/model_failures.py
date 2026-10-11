@@ -224,7 +224,7 @@ def technical_summary(error: object) -> str:
 def explain_turn_failure(error: object, *, source_id: Optional[str] = None) -> dict:
     """THE ONE SENTENCE for an agent turn that failed — the dock, AgentChat, a room, a step.
 
-    goldeneye showed the operator "BOSS could not complete that turn: IntegrityError:
+    An existing install showed the operator "BOSS could not complete that turn: IntegrityError:
     (psycopg.errors.UniqueViolation) duplicate key value … [SQL: INSERT INTO agent_threads …"
     — a database's diagnostics in a chat bubble. The visible message is `headline` + `action`
     (`sentence`); `detail` is technical_summary, for a collapsed Details and the server log.

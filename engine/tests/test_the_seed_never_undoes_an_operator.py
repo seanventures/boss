@@ -48,6 +48,8 @@ CALLERS = {
     "services/skill_definitions.py::sync_role_skills -> assign_skill_to_role": "seed path below",
     "services/specpack.py::* -> _upsert_role_spec": "the writer itself asks seed_exclusions",
     "services/agent_studio.py::_seed_agent -> _upsert_role_spec": "seed path below",
+    "services/agent_instructions.py::skill_from_file -> assign_skill_to_role":
+        "operator: a person imports a guide and explicitly grants it in the same transaction",
     "services/skill_packaging.py::import_mcp -> ensure_mcp_server":
         "an operator's import; lifts the exclusion first",
     "services/agents.py::* -> assign_skill_to_role": "operator: the agent resource",

@@ -133,7 +133,7 @@ class ModelGatewayService:
                        entitlement_kind, owner_type, owner_id,
                        multi_tenant_allowed, auth_method, credential_ref,
                        credential_secret_ref_id, connection_ref, connection_status,
-                       cost_mode, limit_shape, observed_capacity, runtime_supported
+                       cost_mode, limit_shape, observed_capacity, runtime_supported, connection_metadata
                 FROM entitlement_sources
                 WHERE project_id = :project_id AND source_id = :source_id
                 FOR UPDATE
@@ -437,6 +437,34 @@ class ModelGatewayService:
             raise ModelGatewayLeaseError("Model capacity lease has expired.")
         return payload
 
+    def _check_legacy_financial_hold(
+        self, connection: Connection, project_id: str, *, included: bool,
+        estimate: int, reservation_id: Optional[str] = None, require_reservation: bool = False,
+    ) -> None:
+        hold = (self.budget.legacy_model_reconciliation(connection, project_id)
+                or self.budget.legacy_provider_reconciliation(connection, project_id))
+        if not hold:
+            return
+        zero_cash = (included and type(estimate) is int and estimate == 0
+                     and (not require_reservation or bool(reservation_id)))
+        if reservation_id:
+            reservation = connection.execute(text(
+                "SELECT amount_usd_micros,status,expires_at FROM budget_reservations WHERE id=:r AND project_id=:p"),
+                {"r": reservation_id, "p": project_id}).mappings().first()
+            zero_cash = bool(zero_cash and reservation and reservation['amount_usd_micros'] == 0
+                             and reservation['status'] == 'active' and reservation['expires_at'] > now_utc())
+        if not zero_cash:
+            raise ModelCapacityDeniedError(hold['message'])
+
+    def _check_legacy_lease(self, connection: Connection, project_id: str, lease: dict) -> None:
+        source = connection.execute(text(
+            "SELECT entitlement_kind,cost_mode FROM entitlement_sources WHERE id=:id AND project_id=:p"),
+            {"id": lease['entitlement_source_id'], "p": project_id}).mappings().first()
+        self._check_legacy_financial_hold(
+            connection, project_id, included=source_is_included(dict(source) if source else None),
+            estimate=lease['estimated_cost_usd_micros'],
+            reservation_id=lease.get('budget_reservation_id'), require_reservation=True)
+
     def acquire(
         self,
         connection: Connection,
@@ -495,6 +523,7 @@ class ModelGatewayService:
                 raise ModelGatewayLeaseError(
                     "Model capacity dedupe key is already bound to another job scope."
                 )
+            self._check_legacy_lease(connection, project_id, dict(existing))
             return {"lease": self._serialize_lease(dict(existing)), "lease_token": None, "duplicate": True}
 
         decision = self.entitlements.simulate_model_route_decision(
@@ -521,6 +550,9 @@ class ModelGatewayService:
         # is $0 of money (included_spend.py), a gate rather than a hold.
         paid = (source["source_kind"] in self.PAID_SOURCE_KINDS
                 and not source_is_included(source))
+        self._check_legacy_financial_hold(
+            connection, project_id, included=source_is_included(source),
+            estimate=estimated_cost_usd_micros, reservation_id=existing_reservation_id)
         if paid and not source.get("credential_secret_ref_id"):
             raise ModelCapacityDeniedError(
                 "Paid gateway capacity requires a canonical SecretRef credential binding."
@@ -528,18 +560,35 @@ class ModelGatewayService:
         self._expire_source_leases(
             connection, project_id, source["id"], actor=worker_id
         )
-        max_concurrent = max(1, int((source.get("limit_shape") or {}).get("max_concurrent", 1)))
-        active_count = int(
-            connection.execute(
-                text(
-                    """
-                    SELECT count(*) FROM model_gateway_leases
-                    WHERE entitlement_source_id=:source_id AND status='active' AND expires_at > now()
-                    """
-                ),
-                {"source_id": source["id"]},
-            ).scalar_one()
-        )
+        metadata = source.get("connection_metadata") or {}
+        group = str(metadata.get("capacity_group") or source["source_id"])
+        grouped = connection.execute(text(
+            "SELECT pg_try_advisory_xact_lock(hashtextextended(:k, 0))"),
+            {"k": f"model-capacity:{project_id}:{group}"}).scalar_one()
+        if not grouped:
+            raise ModelCapacityDeniedError("Selected model capacity admission is busy; retry shortly.")
+        source_limit = max(1, int((source.get("limit_shape") or {}).get("max_concurrent", 1)))
+        source_count = int(connection.execute(text(
+            "SELECT count(*) FROM model_gateway_leases WHERE entitlement_source_id=:s "
+            "AND status='active' AND expires_at > now()"), {"s": source["id"]}).scalar_one())
+        if source_count >= source_limit:
+            raise ModelCapacityDeniedError("Selected model source has no concurrent lease capacity.")
+        # A temporary proof candidate shares the original connection's capacity,
+        # rather than manufacturing a second slot. Normal ungrouped sources keep
+        # their existing source identity and limit. Never wait while holding budget locks.
+        canonical_limit = connection.execute(text(
+            "SELECT limit_shape FROM entitlement_sources WHERE project_id=:p "
+            "AND COALESCE(connection_metadata->>'capacity_group',source_id)=:g "
+            "AND COALESCE(connection_metadata->>'proof_only','false') <> 'true' "
+            "ORDER BY created_at LIMIT 1"), {"p": project_id, "g": group}).scalar()
+        limits = canonical_limit if isinstance(canonical_limit, dict) else source.get("limit_shape") or {}
+        max_concurrent = max(1, int(limits.get("max_concurrent", 1)))
+        active_count = int(connection.execute(text(
+            "SELECT count(*) FROM model_gateway_leases l "
+            "JOIN entitlement_sources s ON s.id=l.entitlement_source_id "
+            "WHERE l.project_id=:p AND l.status='active' AND l.expires_at > now() "
+            "AND COALESCE(s.connection_metadata->>'capacity_group',s.source_id)=:g"),
+            {"p": project_id, "g": group}).scalar_one())
         if active_count >= max_concurrent:
             raise ModelCapacityDeniedError("Selected model source has no concurrent lease capacity.")
 
@@ -696,6 +745,7 @@ class ModelGatewayService:
         self._safe_metadata(metadata)
         lease = self._load_lease(connection, project_id, lease_id, worker_id, lease_token)
         self.jobs.require_active_lease(connection, worker_id, lease["job_id"], job_lease_token)
+        self._check_legacy_lease(connection, project_id, lease)
         existing = connection.execute(
             text("SELECT * FROM model_gateway_invocations WHERE project_id=:p AND dedupe_key=:d"),
             {"p": project_id, "d": dedupe_key},

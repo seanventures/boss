@@ -104,13 +104,41 @@ need_install() {
 # .env is data, not shell code.
 env_value() { grep -m 1 "^$1=" "$ENV_FILE" 2>/dev/null | cut -d= -f2- || true; }
 
+# ---- scoped sudo Docker fallback ------------------------------------------
+# Keep this small boundary identical in the installer and lifecycle helpers.
+# sudo resets selection variables and uses root's Docker configuration.
+boss_sudo_scope_safe() {
+  _boss_docker_os="$(uname -s)" || return 1
+  [ "$_boss_docker_os" = Linux ] || return 1
+  [ -z "${DOCKER_HOST:-}${DOCKER_CONTEXT:-}${DOCKER_CONFIG:-}${DOCKER_TLS:-}${DOCKER_TLS_VERIFY:-}${DOCKER_CERT_PATH:-}" ] || return 1
+  if [ "${2:-}" != restore ]; then
+  [ "${COMPOSE_PROJECT_NAME:-boss-community}" = boss-community ] || return 1
+  [ "${BOSS_COMMUNITY_IMAGE_TAG:-boss-community}" = boss-community ] || return 1
+  if [ -f "$1" ]; then
+    [ -r "$1" ] || return 1
+    awk '
+      NR == 1 { sub(/^\357\273\277/, "") }
+      /^[[:space:]]*(export[[:space:]]+)?(COMPOSE_PROJECT_NAME|BOSS_COMMUNITY_IMAGE_TAG)([[:space:]]|=|:|$)/ {
+        if ($0 !~ /^(COMPOSE_PROJECT_NAME|BOSS_COMMUNITY_IMAGE_TAG)=(boss-community)?$/) exit 1
+        split($0, field, "="); if (seen[field[1]]++) exit 1
+      }
+    ' "$1" || return 1
+  fi
+  fi
+  _boss_docker_context="$(docker context show 2>/dev/null)" || return 1
+  [ "$_boss_docker_context" = default ] || return 1
+  _boss_docker_endpoint="$(docker context inspect default --format '{{.Endpoints.docker.Host}}' 2>/dev/null)" || return 1
+  [ "$_boss_docker_endpoint" = unix:///var/run/docker.sock ]
+}
+# ---- end scoped sudo Docker fallback --------------------------------------
+
 docker_cmd() {
   if docker info >/dev/null 2>&1; then
     DOCKER=(docker)
-  elif command -v sudo >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then
-    DOCKER=(sudo -n docker)
+  elif boss_sudo_scope_safe "$ENV_FILE" && command -v sudo >/dev/null 2>&1 && sudo -n docker --host unix:///var/run/docker.sock info >/dev/null 2>&1; then
+    DOCKER=(sudo -n docker --host unix:///var/run/docker.sock)
   else
-    die "Docker is unavailable to this user. Start Docker, or grant noninteractive sudo access to Docker."
+    die "Docker is unavailable. Cannot safely use sudo for this Docker selection. Use direct Docker access for custom projects, contexts or connection settings."
   fi
 }
 

@@ -66,11 +66,19 @@ export function ProjectStrip({ projectId, area }: { projectId: string; area?: st
   // What exists versus what arrived. A strip that shows 40 of 59 and says nothing is making
   // the same false claim of absence as one that shows nothing at all.
   const [total, setTotal] = useState(0);
+  const [confirmedEmpty, setConfirmedEmpty] = useState(false);
   // True only while a REFRESH is in flight, never during the first load — the first load has
   // its own "loading" state, and showing both makes the header flicker twice.
   const [refreshing, setRefreshing] = useState(false);
 
+  const scopeGeneration = useRef(0);
+  // Visibility and polling can overlap the first request; only the newest request may settle it.
+  const requestSequence = useRef(0);
+
   const load = useCallback(async (mode: "first" | "refresh") => {
+    const generation = scopeGeneration.current;
+    const request = ++requestSequence.current;
+    const isCurrent = () => generation === scopeGeneration.current && request === requestSequence.current;
     if (!projectId) return;
     if (mode === "refresh") setRefreshing(true);
     try {
@@ -78,16 +86,20 @@ export function ProjectStrip({ projectId, area }: { projectId: string; area?: st
         `/api/projects-strip?project_id=${encodeURIComponent(projectId)}`, { cache: "no-store" });
       const body = (await r.json()) as
         { projects?: StripProject[]; total?: number; error?: string };
+      if (!isCurrent()) return;
       if (!r.ok) {
         // A FAILED REFRESH MUST NOT EMPTY A GOOD STRIP.
         //
         // Blanking what is already on screen because a later poll failed is worse than showing
         // slightly stale rows: the operator loses the list they were reading, for a reason they
-        // cannot see. Only the first load is allowed to end in the failed state.
+        // cannot see. Before any result arrives, a failed refresh is still an initial-load failure.
         if (mode === "first") {
           setState("failed");
-          setError(body.error ?? `API returned ${r.status}`);
+        } else {
+          setState((current) => current === "loading" ? "failed" : current);
         }
+        setConfirmedEmpty(false);
+        setError(body.error ?? `API returned ${r.status}`);
         return;
       }
         // SAME NAME AS THE CARD IT OPENS.
@@ -100,19 +112,32 @@ export function ProjectStrip({ projectId, area }: { projectId: string; area?: st
         ...p, title: appIdentity({ title: p.title }).name,
       })));
       setTotal(Number(body.total ?? (body.projects ?? []).length));
+      // Omit the empty shortcut only when the server explicitly confirms the whole list is empty.
+      setConfirmedEmpty(body.total === 0 && Array.isArray(body.projects) && body.projects.length === 0);
       setState("ready");
       setError(null);
     } catch (e) {
-      if (mode === "first") {
-        setState("failed");
-        setError(String((e as Error)?.message ?? e));
-      }
+      if (!isCurrent()) return;
+      if (mode === "first") setState("failed");
+      else setState((current) => current === "loading" ? "failed" : current);
+      setConfirmedEmpty(false);
+      setError(String((e as Error)?.message ?? e));
     } finally {
-      setRefreshing(false);
+      if (isCurrent()) setRefreshing(false);
     }
   }, [projectId]);
 
-  useEffect(() => { void load("first"); }, [load]);
+  useEffect(() => {
+    // ConsoleShell reuses this header across projects. Only the current scope may confirm
+    // emptiness, report an error, or finish a refresh; old requests can settle after a switch.
+    scopeGeneration.current += 1;
+    setState("loading");
+    setConfirmedEmpty(false);
+    setError(null);
+    setRefreshing(false);
+    void load("first");
+    return () => { scopeGeneration.current += 1; };
+  }, [load]);
 
   // IT HAS TO KEEP PULLING.
   //
@@ -302,6 +327,8 @@ export function ProjectStrip({ projectId, area }: { projectId: string; area?: st
     );
   }
 
+  if (confirmedEmpty) return null;
+
   return (
     <nav className="bx-strip" aria-label={STRIP_LABEL} data-state="ready" data-testid="bx-strip" ref={pickerRef}>
       <button type="button" className="bx-project-trigger" aria-expanded={expanded}
@@ -313,6 +340,7 @@ export function ProjectStrip({ projectId, area }: { projectId: string; area?: st
           </span> : null}
         <span aria-hidden>{expanded ? "⌃" : "⌄"}</span>
       </button>
+      {error ? <span className="bx-strip-note bx-strip-error" role="status">Could not refresh — {error}</span> : null}
       <span className="bx-strip-label">
         {/* WHAT IS MISSING, ON THE LABEL THAT CLAIMS TO LIST THEM.
             Shown only when the strip does not have them all — a count beside every list is

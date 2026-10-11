@@ -258,7 +258,7 @@ function useAsks(projectId: string): Asks | null {
   return asks;
 }
 
-/** The apps this project has built (GET /v1/factory/apps), for "Which app?". */
+/** The apps this project has built (GET /v1/factory/apps), for "App". */
 function useApps(projectId: string, wanted: boolean): { apps: AppRow[]; loaded: boolean } {
   const [apps, setApps] = useState<AppRow[]>([]);
   const [loaded, setLoaded] = useState(false);
@@ -955,10 +955,10 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
   const newBrief = (
     <>
       <div>
-        <div className="np-lbl"><label htmlFor="dw-new-directive">What should it do?</label>
+        <div className="np-lbl"><label htmlFor="dw-new-directive">Brief</label>
           <HelpTip label="Project description"
                    text="The panel and builder use your words. Say what it does and what a person can do with it." /></div>
-        <BigBox id="dw-new-directive" testid="dw-new-directive" label="What should it do?"
+        <BigBox id="dw-new-directive" testid="dw-new-directive" label="Brief"
                 value={draft.directive} onChange={(v) => set("directive", v)}
                 placeholder={"A shift-swap board where staff can offer a shift they cannot work "
                   + "and colleagues can claim it, with the manager approving the swap."}
@@ -990,7 +990,7 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
         </div>
       </div>
       <div>
-        <div className="np-lbl">Done when <em>how you&apos;ll know it works</em>
+        <div className="np-lbl">Done when
           <HelpTip label="Acceptance criteria"
                    text="These become acceptance criteria: checks for the build. Leave them out and the panel proposes some for your approval." /></div>
         <Checks checks={draft.criteria} onChange={(c) => set("criteria", c)} testid="dw-new-criterion"
@@ -1023,7 +1023,7 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
   const addBrief = (
     <>
       <div>
-        <div className="np-lbl">Which app? <em>{apps.length} built by your team</em></div>
+        <div className="np-lbl">App <em>{apps.length} built by your team</em></div>
         <div className="np-find">
           <input className="input np-line" value={appQuery} placeholder="Find an app…" aria-label="Find an app"
                  data-testid="np-app-find" onChange={(e) => setAppQuery(e.target.value)} />
@@ -1052,8 +1052,8 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
         </div>
       </div>
       <div>
-        <div className="np-lbl"><label htmlFor="np-gain">What should it gain?</label></div>
-        <BigBox id="np-gain" testid="np-gain" label="What should it gain?" value={gain}
+        <div className="np-lbl"><label htmlFor="np-gain">Change</label></div>
+        <BigBox id="np-gain" testid="np-gain" label="Change" value={gain}
                 onChange={(v) => { setGain(v); setProposal(null); }}
                 placeholder="Let a sales rep snooze a lead until a date."
                 onFull={() => setFull("gain")} onSubmit={() => void primary()} />
@@ -1075,7 +1075,7 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
         </div>
       </div>
       <div>
-        <div className="np-lbl">Done when <em>how you&apos;ll know it works</em></div>
+        <div className="np-lbl">Done when</div>
         <Checks checks={addChecks} onChange={(c) => { setAddChecks(c); setProposal(null); }}
                 testid="np-check" placeholder="A snoozed lead comes back on its date" />
       </div>
@@ -1106,12 +1106,12 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
 
   const livesIn = adding ? (
     <div className="np-fact" data-testid="np-lands">
-      <small>Lands as</small>
+      <small>Result</small>
       <b title="From the app's PR: an open one is updated on its branch; a merged one means a new PR">{landsAs(app)}</b>
     </div>
   ) : needsRepository ? (
     <div className="np-fact" data-testid="np-lives">
-      <small>Lives in<button type="button" className="np-fact-act" aria-expanded={editRepo}
+      <small>Repository<button type="button" className="np-fact-act" aria-expanded={editRepo}
                              data-testid="np-repo-change" onClick={() => setEditRepo((v) => !v)}>
         {editRepo ? "Done" : "Change"}</button></small>
       <b data-user-text>{draft.repository || suggested?.name
@@ -1206,12 +1206,12 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
                 </span>
               </div>
             ) : (
-              <div className="np-base np-base-empty">Pick an app on the left.</div>
+              <div className="np-base np-base-empty">Pick an app.</div>
             )}
           </div>
         ) : null}
         <div>
-          <div className="np-lbl">{formOnly ? "How it runs" : "How it gets built"}</div>
+          <div className="np-lbl">Workflow</div>
           {formOnly ? null : (
             <div className="np-paths" role="radiogroup" aria-label="Path" data-n={cards.length}>
               {cards.map((c) => {
@@ -1317,9 +1317,9 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
         ) : (
           <div className="np-mode" role="radiogroup" aria-label="What are you making?" data-testid="np-mode">
             <button type="button" role="radio" aria-checked={!adding} data-testid="np-mode-new"
-                    onClick={() => setMode("new")}><span aria-hidden>✦</span>A new app</button>
+                    onClick={() => setMode("new")}>New app</button>
             <button type="button" role="radio" aria-checked={adding} data-testid="np-mode-add"
-                    onClick={() => setMode("add")}><span aria-hidden>＋</span>Add to an existing app</button>
+                    onClick={() => setMode("add")}>Add a feature</button>
           </div>
         )}
         <span className="np-spacer" />
@@ -1368,7 +1368,7 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
       </footer>
       {error ? <p className="dw-new-error" role="alert" data-testid="dw-new-error" data-user-text>{error}</p> : null}
       {full ? (
-        <FullEditor label={full === "brief" ? "What should it do?" : "What should it gain?"}
+        <FullEditor label={full === "brief" ? "Brief" : "Change"}
                     value={full === "brief" ? draft.directive : gain}
                     onChange={(v) => (full === "brief" ? set("directive", v) : setGain(v))}
                     onClose={() => setFull(null)} />

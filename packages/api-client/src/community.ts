@@ -1790,10 +1790,37 @@ export type ReportSummaryResponse = {
   decision_latency: { count: number; avg_seconds: number };
 };
 
+/** One unresolved historical model call; the original estimate is not an invoice or a total. */
+export type LegacyFinancialHold = {
+  reservation_id: string;
+  lease_id: string;
+  invocation_id: string;
+  receipt_id: string;
+  original_reservation_status: "expired" | "released";
+  original_estimate_usd_micros: number;
+  decision_id: string | null;
+  message: string;
+};
+
+/** One unresolved historical provider attempt; the original estimate is not an invoice or a total. */
+export type LegacyProviderHold = {
+  reservation_id: string;
+  changeset_id: string;
+  operation_id: string;
+  resource_receipt_id: string;
+  receipt_id: string;
+  original_reservation_status: "expired" | "released";
+  original_estimate_usd_micros: number;
+  decision_id: string | null;
+  message: string;
+};
+
 export type BudgetStatusResponse = {
   scope_type: string;
   scope_id: string;
   budget_state: string;
+  legacy_financial_hold?: LegacyFinancialHold | null;
+  legacy_provider_hold?: LegacyProviderHold | null;
   cap_usd_micros: number;
   reserved_usd_micros: number;
   actual_usd_micros: number;

@@ -18,6 +18,36 @@ from .typed_decision_spend import (
 )
 
 
+def settled_text_cost(usage: dict, *, included: bool) -> int:
+    """The shared strict cost-evidence rule for a pinned text reply."""
+    from .openai_adapter import estimate_cost_usd_micros, price_for_model
+
+    token_keys = ("prompt_tokens", "completion_tokens")
+    explicit_cost = usage.get("cost_usd_micros")
+    known_cost = isinstance(explicit_cost, int) and not isinstance(explicit_cost, bool) \
+        and explicit_cost >= 0
+    priced_tokens = (usage.get("model") and all(
+        isinstance(usage.get(k), int) and not isinstance(usage[k], bool)
+        and usage[k] >= 0 for k in token_keys
+    ) and all(k not in usage or (isinstance(usage[k], int)
+        and not isinstance(usage[k], bool) and usage[k] >= 0)
+        for k in ("cache_read_tokens", "cache_write_tokens"))
+        and sum(usage[k] for k in token_keys) > 0 and price_for_model(
+        str(usage["model"]), provider=str(usage.get("provider") or ""),
+        endpoint=str(usage.get("base_url") or ""),
+    )[2])
+    if not included and not (known_cost or priced_tokens):
+        raise RuntimeError("Architecture reply has no usable paid cost/usage evidence.")
+    # The shared estimator accepts convertible explicit values. This paid
+    # boundary accepts only typed nonnegative costs, and must not let an
+    # invalid override replace otherwise valid priced token evidence.
+    costing_usage = dict(usage)
+    if not known_cost:
+        costing_usage.pop("cost_usd_micros", None)
+    cost = estimate_cost_usd_micros(costing_usage)
+    return cost
+
+
 class ArchitectureSpend(TypedDecisionSpend):
     job_kind = "architecture.draft"
     agent_id = "chief_architect"
@@ -111,7 +141,7 @@ class ArchitectureSpend(TypedDecisionSpend):
                  version: int, check_work: Callable[[], None]) -> tuple[str, str, dict]:
         from .included_spend import source_by_id, source_is_included
         from .model_router.failover import FailoverChatAdapter
-        from .openai_adapter import estimate_cost_usd_micros, price_for_model, single_attempt
+        from .openai_adapter import single_attempt
 
         check_work()
         choice = getattr(adapter, "_boss_choice", None)
@@ -202,29 +232,7 @@ class ArchitectureSpend(TypedDecisionSpend):
             included = self.commit(lambda c: source_is_included(
                 source_by_id(c, self.project_id, source_id),
             ))
-            token_keys = ("prompt_tokens", "completion_tokens")
-            explicit_cost = usage.get("cost_usd_micros")
-            known_cost = isinstance(explicit_cost, int) and not isinstance(explicit_cost, bool) \
-                and explicit_cost >= 0
-            priced_tokens = (usage.get("model") and all(
-                isinstance(usage.get(k), int) and not isinstance(usage[k], bool)
-                and usage[k] >= 0 for k in token_keys
-            ) and all(k not in usage or (isinstance(usage[k], int)
-                and not isinstance(usage[k], bool) and usage[k] >= 0)
-                for k in ("cache_read_tokens", "cache_write_tokens"))
-                and sum(usage[k] for k in token_keys) > 0 and price_for_model(
-                str(usage["model"]), provider=str(usage.get("provider") or ""),
-                endpoint=str(usage.get("base_url") or ""),
-            )[2])
-            if not included and not (known_cost or priced_tokens):
-                raise RuntimeError("Architecture reply has no usable paid cost/usage evidence.")
-            # The shared estimator accepts convertible explicit values. This paid
-            # boundary accepts only typed nonnegative costs, and must not let an
-            # invalid override replace otherwise valid priced token evidence.
-            costing_usage = dict(usage)
-            if not known_cost:
-                costing_usage.pop("cost_usd_micros", None)
-            cost = estimate_cost_usd_micros(costing_usage)
+            cost = settled_text_cost(usage, included=included)
             batch = SimpleNamespace(cost_usd_micros=cost, usage=usage,
                                     backend=source_id, model=usage.get("model") or source_id)
             self.commit(lambda c: self._settle_success(c, authority, batch, raw))

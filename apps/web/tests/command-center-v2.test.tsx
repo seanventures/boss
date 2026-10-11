@@ -139,7 +139,7 @@ describe("the hero", () => {
     expect($('#cc-compose .askboss')?.getAttribute("data-layout")).toBe("hero");
     expect(tid("askboss-input")).not.toBeNull();
     expect(tid("askboss-talk")?.textContent).toBe("Talk to BOSS");
-    expect(tid("split-build")?.textContent).toBe("Build →");
+    expect(tid("split-build")?.textContent).toBe("Review build →");
     expect(tid("askboss-add-existing")?.getAttribute("href")).toContain("compose=add");
     expect(tid("askboss-add-existing")?.getAttribute("href")).toContain("org=org_1");
   });
