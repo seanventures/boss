@@ -130,10 +130,10 @@ describe("presentation", () => {
     expect(CSS).toContain(".bx-strip-filters { flex: 0 0 auto;");
   });
 
-  it("sticks directly under the top bar, with no gap to show the page through", () => {
+  it("scrolls with the page rather than pinning a second row", () => {
     const rule = CSS.slice(CSS.indexOf(".bx-strip {"), CSS.indexOf(".bx-strip-label {"));
-    expect(rule).toContain("position: sticky");
-    expect(rule).toContain("top: 62px");          // exactly .bx-topbar's height
+    expect(rule).toContain("position: relative");
+    expect(rule).not.toContain("position: sticky");
   });
 
   it("never leaves colour as the only carrier of status", () => {

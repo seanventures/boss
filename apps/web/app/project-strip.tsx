@@ -66,6 +66,7 @@ export function ProjectStrip({ projectId, area }: { projectId: string; area?: st
   // What exists versus what arrived. A strip that shows 40 of 59 and says nothing is making
   // the same false claim of absence as one that shows nothing at all.
   const [total, setTotal] = useState(0);
+  const [confirmedEmpty, setConfirmedEmpty] = useState(false);
   // True only while a REFRESH is in flight, never during the first load — the first load has
   // its own "loading" state, and showing both makes the header flicker twice.
   const [refreshing, setRefreshing] = useState(false);
@@ -86,8 +87,9 @@ export function ProjectStrip({ projectId, area }: { projectId: string; area?: st
         // cannot see. Only the first load is allowed to end in the failed state.
         if (mode === "first") {
           setState("failed");
-          setError(body.error ?? `API returned ${r.status}`);
         }
+        setConfirmedEmpty(false);
+        setError(body.error ?? `API returned ${r.status}`);
         return;
       }
         // SAME NAME AS THE CARD IT OPENS.
@@ -100,13 +102,14 @@ export function ProjectStrip({ projectId, area }: { projectId: string; area?: st
         ...p, title: appIdentity({ title: p.title }).name,
       })));
       setTotal(Number(body.total ?? (body.projects ?? []).length));
+      // Omit the empty shortcut only when the server explicitly confirms the whole list is empty.
+      setConfirmedEmpty(body.total === 0 && Array.isArray(body.projects) && body.projects.length === 0);
       setState("ready");
       setError(null);
     } catch (e) {
-      if (mode === "first") {
-        setState("failed");
-        setError(String((e as Error)?.message ?? e));
-      }
+      if (mode === "first") setState("failed");
+      setConfirmedEmpty(false);
+      setError(String((e as Error)?.message ?? e));
     } finally {
       setRefreshing(false);
     }
@@ -302,6 +305,8 @@ export function ProjectStrip({ projectId, area }: { projectId: string; area?: st
     );
   }
 
+  if (confirmedEmpty) return null;
+
   return (
     <nav className="bx-strip" aria-label={STRIP_LABEL} data-state="ready" data-testid="bx-strip" ref={pickerRef}>
       <button type="button" className="bx-project-trigger" aria-expanded={expanded}
@@ -313,6 +318,7 @@ export function ProjectStrip({ projectId, area }: { projectId: string; area?: st
           </span> : null}
         <span aria-hidden>{expanded ? "⌃" : "⌄"}</span>
       </button>
+      {error ? <span className="bx-strip-note bx-strip-error" role="status">Could not refresh — {error}</span> : null}
       <span className="bx-strip-label">
         {/* WHAT IS MISSING, ON THE LABEL THAT CLAIMS TO LIST THEM.
             Shown only when the strip does not have them all — a count beside every list is
