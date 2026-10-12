@@ -218,6 +218,19 @@ describe("(A) the step's activity, and the way straight into its log", () => {
     expect(href.searchParams.get("step_name")).toBe("Plan it");
   });
 
+  it("a step that succeeded counts what it hit along the way as recovered, not as errors", async () => {
+    window.history.replaceState({}, "", "/?org=org_boss&project=p1&area=delivery_workflows&wfr=wfr_1");
+    function Probe() {
+      const state = useStepActivity("p1", "wfr_1", "plan", false, "succeeded:1");
+      return <StepActivity state={state} live={false} settled
+                           href={stepLogHref(window.location.search, "wfr_1", "plan", { step: "Plan it", run: "Ship it" })} />;
+    }
+    await render(<Probe />);
+    const loud = q('[data-testid="dw-step-log-loud"]')!;
+    expect(loud.textContent?.trim()).toBe("1 recovered");
+    expect(loud.getAttribute("data-level")).toBe("recovered");
+  });
+
   it("the activity log opened on that link is scoped to the step, and says so", async () => {
     window.history.replaceState({}, "", "/?area=activity&wfr=wfr_1&step=plan&step_name=Plan+it&run_name=Lead+Triage+Inbox");
     await render(<LogExplorer projectId="p1" actor="ceo" />);

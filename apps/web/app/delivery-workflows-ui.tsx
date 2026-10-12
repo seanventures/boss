@@ -3574,7 +3574,8 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
         <StepOutputFacts facts={output.facts} details={output.details} />
         </>) : undefined}
       </StepSection>
-      {workflowRunId ? <StepActivity state={activity} href={logHref} live={phase === "now"} /> : null}
+      {workflowRunId ? <StepActivity state={activity} href={logHref} live={phase === "now"}
+                                      settled={phase === "done" || phase === "findings"} /> : null}
     </section>
   );
 }

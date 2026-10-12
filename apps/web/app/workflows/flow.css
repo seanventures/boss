@@ -430,3 +430,4 @@
 .wf-stepout-details > summary { cursor: pointer; font-size: 0.75rem; color: var(--faint); }
 .wf-step-sec-loud { font-size: 0.75rem; font-weight: 600; color: var(--amber); }
 .wf-step-sec-loud[data-level="error"] { color: var(--red); }
+.wf-step-sec-loud[data-level="recovered"] { color: var(--muted); font-weight: 500; }

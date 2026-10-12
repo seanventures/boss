@@ -137,7 +137,18 @@ def test_the_turns_that_changed_something_are_info():
 
 def test_a_failing_tool_result_is_an_error():
     """The single most useful line in a failed build."""
-    assert classify("tool_result", tool_name="Bash", content="npm ERR! failed") == "error"
+    # The TOOL says it failed (the CLI's is_error, which a non-zero exit sets): that is an error.
+    assert classify("tool_result", tool_name="Bash", content="npm ERR! failed", ok=False) == "error"
+    # The same words in a result the tool reported as fine are a hint, not a failure.
+    assert classify("tool_result", tool_name="Bash", content="npm ERR! failed") == "warn"
+
+
+def test_a_successful_read_is_never_an_error_whatever_the_file_says():
+    """A HelpDesk build showed "29 errors": 22 were reads of code that handles errors."""
+    code = "try { await run() } catch (error) { throw new Error('failed: ' + error) }"
+    assert classify("tool_result", tool_name="Read", content=code) == "verbose"
+    assert classify("tool_result", tool_name="Grep", content="src/a.ts: Error") == "verbose"
+    assert classify("tool_result", tool_name="Read", content=code, ok=False) == "error"
     assert classify("tool_result", content="anything", ok=False) == "error"
 
 

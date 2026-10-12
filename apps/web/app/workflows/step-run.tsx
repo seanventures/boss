@@ -472,17 +472,28 @@ export function StepOutputFacts({ facts, details }: { facts: OutputFact[]; detai
 }
 
 /** The step's log as sentences, errors first, and the way into its whole log. */
-export function StepActivity({ state, href, live }: { state: StepActivityState; href: string; live: boolean }) {
+export function StepActivity({ state, href, live, settled = false }: {
+  state: StepActivityState; href: string; live: boolean;
+  /** The step SUCCEEDED: what went wrong along the way was fixed by the step itself. */
+  settled?: boolean;
+}) {
   const rows = state.rows.slice(0, STEP_ACTIVITY_ROWS);
-  const loud = [state.errors ? `${state.errors} error${state.errors === 1 ? "" : "s"}` : "",
-                state.warnings ? `${state.warnings} warning${state.warnings === 1 ? "" : "s"}` : ""]
-    .filter(Boolean).join(" · ");
+  // A BUILD THAT PASSED DID NOT END IN 29 ERRORS. Failing a test before fixing it is how the
+  // work is done; once the step has succeeded those are counted as recovered, in a neutral
+  // voice, and red is kept for a step that is still failing or has failed.
+  const loud = settled
+    ? (state.errors ? `${state.errors} recovered` : "")
+    : [state.errors ? `${state.errors} error${state.errors === 1 ? "" : "s"}` : "",
+       state.warnings ? `${state.warnings} warning${state.warnings === 1 ? "" : "s"}` : ""]
+      .filter(Boolean).join(" · ");
   return (
     <section className="wf-step-sec" data-testid="dw-step-activity" aria-label="Activity">
       <header className="wf-step-sec-head">
         <span className="eyebrow">Activity</span>
         {loud ? <span className="wf-step-sec-loud" data-testid="dw-step-log-loud"
-                      data-level={state.errors ? "error" : "warn"}>{loud}</span> : null}
+                      data-level={settled ? "recovered" : state.errors ? "error" : "warn"}
+                      title={settled ? "Problems the step hit and fixed before it succeeded" : undefined}>
+                  {loud}</span> : null}
         <a className="wf-link wf-step-sec-link" href={href} data-testid="dw-step-log">Step log →</a>
       </header>
       {!state.loaded ? (
