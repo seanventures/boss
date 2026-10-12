@@ -87,6 +87,9 @@ CARRIED_OUT_ON_APPROVAL = frozenset({
     "deploy_stack",
     # Approving a planned host deployment approves its ChangeSet and queues the apply.
     "deploy_host",
+    # Approving a held destroy/restore of a provisioned resource queues its leased
+    # `infra.operation` job (platform/operations.on_decision_approved).
+    "infra_operation",
     # Approving an architecture records it on its review; the waiting step then succeeds and
     # every later build receives the approved document (architecture_docs.on_decision_answered).
     "review_architecture",
