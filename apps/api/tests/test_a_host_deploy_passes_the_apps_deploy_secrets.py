@@ -200,3 +200,22 @@ def test_an_optional_secret_never_refuses_and_a_generated_one_is_made_for_deploy
         passed, missing = app_secrets.deploy_secrets(c, project_id=HOME, app_key=app["key"])
     assert missing == ["PAY_KEY has no deploy value"]
     assert {"name": "SESS_KEY", "mode": "generated", "source": "app_secret", "env": "deploy"} in passed
+
+
+def test_a_stack_reads_the_same_deploy_environment_including_the_apps_own_settings(engine, hosted, app):  # noqa: F811
+    """The stack deploy's reader (stack_deploy.app_deploy_env) is the host path's: the app's
+    deploy secrets, and a setting no template declares (DEMO_PASSWORD), set for deploy only."""
+    from boss_engine.services.stack_deploy import app_deploy_env
+
+    _bind(engine, app, mode="test", value=TEST_VALUE)
+    with engine.begin() as c:
+        app_secrets.put(c, org_id=app["org"], project_id=HOME, app_key=app["key"],
+                        name="DEMO_PASSWORD", env="deploy", mode="test", value="demo-pw-123456",
+                        actor_id="ceo", may_live=False,
+                        spec=app_secrets.deploy_value_spec("DEMO_PASSWORD", ["deploy"], "test"))
+        target = dict(c.execute(text("SELECT * FROM deployment_targets WHERE id = :t"),
+                                {"t": hosted["target_id"]}).mappings().one())
+        env = app_deploy_env(c, HOME, target, None)
+        _passed, missing = app_secrets.deploy_secrets(c, project_id=HOME, app_key=app["key"])
+    assert env["PAY_KEY"] == TEST_VALUE and env["DEMO_PASSWORD"] == "demo-pw-123456"
+    assert missing == []

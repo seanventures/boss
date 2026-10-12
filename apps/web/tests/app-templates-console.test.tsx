@@ -338,6 +338,19 @@ describe("App ▸ Setup", () => {
     expect($('[data-testid="tpl-guide-stripe-checkout"]')).toBeTruthy();                  // project:read still shows the guide
   });
 
+  it("an Owner adds an app setting for deploy (DEMO_PASSWORD): one write, deploy only, value never shown", async () => {
+    await mount(<AppSetup projectId="p1" appKey="shop" />, "owner");
+    expect($('[data-testid="tpl-deploy-value-save"]').hasAttribute("disabled")).toBe(true);
+    await type('[data-testid="tpl-deploy-value-name"]', "demo_password");
+    await type('[data-testid="tpl-deploy-value-value"]', "hunter2-demo");
+    await press('[data-testid="tpl-deploy-value-save"]');
+    const put = writes();
+    expect(put.map((c) => [c.method, c.path.split("?")[0], c.body?.envs, c.body?.mode]))
+      .toEqual([["PUT", "/v1/apps/shop/secrets/DEMO_PASSWORD", ["deploy"], "test"]]);
+    expect(document.body.innerHTML).not.toContain("hunter2-demo");
+    expect($('[data-testid="tpl-setup-note"]').textContent).toContain("next deploy passes it");
+  });
+
   it("names its copy values and environment cells in words", () => {
     expect(copyLabel("redirect_uri")).toBe("Redirect URI");
     expect(copyLabel("deploy_url")).toBe("Deployed URL");

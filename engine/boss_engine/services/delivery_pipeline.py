@@ -129,6 +129,25 @@ def target_for(connection, project_id: str, repo: str, environment: str) -> Opti
     return found[0] if found else None
 
 
+def app_name_of_run(run: Any) -> str:
+    """The app a build is, by name: its recorded app name, else the display name `project_name`
+    makes of its directive — the same function the console titles cards with. "" when unknown."""
+    from .naming import project_name
+
+    run = dict(run or {})
+    fctx = run.get("finalize_ctx") or {}
+    if isinstance(fctx, str):
+        try:
+            fctx = json.loads(fctx)
+        except ValueError:
+            fctx = {}
+    app_name = str((fctx or {}).get("app_name") or "").strip()
+    if not app_name:
+        display, _blurb, _label = project_name(str(run.get("title") or ""))
+        app_name = display if display and display != "Untitled app" else ""
+    return app_name
+
+
 def pick_deploy_target(candidates: list[dict], app_name: str) -> Optional[dict]:
     """Return the unique target with this app's identity, never a repo-only match."""
     from .naming import identity_key
@@ -156,8 +175,12 @@ def deploy_build(engine, settings: Settings, *, project_id: str, run_id: str,
                  environment: str = "staging", target_id: Optional[str] = None,
                  actor: str = "operator", expected_cost_usd_micros: int = 0,
                  reservation_id: Optional[str] = None, host_id: Optional[str] = None,
+                 approval_decision_id: Optional[str] = None,
                  ) -> dict[str, Any]:
     """Plan a finished build's first deployment through Resource Plane.
+
+    `approval_decision_id` is the workflow gate's decision when a Deploy step a person already
+    approved started this deploy; it then runs under that approval (deploy_policy).
 
     BOSS could create hosts and targets and could REDEPLOY, and had no way to perform a
     deployment that had never happened. So "deploy Living Colors to live" had no executable
@@ -180,12 +203,14 @@ def deploy_build(engine, settings: Settings, *, project_id: str, run_id: str,
     with begin(engine) as c:
         stack_target = stack_target_for_deploy(
             c, project_id, {"target_id": target_id, "run_id": run_id,
-                            "environment": environment if target_id else ""},
+                            "environment": environment if target_id else "",
+                            "host_id": host_id or ""},
             default_owner=str(getattr(settings, "target_github_owner", "") or ""))
     if stack_target is not None:
         planned = plan_for_workflow_step(engine, settings, project_id=project_id, actor=actor,
                                          target=stack_target, inputs={"run_id": run_id},
-                                         workflow_run_id=None)
+                                         workflow_run_id=None,
+                                         approval_decision_id=approval_decision_id)
         if planned.get("status") == "failed":
             return {"status": "failed", "reason": planned.get("error")}
         return {"status": "planned", "stack_deployment_id": planned["stack_deployment_id"],
@@ -244,15 +269,9 @@ def deploy_build(engine, settings: Settings, *, project_id: str, run_id: str,
                     "ORDER BY created_at DESC"),
                 {"p": project_id, "r": repo, "e": environment}).mappings().all()]
 
-            from .naming import identity_key, project_name
+            from .naming import identity_key
 
-            fctx = run.get("finalize_ctx") or {}
-            app_name = str(fctx.get("app_name") or "").strip()
-            if not app_name:
-                # `project_name` is what everything else in BOSS uses to turn a directive into
-                # the app's display name — the same function the console titles cards with.
-                display, _blurb, _label = project_name(str(run.get("title") or ""))
-                app_name = display if display and display != "Untitled app" else ""
+            app_name = app_name_of_run(run)
 
             wanted = identity_key(app_name) if app_name else ""
 
@@ -377,6 +396,7 @@ def deploy_build(engine, settings: Settings, *, project_id: str, run_id: str,
             expected_cost_usd_micros=expected_cost_usd_micros,
             reservation_id=reservation_id,
             actor=actor,
+            approval_decision_id=approval_decision_id,
         )
         deployment_run_id = planned.get("deployment_run_id") or planned.get("id")
         # A REFUSED PLAN HAS NO RUN ID, and is an answer in words. It was checked after the id,

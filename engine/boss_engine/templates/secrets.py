@@ -49,6 +49,40 @@ def declared_secret(manifests: list[TemplateManifest], name: str) -> Optional[Se
     return None
 
 
+#: Names an app's own deploy value may never take: BOSS's own deploy variables.
+_RESERVED_PREFIXES = ("BOSS_",)
+
+
+def deploy_value_spec(name: str, envs: list[str], mode: str) -> SecretSpec:
+    """The spec for a value a person sets for the app's DEPLOY that no template declares.
+
+    An app reads settings no template knows about — HelpDesk seeds its demo logins only when
+    DEMO_PASSWORD and ALLOW_DEMO_SEED are set — and there was nowhere to set them: the app's
+    Secrets held only template-declared names, and the stack deploy passed nothing else. A
+    deploy-only value is a person's deliberate act for this app, so it is accepted for `deploy`
+    (and only there: builds and previews stay bounded by what the templates declare), as a
+    plain `test`-mode value — never `live`, which is a provider key's approval path. Raises
+    TemplateError in words when the name or the request does not fit.
+    """
+    import re as _re
+
+    from .manifest import ENV_NAME
+
+    if not _re.match(ENV_NAME, name or ""):
+        raise TemplateError(422, "bad_name", f"{name!r} is not an environment variable name "
+                                             "(capitals, digits and _; starting with a letter)")
+    if name.startswith(_RESERVED_PREFIXES):
+        raise TemplateError(422, "reserved_name", f"{name} is BOSS's own deploy variable")
+    if not envs or set(envs) != {"deploy"}:
+        raise TemplateError(404, "secret_not_declared",
+                            f"no template of this app declares {name}; a value no template "
+                            "declares is set for deploy only")
+    if mode != "test":
+        raise TemplateError(422, "bad_mode", f"{name} is the app's own setting: set it as a "
+                                             "value (mode test), not a live provider key")
+    return SecretSpec(name=name, purpose="The app's own deploy setting, set by a person")
+
+
 def put(c, *, org_id: str, project_id: str, app_key: str, name: str, env: str, mode: str,
         value: Optional[str], actor_id: Optional[str], spec: SecretSpec, may_live: bool) -> dict:
     """Write (or replace) one binding. `spec` is the declaring template's SecretSpec: a name no

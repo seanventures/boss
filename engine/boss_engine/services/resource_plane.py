@@ -2356,7 +2356,10 @@ class ResourcePlaneService:
         expected_cost_usd_micros: int,
         reservation_id: Optional[str],
         actor: str,
+        approval_decision_id: Optional[str] = None,
     ) -> dict[str, Any]:
+        """`approval_decision_id`: the workflow gate that already approved this deploy, passed
+        explicitly by the runner (deploy_policy.pre_approval decides whether it counts)."""
         if expected_cost_usd_micros < 0:
             raise ValueError("expected_cost_usd_micros must be non-negative.")
         target = self._get_deployment_target(
@@ -2646,6 +2649,7 @@ class ResourcePlaneService:
                     release_artifact_id=release_artifact_id,
                     ownership_guard=ownership_guard,
                     actor=actor,
+                    approval_decision_id=approval_decision_id,
                 )
             except governed_host.GovernedHostDeployError as refused:
                 governed_host.release_guard(connection, ownership_guard)

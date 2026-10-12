@@ -62,7 +62,9 @@ from .app_deploy_manifest import (
     DEFAULT_MANIFEST_PATH,
     DeployManifest,
     ManifestError,
+    declared_manifest,
     load_manifest,
+    manifest_workdir,
     render,
 )
 from .core import create_blocking_decision, emit_event, make_id
@@ -82,6 +84,8 @@ TERMINAL_STATES = ("healthy", "failed", "rejected")
 LOG_TAIL_CHARS = 12000
 #: Releases kept on the host, the running one included.
 KEEP_RELEASES = 3
+#: The step that removes a host target's earlier one-container release before its stack runs.
+RETIRE_STEP = "retire previous single-container release"
 
 
 class StackDeployError(Exception):
@@ -451,6 +455,8 @@ class StackApplier:
     # -- bookkeeping ---------------------------------------------------------------------------
     def _plan_steps(self, commands: list[dict[str, Any]]) -> None:
         names = ["prepare", "upload", "environment", "switch"]
+        if self.rendered.get("retire_container"):
+            names.append(RETIRE_STEP)
         names += [f"{self.mode}: {c['name']}" for c in commands]
         if self.rendered["health"]:
             names.append("health")
@@ -574,6 +580,26 @@ class StackApplier:
         # version 2 reported healthy on boss-1 (2026-10-03) while nginx still served version 1
         # from the old release it had mounted.
         release = f"{d}/releases/{shlex.quote(self.commit)}"
+        # ...and inside the MANIFEST'S directory: a manifest in helpdesk-ai/ names
+        # docker-compose.yml meaning helpdesk-ai's, not the repository root's.
+        workdir = str(self.rendered.get("workdir") or "").strip("/")
+        if workdir:
+            release = f"{release}/{shlex.quote(workdir)}"
+
+        retire = str(self.rendered.get("retire_container") or "")
+        if retire:
+            # THE TARGET'S EARLIER ONE-CONTAINER RELEASE holds the port this stack is about to
+            # publish. Removed only when it is BOSS's own release for this target (it mounts the
+            # target's directory under /opt/boss-apps), never a container somebody else runs.
+            name = RETIRE_STEP
+            self._start(name)
+            marker = shlex.quote(str(self.rendered.get("retire_mount") or ""))
+            q = shlex.quote(retire)
+            self._write(name, (
+                f"if docker inspect -f '{{{{range .Mounts}}}}{{{{.Source}}}} {{{{end}}}}' {q} "
+                f"2>/dev/null | grep -q -F {marker}; then docker rm -f {q} >/dev/null && "
+                f"echo BOSS_RETIRED {q}; else echo BOSS_NOTHING_TO_RETIRE; fi"), timeout=120)
+            self._finish(name, "succeeded")
         for command in commands:
             name = f"{self.mode}: {command['name']}"
             self._start(name)
@@ -1008,11 +1034,81 @@ def _live_deployment(connection: Connection, target_id: str, commit: str):
 
 # ── Plan ─────────────────────────────────────────────────────────────────────────────────────
 
+def app_deploy_env(connection: Connection, project_id: str, target: dict,
+                   code_task_run_id: Optional[str]) -> dict[str, str]:
+    """The app's deploy environment: THE ONE READER both deploy paths use
+    (templates.base_url.deploy_environment) — its `deploy` secret values, generated, set or
+    approved live, plus APP_BASE_URL where a template declares it. {} for an app with no key."""
+    from ..app_links.service import project_org
+    from ..templates.base_url import deploy_environment
+    from .governed_host_deploy import _app_key_for
+
+    key = _app_key_for(connection, project_id, target,
+                       {"code_task_run_id": code_task_run_id} if code_task_run_id else None)
+    if not key:
+        return {}
+    env, _withheld, _address = deploy_environment(
+        connection, org_id=project_org(connection, project_id), project_id=project_id,
+        app_key=key, target=target)
+    return env
+
+
+def merge_app_env(manifest: DeployManifest, values: dict[str, str], hidden: list[str],
+                  app_env: dict[str, str]) -> tuple[dict[str, str], list[str]]:
+    """The manifest's environment with the app's deploy values added.
+
+    What a person set for the app (its Setup) beats a literal written in the repository, and
+    fills every key the manifest does not name. A key the manifest GENERATES or reads from a
+    target secret keeps the manifest's value: that is the one the host was initialised with
+    (its database password), and swapping it would lock the app out of its own data. Every app
+    value is redacted, whatever its name.
+    """
+    literal = {e.key for e in manifest.env if e.source == "literal"}
+    out = dict(values)
+    for key, value in app_env.items():
+        if key not in out or key in literal:
+            out[key] = value
+    from ..templates.base_url import BASE_URL_ENV
+
+    return out, list(hidden) + [v for k, v in app_env.items() if v and k != BASE_URL_ENV]
+
+
+def target_address(target: dict, host: dict) -> str:
+    """Where people open the app: the target's public URL, else its domain (a host target
+    serves on a port of its own — HelpDesk at 192.0.2.202:8000), else the bare host."""
+    if target.get("public_url"):
+        return str(target["public_url"]).rstrip("/")
+    domains = _json(target.get("domains")) or []
+    if domains and str(domains[0]).strip():
+        domain = str(domains[0]).strip().rstrip("/")
+        if "://" in domain:
+            return domain
+        checks = _json(target.get("health_checks")) or []
+        scheme = str((checks[0] if checks and isinstance(checks[0], dict) else {})
+                     .get("scheme") or "http")
+        return f"{scheme}://{domain}"
+    return f"http://{host['address']}"
+
+
 def _deployment_ctx(target: dict, host: dict, commit: str, ref: str) -> dict[str, str]:
     return {"commit": commit, "ref": ref, "target.host": str(host["address"]),
             "target.user": str(host.get("ssh_user") or "root"),
-            "target.public_url": str(target.get("public_url") or
-                                     f"http://{host['address']}")}
+            "target.public_url": target_address(target, host)}
+
+
+def address_env(target: dict, host: dict) -> dict[str, str]:
+    """What a deployed app is told about its own address, unless its manifest says otherwise:
+    APP_BASE_URL, and PORT when the target serves on a port of its own. The one-container
+    deploy always told the app these (templates.base_url); a stack must not forget them, or a
+    sign-in app builds its callback URLs for localhost."""
+    from urllib.parse import urlsplit
+
+    url = target_address(target, host)
+    out = {"APP_BASE_URL": url}
+    port = urlsplit(url).port
+    if port and (target.get("domains") or not is_stack_target(target)):
+        out["PORT"] = str(port)
+    return out
 
 
 def _plan_infrastructure(engine, *, project_id: str, target: dict, run_id: Optional[str],
@@ -1058,8 +1154,13 @@ def plan_stack_deploy(engine, settings: Settings, *, project_id: str, target_id:
                       run_id: Optional[str] = None, workflow_run_id: Optional[str] = None,
                       rollback_of: Optional[str] = None,
                       approver_role: Optional[str] = None,
-                      workflow_step_id: Optional[str] = None) -> dict[str, Any]:
+                      workflow_step_id: Optional[str] = None,
+                      manifest_path: Optional[str] = None,
+                      approval_decision_id: Optional[str] = None) -> dict[str, Any]:
     """Record a deployment of `repository@ref` to a stack target, held for approval.
+
+    `manifest_path` is the boss.deploy.yaml the build's app DECLARED (`_declared_stack_target`):
+    with it, the app's host target ships from that manifest like any stack target.
 
     Touches the host only to ASK (one read-only ssh session). Raises StackDeployError with a
     {headline, action} for everything an operator can fix before anything is approved.
@@ -1073,7 +1174,8 @@ def plan_stack_deploy(engine, settings: Settings, *, project_id: str, target_id:
         if not target or target.get("project_id") != project_id:
             raise StackDeployError("No such deployment target in this project.",
                                    "Pick a stack target in Infra.", status_code=404)
-        if not is_stack_target(target):
+        declared = str(manifest_path or "").strip().strip("/")
+        if not is_stack_target(target) and not declared:
             raise StackDeployError(
                 f"Target {target.get('app_name')!r} is a {target.get('target_kind')!r} target, "
                 "not a stack target.",
@@ -1116,7 +1218,7 @@ def plan_stack_deploy(engine, settings: Settings, *, project_id: str, target_id:
             # workflow step or two operators at once must not queue a second install.
             return {**get_stack_deployment(connection, running["id"]), "reused": True}
 
-    path = str(target.get("manifest_path") or DEFAULT_MANIFEST_PATH)
+    path = str(target.get("manifest_path") or declared or DEFAULT_MANIFEST_PATH)
     manifest_text = github.read_file(owner, repo, path, commit)
     if manifest_text is None:
         raise StackDeployError(
@@ -1132,6 +1234,16 @@ def plan_stack_deploy(engine, settings: Settings, *, project_id: str, target_id:
                                f"Fix {path} in the repository and deploy again.")
 
     with engine.begin() as connection:
+        # THE APP'S DEPLOY ENVIRONMENT, by name — the same set the one-container deploy passes
+        # (governed_host_deploy.app_secret_problem): generated secrets made now, a required one
+        # with no deploy value refuses the plan in words, an optional one goes only when set.
+        from .governed_host_deploy import APP_SECRET_ACTION, app_secret_problem
+
+        _app_key, app_secrets, secret_refusal = app_secret_problem(
+            connection, project_id, target, {"code_task_run_id": run_id} if run_id else None)
+        if secret_refusal:
+            raise StackDeployError(secret_refusal, APP_SECRET_ACTION)
+        app_secret_names = sorted({str(a["name"]) for a in app_secrets})
         missing = {key: name for key, name in rendered["env_secrets"].items()
                    if not operator_secret_ref(connection, project_id, target_id, name)}
     if missing:
@@ -1151,7 +1263,10 @@ def plan_stack_deploy(engine, settings: Settings, *, project_id: str, target_id:
 
     deployment_id = make_id("sdep")
     short = commit[:12]
-    summary = manifest.summary()
+    # A manifest in a directory speaks for that directory: its compose file and its commands
+    # are relative to it (helpdesk-ai/boss.deploy.yaml's docker-compose.yml is helpdesk-ai's).
+    summary = {**manifest.summary(), "manifest_path": path,
+               "workdir": manifest_workdir(path), "app_secrets": app_secret_names}
     rp = ResourcePlaneService(settings)
     with engine.begin() as connection:
         # Check-then-insert under ONE lock per target. Everything above took seconds (GitHub,
@@ -1227,6 +1342,8 @@ def plan_stack_deploy(engine, settings: Settings, *, project_id: str, target_id:
             # Which BOSS secret each key carries to the host: the approver sees the names.
             "env_secrets": dict(rendered["env_secrets"]),
             "generated_env_keys": summary["generated_env_keys"],
+            # The app's own deploy secrets (its Setup), by name only — never a value.
+            "app_secrets": app_secret_names,
             # A workflow's deploy step has no gate of its own when it ships to a stack: THIS
             # decision is that gate. So it carries the step's approver and where it came
             # from, and approving it here is approving the release (one approval, not two).
@@ -1238,7 +1355,19 @@ def plan_stack_deploy(engine, settings: Settings, *, project_id: str, target_id:
                if infra_doc else {})}
         cost = {"expected_cost_usd_micros": 0, "reservation_id": reservation["reservation_id"],
                 "cost_confidence": "no_provider_spend"}
-        if workflow_run_id:
+        # ALREADY APPROVED? The workflow gate's decision (passed explicitly) or the
+        # environment's policy (deploy_policy) — then no card of its own; dual control never.
+        from .deploy_policy import pre_approval
+
+        approval = pre_approval(connection, project_id, target.get("environment"),
+                                gate_decision_id=approval_decision_id)
+        if approval and rp.required_approvers_for_changeset(connection, changeset["id"]):
+            approval = None
+        if approval:
+            decision_id = approval["decision_id"]
+            recommendation["approval"] = {k: approval[k]
+                                          for k in ("source", "decision_id", "approved_by")}
+        elif workflow_run_id:
             decision_id = open_step_decision(
                 connection, project_id, None, question, recommendation, cost,
                 "stack_deploy_requires_approval", run_id=workflow_run_id,
@@ -1256,11 +1385,13 @@ def plan_stack_deploy(engine, settings: Settings, *, project_id: str, target_id:
         connection.execute(
             text("UPDATE changeset_operations SET risk_tier = 2 WHERE changeset_id = :c"),
             {"c": changeset["id"]})
-        connection.execute(
-            text("UPDATE decisions SET external_ref = :c WHERE id = :d"),
-            {"c": changeset["id"], "d": decision_id})
+        if not approval:
+            connection.execute(
+                text("UPDATE decisions SET external_ref = :c WHERE id = :d"),
+                {"c": changeset["id"], "d": decision_id})
         steps = [{"name": n, "status": "pending", "started_at": None, "ended_at": None}
                  for n in ["prepare", "upload", "environment", "switch"]
+                 + ([] if is_stack_target(target) else [RETIRE_STEP])
                  + [f"install or update: {s}" for s in summary["steps"]["install"]]
                  + (["health"] if manifest.health else []) + ["finalize"]]
         connection.execute(
@@ -1291,6 +1422,16 @@ def plan_stack_deploy(engine, settings: Settings, *, project_id: str, target_id:
                    {"target_id": target_id, "repository": f"{owner}/{repo}", "ref": ref,
                     "commit": commit, "changeset_id": changeset["id"],
                     "decision_id": decision_id, "workflow_run_id": workflow_run_id})
+        if approval:
+            from .deploy_policy import record_pre_approval
+
+            record_pre_approval(connection, project_id, approval,
+                                entity_type="stack_deployment", entity_id=deployment_id,
+                                actor=actor)
+            on_decision_approved(connection, settings,
+                                 {"id": decision_id,
+                                  "recommendation": {"deployment_id": deployment_id}},
+                                 approval["approved_by"])
         return get_stack_deployment(connection, deployment_id)
 
 
@@ -1607,11 +1748,41 @@ def _finalize(connection: Connection, settings: Settings, *, deployment_id: str,
                        "stack_deployment", deployment_id,
                        {"commit": row["commit_sha"], "mode": outcome["mode"],
                         "open_url": outcome["open_url"]})
+            checks = target_health_checks(outcome.get("health") or [])
+            if checks:
+                # ONE DEFINITION OF HEALTHY. The target's health_checks are what the monitor
+                # samples and what a later deploy gate reads; they were "/" while the manifest
+                # said /readyz, so a blank page kept passing everything but the deploy itself.
+                connection.execute(
+                    text("UPDATE deployment_targets SET health_checks = CAST(:h AS JSONB), "
+                         "updated_at = now() WHERE id = :t"),
+                    {"h": json.dumps(checks), "t": row["target_id"]})
         else:
             _fail(connection, deployment_id, row["project_id"], headline=error.headline,
                   action=error.action, actor=actor, steps=error.steps, log_tail=error.log_tail)
     final = _row(connection, deployment_id)
     return {"status": final["status"], "retry": False, "deployment": serialize(final)}
+
+
+def target_health_checks(rendered_health: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The manifest's health checks in the target's shape ({kind, scheme, port, path,
+    expect_status}) — the ones that can be probed from off the host. A check against the host's
+    own loopback (127.0.0.1, localhost) only means something on the host, so it is left to
+    the deploy, which runs it there."""
+    from urllib.parse import urlsplit
+
+    out: list[dict[str, Any]] = []
+    for check in rendered_health or []:
+        parts = urlsplit(str(check.get("url") or ""))
+        if parts.scheme not in ("http", "https") or not parts.hostname:
+            continue
+        if parts.hostname in ("127.0.0.1", "localhost", "::1"):
+            continue
+        out.append({"kind": "http", "scheme": parts.scheme,
+                    "port": parts.port or (443 if parts.scheme == "https" else 80),
+                    "path": (parts.path or "/") + (f"?{parts.query}" if parts.query else ""),
+                    "expect_status": int(check.get("expect") or 200)})
+    return out
 
 
 def _require_governed(connection: Connection, changeset_id: str, dedupe_key: str,
@@ -1680,11 +1851,26 @@ def apply_on_host(engine, settings: Settings, *, deployment_id: str, apply_token
             manifest = _load(deployment["manifest_text"])
             rendered = render(manifest, _deployment_ctx(target, host, deployment["commit_sha"],
                                                          deployment["ref"]))
+            recorded = _json(deployment.get("manifest")) or {}
+            rendered["workdir"] = str(recorded.get("workdir") or "")
+            if not is_stack_target(target):
+                # A host target shipping its app's declared manifest: its one-container release
+                # (deploy_service, /opt/boss-apps/<app>) is replaced, not left holding the port.
+                from .deploy_service import REMOTE_BASE, _app_name
+
+                legacy = _app_name(str(target.get("repo") or ""), target.get("app_name"))
+                rendered["retire_container"] = legacy
+                rendered["retire_mount"] = f"{REMOTE_BASE}/{legacy}/"
             owner, repo = split_repository(deployment["repository"])
             access = host_access_for(connection, settings, host, adapter)
             github = github_source_for(connection, settings, project_id, owner, repo)
             env_values, hidden = _environment(connection, settings, deployment=deployment,
                                               manifest=manifest, rendered=rendered)
+            app_env = app_deploy_env(connection, project_id, target,
+                                     deployment.get("code_task_run_id"))
+            env_values, hidden = merge_app_env(manifest, env_values, hidden, app_env)
+            for key, value in address_env(target, host).items():
+                env_values.setdefault(key, value)
         except (StackStepFailed, StackDeployError, ManifestError) as exc:
             raise _ApplyFailed(
                 getattr(exc, "headline", None) or f"The manifest is not valid: {exc}",
@@ -1755,6 +1941,7 @@ def apply_on_host(engine, settings: Settings, *, deployment_id: str, apply_token
                            applier.steps if applier else None, applier.log if applier else None)
     return {
         **outcome,
+        "health": list(rendered["health"]),
         **({"infrastructure": infra} if infra else {}),
         "provider_result": {
             "provider_ref": f"ssh://{access.user}@{access.host}{manifest.dir}@"
@@ -1816,15 +2003,82 @@ def _same_repository(a: Optional[str], b: Optional[str]) -> bool:
     return bool(a) and bool(b) and str(a).lower() == str(b).lower()
 
 
+def declared_manifest_for_run(connection: Connection, run_id: str) -> Optional[str]:
+    """The boss.deploy.yaml this build's app declares itself with (app_deploy_manifest.
+    declared_manifest), read from every file the build's LINEAGE wrote — a repair touches only
+    what it fixed, and the manifest was written by the first attempt."""
+    run_id = str(run_id or "").strip()
+    if not run_id:
+        return None
+    rows = connection.execute(
+        text("""
+            SELECT state->'impl_files' AS f FROM code_task_runs
+            WHERE COALESCE(finalize_ctx->>'root_run_id', id) = (
+                SELECT COALESCE(finalize_ctx->>'root_run_id', id) FROM code_task_runs
+                WHERE id = :i)
+        """), {"i": run_id}).mappings().all()
+    files: list[str] = []
+    for r in rows:
+        raw = _json(r["f"]) or []
+        files.extend(str(f) for f in raw if isinstance(f, str))
+    return declared_manifest(files)
+
+
+def _declared_stack_target(connection: Connection, project_id: str,
+                           inputs: dict[str, Any], target: Optional[dict],
+                           default_owner: str) -> Optional[dict]:
+    """The app's own host target, deployed from the manifest its build declared — or None.
+
+    AN APP THAT SAYS HOW IT RUNS IS DEPLOYED THE WAY IT SAYS. Its target was made for the
+    one-container deploy (an SSH target on a host), and that deploy guesses: it served
+    HelpDesk's unbuilt index.html from nginx. The same target, on the same host, ships from the
+    manifest instead — through the same governed plan, approval and receipt as any stack.
+    """
+    run_id = str(inputs.get("run_id") or "").strip()
+    path = declared_manifest_for_run(connection, run_id) if run_id else None
+    if not path:
+        return None
+    if target is None:
+        from .delivery_pipeline import app_name_of_run, pick_deploy_target
+
+        run = connection.execute(
+            text("SELECT spec, title, finalize_ctx FROM code_task_runs WHERE id = :i"),
+            {"i": run_id}).mappings().first()
+        if not run:
+            return None
+        repository = build_repository(run["spec"], default_owner) or ""
+        repo_name = repository.rsplit("/", 1)[-1].lower()
+        environment = str(inputs.get("environment") or "staging").strip() or "staging"
+        candidates = [dict(r) for r in connection.execute(
+            text("SELECT * FROM deployment_targets WHERE project_id = :p AND status = 'active' "
+                 "AND environment = :e AND host_id IS NOT NULL ORDER BY created_at"),
+            {"p": project_id, "e": environment}).mappings().all()]
+        candidates = [t for t in candidates
+                      if str(t.get("repo") or "").rsplit("/", 1)[-1].lower() == repo_name]
+        host_id = str(inputs.get("host_id") or "").strip()
+        if host_id:
+            candidates = [t for t in candidates if t.get("host_id") == host_id]
+        target = pick_deploy_target(candidates, app_name_of_run(run))
+    if not target or target.get("project_id") != project_id or not target.get("host_id") \
+            or target.get("status") != "active":
+        return None
+    return {**target, "manifest_path": target.get("manifest_path") or path}
+
+
 def stack_target_for_deploy(connection: Connection, project_id: str,
                             inputs: dict[str, Any], *,
                             default_owner: str = "") -> Optional[dict]:
-    """The stack target a workflow's deploy step is bound to, or None for the legacy path."""
+    """The stack target a workflow's deploy step is bound to, or None for the legacy path.
+
+    A target is a stack when it was made as one, OR when the build's app declares a
+    boss.deploy.yaml (`_declared_stack_target`): then its host target ships from that manifest.
+    """
     target_id = str(inputs.get("target_id") or "").strip()
     if target_id:
         target = _target(connection, target_id)
-        return target if is_stack_target(target) and target.get("project_id") == project_id \
-            else None
+        if is_stack_target(target):
+            return target if target.get("project_id") == project_id else None
+        return _declared_stack_target(connection, project_id, inputs, target, default_owner)
     # Without a named target, only a build whose repository HAS a stack target goes this way:
     # a project's other apps keep the deploy path they have always had.
     run_id = str(inputs.get("run_id") or "").strip()
@@ -1841,14 +2095,19 @@ def stack_target_for_deploy(connection: Connection, project_id: str,
              "AND status = 'active' AND (:e = '' OR environment = :e) ORDER BY created_at"),
         {"p": project_id, "k": TARGET_KIND, "e": environment}).mappings().all()]
     rows = [r for r in rows if _same_repository(r.get("repo"), repository)]
-    return rows[0] if len(rows) == 1 else None
+    if len(rows) == 1:
+        return rows[0]
+    if rows:
+        return None
+    return _declared_stack_target(connection, project_id, inputs, None, default_owner)
 
 
 def plan_for_workflow_step(engine, settings: Settings, *, project_id: str, actor: str,
                            target: dict, inputs: dict[str, Any],
                            workflow_run_id: Optional[str],
                            approver_role: Optional[str] = None,
-                           step_id: Optional[str] = None) -> dict[str, Any]:
+                           step_id: Optional[str] = None,
+                           approval_decision_id: Optional[str] = None) -> dict[str, Any]:
     """Plan the build's pull-request head onto a stack target; the step waits on it.
 
     No preview is required: the manifest declares how the stack runs and the health checks
@@ -1887,7 +2146,9 @@ def plan_for_workflow_step(engine, settings: Settings, *, project_id: str, actor
             engine, settings, project_id=project_id, target_id=target["id"],
             repository=repository, ref=f"pull/{int(run['pull_request_number'])}", actor=actor,
             run_id=run_id, workflow_run_id=workflow_run_id, approver_role=approver_role,
-            workflow_step_id=step_id)
+            workflow_step_id=step_id,
+            manifest_path=None if is_stack_target(target) else target.get("manifest_path"),
+            approval_decision_id=approval_decision_id)
     except StackDeployError as exc:
         return {"capability": "deploy", "tool": None, "status": "failed",
                 "error": f"{exc.headline} {exc.action}"}

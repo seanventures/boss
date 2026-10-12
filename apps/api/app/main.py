@@ -21669,6 +21669,46 @@ def upsert_deployment_environment_policy(
         return DeploymentEnvironmentPolicySummary(**item)
 
 
+class DeployApprovalPolicyBody(BaseModel):
+    project_id: str = Field(min_length=1, max_length=120)
+    actor: str = Field(min_length=1, max_length=120)
+    requires_approval: bool
+    note: Optional[str] = Field(default=None, max_length=300)
+
+
+@app.get("/v1/deployment-environment-policies/{environment}/approval")
+@permit(P.DEPLOYMENT_READ, scope=Scope.project(query="project_id"))
+def get_deploy_approval_policy(environment: str, project_id: str) -> dict:
+    """Whether a deploy to `environment` asks a person first (deploy_policy). Default: it asks."""
+    from boss_engine.services.deploy_policy import deploy_policy
+
+    with begin(engine) as connection:
+        return deploy_policy(connection, project_id, environment)
+
+
+@app.put("/v1/deployment-environment-policies/{environment}/approval")
+@permit(P.POLICY_MANAGE, scope=Scope.project(body="project_id"))
+def set_deploy_approval_policy(environment: str, payload: DeployApprovalPolicyBody) -> dict:
+    """Set whether deploys to `environment` ask first. Only that rule changes; the signed-in
+    person and the time are recorded, and an event says so. A deploy that skips the card still
+    goes through its ChangeSet, reservation and receipt."""
+    from boss_engine.services.deploy_policy import set_approval_policy
+
+    try:
+        with begin(engine) as connection:
+            # The claimed actor must be the authenticated one (require_project_actor), so the
+            # policy records the person who set it — the same check as the full policy upsert.
+            require_project_actor(connection, payload.project_id, payload.actor,
+                                  "providerops_manage")
+            return set_approval_policy(connection, project_id=payload.project_id,
+                                       environment=environment,
+                                       requires_approval=payload.requires_approval,
+                                       actor=current_api_principal.get() or payload.actor,
+                                       note=payload.note)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+
 @app.get("/v1/deployment-runs", response_model=DeploymentRunListResponse)
 @permit(P.DEPLOYMENT_READ, scope=Scope.project(query="project_id"))
 def list_deployment_runs(

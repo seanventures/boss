@@ -104,7 +104,9 @@ export function parseDetail(v: unknown): TemplateDetail {
 
 export type SecretBinding = { name: string; env: string; mode: string; shape: string; setAt: string; lastUsedAt: string; liveApproved: boolean | null };
 export type DeclaredSecret = { name: string; purpose: string; testDefault: string; bound: boolean };
-export type AppSecrets = { bindings: SecretBinding[]; declared: DeclaredSecret[] };
+export type AppSecrets = { bindings: SecretBinding[]; declared: DeclaredSecret[];
+  /** The app's own deploy settings: values set for deploy that no template declares. */
+  deployValues: string[] };
 export type Applied = { id: string; templateId: string; key: string; name: string; version: string; stack: string; status: string; workflowRunId: string; codeTaskRunId: string; createdAt: string };
 export type Guide = { key: string; name: string; version: string; status: string; guide: string; copy: Record<string, string> };
 
@@ -121,8 +123,12 @@ export function parseSecretsView(v: unknown): AppSecrets {
       const d = obj(x);
       return { name: str(d.name), purpose: str(d.purpose), testDefault: str(d.test_default) || "none", bound: d.bound === true };
     }),
+    deployValues: arr(o.deploy_values).map((x) => str(x)).filter(Boolean),
   };
 }
+
+/** An app deploy setting's name as the API accepts it: capitals, digits and _, a letter first. */
+export const DEPLOY_VALUE_NAME = /^[A-Z][A-Z0-9_]{0,63}$/;
 
 export function parseApplied(v: unknown): Applied[] {
   return arr(obj(v).templates).map((x) => {
