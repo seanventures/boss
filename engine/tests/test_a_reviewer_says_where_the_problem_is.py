@@ -288,8 +288,10 @@ def test_the_panel_records_its_comments_when_the_review_runs() -> None:
     from boss_engine.services import governed_code_task_service as g
 
     src = inspect.getsource(g)
-    # Recorded at every point a review gate resolves, not only at the end of the run.
-    assert src.count("_record_review_comments(engine, run_id, project_id, evidence)") >= 3
+    # Recorded at every point a review gate resolves, not only at the end of the run — a
+    # re-review records ITS OWN summary (`{**evidence, "review_summary": ...}`), not the stale
+    # one `evidence` still holds until the round passes.
+    assert src.count("_record_review_comments(") >= 4
     assert "code_task.review_comments_recorded" in src
 
 
@@ -311,7 +313,9 @@ def test_the_pull_request_posts_the_same_recorded_set() -> None:
     from boss_engine.services import governed_code_task_service as g
 
     src = inspect.getsource(g)
-    assert "_all_review_comments(engine, run_id, project_id)" in src
+    # The poster reads the stored set (and its rounds) the repair round and the build page read.
+    post = inspect.getsource(g._post_review_comments_to_pr)
+    assert "_review_record(engine, run_id, project_id)" in post
 
 
 def test_recording_is_idempotent_on_the_same_finding() -> None:

@@ -94,6 +94,12 @@ class ReviewComment:
     status: str = STATUS_OPEN
     #: Set when the comment came from a review stage, so a repair can say which pass raised it.
     stage: Optional[str] = None
+    #: The implementer's answer to it: `fixed` or `disputed`, its words, the round it answered
+    #: in and the files that round changed. Posted on the pull request as a reply.
+    response_kind: Optional[str] = None
+    response: Optional[str] = None
+    response_round: Optional[int] = None
+    response_files: Optional[list] = None
 
     @property
     def anchored(self) -> bool:
@@ -119,7 +125,11 @@ class ReviewComment:
     @classmethod
     def from_dict(cls, raw: dict) -> "ReviewComment":
         known = {f for f in cls.__dataclass_fields__}  # type: ignore[attr-defined]
-        return cls(**{k: v for k, v in (raw or {}).items() if k in known})
+        out = cls(**{k: v for k, v in (raw or {}).items() if k in known})
+        # The stored id rides along as a plain attribute (not a field: the comment's identity
+        # is its content), so an implementer's numbered answer can be matched back to it.
+        out.ref = (raw or {}).get("id")
+        return out
 
 
 def _clean(text: Optional[str]) -> str:
@@ -220,10 +230,9 @@ def render_for_implementer(comments: Iterable[ReviewComment], root=None) -> str:
     Ordered most blocking first: a repair round is bounded, so what it spends its turns on
     should be decided here rather than by whatever the model reads first.
     """
-    items = [c for c in comments if c.status == STATUS_OPEN]
+    items = implementer_order(comments)
     if not items:
         return ""
-    items.sort(key=lambda c: (-c.blocking_rank, c.path or "", c.line or 0))
     blocks = ["REVIEW COMMENTS — each is a specific place in the change. Address every one, or "
               "say why it is wrong.\n"]
     for i, c in enumerate(items, start=1):
@@ -236,6 +245,39 @@ def render_for_implementer(comments: Iterable[ReviewComment], root=None) -> str:
             blocks.append(quoted)
         blocks.append("")
     return "\n".join(blocks)
+
+
+def implementer_order(comments: Iterable[ReviewComment]) -> list[ReviewComment]:
+    """The open comments in the order the implementer is shown them, numbered from 1.
+
+    Most blocking first. `parse_responses` reads the implementer's answers by these numbers, so
+    the order is one function, never two copies that could drift apart."""
+    items = [c for c in comments if c.status == STATUS_OPEN]
+    items.sort(key=lambda c: (-c.blocking_rank, c.path or "", c.line or 0))
+    return items
+
+
+def response_clause() -> str:
+    """What the implementer is asked to say about each numbered comment."""
+    return ("After fixing, answer EVERY numbered review comment with one line, in exactly this "
+            "form:\n"
+            "  RESPONSE: <number> FIXED — what you changed, and where\n"
+            "  RESPONSE: <number> DISPUTED — why it is not a defect in this change\n"
+            "These answers are posted on the pull request beside the comment, so a person can "
+            "see what was done about each one.\n")
+
+
+_RESPONSE_RE = re.compile(
+    r"(?im)^[\s>*-]*(?:\*\*)?RESPONSE\s*:?\s*(?:\*\*)?\s*#?(?P<n>\d+)\s*[:.)-]?\s*"
+    r"(?:\*\*)?(?P<kind>FIXED|DISPUTED)(?:\*\*)?\s*[—–:-]*\s*(?P<text>.*?)\s*$")
+
+
+def parse_responses(text: str) -> dict[int, tuple[str, str]]:
+    """{comment number: (fixed|disputed, the implementer's words)}. The last answer wins."""
+    out: dict[int, tuple[str, str]] = {}
+    for m in _RESPONSE_RE.finditer(text or ""):
+        out[int(m.group("n"))] = (m.group("kind").lower(), _clean(m.group("text"))[:600])
+    return out
 
 
 def to_github_comments(comments: Iterable[ReviewComment]) -> list[dict]:

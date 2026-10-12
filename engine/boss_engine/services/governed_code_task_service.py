@@ -36,6 +36,7 @@ from ..config import Settings
 from ..ports import sql
 from ..schemas import FileChange
 from . import agent_acts, ci_gate, design_prompts, plane_sync, review_comments, verification_target
+from . import review_input
 from .bakeoff import (
     fixture_for_run as bakeoff_fixture_for_run,
     stage_fixture as stage_bakeoff_fixture,
@@ -186,7 +187,15 @@ def classify_gate_faults(
     """Classify each failing gate as WORK (the change is wrong) or HARNESS (the check
     didn't finish). Only WORK is repairable by re-running the coding agent."""
     faults: dict[str, str] = {}
+    # A REVIEW THAT NEVER SAW THE CHANGE (review_input.hollow_reason) is the check's fault, not
+    # the code's: re-run the CHECK, never send the coder to fix what nobody reviewed.
+    hollow = evidence.get("review_hollow") or {}
+    seat_of = {"code_review_passed": "review_code", "consistent": "consistency_check",
+               "security_clean": "security_check", "no_security_findings": "security_check"}
     for gate in failing:
+        if seat_of.get(gate) in hollow:
+            faults[gate] = "HARNESS"
+            continue
         if gate == "code_review_passed":
             inconclusive = check_is_inconclusive(
                 evidence.get("review_summary", ""),
@@ -1278,6 +1287,113 @@ def _comment_signers(c, run_id: str, review_seat) -> dict:
     return out
 
 
+def _record_review_round(engine, run_id: str, project_id: str, *, round_i: int,
+                         seats: dict, kind: str = "") -> None:
+    """One review round as it happened: each seat's verdict, its summary and whether it saw
+    the change. The pull request gets one GitHub review per round (pr_review_post), so a person
+    reads the review CONVERSATION, not only the last word. Re-recording a round replaces it."""
+    from datetime import datetime as _dt, timezone as _tz
+
+    entry = {"round": int(round_i), "at": _dt.now(_tz.utc).isoformat(),
+             **({"kind": kind} if kind else {}),
+             "seats": {stage: {"verdict": str((s or {}).get("verdict") or "not_run"),
+                               "summary": str((s or {}).get("summary") or "")[:4000],
+                               "hollow": (s or {}).get("hollow")}
+                       for stage, s in (seats or {}).items()}}
+    try:
+        with _transaction(engine) as c:
+            row = c.execute(sql(
+                "SELECT finalize_ctx FROM code_task_runs WHERE id=:id AND project_id=:p"),
+                {"id": run_id, "p": project_id}).mappings().first()
+            rounds = [r for r in (((row or {}).get("finalize_ctx") or {}).get("review_rounds")
+                                  or []) if isinstance(r, dict) and r.get("round") != round_i]
+            rounds.append(entry)
+            rounds.sort(key=lambda r: int(r.get("round") or 0))
+            c.execute(sql(
+                "UPDATE code_task_runs SET finalize_ctx = COALESCE(finalize_ctx,'{}'::jsonb) "
+                "|| jsonb_build_object('review_rounds', CAST(:r AS JSONB)), updated_at=now() "
+                "WHERE id=:id AND project_id=:p"),
+                {"r": _json_dumps(rounds), "id": run_id, "p": project_id})
+    except Exception as exc:  # noqa: BLE001 — a review must not die recording its own output
+        _log_caught(logger)
+        logger.warning("code_task.review_round_not_recorded run=%s %s: %s",
+                       run_id, type(exc).__name__, exc)
+
+
+def _record_comment_responses(engine, run_id: str, project_id: str, answered: list,
+                              reply: str, *, round_i: int, changed_files: list) -> int:
+    """The implementer's answer to each numbered comment it was shown (review_comments.
+    implementer_order), stored on the comment so the pull request shows it as a reply."""
+    responses = review_comments.parse_responses(reply)
+    if not responses or not answered:
+        return 0
+    by_id: dict[str, tuple[str, str]] = {}
+    for n, (kind, words) in responses.items():
+        ref = getattr(answered[n - 1], "ref", None) if 1 <= n <= len(answered) else None
+        if ref:
+            by_id[ref] = (kind, words)
+    if not by_id:
+        return 0
+    try:
+        with _transaction(engine) as c:
+            row = c.execute(sql(
+                "SELECT finalize_ctx FROM code_task_runs WHERE id=:id AND project_id=:p"),
+                {"id": run_id, "p": project_id}).mappings().first()
+            stored = list(((row or {}).get("finalize_ctx") or {}).get("review_comments") or [])
+            for entry in stored:
+                hit = by_id.get((entry or {}).get("id"))
+                if hit:
+                    entry.update({"response_kind": hit[0], "response": hit[1],
+                                  "response_round": int(round_i),
+                                  "response_files": sorted(changed_files)[:20]})
+            c.execute(sql(
+                "UPDATE code_task_runs SET finalize_ctx = COALESCE(finalize_ctx,'{}'::jsonb) "
+                "|| jsonb_build_object('review_comments', CAST(:e AS JSONB)), updated_at=now() "
+                "WHERE id=:id AND project_id=:p"),
+                {"e": _json_dumps(stored), "id": run_id, "p": project_id})
+        return len(by_id)
+    except Exception as exc:  # noqa: BLE001
+        _log_caught(logger)
+        logger.warning("code_task.comment_responses_not_recorded run=%s %s: %s",
+                       run_id, type(exc).__name__, exc)
+        return 0
+
+
+def _review_record(engine, run_id: str, project_id: str) -> tuple[list[dict], list[dict], dict]:
+    """(rounds, comments, posted-state) as recorded on the run."""
+    try:
+        with _transaction(engine) as c:
+            row = c.execute(sql(
+                "SELECT finalize_ctx FROM code_task_runs WHERE id=:id AND project_id=:p"),
+                {"id": run_id, "p": project_id}).mappings().first()
+    except Exception:  # noqa: BLE001 — a description is never worth a failed PR
+        _log_caught(logger)
+        return [], [], {}
+    fctx = (row or {}).get("finalize_ctx") or {}
+    return ([r for r in fctx.get("review_rounds") or [] if isinstance(r, dict)],
+            [c for c in fctx.get("review_comments") or [] if isinstance(c, dict)],
+            fctx.get("pr_review_posts") if isinstance(fctx.get("pr_review_posts"), dict) else {})
+
+
+def _generated_pr_summary(engine, settings, run_id: str, project_id: str, *, title: str,
+                          evidence: dict, gates: dict, paths: list, qg_id: str) -> str:
+    """The PR description from the run's records (pr_description) — never the implementer's
+    closing chat, which is what PR #223's description was."""
+    from . import pr_description
+
+    rounds, comments, _ = _review_record(engine, run_id, project_id)
+    if not rounds and evidence.get("review_summary"):
+        from .pr_review_post import legacy_round
+
+        rounds = [legacy_round(evidence, paths)]
+    return pr_description.render(
+        title=title, evidence=evidence, gates=gates, paths=paths,
+        additions=evidence.get("additions"), deletions=evidence.get("deletions"),
+        rounds=rounds, comments=comments, deferred=evidence.get("deferred_findings") or [],
+        build_url=pr_description.build_url(settings, run_id), run_id=run_id,
+        quality_gate_id=qg_id or "")
+
+
 def _record_review_comments(engine, run_id: str, project_id: str, evidence: dict,
                             *, round_i: int = 0) -> int:
     """Turn the panel's findings into durable, line-anchored comments AS THE REVIEW HAPPENS.
@@ -1317,7 +1433,7 @@ def _record_review_comments(engine, run_id: str, project_id: str, evidence: dict
                     continue
                 seen.add(key_t)
                 signed = signers.get(comment.stage) or {}
-                added.append({"id": make_id("rc"), "round": round_i, **comment.to_dict(),
+                added.append({**comment.to_dict(), "id": make_id("rc"), "round": round_i,
                               # The agent who wrote it, from the act that ran the stage —
                               # never the parser's default (factory spec §6.4).
                               "author_role_key": signed.get("role_key"),
@@ -1409,85 +1525,66 @@ def _all_review_comments(engine, run_id: str, project_id: str) -> list:
 
 def _post_review_comments_to_pr(sf, proposal: dict, evidence: dict, engine, project_id,
                                 run_id: str) -> dict:
-    """Leave the panel's findings ON the pull request, at the lines they are about.
+    """Put the review CONVERSATION on the pull request (pr_review_post): one GitHub review per
+    round, findings at their lines, the implementer's answers as replies, deferred findings
+    listed. PR #223 carried one review holding a summary that saw nothing; a person reading the
+    PR could not tell what the agents had argued about or fixed.
 
-    The review already produced graded, located findings, and until now they lived only in the
-    run's evidence — so the PR carried a paragraph of prose and a human reviewer had to map it
-    back onto the diff themselves. GitHub's review API takes the anchors directly.
-
-    Best effort, always: a review that cannot be posted must never block a pull request that
-    passed its gates. A failure is an event, not an exception.
+    Idempotent through `finalize_ctx.pr_review_posts` (a re-run updates, never duplicates).
+    Best effort, always: a review that cannot be posted never blocks a pull request that passed
+    its gates. A connection that may not write reviews is said in words — on the build page
+    (`evidence.review_comments_posted.reason`) and as an event — never skipped silently.
     """
+    from . import pr_review_post
+
     number = proposal.get("pull_request_number")
     if not number:
         return {"posted": False, "reason": "no pull request number"}
-    # The stored set, recorded when the review ran — including comments the implementer has
-    # since addressed, because a pull request that shows only what is still broken hides the
-    # conversation that got it there.
-    comments = _all_review_comments(engine, run_id, project_id)
+    rounds, comments, state = _review_record(engine, run_id, project_id)
     if not comments:
+        # A run recorded before comments were: parse what the reviewers wrote.
         for stage, key in (("review_code", "review_summary"),
                            ("security_check", "security_summary"),
                            ("consistency_check", "consistency_summary")):
-            comments += review_comments.parse_findings(evidence.get(key) or "", stage=stage)
-    # WHAT THE REVIEWERS ACTUALLY WROTE, even when it will not parse.
-    #
-    # This returned here, silently — no event, no log, nothing on any screen. On a 39-file
-    # build the security and consistency reviewers each produced a substantial review in PROSE
-    # ("## Security Review — Documentation Freshness Board...", "I reviewed the implementation
-    # (serve_freshness.py, freshness_core/*, ...)"), none of it in the graded form
-    # parse_findings expects. So the pull request carried nothing at all, and the operator had
-    # no way to tell "the reviewers found nothing" from "the reviewers were never asked".
-    #
-    # An unparseable review is worth less than an anchored one and far more than silence.
-    summaries: list[str] = []
-    if not comments:
-        for stage, key in (("review_code", "review_summary"),
-                           ("security_check", "security_summary"),
-                           ("consistency_check", "consistency_summary")):
-            text_out = str(evidence.get(key) or "").strip()
-            if text_out:
-                summaries.append(f"### {stage}\n\n{text_out[:4000]}")
-        if not summaries:
-            with _transaction(engine) as c:
-                emit_event(c, project_id, "code_task.review_comments_absent", "boss",
-                           "code_task_run", run_id,
-                           {"pull_request_number": number,
-                            "reason": "no reviewer produced findings or a summary",
-                            "stages": ["review_code", "security_check",
-                                       "consistency_check"]})
-            return {"posted": False, "reason": "no structured findings"}
-    inline = review_comments.to_github_comments(comments)
-    loose = review_comments.unanchored_body(comments)
-    body = ("BOSS review panel — findings from the independent reviewers.\n\n"
-            + (loose + "\n\n" if loose else "")
-            + ("\n\n".join(summaries) + "\n\n"
-               + "_These are the reviewers' own summaries: nothing in them could be anchored "
-                 "to a line, so they are reproduced in full rather than dropped._\n\n"
-               if summaries else "")
-            + "Severity decides the gate; MINOR and NIT are recorded as follow-up work.")
-    try:
-        # COMMENT, never REQUEST_CHANGES: the gate already decided whether this ships, and a
-        # second blocking opinion on the PR would be a second place that decision lives.
-        result = sf.github.create_review(int(number), body=body, event="COMMENT",
-                                         comments=inline or None)
+            comments += [c.to_dict() for c in
+                         review_comments.parse_findings(evidence.get(key) or "", stage=stage)]
+    if not rounds:
+        rounds = [pr_review_post.legacy_round(evidence)]
+    if not comments and not any(str((s or {}).get("summary") or "").strip()
+                                for r in rounds for s in (r.get("seats") or {}).values()):
         with _transaction(engine) as c:
-            emit_event(c, project_id, "code_task.review_comments_posted", "boss",
-                       "code_task_run", run_id,
-                       {"pull_request_number": number, "anchored": len(inline),
-                        "unanchored": len(comments) - len(inline),
-                        "prose_summaries": len(summaries)})
-        return {"posted": True, "anchored": len(inline),
-                "unanchored": len(comments) - len(inline),
-                "review_url": getattr(result, "url", None)}
-    except Exception as exc:  # noqa: BLE001 — never block a passing PR on a comment
-        _log_caught(logger)
-        with _transaction(engine) as c:
-            emit_event(c, project_id, "code_task.review_comments_failed", "boss",
+            emit_event(c, project_id, "code_task.review_comments_absent", "boss",
                        "code_task_run", run_id,
                        {"pull_request_number": number,
-                        "error": f"{type(exc).__name__}: {exc}"[:200]})
-        return {"posted": False, "reason": f"{type(exc).__name__}: {exc}"[:200]}
+                        "reason": "no reviewer produced findings or a summary",
+                        "stages": ["review_code", "security_check", "consistency_check"]})
+        return {"posted": False, "reason": "no reviewer produced findings or a summary"}
+    repository = str(getattr(sf.github, "repository_full_name", "") or "")
+    try:
+        out = pr_review_post.post(sf.github, int(number), comments=comments, rounds=rounds,
+                                  deferred=evidence.get("deferred_findings") or [],
+                                  state=state, repository=repository)
+    except Exception as exc:  # noqa: BLE001 — never block a passing PR on a comment
+        _log_caught(logger)
+        out = {"posted": False, "reason": f"{type(exc).__name__}: {exc}"[:200], "state": state}
+    new_state = out.pop("state", state) or {}
+    try:
+        with _transaction(engine) as c:
+            c.execute(sql(
+                "UPDATE code_task_runs SET finalize_ctx = COALESCE(finalize_ctx,'{}'::jsonb) "
+                "|| jsonb_build_object('pr_review_posts', CAST(:s AS JSONB), "
+                "'pr_review_post_result', CAST(:r AS JSONB)), updated_at=now() "
+                "WHERE id=:id AND project_id=:p"),
+                {"s": _json_dumps(new_state), "r": _json_dumps(out), "id": run_id,
+                 "p": project_id})
+            emit_event(c, project_id,
+                       "code_task.review_comments_posted" if out.get("posted")
+                       else "code_task.review_comments_failed", "boss", "code_task_run", run_id,
+                       {"pull_request_number": number, **{k: v for k, v in out.items()
+                                                         if k != "review_url"}})
+    except Exception:  # noqa: BLE001
+        _log_caught(logger)
+    return out
 
 
 def _with_ci_static(rr: dict, files) -> dict:
@@ -1643,20 +1740,10 @@ def _render_change_for_review(files, *, max_total: int = 48000, max_per_file: in
     REDISCOVER what changed. That rediscovery — not model quality or retries — was the dominant
     review latency. Capped so a large diff can't blow the context; the reviewer can still open any
     file in the read-only tree for more depth."""
-    items = (sorted(files.items()) if isinstance(files, dict)
-             else sorted((fc.path, fc.content) for fc in files))
-    parts, total = [], 0
-    for path, content in items:
-        body = content or ""
-        if len(body) > max_per_file:
-            body = body[:max_per_file] + f"\n… [truncated {len(content) - max_per_file} chars]"
-        block = f"\n=== FILE: {path} ===\n{body}\n"
-        if total + len(block) > max_total:
-            parts.append(f"\n… [further changed files omitted to fit context, starting at {path}]")
-            break
-        parts.append(block)
-        total += len(block)
-    return "".join(parts).strip() or "(no file changes detected)"
+    live = (dict(files) if isinstance(files, dict)
+            else {fc.path: fc.content for fc in files})
+    return review_input.render(review_input.build(live), max_total=max_total,
+                               max_per_file=max_per_file)
 
 
 def _change_clause(change: str) -> str:
@@ -1666,7 +1753,8 @@ def _change_clause(change: str) -> str:
     return ("THE CHANGE UNDER REVIEW — the exact files this task added or modified is inlined "
             "below. Judge THIS change directly; you already have it, so do NOT spend turns running "
             "git diff or hunting the repo. Open another file in the read-only tree ONLY if you "
-            f"genuinely need more context.\n{change}\n\n")
+            f"genuinely need more context.\n{change}\n\n"
+            + review_input.reviewed_clause())
 
 
 def _review_prompt(title, criteria, *, instructions="", ui=False, change=""):
@@ -3469,6 +3557,53 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     pass
             return sorted(paths)
 
+        def _review_change_now() -> review_input.ChangeUnderReview:
+            """THE change every reviewer seat judges (review_input.build): the live diff, plus
+            every path this lineage changed that the live diff does not carry (a seeded file
+            nobody touched again), read from the tree. Never the working tree against HEAD."""
+            live = (dict(accumulated) if use_microvm
+                    else {fc.path: fc.content for fc in sandbox.diff()})
+            reader = None
+            if not use_microvm:
+                files_reader = getattr(sandbox, "_repo_files", None)
+
+                def reader(p: str):
+                    if files_reader is not None:
+                        return files_reader.read_text(p, errors="strict")
+                    target = root / p
+                    return target.read_text(errors="strict") if target.is_file() else None
+            return review_input.build(live, _changed_paths(), read=reader,
+                                      keep=workspace_keepable)
+
+        def _judge_seat(stage: str, ask) -> tuple[dict, Optional[str]]:
+            """Run one reviewer seat, and ask it again once if its review did not see the change.
+
+            `ask(preface)` runs the seat with `preface` in front of its prompt. A second hollow
+            answer is returned with its reason: the caller records the seat as not having
+            reviewed (never a pass), and the gate fails as review_input.HOLLOW_GATE_REASON."""
+            rr = ask("") or {}
+            reason = review_input.hollow_reason(rr.get("summary", ""), _review_change.paths)
+            if not reason:
+                return rr, None
+            with _transaction(engine) as c:
+                emit_event(c, project_id, "code_task.review_hollow", "boss", "code_task_run",
+                           run_id, {"stage": stage, "reason": reason, "retrying": True,
+                                    "changed_files": len(_review_change.paths)})
+            again = ask(review_input.retry_preface(reason, _review_change)) or {}
+            again = {**again, "cost_usd_micros": int(again.get("cost_usd_micros") or 0)
+                     + int(rr.get("cost_usd_micros") or 0)}
+            reason = review_input.hollow_reason(again.get("summary", ""), _review_change.paths)
+            if reason:
+                with _transaction(engine) as c:
+                    emit_event(c, project_id, "code_task.review_hollow", "boss",
+                               "code_task_run", run_id,
+                               {"stage": stage, "reason": reason, "retrying": False,
+                                "changed_files": len(_review_change.paths)})
+            return again, reason
+
+        _review_change = review_input.ChangeUnderReview()
+        _hollow_seats: dict[str, str] = {}
+
         def _run_manifest_verify(plan, *, record: bool):
             """boss.verify.yaml: the affected suites, from the repo root, no scaffold repair."""
             nonlocal last_verify_output
@@ -4514,8 +4649,10 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # Hand every reviewer the actual change inline so it JUDGES instead of burning agentic
             # turns rediscovering the diff (the real review-latency root cause). Reviewers still
             # run in the read-only tree and can open any file for deeper context.
-            change_block = _render_change_for_review(
-                accumulated if use_microvm else {fc.path: fc.content for fc in sandbox.diff()})
+            # THE WHOLE CHANGE (review_input.build): the live diff plus every path the lineage
+            # changed, so a seeded attempt's reviewer is not handed "(no file changes detected)".
+            _review_change = _review_change_now()
+            change_block = _review_change.block()
 
             def _make_review(seat, seat_agent, seat_model):
                 def _run():
@@ -4524,12 +4661,17 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     set_llm_context(routes=_route_ids(), db_engine=engine, project_id=project_id, run_id=run_id,
                                     stage="review_code",
                                     seat=(seat + 1) if panel_size > 1 else None)
-                    rr = seat_agent.run_role(
-                        _review_prompt(title, criteria, instructions=instructions, ui=ui_task, change=change_block),
-                        review_root, read_only=True, model=seat_model)
+                    rr, hollow = _judge_seat("review_code", lambda pre: seat_agent.run_role(
+                        pre + _review_prompt(title, criteria, instructions=instructions, ui=ui_task,
+                                             change=change_block),
+                        review_root, read_only=True, model=seat_model))
                     with lock:
                         panel_cost["v"] += int(rr.get("cost_usd_micros") or 0)
-                    panel["review_votes"][seat] = (rr, _parse_verdict(rr.get("summary", "")))
+                        if hollow:
+                            _hollow_seats["review_code"] = hollow
+                    # A review that never saw the change casts no vote: never `survived`.
+                    panel["review_votes"][seat] = (
+                        rr, "not_run" if hollow else _parse_verdict(rr.get("summary", "")))
                 return _run
 
             review_checks = [_make_review(i, a, m) for i, (a, m) in enumerate(review_members)]
@@ -4537,11 +4679,17 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             def _do_security():
                 set_llm_context(routes=_route_ids(), db_engine=engine, project_id=project_id, run_id=run_id,
                                 stage="security_check")
-                rr = security_agent.run_role(_security_prompt(title, instructions=instructions, criteria=criteria, change=change_block),
-                                             review_root, read_only=True, model=security_model)
+                rr, hollow = _judge_seat("security_check", lambda pre: security_agent.run_role(
+                    pre + _security_prompt(title, instructions=instructions, criteria=criteria,
+                                           change=change_block),
+                    review_root, read_only=True, model=security_model))
                 with lock:
                     panel_cost["v"] += int(rr.get("cost_usd_micros") or 0)
-                panel["security"] = (rr, _parse_security(rr.get("summary", "")))
+                    if hollow:
+                        _hollow_seats["security_check"] = hollow
+                # A security check that never saw the change is not `clean`.
+                panel["security"] = (rr, "hollow" if hollow
+                                     else _parse_security(rr.get("summary", "")))
 
             def _do_full():
                 if use_microvm:
@@ -4566,12 +4714,16 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             def _do_consistency():
                 set_llm_context(routes=_route_ids(), db_engine=engine, project_id=project_id, run_id=run_id,
                                 stage="consistency_check")
-                rr = consistency_agent.run_role(
-                    _consistency_prompt(title, criteria, design, instructions=instructions, change=change_block),
-                    review_root, read_only=True, model=consistency_model)
+                rr, hollow = _judge_seat("consistency_check", lambda pre: consistency_agent.run_role(
+                    pre + _consistency_prompt(title, criteria, design, instructions=instructions,
+                                              change=change_block),
+                    review_root, read_only=True, model=consistency_model))
                 with lock:
                     panel_cost["v"] += int(rr.get("cost_usd_micros") or 0)
-                panel["consistency"] = (rr, _parse_consistency(rr.get("summary", "")))
+                    if hollow:
+                        _hollow_seats["consistency_check"] = hollow
+                panel["consistency"] = (rr, "hollow" if hollow
+                                        else _parse_consistency(rr.get("summary", "")))
 
             # WHICH seats sit on the panel is a profile choice. The default is the full
             # adversarial panel; `lean` narrows it to ["regression"] so a prototype run keeps
@@ -5053,7 +5205,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 gates["tests_strong_enough"] = mutation_caught
             if regressions_ok is not None:
                 gates["nothing_broke"] = regressions_ok
-            gates["consistent"] = cons_verdict != "drift"  # block only on explicit drift
+            # block on explicit drift, and on a check that never saw the change (review_input)
+            gates["consistent"] = cons_verdict not in ("drift", "hollow")
         if iac_result is not None:
             gates.update(_iac_gates(iac_result))
 
@@ -5098,6 +5251,10 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # legacy path (panel disabled / not run).
             "review_panel_size": panel_size,
             "review_confidence": review_confidence,
+            # Seats whose review did not see the change (review_input), and why. Their gates
+            # fail as HOLLOW_GATE_REASON and the check is re-run, never the coder.
+            "review_hollow": dict(_hollow_seats),
+            "review_change_files": len(_review_change.paths),
             "security_verdict": sec_verdict,
             "consistency_verdict": cons_verdict,
             # IaC verify lane (T3): the full per-step JSON result rides the quality-gate
@@ -5197,6 +5354,14 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # rather than three renderings of the same prose at three different moments. Placed
         # after `evidence` is assembled, for the reason the comment inside it already gives.
         _record_review_comments(engine, run_id, project_id, evidence)
+        if do_review:
+            _record_review_round(engine, run_id, project_id, round_i=0, seats={
+                "review_code": {"verdict": verdict, "summary": r3.get("summary", ""),
+                                "hollow": _hollow_seats.get("review_code")},
+                "security_check": {"verdict": sec_verdict, "summary": r4.get("summary", ""),
+                                   "hollow": _hollow_seats.get("security_check")},
+                "consistency_check": {"verdict": cons_verdict, "summary": r6.get("summary", ""),
+                                      "hollow": _hollow_seats.get("consistency_check")}})
 
         # ADVISORY first pass (web build, review=False): a failing quality check is SURFACED
         # (advisory_failing_gates → shown in the UI) but must NOT block. Record it and FALL THROUGH
@@ -5320,12 +5485,23 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         # starts from the same code with the same findings. Nothing in the run
                         # said so — the phase looked identical to one that worked.
                         _before = {fc.path: fc.content for fc in sandbox.diff()}
+                        # The comments, numbered as shown, so the implementer's RESPONSE lines
+                        # can be matched back and posted beside each one on the pull request.
+                        _answered = review_comments.implementer_order(_open) if _open else []
                         rfix = a_fix.run_role(
-                            _targeted_fix_prompt("\n\n".join(finding_bits), round_i), root,
-                            model=m_fix, resume_session_id=impl_session_id)
+                            _targeted_fix_prompt("\n\n".join(finding_bits), round_i)
+                            + ("\n" + review_comments.response_clause() if _answered else ""),
+                            root, model=m_fix, resume_session_id=impl_session_id)
                         impl_session_id = rfix.get("session_id") or impl_session_id
                         cost += int(rfix.get("cost_usd_micros") or 0)
-                        if {fc.path: fc.content for fc in sandbox.diff()} == _before:
+                        _after = {fc.path: fc.content for fc in sandbox.diff()}
+                        if _answered:
+                            _record_comment_responses(
+                                engine, run_id, project_id, _answered, rfix.get("summary") or "",
+                                round_i=round_i,
+                                changed_files=[p for p in set(_before) | set(_after)
+                                               if _before.get(p) != _after.get(p)])
+                        if _after == _before:
                             logger.warning(
                                 "code_task.fix_round_changed_nothing run=%s round=%s", run_id,
                                 round_i)
@@ -5360,8 +5536,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         if round_i >= inrun_max or (set(failing) - _convergeable):
                             break
                         continue
-                    change_block = _render_change_for_review(
-                        {fc.path: fc.content for fc in sandbox.diff()})
+                    _review_change = _review_change_now()
+                    change_block = _review_change.block()
                     impl_files = [fc.path for fc in sandbox.diff()
                                   if not _is_test_path(fc.path)] or impl_files
                     if "code_review_passed" in failing:
@@ -5369,13 +5545,18 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                             _phase(c, "review_code")
                         set_llm_context(routes=_route_ids(), db_engine=engine, project_id=project_id,
                                         run_id=run_id, stage="review_code")
-                        rr = review_agent.run_role(
-                            _review_prompt(title, criteria, instructions=instructions,
-                                           ui=ui_task, change=change_block),
-                            review_root, read_only=True, model=review_model)
+                        rr, _hollow = _judge_seat("review_code", lambda pre: review_agent.run_role(
+                            pre + _review_prompt(title, criteria, instructions=instructions,
+                                                 ui=ui_task, change=change_block),
+                            review_root, read_only=True, model=review_model))
                         cost += int(rr.get("cost_usd_micros") or 0)
                         rr = _with_ci_static(rr, accumulated if use_microvm else sandbox.diff())
-                        verdict = _parse_verdict(rr.get("summary", ""))
+                        if _hollow:
+                            _hollow_seats["review_code"] = _hollow
+                        else:
+                            _hollow_seats.pop("review_code", None)
+                        verdict = ("not_run" if _hollow
+                                   else _parse_verdict(rr.get("summary", "")))
                         r3 = rr
                         review_confidence = 1.0 if verdict == "survived" else 0.0
                         _rev_pass, _blocking, _deferred = _review_gate_from_findings(
@@ -5384,24 +5565,39 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         deferred_findings = _deferred
                         # Materialise the panel's findings as comments NOW, before any fix
                         # round runs, so the implementer and the pull request read the
-                        # same artifact instead of two renderings of the same prose.
-                        _record_review_comments(engine, run_id, project_id, evidence)
-                        _record_review_comments(engine, run_id, project_id, evidence)
+                        # same artifact instead of two renderings of the same prose. THIS
+                        # round's summary: `evidence` still holds the previous one until the
+                        # round passes, which is how a re-review's findings were never recorded.
+                        _record_review_comments(
+                            engine, run_id, project_id,
+                            {**evidence, "review_summary": rr.get("summary", "")},
+                            round_i=round_i)
+                        _record_review_round(engine, run_id, project_id, round_i=round_i, seats={
+                            "review_code": {"verdict": verdict, "summary": rr.get("summary", ""),
+                                            "hollow": _hollow}})
                         gates["code_review_passed"] = _rev_pass
                     if "consistent" in failing:
                         with _transaction(engine) as c:
                             _phase(c, "consistency_check")
                         set_llm_context(routes=_route_ids(), db_engine=engine, project_id=project_id,
                                         run_id=run_id, stage="consistency_check")
-                        rc2 = consistency_agent.run_role(
-                            _consistency_prompt(title, criteria, design,
-                                                instructions=instructions, change=change_block),
-                            review_root, read_only=True, model=consistency_model)
+                        rc2, _hollow = _judge_seat(
+                            "consistency_check", lambda pre: consistency_agent.run_role(
+                                pre + _consistency_prompt(title, criteria, design,
+                                                          instructions=instructions,
+                                                          change=change_block),
+                                review_root, read_only=True, model=consistency_model))
                         cost += int(rc2.get("cost_usd_micros") or 0)
-                        cons_verdict = _parse_consistency(rc2.get("summary", ""))
+                        if _hollow:
+                            _hollow_seats["consistency_check"] = _hollow
+                        else:
+                            _hollow_seats.pop("consistency_check", None)
+                        cons_verdict = ("hollow" if _hollow
+                                        else _parse_consistency(rc2.get("summary", "")))
                         r6 = rc2
-                        gates["consistent"] = cons_verdict != "drift"
+                        gates["consistent"] = cons_verdict not in ("drift", "hollow")
                     failing = [k for k, v in gates.items() if not v]
+                    evidence["review_hollow"] = dict(_hollow_seats)
                     if not failing:
                         evidence.update({
                             "adversarial_verdict": verdict,
@@ -5487,14 +5683,22 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                             _phase(c, "review_code")
                         set_llm_context(routes=_route_ids(), db_engine=engine, project_id=project_id,
                                         run_id=run_id, stage="review_code")
-                        rr = review_agent.run_role(
-                            _review_prompt(title, criteria, instructions=instructions,
-                                           ui=ui_task, change=change_block),
+                        _review_change = _review_change_now()
+                        change_block = _review_change.block()
+                        rr, _hollow = _judge_seat("review_code", lambda pre: review_agent.run_role(
+                            pre + _review_prompt(title, criteria, instructions=instructions,
+                                                 ui=ui_task, change=change_block),
                             review_root, read_only=True, model=review_model,
-                            max_turns=escalated)
+                            max_turns=escalated))
                         cost += int(rr.get("cost_usd_micros") or 0)
                         rr = _with_ci_static(rr, accumulated if use_microvm else sandbox.diff())
-                        verdict = _parse_verdict(rr.get("summary", ""))
+                        if _hollow:
+                            _hollow_seats["review_code"] = _hollow
+                        else:
+                            _hollow_seats.pop("review_code", None)
+                        evidence["review_hollow"] = dict(_hollow_seats)
+                        verdict = ("not_run" if _hollow
+                                   else _parse_verdict(rr.get("summary", "")))
                         r3 = rr
                         _rev_pass, _blocking, _deferred = _review_gate_from_findings(
                             rr.get("summary", ""), verdict,
@@ -5503,7 +5707,16 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         # Materialise the panel's findings as comments NOW, before any fix
                         # round runs, so the implementer and the pull request read the
                         # same artifact instead of two renderings of the same prose.
-                        _record_review_comments(engine, run_id, project_id, evidence)
+                        _esc_round = 100 + escalations   # escalated checks after the rounds
+                        _record_review_comments(
+                            engine, run_id, project_id,
+                            {**evidence, "review_summary": rr.get("summary", "")},
+                            round_i=_esc_round)
+                        _record_review_round(engine, run_id, project_id, round_i=_esc_round,
+                                             seats={"review_code": {
+                                                 "verdict": verdict,
+                                                 "summary": rr.get("summary", ""),
+                                                 "hollow": _hollow}})
                         gates["code_review_passed"] = _rev_pass
                         evidence["review_summary"] = (rr.get("summary") or "")[:4000]
                         evidence["adversarial_verdict"] = verdict
@@ -5794,15 +6007,18 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # with no phase change inside, so a Stop pressed during it was only seen after the
             # PR existed. Checked right before the first GitHub write (the push and the PR).
             _abort_if_cancelled("before opening the PR")
+            _pr_files = ([FileChange(path=p, content=content)
+                          for p, content in accumulated.items()]
+                         if use_microvm else sandbox.diff())
+            _pr_summary = _generated_pr_summary(
+                engine, settings, run_id, project_id, title=title, evidence=evidence,
+                gates=gates, paths=[f.path for f in _pr_files], qg_id=qg_id)
             proposal = sf.propose_pull_request(
                 c, project_id, task_id, reservation_id=reservation_id,
                 dedupe_key=f"code:task:{run_id}", title=title,
                 branch_name=work_branch,
-                summary=(f"Governed pipeline: tests by qa, impl by SE, adversarial review SURVIVED. "
-                         f"QualityGate {qg_id} PASS.\n\n{r2.get('summary','')}"
-                         + agent_acts.pr_trailers(c, run_id)),
-                files=([FileChange(path=p, content=content) for p, content in accumulated.items()]
-                       if use_microvm else sandbox.diff()),
+                summary=_pr_summary + agent_acts.pr_trailers(c, run_id),
+                files=_pr_files,
                 created_by_job_id=job_id, actual_usd_micros=cost,
                 evidence=evidence, quality_gate_id=qg_id, run_id=run_id)
 
@@ -5849,12 +6065,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         c, project_id, task_id, reservation_id=reservation_id,
                         dedupe_key=f"code:task:{run_id}", title=title,
                         branch_name=work_branch,
-                        summary=(f"Governed pipeline: tests by qa, impl by SE. "
-                                 f"QualityGate {qg_id}.\n\n{r2.get('summary','')}"
-                                 + agent_acts.pr_trailers(c, run_id)),
-                        files=([FileChange(path=p, content=content)
-                                for p, content in accumulated.items()]
-                               if use_microvm else sandbox.diff()),
+                        summary=_pr_summary + agent_acts.pr_trailers(c, run_id),
+                        files=_pr_files,
                         created_by_job_id=job_id, actual_usd_micros=cost,
                         evidence=evidence, quality_gate_id=qg_id, run_id=run_id)
                     status = proposal.get("status")

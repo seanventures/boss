@@ -57,6 +57,7 @@ JOB_KIND_PERMISSIONS: dict[str, str] = {
     "github.deployment.create": P.DEPLOYMENT_CREATE,
     "github.triage": P.GITHUB_MANAGE,
     "github.pr_review": P.GITHUB_MANAGE,
+    "pull_request.review_again": P.CODE_TASK_STEER,   # a review round posted on the build's PR
     "github.repository.reconcile": P.REPOSITORY_MANAGE,
     # deployments and infrastructure
     "deployment.stack_apply": P.DEPLOYMENT_CREATE,
