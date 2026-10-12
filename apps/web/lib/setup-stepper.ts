@@ -46,12 +46,12 @@ export function stepNumber(view: SetupView, row: RowKey): number | null {
 export type SetupParams = { focus: RowKey | null; add: string | null; source: string | null };
 
 const ROWS: RowKey[] = ["github", "repository", "models", "capacity", "jobs", "budget", "try",
-                        "advanced", "github_app", "repositories", "ci", "build_database", "toolchains",
-                        "public_url"];
+                        "advanced", "github_app", "repositories", "ci", "build_database", "build_speed",
+                        "toolchains", "public_url"];
 
 /** Rows folded under Advanced: a deep link to one opens the fold first. */
 export const ADVANCED_ROWS: readonly RowKey[] = ["advanced", "github_app", "repositories", "ci", "build_database",
-                                                 "toolchains", "jobs", "budget", "public_url"];
+                                                 "build_speed", "toolchains", "jobs", "budget", "public_url"];
 
 /** `?area=setup[&focus=…][&add=<provider>][&source=<id>]`, plus the legacy `step=` names. */
 export function readParams(search: string): SetupParams {

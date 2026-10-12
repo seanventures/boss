@@ -92,6 +92,36 @@ def thinking_token_cap() -> int:
         return THINKING_TOKEN_CAP_DEFAULT
 
 
+#: The CLI's sub-agent tool (Claude Code 2.x names it `Agent`; `Task` is its older alias).
+SUB_AGENT_TOOL = "Agent"
+#: Never available to a build, sub-agent or not: the build reaches the network only through
+#: the fence, and a sub-agent must not be able to ask for what its parent was never given.
+SUB_AGENT_DENIED_TOOLS = "WebFetch,WebSearch"
+
+
+def sub_agent_tools(allowed: str) -> str:
+    """`allowed` plus the sub-agent tool, once."""
+    names = [t.strip() for t in str(allowed or "").split(",") if t.strip()]
+    if SUB_AGENT_TOOL not in names:
+        names.append(SUB_AGENT_TOOL)
+    return ",".join(names)
+
+
+def sub_agent_rule(n: int) -> str:
+    """How a writing stage fans out: independent parts in parallel, integration by the parent."""
+    return (
+        f"\n\nPARALLEL SUB-AGENTS (use them, up to {n} at once):\n"
+        f"- This is a large change. Split INDEPENDENT parts across up to {n} parallel sub-agents "
+        "with the Agent tool IN ONE TURN, e.g. server routes, data layer and migrations, UI "
+        "screens, and test suites, each told exactly which files it owns.\n"
+        "- Give each sub-agent the relevant part of the spec and plan and the files it must NOT "
+        "touch. Two sub-agents never write the same file.\n"
+        "- When they return, YOU integrate: read what they wrote, fix the seams, then run the "
+        "full build and every test yourself. You are responsible for the whole change passing.\n"
+        "- Small or tightly coupled work: do it yourself; a sub-agent is for parallel volume.\n"
+    )
+
+
 def _idle_timeout_seconds() -> float:
     raw = (os.environ.get(_IDLE_TIMEOUT_ENV) or "").strip()
     if not raw:
@@ -122,6 +152,51 @@ def _end_child(child, reap_seconds: float = 10.0) -> None:
         pass
 
 
+def is_partial_line(line: str) -> bool:
+    """A token-level `stream_event` line (--include-partial-messages)."""
+    return '"type":"stream_event"' in (line or "")[:64]
+
+
+class LivePulse:
+    """A long model stretch is never silent: "Thinking… 2m" / "Writing… 1m", at most every 30s.
+
+    A HelpDesk AI build had two silent stretches of 7 and 12 minutes, the model thinking before
+    it acted, and nobody watching could tell that from a hang. With partial messages the CLI
+    says what it is doing token by token; this turns that into one line per half minute.
+    """
+
+    EVERY_SECONDS = 30.0
+
+    def __init__(self, clock=time.monotonic):
+        self._clock = clock
+        self.reset()
+
+    def reset(self) -> None:
+        """A whole turn arrived: the stretch is over."""
+        self._phase = ""
+        self._since = 0.0
+        self._last = 0.0
+
+    def feed(self, line: str) -> Optional[dict]:
+        phase = ("thinking" if '"thinking_delta"' in line
+                 else "writing" if ('"text_delta"' in line or '"input_json_delta"' in line)
+                 else "")
+        if not phase:
+            return None
+        now = self._clock()
+        if phase != self._phase:
+            self._phase, self._since, self._last = phase, now, now
+            return None
+        if now - self._last < self.EVERY_SECONDS:
+            return None
+        self._last = now
+        elapsed = int(now - self._since)
+        mins, secs = divmod(elapsed, 60)
+        took = f"{mins}m {secs:02d}s" if mins else f"{secs}s"
+        return {"direction": "completion", "level": "info",
+                "content": f"{phase.capitalize()}… {took} so far"}
+
+
 def _drain(child, *, timeout: Optional[float], on_line=None) -> tuple[str, str]:
     """Read a child's stdout/stderr as they arrive, returning the full text of each.
 
@@ -144,7 +219,11 @@ def _drain(child, *, timeout: Optional[float], on_line=None) -> tuple[str, str]:
         try:
             for line in iter(stream.readline, ""):
                 last_output_at[0] = time.monotonic()
-                sink.append(line)
+                # A PARTIAL message (one per token with --include-partial-messages) is a pulse
+                # for the live view, never part of the output: keeping them would multiply the
+                # stored stdout a hundredfold and change nothing the final parse reads.
+                if not is_partial_line(line):
+                    sink.append(line)
                 if live and on_line is not None:
                     try:
                         on_line(line)
@@ -587,6 +666,7 @@ class CodeAgent(Protocol):
     def run_role(
         self, prompt: str, cwd: Path, *, read_only: bool = False, model: Optional[str] = None,
         resume_session_id: Optional[str] = None, max_turns: Optional[int] = None,
+        parallel_agents: int = 0,
     ) -> dict:
         """Run one isolated, role-scoped invocation against an existing workdir.
         Returns {summary, usage, cost_usd_micros, turns, model, session_id?}. The role
@@ -718,7 +798,7 @@ class ClaudeCodeAgent:
         self, prompt: str, cwd: Path, *, read_only: bool = False, model: Optional[str] = None,
         allowed_tools: Optional[str] = None, resume_session_id: Optional[str] = None,
         max_turns: Optional[int] = None, seat: str = "agent",
-        on_turn: Optional[Callable[[dict], None]] = None,
+        on_turn: Optional[Callable[[dict], None]] = None, parallel_agents: int = 0,
     ) -> dict:
         timeout = int(self.settings.code_agent_timeout_seconds or 900)
         # A full web build (in-container / local_subprocess) needs well beyond the legacy 900s that
@@ -737,6 +817,14 @@ class ClaudeCodeAgent:
             allowed = allowed_tools
         else:
             allowed = "Read,Grep,Glob,Bash" if read_only else self.settings.code_agent_allowed_tools
+        # PARALLEL SUB-AGENTS (build_speed). A sub-agent runs INSIDE this same CLI process: same
+        # uid, same cwd, same environment, same network fence and the same --allowedTools and
+        # permission mode, so it can do nothing the parent cannot. Granted only to writing stages
+        # (never a reviewer: review independence), and the network tools are refused outright so
+        # a general-purpose sub-agent cannot ask for them.
+        fan_out = 0 if read_only else max(0, int(parallel_agents or 0))
+        if fan_out:
+            allowed = sub_agent_tools(allowed)
         permission = "default" if read_only else "acceptEdits"
         _max_turns = int(self.settings.code_agent_max_turns or 40)
         if read_only:
@@ -771,12 +859,14 @@ class ClaudeCodeAgent:
                 # `stream-json` emits a line per turn AND still ends with the identical result
                 # event `--output-format json` would have returned, which is why the transcript
                 # could be added without changing a single caller in the build pipeline.
-                *(("--output-format", "stream-json", "--verbose")
+                *(("--output-format", "stream-json", "--verbose", "--include-partial-messages")
                   if stream else ("--output-format", "json")),
                 "--max-turns", str(_max_turns),
                 "--allowedTools", allowed,
                 "--permission-mode", permission,
             ]
+            if fan_out:
+                argv += ["--disallowedTools", SUB_AGENT_DENIED_TOOLS]
             if self.mcp_harness is not None:
                 # ONLY THE AGENT'S OWN SERVERS, Ask/Off tools refused (code_task_mcp).
                 argv += self.mcp_harness.argv()
@@ -795,7 +885,7 @@ class ClaudeCodeAgent:
             # and the whole command is then rejected before the process starts — measured on the
             # chat path as `OSError: [Errno 7] Argument list too long: 'nice'`. Over the limit
             # the prompt goes on stdin; under it, nothing changes.
-            body = _argv_safe(prompt) + _PARALLEL_TOOLS_RULE
+            body = _argv_safe(prompt) + _PARALLEL_TOOLS_RULE + (sub_agent_rule(fan_out) if fan_out else "")
             if len(body.encode("utf-8", "ignore")) > 96_000:
                 return argv, body
             return argv + ["--", body], None
@@ -832,7 +922,18 @@ class ClaudeCodeAgent:
             except Exception:  # noqa: BLE001
                 pass
 
+            pulse = LivePulse()
+
             def _on_line(line: str) -> None:
+                if is_partial_line(line):
+                    beat = pulse.feed(line)
+                    if beat:
+                        try:
+                            record_agent_turns([beat], engine_name=self.engine, model=live_model)
+                        except Exception:  # noqa: BLE001
+                            pass
+                    return
+                pulse.reset()
                 produced = parser.feed(line)
                 if not produced:
                     return
@@ -1059,6 +1160,7 @@ class ClaudeCodeAgent:
     def run_role(
         self, prompt: str, cwd: Path, *, read_only: bool = False, model: Optional[str] = None,
         resume_session_id: Optional[str] = None, max_turns: Optional[int] = None,
+        parallel_agents: int = 0,
     ) -> dict:
         """Run a single role-scoped agent invocation against an existing workdir and
         return {summary, usage, cost_usd_micros, turns, model, session_id}. Used by the
@@ -1076,7 +1178,8 @@ class ClaudeCodeAgent:
             # command line: a writing agent must never be reaped as though it were a reviewer.
             data = self._invoke(prompt, cwd, read_only=read_only, model=model,
                                 resume_session_id=resume_session_id, max_turns=max_turns,
-                                seat=("review" if read_only else "agent"))
+                                seat=("review" if read_only else "agent"),
+                                parallel_agents=0 if read_only else int(parallel_agents or 0))
         except Exception as exc:
             failed_model = model or getattr(self.settings, "claude_cli_model", None) or ""
             record_llm_call(engine_name=self.engine, usage={"model": failed_model},
@@ -1457,6 +1560,7 @@ class NativeCodeAgent:
     def run_role(
         self, prompt: str, cwd: Path, *, read_only: bool = False, model: Optional[str] = None,
         resume_session_id: Optional[str] = None,  # accepted for interface parity; native has no session store
+        **_ignored,  # parallel_agents, max_turns: a Claude CLI capability the native loop has no use for
     ) -> dict:
         if self._tools_enabled():
             try:

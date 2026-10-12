@@ -194,6 +194,9 @@ export type SetupView = {
   /** "Give builds a database (Postgres)" — the project setting build_services. Absent on an older API. */
   build_database?: { key: string; mode?: "auto" | "always" | "never"; enabled: boolean; source: "project" | "default"; configured: boolean;
                      permission: string } | null;
+  /** "Build speed": parallel sub-agents per build (project setting build_speed). Absent on an older API. */
+  build_speed?: { key: string; mode: "balanced" | "fastest"; parallelism: number; machine: number;
+                  asks?: Record<string, number>; source: "project" | "default"; permission: string } | null;
   /** A background probe (signed-in CLIs, the secret store) is on its way: ask again soon. */
   detecting?: boolean;
 };
@@ -223,4 +226,4 @@ export type TokenFound = {
 /** Rows on the board. */
 export type RowKey = "github" | "repository" | "models" | "capacity" | "jobs" | "budget" | "try"
   /** Advanced: the rows folded under it (`focus=` opens the fold on that row). */
-  | "advanced" | "github_app" | "repositories" | "ci" | "build_database" | "toolchains" | "public_url";
+  | "advanced" | "github_app" | "repositories" | "ci" | "build_database" | "build_speed" | "toolchains" | "public_url";

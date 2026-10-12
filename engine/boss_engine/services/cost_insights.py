@@ -28,7 +28,7 @@ from .openai_adapter import CACHE_READ_MULT, price_for_model
 _MIN_SPEND_USD_MICROS = 100_000          # ignore projects with < $0.10 at stake
 _CACHE_RATIO_FLOOR = 0.30
 _ESTIMATED_SHARE_FLOOR = 0.20
-_CHEAP_STAGES = ("standards", "spec", "plan", "review_plan")
+_CHEAP_STAGES = ("standards", "spec", "plan", "review_plan", "design")
 
 
 def build_insights(connection: Connection, project_id: str) -> dict[str, Any]:

@@ -970,6 +970,7 @@ def _build(connection: Connection, settings: Any, project_id: str, *,
         # Build toolchains in this image (Python and Node always; Java when turned on).
         "toolchains": _toolchains(),
         "build_database": build_database(connection, settings, project_id),
+        "build_speed": build_speed(connection, settings, project_id),
         "generated_at": now.isoformat(),
     }
 
@@ -999,6 +1000,29 @@ def build_database(connection: Connection, settings: Any, project_id: str) -> di
     return {"key": build_services.SETTING_KEY, "mode": mode, "enabled": mode != build_services.NEVER,
             "source": "project" if build_services.SETTING_KEY in chosen else "default",
             "configured": bool((os.environ.get(build_services.SERVER_URL_ENV) or "").strip()),
+            "permission": "settings:update"}
+
+
+def build_speed(connection: Connection, settings: Any, project_id: str) -> dict[str, Any]:
+    """"Build speed": how many parallel sub-agents a build's writing stages may use
+    (project_settings.build_parallelism). `parallelism` is what a build gets right now, after
+    the machine's own cap; `machine` is that cap. Same model and same checks at every speed."""
+    from . import project_settings
+
+    try:
+        with connection.begin_nested():
+            chosen = project_settings.get_all(connection, project_id)
+            parallelism = project_settings.build_parallelism(connection, project_id, settings)
+    except Exception:  # noqa: BLE001 — the rest of Repo and models still renders
+        chosen, parallelism = {}, 1
+    mode = str(chosen.get("build_speed") or getattr(settings, "build_speed", None)
+               or "balanced").lower()
+    if mode not in project_settings.BUILD_SPEED_PARALLELISM:
+        mode = "balanced"
+    return {"key": "build_speed", "mode": mode, "parallelism": int(parallelism),
+            "machine": project_settings.machine_parallelism(),
+            "asks": dict(project_settings.BUILD_SPEED_PARALLELISM),
+            "source": "project" if "build_speed" in chosen else "default",
             "permission": "settings:update"}
 
 
