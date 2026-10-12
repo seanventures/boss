@@ -141,6 +141,23 @@ def test_a_project_adds_only_allowed_repositories(eng, world):
     assert listed["not_allowed_count"] == 2                     # mobile, legacy-admin
 
 
+def test_in_one_repo_mode_the_default_repository_is_used_by_every_app(eng, world, monkeypatch):
+    """Factory › Repositories said "Used by apps: —" beside the repository HelpDesk was built
+    from: apps built before components existed have no component rows."""
+    ids = _allowed_world(eng, world)
+    pid = world["projects"][0]
+    monkeypatch.setattr(project_repos, "_apps_built_here", lambda db, p: [
+        {"app_key": "helpdesk", "app_name": "HelpDesk", "components": []}])
+    with eng.begin() as db:
+        _add(db, pid, ids["acme/contracts"])
+        listed = project_repos.list_project_repos(db, pid)
+    if listed["repo_mode"] == "multi":
+        pytest.skip("this world starts in several-repo mode")
+    default = next(i for i in listed["items"] if i["is_default"])
+    assert [a["app_name"] for a in default["used_by_apps"]] == ["HelpDesk"]
+    assert listed["allow_list"] == "in_use"
+
+
 def test_bad_role_hints_and_branches_are_refused(eng, world):
     ids = _allowed_world(eng, world)
     pid = world["projects"][0]
