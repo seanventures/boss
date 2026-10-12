@@ -51,7 +51,7 @@ import secrets as _secrets
 import shlex
 import tempfile
 from dataclasses import dataclass, field
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Mapping, Optional
 from urllib.parse import quote
 
 from sqlalchemy import text
@@ -2164,7 +2164,14 @@ def plan_for_workflow_step(engine, settings: Settings, *, project_id: str, actor
         "stack_target_name": target.get("app_name"),
         "stack_host": (deployment.get("preflight") or {}).get("host"),
         **({"approver_role": approver_role} if approver_role else {}),
-        "note": (f"Planned {deployment['repository']}@{str(deployment.get('commit'))[:12]} "
-                 f"onto {target.get('app_name')}; it runs once the deployment decision is "
-                 "approved."),
+        "note": planned_note(deployment, target.get("app_name")),
     }
+
+
+def planned_note(deployment: Mapping[str, Any], app_name: Any) -> str:
+    """What happens next, as it will: a deploy the environment's rule approved runs now. It said
+    "it runs once the deployment decision is approved" when no decision had been opened."""
+    where = f"{deployment.get('repository')}@{str(deployment.get('commit'))[:12]} onto {app_name}"
+    if deployment.get("decision_id"):
+        return f"Planned {where}; it runs once the deployment decision is approved."
+    return f"Planned {where}; no approval is needed here, so it is starting now."

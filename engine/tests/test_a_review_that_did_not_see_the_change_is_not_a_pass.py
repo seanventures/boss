@@ -251,6 +251,29 @@ def test_the_description_is_generated_from_records_never_agent_chat():
     assert "r2.get('summary','')}" not in src     # the implementer's chat is not the description
 
 
+def test_the_description_reads_the_runs_recorded_tests_and_the_final_review_round():
+    """PR #223 said "No test command was recorded" over a run whose `tests` list held the
+    passing build/lint/e2e command, and "✅ Review passed" from the round that saw nothing."""
+    body = pr_description.render(
+        title="HelpDesk", evidence={"tests": [{"command": "npm run test:e2e", "ok": True,
+                                               "exit_code": 0}]},
+        gates={"code_review_passed": True},
+        rounds=[{"seats": {"review_code": {"verdict": "hollow"}}},
+                {"seats": {"review_code": {"verdict": "refuted"}}}])
+    assert "No test command was recorded" not in body and "✅ `npm run test:e2e`" in body
+    assert "❌ Review passed" in body
+    passing = pr_description.render(
+        title="HelpDesk", evidence={"test_command": "npm test", "tests_passed": True},
+        gates={"code_review_passed": True},
+        rounds=[{"seats": {"review_code": {"verdict": "hollow"}}},
+                {"seats": {"review_code": {"verdict": "survived"}}}])
+    assert "✅ `npm test`" in passing and "✅ Review passed" in passing
+    hollow_last = pr_description.render(
+        title="HelpDesk", evidence={}, gates={"code_review_passed": True},
+        rounds=[{"seats": {"review_code": {"verdict": "hollow"}}}])
+    assert "❌ Review passed" in hollow_last
+
+
 # ── 4. Review this PR again exists everywhere a person or agent would look ──────────────────
 
 def test_review_again_is_an_api_a_tool_a_job_and_a_button():

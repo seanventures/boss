@@ -45,6 +45,7 @@ def render(*, title: str, evidence: dict, gates: dict, paths: Iterable[str] = ()
            quality_gate_id: str = "") -> str:
     """The description. Every line comes from a record; nothing is written by a model."""
     paths = sorted({str(p) for p in paths if p})
+    rounds = [r for r in rounds if isinstance(r, dict)]
     out = [f"## {title}".strip(), ""]
     # What changed.
     size = (f" (+{int(additions or 0)} −{int(deletions or 0)})"
@@ -56,21 +57,36 @@ def render(*, title: str, evidence: dict, gates: dict, paths: Iterable[str] = ()
         out.append(f"- Tests: {len(tests)} file{'s' if len(tests) != 1 else ''}")
     # Tests.
     out += ["", "### Tests"]
-    cmds = evidence.get("test_commands") if isinstance(evidence.get("test_commands"), list) else []
+    # The run records its commands as `tests` (a list of {command, ok, exit_code}) and the last
+    # one as `test_command`; reading only `test_commands`/`test_cmd` said "No test command was
+    # recorded" over a run whose build, typecheck, lint and e2e had all passed.
+    cmds = next((v for v in (evidence.get("test_commands"), evidence.get("tests"))
+                 if isinstance(v, list) and v), [])
+    single = evidence.get("test_cmd") or evidence.get("test_command")
     if cmds:
         for c in cmds[:6]:
-            c = c if isinstance(c, dict) else {}
+            c = c if isinstance(c, dict) else {"command": str(c)}
             ok = c.get("ok") if "ok" in c else c.get("exit_code") == 0
             out.append(f"- {'✅' if ok else '❌'} `{str(c.get('command') or '')[:160]}`")
-    elif evidence.get("test_cmd"):
+    elif single:
         passed = evidence.get("tests_passed")
         mark = "✅" if passed else ("❌" if passed is False else "•")
-        out.append(f"- {mark} `{str(evidence.get('test_cmd'))[:160]}`")
+        out.append(f"- {mark} `{str(single)[:160]}`")
     else:
         out.append("- No test command was recorded.")
-    # Checks.
-    passed = [k for k, v in (gates or {}).items() if v]
-    failed = [k for k, v in (gates or {}).items() if not v]
+    # Checks — the review checks as the FINAL review round says, not as the first round left
+    # them: "✅ Review passed" stood over a round that did not see the change.
+    gates = dict(gates or {})
+    final = next((r.get("seats") or {} for r in reversed(rounds) if r.get("seats")), {})
+    for seat, gate, good in (("review_code", "code_review_passed", {"survived"}),
+                             ("security_check", "security_clean", {"clean"}),
+                             ("consistency_check", "consistent", {"consistent"})):
+        verdict = str((final.get(seat) or {}).get("verdict") or "")
+        # Only ever downgrades: a recorded failure stays a failure.
+        if gate in gates and verdict:
+            gates[gate] = bool(gates[gate]) and verdict in good
+    passed = [k for k, v in gates.items() if v]
+    failed = [k for k, v in gates.items() if not v]
     out += ["", "### Checks"]
     if gates:
         out.append(f"{len(passed)} passed, {len(failed)} failed.")

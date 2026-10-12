@@ -2422,8 +2422,8 @@ def _outputs(connection: Any, run: Mapping[str, Any], facts: Facts, st: BuildSta
     n = _pr_number(run)
     agents = len({a.get("role_key") for a in _stage_acts(acts) if a.get("role_key")})
     pr: Optional[dict[str, Any]] = None
+    dstate = _decision_state(decision, now) if (n or run.get("pull_request_url")) else None
     if n or run.get("pull_request_url"):
-        dstate = _decision_state(decision, now)
         word = (f"#{n} · Merged" if dstate == "merged" else
                 f"#{n} · Waiting on you" if dstate == "waiting" else f"#{n} · Open")
         url = run.get("pull_request_url")
@@ -2549,8 +2549,15 @@ def _outputs(connection: Any, run: Mapping[str, Any], facts: Facts, st: BuildSta
         tests_ok = not commands or all(c["ok"] for c in commands)
         n_failed = sum(1 for g in (checks or {}).get("gates") or []
                        if not g["ok"] and not g.get("waived_by"))
-        if st["state"] in ("merged", "deployed"):
+        # MERGED ONLY WHEN IT WAS. A deployed build is not a merged one: the OUTPUTS header said
+        # "Merged" while PR #223 was open, because the build had been deployed from its branch.
+        if st["state"] == "merged" or (st["state"] == "deployed" and dstate == "merged"):
             ready = {"ready": False, "word": "Merged"}
+        elif st["state"] == "deployed" and not n:
+            ready = {"ready": False, "word": "Deployed"}
+        elif (st["state"] == "deployed" and not failed_checks and tests_ok
+              and not blockers):
+            ready = {"ready": True, "word": "Deployed · ready to merge"}
         elif st["state"] == "pr_open" and not failed_checks and tests_ok and not blockers:
             ready = {"ready": True, "word": "Ready to merge"}
         elif blockers:
