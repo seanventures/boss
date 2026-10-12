@@ -58,6 +58,14 @@ describe("an approval card says names and sentences", async () => {
   });
 });
 
+describe("a machine's card says each thing once, and all of it on hover", () => {
+  it("a host named by its address shows the address once; a long name has a tooltip", () => {
+    const src = codeOnly("app/infra/rack.tsx");
+    expect(src).toContain("rack.address && rack.address !== rack.name");
+    expect(src).toMatch(/className="inf-trunc" data-copy="data" title=\{rack\.name\}/);
+  });
+});
+
 describe("two buttons never run together", () => {
   it("Share this run and Download diagnostics sit in one spaced group", () => {
     expect(codeOnly("app/improve/share-run.tsx")).toContain('className="share-run-buttons"');
