@@ -61,8 +61,11 @@ describe("the chain", () => {
     const items = chainItems(chain, "ceo");
     const said = items.map((it) => it.kind === "loop" ? "loop"
       : it.acts.map((a) => a.roleKey ?? (a.handedBy.id === "ceo" || a.accountable === "ceo" ? "You" : "?")).join("+"));
+    // Your two consecutive steps are one stop that names them (mergeRepeats), not "You → You".
     expect(said).toEqual(["You", "pm", "chief_architect", "engineering_captain", "qa+adversarial_reviewer",
-      "You", "You", "release_manager"]);
+      "You", "release_manager"]);
+    const yours = items[5];
+    expect(yours.kind === "hop" && yours.steps?.length).toBe(2);
     const build = items[3];
     expect(build.kind === "hop" && build.insideCount).toBe(6);
     expect(build.kind === "hop" && build.inside.map((i) => i.kind)).toEqual(["loop"]);
@@ -81,15 +84,24 @@ describe("the chain", () => {
         parent_act_id: i === 0 ? "act_r" : `act_${all[i - 1][0]}`, how: role ? "named" : "run_actor",
         label: `${id} · Ship it #182` }));
     const items = chainItems(toChain({ acts: [root, ...steps], accountable: "ceo", totals: {}, credits: [] }), "ceo");
-    expect(items.map((it) => it.kind)).toEqual(["hop", "hop", "hop", "hop", "hop", "hop"]);
-    expect(items.slice(1).map((it) => it.acts[0].links.step_id)).toEqual(["research", "prd", "readiness", "approve", "deploy"]);
+    // No loop: five different steps stay five stops. Only You starting the run and then doing
+    // research — the same actor back to back — is one stop.
+    expect(items.map((it) => it.kind)).toEqual(["hop", "hop", "hop", "hop", "hop"]);
+    expect(items[0].kind === "hop" && items[0].steps).toEqual(["Run", "research"]);
+    expect(items.slice(1).map((it) => (it.kind === "hop" ? it.acts[0].links.step_id : "")))
+      .toEqual(["prd", "readiness", "approve", "deploy"]);
   });
 
   it("draws that order, and opens the build's inner work on request", () => {
     const el = render(<RunChain chain={toChain(shipItChain())} viewer="ceo" />);
-    const hops = [...el.querySelectorAll('[data-testid="ag-chain-strip"] > [data-testid="ag-chain-hop"]')]
+    const strip = () => [...el.querySelectorAll('[data-testid="ag-chain-strip"] > [data-testid="ag-chain-hop"]')]
       .map((h) => h.getAttribute("data-roles"));
-    expect(hops).toEqual(["", "pm", "chief_architect", "engineering_captain", "qa,adversarial_reviewer", "", "", "release_manager"]);
+    // Seven stops: the first two and the last three are drawn, the middle is `+2 more`.
+    expect(strip()).toEqual(["", "pm", "qa,adversarial_reviewer", "", "release_manager"]);
+    const more = el.querySelector('[data-testid="ag-chain-more"]') as HTMLButtonElement;
+    expect(more.textContent).toBe("+2 more");
+    act(() => more.click());
+    expect(strip()).toEqual(["", "pm", "chief_architect", "engineering_captain", "qa,adversarial_reviewer", "", "release_manager"]);
     const fold = el.querySelector('[data-testid="ag-chain-fold"]') as HTMLButtonElement;
     expect(fold.textContent).toContain("+6 inside Build");
     act(() => fold.click());
@@ -107,6 +119,7 @@ describe("the chain", () => {
 
   it("opens a hop's Act card, which says how the work reached it", () => {
     const el = render(<RunChain chain={toChain(shipItChain())} viewer="ceo" />);
+    act(() => (el.querySelector('[data-testid="ag-chain-more"]') as HTMLButtonElement).click());
     const atlas = el.querySelector('[data-act-id="act_plan"][data-testid="ag-act-face"]') as HTMLButtonElement;
     act(() => atlas.click());
     const card = document.querySelector('[role="dialog"] [data-testid="ag-act-card"]')!;

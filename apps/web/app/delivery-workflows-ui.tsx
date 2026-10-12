@@ -20,7 +20,7 @@ import { missingRequired, suppliedInputs, workflowInputFields } from "../lib/wor
 import { HostAdviceBanner, useHostAdvice } from "./host-advice";
 import { StartRefusal, asReadiness, type PendingRefusal } from "./workflow-readiness-ui";
 import { RunReportPanel } from "./run-report-ui";
-import { changeReviewHref, plannedDeploymentFrom, type PlannedDeployment } from "./deploy-ui";
+import { plannedDeploymentFrom } from "./deploy-ui";
 import { WriteInFlightError, apiWrite, runPress } from "../lib/api-write";
 import { stepAgentChip } from "./step-agents-ui";
 // Agent World (S-runs): who did each step, the chain, the Act card and Credits.
@@ -453,9 +453,13 @@ export function bucketOf(run: { status: string; standing?: RunStanding;
  *  decision somebody made about this step, the other is a path the run did not go down. */
 export function skippedBy(step: RunStep): string {
   const out = (step.output ?? {}) as {
-    skipped_by_operator?: unknown; skipped_by?: unknown; skip_reason?: unknown };
+    skipped_by_operator?: unknown; skipped_by?: unknown; skipped_by_name?: unknown; skip_reason?: unknown };
   if (step.status !== "skipped" || !out.skipped_by_operator) return "";
-  const who = String(out.skipped_by ?? "").trim() || "an operator";
+  // A name, never a raw member id ("skipped by usr_kdzh…"): the recorded name, a role key
+  // read as words, or "an operator".
+  const name = String(out.skipped_by_name ?? "").trim();
+  const raw = String(out.skipped_by ?? "").trim();
+  const who = name || (raw && !/^(usr|mem|svc|acct)_/i.test(raw) ? raw.replace(/_/g, " ") : "") || "an operator";
   const why = String(out.skip_reason ?? "").trim();
   return why ? `skipped by ${who}: ${why}` : `skipped by ${who}`;
 }
@@ -2238,7 +2242,11 @@ function DeployWhere({ targets, hosts, runInput, buildRunId, busy, bound, hostNa
   // target, which is what put an empty form in front of an operator who had already filled it.
   const settled = bound ?? chosen;
   if (settled && !changing) {
-    const where = (settled.domains ?? []).find((d: string) => !!d);
+    // The address once: on a host already named by it, only the port is new information.
+    const domain = (settled.domains ?? []).find((d: string) => !!d) ?? "";
+    const [domainHost, port] = domain.replace(/^https?:\/\//, "").split("/")[0].split(":");
+    const where = !domain ? "" : hostName && hostName.split(" · ").includes(domainHost)
+      ? (port ? `port ${port}` : "") : domain;
     return (
       <div className="dw-bound" data-testid="dw-deploy-bound">
         <span className="dw-bound-ok" aria-hidden>✓</span>
@@ -2315,20 +2323,18 @@ function DeployWhere({ targets, hosts, runInput, buildRunId, busy, bound, hostNa
  *  The `deploy` op creates a ChangeSet for review. It cannot claim a deployment is running
  *  or shipped until that ChangeSet is approved and applied.
  */
-function ShipNow({ projectId, buildRunId, target, alreadyLive, onDone }: {
+function ShipNow({ projectId, buildRunId, target, again, onDone }: {
   projectId: string; buildRunId: string; target: DeployTarget;
-  /** Something already serves at this target; the plan proposes replacing it. */
-  alreadyLive: boolean;
+  /** This app has been deployed before: the request replaces what runs there. */
+  again: boolean;
   onDone: () => void;
 }) {
-  const [state, setState] = useState<"idle" | "planning" | "planned">("idle");
-  const [plan, setPlan] = useState<PlannedDeployment | null>(null);
+  const [state, setState] = useState<"idle" | "planning">("idle");
   const [msg, setMsg] = useState<string | null>(null);
 
   const ship = useCallback(async () => {
     setState("planning");
     setMsg(null);
-    setPlan(null);
     try {
       const r = await apiWrite("/api/app-deploy", {
         method: "POST", headers: { "Content-Type": "application/json" }, cache: "no-store",
@@ -2344,14 +2350,14 @@ function ShipNow({ projectId, buildRunId, target, alreadyLive, onDone }: {
         setMsg(d?.error ?? `could not plan the deployment (HTTP ${r.status})`);
         return;
       }
-      const nextPlan = plannedDeploymentFrom(d);
-      if (!nextPlan) {
+      if (!plannedDeploymentFrom(d)) {
         setState("idle");
         setMsg("Deployment request did not return a reviewable ChangeSet. No deployment was confirmed.");
         return;
       }
-      setPlan(nextPlan);
-      setState("planned");
+      // The request now exists; the status line above it (DeployStatusLine) takes over and
+      // says "Waiting for approval", and this button steps aside until that deploy settles.
+      setState("idle");
       onDone();
     } catch (e) {
       setState("idle");
@@ -2361,28 +2367,84 @@ function ShipNow({ projectId, buildRunId, target, alreadyLive, onDone }: {
 
   return (
     <div className="dw-ship" data-testid="dw-ship">
-      <GatedButton permission="deployment:create" type="button" className="cap-btn primary" disabled={state !== "idle"}
-              onClick={ship} data-testid="dw-ship-now">
-        {state === "planning" ? "Planning…"
-          : alreadyLive ? "Plan redeployment" : "Plan deployment"}
+      <GatedButton permission="deployment:create" type="button" className={`cap-btn${again ? "" : " primary"}`}
+              disabled={state !== "idle"} onClick={ship} data-testid="dw-ship-now"
+              title={`Asks for approval, then ships ${target.app_name} · ${target.environment}${
+                target.domains?.[0] ? ` to ${target.domains[0]}` : ""}`}>
+        {state === "planning" ? "Asking…" : again ? "Deploy again" : "Deploy"}
       </GatedButton>
-      <span className="detail">
-        {alreadyLive
-          ? <>Creates a ChangeSet to review before replacing what runs at{" "}
-               {target.domains?.[0] ?? target.app_name}.</>
-          : <>Creates a ChangeSet to review before deploying <b>{target.app_name}</b> · {target.environment}
-             {target.domains?.[0] ? ` (${target.domains[0]})` : ""}.</>}
-      </span>
-      {plan ? (
-        <span className="detail dw-ship-msg" data-testid="dw-ship-plan" role="status">
-          Nothing has deployed. ChangeSet <code>{plan.changeset_id}</code> is ready.
-          Next, open <a href={changeReviewHref(
-            plan.changeset_id, typeof window !== "undefined" ? window.location.search : "",
-          )}>ProviderOps ChangeSet Review</a>, approve it, then apply it.
-        </span>
-      ) : null}
       {msg ? <span className="detail dw-ship-msg" data-testid="dw-ship-msg" role="alert">{msg}</span> : null}
     </div>
+  );
+}
+
+/** A deploy of this build as the server reads it (GET /v1/code-tasks/{id}/deployments). */
+export type NewestDeploy = {
+  ref: string; phase: string; word: string; tone: string; sentence: string;
+  openUrl: string | null; refresh: () => void;
+};
+/** Deploys still in hand: asking a person, starting, or running. */
+export const OPEN_PHASES = new Set(["needs_approval", "queued", "deploying"]);
+
+/** The newest deploy of a build, re-read every 3 s while it moves and 8 s while it asks. */
+export function useNewestDeploy(buildRunId: string | null, appName: string): NewestDeploy | null {
+  const [seen, setSeen] = useState<Omit<NewestDeploy, "refresh"> | null>(null);
+  const [tick, setTick] = useState(0);
+  const refresh = useCallback(() => setTick((t) => t + 1), []);
+  useEffect(() => {
+    if (!buildRunId) { setSeen(null); return; }
+    let alive = true;
+    (async () => {
+      try {
+        const r = await fetch(
+          `/api/run-deployments?run_ids=${encodeURIComponent(buildRunId)}`
+          + `&app_name=${encodeURIComponent(appName)}`, { cache: "no-store" });
+        if (!r.ok) return;
+        const body = await r.json();
+        const list = (body?.runs?.[buildRunId]?.deployments ?? []) as Array<Record<string, unknown>>;
+        const newest = [...list].sort((a, b) =>
+          String(b.started_at ?? "").localeCompare(String(a.started_at ?? "")))[0];
+        if (!alive) return;
+        setSeen(newest ? {
+          ref: String(newest.ref ?? ""), phase: String(newest.phase ?? ""),
+          word: String(newest.word ?? newest.status ?? ""), tone: String(newest.tone ?? ""),
+          sentence: String(newest.sentence ?? ""),
+          openUrl: typeof newest.open_url === "string" && newest.open_url ? newest.open_url : null,
+        } : null);
+      } catch { /* no deployment history: the step simply offers to ship */ }
+    })();
+    return () => { alive = false; };
+  }, [buildRunId, appName, tick]);
+  const phase = seen?.phase ?? "";
+  useEffect(() => {
+    if (!OPEN_PHASES.has(phase)) return;
+    const t = setTimeout(refresh, phase === "needs_approval" ? 8_000 : 3_000);
+    return () => clearTimeout(t);
+  }, [phase, tick, refresh]);
+  return seen ? { ...seen, refresh } : null;
+}
+
+/** The deploy's state, in the words every surface uses, with the ways into it. */
+export function DeployStatusLine({ deploy, stepSucceeded }: { deploy: NewestDeploy; stepSucceeded: boolean }) {
+  // Keeps the org, as every console link does.
+  const org = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("org") : null;
+  const href = deploy.ref ? `?${org ? `org=${encodeURIComponent(org)}&` : ""}area=infra&view=deploys&deploy=${
+    encodeURIComponent(deploy.ref)}` : "";
+  // A live app that this step did not ship is the previous release, and is said so.
+  const earlier = !stepSucceeded && deploy.phase === "live";
+  return (
+    <p className="dw-step-live" data-testid="dw-deploy-status" data-phase={deploy.phase}>
+      <span className="dw-badge" data-tone={deploy.tone} data-testid="dw-deploy-word">{deploy.word}</span>
+      <span className="detail" data-testid="dw-deploy-sentence">
+        {earlier ? "The previous release: " : ""}{deploy.sentence}
+      </span>
+      {deploy.openUrl ? (
+        <a className={`cap-btn${earlier ? "" : " primary"}`} href={deploy.openUrl} target="_blank"
+           rel="noreferrer" data-testid="dw-open-app">Open the app ↗</a>
+      ) : null}
+      {href ? <a className="cap-btn" href={href} data-testid="dw-open-deploy"
+                 title="This deploy's steps, log and health check">Deploy details</a> : null}
+    </p>
   );
 }
 
@@ -2947,7 +3009,8 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
     const hostId = String(shippedTo?.host_id ?? "");
     const host = hosts.find((h) => h.id === hostId);
     if (!host) return "";
-    return `${host.name}${host.address ? ` · ${host.address}` : ""}`;
+    // Said once: a host named by its address read "192.0.2.202 · 192.0.2.202".
+    return host.address && host.address !== host.name ? `${host.name} · ${host.address}` : host.name;
   })();
   // THE TARGET CONTROL, MADE ONCE AND PLACED WHEREVER THE LAYOUT PUTS IT. It renders the bound
   // target as a fact with Change, or the form to set one — and `onBound` is also what records
@@ -2966,39 +3029,13 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
   // `blocked` stopped counting as success. So the console offered "Open the app →
   // 192.0.2.202:8000" and "Replaces what is running there" for an address with no container on
   // it at all. A link to a dead app is the same lie in a new place.
-  const [lastDeploy, setLastDeploy] = useState<{ status: string } | null>(null);
-  useEffect(() => {
-    if (!isDeployStep(step, capability) || !buildRunId) return;
-    let alive = true;
-    // THE APP'S NAME, NOT THE BRIEF. This asked for deployments of an app called "Build a lead
-    // triage inbox.\nWho it is for: …", got none, and concluded nothing had shipped — which
-    // suppressed the link even when the target resolved.
-    const name = appIdentity(runInput as AppRun).name;
-    (async () => {
-      try {
-        const r = await fetch(
-          `/api/run-deployments?run_ids=${encodeURIComponent(buildRunId)}`
-          + `&app_name=${encodeURIComponent(name)}`, { cache: "no-store" });
-        if (!r.ok) return;
-        const body = await r.json();
-        const list = (body?.runs?.[buildRunId]?.deployments ?? []) as Array<{
-          status?: string; started_at?: string;
-        }>;
-        const newest = [...list].sort((a, b) =>
-          String(b.started_at ?? "").localeCompare(String(a.started_at ?? "")))[0];
-        if (alive && newest) setLastDeploy({ status: String(newest.status ?? "") });
-      } catch { /* no deployment history: the step simply offers to ship */ }
-    })();
-    return () => { alive = false; };
-  }, [buildRunId, step, capability, runInput]);
-
-  const liveAppUrl = (() => {
-    if (!isDeployStep(step, capability) || stackDeploy) return "";
-    if (lastDeploy?.status !== "succeeded") return "";
-    const domain = (shippedTo?.domains ?? []).find((d: string) => !!d);
-    if (!domain) return "";
-    return /^https?:\/\//.test(domain) ? domain : `http://${domain}`;
-  })();
+  // THE SERVER'S ONE READING OF THE NEWEST DEPLOY (infra_view.deploy_status): its word, the
+  // sentence Infra shows, and the app link only once it went live with its health check
+  // passed. This step used to derive all three itself and said "Nothing has deployed" over a
+  // deploy that had shipped. Re-read while the deploy is moving, so approve → starting →
+  // deploying → live is watched here, not discovered by refreshing.
+  const name = appIdentity(runInput as AppRun).name;
+  const lastDeploy = useNewestDeploy(isDeployStep(step, capability) && !stackDeploy ? buildRunId : null, name);
   const blocker = step.blocker ?? null;
   // The live preview is resolved per-step by the API and lives ON the step, not in the output
   // the runtime recorded — merged here so the link builder sees one object.
@@ -3216,11 +3253,17 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
           primary buttons saying the app is deployed, above a line asking for approval to
           deploy it. While there is an answerable gate, the gate IS the way to ship; the button
           comes back once the decision has been taken, for the re-ship case it was added for. */}
+      {/* WHERE THE DEPLOY IS, IN THE SERVER'S WORDS, with the way into it. */}
+      {lastDeploy ? <DeployStatusLine deploy={lastDeploy} stepSucceeded={step.status === "succeeded"} /> : null}
+      {/* ONE OPEN REQUEST AT A TIME. While a deploy of this app waits for approval, starts or
+          runs, that deploy IS the way forward: a second "Plan deployment" press made a second
+          request, and the operator approved one while the other still asked. */}
       {isDeployStep(step, capability) && !stackDeploy && shippedTo && buildRunId
         && !needsYou(step)
-        && decidedButNotMoved(step) !== "approved" ? (
+        && decidedButNotMoved(step) !== "approved"
+        && !(lastDeploy && OPEN_PHASES.has(lastDeploy.phase)) ? (
         <ShipNow projectId={projectId} buildRunId={buildRunId} target={shippedTo}
-                 alreadyLive={!!liveAppUrl} onDone={onBound} />
+                 again={!!lastDeploy} onDone={() => { lastDeploy?.refresh(); onBound(); }} />
       ) : null}
 
       {/* WHOSE DEPLOYMENT IS THAT, THOUGH.
@@ -3230,20 +3273,6 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
           says the deploy is done and then asks to approve the deploy. When this step has not
           succeeded the same fact is stated as what it is — the previous release — and does not
           take the primary button off the gate. */}
-      {liveAppUrl ? (
-        <p className="dw-step-live" data-testid="dw-step-live">
-          <a className={`cap-btn${
-               isDeployStep(step, capability) && step.status !== "succeeded" ? "" : " primary"}`}
-             href={liveAppUrl} target="_blank" rel="noreferrer"
-             data-testid="dw-open-app">Open the app ↗</a>
-          <span className="detail" data-testid="dw-step-live-note">
-            {isDeployStep(step, capability) && step.status !== "succeeded"
-              ? <>{liveAppUrl} — answering, from an earlier release. This build has not
-                  shipped yet.</>
-              : <>{liveAppUrl} — shipped and answering.</>}
-          </span>
-        </p>
-      ) : null}
       {observedGates(step, runAppTitle) ? (
         <p className="dw-step-gates" data-testid="dw-step-gates">
           {observedGates(step, runAppTitle)}

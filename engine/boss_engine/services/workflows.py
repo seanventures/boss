@@ -4820,7 +4820,11 @@ def retry_failed_step(
     retry_marker = {"retry_note": note, "retried_by": actor,
                     "retried_from_code_task_run_id": _code_task_of(previous)}
     connection.execute(
+        # The retry is a new attempt and is timed as one: its clock starts when it is leased.
+        # Keeping the first attempt's start made a deploy retried the next morning read
+        # "14h 16m" for a step that ran in twenty seconds.
         text("UPDATE workflow_step_runs SET status='ready', attempt=0, last_error=NULL, "
+             "started_at=NULL, completed_at=NULL, "
              "lease_owner=NULL, lease_expires_at=NULL, run_after=now(), updated_at=now(), "
              "output = ((COALESCE(output, '{}'::jsonb) - 'waiting'"
              + (" - 'rejected_by_approver' - 'outcome') || jsonb_build_object("
@@ -4939,14 +4943,21 @@ def skip_failed_step(
 
     require(connection, project_id, run_id, "skip_step", step_id=step_id)
 
+    # WHO, BY NAME. The rail read "skipped by usr_kdzhawzy7mxmp5hpb3bqlgqojs": the record keeps
+    # the id (the audit's key) and the screen gets the person's name beside it.
+    who = connection.execute(text(
+        "SELECT display_name FROM project_members WHERE member_id = :m AND display_name <> '' "
+        "UNION ALL SELECT display_name FROM org_members WHERE member_id = :m "
+        "AND display_name <> '' LIMIT 1"), {"m": actor}).scalar()
     marker = {
         "status": "skipped",
         "skipped_by_operator": True,
         "skip_reason": reason[:500],
         "skipped_by": actor,
+        "skipped_by_name": str(who) if who else None,
         "skipped_from": row["status"],
         "failure": row["last_error"],
-        "note": f"skipped by {actor}: {reason[:300]}",
+        "note": f"skipped by {who or 'an operator'}: {reason[:300]}",
     }
     updated = connection.execute(
         text(

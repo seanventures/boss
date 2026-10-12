@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { DeploysTab } from "../app/infra/deploys";
 import { ResidentTile } from "../app/infra/rack";
+import { gitRefOrEmpty } from "../app/infra/target-drawer";
 import { deploysCadence, DEPLOY_LIVE_POLL_MS, DEPLOYS_IDLE_POLL_MS, parseDeployList, parseResident } from "../lib/infra-view";
 import { deployRow, deploysFixture, mockInfraFetch, type Route } from "./_helpers/infra-fixtures";
 import { allByTestId, mount, press, settle, TabHarness, type Mounted } from "./_helpers/infra-tab-render";
@@ -87,6 +88,15 @@ describe("the fleet tile fits its text and opens its app", () => {
     expect(open).toContain('href="http://192.0.2.202:8000/"');
     expect(open).toContain("8a009a6");
     expect(html(tile({ open_url: null }))).not.toContain('data-testid="inf-tile-open-app"');
+  });
+});
+
+describe("the target drawer's Ref field starts as a ref", () => {
+  it("never starts from the target's SSH address", () => {
+    expect(gitRefOrEmpty("root@192.0.2.202:22")).toBe("");
+    expect(gitRefOrEmpty("main")).toBe("main");
+    expect(gitRefOrEmpty("release/1.2")).toBe("release/1.2");
+    expect(gitRefOrEmpty(null)).toBe("");
   });
 });
 

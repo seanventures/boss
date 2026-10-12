@@ -614,8 +614,12 @@
 .ag-chain-toggle { align-self: flex-start; display: inline-flex; align-items: center; gap: 6px; border: 0; background: none;
   color: var(--muted); font: 600 0.57895rem var(--sans); letter-spacing: .06em; text-transform: uppercase; cursor: pointer; padding: 2px 0; }
 .ag-chain-count { color: var(--faint); font-weight: 500; text-transform: none; letter-spacing: 0; }
-.ag-chain-strip { display: flex; align-items: flex-start; gap: 0; overflow-x: auto; overscroll-behavior-x: contain;
+/* WRAPS, NEVER SCROLLS: a strip that ran off the card into a horizontal scroll read as an
+   endless chain of agents. Stops wrap onto the next line; a long middle folds into `+N more`. */
+.ag-chain-strip { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 6px 0; overflow: visible;
   padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--r-xl); background: var(--surface-2); max-width: 100%; }
+.ag-chain-steps { font-size: 0.6rem; color: var(--muted); white-space: nowrap; cursor: default; }
+.ag-chain-more { align-self: center; }
 .ag-chain-hop { display: inline-flex; flex-direction: column; gap: 4px; flex: none; }
 .ag-chain-col { display: inline-flex; flex-direction: column; gap: 6px; }
 .ag-chain-hop[data-stack="true"] .ag-chain-col { padding: 4px 6px; border-left: 2px solid var(--border-strong); }
