@@ -1239,6 +1239,8 @@ class Settings(BaseSettings):
     # Tools the sandboxed Claude Code agent may use (its OWN native tools here —
     # the inverse of claude_cli_adapter, which denies them). Bash is constrained
     # to the sandbox cwd; network egress is the deployment's responsibility.
+    build_speed: str = Field(default="balanced", alias="BOSS_BUILD_SPEED")
+    build_parallelism: int = Field(default=0, alias="BOSS_BUILD_PARALLELISM")
     code_agent_allowed_tools: str = Field(
         default="Read,Edit,MultiEdit,Write,Glob,Grep,Bash,TodoWrite",
         alias="BOSS_CODE_AGENT_ALLOWED_TOOLS",

@@ -92,6 +92,36 @@ def thinking_token_cap() -> int:
         return THINKING_TOKEN_CAP_DEFAULT
 
 
+#: The CLI's sub-agent tool (Claude Code 2.x names it `Agent`; `Task` is its older alias).
+SUB_AGENT_TOOL = "Agent"
+#: Never available to a build, sub-agent or not: the build reaches the network only through
+#: the fence, and a sub-agent must not be able to ask for what its parent was never given.
+SUB_AGENT_DENIED_TOOLS = "WebFetch,WebSearch"
+
+
+def sub_agent_tools(allowed: str) -> str:
+    """`allowed` plus the sub-agent tool, once."""
+    names = [t.strip() for t in str(allowed or "").split(",") if t.strip()]
+    if SUB_AGENT_TOOL not in names:
+        names.append(SUB_AGENT_TOOL)
+    return ",".join(names)
+
+
+def sub_agent_rule(n: int) -> str:
+    """How a writing stage fans out: independent parts in parallel, integration by the parent."""
+    return (
+        f"\n\nPARALLEL SUB-AGENTS (use them, up to {n} at once):\n"
+        f"- This is a large change. Split INDEPENDENT parts across up to {n} parallel sub-agents "
+        "with the Agent tool IN ONE TURN, e.g. server routes, data layer and migrations, UI "
+        "screens, and test suites, each told exactly which files it owns.\n"
+        "- Give each sub-agent the relevant part of the spec and plan and the files it must NOT "
+        "touch. Two sub-agents never write the same file.\n"
+        "- When they return, YOU integrate: read what they wrote, fix the seams, then run the "
+        "full build and every test yourself. You are responsible for the whole change passing.\n"
+        "- Small or tightly coupled work: do it yourself; a sub-agent is for parallel volume.\n"
+    )
+
+
 def _idle_timeout_seconds() -> float:
     raw = (os.environ.get(_IDLE_TIMEOUT_ENV) or "").strip()
     if not raw:
@@ -587,6 +617,7 @@ class CodeAgent(Protocol):
     def run_role(
         self, prompt: str, cwd: Path, *, read_only: bool = False, model: Optional[str] = None,
         resume_session_id: Optional[str] = None, max_turns: Optional[int] = None,
+        parallel_agents: int = 0,
     ) -> dict:
         """Run one isolated, role-scoped invocation against an existing workdir.
         Returns {summary, usage, cost_usd_micros, turns, model, session_id?}. The role
@@ -718,7 +749,7 @@ class ClaudeCodeAgent:
         self, prompt: str, cwd: Path, *, read_only: bool = False, model: Optional[str] = None,
         allowed_tools: Optional[str] = None, resume_session_id: Optional[str] = None,
         max_turns: Optional[int] = None, seat: str = "agent",
-        on_turn: Optional[Callable[[dict], None]] = None,
+        on_turn: Optional[Callable[[dict], None]] = None, parallel_agents: int = 0,
     ) -> dict:
         timeout = int(self.settings.code_agent_timeout_seconds or 900)
         # A full web build (in-container / local_subprocess) needs well beyond the legacy 900s that
@@ -737,6 +768,14 @@ class ClaudeCodeAgent:
             allowed = allowed_tools
         else:
             allowed = "Read,Grep,Glob,Bash" if read_only else self.settings.code_agent_allowed_tools
+        # PARALLEL SUB-AGENTS (build_speed). A sub-agent runs INSIDE this same CLI process: same
+        # uid, same cwd, same environment, same network fence and the same --allowedTools and
+        # permission mode, so it can do nothing the parent cannot. Granted only to writing stages
+        # (never a reviewer: review independence), and the network tools are refused outright so
+        # a general-purpose sub-agent cannot ask for them.
+        fan_out = 0 if read_only else max(0, int(parallel_agents or 0))
+        if fan_out:
+            allowed = sub_agent_tools(allowed)
         permission = "default" if read_only else "acceptEdits"
         _max_turns = int(self.settings.code_agent_max_turns or 40)
         if read_only:
@@ -777,6 +816,8 @@ class ClaudeCodeAgent:
                 "--allowedTools", allowed,
                 "--permission-mode", permission,
             ]
+            if fan_out:
+                argv += ["--disallowedTools", SUB_AGENT_DENIED_TOOLS]
             if self.mcp_harness is not None:
                 # ONLY THE AGENT'S OWN SERVERS, Ask/Off tools refused (code_task_mcp).
                 argv += self.mcp_harness.argv()
@@ -795,7 +836,7 @@ class ClaudeCodeAgent:
             # and the whole command is then rejected before the process starts — measured on the
             # chat path as `OSError: [Errno 7] Argument list too long: 'nice'`. Over the limit
             # the prompt goes on stdin; under it, nothing changes.
-            body = _argv_safe(prompt) + _PARALLEL_TOOLS_RULE
+            body = _argv_safe(prompt) + _PARALLEL_TOOLS_RULE + (sub_agent_rule(fan_out) if fan_out else "")
             if len(body.encode("utf-8", "ignore")) > 96_000:
                 return argv, body
             return argv + ["--", body], None
@@ -1059,6 +1100,7 @@ class ClaudeCodeAgent:
     def run_role(
         self, prompt: str, cwd: Path, *, read_only: bool = False, model: Optional[str] = None,
         resume_session_id: Optional[str] = None, max_turns: Optional[int] = None,
+        parallel_agents: int = 0,
     ) -> dict:
         """Run a single role-scoped agent invocation against an existing workdir and
         return {summary, usage, cost_usd_micros, turns, model, session_id}. Used by the
@@ -1076,7 +1118,8 @@ class ClaudeCodeAgent:
             # command line: a writing agent must never be reaped as though it were a reviewer.
             data = self._invoke(prompt, cwd, read_only=read_only, model=model,
                                 resume_session_id=resume_session_id, max_turns=max_turns,
-                                seat=("review" if read_only else "agent"))
+                                seat=("review" if read_only else "agent"),
+                                parallel_agents=0 if read_only else int(parallel_agents or 0))
         except Exception as exc:
             failed_model = model or getattr(self.settings, "claude_cli_model", None) or ""
             record_llm_call(engine_name=self.engine, usage={"model": failed_model},
@@ -1457,6 +1500,7 @@ class NativeCodeAgent:
     def run_role(
         self, prompt: str, cwd: Path, *, read_only: bool = False, model: Optional[str] = None,
         resume_session_id: Optional[str] = None,  # accepted for interface parity; native has no session store
+        **_ignored,  # parallel_agents, max_turns: a Claude CLI capability the native loop has no use for
     ) -> dict:
         if self._tools_enabled():
             try:

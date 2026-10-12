@@ -43,6 +43,8 @@ ENFORCED: dict[str, tuple[str, str]] = {
     "pace": ("Preset", "preset"),
     "code_agent_max_concurrency": ("Review panel", "review_panel"),
     "code_agent_max_turns": ("Each agent", "each_agent"),
+    # The build's writing stages, capped again by the machine (project_settings.build_parallelism).
+    "build_parallelism": ("Each build", "each_build"),
     "code_review_inrun_max_rounds": ("Review loop", "review_loop"),
     "captain_leads_projects": ("Every build", "every_build"),
     "captain_auto_improve": ("Captain's own builds", "captain_own_builds"),

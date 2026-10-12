@@ -2052,6 +2052,22 @@ def _mutate_prompt(impl_files):
     )
 
 
+def _build_fan_out(engine, project_id, settings) -> int:
+    """Parallel sub-agents for a writing stage (project_settings.build_parallelism), 0 for none.
+
+    Never raises: a settings read that fails builds with one agent, exactly as before.
+    """
+    try:
+        from .project_settings import build_parallelism
+
+        with _transaction(engine) as c:
+            n = int(build_parallelism(c, project_id, settings) or 0)
+        return n if n > 1 else 0
+    except Exception:  # noqa: BLE001 — speed is never worth failing a build over
+        _log_caught(logger)
+        return 0
+
+
 # --- Design phase (Wire-Phase 2): standards -> spec -> plan -> review plan, before any code. ---
 def _standards_prompt():
     return (
@@ -4143,7 +4159,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     return r, [fc.path for fc in changes], changes
                 set_llm_context(stage="write_tests")
                 a, m = _route_escalated("write_tests") if escalate else _route("write_tests")
-                r = a.run_role(prompt, root, model=m)
+                r = a.run_role(prompt, root, model=m,
+                               parallel_agents=_build_fan_out(engine, project_id, settings))
                 cost += int(r.get("cost_usd_micros") or 0)
                 return r, [fc.path for fc in sandbox.diff() if _is_test_path(fc.path)], None
 
@@ -4370,9 +4387,13 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                             model=m, resume_session_id=resume_sid)
                     except Exception:
                         _log_caught(logger)
-                        r2 = a.run_role(impl_prompt, root, model=m)
+                        r2 = a.run_role(impl_prompt, root, model=m,
+                                        parallel_agents=_build_fan_out(engine, project_id, settings))
                 else:
-                    r2 = a.run_role(impl_prompt, root, model=m)
+                    # The first implement fans out (build_speed); a repair resumed on its own
+                    # session stays one agent: it is a focused fix, not parallel volume.
+                    r2 = a.run_role(impl_prompt, root, model=m,
+                                    parallel_agents=_build_fan_out(engine, project_id, settings))
                 impl_session_id = r2.get("session_id") or impl_session_id
                 cost += int(r2.get("cost_usd_micros") or 0)
                 # FINISH THE WORK BEFORE JUDGING IT. The implementer hitting its turn cap
