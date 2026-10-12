@@ -49,6 +49,9 @@ NO_ACTION_BY_DESIGN = {
     # A meeting's own decision items: the panel writes the question, and the answer is
     # recorded for the minutes. General kind, no follow-on.
     ("engine/boss_engine/services/canonical.py", "_create_meeting_decision"),
+    # A live app secret awaiting a person (templates.secrets): Approve records the approval,
+    # and a deploy reads it (_live_approved) before passing the live value. No follow-on.
+    ("engine/boss_engine/templates/secrets.py", "_live_decision"),
 }
 
 #: Functions that write a decision row themselves instead of through create_blocking_decision.
@@ -59,6 +62,7 @@ DIRECT_INSERTS = {
     ("engine/boss_engine/services/infrastructure.py", "_create_provision_review_decision"),
     ("engine/boss_engine/services/canonical.py", "_create_meeting_decision"),
     ("engine/boss_engine/services/role_governance.py", "_create_autonomy_change_decision"),
+    ("engine/boss_engine/templates/secrets.py", "_live_decision"),
 }
 #: The Postgres body of create_blocking_decision: its callers are the producers scanned above.
 SINK_INSERTS = {("engine/boss_engine/services/core.py", "_create_blocking_decision_postgres")}
@@ -177,7 +181,25 @@ def _resolve_action(module: Module, expr: ast.expr, func: Optional[ast.FunctionD
         if assigned:
             return [f for value in assigned
                     for f in _resolve_action(module, value, func, depth)]
+        # A module constant (`DECISION_ACTION = "infra_operation"`), read where it is defined.
+        constant = _module_constant(module, expr.id)
+        if constant is not None:
+            return [Found(where, action=constant)]
     return [Found(where, unresolved=f"action is {ast.unparse(expr)}")]
+
+
+def _module_constant(module: Module, name: str) -> Optional[str]:
+    """The string a top-level `NAME = "..."` (or `NAME: str = "..."`) binds, or None."""
+    for node in module.tree.body:
+        target, value = None, None
+        if isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target, value = node.targets[0], node.value
+        elif isinstance(node, ast.AnnAssign):
+            target, value = node.target, node.value
+        if isinstance(target, ast.Name) and target.id == name \
+                and isinstance(value, ast.Constant) and isinstance(value.value, str):
+            return value.value
+    return None
 
 
 def _may_carry_action(expr: ast.expr) -> bool:

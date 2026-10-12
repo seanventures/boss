@@ -98,7 +98,8 @@ def request_operation(connection: Any, settings: Any, *, project_id: str, resour
         from ..services import action_preview
         inputs = {"resource": resource_id, "operation": h.value, "plugin": f"{reg.id} {reg.version}",
                   "mode": row["mode"], "digest": digest}
-        rec = {"action": DECISION_ACTION, **payload, "project_id": project_id,
+        # The spread first: nothing in the payload can replace the decision's action.
+        rec = {**payload, "action": DECISION_ACTION, "project_id": project_id,
                "action_preview": action_preview.build(f"infra.{h.value}", inputs, step_label=h.value.title())}
         words = "Destroy" if h == Hook.DESTROY else "Restore"
         decision_id = create_blocking_decision(
