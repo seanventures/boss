@@ -169,6 +169,7 @@ function itemNames(it: ChainItem, viewer: string): string {
 export function RunChain({ chain, viewer, defaultOpen = true }: {
   chain: Chain | null; viewer: string; defaultOpen?: boolean;
 }) {
+  useIdentityVersion(); // the folded middle's names are resolved at render: repaint when identities load
   const [open, setOpen] = useState(defaultOpen);
   const [all, setAll] = useState(false);
   // The acts already here when the strip first drew: only work that starts while you watch
