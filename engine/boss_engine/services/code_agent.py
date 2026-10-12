@@ -76,6 +76,22 @@ _IDLE_TIMEOUT_ENV = "BOSS_CODE_AGENT_IDLE_TIMEOUT_SECONDS"
 _IDLE_TIMEOUT_DEFAULT = 600
 
 
+#: The default bound on a build agent's silent thinking per step, in tokens.
+THINKING_TOKEN_CAP_DEFAULT = 12000
+_THINKING_CAP_ENV = "BOSS_CODE_AGENT_MAX_THINKING_TOKENS"
+
+
+def thinking_token_cap() -> int:
+    """The build agent's thinking cap: the env override, else the default; 0 means no cap."""
+    raw = (os.environ.get(_THINKING_CAP_ENV) or "").strip()
+    if not raw:
+        return THINKING_TOKEN_CAP_DEFAULT
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return THINKING_TOKEN_CAP_DEFAULT
+
+
 def _idle_timeout_seconds() -> float:
     raw = (os.environ.get(_IDLE_TIMEOUT_ENV) or "").strip()
     if not raw:
@@ -626,6 +642,15 @@ class ClaudeCodeAgent:
             env["CLAUDE_CODE_OAUTH_TOKEN"] = token
             # The wizard-connected subscription wins over an inherited API key.
             env.pop("ANTHROPIC_API_KEY", None)
+        # A BOUND ON SILENT THINKING. Left to decide for itself, the model thought for 7 and 12
+        # minutes before its first action in a HelpDesk AI build (19 of the build's first 52
+        # minutes were silence, with no tool call, no output and no error), and nobody watching
+        # can tell that from a hang. The design stages have already done the deep reasoning; a
+        # cap keeps each step's thinking to minutes, not quarters of an hour.
+        # BOSS_CODE_AGENT_MAX_THINKING_TOKENS=0 leaves the CLI's own default.
+        cap = thinking_token_cap()
+        if cap and "MAX_THINKING_TOKENS" not in env:
+            env["MAX_THINKING_TOKENS"] = str(cap)
         return env
 
     def _build_prompt(self, spec: CodeTaskSpec, repo: RepoContext,
