@@ -644,6 +644,17 @@ def reap_tick(engine: Any) -> dict[str, Any]:
     from .resource_ledger import install_id
 
     live = resource_reaper._live_sandbox_tasks(engine)
+    # A preview's database is keyed by the preview id (preview_service.provision_preview_database):
+    # live while the preview is, whichever process started it.
+    if engine is not None and "*" not in live:
+        try:
+            from sqlalchemy import text as _text
+
+            with engine.begin() as c:
+                live |= {str(r[0]) for r in c.execute(_text(
+                    "SELECT id FROM app_previews WHERE status IN ('starting', 'running')")).all()}
+        except Exception:  # noqa: BLE001 — unknown: keep every database
+            live = {"*"}
     inst = ""
     if engine is not None:
         with contextlib.suppress(Exception), engine.begin() as c:

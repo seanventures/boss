@@ -87,6 +87,75 @@ def _release_preview_sandbox(preview_id: Optional[str]) -> None:
         from . import sandbox_identity
 
         sandbox_identity.release(str(preview_id))
+    # Its throwaway database ends with it (after its processes: nothing still writes). The
+    # reaper drops one this process no longer holds (preview_database_ids keeps live ones).
+    with contextlib.suppress(Exception):
+        from . import build_services
+
+        build_services.teardown(str(preview_id), reason="preview_ended")
+
+
+def preview_needs_database(run: Optional[dict], workdir: Optional[Path]) -> list[str]:
+    """Why this preview needs its own Postgres, or [] when it does not.
+
+    A PREVIEW OF A BUILD THAT HAD A DATABASE GETS ONE TOO. The build ran its tests against its
+    throwaway Postgres (build_services) and passed, then the preview started the same app with
+    no DATABASE_URL: it exited on ECONNREFUSED 127.0.0.1:5432, the preview step failed, and the
+    deploy step — which requires a reviewed preview — could never run. Same rule as the build:
+    the build's recorded decision (state.build_database), else the app's own code says Postgres;
+    the project's Never wins."""
+    state = (run or {}).get("state") or {}
+    if isinstance(state, str):
+        try:
+            state = json.loads(state)
+        except ValueError:
+            state = {}
+    decided = state.get("build_database") if isinstance(state, dict) else None
+    decided = decided if isinstance(decided, dict) else {}
+    from . import build_services
+
+    if decided.get("mode") == build_services.NEVER:
+        return []
+    if decided.get("postgres"):
+        return ["the build ran with a Postgres database"] + [str(w) for w in (decided.get("why") or [])][:3]
+    if workdir is not None:
+        try:
+            return build_services.detect_in_code(workdir)[:3]
+        except Exception:  # noqa: BLE001 — detection is a hint; the build's record decides
+            logger.debug("preview database detection failed", exc_info=True)
+    return []
+
+
+def provision_preview_database(engine, run: Optional[dict], preview_id: str,
+                               workdir: Optional[Path]) -> Optional[str]:
+    """Give preview `preview_id` its own throwaway database when it needs one. Returns None when
+    it is ready or not needed, else why it could not be made (the preview fails with that reason
+    instead of starting an app that cannot reach its database).
+
+    The lease is keyed by the PREVIEW id, so owned_process injects DATABASE_URL / PG* into the
+    preview's own processes only (Owner("preview", preview_id) — `preview` is a workload kind),
+    after the app's environment filter; the password is scrubbed like a build's."""
+    why = preview_needs_database(run, workdir)
+    if not why:
+        return None
+    from . import build_services
+
+    install = ""
+    with contextlib.suppress(Exception):
+        from .resource_ledger import install_id
+
+        with begin(engine) as c:
+            install = install_id(c)
+    try:
+        lease = build_services.provision(preview_id, install=install)
+    except build_services.BuildServicesUnavailable as exc:
+        return f"this app needs PostgreSQL ({why[0]}), but its preview database could not be made: {exc}"
+    with contextlib.suppress(Exception), begin(engine) as c:
+        project_id = (run or {}).get("project_id") or ""
+        emit_event(c, project_id, "app_preview.database_ready", "boss", "app_preview", preview_id,
+                   {"run_id": (run or {}).get("id"), "database": lease.name, "host": lease.host,
+                    "port": lease.port, "env": list(build_services.ENV_NAMES), "why": why})
+    return None
 
 
 def _preview_workdir(preview_id: str, ident) -> Path:
@@ -2412,6 +2481,9 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
             "target, or a Python entrypoint/tests)"
         )
 
+    database_refused = provision_preview_database(engine, run, preview_id, workdir)
+    if database_refused:
+        return _fail(database_refused, command=" ".join(command))
     _expires = datetime.now(timezone.utc) + timedelta(minutes=ttl_minutes)
     proc, port_hint = launch_app(
         workdir, command, log_path,
@@ -2808,6 +2880,11 @@ def _respawn_process_preview(engine, settings: Settings, preview_id: str) -> Non
         _changed = lineage_impl_files(engine, {"id": row["run_id"]})
         command = _detect_command(workdir, _changed)
         if not command:
+            _release_preview_sandbox(preview_id)
+            return
+        with begin(engine) as c:
+            _run = load_code_task_run(c, row["run_id"]) if row.get("run_id") else None
+        if provision_preview_database(engine, _run, preview_id, workdir):
             _release_preview_sandbox(preview_id)
             return
         # The one launcher, so a respawned preview gets the same filtered environment as the
