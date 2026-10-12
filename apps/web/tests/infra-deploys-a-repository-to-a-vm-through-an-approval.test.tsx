@@ -312,7 +312,11 @@ describe("Infra › Deploys: + Deploy → plan → approve in the drawer", () =>
 
       await act(async () => { q("inf-deploy-approve")!.click(); });
       await settle(() => f.writes().some((w) => w.path === "/v1/decisions/dec_wait/approve"), "approve");
-      await settle(() => toasts.includes("Deploy approved"), "approve toast");
+      await settle(() => toasts.includes("Approved · starting the deploy"), "approve toast");
+      // ONE PRESS: the drawer reads the answer at once — Approve is gone and it says Starting,
+      // before the next poll brings the server's own state.
+      expect(q("inf-deploy-approve")).toBeNull();
+      expect(q("inf-deploy-sentence")?.textContent).toContain("Approved. Starting the deploy.");
     } finally {
       window.removeEventListener("boss:toast", onToast);
     }

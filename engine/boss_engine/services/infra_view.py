@@ -74,6 +74,9 @@ WORDS: dict[str, dict[str, Word]] = {
         "cancelled": {"word": "Cancelled", "tone": "grey"},
         # Refused by an environment policy before anything ran (delivery_pipeline).
         "blocked": {"word": "Blocked", "tone": "red"},
+        # A request a newer one for the same target replaced, or one whose decision another
+        # run took (deploy_status): nothing ran, and nothing will.
+        "superseded": {"word": "Superseded", "tone": "grey"},
     },
     "preview": {
         "starting": {"word": "Starting", "tone": "accent"},
@@ -116,6 +119,99 @@ def word(kind: str, raw: Optional[str]) -> Word:
         log.warning("infra_view.word: no word for %s=%r", kind, raw)
         return dict(UNKNOWN_WORD)  # type: ignore[return-value]
     return dict(hit)  # type: ignore[return-value]
+
+
+def health_checks(raw: Any) -> list[dict[str, Any]]:
+    """The recorded health checks as a list. Deploys record either a list of checks or
+    `{"healthy": bool, "checks": [...]}`; read as a list, the second form was its keys, so the
+    drawer said "Not checked yet" over a check that had passed."""
+    value = _json(raw) if isinstance(raw, str) else raw
+    if isinstance(value, dict):
+        value = value.get("checks") or []
+    return [c for c in (value or []) if isinstance(c, dict)]
+
+
+def _check_ok(check: dict[str, Any]) -> bool:
+    return check.get("ok") is True or check.get("passed") is True or check.get("status") == "passed"
+
+
+def health_line(raw: Any) -> Optional[str]:
+    """`GET /readyz → 200` for each recorded check: what was actually asked, so a check that
+    only fetched `/` reads as exactly that."""
+    from urllib.parse import urlsplit
+
+    parts = []
+    for c in health_checks(raw)[:3]:
+        url = str(c.get("url") or c.get("path") or "")
+        path = (urlsplit(url).path or "/") if "://" in url else (url or "/")
+        got = c.get("status")
+        parts.append(f"GET {path} → {got if got is not None else '?'}"
+                     + ("" if _check_ok(c) else f" (expected {c.get('expected', 200)})"))
+    return " · ".join(parts) or None
+
+
+_PHASE_OF = {"awaiting_approval": "needs_approval", "planned": "needs_approval",
+             "created": "needs_approval", "pending": "needs_approval",
+             "approved": "queued", "running": "deploying", "applying": "deploying",
+             "deploying": "deploying", "building": "deploying"}
+
+
+def deploy_status(raw_status: Optional[str], *, decision_status: Optional[str] = None,
+                  steps: Any = None, health: Any = None, url: Optional[str] = None,
+                  failure: Optional[str] = None, newest_for_target: bool = True,
+                  success_means_healthy: bool = False) -> dict[str, Any]:
+    """THE ONE READING OF A DEPLOY'S STATE: phase, word, tone, a sentence, the step running now,
+    and the app's address when (and only when) the deploy went live and passed its health check.
+
+    Every surface that shows a deploy (Infra rows and drawer, the workflow run's Deploy step,
+    the fleet tile) draws this, so they cannot disagree. They did: a run that had shipped read
+    "Nothing has deployed. ChangeSet … is ready" on the workflow, and Infra said "Needs you" for
+    a request whose decision another run had already taken.
+    """
+    status = str(raw_status or "").strip().lower()
+    # A request still `awaiting_approval` whose decision is no longer open can never move:
+    # another run took the decision, or it was answered elsewhere. It is not waiting on you.
+    if status == "awaiting_approval" and decision_status and decision_status != "pending":
+        status = "superseded"
+    w = deploy_word(status, newest_for_target=newest_for_target)
+    listed = steps if isinstance(steps, list) else (_json(steps) or [])
+    now = next((_step_title(x) for x in listed
+                if isinstance(x, dict) and step_state(x.get("status")) == "running"), None)
+    checks = health_checks(health)
+    checked = health_line(health)
+    healthy = bool(checks) and all(_check_ok(c) for c in checks)
+    address = _app_url(url)
+    phase = _PHASE_OF.get(status) or ("live" if status in SUCCESS_STATES else
+                                      "failed" if status in FAILED_STATES else status or "unknown")
+    sentence = {
+        "needs_approval": "Waiting for approval. Nothing has run on the host yet.",
+        "queued": "Approved. Starting the deploy.",
+        "deploying": f"Deploying{f': {now}' if now else ''}.",
+        "superseded": "Replaced by another deploy request. Nothing ran.",
+        "rejected": "Not approved. Nothing was deployed.",
+        "cancelled": "Cancelled. Nothing was deployed.",
+        "rolled_back": ("The health check failed after release, so the previous release was "
+                        "restored." + (f" Checked: {checked}." if checked else "")),
+    }.get(phase)
+    if phase == "live" and success_means_healthy and not checks:
+        # A stack deployment reaches `succeeded` only after its manifest's health checks pass
+        # (stack_deploy.py), so its status IS the health verdict.
+        healthy = True
+    if phase == "live":
+        where = address or "its host"
+        sentence = (f"Live at {where}. Health check passed"
+                    + (f": {checked}." if checked else ".") if healthy else
+                    f"Deployed to {where}, but its health check did not pass"
+                    + (f": {checked}." if checked else " (no result was recorded)."))
+    elif phase == "failed":
+        first = (str(failure or "").strip().splitlines() or [""])[0][:200]
+        sentence = first or ("Blocked before it ran." if status == "blocked" else "Failed.")
+    return {"phase": phase, "word": w["word"], "tone": w["tone"],
+            "sentence": sentence or f"{w['word']}.", "now": now,
+            # Offered only for a deploy that went live AND passed the health check it recorded:
+            # a link to a page that does not work is the same lie in a new place.
+            "open_url": address if phase == "live" and healthy else None,
+            "health": checked, "healthy": healthy if (checks or phase == "live") else None}
 
 
 def deploy_word(raw: Optional[str], *, newest_for_target: bool) -> Word:
@@ -202,6 +298,8 @@ class LastDeploy(TypedDict, total=False):
     # LIVE IS WHAT IS RUNNING; A NEWER FAILURE IS SAID BESIDE IT (operator decision 2026-10-04).
     # The newest attempt on the target after this live deploy, when it failed; None otherwise.
     failed_after: Optional[FailedAfter]
+    # It passed its health check (deploy_status's rule) — what earns the tile its Open app.
+    healthy: bool
 
 
 class Resident(TypedDict, total=False):
@@ -214,6 +312,7 @@ class Resident(TypedDict, total=False):
     last_deploy: Optional[LastDeploy]   # target only; None → "Never deployed"
     expires_at: Optional[str]           # preview only
     url: Optional[str]                  # preview open url | Grafana url
+    open_url: Optional[str]             # target: the app, once its newest deploy is live healthy
     port: Optional[int]
 
 
@@ -360,6 +459,13 @@ class DeployRow(TypedDict, total=False):
     failed_after: Optional[FailedAfter]
     decision_id: Optional[str]
     run_id: Optional[str]             # the build that made it → Build ↗
+    # deploy_status: needs_approval · queued · deploying · live · failed · superseded …, the
+    # one sentence every surface shows, the step running now, and the app's address on the
+    # target's Live row when its health check passed.
+    phase: str
+    sentence: str
+    now: Optional[str]
+    open_url: Optional[str]
 
 
 class DeployList(TypedDict, total=False):
@@ -846,20 +952,25 @@ def last_deploys(connection: Any, target_ids: list[str]) -> dict[str, LastDeploy
         return {}
     out: dict[str, LastDeploy] = {}
     for r in connection.execute(text(
-            "SELECT DISTINCT ON (target_id) target_id, kind, id, sha, at FROM ("
+            "SELECT DISTINCT ON (target_id) target_id, kind, id, sha, at, health FROM ("
             "  SELECT target_id, 'stack' AS kind, id, commit_sha AS sha, "
-            "         COALESCE(finished_at, created_at) AS at "
+            "         COALESCE(finished_at, created_at) AS at, NULL::jsonb AS health "
             "  FROM stack_deployments WHERE target_id = ANY(:ids) AND status = 'healthy' "
             "  UNION ALL "
             "  SELECT deployment_target_id, "
             "         CASE WHEN trigger IS NULL THEN 'registry' ELSE 'delivery' END, id, "
-            "         commit_ref, COALESCE(finished_at, started_at, created_at) "
+            "         commit_ref, COALESCE(finished_at, started_at, created_at), "
+            "         health_check_results "
             "  FROM deployment_runs WHERE deployment_target_id = ANY(:ids) "
             "    AND status IN ('succeeded', 'deployed')) x "
             "ORDER BY target_id, at DESC"), {"ids": list(target_ids)}).mappings():
+        # Healthy by the same rule as every deploy view (deploy_status): a stack deployment
+        # is healthy by status; a deployment run by the health check it recorded.
+        healthy = r["kind"] == "stack" or deploy_status("succeeded", health=r["health"])["healthy"]
         out[r["target_id"]] = {"sha7": sha7(r["sha"]) or (str(r["sha"] or "")[:12] or None),
                                "at": _iso(r["at"]), "word": "Live",
                                "ref": f"{r['kind']}:{r['id']}", "failed_after": None,
+                               "healthy": bool(healthy),
                                "_at": r["at"]}  # type: ignore[typeddict-unknown-key]
     newer = failed_after(connection, {t: (d["ref"], d.pop("_at")) for t, d in out.items()})  # type: ignore[misc]
     for t, f in newer.items():
@@ -914,11 +1025,15 @@ def monitoring_stored(connection: Any, project_id: str) -> Optional[dict[str, An
 def _target_resident(t: dict[str, Any], health: dict[str, dict[str, Any]],
                      strip_: dict[str, list[list[int]]], last: dict[str, LastDeploy]) -> Resident:
     h = health.get(t["id"]) or {"word": "No signal", "tone": "hollow"}
+    url = t.get("public_url") or ((_json(t.get("domains")) or [None])[0])
+    shipped = last.get(t["id"])
     return {"kind": "target", "id": t["id"], "name": t["app_name"], "env": t["environment"],
             "health": {"word": h["word"], "tone": h["tone"]},  # type: ignore[typeddict-item]
             "strip": strip_.get(t["id"]) or [[0, 0] for _ in range(STRIP_CELLS)],
-            "last_deploy": last.get(t["id"]), "expires_at": None,
-            "url": t.get("public_url") or ((_json(t.get("domains")) or [None])[0]),
+            "last_deploy": shipped, "expires_at": None,
+            "url": url,
+            # The app, opened from its tile: only once its newest deploy went live healthy.
+            "open_url": _app_url(url) if shipped and shipped.get("healthy") else None,
             "port": None}
 
 
@@ -1212,7 +1327,8 @@ _UNION = """
          CAST(CASE WHEN s.finished_at IS NOT NULL AND s.apply_started_at IS NOT NULL
               THEN extract(epoch FROM (s.finished_at - s.apply_started_at)) * 1000 END AS bigint)
            AS duration_ms,
-         s.apply_started_at, s.failure_reason
+         s.apply_started_at, s.failure_reason,
+         NULL::jsonb AS health, s.open_url AS open_url
   FROM stack_deployments s WHERE s.project_id = :p
   UNION ALL
   SELECT CASE WHEN d.trigger IS NULL THEN 'registry' ELSE 'delivery' END, d.id,
@@ -1223,7 +1339,8 @@ _UNION = """
          CAST(COALESCE(d.duration_ms, CASE WHEN d.finished_at IS NOT NULL
               AND d.started_at IS NOT NULL
               THEN extract(epoch FROM (d.finished_at - d.started_at)) * 1000 END) AS bigint),
-         d.started_at, d.failure_reason
+         d.started_at, d.failure_reason,
+         d.health_check_results, NULL::text
   FROM deployment_runs d WHERE d.project_id = :p
 """
 
@@ -1430,7 +1547,17 @@ def _shape_rows(connection: Any, settings: Any, project_id: str, raw: list[dict[
         if (r["kind"] != "stack" and r.get("decision_status") == "pending"
                 and status in WAITING_STATES):
             state = "awaiting_approval"
-        w = deploy_word(state, newest_for_target=r["ref"] in live_refs)
+        # THE ONE READING (deploy_status): word, sentence, the step running now, the app link.
+        seen = deploy_status(
+            state, decision_status=r.get("decision_status"), steps=r.get("steps"),
+            health=r.get("health"),
+            url=r.get("open_url") or r.get("target_url")
+            or ((_json(r.get("target_domains")) or [None])[0]),
+            failure=r.get("failure_reason"), newest_for_target=r["ref"] in live_refs,
+            success_means_healthy=r["kind"] == "stack")
+        if seen["phase"] == "superseded":
+            state = "superseded"
+        w = {"word": seen["word"], "tone": seen["tone"]}
         steps = [{"s": step_state(s.get("status")), "t": _step_title(s)[:40]}
                  for s in (_json(r.get("steps")) or [])[:MAX_STEPS] if isinstance(s, dict)]
         decided = r.get("decision_status") in ("approved", "rejected", "executed")
@@ -1456,6 +1583,8 @@ def _shape_rows(connection: Any, settings: Any, project_id: str, raw: list[dict[
             "rollback_to_sha7": rollback_to,
             "failed_after": (newer_failed.get(r["target_id"]) if r["ref"] in live_refs else None),
             "decision_id": r.get("decision_id"), "run_id": r.get("run_id"),
+            "phase": seen["phase"], "sentence": seen["sentence"], "now": seen["now"],
+            "open_url": seen["open_url"] if r["ref"] in live_refs else None,
         }
         out.append(_fit(row))  # type: ignore[arg-type]
     return out
@@ -1477,6 +1606,7 @@ def _union_query(where: str, tail: str) -> str:
         "         ORDER BY target_id, COALESCE(finished_at, started_at, created_at) DESC) "
         "SELECT u.*, COALESCE(u.finished_at, u.started_at, u.created_at) AS ts, "
         "       u.kind || ':' || u.id AS ref, t.app_name, t.environment, t.target_kind, "
+        "       t.public_url AS target_url, t.domains AS target_domains, "
         "       COALESCE(u.host_id, t.host_id) AS hid, h.name AS host_name, "
         "       pa.account_label, dd.status AS decision_status, dd.approved_by "
         "FROM u LEFT JOIN deployment_targets t ON t.id = u.target_id "
@@ -1762,12 +1892,15 @@ def deploy_detail(connection: Any, settings: Any, project_id: str, ref: str) -> 
                       "health": None} if governed else None),
             "preflight": [],
             "log_tail": _tail(logs) if logs else None,
-            "health_check_results": [h for h in (_json(full["health_check_results"]) or [])
-                                     if isinstance(h, dict)],
+            "health_check_results": health_checks(full["health_check_results"]),
             "promotion": _promotion(connection, ident) if kind == "registry" else None,
-            # A governed host deploy links its app only once the health check passed.
-            "open_url": (None if governed and raw["status"] not in SUCCESS_STATES else
-                         _app_url(full["public_url"] or ((_json(full["domains"]) or [None])[0]))),
+            # A deploy links its app only once it went live AND its health check passed
+            # (deploy_status) — the same rule the row and the workflow step use.
+            "open_url": deploy_status(
+                raw["status"], decision_status=raw.get("decision_status"),
+                health=full["health_check_results"],
+                url=full["public_url"] or ((_json(full["domains"]) or [None])[0]),
+            )["open_url"],
             "changeset_id": full["changeset_id"],
         }
     body["live"] = row["state"] in ACTIVE_STATES

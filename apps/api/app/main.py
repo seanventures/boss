@@ -1409,6 +1409,13 @@ async def lifespan(_: FastAPI):
             repaired = repair_refusal_records(connection)
         if any(repaired.values()):
             print(f"[lifespan] refused deployment plans cleared: {repaired}")
+        # Requests whose approval another run took can never move: close them as superseded.
+        from boss_engine.services.governed_host_deploy import supersede_orphaned_runs
+
+        with begin(engine) as connection:
+            orphans = supersede_orphaned_runs(connection, settings)
+        if any(orphans.values()):
+            print(f"[lifespan] orphaned deploy requests closed: {orphans}")
     except Exception as exc:  # noqa: BLE001 — never block boot on a repair
         print(f"[lifespan] refused-plan repair skipped: {exc}")
     # CONSOLIDATE THE LOGS. Everything BOSS writes about where time went — the sandbox's
@@ -9569,6 +9576,13 @@ def plan_manual_deploy(payload: dict) -> dict:
         # The base branch is read from the source run's own spec rather than assumed, because
         # "main" is a guess about someone else's repository.
         ref = payload.get("ref") or payload.get("commit_ref")
+        # A GIT REF HAS NO ':' AND NO SPACE (git check-ref-format). The target drawer prefilled
+        # this field with the target's SSH address, so "root@192.0.2.202:22" was planned as the
+        # commit to ship: a third open request for the app, and one no build could satisfy.
+        if ref and (":" in str(ref) or any(ch.isspace() for ch in str(ref))):
+            raise HTTPException(status_code=422, detail=(
+                f"'{ref}' is not a branch, tag or commit. Leave Ref empty to ship the default "
+                "branch."))
         if not ref and source_run:
             spec_row = connection.execute(
                 text("SELECT spec FROM code_task_runs WHERE id = :i"),
@@ -9594,8 +9608,10 @@ def plan_manual_deploy(payload: dict) -> dict:
             raise HTTPException(status_code=409,
                                 detail=f"{refused.headline} {refused.action}") from refused
         run_id = planned.get("deployment_run_id") or planned.get("id")
-        connection.execute(text("UPDATE deployment_runs SET trigger='manual' WHERE id=:i"),
-                           {"i": run_id})
+        # An adopted request keeps who asked first: it is the same deploy, not a new manual one.
+        if not planned.get("reused"):
+            connection.execute(text("UPDATE deployment_runs SET trigger='manual' WHERE id=:i"),
+                               {"i": run_id})
 
     if planned.get("status") in {"failed", "blocked"}:
         # The blocked run and decision were committed above. Do not launch a worker for a
@@ -9614,6 +9630,9 @@ def plan_manual_deploy(payload: dict) -> dict:
     if planned.get("changeset_id"):
         return {"deployment_run_id": run_id, "status": "planned",
                 "trigger": "manual", "changeset_id": planned["changeset_id"],
+                # Already open: the console says "already asking" instead of a new plan.
+                "reused": bool(planned.get("reused")),
+                "run_status": planned.get("status"),
                 **_planned_next_action(planned)}
     raise HTTPException(status_code=409, detail="Deployment has no governed ChangeSet.")
 
@@ -11392,10 +11411,12 @@ def deployments_for_code_task_endpoint(run_id: str, limit: int = 5,
             # the first version of it shipped before this was checked.
             text("SELECT r.id, r.app_name, r.environment, r.status, r.commit_ref, "
                  "       r.started_at, r.finished_at, r.failure_reason, r.trigger, "
-                 "       r.deployment_target_id, "
+                 "       r.deployment_target_id, r.steps, r.health_check_results, "
+                 "       r.decision_id, x.status AS decision_status, "
                  "       t.domains, t.health_checks, h.name AS host_name, "
                  "       r.release_packet->>'code_task_run_id' AS release_packet_run "
                  "FROM deployment_runs r "
+                 "LEFT JOIN decisions x ON x.id = r.decision_id "
                  "LEFT JOIN deployment_targets t ON t.id = r.deployment_target_id "
                  "LEFT JOIN deployment_hosts h ON h.id = t.host_id "
                  # AN APP'S ATTEMPTS ARE SEVERAL RUNS, AND ONLY ONE OF THEM SHIPPED.
@@ -11446,8 +11467,20 @@ def deployments_for_code_task_endpoint(run_id: str, limit: int = 5,
                         and isinstance(checks[0], dict) else None)
             raw = f"{declared or 'http'}://{raw}"
         item["url"] = raw
-        item.pop("domains", None)
-        item.pop("health_checks", None)
+        # THE ONE READING (infra_view.deploy_status): the workflow step shows the same word,
+        # sentence and app link as Infra, and its drawer is one `ref` away.
+        from boss_engine.services.infra_view import deploy_status as _deploy_status
+
+        seen = _deploy_status(item.get("status"), decision_status=item.get("decision_status"),
+                              steps=item.get("steps"), health=item.get("health_check_results"),
+                              url=raw, failure=item.get("failure_reason"))
+        item.update({"ref": f"{'delivery' if item.get('trigger') else 'registry'}:{item['id']}",
+                     "phase": seen["phase"], "word": seen["word"], "tone": seen["tone"],
+                     "sentence": seen["sentence"], "now": seen["now"],
+                     "open_url": seen["open_url"], "health": seen["health"]})
+        for key in ("domains", "health_checks", "steps", "health_check_results",
+                    "decision_status"):
+            item.pop(key, None)
         out.append(item)
 
     # Is this app pointed at a host at all? Looked up by `app_name` deliberately: unlike the

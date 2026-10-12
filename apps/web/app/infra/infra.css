@@ -195,11 +195,18 @@
 .inf-stage[data-state="current"] .inf-stage-mark, .inf-setup-step[data-state="current"] .inf-stage-mark { border-color: var(--accent-text); color: var(--accent-text); }
 
 .inf-slots { display: flex; flex-wrap: wrap; gap: 8px; min-width: 0; }
+/* A TILE FITS ITS TEXT. It was a fixed 168×64 box with overflow hidden, so "HelpDesk · staging"
+   was cut to "HelpDesk · stagi…" and its third line ("8a009a6 · 2m") was clipped off the bottom.
+   It grows to its three lines and takes the width its name needs, within bounds. */
 .inf-tile {
-  display: flex; flex-direction: column; justify-content: space-between; gap: 1px; width: 168px; height: 64px; padding: 5px 9px; min-width: 0;
-  overflow: hidden; line-height: 1.2;
+  display: flex; flex-direction: column; justify-content: space-between; gap: 3px;
+  flex: 0 1 auto; width: max-content; min-width: 176px; max-width: 280px; min-height: 64px; height: auto;
+  padding: 6px 10px; line-height: 1.3;
   border: 1px solid var(--border); border-radius: var(--r); background: var(--surface-2); cursor: pointer; font-size: 0.74rem;
 }
+.inf-tile-l3-row { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.inf-tile-l3-row .inf-tile-l3 { flex: 1 1 auto; }
+.inf-tile-open { flex: none; font-size: 0.74rem; }
 .inf-tile:hover { border-color: var(--accent-line); }
 .inf-tile[data-tone="red"] { border-color: color-mix(in srgb, var(--red) 50%, var(--border)); }
 .inf-tile[data-tone="amber"] { border-color: color-mix(in srgb, var(--amber) 45%, var(--border)); }
@@ -211,7 +218,7 @@
 .inf-tile-strip { flex: 1; min-width: 0; }
 .inf-tile-l3 { color: var(--muted); font-size: 0.74rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
 .inf-tile-l3 .inf-mono { font-size: 0.72rem; }
-.inf-slot { display: inline-grid; place-items: center; width: 168px; height: 64px; padding: 0; border: 1px dashed var(--border-strong);
+.inf-slot { display: inline-grid; place-items: center; width: 176px; min-height: 64px; padding: 0; border: 1px dashed var(--border-strong);
   border-radius: var(--r); background: transparent; color: var(--faint); font: inherit; font-size: 0.78rem; }
 button.inf-slot { cursor: pointer; }
 button.inf-slot:hover { border-color: var(--accent-line); color: var(--accent-text); }

@@ -81,6 +81,8 @@ export type Resident = {
   lastDeploy: LastDeploy | null;
   expiresAt: string | null;
   url: string | null;
+  /** A target's app, once its newest deploy went live and passed its health check. */
+  openUrl: string | null;
   port: number | null;
 };
 export function parseResident(w: unknown): Resident {
@@ -92,7 +94,7 @@ export function parseResident(w: unknown): Resident {
     strip: parseStrip(o.strip),
     lastDeploy: ld ? { sha7: optStr(ld.sha7), at: optStr(ld.at), word: str(ld.word), ref: optStr(ld.ref),
                        failedAfter: parseFailedAfter(ld.failed_after) } : null,
-    expiresAt: optStr(o.expires_at), url: optStr(o.url), port: optNum(o.port),
+    expiresAt: optStr(o.expires_at), url: optStr(o.url), openUrl: optStr(o.open_url), port: optNum(o.port),
   };
 }
 
@@ -239,7 +241,15 @@ export type DeployRow = {
   decisionId: string | null; runId: string | null;
   /** On a Live row: a newer attempt on the same target that failed. */
   failedAfter: FailedAfter | null;
+  /** The server's one reading of this deploy (infra_view.deploy_status): its phase, the
+   *  sentence every surface shows, the step running now, and the app's address on the Live row
+   *  once its health check passed. */
+  phase: DeployPhase; sentence: string; now: string | null; openUrl: string | null;
 };
+export type DeployPhase = "needs_approval" | "queued" | "deploying" | "live" | "failed" | "rolled_back"
+  | "rejected" | "superseded" | "cancelled" | string;
+/** A deploy still moving: the views re-read every few seconds until it settles. */
+export const MOVING_PHASES = new Set<string>(["queued", "deploying"]);
 const STEP_STATES = new Set(["done", "running", "failed", "pending", "skipped"]);
 const TRIGGERS = new Set(["manual", "merge", "workflow", "rollback", "redeploy"]);
 export function parseDeployRow(w: unknown): DeployRow {
@@ -258,6 +268,7 @@ export function parseDeployRow(w: unknown): DeployRow {
     can: { approve: !!can.approve, reject: !!can.reject, rollback: !!can.rollback, redeploy: !!can.redeploy },
     rollbackToSha7: optStr(o.rollback_to_sha7),
     decisionId: optStr(o.decision_id), runId: optStr(o.run_id), failedAfter: parseFailedAfter(o.failed_after),
+    phase: str(o.phase), sentence: str(o.sentence), now: optStr(o.now), openUrl: optStr(o.open_url),
   };
 }
 export type DeployList = {
@@ -502,8 +513,14 @@ export const useTargetDetail = (projectId: string, id: string | null): Polled<Ta
 // `approved`: a governed host deploy queued for its worker — it turns Deploying in seconds.
 const LIVE_STATES = new Set(["planned", "awaiting_approval", "approved", "running", "applying", "created", "pending"]);
 export const useDeploys = (projectId: string, f: { state?: string | null; app?: string | null; env?: string | null; viewer?: string } = {}): Polled<DeployList> =>
-  usePolled(projectId ? deploysUrl(projectId, f) : null, parseDeployList,
-            (d) => (d && d.rows.some((r) => LIVE_STATES.has(r.state)) ? DEPLOYS_LIVE_POLL_MS : DEPLOYS_IDLE_POLL_MS));
+  usePolled(projectId ? deploysUrl(projectId, f) : null, parseDeployList, deploysCadence);
+/** How soon the Deploys list re-reads: every 3 s while a deploy is starting or running (so
+ *  Starting → Deploying → Live is watched, not discovered), 8 s while one waits on a person,
+ *  30 s when nothing moves. */
+export function deploysCadence(d: DeployList | null): number {
+  if (d && d.rows.some((r) => MOVING_PHASES.has(r.phase))) return DEPLOY_LIVE_POLL_MS;
+  return d && d.rows.some((r) => LIVE_STATES.has(r.state)) ? DEPLOYS_LIVE_POLL_MS : DEPLOYS_IDLE_POLL_MS;
+}
 /** One poll for a deploy's detail: 3 s while live, then it stops (the drawer and the workflow
  *  stack-deploy step both read this). */
 export const useDeployDetail = (projectId: string, deployRef: string | null): Polled<DeployDetail> =>

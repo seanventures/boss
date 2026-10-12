@@ -1,5 +1,8 @@
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
+import { DeployStatusLine } from "../app/delivery-workflows-ui";
 import { codeOnly } from "./_helpers/source";
 
 /**
@@ -69,20 +72,34 @@ describe("a gate that has not been answered is the only way to ship", () => {
 });
 
 describe("an address answering does not mean this run shipped", () => {
+  const live = { ref: "delivery:deprun_1", phase: "live", word: "Live", tone: "green",
+                 sentence: "Live at http://h:8000/. Health check passed: GET /readyz → 200.",
+                 openUrl: "http://h:8000/", refresh: () => {} };
+
   it("the live link says which release it is, when this step has not succeeded", () => {
     // This app had a deployment from a run five days earlier, so a step waiting for approval
     // led with "shipped and answering" — true about the app, false about the step.
-    expect(UI).toContain("answering, from an earlier release");
-    expect(UI).toContain("This build has not");
+    const html = renderToStaticMarkup(createElement(DeployStatusLine, { deploy: live, stepSucceeded: false }));
+    expect(html).toContain("The previous release: Live at http://h:8000/");
   });
 
   it("and does not take the primary button off the gate", () => {
-    const at = UI.indexOf('data-testid="dw-open-app"');
-    const block = UI.slice(at - 400, at);
-    expect(block).toContain('isDeployStep(step, capability) && step.status !== "succeeded" ? ""');
+    const html = renderToStaticMarkup(createElement(DeployStatusLine, { deploy: live, stepSucceeded: false }));
+    expect(html).toMatch(/class="cap-btn"[^>]*data-testid="dw-open-app"/);
   });
 
-  it("a succeeded deploy still says so plainly", () => {
-    expect(UI).toContain("shipped and answering");
+  it("a succeeded deploy says so in the server's words, with the app one press away", () => {
+    const html = renderToStaticMarkup(createElement(DeployStatusLine, { deploy: live, stepSucceeded: true }));
+    expect(html).toContain("Live at http://h:8000/. Health check passed: GET /readyz → 200.");
+    expect(html).toMatch(/class="cap-btn primary"[^>]*data-testid="dw-open-app"/);
+    expect(html).toContain('data-testid="dw-open-deploy"');
+  });
+
+  it("a deploy that is not live offers no app link", () => {
+    for (const phase of ["needs_approval", "queued", "deploying", "failed"]) {
+      const html = renderToStaticMarkup(createElement(DeployStatusLine, {
+        deploy: { ...live, phase, word: phase, openUrl: null, sentence: "…" }, stepSucceeded: true }));
+      expect(html).not.toContain('data-testid="dw-open-app"');
+    }
   });
 });

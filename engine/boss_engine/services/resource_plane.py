@@ -2460,6 +2460,9 @@ class ResourcePlaneService:
             if existing:
                 run = self._get_deployment_run(connection, project_id, existing)
                 return {**run, "reused": True}
+            # A different release replaces what is still only ASKING to ship here.
+            governed_host.supersede_replaced(connection, self.settings, target["id"],
+                                             commit_ref, actor=actor)
             problem = governed_host.plan_problem(connection, target)
             if problem:
                 # A plan BOSS will not make is an answer, not a record: no decision to

@@ -336,11 +336,13 @@ export function StepDoneBy({ act, approval, output, phase, status, planned, view
   }
   const actor = stepActor(laneAgentOf(output, act, viewer), planned);
   const named = actor ? nameOf(actor.roleKey, actor.variant, actor.personId, actor.name) : null;
-  const priced = !!act || calls > 0 || !!spend;
   // EVERY ATTEMPT'S SPEND. The step's own act holds none of it — the calls land on its build
   // stages and panel seats, and a retry is a new act — so the chain's per-step sum comes first.
   const spent = spend ? spend.costUsd : act?.costUsd || cost;
   const included = spend ? spend.includedUsd : act?.includedUsd ?? 0;
+  // A PRICE ONLY WHERE MODELS WERE USED. A deploy a person approved made no model call, and
+  // "$0.00" beside it read as a cost line that had failed to load.
+  const priced = calls > 0 || spent > 0 || included > 0;
   const hasCard = !!act || !!(output && typeof output === "object" && (output as { ran_as?: unknown }).ran_as);
   return (
     <div className="wf-doneby" data-testid="dw-step-doneby">

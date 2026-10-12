@@ -376,6 +376,10 @@ def _create_blocking_decision_postgres(
     rec_in = recommendation if isinstance(recommendation, dict) else {}
     gate_run = str(rec_in.get("workflow_run_id") or "").strip() or None
     gate_step = (str(rec_in.get("step_id") or "").strip() or None) if gate_run else None
+    # A DEPLOY'S APPROVAL IS ITS RUN'S. Two deploy requests for one app ask the same question
+    # ("Deploy HelpDesk to 192.0.2.202 · staging"), and merging them handed both runs one
+    # decision: the approval queued one, and the other sat at "Needs you" forever.
+    subject_run = str(rec_in.get("deployment_run_id") or "").strip() or None
     existing = connection.execute(
         sql(
             """
@@ -387,12 +391,13 @@ def _create_blocking_decision_postgres(
               AND recommendation->>'workflow_run_id' IS NOT DISTINCT FROM :gate_run
               AND (CAST(:gate_run AS TEXT) IS NULL
                    OR recommendation->>'step_id' IS NOT DISTINCT FROM :gate_step)
+              AND recommendation->>'deployment_run_id' IS NOT DISTINCT FROM :subject_run
             ORDER BY created_at DESC
             LIMIT 1
             """
         ),
         {"project_id": project_id, "question": question, "task_id": task_id,
-         "gate_run": gate_run, "gate_step": gate_step},
+         "gate_run": gate_run, "gate_step": gate_step, "subject_run": subject_run},
     ).mappings().first()
     if existing:
         prior = existing["recommendation"] or {}

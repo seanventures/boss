@@ -193,15 +193,16 @@ describe("a succeeded deploy shows the app, not an old failure", () => {
 
   it("links to the app once it has actually shipped", () => {
     expect(SOURCE).toContain('data-testid="dw-open-app"');
-    expect(SOURCE).toContain("const liveAppUrl");
   });
 
-  it("links only on a succeeded DEPLOYMENT, and only from the bound target", () => {
+  it("links only when the SERVER says the deploy is live and passed its health check", () => {
     // Linking on anything less repeats the mistake this view keeps making: reporting a state
-    // the system is not in. The condition moved from the step's status to the deployment's,
-    // because the step is precisely what cannot be trusted — see the suite below.
-    expect(SOURCE).toContain('lastDeploy?.status !== "succeeded"');
-    expect(SOURCE).toContain("shippedTo?.domains");
+    // the system is not in. The link is the deployment's `open_url` (infra_view.deploy_status),
+    // which the server sets only for a live deploy whose recorded health check passed — the
+    // console no longer builds it from the target's domain.
+    expect(SOURCE).toContain("deploy.openUrl ? (");
+    expect(SOURCE).toContain("typeof newest.open_url === \"string\"");
+    expect(SOURCE).not.toContain("shippedTo?.domains ?? []).find");
   });
 });
 
@@ -224,24 +225,30 @@ describe("a bound app can request a gated deployment from the deploy step", () =
   const SOURCE = readFileSync(
     new URL("../app/delivery-workflows-ui.tsx", import.meta.url), "utf8");
 
-  it("offers a deployment plan once a target is bound", () => {
-    // Binding says where a deployment would go; planning creates the reviewable ChangeSet.
+  it("offers a deploy once a target is bound", () => {
+    // Binding says where a deployment would go; Deploy asks for its approval.
     expect(SOURCE).toContain('data-testid="dw-ship-now"');
-    expect(SOURCE).toContain("Plan deployment");
+    expect(SOURCE).toContain('again ? "Deploy again" : "Deploy"');
   });
 
   it("uses the console's existing deploy op rather than a new path", () => {
     expect(SOURCE).toContain('op: "deploy"');
   });
 
-  it("shows the ChangeSet review step without claiming execution", () => {
+  it("says where the request is in the server's words, never its own", () => {
+    // "Nothing has deployed. ChangeSet … is ready. Next, open ProviderOps ChangeSet Review,
+    // approve it, then apply it." stayed on screen after the deploy had shipped: a host deploy
+    // is approved as a decision and applies itself. The status line reads the deployment.
     expect(SOURCE).toContain("plannedDeploymentFrom(d)");
-    expect(SOURCE).toContain("Nothing has deployed. ChangeSet");
-    expect(SOURCE).toContain("approve it, then apply it");
+    expect(SOURCE).not.toContain("Nothing has deployed. ChangeSet");
+    expect(SOURCE).not.toContain("approve it, then apply it");
+    expect(SOURCE).toContain('data-testid="dw-deploy-sentence"');
   });
 
-  it("does not poll a plan as if a deployment had started", () => {
-    const shipNow = SOURCE.slice(SOURCE.indexOf("function ShipNow("), SOURCE.indexOf("function stepCaptain("));
+  it("steps the button aside while a deploy of this app is open", () => {
+    // A second press while one request waited made a second request (one approval each).
+    expect(SOURCE).toContain("!(lastDeploy && OPEN_PHASES.has(lastDeploy.phase))");
+    const shipNow = SOURCE.slice(SOURCE.indexOf("function ShipNow("), SOURCE.indexOf("export type NewestDeploy"));
     expect(shipNow).not.toContain("/api/run-deployments");
   });
 });
@@ -282,13 +289,13 @@ describe("the live link follows the deployment, not the step", () => {
     // HookWatch's deploy step reads SUCCEEDED because of a blocked run recorded before
     // `blocked` stopped counting as success. Trusting it produced "Open the app →
     // 192.0.2.202:8000" for an address with no container on it.
-    expect(SOURCE).toContain('lastDeploy?.status !== "succeeded"');
+    expect(SOURCE).toContain("const lastDeploy = useNewestDeploy(");
     expect(SOURCE).not.toContain('if (!isDeployStep(step, capability) || step.status !== "succeeded") return ""');
   });
 
-  it("asks the deployment history for that build", () => {
-    expect(SOURCE).toContain("const [lastDeploy, setLastDeploy]");
+  it("asks the deployment history for that build, and keeps asking while it moves", () => {
     expect(SOURCE).toContain("body?.runs?.[buildRunId]?.deployments");
+    expect(SOURCE).toContain('phase === "needs_approval" ? 8_000 : 3_000');
   });
 });
 

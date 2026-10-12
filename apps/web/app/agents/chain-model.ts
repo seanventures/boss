@@ -37,6 +37,8 @@ export type Hop = {
   /** A retried step: every attempt, oldest first, each with its own inner work. The hop itself
    *  is the latest; the chain says the step once, with the count (`Forge · 7 attempts`). */
   attempts?: Hop[];
+  /** The same actor's consecutive steps, said once (`Seed Owner · 3 steps`), oldest first. */
+  steps?: string[];
 };
 export type Loop = { kind: "loop"; key: string; a: Hop; b: Hop; rounds: number; acts: Act[] };
 export type ChainItem = Hop | Loop;
@@ -235,7 +237,60 @@ export function chainItems(chain: Pick<Chain, "acts">, viewer: string): ChainIte
       items.push(hopOf(column, viewer));
     }
   }
-  return [items[0], ...collapseLoops(items.slice(1))];
+  return mergeRepeats([items[0], ...collapseLoops(items.slice(1))]);
+}
+
+/** What a hop did, in a step list: its step's label, or its own. */
+function hopWork(h: Hop): string {
+  const a = h.acts[0];
+  return shortLabel(a?.label ?? "") || a?.links.step_id || "";
+}
+
+/**
+ * ONE ACTOR, ONE STOP. "Seed Owner → Seed Owner → Juno → Seed Owner → Seed Owner" said the same
+ * person five times and ran the strip off the card. Consecutive hops by the same actor are one
+ * stop that names the steps it covers (`· 3 steps`, listed on hover); their inner work folds
+ * together. A retried step keeps its own stop: its attempts open from it.
+ */
+export function mergeRepeats(items: ChainItem[]): ChainItem[] {
+  const out: ChainItem[] = [];
+  const single = (it: ChainItem | undefined): it is Hop =>
+    !!it && it.kind === "hop" && it.acts.length === 1 && !(it.attempts && it.attempts.length > 1);
+  for (const it of items) {
+    const prev = out[out.length - 1];
+    if (single(it) && single(prev) && whoKey(prev.who[0]) === whoKey(it.who[0])) {
+      const steps = [...(prev.steps ?? [hopWork(prev)]), hopWork(it)].filter(Boolean);
+      out[out.length - 1] = {
+        ...prev, key: `${prev.key}~${it.key}`, steps,
+        // The latest act stands for the stop: its face says how it is now.
+        acts: it.acts, who: it.who,
+        inside: [...prev.inside, ...it.inside], insideCount: prev.insideCount + it.insideCount,
+        insideOf: prev.insideCount && it.insideCount ? "these steps" : prev.insideCount ? prev.insideOf : it.insideOf,
+      };
+      continue;
+    }
+    out.push(it);
+  }
+  return out;
+}
+
+/** The distinct actors a strip shows (agents, people and BOSS): what its count says. */
+export function actorsShown(items: ChainItem[]): string[] {
+  const keys = new Set<string>();
+  for (const it of items) {
+    const hops = it.kind === "hop" ? [it] : [it.a, it.b];
+    for (const h of hops) for (const w of h.who) keys.add(whoKey(w));
+  }
+  return [...keys];
+}
+
+/** A long strip keeps its first stops and its last ones, and folds the middle into `+N`. */
+export const CHAIN_HEAD = 2;
+export const CHAIN_TAIL = 3;
+export function foldMiddle<T>(items: T[]): { head: T[]; middle: T[]; tail: T[] } {
+  if (items.length <= CHAIN_HEAD + CHAIN_TAIL + 1) return { head: items, middle: [], tail: [] };
+  return { head: items.slice(0, CHAIN_HEAD), middle: items.slice(CHAIN_HEAD, items.length - CHAIN_TAIL),
+           tail: items.slice(items.length - CHAIN_TAIL) };
 }
 
 /** The act that ran this step, if any: the latest step act for it (a retry is newer). */

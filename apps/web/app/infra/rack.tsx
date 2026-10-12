@@ -83,6 +83,18 @@ export function ResidentTile({ r, now, windowEnd, onOpen }: {
           ) : null}
         </span>
       : <span className="inf-tile-l3 inf-muted" title="This target has no deploy yet">Never deployed</span>;
+    if (r.openUrl) {
+      // OPEN THE APP FROM WHERE IT IS DRAWN. The tile named the app and its release and gave
+      // no way to look at it; the address is offered once its deploy went live healthy.
+      line3 = (
+        <span className="inf-tile-l3-row">
+          {line3}
+          <a className="inf-link inf-tile-open" href={r.openUrl} target="_blank" rel="noreferrer"
+             onClick={(e) => e.stopPropagation()} data-testid="inf-tile-open-app"
+             title={`Open ${r.openUrl} in a new tab`}>Open ↗</a>
+        </span>
+      );
+    }
   } else if (r.kind === "preview") {
     const left = now !== null ? minutesLeft(r.expiresAt, now) : null;
     line3 = left !== null ? <span className="inf-tile-l3" title={r.expiresAt ? `Expires at ${localTime(r.expiresAt)}` : undefined}>{left}m left</span> : null;

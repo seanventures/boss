@@ -18,7 +18,7 @@ import React, { useRef, useState } from "react";
 
 import type { Act, Chain } from "../../lib/agent-world-types";
 import { ActFace } from "./act-card";
-import { agentKeys, chainItems, whoDid, type ChainItem, type Hop } from "./chain-model";
+import { actorsShown, agentKeys, chainItems, foldMiddle, whoDid, type ChainItem, type Hop } from "./chain-model";
 import { nameOf } from "./run-face";
 import { useIdentityVersion } from "../../lib/use-agent-identities";
 
@@ -70,6 +70,11 @@ function HopView({ hop, viewer, fresh, depth, attempt }: {
             <ActFace act={a} viewer={viewer} size={depth ? 20 : 24} />
             {attempt ? <span className="ag-chain-attempt-n">Attempt {attempt}</span> : null}
             <Name act={a} viewer={viewer} />
+            {hop.steps && hop.steps.length > 1 ? (
+              <span className="ag-chain-steps" data-testid="ag-chain-steps" data-tip={hop.steps.join("\n")}>
+                · {hop.steps.length} steps
+              </span>
+            ) : null}
             {attempts.length > 1 ? (
               // ONE STEP, ONE FACE: the attempts fold into a count, and open into each attempt.
               <button type="button" className="ag-chain-fold ag-chain-tries" aria-expanded={tries}
@@ -152,10 +157,20 @@ function lastOf(acts: Act[], like: Act): Act {
   return last;
 }
 
+/** Who a strip item is, for the folded middle's hover list. */
+function itemNames(it: ChainItem, viewer: string): string {
+  const hops = it.kind === "hop" ? [it] : [it.a, it.b];
+  return hops.map((h) => h.acts.map((a) => {
+    const w = whoDid(a, viewer);
+    return nameOf(w.roleKey, w.variant, w.personId, w.name).name;
+  }).join(", ")).join(" ↔ ");
+}
+
 export function RunChain({ chain, viewer, defaultOpen = true }: {
   chain: Chain | null; viewer: string; defaultOpen?: boolean;
 }) {
   const [open, setOpen] = useState(defaultOpen);
+  const [all, setAll] = useState(false);
   // The acts already here when the strip first drew: only work that starts while you watch
   // draws its edge in.
   const seen = useRef<Set<string> | null>(null);
@@ -163,7 +178,11 @@ export function RunChain({ chain, viewer, defaultOpen = true }: {
   if (seen.current === null) seen.current = new Set(chain.acts.map((a) => a.actId));
   const fresh = new Set(chain.acts.filter((a) => !seen.current!.has(a.actId)).map((a) => a.actId));
   const items = chainItems(chain, viewer);
+  // THE COUNT IS WHAT THE STRIP SHOWS: every distinct actor drawn, people and BOSS included.
+  // "8 agents" over a strip of fourteen faces, most of them one person, read as a runaway.
+  const shown = actorsShown(items).length;
   const agents = agentKeys(chain).length;
+  const { head, middle, tail } = all ? { head: items, middle: [], tail: [] } : foldMiddle(items);
   return (
     <section className="ag-chain" data-testid="ag-chain" data-open={open ? "true" : undefined}
              aria-label="Who handed work to whom">
@@ -171,11 +190,32 @@ export function RunChain({ chain, viewer, defaultOpen = true }: {
               data-tip="Who handed work to whom, in order" onClick={() => setOpen((v) => !v)}>
         {open ? <CaretDown size={11} weight="bold" aria-hidden /> : <CaretRight size={11} weight="bold" aria-hidden />}
         Chain
-        <span className="ag-chain-count">{agents} {agents === 1 ? "agent" : "agents"}</span>
+        <span className="ag-chain-count" data-testid="ag-chain-count"
+              data-tip={`${agents} ${agents === 1 ? "agent" : "agents"}; the rest are people or BOSS`}>
+          {shown} taking part
+        </span>
       </button>
       {open ? (
+        // WRAPS, NEVER SCROLLS: a long chain keeps its first and last stops and folds the
+        // middle into `+N`, its names on hover and the whole strip one press away.
         <div className="ag-chain-strip" data-testid="ag-chain-strip">
-          <Items items={items} viewer={viewer} fresh={fresh} depth={0} />
+          <Items items={head} viewer={viewer} fresh={fresh} depth={0} />
+          {middle.length ? (
+            <>
+              <Edge acts={[]} fresh={false} />
+              <button type="button" className="ag-chain-fold ag-chain-more" data-testid="ag-chain-more"
+                      aria-expanded={false} onClick={() => setAll(true)}
+                      data-tip={middle.map((it) => itemNames(it, viewer)).join("\n")}>
+                +{middle.length} more
+              </button>
+            </>
+          ) : null}
+          {tail.length ? (
+            <>
+              <Edge acts={tail[0].kind === "hop" ? tail[0].acts : tail[0].a.acts} fresh={false} />
+              <Items items={tail} viewer={viewer} fresh={fresh} depth={0} />
+            </>
+          ) : null}
         </div>
       ) : null}
     </section>

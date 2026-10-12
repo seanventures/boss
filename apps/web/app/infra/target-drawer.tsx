@@ -212,11 +212,20 @@ function RetireTargetSheet({ t, actor, onClose, onRetired }: { t: TargetDetail; 
   );
 }
 
+/** A git ref, or "" for anything git would refuse (an address, a sentence). */
+export function gitRefOrEmpty(value: string | null | undefined): string {
+  const v = (value ?? "").trim();
+  return v && !/[:\s]/.test(v) ? v : "";
+}
+
 function DeploySection({ t, projectId, actor, canWrite, now, refresh, onDeploy }: {
   t: TargetDetail; projectId: string; actor: string; canWrite: boolean; now: number | null; refresh: () => void;
   onDeploy: (ref: string) => void;
 }) {
-  const [ref, setRef] = useState(t.where.ref ?? "");
+  // THE REF FIELD TAKES A BRANCH, TAG OR COMMIT. `where.ref` is the target's address — an SSH
+  // target's is "root@192.0.2.202:22" — and prefilling it here planned that as the commit to
+  // ship. Only a ref-shaped value (no ':' or space, as git requires) is a starting point.
+  const [ref, setRef] = useState(gitRefOrEmpty(t.where.ref));
   const [refs, setRefs] = useState<{ name: string; sha?: string }[] | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
