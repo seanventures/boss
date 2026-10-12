@@ -93,6 +93,10 @@ class SecretSpec(_Strict):
     #: none = the operator must paste a test value; generated = BOSS makes one; stub = the
     #: template's test double is used (§2.4).
     test_default: Literal["none", "generated", "stub"] = "none"
+    #: false = the app runs without it, and the feature it unlocks stays off (a sign-in provider
+    #: the app enables only when its client id is set). A deploy is never refused for a secret
+    #: that is not required; one with test_default=generated is generated for deploy as well.
+    required: bool = True
     #: What build, preview and tests accept.
     pattern: Optional[str] = Field(default=None, max_length=500)
     #: Accepted only for env=deploy, after a person's decision (§2.4).

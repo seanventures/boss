@@ -228,11 +228,19 @@ def _app_key_for(connection: Connection, project_id: str, target: dict,
 def app_secret_problem(connection: Connection, project_id: str, target: dict,
                        release_packet: Optional[dict]) -> tuple[Optional[str], list[dict], Optional[str]]:
     """(app_key, the app secrets a deploy passes BY NAME, the refusal in words or None)."""
-    from ..templates.secrets import deploy_secrets
+    from ..templates.secrets import deploy_secrets, ensure_deploy_generated
 
     key = _app_key_for(connection, project_id, target, release_packet)
     if not key:
         return None, [], None
+    # The secrets BOSS makes (a session key) are made for deploy here, before they are counted.
+    org_id = connection.execute(text(
+        "SELECT w.org_id FROM projects p JOIN workspaces w ON w.id = p.workspace_id "
+        "WHERE p.id = :p"), {"p": project_id}).scalar()
+    if org_id:
+        with connection.begin_nested():
+            ensure_deploy_generated(connection, org_id=str(org_id), project_id=project_id,
+                                    app_key=key)
     passed, missing = deploy_secrets(connection, project_id=project_id, app_key=key)
     if not missing:
         return key, passed, None

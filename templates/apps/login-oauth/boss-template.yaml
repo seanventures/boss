@@ -12,26 +12,32 @@ requires: []
 works_with: [catalog-cart]
 secrets:
   - name: GOOGLE_CLIENT_ID
+    required: false
     purpose: The Google OAuth client's id (Google Cloud console, OAuth client of type Web application)
     test_default: stub
     pattern: '^[0-9]+-[a-z0-9]+\.apps\.googleusercontent\.com$'
   - name: GOOGLE_CLIENT_SECRET
+    required: false
     purpose: The Google OAuth client's secret
     test_default: stub
     pattern: '^GOCSPX-[A-Za-z0-9_-]{20,}$'
   - name: GITHUB_CLIENT_ID
+    required: false
     purpose: The GitHub OAuth app's client id
     test_default: stub
   - name: GITHUB_CLIENT_SECRET
+    required: false
     purpose: The GitHub OAuth app's client secret
     test_default: stub
   - name: SESSION_SECRET
     purpose: Signs the session cookie; BOSS generates a random one per app and environment
     test_default: generated
   - name: OIDC_BOSS_CLIENT_ID
+    required: false
     purpose: The app's client id at BOSS's OIDC provider ("Sign in with BOSS"); filled by BOSS when the app is registered
     test_default: stub
   - name: OIDC_BOSS_CLIENT_SECRET
+    required: false
     purpose: The app's client secret at BOSS's OIDC provider
     test_default: stub
 env:

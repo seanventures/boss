@@ -331,11 +331,56 @@ def declared_names(c, *, project_id: str, app_key: str) -> list[str]:
     return names
 
 
+def declared_specs(c, *, project_id: str, app_key: str) -> dict[str, dict]:
+    """{name: {"required", "test_default"}} for the secrets the app's templates declare. A name
+    two templates declare is required if either requires it."""
+    rows = c.execute(text(
+        "SELECT t.manifest -> 'secrets' AS secrets FROM app_template_applications a "
+        "JOIN app_templates t ON t.id = a.template_id WHERE a.project_id = :p AND a.app_key = :a "
+        "AND a.status <> 'abandoned' ORDER BY a.created_at"),
+        {"p": project_id, "a": app_key}).mappings().all()
+    out: dict[str, dict] = {}
+    for r in rows:
+        raw = r["secrets"]
+        if isinstance(raw, str):
+            raw = json.loads(raw)
+        for spec in raw or []:
+            if not isinstance(spec, dict) or not spec.get("name"):
+                continue
+            name = str(spec["name"])
+            required = spec.get("required", True) is not False
+            seen = out.get(name)
+            out[name] = {"required": required or bool(seen and seen["required"]),
+                         "test_default": (seen or {}).get("test_default")
+                         or spec.get("test_default") or "none",
+                         "spec": spec}
+    return out
+
+
+def ensure_deploy_generated(c, *, org_id: str, project_id: str, app_key: str,
+                            actor_id: Optional[str] = None) -> list[str]:
+    """A secret BOSS generates for build and preview (test_default=generated, e.g. a session
+    signing key) is generated for deploy too, once, when nobody has set one. Without this a
+    deploy was refused for "SESSION_SECRET has no deploy value" — a value no person is meant to
+    choose. Returns the names it generated. Never touches a binding somebody set."""
+    made: list[str] = []
+    for name, d in declared_specs(c, project_id=project_id, app_key=app_key).items():
+        if d["test_default"] != "generated" or has_binding(
+                c, project_id=project_id, app_key=app_key, name=name, env="deploy"):
+            continue
+        put(c, org_id=org_id, project_id=project_id, app_key=app_key, name=name, env="deploy",
+            mode="generated", value=None, actor_id=actor_id,
+            spec=SecretSpec.model_validate(d["spec"]), may_live=False)
+        made.append(name)
+    return made
+
+
 def deploy_secrets(c, *, project_id: str, app_key: str) -> tuple[list[dict], list[str]]:
     """What a deploy of this app passes, BY NAME, and the words for each required secret it
     cannot pass. Never a value: this is what a plan, a ChangeSet and a decision may carry.
 
-    Required = every secret the app's templates declare. It is missing when it has no `deploy`
+    Required = every secret the app's templates declare, unless declared `required: false` (the
+    app runs without it). It is missing when it has no `deploy`
     binding, or its deploy binding is a live key a person has not approved (the decision
     `put` raised). Undeclared deploy bindings (an issued sign-in client, F6) are passed too."""
     rows = c.execute(text(
@@ -345,9 +390,13 @@ def deploy_secrets(c, *, project_id: str, app_key: str) -> tuple[list[dict], lis
     bound = {r["name"]: r for r in rows}
     passed: list[dict] = []
     missing: list[str] = []
-    for name in sorted(set(bound) | set(declared_names(c, project_id=project_id, app_key=app_key))):
+    declared = declared_specs(c, project_id=project_id, app_key=app_key)
+    for name in sorted(set(bound) | set(declared)):
         r = bound.get(name)
         if r is None or (r["mode"] != "stub" and not r["vault_item_id"]):
+            # Not required: the app runs without it and that feature stays off.
+            if name in declared and not declared[name]["required"]:
+                continue
             missing.append(f"{name} has no deploy value")
             continue
         if r["mode"] == "live" and not _live_approved(c, r["live_decision_id"]):

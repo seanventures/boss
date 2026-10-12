@@ -173,3 +173,30 @@ def test_a_declared_secret_with_no_deploy_value_refuses_the_deploy_in_words(clie
     assert f"{app['name']} cannot deploy: PAY_KEY has no deploy value" in words
     assert "Secrets" in words and TEST_VALUE not in words
     assert hosted["host"].writes() == []
+
+
+def test_an_optional_secret_never_refuses_and_a_generated_one_is_made_for_deploy(engine, app):
+    """HelpDesk was refused for "GOOGLE_CLIENT_ID has no deploy value" (a sign-in the app turns
+    on only when its id is set) and "SESSION_SECRET has no deploy value" (a key BOSS generates
+    for build and preview, and nobody is meant to choose). Neither is the operator's to fill."""
+    extra = [{"name": "OPT_CLIENT_ID", "test_default": "stub", "required": False},
+             {"name": "SESS_KEY", "test_default": "generated"}]
+    with engine.begin() as c:
+        tid = c.execute(text("SELECT template_id FROM app_template_applications WHERE project_id = :p "
+                             "AND app_key = :a"), {"p": HOME, "a": app["key"]}).scalar_one()
+        c.execute(text("UPDATE app_templates SET manifest = jsonb_set(manifest, '{secrets}', "
+                       "(manifest->'secrets') || CAST(:x AS JSONB)) WHERE id = :t"),
+                  {"t": tid, "x": json.dumps(extra)})
+        _passed, missing = app_secrets.deploy_secrets(c, project_id=HOME, app_key=app["key"])
+        assert not any("OPT_CLIENT_ID" in m for m in missing)
+        assert any("SESS_KEY" in m for m in missing) and any("PAY_KEY" in m for m in missing)
+
+        made = app_secrets.ensure_deploy_generated(c, org_id=app["org"], project_id=HOME,
+                                                   app_key=app["key"])
+        assert made == ["SESS_KEY"]
+        # Once only: a second pass, or a value somebody set, is never replaced.
+        assert app_secrets.ensure_deploy_generated(c, org_id=app["org"], project_id=HOME,
+                                                   app_key=app["key"]) == []
+        passed, missing = app_secrets.deploy_secrets(c, project_id=HOME, app_key=app["key"])
+    assert missing == ["PAY_KEY has no deploy value"]
+    assert {"name": "SESS_KEY", "mode": "generated", "source": "app_secret", "env": "deploy"} in passed
