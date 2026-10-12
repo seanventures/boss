@@ -896,7 +896,7 @@ def _observed_monitoring(
             base = f"http://{host}:{DEFAULT_PORTS['grafana']}"
             have = provisioned_dashboards(base)
             if have is not None:
-                missing = sorted({w["app"] for w in watched
+                missing = sorted({w["app_name"] for w in watched
                                   if dashboard_uid(w["app"]) not in have})
                 dashboard = {"grafana": base, "missing_dashboards": missing}
     except Exception as error:  # noqa: BLE001 — an unreachable Grafana must not fail the step
@@ -2447,6 +2447,20 @@ def _perform_capability(
                        "workflow_run", str(context.get("run_id") or ""),
                        {"step_id": step.get("id"), "preview_skipped_by": waiver["by"],
                         "reason": waiver["reason"][:300]})
+
+    # A SMOKE TEST ASKS THE DEPLOYMENT, NOT A URL. A free URL probe is refused in Community
+    # (every smoke test after a deploy dead-lettered there) and, where it ran, "GET / is 200"
+    # passed a blank page. The run's own deployment is probed through its own target with the
+    # health the app declares (deployment_smoke). A run that deployed nothing still calls the
+    # tool with its URL, which each edition allows or refuses on its own terms.
+    if key == "smoke_test":
+        from .deployment_smoke import run_deployment, smoke_deployment
+
+        run_id = str(context.get("run_id") or "")
+        if run_deployment(connection, run_id) is not None:
+            return smoke_deployment(connection, getattr(ctx, "settings", None),
+                                    getattr(ctx, "engine", None),
+                                    project_id=project_id, run_id=run_id)
 
     # ADOPT A PREVIEW THAT IS ALREADY UP. The build pipeline starts a preview itself, so a
     # workflow that called start_preview again would boot a second copy of the same app on a
