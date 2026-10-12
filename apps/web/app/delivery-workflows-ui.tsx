@@ -411,11 +411,20 @@ export function stoppedForYou(step: RunStep): boolean {
 
 /** The first step this run stopped at for the operator, or null. */
 export function stoppedStep(run: { status: string; standing?: RunStanding;
-                                   steps?: RunStep[] | null }): RunStep | null {
+                                   steps?: RunStep[] | null;
+                                   actions?: Run["actions"] }): RunStep | null {
   // A run somebody stopped, or one that finished, is history — nothing there waits on anybody.
   // The SERVER says which runs are closed; this used to be a hand copy of the engine's list.
   if (run.standing === "closed") return null;
-  return (run.steps ?? []).find(stoppedForYou) ?? null;
+  // AN APPROVED STEP THAT THEN FAILED STILL WAITS ON YOU. `stoppedForYou` reads a decision id
+  // as "a person's no", but a deploy approved and then refused by its own check carries the
+  // approval's id too — and the card said "Try it again" with no button. When the server
+  // offers Retry or Skip on a stopped step, that step is the operator's, whatever it carries.
+  return (run.steps ?? []).find((step) => stoppedForYou(step)
+    || (STOPPED_STEP_STATUSES.includes(step.status)
+        && (run.actions ?? []).some((a) => a.step_id === step.step_id
+                                        && (a.key === "retry_step" || a.key === "skip_step"))))
+    ?? null;
 }
 
 /** Does this run need a person right now — an open approval, or a step it stopped at? The ONE

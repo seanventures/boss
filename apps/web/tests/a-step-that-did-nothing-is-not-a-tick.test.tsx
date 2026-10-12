@@ -146,4 +146,17 @@ describe("a run is filed where the SERVER says it stands", () => {
     expect(stoppedStep(runOf("running", [tolerated]))).toBeNull();
     expect(phaseOf(tolerated)).toBe("failed");
   });
+
+  it("an approved deploy that then failed offers Retry on the card — the server says so", () => {
+    const deploy = step({ step_id: "deploy", status: "deadlettered", capability: "deploy",
+                          decision_id: "dec_approved" });
+    const run = runOf("deadlettered", [deploy]);
+    // Without the server's answers it is an approval's step, not the operator's to retry...
+    expect(stoppedStep(run)).toBeNull();
+    // ...but once the server offers Retry on it, the card carries the button.
+    run.actions = [{ key: "retry_step", label: "Retry", reason: null, step_id: "deploy",
+                     enabled: true }] as never;
+    expect(stoppedStep(run)?.step_id).toBe("deploy");
+    expect(view(run)).toContain('data-testid="dw-run-stopped-retry"');
+  });
 });
