@@ -23,7 +23,7 @@ import { useGuardedCall } from "../../identity/identity-provider";
 import { IdentityError } from "../../../lib/identity/api";
 import { Markdown } from "../../../app/markdown";
 import {
-  APPLIED_WORD, ENVS, ENV_WORD, refusalWords, resolveAppKey, secretWord, stackLabel, templatesApi,
+  APPLIED_WORD, DEPLOY_VALUE_NAME, ENVS, ENV_WORD, refusalWords, resolveAppKey, secretWord, stackLabel, templatesApi,
   type AppSecrets, type Applied, type Guide, type SecretBinding,
 } from "../../../lib/templates";
 import { CopyValue, SideSheet } from "./side-sheet";
@@ -86,6 +86,10 @@ export function AppSetup({ projectId, appKey }: { projectId: string; appKey: str
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState("");
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
+  // THE APP'S OWN DEPLOY SETTINGS (DEMO_PASSWORD, ALLOW_DEMO_SEED…): a name and a value, for
+  // deploy only. The app reads them; no template declares them, so they had nowhere to go.
+  const [dvName, setDvName] = useState("");
+  const [dvValue, setDvValue] = useState("");
   const guarded = useGuardedCall();
   const readGate = useGate("app_secret:read_metadata", projectId);
 
@@ -141,7 +145,26 @@ export function AppSetup({ projectId, appKey }: { projectId: string; appKey: str
     }
   }
 
+  async function saveDeployValue() {
+    const name = dvName.trim().toUpperCase();
+    if (!DEPLOY_VALUE_NAME.test(name) || !dvValue || busy) return;
+    setBusy(true); setNote("");
+    try {
+      await guarded(`Store ${name} for deploy.`, () => templatesApi.putSecret(projectId, appKey, name,
+        { envs: ["deploy"], mode: "test", value: dvValue }));
+      setDvValue("");     // written through: never kept in the browser
+      setDvName("");
+      setNote(`${name} stored. The next deploy passes it to the app.`);
+      await load();
+    } catch (e) {
+      setNote(e instanceof IdentityError && e.code === "step_up_cancelled" ? "Not stored: you cancelled the check." : refusalWords(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const declared = secrets?.declared ?? [];
+  const deployValues = secrets?.deployValues ?? [];
   return (
     <div className="tpl-setup" data-testid="tpl-setup">
       {error ? <p className="tpl-err" role="alert" data-user-text>{error}</p> : null}
@@ -241,6 +264,38 @@ export function AppSetup({ projectId, appKey }: { projectId: string; appKey: str
               );
             })}
           </ul>
+        ) : null}
+        {secrets ? (
+          <div className="tpl-deploy-values" data-testid="tpl-deploy-values">
+            <h4 title="Settings the app reads at deploy that no template declares, e.g. DEMO_PASSWORD. Write-only.">App settings for deploy</h4>
+            {deployValues.length ? (
+              <ul className="tpl-rows">
+                {deployValues.map((n) => (
+                  <li key={n} className="tpl-row" data-testid={`tpl-deploy-value-${n}`}>
+                    <span className="tpl-row-name">{n}</span>
+                    <span className="tpl-chip" data-tone="green" title="Passed to the app on its next deploy">{ENV_WORD.deploy} · Set</span>
+                    <GatedButton permission="app_secret:write" projectId={projectId} className="tpl-btn" disabled={busy}
+                                 data-testid={`tpl-deploy-value-remove-${n}`}
+                                 onClick={() => void guarded(`Remove ${n}.`, () => templatesApi.deleteSecret(projectId, appKey, n, "deploy")).then(() => load(), (e) => setNote(refusalWords(e)))}>
+                      Remove
+                    </GatedButton>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+            <div className="tpl-edit">
+              <input value={dvName} onChange={(e) => setDvName(e.target.value)} placeholder="NAME" aria-label="Setting name"
+                     data-testid="tpl-deploy-value-name" autoComplete="off" />
+              <input value={dvValue} onChange={(e) => setDvValue(e.target.value)} placeholder="Value" aria-label="Setting value"
+                     type="password" data-testid="tpl-deploy-value-value" autoComplete="off" />
+              <GatedButton permission="app_secret:write" projectId={projectId} className="tpl-btn primary"
+                           disabled={busy || !DEPLOY_VALUE_NAME.test(dvName.trim().toUpperCase()) || !dvValue}
+                           title="Stored write-only for deploy; the next deploy passes it to the app"
+                           data-testid="tpl-deploy-value-save" onClick={() => void saveDeployValue()}>
+                Add
+              </GatedButton>
+            </div>
+          </div>
         ) : null}
         {note ? <span className="tpl-muted" role="status" data-testid="tpl-setup-note">{note}</span> : null}
       </section>

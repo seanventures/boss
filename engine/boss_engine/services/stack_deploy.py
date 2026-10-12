@@ -1034,6 +1034,45 @@ def _live_deployment(connection: Connection, target_id: str, commit: str):
 
 # ── Plan ─────────────────────────────────────────────────────────────────────────────────────
 
+def app_deploy_env(connection: Connection, project_id: str, target: dict,
+                   code_task_run_id: Optional[str]) -> dict[str, str]:
+    """The app's deploy environment: THE ONE READER both deploy paths use
+    (templates.base_url.deploy_environment) — its `deploy` secret values, generated, set or
+    approved live, plus APP_BASE_URL where a template declares it. {} for an app with no key."""
+    from ..app_links.service import project_org
+    from ..templates.base_url import deploy_environment
+    from .governed_host_deploy import _app_key_for
+
+    key = _app_key_for(connection, project_id, target,
+                       {"code_task_run_id": code_task_run_id} if code_task_run_id else None)
+    if not key:
+        return {}
+    env, _withheld, _address = deploy_environment(
+        connection, org_id=project_org(connection, project_id), project_id=project_id,
+        app_key=key, target=target)
+    return env
+
+
+def merge_app_env(manifest: DeployManifest, values: dict[str, str], hidden: list[str],
+                  app_env: dict[str, str]) -> tuple[dict[str, str], list[str]]:
+    """The manifest's environment with the app's deploy values added.
+
+    What a person set for the app (its Setup) beats a literal written in the repository, and
+    fills every key the manifest does not name. A key the manifest GENERATES or reads from a
+    target secret keeps the manifest's value: that is the one the host was initialised with
+    (its database password), and swapping it would lock the app out of its own data. Every app
+    value is redacted, whatever its name.
+    """
+    literal = {e.key for e in manifest.env if e.source == "literal"}
+    out = dict(values)
+    for key, value in app_env.items():
+        if key not in out or key in literal:
+            out[key] = value
+    from ..templates.base_url import BASE_URL_ENV
+
+    return out, list(hidden) + [v for k, v in app_env.items() if v and k != BASE_URL_ENV]
+
+
 def target_address(target: dict, host: dict) -> str:
     """Where people open the app: the target's public URL, else its domain (a host target
     serves on a port of its own — HelpDesk at 192.0.2.202:8000), else the bare host."""
@@ -1194,6 +1233,16 @@ def plan_stack_deploy(engine, settings: Settings, *, project_id: str, target_id:
                                f"Fix {path} in the repository and deploy again.")
 
     with engine.begin() as connection:
+        # THE APP'S DEPLOY ENVIRONMENT, by name — the same set the one-container deploy passes
+        # (governed_host_deploy.app_secret_problem): generated secrets made now, a required one
+        # with no deploy value refuses the plan in words, an optional one goes only when set.
+        from .governed_host_deploy import APP_SECRET_ACTION, app_secret_problem
+
+        _app_key, app_secrets, secret_refusal = app_secret_problem(
+            connection, project_id, target, {"code_task_run_id": run_id} if run_id else None)
+        if secret_refusal:
+            raise StackDeployError(secret_refusal, APP_SECRET_ACTION)
+        app_secret_names = sorted({str(a["name"]) for a in app_secrets})
         missing = {key: name for key, name in rendered["env_secrets"].items()
                    if not operator_secret_ref(connection, project_id, target_id, name)}
     if missing:
@@ -1216,7 +1265,7 @@ def plan_stack_deploy(engine, settings: Settings, *, project_id: str, target_id:
     # A manifest in a directory speaks for that directory: its compose file and its commands
     # are relative to it (helpdesk-ai/boss.deploy.yaml's docker-compose.yml is helpdesk-ai's).
     summary = {**manifest.summary(), "manifest_path": path,
-               "workdir": manifest_workdir(path)}
+               "workdir": manifest_workdir(path), "app_secrets": app_secret_names}
     rp = ResourcePlaneService(settings)
     with engine.begin() as connection:
         # Check-then-insert under ONE lock per target. Everything above took seconds (GitHub,
@@ -1292,6 +1341,8 @@ def plan_stack_deploy(engine, settings: Settings, *, project_id: str, target_id:
             # Which BOSS secret each key carries to the host: the approver sees the names.
             "env_secrets": dict(rendered["env_secrets"]),
             "generated_env_keys": summary["generated_env_keys"],
+            # The app's own deploy secrets (its Setup), by name only — never a value.
+            "app_secrets": app_secret_names,
             # A workflow's deploy step has no gate of its own when it ships to a stack: THIS
             # decision is that gate. So it carries the step's approver and where it came
             # from, and approving it here is approving the release (one approval, not two).
@@ -1791,6 +1842,9 @@ def apply_on_host(engine, settings: Settings, *, deployment_id: str, apply_token
             github = github_source_for(connection, settings, project_id, owner, repo)
             env_values, hidden = _environment(connection, settings, deployment=deployment,
                                               manifest=manifest, rendered=rendered)
+            app_env = app_deploy_env(connection, project_id, target,
+                                     deployment.get("code_task_run_id"))
+            env_values, hidden = merge_app_env(manifest, env_values, hidden, app_env)
             for key, value in address_env(target, host).items():
                 env_values.setdefault(key, value)
         except (StackStepFailed, StackDeployError, ManifestError) as exc:

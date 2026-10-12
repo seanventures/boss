@@ -406,7 +406,11 @@ def build_templates_router() -> APIRouter:
             bound = secrets_service.list_bindings(db, project_id=project_id, app_key=app_key)
             declared = _declared(db, project_id, app_key, None, ctx.principal.org_id)
         names = {b["name"] for b in bound}
+        known = {s.name for m in declared for s in m.secrets}
         return {"app_key": app_key, "secrets": bound,
+                # The app's own deploy settings: values set for deploy no template declares.
+                "deploy_values": sorted({b["name"] for b in bound
+                                         if b["name"] not in known and b.get("env") == "deploy"}),
                 "declared": [{"name": s.name, "purpose": s.purpose, "test_default": s.test_default,
                               "bound": s.name in names} for m in declared for s in m.secrets]}
 
@@ -425,13 +429,13 @@ def build_templates_router() -> APIRouter:
                 app_key = _app(db, body.project_id, app_key)
                 spec = secrets_service.declared_secret(
                     _declared(db, body.project_id, app_key, body.template_id, ctx.principal.org_id), name)
-                if spec is None:
-                    raise TemplateError(404, "secret_not_declared",
-                                        f"no template of this app declares {name}; an app holds only "
-                                        "the secrets its templates declare")
                 envs = list(dict.fromkeys(body.envs or ([body.env] if body.env else [])))
                 if not envs:
                     raise TemplateError(422, "env_required", "name the env (or envs) this value is for")
+                if spec is None:
+                    # The app's own deploy setting (DEMO_PASSWORD, ALLOW_DEMO_SEED…): deploy
+                    # only, a plain value — secrets.deploy_value_spec says when it fits.
+                    spec = secrets_service.deploy_value_spec(name, envs, body.mode)
                 # One request, one transaction, every env: a test key typed once is written once
                 # (it was two PUTs, build then preview, each its own write and step-up).
                 results = [secrets_service.put(
