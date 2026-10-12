@@ -285,6 +285,8 @@ def meter(status: dict[str, Any]) -> dict[str, Any]:
         "period": status.get("period"),
         "state": status.get("budget_state"),
         "state_label": STATE_LABELS.get(str(status.get("budget_state")), "Unknown"),
+        "legacy_financial_hold": status.get("legacy_financial_hold"),
+        "legacy_provider_hold": status.get("legacy_provider_hold"),
         "cap_usd_micros": status.get("cap_usd_micros"),
         "actual_usd_micros": status.get("actual_usd_micros"),
         "reserved_usd_micros": status.get("reserved_usd_micros"),

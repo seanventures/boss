@@ -2,17 +2,14 @@
 
 /**
  * Capacity: where model capacity comes from (was System Configuration › AI Capacity; operator
- * decision §11.2 moved it here, beside the Model row it overlaps).
+ * decision §11.2 moved it here, now under the Models heading).
  *
- *   Capacity   ● Active  anthropic_api   anthropic · key · available      On Model row  Replace ↗
- *              ● Blocked openai_gateway  openai · gateway                 [Store credential]
- *              ● Needs login claude_max  anthropic · plan                 [Start official session]
- *              ● Active  chatgpt_pro     openai · plan · connected        [Disconnect session]
- *              SESSIONS  claude_cli_login · Waiting on you · `claude login`  [Complete session]
- *              Broker skills  Skills ↗
+ * Source names open optional identity/model details. Status, reported capacity and actions
+ * stay visible, as do every session and its completion controls.
  *
- * One source per line, every source the project has (the Model row shows only the connected
- * ones). A key that is already a Model row is replaced THERE (`Replace ↗` opens its menu) — no
+ * Connected, uncertain and attention sources stay in view. Positively unused sources are
+ * offered through Add source, only after both reads prove absence (the Model row shows connected
+ * ones). A key that is already a Model row is replaced THERE (`Replace key ↗` opens its menu) — no
  * second key form; a source with no key yet takes one here, into the secret backend you pick.
  * Official logins are started, completed (the session reference and the capacity it reports,
  * as fields, not raw JSON) and disconnected here. The data is read client-side from the API
@@ -28,7 +25,6 @@ import { apiWrite } from "../../lib/api-write";
 import { fetchSetup } from "../../lib/setup-client";
 import { toast, useBoard } from "./parts";
 import { Dot, Tip } from "./pill";
-import { SetupRow } from "./setup-row";
 import { useLocalTime } from "../../lib/local-time";
 
 // ── the wire, parsed ────────────────────────────────────────────────────────────────────────
@@ -40,7 +36,7 @@ const list = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is st
 
 export type CapSource = {
   sourceId: string; provider: string; kind: string; effective: string; auth: string; connection: string;
-  credentialPresent: boolean; capacity: string; models: string[]; modes: string[]; scopes: string[]; pooled: boolean;
+  credentialPresent: boolean; credentialAbsent: boolean; capacity: string; models: string[]; modes: string[]; scopes: string[]; pooled: boolean;
 };
 export type CapSession = {
   id: string; sourceId: string; mode: string; status: string; scopes: string[]; login: string | null; action: string | null; at: string;
@@ -53,6 +49,8 @@ export function parseSources(w: unknown): CapSource[] {
     return {
       sourceId: s(r.source_id), provider: s(r.provider), kind: s(r.source_kind), effective: s(r.effective_status, s(r.status)),
       auth: s(r.auth_method), connection: s(r.connection_status), credentialPresent: cap.credential_present === true,
+      // Seeded credential_ref/connection_ref can name an absent environment variable.
+      credentialAbsent: cap.credential_present === false && !r.credential_secret_ref_id,
       capacity: s(cap.capacity_state, "unknown"), models: list(r.supported_models),
       modes: list(o(r.connection_metadata).supported_connection_modes), scopes: list(r.oauth_scopes),
       pooled: r.multi_tenant_allowed === true,
@@ -71,11 +69,30 @@ export function parseSessions(w: unknown): CapSession[] {
 }
 
 const words = (v: string) => v.replace(/[_-]+/g, " ").replace(/^\w/, (c) => c.toUpperCase());
+// Display names only: source IDs remain the identity for every control and request.
+const SOURCE_NAMES: Record<string, string> = {
+  openai_codex_chatgpt: "Codex (ChatGPT)", openai_api: "OpenAI API",
+  anthropic_claude_code: "Claude Code", anthropic_api: "Anthropic API",
+  typesafe_jev: "TypeSafe Jev", google_gemini_cli: "Gemini CLI", google_api: "Google API",
+  cursor_cli: "Cursor CLI", cursor_api: "Cursor API", xai_grok_build: "Grok Build", xai_api: "xAI API",
+  approved_local_model_host: "Local model", managed_cloud_model_gateway: "Managed gateway",
+};
+const sourceName = (id: string) => Object.hasOwn(SOURCE_NAMES, id) ? SOURCE_NAMES[id] : id;
 const KIND: Record<string, string> = { api_key: "key", gateway: "gateway", subscription: "plan", local_capacity: "local", local: "local" };
 export function stateOf(src: CapSource): { label: string; tone: "green" | "amber" | "red" | "grey" } {
   if (src.effective === "active") return { label: "Active", tone: "green" };
   if (src.effective === "blocked") return { label: "Blocked", tone: "red" };
-  if (src.effective === "needs_connection" || src.connection === "not_connected") return { label: "Needs login", tone: "amber" };
+  // A disconnected flag must not replace an unknown, unsupported or failed verdict.
+  const unused = ["declared", "needs_connection", "missing_credentials", "missing_oauth_connection"].includes(src.effective);
+  if (unused && src.connection === "not_connected") {
+    if (takesKey(src) && src.credentialAbsent) return { label: "Needs key", tone: "amber" };
+    if (isLogin(src)) return { label: "Needs sign-in", tone: "amber" };
+    if (src.auth === "local_host") return { label: "Not configured", tone: "amber" };
+    return { label: "Not connected", tone: "amber" };
+  }
+  if (unused && ["failed", "expired", "revoked"].includes(src.connection)) {
+    return { label: words(src.connection), tone: src.connection === "failed" ? "red" : "amber" };
+  }
   return { label: words(src.effective || "unknown"), tone: "grey" };
 }
 const SESSION_WORD: Record<string, string> = {
@@ -106,7 +123,7 @@ function KeyForm({ src, onSave }: { src: CapSource; onSave: (value: string, back
   const [value, setValue] = useState("");
   const [backend, setBackend] = useState(BACKENDS[0].id);
   const [busy, setBusy] = useState(false);
-  const label = src.credentialPresent ? "Rotate credential" : "Store credential";
+  const label = src.credentialPresent ? "Replace key" : "Save key";
   return (
     <form className="su-line su-cap-form" data-testid="setup-cap-key-form"
           onSubmit={async (e) => {
@@ -154,7 +171,7 @@ function StartForm({ src, onStart }: { src: CapSource; onStart: (mode: string, s
         <input value={scopes} aria-label="Scopes" placeholder="Comma separated" onChange={(e) => setScopes(e.target.value)} />
       </label>
       <GatedButton permission="entitlement:manage" type="submit" className="su-btn su-btn-sm" disabled={busy} data-testid="setup-cap-start"
-              title="Get the official login steps for this plan" data-tip="Get the official login steps for this plan">Start official session</GatedButton>
+              title="Get the official login steps for this plan" data-tip="Get the official login steps for this plan">Get sign-in steps</GatedButton>
     </form>
   );
 }
@@ -216,6 +233,10 @@ export const CapacityRow = forwardRef<HTMLElement, { actor?: string; focused: bo
   const { projectId, view, apply } = useBoard();
   const [sources, setSources] = useState<CapSource[] | null>(null);
   const [sessions, setSessions] = useState<CapSession[]>([]);
+  const [readsComplete, setReadsComplete] = useState(false);
+  const [sessionError, setSessionError] = useState<string | null>(null);
+  const [selected, setSelected] = useState("");
+  const [edited, setEdited] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [locked, setLocked] = useState<string | null>(null);
   const [open, setOpen] = useState<string | null>(null);
@@ -224,16 +245,35 @@ export const CapacityRow = forwardRef<HTMLElement, { actor?: string; focused: bo
 
   const load = useCallback(async () => {
     const pid = encodeURIComponent(projectId);
+    setReadsComplete(false);
     try {
       const [a, b] = await Promise.all([
         fetch(`/v1/entitlements/sources?project_id=${pid}`, { cache: "no-store" }),
-        fetch(`/v1/entitlement-connection-sessions?project_id=${pid}&limit=20`, { cache: "no-store" }),
+        fetch(`/v1/entitlement-connection-sessions?project_id=${pid}&limit=20`, { cache: "no-store" }).catch(() => null),
       ]);
       if (isLocked(a)) { setLocked(await lockedReason(a)); setSources([]); setError(null); return; }
       if (!a.ok) throw new Error(`HTTP ${a.status}`);
       setLocked(null);
-      setSources(parseSources(await a.json()));
-      setSessions(b.ok ? parseSessions(await b.json()) : []);
+      const sourceWire = await a.json();
+      const parsed = parseSources(sourceWire);
+      setSources(parsed);
+      const sourceItems = o(sourceWire).items;
+      const sourcesKnown = Array.isArray(sourceItems) && parsed.length === sourceItems.length;
+      try {
+        if (!b) throw new Error("Not readable now");
+        if (!b.ok) throw new Error(`HTTP ${b.status}`);
+        const sessionWire = await b.json();
+        const items = o(sessionWire).items;
+        const parsedSessions = parseSessions(sessionWire);
+        if (!Array.isArray(items) || parsedSessions.length !== items.length
+            || parsedSessions.some((x) => !x.sourceId)) throw new Error("Not reported");
+        setSessions(parsedSessions);
+        setSessionError(null);
+        // The API returns at most 20 sessions. A full page cannot prove an older session absent.
+        setReadsComplete(sourcesKnown && items.length < 20);
+      } catch (e) {
+        setSessionError(e instanceof Error ? e.message : String(e));
+      }
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -252,43 +292,70 @@ export const CapacityRow = forwardRef<HTMLElement, { actor?: string; focused: bo
     return true;
   };
   const onBoard = new Set(view.models.map((m) => m.source_id));
+  const confirmedUnused = (src: CapSource) => readsComplete && !error && !locked && src.credentialAbsent
+    && src.connection === "not_connected"
+    && ["declared", "needs_connection", "missing_credentials", "missing_oauth_connection"].includes(src.effective)
+    && src.capacity === "unknown" && (takesKey(src) || isLogin(src))
+    && !onBoard.has(src.sourceId) && !sessions.some((x) => x.sourceId === src.sourceId);
+  const unused = (src: CapSource) => confirmedUnused(src) && open !== src.sourceId && disconnecting !== src.sourceId && !edited.has(src.sourceId);
+  const choices = (sources ?? []).filter(confirmedUnused);
+  const shown = (sources ?? []).filter((src) => !unused(src) || selected === src.sourceId);
+  const edit = (id: string, editing: boolean) => {
+    setEdited((prev) => new Set(prev).add(id));
+    setOpen(editing ? null : id);
+  };
 
   return (
-    <SetupRow ref={ref} row="capacity" label="Capacity" focused={focused} mode="open"
-              tip="Where model capacity comes from: keys, plans and official logins.">
+    <section ref={ref} className="su-model-sources" id="su-capacity" data-testid="su-row-capacity"
+             data-focused={focused || undefined} aria-label="Source connections">
       <div className="su-stack" data-testid="setup-entitlements">
         {sources === null ? <span className="su-faint">Loading…</span> : null}
         {locked ? <LockedPanel inline reason={locked} testId="setup-entitlements-locked" /> : null}
-        {error ? <Tip tip={error} className="su-faint">Can&apos;t load capacity</Tip> : null}
+        {error ? <Tip tip={error} className="su-faint">Can&apos;t load model sources</Tip> : null}
         {sources && !error && !locked && sources.length === 0 ? <span className="su-faint">No sources yet</span> : null}
-        {(sources ?? []).map((src) => {
+        {choices.length ? (
+          <details className="su-add-source" data-testid="setup-cap-add">
+            <summary>Add source</summary>
+            <label className="su-field">
+              <span className="su-field-label">Source</span>
+              <select value={choices.some((src) => src.sourceId === selected) ? selected : ""} aria-label="Source" data-testid="setup-cap-chooser"
+                      onChange={(e) => setSelected(e.target.value)}>
+                <option value="">Choose a source</option>
+                {choices.map((src) => <option key={src.sourceId} value={src.sourceId}>{sourceName(src.sourceId)}</option>)}
+              </select>
+            </label>
+          </details>
+        ) : null}
+        {shown.map((src) => {
           const st = stateOf(src);
           const mine = sessions.filter((x) => x.sourceId === src.sourceId);
           const editing = open === src.sourceId;
           return (
             <div key={src.sourceId} className="su-cap" data-testid="setup-cap-source" data-source={src.sourceId}>
-              <div className="su-line">
-                <span className={`su-pill su-tone-${st.tone}`} role="status"><Dot tone={st.tone} />{st.label}</span>
-                <span className="su-mono su-strong" data-user-text>{src.sourceId}</span>
-                <span className="su-faint" data-user-text>{src.provider}</span>
-                <span className="su-chip">{KIND[src.kind] ?? words(src.kind)}</span>
+              <div className="su-line su-cap-head">
+                <details className="mr-criteria" style={{ minWidth: 0, maxWidth: "100%" }} data-testid="setup-cap-details">
+                  <summary style={{ maxWidth: "100%", overflowWrap: "anywhere" }}><span data-user-text>{sourceName(src.sourceId)}</span><span className="su-sr"> details</span></summary>
+                  <div className="su-stack su-faint" style={{ overflowWrap: "anywhere" }}>
+                    <span>Source ID: <span className="su-mono" data-user-text>{src.sourceId}</span></span>
+                    <span>Provider: <span data-user-text>{src.provider}</span></span>
+                    <span>Type: <span data-user-text>{KIND[src.kind] ?? words(src.kind)}</span></span>
+                    {src.models.length ? <span>Models: <span className="su-mono" data-user-text>{src.models.join(", ")}</span></span> : null}
+                  </div>
+                </details>
+                <span className={`su-pill su-tone-${st.tone}`} role="status"
+                      data-connection-summary={["Needs key", "Needs sign-in", "Not configured", "Not connected"].includes(st.label) || undefined}>
+                  <Dot tone={st.tone} />{st.label}
+                </span>
                 {src.capacity !== "unknown" ? <Tip tip="The capacity this source last reported." className="su-faint">{words(src.capacity)}</Tip> : null}
-                {src.models.length ? (
-                  <Tip tip={src.models.join(", ")} className="su-faint su-mono">
-                    {src.models[0]}{src.models.length > 1 ? ` +${src.models.length - 1}` : ""}
-                  </Tip>
-                ) : null}
                 <span className="su-spacer" />
                 {takesKey(src) && onBoard.has(src.sourceId) ? (
-                  <>
-                    <Tip tip="Its key is managed on the Model row above." className="su-chip">On Model row</Tip>
-                    <a className="su-link" href={`?area=setup&source=${encodeURIComponent(src.sourceId)}`} data-testid="setup-cap-replace">Replace ↗</a>
-                  </>
+                  <a className="su-link" href={`?area=setup&source=${encodeURIComponent(src.sourceId)}`} data-testid="setup-cap-replace"
+                     title="Replace its key on the Model row">Replace key ↗</a>
                 ) : null}
                 {takesKey(src) && !onBoard.has(src.sourceId) ? (
                   <GatedButton permission="entitlement:manage" type="button" className="su-btn su-btn-sm" aria-expanded={editing} data-testid="setup-cap-key-open"
-                          onClick={() => setOpen(editing ? null : src.sourceId)}>
-                    {src.credentialPresent ? "Rotate credential" : "Store credential"}
+                          onClick={() => edit(src.sourceId, editing)}>
+                    {src.credentialPresent ? "Replace key" : "Add key"}
                   </GatedButton>
                 ) : null}
                 {isLogin(src) && src.connection === "connected" ? (
@@ -297,7 +364,7 @@ export const CapacityRow = forwardRef<HTMLElement, { actor?: string; focused: bo
                 ) : null}
                 {isLogin(src) && src.connection !== "connected" ? (
                   <GatedButton permission="entitlement:manage" type="button" className="su-btn su-btn-sm" aria-expanded={editing} data-testid="setup-cap-start-open"
-                          onClick={() => setOpen(editing ? null : src.sourceId)}>Start official session</GatedButton>
+                          onClick={() => edit(src.sourceId, editing)}>Sign in</GatedButton>
                 ) : null}
               </div>
               {editing && takesKey(src) ? (
@@ -354,13 +421,13 @@ export const CapacityRow = forwardRef<HTMLElement, { actor?: string; focused: bo
         <div className="su-line" data-testid="setup-entitlement-session">
           <Tip tip="Official logins started from a plan above." className="su-faint su-cap-label">Sessions</Tip>
           <span className="su-faint">
-            {sessions.length ? `${sessions.length} · ${sessions.filter((x) => x.status === "operator_action_required").length} waiting` : "None"}
+            {sessionError ? <Tip tip={sessionError}>Can&apos;t load sessions</Tip>
+              : sessions.length ? `${sessions.length} · ${sessions.filter((x) => x.status === "operator_action_required").length} waiting` : "None"}
           </span>
           <span className="su-spacer" />
-          <Tip tip="Broker and model skills live in Skills and MCP." className="su-faint">Broker skills</Tip>
           <a className="su-link" href="?area=skills" data-testid="setup-broker-skills-link">Skills ↗</a>
         </div>
       </div>
-    </SetupRow>
+    </section>
   );
 });

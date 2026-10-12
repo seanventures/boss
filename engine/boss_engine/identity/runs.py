@@ -711,11 +711,17 @@ def original_build_authority(db: Any, task_run_id: str) -> Any:
 
     from . import lineage
 
-    if not db.execute(text("SELECT to_regclass('jobs') IS NOT NULL")).scalar():
-        return None
-    row = db.execute(text(
-        "SELECT payload, on_behalf_of, grant_id, chain, on_behalf_system FROM jobs WHERE kind = 'code.task' "
-        "AND payload->>'run_id' = :r ORDER BY created_at, id LIMIT 1"), {"r": task_run_id}).mappings().first()
+    first_job = getattr(db, "first_code_task_job", None)
+    if callable(first_job):
+        # Non-SQL persistence can explicitly report its stored job authority (or
+        # its absence). Never infer a grant from editable run-state metadata.
+        row = first_job(task_run_id)
+    else:
+        if not db.execute(text("SELECT to_regclass('jobs') IS NOT NULL")).scalar():
+            return None
+        row = db.execute(text(
+            "SELECT payload, on_behalf_of, grant_id, chain, on_behalf_system FROM jobs WHERE kind = 'code.task' "
+            "AND payload->>'run_id' = :r ORDER BY created_at, id LIMIT 1"), {"r": task_run_id}).mappings().first()
     if row is None:
         return None
     try:

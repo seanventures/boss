@@ -68,6 +68,8 @@ const str = (v: unknown): string => (v == null ? "" : String(v));
 const opt = (v: unknown): string | undefined => (v == null || v === "" ? undefined : String(v));
 const arr = <T = unknown>(v: unknown): T[] => (Array.isArray(v) ? (v as T[]) : []);
 const num = (v: unknown): number => (typeof v === "number" ? v : Number(v ?? 0) || 0);
+const knownCost = (v: unknown): number | null =>
+  typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : null;
 
 export function mapProposal(w: Wire): ProposalView {
   const readiness = w.readiness as Wire | undefined;
@@ -123,7 +125,7 @@ export function mapTurn(w: Wire): TurnView {
     ...(kind === "summary" && payload.text ? { summary: mapSummary(payload) } : {}),
     ...(kind === "error" ? { error: mapFailure(payload) } : {}),
     actId: opt(w.act_id), citedActs: arr<string>(w.cited_acts).map(String),
-    tokensIn: num(w.tokens_in), tokensOut: num(w.tokens_out), costUsd: num(w.cost_usd),
+    tokensIn: num(w.tokens_in), tokensOut: num(w.tokens_out), costUsd: knownCost(w.cost_usd),
     receiptId: opt(w.receipt_id), createdAt: str(w.created_at),
   };
 }
@@ -176,7 +178,7 @@ export function mapEvent(type: string, d: Wire): ConverseEvent | null {
       return { type, turnId: str(d.turn_id), summary: mapSummary((d.summary ?? {}) as Wire) };
     case "turn_end":
       return { type, turnId: str(d.turn_id), status: str(d.status) === "error" ? "error" : "complete",
-               tokensIn: num(d.tokens_in), tokensOut: num(d.tokens_out), costUsd: num(d.cost_usd),
+               tokensIn: num(d.tokens_in), tokensOut: num(d.tokens_out), costUsd: knownCost(d.cost_usd),
                receiptId: opt(d.receipt_id), citedActs: arr<string>(d.cited_acts).map(String) };
     case "error":
       return { type, turnId: opt(d.turn_id), error: mapFailure(d.error) };
@@ -407,7 +409,7 @@ export function useConversation(projectId: string, conversationId: string | null
             turnId: event.turnId, seq: event.seq, speakerKind: event.speakerKind, roleKey: event.roleKey,
             addressedTo: [], replyToTurnId: event.replyToTurnId, kind: "message", content: "",
             status: "streaming", actId: event.actId, citedActs: [], tokensIn: 0, tokensOut: 0,
-            costUsd: 0, createdAt: new Date().toISOString() };
+            costUsd: null, createdAt: new Date().toISOString() };
           return { ...c, turns: [...c.turns, turn] };
         }
         case "token":

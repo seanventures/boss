@@ -146,6 +146,10 @@ class WorkflowStartBody(ProjectBody):
     workflow_key: str | None = None
     work_class: str | None = None
     input: dict[str, Any] | None = None
+    #: Integrity of a displayed work agreement, never permission or financial authority.
+    agreement_content_hash: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    agreement_binding_token: str | None = Field(default=None, max_length=200,
+                                               pattern=r"^\d+\.[0-9a-f]{64}\.[0-9a-f]{32}\.[0-9a-f]{64}$")
     from_run: str | None = None
     from_discovery: str | None = None
     dedupe_key: str | None = None

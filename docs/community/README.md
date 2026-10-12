@@ -1,155 +1,74 @@
 ---
-title: The control plane for AI software work
+title: Delegate one useful software change
 hide:
   - navigation
   - toc
 ---
 
-<div class="boss-hero" markdown="1">
+<div class="boss-manual-intro" markdown="1">
 
-<div class="boss-hero__copy" markdown="1">
+<p class="boss-eyebrow">BOSS Community · Self-hosted · Apache 2.0</p>
 
-<p class="boss-eyebrow">Open source · Apache 2.0 · v1.0-rc8</p>
+# Delegate one useful software change
 
-# The control plane for AI software work
+Know what ran, what it cost, what needs your decision, and how to continue safely.
 
-Agents can write code, open pull requests, spend money, and touch infrastructure. BOSS decides whether they should, and keeps the proof when they do: plans you can read, budgets reserved before spend, approvals where people matter, and a receipt for every effect.
+BOSS keeps the plan, work history, decisions and evidence around an AI-assisted repository change. Start with one Owner, one repository, one model and a change you can check yourself.
 
-[Get started](QUICKSTART.md){ .md-button .md-button--primary }
-[Deploy for your team](hostname.md){ .md-button }
-[View on GitHub](https://github.com/seanventures/boss){ .md-button }
-
-</div>
-
-<div class="boss-receipt" markdown="1">
-
-<p class="boss-receipt__kicker">Receipt · task created</p>
-
-| | |
-| --- | --- |
-| Goal | Plan the community launch |
-| Budget | Reserved before any model call |
-| Approval | Held for a person in Approvals |
-| Effect | Recorded once, with a dedupe key |
-| Console | Your domain, or `127.0.0.1:3000` on the server |
+[Start a useful change](FIRST_USEFUL_CHANGE.md){ .md-button .md-button--primary }
+[Install the release](QUICKSTART.md){ .md-button }
 
 </div>
 
-</div>
+## A place to return to the work
 
-## Why teams run BOSS
+Use **Command Center** for the current next action, **Approvals** for decisions, **Workflows** for a run's steps and **Factory** for code work and its deliverable. **Activity log** links recorded events, jobs, receipts and failures. A completed job is a record to inspect; accepting its result is your decision.
 
-<div class="boss-cards" markdown="1">
+<div class="boss-product-shot" markdown="1">
 
-<div class="boss-card" markdown="1">
+![Installed Command Center showing repository and model setup actions with no work running.](assets/screenshots/home-28d75d69.jpg)
 
-### Nothing off the record
-
-Every external effect is a receipt with a unique dedupe key, so a retried step is recognized instead of repeated.
+Actual console capture after named Owner sign-in on a fresh disposable install using the qualified RC8 API and web images. This shows setup actions and no in-flight work, not a completed provider-backed software change. [Screenshot provenance](assets/screenshots/provenance.json)
 
 </div>
 
-<div class="boss-card" markdown="1">
+## What you need before delegating
 
-### Spend reserved first
+You should be comfortable administering a single-tenant Linux/Docker installation, reviewing a GitHub diff and running your repository's checks. Allow time for installation, named Owner enrollment, repository permissions and model setup. A CPU-only local model can be slow; the [Getting started transcript](GETTING_STARTED.md) gives historical timings, not a current performance guarantee.
 
-Model and tool work runs through quote, reserve, consume, and release. A runaway agent hits a budget wall, not your card.
+Choose a small correction or bug fix with a clear result. The [first useful change guide](FIRST_USEFUL_CHANGE.md) helps you define the task, follow the existing workflow, review the exact output and handle a hold or uncertain attempt.
 
-</div>
+## The operating contract
 
-<div class="boss-card" markdown="1">
+| You need to know | Where to look | What the record means |
+| --- | --- | --- |
+| What will run | The selected workflow and drafted PRD | Read the scope and checks before required approval. The default Standard path has no separate Architecture step. |
+| What needs you | Command Center and Approvals | Open the actual decision and its evidence; a recommendation is not permission. |
+| What it cost | The run report, budget and receipt evidence | Estimated, reserved, observed and reconciled amounts are different. A reservation is not a hard ceiling on a provider invoice. |
+| What happened | Workflows, Factory and Activity log | Inspect the deliverable, checked revision and receipt together. A dedupe key alone cannot resolve an ambiguous external outcome. |
+| How to continue | The failed or held step and its linked records | Fix the stated cause. Reconcile an uncertain accepted effect before retrying. Stop may leave usage or budget held. |
 
-### People decide what matters
+See [Architecture approval and spending](ARCHITECTURE_GOVERNANCE.md), [build isolation](SANDBOX.md) and [release validation](RC8_VALIDATION.md) for the controls and their current limits.
 
-Gated steps wait in an approval inbox with the context to decide. BOSS changes itself only through pull requests.
-
-</div>
-
-<div class="boss-card" markdown="1">
-
-### No silent failures
-
-Every job holds a heartbeated lease. Failures retry, dead-letter, or escalate to a person. Nothing is dropped.
-
-</div>
-
-<div class="boss-card" markdown="1">
-
-### Your infrastructure
-
-Self-hosted on your server and reached over HTTPS on your domain or private network. Credentials are stored locally. Hosted model calls send authentication and selected task data to that provider.
-
-</div>
-
-<div class="boss-card" markdown="1">
-
-### Your models
-
-OpenAI, Anthropic, OpenAI-compatible endpoints, and the Claude Code, Codex, and Grok subscriptions you already pay for.
-
-</div>
-
-</div>
-
-## How it works
-
-```text
-Goal  →  Plan  →  Budget  →  Work  →  Evidence  →  Decision  →  Receipt
-```
-
-Give BOSS an outcome in **Command Center**. It drafts a plan, reserves budget before any model or tool call, runs the work on a leased worker, attaches evidence such as tests and pull requests, stops for a person wherever a decision is gated, and records a receipt for every effect. Postgres is the system of record, so every step can be audited after the fact.
-
-## Drive it your way
-
-<div class="boss-setups" markdown="1">
-
-<div class="boss-setup" markdown="1">
-
-### Mission Control
-
-The web console for your whole team: **Command Center** for goals, **Approvals** for decisions, **Activity log** for every receipt and failure, **Workflows** for runs and the library, and **Agent Studio** for the roster, team and panels. [Console access](CONSOLE_AUTH.md)
-
-</div>
-
-<div class="boss-setup" markdown="1">
-
-### Metatron terminal
-
-`make metatron` opens a full terminal client. Chat with BOSS, work tasks and decisions, and reach any API operation with `/ops`, `/describe`, and `/op`. One-shot `--json` mode is built for scripts. [Terminal and API](TERMINAL_API.md)
-
-</div>
-
-<div class="boss-setup" markdown="1">
-
-### MCP for your agents
-
-Run `make mcp-setup`, then point Claude Code, Codex, or any MCP client at `make mcp`. Agents get project-scoped access to the API, with human confirmation on sensitive calls. [MCP](MCP.md)
-
-</div>
-
-</div>
-
-Prefer plain HTTP? Use a personal key from **My account › API keys**, or a service-account key. See [CLI](cli.md) and [calling the API remotely](remote-api.md).
-
-## Start here
+## Choose your entrance
 
 | I want to | Read |
 | --- | --- |
-| Go from install to software BOSS built | [Getting started](GETTING_STARTED.md) |
-| Install BOSS and run a first goal | [Quickstart](QUICKSTART.md) |
-| Serve it to my team on a domain or private IP | [Deploy](hostname.md) |
-| Invite my team and give them access | [People and access](PEOPLE_AND_ACCESS.md) |
-| Set up email, single sign-on or SCIM | [Sign-in setup](SIGN_IN_SETUP.md) |
-| Control what agents may do for people | [Agents and access](AGENTS_AND_ACCESS.md) |
-| Upgrade an install that uses the shared password | [Upgrade to named accounts](IDENTITY_UPGRADE.md) |
+| Delegate and review one bounded repository change | [First useful change](FIRST_USEFUL_CHANGE.md) |
+| Install, claim the Owner account and check the services | [Quickstart](QUICKSTART.md) |
+| Follow the longer recorded installation and build transcript | [Getting started](GETTING_STARTED.md) |
+| See the console and terminal controls | [Walkthroughs](walkthroughs.md) |
 | Connect a model or coding subscription | [Model connections](MODEL_CONNECTIONS.md) |
-| See what a fresh install can do | [Use cases](use-cases.md) and [walkthroughs](walkthroughs.md) |
-| Try ready-made workflows | [Example workflows](https://github.com/seanventures/boss/blob/main/examples/README.md) |
-| See everything that ships, with status | [Features](FEATURES.md) |
-| Upgrade, back up, or uninstall | [Installer guide](https://github.com/seanventures/boss/blob/main/scripts/install/README.md) |
+| Serve my install over HTTPS | [Deploy](hostname.md) |
+| Invite people or control agent authority | [People and access](PEOPLE_AND_ACCESS.md) · [Agents and access](AGENTS_AND_ACCESS.md) |
+| Work from the keyboard or my existing coding agent | [Terminal and API](TERMINAL_API.md) · [MCP](MCP.md) |
+| Inspect the full capability list | [Features](FEATURES.md) · [Use cases](use-cases.md) |
+| Upgrade, back up or recover an install | [Installer guide](https://github.com/seanventures/boss/blob/v1.0-rc8/scripts/install/README.md) |
 
-## Get involved
+## Release status and help
 
-BOSS is built in the open. [Open an issue](FEEDBACK_LOOP.md) for bugs and ideas, read the [contributing guide](https://github.com/seanventures/boss/blob/main/CONTRIBUTING.md) to send a pull request, and report vulnerabilities privately through the [security policy](https://github.com/seanventures/boss/blob/main/SECURITY.md).
+The [RC8 source release](https://github.com/seanventures/boss/releases/tag/v1.0-rc8) is available. The [validation record](RC8_VALIDATION.md) separates source tests, disposable installed-runtime checks, live provider work, supported clean-host qualification and hosted deployment. A useful live-provider result, independent first use and safe reconciliation remain release qualification work. This guide does not claim those outcomes have been observed.
 
-BOSS Community is licensed under the Apache License 2.0.
+Use local **Help** without losing the page you are on. [Report a problem](FEEDBACK_LOOP.md) with your version, the failing step and redacted record IDs. Keep credentials and private task data out of public issues. Report suspected vulnerabilities privately through the [security policy](https://github.com/seanventures/boss/blob/main/SECURITY.md).
+
+BOSS Community is licensed under the Apache License 2.0. [View the source](https://github.com/seanventures/boss) or read the [contributing guide](https://github.com/seanventures/boss/blob/main/CONTRIBUTING.md).

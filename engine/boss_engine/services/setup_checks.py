@@ -364,14 +364,16 @@ def complete_once(*, api: str, endpoint: str, api_key: str, model: str,
     if answer.status in (200, 201):
         usage_raw = (answer.body or {}).get("usage") if isinstance(answer.body, dict) else {}
         usage_raw = usage_raw if isinstance(usage_raw, dict) else {}
-        usage = {
-            "model": model,
-            "prompt_tokens": int(usage_raw.get("prompt_tokens")
-                                 or usage_raw.get("input_tokens") or 0),
-            "completion_tokens": int(usage_raw.get("completion_tokens")
-                                     or usage_raw.get("output_tokens") or 0),
-            "base_url": endpoint,
-        }
+        # Preserve typed usage evidence. Missing/boolean/string counts cannot
+        # silently become a zero-dollar paid success at the authority boundary.
+        usage = {"model": model, "base_url": endpoint}
+        for key, alias in (("prompt_tokens", "input_tokens"), ("completion_tokens", "output_tokens")):
+            value = usage_raw.get(key, usage_raw.get(alias))
+            if value is not None:
+                usage[key] = value
+        for key in ("cost_usd_micros", "cache_read_tokens", "cache_write_tokens"):
+            if key in usage_raw:
+                usage[key] = usage_raw[key]
         return {"ok": True, "state": "working", "status": answer.status,
                 "latency_ms": latency, "usage": usage, "host": host, "retry_at": None}
     detail = _message(answer) or answer.error

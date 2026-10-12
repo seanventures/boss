@@ -648,12 +648,12 @@ def _record_model_check(connection: Connection, project_id: str, source_id: str,
     """Write a model check onto its source (or, for an install key, as an event)."""
     from .core import emit_event
 
-    if result.get("state") == "paused_budget":
+    if result.get("state") == "paused_budget" or result.get("capacity_refused"):
         # Not a check: the budget refused to spend on it. Nothing is recorded, so the row keeps
         # what it last knew and reads "Paused · budget" exactly while the budget says so.
         return
     last = {"ok": bool(result.get("ok")), "state": result.get("state") or "failed",
-            "at": iso(now_utc()), "latency_ms": result.get("latency_ms"),
+            "at": result.get("checked_at") or iso(now_utc()), "latency_ms": result.get("latency_ms"),
             "retry_at": result.get("retry_at"), "host": result.get("host"),
             "receipt_id": result.get("receipt_id")}
     if source_id.startswith("env-"):
@@ -696,28 +696,43 @@ def _engine(connection: Connection):
 
 def _key_proof(connection: Connection, settings: Any, project_id: str, provider: str, *,
                api_key: str, base_url: str, model: str, actor: str,
-               http: Optional[Http]) -> dict[str, Any]:
-    """One governed completion on a key or a local model."""
-    from .openai_adapter import estimate_cost_usd_micros
-    from .setup_service import PROVIDERS, PROOF_ESTIMATE_USD_MICROS, governed_proof, \
-        model_key_details
+               http: Optional[Http], intent: str = "", capacity_group: str = "",
+               backend: str = "", env_name: str = "", request_target: str = "") -> dict[str, Any]:
+    """One governed completion on an encrypted, proof-only key or local model."""
+    from .setup_service import PROVIDERS, governed_proof, model_key_details
 
     details = model_key_details(provider=provider, base_url=base_url, model=model)
     api = (PROVIDERS.get(provider) or {}).get("api") or "openai"
     local = provider in setup_view.LOCALS
 
-    def prove() -> dict[str, Any]:
+    def prove(bound) -> dict[str, Any]:
+        if env_name:
+            from .env_refs import assert_may_send
+            assert_may_send(env_name, details["endpoint"])
         result = setup_checks.complete_once(api=api, endpoint=details["endpoint"],
-                                            api_key=api_key, model=details["model"], http=http)
-        if result.get("ok"):
-            usage = {**result.get("usage", {}), "provider": provider}
-            result["cost_usd_micros"] = 0 if local else min(
-                estimate_cost_usd_micros(usage), PROOF_ESTIMATE_USD_MICROS)
-            result["replied"] = "OK"
+            api_key=str(bound.get("credential") or ""), model=details["model"], http=http)
+        result["usage"] = {**result.get("usage", {}), "provider": provider}
         return result
 
+    from .secret_backends import default_secret_backend
+    candidate = {"provider": provider, "source_kind": "local" if local else "api",
+        "entitlement_kind": "local_capacity" if local else "api_key",
+        "owner_type": "project", "owner_id": project_id,
+        "cost_mode": "local_capacity" if local else "usage_based_api",
+        "auth_method": "api_key", "connection_status": "connected", "status": "active",
+        "runtime_supported": True, "observed_capacity": {"credential_present": local},
+        "supported_models": [details["model"]], "workload_classes_allowed": ["owner_sandbox"],
+        "risk_tier_max": 1, "limit_shape": {"max_concurrent": 1}}
+    if env_name:
+        candidate["credential_env_name"] = env_name
+    candidate["connection_request_target"] = request_target
+    candidate["connection_request_endpoint"] = details["endpoint"]
+    candidate["connection_request_base_url"] = details["base_url"]
+    group = capacity_group or "connection:" + provider + ":" + details["base_url"] + ":" + details["model"]
     proof = governed_proof(_engine(connection), settings, project_id, f"setup-{provider}",
-                           actor, prove=prove, amount=0 if local else None)
+        actor, bound_prove=prove, amount=0 if local else None, candidate=candidate,
+        credential=api_key, backend=backend or default_secret_backend(settings),
+        intent=intent, capacity_group=group)
     if proof.get("budget_refused"):
         proof.update(ok=False, state="paused_budget")
     proof.setdefault("state", "working" if proof.get("ok") else "failed")
@@ -766,11 +781,11 @@ def connect_model(connection: Connection, settings: Any, project_id: str, *, pro
                   kind: str, api_key: str = "", credential: str = "", credential_file: str = "",
                   base_url: str = "", model: str = "", accept_database_fallback: bool = False,
                   actor: str = "ceo", http: Optional[Http] = None, prove_with=None,
-                  replace_source_id: str = "") -> dict[str, Any]:
+                  replace_source_id: str = "", intent: str = "") -> dict[str, Any]:
     """Store a model credential and prove it with one governed question.
 
-    A failed check keeps nothing, except a key whose provider was busy or unreachable — that
-    key may well be right, and is kept with its pill saying so.
+    Unknown provider acceptance or cost retains financial authority for reconciliation.
+    A failed or uncertain replacement leaves the working connection unchanged.
     """
     provider = (provider or "").strip().lower()
     entry = setup_view.CATALOGUE_BY_PROVIDER.get(provider)
@@ -784,70 +799,65 @@ def connect_model(connection: Connection, settings: Any, project_id: str, *, pro
         return _connect_subscription(connection, settings, project_id, provider,
                                      credential=credential or credential_file,
                                      accept=accept_database_fallback, actor=actor,
-                                     prove_with=prove_with)
+                                     prove_with=prove_with, intent=intent)
     return _connect_key(connection, settings, project_id, provider, api_key=api_key,
                         base_url=base_url, model=model, accept=accept_database_fallback,
-                        actor=actor, http=http, replace_source_id=replace_source_id)
+                        actor=actor, http=http, replace_source_id=replace_source_id, intent=intent)
 
 
 def _connect_subscription(connection: Connection, settings: Any, project_id: str, provider: str,
                           *, credential: str, accept: bool, actor: str,
-                          prove_with=None) -> dict[str, Any]:
-    from .setup_service import SetupError, connect_coding_agent, store_coding_agent_credential
+                          prove_with=None, intent: str = "") -> dict[str, Any]:
+    from .setup_service import SetupError, connect_coding_agent
+
+    if credential.strip():
+        # The official harness restores a canonical shared session. It has no
+        # candidate-only OAuth import override, so testing a pasted token here
+        # would overwrite working material before its proof. Refuse before any
+        # store mutation, job, receipt or provider contact.
+        raise subscription_import_refusal()
 
     spec = _subscription_spec(settings, provider)
     if spec is None:
         raise _failure(provider, "not_on_server")
-    stored_ref = None
-    if credential.strip():
-        require_store(connection, settings, project_id, accept, actor)
-        # COMMITTED BEFORE THE PROOF. The proof turn runs the CLI, which reads the credential
-        # from the store on its own connection; one held in this request's open transaction is
-        # invisible to it. A credential that then fails its check is revoked below.
-        try:
-            with _engine(connection).begin() as own:
-                stored = store_coding_agent_credential(
-                    own, settings, project_id, provider, credential, actor=actor,
-                    accept_database_fallback=True)
-        except SetupError:
-            # Said as the catalogue's pill (Login expired: "Make a new token with claude
-            # setup-token."), never a sentence of its own; nothing about the value is repeated.
-            raise _failure(provider, "login_expired") from None
-        stored_ref = stored.get("ref_key")
     setup_view.forget_cached("cli")
-    proofs: list[dict[str, Any]] = []
-
-    def prove() -> dict[str, Any]:
-        from .setup_service import prove_coding_agent
-
-        result = (prove_with or (lambda: prove_coding_agent(settings, provider)))()
-        proofs.append(result)
-        return result
 
     started = time.monotonic()
     try:
-        connect_coding_agent(connection, settings, project_id, provider, actor=actor,
-                             prove=True, prove_with=prove)
+        connected = connect_coding_agent(connection, settings, project_id, provider, actor=actor,
+                                        prove=True, prove_with=prove_with, intent=intent)
     except SetupError as exc:
-        _forget_credential(connection, project_id, stored_ref, actor)
         message = str(exc)
         lowered = message.lower()
         if "not installed" in lowered:
             state = "not_on_server"
         elif "budget" in lowered:
             state = "paused_budget"
+        elif "capacity" in lowered:
+            raise SetupActionError(409, "failed", "Model capacity busy",
+                "The selected CLI capacity is in use. No proof was submitted; "
+                "try a new explicit Connect intent after that work finishes.") from None
         elif "rejected" in lowered or "not signed in" in lowered or "login" in lowered:
             state = "login_expired"
         else:
-            last = proofs[-1] if proofs else {}
             state = setup_checks.classify_model_failure(
-                -1, str(last.get("error") or message), subscription=True)
+                -1, message, subscription=True)
         raise _failure(provider, state) from None
+    proof = connected["proof"]
     _record_model_check(connection, project_id, spec.entitlement_source_id or provider,
                         {"ok": True, "state": "working",
                          "latency_ms": int((time.monotonic() - started) * 1000),
-                         "receipt_id": (proofs[-1] if proofs else {}).get("receipt_id")}, actor)
+                         "receipt_id": proof.get("receipt_id"),
+                         "checked_at": proof.get("checked_at")}, actor)
     return {"ok": True, "source_id": spec.entitlement_source_id or provider}
+
+
+def subscription_import_refusal() -> SetupActionError:
+    """Modern and deprecated HTTP doors share the same safe import boundary."""
+    return SetupActionError(409, "failed", "CLI credential import held",
+        "Sign this CLI in as the BOSS service user, then Connect without pasted "
+        "credential material. Candidate-only subscription import is not yet supported; "
+        "the existing stored session was left unchanged. An API-key model is another option.")
 
 
 def _first_sentence(message: str) -> str:
@@ -926,7 +936,8 @@ def _backend_it_lives_in(connection: Connection, project_id: str, source_id: str
 
 def _connect_key(connection: Connection, settings: Any, project_id: str, provider: str, *,
                  api_key: str, base_url: str, model: str, accept: bool, actor: str,
-                 http: Optional[Http], replace_source_id: str = "") -> dict[str, Any]:
+                 http: Optional[Http], replace_source_id: str = "",
+                 intent: str = "") -> dict[str, Any]:
     from .entitlements import EntitlementBrokerService
     from .model_gateway import ModelGatewayService
     from .secret_backends import default_secret_backend
@@ -942,12 +953,54 @@ def _connect_key(connection: Connection, settings: Any, project_id: str, provide
     if api_key:
         # Asked before the provider is called: a refusal sends nothing anywhere.
         require_store(connection, settings, project_id, accept, actor)
+    from .setup_service import model_key_details
+    details = model_key_details(provider=provider, base_url=base_url, model=model)
+    existing_id = replace_source_id or _same_connection(connection, project_id, provider,
+        base_url=details["base_url"], model=details["model"]) or ""
+    capacity_group = existing_id
+    if existing_id:
+        metadata = connection.execute(text("SELECT connection_metadata FROM entitlement_sources "
+            "WHERE project_id=:p AND source_id=:s"), {"p":project_id,"s":existing_id}).scalar()
+        capacity_group = str(setup_view._obj(metadata).get("capacity_group") or existing_id)
     try:
         proof = _key_proof(connection, settings, project_id, provider, api_key=api_key,
-                           base_url=base_url, model=model, actor=actor, http=http)
+                           base_url=base_url, model=model, actor=actor, http=http,
+                           intent=intent, capacity_group=capacity_group,
+                           request_target=replace_source_id,
+                           backend=_backend_it_lives_in(connection, project_id, existing_id)
+                           if existing_id else "")
     except SetupError as exc:
         raise SetupActionError(422, "unreachable", "Can't reach", _first_sentence(str(exc))) \
             from None
+    if proof.get("reconciliation_required"):
+        raise SetupActionError(409, "failed", "Proof needs reconciliation",
+            "The provider outcome or cost is unknown. Its financial hold remains; "
+            "review the receipt before authorizing another proof.",
+            {"receipt_id": proof.get("receipt_id"), "reconciliation_required": True})
+    if proof.get("intent_conflict"):
+        raise SetupActionError(409, "failed", "Connection intent changed",
+            "The credential, endpoint, model or target changed under an existing intent. "
+            "The working connection was left unchanged; use a new explicit intent.")
+    if proof.get("capacity_refused"):
+        raise SetupActionError(409, "failed", "Model capacity busy",
+            "The selected connection capacity is in use. No proof was submitted; "
+            "try a new explicit Connect intent after that work finishes.")
+    receipt_id = proof.get("receipt_id")
+    if receipt_id:
+        saved = connection.execute(text("SELECT result FROM receipts "
+            "WHERE project_id=:p AND id=:r FOR UPDATE"),
+            {"p": project_id, "r": receipt_id}).scalar_one()
+        saved_source = setup_view._obj(saved).get("connection_saved_source_id")
+        if saved_source:
+            current = connection.execute(text("SELECT connection_metadata FROM entitlement_sources "
+                "WHERE project_id=:p AND source_id=:s"),
+                {"p": project_id, "s": saved_source}).scalar()
+            if setup_view._obj(current).get("connect_receipt_id") != receipt_id:
+                raise SetupActionError(409, "failed", "Connection changed",
+                    "This intent already connected an earlier credential. Use a new explicit "
+                    "intent to change the current connection; it was left unchanged.")
+            return {"ok": bool(proof.get("ok")), "source_id": saved_source,
+                    "state": proof.get("state")}
     keep = proof.get("ok") or proof.get("state") in ("rate_limited", "unreachable")
     if not keep:
         raise _failure(provider, str(proof.get("state") or "failed"), proof.get("model"),
@@ -989,7 +1042,9 @@ def _connect_key(connection: Connection, settings: Any, project_id: str, provide
          **({"connection_status": "connected"} if local and not api_key else {}),
          "supported_models": [proof["model"]],
          "connection_metadata": {"base_url": proof.get("base_url") or spec.get("base_url") or "",
-                                 "model": proof["model"]}},
+                                 "model": proof["model"],
+                                 "connect_receipt_id": receipt_id,
+                                 "capacity_group": proof.get("capacity_group") or source_id}},
         actor=actor)
     if api_key:
         ModelGatewayService(settings).upload_credential(
@@ -997,6 +1052,10 @@ def _connect_key(connection: Connection, settings: Any, project_id: str, provide
             backend=_backend_it_lives_in(connection, project_id, source_id)
             or default_secret_backend(settings), actor=actor)
     _record_model_check(connection, project_id, source_id, proof, actor)
+    if receipt_id:
+        from .receipts import ReceiptService
+        ReceiptService().merge_result(connection, receipt_id,
+                                      {"connection_saved_source_id": source_id})
     return {"ok": bool(proof.get("ok")), "source_id": source_id, "state": proof.get("state")}
 
 
@@ -1036,7 +1095,9 @@ def check_model(connection: Connection, settings: Any, project_id: str, source_i
             proof = _key_proof(connection, settings, project_id, provider, api_key=key,
                                base_url=str(metadata.get("base_url") or ""),
                                model=str(models[0] if models else metadata.get("model") or ""),
-                               actor=actor, http=http)
+                               actor=actor, http=http,
+                               capacity_group=str(metadata.get("capacity_group") or source_id),
+                               backend=_backend_it_lives_in(connection, project_id, source_id) or "")
         except Exception as exc:  # noqa: BLE001
             proof = {"ok": False, "state": "unreachable", "error": type(exc).__name__}
     _record_model_check(connection, project_id, source_id, proof, actor)
@@ -1056,9 +1117,23 @@ def _check_env_model(connection: Connection, settings: Any, project_id: str, pro
                 else str(getattr(settings, "openai_base_url", "") or "")
                 if provider == "openai" else "")
         model = str(getattr(settings, "openai_model", "") or "") if provider == "openai" else ""
+        env_name = ""
+        if key:
+            import os
+            from .env_refs import env_name_allowed
+            names = {"openai":"OPENAI_API_KEY", "anthropic":"ANTHROPIC_API_KEY",
+                "openrouter":"OPENROUTER_API_KEY", "groq":"GROQ_API_KEY",
+                "deepseek":"DEEPSEEK_API_KEY", "gemini":"GOOGLE_API_KEY", "xai":"XAI_API_KEY"}
+            wanted = names.get(provider, "")
+            env_name = next((n for n in (wanted, "BOSS_" + wanted)
+                if n and env_name_allowed(n) and os.environ.get(n) == key), "")
+            if not env_name:
+                raise SetupActionError(409,"key_unreadable","Proof held",
+                    "Connect this key through its chosen store before checking it.")
         try:
             proof = _key_proof(connection, settings, project_id, provider, api_key=key,
-                               base_url=base, model=model, actor=actor, http=http)
+                               base_url=base, model=model, actor=actor, http=http,
+                               env_name=env_name, capacity_group=f"env-{provider}")
         except Exception as exc:  # noqa: BLE001
             proof = {"ok": False, "state": "unreachable", "error": type(exc).__name__}
     _record_model_check(connection, project_id, f"env-{provider}", proof, actor)

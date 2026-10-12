@@ -40,7 +40,7 @@ function withSignin(api: FakeApi, status: unknown, extra: (url: string, op: stri
 const OLD_ROWS = ["su-row-repository", "su-row-github-access", "su-row-build-database", "su-row-models",
                   "su-row-capacity", "su-row-jobs", "su-row-budget", "su-row-try", "su-row-toolchains",
                   "su-row-public-url"];
-const ADVANCED_ROWS = ["su-row-github-access", "su-row-build-database", "su-row-capacity", "su-row-jobs",
+const ADVANCED_ROWS = ["su-row-github-access", "su-row-build-database", "su-row-jobs",
                        "su-row-budget", "su-row-toolchains", "su-row-public-url", "su-row-ci"];
 
 describe("the order a new person sees", () => {
@@ -81,17 +81,19 @@ describe("parity: every capability still reachable", () => {
     for (const id of OLD_ROWS) expect(q(document.body, id), id).not.toBeNull();
     const adv = q(document.body, "su-advanced")!;
     for (const id of ADVANCED_ROWS) expect(adv.querySelector(`[data-testid="${id}"]`), id).not.toBeNull();
-    for (const why of ["github_app", "repositories", "ci", "build_database", "toolchains", "capacity", "jobs",
+    for (const why of ["github_app", "repositories", "ci", "build_database", "toolchains", "jobs",
                        "budget", "public_url"]) {
       const line = q(adv, `su-adv-why-${why}`)!;
       expect(line.textContent!.split(/\s+/).length, why).toBeLessThanOrEqual(6);
       expect(line.getAttribute("data-tip")).toBeTruthy();
     }
+    // rc9 grouped the model sources (capacity) inside ③ Model, not the fold
+    expect(q(document.body, "su-row-models")!.querySelector('[data-testid="su-row-capacity"]')).not.toBeNull();
     // the CI opt-in moved out of the repo line into Advanced › CI permission
     expect(q(document.body, "su-row-repository")!.querySelector("[data-testid^=su-ci-workflows]")).toBeNull();
   });
 
-  for (const focus of ["budget", "jobs", "capacity", "ci", "github_app", "toolchains", "public_url", "build_database"]) {
+  for (const focus of ["budget", "jobs", "ci", "github_app", "toolchains", "public_url", "build_database"]) {
     it(`?focus=${focus} opens Advanced`, async () => {
       const api = fakeApi(board());
       withSignin(api, SIGNED_IN);

@@ -17,7 +17,7 @@ MASKED = [
     ("ghs_Zq8xWv7uTs6rQp5oNm4lKj3iHg2f", "[SECRET]"),
     ("github_pat_11AAQ7ZPY0Zq8xWv7uTs6r_Qp5o", "[SECRET]"),
     ("AKIAZQ8XWV7UTS6RQP5O", "[AWS_KEY]"),
-    ("glpat-Zq8xWv7uTs6rQp5oNm4l", "[SECRET]"),
+    ("glpat-" + ("fixture0" * 3), "[SECRET]"),
     ("AIzaSyZq8xWv7uTs6rQp5oNm4lKj3iHg2fEd1cBa0", "[SECRET]"),
     ("DB_PASSWORD=hunter2!x", "DB_PASSWORD=[SECRET]"),
     ('{"password": "hunter2xx"}', '{"password": "[SECRET]"}'),

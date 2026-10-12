@@ -1,0 +1,27 @@
+skills:
+  - id: agent.voice
+    kind: model
+    risk_tier: 1
+    mock_mode: false
+    description: One pinned reply or judgement call for an admitted agent voice test or draft, with durable job, reservation, model lease and invocation receipt.
+    data_boundary: internal
+    input_schema:
+      request_intent: string
+      call: string
+      prompt: string
+    output_schema:
+      text: string
+      receipt_id: string
+    cost:
+      estimator: token_estimate
+      category: model
+    permissions:
+      allowed_callers: [worker, control_plane]
+      required_permissions: [model_invoke]
+    policy:
+      requires_budget_reservation: true
+      requires_router_log: true
+      requires_provider_rule_compliance: true
+    retry:
+      max_attempts: 1
+      backoff: none

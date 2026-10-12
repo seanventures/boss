@@ -9,7 +9,7 @@ BOSS runs code it did not write: every build, test and agent step. This page exp
 - **Previews too.** An app preview runs the same way: its own user for as long as the preview lives, its files in its own directory, none of BOSS's environment, and the same fence. It may also reach its own preview port, never another preview's.
 - **No credentials.** A build holds no GitHub token or provider key. boss-egress adds them to each allowed request (see [Agents and access](AGENTS_AND_ACCESS.md#github-access-for-builds)).
 
-To set up the fence, the api container starts as root with the `NET_ADMIN` capability, installs iptables rules that match the build users, then becomes the `boss` user for good. It can never become root again.
+To set up the fence, the api container starts as root with the `NET_ADMIN` capability, installs IPv4 and IPv6 rules that match the build users, then becomes the `boss` user for good. It can never become root again. IPv6 rules may be skipped only when the kernel cannot create an IPv6 socket. Missing tools, unreadable rules or a failed rule installation hold builds; an empty IPv6 address list does not establish that the network is fenced.
 
 !!! note "`docker compose exec` is root by default"
     Because the container starts as root, pass `-u boss` to anything you run in it:
@@ -31,7 +31,7 @@ Set these in `.env`, then restart (`boss update`).
 
 ## A host that cannot fence builds
 
-The fence needs iptables with the *owner* match. Some hosts do not have it: rootless Docker, gVisor, and some WSL2 and VPS kernels.
+The fence needs iptables with the *owner* match, including ip6tables when the kernel supports IPv6. Some hosts do not have it: rootless Docker, gVisor, and some WSL2 and VPS kernels.
 
 On such a host, with the default `enforce`:
 
@@ -72,10 +72,16 @@ the `build-services` Postgres (its own container on port 5433, data on tmpfs; ne
 database). Every command the run starts, its tests included, gets `DATABASE_URL`
 (`postgresql://user:pass@host:5433/db`) and `PGHOST PGPORT PGUSER PGPASSWORD PGDATABASE`. The
 database is deleted when the run ends. If deletion fails, cleanup stays pending and is logged;
-the resource reaper retries instead of recording a successful release. A failed ledger update
-also stays pending for retry by the running API. If the API restarts after deletion but before
-that retry succeeds, the unreleased ledger entry may require reconciliation. If the run's process
-dies, the reaper removes its orphaned database after a grace period when the server is reachable.
+the resource reaper retries instead of recording a successful release. If deletion succeeds but
+the ledger update fails, an existing open ledger row can be retried after an API restart. The
+reaper closes that specific row only after confirming that both its database and role are absent
+on the same configured server, its owner and ancestors are no longer live, and the grace period
+has elapsed. It checks bounded pages and resumes on later passes, so older held rows do not
+permanently block later entries. Rows alone never authorize deletion. Uncertain ownership,
+changed server or prefix, unavailable checks and a remaining object stay held. Ledger recording
+is best effort: an unwritten row cannot provide this restart recovery evidence. If the run's
+process dies while its database remains, the separate catalog ownership sweep removes its
+orphan after a grace period when the server is reachable.
 This data is temporary: restarting the build-services container loses it. It is neither the
 application's deployed database nor part of the durable BOSS recovery backup.
 

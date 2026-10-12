@@ -2,10 +2,10 @@
   "name": "boss-web",
   "private": true,
   "license": "Apache-2.0",
-  "version": "1.0.0-rc.8",
+  "version": "1.0.0-rc.9",
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "next build --webpack",
     "start": "next start",
     "lint": "next typegen && tsc --noEmit",
     "test": "vitest run",
@@ -14,7 +14,7 @@
   "dependencies": {
     "@boss/api-client": "workspace:*",
     "@phosphor-icons/react": "^2.1.10",
-    "next": "^15.3.3",
+    "next": "16.4.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },

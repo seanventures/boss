@@ -22,7 +22,7 @@ const PROMOTE_LEAD = "Produce a PRD for this evidence-backed opportunity";
  * What the person asked, never the prompt BOSS built around it — the ONE reader of a brief for
  * every hero, card, title and drawer. The API's `brief` (engine meeting_brief.split_brief) when
  * it sent one; else the same cut made here, so an older API cannot leak "--- RESEARCH ALREADY
- * DONE FOR THIS --- … ## What was researched {" onto a screen (shared-server: 4 of 22 panels).
+ * DONE FOR THIS --- … ## What was researched {" onto a screen (an existing install: 4 of 22 panels).
  */
 export function humanBrief(raw: string | null | undefined, apiBrief?: string | null): string {
   const tidy = (t: string) => t.replace(/[ \t]*\[boss:[^\]]*\]/gi, "").replace(/[ \t]+\n/g, "\n")
@@ -361,7 +361,7 @@ const isId = (t: string) => /^[A-Z]{1,4}[-‐‑]?\d+(?:\.\d+)?$/.test(plain(t))
 
 /**
  * A PRD's parts by the ROLE of each section, reading bullets, numbered lines and TABLES (row by
- * row, the column that names the thing). shared-server's PRDs put Goals in a table and Non-Goals in
+ * row, the column that names the thing). An existing install's PRDs put Goals in a table and Non-Goals in
  * bullets under a bold line, so a keyword match on "goal" handed the composer the Non-Goals.
  */
 export function prdParts(md: string | null | undefined): PrdParts {

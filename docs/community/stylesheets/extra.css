@@ -418,3 +418,14 @@
   padding: 0.55em 1.3em;
   border-radius: 8px;
 }
+
+/* The entry guide leads with one task and an actual installed screen. */
+.boss-manual-intro { border-bottom: 1px solid var(--boss-rule); padding-bottom: 1.3rem; margin-bottom: 1.6rem; }
+.md-typeset .boss-manual-intro h1 { max-width: 28rem; font-size: clamp(1.7rem, 4vw, 2.45rem); line-height: 1.1; margin-bottom: 1rem; }
+.md-typeset .boss-manual-intro > p { max-width: 36rem; }
+.md-typeset .boss-manual-intro .boss-eyebrow { color: var(--md-typeset-a-color); }
+.boss-product-shot { display: grid; grid-template-columns: minmax(0, 16rem) minmax(0, 1fr); align-items: end; gap: 1.4rem; margin: 1.4rem 0 2rem; }
+.boss-product-shot p { margin: 0; font-size: .78rem; }
+.boss-product-shot img, .boss-walk-shot { display: block; max-width: 100%; width: 20rem; height: auto; border: 1px solid var(--boss-rule); border-radius: .45rem; }
+.md-typeset .boss-manual-intro .md-button { margin: .4rem .4rem 0 0; padding: .55em 1em; }
+@media (max-width: 40rem) { .boss-product-shot { grid-template-columns: 1fr; } .boss-product-shot img { width: 100%; max-width: 20rem; } }

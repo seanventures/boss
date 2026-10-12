@@ -21,6 +21,7 @@ from apps.api.app.main import app  # noqa: E402
 # Exactly what the exclusion list is allowed to take out, by route template. Adding a route
 # here is a design decision about that route; write the reason into idempotency.EXCLUSIONS.
 EXPECTED_EXCLUDED = {
+    ("POST", "/v1/delivery-workflows/agreement"),  # authenticated read; no replay DB write
     ("POST", "/v1/worker/poll"), ("POST", "/v1/worker/heartbeat"),
     ("POST", "/v1/worker/complete"), ("POST", "/v1/worker/fail"),
     *{(m, p) for m in ("POST", "PUT", "PATCH", "DELETE")
@@ -69,14 +70,28 @@ def test_no_mutating_route_outside_v1_except_foreign_protocols():
     assert not strays, f"a write outside /v1/ is outside the idempotency contract: {strays}"
 
 
-def test_a_streaming_write_is_excluded_rather_than_buffered():
-    """A stream cannot be stored to be replayed; buffering one would hang the request."""
+def test_a_streaming_write_has_a_durable_live_replay_contract_or_explicit_exclusion():
+    """A stream that can spend is fenced through completion, not exempted at headers.
+
+    The named contract yields live and stores only a bounded, fully drained response;
+    actual HTTP/PG duplicate and unknown-outcome proofs live in test_agent_voice_stream_intent.
+    A new write stream cannot silently inherit this route-specific policy.
+    """
+    from apps.api.app import stream_intent
+    discovered = set()
     for method, route in _mutating_routes():
         streams = (route.response_class is StreamingResponse
-                   or "StreamingResponse(" in inspect.getsource(route.endpoint))
+                   or "StreamingResponse(" in inspect.getsource(route.endpoint)
+                   or inspect.signature(route.endpoint).return_annotation in
+                   (StreamingResponse, "StreamingResponse"))
         if streams and route.path.startswith("/v1/"):
-            assert idempotency.exclusion_reason(method, route.path), (method, route.path)
+            discovered.add(route.path)
+            assert (stream_intent.governs(method, route.path)
+                    or idempotency.exclusion_reason(method, route.path)), (method, route.path)
+    assert {f"/v1/conversations/{{conversation_id}}/{part}"
+            for part in ("turns", "summary", "propose")} <= discovered
     assert idempotency.is_streaming("text/event-stream; charset=utf-8")
+    assert not idempotency.exclusion_reason("POST", "/v1/agents/qa/test")
 
 
 def test_the_middleware_is_installed_inside_authentication():
@@ -100,7 +115,7 @@ def test_what_a_key_remembers():
 
 
 def test_every_covered_route_really_reaches_the_claim_and_every_excluded_one_does_not(
-        monkeypatch):
+        monkeypatch, client, engine):
     """NOT A TAUTOLOGY. The test above calls a route "covered" when the exclusion regex does not
     match its TEMPLATE — but the middleware decides on the CONCRETE path a request arrives on,
     and nothing proved a covered route ever reaches the claim (review of 45e7693, still open
@@ -109,10 +124,19 @@ def test_every_covered_route_really_reaches_the_claim_and_every_excluded_one_doe
     claim is replaced by a recorder that answers "replay", so no handler runs and nothing is
     written; a covered route must reach it, on its own template, and come back replayed — an
     excluded one must not reach it at all."""
-    from fastapi.testclient import TestClient
-
     from apps.api.app import main
 
+    from apps.api.tests.identity_fixtures import IdentityWorld
+    from boss_engine.identity.authn import SESSION_COOKIE
+
+    world = IdentityWorld.create(engine)
+    owner = world.person("owned census caller")
+    world.bind(owner, "owner", project=world.project_a)
+    with engine.begin() as c:
+        from sqlalchemy import text
+        c.execute(text("INSERT INTO agent_conversations(conversation_id,project_id,actor,kind,title,seats) "
+                       "VALUES('cnv_census',:p,:a,'talk','Owned census','[\"qa\"]')"),
+                  {"p":world.project_a,"a":owner.id})
     reached: list[tuple[str, str]] = []
 
     def recorder(**kwargs):
@@ -121,7 +145,9 @@ def test_every_covered_route_really_reaches_the_claim_and_every_excluded_one_doe
                                  content_type="application/json")
 
     monkeypatch.setattr(main, "_idempotency_claim", recorder)
-    client = TestClient(app, raise_server_exceptions=False)
+    # Keep the fixture client's transport and select the existing IdentityWorld
+    # session seam. This is canonical authorization proof, not session-crypto QA.
+    client.cookies.set(SESSION_COOKIE, "owned-census-session-selector")
     missed, leaked = [], []
     import re as _re
 
@@ -130,8 +156,19 @@ def test_every_covered_route_really_reaches_the_claim_and_every_excluded_one_doe
             continue
         concrete = _re.sub(r"\{[^}:]+(?::path)?\}", "zzparam", route.path)
         reached.clear()
-        response = client.request(method, concrete, json={},
-                                  headers={idempotency.HEADER: "route-probe-1"})
+        # Every request has the same real owned Owner/project. Governed streams
+        # additionally check current permission before the recorder can replay.
+        from apps.api.app import stream_intent
+        probe_body = {"project_id": world.project_a, "actor": owner.id}
+        if stream_intent.family(method, concrete) == "voice":
+            probe_body.update(probe="intro", field="mission")
+        if stream_intent.family(method, concrete) == "conversation":
+            concrete = concrete.replace("zzparam", "cnv_census")
+        with world.acting_as(world.ctx(owner)):
+            response = client.request(method, concrete, json=probe_body,
+                                      headers={idempotency.HEADER: "route-probe-1",
+                                               "sec-fetch-site": "same-origin"},
+                                      follow_redirects=False)
         excluded = idempotency.exclusion_reason(method, route.path)
         if excluded:
             if reached:

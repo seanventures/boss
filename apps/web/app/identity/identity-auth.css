@@ -88,6 +88,12 @@ a.idn-idp:hover { border-color: var(--accent-line); background: color-mix(in srg
 /* "or use email" */
 .idn-auth .idn-or { text-transform: uppercase; letter-spacing: 0.14em; font-size: 0.57895rem; font-weight: 700; margin: 20px 0 16px; }
 
+/* Keep the usable password form in view when every external method is unavailable. */
+.idn-other-signin { margin-bottom: 14px; }
+.idn-other-signin > summary { min-height: 44px; align-content: center; color: var(--ink-soft); font-size: 0.71053rem; cursor: pointer; }
+.idn-other-signin > summary:focus-visible { outline: 2px solid var(--teal); outline-offset: 3px; border-radius: 6px; }
+.idn-other-signin[open] > summary { margin-bottom: 10px; }
+
 /* the segmented method switcher */
 .idn-mtabs.seg { display: flex; gap: 4px; padding: 4px; border-radius: 13px; margin-bottom: 18px; }
 .idn-mtabs.seg > [role="tab"], .idn-mtabs.seg > .idn-tipw { flex: 1 1 0; min-width: 0; }

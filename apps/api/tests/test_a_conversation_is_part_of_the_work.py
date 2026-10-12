@@ -20,8 +20,13 @@ from sqlalchemy import text
 
 from apps.api.tests import workflow_management_support as wf
 from apps.api.tests.test_talking_with_agents import (  # noqa: F401 — fixtures used by name
-    ACTOR, PROJECT, _events, _open, _say, model, seated,
+    ACTOR, PROJECT, _events, _open, _say,
 )
+from apps.api.tests import test_talking_with_agents as conversation_fixtures
+
+# Export the existing pytest fixtures without shadowing imported names.
+model = conversation_fixtures.model
+seated = conversation_fixtures.seated
 
 
 def _feed(client, role_key: str) -> list[dict]:
@@ -39,10 +44,54 @@ def _lineage(client, role_key: str) -> dict:
 
 
 def _chain(client, run_id: str) -> list[dict]:
+    # This lineage GET can repair rows, so a session read must prove same-origin.
+    refused = client.get(f"/v1/workflow-runs/{run_id}/chain",
+                         params={"project_id": PROJECT, "viewer": ACTOR})
+    assert refused.status_code == 403 and refused.json()["error"] == "csrf_failed"
     got = client.get(f"/v1/workflow-runs/{run_id}/chain",
-                     params={"project_id": PROJECT, "viewer": ACTOR})
+                     params={"project_id": PROJECT, "viewer": ACTOR},
+                     headers={"sec-fetch-site": "same-origin"})
     assert got.status_code == 200, got.text
     return got.json()["acts"]
+
+
+def _worker_ticks(client, engine, count: int, monkeypatch) -> None:
+    # Start/Ask remain the real human's actions. Executing the worker protocol
+    # requires its own fixed system identity; even an Owner must be refused.
+    refused = client.post("/v1/delivery-workflows/run-capabilities", json={"project_id": PROJECT})
+    assert refused.status_code == 403 and refused.json()["permission"] == "worker:lease"
+    from apps.api.tests.identity_fixtures import IdentityWorld
+    from boss_engine.identity.principal import (
+        AuthContext, AuthMethod, Principal, PrincipalKind, PrincipalStatus,
+    )
+    with engine.connect() as c:
+        row = c.execute(text("SELECT p.workspace_id,w.org_id FROM projects p JOIN workspaces w "
+                             "ON w.id=p.workspace_id WHERE p.id=:p"), {"p": PROJECT}).mappings().one()
+    world = IdentityWorld(engine, row["org_id"], row["workspace_id"], PROJECT, PROJECT)
+    worker = AuthContext(Principal("sys_worker", PrincipalKind.SYSTEM, world.org,
+                                   PrincipalStatus.ACTIVE, "Owned workflow worker"), AuthMethod.SYSTEM)
+    # The old unauthenticated fixture never minted delegated run tokens. Give
+    # this owned DB the genuine vault/signing bootstrap used by identity tests.
+    import base64
+    from boss_engine.identity import signing_keys, vault
+    with monkeypatch.context() as boot_env:
+        boot_env.delenv("BOSS_MASTER_KEY_FILE", raising=False)
+        boot_env.setenv("BOSS_MASTER_KEY", base64.b64encode(b"k" * 32).decode())
+        vault.reset_master_key_cache()
+        signing_keys.clear_cache()
+        try:
+            with engine.begin() as c:
+                vault.check_master_key(db=c)
+                signing_keys.provision(org_id=world.org, db=c)
+            signing_keys.clear_cache()
+            with engine.begin() as c:
+                signing_keys.require_keys(org_id=world.org, db=c)
+            with world.acting_as(worker):
+                for _ in range(count):
+                    wf.tick(client)
+        finally:
+            signing_keys.clear_cache()
+            vault.reset_master_key_cache()
 
 
 def test_talking_to_an_agent_is_in_its_work_and_its_lineage(client, engine, model, seated):
@@ -119,8 +168,7 @@ def test_a_room_starts_a_run_that_runs_as_the_room_and_asking_about_a_step_is_in
     run_id = started.json()["run_id"]
     assert run_id
 
-    for _ in range(4):
-        wf.tick(client)
+    _worker_ticks(client, engine, 4, monkeypatch)
     view = wf.run_view(client, run_id)
     assert view["status"] == "completed", wf.statuses(view)
 
@@ -173,7 +221,6 @@ def test_a_start_card_never_replaces_an_agent_the_workflow_names(client, engine,
                    start_anyway=["model"])
     assert run.status_code == 200, run.text
     run_id = run.json()["run"]["id"]
-    for _ in range(3):
-        wf.tick(client)
+    _worker_ticks(client, engine, 3, monkeypatch)
     ran_as = wf.steps_of(wf.run_view(client, run_id))["fix"]["output"]["ran_as"]
     assert (ran_as["agent"], ran_as["why"]) == ("security_reviewer", "named on the step")

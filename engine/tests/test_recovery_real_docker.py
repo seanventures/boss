@@ -174,7 +174,8 @@ volumes:
             shutil.copytree(install, negative_target, ignore=shutil.ignore_patterns('.env'))
             negative_project = source_project + mode
             refused = run('bash', REPO / 'scripts/install/restore.sh', '--backup', broken,
-                          '--dir', negative_target, '--project', negative_project, timeout=120)
+                          '--dir', negative_target, '--project', negative_project,
+                          '--offline-data-only', timeout=120)
             assert refused.returncode != 0
             assert not (negative_target / '.env').exists()
             assert not ok('docker', 'ps', '-aq', '--filter', f'label=com.docker.compose.project={negative_project}')
@@ -182,15 +183,31 @@ volumes:
             shutil.rmtree(broken)
         shutil.copytree(install, recovered, ignore=shutil.ignore_patterns('.env'))
         target_cmd = compose(recovered, target_project)
+        # This archived inert fixture has no startup guard; normal restore must
+        # refuse before creating resources, even though its archive is valid.
+        refused = run('bash', REPO / 'scripts/install/restore.sh', '--backup', backup,
+                      '--dir', recovered, '--project', target_project)
+        assert refused.returncode != 0 and '--offline-data-only' in refused.stderr
+        assert not (recovered / '.env').exists()
+        assert not ok('docker', 'ps', '-aq', '--filter', f'label=com.docker.compose.project={target_project}')
         restored = run('bash', REPO / 'scripts/install/restore.sh', '--backup', backup,
-                       '--dir', recovered, '--project', target_project, timeout=180)
+                       '--dir', recovered, '--project', target_project,
+                       '--offline-data-only', timeout=180)
         assert restored.returncode == 0, restored.stderr[-3000:]
+        assert 'up -d' not in restored.stdout and 'startup remains HELD' in restored.stdout
+        base = json.loads((recovered / 'scripts/install/community-compose.yml').read_text())
+        assert set(base['services']) == {'db'}
+        assert (recovered / '.boss-archived-compose.yml').is_file()
         assert set(ok(*target_cmd, 'ps', '--status', 'running', '--services').splitlines()) == {'db'}
         target_engine = engine_for(target_cmd)
+        def read_offline_volume(kind, filename):
+            name = base['volumes']['boss_community_' + kind]['name']
+            return ok('docker', 'run', '--rm', '--network', 'none', '--pull', 'never',
+                      '--mount', f'type=volume,src={name},dst=/read,readonly', '--entrypoint',
+                      'cat', manifest['api_image_id'], '/read/' + filename)
         # Read the actual restored volume's key into a new protected file, not the original key.
         restored_key = tmp_path / 'restored.key'
-        raw = ok(*target_cmd, 'run', '--rm', '--no-deps', '--pull', 'never', '-T', '--entrypoint',
-                 'cat', 'api', '/var/lib/boss/identity/master.key')
+        raw = read_offline_volume('identity', 'master.key')
         restored_key.write_text(raw)
         restored_key.chmod(0o600)
         assert hashlib.sha256(restored_key.read_bytes()).digest() == hashlib.sha256(keyfile.read_bytes()).digest()
@@ -214,8 +231,11 @@ volumes:
             assert any(cookie.startswith(authn.SESSION_COOKIE + '=') for cookie in signed_in.cookies)
             assert db.execute(text("SELECT count(*) FROM receipts WHERE dedupe_key='recovery-fixture-receipt'")).scalar_one() == 1
             assert db.execute(text("SELECT count(*) FROM events WHERE event_type='recovery.fixture'")).scalar_one() == 1
-        assert ok(*target_cmd, 'run', '--rm', '--no-deps', '--pull', 'never', '-T', '--entrypoint',
-                  'cat', 'api', '/var/lib/boss/artifacts/recovery.txt') == artifact.strip()
+        assert read_offline_volume('artifacts', 'recovery.txt') == artifact.strip()
+        hold = json.loads(read_offline_volume('recovery', 'hold.json'))
+        assert hold['state'] == 'held' and hold['source_commit'] == sha
+        # Local identity function checks above are not an installed API/MFA sign-in.
+        assert set(ok(*target_cmd, 'config', '--services').splitlines()) == {'db'}
         # A second restore must refuse the occupied target before changing it.
         repeat = run('bash', REPO / 'scripts/install/restore.sh', '--backup', backup,
                      '--dir', recovered, '--project', target_project)
@@ -262,6 +282,13 @@ volumes:
                 engine.dispose()
         if target_cmd:
             run(*target_cmd, 'down', '--volumes', '--remove-orphans')
+            # Canonical DB-only Compose prunes unused utility/hold volumes.
+            # Remove only this fixture's unique, explicitly labelled project.
+            volumes = ok('docker', 'volume', 'ls', '-q', '--filter',
+                         f'label=com.docker.compose.project={target_project}').splitlines()
+            for name in volumes:
+                assert name.startswith(target_project + '_')
+                run('docker', 'volume', 'rm', name)
         run(*source_cmd, 'down', '--volumes', '--remove-orphans')
         vault.reset_master_key_cache()
         keyfile.unlink(missing_ok=True)

@@ -87,7 +87,7 @@ export async function middleware(request: NextRequest) {
   if (isOidcPath(path)) return NextResponse.next();
   // The sign-in pages and the public sign-in API (rate-limited and CSRF-checked by the API).
   if (isPublicConsolePath(path)) return passThrough(request);
-  // A NETWORK-TRUSTED INSTALL (shared-server, before and up to 30 days after its claim) has no
+  // A NETWORK-TRUSTED INSTALL (before and up to 30 days after its claim) has no
   // cookie to check: the API's network bridge decides who the visitor is (§4.12, S5). Once the
   // bridge ends, the API answers 401 and the console sends the visitor to sign in like anyone.
   if (networkTrustedConsole() || hasSessionCookie(request.headers.get("cookie"))) {
@@ -155,7 +155,7 @@ function legacyRedirect(request: NextRequest): NextResponse | null {
   }
   // AN ABSOLUTE LOCATION, ON THE BROWSER'S OWN ORIGIN. Next's middleware adapter parses a
   // redirect's Location with `new NextURL(location)` and NO base: a relative `/?area=budget`
-  // throws "Invalid URL" and every alias answered 500 (shared-server, `?area=govern`). The origin is
+  // throws "Invalid URL" and every alias answered 500 (an existing install, `?area=govern`). The origin is
   // the public one when the console sits behind a proxy, never the internal listener's.
   return new NextResponse(null, {
     status: 307,

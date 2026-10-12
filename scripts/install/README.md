@@ -139,14 +139,15 @@ This is the same command as [Install](#install): it installs the newest release 
 
 ### Straight from GitHub
 
-Install the reviewed RC8 source without the website. This uses Git authentication if the repository requires access, resolves the release checkout to a full commit SHA, and installs that same commit:
+Install the reviewed RC8 source without the website. This uses Git authentication if the repository requires access, checks out the verified published commit, and installs that same commit:
 
 ```bash
 (
   set -e
+  BOSS_RELEASE_COMMIT=cb278010b4cef68c55a9684c3e9bd74b14c8b520
   git clone --branch v1.0-rc8 https://github.com/seanventures/boss.git boss-rc8
   cd boss-rc8
-  BOSS_RELEASE_COMMIT="$(git rev-parse HEAD)"
+  git checkout --detach "$BOSS_RELEASE_COMMIT"
   ./install.sh --dir "$PWD" --ref "$BOSS_RELEASE_COMMIT"
 )
 ```
@@ -254,6 +255,10 @@ Existing single-key installs receive a new worker key on the next installer reru
 ### Docker access
 
 The installer does not add your account to the root-equivalent Docker group. On a Linux host where only the administrator can access Docker, run Compose with `sudo` or grant Docker access deliberately through your host policy.
+
+Default local Linux installs can use sudo. Custom project names, image tags, or Docker connection settings need Docker access as your user account. The helpers stop when sudo cannot safely preserve your selection. They never forward Docker credentials or preserve the full environment.
+
+Restore uses the target project you specify and the validated archived images. Running apps in a custom restored project still needs direct Docker access. Keep the same project and image-tag settings for each lifecycle command.
 
 ## Mission Control access
 
@@ -376,11 +381,13 @@ The BOSS source URL the installer uses is not an operator repository binding. Fr
 
 | | Need | Why |
 |---|---|---|
-| **Disk** | **100 GB** | Images are about 11.5 GB (api 4.1, infisical 3.8, web 1.6, worker 1.5, postgres 0.4). Building them uses tens of GB of layer cache. A run can also clone a repository and install browsers. The installer warns below 80 GB. |
+| **Disk** | **About 100 GB recommended working capacity** | Images, build cache and agent repositories need space; the amount varies by selected services and workload. The installer reports the install filesystem separately from an accessible local Linux Docker image store, with an advisory below about 80 GB free. This is not a hard minimum. |
 | **RAM** | **8 GB minimum, 16 GB comfortable** | The six containers idle at about 1.6 GB. Coding work runs inside the API container and adds whatever that task installs. Less than 8 GB will swap. |
 | **CPU** | 4 cores | Reviewers run in parallel. |
 
 If the host starts swapping, runs stall and BOSS records `host.stalled` on that machine. Add memory or free disk, then retry; retrying on a swapping host does not fix the stall.
+
+The installer builds and loads one selected service image at a time to reduce overlapping disk use. This does not guarantee a build will fit. Docker Desktop and remote daemons have separate storage limits; when their free space cannot be measured locally, the installer reports it as unknown. Check the selected Docker host or Docker Desktop disk settings as well as the install volume.
 
 ### Ports
 
@@ -587,7 +594,7 @@ If a build fails, the backup path is printed. Inspect Compose logs and retry `up
 
 Recovery must restore the database **and its matching identity key**. A database-only backup cannot recover encrypted TOTP factors and connections after their key volume is lost. Older archives without a complete recovery manifest are incomplete: preserve the original volumes and obtain a reviewed recovery plan. They cannot authorize a data purge.
 
-Use `restore.sh` from the current recovery tools against a **fresh checkout at the backed-up source revision**, a new Compose project name, and no existing target `.env`, containers or volumes. Keep the existing installation intact until the restored Owner, TOTP, encrypted connections, artifacts and history have been checked. The helper restores only local data; application services remain stopped for inspection.
+Use `restore.sh` from the current recovery tools against a **fresh checkout at the backed-up source revision**, a new Compose project name, and no existing target `.env`, containers or volumes. Keep the existing installation intact. Restoring older data can erase the receipt or claim of an already accepted provider action, so application startup remains held independently of the restored database.
 
 ```bash
 ./scripts/install/restore.sh --backup /absolute/path/to/boss-backup \
@@ -596,7 +603,19 @@ Use `restore.sh` from the current recovery tools against a **fresh checkout at t
 
 The helper validates the completion manifest, file checksums, safe archive paths, master-key format and database key check value before creating target resources. It uses locally cached immutable database/API image IDs recorded by the backup; it never pulls or builds images. The target source revision must match the archive. It restores the identity and artifact volumes before application startup, restores each database with `pg_restore --exit-on-error --single-transaction`, then checks the restored database/key pairing. On any failure it reports an incomplete recovery, leaves application services stopped, and retains the new target for inspection; it never deletes the original stack.
 
-The restored database uses an ephemeral loopback port so the retained original stack can keep its port. After success, choose a free API port in the target `.env` and use the printed Compose command with the saved image override to start only the archived API image for recovery verification. Keep workers and provider effects disabled during recovery verification; enable the console and workers only after their images and the recovery checks are qualified for the same source revision. Check a real Owner password/MFA sign-in, decrypt a known connection locally, inspect a known artifact and its receipt/history, and check `/health` before returning users to the console. A matching-key boot check alone does not establish a complete restore. Moving to a different source revision, images or schema requires separate migration qualification.
+Normal recovery also requires a matching source/image pair containing the reviewed startup guard. Guard interface, image revision and guard/entrypoint file hashes are checked before target data resources. A separate recovery volume holds API, worker, egress and MCP startup before application imports; API checks it before privileged sandbox initialization. The exclusive held marker exists before any usable target `.env` or recovery base is published, closing the concurrent-start window. The complete environment appears atomically with the new project and image pins; owned volumes retain their Compose project/logical-volume labels. Base Compose retains the shared read-only mount and immutable image pins, so leaving out the generated image override does not remove the hold. MCP receives no identity-vault mount. The exact archived API/Python image is reused for the four held roles with explicit role commands; this does not qualify automatic readiness or resumption.
+
+Pre-guard archives, including RC8, refuse normal recovery. Use explicit offline data-only mode with current recovery tools:
+
+```bash
+./scripts/install/restore.sh --backup /absolute/path/to/boss-backup \
+  --dir /absolute/path/to/fresh-checkout --project boss-recovered-offline \
+  --offline-data-only
+```
+
+Offline mode persists a **DB-only base Compose** in the fresh target and retains the archived static Compose separately as `.boss-archived-compose.yml`. It declares no application roles even without the saved override. Identity/artifact restoration uses bounded network-disabled utility containers, not application startup. This intentionally modifies the target recovery workspace; rerunning an archived installer or replacing this base is outside the reviewed recovery procedure.
+
+The recovered database uses an ephemeral loopback port so the original can keep its port. No application-start command is printed and there is no generic clear/acknowledge/resume operation. Preserve the recovery volume, original data, provider receipts and accepted-action evidence. Offline archive/key metadata, local cryptographic checks and history inspection do not establish a real Owner password/MFA sign-in, working `/health`, provider reconciliation or permission to resume. Provider-specific reconciliation and an explicitly reviewed migration/recovery plan must resolve outstanding liability before any restart. Moving source, images or schema requires separate qualification. See [Restored state hold](../../docs/community/RESTORED_STATE_HOLD.md) and [Provider recovery](../../docs/community/PROVIDER_RECOVERY.md).
 
 Backups contain private `.env` and identity keys and must be protected together. The identity key must be a regular file under the Compose identity volume; custom external key locations require a separate reviewed backup procedure and are refused by the automatic backup. CLI session volumes are excluded; the archived `.env` blanks `CLAUDE_CODE_OAUTH_TOKEN` and `CODEX_AUTH_JSON`, including supported single-line quoted, whitespace and `export` forms. Interpolated, multiline or ambiguous session assignments are refused. The scan checks their decoded values and nested Codex token strings in decompressed database text and artifact contents. Encrypted durable BOSS/Infisical connection credentials are retained for recovery; this scan covers configured `.env` session values and does not claim to remove every credential from encrypted records. Unsafe archive members (including symlinks), missing volumes, incompatible keys and excluded CLI session material fail closed. If either excluded value is found in decompressed database or artifact content, backup fails and discards the incomplete archive without changing the original data. Remove the unexpected persisted session material through an appropriate reviewed data procedure, then retry. After moving machines or purging session volumes, sign in through the official provider CLI again.
 
@@ -605,7 +624,7 @@ Backups contain private `.env` and identity keys and must be protected together.
 A remote archive install uses `.boss-shipped-commit` rather than Git.
 
 - **Update:** the local `upgrade.sh` requires a Git checkout, so use `remote.sh update` from your machine instead; it backs up on the VM first.
-- **Recover:** prepare a fresh checkout at the backed-up commit on the VM, then use the guarded restore procedure above with the complete database, identity-key and artifact backup written there. Start the archived API only after restore succeeds.
+- **Recover:** prepare a fresh checkout at the backed-up commit on the VM, then use current recovery tools and the complete database, identity-key and artifact archive. Pre-guard source requires explicit offline data-only recovery. Success retains the startup hold; it does not authorize starting the archived API.
 - **Failed update:** the new source is at the install path while the prior source remains at `PATH.prev` until installer/recreation succeeds. A failed build leaves the old containers running; after diagnosing the failure, you can move `PATH.prev` back to `PATH` before retrying. If recreation started, a database migration may have run: inspect the backup on that VM and use the complete recovery procedure above instead of only moving source. A failed source swap itself restores the prior source path, and the remote script refuses to discard a leftover `PATH.prev` on a later attempt.
 
 `user@your-vm` is a machine you administer:

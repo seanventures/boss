@@ -27,10 +27,18 @@ def reply_cost(connection, project_id: str, source_id: Optional[str], usage: dic
     settlement) returns None for unusable evidence, which settles at the reserved estimate.
     """
     from .included_spend import source_by_id, source_is_included
+
+    included = source_is_included(source_by_id(connection, project_id, source_id))
+    return settled_text_cost(usage if isinstance(usage, dict) else {}, included=included, strict=strict)
+
+
+def settled_text_cost(usage: dict, *, included: bool, strict: bool = True) -> Optional[int]:
+    """The shared strict cost-evidence rule for a pinned text reply.
+
+    `strict=False` returns None instead of raising when paid usage evidence is unusable.
+    """
     from .openai_adapter import estimate_cost_usd_micros, price_for_model
 
-    usage = usage if isinstance(usage, dict) else {}
-    included = source_is_included(source_by_id(connection, project_id, source_id))
     token_keys = ("prompt_tokens", "completion_tokens")
     explicit_cost = usage.get("cost_usd_micros")
     known_cost = isinstance(explicit_cost, int) and not isinstance(explicit_cost, bool) \

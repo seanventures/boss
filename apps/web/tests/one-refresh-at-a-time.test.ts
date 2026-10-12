@@ -88,6 +88,114 @@ describe("the coordinator", () => {
     expect(starts).toBe(2);
   });
 
+  it("cancels a discarded refresh and its owed work without recording a landing", () => {
+    const time = fakeTime();
+    let starts = 0;
+    const c = createRefreshCoordinator({ start: () => { starts += 1; }, ...time });
+    c.request("now");
+    time.run(800);
+    c.landed();
+    expect(c.lastDurationMs()).toBe(800);
+
+    c.request("now");
+    c.request("now");
+    time.run(900);
+    c.cancel();
+    expect(c.busy()).toBe(false);
+    expect(c.lastDurationMs()).toBe(800);
+    c.landed(); // An idle acknowledgement after discard cannot record a success.
+    expect(c.lastDurationMs()).toBe(800);
+    time.run(121_000);
+    expect(starts).toBe(2);
+
+    c.request("now");
+    expect(starts).toBe(3);
+    expect(c.busy()).toBe(true);
+    time.run(121_400);
+    c.landed();
+    expect(c.lastDurationMs()).toBe(400);
+    expect(starts).toBe(3); // The discarded request's owed work is gone.
+  });
+
+  it("cancels a scheduled poll cooldown without starting it later", () => {
+    const time = fakeTime();
+    let starts = 0;
+    const c = createRefreshCoordinator({ start: () => { starts += 1; }, ...time });
+    c.request("now");
+    time.run(2_000);
+    c.landed();
+    c.request("poll");
+    c.cancel();
+    c.cancel();
+    time.run(4_000);
+    expect(starts).toBe(1);
+    expect(c.busy()).toBe(false);
+    expect(c.lastDurationMs()).toBe(2_000);
+    c.request("now");
+    expect(starts).toBe(2);
+  });
+
+  it("ignores an already queued ceiling callback from a canceled attempt", () => {
+    const time = fakeTime();
+    const callbacks: (() => void)[] = [];
+    let starts = 0;
+    const c = createRefreshCoordinator({
+      start: () => { starts += 1; }, ...time,
+      setTimer: (fn, ms) => { callbacks.push(fn); return time.setTimer(fn, ms); },
+    });
+    c.request("now");
+    const canceledCeiling = callbacks[0];
+    c.cancel();
+    c.request("now");
+    c.request("now");
+    canceledCeiling(); // Clearing a timer cannot retract a callback already dispatched.
+    expect(starts).toBe(2);
+    expect(c.busy()).toBe(true);
+    expect(c.lastDurationMs()).toBe(0);
+    time.run(350);
+    c.landed();
+    expect(starts).toBe(3);
+    expect(c.lastDurationMs()).toBe(350);
+    c.dispose();
+  });
+
+  it("ignores an already queued cooldown callback after cancellation", () => {
+    const time = fakeTime();
+    const callbacks: (() => void)[] = [];
+    let starts = 0;
+    const c = createRefreshCoordinator({
+      start: () => { starts += 1; }, ...time,
+      setTimer: (fn, ms) => { callbacks.push(fn); return time.setTimer(fn, ms); },
+    });
+    c.request("now");
+    time.run(500);
+    c.landed();
+    c.request("poll");
+    const canceledCooldown = callbacks[1];
+    c.cancel();
+    c.request("now");
+    canceledCooldown();
+    expect(starts).toBe(2);
+    expect(c.busy()).toBe(true);
+    c.dispose();
+  });
+
+  it("cannot resume disposed work after cancellation or a late acknowledgement", () => {
+    const time = fakeTime();
+    let starts = 0;
+    const c = createRefreshCoordinator({ start: () => { starts += 1; }, ...time });
+    c.request("now");
+    c.request("now");
+    c.cancel();
+    c.dispose();
+    c.request("now");
+    c.landed();
+    time.run(130_000);
+    expect(starts).toBe(1);
+    expect(c.busy()).toBe(false);
+    expect(c.lastDurationMs()).toBe(0);
+  });
+
   it("with no shell mounted, a request refreshes directly", () => {
     let direct = 0;
     requestConsoleRefresh({ refresh: () => { direct += 1; } }, "now");
@@ -235,6 +343,23 @@ describe("a refresh that never lands is unstuck, not waited out (2026-10-10)", (
     expect(c.busy()).toBe(false);
   });
 
+  // rc9 merge: a refresh that is only SLOW is not stuck. Before any refresh is measured, the
+  // watchdog waits at least 1.5x what the server took for the page load, so a 1.5 s server's
+  // first refresh is answered rather than restarted (and rendered again) at 0.7 s.
+  it("never unsticks a first refresh before the server could have answered it", () => {
+    for (const [serverMs, firstUnstickAfter] of [[0, 700], [1_500, 2_250], [4_000, 6_000]]) {
+      const time = fakeTime();
+      let unsticks = 0;
+      const c = createRefreshCoordinator({ start: () => {}, unstick: () => { unsticks += 1; }, ...time, serverMs });
+      c.request("now");
+      time.run(firstUnstickAfter - 1);
+      expect(unsticks, `serverMs=${serverMs}`).toBe(0);
+      time.run(firstUnstickAfter);    // fakeTime runs to an absolute time
+      expect(unsticks, `serverMs=${serverMs}`).toBe(1);
+      c.dispose();
+    }
+  });
+
   it("a refresh that lands in time is never unstuck", () => {
     const time = fakeTime();
     let unsticks = 0;
@@ -265,7 +390,8 @@ describe("a refresh that never lands is unstuck, not waited out (2026-10-10)", (
   it("the shell lands a refresh on the server's new render, not on React's transition flag", () => {
     const shell = codeOnly("app/ConsoleShell.tsx");
     expect(shell).toContain("renderToken");
-    expect(shell).toMatch(/lastToken\.current = renderToken;\s*refreshCoordinator\.landed\(\);/);
+    // rc9 merge: a render that commits with a URL restore is not the canceled refresh landing.
+    expect(shell).toMatch(/lastToken\.current = renderToken;\s*if \(!canceled\) refreshCoordinator\.landed\(\);/);
     expect(codeOnly("app/page.tsx")).toMatch(/renderToken=\{/);
   });
 });

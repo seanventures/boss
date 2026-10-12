@@ -141,18 +141,17 @@ export function ReadinessPanel({ readiness, accepted, onAccept, projectId = "" }
   const open = unaccepted(readiness, accepted);
   return (
     <section className="dw-ready" data-testid="dw-readiness" aria-label="What this needs first">
-      <h4>This cannot run here yet</h4>
+      <h4>Setup needed</h4>
       <ReadinessNotes notes={readiness.notes} />
       <ul className="dw-ready-list">
         {missing.map((need) => (
           <li key={need.key} data-testid={`dw-readiness-missing-${need.key}`}
               data-accepted={accepted.includes(need.key) || undefined}>
             <strong>{need.label}</strong>
-            {/* SAID ONCE, SHORT (independent test D6): the refusal's line and this list both
-                said every reason in full — ~80 words twice. The item is its name and its fix;
-                why it is needed is one press away. */}
+            {/* Keep the prerequisite visible; instructions and step context are one press away. */}
             <details className="dw-ready-why">
-              <summary>Why</summary>
+              <summary>Setup details</summary>
+              <span className="dw-ready-fix">{need.fix}</span>
               <span className="detail">
                 Needed by {need.needed_by.map((n) => n.label).join(", ")}. {need.detail}.
               </span>
@@ -169,10 +168,10 @@ export function ReadinessPanel({ readiness, accepted, onAccept, projectId = "" }
               {/* The fix's own landing (`?area=setup&focus=repository`, `?area=skills&ability=email`)
                   when the API names one; the shell keeps the org and switches in place. */}
               {need.href && isAreaId(need.area) ? (
-                <a href={withOrg(need.href, org)} data-testid={`dw-readiness-fix-${need.key}`}>{need.fix}</a>
+                <a href={withOrg(need.href, org)} data-testid={`dw-readiness-fix-${need.key}`}>Open setup<span className="sr-only">: {need.label}</span></a>
               ) : isAreaId(need.area) ? (
-                <AreaLink area={need.area}>{need.fix}</AreaLink>
-              ) : need.fix}
+                <AreaLink area={need.area}>Open setup<span className="sr-only">: {need.label}</span></AreaLink>
+              ) : null}
             </span>
             {/* THE FIX WHERE THE PROBLEM IS. Email is the one need a short form settles, so
                 it is drawn right here rather than sending the operator away from Start. */}

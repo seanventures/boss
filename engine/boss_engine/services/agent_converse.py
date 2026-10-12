@@ -17,7 +17,8 @@ door the composer uses (`start_from_proposal`, given the API's start function).
 
 STREAMING. Each word goes out as a `token` event the moment the model writes it: the Claude
 CLI (`stream-json` partial messages) and the OpenAI adapter (`stream=True`) implement
-`stream_text_response`, and the wrappers around them (fallback, governed) pass it through. An
+`stream_text_response`. ConversationCallSpend pins one source and carries its canonical
+job, reservation, model lease and receipt across the live stream. An
 adapter that cannot stream (the Codex CLI) answers whole; that answer is revealed in word groups
 (`REVEAL_SECONDS` in total) after a `turn_start` the console draws as the seat thinking.
 
@@ -39,7 +40,9 @@ from sqlalchemy import text
 
 from . import agent_acts, agent_identity, agent_instructions, agent_persona
 from .agent_world_types import AI_DISCLOSURE, ROOM_PRESETS
-from .core import emit_event, make_id
+from .core import create_blocking_decision, emit_event, make_id
+from .conversation_spend import ConversationAuthority, ConversationCallSpend
+from .typed_decision_spend import TypedDecisionReconciliationRequired
 
 log = logging.getLogger("boss.agent_converse")
 
@@ -254,7 +257,12 @@ def _turn_dict(row: Any) -> dict:
     turn = dict(row)
     for key, default in (("addressed_to", []), ("payload", {}), ("cited_acts", [])):
         turn[key] = _jsonish(turn.get(key), default)
-    turn["cost_usd"] = float(turn.get("cost_usd") or 0)
+    # A modern unfinished call has no settled cost; its schema default is not
+    # evidence of zero. Preserve numeric historical records and settled zero.
+    unresolved = turn["payload"].get("spend_status") in {
+        "not_admitted", "admitted", "needs_reconciliation",
+    }
+    turn["cost_usd"] = None if unresolved else float(turn.get("cost_usd") or 0)
     turn["created_at"] = _iso(turn.get("created_at"))
     return turn
 
@@ -508,6 +516,7 @@ class _Plan:
     reserve_micros: int
     #: This stream's hold on the floor (see STALE_STREAMING_SECONDS).
     claim: Optional[str] = None
+    authority: Optional[ConversationAuthority] = None
 
 
 def _guard(connection, settings: Any, project_id: str, conv: dict, n_calls: int,
@@ -541,16 +550,44 @@ def _guard(connection, settings: Any, project_id: str, conv: dict, n_calls: int,
 
 def _settle_cut_off(connection, settings: Any, project_id: str, turn_id: str,
                     act_id: Optional[str], reservation_id: Optional[str], failure: dict) -> None:
-    """A turn that will never finish: say why, give back its budget, close its act."""
-    from .budget import BudgetGovernor
-
+    """Close the visible turn; a missing outcome is never proof of unused budget."""
+    row = connection.execute(text(
+        "SELECT receipt_id, payload, status FROM agent_conversation_turns WHERE turn_id=:t FOR UPDATE"),
+        {"t": turn_id}).mappings().first()
+    if not row or row["status"] != "streaming":
+        return
+    payload = _jsonish(row["payload"], {})
+    result = (connection.execute(text("SELECT result FROM receipts WHERE id=:r"),
+                                {"r": row["receipt_id"]}).scalar() or {}) if row["receipt_id"] else {}
+    held = reservation_id or payload.get("reservation_id")
+    if held:
+        status = connection.execute(text("SELECT status FROM budget_reservations WHERE id=:r"),
+                                    {"r": held}).scalar()
+        if status == "active":
+            failure = {**failure, "kind": "outcome_unknown", "retry": False,
+                       "headline": "The model outcome needs reconciliation.",
+                       "action": "Reconcile the recorded receipt before asking again.",
+                       "spend_status": "needs_reconciliation", "reservation_id": held,
+                       "receipt_id": row["receipt_id"] if row else None}
+            decision = result.get("reconciliation_decision_id")
+            if not decision:
+                decision = create_blocking_decision(connection, project_id, None,
+                    "Reconcile the interrupted conversation turn", {"action": "conversation_reconciliation"},
+                    {"turn_id": turn_id, "reservation_id": held,
+                     "receipt_id": row["receipt_id"]}, "conversation_reconciliation")
+            failure["decision_id"] = decision
+        elif status == "consumed":
+            # A later transcript/parse failure cannot erase a successfully booked call.
+            failure = {**failure, "spend_status": "settled", "receipt_id": row["receipt_id"]}
+            booked = connection.execute(text("SELECT actual_usd_micros FROM cost_receipts "
+                                              "WHERE receipt_id=:r"),
+                                        {"r": row["receipt_id"]}).scalar()
+            connection.execute(text("UPDATE agent_conversation_turns SET cost_usd=:cost WHERE turn_id=:t"),
+                               {"cost": int(booked or 0) / 1_000_000, "t": turn_id})
     connection.execute(
         text("UPDATE agent_conversation_turns SET status = 'error', kind = 'error', "
              "payload = CAST(:p AS JSONB) WHERE turn_id = :t AND status = 'streaming'"),
         {"p": json.dumps(failure), "t": turn_id})
-    if reservation_id:
-        BudgetGovernor(settings).release(connection, project_id, reservation_id,
-                                         "conversation turn did not finish")
     if act_id:
         agent_acts.close_act(connection, act_id, status="error")
 
@@ -576,7 +613,8 @@ def _hold_floor(engine, plan: "_Plan") -> bool:
     with begin(engine) as c:
         return c.execute(
             text("UPDATE agent_conversations SET streaming_until = now() + "
-                 "make_interval(secs => :s) WHERE conversation_id = :c AND streaming_claim = :t"),
+                 "make_interval(secs => :s) WHERE conversation_id = :c AND streaming_claim = :t "
+                 "AND streaming_until > now()"),
             {"s": STALE_STREAMING_SECONDS, "c": plan.conversation_id, "t": plan.claim},
         ).rowcount == 1
 
@@ -631,7 +669,8 @@ def _addressed(conv: dict, message: str, to: Optional[list[str]]) -> list[str]:
 
 
 def take_turn(engine, *, project_id: str, conversation_id: str, actor: str, message: str,
-              to: Optional[list[str]] = None, rounds: int = 1, settings: Any = None
+              to: Optional[list[str]] = None, rounds: int = 1, settings: Any = None,
+              authority: Optional[ConversationAuthority] = None
               ) -> Iterator[dict]:
     """Record the person's turn, then stream each addressed seat's reply in seat order.
 
@@ -681,8 +720,10 @@ def take_turn(engine, *, project_id: str, conversation_id: str, actor: str, mess
                 c.execute(text("UPDATE agent_conversations SET title = :t "
                                "WHERE conversation_id = :c"),
                           {"t": _title_from(said), "c": conversation_id})
+        if authority and authority.protect:
+            authority.protect(c)
     plan = _Plan(project_id, conversation_id, actor, "reply", speakers, person_turn_id, rounds,
-                 per_call, claim)
+                 per_call, claim, authority)
     return _run(engine, settings, plan)
 
 
@@ -692,7 +733,7 @@ def _title_from(said: str) -> str:
 
 
 def summarize_room(engine, *, project_id: str, conversation_id: str, actor: str,
-                   settings: Any = None) -> Iterator[dict]:
+                   settings: Any = None, authority: Optional[ConversationAuthority] = None) -> Iterator[dict]:
     from ..db import begin
 
     settings = _settings(settings)
@@ -708,14 +749,16 @@ def summarize_room(engine, *, project_id: str, conversation_id: str, actor: str,
             raise _invalid("nobody has spoken yet")
         per_call = _per_call(c, settings, project_id, SYNTHESIS_RESERVE_MICROS)
         claim = _guard(c, settings, project_id, conv, 1, per_call)
+        if authority and authority.protect:
+            authority.protect(c)
     lead = conv.get("lead_role_key") or conv["seats"][0]
     return _run(engine, settings, _Plan(project_id, conversation_id, actor, "summary",
                                         [_Speaker(lead, "asked_by_person")], None, 1,
-                                        per_call, claim))
+                                        per_call, claim, authority))
 
 
 def propose_start(engine, *, project_id: str, conversation_id: str, actor: str,
-                  settings: Any = None) -> Iterator[dict]:
+                  settings: Any = None, authority: Optional[ConversationAuthority] = None) -> Iterator[dict]:
     from ..db import begin
 
     settings = _settings(settings)
@@ -730,10 +773,12 @@ def propose_start(engine, *, project_id: str, conversation_id: str, actor: str,
             raise _invalid("say what you want to start first")
         per_call = _per_call(c, settings, project_id, SYNTHESIS_RESERVE_MICROS)
         claim = _guard(c, settings, project_id, conv, 1, per_call)
+        if authority and authority.protect:
+            authority.protect(c)
     lead = conv.get("lead_role_key") or conv["seats"][0]
     return _run(engine, settings, _Plan(project_id, conversation_id, actor, "proposal",
                                         [_Speaker(lead, "asked_by_person")], None, 1,
-                                        per_call, claim))
+                                        per_call, claim, authority))
 
 
 # ── Running a plan: one governed model call per speaker ──────────────────────────────────────
@@ -741,7 +786,7 @@ def propose_start(engine, *, project_id: str, conversation_id: str, actor: str,
 
 def _run(engine, settings: Any, plan: _Plan) -> Iterator[dict]:
     """The stream. Each speaker: turn_start → token* → (proposal|summary)? → turn_end; a failed
-    speaker sends error and the room moves on; done closes it with the conversation summary."""
+    model call stops remaining speakers; done closes it with the conversation summary."""
     from ..db import begin
 
     try:
@@ -761,6 +806,7 @@ def _run(engine, settings: Any, plan: _Plan) -> Iterator[dict]:
                 break   # the claim lapsed and another stream took the floor: stop here
             started: Optional[str] = None
             speaking = _speak(engine, settings, plan, speaker)
+            stop_room = False
             try:
                 for event in speaking:
                     if event["type"] == "turn_start":
@@ -768,8 +814,13 @@ def _run(engine, settings: Any, plan: _Plan) -> Iterator[dict]:
                     if event["type"] == "turn_end" and event.get("status") == "complete":
                         if speaker.round == 1:
                             round_turns[speaker.role_key] = event["turn_id"]
+                    if event["type"] == "turn_end" and event.get("status") == "error":
+                        stop_room = True
                     yield event
             except Exception as error:  # noqa: BLE001 — one seat failing never ends the room
+                stop_room = True
+                if plan.authority and plan.authority.incomplete:
+                    plan.authority.incomplete()
                 log.exception("converse speaker %s failed", speaker.role_key)
                 from .model_failures import explain_turn_failure
 
@@ -779,13 +830,15 @@ def _run(engine, settings: Any, plan: _Plan) -> Iterator[dict]:
                 if started:
                     yield {"type": "error", "turn_id": started, "error": said}
                     yield {"type": "turn_end", "turn_id": started, "status": "error",
-                           "tokens_in": 0, "tokens_out": 0, "cost_usd": 0, "cited_acts": []}
+                           "tokens_in": 0, "tokens_out": 0, "cost_usd": None, "cited_acts": []}
                 else:
                     yield {"type": "error", "error": said}
             finally:
                 # Closing the stream (Stop, a closed tab) closes the seat speaking with it, now,
                 # so its turn is settled before the floor is given back below.
                 speaking.close()
+            if stop_room:
+                break
         with begin(engine) as c:
             # Give the floor back BEFORE `done`: the console sends its next turn on `done`.
             _yield_floor(c, plan)
@@ -875,7 +928,6 @@ def _scope(connection, project_id: str, role_key: str) -> dict:
 
 def _instruction(plan: _Plan, conv: dict, speaker: _Speaker, roles: dict[str, dict],
                  greeting: bool, catalogue: list[dict]) -> str:
-    me = roles[speaker.role_key]
     others = [_speaker(roles.get(k), k) for k in conv["seats"] if k != speaker.role_key]
     if plan.mode == "summary":
         return (
@@ -1041,29 +1093,6 @@ def _reveal(text_value: str) -> Iterator[str]:
             time.sleep(pause)
 
 
-def _call(adapter, system_prompt: str, prompt: str) -> Iterator[tuple[str, Any]]:
-    """Yields ('chunk', text)… then ('done', (full_text, usage)). Streams when the adapter can."""
-    streamer = getattr(adapter, "stream_text_response", None)
-    if callable(streamer):
-        parts: list[str] = []
-        usage: dict = {}
-        for piece in streamer(prompt, system_prompt=system_prompt):
-            if isinstance(piece, dict):
-                usage = piece
-                continue
-            parts.append(str(piece))
-            yield "chunk", str(piece)
-        yield "done", ("".join(parts), usage)
-        return
-    reply = adapter.create_text_response(prompt, system_prompt=system_prompt)
-    if isinstance(reply, tuple):
-        full = str(reply[1] if len(reply) > 1 else reply[0] or "")
-        usage = reply[2] if len(reply) > 2 and isinstance(reply[2], dict) else {}
-    else:
-        full, usage = str(reply or ""), {}
-    yield "done", (full, usage)
-
-
 def _only_json(value: str) -> dict:
     trimmed = str(value or "").strip()
     start, end = trimmed.find("{"), trimmed.rfind("}")
@@ -1075,32 +1104,11 @@ def _only_json(value: str) -> dict:
     return parsed
 
 
-def _receipt(connection, project_id: str, turn_id: str, scope: dict, payload: dict) -> str:
-    from .receipts import ReceiptService
-
-    owner = connection.execute(
-        text("SELECT p.workspace_id, w.org_id FROM projects p "
-             "JOIN workspaces w ON w.id = p.workspace_id WHERE p.id = :p"),
-        {"p": project_id},
-    ).mappings().first()
-    receipts = ReceiptService()
-    receipt, _ = receipts.create_or_reuse(
-        connection, owner["org_id"], owner["workspace_id"], project_id,
-        dedupe_key=f"converse:{turn_id}", effect_kind="model.converse_turn",
-        effect_scope=scope, payload=payload)
-    receipts.mark_succeeded(connection, receipt["id"], None, payload)
-    return receipt["id"]
-
-
 def _speak(engine, settings: Any, plan: _Plan, speaker: _Speaker) -> Iterator[dict]:
     from ..db import begin
-    from .budget import BudgetGovernor
     from .llm_telemetry import record_llm_call, set_llm_context
     from .model_failures import explain
-    from .llm_telemetry import engine_call_is_included
-    from .openai_adapter import estimate_cost_usd_micros
 
-    budget = BudgetGovernor(settings)
     with begin(engine) as c:
         conv = _row(c, plan.project_id, plan.conversation_id, lock=True)
         roles = _roles(c, plan.project_id, list(dict.fromkeys(conv["seats"] + [speaker.role_key])))
@@ -1142,11 +1150,7 @@ def _speak(engine, settings: Any, plan: _Plan, speaker: _Speaker) -> Iterator[di
                              {"a": parent}).scalar()
         is_room = conv["kind"] == "room"
         scope = _scope(c, plan.project_id, speaker.role_key)
-        reservation = budget.reserve(c, plan.project_id, BUDGET_CATEGORY, plan.reserve_micros,
-                                     f"conversation {plan.conversation_id}",
-                                     expires_in_minutes=15)
-        held = reservation.get("reservation_id") if reservation.get("status") == "reserved" \
-            else None
+        held = None  # canonical authority is admitted after the visible turn exists
         label_kind = {"talk": "Talk", "plan": "Plan", "room": "Room"}[conv["kind"]]
         act_id = agent_acts.open_act(
             c, project_id=plan.project_id, kind="seat" if is_room else "chat",
@@ -1169,9 +1173,7 @@ def _speak(engine, settings: Any, plan: _Plan, speaker: _Speaker) -> Iterator[di
                             kind={"summary": "summary", "proposal": "proposal"}.get(
                                 plan.mode, "message"),
                             status="streaming", act_id=act_id, fingerprint=role.get("fingerprint"),
-                            # Until it finishes, the turn carries its reservation, so whoever
-                            # finds it cut off can give the budget back (_sweep).
-                            payload={"reservation_id": held} if held else {})
+                            payload={"spend_status": "not_admitted"})
         system_prompt = _compose(
             role, mode="panel" if is_room else "chat",
             act={"act_id": act_id, "label": f"{label_kind} · {conv['title']}",
@@ -1194,19 +1196,46 @@ def _speak(engine, settings: Any, plan: _Plan, speaker: _Speaker) -> Iterator[di
     turn_id = turn["turn_id"]
     # Once the turn exists it is settled exactly once, whatever happens next: completed below,
     # failed with a reason (`fail`), or — if the stream is closed mid-answer (Stop, a closed
-    # tab: GeneratorExit) or anything after this point raises — stopped by the `except` at the
-    # end. Never left 'streaming' with its act open and its budget held.
+    # tab: GeneratorExit) or anything after this point raises. Unknown accepted work
+    # retains its financial hold and requires reconciliation.
     finished = False
+    spend = None
+
+    def check_work():
+        if plan.authority is None:
+            raise RuntimeError("A verified conversation principal is required before model contact.")
+        plan.authority.check_work()
+        with begin(engine) as c:
+            current = _row(c, plan.project_id, plan.conversation_id)
+            active = c.execute(text(
+                "SELECT streaming_claim=:claim AND streaming_until>now() "
+                "FROM agent_conversations WHERE conversation_id=:cid"),
+                {"claim": plan.claim, "cid": plan.conversation_id}).scalar()
+            status = c.execute(text("SELECT status FROM agent_conversation_turns WHERE turn_id=:t"),
+                               {"t": turn_id}).scalar()
+            if current["actor"] != plan.actor or current["status"] == "closed" or not active or status != "streaming":
+                raise RuntimeError("Conversation authority changed before this reply completed.")
 
     def fail(error: Any) -> Iterator[dict]:
         nonlocal finished
         failure = explain(error)
+        if isinstance(error, TypedDecisionReconciliationRequired):
+            failure = {**failure, "kind": "outcome_unknown", "retry": False,
+                       "headline": "The model outcome needs reconciliation.",
+                       "action": "Reconcile the recorded receipt before asking again."}
         with begin(engine) as c2:
             _settle_cut_off(c2, settings, plan.project_id, turn_id, act_id, held, failure)
+            saved = c2.execute(text("SELECT payload,receipt_id,cost_usd FROM agent_conversation_turns WHERE turn_id=:t"),
+                               {"t": turn_id}).mappings().one()
+            failure = saved["payload"]
         finished = True
-        yield {"type": "error", "turn_id": turn_id, "error": failure}
+        yield {"type": "error", "turn_id": turn_id, "error": failure,
+               "receipt_id": saved["receipt_id"]}
         yield {"type": "turn_end", "turn_id": turn_id, "status": "error", "tokens_in": 0,
-               "tokens_out": 0, "cost_usd": 0, "cited_acts": []}
+               "tokens_out": 0, "cost_usd": (float(saved["cost_usd"])
+                   if failure.get("spend_status") == "settled" else None), "cited_acts": [],
+               "receipt_id": saved["receipt_id"],
+               "spend_status": failure.get("spend_status", "refused")}
 
     def record(**call: Any) -> None:
         # Attribution is set in the SAME generator step as the write. A streamed response
@@ -1228,10 +1257,11 @@ def _speak(engine, settings: Any, plan: _Plan, speaker: _Speaker) -> Iterator[di
                **({"reply_to_turn_id": speaker.reply_to_turn_id}
                   if speaker.reply_to_turn_id else {})}
 
-        if not held:
-            yield from fail(f"budget reservation denied: {reservation.get('message')}")
-            return
-
+        with begin(engine) as c:
+            if c.execute(text("SELECT status FROM agent_conversation_turns WHERE turn_id=:t"),
+                         {"t": turn_id}).scalar() != "streaming":
+                finished = True
+                return
         prompt_parts = [p for p in (
             about,
             f"The conversation so far:\n\n{transcript}" if transcript else "",
@@ -1246,27 +1276,44 @@ def _speak(engine, settings: Any, plan: _Plan, speaker: _Speaker) -> Iterator[di
             # this call's attribution too.
             set_llm_context(db_engine=engine, project_id=plan.project_id, stage="converse",
                             act_id=act_id, role_key=speaker.role_key, settings=settings)
-            for kind, value in _call(adapter, system_prompt, prompt):
+            check_work()
+            spend = ConversationCallSpend.for_runner(
+                settings, engine=engine, project_id=plan.project_id,
+                run_id=plan.conversation_id, step_id=turn_id, attempt=1,
+                actor=plan.authority.principal, worker_id=f"conversation:{turn_id}")
+            spend.agent_id = str(role.get("agent_id") or speaker.role_key)
+            spend.acting = plan.authority.acting
+            spend.max_cost_usd_micros = (REPLY_RESERVE_MICROS if plan.mode == "reply"
+                                          else SYNTHESIS_RESERVE_MICROS)
+            stream = spend.stream(settings, adapter, prompt=prompt,
+                                  system_prompt=system_prompt, check_work=check_work)
+            for kind, value in stream:
                 if kind == "chunk" and not structured:
                     yield {"type": "token", "turn_id": turn_id, "text": value}
                 elif kind == "done":
                     full, usage = value
                     usage = usage or {}
         except Exception as error:  # noqa: BLE001 — explained to the operator, never raised
+            if spend is not None and spend.producer_failed and plan.authority.incomplete:
+                plan.authority.incomplete()
             record(usage={}, ok=False, error=str(error))
             yield from fail(error)
             return
-        # What the turn is worth at list price; on a subscription or a local model that is
-        # not money (included_spend.py), so the budget settles $0 and the turn costs nothing.
-        worth = estimate_cost_usd_micros(usage) if usage else 0
-        included = engine_call_is_included(engine_name, usage)
-        cost = 0 if included else worth
-        record(usage=usage, cost_usd_micros=worth)
-        if not structured and not getattr(adapter, "stream_text_response", None):
-            for piece in _reveal(full):
-                yield {"type": "token", "turn_id": turn_id, "text": piece}
+        finally:
+            if spend is not None and "stream" in locals():
+                stream.close()
+        # Display the canonical settled cash, not a legacy engine-name inference.
+        with begin(engine) as c:
+            booked = c.execute(text(
+                "SELECT actual_usd_micros, equivalent_usd_micros, included_in_subscription "
+                "FROM cost_receipts WHERE receipt_id=:r"),
+                {"r": spend.authority.receipt_id}).mappings().one()
+        cost = int(booked["actual_usd_micros"])
+        worth = int(booked["equivalent_usd_micros"] or cost)
+        record(usage={**usage, "billing": ("subscription" if booked["included_in_subscription"]
+                                           else "api")}, cost_usd_micros=worth)
 
-        payload: dict = {}
+        payload: dict = {"spend_status": "settled"}
         content = full.strip()
         extra_events: list[dict] = []
         if structured:
@@ -1277,7 +1324,7 @@ def _speak(engine, settings: Any, plan: _Plan, speaker: _Speaker) -> Iterator[di
                         proposal = validate_proposal(c, settings, plan.project_id, parsed,
                                                      catalogue)
                         _supersede(c, plan.conversation_id)
-                        payload = proposal
+                        payload = {**proposal, "spend_status": "settled"}
                         content = str(parsed.get("message") or proposal["why"]
                                       or "Here is a plan.")
                         extra_events.append({"type": "proposal", "turn_id": turn_id,
@@ -1285,7 +1332,7 @@ def _speak(engine, settings: Any, plan: _Plan, speaker: _Speaker) -> Iterator[di
                     else:
                         summary = _validate_summary(c, settings, plan.project_id, parsed, conv,
                                                     speaker.role_key, catalogue)
-                        payload = summary
+                        payload = {**summary, "spend_status": "settled"}
                         content = summary["text"]
                         extra_events.append({"type": "summary", "turn_id": turn_id,
                                              "summary": summary})
@@ -1301,25 +1348,14 @@ def _speak(engine, settings: Any, plan: _Plan, speaker: _Speaker) -> Iterator[di
         receipt_id = None
         with begin(engine) as c:
             # Only a turn still streaming completes. One already settled as cut off (this
-            # stream outlived its claim and the next turn swept it) stays settled: its budget
-            # was given back and its act closed, so this answer is not recorded twice.
+            # stream outlived its claim and the next turn swept it) stays settled;
+            # its held or booked liability is not silently discarded.
             if not c.execute(text(
                     "UPDATE agent_conversation_turns SET status = 'complete' "
                     "WHERE turn_id = :t AND status = 'streaming'"), {"t": turn_id}).rowcount:
                 finished = True
                 return
-            receipt_id = _receipt(c, plan.project_id, turn_id,
-                                  {"conversation_id": plan.conversation_id, "turn_id": turn_id,
-                                   "role_key": speaker.role_key, "act_id": act_id},
-                                  {"tokens_in": tokens_in, "tokens_out": tokens_out,
-                                   "cost_usd_micros": cost, "model": usage.get("model"),
-                                   **({"included_in_subscription": True,
-                                       "equivalent_usd_micros": worth} if included else {})})
-            budget.consume(c, plan.project_id, held, receipt_id=receipt_id,
-                           category=BUDGET_CATEGORY,
-                           skill_or_model_id=f"converse:{usage.get('model') or 'model'}",
-                           estimated_usd_micros=plan.reserve_micros, actual_usd_micros=worth,
-                           actor=plan.actor, included_in_subscription=included)
+            receipt_id = spend.authority.receipt_id
             c.execute(text("""
                 UPDATE agent_conversation_turns SET content = :content,
                        payload = CAST(:payload AS JSONB), cited_acts = CAST(:cited AS JSONB),
@@ -1342,7 +1378,7 @@ def _speak(engine, settings: Any, plan: _Plan, speaker: _Speaker) -> Iterator[di
         yield from extra_events
         yield {"type": "turn_end", "turn_id": turn_id, "status": "complete",
                "tokens_in": tokens_in, "tokens_out": tokens_out, "cost_usd": cost / 1_000_000,
-               "receipt_id": receipt_id, "cited_acts": cited}
+               "receipt_id": receipt_id, "cited_acts": cited, "spend_status": "settled"}
     except BaseException as error:
         if not finished:
             try:

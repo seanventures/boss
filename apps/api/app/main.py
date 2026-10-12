@@ -1969,7 +1969,54 @@ async def one_effect_per_idempotency_key(request: Request, call_next):
     body = await request.body()
     fingerprint = idempotency.request_fingerprint(
         request.method, route_path, request.url.query, body)
+    from . import stream_intent
+    intent_family = stream_intent.family(request.method, route_path)
+    voice_intent = intent_family is not None
+    if voice_intent:
+        # A stored provider outcome cannot lend permission. Re-evaluate the existing
+        # route declaration and legacy project admission even for a completed replay.
+        from starlette.routing import Match
+        for route in app.routes:
+            matched, child = route.matches(request.scope)
+            if matched == Match.FULL:
+                request.scope.update(child)
+                request.scope["route"] = route
+                break
+        try:
+            await identity_guard.enforce_access(request)
+            data = await request.json()
+            with begin(engine) as connection:
+                project = str(data.get("project_id") or "")
+                claimed = str(data.get("actor") or "")
+                if intent_family == "conversation":
+                    who = _converse_actor(connection, project, claimed)
+                    conversation = _converse.get_conversation(
+                        connection, project, str(request.path_params.get("conversation_id") or ""))
+                    if conversation["actor"] != who:
+                        raise HTTPException(status_code=404, detail="No such conversation.")
+                    _conversation_authority(request, project).check_work()
+                else:
+                    require_project_write_actor(connection, project, claimed, "role_review")
+        except identity_guard.AccessRefused as error:
+            return JSONResponse(status_code=error.outcome.status,
+                                content=error.outcome.error_body())
+        except _converse.ConverseError as error:
+            return JSONResponse(status_code=error.status, content={"detail": error.detail()})
+        except HTTPException as error:
+            return JSONResponse(status_code=error.status_code, content={"detail": error.detail})
+        except (ValueError, TypeError, AttributeError):
+            return JSONResponse(status_code=422, content={"detail": "Invalid model-stream request."})
+        ctx = getattr(request.state, "identity", None)
+        if ctx is not None:
+            principal = str(ctx.principal.id)
     owner = {"principal": principal, "key": key}
+    if voice_intent:
+        request.state.voice_intent = stream_intent.intent_id(principal, key)
+        request.state.voice_intent_owner = owner
+        request.state.voice_intent_fingerprint = fingerprint
+        # BaseHTTPMiddleware can exhaust its outer iterator before re-raising a
+        # producer failure. Only the actual model-stream producer may certify completion.
+        request.state.voice_stream_completed = False
     claim = await run_in_threadpool(
         _idempotency_claim, method=request.method, path=route_path,
         fingerprint=fingerprint, **owner)
@@ -1991,12 +2038,25 @@ async def one_effect_per_idempotency_key(request: Request, call_next):
     try:
         response = await call_next(request)
     except BaseException:
-        # A handler that raised has decided nothing; the same press must be able to try again.
+        # Only an uncommitted generic intent is released. A voice provider outcome may
+        # already be unknown, so release preserves its durable domain commitment.
         await run_in_threadpool(_idempotency_release, **owner)
         raise
     content_type = response.headers.get("content-type", "")
+    if voice_intent and idempotency.is_streaming(content_type):
+        async def finish(payload):
+            if not getattr(request.state, "voice_stream_completed", False):
+                return
+            await run_in_threadpool(
+                _idempotency_complete, status_code=response.status_code, body=payload,
+                content_type=content_type or None,
+                headers=idempotency.replayable_headers(response.raw_headers), **owner)
+        response.body_iterator = stream_intent.record_live(
+            response.body_iterator, limit=idempotency.MAX_STORED_BODY_BYTES, finish=finish)
+        return response
     if (not idempotency.remembers(response.status_code)
             or idempotency.is_streaming(content_type)):
+        # release refuses a durable intent: a provider error is not proof of no effect.
         await run_in_threadpool(_idempotency_release, **owner)
         return response
     chunks: list[bytes] = []
@@ -13056,7 +13116,7 @@ def _run_agent_chat(payload: AgentChatRequest, request: Request, *, endpoint: st
             # opposite. Five words that name nothing could not be acted on; the replacement,
             # the exception's class and text, put "IntegrityError: (psycopg.errors.
             # UniqueViolation) duplicate key value … [SQL: INSERT INTO agent_threads …" in the
-            # dock on shared-server. One explainer (model_failures.explain_turn_failure) turns any
+            # dock on an existing install. One explainer (model_failures.explain_turn_failure) turns any
             # failure into a sentence; the technical line rides along for a collapsed Details,
             # and the whole traceback goes to the log.
             LOGGER.exception("agent chat failed on %s", endpoint)
@@ -17788,40 +17848,26 @@ def setup_coding_agents(response: Response, project_id: str = "") -> dict:
 @permit(P.MODEL_PROVIDER_MANAGE, scope=Scope.project(body="project_id"))
 def setup_store_coding_agent_credential(payload: open_bodies.CodingAgentCredentialBody,
                                         response: Response) -> dict:
-    """DEPRECATED: POST /v1/setup/models with `credential` (stores and proves in one press).
-    Stores a subscription's credential in whatever store this installation has."""
+    """DEPRECATED: supplied subscription import awaits candidate-isolated proof.
+
+    Existing authenticated CLI sessions can connect through POST /v1/setup/models.
+    """
     payload = payload.payload()
-    from .services.setup_service import (
-        SecretFallbackNotAccepted,
-        SetupError,
-        store_coding_agent_credential,
-    )
+    from .services.setup_actions import subscription_import_refusal
 
     _deprecated(response, "/v1/setup/models")
     project_id = str(payload.get("project_id") or "").strip()
     actor = str(payload.get("actor") or "").strip() or (
         current_api_principal.get() or "ceo")
     provider = str(payload.get("provider") or "").strip().lower()
-    credential = str(payload.get("credential") or "")
-    accept = bool(payload.get("accept_database_fallback"))
     if not project_id or not provider:
         raise HTTPException(status_code=400, detail="project_id and provider are required")
     with begin() as connection:
         require_project_actor(connection, project_id, actor, "entitlement_manage")
-        try:
-            return store_coding_agent_credential(
-                connection, get_settings(), project_id, provider, credential, actor=actor,
-                accept_database_fallback=accept)
-        except SecretFallbackNotAccepted as exc:
-            # 409, not 422: what is missing is a decision, named so a client can ask for it.
-            raise HTTPException(status_code=409, detail={
-                "error": "secret_store_fallback_not_accepted",
-                "message": str(exc),
-                "backend": exc.backend,
-                "resend_with": {"accept_database_fallback": True},
-            }) from exc
-        except SetupError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        refusal = subscription_import_refusal()
+        raise HTTPException(status_code=refusal.status, detail=refusal.detail,
+                            headers={"Deprecation": "true",
+                                     "Link": '</v1/setup/models>; rel="successor-version"'})
 
 
 @app.get("/v1/setup/decision-model")
@@ -20551,34 +20597,47 @@ def apply_changeset(
     changeset_id: str,
     payload: ChangeSetApplyRequest,
 ) -> ChangeSetApplyResponse:
-    with begin(engine) as connection:
-        project_id = project_id_for_changeset(connection, changeset_id)
-        require_project_actor(
-            connection,
-            project_id,
-            payload.actor,
-            "providerops_manage",
-        )
+    from boss_engine.services.changeset_apply import (
+        ApplyAuthorityRefused, apply_changeset as durable_apply,
+    )
+
+    def authorize(connection, project_id):
         try:
-            result = resource_plane.apply_changeset(
-                connection,
-                changeset_id=changeset_id,
-                actor=payload.actor,
-                created_by_job_id=payload.created_by_job_id,
-                dry_run=payload.dry_run,
-            )
-        except (ChangeSetNotFoundError, ValueError) as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
-        return ChangeSetApplyResponse(
-            status=result["status"],
-            changeset=ChangeSetSummary(**result["changeset"]),
-            resource_receipts=[
-                ResourceReceiptSummary(**item)
-                for item in result.get("resource_receipts", [])
-            ],
-            expected_receipts=result.get("expected_receipts"),
-            decision_id=result.get("decision_id"),
-        )
+            require_project_actor(connection, project_id, payload.actor, "providerops_manage")
+        except HTTPException as error:
+            raise ApplyAuthorityRefused("Current ChangeSet apply permission is required.") from error
+        if identity_guard.identity_enforced():
+            from boss_engine.identity import authz, request_memo
+            from boss_engine.identity.scope import ResolvedScope
+            ctx = identity_guard.REQUEST_IDENTITY.get()
+            if ctx is None:
+                raise ApplyAuthorityRefused("A canonical principal is required.")
+            request_memo.clear()
+            decision = authz.check(ctx, P.CHANGESET_APPROVE,
+                                  ResolvedScope.in_project(ctx.principal.org_id, project_id),
+                                  db=connection)
+            if not decision.allowed:
+                raise ApplyAuthorityRefused("Current ChangeSet apply permission is required.")
+        return payload.actor
+
+    try:
+        result = durable_apply(engine, resource_plane, changeset_id=changeset_id,
+                               authorize=authorize, created_by_job_id=payload.created_by_job_id,
+                               dry_run=payload.dry_run)
+    except ApplyAuthorityRefused as error:
+        raise HTTPException(status_code=403, detail=str(error)) from error
+    except (ChangeSetNotFoundError, ValueError) as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    return ChangeSetApplyResponse(
+        status=result["status"],
+        changeset=ChangeSetSummary(**result["changeset"]),
+        resource_receipts=[
+            ResourceReceiptSummary(**item)
+            for item in result.get("resource_receipts", [])
+        ],
+        expected_receipts=result.get("expected_receipts"),
+        decision_id=result.get("decision_id"),
+    )
 
 
 @app.post(
@@ -22694,6 +22753,8 @@ def budget_status(scope_type: str, scope_id: str) -> BudgetStatusResponse:
             resets_at_label=snapshot.get("resets_at_label"),
             budget_timezone=snapshot.get("budget_timezone"),
             periods=snapshot.get("periods") or {},
+            legacy_financial_hold=snapshot.get("legacy_financial_hold"),
+            legacy_provider_hold=snapshot.get("legacy_provider_hold"),
         )
 
 
@@ -25233,7 +25294,7 @@ def list_delivery_runs(project_id: str, limit: int = 25) -> dict:
         runs = connection.execute(
             text(
                 """
-                SELECT r.id, r.status, r.actor, r.input, r.blocked_reason, r.error,
+                SELECT r.id, r.project_id, r.dedupe_key, r.status, r.actor, r.input, r.blocked_reason, r.error,
                        r.created_at, r.updated_at, r.completed_at,
                        d.workflow_key, d.name AS workflow_name, v.version, v.spec
                 FROM workflow_runs r
@@ -25519,6 +25580,8 @@ def list_delivery_runs(project_id: str, limit: int = 25) -> dict:
         )
         out.append({
             "id": run["id"],
+            "project_id": run["project_id"],
+            "dedupe_key": run["dedupe_key"],
             "status": run["status"],
             "workflow_key": run["workflow_key"],
             "workflow_name": run["workflow_name"],
@@ -26448,6 +26511,19 @@ def start_delivery_workflow(payload: WorkflowStartBody, connection_in: Any = Non
     actor = _delivery_workflow_actor(payload)
     if not project_id:
         raise HTTPException(status_code=400, detail="project_id is required")
+    if payload.get("agreement_content_hash") or payload.get("agreement_binding_token"):
+        if any(payload.get(key) for key in ("from_run", "from_discovery", "replaces_run", "rerun_of", "sample")):
+            raise HTTPException(409, "This agreement is for new work. Review a separate intent before adopting or replacing work.")
+        # A first-work agreement cannot acquire hidden adoption/extension fields through
+        # the existing start handler's input normalization.
+        from boss_engine.services.work_agreement import first_input
+        original_input = payload.get("input")
+        try:
+            canonical_input = first_input(str((original_input or {}).get("directive") or "")) if isinstance(original_input, dict) else None
+        except ValueError:
+            canonical_input = None
+        if canonical_input is None or original_input != canonical_input:
+            raise HTTPException(409, "The supplied brief changed. Review the current agreement before starting.")
     with _tx() as connection:
         require_project_actor(connection, project_id, actor, "workflow_execute")
     run_input = payload.get("input") if isinstance(payload.get("input"), dict) else {}
@@ -26615,6 +26691,23 @@ def start_delivery_workflow(payload: WorkflowStartBody, connection_in: Any = Non
         require_project_actor(connection, project_id, actor, "workflow_execute")
         _authorize_delivery_target_input(connection, project_id, actor, run_input)
         version_id = None
+        agreement_hash = payload.get("agreement_content_hash")
+        agreement_token = payload.get("agreement_binding_token")
+        if agreement_hash or agreement_token:
+            if not agreement_hash or not agreement_token:
+                raise HTTPException(409, "Review the work again; both agreement binding fields are required.")
+            from boss_engine.services import work_agreement
+            from .routers.work_agreement import principal_binding
+            try:
+                version_id = work_agreement.validate(
+                    connection, settings, project_id=project_id, principal=principal_binding(actor),
+                    run_input=run_input, work_class=work_class, workflow_key=workflow_key,
+                    start_anyway=payload.get("start_anyway") or [],
+                    content_hash=agreement_hash, binding_token=agreement_token)
+            except work_agreement.AgreementConflict as error:
+                raise HTTPException(409, str(error)) from error
+            # A confirmation replay is one intent, independent of its HTTP press key.
+            payload["dedupe_key"] = work_agreement.intent_key(agreement_token)
         if workflow_key:
             # THE VERSION THAT RUNS. version DESC is the abandoned spec after a revert:
             # re-saving an earlier configuration reactivates it without a new number, and
@@ -29698,7 +29791,7 @@ def _agent_voice_row(connection, project_id: str, role_key: str) -> dict[str, An
 
 
 def _agent_voice_gate(project_id: str, role_key: str, actor: Optional[str],
-                      persona: Optional[dict[str, Any]], effect: str, reason: str):
+                      persona: Optional[dict[str, Any]], effect: str, reason: str, request: Optional[Request] = None):
     """Everything checked before a voice call spends anything: who, which agent, a model, the
     budget. Returns (actor, role row with any unsaved persona, the request's VoiceSpend —
     which the caller must close(), in a finally, so the spend is settled or released)."""
@@ -29713,8 +29806,29 @@ def _agent_voice_gate(project_id: str, role_key: str, actor: Optional[str],
         if not agent_voice.model_ready(connection, settings, project_id):
             raise HTTPException(status_code=409, detail=agent_voice.NEEDS_MODEL)
         try:
+            ctx = identity_guard.REQUEST_IDENTITY.get()
+            principal = str(ctx.principal.id) if ctx is not None else who
+            intent = getattr(request.state, "voice_intent", None) if request else None
+            owner = getattr(request.state, "voice_intent_owner", None) if request else None
+            fingerprint = getattr(request.state, "voice_intent_fingerprint", None) if request else None
+            enforced = identity_guard.identity_enforced()
+            def check_voice_permission():
+                if ctx is not None and enforced:
+                    from boss_engine.identity import authz, request_memo
+                    from boss_engine.identity.scope import ResolvedScope
+                    # A second call in a long stream must not borrow the first call's
+                    # cached permission after the principal or its binding was revoked.
+                    request_memo.clear()
+                    permission = P.AGENT_TEST if effect == "model.agent_voice_test" else P.AGENT_CREATE
+                    decision = authz.check(ctx, permission,
+                        ResolvedScope.in_project(ctx.principal.org_id, project_id))
+                    if not decision.allowed:
+                        raise RuntimeError("Voice request permission is no longer granted.")
             spend = agent_voice.open_spend(connection, engine, settings, project_id, effect,
-                                           reason, {"role_key": role_key, "actor": who})
+                reason, {"role_key": role_key, "actor": principal,
+                         "agent_id": str(row.get("agent_id") or role_key)}, intent=intent,
+                protect=(lambda c: idempotency.protect(c, fingerprint=fingerprint, **owner)) if owner else None,
+                check_work=check_voice_permission)
         except agent_voice.VoiceError as refused:
             raise HTTPException(status_code=409, detail=refused.payload) from refused
     return who, agent_voice.voiced_role(row, persona), spend
@@ -29811,7 +29925,7 @@ def agent_card_endpoint(role_key: str, project_id: str):
 
 @app.post("/v1/agents/{role_key}/persona/draft")
 @permit(P.AGENT_CREATE, scope=Scope.project(body="project_id"))
-def agent_persona_draft_endpoint(role_key: str, body: AgentPersonaDraftBody):
+def agent_persona_draft_endpoint(role_key: str, body: AgentPersonaDraftBody, request: Request = None):
     """`Draft it`: one model call in the agent's own composed voice. Saves nothing."""
     from boss_engine.services import agent_voice
     from boss_engine.services.agent_persona import lint_persona
@@ -29820,15 +29934,19 @@ def agent_persona_draft_endpoint(role_key: str, body: AgentPersonaDraftBody):
 
     who, row, spend = _agent_voice_gate(
         body.project_id, role_key, body.actor, body.persona, "model.agent_persona_draft",
-        f"Draft {body.field} for {role_key}")
+        f"Draft {body.field} for {role_key}", request)
     try:
         raw, usage = spend.ask(system=agent_voice.system_prompt(
                                    row, _instructions_for(body.project_id, role_key, "chat")),
                                prompt=agent_voice.draft_prompt(body.field))
     except Exception as error:  # noqa: BLE001 — explained, never a bare 500
         spend.close(error=str(error))
+        explanation = explain(error.__cause__ or error)
+        if spend.uncertain:
+            explanation = {**explanation, "retry": False,
+                           "headline": "The model outcome is unknown. Reconcile its recorded receipt before retrying."}
         raise HTTPException(status_code=502, detail={"code": "model_failed",
-                                                     "error": explain(error)}) from error
+                                                     "error": explanation}) from error
     finally:
         spend.close()
     draft = agent_voice.clip_draft(body.field, raw)
@@ -29844,7 +29962,7 @@ def agent_persona_draft_endpoint(role_key: str, body: AgentPersonaDraftBody):
 
 @app.post("/v1/agents/{role_key}/test")
 @permit(P.AGENT_TEST, scope=Scope.project(body="project_id"))
-def agent_voice_test_endpoint(role_key: str, body: AgentVoiceTestBody):
+def agent_voice_test_endpoint(role_key: str, body: AgentVoiceTestBody, request: Request = None):
     """`Test`: a probe, answered through the agent's exact composed prompt, streamed as SSE.
 
     Events: `token` {text}* then `result` {voice 0-5, in_remit, says_ai, fingerprint, …};
@@ -29857,15 +29975,19 @@ def agent_voice_test_endpoint(role_key: str, body: AgentVoiceTestBody):
 
     who, row, spend = _agent_voice_gate(
         body.project_id, role_key, body.actor, body.persona, "model.agent_voice_test",
-        f"Test {body.probe} for {role_key}")
+        f"Test {body.probe} for {role_key}", request)
 
     def sse(event: str, data: dict[str, Any]) -> str:
         return f"event: {event}\ndata: {json.dumps(data, default=str)}\n\n"
 
     def stream():
-        # A finally, not a trailing call: a client that drops mid-stream closes this generator
-        # at a yield, and the spend must still be settled (or the hold released) right then.
+        completed = False
+        # An observed generator interruption still closes the spend bookkeeping.
+        # Network disconnect alone does not prove cancellation or provider rejection.
         try:
+            # Standard SSE comment: no model result or authority claim. Starlette's
+            # compression layer releases headers on the first body chunk even for SSE.
+            yield ": voice intent admitted\n\n"
             try:
                 reply, usage = spend.ask(system=agent_voice.system_prompt(
                                              row, _instructions_for(body.project_id, role_key,
@@ -29873,7 +29995,16 @@ def agent_voice_test_endpoint(role_key: str, body: AgentVoiceTestBody):
                                          prompt=agent_voice.PROBES[body.probe]["prompt"])
             except Exception as error:  # noqa: BLE001
                 spend.close(error=str(error))
-                yield sse("error", {"error": explain(error)})
+                explanation = explain(error.__cause__ or error)
+                if spend.uncertain:
+                    explanation = {**explanation, "retry": False,
+                                   "headline": "The model outcome is unknown. Reconcile its recorded receipt before retrying.",
+                                   "action": "Reconcile the recorded invocation receipts before retrying."}
+                yield sse("error", {"error": explanation,
+                                    "receipt_id": spend.receipt_id,
+                                    "receipt_ids": spend.receipt_ids,
+                                    "spend_status": "needs_reconciliation" if spend.uncertain else "refused"})
+                completed = True
                 return
             for piece in agent_voice.chunks(reply):
                 yield sse("token", {"text": piece})
@@ -29888,7 +30019,9 @@ def agent_voice_test_endpoint(role_key: str, body: AgentVoiceTestBody):
             result = {**agent_voice.score(row, body.probe, reply, judgement),
                       "probe": body.probe, "fingerprint": row.get("fingerprint") or "",
                       "version": int(row.get("identity_version") or 1),
-                      "draft": body.persona is not None, "receipt_id": spend.receipt_id}
+                      "draft": body.persona is not None, "receipt_id": spend.receipt_id,
+                      "receipt_ids": spend.receipt_ids,
+                      "spend_status": "needs_reconciliation" if spend.uncertain else "settled"}
             try:
                 with begin(engine) as connection:
                     emit_event(connection, body.project_id, "agent.tested", who, "agent",
@@ -29900,8 +30033,21 @@ def agent_voice_test_endpoint(role_key: str, body: AgentVoiceTestBody):
             except Exception:  # noqa: BLE001 — the operator still gets the result
                 logging.getLogger(__name__).warning("agent.tested not recorded", exc_info=True)
             yield sse("result", result)
+            if spend.uncertain:
+                # Preserve the usable reply/score, then expose the unsettled judgement
+                # through the existing client's visible error channel as well.
+                yield sse("error", {"error": {
+                    "kind": "outcome_unknown", "retry": False,
+                    "headline": "The judgement outcome is unknown. Reconcile its recorded receipt before retrying."},
+                    "receipt_id": spend.receipt_id, "receipt_ids": spend.receipt_ids,
+                    "spend_status": "needs_reconciliation"})
+            completed = True
         finally:
             spend.close()
+            if completed and request is not None:
+                # Shared scope state reaches the outer recorder. Set it only after
+                # the actual terminal yield was consumed and final close succeeded.
+                request.state.voice_stream_completed = True
 
     # The background close covers a stream that was never started at all (idempotent).
     return StreamingResponse(stream(), media_type="text/event-stream",
@@ -30475,6 +30621,23 @@ from .routers.architecture import build_architecture_router
 
 app.include_router(build_architecture_router(engine=engine,
                                              require_reader=require_project_reader))
+from .routers.deliverable_review import build_deliverable_review_router
+
+app.include_router(build_deliverable_review_router(
+    engine=engine, require_reader=require_code_task_reader,
+    require_write_actor=require_project_write_actor,
+))
+from .routers.work_agreement import build_work_agreement_router
+
+app.include_router(build_work_agreement_router(
+    engine=engine, settings=lambda: settings, require_reader=require_project_reader,
+    actor_of=_delivery_workflow_actor))
+from .routers.acceptance_templates import build_acceptance_templates_router
+
+app.include_router(build_acceptance_templates_router(
+    engine=engine, require_reader=require_project_reader,
+    require_write_actor=require_project_write_actor,
+))
 from .hardware_api import mount_hardware_routes
 
 mount_hardware_routes(app, require_project_actor, require_project_reader)
@@ -30591,17 +30754,56 @@ def get_conversation_endpoint(conversation_id: str, project_id: str,
         return conversation
 
 
+def _conversation_authority(request: Request, project: str):
+    from boss_engine.identity import authz, lineage, request_memo
+    from boss_engine.identity.scope import ResolvedScope
+    from boss_engine.services.conversation_spend import ConversationAuthority
+
+    ctx = identity_guard.REQUEST_IDENTITY.get()
+    if ctx is None:
+        raise HTTPException(status_code=403, detail="A signed-in principal is required to ask an agent.")
+    def check_work():
+        request_memo.clear()
+        decision = authz.check(ctx, P.MEETING_CONVENE,
+                              ResolvedScope.in_project(ctx.principal.org_id, project))
+        if not decision.allowed:
+            raise HTTPException(status_code=403, detail="Conversation permission is no longer granted.")
+    owner = getattr(request.state, "voice_intent_owner", None)
+    fingerprint = getattr(request.state, "voice_intent_fingerprint", None)
+    return ConversationAuthority(
+        principal=str(ctx.principal.id),
+        acting=lineage.current() or lineage.Acting(
+            principal_id=str(ctx.principal.id), org_id=ctx.principal.org_id),
+        check_work=check_work,
+        protect=(lambda c: idempotency.protect(c, fingerprint=fingerprint, **owner)) if owner else None,
+        incomplete=lambda: setattr(request.state, "conversation_producer_failed", True),
+    )
+
+
 def _converse_stream(request: Request, project_id: str, claimed: Optional[str], endpoint: str,
                      open_stream) -> StreamingResponse:
     with begin(engine) as connection:
         actor = _converse_actor(connection, project_id, claimed)
+    authority = _conversation_authority(request, project_id)
+    authority.check_work()
     _enforce_high_cost_rate_limit(request, project_id, actor, endpoint=endpoint)
     try:
-        events = open_stream(actor)
+        events = open_stream(actor, authority)
     except _converse.ConverseError as error:
         raise _converse_refused(error) from error
-    return StreamingResponse(_converse.sse(events), media_type="text/event-stream",
-                             headers=_SSE_HEADERS)
+
+    def stream():
+        completed = False
+        try:
+            yield from _converse.sse(events)
+            completed = True
+        finally:
+            events.close()
+            if completed and not getattr(request.state, "conversation_producer_failed", False):
+                request.state.voice_stream_completed = True
+
+    return StreamingResponse(stream(), media_type="text/event-stream", headers=_SSE_HEADERS,
+                             background=BackgroundTask(events.close))
 
 
 @app.post("/v1/conversations/{conversation_id}/turns")
@@ -30612,10 +30814,10 @@ def conversation_turn_endpoint(conversation_id: str, payload: ConversationTurnBo
     project_id = str(payload.project_id or "")
     return _converse_stream(
         request, project_id, payload.actor, "/v1/conversations/turns",
-        lambda actor: _converse.take_turn(
+        lambda actor, authority: _converse.take_turn(
             engine, project_id=project_id, conversation_id=conversation_id, actor=actor,
             message=str(payload.message or ""), to=list(payload.to or []),
-            rounds=int(payload.rounds or 1), settings=settings))
+            rounds=int(payload.rounds or 1), settings=settings, authority=authority))
 
 
 @app.post("/v1/conversations/{conversation_id}/summary")
@@ -30626,9 +30828,9 @@ def conversation_summary_endpoint(conversation_id: str, payload: open_bodies.Pro
     project_id = str(payload.project_id or "")
     return _converse_stream(
         request, project_id, payload.actor, "/v1/conversations/summary",
-        lambda actor: _converse.summarize_room(
+        lambda actor, authority: _converse.summarize_room(
             engine, project_id=project_id, conversation_id=conversation_id, actor=actor,
-            settings=settings))
+            settings=settings, authority=authority))
 
 
 @app.post("/v1/conversations/{conversation_id}/propose")
@@ -30639,9 +30841,9 @@ def conversation_propose_endpoint(conversation_id: str, payload: open_bodies.Pro
     project_id = str(payload.project_id or "")
     return _converse_stream(
         request, project_id, payload.actor, "/v1/conversations/propose",
-        lambda actor: _converse.propose_start(
+        lambda actor, authority: _converse.propose_start(
             engine, project_id=project_id, conversation_id=conversation_id, actor=actor,
-            settings=settings))
+            settings=settings, authority=authority))
 
 
 @app.post("/v1/conversations/{conversation_id}/start")

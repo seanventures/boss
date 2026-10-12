@@ -4,7 +4,7 @@
 
 <p align="center">
   <strong>The self-hosted control plane for AI software work.</strong><br>
-  Give it a goal. Review the plan, the spend, and the evidence before anything leaves your machine.
+  Delegate a bounded change. Review the plan, the result, and the cost evidence.
 </p>
 
 <p align="center">
@@ -63,7 +63,7 @@ BOSS runs as a small set of services on one machine: **Postgres** as the durable
 
 ## Deploy
 
-BOSS runs on a server you control, and your team reaches Mission Control over HTTPS on your domain or your private network. A fresh Ubuntu 22.04/24.04 or Debian 12/13 VM works out of the box; the installer sets up Docker, generates credentials, starts the services, seeds your first project, and verifies everything is healthy.
+BOSS runs on a server you control, and your team reaches Mission Control over HTTPS on your domain or your private network. The installer targets Ubuntu 22.04/24.04 and Debian 12/13: it can set up Docker, generate credentials, start the services, seed your first project and check service health. The current candidate has bounded installed checks on an owned Linux arm64 environment with existing Docker; supported clean-host installation and useful provider work remain separate qualification steps. Read the [RC9 validation record](docs/community/RC9_VALIDATION.md) before relying on those paths.
 
 **1. Pick an address.** Use a domain such as `boss.example.com` with a DNS record pointing at the server, or the server's private IP on your network, such as `192.168.1.50`.
 

@@ -21,6 +21,8 @@ describe("the shared section label", () => {
     const rows = [...document.body.querySelectorAll('[data-testid^="su-row-"]')];
     expect(rows.length).toBeGreaterThan(3);
     for (const row of rows) {
+      // A part of another row (rc9: the model sources inside Models) shares that row's label.
+      if (row.parentElement?.closest('[data-testid^="su-row-"]')) continue;
       const label = row.querySelector(".su-row-label .section-label");
       expect(label?.getAttribute("data-level"), row.getAttribute("data-testid") ?? "").toBe("2");
     }

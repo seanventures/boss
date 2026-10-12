@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import stat
+import subprocess
 import sys
 from pathlib import Path
 
@@ -72,3 +73,18 @@ def test_below_the_threshold_nothing_is_pruned(tmp_path, monkeypatch):
     assert out["pruned"] is False
     assert not (tmp_path / "docker.log").exists()
     assert os.environ["BOSS_DEDICATED_HOST"] == "1"
+
+
+def test_cleanup_preview_does_not_mutate_even_on_a_full_dedicated_host(tmp_path):
+    _fake_docker(tmp_path)
+    df = tmp_path / "df"
+    df.write_text("#!/bin/sh\nprintf 'Filesystem Size Used Avail Use%% Mounted\\n/dev/test 100G 96G 4G 96%% /\\n'\n")
+    df.chmod(df.stat().st_mode | stat.S_IEXEC)
+    env = {**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}",
+           "BOSS_DEDICATED_HOST": "1"}
+    result = subprocess.run(["bash", str(PRUNE), "--dry-run"], env=env,
+                            capture_output=True, text=True, check=True)
+    calls = (tmp_path / "docker.log").read_text().splitlines()
+    assert calls and all(call.split()[0] in {"info", "ps", "images"} for call in calls)
+    assert "would run: docker image prune" in result.stdout
+    assert "would run: docker builder prune" in result.stdout

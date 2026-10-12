@@ -9,8 +9,9 @@
  * server decides every pill. While setup is unfinished the board runs as a stepper —
  * 1 GitHub (the one "Sign in with GitHub"), 2 Repos, 3 Model, 4 Try it — and after the first pull
  * request it is a board. Everything else (the org's own GitHub App, the multi-repo registry, CI
- * permission, build database, toolchains, capacity, routing, budget, public URL) folds under
- * ADVANCED, each with one plain line; a deep link to any of them opens the fold on it.
+ * permission, build database, toolchains, routing, budget, public URL) folds under ADVANCED,
+ * each with one plain line; a deep link to any of them opens the fold on it. The model sources
+ * (capacity) sit inside 3 Model since rc9, so `focus=capacity` lands there.
  *
  * Deep links: `?area=setup&focus=repository|repositories|models|jobs|routing|budget|try` (routing = jobs), `&add=<provider>` opens Add a
  * model on that provider, `&source=<id>` opens that model's menu, legacy `step=github|model` maps
@@ -55,7 +56,6 @@ const ADVANCED: Record<string, { line: string; tip: string }> = {
         tip: "Off by default. Asked for only when a build needs to change CI." },
   build_database: { line: "Postgres for builds that need it", tip: "Auto, Always or Never." },
   toolchains: { line: "What builds can compile and run", tip: "Python and Node always; others on the host." },
-  capacity: { line: "Model logins and subscriptions", tip: "Every model seat BOSS knows, and how to sign in." },
   jobs: { line: "Which model does which job", tip: "Pin a model to a job, or let BOSS route." },
   budget: { line: "Monthly spend cap", tip: "BOSS pauses model spend at the cap." },
   public_url: { line: "Address used in emailed links", tip: "Sign-in, passkeys and emailed links use it." },
@@ -284,13 +284,13 @@ export function SetupBoard({ projectId, actor, initialView = null }: {
                }}
                title="Describe one small change; BOSS opens a pull request on your repository."
                data-tip="Describe one small change; BOSS opens a pull request on your repository.">
-              Next: open your first PR
+              Next: open a PR
             </a>
           ) : view.ready ? (
             <a className="su-link" href="?area=skills&setup=1" data-testid="su-next-skills"
                title="Choose what your agents can do: research, tickets, email."
                data-tip="Choose what your agents can do: research, tickets, email.">
-              Next: give your crew skills
+              Next: add skills
             </a>
           ) : null}
           <span className="su-spacer" />
@@ -317,9 +317,12 @@ export function SetupBoard({ projectId, actor, initialView = null }: {
         <RepositoryRow ref={ref("repository")} mode={rowMode(view, "repository")}
                        step={shift(stepNumber(view, "repository"))} focused={focus === "repository"} />
         <ModelsRow ref={ref("models")} mode={rowMode(view, "models")}
-                   step={shift(stepNumber(view, "models"))} focused={focus === "models"}
+                   step={shift(stepNumber(view, "models"))} focused={focus === "models" || focus === "capacity"}
                    add={params.add} source={params.source}
-                   onAddHandled={() => setParams((p) => ({ ...p, add: null }))} />
+                   onAddHandled={() => setParams((p) => ({ ...p, add: null }))}>
+          {/* rc9 (BOSS-434/437): the model sources sit inside Models, one heading and panel. */}
+          <CapacityRow ref={ref("capacity")} actor={actor} focused={focus === "capacity"} />
+        </ModelsRow>
         <TryRow ref={ref("try")} mode={rowMode(view, "try")} step={shift(stepNumber(view, "try"))}
                 focused={focus === "try"} />
         <details className="su-advanced" data-testid="su-advanced" ref={ref("advanced")} open={advancedOpen}
@@ -336,7 +339,6 @@ export function SetupBoard({ projectId, actor, initialView = null }: {
           <div className="su-adv-item" ref={ref("ci")}><Why id="ci" /><CiPermission /></div>
           <div className="su-adv-item" ref={ref("build_database")}><Why id="build_database" /><BuildDatabaseRow /></div>
           <div className="su-adv-item" ref={ref("toolchains")}><Why id="toolchains" /><ToolchainsRow /></div>
-          <div className="su-adv-item"><Why id="capacity" /><CapacityRow ref={ref("capacity")} actor={actor} focused={focus === "capacity"} /></div>
           {/* Model routing — where "Who does what" lived; its rows are "Pin a job" inside. */}
           <div className="su-adv-item"><Why id="jobs" /><RoutingRow ref={ref("jobs")} mode={rowMode(view, "jobs")} focused={focus === "jobs"} /></div>
           <div className="su-adv-item"><Why id="budget" /><BudgetRow ref={ref("budget")} mode={rowMode(view, "budget")} focused={focus === "budget"} /></div>
