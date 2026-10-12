@@ -159,7 +159,8 @@ _PHASE_OF = {"awaiting_approval": "needs_approval", "planned": "needs_approval",
 def deploy_status(raw_status: Optional[str], *, decision_status: Optional[str] = None,
                   steps: Any = None, health: Any = None, url: Optional[str] = None,
                   failure: Optional[str] = None, newest_for_target: bool = True,
-                  success_means_healthy: bool = False) -> dict[str, Any]:
+                  success_means_healthy: bool = False,
+                  fixed_later: bool = False) -> dict[str, Any]:
     """THE ONE READING OF A DEPLOY'S STATE: phase, word, tone, a sentence, the step running now,
     and the app's address when (and only when) the deploy went live and passed its health check.
 
@@ -197,6 +198,22 @@ def deploy_status(raw_status: Optional[str], *, decision_status: Optional[str] =
         # A stack deployment reaches `succeeded` only after its manifest's health checks pass
         # (stack_deploy.py), so its status IS the health verdict.
         healthy = True
+    if phase == "live" and not newest_for_target:
+        # ONLY THE CURRENT DEPLOY IS LIVE. An older success said "Live at …" in its drawer
+        # while the row beside it said Done.
+        sentence = (f"Was live at {address or 'its host'}. A later deploy of this app "
+                    "replaced it.")
+        return {"phase": "replaced", "word": w["word"], "tone": w["tone"], "sentence": sentence,
+                "now": None, "open_url": None, "health": checked,
+                "healthy": healthy if checks else None}
+    if phase == "failed" and fixed_later:
+        # HISTORY, NOT A PROBLEM. A blocked deploy stayed red, and counted under Failed, after
+        # later deploys of the same target had succeeded.
+        first = (str(failure or "").strip().splitlines() or [""])[0][:200]
+        return {"phase": "failed_earlier", "word": "Failed earlier", "tone": "grey",
+                "sentence": (f"{first} A later deploy of this app succeeded." if first
+                             else "A later deploy of this app succeeded."),
+                "now": None, "open_url": None, "health": checked, "healthy": None}
     if phase == "live":
         where = address or "its host"
         sentence = (f"Live at {where}. Health check passed"
@@ -1336,9 +1353,12 @@ _UNION = """
          CASE WHEN d.trigger = 'rollback' THEN d.release_packet->>'redeploy_of' END,
          NULL::text, d.release_packet->>'code_task_run_id',
          d.trigger, d.steps, COALESCE(d.started_at, d.created_at), d.finished_at, d.created_at,
-         CAST(COALESCE(d.duration_ms, CASE WHEN d.finished_at IS NOT NULL
+         -- A request that never ran has no duration: a superseded row said "Nothing ran"
+         -- beside "5h 25m", the time it sat waiting before being closed.
+         CAST(CASE WHEN d.status IN ('superseded', 'rejected', 'cancelled') THEN NULL
+              ELSE COALESCE(d.duration_ms, CASE WHEN d.finished_at IS NOT NULL
               AND d.started_at IS NOT NULL
-              THEN extract(epoch FROM (d.finished_at - d.started_at)) * 1000 END) AS bigint),
+              THEN extract(epoch FROM (d.finished_at - d.started_at)) * 1000 END) END AS bigint),
          d.started_at, d.failure_reason,
          d.health_check_results, NULL::text
   FROM deployment_runs d WHERE d.project_id = :p
@@ -1554,7 +1574,7 @@ def _shape_rows(connection: Any, settings: Any, project_id: str, raw: list[dict[
             url=r.get("open_url") or r.get("target_url")
             or ((_json(r.get("target_domains")) or [None])[0]),
             failure=r.get("failure_reason"), newest_for_target=r["ref"] in live_refs,
-            success_means_healthy=r["kind"] == "stack")
+            success_means_healthy=r["kind"] == "stack", fixed_later=bool(r.get("fixed_later")))
         if seen["phase"] == "superseded":
             state = "superseded"
         w = {"word": seen["word"], "tone": seen["tone"]}
@@ -1594,7 +1614,11 @@ _STATE_FILTERS = {
     "needs_you": ("u.decision_id IS NOT NULL AND dd.status = 'pending' "
                   "AND u.status = ANY(:waiting)"),
     "live": "(u.kind || ':' || u.id) IN (SELECT ref FROM live)",
-    "failed": "u.status = ANY(:failed)",
+    # A failure a later success of the same target fixed is history, not a Failed row.
+    "failed": ("u.status = ANY(:failed) AND NOT EXISTS (SELECT 1 FROM u u2 "
+               "WHERE u2.target_id = u.target_id AND u2.status = ANY(:success) "
+               "AND COALESCE(u2.finished_at, u2.started_at, u2.created_at) "
+               "  > COALESCE(u.finished_at, u.started_at, u.created_at))"),
 }
 
 
@@ -1608,7 +1632,11 @@ def _union_query(where: str, tail: str) -> str:
         "       u.kind || ':' || u.id AS ref, t.app_name, t.environment, t.target_kind, "
         "       t.public_url AS target_url, t.domains AS target_domains, "
         "       COALESCE(u.host_id, t.host_id) AS hid, h.name AS host_name, "
-        "       pa.account_label, dd.status AS decision_status, dd.approved_by "
+        "       pa.account_label, dd.status AS decision_status, dd.approved_by, "
+        "       (u.status = ANY(:failed) AND EXISTS (SELECT 1 FROM u u2 "
+        "          WHERE u2.target_id = u.target_id AND u2.status = ANY(:success) "
+        "          AND COALESCE(u2.finished_at, u2.started_at, u2.created_at) "
+        "            > COALESCE(u.finished_at, u.started_at, u.created_at))) AS fixed_later "
         "FROM u LEFT JOIN deployment_targets t ON t.id = u.target_id "
         "LEFT JOIN deployment_hosts h ON h.id = COALESCE(u.host_id, t.host_id) "
         "LEFT JOIN provider_accounts pa ON pa.id = t.provider_account_id "
@@ -1900,6 +1928,8 @@ def deploy_detail(connection: Any, settings: Any, project_id: str, ref: str) -> 
                 raw["status"], decision_status=raw.get("decision_status"),
                 health=full["health_check_results"],
                 url=full["public_url"] or ((_json(full["domains"]) or [None])[0]),
+                # Only the deploy serving the app now links it (the row's own reading).
+                newest_for_target=row.get("phase") not in ("replaced", "failed_earlier"),
             )["open_url"],
             "changeset_id": full["changeset_id"],
         }

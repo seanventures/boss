@@ -28,6 +28,7 @@ import { usePolledRead } from "../../lib/log-stream";
 import { clock as logClock, utcTitle } from "../../lib/log-time";
 import { logHref } from "../../lib/log-url";
 import { isLoopbackPreviewUrl } from "../../lib/code-tasks";
+import { humanDuration } from "../../lib/datetime";
 import { INCLUDED_TIP, laneAgentOf, spendLabel, type LaneAgent } from "../agents/chain-model";
 import { nameOf, RunFace } from "../agents/run-face";
 import { StepSignedBy } from "../agents/step-signed-by";
@@ -72,7 +73,26 @@ export function actorName(actor: StepActor): string {
 
 /* ── Output ──────────────────────────────────────────────────────────────────────── */
 
-export type OutputFact = { label: string; value: string; tip?: string };
+export type OutputFact = { label: string; value: string; tip?: string; href?: string };
+
+/** A RECORD ID IS A LINK, NEVER TEXT (rc10 tester: "Details · 11" listed `deprun_…`, `dec_…`,
+ *  `chg_…` on a finished deploy step). The kinds a person can open become a named link; the
+ *  rest (targets, jobs, acts) are bookkeeping the panel already names elsewhere and drop. */
+const ID_LINKS: Array<[RegExp, string, (id: string) => string]> = [
+  [/^deprun_/, "Deployment", (id) => `?area=infra&view=deploys&deploy=${encodeURIComponent(`delivery:${id}`)}`],
+  [/^sdep_/, "Deployment", (id) => `?area=infra&view=deploys&deploy=${encodeURIComponent(`stack:${id}`)}`],
+  [/^dec_/, "Decision", (id) => `?area=approvals&decision=${encodeURIComponent(id)}`],
+  [/^chg_/, "Change set", (id) => `?area=infra&view=cloud&cloud=changes&changeset=${encodeURIComponent(id)}`],
+  [/^crun_/, "Build", (id) => `?area=code_tasks&build=${encodeURIComponent(id)}`],
+  [/^wfr_/, "Workflow run", (id) => `?area=delivery_workflows&wfr=${encodeURIComponent(id)}`],
+];
+// BOSS's own record prefixes, named: a looser shape matched words like "not_applicable".
+const RECORD_ID = /^(deprun|sdep|dec|chg|crun|wfr|deptgt|job|act|rrcpt|res|agt|usr|dh|tsk|mrun|prev|qg|drun|asb|tpl|tapp|disc|mtg)_[A-Za-z0-9]+$/;
+/** Lifecycle fields that describe a step IN FLIGHT. On a finished step they are stale: a
+ *  succeeded deploy still said "verdict awaiting · next action approve_decision". */
+const IN_FLIGHT = new Set(["await", "verdict", "awaited_status", "next_action", "waiting_on",
+  "awaiting", "pending_decision"]);
+const FINISHED = new Set(["succeeded", "failed", "skipped", "deadlettered", "cancelled", "completed"]);
 
 /** WHAT A PERSON WANTS FROM A STEP'S OUTPUT, by name. An allow-list: a new engine field lands
  *  under Details until someone decides it is an output, rather than on the page by default. */
@@ -116,7 +136,7 @@ function sentenceOf(text: string): string {
  * shows it above; on a succeeded step it is what the step has to say, so it is an output.
  */
 export function stepOutput(output: Record<string, unknown> | null | undefined,
-                           opts: { noteShownAbove: boolean }): { facts: OutputFact[]; details: OutputFact[] } {
+                           opts: { noteShownAbove: boolean; status?: string }): { facts: OutputFact[]; details: OutputFact[] } {
   const out = output ?? {};
   const facts: OutputFact[] = [];
   const seen = new Set<string>();
@@ -127,8 +147,16 @@ export function stepOutput(output: Record<string, unknown> | null | undefined,
     // THE SAME TEXT IS ONE FACT. `await` and `run_id` held the same crun_ on every build step.
     if (seen.has(text)) return;
     seen.add(text);
+    if (RECORD_ID.test(text)) {
+      const link = ID_LINKS.find(([re]) => re.test(text));
+      if (!link) return;
+      const [, kind, href] = link;
+      list.push({ label, value: `Open ${kind.toLowerCase()}`, tip: kind, href: href(text) });
+      return;
+    }
     list.push({ label, value: WORDS[text] ?? text, ...(tip ? { tip } : {}) });
   };
+  const finished = FINISHED.has(String(opts.status ?? ""));
   if (!opts.noteShownAbove && typeof out.note === "string" && out.note.trim()) {
     add(facts, "Note", sentenceOf(out.note.trim()), out.note.trim());
   }
@@ -140,7 +168,8 @@ export function stepOutput(output: Record<string, unknown> | null | undefined,
   const human = new Set(["note", ...HUMAN.map(([k]) => k)]);
   for (const [key, value] of Object.entries(out)) {
     if (NEVER.has(key) || human.has(key)) continue;
-    add(details, key.replace(/_/g, " "), value);
+    if (finished && IN_FLIGHT.has(key)) continue;
+    add(details, key.replace(/_/g, " ").replace(/ (id|run id)$/, ""), value);
   }
   return { facts, details: details.slice(0, 12) };
 }
@@ -197,8 +226,7 @@ export function stepLogSentence(item: Pick<ActivityLogItem, "source" | "kind" | 
     const status = String(data.status ?? "");
     const attempt = Number(data.attempt) || 0;
     const secs = Number(data.duration_seconds);
-    const took = Number.isFinite(secs) && secs > 0
-      ? (secs < 60 ? ` in ${Math.round(secs)}s` : ` in ${Math.round(secs / 60)}m`) : "";
+    const took = Number.isFinite(secs) && secs > 0 ? ` in ${humanDuration(secs)}` : "";
     const which = attempt > 1 ? `Attempt ${attempt}` : "Step";
     return status ? `${which} ${status}${took}` : null;
   }
@@ -239,7 +267,11 @@ export function summariseStepActivity(items: ActivityLogItem[]): Omit<StepActivi
     rows.push({ id: i.id, at: i.createdAt, text, level: i.level, tip: i.body || i.title || text });
   }
   const loud = (r: StepLogRow) => (r.level === "error" ? 0 : r.level === "warn" ? 1 : 2);
-  const ordered = rows.map((r, n) => ({ r, n })).sort((a, b) => loud(a.r) - loud(b.r) || a.n - b.n).map((x) => x.r);
+  // Within each group, newest first by TIME: the reader merges sources, so input order alone
+  // put 04:14 above 21:57 above 06:45.
+  const t = (r: StepLogRow) => Date.parse(r.at) || 0;
+  const ordered = rows.map((r, n) => ({ r, n }))
+    .sort((a, b) => loud(a.r) - loud(b.r) || t(b.r) - t(a.r) || a.n - b.n).map((x) => x.r);
   return {
     rows: ordered, model, cost, calls: calls.length,
     errors: rows.filter((r) => r.level === "error").length,
@@ -293,6 +325,9 @@ export function actorVerb(phase: string, status: string): string {
   if (phase === "skipped") return "Skipped";
   if (phase === "ahead") return "Assigned to";
   if (phase === "now") return ["ready", "queued", "pending"].includes(status) ? "Queued for" : "Doing";
+  // A step that failed was not "done": the run card said "Done by BOSS" over a failed smoke test.
+  if (["failed", "deadlettered", "blocked"].includes(status)) return "Tried by";
+  if (status === "cancelled") return "Stopped while with";
   return "Done by";
 }
 
@@ -424,7 +459,9 @@ export function StepOutputFacts({ facts, details }: { facts: OutputFact[]; detai
             {details.map((f) => (
               <div key={`${f.label}:${f.value}`}>
                 <dt>{f.label}</dt>
-                <dd data-tip={f.value} data-user-text>{f.value}</dd>
+                <dd data-tip={f.tip ?? f.value} data-user-text>
+                  {f.href ? <a className="inf-link" href={f.href}>{f.value}</a> : f.value}
+                </dd>
               </div>
             ))}
           </dl>

@@ -139,3 +139,18 @@ export function formatAgeCompact(value?: string | null, nowMs: number = 0): stri
   if (h < 24) return `${h}h ${m % 60}m`;
   return `${Math.floor(h / 24)}d ${h % 24}h`;
 }
+
+/** A duration as a person reads it: "42s", "12m 5s", "2h 3m", "1d 4h". THE ONE formatter for
+ *  how long something took; the run report said "2011.4min" and a step said "857m". */
+export function humanDuration(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) return "";
+  const s = Math.round(seconds);
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return s % 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${Math.floor(s / 60)}m`;
+  if (s < 86400) {
+    const m = Math.floor((s % 3600) / 60);
+    return m ? `${Math.floor(s / 3600)}h ${m}m` : `${Math.floor(s / 3600)}h`;
+  }
+  const h = Math.floor((s % 86400) / 3600);
+  return h ? `${Math.floor(s / 86400)}d ${h}h` : `${Math.floor(s / 86400)}d`;
+}

@@ -2,6 +2,7 @@
 
 import { GatedButton } from "../components/gated";
 import { usd } from "../lib/money";
+import { humanDuration } from "../lib/datetime";
 import React, { useCallback, useEffect, useState } from "react";
 import { FilePdf, Hammer, Warning } from "@phosphor-icons/react";
 import { apiWrite } from "../lib/api-write";
@@ -89,7 +90,7 @@ export function benchmarkRows(b: Benchmark): [string, string][] {
     ["Pull request", v(b.pr_url)],
     ["Tests", b.tests_total === null || b.tests_passed === null ? "not measured" : `${b.tests_passed}/${b.tests_total} passed`],
     ["Human approvals", v(b.human_approvals)], ["Manual interventions", v(b.manual_interventions)],
-    ["Elapsed", b.elapsed_minutes === null ? "not measured" : `${b.elapsed_minutes} min`],
+    ["Elapsed", b.elapsed_minutes === null ? "not measured" : humanDuration(Number(b.elapsed_minutes) * 60)],
     ["Model cost", b.model_cost_usd === null ? "not measured" : `$${b.model_cost_usd.toFixed(2)}`],
     ["Retries", v(b.retries)], ["Deployment smoke test", v(b.deployment_smoke_test)],
   ];

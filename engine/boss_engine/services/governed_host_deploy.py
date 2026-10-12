@@ -318,7 +318,10 @@ def supersede(connection: Connection, settings: Optional[Settings], row: Any, *,
     from .budget import BudgetGovernor
 
     done = connection.execute(
-        text("UPDATE deployment_runs SET status = 'superseded', finished_at = now(), "
+        # finished_at stays the request's own time: closing an old orphan at startup must not
+        # make it read as something that just happened.
+        text("UPDATE deployment_runs SET status = 'superseded', "
+             "finished_at = COALESCE(finished_at, created_at), "
              "failure_reason = :r, updated_at = now() "
              "WHERE id = :i AND status = 'awaiting_approval' RETURNING id"),
         {"i": row["id"], "r": reason[:400]}).first()

@@ -11414,7 +11414,8 @@ def deployments_for_code_task_endpoint(run_id: str, limit: int = 5,
                  "       r.deployment_target_id, r.steps, r.health_check_results, "
                  "       r.decision_id, x.status AS decision_status, "
                  "       t.domains, t.health_checks, h.name AS host_name, "
-                 "       r.release_packet->>'code_task_run_id' AS release_packet_run "
+                 "       r.release_packet->>'code_task_run_id' AS release_packet_run, "
+                 "       r.created_at, 'run' AS source "
                  "FROM deployment_runs r "
                  "LEFT JOIN decisions x ON x.id = r.decision_id "
                  "LEFT JOIN deployment_targets t ON t.id = r.deployment_target_id "
@@ -11433,7 +11434,22 @@ def deployments_for_code_task_endpoint(run_id: str, limit: int = 5,
                  # still holds — matching on a NAME could show another app's deployment — which
                  # is why this is identity equality within one project and not a LIKE.
                  "WHERE r.project_id = :p "
-                 "ORDER BY r.created_at DESC LIMIT 200"),
+                 # A DEPLOY FROM THE APP'S OWN boss.deploy.yaml IS A STACK DEPLOYMENT. Read only
+                 # from deployment_runs, the step described an older single-container deploy
+                 # while the app was live from a newer stack deploy.
+                 "UNION ALL "
+                 "SELECT s.id, t.app_name, t.environment, s.status, s.commit_sha, "
+                 "       s.apply_started_at, s.finished_at, s.failure_reason, 'stack', "
+                 "       s.target_id, s.steps, NULL::jsonb, "
+                 "       s.decision_id, x.status, "
+                 "       t.domains, t.health_checks, h.name, "
+                 "       s.code_task_run_id, s.created_at, 'stack' "
+                 "FROM stack_deployments s "
+                 "LEFT JOIN decisions x ON x.id = s.decision_id "
+                 "LEFT JOIN deployment_targets t ON t.id = s.target_id "
+                 "LEFT JOIN deployment_hosts h ON h.id = COALESCE(s.host_id, t.host_id) "
+                 "WHERE s.project_id = :p "
+                 "ORDER BY created_at DESC LIMIT 200"),
             {"p": run_project}).mappings().all()
     from boss_engine.services.naming import identity_key as _identity_key
 
@@ -11444,9 +11460,16 @@ def deployments_for_code_task_endpoint(run_id: str, limit: int = 5,
         or (_wanted and _identity_key(str(r["app_name"] or "")) == _wanted)
     ][:max(1, min(int(limit), 20))]
     out = []
+    seen_targets: set[str] = set()
     for row in rows:
         item = dict(row)
         item.pop("release_packet_run", None)
+        source = item.pop("source", "run")
+        item.pop("created_at", None)
+        # The newest deploy of a target is the one serving it; older ones are history.
+        target_key = str(item.get("deployment_target_id") or "")
+        newest = target_key not in seen_targets
+        seen_targets.add(target_key)
         for key in ("started_at", "finished_at"):
             if item.get(key) is not None:
                 item[key] = str(item[key])
@@ -11473,8 +11496,11 @@ def deployments_for_code_task_endpoint(run_id: str, limit: int = 5,
 
         seen = _deploy_status(item.get("status"), decision_status=item.get("decision_status"),
                               steps=item.get("steps"), health=item.get("health_check_results"),
-                              url=raw, failure=item.get("failure_reason"))
-        item.update({"ref": f"{'delivery' if item.get('trigger') else 'registry'}:{item['id']}",
+                              url=raw, failure=item.get("failure_reason"),
+                              newest_for_target=newest,
+                              success_means_healthy=source == "stack")
+        kind = "stack" if source == "stack" else ("delivery" if item.get("trigger") else "registry")
+        item.update({"ref": f"{kind}:{item['id']}",
                      "phase": seen["phase"], "word": seen["word"], "tone": seen["tone"],
                      "sentence": seen["sentence"], "now": seen["now"],
                      "open_url": seen["open_url"], "health": seen["health"]})

@@ -157,8 +157,10 @@ export function ShareRunButton({ projectId, actor, unitKind, unitId }: {
   projectId: string; actor: string; unitKind: "build" | "workflow_run"; unitId: string;
 }) {
   const [open, setOpen] = useState<"share" | "local" | null>(null);
+  // One group with its own gap: two bare buttons ran together as "Share this runDownload
+  // diagnostics" on the run card.
   return (
-    <>
+    <span className="share-run-buttons" data-testid="share-run-buttons">
       <GatedButton permission="telemetry:share" type="button" className="ag-link" data-testid="share-run-open"
               title="Send this run, redacted and edited by you, to the BOSS project"
               onClick={() => setOpen("share")}>Share this run</GatedButton>
@@ -166,6 +168,6 @@ export function ShareRunButton({ projectId, actor, unitKind, unitId }: {
                    onClick={() => setOpen("local")}>Download diagnostics</GatedButton>
       {open ? <ShareRunSheet projectId={projectId} actor={actor} unitKind={unitKind} unitId={unitId}
                              localOnly={open === "local"} onClose={() => setOpen(null)} /> : null}
-    </>
+    </span>
   );
 }
