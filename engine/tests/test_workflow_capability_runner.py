@@ -9,6 +9,8 @@ can run twice.
 
 from __future__ import annotations
 
+import json
+
 import os
 import uuid
 
@@ -2077,6 +2079,48 @@ def test_deploy_refuses_when_the_preview_produced_nothing(eng, project, monkeypa
 
     assert problem and "without a URL" in problem or "nothing was previewable" in (problem or "")
     assert not deploy.calls
+
+
+def _preview_then_deploy_run(c, project, name):
+    _, version = _publish(c, project, name, [
+        {"id": "preview", "kind": "capability",
+         "binding": {"capability": "preview", "inputs": {"run_id": "crun_x"}},
+         "next": ["deploy"]},
+        {"id": "deploy", "kind": "capability",
+         "binding": {"capability": "deploy", "inputs": {"run_id": "crun_x"}},
+         "next": []},
+    ], "preview")
+    return _start(c, project, version["id"], {})
+
+
+def test_an_operator_who_skips_the_preview_can_still_deploy(eng, project):
+    """Some apps cannot be previewed; a person's Skip, with a reason, is the choice to ship
+    without one — and the deploy must honour it rather than dead-letter."""
+    with eng.begin() as c:
+        run = _preview_then_deploy_run(c, project, "skipprev")
+        c.execute(
+            text("UPDATE workflow_step_runs SET status='skipped', output=CAST(:o AS JSONB) "
+                 "WHERE workflow_run_id=:r AND step_id='preview'"),
+            {"r": run["id"], "o": json.dumps({"skipped_by_operator": True, "skipped_by": "usr_op",
+                                              "skip_reason": "preview host has no database"})},
+        )
+        assert runner._preview_missing_for_run(c, {"run_id": run["id"]}) is None
+        assert runner._preview_waiver_for_run(c, run["id"]) == {
+            "by": "usr_op", "reason": "preview host has no database"}
+
+
+def test_a_preview_the_system_skipped_still_holds_the_deploy(eng, project):
+    """Nobody chose to ship unpreviewed, so the deploy waits — and says how to choose."""
+    with eng.begin() as c:
+        run = _preview_then_deploy_run(c, project, "sysskip")
+        c.execute(
+            text("UPDATE workflow_step_runs SET status='skipped', "
+                 "output='{\"note\": \"not applicable\"}'::jsonb "
+                 "WHERE workflow_run_id=:r AND step_id='preview'"),
+            {"r": run["id"]},
+        )
+        problem = runner._preview_missing_for_run(c, {"run_id": run["id"]})
+    assert problem and "Skip the preview with a reason" in problem
 
 
 def test_a_workflow_without_a_preview_step_is_not_blocked(eng, project):

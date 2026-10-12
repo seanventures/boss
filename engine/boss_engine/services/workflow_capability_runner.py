@@ -1499,9 +1499,12 @@ def _preview_missing_for_run(
         return None
     if row is None:
         return None                       # no preview step in this workflow: nothing to require
+    if _preview_waived(row):
+        return None                       # a person chose to ship without one, and said why
     if row["status"] != "succeeded":
         return (f"the preview step is '{row['status']}', so there is nothing to look at yet. "
-                "Run the preview, then deploy.")
+                "Run the preview, then deploy — or Skip the preview with a reason to deploy "
+                "without one.")
     output = row["output"] if isinstance(row["output"], dict) else json.loads(row["output"] or "{}")
     # IS A PREVIEW SERVING RIGHT NOW — not "does the URL we wrote down still answer".
     #
@@ -1525,6 +1528,37 @@ def _preview_missing_for_run(
                 f"reviewed (the one this step started, {url}, has gone). Start a fresh "
                 "preview, then deploy.")
     return None
+
+
+def _preview_waived(row: Any) -> Optional[dict[str, Any]]:
+    """Who chose to deploy without a preview, and why — or None.
+
+    Some apps cannot be previewed (a service the preview host cannot provide, a target that
+    only exists in the real environment), and the operator must still be able to ship. The
+    choice is the operator's Skip on the preview step: a person, with a reason, recorded by
+    `skip_failed_step`. A preview the SYSTEM skipped (refused, not applicable) is not a choice
+    anyone made, so it still holds the deploy.
+    """
+    if row is None or row["status"] != "skipped":
+        return None
+    output = row["output"] if isinstance(row["output"], dict) else json.loads(row["output"] or "{}")
+    if not output.get("skipped_by_operator") or not output.get("skipped_by"):
+        return None
+    return {"by": output.get("skipped_by"), "reason": output.get("skip_reason") or ""}
+
+
+def _preview_waiver_for_run(connection: Connection, run_id: str) -> Optional[dict[str, Any]]:
+    try:
+        row = connection.execute(
+            text("SELECT status, output FROM workflow_step_runs "
+                 "WHERE workflow_run_id = :r AND step_id = 'preview' "
+                 "ORDER BY created_at DESC LIMIT 1"),
+            {"r": run_id},
+        ).mappings().first()
+    except Exception:  # noqa: BLE001
+        log.exception("could not read the preview step for run %s", run_id)
+        return None
+    return _preview_waived(row)
 
 
 def _live_preview_for_run(connection: Connection, run_id: str) -> Optional[str]:
@@ -2406,6 +2440,13 @@ def _perform_capability(
             return {"capability": key, "tool": None, "status": "failed",
                     "error": missing,
                     "note": "this workflow previews before it ships; nothing was previewable."}
+        waiver = _preview_waiver_for_run(connection, str(context.get("run_id") or ""))
+        if waiver:
+            # Shipping unpreviewed is allowed, never silent: the run's history says who chose it.
+            emit_event(connection, project_id, "workflow.deploy_without_preview", actor,
+                       "workflow_run", str(context.get("run_id") or ""),
+                       {"step_id": step.get("id"), "preview_skipped_by": waiver["by"],
+                        "reason": waiver["reason"][:300]})
 
     # ADOPT A PREVIEW THAT IS ALREADY UP. The build pipeline starts a preview itself, so a
     # workflow that called start_preview again would boot a second copy of the same app on a
