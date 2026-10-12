@@ -112,10 +112,13 @@ export function RateIt({ projectId, actor, subject, id, testId }: {
   };
 
   if (!open && !rating) {
+    // ONE FACE PER SUBJECT. The closed button said "Rate" and the opened one asked "Working as
+    // expected?", so of two deploy drawers side by side one read Rate and the other the
+    // question. Closed, it asks the same question it asks open.
     return (
       <span className="im-rate" data-testid={testId ?? `rate-${subject}`}>
         <button type="button" className="im-rate-btn" data-quiet="" onClick={() => setOpen(true)}
-                title="Tell BOSS how this went. One tap.">Rate</button>
+                title="Tell BOSS how this went. One tap.">{QUESTION[subject] ?? "Rate"}</button>
       </span>
     );
   }
