@@ -341,6 +341,11 @@ describe("App ▸ Setup", () => {
   it("an Owner adds an app setting for deploy (DEMO_PASSWORD): one write, deploy only, value never shown", async () => {
     await mount(<AppSetup projectId="p1" appKey="shop" />, "owner");
     expect($('[data-testid="tpl-deploy-value-save"]').hasAttribute("disabled")).toBe(true);
+    // The panel's own form, not bare boxes: styled inputs, a primary button, Enter submits.
+    expect($('[data-testid="tpl-deploy-value-form"]').tagName).toBe("FORM");
+    expect($('[data-testid="tpl-deploy-value-name"]').classList.contains("tpl-input")).toBe(true);
+    expect($('[data-testid="tpl-deploy-value-value"]').classList.contains("tpl-input")).toBe(true);
+    expect($('[data-testid="tpl-deploy-value-save"]').className).toContain("ag-btn-primary");
     await type('[data-testid="tpl-deploy-value-name"]', "demo_password");
     await type('[data-testid="tpl-deploy-value-value"]', "hunter2-demo");
     await press('[data-testid="tpl-deploy-value-save"]');
