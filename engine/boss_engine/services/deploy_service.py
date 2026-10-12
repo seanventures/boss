@@ -42,6 +42,24 @@ def _app_name(repo: str, name: Optional[str]) -> str:
 # copy of a path is a precondition that silently stops matching.
 REMOTE_BASE = "/opt/boss-apps"
 
+
+def ensure_dir_sh(path: str, user: str, *, ok: str, created: str, need: str) -> str:
+    """Shell that makes `path` a directory `user` can write, printing `ok`, `created` or `need`.
+
+    THE ONE WAY BOSS prepares a directory on a host. Tried in order: it is already there and
+    writable; plain `mkdir -p` (root, or a writable parent — a VM reached as root often has no
+    sudo at all); passwordless sudo. Only when all three fail is it a person's step, and `need`
+    says so. A missing directory is not an unwritable one: preflight refused a fresh VM reached
+    as root with "/opt/boss-apps is not writable by root", which nothing on that host prevented.
+    """
+    import shlex as _shlex
+
+    d, u = _shlex.quote(path), _shlex.quote(user)
+    return (f"if [ -d {d} ] && [ -w {d} ]; then echo {ok}; "
+            f"elif mkdir -p {d} 2>/dev/null && [ -w {d} ]; then echo {created}; "
+            f"elif sudo -n mkdir -p {d} 2>/dev/null && sudo -n chown {u} {d} 2>/dev/null; "
+            f"then echo {created}; else echo {need}; fi")
+
 # Host/user land in a local `shell=True` pipeline (tar|ssh). Reject metacharacters so a
 # deploy request cannot run arbitrary commands on the BOSS API host.
 _SAFE_HOST_RE = re.compile(r"^[A-Za-z0-9._:-]+$")

@@ -440,14 +440,17 @@ class SSHContainerConnector:
                 _discard_key_file(ephemeral)
 
     def _probe_host(self, key: str, target: dict, app_dir: str) -> list[str]:
-        from .deploy_service import REMOTE_BASE, _ssh
+        from .deploy_service import REMOTE_BASE, _ssh, ensure_dir_sh
 
         user, host, port = _split_ref(target.get("target_ref", ""))
 
         # One round trip answers everything: reachability, the deploy dir, and the runtime.
         # An absent app dir is fine — apply() creates it. An existing one BOSS cannot write is
-        # not, so "missing" and "unwritable" must not collapse into the same answer.
-        probe = (f"test -w {REMOTE_BASE} && echo BASE_OK || echo BASE_NO; "
+        # not, so "missing" and "unwritable" must not collapse into the same answer. The base
+        # directory is MADE here when BOSS can make it (ensure_dir_sh): an empty directory the
+        # approved deploy is about to use is not a step to hand back to a person.
+        probe = (ensure_dir_sh(REMOTE_BASE, user, ok="BASE_OK", created="BASE_OK",
+                               need="BASE_NO") + "; "
                  f"{{ test ! -e {app_dir} || test -w {app_dir}; }} && echo APP_OK || echo APP_NO; "
                  f"command -v docker >/dev/null && echo DOCKER_OK || echo DOCKER_NO")
         try:
@@ -466,7 +469,8 @@ class SSHContainerConnector:
             # what to grant. This is host provisioning, like installing docker — the operator
             # prepares the destination, BOSS performs the deployment.
             problems.append(
-                f"{REMOTE_BASE} is not writable by {user} on {host}; prepare the host once: "
+                f"BOSS could not create {REMOTE_BASE} on {host} as {user} (no write access to "
+                f"its parent and no passwordless sudo); prepare the host once: "
                 f"sudo mkdir -p {REMOTE_BASE} && sudo chown {user} {REMOTE_BASE}")
         if "APP_NO" in out:
             problems.append(
@@ -489,7 +493,7 @@ class SSHContainerConnector:
         because on a shared host the things it would remove belong to someone else.
         """
         from .deploy_service import (REMOTE_BASE, _app_name, _discard_key_file,
-                                     _materialise_key, _ssh, _ssh_key_file)
+                                     _materialise_key, _ssh, _ssh_key_file, ensure_dir_sh)
         from .secret_backends import SecretUnavailable, resolve_target_secret
 
         user, host, port = _split_ref(target.get("target_ref", ""))
@@ -507,10 +511,8 @@ class SSHContainerConnector:
             # rather than hanging on a password prompt nobody can answer.
             script = (
                 f"set -e; "
-                f"if [ ! -d {REMOTE_BASE} ] || [ ! -w {REMOTE_BASE} ]; then "
-                f"  sudo -n mkdir -p {REMOTE_BASE} && sudo -n chown {user} {REMOTE_BASE} "
-                f"    && echo CREATED_BASE || echo NEED_SUDO; "
-                f"else echo BASE_OK; fi; "
+                + ensure_dir_sh(REMOTE_BASE, user, ok="BASE_OK", created="CREATED_BASE",
+                                need="NEED_SUDO") + "; " +
                 f"mkdir -p {app_dir}/data 2>/dev/null && echo APP_OK || echo APP_NO; "
                 f"command -v docker >/dev/null && echo DOCKER_OK || echo DOCKER_NO; "
                 # Ports this app's OWN container publishes. A live target legitimately holds

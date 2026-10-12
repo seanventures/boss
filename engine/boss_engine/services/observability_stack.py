@@ -750,7 +750,8 @@ def deploy_stack(engine, settings: Settings, *, project_id: str, host_target_id:
     second way to reach the same machine.
     """
     from ..db import begin
-    from .deploy_service import _discard_key_file, _materialise_key, _ssh, _ssh_key_file
+    from .deploy_service import (_discard_key_file, _materialise_key, _ssh, _ssh_key_file,
+                                 ensure_dir_sh)
     from .deployment_connectors import _split_ref
     from .secret_backends import SecretUnavailable, resolve_target_secret
 
@@ -783,9 +784,10 @@ def deploy_stack(engine, settings: Settings, *, project_id: str, host_target_id:
         # `sudo -n` so a host without passwordless sudo fails immediately with an instruction
         # rather than hanging on a prompt nobody can answer.
         parts = [
-            f"if [ ! -d {STACK_DIR} ] || [ ! -w {STACK_DIR} ]; then "
-            f"  sudo -n mkdir -p {STACK_DIR} && sudo -n chown {user} {STACK_DIR} "
-            f"    || {{ echo 'NEED_SUDO {STACK_DIR}' >&2; exit 90; }}; fi",
+            # ensure_dir_sh: plain mkdir first (root needs no sudo, and may not have it).
+            "case \"$(" + ensure_dir_sh(STACK_DIR, user, ok="DIR_OK", created="DIR_OK",
+                                         need="DIR_NO") + ")\" "
+            f"in DIR_NO) echo 'NEED_SUDO {STACK_DIR}' >&2; exit 90;; esac",
             f"mkdir -p {STACK_DIR}/grafana/datasources {STACK_DIR}/grafana/dashboards/boss",
             # Dashboards are FULLY generated, so the directory is cleared before rewriting.
             # Writing without removing leaves a dashboard for an app that is no longer
