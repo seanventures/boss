@@ -351,7 +351,9 @@ describe("Infra › Deploys: + Deploy → plan → approve in the drawer", () =>
     expect(q("inf-deploy-steps")?.querySelectorAll("li")).toHaveLength(6);
     expect(q("inf-deploy-log")?.textContent).toContain("Health check passed");
     expect(q("inf-deploy-open-app")?.getAttribute("href")).toBe("https://invoice.example.com");
-    expect(q("inf-deploy-full-log")?.getAttribute("href")).toBe("?area=activity&src=deployment&subject=stack%3Asd_live");
+    // The whole story of this deploy: its ref as the subject, no stream filter (the server
+    // resolves the ref and brings the approval, job and receipt with the steps).
+    expect(q("inf-deploy-full-log")?.getAttribute("href")).toBe("?area=activity&subject=stack%3Asd_live");
     await act(async () => { q("inf-deploy-redeploy")!.click(); });
     await settle(() => f.writes().some((w) => w.path === "/v1/infra/targets/t_live/deploy"), "redeploy");
     expect(f.writes().find((w) => w.path === "/v1/infra/targets/t_live/deploy")?.body).toMatchObject({ ref: "9f8e7d6" });
