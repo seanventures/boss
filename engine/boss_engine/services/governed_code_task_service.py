@@ -2097,6 +2097,44 @@ def _plan_prompt(title, spec):
     )
 
 
+_DESIGN_HEADS = (("standards", "STANDARDS"), ("spec", "SPEC"), ("plan", "PLAN"))
+
+
+def _design_prompt(title, instructions, criteria):
+    """Standards, spec and plan from ONE read of the repository, in three marked sections."""
+    return (
+        _ctx_block(title, instructions, criteria)
+        + "You are the design lead for this change. Read this repository ONCE, then write three "
+        "sections, each starting with its own heading line exactly as shown. Do NOT edit any "
+        "files.\n\n"
+        "=== STANDARDS ===\nA short bulleted list of the coding standards a new change here "
+        "should follow: style, naming, error handling, test conventions, and file structure.\n\n"
+        "=== SPEC ===\nA clear, testable specification: a one-paragraph summary, a change list "
+        "(added / changed / removed), and a clarified, testable list of acceptance criteria. "
+        "Resolve any ambiguity explicitly.\n\n"
+        "=== PLAN ===\nA short technical plan: the files to add or change, the function "
+        "signatures, and the key edge cases to handle. If the app needs a relational database, "
+        "end the plan with the line `database: postgres` (BOSS then gives every build its own "
+        "PostgreSQL database, DATABASE_URL in the environment); otherwise end with "
+        "`database: none`."
+    )
+
+
+def _split_design(text: str) -> dict:
+    """The three sections of a joint design answer; a missing one is empty (and re-run)."""
+    out = {key: "" for key, _ in _DESIGN_HEADS}
+    marks = []
+    for key, head in _DESIGN_HEADS:
+        m = re.search(rf"^\s*=+\s*{head}\s*=+\s*$", text or "", re.MULTILINE)
+        if m:
+            marks.append((m.start(), m.end(), key))
+    marks.sort()
+    for i, (_start, end, key) in enumerate(marks):
+        stop = marks[i + 1][0] if i + 1 < len(marks) else len(text)
+        out[key] = text[end:stop].strip()
+    return out
+
+
 def _review_plan_prompt(title, plan):
     return (
         "You are a design reviewer with FRESH context. FIRST decide whether this task ASKS FOR "
@@ -3948,17 +3986,36 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         elif do_design:
             with _transaction(engine) as c:
                 _phase(c, "design")
-            set_llm_context(stage="standards")
-            a, m = _route("standards")
-            d1 = a.run_role(_standards_prompt(), root, read_only=True, model=m)
-            set_llm_context(stage="spec")
-            a, m = _route("spec")
-            d2 = a.run_role(_spec_prompt(title, instructions, criteria), root, read_only=True,
-                            model=m)
-            set_llm_context(stage="plan")
+            # ONE SESSION FOR STANDARDS, SPEC AND PLAN. They were three cold sessions, each
+            # re-reading the same repository (a HelpDesk AI build: 0.6 + 2.2 + 5.3 minutes).
+            # One read produces all three, under the plan's route (the strongest of the
+            # three). A part the session did not deliver is written by its own session as
+            # before, so a short answer never becomes a thin design. The plan review below
+            # stays its OWN session with fresh context: a plan is never reviewed by its author.
+            set_llm_context(stage="design")
             a, m = _route("plan")
-            d3 = a.run_role(_plan_prompt(title, d2.get("summary", "")), root, read_only=True,
-                            model=m)
+            joint = a.run_role(_design_prompt(title, instructions, criteria), root,
+                               read_only=True, model=m)
+            parts = _split_design(joint.get("summary", ""))
+            d1 = {"summary": parts["standards"], "cost_usd_micros": joint.get("cost_usd_micros")}
+            d2 = {"summary": parts["spec"], "cost_usd_micros": 0}
+            d3 = {"summary": parts["plan"], "cost_usd_micros": 0}
+            if not parts["standards"]:
+                set_llm_context(stage="standards")
+                a, m = _route("standards")
+                d1 = a.run_role(_standards_prompt(), root, read_only=True, model=m)
+                d1["cost_usd_micros"] = int(d1.get("cost_usd_micros") or 0) + int(
+                    joint.get("cost_usd_micros") or 0)
+            if not parts["spec"]:
+                set_llm_context(stage="spec")
+                a, m = _route("spec")
+                d2 = a.run_role(_spec_prompt(title, instructions, criteria), root,
+                                read_only=True, model=m)
+            if not parts["plan"]:
+                set_llm_context(stage="plan")
+                a, m = _route("plan")
+                d3 = a.run_role(_plan_prompt(title, d2.get("summary", "")), root,
+                                read_only=True, model=m)
             set_llm_context(stage="review_plan")
             a, m = _route("review_plan")
             d4 = a.run_role(_review_plan_prompt(title, d3.get("summary", "")), root,
