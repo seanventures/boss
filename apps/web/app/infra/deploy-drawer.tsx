@@ -12,7 +12,7 @@ import React, { useState } from "react";
 import { RateIt } from "../improve/rate-it";
 
 import { showToast } from "../client-forms";
-import { buildHref, changeHref, logsHref, useDeployDetail, type DeployDetail, type StepState } from "../../lib/infra-view";
+import { buildHref, changeHref, deployLogsHref, useDeployDetail, type DeployDetail, type StepState } from "../../lib/infra-view";
 import { goConsole } from "./deploy-actions";
 import { StepDots } from "./deploy-row";
 import { afterWrite, decideDeploy, deployTarget, redeployDelivery, rollbackDeploy, runHealthCheck } from "./infra-actions";
@@ -211,7 +211,7 @@ function DeployBody({ d, projectId, actor, refresh, onOpen }: {
       <DrawerSection label="Log" testId="inf-deploy-log" actions={d.logTail ? (
         <span className="inf-actions">
           <CopyButton text={d.logTail} label="Copy" testId="inf-deploy-log-copy" />
-          <ConsoleLink href={logsHref("deployment", row.ref)} testId="inf-deploy-full-log">Open full log ↗</ConsoleLink>
+          <ConsoleLink href={deployLogsHref(row.ref)} testId="inf-deploy-full-log">Open full log ↗</ConsoleLink>
         </span>
       ) : null}>
         {d.logTail ? <pre className="inf-dlog" data-copy="data" tabIndex={0}>{log}</pre>

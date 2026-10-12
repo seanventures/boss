@@ -217,7 +217,8 @@ def deployment(c, *, at: datetime, app: str = "checkout", environment: str = "pr
 def wipe(c, project: str = PROJECT) -> None:
     """Every log row of the project (and project-less app output), so a test owns its log."""
     for table in ("events", "llm_calls", "agent_turns", "jobs", "deadletters", "receipts",
-                  "agent_process_steps", "workflow_step_runs", "deployment_runs"):
+                  "agent_process_steps", "workflow_step_runs", "deployment_runs",
+                  "stack_deployments"):
         c.execute(text(f"DELETE FROM {table} WHERE project_id = :p"), {"p": project})
     c.execute(text("DELETE FROM app_logs WHERE project_id = :p OR project_id IS NULL"),
               {"p": project})

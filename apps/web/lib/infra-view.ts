@@ -524,6 +524,13 @@ export function logsHref(source: "deployment" | "llm_call" | "app_log" | "event"
   since?: string | null, search?: string): string {
   return logHref({ src: source, subject: subject ?? null, since: since ?? null }, search);
 }
+/** A deploy's whole log: one line per step it ran, and the approval, job, ChangeSet and receipt
+ *  it was made of. The ref (`delivery:…`, `stack:…`) goes as it is — the server reads it
+ *  (infra_view.split_deploy_ref). No `src`: limiting it to the Deploys stream hid the approval
+ *  and the job, which are half of "what happened to this deploy". */
+export function deployLogsHref(deployRef: string, search?: string): string {
+  return logHref({ subject: deployRef }, search);
+}
 export const buildHref = (runId: string) => `?area=code_tasks&build=${encodeURIComponent(runId)}`;
 export const deployHref = (deployRef: string) => `?area=infra&view=deploys&deploy=${encodeURIComponent(deployRef)}`;
 export const hostHref = (hostId: string) => `?area=infra&view=fleet&host=${encodeURIComponent(hostId)}`;

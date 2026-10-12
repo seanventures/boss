@@ -1571,11 +1571,28 @@ def deploy_rows(connection: Any, settings: Any, project_id: str, *, state: Optio
     return _finish(body)  # type: ignore[return-value]
 
 
-def _parse_ref(ref: str) -> tuple[str, str]:
+#: The kinds a deploy ref names (`<kind>:<id>`), and the table each id lives in.
+DEPLOY_REF_TABLES = {"stack": "stack_deployments", "registry": "deployment_runs",
+                     "delivery": "deployment_runs"}
+
+
+def split_deploy_ref(ref: Any) -> Optional[tuple[str, str]]:
+    """`delivery:deprun_…` → ("delivery", "deprun_…"), or None when `ref` is not a deploy ref.
+
+    THE ONE READER of a deploy ref. The console hands refs to sibling screens (the Activity
+    log's `subject=`), and every reader that compared the whole ref to a row id matched
+    nothing: "Open full log" showed 0 lines for a deploy that had nine steps."""
     kind, _, ident = str(ref or "").partition(":")
-    if kind not in ("stack", "registry", "delivery") or not ident:
+    if kind not in DEPLOY_REF_TABLES or not ident.strip():
+        return None
+    return kind, ident.strip()
+
+
+def _parse_ref(ref: str) -> tuple[str, str]:
+    parsed = split_deploy_ref(ref)
+    if parsed is None:
         raise LookupError(f"Not a deploy: {ref}")
-    return kind, ident
+    return parsed
 
 
 def _one_row(connection: Any, settings: Any, project_id: str, ref: str,

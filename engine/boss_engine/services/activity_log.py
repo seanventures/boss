@@ -679,28 +679,50 @@ def _build_workflow_step(row: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _build_deployment(row: Mapping[str, Any]) -> dict[str, Any]:
-    """What was deployed where, and whether it came up."""
+    """What was deployed where, and whether it came up — one line for the deploy, and one per
+    step it recorded (`activity_sql._DEPLOY_LINES`). The level mirrors `_DEPLOY_LEVEL`."""
     raw = _raw(row)
     status, environment = _text(raw.get("status")), _text(raw.get("environment"))
     failure, app_name = _text(raw.get("failure_reason")), _text(raw.get("app_name"))
+    deploy_id = _text(raw.get("deploy_id")) or _text(row.get("id"))
+    common = {
+        "app": app_name, "environment": environment, "status": status,
+        "target_kind": _text(raw.get("target_kind")),
+        "target_ref": _text(raw.get("target_ref")), "commit": _text(raw.get("commit_ref")),
+        "repo": _text(raw.get("repo")),
+        "duration_seconds": _duration_seconds(row.get("started"), row.get("finished")),
+        "failure_reason": failure, "deploy_id": deploy_id,
+    }
+    if _text(raw.get("line")) == "step":
+        label, log = _text(raw.get("label")), _text(raw.get("log"))
+        lowered = status.lower()
+        if lowered in ("failed", "error") or failure:
+            level = "error"
+        elif lowered in ("pending", "skipped", ""):
+            level = "verbose"
+        else:
+            level = "info"
+        return _item(
+            id=_text(row.get("id")), source="deployment", kind="deploy.step",
+            actor=_text(raw.get("created_by")) or "deployer", entity_type="deployment_run",
+            entity_id=deploy_id, created_at=row.get("ts"),
+            data={**common, "step": label, "order": int(raw.get("ord") or 0)},
+            classify_row={"action": f"deploy step {label} {status}".strip(),
+                          "status": status, "kind": "deployment", "stage": label},
+            level=level, body=log or failure,
+        )
     return _item(
         id=_text(row.get("id")), source="deployment",
         kind=f"deploy.{environment}" if environment else "deploy",
         actor=_text(raw.get("created_by")) or "deployer", entity_type="deployment_run",
-        entity_id=_text(row.get("id")), created_at=row.get("ts"),
-        data={
-            "app": app_name, "environment": environment, "status": status,
-            "target_kind": _text(raw.get("target_kind")),
-            "target_ref": _text(raw.get("target_ref")), "commit": _text(raw.get("commit_ref")),
-            "repo": _text(raw.get("repo")),
-            "duration_seconds": _duration_seconds(row.get("started"), row.get("finished")),
-            "failure_reason": failure,
-        },
+        entity_id=deploy_id, created_at=row.get("ts"),
+        data=common,
         classify_row={"action": f"deploy {app_name} to {environment} {status}".strip(),
                       "status": status, "kind": "deployment", "stage": environment},
         level="error" if failure or status == "failed" else "info",
-        # No process: the app is named in the row and found by `subject=` (D16).
-        body=failure,
+        # No process: the app is named in the row and found by `subject=` (D16). A stack deploy
+        # carries its command log on this line (its steps record no log of their own).
+        body="\n".join(part for part in (failure, _text(raw.get("log"))) if part),
     )
 
 
@@ -814,6 +836,9 @@ class LogQuery:
     step_id: str = ""
     act: str = ""
     subject: str = ""
+    #: What `subject` stands for, resolved once (`_subject_ids`): the subject itself, the id in
+    #: a deploy ref, and the records a deploy is made of (its job, decision, ChangeSet, receipts).
+    subjects: list[str] = field(default_factory=list)
     since: Optional[datetime] = None
     until: Optional[datetime] = None
     range: str = ""
@@ -884,7 +909,7 @@ class LogQuery:
         """The filters, as a stable string — part of every ETag (the resolved window is not:
         a relative range's edges move every second, and a quiet log must stay 304)."""
         parts = {k: v for k, v in sorted(self.__dict__.items())
-                 if k not in ("since", "until", "work", "missing")
+                 if k not in ("since", "until", "work", "missing", "subjects")
                  and v not in ("", [], None, False, set())}
         if not self.range:
             parts["since"], parts["until"] = _iso(self.since), _iso(self.until)
@@ -975,7 +1000,7 @@ def _where(query: LogQuery, source: str, *, skip: frozenset[str] = frozenset(),
             return None
         clauses.append(f"({spec.act_match})")
     if query.subject:
-        clauses.append(f"({spec.subject_match or 't.id = :subject'})")
+        clauses.append(f"({spec.subject_match or 't.id = ANY(:subjects)'})")
     if query.q:
         clauses.append(f"({spec.fts})" if spec.fts else f"strpos({spec.text}, lower(:q)) > 0")
     return clauses
@@ -989,6 +1014,7 @@ def _params(query: LogQuery) -> dict[str, Any]:
         "agents": query.agents, "exclude_agents": query.exclude_agents,
         "service": query.service, "run_id": query.run_id, "wfr": query.workflow_run_id,
         "step": query.step_id, "work": query.work, "act": query.act, "subject": query.subject,
+        "subjects": query.subjects or ([query.subject] if query.subject else []),
         "since": query.since, "until": query.until,
     }
 
@@ -1115,6 +1141,45 @@ def _scope_probe(query: LogQuery) -> list[dict[str, Any]]:
     return probe
 
 
+def _subject_ids(connection: Connection, query: "LogQuery") -> list[str]:
+    """Everything `subject=` stands for, so every stream matches the same thing.
+
+    A sibling screen links here with the id it holds. The Infra deploy drawer holds a deploy
+    REF (`delivery:deprun_…`, `stack:sdep_…`), which no row is keyed by — "Open full log"
+    matched nothing. The ref is read once, by infra_view's one reader, and a deploy brings the
+    records it is made of: its job (`job.*`), its approval (`decision.*`), its ChangeSet and its
+    receipts (`resource_receipt.*`). Never the build: that is a different log."""
+    from .infra_view import split_deploy_ref
+
+    subject = _text(query.subject)
+    ids: list[str] = [subject] if subject else []
+    parsed = split_deploy_ref(subject)
+    if parsed and parsed[1] not in ids:
+        ids.append(parsed[1])
+    if not ids or "deployment" in query.missing:
+        return ids
+    rows = _fetch_rows(connection, """
+        SELECT d.job_id, d.decision_id, d.changeset_id, NULL::text AS reservation_id,
+               d.release_receipt_ids AS receipts
+        FROM deployment_runs d WHERE d.project_id = :p AND d.id = ANY(:ids)
+        UNION ALL
+        SELECT x.job_id, x.decision_id, x.changeset_id, x.reservation_id, NULL::jsonb
+        FROM stack_deployments x WHERE x.project_id = :p AND x.id = ANY(:ids)""",
+                       {"p": query.project_id, "ids": ids})
+    for row in rows:
+        linked = [row.get("job_id"), row.get("decision_id"), row.get("changeset_id"),
+                  row.get("reservation_id")]
+        receipts = row.get("receipts")
+        if isinstance(receipts, str):
+            try:
+                receipts = json.loads(receipts)
+            except ValueError:
+                receipts = []
+        linked += list(receipts) if isinstance(receipts, list) else []
+        ids += [_text(v) for v in linked if _text(v) and _text(v) not in ids]
+    return ids
+
+
 #: Databases already seen to hold every source table. A partial schema is re-checked each time
 #: (a table can be created later); a complete one never loses a table at runtime.
 _COMPLETE: set[str] = set()
@@ -1127,14 +1192,15 @@ def _missing_sources(connection: Connection) -> set[str]:
     key = str(getattr(engine, "url", "")) if engine is not None else ""
     if not key or key in _COMPLETE:
         return set()
-    tables = sorted({spec.table for spec in activity_sql.SOURCES.values()})
+    tables = sorted({t for spec in activity_sql.SOURCES.values() for t in spec.tables()})
     rows = _fetch_rows(connection,
                        "SELECT name, to_regclass(name) IS NOT NULL AS present "
                        "FROM unnest(CAST(:tables AS text[])) AS name", {"tables": tables})
     absent = {_text(r["name"]) for r in rows if not r.get("present")}
     if not absent and rows:
         _COMPLETE.add(key)
-    return {name for name, spec in activity_sql.SOURCES.items() if spec.table in absent}
+    return {name for name, spec in activity_sql.SOURCES.items()
+            if any(t in absent for t in spec.tables())}
 
 
 class ActivityLogService:
@@ -1155,6 +1221,8 @@ class ActivityLogService:
     def prepare(connection: Connection, project_id: str, **params: Any) -> LogQuery:
         query = LogQuery.build(project_id, **params)
         query.missing = _missing_sources(connection)
+        if query.subject:
+            query.subjects = _subject_ids(connection, query)
         if query.step_id:
             query.work = sorted(_step_work_ids(connection, query.project_id,
                                                query.workflow_run_id, query.step_id))

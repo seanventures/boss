@@ -108,6 +108,12 @@ class Source:
     always: str = ""
     #: The column the newest-row probe reads for this source's ETag (index-backed).
     newest: str = "t.created_at"
+    #: The real tables behind `table` when `table` is a derived relation: the partial-schema
+    #: probe checks these (empty: `table` itself is the table).
+    requires: tuple[str, ...] = ()
+
+    def tables(self) -> tuple[str, ...]:
+        return self.requires or (self.table,)
 
 
 _P = "t.project_id = :project_id"
@@ -145,11 +151,87 @@ _STEP_LEVEL = (
     f"WHEN {_trim('t.status')} IN ('succeeded', 'skipped', 'cancelled') THEN 'info' "
     "ELSE 'verbose' END)"
 )
-_DEPLOY_KIND = (f"(CASE WHEN {_trim('t.environment')} <> '' THEN 'deploy.' || "
+# A DEPLOY'S LOG IS ITS STEPS. The source used to be one row per deploy, so "Open full log" on
+# a deploy that ran nine steps showed one line, or none: the step records (label, status, log)
+# the deploy drawer reads never reached the log. `_DEPLOY_LINES` is every deploy as lines: one
+# `run` line (what was deployed where, and how it ended) and one `step` line per recorded step,
+# for both kinds of deploy — `deployment_runs` (governed host and registry deploys) and
+# `stack_deployments` (an app's own boss.deploy.yaml). The step order is the record's order.
+_STEP_ARRAY = "(CASE WHEN jsonb_typeof({col}) = 'array' THEN {col} ELSE '[]'::jsonb END)"
+#: A step that never ran has no time of its own; it reads after everything the deploy did.
+_NOT_RUN = "greatest({a}.created_at, coalesce({a}.finished_at, {a}.updated_at))"
+
+
+def _step_time(key: str, fallback: str) -> str:
+    value = f"coalesce(s.step->>'{key}', '')"
+    return (f"(CASE WHEN {value} ~ '^[0-9]{{4}}-[0-9]{{2}}-[0-9]{{2}}' "
+            f"THEN ({value})::timestamptz ELSE {fallback} END)")
+
+
+_DEPLOY_LINES = f"""(
+    SELECT d.id, d.project_id, d.created_at, d.updated_at AS changed_at, d.id AS deploy_id,
+           'run'::text AS line, d.app_name, d.environment, d.status, d.target_kind,
+           d.target_ref, d.commit_ref, d.repo, d.failure_reason, d.created_by,
+           d.deployment_target_id, d.started_at, d.finished_at, ''::text AS label,
+           ''::text AS log, 0::bigint AS ord
+    FROM deployment_runs d
+    UNION ALL
+    SELECT d.id || '/' || s.ord, d.project_id,
+           {_step_time('started_at', _step_time('ended_at', _NOT_RUN.format(a='d')))},
+           d.updated_at, d.id, 'step', d.app_name, d.environment,
+           coalesce(s.step->>'status', ''), d.target_kind, d.target_ref, d.commit_ref, d.repo,
+           coalesce(s.step->>'error', ''), d.created_by, d.deployment_target_id,
+           {_step_time('started_at', 'NULL::timestamptz')},
+           {_step_time('ended_at', 'NULL::timestamptz')},
+           coalesce(nullif(s.step->>'label', ''), nullif(s.step->>'step', ''),
+                    s.step->>'name', ''),
+           coalesce(s.step->>'log', ''), s.ord
+    FROM deployment_runs d
+    CROSS JOIN LATERAL jsonb_array_elements({_STEP_ARRAY.format(col='d.steps')})
+         WITH ORDINALITY AS s(step, ord)
+    UNION ALL
+    SELECT x.id, x.project_id, x.created_at, x.updated_at, x.id, 'run',
+           coalesce(nullif(dt.app_name, ''), x.manifest->>'name', x.repository, ''),
+           coalesce(dt.environment, ''), x.status, 'stack', coalesce(x.host_id, ''),
+           coalesce(nullif(x.commit_sha, ''), x.ref), x.repository, x.failure_reason,
+           x.created_by, x.target_id, x.apply_started_at, x.finished_at, '',
+           coalesce(x.log_tail, ''), 0
+    FROM stack_deployments x LEFT JOIN deployment_targets dt ON dt.id = x.target_id
+    UNION ALL
+    SELECT x.id || '/' || s.ord, x.project_id,
+           {_step_time('started_at', _step_time('ended_at', _NOT_RUN.format(a='x')))},
+           x.updated_at, x.id, 'step',
+           coalesce(nullif(dt.app_name, ''), x.manifest->>'name', x.repository, ''),
+           coalesce(dt.environment, ''), coalesce(s.step->>'status', ''), 'stack',
+           coalesce(x.host_id, ''), coalesce(nullif(x.commit_sha, ''), x.ref), x.repository,
+           coalesce(s.step->>'error', ''), x.created_by, x.target_id,
+           {_step_time('started_at', 'NULL::timestamptz')},
+           {_step_time('ended_at', 'NULL::timestamptz')},
+           coalesce(nullif(s.step->>'label', ''), s.step->>'name', ''),
+           coalesce(s.step->>'log', ''), s.ord
+    FROM stack_deployments x LEFT JOIN deployment_targets dt ON dt.id = x.target_id
+    CROSS JOIN LATERAL jsonb_array_elements({_STEP_ARRAY.format(col='x.steps')})
+         WITH ORDINALITY AS s(step, ord)
+)"""
+
+_IS_STEP = "t.line = 'step'"
+_DEPLOY_KIND = (f"(CASE WHEN {_IS_STEP} THEN 'deploy.step' "
+                f"WHEN {_trim('t.environment')} <> '' THEN 'deploy.' || "
                 f"{_trim('t.environment')} ELSE 'deploy' END)")
-_DEPLOY_ACTION = (f"btrim('deploy ' || {_trim('t.app_name')} || ' to ' || "
-                  f"{_trim('t.environment')} || ' ' || {_trim('t.status')})")
+_DEPLOY_ACTION = (f"(CASE WHEN {_IS_STEP} THEN btrim('deploy step ' || {_trim('t.label')} "
+                  f"|| ' ' || {_trim('t.status')}) "
+                  f"ELSE btrim('deploy ' || {_trim('t.app_name')} || ' to ' || "
+                  f"{_trim('t.environment')} || ' ' || {_trim('t.status')}) END)")
 _DEPLOY_STATUS = status_case((_DEPLOY_ACTION, "t.status", "'deployment'"), "t.status")
+#: A step that never ran (pending) is verbose: it is the plan, not something that happened.
+_DEPLOY_LEVEL = (
+    f"(CASE WHEN {_IS_STEP} THEN (CASE WHEN lower({_trim('t.status')}) IN ('failed', 'error') "
+    f"OR {_trim('t.failure_reason')} <> '' THEN 'error' "
+    f"WHEN lower({_trim('t.status')}) IN ('pending', 'skipped', '') THEN 'verbose' "
+    "ELSE 'info' END) "
+    f"WHEN {_trim('t.failure_reason')} <> '' OR {_trim('t.status')} = 'failed' "
+    "THEN 'error' ELSE 'info' END)"
+)
 
 
 def _text_of(*parts: str) -> str:
@@ -180,7 +262,7 @@ SOURCES: dict[str, Source] = {
         step_match=("t.entity_type = 'workflow_run' AND t.entity_id = :wfr "
                     "AND t.data->>'step_id' = :step"),
         work_match="t.entity_id = ANY(:work)", act_match="t.entity_id = :act",
-        subject_match="t.entity_id = :subject",
+        subject_match="t.entity_id = ANY(:subjects)",
         fts=("to_tsvector('english', translate(coalesce(t.event_type, '') || ' ' || "
              "coalesce(t.actor, '') || ' ' || coalesce(t.entity_type, '') || ' ' || "
              "coalesce(t.entity_id, ''), '._-', '   ')) @@ "
@@ -243,8 +325,8 @@ SOURCES: dict[str, Source] = {
         run_key="coalesce(t.code_task_run_id, '')", agent="t.role",
         run_match="t.code_task_run_id = :run_id", work_match="t.code_task_run_id = ANY(:work)",
         act_match="t.act_id = :act",
-        subject_match=("(t.model = :subject OR t.role = :subject OR t.engine = :subject "
-                       "OR t.code_task_run_id = :subject)"),
+        subject_match=("(t.model = ANY(:subjects) OR t.role = ANY(:subjects) "
+                       "OR t.engine = ANY(:subjects) OR t.code_task_run_id = ANY(:subjects))"),
     ),
     "agent_turn": Source(
         name="agent_turn", table="agent_turns", scopes=(_P,), ts="t.created_at",
@@ -280,7 +362,7 @@ SOURCES: dict[str, Source] = {
         text=_text_of(_APP_KIND, "t.service", "t.run_id", "t.message", _words(_APP_KIND)),
         run_key="coalesce(t.run_id, '')", service="t.service",
         run_match="t.run_id = :run_id", work_match="t.run_id = ANY(:work)",
-        subject_match="(t.run_id = :subject OR t.service = :subject)",
+        subject_match="(t.run_id = ANY(:subjects) OR t.service = ANY(:subjects))",
     ),
     "workflow_step": Source(
         name="workflow_step", table="workflow_step_runs", scopes=(_P,), ts=_STEP_TS,
@@ -297,24 +379,29 @@ SOURCES: dict[str, Source] = {
         started="t.started_at", finished="t.completed_at", newest=_STEP_TS,
     ),
     "deployment": Source(
-        name="deployment", table="deployment_runs", scopes=(_P,), ts="t.created_at",
+        name="deployment", table=_DEPLOY_LINES,
+        requires=("deployment_runs", "stack_deployments", "deployment_targets"),
+        scopes=(_P,), ts="t.created_at",
         raw=("jsonb_build_object('app_name', t.app_name, 'environment', t.environment, "
              "'status', t.status, 'target_kind', t.target_kind, 'target_ref', t.target_ref, "
              "'commit_ref', t.commit_ref, 'repo', t.repo, 'failure_reason', t.failure_reason, "
-             "'created_by', t.created_by)"),
-        status=_DEPLOY_STATUS,
-        level=(f"(CASE WHEN {_trim('t.failure_reason')} <> '' OR {_trim('t.status')} = 'failed' "
-               "THEN 'error' ELSE 'info' END)"),
+             "'created_by', t.created_by, 'line', t.line, 'deploy_id', t.deploy_id, "
+             "'label', t.label, 'log', t.log, 'ord', t.ord)"),
+        status=_DEPLOY_STATUS, level=_DEPLOY_LEVEL,
         kind=_DEPLOY_KIND, actor=f"coalesce(nullif({_trim('t.created_by')}, ''), 'deployer')",
-        entity_type="'deployment_run'", entity_id="t.id", title=_DEPLOY_ACTION,
-        text=_text_of(_DEPLOY_KIND, "t.created_by", "'deployment_run'", "t.id",
-                      "t.failure_reason", _words(_DEPLOY_ACTION)),
+        entity_type="'deployment_run'", entity_id="t.deploy_id", title=_DEPLOY_ACTION,
+        text=_text_of(_DEPLOY_KIND, "t.created_by", "'deployment_run'", "t.deploy_id",
+                      "t.failure_reason", "t.label", "t.log", _words(_DEPLOY_ACTION)),
+        # "By run": a deploy's lines group under the deploy.
+        run_key="t.deploy_id",
         # The app is not a process: PROCESS is API and worker. A deploy is found by its app
         # through `subject=` (and the old `service=` links, below), and names it in its row.
         service_match="t.app_name = :service",
-        subject_match=("(t.deployment_target_id = :subject OR t.id = :subject "
-                       "OR t.app_name = :subject)"),
+        subject_match=("(t.deploy_id = ANY(:subjects) OR t.deployment_target_id = ANY(:subjects) "
+                       "OR t.app_name = ANY(:subjects))"),
         started="t.started_at", finished="t.finished_at",
+        # A deploy's status and steps change after it is created: its updated_at moves.
+        newest="coalesce(t.changed_at, t.created_at)",
     ),
 }
 

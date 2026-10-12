@@ -41,7 +41,7 @@ COLUMNS = {
     "workflow_step": ("step_id text, step_kind text, status text, attempt int, last_error text, "
                       "workflow_run_id text"),
     "deployment": ("app_name text, environment text, status text, failure_reason text, "
-                   "created_by text"),
+                   "created_by text, line text, label text"),
 }
 
 
@@ -84,12 +84,21 @@ def _fixtures(source: str) -> list[dict]:
                      "failed", "deadlettered", "cancelled"],
                     [0, 1, 2], ["", "boom", "  "])]
     if source == "deployment":
-        return [{"app_name": app, "environment": env, "status": st, "failure_reason": fr,
-                 "created_by": "d"}
+        runs = [{"app_name": app, "environment": env, "status": st, "failure_reason": fr,
+                 "created_by": "d", "line": "run", "label": ""}
                 for app, env, st, fr in itertools.product(
                     ["checkout", "error-app"], ["", "production", "stuck-env"],
                     ["created", "running", "succeeded", "failed", "rolled_back", "timeout"],
                     [None, "", "health check never passed"])]
+        # A deploy's steps are lines of the same stream (activity_sql._DEPLOY_LINES).
+        steps = [{"app_name": "checkout", "environment": "staging", "status": st,
+                  "failure_reason": fr, "created_by": "d", "line": "step", "label": label}
+                 for st, fr, label in itertools.product(
+                     ["", "pending", "running", "ok", "OK", "failed", "error", "skipped",
+                      "succeeded", " Failed ", "timeout"],
+                     [None, "", "boom"],
+                     ["Preflight checks", "fix error page", "", "health", "waiting room"])]
+        return runs + steps
     raise AssertionError(source)
 
 
