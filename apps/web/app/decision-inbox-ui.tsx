@@ -323,8 +323,46 @@ function decisionImpact(decision: DecisionFeedItem): { label: string; tone: stri
   if (action === "execute_agent_tool") return { label: "publish", tone: "teal" };
   if (action === "resume_agent_run") return { label: "agent tool", tone: "teal" };
   if (action === "review_architecture") return { label: "architecture", tone: "blue" };
-  const rule = decisionRuleLabel(decision);
-  return { label: rule.length > 18 ? rule.slice(0, 18).trimEnd() + "…" : rule, tone: "muted" };
+  if (action.includes("budget") || action.includes("reservation")) return { label: "budget", tone: "amber" };
+  if (action === "deploy_stack") return { label: "deploy", tone: "teal" };
+  return { label: impactWord(decisionRuleLabel(decision)), tone: "muted" };
+}
+
+/** A chip's word: whole words that fit, never a word cut in half ("CREATE BUDGET RESE…"). */
+export function impactWord(rule: string): string {
+  const words = rule.trim().split(/\s+/).filter(Boolean);
+  let out = "";
+  for (const w of words) {
+    const next = out ? `${out} ${w}` : w;
+    if (next.length > 18) break;
+    out = next;
+  }
+  return out || (words[0] ?? "").slice(0, 18);
+}
+
+/** Who approved a decision, as a person reads it: their name, or a role word, never an id. */
+export function approverName(decision: Pick<DecisionFeedItem, "approvedBy" | "approvedByName">): string {
+  if (decision.approvedByName) return decision.approvedByName;
+  const by = String(decision.approvedBy ?? "");
+  if (by === "ceo") return "the owner";
+  return /^[a-z]{2,6}_[A-Za-z0-9]+$/.test(by) ? "a person" : by;
+}
+
+/** Reason codes a decision carries, in words. A bare code (`host_deploy_requires_approval`,
+ *  `missing_reservation`) is the machine's; the card says what it means. */
+const REASON_WORDS: Record<string, string> = {
+  host_deploy_requires_approval: "a deploy to a host needs a person's approval",
+  stack_deploy_requires_approval: "a deploy to a host needs a person's approval",
+  missing_reservation: "no budget was reserved for this work",
+  missing_active_reservation: "no budget was reserved for this work",
+  budget_exceeded: "it would go over the budget",
+  live_secret_requires_approval: "a live key needs a person's approval",
+};
+export function reasonInWords(reason: string | null | undefined): string {
+  const r = String(reason ?? "").trim();
+  if (!r) return "";
+  if (!/^[a-z0-9_.:-]+$/.test(r)) return r;
+  return REASON_WORDS[r] ?? r.replace(/[_.:-]+/g, " ");
 }
 
 function decisionStatusDetail(decision: DecisionFeedItem): string {
@@ -355,8 +393,12 @@ function decisionStatusDetail(decision: DecisionFeedItem): string {
       decision.approvedAt,
     )} — no human reviewed this.`;
   }
+  if (decision.approvedBy?.startsWith("policy:")) {
+    return `Approved by this environment's deploy rule at ${formatDeadline(decision.approvedAt)}.`;
+  }
   if (decision.approvedBy) {
-    return `Approved by ${decision.approvedBy} at ${formatDeadline(
+    // A NAME, NEVER AN ID: "Approved by usr_kdzh…" and "Approved by ceo" were what cards said.
+    return `Approved by ${approverName(decision)} at ${formatDeadline(
       decision.approvedAt,
     )}.`;
   }
@@ -850,7 +892,7 @@ function DecisionInboxRow({
             </span>
             {decision.reason ? (
               <span className="dq-ev" data-testid="decision-reason">
-                reason {decision.reason}
+                why: {reasonInWords(decision.reason)}
               </span>
             ) : null}
             {estimatedCost != null ? (

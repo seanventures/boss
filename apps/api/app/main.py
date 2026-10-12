@@ -3061,6 +3061,33 @@ def job_summary_from_row(row) -> JobSummary:
     )
 
 
+_PRINCIPAL_NAMES: dict[str, tuple[float, Optional[str]]] = {}
+
+
+def principal_display_name(principal_id: Optional[str]) -> Optional[str]:
+    """A person's or agent's name for an actor id, or None. Cached for a minute: cards are
+    listed many at a time and names rarely change. "Approved by usr_kdzh…" and "Approved by ceo"
+    were what the Approvals cards said."""
+    pid = str(principal_id or "").strip()
+    if not pid or pid in ("auto_approval",) or pid.startswith("policy:"):
+        return None
+    if pid == "ceo":
+        return "the owner"
+    hit = _PRINCIPAL_NAMES.get(pid)
+    if hit and time.monotonic() - hit[0] < 60:
+        return hit[1]
+    name: Optional[str] = None
+    try:
+        with engine.connect() as connection:
+            name = connection.execute(
+                text("SELECT display_name FROM identity_principals WHERE id = :i"),
+                {"i": pid}).scalar()
+    except Exception:  # noqa: BLE001 — a name is a nicety; the card still shows without it
+        name = None
+    _PRINCIPAL_NAMES[pid] = (time.monotonic(), name or None)
+    return name or None
+
+
 def decision_card_from_row(row) -> DecisionCard:
     from boss_engine.services import decision_actions
     from boss_engine.services.core import decision_reason_from_payload
@@ -3079,6 +3106,7 @@ def decision_card_from_row(row) -> DecisionCard:
         cost_summary=row["cost_summary"] or {},
         deadline_at=row["deadline_at"].isoformat() if row["deadline_at"] else None,
         approved_by=row["approved_by"],
+        approved_by_name=principal_display_name(row["approved_by"]),
         approved_at=row["approved_at"].isoformat() if row["approved_at"] else None,
         delegated_to=row.get("delegated_to"),
         delegated_by=row.get("delegated_by"),
