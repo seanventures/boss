@@ -95,6 +95,9 @@ def job_run_id(kind: str, payload: dict[str, Any]) -> Optional[str]:
 
 def run_job_match_sql(table: str, run_ref: str) -> str:
     """Fixed-kind linkage for internal SQL; callers supply their own project predicate."""
+    if table == "security_scans":
+        # A scan's job names its scan, not a run (security_scan.service, enqueue_job).
+        return f"j.kind = 'security.scan' AND j.payload->>'scan_id' = {run_ref}"
     kinds = [kind for kind, mapped in _RUN_TABLE_FOR_KIND.items() if mapped == table]
     if not kinds:
         return f"j.payload->>'run_id' = {run_ref}"

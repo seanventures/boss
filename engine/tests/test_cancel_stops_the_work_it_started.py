@@ -44,6 +44,19 @@ class TestCancelReachesTheRealWork:
         )
 
 
+    def test_a_security_scan_is_stopped_in_words_its_table_accepts(self):
+        """security_scans allows queued/running/done/failed and has no updated_at. The generic
+        UPDATE (status='cancelled', updated_at) failed there and, inside the cancel's
+        transaction, would have aborted the whole cancel."""
+        from boss_engine.services import jobs
+
+        stop = workflows._WORK_CANCEL_SQL["security_scans"]
+        assert "status='failed'" in stop and "updated_at" not in stop
+        assert "done" in workflows._WORK_TERMINAL
+        assert "payload->>'scan_id'" in jobs.run_job_match_sql("security_scans", ":w")
+        assert "begin_nested" in inspect.getsource(workflows._cancel_work_this_run_started)
+
+
 class TestItStopsRunningWorkAndNotJustQueuedWork:
     def test_jobs_are_cancelled_with_force(self):
         """The queue refuses to cancel a RUNNING job by default, because killing one leaves a
