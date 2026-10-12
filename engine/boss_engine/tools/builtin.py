@@ -2324,6 +2324,11 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
             return {"ok": False,
                     "error": f"cannot propose {name!r}: not an action BOSS can run",
                     "available": sorted(_DISCUSS_OPERATIONS_TOOLS)}
+        unavailable = action_unavailable(name, getattr(ctx, "settings", None))
+        if unavailable:
+            return {"ok": False,
+                    "error": f"cannot propose {name!r} here: {unavailable} Say what the "
+                             "operator can do instead, or what BOSS will do itself."}
         call_args = args.get("args") or {}
         placeholder = _placeholder_argument(call_args)
         if placeholder:
@@ -6740,17 +6745,10 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
                                                _ssh_key_file)
         from ..services.secret_backends import resolve_target_secret
 
-        if _community_raw_sql_disabled(ctx.settings):
-            return {
-                "ok": False,
-                "error": "Community host shell is disabled until commands use an approved "
-                         "ChangeSet, budget reservation, and ResourceReceipt.",
-                "note": "inspect_host remains available for supported read-only commands.",
-            }
-        if not getattr(ctx.settings, "agent_host_shell", False):
-            return {"ok": False,
-                    "error": "host shell is disabled (BOSS_AGENT_HOST_SHELL is not set).",
-                    "note": "inspect_host still works for read-only commands."}
+        unavailable = action_unavailable("run_on_host", ctx.settings)
+        if unavailable:
+            return {"ok": False, "error": unavailable,
+                    "note": "inspect_host remains available for supported read-only commands."}
 
         raw = (args.get("command") or "").strip()
         if not raw:
@@ -7216,6 +7214,26 @@ def _writes_access_tables(statement: str) -> str | None:
     """The first access table a raw SQL statement names, or None."""
     found = _ACCESS_TABLE.search((statement or "").lower().replace('"', ""))
     return found.group(1) if found else None
+
+
+def action_unavailable(name: str, settings: Any) -> str | None:
+    """Why the action `name` cannot run on this install, or None. THE ONE RULE.
+
+    The tool and `propose_action` both read it, so an agent never offers a button the tool
+    will refuse. Harbor offered "run on host"
+    to fix a deploy's directory, and the click answered "Community host shell is disabled".
+    """
+    if name == "run_on_host":
+        if settings is None:
+            from ..config import get_settings
+
+            settings = get_settings()
+        if _community_raw_sql_disabled(settings):
+            return ("Community host shell is disabled until commands use an approved "
+                    "ChangeSet, budget reservation, and ResourceReceipt.")
+        if not getattr(settings, "agent_host_shell", False):
+            return "host shell is disabled (BOSS_AGENT_HOST_SHELL is not set)."
+    return None
 
 
 def build_discuss_read_registry(*, edition: str | None = None) -> ToolRegistry:
