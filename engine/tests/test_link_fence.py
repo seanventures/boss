@@ -44,7 +44,10 @@ def _chain(env: dict[str, str]) -> list[str]:
     src = SCRIPT.read_text()
     fence = src[src.index("fence_network() {"):src.index("\n}\n", src.index("fence_network() {")) + 3]
     head = "\n".join(l for l in src.splitlines() if re.match(r"^(UID_RANGE|PORTS|LINK_PORTS|PREVIEW_PORTS)=", l))
+    # fence_ipv6 (BOSS-487) is its own function with its own tests; fence_network calls it last,
+    # and this file renders only the IPv4 chain, so it stands in as a success here.
     stub = ("iptables() { echo \"iptables $*\"; }\nip6tables() { return 1; }\n"
+            "fence_ipv6() { return 0; }\n"
 
             "command() { return 0; }\n"
             # the container's networks, as the script's /proc/net/route reader would print them
@@ -61,7 +64,8 @@ def _restored(env: dict[str, str]) -> list[str]:
     src = SCRIPT.read_text()
     fence = src[src.index("fence_network() {"):src.index("\n}\n", src.index("fence_network() {")) + 3]
     head = "\n".join(l for l in src.splitlines() if re.match(r"^(UID_RANGE|PORTS|LINK_PORTS|PREVIEW_PORTS)=", l))
-    stub = ("iptables() { :; }\nip6tables() { return 1; }\ncommand() { return 0; }\n"
+    stub = ("iptables() { :; }\nip6tables() { return 1; }\nfence_ipv6() { return 0; }\n"
+            "command() { return 0; }\n"
 
             "python3() { cat >/dev/null; echo 172.18.0.0/16; }\n")
     path = f"{_restore_stub_path()}:{os.environ.get('PATH', '')}"
