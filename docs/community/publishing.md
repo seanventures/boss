@@ -1,6 +1,6 @@
 # Publishing the docs
 
-The repository provides a static landing page in `docs/landing/` and a manual built with [MkDocs Material](https://squidfunk.github.io/mkdocs-material/) from `docs/community/`. The project's hosted website is <https://boss.sean.network/>. Its deployment is separate from a source release; a local build does not verify the content currently served there. Pages outside the manual, such as the installer guide and examples, are linked on GitHub.
+The repository provides the BOSS product manual in `docs/community/`, built with [MkDocs Material](https://squidfunk.github.io/mkdocs-material/). The marketing website at <https://boss.sean.network/> has its own source repository and deployment. It imports the product manual and installer bootstrap from BOSS. Pages outside the manual, such as the installer guide and examples, are linked on GitHub.
 
 ## Build locally
 
@@ -10,11 +10,11 @@ From the repository root, install `mkdocs` and `mkdocs-material`, then run:
 mkdocs build -f mkdocs.community.yml --strict
 ```
 
-Use `mkdocs serve -f mkdocs.community.yml` for a live preview while you edit. The landing page is plain HTML; open `docs/landing/index.html` in a browser, or serve the combined build with `python3 -m http.server`.
+Use `mkdocs serve -f mkdocs.community.yml` for a live preview while you edit.
 
 ## Build check
 
-The `Docs site` workflow in `.github/workflows/pages.yml` only verifies the build. On pull requests and pushes to `main` that touch the docs, it builds the manual in strict mode under `_site/docs/` and copies the landing page to `_site/`, the same layout served at <https://boss.sean.network/>. It does not deploy anything; GitHub Pages is not the host.
+The `Product docs` workflow in `.github/workflows/pages.yml` verifies the manual in strict mode under `_site/docs/`. The hosted website publishes its imported copy through its separate deployment process. A source release or local manual build does not verify the content currently served there.
 
 ## Installer pin
 
