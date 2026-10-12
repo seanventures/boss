@@ -136,10 +136,10 @@ function DeployBody({ d, projectId, actor, refresh, onOpen }: {
       ) : null}
 
       {/* WHERE IT IS, IN ONE SENTENCE — the same one the row, the run and the fleet show. */}
-      <p className="inf-dd-status" data-testid="inf-deploy-sentence" data-phase={verdict === "approve" ? "queued" : row.phase}>
+      <div className="inf-dd-status" data-testid="inf-deploy-sentence" data-phase={verdict === "approve" ? "queued" : row.phase}>
         <StateWord w={shownWord(row, verdict)} />{" "}
         <span data-copy="data">{verdict === "approve" ? "Approved. Starting the deploy." : row.sentence}</span>
-      </p>
+      </div>
       {verdict === null && (row.can.approve || row.can.reject) ? (
         <DrawerSection label="Needs you" testId="inf-deploy-needs">
           <div className="inf-actions">

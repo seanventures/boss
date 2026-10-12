@@ -180,7 +180,7 @@ function MultiRepoConsentSheet({ request, onClose }: { request: ConsentRequest; 
             <div className="mr-ui-eyebrow">Not reachable <span>{mr.unreachable.length} other {mr.unreachable.length === 1 ? "repository" : "repositories"}{org ? ` in ${org}` : ""}</span></div>
             <div className="mr-cs-chips">
               {shown.map((u) => (
-                <span key={u} className="mr-ui-chip static" style={{ opacity: 0.65 }} title="This run's token cannot reach it" data-user-text>
+                <span key={u} className="mr-ui-chip static unreachable" title="This run's token cannot reach it" data-user-text>
                   <LockKey size={11} aria-hidden />{u}
                 </span>
               ))}

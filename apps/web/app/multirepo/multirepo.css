@@ -456,3 +456,6 @@
 @media (prefers-reduced-motion: reduce) { .mr-spin { animation: none; } }
 /* The change-set approval card is the whole Approvals row. */
 .dq-row.dq-row-changeset { padding: 0; border: 0; background: none; box-shadow: none; display: block; }
+
+/* A repository this run's token cannot reach: shown, but quieter. */
+.mr-ui-chip.static.unreachable { opacity: 0.65; }

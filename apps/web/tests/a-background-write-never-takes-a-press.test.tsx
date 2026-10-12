@@ -119,7 +119,9 @@ describe("the automatic recheck is a background write, not a press", () => {
     expect(held.length).toBe(3); // three rechecks still in flight
     const retry = host!.querySelector<HTMLButtonElement>('[data-testid="dw-run-stopped-retry"]');
     expect(retry, "the stopped run offers Try again").not.toBeNull();
-    await act(async () => { retry!.click(); });
+    await act(async () => { retry!.click(); });          // Try again opens the optional note…
+    const send = host!.querySelector<HTMLButtonElement>('[data-testid="dw-run-stopped-retry-confirm"]');
+    await act(async () => { send!.click(); });           // …and its Retry sends it
     await settle();
     expect(posts("retry_step").length).toBe(1);
     expect(toasts).toEqual([]);
@@ -134,8 +136,12 @@ describe("a refused press is said, in the operator's words", () => {
     await mount();
     const buttons = [...host!.querySelectorAll<HTMLButtonElement>('[data-testid="dw-run-stopped-retry"]')];
     expect(buttons.length).toBe(3);
-    // Two Try again presses on two different runs, in the same tick — before `busy` re-renders.
+    // Open the note on two different runs, then send both in the same tick — before `busy`
+    // re-renders.
     await act(async () => { buttons[0].click(); buttons[1].click(); });
+    const sends = [...host!.querySelectorAll<HTMLButtonElement>('[data-testid="dw-run-stopped-retry-confirm"]')];
+    expect(sends.length).toBe(2);
+    await act(async () => { sends[0].click(); sends[1].click(); });
     await settle();
     expect(posts("retry_step").length).toBe(1);
     expect(toasts).toEqual([
@@ -149,7 +155,9 @@ describe("a refused press is said, in the operator's words", () => {
     holdActions = new Set(["retry_step"]);
     await mount();
     const retry = host!.querySelector<HTMLButtonElement>('[data-testid="dw-run-stopped-retry"]')!;
-    await act(async () => { retry.click(); retry.click(); });
+    await act(async () => { retry.click(); });
+    const send = host!.querySelector<HTMLButtonElement>('[data-testid="dw-run-stopped-retry-confirm"]')!;
+    await act(async () => { send.click(); send.click(); });
     await settle();
     expect(posts("retry_step").length).toBe(1);
     expect(toasts).toEqual([]);
