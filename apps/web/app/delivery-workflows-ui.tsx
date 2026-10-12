@@ -2200,7 +2200,7 @@ export function RunActionsBar({ run, busy, handlers }: {
  * Choosing a HOST is the act that was missing. A target is that host plus this app's name, its
  * environment and a free port, and the button that makes one also points the run at it.
  */
-function DeployWhere({ targets, hosts, runInput, buildRunId, busy, bound, hostName,
+function DeployWhere({ targets, hosts, runInput, buildRunId, busy, bound, hostName, live,
                       onSetTarget, onPrepareTarget, onBound }: {
   targets: DeployTarget[]; hosts: DeployHost[]; runInput: Record<string, unknown>;
   /** The code task whose build is being shipped — the app the target binds to. */
@@ -2210,6 +2210,8 @@ function DeployWhere({ targets, hosts, runInput, buildRunId, busy, bound, hostNa
   bound?: DeployTarget;
   /** That target's host, in the words the host list uses. */
   hostName?: string;
+  /** The app is live there and the step already says "Live at <address>". */
+  live?: boolean;
   onSetTarget: (targetId: string) => void; onPrepareTarget: (hostId: string) => void;
   onBound: () => void;
 }) {
@@ -2255,8 +2257,10 @@ function DeployWhere({ targets, hosts, runInput, buildRunId, busy, bound, hostNa
         <span className="dw-bound-ok" aria-hidden>✓</span>
         <span>
           Ships to <strong>{settled.app_name}</strong> · {settled.environment}
-          {hostName ? <> on <strong>{hostName}</strong></> : null}
-          {where ? <span className="detail"> ({where})</span> : null}
+          {/* The address once: when the step already says "Live at http://host:port", the host
+              and port here repeated it. */}
+          {hostName && !live ? <> on <strong>{hostName}</strong></> : null}
+          {where && !live ? <span className="detail"> ({where})</span> : null}
         </span>
         <button type="button" className="cap-btn dw-bound-change" disabled={!!busy}
                 data-testid="dw-deploy-change" onClick={() => setChanging(true)}>
@@ -3018,10 +3022,12 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
   // THE TARGET CONTROL, MADE ONCE AND PLACED WHEREVER THE LAYOUT PUTS IT. It renders the bound
   // target as a fact with Change, or the form to set one — and `onBound` is also what records
   // that this operator has now done it, which is what quietens the step's teaching copy.
+  const name = appIdentity(runInput as AppRun).name;
+  const lastDeploy = useNewestDeploy(isDeployStep(step, capability) && !stackDeploy ? buildRunId : null, name);
   const targetControl = (
     <DeployWhere targets={targets} hosts={hosts} runInput={runInput}
                  buildRunId={buildRunId ?? ""} busy={busy}
-                 bound={shippedTo} hostName={boundHostName}
+                 bound={shippedTo} hostName={boundHostName} live={!!lastDeploy?.openUrl}
                  onSetTarget={onSetTarget} onPrepareTarget={onPrepareTarget}
                  onBound={() => { markDeployLearned(); onBound(); }} />
   );
@@ -3036,9 +3042,8 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
   // sentence Infra shows, and the app link only once it went live with its health check
   // passed. This step used to derive all three itself and said "Nothing has deployed" over a
   // deploy that had shipped. Re-read while the deploy is moving, so approve → starting →
-  // deploying → live is watched here, not discovered by refreshing.
-  const name = appIdentity(runInput as AppRun).name;
-  const lastDeploy = useNewestDeploy(isDeployStep(step, capability) && !stackDeploy ? buildRunId : null, name);
+  // deploying → live is watched here, not discovered by refreshing. (`lastDeploy`, above the
+  // target control, which uses it.)
   const blocker = step.blocker ?? null;
   // The live preview is resolved per-step by the API and lives ON the step, not in the output
   // the runtime recorded — merged here so the link builder sees one object.

@@ -4,6 +4,7 @@ import React, { useCallback, useEffect, useId, useRef, useState } from "react";
 import { GatedButton } from "../../components/gated";
 import { postJson } from "./cockpit-actions";
 import { SavedChecks } from "./saved-checks";
+import { actorWords } from "../../lib/actor-words";
 
 type Review = {
   id: string; actor: string; outcome: "accepted" | "changes_requested"; note: string;
@@ -116,7 +117,7 @@ export function ResultReview({ runId, onChangeRequested }: {
         {data.history.map((review) => <li key={review.id}>
           <div className="fx-out-links"><span>{review.outcome === "accepted" ? "Accepted as useful" : "Changes requested"}</span>
             <code>{review.snapshot.delivered_head?.slice(0, 12) ?? "Unknown revision"}</code>
-            <span>{review.actor}</span><time>{review.created_at}</time>
+            <span>{actorWords(review.actor)}</span><time>{review.created_at}</time>
             {review.snapshot_hash !== data.snapshot_hash ? <span>Earlier evidence snapshot</span> : null}</div>
           {review.note ? <div data-user-text>{review.note}</div> : null}
           {review.outcome === "changes_requested" ? <button type="button" className="ag-link" onClick={() => onChangeRequested(`Review of ${runId} at ${review.snapshot.delivered_head}:\n${review.note}`)}>Prepare this change</button> : null}

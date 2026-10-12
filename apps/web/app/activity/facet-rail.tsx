@@ -44,18 +44,24 @@ function Section({ id, label, open, onToggle, children }: {
   );
 }
 
-function RailRow({ k, value, label, n, icon, testid, pressed, exact, loaded, onToggle, onOnly }: {
+function RailRow({ k, value, label, n, icon, testid, pressed, exact, loaded, onToggle, onOnly, adds }: {
   k: LogTokenKey; value: string; label: React.ReactNode; n?: number; icon?: React.ReactNode; testid: string;
   pressed: boolean; exact: boolean; loaded: boolean; onToggle: () => void; onOnly?: () => void;
+  /** Another value of this facet is selected: this row's count is what selecting it would ADD. */
+  adds?: boolean;
 }) {
+  // "6 lines" with Events 15 and Jobs 1 beside them read as a count that did not add up. While
+  // a stream is selected, the others say what they would add: +15, +1.
+  const plus = adds && !pressed && (n ?? 0) > 0;
   return (
     <li className="lx-rail-row" data-key={k} data-value={value}>
       <button type="button" className="lx-rail-pick" data-testid={testid} aria-pressed={pressed} onClick={onToggle}>
         <span className="lx-check" aria-hidden />
         {icon}
         <span className="lx-rail-label">{label}</span>
-        <span className="lx-count" title={exact ? undefined : "At least this many. Counting stopped early."}>
-          {loaded ? count(n ?? 0, exact) : ""}
+        <span className="lx-count" data-adds={plus || undefined}
+              title={plus ? "Lines selecting this would add" : exact ? undefined : "At least this many. Counting stopped early."}>
+          {loaded ? `${plus ? "+" : ""}${count(n ?? 0, exact)}` : ""}
         </span>
       </button>
       {onOnly ? (
@@ -113,6 +119,7 @@ export function FacetRail({ facets, tokens, showVerbose, onTokens, onVerbose }: 
           const Icon = STREAM_ICON[s.key];
           return (
             <RailRow key={s.key} k="src" value={s.key} pressed={has("src", s.key)} exact={exact} loaded={facets !== null} onToggle={() => toggle("src", s.key)} onOnly={() => only("src", s.key)} n={facets?.sources[s.key]} testid={`lx-src-${s.key}`}
+                 adds={tokens.some((t) => t.key === "src")}
                  icon={Icon ? <Icon size={13} aria-hidden /> : null}
                  label={<span title={s.hint}>{s.label}</span>} />
           );

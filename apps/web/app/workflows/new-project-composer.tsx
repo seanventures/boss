@@ -46,6 +46,7 @@ import { notifyChanged } from "../changed";
 import { nameOf } from "../agents/run-face";
 import { CHANGE_CHIPS, specFirstDirective } from "../factory/change-it";
 import { builtBuild, parseApps, type AppRow } from "../factory/apps-tab";
+import { AppContext } from "./app-context";
 import { createLinkAction } from "../factory/links-actions";
 import { TalksTo, linkRequests, talksToProblem, type TalksToRow } from "./talks-to";
 import { defaultInputs, invalidInputs, missingRequired, startsFromABrief, suppliedInputs,
@@ -1415,6 +1416,7 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
             ) : (
               <div className="np-base np-base-empty">Pick an app.</div>
             )}
+            {app ? <AppContext projectId={projectId} app={app} /> : null}
           </div>
         ) : null}
         <div>

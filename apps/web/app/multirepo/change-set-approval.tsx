@@ -25,6 +25,7 @@ import {
   CHANGE_SET_PLACES, isBlocking, isFixed, isOpenIssue, multirepo, shortName, type ChangeSetView, type DeployPlan,
 } from "../../lib/multirepo";
 import { areaHref } from "../factory/cockpit-util";
+import { actorWords } from "../../lib/actor-words";
 
 type PullRequest = { repository: string; pr_number?: number | null; pr_url?: string | null; head_sha?: string | null;
                      additions?: number | null; deletions?: number | null; components?: string[] };
@@ -205,7 +206,7 @@ export function ChangeSetApproval({ decision, projectId, actorId, pending }: {
         <div className="mr-appr-f" data-testid="mr-approval-verdict">
           <span className="mr-ui-pill" data-tone={decision.status === "approved" || decision.status === "executed" ? "ok"
             : decision.status === "rejected" ? "bad" : "muted"}>{decision.status.replace(/_/g, " ")}</span>
-          {decision.approvedBy ? <span className="mr-ui-sub">by <span data-user-text>{decision.approvedBy}</span></span> : null}
+          {decision.approvedBy ? <span className="mr-ui-sub">by <span data-user-text>{actorWords(decision.approvedBy)}</span></span> : null}
           {csId ? <a className="mr-ui-link" href={areaHref(CHANGE_SET_PLACES.cockpit(csId))}>Open the change</a> : null}
         </div>
       ) : null}

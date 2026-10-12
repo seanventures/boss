@@ -6,6 +6,7 @@ import type {
 } from "@boss/api-client";
 import React from "react";
 import { formatDateTimeShort } from "../lib/datetime";
+import { actorWords } from "../lib/actor-words";
 
 function formatTime(value?: string): string {
   return formatDateTimeShort(value, "—");
@@ -138,7 +139,7 @@ export function WorkflowRegistryView({
                   <span className="workflow-event-marker" />
                   <span>
                     <strong>{event.event_type.replaceAll("_", " ")}</strong>
-                    <small>{event.actor} · {formatTime(event.created_at)}</small>
+                    <small>{actorWords(event.actor)} ·{formatTime(event.created_at)}</small>
                   </span>
                 </div>
               ))}

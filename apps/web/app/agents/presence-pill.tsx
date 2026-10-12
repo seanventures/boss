@@ -53,7 +53,7 @@ export function pillText(working: number, needs: number): string {
 /** The older words, from agents alone: for an API that sends no `attention`. */
 export function pillWords(rows: CrewRow[]): string {
   const needs = rows.filter((r) => r.zone === "needs_you").length;
-  return pillText(rows.length - needs, needs);
+  return pillText(rows.filter((r) => r.zone === "working" || r.zone === "in_panel").length, needs);
 }
 
 function openAgents(patch: Record<string, string | null> = {}): void {
@@ -81,10 +81,13 @@ export function PresencePill({ projectId, live: given, attention: givenAttention
   const v = useIdentityVersion(); // the crew is named at render: repaint when identities load
   const now = useNow(30_000);
   const rows = useMemo(() => crewOf(live), [live, v]); // eslint-disable-line react-hooks/exhaustive-deps -- `v` versions the store crewOf reads
-  // With attention, needs-you is its items; the agent rows below are the ones at work.
-  const working = attention ? rows.filter((r) => r.zone !== "needs_you") : rows;
+  // WORKING MEANS WORKING. An agent can be live without working (queued, waiting): crewOf
+  // files it under idle, and counting "everything not needs-you" said "1 working" with nothing
+  // running. Only the working and in-panel zones are work.
+  const atWork = (r: CrewRow) => r.zone === "working" || r.zone === "in_panel";
+  const working = rows.filter(atWork);
   const needs = attention ? attention.count : rows.filter((r) => r.zone === "needs_you").length;
-  const workingCount = attention ? working.length : rows.length - needs;
+  const workingCount = working.length;
   const [open, setOpen] = useState(false);
   const box = useRef<HTMLDivElement>(null);
   const [announced, setAnnounced] = useState("");

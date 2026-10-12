@@ -68,6 +68,7 @@ from .app_deploy_manifest import (
     render,
 )
 from .core import create_blocking_decision, emit_event, make_id
+from .people_names import who as _who
 
 log = logging.getLogger(__name__)
 
@@ -1511,7 +1512,7 @@ def on_decision_not_approved(connection: Connection, settings: Settings, decisio
         text("UPDATE changesets SET status = 'rejected', failure_reason = :r, updated_at = now() "
              "WHERE id = :c AND status IN ('pending_approval', 'policy_checked', "
              "'budget_reserved')"),
-        {"c": row["changeset_id"], "r": f"decision {outcome} by {actor}"})
+        {"c": row["changeset_id"], "r": f"decision {outcome} by {_who(actor, connection)}"})
     if row["reservation_id"]:
         BudgetGovernor(settings).release(connection, row["project_id"], row["reservation_id"],
                                          "Stack deployment was not approved.")

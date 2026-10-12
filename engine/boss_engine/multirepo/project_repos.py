@@ -114,9 +114,43 @@ def list_project_repos(db: Any, project_id: str) -> dict[str, Any]:
                for k, r in sorted(reg.items()) if r.get("allowed") and k not in in_project
                and not r.get("archived") and r.get("reachable", True)]
     not_allowed = sum(1 for k, r in reg.items() if not r.get("allowed") and k not in in_project)
-    return {"project_id": project_id, "repo_mode": repo_mode(db, project_id), "items": items,
+    mode = repo_mode(db, project_id)
+    # ONE REPO MEANS EVERY APP BUILDS FROM IT. Apps built before components existed have no
+    # component rows, so the default repository read "Used by apps: —" while HelpDesk was
+    # built from it. In one-repo mode the default binding is used by every app the project has.
+    if mode != "multi":
+        built = _apps_built_here(db, project_id)
+        for item in items:
+            if item["is_default"] and not item["used_by_apps"]:
+                item["used_by_apps"] = built
+    # NO ALLOW-LIST IS NOT "NOTHING ALLOWED". A project on a GitHub token (no GitHub App) has no
+    # registry; its repositories work through the token. The console said "No repository is
+    # allowed for BOSS yet" beside a repository marked Working.
+    return {"project_id": project_id, "repo_mode": mode, "items": items,
             "addable": addable, "not_allowed_count": not_allowed, "registry_in_use": bool(reg),
+            "allow_list": "in_use" if reg else ("not_set_up" if items else "empty"),
             "apps": _apps_summary(db, project_id)}
+
+
+def _apps_built_here(db: Any, project_id: str) -> list[dict[str, Any]]:
+    """The project's apps as the Factory names them (one per app identity)."""
+    try:
+        from ..services.code_task_service import list_code_task_runs
+        from ..services.factory_view import _app_key_of_name, app_name, group_into_apps
+
+        with db.begin_nested():
+            runs = list_code_task_runs(db, project_id, 200, exclude_internal=True)
+        out, seen = [], set()
+        for group in group_into_apps(runs):
+            name = app_name(group[0])
+            key = _app_key_of_name(name)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append({"app_key": key, "app_name": name, "components": []})
+        return out
+    except Exception:  # noqa: BLE001 — a helpful column, never a failed page
+        return []
 
 
 def _apps_summary(db: Any, project_id: str) -> list[dict[str, Any]]:

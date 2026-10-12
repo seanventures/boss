@@ -1033,8 +1033,10 @@ def _pause_largest(engine, settings, row, evidence, actor):
         project = c.execute(text("SELECT project_id FROM code_task_runs WHERE id=:id"),
                             {"id": run_id}).scalar()
         try:
+            from .people_names import who
+
             cancel_run(c, run_id, str(project), actor=actor,
-                       reason=f"Paused by {actor} to free memory; press Resume to continue")
+                       reason=f"Paused by {who(actor, c)} to free memory; press Resume to continue")
         except (LookupError, CancelRefused) as exc:
             raise ActRefused(str(exc)) from exc
         c.execute(text(
@@ -1088,7 +1090,9 @@ def _cancel_build(engine, settings, row, evidence, actor):
         project = c.execute(text("SELECT project_id FROM code_task_runs WHERE id=:id"),
                             {"id": run_id}).scalar()
         try:
-            cancel_run(c, run_id, str(project), actor=actor, reason=f"Cancelled by {actor}")
+            from .people_names import who
+
+            cancel_run(c, run_id, str(project), actor=actor, reason=f"Cancelled by {who(actor, c)}")
         except (LookupError, CancelRefused) as exc:
             raise ActRefused(str(exc)) from exc
     owned_process.terminate_owner(run_id, reason="cancel")

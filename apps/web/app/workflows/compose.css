@@ -250,6 +250,15 @@
 .np-base .np-keep { color: var(--green); }
 .np-base-empty { display: block; color: var(--np-faint); font-size: 0.68421rem; }
 
+/* What the feature builds onto: one summary line, the detail behind it (app-context.tsx). */
+.np-ctx { margin-top: 8px; border: 1px solid var(--border); border-radius: 12px; padding: 8px 12px; font-size: 0.65789rem; }
+.np-ctx > summary { cursor: pointer; display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; color: var(--ink-soft); }
+.np-ctx-open { margin-left: auto; color: var(--teal, #5eead4); white-space: nowrap; }
+.np-ctx-grid { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 12px; margin: 8px 0 2px; }
+.np-ctx-grid dt { color: var(--np-faint); }
+.np-ctx-grid dd { margin: 0; overflow-wrap: anywhere; }
+.np-ctx-grid code { font-family: var(--mono); }
+
 .np-proposal { border: 1px solid rgba(245, 181, 68, 0.35); border-radius: 12px; padding: 12px 14px; background: rgba(245, 181, 68, 0.06); }
 .np-proposal-kind { font: 700 0.57895rem var(--sans); color: var(--amber); }
 .np-proposal-note { white-space: pre-wrap; font: 500 0.65789rem/1.5 var(--mono); color: var(--ink-soft); margin: 8px 0; max-height: 220px; overflow: auto; }
