@@ -319,7 +319,9 @@ def record_turns(
             "truncated": clipped,
             "tokens": int(turn.get("tokens") or 0),
             "latency_ms": int(turn.get("latency_ms") or 0),
-            "level": classify(direction, tool_name=tool_name or "", content=content, ok=ok),
+            # A turn BOSS wrote itself (a live "thinking…" pulse) says its own level.
+            "level": (turn["level"] if turn.get("level") in LEVELS
+                      else classify(direction, tool_name=tool_name or "", content=content, ok=ok)),
             "ok": ok,
             "error": None if ok else (content[:500] or "tool reported an error"),
         })

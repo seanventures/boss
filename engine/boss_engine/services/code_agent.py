@@ -152,6 +152,51 @@ def _end_child(child, reap_seconds: float = 10.0) -> None:
         pass
 
 
+def is_partial_line(line: str) -> bool:
+    """A token-level `stream_event` line (--include-partial-messages)."""
+    return '"type":"stream_event"' in (line or "")[:64]
+
+
+class LivePulse:
+    """A long model stretch is never silent: "Thinking… 2m" / "Writing… 1m", at most every 30s.
+
+    A HelpDesk AI build had two silent stretches of 7 and 12 minutes, the model thinking before
+    it acted, and nobody watching could tell that from a hang. With partial messages the CLI
+    says what it is doing token by token; this turns that into one line per half minute.
+    """
+
+    EVERY_SECONDS = 30.0
+
+    def __init__(self, clock=time.monotonic):
+        self._clock = clock
+        self.reset()
+
+    def reset(self) -> None:
+        """A whole turn arrived: the stretch is over."""
+        self._phase = ""
+        self._since = 0.0
+        self._last = 0.0
+
+    def feed(self, line: str) -> Optional[dict]:
+        phase = ("thinking" if '"thinking_delta"' in line
+                 else "writing" if ('"text_delta"' in line or '"input_json_delta"' in line)
+                 else "")
+        if not phase:
+            return None
+        now = self._clock()
+        if phase != self._phase:
+            self._phase, self._since, self._last = phase, now, now
+            return None
+        if now - self._last < self.EVERY_SECONDS:
+            return None
+        self._last = now
+        elapsed = int(now - self._since)
+        mins, secs = divmod(elapsed, 60)
+        took = f"{mins}m {secs:02d}s" if mins else f"{secs}s"
+        return {"direction": "completion", "level": "info",
+                "content": f"{phase.capitalize()}… {took} so far"}
+
+
 def _drain(child, *, timeout: Optional[float], on_line=None) -> tuple[str, str]:
     """Read a child's stdout/stderr as they arrive, returning the full text of each.
 
@@ -174,7 +219,11 @@ def _drain(child, *, timeout: Optional[float], on_line=None) -> tuple[str, str]:
         try:
             for line in iter(stream.readline, ""):
                 last_output_at[0] = time.monotonic()
-                sink.append(line)
+                # A PARTIAL message (one per token with --include-partial-messages) is a pulse
+                # for the live view, never part of the output: keeping them would multiply the
+                # stored stdout a hundredfold and change nothing the final parse reads.
+                if not is_partial_line(line):
+                    sink.append(line)
                 if live and on_line is not None:
                     try:
                         on_line(line)
@@ -810,7 +859,7 @@ class ClaudeCodeAgent:
                 # `stream-json` emits a line per turn AND still ends with the identical result
                 # event `--output-format json` would have returned, which is why the transcript
                 # could be added without changing a single caller in the build pipeline.
-                *(("--output-format", "stream-json", "--verbose")
+                *(("--output-format", "stream-json", "--verbose", "--include-partial-messages")
                   if stream else ("--output-format", "json")),
                 "--max-turns", str(_max_turns),
                 "--allowedTools", allowed,
@@ -873,7 +922,18 @@ class ClaudeCodeAgent:
             except Exception:  # noqa: BLE001
                 pass
 
+            pulse = LivePulse()
+
             def _on_line(line: str) -> None:
+                if is_partial_line(line):
+                    beat = pulse.feed(line)
+                    if beat:
+                        try:
+                            record_agent_turns([beat], engine_name=self.engine, model=live_model)
+                        except Exception:  # noqa: BLE001
+                            pass
+                    return
+                pulse.reset()
                 produced = parser.feed(line)
                 if not produced:
                     return
