@@ -650,15 +650,18 @@ def on_decision_not_approved(connection: Connection, settings: Settings, decisio
     row = _row(connection, run_id, lock=True) if run_id else None
     if not row or row["status"] != "awaiting_approval":
         return
+    from .people_names import who
+
+    by = who(actor, connection)
     connection.execute(
         text("UPDATE deployment_runs SET status = 'rejected', finished_at = now(), "
              "failure_reason = :r, updated_at = now() WHERE id = :i"),
-        {"i": run_id, "r": f"Not approved ({outcome}) by {actor}. Nothing was deployed."})
+        {"i": run_id, "r": f"Not approved ({outcome}) by {by}. Nothing was deployed."})
     connection.execute(
         text("UPDATE changesets SET status = 'rejected', failure_reason = :r, updated_at = now() "
              "WHERE id = :c AND status IN ('pending_approval', 'policy_checked', "
              "'budget_reserved')"),
-        {"c": row["changeset_id"], "r": f"decision {outcome} by {actor}"})
+        {"c": row["changeset_id"], "r": f"decision {outcome} by {by}"})
     if row["reservation_id"]:
         BudgetGovernor(settings).release(connection, row["project_id"], row["reservation_id"],
                                          "Host deployment was not approved.")

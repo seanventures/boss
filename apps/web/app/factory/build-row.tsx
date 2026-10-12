@@ -16,6 +16,7 @@ import type { BuildRow as Build } from "../../lib/factory-floor";
 import { useIdentityVersion } from "../../lib/use-agent-identities";
 import { localTime, span, type Band } from "../agents/live-util";
 import { StationLine, WaitGlyph, activeStation, stationMoves } from "./station-line";
+import { actorWords } from "../../lib/actor-words";
 
 /** States whose face never moves: motion would claim work that is not happening. */
 export const STILL_STATES = new Set(["quiet", "budget_wait", "blocked", "budget_refused", "needs_waiver", "queued"]);
@@ -68,7 +69,7 @@ export function BuildRow({ build: b, density = "row", band = "wide", now, still,
   const cost = b.metered && b.costUsd > 0 ? `$${b.costUsd.toFixed(2)}` : "";
   const started = localTime(b.startedAt);
   // A tooltip is ~14 words: a long build title (the Captain writes whole briefs) is cut.
-  const nameTip = [shortTitle(b.title), `attempt ${b.attempt}`, b.actor ? `started by ${b.actor}` : "", started]
+  const nameTip = [shortTitle(b.title), `attempt ${b.attempt}`, b.actor ? `started by ${actorWords(b.actor)}` : "", started]
     .filter(Boolean).join(" · ");
   const phone = band === "phone";
 

@@ -815,12 +815,13 @@ def preview_flag(preview: Optional[Mapping[str, Any]], now: Optional[datetime] =
 
 
 def _who_stopped(fctx: Mapping[str, Any], viewer: Optional[str]) -> str:
+    from .people_names import who
+
     actor = str(fctx.get("cancelled_by") or "").strip()
     if not actor:
         return "Stopped"
-    if viewer and actor == viewer:
-        return "Stopped by you"
-    return f"Stopped by {actor}"
+    # A name, never an id: the build list said "Stopped by usr_kdzhawzy7mxmp5hpb3bqlgqojs".
+    return f"Stopped by {who(actor, viewer=viewer)}"
 
 
 def build_state(run: Mapping[str, Any], *, acts: Optional[list[Mapping[str, Any]]] = None,

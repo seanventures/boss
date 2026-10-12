@@ -22,6 +22,7 @@ import {
 } from "../../lib/multirepo";
 import { showToast } from "../client-forms";
 import { useOnScreen } from "../../lib/area-shown";
+import { actorWords } from "../../lib/actor-words";
 
 const RELEASE_STATES = ["merged", "deploying", "live", "rolled_back"];
 const cap = (s: string) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
@@ -236,7 +237,7 @@ export function DeployPlanView({ projectId, changeSetId, onBack }: { projectId: 
           <div className="mr-ui-note" data-testid="mr-dp-merged-together">
             <LockKey size={15} aria-hidden />
             <div>Merged together: the {n === 1 ? "PR merges" : `${numberWord(n)} PRs merge`} only after all pass at once. A failed merge reverts the ones that landed.
-              {plan.approved_by ? <> Approved by <span data-user-text>{plan.approved_by}</span>.</> : null}</div>
+              {plan.approved_by ? <> Approved by <span data-user-text>{actorWords(plan.approved_by)}</span>.</> : null}</div>
           </div>
         </div>
       </div>

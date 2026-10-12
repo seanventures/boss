@@ -745,7 +745,10 @@ def on_decision_answered(connection: Connection, decision: Mapping[str, Any], *,
         )
         event = "architecture.changes_requested"
     elif action == "reject":
-        reason = f"rejected by {actor}" + (f": {note.strip()}" if note and note.strip() else "")
+        from .people_names import who
+
+        reason = (f"rejected by {who(actor, connection)}"
+                  + (f": {note.strip()}" if note and note.strip() else ""))
         connection.execute(
             text("UPDATE architecture_reviews SET status = 'rejected', error = :e, "
                  "updated_at = now() WHERE id = :i"),

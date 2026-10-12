@@ -194,6 +194,7 @@ import { fetchKnowledgeGraphFeed } from "../lib/knowledge-graph";
 import { KnowledgeGraphPanel } from "./knowledge-graph-ui";
 import { AskBossHero } from "./ask-boss-hero";
 import { ActionForm } from "./client-forms";
+import { actorWords } from "../lib/actor-words";
 function formatMicros(amount: unknown): string {
   if (typeof amount !== "number") {
     return "n/a";
@@ -1250,7 +1251,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                           permissions: {member.permissions.join(", ") || "none"}
                         </p>
                         <p className="detail">
-                          Created by {member.createdBy} / updated{" "}
+                          Created by {actorWords(member.createdBy)} / updated{" "}
                           {formatDateTime(member.updatedAt)}
                         </p>
                       </div>
@@ -1365,7 +1366,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                         </p>
                         <p className="detail">
                           Expires {formatDateTime(grant.expiresAt)} / requested by{" "}
-                          {grant.requestedBy}
+                          {actorWords(grant.requestedBy)}
                         </p>
                         <p className="detail">
                           Postmortem task: {grant.postmortemTaskId ?? "missing"}
@@ -1936,7 +1937,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                               {policy.allowedDataBoundaries.join(", ") || "none"}
                             </p>
                             <p className="detail">
-                              Updated by {policy.createdBy} at{" "}
+                              Updated by {actorWords(policy.createdBy)} at{" "}
                               {formatDateTime(policy.updatedAt)}
                             </p>
                             {policy.rolloutNotes ? (
@@ -2428,7 +2429,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                               {policy.allowedDomains.join(", ") || "not restricted"}
                             </p>
                             <p className="detail">
-                              Updated by {policy.createdBy} at{" "}
+                              Updated by {actorWords(policy.createdBy)} at{" "}
                               {formatDateTime(policy.updatedAt)}
                             </p>
                             {policy.rolloutNotes ? (
@@ -2757,7 +2758,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                     <div>
                       <h4>{record.moduleId}</h4>
                       <p className="detail">
-                        {record.action} / {record.status} / actor {record.actor}
+                        {record.action} / {record.status} / actor {actorWords(record.actor)}
                       </p>
                       <p className="detail">
                         {record.fromVersion ?? "none"} {"->"}{" "}
@@ -3450,7 +3451,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                       <div>
                         <h4>{titleCaseToken(event.eventType)}</h4>
                         <p className="detail">
-                          {event.actor} / {event.entityType} / {formatDateTime(event.createdAt)}
+                          {actorWords(event.actor)} / {event.entityType} / {formatDateTime(event.createdAt)}
                         </p>
                       </div>
                       <code className="mono">{event.entityId}</code>

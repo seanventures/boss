@@ -4,6 +4,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState, type ReactNod
 import { formatTime } from "../lib/datetime";
 import { Markdown } from "./markdown";
 import { pushUrlParam, readUrlParam } from "./url-nav";
+import { actorWords } from "../lib/actor-words";
 
 /* ============================================================
    Shared types (structural — match the page feeds)
@@ -646,7 +647,7 @@ export function WorkBoard({
                     <span className={`wf-ic tone-${m.tone}`}><m.Icon /></span>
                     <span className="wf-tl-body">
                       <span className="wf-tl-label">{m.label}</span>
-                      <span className="wf-tl-meta">{e.actor} · {fmtTime(e.createdAt)}{gap ? ` · +${gap}` : ""}</span>
+                      <span className="wf-tl-meta">{actorWords(e.actor)} ·{fmtTime(e.createdAt)}{gap ? ` · +${gap}` : ""}</span>
                     </span>
                   </div>
                 );

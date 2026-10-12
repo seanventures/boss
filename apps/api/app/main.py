@@ -3061,31 +3061,20 @@ def job_summary_from_row(row) -> JobSummary:
     )
 
 
-_PRINCIPAL_NAMES: dict[str, tuple[float, Optional[str]]] = {}
 
 
 def principal_display_name(principal_id: Optional[str]) -> Optional[str]:
     """A person's or agent's name for an actor id, or None. Cached for a minute: cards are
     listed many at a time and names rarely change. "Approved by usr_kdzh…" and "Approved by ceo"
     were what the Approvals cards said."""
-    pid = str(principal_id or "").strip()
-    if not pid or pid in ("auto_approval",) or pid.startswith("policy:"):
-        return None
-    if pid == "ceo":
-        return "the owner"
-    hit = _PRINCIPAL_NAMES.get(pid)
-    if hit and time.monotonic() - hit[0] < 60:
-        return hit[1]
-    name: Optional[str] = None
+    # One lookup for every surface that names an actor (services/people_names.py).
+    from boss_engine.services.people_names import principal_name
+
     try:
         with engine.connect() as connection:
-            name = connection.execute(
-                text("SELECT display_name FROM identity_principals WHERE id = :i"),
-                {"i": pid}).scalar()
+            return principal_name(principal_id, connection)
     except Exception:  # noqa: BLE001 — a name is a nicety; the card still shows without it
-        name = None
-    _PRINCIPAL_NAMES[pid] = (time.monotonic(), name or None)
-    return name or None
+        return None
 
 
 def decision_card_from_row(row) -> DecisionCard:
