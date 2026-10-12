@@ -415,8 +415,13 @@ def _item(
     service: Optional[str] = None,
     body: str = "",
     sql_matched: bool = False,
+    personal: bool = True,
 ) -> dict[str, Any]:
     classified = _classify(classify_row)
+    # A deploy's log is about machines, not people: its host's address is how the app is
+    # reached, shown in the drawer beside it. Masking it as personal data turned the Activity
+    # log's copy into "[IP]". Credentials are still removed from every line.
+    body = (redact(body)[0] if personal else redact_secrets(body)) if body else ""
     status_value = classified["status"]
     return scrub({
         "id": id,
@@ -449,7 +454,7 @@ def _item(
         # The readable body of a turn, an error or a log line — redacted here too, not only
         # where it was written: an export or a copied line must never be the first place a
         # key that slipped past capture is shown.
-        "body": redact(body)[0] if body else "",
+        "body": body,
         # Set when the SOURCE QUERY already applied the search. Python must not filter it a
         # second time: the SQL matched on content that `_matches_q` cannot see, so re-checking
         # would throw away exactly the rows full-text search just found.
@@ -709,7 +714,7 @@ def _build_deployment(row: Mapping[str, Any]) -> dict[str, Any]:
             data={**common, "step": label, "order": int(raw.get("ord") or 0)},
             classify_row={"action": f"deploy step {label} {status}".strip(),
                           "status": status, "kind": "deployment", "stage": label},
-            level=level, body=log or failure,
+            level=level, body=log or failure, personal=False,
         )
     return _item(
         id=_text(row.get("id")), source="deployment",
@@ -723,6 +728,7 @@ def _build_deployment(row: Mapping[str, Any]) -> dict[str, Any]:
         # No process: the app is named in the row and found by `subject=` (D16). A stack deploy
         # carries its command log on this line (its steps record no log of their own).
         body="\n".join(part for part in (failure, _text(raw.get("log"))) if part),
+        personal=False,
     )
 
 

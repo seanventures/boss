@@ -2750,6 +2750,8 @@ class DecisionCard(BaseModel):
     cost_summary: dict[str, Any]
     deadline_at: Optional[str] = None
     approved_by: Optional[str] = None
+    # Who approved it, by name: the card never shows an actor id.
+    approved_by_name: Optional[str] = None
     approved_at: Optional[str] = None
     delegated_to: Optional[str] = None
     delegated_by: Optional[str] = None

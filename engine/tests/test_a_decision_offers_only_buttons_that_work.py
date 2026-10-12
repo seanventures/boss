@@ -175,8 +175,16 @@ def test_hand_to_someone_else_is_delegation_and_asks_who():
 
 def test_a_closed_decision_offers_nothing_and_an_approved_one_only_mark_executed():
     assert da.allowed_actions({**SAMPLES["general"], "status": "rejected"}) == []
-    assert [a["action"] for a in da.allowed_actions({**SAMPLES["general"],
-                                                     "status": "approved"})] == ["execute"]
+    # Only a card whose work a person carries out by hand keeps "Mark executed".
+    manual = {"status": "approved", "recommendation": {"action": "provide_github_token"}}
+    assert [a["action"] for a in da.allowed_actions(manual)] == ["execute"]
+    assert da.allowed_actions({**SAMPLES["general"], "status": "approved"}) == []
+
+
+def test_an_approved_decision_boss_carried_out_offers_nothing():
+    """A deploy, a gate or a merge BOSS ran itself showed "Mark executed" for ever (rc10)."""
+    for kind in ("deploy_gate", "workflow_gate", "pull_request"):
+        assert da.allowed_actions({**SAMPLES[kind], "status": "approved"}) == [], kind
 
 
 def test_an_expired_hold_decision_can_still_be_answered():

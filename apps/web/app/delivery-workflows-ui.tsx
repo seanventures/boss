@@ -5,6 +5,7 @@ import type { Permission } from "../lib/identity/permissions.gen";
 import { routeForStep, useRunRoutes } from "./why-this-model";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ShareRunButton } from "./improve/share-run";
+import { humanDuration } from "../lib/datetime";
 
 import { ActionPreview, actionPreviewOf } from "./action-preview";
 import { appIdentity, identityKey, type AppRun } from "./app-identity";
@@ -1260,15 +1261,17 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
 /* ── Running ─────────────────────────────────────────────────────────────────── */
 
 /** How long a step took, or has been going. The single most asked question of a pipeline. */
-function stepDuration(step: { started_at?: string | null; completed_at?: string | null }): string {
+function stepDuration(step: { started_at?: string | null; completed_at?: string | null;
+                              decision_approved_at?: string | null }): string {
   if (!step.started_at) return "";
-  const start = Date.parse(step.started_at);
+  // WORKING TIME, NOT WAITING TIME. A gated step starts when it is created and then waits for a
+  // person; timing it from there showed "14h 16m" for a deploy that ran in under a minute. The
+  // clock starts when its gate was answered, if that came later.
+  const approved = step.decision_approved_at ? Date.parse(step.decision_approved_at) : NaN;
+  const start = Math.max(Date.parse(step.started_at), Number.isFinite(approved) ? approved : -Infinity);
   const end = step.completed_at ? Date.parse(step.completed_at) : Date.now();
   if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return "";
-  const secs = Math.round((end - start) / 1000);
-  const text = secs < 60 ? `${secs}s`
-    : secs < 3600 ? `${Math.floor(secs / 60)}m ${secs % 60}s`
-    : `${Math.floor(secs / 3600)}h ${Math.floor((secs % 3600) / 60)}m`;
+  const text = humanDuration((end - start) / 1000);
   return step.completed_at ? text : `${text}…`;
 }
 
@@ -3066,7 +3069,8 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
   // decision, the note), with every machine field — awaits, run ids, verdicts — under one
   // Details disclosure, each text once and never "null" (stepOutput, app/workflows/step-run).
   const output = stepOutput(step.output as Record<string, unknown>,
-                            { noteShownAbove: step.status !== "succeeded" || phase === "skipped" });
+                            { noteShownAbove: step.status !== "succeeded" || phase === "skipped",
+                              status: step.status });
 
   // THE STEP'S OWN LOG: its rows and the work it started, read once and shared by the Done-by
   // line (model, cost) and the Activity section, so they cannot disagree.

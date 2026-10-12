@@ -152,11 +152,15 @@ export function RackView({ rack, now, windowEnd, canAct, busy, onHost, onResiden
              data-tone={rack.state.tone} aria-label={rack.thisComputer ? `This computer, ${rack.name}` : rack.name}>
       <header className="inf-rack-head">
         <button type="button" className="inf-rack-name" onClick={() => onHost(rack.id)} data-testid={`inf-rack-open-${rack.id}`}
-                title="Open this machine">
+                title={`Open this machine · ${rack.name}`}>
           {rack.thisComputer ? <span className="inf-rack-this">This computer</span> : null}
-          <span className="inf-trunc" data-copy="data">{rack.name}</span>
+          {/* The full name on hover: a long one ("Paramagurus-MacBook-Pro…") is cut to fit. */}
+          <span className="inf-trunc" data-copy="data" title={rack.name}>{rack.name}</span>
         </button>
-        {rack.address ? <span className="inf-mono inf-trunc inf-muted" data-copy="data" title={rack.address}>{rack.address}</span> : null}
+        {/* The address once: a host named by its address read "192.0.2.202 192.0.2.202". */}
+        {rack.address && rack.address !== rack.name
+          ? <span className="inf-mono inf-trunc inf-muted" data-copy="data" title={rack.address}>{rack.address}</span>
+          : null}
         {rack.arch ? <span className="inf-muted">{rack.arch}</span> : null}
         <span className="ag-spacer" />
         <StateWord w={rack.state} testId="inf-rack-state" changed={changed} />
