@@ -2433,7 +2433,9 @@ def _perform_capability(
                 workflow_run_id=str(context.get("run_id") or "") or None,
                 approver_role=str((step.get("approval") or {}).get("approver_role") or "")
                 or None,
-                step_id=str(step.get("id") or "") or None)
+                step_id=str(step.get("id") or "") or None,
+                # ONE APPROVAL PER DEPLOY: the gate a person already answered, passed on.
+                approval_decision_id=str(context.get("approval_decision_id") or "") or None)
     if key == "deploy":
         missing = _preview_missing_for_run(connection, context)
         if missing:
@@ -2584,6 +2586,10 @@ def _perform_capability(
             return _settle_started_work(capability, key, resumed)
     # Under the run's recorded authority (the step's agent for that person), never the worker's.
     with _step_authority(ctx, connection, project_id, context, step, step_actor):
+        if key == "deploy" and context.get("approval_decision_id"):
+            # ONE APPROVAL PER DEPLOY: the step's released gate goes to the deploy explicitly,
+            # so the deployment runs under it instead of asking a second time.
+            inputs = {**inputs, "approval_decision_id": str(context["approval_decision_id"])}
         output = _invoke_tool(ctx, capability.tool, project_id, step_actor, inputs)
     result = {"capability": key, "tool": capability.tool, **output,
               "ran_as": {**ran_as, "tool": capability.tool,

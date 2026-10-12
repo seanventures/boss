@@ -1155,7 +1155,8 @@ def plan_stack_deploy(engine, settings: Settings, *, project_id: str, target_id:
                       rollback_of: Optional[str] = None,
                       approver_role: Optional[str] = None,
                       workflow_step_id: Optional[str] = None,
-                      manifest_path: Optional[str] = None) -> dict[str, Any]:
+                      manifest_path: Optional[str] = None,
+                      approval_decision_id: Optional[str] = None) -> dict[str, Any]:
     """Record a deployment of `repository@ref` to a stack target, held for approval.
 
     `manifest_path` is the boss.deploy.yaml the build's app DECLARED (`_declared_stack_target`):
@@ -1354,7 +1355,19 @@ def plan_stack_deploy(engine, settings: Settings, *, project_id: str, target_id:
                if infra_doc else {})}
         cost = {"expected_cost_usd_micros": 0, "reservation_id": reservation["reservation_id"],
                 "cost_confidence": "no_provider_spend"}
-        if workflow_run_id:
+        # ALREADY APPROVED? The workflow gate's decision (passed explicitly) or the
+        # environment's policy (deploy_policy) — then no card of its own; dual control never.
+        from .deploy_policy import pre_approval
+
+        approval = pre_approval(connection, project_id, target.get("environment"),
+                                gate_decision_id=approval_decision_id)
+        if approval and rp.required_approvers_for_changeset(connection, changeset["id"]):
+            approval = None
+        if approval:
+            decision_id = approval["decision_id"]
+            recommendation["approval"] = {k: approval[k]
+                                          for k in ("source", "decision_id", "approved_by")}
+        elif workflow_run_id:
             decision_id = open_step_decision(
                 connection, project_id, None, question, recommendation, cost,
                 "stack_deploy_requires_approval", run_id=workflow_run_id,
@@ -1372,9 +1385,10 @@ def plan_stack_deploy(engine, settings: Settings, *, project_id: str, target_id:
         connection.execute(
             text("UPDATE changeset_operations SET risk_tier = 2 WHERE changeset_id = :c"),
             {"c": changeset["id"]})
-        connection.execute(
-            text("UPDATE decisions SET external_ref = :c WHERE id = :d"),
-            {"c": changeset["id"], "d": decision_id})
+        if not approval:
+            connection.execute(
+                text("UPDATE decisions SET external_ref = :c WHERE id = :d"),
+                {"c": changeset["id"], "d": decision_id})
         steps = [{"name": n, "status": "pending", "started_at": None, "ended_at": None}
                  for n in ["prepare", "upload", "environment", "switch"]
                  + ([] if is_stack_target(target) else [RETIRE_STEP])
@@ -1408,6 +1422,16 @@ def plan_stack_deploy(engine, settings: Settings, *, project_id: str, target_id:
                    {"target_id": target_id, "repository": f"{owner}/{repo}", "ref": ref,
                     "commit": commit, "changeset_id": changeset["id"],
                     "decision_id": decision_id, "workflow_run_id": workflow_run_id})
+        if approval:
+            from .deploy_policy import record_pre_approval
+
+            record_pre_approval(connection, project_id, approval,
+                                entity_type="stack_deployment", entity_id=deployment_id,
+                                actor=actor)
+            on_decision_approved(connection, settings,
+                                 {"id": decision_id,
+                                  "recommendation": {"deployment_id": deployment_id}},
+                                 approval["approved_by"])
         return get_stack_deployment(connection, deployment_id)
 
 
@@ -2082,7 +2106,8 @@ def plan_for_workflow_step(engine, settings: Settings, *, project_id: str, actor
                            target: dict, inputs: dict[str, Any],
                            workflow_run_id: Optional[str],
                            approver_role: Optional[str] = None,
-                           step_id: Optional[str] = None) -> dict[str, Any]:
+                           step_id: Optional[str] = None,
+                           approval_decision_id: Optional[str] = None) -> dict[str, Any]:
     """Plan the build's pull-request head onto a stack target; the step waits on it.
 
     No preview is required: the manifest declares how the stack runs and the health checks
@@ -2122,7 +2147,8 @@ def plan_for_workflow_step(engine, settings: Settings, *, project_id: str, actor
             repository=repository, ref=f"pull/{int(run['pull_request_number'])}", actor=actor,
             run_id=run_id, workflow_run_id=workflow_run_id, approver_role=approver_role,
             workflow_step_id=step_id,
-            manifest_path=None if is_stack_target(target) else target.get("manifest_path"))
+            manifest_path=None if is_stack_target(target) else target.get("manifest_path"),
+            approval_decision_id=approval_decision_id)
     except StackDeployError as exc:
         return {"capability": "deploy", "tool": None, "status": "failed",
                 "error": f"{exc.headline} {exc.action}"}

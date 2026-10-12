@@ -315,8 +315,11 @@ def rollback_plan_for(target: dict, previous: Optional[dict]) -> list[str]:
 def plan_host_deployment(rp, connection: Connection, *, project_id: str, target: dict,
                          commit_ref: Optional[str], release_packet: dict,
                          release_artifact_id: Optional[str], ownership_guard: dict,
-                         actor: str) -> dict[str, Any]:
-    """Record a deployment of `target` at `commit_ref`, held for a person's approval.
+                         actor: str,
+                         approval_decision_id: Optional[str] = None) -> dict[str, Any]:
+    """Record a deployment of `target` at `commit_ref`, held for a person's approval — or run
+    under one it already has (deploy_policy.pre_approval: the workflow gate's decision, passed
+    in as `approval_decision_id`, or the environment's policy).
 
     Called by ResourcePlaneService.plan_deployment_run for ssh/container targets once the
     environment policy and the surface lease have passed. Returns the deployment run.
@@ -406,9 +409,19 @@ def plan_host_deployment(rp, connection: Connection, *, project_id: str, target:
     }
     cost = {"expected_cost_usd_micros": 0, "reservation_id": reservation_id,
             "cost_confidence": "no_provider_spend"}
-    decision_id = create_blocking_decision(
-        connection, project_id, None, question, recommendation, cost, REASON_CODE,
-        risk_tier=risk_tier, default_action="hold")
+    from .deploy_policy import pre_approval
+
+    approval = pre_approval(connection, project_id, environment,
+                            gate_decision_id=approval_decision_id)
+    if approval and rp.required_approvers_for_changeset(connection, changeset["id"]):
+        approval = None      # dual control is two people's answer; a policy cannot give it
+    if approval:
+        decision_id = approval["decision_id"]
+        review["approval"] = {k: approval[k] for k in ("source", "decision_id", "approved_by")}
+    else:
+        decision_id = create_blocking_decision(
+            connection, project_id, None, question, recommendation, cost, REASON_CODE,
+            risk_tier=risk_tier, default_action="hold")
     connection.execute(
         text("UPDATE changesets SET status = 'pending_approval', risk_tier = :r, "
              "approval_decision_id = :d, updated_at = now() WHERE id = :c"),
@@ -416,8 +429,9 @@ def plan_host_deployment(rp, connection: Connection, *, project_id: str, target:
     connection.execute(
         text("UPDATE changeset_operations SET risk_tier = :r WHERE changeset_id = :c"),
         {"c": changeset["id"], "r": risk_tier})
-    connection.execute(text("UPDATE decisions SET external_ref = :c WHERE id = :d"),
-                       {"c": changeset["id"], "d": decision_id})
+    if not approval:
+        connection.execute(text("UPDATE decisions SET external_ref = :c WHERE id = :d"),
+                           {"c": changeset["id"], "d": decision_id})
     review = {**review, "decision_id": decision_id, "changeset_id": changeset["id"]}
     packet = {**(release_packet or {}), "surface_ownership": ownership_guard,
               "governed": True, "plan_review": review}
@@ -444,6 +458,13 @@ def plan_host_deployment(rp, connection: Connection, *, project_id: str, target:
                deployment_run_id,
                {"deployment_target_id": target["id"], "changeset_id": changeset["id"],
                 "decision_id": decision_id, "environment": environment, "governed": True})
+    if approval:
+        from .deploy_policy import record_pre_approval
+
+        record_pre_approval(connection, project_id, approval, entity_type="deployment_run",
+                            entity_id=deployment_run_id, actor=actor)
+        approve_and_queue(connection, rp.settings, run_id=deployment_run_id,
+                          approver=approval["approved_by"], decision_id=decision_id)
     return rp._get_deployment_run(connection, project_id, deployment_run_id)
 
 
@@ -487,6 +508,15 @@ def on_decision_approved(connection: Connection, settings: Settings, decision: d
                                          actor=actor, phased_owner=True, approver_roles=approver_roles)
     if changeset.get("status") != "approved":
         return None  # dual control: another approver role is still to sign
+    return _queue_apply(connection, row, actor=actor, decision_id=decision.get("id"))
+
+
+def _queue_apply(connection: Connection, row: Any, *, actor: str,
+                 decision_id: Optional[str]) -> dict[str, Any]:
+    """The approved deployment's apply, queued as a worker job."""
+    from .jobs import JOB_PRIORITY_INTERACTIVE, enqueue_job
+
+    run_id = str(row["id"])
     job = enqueue_job(
         connection, row["project_id"], JOB_KIND,
         {"deployment_run_id": run_id, "changeset_id": row["changeset_id"], "actor": actor},
@@ -497,9 +527,26 @@ def on_decision_approved(connection: Connection, settings: Settings, decision: d
              "WHERE id = :i"), {"j": job.get("id"), "i": run_id})
     emit_event(connection, row["project_id"], "deployment_run.approved", actor,
                "deployment_run", run_id,
-               {"decision_id": decision.get("id"), "changeset_id": row["changeset_id"],
+               {"decision_id": decision_id, "changeset_id": row["changeset_id"],
                 "job_id": job.get("id")})
     return job
+
+
+def approve_and_queue(connection: Connection, settings: Settings, *, run_id: str,
+                      approver: str, decision_id: Optional[str]) -> Optional[dict[str, Any]]:
+    """Run a deployment under an approval it ALREADY HAS (deploy_policy.pre_approval): its
+    ChangeSet approved by that approver, its apply queued now — no card of its own."""
+    from .resource_plane import ResourcePlaneService
+
+    row = _row(connection, run_id, lock=True)
+    if not row or row["status"] != "awaiting_approval":
+        return None
+    rp = ResourcePlaneService(settings)
+    changeset = rp.approve_changeset(connection, changeset_id=row["changeset_id"],
+                                     actor=approver, phased_owner=True)
+    if changeset.get("status") != "approved":
+        return None
+    return _queue_apply(connection, row, actor=approver, decision_id=decision_id)
 
 
 def on_decision_not_approved(connection: Connection, settings: Settings, decision: dict,

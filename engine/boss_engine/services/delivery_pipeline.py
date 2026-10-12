@@ -175,8 +175,12 @@ def deploy_build(engine, settings: Settings, *, project_id: str, run_id: str,
                  environment: str = "staging", target_id: Optional[str] = None,
                  actor: str = "operator", expected_cost_usd_micros: int = 0,
                  reservation_id: Optional[str] = None, host_id: Optional[str] = None,
+                 approval_decision_id: Optional[str] = None,
                  ) -> dict[str, Any]:
     """Plan a finished build's first deployment through Resource Plane.
+
+    `approval_decision_id` is the workflow gate's decision when a Deploy step a person already
+    approved started this deploy; it then runs under that approval (deploy_policy).
 
     BOSS could create hosts and targets and could REDEPLOY, and had no way to perform a
     deployment that had never happened. So "deploy Living Colors to live" had no executable
@@ -205,7 +209,8 @@ def deploy_build(engine, settings: Settings, *, project_id: str, run_id: str,
     if stack_target is not None:
         planned = plan_for_workflow_step(engine, settings, project_id=project_id, actor=actor,
                                          target=stack_target, inputs={"run_id": run_id},
-                                         workflow_run_id=None)
+                                         workflow_run_id=None,
+                                         approval_decision_id=approval_decision_id)
         if planned.get("status") == "failed":
             return {"status": "failed", "reason": planned.get("error")}
         return {"status": "planned", "stack_deployment_id": planned["stack_deployment_id"],
@@ -391,6 +396,7 @@ def deploy_build(engine, settings: Settings, *, project_id: str, run_id: str,
             expected_cost_usd_micros=expected_cost_usd_micros,
             reservation_id=reservation_id,
             actor=actor,
+            approval_decision_id=approval_decision_id,
         )
         deployment_run_id = planned.get("deployment_run_id") or planned.get("id")
         # A REFUSED PLAN HAS NO RUN ID, and is an answer in words. It was checked after the id,
