@@ -37,7 +37,12 @@ def _resolve_src() -> str:
 
 
 def _find_resolver() -> str:
+    # The resolver is the PUBLIC entry point (`transition`). Private follow-on handlers also
+    # raise InvalidDecisionTransitionError now (the architecture lease fix, 995e7ac8), and one
+    # of them sorts first — read without this filter, the test checked the wrong method.
     for name, obj in inspect.getmembers(decisions.DecisionService, inspect.isfunction):
+        if name.startswith("_"):
+            continue
         src = inspect.getsource(obj)
         if "InvalidDecisionTransitionError" in src and "approve" in src:
             return src

@@ -554,6 +554,12 @@ def test_a_refused_gate_blocks_the_run_and_cannot_be_skipped(eng, project, monke
     """A gate's "failure" is a person saying no. The run blocks there — and Skip is refused,
     because skipping would turn that no into a yes."""
     monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([]))
+    if key == "security_decide":
+        # The security choice is asked only when the scan found something to fix (with nothing,
+        # it steps aside as not applicable, by design). Give it findings, so a person says no.
+        from boss_engine.services import security_review_steps
+
+        monkeypatch.setattr(security_review_steps, "has_choices", lambda *a, **k: True)
     with eng.begin() as c:
         run = _two_step(c, project, key)
         runner.tick(c, Ctx(eng), project_id=project)

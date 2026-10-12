@@ -5760,6 +5760,15 @@ _WORK_TABLES: dict[str, str] = {
     "architecture": "architecture_reviews",
     # Waiting for CI (ci_gate): cancelling the run stops the looking; the wait no longer gates.
     "ci_wait": "ci_waits",
+    # The security_review workflow's scan. Its job carries {"scan_id"} (jobs.run_job_match_sql).
+    "security_scan": "security_scans",
+}
+
+#: How a table records "this was stopped", where it differs from status='cancelled' and
+#: updated_at. security_scans allows only queued/running/done/failed and has no updated_at:
+#: the generic UPDATE fails there, and inside the cancel's transaction it would abort it.
+_WORK_CANCEL_SQL: dict[str, str] = {
+    "security_scans": "status='failed', ended_at=now()",
 }
 
 _WORK_TERMINAL: frozenset[str] = frozenset(
@@ -5767,6 +5776,8 @@ _WORK_TERMINAL: frozenset[str] = frozenset(
      # A deployment's own finished states. Without them a cancel would relabel a deployment
      # that already shipped (`deployed`, `healthy`) or already failed as "cancelled".
      "deployed", "healthy", "unhealthy", "rolled_back", "rollback_pending",
+     # A security scan's own finished state.
+     "done",
      # An architecture a person already answered stays answered.
      "approved", "rejected"}
 )
@@ -5896,16 +5907,21 @@ def _cancel_work_this_run_started(
 
         # Then the record, so the console and every resume path agree it is over.
         table = _WORK_TABLES[kind]
+        stop = _WORK_CANCEL_SQL.get(table, "status='cancelled', updated_at=now()")
         try:
-            connection.execute(
-                text(
-                    f"""
-                    UPDATE {table} SET status='cancelled', updated_at=now()
-                    WHERE id = :work_id AND project_id = :project_id AND status NOT IN :terminal
-                    """
-                ).bindparams(bindparam("terminal", expanding=True)),
-                {"work_id": work_id, "project_id": project_id, "terminal": sorted(_WORK_TERMINAL)},
-            )
+            # Its own savepoint: a statement that fails must not abort the cancel around it.
+            with connection.begin_nested():
+                connection.execute(
+                    text(
+                        f"""
+                        UPDATE {table} SET {stop}
+                        WHERE id = :work_id AND project_id = :project_id
+                          AND status NOT IN :terminal
+                        """
+                    ).bindparams(bindparam("terminal", expanding=True)),
+                    {"work_id": work_id, "project_id": project_id,
+                     "terminal": sorted(_WORK_TERMINAL)},
+                )
         except Exception:  # noqa: BLE001 — table shapes differ; the job cancel is what matters
             logger.exception("could not mark %s %s cancelled", kind, work_id)
 

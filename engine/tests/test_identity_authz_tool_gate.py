@@ -111,7 +111,14 @@ def test_the_workflow_runner_cannot_go_around_the_gate(monkeypatch):
     source = open(runner.__file__, encoding="utf-8").read()
     body = source[source.index("def _invoke_tool"):]
     body = body[: body.index("\ndef ", 10)]
-    assert body.index("identity_gate(") < body.index("spec.handler(")
+    # The checks live in `_authorize_step_tool`, shared with the resumed build (`_retried_build`)
+    # so a retried build is decided exactly as the step's own call. It must run before the
+    # handler, and it must call the identity gate.
+    assert body.index("_authorize_step_tool(") < body.index("spec.handler(")
+    checks = source[source.index("def _authorize_step_tool"):]
+    checks = checks[: checks.index("\ndef ", 10)]
+    assert "identity_gate(" in checks
+    assert "return spec, refused" in checks[checks.index("identity_gate("):]
 
 
 # ---- also_requires: a tool needing two keys, like the route it mirrors (apply_template) -----------
