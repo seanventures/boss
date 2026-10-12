@@ -48,6 +48,40 @@ from typing import Any, Optional, Union
 DEFAULT_BASE_DIR = "/opt/boss-apps"
 #: The manifest's conventional location at the repository root.
 DEFAULT_MANIFEST_PATH = "boss.deploy.yaml"
+
+
+def declared_manifest(files: Any) -> Optional[str]:
+    """The boss.deploy.yaml an app declares itself with, from the files its build wrote, or None.
+
+    THE ONE RULE for "how is this app deployed": an app that says how it runs is deployed the
+    way it says, never guessed at. HelpDesk wrote helpdesk-ai/boss.deploy.yaml (compose: the
+    Node server and its Postgres), the deploy guessed "static", and nginx served its unbuilt
+    index.html — a blank page that passed a health check on `/`.
+
+    A repository holds several apps, and its ROOT manifest can be another app's (boss-sandbox's
+    belongs to stack-demo). So a manifest inside a directory wins, and among those the one whose
+    directory holds most of what the build wrote; the root manifest only when it is the only one.
+    """
+    paths = [str(f).strip().removeprefix("./").lstrip("/") for f in (files or [])
+             if str(f or "").strip()]
+    manifests = [p for p in paths if p.rsplit("/", 1)[-1] == DEFAULT_MANIFEST_PATH]
+    if not manifests:
+        return None
+    nested = [m for m in manifests if "/" in m]
+    if not nested:
+        return DEFAULT_MANIFEST_PATH
+
+    def held(manifest: str) -> tuple[int, int]:
+        directory = manifest.rsplit("/", 1)[0] + "/"
+        return (sum(1 for p in paths if p.startswith(directory)), manifest.count("/"))
+
+    return max(nested, key=held)
+
+
+def manifest_workdir(manifest_path: Optional[str]) -> str:
+    """The directory a manifest's paths and commands are relative to: its own ("" = root)."""
+    path = str(manifest_path or "").strip().strip("/")
+    return path.rsplit("/", 1)[0] if "/" in path else ""
 #: A step with no timeout of its own. Installs of a platform pull images and build; ten minutes
 #: is routine, so the default is generous and a step may still ask for more.
 DEFAULT_STEP_TIMEOUT_SECONDS = 1800
@@ -260,7 +294,10 @@ def _health(raw: Any) -> tuple[HealthCheck, ...]:
         if not isinstance(item, dict):
             raise ManifestError(f"{where} must be {{url, expect, timeout_seconds}}.")
         url = str(item.get("url") or "").strip()
-        if not re.match(r"^https?://", url):
+        # `{target.public_url}` always renders to an http(s) URL, so a check written against
+        # the app's own address is one — HelpDesk's `{target.public_url}/readyz` was refused
+        # here, which made the only honest health check for a host target unwritable.
+        if not re.match(r"^(?:https?://|\{target\.public_url\}(?:/|$))", url):
             raise ManifestError(
                 f"{where}.url must be an http:// or https:// URL; it is probed ON THE HOST, "
                 "so http://127.0.0.1:<port>/... is the usual answer.")

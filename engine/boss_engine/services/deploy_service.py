@@ -550,6 +550,45 @@ def _resolve_repo_branch(run: dict, settings: Settings) -> tuple[str, str, str]:
     return owner, repo, branch
 
 
+#: A module script a browser cannot run: TypeScript/JSX/framework source, served as-is.
+_SOURCE_SCRIPT = re.compile(
+    r"""<script\b[^>]*\bsrc\s*=\s*["']([^"']+\.(?:tsx?|jsx|mts|vue|svelte))["']""",
+    re.IGNORECASE)
+
+
+def unbuilt_reason(index_html: Path) -> Optional[str]:
+    """Why this index.html is SOURCE rather than a built page, or None.
+
+    HelpDesk's deploy served helpdesk-ai/index.html from nginx: `<script type="module"
+    src="/src/main.tsx">`. A browser cannot run that, so the page was blank — and the health
+    check on `/` passed, because nginx answered 200. A page that cannot run is not deployable.
+    """
+    try:
+        html = index_html.read_text(errors="replace")
+    except OSError:
+        return None
+    found = _SOURCE_SCRIPT.search(html)
+    if not found:
+        return None
+    return (f"{index_html.name} loads {found.group(1)}, which is source code a browser cannot "
+            "run — this app was never built. Deploy its build output (npm run build writes "
+            "dist/), or let the app say how it is deployed in a boss.deploy.yaml.")
+
+
+def declared_refusal(work: Path, manifest: Optional[str]) -> Optional[str]:
+    """The words for refusing a one-container deploy of an app that declares its own, or None.
+
+    THE BACKSTOP to stack_deploy's routing: whichever path reaches this function — a redeploy,
+    Infra's button, a target with no build — an app with a boss.deploy.yaml is never guessed
+    at. Its manifest says how it runs; this deploy would serve whatever it found.
+    """
+    if not manifest or not (work / manifest).is_file():
+        return None
+    return (f"this app declares how it is deployed ({manifest}), so BOSS ships it from that "
+            "manifest, not as a single guessed container. Deploy it again from its build or its "
+            "workflow: BOSS plans it from the manifest, on the same host, for approval.")
+
+
 def _build_dist(settings: Settings, owner: str, repo: str, branch: str, *, token: str = "",
                 changed: Optional[list[str]] = None,
                 ref: Optional[str] = None) -> tuple[Path, str, str, Optional[str]]:
@@ -616,6 +655,13 @@ def _build_dist(settings: Settings, owner: str, repo: str, branch: str, *, token
     # below carries this value out, so no caller has to know which ones discard the clone.
     sha = _head_sha(work)
 
+    from .app_deploy_manifest import declared_manifest
+
+    refused = declared_refusal(work, declared_manifest(changed or []))
+    if refused:
+        shutil.rmtree(work, ignore_errors=True)
+        raise RuntimeError(refused)
+
     # NOT EVERY APP HAS A BUILD. This ran `npm ci && npm run build` unconditionally and failed
     # on the first real deployment: the stock app is deliberately no-build vanilla JS, with a
     # package.json but no build script. Assuming a Node pipeline turns "nothing to build" into
@@ -658,6 +704,9 @@ def _build_dist(settings: Settings, owner: str, repo: str, branch: str, *, token
         if not (work / "dist").is_dir():
             raise RuntimeError("build script ran but did not produce ./dist")
         if not has_start:
+            unbuilt = unbuilt_reason(work / "dist" / "index.html")
+            if unbuilt:
+                raise RuntimeError(unbuilt)
             return (work, "static", "", sha)
         # Built, and it has a server to run. Ship the whole app directory — its package.json is
         # the run contract — laid out under the same `dist` name every mode uses, so staging,
@@ -713,6 +762,17 @@ def _build_dist(settings: Settings, owner: str, repo: str, branch: str, *, token
             f"cannot tell which app to deploy from {where} — candidates: {exc}. "
             "Have the task build a single app, or set boss.preview.command.") from exc
 
+    # The app the resolver chose may declare itself even when the lineage did not say so (a
+    # target deployed with no build, or a build that never touched its manifest).
+    if value not in (".", ""):
+        from .app_deploy_manifest import DEFAULT_MANIFEST_PATH
+
+        app_dir = value if kind != "py" else (value.rsplit("/", 1)[0] if "/" in value else "")
+        if app_dir:
+            refused = declared_refusal(work, f"{app_dir.rstrip('/')}/{DEFAULT_MANIFEST_PATH}")
+            if refused:
+                raise RuntimeError(refused)
+
     if kind == "py":
         # A server, not a file tree. The stock app serves its own UI *and* its /api/* routes
         # from one process, so shipping only web-stock/ to nginx would render a UI in which
@@ -753,6 +813,9 @@ def _build_dist(settings: Settings, owner: str, repo: str, branch: str, *, token
     if static_dir is None or not (static_dir / "index.html").is_file():
         raise RuntimeError(
             "no build script and no index.html found — nothing servable to deploy")
+    unbuilt = unbuilt_reason(static_dir / "index.html")
+    if unbuilt:
+        raise RuntimeError(unbuilt)
     if static_dir == work / "dist":
         return (work, "static", "", sha)
     dist = work / "dist"

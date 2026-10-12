@@ -129,6 +129,25 @@ def target_for(connection, project_id: str, repo: str, environment: str) -> Opti
     return found[0] if found else None
 
 
+def app_name_of_run(run: Any) -> str:
+    """The app a build is, by name: its recorded app name, else the display name `project_name`
+    makes of its directive — the same function the console titles cards with. "" when unknown."""
+    from .naming import project_name
+
+    run = dict(run or {})
+    fctx = run.get("finalize_ctx") or {}
+    if isinstance(fctx, str):
+        try:
+            fctx = json.loads(fctx)
+        except ValueError:
+            fctx = {}
+    app_name = str((fctx or {}).get("app_name") or "").strip()
+    if not app_name:
+        display, _blurb, _label = project_name(str(run.get("title") or ""))
+        app_name = display if display and display != "Untitled app" else ""
+    return app_name
+
+
 def pick_deploy_target(candidates: list[dict], app_name: str) -> Optional[dict]:
     """Return the unique target with this app's identity, never a repo-only match."""
     from .naming import identity_key
@@ -180,7 +199,8 @@ def deploy_build(engine, settings: Settings, *, project_id: str, run_id: str,
     with begin(engine) as c:
         stack_target = stack_target_for_deploy(
             c, project_id, {"target_id": target_id, "run_id": run_id,
-                            "environment": environment if target_id else ""},
+                            "environment": environment if target_id else "",
+                            "host_id": host_id or ""},
             default_owner=str(getattr(settings, "target_github_owner", "") or ""))
     if stack_target is not None:
         planned = plan_for_workflow_step(engine, settings, project_id=project_id, actor=actor,
@@ -244,15 +264,9 @@ def deploy_build(engine, settings: Settings, *, project_id: str, run_id: str,
                     "ORDER BY created_at DESC"),
                 {"p": project_id, "r": repo, "e": environment}).mappings().all()]
 
-            from .naming import identity_key, project_name
+            from .naming import identity_key
 
-            fctx = run.get("finalize_ctx") or {}
-            app_name = str(fctx.get("app_name") or "").strip()
-            if not app_name:
-                # `project_name` is what everything else in BOSS uses to turn a directive into
-                # the app's display name — the same function the console titles cards with.
-                display, _blurb, _label = project_name(str(run.get("title") or ""))
-                app_name = display if display and display != "Untitled app" else ""
+            app_name = app_name_of_run(run)
 
             wanted = identity_key(app_name) if app_name else ""
 

@@ -2886,6 +2886,11 @@ def _awaited_handle(key: str, output: dict[str, Any]) -> Optional[dict[str, Any]
             and output["change_set_id"].strip():
         # A build of an app with several repositories is ONE change set (multirepo).
         return {"kind": "change_set", "id": output["change_set_id"].strip()}
+    if key == "deploy" and isinstance(output.get("stack_deployment_id"), str) \
+            and output["stack_deployment_id"].strip():
+        # A DEPLOY THAT SHIPS FROM THE APP'S OWN MANIFEST is a stack deployment, and the step
+        # waits on that — never "no deployment id, so it must be done".
+        return {"kind": "stack_deployment", "id": output["stack_deployment_id"].strip()}
     spec = _AWAIT_KINDS.get(key)
     if not spec:
         return None

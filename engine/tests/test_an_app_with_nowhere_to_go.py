@@ -96,7 +96,10 @@ class TestTheAppNameIsActuallyRead:
         assert "SELECT id, project_id, status, title, spec, finalize_ctx" in self.SRC
 
     def test_the_title_falls_back_through_the_same_namer_the_console_uses(self):
-        assert "project_name(str(run.get(\"title\") or \"\"))" in self.SRC
+        # One namer for "which app is this build", shared with the stack deploy's routing.
+        assert "app_name_of_run(run)" in self.SRC
+        namer = inspect.getsource(delivery_pipeline.app_name_of_run)
+        assert "project_name(str(run.get(\"title\") or \"\"))" in namer
 
     def test_matching_is_on_identity_not_substring(self):
         assert "identity_key(str(t.get(\"app_name\") or \"\")) == wanted" in self.SRC
