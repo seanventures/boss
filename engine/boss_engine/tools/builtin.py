@@ -3127,6 +3127,33 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
             return {"ok": False, "error": str(exc).strip("'\"")}
 
     @reg.tool(
+        "review_pull_request_again",
+        "Run the adversarial review again on a build's open pull request — on the PR's REAL "
+        "diff from GitHub, not the build's working tree — and post it on the PR as a new review "
+        "round (findings at their lines, the description regenerated from BOSS's records). Use "
+        "when a PR's review was hollow ('nothing to review') or a person wants it looked at "
+        "again. Queued: returns at once; the build page shows the result.",
+        _obj({"run_id": {"type": "string", "description": "the build (code task run)"},
+              "pull_request_number": {"type": "integer",
+                                      "description": "or the PR number, if the run id is unknown"}},
+             []),
+        kind="write",
+        # A model review per call: reversible in state (a new round), not in spend.
+        reversibility="costs_money", permission="code_task:steer")
+    def review_pull_request_again(ctx, *, project_id, actor, args):
+        pra = services_module("pr_review_again")
+        if not args.get("run_id") and not args.get("pull_request_number"):
+            return {"ok": False, "error": "give run_id or pull_request_number"}
+        try:
+            with ctx.begin() as c:
+                out = pra.request(c, project_id=project_id, actor=actor,
+                                  run_id=args.get("run_id") or None,
+                                  pull_request_number=args.get("pull_request_number") or None)
+        except pra.ReviewAgainRefused as exc:
+            return {"ok": False, "error": str(exc)}
+        return {"ok": True, **out}
+
+    @reg.tool(
         "watch_code_task",
         "LIVE tool-level feed of what the coding agent is doing RIGHT NOW: each file it "
         "reads or edits, lines written so far, and whether it is exploring or editing. Use "
@@ -7116,6 +7143,8 @@ _DISCUSS_OPERATIONS_TOOLS: frozenset[str] = frozenset({
     "connect_coding_agent",
     "add_review_comment",
     "resolve_review_comment",
+    # A hollow review (PR #223) is fixed by reviewing the PR's real diff again, on request.
+    "review_pull_request_again",
     "cancel_code_task",
     # Correcting where an app is addressed. BOSS diagnosed the same deployment four times
     # and could not act on any of it, because changing a target was not something it could do —

@@ -78,9 +78,13 @@ export type StoryRow = StoryAct | StoryYou | StoryBoss;
 
 export type NowLine = { actId: string; roleKey: string | null; tool: string; arg?: string; at: string };
 
+/** The review on the pull request: posted rounds, a refusal in words, a "review again" state. */
+export type PrReview = {
+  word: string; url?: string; reason?: string; again?: string; permission: boolean; rounds: number;
+};
 export type PrOutput = {
   number?: number; url?: string; filesUrl?: string; decisionId?: string; decisionStatus?: string;
-  madeBy: number; word: string; roleKey: string | null;
+  madeBy: number; word: string; roleKey: string | null; review?: PrReview;
 };
 export type Gate = {
   name: string; label: string; ok: boolean; waivedBy?: string; roleKey: string | null;
@@ -163,6 +167,13 @@ const failureOf = (v: unknown): { line: string; tip: string } | null => {
   return opt(o.line) ? { line: str(o.line), tip: str(o.tip) } : null;
 };
 
+export function prReviewOf(v: unknown): PrReview | undefined {
+  if (!v || typeof v !== "object") return undefined;
+  const o = obj(v);
+  return { word: str(o.word), url: opt(o.url), reason: opt(o.reason), again: opt(o.again),
+           permission: o.permission === true, rounds: num(o.rounds) };
+}
+
 export function parseStory(w: unknown): StoryRow {
   const o = obj(w);
   const type = str(o.type);
@@ -209,7 +220,7 @@ export function parseOutputs(w: unknown): CockpitOutputs {
     mergeReady: { ready: mr.ready === true, word: str(mr.word) },
     pr: pr ? { number: optNum(pr.number), url: opt(pr.url), filesUrl: opt(pr.files_url), decisionId: opt(pr.decision_id),
                decisionStatus: opt(pr.decision_status), madeBy: num(pr.made_by), word: str(pr.word),
-               roleKey: roleOf(pr.role_key) } : null,
+               roleKey: roleOf(pr.role_key), review: prReviewOf(pr.review) } : null,
     checks: checks ? {
       word: str(checks.word), tip: opt(checks.tip), advisory: checks.advisory === true,
       gates: arr(checks.gates).map((g) => {

@@ -2156,6 +2156,13 @@ def gate_reason(name: str, ok: bool, evidence: Mapping[str, Any],
     """
     ev = evidence if isinstance(evidence, Mapping) else {}
     cmds = test_commands(ev)
+    hollow = ev.get("review_hollow") if isinstance(ev.get("review_hollow"), Mapping) else {}
+    seat = {"code_review_passed": "review_code", "security_clean": "security_check",
+            "consistent": "consistency_check"}.get(name)
+    if not ok and seat and seat in hollow:
+        from .review_input import HOLLOW_GATE_REASON
+
+        return HOLLOW_GATE_REASON
     if name == "written_tests_pass":
         bad = [c for c in cmds if not c["ok"]]
         if bad:
@@ -2375,6 +2382,33 @@ def _cost(connection: Any, run_id: str, st: BuildState) -> dict[str, Any]:
             "by_agent": agents, "by_station": by_station}
 
 
+def pr_review_line(fctx: Mapping[str, Any]) -> dict[str, Any]:
+    """The review on the pull request, for the build page: posted (with its link), refused (in
+    the words GitHub's refusal earned — a token without "Pull requests: write" is said, never
+    skipped), and the state of a "Review this PR again"."""
+    posted = fctx.get("pr_review_post_result") if isinstance(
+        fctx.get("pr_review_post_result"), Mapping) else {}
+    again = fctx.get("pr_review_again") if isinstance(fctx.get("pr_review_again"), Mapping) else {}
+    rounds = len([r for r in fctx.get("review_rounds") or [] if isinstance(r, Mapping)])
+    status = str(again.get("status") or "")
+    if status in ("queued", "running"):
+        word = "Reviewing again…"
+    elif status == "failed":
+        word = "Review again failed"
+    elif posted.get("posted"):
+        word = f"{rounds} review round{'s' if rounds != 1 else ''} on the PR" if rounds else \
+            "Review posted on the PR"
+    elif posted.get("reason"):
+        word = "Review not posted"
+    else:
+        word = "No review on the PR yet"
+    reason = (again.get("reason") if status == "failed" else None) or (
+        None if posted.get("posted") else posted.get("reason"))
+    return {"word": word, "url": posted.get("review_url") or again.get("review_url"),
+            "reason": str(reason)[:400] if reason else None, "again": status or None,
+            "permission": bool(posted.get("permission")), "rounds": rounds}
+
+
 def _outputs(connection: Any, run: Mapping[str, Any], facts: Facts, st: BuildState,
              stations: list[Station], comments: list[dict[str, Any]],
              decision: Optional[Mapping[str, Any]], now: datetime) -> dict[str, Any]:
@@ -2396,7 +2430,8 @@ def _outputs(connection: Any, run: Mapping[str, Any], facts: Facts, st: BuildSta
         pr = {"number": n, "url": url, "files_url": f"{url}/files" if url else None,
               "decision_id": run.get("decision_id"),
               "decision_status": (decision or {}).get("status"), "made_by": agents,
-              "word": word, "role_key": role_at.get("build")}
+              "word": word, "role_key": role_at.get("build"),
+              "review": pr_review_line(fctx)}
     elif st["state"] == "done_no_pr":
         pr = {"number": None, "url": None, "made_by": agents, "role_key": role_at.get("build"),
               "word": "No PR" + (f" · {st['tip'].lower()}" if st.get("tip") else "")}

@@ -30222,6 +30222,44 @@ def code_task_review_comment_resolve_endpoint(run_id: str, comment_id: str,
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+class ReviewPrAgainBody(BaseModel):
+    actor: str
+
+
+@app.post("/v1/code-tasks/{run_id}/review-pr-again")
+@permit(P.CODE_TASK_STEER, scope=Scope.of("code_task", path="run_id"))
+def code_task_review_pr_again_endpoint(run_id: str, payload: ReviewPrAgainBody) -> dict:
+    """Review this build's pull request again: the adversarial review on the PR's real diff,
+    posted on the PR as a new round (services/pr_review_again.py). Queued; returns at once.
+    A request while one is queued or running returns that one."""
+    from boss_engine.services import pr_review_again
+
+    actor = payload.actor.strip()
+    if not actor:
+        raise HTTPException(status_code=422, detail="actor is required")
+    with begin(engine) as connection:
+        owner = require_code_task_reader(connection, run_id)
+        require_project_actor(connection, owner, actor, "task_create")
+        try:
+            return pr_review_again.request(connection, project_id=owner, actor=actor,
+                                           run_id=run_id)
+        except pr_review_again.ReviewAgainRefused as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.post("/v1/code-tasks/{run_id}/review-pr-again/run")
+@permit(P.WORKER_LEASE)
+def code_task_review_pr_again_run_endpoint(run_id: str, payload: dict) -> dict:
+    """Worker-invoked: run one queued `pull_request.review_again` job here, where the reviewer
+    CLI and the project's GitHub connection are."""
+    from boss_engine.services import pr_review_again
+
+    require_worker_principal()
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    return pr_review_again.execute(engine, get_settings(), {**(payload or {}), "run_id": run_id})
+
+
 class CodeTaskCancelBody(BaseModel):
     actor: str
     reason: str = ""

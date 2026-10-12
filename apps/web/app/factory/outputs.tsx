@@ -28,7 +28,7 @@ import { ApprovePreview } from "../previews-ui";
 import { WaiveSheet } from "./waive-sheet";
 import { AgFaceStack } from "../agents/agent-face";
 import { nameOf, RunFace } from "../agents/run-face";
-import { fetchCalls, resolveComment, stopPreview, type ModelCall } from "./cockpit-actions";
+import { fetchCalls, resolveComment, reviewPrAgain, stopPreview, type ModelCall } from "./cockpit-actions";
 import { areaHref, costWord, kilo, money, secondsWord, whoName } from "./cockpit-util";
 import { localWith } from "../../lib/local-time";
 import { useIdentityVersion } from "../../lib/use-agent-identities";
@@ -148,7 +148,7 @@ export function Outputs({ projectId, actor, cockpit: c, open, onOpen, onLogs, on
               {isOpen ? (
                 <div className="fx-out-body" data-testid={`fx-out-body-${k}`}>
                   {k === "brief" ? <BriefBody c={c} /> : null}
-                  {k === "pr" ? <PrBody c={c} /> : null}
+                  {k === "pr" ? <PrBody c={c} actor={actor} onRefresh={onRefresh} /> : null}
                   {k === "checks" ? <ChecksBody c={c} projectId={projectId} actor={actor} onRefresh={onRefresh} /> : null}
                   {k === "tests" ? <TestsBody c={c} /> : null}
                   {k === "changes" ? <ChangesBody c={c} /> : null}
@@ -166,7 +166,40 @@ export function Outputs({ projectId, actor, cockpit: c, open, onOpen, onLogs, on
   );
 }
 
-function PrBody({ c }: { c: Cockpit }) {
+/** The review on the pull request, and "Review this PR again": the adversarial review on the
+ *  PR's real diff, posted on the PR as a new round (services/pr_review_again.py). */
+export function PrReviewLine({ c, actor, onRefresh }: { c: Cockpit; actor: string; onRefresh?: () => void }) {
+  const pr = c.outputs.pr;
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  if (!pr?.url) return null;
+  const review = pr.review;
+  const inFlight = review?.again === "queued" || review?.again === "running";
+  const go = async () => {
+    setBusy(true); setError("");
+    const r = await reviewPrAgain(c.run.id, actor);
+    setBusy(false);
+    if (r.ok) { showToast("success", r.data?.already ? "Already reviewing this PR" : "Reviewing the PR again"); notifyChanged("code-tasks"); onRefresh?.(); }
+    else setError(r.error ?? "");
+  };
+  return (
+    <span className="fx-out-col" data-testid="fx-pr-review-line">
+      <span className="fx-out-links">
+        <span className="fx-muted" data-testid="fx-pr-review-word">{review?.word || "No review on the PR yet"}</span>
+        {review?.url ? <a className="ag-link" href={review.url} target="_blank" rel="noreferrer" data-testid="fx-pr-review-open">See the review ↗</a> : null}
+        <GatedButton permission="code_task:steer" type="button" className="ag-btn" disabled={busy || inFlight}
+                     data-testid="fx-pr-review-again" onClick={() => void go()}
+                     title="Run the adversarial review on this PR's real diff and post it on the PR as a new round">
+          {inFlight ? "Reviewing…" : "Review this PR again"}
+        </GatedButton>
+      </span>
+      {review?.reason ? <span className="fx-err" role="note" data-user-text data-testid="fx-pr-review-reason">{review.reason}</span> : null}
+      {error ? <span className="fx-err" role="alert" data-user-text>{error}</span> : null}
+    </span>
+  );
+}
+
+function PrBody({ c, actor, onRefresh }: { c: Cockpit; actor: string; onRefresh?: () => void }) {
   const pr = c.outputs.pr;
   if (!pr) return <span className="fx-muted">Not yet</span>;
   const card = c.attention.find((a) => a.decisionKind === "pull_request" || a.decisionId === pr.decisionId);
@@ -187,6 +220,7 @@ function PrBody({ c }: { c: Cockpit }) {
         ) : null}
         {pr.madeBy > 0 ? <span className="fx-muted">Made by {pr.madeBy} {pr.madeBy === 1 ? "agent" : "agents"}</span> : null}
       </span>
+      <PrReviewLine c={c} actor={actor} onRefresh={onRefresh} />
       {/* APPROVE & SHIP, beside the PR it merges (the old action bar): it reads the preview's
           gate, says what approving deploys, and renders nothing where there is no gate. */}
       {p && ["running", "verified", "starting"].includes(p.status) ? (

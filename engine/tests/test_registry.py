@@ -28,6 +28,9 @@ _EXPECTED_TOOLS: set[str] = {
     # say "not safe" gives the implementer nothing to act on; these three are how a finding
     # gets a file and a line, and how a person adds one of their own.
     "add_review_comment", "list_review_comments", "resolve_review_comment",
+    # A hollow review (PR #223: "nothing to review" on 77 files) is answered by reviewing the
+    # pull request's real diff again and posting the round on the PR.
+    "review_pull_request_again",
     # Rules the WORKFORCE mandates, as opposed to the ones the platform hardcodes. Security
     # concluding in a panel that ports must be checked for public exposure used to change
     # nothing — the conclusion lived in minutes no build ever read. `check_port_exposure` is
@@ -207,11 +210,12 @@ def test_default_registry_shape():
     read = {s.name for s in reg.specs(kind="read")}
     write = {s.name for s in reg.specs(kind="write")}
     assert read | write == set(reg.names())
-    assert len(reg.names()) == 123, (
+    assert len(reg.names()) == 124, (
         f"tool set changed: unexpected={sorted(set(reg.names()) - _EXPECTED_TOOLS)}, "
         f"missing={sorted(_EXPECTED_TOOLS - set(reg.names()))}")
     assert len(read) == 71  # + my_recent_work, + system_health, + 7 template/security reads
-    assert len(write) == 52  # + system_doctor_act, + run_security_scan (F4), + apply_template (F2)
+    assert len(write) == 53  # + system_doctor_act, + run_security_scan (F4), + apply_template (F2),
+    #                         + review_pull_request_again
     # the capabilities the user explicitly asked the agent to cover
     for name in (
         "project_status", "list_running_work", "get_task_preview",

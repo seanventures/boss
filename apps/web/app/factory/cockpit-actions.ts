@@ -65,6 +65,11 @@ export function resolveComment(runId: string, commentId: string, actor: string,
   return postJson(`${run(runId)}/review-comments/${encodeURIComponent(commentId)}/resolve`, { actor, status, note });
 }
 
+/** Review the build's pull request again, on its real diff, and post the round on the PR. */
+export function reviewPrAgain(runId: string, actor: string): Promise<Posted<{ status?: string; already?: boolean }>> {
+  return postJson(`${run(runId)}/review-pr-again`, { actor });
+}
+
 export function stopPreview(previewId: string, actor: string): Promise<Posted> {
   return postJson(`/v1/previews/${encodeURIComponent(previewId)}/stop`, { actor });
 }
@@ -137,6 +142,7 @@ declareAction(stopBuild, "code_task:cancel");
 declareAction(steerBuild, "code_task:steer");
 declareAction(retryBuild, "code_task:retry");
 declareAction(resolveComment, "code_task:steer");
+declareAction(reviewPrAgain, "code_task:steer");
 declareAction(stopPreview, "preview:manage");
 declareAction(fetchTools, "code_task:read");
 declareAction(fetchBuildLog, "code_task:read");

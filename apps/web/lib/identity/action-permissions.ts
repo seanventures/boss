@@ -197,6 +197,7 @@ export const ACTION_PERMISSIONS: Readonly<Record<string, Permission>> = {
   "app/factory/cockpit-actions.ts#steerBuild": "code_task:steer",
   "app/factory/cockpit-actions.ts#retryBuild": "code_task:retry",
   "app/factory/cockpit-actions.ts#resolveComment": "code_task:steer",
+  "app/factory/cockpit-actions.ts#reviewPrAgain": "code_task:steer",
   "app/factory/cockpit-actions.ts#stopPreview": "preview:manage",
   "app/factory/cockpit-actions.ts#fetchTools": "code_task:read",
   "app/factory/cockpit-actions.ts#fetchBuildLog": "code_task:read",

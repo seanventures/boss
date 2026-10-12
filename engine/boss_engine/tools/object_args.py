@@ -60,6 +60,7 @@ CONFINED: dict[str, dict[str, str | tuple[str, ...]]] = {
     "request_meeting": {"task_id": "task"},
     "run_security_scan": {"workflow_run_id": "workflow_run"},
     "resolve_review_comment": {"run_id": CODE_TASK},
+    "review_pull_request_again": {"run_id": CODE_TASK},
     "retarget_app": {"target_id": "deployment_target", "host_id": "deployment_host"},
     "retry_code_task": {"run_id": CODE_TASK},
     "retry_workflow_step": {"run_id": "workflow_run"},
@@ -90,6 +91,8 @@ UNCONFINED: dict[str, dict[str, str]] = {
                                   "call's project by the handler",
                    "merge_app_ids": "same: matched only within the call's project"},
     "resolve_review_comment": {"comment_id": "looked up under its (confined) run_id"},
+    "review_pull_request_again": {"pull_request_number": "matched only among the call's "
+                                                         "project's builds by the handler"},
     "retry_workflow_step": {"step_id": "a step of the (confined) run_id"},
     "skip_workflow_step": {"step_id": "a step of the (confined) run_id"},
     "system_doctor_act": {"finding_id": "an install-wide health finding; the tool needs "

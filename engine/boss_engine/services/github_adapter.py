@@ -860,6 +860,77 @@ class GitHubAdapter:
             state=response["state"],
         )
 
+    # -- the review conversation on a pull request (services/pr_review_post.py) -------------
+
+    def pull_request_files(self, pull_number: int, *, limit: int = 3000) -> list[dict]:
+        """Every file the pull request changes: {path, status, additions, deletions}. GitHub
+        lists at most 3000; a review is told when it was cut."""
+        out: list[dict] = []
+        page = 1
+        while len(out) < limit:
+            batch = self._request(
+                "GET",
+                f"/repos/{self.repository_full_name}/pulls/{pull_number}/files"
+                f"?per_page=100&page={page}",
+            )
+            if not batch:
+                break
+            for item in batch:
+                out.append({
+                    "path": str(item.get("filename") or ""),
+                    "status": str(item.get("status") or ""),
+                    "additions": int(item.get("additions") or 0),
+                    "deletions": int(item.get("deletions") or 0),
+                })
+            if len(batch) < 100:
+                break
+            page += 1
+        return out[:limit]
+
+    def pull_request_meta(self, pull_number: int) -> dict:
+        """Title, body and the head/base the review is about."""
+        response = self._request(
+            "GET", f"/repos/{self.repository_full_name}/pulls/{pull_number}")
+        head = response.get("head") or {}
+        base = response.get("base") or {}
+        return {"number": int(response["number"]), "url": str(response.get("html_url") or ""),
+                "title": str(response.get("title") or ""), "body": str(response.get("body") or ""),
+                "state": str(response.get("state") or ""),
+                "head_ref": str(head.get("ref") or ""), "head_sha": str(head.get("sha") or ""),
+                "base_ref": str(base.get("ref") or ""), "base_sha": str(base.get("sha") or "")}
+
+    def update_pull_request_body(self, pull_number: int, body: str) -> None:
+        self._request("PATCH", f"/repos/{self.repository_full_name}/pulls/{pull_number}",
+                      {"body": body})
+
+    def review_comments_of(self, pull_number: int, review_id: int) -> list[dict]:
+        """The inline comments one review left: {id, path, line, body}."""
+        response = self._request(
+            "GET",
+            f"/repos/{self.repository_full_name}/pulls/{pull_number}/reviews/{review_id}"
+            "/comments?per_page=100",
+        )
+        return [{"id": int(c["id"]), "path": str(c.get("path") or ""),
+                 "line": c.get("line") or c.get("original_line"),
+                 "body": str(c.get("body") or "")}
+                for c in response or [] if c.get("id") is not None]
+
+    def update_review_body(self, pull_number: int, review_id: int, body: str) -> None:
+        self._request(
+            "PUT",
+            f"/repos/{self.repository_full_name}/pulls/{pull_number}/reviews/{review_id}",
+            {"body": body},
+        )
+
+    def reply_to_review_comment(self, pull_number: int, comment_id: int, body: str) -> int:
+        response = self._request(
+            "POST",
+            f"/repos/{self.repository_full_name}/pulls/{pull_number}/comments/{comment_id}"
+            "/replies",
+            {"body": body},
+        )
+        return int(response["id"])
+
     def get_pull_request_diff(self, pull_number: int) -> str:
         return self._request(
             "GET",
