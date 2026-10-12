@@ -282,15 +282,102 @@ def plan_problem(connection: Connection, target: dict) -> Optional[dict[str, str
     return None
 
 
+def same_release(a: Optional[str], b: Optional[str]) -> bool:
+    """Do two requested refs name the same release? An unnamed ref ("ship this app") is the
+    open request, whatever it pinned; a short sha names its long form."""
+    x, y = str(a or "").strip(), str(b or "").strip()
+    return not x or not y or x == y or (len(min(x, y, key=len)) >= 7
+                                        and (x.startswith(y) or y.startswith(x)))
+
+
+def _open_runs(connection: Connection, target_id: str) -> list[dict[str, Any]]:
+    return [dict(r) for r in connection.execute(
+        text("SELECT * FROM deployment_runs WHERE deployment_target_id = :t "
+             "AND changeset_id IS NOT NULL AND status = ANY(:s) ORDER BY created_at DESC"),
+        {"t": target_id, "s": list(ACTIVE_STATES)}).mappings()]
+
+
 def live_run(connection: Connection, target_id: str, commit_ref: Optional[str]):
-    """The governed run already going for this target and commit, if any: a second click, a
-    retried step or two operators at once get the same run, never a second deployment."""
-    return connection.execute(
-        text("SELECT id FROM deployment_runs WHERE deployment_target_id = :t "
-             "AND changeset_id IS NOT NULL AND status = ANY(:s) "
-             "AND COALESCE(commit_ref, '') = COALESCE(:c, '') "
-             "ORDER BY created_at DESC LIMIT 1"),
-        {"t": target_id, "s": list(ACTIVE_STATES), "c": commit_ref}).scalar()
+    """The governed run already open for this target and release, if any: a second click, a
+    retried step or two operators at once get the same run, never a second deployment.
+
+    Matched on the RELEASE, not on the literal ref string. Equality on `commit_ref` let one
+    target collect three open runs — the workflow asked with no ref, the Deploy button with
+    the default branch, a redeploy with the sha — and each was a separate approval, so the
+    operator approved one and watched another still asking."""
+    for r in _open_runs(connection, target_id):
+        if same_release(r.get("commit_ref"), commit_ref):
+            return r["id"]
+    return None
+
+
+def supersede(connection: Connection, settings: Optional[Settings], row: Any, *,
+              reason: str, actor: str) -> bool:
+    """Close a request that never ran and never will: its ChangeSet is closed, its reservation
+    returned, its surface released, and its decision withdrawn unless another run holds it."""
+    from .budget import BudgetGovernor
+
+    done = connection.execute(
+        text("UPDATE deployment_runs SET status = 'superseded', finished_at = now(), "
+             "failure_reason = :r, updated_at = now() "
+             "WHERE id = :i AND status = 'awaiting_approval' RETURNING id"),
+        {"i": row["id"], "r": reason[:400]}).first()
+    if not done:
+        return False
+    if row.get("changeset_id"):
+        connection.execute(
+            text("UPDATE changesets SET status = 'rejected', failure_reason = :r, "
+                 "updated_at = now() WHERE id = :c AND status IN ('pending_approval', "
+                 "'policy_checked', 'budget_reserved')"),
+            {"c": row["changeset_id"], "r": reason[:200]})
+    if row.get("decision_id"):
+        connection.execute(
+            text("UPDATE decisions SET status = 'withdrawn', updated_at = now(), "
+                 "resolution_note = :r WHERE id = :d AND status = 'pending' "
+                 "AND NOT EXISTS (SELECT 1 FROM deployment_runs o WHERE o.decision_id = :d "
+                 "                AND o.id <> :i AND o.status <> 'superseded')"),
+            {"d": row["decision_id"], "i": row["id"], "r": reason[:200]})
+    if row.get("reservation_id") and settings is not None:
+        try:
+            with connection.begin_nested():
+                BudgetGovernor(settings).release(connection, row["project_id"],
+                                                 row["reservation_id"], reason[:200])
+        except Exception:  # noqa: BLE001 — a reservation already settled is not a failure
+            log.info("reservation %s for %s was already settled", row["reservation_id"],
+                     row["id"])
+    release_surface(connection, row)
+    emit_event(connection, row["project_id"], "deployment_run.superseded", actor,
+               "deployment_run", row["id"], {"reason": reason[:300]})
+    return True
+
+
+def supersede_replaced(connection: Connection, settings: Settings, target_id: str,
+                       commit_ref: Optional[str], *, actor: str) -> list[str]:
+    """A request for a DIFFERENT release replaces the ones still waiting for approval on this
+    target: approving the old one afterwards would ship what nobody now wants."""
+    closed = []
+    for r in _open_runs(connection, target_id):
+        if r["status"] == "awaiting_approval" and not same_release(r.get("commit_ref"),
+                                                                   commit_ref):
+            if supersede(connection, settings, r, actor=actor,
+                         reason=f"Replaced by a request for {commit_ref or 'the default branch'}."
+                                " Nothing ran."):
+                closed.append(r["id"])
+    return closed
+
+
+def supersede_orphaned_runs(connection: Connection, settings: Optional[Settings] = None
+                            ) -> dict[str, int]:
+    """Close requests that can never move: `awaiting_approval` with a decision that is no
+    longer open. Two runs once shared one decision (deprun_dddc… and deprun_659e…); the
+    approval took one, and the other sat at "Needs you" with nothing to approve. Idempotent."""
+    rows = [dict(r) for r in connection.execute(text(
+        "SELECT d.* FROM deployment_runs d JOIN decisions x ON x.id = d.decision_id "
+        "WHERE d.status = 'awaiting_approval' AND x.status <> 'pending'")).mappings()]
+    closed = sum(supersede(connection, settings, r, actor="boss",
+                           reason="Its approval was answered for another deploy request. "
+                                  "Nothing ran.") for r in rows)
+    return {"runs_superseded": closed}
 
 
 def previous_success(connection: Connection, target_id: str) -> Optional[dict]:

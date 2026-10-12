@@ -72,8 +72,19 @@ def test_a_healthy_host_deploy_links_its_app_and_a_rolled_back_one_says_why(
         c.execute(text("UPDATE deployment_runs SET status = 'succeeded', finished_at = now() "
                        "WHERE id = 'dr_host'"))
         c.execute(text("UPDATE decisions SET status = 'approved' WHERE id = 'dec_host'"))
+    # Succeeded with no health result recorded: nothing says the app works, so no link.
+    assert _detail(client)["open_url"] is None
+    with engine.begin() as c:
+        # What the governed apply records (governed_host_deploy._finalize): the check it ran.
+        c.execute(text(
+            "UPDATE deployment_runs SET health_check_results = CAST(:h AS JSONB) "
+            "WHERE id = 'dr_host'"),
+            {"h": '{"healthy": true, "checks": [{"ok": true, "status": 200, "expected": 200, '
+                  '"url": "http://203.0.113.10:8001/healthz"}]}'})
     d = _detail(client)
     assert d["open_url"] == "http://203.0.113.10:8001/"
+    assert d["row"]["sentence"] == ("Live at http://203.0.113.10:8001/. Health check passed: "
+                                    "GET /healthz → 200.")
     with engine.begin() as c:
         c.execute(text("UPDATE deployment_runs SET status = 'rolled_back', failure_reason = "
                        "'The health check failed after release; BOSS rolled the host back.' "

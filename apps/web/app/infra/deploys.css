@@ -59,6 +59,9 @@
 /* The deploy drawer. */
 .inf-dd-head { display: inline-flex; align-items: center; gap: 10px; min-width: 0; flex-wrap: wrap; }
 .inf-dd-now { font-size: 0.82rem; color: var(--ink); }
+/* The deploy's one sentence (deploy_status), under the drawer head. */
+.inf-dd-status { margin: 0 0 10px; display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px;
+  font-size: 0.86rem; color: var(--ink); overflow-wrap: anywhere; }
 .inf-dd-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
 .inf-dd-steps li { display: grid; grid-template-columns: 0.94737rem minmax(0, 1fr) auto; align-items: center; gap: 8px; font-size: 0.84rem; }
 .inf-dd-steps li[data-s="pending"] { color: var(--muted); }

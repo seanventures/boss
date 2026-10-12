@@ -56,6 +56,33 @@ export function Approver({ approver }: { approver: DeployRow["approver"] }) {
   );
 }
 
+/** APPROVE IS ONE PRESS. Between the approval landing and the next read of the row, the row
+ *  still said `can.approve` — so the button came back, and a second press answered "Couldn't do
+ *  that" over a deploy that was already starting. Once a verdict lands, the row reads it until
+ *  the server's state moves on. */
+export function useVerdict(row: Pick<DeployRow, "ref" | "state">) {
+  const [given, setGiven] = useState<{ key: string; verdict: "approve" | "reject" } | null>(null);
+  const key = `${row.ref}|${row.state}`;
+  const verdict = given && given.key === key ? given.verdict : null;
+  return { verdict, give: (v: "approve" | "reject") => setGiven({ key, verdict: v }) };
+}
+
+/** The word a row wears: the server's, or what the operator just answered while it catches up. */
+export function shownWord(row: Pick<DeployRow, "word" | "tone">, verdict: "approve" | "reject" | null) {
+  if (verdict === "approve") return { word: "Starting", tone: "accent" as DeployRow["tone"] };
+  if (verdict === "reject") return { word: "Rejected", tone: "grey" as DeployRow["tone"] };
+  return { word: row.word, tone: row.tone };
+}
+
+/** Open the app: offered by the server only on a Live deploy whose health check passed. */
+export function OpenApp({ url, testId, className = "inf-link" }: { url: string | null; testId: string; className?: string }) {
+  if (!url) return null;
+  return (
+    <a className={className} href={url} target="_blank" rel="noreferrer" data-testid={testId}
+       title={`Open ${url} in a new tab`}>Open app ↗</a>
+  );
+}
+
 export type DeployRowProps = {
   row: DeployRow;
   projectId: string;
@@ -72,20 +99,23 @@ export type DeployRowProps = {
 export function DeployRowView({ row, projectId, actor, onOpen, onChanged, actions = true, now }: DeployRowProps) {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const { verdict, give } = useVerdict(row);
   const where = row.host?.name ?? row.account ?? "";
   const when = row.startedAt ?? row.finishedAt;
   const age = ago(row.finishedAt ?? row.startedAt, now);
-  const tip = [where, row.approver?.actor === "you" ? "approved by you" : ""].filter(Boolean).join(" · ");
+  const tip = [row.sentence, where, row.approver?.actor === "you" ? "approved by you" : ""].filter(Boolean).join(" · ");
 
-  const decide = async (verdict: "approve" | "reject") => {
+  const decide = async (v: "approve" | "reject") => {
     if (!row.decisionId) return;
-    setBusy(verdict); setError(null);
-    const r = await decideDeploy(row.decisionId, actor, verdict);
+    setBusy(v); setError(null);
+    const r = await decideDeploy(row.decisionId, actor, v);
     setBusy(null);
     if (!r.ok) { setError(r.error); return; }
-    showToast("success", verdict === "approve" ? "Deploy approved" : "Deploy rejected");
+    give(v);
+    showToast("success", v === "approve" ? "Approved · starting the deploy" : "Deploy rejected");
     afterWrite(onChanged);
   };
+  const canDecide = verdict === null;
   const rollback = async () => {
     setBusy("rollback"); setError(null);
     const r = await rollbackDeploy(projectId, row.ref, actor);
@@ -97,8 +127,9 @@ export function DeployRowView({ row, projectId, actor, onOpen, onChanged, action
   };
 
   return (
-    <li className="inf-dep-row" data-testid="inf-deploy-row" data-ref={row.ref} data-tone={row.tone} title={tip || undefined}>
-      <StateWord w={{ word: row.word, tone: row.tone }} />
+    <li className="inf-dep-row" data-testid="inf-deploy-row" data-ref={row.ref} data-tone={row.tone}
+        data-phase={verdict === "approve" ? "queued" : row.phase} title={tip || undefined}>
+      <StateWord w={shownWord(row, verdict)} />
       <button type="button" className="inf-dep-name" onClick={() => onOpen(row.ref)} title={`${row.app} · ${row.env}`}>
         <span data-copy="data">{row.app}</span><span className="inf-faint"> · </span><span data-copy="data">{row.env}</span>
       </button>
@@ -118,11 +149,12 @@ export function DeployRowView({ row, projectId, actor, onOpen, onChanged, action
             Last attempt failed{now !== null ? ` · ${ago(row.failedAfter.at, now)} ago` : ""}
           </button>
         ) : null}
-        {actions && row.can.approve ? (
+        <OpenApp url={row.openUrl} testId="inf-deploy-row-open-app" />
+        {actions && canDecide && row.can.approve ? (
           <GatedButton permission="decision:approve" type="button" className="ag-btn ag-btn-primary" disabled={busy !== null} data-testid="inf-deploy-row-approve"
                   onClick={() => void decide("approve")}>{busy === "approve" ? "Approving…" : "Approve"}</GatedButton>
         ) : null}
-        {actions && row.can.reject ? (
+        {actions && canDecide && row.can.reject ? (
           <GatedButton permission="decision:approve" type="button" className="ag-btn" disabled={busy !== null} data-testid="inf-deploy-row-reject"
                   onClick={() => void decide("reject")}>Reject</GatedButton>
         ) : null}

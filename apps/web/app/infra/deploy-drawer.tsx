@@ -14,7 +14,7 @@ import { RateIt } from "../improve/rate-it";
 import { showToast } from "../client-forms";
 import { buildHref, changeHref, logsHref, useDeployDetail, type DeployDetail, type StepState } from "../../lib/infra-view";
 import { goConsole } from "./deploy-actions";
-import { StepDots } from "./deploy-row";
+import { StepDots, shownWord, useVerdict } from "./deploy-row";
 import { afterWrite, decideDeploy, deployTarget, redeployDelivery, rollbackDeploy, runHealthCheck } from "./infra-actions";
 import { CopyButton, ErrorLine, Menu, copyText, dur } from "./infra-util";
 import { Drawer, DrawerSection, Skeleton, StateWord } from "./kit";
@@ -76,6 +76,7 @@ function DeployBody({ d, projectId, actor, refresh, onOpen }: {
   const [error, setError] = useState<string | null>(null);
   const [showError, setShowError] = useState(false);
   const [checks, setChecks] = useState<Record<string, unknown>[] | null>(null);
+  const { verdict, give } = useVerdict(row);
   const kindId = row.ref.slice(row.ref.indexOf(":") + 1);
 
   const run = async (key: string, fn: () => Promise<{ ok: boolean; error?: string; data?: unknown }>, toast: (data: Record<string, unknown>) => string) => {
@@ -88,9 +89,12 @@ function DeployBody({ d, projectId, actor, refresh, onOpen }: {
     refresh();
     return data;
   };
-  const decide = (verdict: "approve" | "reject") => row.decisionId
-    ? void run(verdict, () => decideDeploy(row.decisionId as string, actor, verdict), () => (verdict === "approve" ? "Deploy approved" : "Deploy rejected"))
-    : undefined;
+  const decide = async (v: "approve" | "reject") => {
+    if (!row.decisionId) return;
+    const data = await run(v, () => decideDeploy(row.decisionId as string, actor, v),
+      () => (v === "approve" ? "Approved · starting the deploy" : "Deploy rejected"));
+    if (data) give(v);
+  };
   const rollback = async () => {
     const data = await run("rollback", () => rollbackDeploy(projectId, row.ref, actor),
       (x) => {
@@ -131,16 +135,21 @@ function DeployBody({ d, projectId, actor, refresh, onOpen }: {
         </div>
       ) : null}
 
-      {row.can.approve || row.can.reject ? (
+      {/* WHERE IT IS, IN ONE SENTENCE — the same one the row, the run and the fleet show. */}
+      <p className="inf-dd-status" data-testid="inf-deploy-sentence" data-phase={verdict === "approve" ? "queued" : row.phase}>
+        <StateWord w={shownWord(row, verdict)} />{" "}
+        <span data-copy="data">{verdict === "approve" ? "Approved. Starting the deploy." : row.sentence}</span>
+      </p>
+      {verdict === null && (row.can.approve || row.can.reject) ? (
         <DrawerSection label="Needs you" testId="inf-deploy-needs">
           <div className="inf-actions">
             {row.can.approve ? (
               <GatedButton permission="decision:approve" type="button" className="ag-btn ag-btn-primary" disabled={busy !== null} data-testid="inf-deploy-approve"
-                      onClick={() => decide("approve")}>{busy === "approve" ? "Approving…" : "Approve"}</GatedButton>
+                      onClick={() => void decide("approve")}>{busy === "approve" ? "Approving…" : "Approve"}</GatedButton>
             ) : null}
             {row.can.reject ? (
               <GatedButton permission="decision:approve" type="button" className="ag-btn" disabled={busy !== null} data-testid="inf-deploy-reject"
-                      onClick={() => decide("reject")}>{busy === "reject" ? "Rejecting…" : "Reject"}</GatedButton>
+                      onClick={() => void decide("reject")}>{busy === "reject" ? "Rejecting…" : "Reject"}</GatedButton>
             ) : null}
           </div>
         </DrawerSection>
