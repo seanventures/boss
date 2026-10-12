@@ -4362,6 +4362,11 @@ def _resume_answered_gates(
               AND s.status = 'waiting'
               AND s.step_kind = 'capability'
               AND d.status IN ('approved', 'rejected', 'expired')
+              -- ONCE PER ANSWER. A released step goes on to wait for its WORK (a deploy
+              -- awaiting its own approval), still `waiting` with the same approved decision.
+              -- Read as a fresh answer, it was released again every tick: HelpDesk's deploy
+              -- step re-sent its deploy 1,039 times in six hours.
+              AND COALESCE(s.binding_snapshot->>'released_for', '') <> s.decision_id
             """
         ),
         {"run_id": run["id"]},
@@ -4464,7 +4469,8 @@ def _resume_answered_gates(
                     """
                 ),
                 {"id": row["id"],
-                 "patch": json.dumps({"approved_at": now_utc().isoformat()})},
+                 "patch": json.dumps({"approved_at": now_utc().isoformat(),
+                                      "released_for": str(row["decision_id"] or "")})},
             )
             connection.execute(
                 text("UPDATE workflow_runs SET status='running', updated_at=now() "

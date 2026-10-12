@@ -305,6 +305,36 @@ def test_a_gate_waits_for_a_person_instead_of_being_executed(eng, project, monke
     assert result["performed"][0]["outcome"] == "gate_opened"
 
 
+def test_an_answered_gate_releases_its_step_once_not_every_tick(eng, project, monkeypatch):
+    """A step released by its approval goes on to wait for its WORK (a deploy waiting on its
+    own approval) — still `waiting`, same approved decision. Read as a new answer, it was
+    released again every tick: HelpDesk's deploy step re-sent its deploy 1,039 times."""
+    monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([]))
+    with eng.begin() as c:
+        _, version = _publish(c, project, "gate_once", [
+            {"id": "g", "kind": "capability",
+             "binding": {"capability": "spec_review", "inputs": {}}, "next": []},
+        ], "g")
+        run = _start(c, project, version["id"])
+        runner.tick(c, Ctx(eng), project_id=project)
+        c.execute(text("UPDATE workflow_step_runs SET binding_snapshot = binding_snapshot || "
+                       "'{\"gate_completes_step\": false}'::jsonb WHERE workflow_run_id=:r"),
+                  {"r": run["id"]})
+        c.execute(text("UPDATE decisions SET status='approved', approved_by='usr_x' WHERE id = "
+                       "(SELECT decision_id FROM workflow_step_runs WHERE workflow_run_id=:r)"),
+                  {"r": run["id"]})
+        run_row = dict(c.execute(text("SELECT * FROM workflow_runs WHERE id=:r"),
+                                 {"r": run["id"]}).mappings().one())
+        first = runner._resume_answered_gates(c, project, run_row)
+        # The released step ran its tool and now waits on the work it started.
+        c.execute(text("UPDATE workflow_step_runs SET status='waiting' WHERE workflow_run_id=:r"),
+                  {"r": run["id"]})
+        second = runner._resume_answered_gates(c, project, run_row)
+
+    assert [a["outcome"] for a in first] == ["approved_released"]
+    assert second == [], "the same answer released the step a second time"
+
+
 def test_a_tool_that_fails_records_a_reason_and_stays_retryable(eng, project, monkeypatch):
     failing = RecordingTool("request_meeting", {"ok": False, "error": "the panel is full"})
     monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([failing]))
