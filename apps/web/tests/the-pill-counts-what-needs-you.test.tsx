@@ -35,6 +35,12 @@ describe("the pill counts what needs you", () => {
     // The title's `(n)` is the shell's now (tests/the-tab-title-has-one-owner.test.tsx).
   });
 
+  it("an agent that is live but not working (queued, waiting) is not counted as working", async () => {
+    const live = parseLive([{ role_key: "release_manager", state: "waiting", line: "Queued behind a deploy" }]);
+    await mount(<PresencePill projectId="p1" live={live} attention={gates(1)} />);
+    expect(pillWordsShown()).toBe("1 needs you");
+  });
+
   it("a pull request with no agent is counted, and shows the pill on its own", async () => {
     await mount(<PresencePill projectId="p1" live={new Map()} attention={gates(1, null)} />);
     expect(pillWordsShown()).toBe("1 needs you");

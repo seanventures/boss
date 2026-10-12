@@ -59,6 +59,13 @@ describe("shipping is two acts, in order", () => {
     expect(CSS).toContain(".dw-bound");
   });
 
+  it("the address is said once: a live app's Ships to line drops the host and port", () => {
+    // "Live at http://192.0.2.202:8000" above, "Ships to … on 192.0.2.202 (port 8000)" below.
+    expect(UI).toContain("hostName && !live ?");
+    expect(UI).toContain("where && !live ?");
+    expect(UI).toContain("live={!!lastDeploy?.openUrl}");
+  });
+
   it("and the target list is re-read after binding, which is why it looked like nothing happened", () => {
     // The target really was created — deptgt_ee5dae79, 'Onboarding Path Builder.', active — and
     // the step went on rendering the empty form, because the only evidence that a target exists
