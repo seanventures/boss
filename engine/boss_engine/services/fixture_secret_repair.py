@@ -22,9 +22,10 @@ from __future__ import annotations
 import difflib
 import hashlib
 import re
-import subprocess
 from pathlib import Path
 from typing import Callable, Iterable, Mapping, Optional
+
+from . import owned_process
 
 #: An added line the turn may introduce beside the flagged ones: an import the generated value
 #: needs (`import secrets`, `import { randomUUID } from "node:crypto"`, `const x = require(...)`).
@@ -111,8 +112,9 @@ def check_line_edits(before: str, after: str, allowed: set[int]) -> list[str]:
 
 
 def _git(root: Path, *args: str) -> str:
-    return subprocess.run(["git", *args], cwd=str(root), capture_output=True, text=True,
-                          timeout=60, check=False).stdout
+    # Owned (owned_process): its own group, ended with the whole tree on timeout or cancel.
+    return owned_process.run(["git", *args], cwd=str(root), capture_output=True, text=True,
+                             timeout=60, check=False).stdout
 
 
 def _dirty(root: Path) -> dict[str, Optional[bytes]]:
@@ -200,8 +202,8 @@ def _revert(root: Path, before: dict, after: dict) -> None:
         fp = root / p
         if old is _HEAD:
             if _git(root, "ls-files", "--", p).strip():
-                subprocess.run(["git", "checkout", "--", p], cwd=str(root), capture_output=True,
-                               timeout=60, check=False)
+                owned_process.run(["git", "checkout", "--", p], cwd=str(root), capture_output=True,
+                                  timeout=60, check=False)
             else:
                 fp.unlink(missing_ok=True)
         elif old is None:
