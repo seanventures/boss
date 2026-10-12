@@ -155,6 +155,20 @@ CASES = [
      None,
      {"recheck": True, "stop": True, "stop_and_rerun": True,
       "retry_step:deploy": True, "skip_step:deploy": True}),
+    # HelpDesk D1: the preview failed (no database), the operator skipped it, and deploy —
+    # which requires a reviewed preview — dead-lettered. Once the preview could serve, it had
+    # to be runnable again on THIS run; an un-retryable skip made the run a dead end.
+    ("a step the operator skipped can be tried again", "deadlettered",
+     [step("preview", "skipped", "start_preview",
+           {"skipped_by_operator": True, "skip_reason": "preview failed"}),
+      step("deploy", "deadlettered", "deploy")],
+     None,
+     {"recheck": True, "stop": True, "stop_and_rerun": True, "remove": True,
+      "retry_step:preview": True, "retry_step:deploy": True, "skip_step:deploy": True}),
+    ("a step the run's own path left out is not offered again", "running",
+     [step("preview", "skipped", "start_preview", {"status": "path_not_reached"}),
+      step("build", "running", "build")],
+     None, {"stop": True, "stop_and_rerun": True}),
     ("paused", "paused", [step("build", "ready", "build")],
      None, {"stop": True, "stop_and_rerun": True}),
     ("compensating: neither stopped nor removed until it finishes", "compensating",

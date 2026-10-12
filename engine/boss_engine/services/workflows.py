@@ -4830,6 +4830,15 @@ def retry_failed_step(
              + "WHERE id=:id"),
         {"id": row["id"], "retry": json.dumps(retry_marker)},
     )
+    if row["status"] == "skipped":
+        # UN-SKIPPED: the operator's skip is kept as history (`unskipped`), never as the state of
+        # a step that is about to run — a later success must not still read "skipped by …".
+        connection.execute(
+            text("UPDATE workflow_step_runs SET completed_at=NULL, output = (output "
+                 "- 'skipped_by_operator' - 'skip_reason' - 'skipped_by' - 'skipped_from' "
+                 "- 'status') || jsonb_build_object('unskipped', jsonb_build_object("
+                 "'reason', output->'skip_reason', 'by', output->'skipped_by')) WHERE id=:id"),
+            {"id": row["id"]})
     emit_event(connection, project_id, "workflow.step_retried", actor, "workflow_run", run_id,
                {"step_id": step_id, "was": row["status"],
                 "workflow_step_run_id": row["id"],

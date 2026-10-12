@@ -681,6 +681,38 @@ def test_skip_and_proceed_records_who_and_why_and_the_run_goes_on(eng, project, 
     assert marker["reason"] == "the directive is specific enough"
 
 
+def test_a_step_the_operator_skipped_can_be_tried_again(eng, project, monkeypatch):
+    """HelpDesk D1: preview failed (no database) and was skipped; deploy, which needs a reviewed
+    preview, then dead-lettered. With the cause fixed the preview must run again ON THIS RUN —
+    Try again on a skipped step re-queues it, and its skip stays only as history."""
+    from boss_engine.identity import consent as _consent
+
+    monkeypatch.setattr(_consent, "require_for_retry", lambda *a, **k: None)
+    did = f"drun_{uuid.uuid4().hex[:8]}"
+    discovery = RecordingTool("create_discovery", {"run_id": did})
+    meeting = RecordingTool("request_meeting", {"run_id": f"mrun_{uuid.uuid4().hex[:8]}"})
+    monkeypatch.setattr(runner, "_tool_registry",
+                        lambda: RecordingRegistry([discovery, meeting]))
+    with eng.begin() as c:
+        run = _research_then_panel(c, project)
+        runner.tick(c, Ctx(eng), project_id=project)
+        _kill_research(c, project, did, '{}')
+        runner.tick(c, Ctx(eng), project_id=project)
+        workflows.skip_failed_step(c, project_id=project, run_id=run["id"], step_id="research",
+                                   actor="ceo", reason="no database for it yet")
+        result = workflows.retry_failed_step(c, project_id=project, run_id=run["id"],
+                                             step_id="research", actor="ceo",
+                                             note="it has a database now")
+        research = _steps(c, run["id"])["research"]
+        c.execute(text("DELETE FROM discovery_runs WHERE id=:i"), {"i": did})
+
+    assert result["was"] == "skipped" and result["status"] == "ready"
+    assert research["status"] == "ready"
+    assert "skipped_by_operator" not in research["output"]
+    assert research["output"]["unskipped"]["reason"] == "no database for it yet"
+    assert research["output"]["retry_note"] == "it has a database now"
+
+
 def test_a_required_input_from_a_skipped_step_stops_that_step_with_the_reason(
         eng, project, monkeypatch):
     """A step that cannot work without the skipped output is not handed a made-up one. It

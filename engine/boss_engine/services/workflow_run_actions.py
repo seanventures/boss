@@ -183,6 +183,14 @@ SKIP_PAST_A_NO = ("Skipping this approval would run what you just refused. "
                   "Retry asks again; Stop ends the run.")
 
 
+def is_operator_skip(step: dict[str, Any]) -> bool:
+    """A step a PERSON skipped after it failed (Skip and proceed) — not one the run's own path
+    left out. Its Retry stays offered: the operator can change their mind once the cause is
+    fixed. Without it a skipped preview was a dead end — deploy requires a reviewed preview, so
+    deploy failed, and the preview that would now serve could never be run again on this run."""
+    return str(step.get("status") or "") == "skipped" and bool(_output(step).get("skipped_by_operator"))
+
+
 def skip_refusal(step: dict[str, Any]) -> Optional[str]:
     """THE ONE RULE for whether a failed step may be skipped past a person's no.
 
@@ -470,7 +478,7 @@ def _verdicts(
         step_status = str(step.get("status") or "")
         step_id = str(step.get("step_id") or "")
 
-        if step_status not in RETRYABLE_STEP_STATES:
+        if step_status not in RETRYABLE_STEP_STATES and not is_operator_skip(step):
             # Re-queueing a step that is running would run it twice.
             retry = (ABSENT, f"'{step_id}' is {step_status}, so there is nothing to retry.")
         elif status == "cancelled":
