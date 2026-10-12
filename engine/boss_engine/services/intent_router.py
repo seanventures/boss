@@ -2181,6 +2181,22 @@ class IntentRouter:
                                  evidence=subject_ev)
         if scope:
             system = scope + "\n\n" + system
+        # A PASTED FAILURE IS A CLAIM ABOUT THE PAST (reported_failure.py). With no record id to
+        # resolve, the deployment targets it names are read now, so the answer leads with what
+        # is true now — Harbor told an operator to run sudo for a preflight step two later
+        # deploys had already got past.
+        if subject_ref is None:
+            from .reported_failure import current_state_note
+
+            _now = current_state_note(connection, project_id, _question)
+            if _now:
+                system = _now + "\n\n" + system
+        # ASKED AGAIN IS NOT "SAY IT AGAIN". The same paste twice got the same answer twice,
+        # anchored on the thread's previous reply.
+        from .reported_failure import ASKED_AGAIN, asked_before
+
+        if asked_before(messages):
+            system = ASKED_AGAIN + "\n\n" + system
         # last 12 user/assistant turns as history; newest user message drives the turn
         convo = [
             {"role": m["role"], "content": m["content"]}

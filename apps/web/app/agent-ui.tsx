@@ -1110,8 +1110,10 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
             "Read that error literally, fix the arguments, and try again yourself — do not " +
             "re-offer the same call, do not ask me to confirm, and do not explain the design " +
             "again. If the error names a missing input, supply it or wire it from a step that " +
-            "produces it. If you genuinely cannot fix it, say in one sentence what is blocking " +
-            "you and what you need from me.");
+            "produces it. If this action cannot run here at all, do not ask me to do its work " +
+            "by hand until you have checked what BOSS can run instead (a retry, a redeploy, " +
+            "another action) and offered it as a button. If you genuinely cannot fix it, say " +
+            "in one sentence what is blocking you and what you need from me.");
           runTurn(fd);
         } else {
           setMessages((m) => [...m, { role: "assistant", content:

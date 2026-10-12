@@ -77,7 +77,9 @@ class TestTheFlagIsTheOuterGate:
                 args={"host": "h", "command": "docker ps"}, operator_confirmed=True,
             )
             assert out["ok"] is False
-            assert "Community host shell" in out["error"]
+            # Said in the words a person reads (action_unavailable); the governance detail
+            # goes to the log.
+            assert "This edition doesn't let agents run commands on your hosts" in out["error"]
 
     def test_disabled_refuses_even_with_confirmation(self):
         out = build_default_registry().invoke(
