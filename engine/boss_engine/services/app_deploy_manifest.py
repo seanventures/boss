@@ -159,6 +159,9 @@ class DeployManifest:
             "name": self.name,
             "kind": self.kind,
             "dir": self.dir,
+            # The compose project its containers are labelled with (kind: compose), so a log
+            # reader finds the app's containers on the host without guessing their names.
+            "compose_project": self.compose_project,
             "steps": {
                 "install": [s.name for s in self.install],
                 "update": [s.name for s in self.update],
