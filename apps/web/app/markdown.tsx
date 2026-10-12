@@ -19,8 +19,11 @@ export function safeHref(href: string): boolean {
 
 function renderInline(text: string, keyPrefix: string): React.ReactNode[] {
   const nodes: React.ReactNode[] = [];
+  // UNDERSCORES INSIDE A WORD ARE NOT EMPHASIS (CommonMark's rule). Without the lookarounds
+  // `BOSS_AGENT_HOST_SHELL` rendered as "BOSSAGENTHOSTSHELL" and `run_on_host` as "runonhost" —
+  // an operator was told to set a setting whose name the console had just destroyed.
   const pattern =
-    /(`[^`]+`)|(\*\*[^*]+\*\*|__[^_]+__)|(\*[^*\s][^*]*\*|_[^_\s][^_]*_)|(\[[^\]]+\]\([^)\s]+\))/g;
+    /(`[^`]+`)|(\*\*[^*]+\*\*|(?<![A-Za-z0-9_])__[^_]+__(?![A-Za-z0-9_]))|(\*[^*\s][^*]*\*|(?<![A-Za-z0-9_])_[^_\s][^_]*_(?![A-Za-z0-9_]))|(\[[^\]]+\]\([^)\s]+\))/g;
   let last = 0;
   let m: RegExpExecArray | null;
   let i = 0;

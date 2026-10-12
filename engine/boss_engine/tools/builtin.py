@@ -2327,8 +2327,9 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
         unavailable = action_unavailable(name, getattr(ctx, "settings", None))
         if unavailable:
             return {"ok": False,
-                    "error": f"cannot propose {name!r} here: {unavailable} Say what the "
-                             "operator can do instead, or what BOSS will do itself."}
+                    "error": f"cannot propose {name!r} here: {unavailable} Offer what BOSS "
+                             "can run instead (for a deploy: a retry or `redeploy`), and ask the "
+                             "operator to act by hand only if nothing in BOSS can."}
         call_args = args.get("args") or {}
         placeholder = _placeholder_argument(call_args)
         if placeholder:
@@ -6717,9 +6718,10 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
         "run_on_host",
         "Run ANY command on a registered deployment host over SSH — restart or delete "
         "containers, edit files, install packages, inspect anything. This changes the machine. "
-        "Use inspect_host when you only need to look. Unavailable in Community until "
-        "host effects use the governed Resource Plane. Other editions also require "
-        "BOSS_AGENT_HOST_SHELL.",
+        "Use inspect_host when you only need to look. Not available in Community, and off "
+        "elsewhere unless `BOSS_AGENT_HOST_SHELL` is set: where it is unavailable, do not "
+        "offer it — host work such as creating the deploy directory is done by the deploy's "
+        "own preflight, so offer a retry or `redeploy` instead.",
         _obj({"host": {"type": "string", "description": "host name, id or address"},
               "command": {"type": "string", "description": "the shell command to run"},
               "timeout_s": {"type": "integer", "minimum": 5, "maximum": 600, "default": 120}},
@@ -7216,8 +7218,29 @@ def _writes_access_tables(statement: str) -> str | None:
     return found.group(1) if found else None
 
 
+#: What a person reads when an action cannot run here — plain words, the same ones the agent
+#: repeats. The governance detail behind each ("approved ChangeSet, budget reservation and
+#: ResourceReceipt") is for the log, not for the operator: Harbor read it aloud, and an operator
+#: was told to "turn on governed host-shell execution (BOSSAGENTHOSTSHELL / the Resource Plane)".
+_UNAVAILABLE_SAID: dict[str, str] = {
+    "community_host_shell": (
+        "This edition doesn't let agents run commands on your hosts. BOSS's own deploy steps "
+        "do the host work — preflight creates the deploy directory, and a retry or `redeploy` "
+        "ships the build again."),
+    "host_shell_off": (
+        "Agents can't run commands on your hosts on this install (the `BOSS_AGENT_HOST_SHELL` "
+        "setting is off). BOSS's own deploy steps still do the host work."),
+}
+_UNAVAILABLE_DETAIL: dict[str, str] = {
+    "community_host_shell": ("Community: run_on_host stays off until host commands go through "
+                             "an approved ChangeSet, budget reservation and ResourceReceipt."),
+    "host_shell_off": "run_on_host needs BOSS_AGENT_HOST_SHELL=true.",
+}
+
+
 def action_unavailable(name: str, settings: Any) -> str | None:
-    """Why the action `name` cannot run on this install, or None. THE ONE RULE.
+    """Why the action `name` cannot run on this install, in the words a person reads, or None.
+    THE ONE RULE.
 
     The tool and `propose_action` both read it, so an agent never offers a button the tool
     will refuse. Harbor offered "run on host"
@@ -7229,10 +7252,16 @@ def action_unavailable(name: str, settings: Any) -> str | None:
 
             settings = get_settings()
         if _community_raw_sql_disabled(settings):
-            return ("Community host shell is disabled until commands use an approved "
-                    "ChangeSet, budget reservation, and ResourceReceipt.")
-        if not getattr(settings, "agent_host_shell", False):
-            return "host shell is disabled (BOSS_AGENT_HOST_SHELL is not set)."
+            key = "community_host_shell"
+        elif not getattr(settings, "agent_host_shell", False):
+            key = "host_shell_off"
+        else:
+            return None
+        import logging
+
+        logging.getLogger(__name__).info("action %s unavailable: %s", name,
+                                         _UNAVAILABLE_DETAIL[key])
+        return _UNAVAILABLE_SAID[key]
     return None
 
 
