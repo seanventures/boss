@@ -1515,6 +1515,28 @@ def previous_failure_block(prev: dict, gates_failed: Optional[list] = None) -> s
     return "\n".join(parts)
 
 
+def _lineage_produced_nothing(engine, prev: dict, run_id: str) -> bool:
+    """True when no attempt of this lineage (back to its root, or to a completed attempt) left any
+    work behind: no completed stage (so nothing checkpointed to the branch), no approved design,
+    no saved workspace, no PR. Then a retry has nothing to repair."""
+    node, node_id = prev, run_id
+    for _ in range(12):
+        if node is None:
+            return True
+        fc = node.get("finalize_ctx") or {}
+        st = node.get("state") or {}
+        if (node.get("status") == "completed" or node.get("pull_request_url")
+                or fc.get("completed_stages") or fc.get("saved_workspace") or fc.get("pending_diff")
+                or (isinstance(st.get("design"), dict) and st["design"])):
+            return False
+        node_id = str(fc.get("parent_run_id") or "")
+        if not node_id:
+            return True
+        with _transaction(engine) as c:
+            node = load_code_task_run(c, node_id)
+    return False
+
+
 def retry_code_task(
     engine, settings: Settings, jobs, run_id: str, *, fix_note: str = "",
     profile: Optional[str] = None, repair_retries: Optional[int] = None,
@@ -1694,6 +1716,20 @@ def retry_code_task(
         if whole:
             rid, n, _r = max(whole, key=lambda w: w[2])
             seed_files, seed_from = n, rid
+    # NOTHING TO REPAIR: every earlier attempt stopped before producing anything (crun_2f76585e
+    # died at the clone, 1.1 min in). The retry is then a FRESH build of the same brief — the
+    # same app folder, the same criteria — not a repair: telling it "the previous attempt's code
+    # is ALREADY PRESENT" and holding it to "the app's existing tests" sent crun_37f4ccef to treat
+    # other apps' suites at the repo root as its own.
+    fresh = (prev.get("status") != "completed" and not seed_files and not pr_url
+             and _lineage_produced_nothing(engine, prev, run_id))
+    if fresh:
+        why = str(prev.get("error") or "it stopped before producing anything").strip()
+        augmented = (f"{base_instr}\n\n=== ITERATION FEEDBACK (attempt {attempt}) ===\n"
+                     "This is a FRESH build of the brief above: the previous attempt stopped "
+                     f"before producing any work ({why[:300]}), so nothing of it exists to "
+                     "continue from. Build it as the brief says, in the place the brief names."
+                     + (f"\n\n## Note from the operator\n{fix_note}" if fix_note else ""))
     history = list(fctx_prev.get("feedback_history") or [])
     history.append({
         "attempt": attempt, "parent_run_id": run_id, "prev_status": prev.get("status"),
@@ -1709,7 +1745,7 @@ def retry_code_task(
             # change) is held to the app's existing tests, as every other change path is —
             # enforced here so no client can drop it. A blind retry keeps its own criteria.
             acceptance_criteria=(with_existing_tests_criterion(spec.get("acceptance_criteria"))
-                                 if str(fix_note or "").strip()
+                                 if str(fix_note or "").strip() and not fresh
                                  else spec.get("acceptance_criteria") or []),
             test_commands=spec.get("test_commands") or [],
             owner=spec.get("owner") or settings.target_github_owner,
@@ -1717,6 +1753,8 @@ def retry_code_task(
             base_branch=spec.get("base_branch") or "main",
             role_key=spec.get("role_key"),
             finalize_ctx={"parent_run_id": run_id, "root_run_id": root, "attempt": attempt,
+                          # A fresh build of the same brief, not a repair (see `fresh` above).
+                          **({"fresh_build": True} if fresh else {}),
                           # AN EXPLICIT CHOICE MAKES THIS A PIECE OF WORK IN ITS OWN RIGHT.
                           # A retry inherits its parent's run; a change the operator chose a
                           # workflow for is a new piece of work following that path.
