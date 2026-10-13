@@ -219,3 +219,32 @@ def test_a_stack_reads_the_same_deploy_environment_including_the_apps_own_settin
         _passed, missing = app_secrets.deploy_secrets(c, project_id=HOME, app_key=app["key"])
     assert env["PAY_KEY"] == TEST_VALUE and env["DEMO_PASSWORD"] == "demo-pw-123456"
     assert missing == []
+
+
+def test_a_proofs_generated_secret_is_throwaway_and_never_the_deploys(engine, hosted, app):  # noqa: F811
+    """HelpDesk AI (crun_db538dff): the app-start proof now gets the session key the app declares
+    (templates.run_env). Fresh per proof, never stored, and never what a deploy holds."""
+    from boss_engine.templates import run_env
+
+    extra = [{"name": "SESS_KEY", "test_default": "generated"}]
+    with engine.begin() as c:
+        tid = c.execute(text("SELECT template_id FROM app_template_applications WHERE project_id = :p "
+                             "AND app_key = :a"), {"p": HOME, "a": app["key"]}).scalar_one()
+        c.execute(text("UPDATE app_templates SET manifest = jsonb_set(manifest, '{secrets}', "
+                       "(manifest->'secrets') || CAST(:x AS JSONB)) WHERE id = :t"),
+                  {"t": tid, "x": json.dumps(extra)})
+        rows = lambda: c.execute(text("SELECT count(*) FROM app_secret_bindings WHERE project_id = :p "  # noqa: E731
+                                      "AND app_key = :a"), {"p": HOME, "a": app["key"]}).scalar_one()
+        before = rows()
+        needs = run_env.app_needs(c, project_id=HOME, app_key=app["key"])
+        proofs = [run_env.resolve(needs, purpose="proof").values["SESS_KEY"] for _ in range(2)]
+        preview = run_env.resolve(needs, purpose="preview").values["SESS_KEY"]
+        assert rows() == before                                   # resolving stored nothing
+        assert all(len(v) >= 32 for v in proofs) and proofs[0] != proofs[1]
+        # PAY_KEY is a person's secret: the proof names it rather than inventing one.
+        assert [n.name for n in run_env.resolve(needs, purpose="proof").needs] == ["PAY_KEY"]
+
+        app_secrets.ensure_deploy_generated(c, org_id=app["org"], project_id=HOME, app_key=app["key"])
+        deploy_values, _ = app_secrets.values_for_env(c, org_id=app["org"], project_id=HOME,
+                                                      app_key=app["key"], env="deploy")
+    assert deploy_values["SESS_KEY"] not in (*proofs, preview)

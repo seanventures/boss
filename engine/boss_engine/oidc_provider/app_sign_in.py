@@ -338,37 +338,51 @@ def disconnect(db: Any, *, org_id: str, project_id: str, app_key: str, actor: st
 
 # ---- a preview's environment -----------------------------------------------------------------------
 
-def preview_environment(db: Any, *, project_id: str, run_id: Optional[str], preview_id: str) -> dict[str, str]:
-    """What a preview of an app gets from its templates (F2 §2.4): its `preview` secret values
-    (test/generated/stub, never live), APP_BASE_URL (where the browser reaches it), and, when the
-    app uses Sign in with BOSS, its redirect URI registered for this preview."""
+def preview_environment(db: Any, *, project_id: str, run_id: Optional[str], preview_id: str,
+                        app_dir: Optional[Any] = None) -> dict[str, str]:
+    """What a preview of an app gets (F2 §2.4): preview_run_environment's values."""
+    return preview_run_environment(db, project_id=project_id, run_id=run_id, preview_id=preview_id,
+                                   app_dir=app_dir).values
+
+
+def preview_run_environment(db: Any, *, project_id: str, run_id: Optional[str], preview_id: str,
+                            app_dir: Optional[Any] = None):
+    """The preview's run_env.RunEnvironment: what the app declares (its templates' secrets, its
+    boss.deploy.yaml and .env.example in `app_dir`), resolved for a preview by the same rule the
+    app-start proof and the deploy use. Its `preview` secret values (test/stub, never live); a
+    secret BOSS generates (a session key) FRESH for this preview, never the deploy's; APP_BASE_URL
+    (where the browser reaches it); and, when the app uses Sign in with BOSS, its redirect URI
+    registered for this preview."""
+    from pathlib import Path
+
     from ..app_links.service import app_index, project_org
     from ..templates.base_url import BASE_URL_ENV
+    from ..templates.run_env import app_needs, needs_from_app_dir, resolve
     from ..templates.secrets import values_for_env
 
-    if not run_id:
-        return {}
-    by_run, _ = app_index(db, project_id)
-    app_key = by_run.get(run_id)
-    org_id = project_org(db, project_id)
-    if not app_key or not org_id:
-        return {}
-    applied = db.execute(text(
+    app_dir = Path(app_dir) if app_dir is not None else None
+    by_run, _ = app_index(db, project_id) if run_id else ({}, None)
+    app_key = by_run.get(run_id) if run_id else None
+    org_id = project_org(db, project_id) if app_key else None
+    applied = bool(app_key and org_id and db.execute(text(
         "SELECT 1 FROM app_template_applications WHERE project_id = :p AND app_key = :k "
-        "AND status NOT IN ('failed', 'abandoned') LIMIT 1"), {"p": project_id, "k": app_key}).first()
-    if not applied:             # an app no template was applied to keeps its environment as it was
-        return {}
-    env, withheld = values_for_env(db, org_id=org_id, project_id=project_id, app_key=app_key, env="preview")
+        "AND status NOT IN ('failed', 'abandoned') LIMIT 1"), {"p": project_id, "k": app_key}).first())
+    if not applied:
+        # No template: only what the app's own files declare (a session key in .env.example).
+        return resolve(needs_from_app_dir(app_dir), purpose="preview")
+    bound, withheld = values_for_env(db, org_id=org_id, project_id=project_id, app_key=app_key, env="preview")
     for why in withheld:
         logger.warning("preview %s: %s", preview_id, why)
+    env = resolve(app_needs(db, project_id=project_id, app_key=app_key, app_dir=app_dir),
+                  purpose="preview", bound=bound)
     base = preview_base(db, org_id, preview_id)
     if base:
-        env.setdefault(BASE_URL_ENV, base)
+        env.values.setdefault(BASE_URL_ENV, base)
     sync_redirect_uris(db, org_id=org_id, project_id=project_id, app_key=app_key, also=preview_id)
-    if env:
+    if env.values:
         from ..identity import redaction
 
-        redaction.register_secrets([v for k, v in env.items() if k != BASE_URL_ENV])
+        redaction.register_secrets([v for k, v in env.values.items() if k != BASE_URL_ENV])
     return env
 
 

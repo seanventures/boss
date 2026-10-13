@@ -421,15 +421,20 @@ def deploy_secrets(c, *, project_id: str, app_key: str) -> tuple[list[dict], lis
         "SELECT name, mode, vault_item_id, live_decision_id FROM app_secret_bindings "
         "WHERE project_id = :p AND app_key = :a AND env = 'deploy' ORDER BY name"),
         {"p": project_id, "a": app_key}).mappings().all()
+    from .run_env import decide, needs_from_declared_specs
+
     bound = {r["name"]: r for r in rows}
     passed: list[dict] = []
     missing: list[str] = []
-    declared = declared_specs(c, project_id=project_id, app_key=app_key)
+    # THE SAME RULE the app-start proof and the preview use (run_env.decide), for a deploy: a
+    # generated secret is the stored deploy value (ensure_deploy_generated), never a throwaway.
+    declared = needs_from_declared_specs(declared_specs(c, project_id=project_id, app_key=app_key))
     for name in sorted(set(bound) | set(declared)):
         r = bound.get(name)
         if r is None or (r["mode"] != "stub" and not r["vault_item_id"]):
             # Not required: the app runs without it and that feature stays off.
-            if name in declared and not declared[name]["required"]:
+            if name in declared and decide(declared[name], has_value=False,
+                                           purpose="deploy") == "unset":
                 continue
             missing.append(f"{name} has no deploy value")
             continue

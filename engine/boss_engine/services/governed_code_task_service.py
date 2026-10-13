@@ -219,6 +219,11 @@ def classify_gate_faults(
         elif gate == "app_serves":
             # The app did not answer is WORK. The check could not even start it (no tree to
             # copy, launcher failed) is BOSS's fault, and must not send the coder to fix it.
+            # A SECRET ONLY A PERSON CAN SET (templates.run_env: needs_secret) is neither: no
+            # repair round can produce it, and a coder told to "fix" it would code around it.
+            if (evidence.get("app_serves") or {}).get("needs_secret"):
+                faults[gate] = "PERSON"
+                continue
             inconclusive = bool((evidence.get("app_serves") or {}).get("harness"))
         else:
             # Test gates are authoritative: BOSS re-runs the suite itself, so a red suite is
@@ -771,6 +776,15 @@ def blocked_gate_messages(qg_id: str, failing: list, app_serves_record: Optional
     if install:
         error = f"Blocked: {install}. " + error
         reason = f"{install}, so the build is not done"
+    needs = list((app_serves_record or {}).get("needs_secret") or [])
+    if "app_serves" in (failing or []) and needs and not install:
+        # A PERSON'S ACT, not a waiver and not a repair: what to set, and where.
+        from ..templates.run_env import needs_secret_action
+        from .preview_service import app_serves_headline
+
+        error = (f"Blocked: {app_serves_headline(app_serves_record)}. "
+                 f"{needs_secret_action(needs)}")
+        reason = f"the app needs {', '.join(needs)}, which only a person can set"
     return error, reason
 
 
@@ -819,6 +833,11 @@ def resolve_gate_failure_action(
     """
     if not failing:
         return "ship"
+    # A PERSON MUST ACT (a secret only they can set, classify_gate_faults "PERSON"): the build
+    # cannot pass until they do, so no repair round goes to the coder and nothing ships. Blocked,
+    # naming what to set and where; their Retry runs the build again.
+    if faults and any(faults.get(g) == "PERSON" for g in failing):
+        return "block"
     # A CHECK THAT NEVER RAN IS NOT AN OPINION TO SHIP PAST — checked BEFORE advisory.
     #
     # This sat below the advisory branch, which returns "ship" for anything outside the hard
@@ -1082,6 +1101,34 @@ def _connector_probe_paths(engine, run: dict) -> list[str]:
     except Exception:  # noqa: BLE001 — no probe: the gate says the routes were not checked
         _log_caught(logger)
         return []
+
+
+def _app_run_declarations(engine, run: dict) -> tuple[dict, dict]:
+    """(what the app's templates declare, the values a person bound for its `build` environment)
+    for the app-start proof (templates.run_env). The proof reads the app's own files itself.
+    Never raises: with nothing known the proof still reads boss.deploy.yaml and .env.example."""
+    from ..templates import gate as template_gate
+    from ..templates.run_env import app_needs
+    from ..templates.secrets import values_for_env
+
+    try:
+        with _transaction(engine) as c:
+            applied = template_gate.applied_template(c, run)
+            if not applied or applied.get("error"):
+                return {}, {}
+            app_key = applied.get("app_key")
+            needs = app_needs(c, project_id=run["project_id"], app_key=app_key,
+                              manifests=[applied.get("manifest") or {}])
+            org = c.execute(sql("SELECT w.org_id FROM projects p JOIN workspaces w ON w.id = p.workspace_id "
+                                "WHERE p.id = :p"), {"p": run.get("project_id")}).scalar()
+            bound: dict = {}
+            if org and app_key:
+                bound, _withheld = values_for_env(c, org_id=org, project_id=run["project_id"],
+                                                  app_key=app_key, env="build")
+            return needs, bound
+    except Exception:  # noqa: BLE001
+        _log_caught(logger)
+        return {}, {}
 
 
 def _template_gates(engine, run: dict, sandbox, *, root, cwd, changed_files: dict,
@@ -6017,12 +6064,16 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 # builds a named full-stack app — never inferred from the code (third review
                 # of b63717c), never `web_app_build`, which every build-on-existing/extend
                 # carries, CLIs and libraries included.
+                _run_needs, _run_bound = _app_run_declarations(engine, run)
                 record = prove_app_serves(
                     root, list(files.keys()), lineage=lineage,
                     known_service=serve_proof_known_service(spec, fctx),
                     timeout=float(getattr(settings, "code_task_serve_check_timeout_seconds",
                                           180) or 180),
                     probe_paths=_connector_probe_paths(engine, run) or None,
+                    # WHAT THE APP DECLARES, so a session key BOSS generates is there (fresh,
+                    # throwaway) and a secret only a person sets is named, not crashed on.
+                    needs=_run_needs, bound=_run_bound,
                 )
             with _transaction(engine) as c:
                 emit_event(c, project_id, "code_task.app_serve_checked", "boss",
@@ -6974,7 +7025,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
 
                     _held = _tpl_hold_outcome(
                         failing, _install_fail[0], app_serves=app_serves_record,
-                        template_tests=((_template_record or {}).get("evidence") or {}).get("template_tests"))
+                        template_tests=((_template_record or {}).get("evidence") or {}).get("template_tests"),
+                        secret_scan=((_template_record or {}).get("evidence") or {}).get("secret_scan"))
                     if _held is not None:
                         ctx["template_hold"] = _held
                     c.execute(sql(
@@ -6998,7 +7050,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
 
                 _held = _tpl_hold_outcome([g for g in TEMPLATE_GATES
                                            if (_tpl_gates or {}).get(g) is not True],
-                                          _install_fail[0])
+                                          _install_fail[0],
+                                          secret_scan=((_template_record or {}).get("evidence")
+                                                       or {}).get("secret_scan"))
                 c.execute(sql("UPDATE code_task_runs SET status='blocked', phase='done', error=:e, "
                               "updated_at=now() WHERE id=:id"),
                           {"e": (_held or {}).get("error") or template_push_hold(_tpl_applies, _tpl_gates),
