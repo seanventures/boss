@@ -76,6 +76,7 @@ P1:
     - engine/tests/test_a_previews_container_log_reaches_the_activity_log.py
     # Operator-reported regressions 2026-10-10..13
     - engine/tests/test_a_build_agents_thinking_is_bounded.py
+    - engine/tests/test_build_profile.py
     - engine/tests/test_agent_turn_capture.py
     - engine/tests/test_a_panel_turn_carries_its_gist.py
     - engine/tests/test_one_design_session_reads_the_repo_once.py
