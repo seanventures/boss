@@ -88,7 +88,13 @@ def test_the_build_directive_assembles_for_every_stack(name, stack):
     row = {"source": "builtin", "digest": report.digest}
     text = apply_service.build_directive(row=row, manifest=m, stack=stack, framework=m.stacks[stack].frameworks[0],
                                          files=files, note="", app_name="Shop")
-    assert f'Apply the template "{m.name}" ({m.id} {m.version})' in text
+    assert f'"{m.name}" ({m.id} {m.version})' in text
+    # A connector is INTEGRATED into the app, in the app's own look; an idea STARTS an app.
+    opening = {"connector": "Integrate the connector", "idea": "from the idea",
+               "training": f'Apply "{m.name}"'}[m.item_kind]
+    assert opening in text
+    if m.item_kind == "connector":
+        assert "read the app's UI conventions" in text and "SECURITY CORE stays exactly" in text
     assert m.tests[stack].command in text and f"at least {m.tests[stack].min_tests} passing tests" in text
     assert apply_service.UNTRUSTED_BEGIN not in text
     tests = template_test_files(files, stack)
