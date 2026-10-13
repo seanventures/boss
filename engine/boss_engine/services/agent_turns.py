@@ -48,6 +48,9 @@ LEVELS = ("verbose", "info", "warn", "error")
 _NOTABLE_TOOLS = frozenset({"Bash", "Edit", "Write", "MultiEdit", "NotebookEdit"})
 
 _ERROR_MARKERS = ("error", "failed", "exception", "traceback", "fatal")
+#: Tools that only look. Their result is what they found, so its words never set its level.
+_READ_ONLY_TOOLS = frozenset({"Read", "Glob", "Grep", "LS", "WebFetch", "WebSearch", "TodoWrite",
+                              "NotebookRead"})
 _WARN_MARKERS = ("warn", "deprecat", "retry", "retrying", "timeout", "skipped")
 
 
@@ -105,10 +108,16 @@ def classify(direction: str, *, tool_name: str = "", content: str = "", ok: bool
     """
     if not ok:
         return "error"
+    if direction == "tool_result" and tool_name in _READ_ONLY_TOOLS:
+        # WHAT A FILE SAYS IS NOT HOW THE READ WENT. A successful Read of code that handles
+        # errors ("catch (error)", "throw new Error") was filed as an error by the word search
+        # below: a HelpDesk build showed "29 errors", 22 of them reads that had worked.
+        return "verbose"
     lowered = (content or "").lower()
     if any(marker in lowered for marker in _ERROR_MARKERS):
-        # A tool RESULT saying "error" is the single most useful line in a failed build.
-        return "error" if direction == "tool_result" else "warn"
+        # The TOOL decides whether it failed (`ok`, above). Words in a successful result are a
+        # hint worth a look, never a failure: "0 failed" and "error handling" are not errors.
+        return "warn"
     if any(marker in lowered for marker in _WARN_MARKERS):
         return "warn"
     if direction == "tool_call" and tool_name in _NOTABLE_TOOLS:
@@ -310,7 +319,9 @@ def record_turns(
             "truncated": clipped,
             "tokens": int(turn.get("tokens") or 0),
             "latency_ms": int(turn.get("latency_ms") or 0),
-            "level": classify(direction, tool_name=tool_name or "", content=content, ok=ok),
+            # A turn BOSS wrote itself (a live "thinking…" pulse) says its own level.
+            "level": (turn["level"] if turn.get("level") in LEVELS
+                      else classify(direction, tool_name=tool_name or "", content=content, ok=ok)),
             "ok": ok,
             "error": None if ok else (content[:500] or "tool reported an error"),
         })

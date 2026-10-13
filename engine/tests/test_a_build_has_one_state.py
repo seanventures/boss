@@ -90,7 +90,7 @@ def test_failed_and_cancelled():
                        viewer="ceo")
     assert s["word"] == "Stopped by you"
     s = state(run("cancelled", "implement", fctx={"cancelled_by": "ceo"}))
-    assert s["word"] == "Stopped by ceo"
+    assert s["word"] == "Stopped by the owner"     # a name, never the actor id
 
 
 def test_a_cancelled_run_with_a_pr_is_cancelled():

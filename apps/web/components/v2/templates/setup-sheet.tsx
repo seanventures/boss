@@ -274,7 +274,7 @@ export function AppSetup({ projectId, appKey }: { projectId: string; appKey: str
                   <li key={n} className="tpl-row" data-testid={`tpl-deploy-value-${n}`}>
                     <span className="tpl-row-name">{n}</span>
                     <span className="tpl-chip" data-tone="green" title="Passed to the app on its next deploy">{ENV_WORD.deploy} · Set</span>
-                    <GatedButton permission="app_secret:write" projectId={projectId} className="tpl-btn" disabled={busy}
+                    <GatedButton permission="app_secret:write" projectId={projectId} className="ag-btn" disabled={busy}
                                  data-testid={`tpl-deploy-value-remove-${n}`}
                                  onClick={() => void guarded(`Remove ${n}.`, () => templatesApi.deleteSecret(projectId, appKey, n, "deploy")).then(() => load(), (e) => setNote(refusalWords(e)))}>
                       Remove
@@ -283,18 +283,22 @@ export function AppSetup({ projectId, appKey }: { projectId: string; appKey: str
                 ))}
               </ul>
             ) : null}
-            <div className="tpl-edit">
-              <input value={dvName} onChange={(e) => setDvName(e.target.value)} placeholder="NAME" aria-label="Setting name"
+            {/* The same form as a secret's Set key: the panel's own inputs and buttons. These were
+                bare <input>s in an unstyled div, tiny white boxes an operator could not find. */}
+            <form className="tpl-row-set" data-testid="tpl-deploy-value-form"
+                  onSubmit={(e) => { e.preventDefault(); void saveDeployValue(); }}>
+              <input className="tpl-input tpl-mono" value={dvName} onChange={(e) => setDvName(e.target.value)}
+                     placeholder="NAME, e.g. DEMO_PASSWORD" aria-label="Setting name" spellCheck={false}
                      data-testid="tpl-deploy-value-name" autoComplete="off" />
-              <input value={dvValue} onChange={(e) => setDvValue(e.target.value)} placeholder="Value" aria-label="Setting value"
-                     type="password" data-testid="tpl-deploy-value-value" autoComplete="off" />
-              <GatedButton permission="app_secret:write" projectId={projectId} className="tpl-btn primary"
+              <input className="tpl-input" value={dvValue} onChange={(e) => setDvValue(e.target.value)} placeholder="Value"
+                     aria-label="Setting value" type="password" data-testid="tpl-deploy-value-value" autoComplete="off" />
+              <GatedButton permission="app_secret:write" projectId={projectId} type="submit" className="ag-btn ag-btn-primary"
                            disabled={busy || !DEPLOY_VALUE_NAME.test(dvName.trim().toUpperCase()) || !dvValue}
                            title="Stored write-only for deploy; the next deploy passes it to the app"
-                           data-testid="tpl-deploy-value-save" onClick={() => void saveDeployValue()}>
+                           data-testid="tpl-deploy-value-save">
                 Add
               </GatedButton>
-            </div>
+            </form>
           </div>
         ) : null}
         {note ? <span className="tpl-muted" role="status" data-testid="tpl-setup-note">{note}</span> : null}

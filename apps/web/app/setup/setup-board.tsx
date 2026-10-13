@@ -28,6 +28,7 @@ import {
 import type { RowKey, SetupView } from "../../lib/setup-types";
 import { BudgetRow } from "./budget-row";
 import { BuildDatabaseRow } from "./build-database-row";
+import { BuildSpeedRow } from "./build-speed-row";
 import { CapacityRow } from "./capacity-row";
 import { ModelsRow } from "./models-row";
 import { BoardContext, toast, useBoard } from "./parts";
@@ -55,6 +56,7 @@ const ADVANCED: Record<string, { line: string; tip: string }> = {
   ci: { line: "Let builds edit CI workflows",
         tip: "Off by default. Asked for only when a build needs to change CI." },
   build_database: { line: "Postgres for builds that need it", tip: "Auto, Always or Never." },
+  build_speed: { line: "How many agents write a build at once", tip: "Balanced or Fastest." },
   toolchains: { line: "What builds can compile and run", tip: "Python and Node always; others on the host." },
   jobs: { line: "Which model does which job", tip: "Pin a model to a job, or let BOSS route." },
   budget: { line: "Monthly spend cap", tip: "BOSS pauses model spend at the cap." },
@@ -338,6 +340,7 @@ export function SetupBoard({ projectId, actor, initialView = null }: {
           <div className="su-adv-item" ref={ref("repositories")}><Why id="repositories" /><RepositoryRegistry projectId={projectId} /></div>
           <div className="su-adv-item" ref={ref("ci")}><Why id="ci" /><CiPermission /></div>
           <div className="su-adv-item" ref={ref("build_database")}><Why id="build_database" /><BuildDatabaseRow /></div>
+          <div className="su-adv-item" ref={ref("build_speed")}><Why id="build_speed" /><BuildSpeedRow /></div>
           <div className="su-adv-item" ref={ref("toolchains")}><Why id="toolchains" /><ToolchainsRow /></div>
           {/* Model routing — where "Who does what" lived; its rows are "Pin a job" inside. */}
           <div className="su-adv-item"><Why id="jobs" /><RoutingRow ref={ref("jobs")} mode={rowMode(view, "jobs")} focused={focus === "jobs"} /></div>

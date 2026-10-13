@@ -1,0 +1,137 @@
+# Test tiers (docs/operations/TEST_TIERS.md). Paths are relative to the repository root.
+#
+#   major release  = P0 + P1
+#   minor release  = P0 + the tests of the changed areas  (scripts/test-tier.sh changed)
+#   P2             = everything not listed here; on demand or nightly
+#
+# P0 is what a user hits first and must never break; it stays small (target <= 10 min).
+# P1 is the main features plus a regression test for every operator-reported bug (<= 30 min).
+
+P0:
+  engine:
+    # First run and install
+    - engine/tests/test_first_run_setup.py
+    - engine/tests/test_a_fresh_install_can_press_build.py
+    # Secrets never leave
+    - engine/tests/test_redaction_masks_every_credential.py
+    - engine/tests/test_identity_audit_redaction.py
+    # Sandbox and network fence
+    - engine/tests/test_identity_f1_sandbox_boundary.py
+    - engine/tests/test_sandbox_network_fence.py
+    - engine/tests/test_a_build_fans_out_inside_its_sandbox.py
+    # Build pipeline happy path
+    - engine/tests/test_code_task_service.py
+    - engine/tests/test_a_build_proves_its_app_runs.py
+    # Workflow runner core: gates, retry/skip, one approval per deploy
+    - engine/tests/test_an_approved_gate_releases_the_work.py
+    - engine/tests/test_one_approval_per_deploy.py
+    - engine/tests/test_a_workflow_follows_a_retry.py
+    # Governed deploy + health
+    - engine/tests/test_an_app_is_deployed_the_way_it_says.py
+    - engine/tests/test_a_smoke_test_asks_the_deployment_not_a_url.py
+  api:
+    - apps/api/tests/test_api_e2e_smoke.py
+    # Sign-in, step-up, CSRF
+    - apps/api/tests/test_identity_authn_signin.py
+    - apps/api/tests/test_identity_fxd_step_up.py
+    - apps/api/tests/test_identity_f3_authn_security.py
+    # Authz core
+    - apps/api/tests/test_identity_authz_matrix.py
+    # Secrets
+    - apps/api/tests/test_no_secret_leaves_the_log.py
+    - apps/api/tests/test_a_host_deploy_passes_the_apps_deploy_secrets.py
+    # Governed deploy
+    - apps/api/tests/test_a_host_deploys_only_through_an_approved_changeset.py
+    - apps/api/tests/test_a_stack_deploys_only_through_an_approved_changeset.py
+    - apps/api/tests/test_a_deploy_asks_once_or_as_its_policy_says.py
+  web:
+    - apps/web/tests/console-routes-answer-what-the-console-asks.test.ts
+    - apps/web/tests/sign-in-shows-every-option-and-says-why.test.tsx
+    - apps/web/tests/sign-in-keeps-your-place-and-you-can-sign-out.test.ts
+    - apps/web/tests/step-up-only-on-a-press.test.tsx
+    - apps/web/tests/identity-mirroring.test.ts
+    - apps/web/tests/a-press-is-sent-once.test.ts
+    - apps/web/tests/a-workflow-is-started-once-per-press.test.ts
+    - apps/web/tests/a-deploy-is-approved-once-and-opens-its-app.test.tsx
+
+P1:
+  engine:
+    # Workflows
+    - engine/tests/test_workflow_capability_runner.py
+    - engine/tests/test_a_failed_step_stops_the_run.py
+    - engine/tests/test_a_gate_nobody_answered_does_not_kill_the_work.py
+    - engine/tests/test_an_approval_records_who_approved_it.py
+    - engine/tests/test_one_approval_releases_one_run.py
+    - engine/tests/test_a_retry_repairs_the_saved_workspace.py
+    - engine/tests/test_a_retry_is_not_a_duplicate_of_a_dead_run.py
+    - engine/tests/test_retry_chains_are_bounded.py
+    # Previews
+    - engine/tests/test_previews_run_in_the_sandbox.py
+    - engine/tests/test_a_refused_preview_is_skipped_in_words.py
+    - engine/tests/test_preview_retry_is_bounded.py
+    - engine/tests/test_link_fence.py
+    # Activity log
+    - engine/tests/test_activity_classify.py
+    - engine/tests/test_activity_log_levels_and_search.py
+    - engine/tests/test_a_previews_container_log_reaches_the_activity_log.py
+    # Operator-reported regressions 2026-10-10..13
+    - engine/tests/test_a_build_agents_thinking_is_bounded.py
+    - engine/tests/test_agent_turn_capture.py
+    - engine/tests/test_a_panel_turn_carries_its_gist.py
+    - engine/tests/test_one_design_session_reads_the_repo_once.py
+    - engine/tests/test_a_live_lane_folds_like_the_run_chain.py
+    - engine/tests/test_pipeline_view_knows_deployments.py
+    - engine/tests/test_a_stack_deploy_writes_to_the_host_only_under_its_changeset.py
+    - engine/tests/test_deploy_does_not_raise_a_key_error.py
+  api:
+    # Approvals
+    - apps/api/tests/test_an_approval_shows_what_it_will_send.py
+    - apps/api/tests/test_architecture_approval_api.py
+    - apps/api/tests/test_a_gone_run_takes_its_approvals.py
+    # Infra / deploys
+    - apps/api/tests/test_a_host_deploy_shows_its_plan_and_its_approval_in_infra.py
+    - apps/api/tests/test_a_stack_deploy_step_is_approved_once_by_its_deployment.py
+    - apps/api/tests/test_a_deployed_app_knows_its_address.py
+    - apps/api/tests/test_a_first_deploy_needs_only_a_machine.py
+    - apps/api/tests/test_deploy_ssh_safety.py
+    - apps/api/tests/test_deploy_rows_stay_within_the_list_budget.py
+    - apps/api/tests/test_a_deploys_full_log_is_its_steps_and_records.py
+    - apps/api/tests/test_e2e_work_and_deploy.py
+    # Activity log
+    - apps/api/tests/test_activity_api.py
+    - apps/api/tests/test_activity_counts_the_whole_log.py
+    # Workflows / factory / templates / previews / agents
+    - apps/api/tests/test_a_workflow_says_what_it_will_do.py
+    - apps/api/tests/test_a_change_follows_the_workflow_it_was_given.py
+    - apps/api/tests/test_factory_effect_decision_guard.py
+    - apps/api/tests/test_an_insecure_template_app_is_never_deployed.py
+    - apps/api/tests/test_a_failed_template_build_never_ships.py
+    - apps/api/tests/test_a_preview_restarts_on_the_same_build.py
+    - apps/api/tests/test_an_agent_step_runs_on_the_connected_subscription.py
+    - apps/api/tests/test_agents_activity_folds_tool_calls.py
+  web:
+    # Workflows and run card
+    - apps/web/tests/a-step-panel-leads-with-the-run.test.tsx
+    - apps/web/tests/a-chain-says-each-actor-once-and-fits-its-card.test.tsx
+    - apps/web/tests/a-background-write-never-takes-a-press.test.tsx
+    - apps/web/tests/an-approved-gate-stops-asking.test.ts
+    - apps/web/tests/approved-gate-stops-offering-the-press.test.ts
+    - apps/web/tests/a-stack-deploy-step-is-approved-once-through-its-deployment.test.tsx
+    - apps/web/tests/deploy-step-says-what-to-do.test.ts
+    # Approvals
+    - apps/web/tests/an-approval-shows-what-it-will-do.test.tsx
+    - apps/web/tests/an-architecture-is-approved-by-a-person.test.tsx
+    # Infra / deploys
+    - apps/web/tests/a-deploys-full-log-is-the-whole-deploy.test.ts
+    - apps/web/tests/deploy-drawer-polls-only-while-live.test.tsx
+    - apps/web/tests/deploy-rail-shows-what-the-row-can-do.test.tsx
+    - apps/web/tests/infra-copy-budget.test.tsx
+    # Activity log
+    - apps/web/tests/activity-log.test.ts
+    - apps/web/tests/activity-log-reaches-every-row.test.ts
+    # Factory / settings / names / Ask BOSS
+    - apps/web/tests/an-apps-settings-are-one-press-from-its-page.test.ts
+    - apps/web/tests/a-person-is-named-never-an-id.test.ts
+    - apps/web/tests/ask-boss-not-stuck.test.ts
+    - apps/web/tests/research-and-panels-never-show-the-prompt.test.tsx
+    - apps/web/tests/composer-talks-to.test.tsx

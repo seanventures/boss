@@ -51,6 +51,22 @@ def test_a_request_whose_approval_went_elsewhere_is_superseded_not_waiting_on_yo
     assert "Nothing ran" in orphan["sentence"]
 
 
+def test_only_the_current_deploy_is_live():
+    """An older success's drawer said "Live at …" beside a row that said Done (rc10 tester)."""
+    seen = deploy_status("succeeded", health=HEALTH_OK, url="192.0.2.202:8000", newest_for_target=False)
+    assert seen["phase"] == "replaced" and seen["word"] == "Done"
+    assert seen["open_url"] is None and "Live at" not in seen["sentence"]
+    assert "replaced it" in seen["sentence"]
+
+
+def test_a_failure_a_later_success_fixed_is_history():
+    """A blocked deploy stayed red, and counted under Failed, after later deploys succeeded."""
+    seen = deploy_status("blocked", failure="/opt/boss-apps is not writable", fixed_later=True)
+    assert seen["tone"] == "grey" and seen["word"] == "Failed earlier"
+    assert "A later deploy of this app succeeded." in seen["sentence"]
+    assert deploy_status("blocked", failure="x")["tone"] == "red"
+
+
 def test_a_failure_says_its_first_line():
     failed = deploy_status("blocked", failure="/opt/boss-apps could not be made\nmore")
     assert failed["phase"] == "failed" and failed["sentence"] == "/opt/boss-apps could not be made"

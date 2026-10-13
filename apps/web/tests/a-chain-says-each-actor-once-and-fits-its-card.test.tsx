@@ -57,6 +57,18 @@ describe("one actor, one stop", () => {
     expect(items[2].kind === "hop" && items[2].steps).toEqual(["approve", "deploy"]);
   });
 
+  it("merges a retried step with the same actor beside it, and counts distinct steps", () => {
+    // rc10 tester: "Seed Owner · 1042 steps → Seed Owner · 1042 attempts", side by side.
+    const items = chainItems(runOf([["prd", null], ["meeting", "pm"], ["approve", null]]), "viewer");
+    const [a, , b] = items as Extract<typeof items[number], { kind: "hop" }>[];
+    const retried = { ...b, attempts: [b, b, b] };
+    const merged = mergeRepeats([a, retried, { ...b, key: "again" }]);
+    expect(merged).toHaveLength(1);
+    const stop = merged[0] as typeof a;
+    expect(stop.steps).toEqual(["Run", "prd", "approve ×3", "approve"]);
+    expect(new Set(stop.steps).size).toBe(stop.steps!.length);
+  });
+
   it("never merges across a different actor", () => {
     const items = chainItems(runOf([["a", "pm"], ["b", null], ["c", "pm"]]), "viewer");
     expect(mergeRepeats(items)).toHaveLength(4);
@@ -70,6 +82,14 @@ describe("the count is what the strip draws", () => {
     const el = render(<RunChain chain={chain} viewer="viewer" />);
     expect(el.querySelector('[data-testid="ag-chain-count"]')?.textContent).toBe("3 taking part");
     expect(el.querySelector('[data-testid="ag-chain-steps"]')?.getAttribute("data-tip")).toBe("Run\nprd");
+  });
+
+  it("counts the actors folded inside a stop too", () => {
+    // "4 taking part" over Seed Owner, Juno, "+5 inside Meeting", "+3 more"…
+    const items = chainItems(runOf([["prd", null], ["meeting", "pm"]]), "viewer");
+    const inner = chainItems(runOf([["seat", "qa"], ["seat2", "sre"]]), "viewer").slice(1);
+    const withInside = items.map((it, i) => (i === 1 && it.kind === "hop" ? { ...it, inside: inner } : it));
+    expect(actorsShown(withInside)).toHaveLength(actorsShown(items).length + 2);
   });
 });
 

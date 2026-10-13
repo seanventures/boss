@@ -115,13 +115,21 @@ class _Conn:
         return self.runs.get(run_id)
 
 
-def _outputs(run, gate_row=None):
+def _outputs(run, gate_row=None, state="pr_open", decision=None):
     facts = fv.Facts()
     if gate_row is not None:
         facts.gates[run["id"]] = gate_row
-    st = {"state": "pr_open", "word": "PR open", "verb": "Working", "station": "pr", "k": 6,
+    st = {"state": state, "word": "PR open", "verb": "Working", "station": "pr", "k": 6,
           "n": 8, "rounds": 1, "tip": None, "preview": None}
-    return fv._outputs(_Conn(), run, facts, st, [], [], None, NOW)
+    return fv._outputs(_Conn(), run, facts, st, [], [], decision, NOW)
+
+
+def test_a_deployed_build_is_not_called_merged_while_its_pr_is_open():
+    """The OUTPUTS header said "Merged" while PR #223 was open: the build had been deployed
+    from its branch, and "deployed" was read as "merged" (rc10 tester)."""
+    word = _outputs(_run(), state="deployed")["merge_ready"]["word"]
+    assert word != "Merged"            # its merge readiness, said like any open PR's
+    assert _outputs(_run(), state="merged")["merge_ready"]["word"] == "Merged"
 
 
 # ── Checks say why ────────────────────────────────────────────────────────────────────────

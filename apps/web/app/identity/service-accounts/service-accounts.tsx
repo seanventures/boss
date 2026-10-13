@@ -28,6 +28,7 @@ import { IdentityError, idDelete, idGet, idPatch, idPost } from "../../../lib/id
 import { PERMISSION_META, isPermission, type Permission } from "../../../lib/identity/permissions.gen";
 import type { AccessRole, ApiKey, IssuedSecret, ServiceAccount } from "../../../lib/identity/types";
 import { grantReach, type GrantReach } from "../../../lib/identity/grant-limit";
+import { actorWords } from "../../../lib/actor-words";
 
 type Preset = "read" | "mcp" | "ci" | "custom";
 const PRESETS: { id: Preset; label: string; tip: string }[] = [
@@ -479,7 +480,7 @@ export function ServiceAccounts({ initial, roles, noExpiryAllowed, maxDays, sele
               <span className="idn-bigico"><SaIcon sa={sa} size={24} /></span>
               <div>
                 <h2 id="idn-sa-name">{sa.name}</h2>
-                <span className="idn-dim idn-small" data-copy="data">{sa.description}{sa.created_by ? ` · created by ${sa.created_by}, ${shortDate(sa.created_at)}` : ""}</span>
+                <span className="idn-dim idn-small" data-copy="data">{sa.description}{sa.created_by ? ` · created by ${actorWords(sa.created_by)},${shortDate(sa.created_at)}` : ""}</span>
               </div>
               <span className="idn-spacer" />
               <CanButton permission="service_account:manage" className="idn-btn sm" onClick={() => setEditing("all")} disabled={sa.kind !== "service"} tip="Name, owners and access roles" data-testid="edit-sa-open">Edit</CanButton>

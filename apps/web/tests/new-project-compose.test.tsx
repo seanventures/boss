@@ -79,7 +79,7 @@ const CATALOGUE: CatalogueEntry[] = Object.entries(STEPS).map(([key, steps]) => 
 }));
 
 const APPS = { apps: [
-  { key: "crun_lead2", app: "Lead-Triage Inbox", run_id: "crun_lead2", builders: ["pm", "engineering_captain", "qa"],
+  { key: "crun_lead2", app: "Lead-Triage Inbox", app_key: "lead-triage", run_id: "crun_lead2", builders: ["pm", "engineering_captain", "qa"],
     state: "pr_open", word: "PR open", builds: 2, run_ids: ["crun_lead2", "crun_lead1"], pr_number: 186, pr_state: "open",
     preview: { status: "running", url: "/v1/previews/prev_9/web/" },
     repo: "acme/sandbox", brief: "Lead triage", attempts: [
@@ -107,6 +107,15 @@ function stubApi() {
       return json({ run: { id: "wfr_started" } });
     }
     if (url.pathname === "/v1/factory/apps") return json(APPS);
+    if (url.pathname === "/v1/infra/deploys") return json({ counts: {}, rows: url.searchParams.get("app") === "Lead-Triage Inbox" ? [
+      { ref: "stack:sd_1", kind: "stack", app: "Lead-Triage Inbox", env: "staging", host: { id: "h1", name: "box-1" },
+        state: "healthy", word: "Live", phase: "live", sentence: "Live at http://box-1:8000. Health check passed.",
+        open_url: "http://box-1:8000", finished_at: "2026-10-12T09:43:00Z", steps: [], can: {} }] : [], filters: {} });
+    if (url.pathname === "/v1/apps/lead-triage/secrets") return json({
+      secrets: [{ name: "SESSION_SECRET", env: "deploy", mode: "generated" }, { name: "SESSION_SECRET", env: "build", mode: "generated" }],
+      declared: [], deploy_values: ["DEMO_PASSWORD", "ALLOW_DEMO_SEED"] });
+    if (url.pathname === "/v1/apps/lead-triage/templates") return json({ templates: [
+      { id: "ta1", template_key: "login-oauth", name: "Login with Google, GitHub or BOSS", version: "1.0.0", status: "applied" }] });
     if (url.pathname === "/api/project-agents") return json({ default_roles: ["pm", "engineering_captain", "qa", "release_manager"] });
     if (url.pathname === "/api/agent") return json({ items: [] });
     const view = url.searchParams.get("view");
@@ -401,6 +410,21 @@ describe("a new app", () => {
 // ── Adding to an app ─────────────────────────────────────────────────────────────────────────
 
 describe("adding a feature to an app that exists", () => {
+  it("Add a feature shows the app's full context before asking: where it runs, settings, templates, code", async () => {
+    await mount({ mode: "add", appKey: "crun_lead1" });
+    await settle(); await settle();
+    const ctx = $('[data-testid="np-app-context"]');
+    expect(ctx).not.toBeNull();
+    expect($('[data-testid="np-app-context-summary"]')!.textContent).toContain("Live · staging on box-1");
+    // DEMO_PASSWORD and ALLOW_DEMO_SEED, plus the generated SESSION_SECRET.
+    expect($('[data-testid="np-app-context-summary"]')!.textContent).toContain("3 deploy settings");
+    expect($('[data-testid="np-app-context-open"]')?.getAttribute("href")).toBe("http://box-1:8000");
+    expect($('[data-testid="np-ctx-deploy"]')!.textContent).toContain("Health check passed");
+    expect($('[data-testid="np-ctx-settings"]')!.textContent).toContain("DEMO_PASSWORD");
+    expect($('[data-testid="np-ctx-templates"]')!.textContent).toContain("Login with Google, GitHub or BOSS v1.0.0");
+    expect($('[data-testid="np-ctx-code"]')!.textContent).toContain("acme/sandbox · PR #186 (open)");
+  });
+
   it("a link's app is chosen; the plan says what it builds on and how it lands", async () => {
     await mount({ mode: "add", appKey: "crun_lead1" });
     expect($('[data-testid="np-app-crun_lead2"]')?.getAttribute("aria-checked")).toBe("true");

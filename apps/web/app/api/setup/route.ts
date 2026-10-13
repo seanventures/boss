@@ -48,6 +48,8 @@ const OPS: Record<string, Op> = {
   routing_catalogue: { method: "POST", path: () => "/v1/setup/routing/catalogue" },
   // "Give builds a database (Postgres)": the project setting build_services (Owner/Admin).
   build_database: { method: "PUT", path: () => "/v1/settings/build_services" },
+  // "Build speed": the project setting build_speed (Owner/Admin).
+  build_speed: { method: "PUT", path: () => "/v1/settings/build_speed" },
 };
 
 async function forward(r: Response) {

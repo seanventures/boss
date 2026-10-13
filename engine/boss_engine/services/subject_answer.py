@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import contextvars
 import logging
+import re
 import threading
 import time
 from dataclasses import dataclass, field
@@ -108,7 +109,26 @@ def wants_first_answer(message: str, evidence: Optional[SubjectEvidence],
         return False
     if evidence is None or not evidence.found:
         return False
+    if asks_for_a_live_read(message or ""):
+        return False
     return asked_only_to_look(message or "")
+
+
+#: A question only a live look can answer: the app's logs, what is running on a host now. The
+#: record holds what BOSS intended and last saw; "show me the container logs" is about the
+#: machine, so it goes to the loop, which has read_app_logs and inspect_host.
+_LIVE_READ = re.compile(
+    r"\b(logs?|docker|container|journalctl|tail|stdout|stderr|running (on|now)|right now|"
+    r"currently|disk|df -h|memory|cpu|process(es)?)\b", re.IGNORECASE)
+
+
+def asks_for_a_live_read(message: str) -> bool:
+    """Does answering this need a look at the machine rather than the record?
+
+    Harbor was asked for HelpDesk's last 40 log lines. The turn took the one-call path, which
+    has no tools by design, and the reply said "I have no tool to run docker logs" — true of
+    that call, false of BOSS. A question about the live machine is answered by the loop."""
+    return bool(_LIVE_READ.search(message or ""))
 
 
 _SYSTEM = (
@@ -126,7 +146,11 @@ _SYSTEM = (
     "\n"
     "Rules: a checker's label or suggested_action is not the cause unless the error text "
     "agrees with it. Never invent a file, line or value the record does not contain. Do not ask "
-    "the operator anything and do not offer to investigate — the console offers that next."
+    "the operator anything and do not offer to investigate — the console offers that next. "
+    "Never say BOSS lacks a tool or cannot reach something: this answer reads only the "
+    "record, and \"Investigate further\" checks the live system (logs, hosts, containers). "
+    "If the question needs that, say what the record shows and that Investigate further "
+    "fetches the rest."
 )
 
 

@@ -29,6 +29,7 @@ from .github_adapter import (
 )
 from .agent_loop import load_agent_run, run_agent_loop
 from . import model_routing
+from .github_words import github_error_in_words as _github_words
 from .openai_adapter import OpenAIAdapter, estimate_cost_usd_micros  # noqa: F401
 from .pipeline_adapter import make_pipeline_adapter
 from .receipts import ReceiptService
@@ -1919,7 +1920,9 @@ class SoftwareFactoryService:
         except Exception as error:
             validation = PullRequestValidationResult(
                 status="unavailable",
-                summary=f"Unable to capture GitHub validation evidence: {error}",
+                # In words: which permission is missing and where to grant it, never the raw
+                # client error with GitHub's URL and a link to MDN.
+                summary=_github_words(error, doing="Couldn't read the pull request's checks"),
                 head_sha=branch_head_sha,
                 completed=False,
                 checks=[],

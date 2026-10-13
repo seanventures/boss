@@ -64,6 +64,60 @@ _JOURNALCTL_VALUE_FLAGS = frozenset({
 })
 
 
+def app_logs_shell(*, compose_project: str | None, container: str, tail: int) -> str:
+    """The one read command that prints an app's container logs: `docker ps` to find them,
+    `docker logs` for each. Every name is BOSS's own and quoted; nothing else runs."""
+    import shlex as _shlex
+
+    tail = max(1, min(int(tail or 80), 400))
+    if compose_project:
+        filt = _shlex.quote(f"label=com.docker.compose.project={compose_project}")
+    else:
+        filt = _shlex.quote(f"name=^{container}$")
+    return (f"for c in $(docker ps -a --filter {filt} --format '{{{{.Names}}}}' | head -8); "
+            f"do echo \"===== $c\"; docker logs --tail {tail} \"$c\" 2>&1; done")
+
+
+def _app_logs_command(ctx: Any, project_id: str, args: dict) -> tuple[Any, Any]:
+    """(command, (target, host_id, where the names came from)), or (None, the reason)."""
+    import json as _json
+
+    from sqlalchemy import text as _text
+
+    from ..services.deploy_service import _app_name
+
+    want = str(args.get("app") or "").strip()
+    env = str(args.get("environment") or "").strip()
+    if not want:
+        return None, "name the app or its deployment target"
+    with ctx.begin() as c:
+        rows = c.execute(_text(
+            "SELECT id, app_name, repo, environment, host_id FROM deployment_targets "
+            "WHERE project_id = :p AND (id = :w OR lower(app_name) = lower(:w)) "
+            "AND (:e = '' OR environment = :e) ORDER BY updated_at DESC NULLS LAST"),
+            {"p": project_id, "w": want, "e": env}).mappings().all()
+        if not rows:
+            return None, f"no deployment target for {want!r}" + (f" in {env}" if env else "")
+        target = dict(rows[0])
+        stack = c.execute(_text(
+            "SELECT manifest, host_id FROM stack_deployments WHERE project_id = :p "
+            "AND target_id = :t ORDER BY created_at DESC LIMIT 1"),
+            {"p": project_id, "t": target["id"]}).mappings().first()
+    host_id = (stack or {}).get("host_id") or target.get("host_id")
+    if not host_id:
+        return None, f"{target['app_name']} has no host recorded"
+    manifest = (stack or {}).get("manifest") or {}
+    if isinstance(manifest, str):
+        manifest = _json.loads(manifest or "{}")
+    project = str(manifest.get("compose_project") or (
+        manifest.get("name") if manifest.get("kind") == "compose" else "") or "").strip()
+    single = _app_name(target.get("repo") or "", target.get("app_name"))
+    command = app_logs_shell(compose_project=project or None, container=single,
+                             tail=int(args.get("tail") or 80))
+    source = f"compose project {project}" if project else f"container {single}"
+    return command, (target, host_id, source)
+
+
 def _inspect_host_command(raw_value: object) -> tuple[str | None, str | None]:
     """Return one shell-safe read command, or a reason before any credential/SSH access.
 
@@ -6599,16 +6653,47 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
         if error:
             return {"ok": False, "error": error,
                     "note": "this tool inspects; it never changes a host."}
+        return _run_read_on_host(ctx, project_id, (args.get("host") or "").strip(), command)
 
+    @reg.tool(
+        "read_app_logs",
+        "A deployed app's own container logs, read-only: name the app (or its deployment "
+        "target) and BOSS finds its host and its containers, every service of a compose "
+        "stack included, and returns the last lines of each. Use it for 'show me the app's "
+        "logs', 'did the seed run', 'why does it crash'.",
+        _obj({"app": {"type": "string",
+                      "description": "the app's name, or its deployment target id"},
+              "environment": {"type": "string", "description": "e.g. staging; optional"},
+              "tail": {"type": "integer", "minimum": 1, "maximum": 400, "default": 80}},
+             ["app"]), permission="host:exec")
+    def read_app_logs(ctx, *, project_id, actor, args):
+        """Harbor was asked for HelpDesk's container logs and answered "I have no tool to run
+        docker logs": inspect_host can, but only given a container name, and a compose stack's
+        names (helpdesk-ai-app-1, helpdesk-ai-db-1) live on the host, not in any record the
+        agent reads. Finding them is BOSS's job, so this does it: the target, its host, and its
+        containers by the compose project label or the single-container name."""
+        command, where = _app_logs_command(ctx, project_id, args)
+        if command is None:
+            return {"ok": False, "error": where}
+        target, host_id, source = where
+        out = _run_read_on_host(ctx, project_id, host_id, command)
+        if out.get("ok") is False:
+            return out
+        if not (out.get("stdout") or "").strip():
+            out["note"] = f"no containers found for {target['app_name']} ({source}) on the host"
+        return {**out, "app": target["app_name"], "environment": target.get("environment"),
+                "containers_from": source}
+
+    def _run_read_on_host(ctx, project_id, want, command):
+        """inspect_host's transport: the registered host, its own key, one read command."""
         from ..services.deploy_service import (_discard_key_file, _materialise_key, _ssh,
                                                _ssh_key_file)
         from ..services.secret_backends import resolve_target_secret
 
-        want = (args.get("host") or "").strip()
         with ctx.begin() as c:
             row = c.execute(_text(
                 "SELECT * FROM deployment_hosts "
-                "WHERE project_id = :p AND (id = :h OR name = :h)"),
+                "WHERE project_id = :p AND (id = :h OR name = :h OR address = :h)"),
                 {"p": project_id, "h": want}).mappings().first()
             if row is None:
                 return {"ok": False, "error": f"no registered host {want!r}"}

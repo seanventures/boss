@@ -149,6 +149,9 @@ describe("(A) who did it is one line, with the agent's card one press away", () 
     expect(actorVerb("now", "ready")).toBe("Queued for");
     expect(actorVerb("now", "running")).toBe("Doing");
     expect(actorVerb("done", "succeeded")).toBe("Done by");
+    // A failed step was not done (rc10 tester: "Done by BOSS" over a failed smoke test).
+    expect(actorVerb("done", "failed")).toBe("Tried by");
+    expect(actorVerb("done", "deadlettered")).toBe("Tried by");
   });
 
   it("names the same actor as the lane node: who ran it, else the step's planned view", async () => {
@@ -215,6 +218,19 @@ describe("(A) the step's activity, and the way straight into its log", () => {
     expect(href.searchParams.get("step_name")).toBe("Plan it");
   });
 
+  it("a step that succeeded counts what it hit along the way as recovered, not as errors", async () => {
+    window.history.replaceState({}, "", "/?org=org_boss&project=p1&area=delivery_workflows&wfr=wfr_1");
+    function Probe() {
+      const state = useStepActivity("p1", "wfr_1", "plan", false, "succeeded:1");
+      return <StepActivity state={state} live={false} settled
+                           href={stepLogHref(window.location.search, "wfr_1", "plan", { step: "Plan it", run: "Ship it" })} />;
+    }
+    await render(<Probe />);
+    const loud = q('[data-testid="dw-step-log-loud"]')!;
+    expect(loud.textContent?.trim()).toBe("1 recovered");
+    expect(loud.getAttribute("data-level")).toBe("recovered");
+  });
+
   it("the activity log opened on that link is scoped to the step, and says so", async () => {
     window.history.replaceState({}, "", "/?area=activity&wfr=wfr_1&step=plan&step_name=Plan+it&run_name=Lead+Triage+Inbox");
     await render(<LogExplorer projectId="p1" actor="ceo" />);
@@ -259,13 +275,27 @@ describe("(A) Output is what the step made, for a person", () => {
     const { facts, details } = stepOutput(BUILD_OUTPUT, { noteShownAbove: false });
     expect(facts).toEqual([{ label: "Repository", value: "e2e-org/e2e-app" }, { label: "Base branch", value: "main" }]);
     const texts = details.map((d) => d.value);
-    expect(texts.filter((t) => t === "crun_768a")).toHaveLength(1);
-    expect(texts).toContain("awaiting");
-    expect(texts).toContain("mrun_1");
-    expect(texts.join(" ")).not.toMatch(/null|act_01|boss-dogfood/);
+    // A record id is a named link, once — never the raw id as text.
+    expect(details.filter((d) => d.href === "?area=code_tasks&build=crun_768a")).toHaveLength(1);
+    expect(texts).toContain("Open build");
+    expect(texts).toContain("awaiting");                    // still in flight: no status given
+    expect(texts.join(" ")).not.toMatch(/null|act_01|boss-dogfood|crun_768a|mrun_1/);
     await render(<StepOutputFacts facts={facts} details={details} />);
     expect(q('[data-testid="dw-step-out"]')!.textContent).not.toContain("awaiting");
     expect((q('[data-testid="dw-step-details"]') as HTMLDetailsElement).open).toBe(false);
+  });
+
+  it("a finished step shows no in-flight state and no raw ids, only named links", () => {
+    const deploy = { await: { id: "deprun_8bdeb296", kind: "deployment" }, verdict: "awaiting",
+      next_action: "approve_decision", target_id: "deptgt_be289c6af97a", decision_id: "dec_fb1f425c2979",
+      changeset_id: "chg_13206e6b5f80", app_name: "HelpDesk", environment: "staging" };
+    const { facts, details } = stepOutput(deploy, { noteShownAbove: false, status: "succeeded" });
+    const all = [...facts, ...details].map((f) => `${f.label} ${f.value} ${f.href ?? ""}`).join(" | ");
+    expect(all).not.toMatch(/awaiting|approve_decision|deptgt_/);
+    expect(details.map((d) => d.value).join(" ")).not.toMatch(/(deprun|dec|chg)_/);
+    expect(details.map((d) => d.href)).toEqual(expect.arrayContaining([
+      "?area=approvals&decision=dec_fb1f425c2979",
+      "?area=infra&view=cloud&cloud=changes&changeset=chg_13206e6b5f80"]));
   });
 
   it("a succeeded step's note is an output; a step that did not succeed shows it above instead", () => {

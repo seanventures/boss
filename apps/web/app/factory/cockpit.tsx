@@ -39,6 +39,7 @@ import { nameOf } from "../agents/run-face";
 import { ChangeIt } from "./change-it";
 import { ResultReview } from "./result-review";
 import { addFeatureHref } from "./apps-tab";
+import { AppSetupSheet } from "../../components/v2/templates/setup-sheet";
 import { stopBuild, steerBuild } from "./cockpit-actions";
 import { RateIt, ReasonChips, sendReasons } from "../improve/rate-it";
 import { ShareRunSheet } from "../improve/share-run";
@@ -185,6 +186,7 @@ function CockpitView({ c, projectId, runId, actor, onClose, onOpenBuild, refresh
   // confirms it on the next read, or the press is undone with its sentence.
   const [stopped, setStopped] = useState(false);
   const [steering, setSteering] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [guidance, setGuidance] = useState("");
   const [steerChips, setSteerChips] = useState<string[]>([]);
   const [sharing, setSharing] = useState(false);
@@ -363,6 +365,11 @@ function CockpitView({ c, projectId, runId, actor, onClose, onOpenBuild, refresh
           <a className="ag-btn fx-add-feature" data-testid="fx-add-feature"
              href={addFeatureHref(c.run.id, c.outputs.preview?.status === "running" ? c.outputs.preview.id : null)}
              title="New project, adding to this app: its branch, its PR, its tests">＋ Add a feature</a>
+          {/* THE APP'S SETTINGS, IN THE OPEN: secrets, deploy settings and the sign-in guide were
+              behind Factory › Apps › ⋯ › Setup, which an operator asked for twice could not find. */}
+          <button type="button" className="ag-btn" data-testid="fx-app-settings"
+                  title="Secrets, deploy settings and setup for this app"
+                  onClick={() => setSettingsOpen(true)}>Settings</button>
           <span className="fx-state" data-state={s.state} data-testid="fx-state">
             <span className="fx-state-word" title={s.tip || undefined}>{s.word}</span>
             {s.n ? <span className="fx-k" title="Stations done. BOSS doesn't guess finish times." data-testid="fx-k">{s.k} of {s.n}</span> : null}
@@ -472,6 +479,8 @@ function CockpitView({ c, projectId, runId, actor, onClose, onOpenBuild, refresh
         {diagnostics ? <ShareRunSheet projectId={projectId} actor={actor} unitKind="build" unitId={c.run.id}
                                       localOnly onClose={() => setDiagnostics(false)} /> : null}
         {err ? <span className="fx-err" role="alert" data-user-text data-testid="fx-error">{err}</span> : null}
+        {settingsOpen ? <AppSetupSheet projectId={projectId} runId={c.run.id} appName={c.app}
+                                       onClose={() => setSettingsOpen(false)} /> : null}
       </header>
 
       {c.attention.length ? (

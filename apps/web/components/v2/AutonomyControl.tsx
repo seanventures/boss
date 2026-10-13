@@ -5,6 +5,7 @@
 import { GatedButton } from "../gated";
 import React, { useState } from "react";
 import { apiWrite } from "../../lib/api-write";
+import { actorWords } from "../../lib/actor-words";
 
 /**
  * The autonomy switch — Supervised or Full auto.
@@ -136,7 +137,7 @@ export function AutonomyControl({
       {/* Who turned it off, kept visible while it is off. */}
       {isAuto && state.set_by ? (
         <p className="v2-autonomy-note" data-testid="v2-autonomy-setby">
-          set by {state.set_by}
+          set by {actorWords(state.set_by)}
         </p>
       ) : null}
     </div>

@@ -102,7 +102,10 @@ export function DeployRowView({ row, projectId, actor, onOpen, onChanged, action
   const { verdict, give } = useVerdict(row);
   const where = row.host?.name ?? row.account ?? "";
   const when = row.startedAt ?? row.finishedAt;
-  const age = ago(row.finishedAt ?? row.startedAt, now);
+  // A request that never ran is as old as the request: its finish is only when BOSS closed it,
+  // and a Superseded row from hours ago read "4m", growing beside the live one.
+  const neverRan = ["superseded", "rejected", "cancelled"].includes(row.phase);
+  const age = ago(neverRan ? row.startedAt ?? row.finishedAt : row.finishedAt ?? row.startedAt, now);
   const tip = [row.sentence, where, row.approver?.actor === "you" ? "approved by you" : ""].filter(Boolean).join(" · ");
 
   const decide = async (v: "approve" | "reject") => {

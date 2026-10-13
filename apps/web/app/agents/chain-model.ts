@@ -254,16 +254,26 @@ function hopWork(h: Hop): string {
  */
 export function mergeRepeats(items: ChainItem[]): ChainItem[] {
   const out: ChainItem[] = [];
+  // A retried step merges too: "Seed Owner · N steps → Seed Owner · N attempts" put the same
+  // person twice side by side. Its attempts travel with the merged stop.
   const single = (it: ChainItem | undefined): it is Hop =>
-    !!it && it.kind === "hop" && it.acts.length === 1 && !(it.attempts && it.attempts.length > 1);
+    !!it && it.kind === "hop" && it.acts.length === 1;
+  const work = (h: Hop) => {
+    const n = h.attempts?.length ?? 0;
+    const w = hopWork(h);
+    return w && n > 1 ? `${w} ×${n}` : w;
+  };
   for (const it of items) {
     const prev = out[out.length - 1];
     if (single(it) && single(prev) && whoKey(prev.who[0]) === whoKey(it.who[0])) {
-      const steps = [...(prev.steps ?? [hopWork(prev)]), hopWork(it)].filter(Boolean);
+      // DISTINCT steps, not records: a step written many times is still one step.
+      const steps = [...new Set([...(prev.steps ?? [work(prev)]), work(it)].filter(Boolean))];
+      const attempts = [...(prev.attempts ?? []), ...(it.attempts ?? [])];
       out[out.length - 1] = {
         ...prev, key: `${prev.key}~${it.key}`, steps,
         // The latest act stands for the stop: its face says how it is now.
         acts: it.acts, who: it.who,
+        ...(attempts.length > 1 ? { attempts } : { attempts: undefined }),
         inside: [...prev.inside, ...it.inside], insideCount: prev.insideCount + it.insideCount,
         insideOf: prev.insideCount && it.insideCount ? "these steps" : prev.insideCount ? prev.insideOf : it.insideOf,
       };
@@ -274,13 +284,21 @@ export function mergeRepeats(items: ChainItem[]): ChainItem[] {
   return out;
 }
 
-/** The distinct actors a strip shows (agents, people and BOSS): what its count says. */
+/** The distinct actors a strip shows (agents, people and BOSS): what its count says. It counts
+ *  everyone a person can reach from the strip, folded ones included ("+5 inside Meeting",
+ *  "+3 more"): the header said "4 taking part" over a strip naming more than four. */
 export function actorsShown(items: ChainItem[]): string[] {
   const keys = new Set<string>();
-  for (const it of items) {
-    const hops = it.kind === "hop" ? [it] : [it.a, it.b];
-    for (const h of hops) for (const w of h.who) keys.add(whoKey(w));
-  }
+  const visit = (list: ChainItem[]) => {
+    for (const it of list) {
+      const hops = it.kind === "hop" ? [it] : [it.a, it.b];
+      for (const h of hops) {
+        for (const w of h.who) keys.add(whoKey(w));
+        visit(h.inside);
+      }
+    }
+  };
+  visit(items);
   return [...keys];
 }
 

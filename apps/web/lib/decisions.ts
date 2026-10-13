@@ -17,6 +17,8 @@ export type DecisionFeedItem = {
   costSummary: Record<string, unknown>;
   deadlineAt?: string;
   approvedBy?: string;
+  /** Who approved it, by name (the server resolves it): the card never shows an actor id. */
+  approvedByName?: string | null;
   approvedAt?: string;
   delegatedTo?: string;
   delegatedBy?: string;
@@ -192,6 +194,7 @@ function mapDecision(payload: ApiDecisionCard): DecisionFeedItem {
     costSummary: payload.cost_summary,
     deadlineAt: payload.deadline_at,
     approvedBy: payload.approved_by,
+    approvedByName: (payload as { approved_by_name?: string | null }).approved_by_name ?? null,
     approvedAt: payload.approved_at,
     delegatedTo: payload.delegated_to,
     delegatedBy: payload.delegated_by,

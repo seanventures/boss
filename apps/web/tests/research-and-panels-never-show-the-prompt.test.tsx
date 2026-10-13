@@ -164,6 +164,19 @@ describe("the meeting room", () => {
     expect(host!.querySelector('[data-testid="meeting-review"]')).toBeNull();
   });
 
+  it("an opened PRD reads at the page's width, in its own row", async () => {
+    await open(meeting({ prd_markdown: "# PRD — HelpDesk AI\n\n## 1. Summary\n\nTickets and roles." }));
+    const side = host!.querySelector('[data-testid="meeting-prd"]')!;
+    const read = [...side.querySelectorAll("button")].find((b) => b.textContent?.includes("Read the PRD"))!;
+    await act(async () => { read.click(); });
+    const wide = host!.querySelector('[data-testid="meeting-prd-full"]')!;
+    expect(wide).not.toBeNull();
+    expect(wide.classList.contains("rp-prd-wide")).toBe(true);
+    expect(wide.textContent).toContain("Tickets and roles.");
+    // The narrow column keeps its outline only; the document itself is not drawn twice.
+    expect(side.textContent).not.toContain("Tickets and roles.");
+  });
+
   it("a failed panel says why and offers to convene it again", async () => {
     await open(meeting({ status: "failed", phase: "synthesis", error: "The budget cap was reached." }));
     expect(host!.querySelector('[data-testid="meeting-error"]')!.textContent).toContain("The budget cap was reached.");

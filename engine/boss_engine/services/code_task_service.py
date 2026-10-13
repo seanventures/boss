@@ -1193,7 +1193,9 @@ def cancel_run(connection, run_id: str, project_id: str, *, actor: str,
         raise LookupError(f"no code task run {run_id}")
     if row["status"] in TERMINAL_RUN_STATUSES:
         raise CancelRefused(f"run is already terminal: {row['status']}")
-    reason = (reason or "").strip() or f"Stopped by {actor}"
+    from .people_names import who as _who
+
+    reason = (reason or "").strip() or f"Stopped by {_who(actor, connection)}"
     recorded = connection.execute(
         sql("INSERT INTO code_task_stop_requests (run_id, project_id, actor, reason, phase) "
             "VALUES (:id, :p, :a, :r, :ph) ON CONFLICT (run_id) DO NOTHING RETURNING run_id"),
@@ -1311,8 +1313,10 @@ def honour_stop_request(connection, run_id: str) -> Optional[dict]:
     req = pending_stop(connection, run_id)
     if not req:
         return None
+    from .people_names import who as _who
+
     return _finalize_cancel(connection, run_id, str(req["project_id"]), actor=str(req["actor"]),
-                            reason=str(req["reason"] or f"Stopped by {req['actor']}"),
+                            reason=str(req["reason"] or f"Stopped by {_who(req['actor'], connection)}"),
                             phase=req.get("phase"))
 
 

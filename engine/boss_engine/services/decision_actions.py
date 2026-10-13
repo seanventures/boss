@@ -349,7 +349,11 @@ def allowed_actions(decision: Mapping[str, Any]) -> list[dict[str, Any]]:
     status = str(decision.get("status") or "")
     if status == "approved":
         # The approval happened; the only thing left is recording that it was carried out by
-        # hand, which matters for the types BOSS cannot carry out itself.
+        # hand, which matters ONLY for the types BOSS cannot carry out itself. A deploy, a gate
+        # or a merge BOSS ran itself showed "Mark executed" forever after it was done.
+        if carries_out_on_approval(decision) or kind_of(decision) in (
+                "workflow_gate", "deploy_gate", "architecture_review"):
+            return []
         return [_action(
             "execute", "Mark executed", "approve",
             "Records what was carried out and where, for the audit trail.", needs="note")]

@@ -50,6 +50,26 @@ describe("Factory › Repositories", () => {
     expect(document.body.textContent).toContain("boss/*");
   });
 
+  it("one repo on a GitHub token: the page agrees with itself (Working, used by its app, no 'nothing allowed')", async () => {
+    const view = projectReposFixture();
+    const one = {
+      ...view, repo_mode: "single", registry_in_use: false, addable: [], not_allowed_count: 0,
+      items: [{ ...view.items[0], binding_id: "bnd_sandbox", full_name: "paramg/boss-sandbox", is_default: true,
+                role_hint: null, state: "working",
+                used_by_apps: [{ app_key: "helpdesk", app_name: "HelpDesk", components: [] }] }],
+    };
+    stubFetch((c) => (c.method === "GET" && c.path === "/v1/projects/p1/repos" ? { body: one } : undefined));
+    await mount();
+    const row = tid("mr-prj-row-bnd_sandbox")!.textContent!;
+    expect(row).toContain("Working");
+    expect(row).toContain("HelpDesk");
+    expect(tid("mr-prj-role-bnd_sandbox")?.textContent).toBe("Whole app");
+    expect(row).not.toContain("No role");
+    const note = tid("mr-prj-no-registry")!.textContent!;
+    expect(note).not.toContain("No repository is allowed");
+    expect(note).toContain("work through its GitHub connection");
+  });
+
   it("Remove while an app uses it shows the in_use message and keeps the row", async () => {
     const calls = api((c) => (c.method === "DELETE"
       ? { status: 409, body: { error: "in_use", message: "Storefront and Checkout use acme/api. Remove it from their components first.", apps: ["storefront", "checkout"] } }

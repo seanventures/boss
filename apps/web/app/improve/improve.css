@@ -200,3 +200,6 @@
 /* In a column (Govern's "Send to"), an input keeps its own height: flex-basis is width only in a row. */
 .im-row-what .im-input { flex: 0 0 auto; width: 100%; max-width: 560px; }
 .im-share textarea.im-share-note { min-height: 64px; height: 64px; }
+
+/* Share this run · Download diagnostics: never run together. */
+.share-run-buttons { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 0.75rem; }

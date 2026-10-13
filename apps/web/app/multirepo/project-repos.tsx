@@ -123,7 +123,12 @@ export function ProjectRepositories({ projectId }: { projectId: string }) {
                       <tr key={r.binding_id} data-testid={`mr-prj-row-${r.binding_id}`}>
                         <td><RepoName name={r.full_name} sub={<Lang lang={r.language} />} /></td>
                         <td>
-                          {gate.allowed ? (
+                          {/* ONE REPO HOLDS THE WHOLE APP: a role hint splits an app across several
+                              repositories, and "No role" read as something missing. */}
+                          {!multi ? (
+                            <span className="mr-ui-chip static" title="One repo: the whole app lives here"
+                                  data-testid={`mr-prj-role-${r.binding_id}`}>Whole app</span>
+                          ) : gate.allowed ? (
                             <select className="mr-ui-select" value={r.role_hint ?? ""} disabled={!!busy}
                                     aria-label={`Role of ${r.full_name}`} data-testid={`mr-prj-role-${r.binding_id}`}
                                     onChange={(e) => void write(`role:${r.binding_id}`, "Change this repository's role.",
@@ -182,10 +187,17 @@ export function ProjectRepositories({ projectId }: { projectId: string }) {
               {notAllowed ? <> · {notAllowed} more there {notAllowed === 1 ? "is" : "are"} not allowed.</> : "."}
             </span>
           </div>
+          {/* SAID FROM THE SAME FACTS AS THE ROWS. With no allow-list (a project on a GitHub token)
+              its repositories still work; only adding more needs the list. "No repository is
+              allowed" beside a row marked Working contradicted itself. */}
           {view.registry_in_use === false ? (
             <div className="mr-ui-note" data-testid="mr-prj-no-registry" style={{ marginTop: 12 }}>
               <Info size={15} aria-hidden />
-              <div>No repository is allowed for BOSS yet. Tick them in <a className="mr-ui-link" href={registryLink}>Repo and models › Repositories</a>.</div>
+              {view.items.length ? (
+                <div>The repository allow-list isn&apos;t set up, so there is nothing more to add. This project&apos;s repositories work through its GitHub connection. To add others, set up the list in <a className="mr-ui-link" href={registryLink}>Repo and models › Repositories</a>.</div>
+              ) : (
+                <div>No repository is allowed for BOSS yet. Tick them in <a className="mr-ui-link" href={registryLink}>Repo and models › Repositories</a>.</div>
+              )}
             </div>
           ) : null}
         </div>

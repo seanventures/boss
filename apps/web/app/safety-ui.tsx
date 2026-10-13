@@ -7,6 +7,7 @@ import { type PolicyEval, type RunTrace } from "../lib/safety";
 import { scanAnomaliesAction } from "./actions";
 import { SubmitButton } from "./submit-button";
 import { ActionForm } from "./client-forms";
+import { actorWords } from "../lib/actor-words";
 
 function decisionTone(d: string): string {
   if (d === "allow") return "#3fb950";
@@ -116,7 +117,7 @@ export function RunTraceViewer({ trace, initialRunId }: { trace: RunTrace; initi
               <div key={i} style={{ fontSize: 12.5, color: "var(--ink-soft)" }}>
                 <span style={{ color: "var(--muted)" }}>{formatTime(ev.createdAt)}</span>{" "}
                 <b style={{ color: "var(--ink)" }}>{ev.eventType}</b>{" "}
-                <span style={{ color: "var(--muted)" }}>· {ev.actor}</span>
+                <span style={{ color: "var(--muted)" }}>· {actorWords(ev.actor)}</span>
               </div>
             ))}
           </div>

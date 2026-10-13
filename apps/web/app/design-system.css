@@ -3563,7 +3563,10 @@ select.input:focus,
 .bx-org-chip, .bx-kbd { border: 0; background: transparent; color: var(--ink-soft); font: inherit; font-size: .78rem; }
 .bx-org-chip:hover, .bx-kbd:hover { background: var(--raised); color: var(--ink); }
 .bx-kbd kbd { background: transparent; }
-.bx-strip { top: 62px; }
+/* The project strip sits in the flow under the sticky topbar. `top: 62px` on a relatively
+   positioned strip shifted it down over the first thing in the page, which is the security
+   banner ("New sign-in from a new device…"): a security notice must never be covered. */
+.bx-strip { top: auto; }
 
 /* Assignments are a live readout with task links, not a decorative orbit. */
 .cc-coord, .cc-feed { background: var(--panel-alt); }
