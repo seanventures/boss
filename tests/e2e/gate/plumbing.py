@@ -9,7 +9,10 @@ way a build runs it, and fails on the class of bugs that broke HelpDesk builds o
   4. a GitHub 502 that fails a whole build instead of being retried in place, and retries that
      run under the wrong identity or rebuild what was already built;
   5. an approval that needs step-up and is not re-sent (tests/e2e/gate/approval_step_up.py);
-  6. a blocked build that names the wrong gate.
+  6. a blocked build that names the wrong gate;
+  7. a web gate that runs scripts the app does not define and never runs the ones it does: a plain
+     Node ESM app (tests/e2e/fixtures/plain-node) was gated on `npm run build` ("Missing script")
+     and its own `npm test` was never the gate (crun_decc93dbb0154e768871).
 
 WHERE IT RUNS. Inside a throwaway container of the installed worker image (scripts/e2e-gate.sh
 starts it; never the install's own containers), with the BOSS under test mounted at /boss and
@@ -28,6 +31,7 @@ from __future__ import annotations
 import argparse
 import ast
 import contextlib
+import dataclasses
 import inspect
 import json
 import os
@@ -47,6 +51,8 @@ HERE = Path(__file__).resolve().parent
 FIXTURE = HERE.parent / "fixtures" / "helpdesk-mini"
 APP_DIR = "helpdesk"
 OWNER, REPO = "gate", "helpdesk-mini"
+PLAIN_FIXTURE = HERE.parent / "fixtures" / "plain-node"
+PLAIN_DIR, PLAIN_REPO = "plain", "plain-node"
 RESULTS: list[dict[str, Any]] = []
 
 
@@ -131,11 +137,12 @@ class Gate:
         from remote import LocalGitHub  # tests/e2e/gate/remote.py
 
         self.hub = LocalGitHub(self.work / "github").start()
-        files = {}
-        for path in sorted(FIXTURE.rglob("*")):
-            if path.is_file() and "node_modules" not in path.parts:
-                files[path.relative_to(FIXTURE).as_posix()] = path.read_text(encoding="utf-8")
-        self.hub.seed(OWNER, REPO, files)
+        for fixture, repo in ((FIXTURE, REPO), (PLAIN_FIXTURE, PLAIN_REPO)):
+            files = {}
+            for path in sorted(fixture.rglob("*")):
+                if path.is_file() and "node_modules" not in path.parts:
+                    files[path.relative_to(fixture).as_posix()] = path.read_text(encoding="utf-8")
+            self.hub.seed(OWNER, repo, files)
         # The build's own scope, as run_governed_code_task opens it: everything started below is
         # this run's, and runs as this run's uid.
         self.stack.enter_context(owned_process.owner_scope("code_run", self.run_id,
@@ -254,39 +261,94 @@ def check_install(g: Gate) -> str:
     return f"{vt.NPM_INSTALL_CMD} passed"
 
 
-@check("verify: build, typecheck, lint, the app's tests")
+@contextlib.contextmanager
+def _first_pass(title: str, brief: str):
+    """A build's first pass, as run_governed_code_task scopes it (build_scope.decide)."""
+    try:
+        from boss_engine.services import build_scope
+    except ImportError:
+        yield
+        return
+    token = build_scope.set_scope(build_scope.decide(title, brief))
+    try:
+        yield
+    finally:
+        build_scope._SCOPE.reset(token)
+
+
+def _web_gate(vt: Any, plan: Any, run: Callable[[str], Any]) -> list:
+    """BOSS's own web gate over a plan (run_web_gate where this BOSS has it)."""
+    if hasattr(vt, "run_web_gate"):
+        return vt.run_web_gate(run, plan)
+    return vt.run_until_failure(SimpleNamespace(run=run), plan.commands)
+
+
+def _gate_verdict(vt: Any, plan: Any, results: list, what: str) -> str:
+    """FAIL unless every command passed and the app's own tests were in the gate."""
+    for result in results:
+        if not result.ok:
+            said = next((ln.strip() for ln in _result_text(result).splitlines()
+                         if "Missing script" in ln), "") or _tail(_result_text(result), 4)
+            raise CheckFailed(f"BOSS's web gate failed a known-good {what}: `{result.command}`: {said}")
+    test_step = getattr(vt, "TEST_STEP", "npm test")
+    if test_step not in plan.commands:
+        raise CheckFailed(f"BOSS's web gate never runs the {what}'s own tests (`{test_step}`): it "
+                          f"ran only {' -> '.join(plan.commands)}")
+    return " -> ".join(c for c in plan.commands if c != vt.NPM_INSTALL_CMD)
+
+
+@check("verify: the web gate on what the app defines, the app's own tests", bug="7")
 def check_verify(g: Gate) -> str:
-    """The web verification target (pass 1: no browser tests) and the build's own test suite,
-    each through the sandbox, with the run's own database (build_services)."""
+    """BOSS's web gate for this app (resolve_gate_plan, as _run_verify plans it, in a first
+    pass: no browser tests), through the sandbox, with the run's own database (build_services).
+    The install already ran (check_install). The app's own `npm test` must be in it: the gate
+    used to add it here itself, and so never saw that BOSS's gate did not run it."""
     if not g.install_ok:
         raise Skip("the install failed")
     from boss_engine.services import build_services
     from boss_engine.services import verification_target as vt
 
     build_services.provision(g.run_id, server_url=g.pg_url)
-    steps = [c for c in vt.resolve_authoritative_test_commands({"project_kind": "web"})
-             if c != vt.NPM_INSTALL_CMD and c != getattr(vt, "E2E_STEP", "npm run test:e2e")]
-    steps.append("npm test")
-    if hasattr(vt, "run_steps_until_failure"):
-        results = vt.run_steps_until_failure(g.sandbox, [(c, g.app) for c in steps], timeout=600)
-    else:
-        results = vt.run_until_failure(_AppSandbox(g), steps)
-    for result in results:
-        if not result.ok:
-            raise CheckFailed(f"`{result.command}` failed on a known-good app: "
-                              + _tail(_result_text(result), 5))
+    with _first_pass("HelpDesk mini", "an Express app with login"):
+        plan = vt.resolve_gate_plan({"project_kind": "web"}, "HelpDesk mini", g.root,
+                                    changed=[f"{APP_DIR}/package.json"])
+    plan = dataclasses.replace(plan, commands=[c for c in plan.commands if c != vt.NPM_INSTALL_CMD])
+    if Path(plan.cwd).resolve() != g.app.resolve():
+        raise CheckFailed(f"the gate planned to verify {plan.cwd}, not the app at {g.app}")
+    results = _web_gate(vt, plan, lambda c: g.run(c, timeout=600))
+    detail = _gate_verdict(vt, plan, results, "app")
     g.tests_ok = True
-    return " -> ".join(steps)
+    return detail
 
 
-class _AppSandbox:
-    """sandbox.run in the app directory (for a BOSS without run_steps_until_failure)."""
+@check("web gate: a plain Node ESM app passes on what it defines", bug="7")
+def check_plain_node(g: Gate) -> str:
+    """The second golden fixture (tests/e2e/fixtures/plain-node): no build, typecheck or lint
+    script, its tests under `node --test`. Cloned like a build, prepared like one
+    (ensure_verify_script, prepare_web_verify_env), then BOSS's whole web gate as _run_verify
+    plans and runs it, install first, as the run's uid. It must pass, and its `npm test` must
+    be in it (crun_decc93dbb0154e768871: `Missing script: "build"`, tests never run)."""
+    from boss_engine.services import verification_target as vt
+    from boss_engine.services.sandbox import EphemeralSandbox
 
-    def __init__(self, g: Gate):
-        self.g = g
-
-    def run(self, command: str, **kw: Any) -> Any:
-        return self.g.run(str(command), **kw)
+    box = EphemeralSandbox(g.settings, task_id=f"{g.run_id}-plain")
+    try:
+        access = SimpleNamespace(clone_url=g.hub.git_url(OWNER, PLAIN_REPO), git_config=[], own_git=None)
+        root = box.provision(OWNER, PLAIN_REPO, base_branch="main", egress=access)
+        app = root / PLAIN_DIR
+        with _first_pass("Plain Node", "a Node ESM module with node --test tests"):
+            plan = vt.resolve_gate_plan({"project_kind": "web"}, "Plain Node", root,
+                                        changed=[f"{PLAIN_DIR}/package.json", f"{PLAIN_DIR}/src/slug.js"])
+        if Path(plan.cwd).resolve() != app.resolve():
+            raise CheckFailed(f"the gate planned to verify {plan.cwd}, not the app at {app}")
+        with contextlib.suppress(Exception):
+            vt.ensure_verify_script(app)
+        vt.prepare_web_verify_env(app, scenarios=None, app_id=None)
+        results = _web_gate(vt, plan, lambda c: box.run(c, cwd=str(app), timeout=600))
+        return _gate_verdict(vt, plan, results, "plain Node app")
+    finally:
+        with contextlib.suppress(Exception):
+            box.teardown()
 
 
 @check("the app's programs stay runnable for the run's uid", bug="2")
@@ -504,16 +566,18 @@ def _connector_own_suite(g: Gate, tpl: dict) -> dict:
         shutil.rmtree(base, ignore_errors=True)
 
 
-@check("a blocked build names the gate that failed", bug="6")
+@check("a blocked build names the gate that failed", bug="6, 7")
 def check_blocked_words(g: Gate) -> str:
     """templates.gate.hold_outcome, the one line a blocked build shows, given (a) this run's own
     gates and (b) the two HelpDesk AI failures it misnamed on 2026-10-13."""
     from boss_engine.templates import gate as template_gate
 
-    def outcome(failing, install=None, serve=None, tt=None):
+    def outcome(failing, install=None, serve=None, tt=None, tests=None):
         # The richest call this BOSS accepts: a BOSS that cannot be told which gate really
         # failed answers from less, and its words are judged the same way.
         for call in (lambda: template_gate.hold_outcome(failing, install, app_serves=serve,
+                                                        template_tests=tt, tests=tests),
+                     lambda: template_gate.hold_outcome(failing, install, app_serves=serve,
                                                         template_tests=tt),
                      lambda: template_gate.hold_outcome(failing, install),
                      lambda: template_gate.hold_outcome(failing)):
@@ -540,6 +604,16 @@ def check_blocked_words(g: Gate) -> str:
     got = (outcome(["template_tests"], install) or {}).get("error", "")
     if "dependencies did not install" not in got or "ERESOLVE" not in got:
         wrong.append(f"install failed -> {got[:160]!r}")
+    # crun_decc93db: the build's own checks failed (`npm run build`: Missing script), so the
+    # connector's wiring was never checked: name the check, never the template's tests.
+    tt = {"kind": "connector", "because": "tests",
+          "error": "the build's own tests did not pass, so the connector's wiring was not checked"}
+    tests = [{"command": "npm install … && npm run build", "exit_code": 1, "ok": False,
+              "failed_check": {"command": "npm run build", "line": 'Missing script: "build"'}}]
+    got = (outcome(["template_tests"], None, None, tt, tests) or {}).get("error", "")
+    if "npm run build" not in got or "Missing script" not in got \
+            or "template's tests did not pass" in got:
+        wrong.append(f"the app's checks failed -> {got[:160]!r}")
     # This run: if its proof failed, the words must lead with that, not with the template.
     if g.serve and g.serve.get("ok") is False:
         failing = ["app_serves"] + [k for k, v in (getattr(g.template_record, "gates", {}) or {}).items() if not v]
@@ -549,7 +623,8 @@ def check_blocked_words(g: Gate) -> str:
             wrong.append(f"this run -> {got[:160]!r}")
     if wrong:
         raise CheckFailed("the blocked message names the wrong gate: " + "; ".join(wrong))
-    return "install -> 'dependencies did not install: ERESOLVE …'; app -> 'the app did not start: tsx: …'"
+    return ("install -> 'dependencies did not install: ERESOLVE …'; app -> 'the app did not start: "
+            "tsx: …'; checks -> 'the app's checks failed: npm run build — Missing script …'")
 
 
 @check("pull request through a GitHub 502", bug="4")
@@ -661,8 +736,6 @@ def check_deploy(g: Gate) -> str:
     from boss_engine.services import build_services, stack_deploy
 
     manifest = adm.load_manifest(g.root / "boss.deploy.yaml")
-    import dataclasses
-
     deploy_dir = str(g.work / "deploy" / manifest.name)
     manifest = dataclasses.replace(manifest, dir=deploy_dir)
     source = stack_deploy.GitHubSource("gate-local-token")
@@ -809,6 +882,7 @@ def main() -> int:
             check_harden(g)
             check_install(g)
             check_verify(g)
+            check_plain_node(g)
             check_exec_bits(g)
             check_serve(g)
             check_connector(g)

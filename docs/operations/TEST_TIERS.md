@@ -60,7 +60,9 @@ scripts/e2e-gate.sh plumbing --keep                  # keep the logs (gate.log, 
 for HelpDesk AI: Node 22 + TypeScript run by `tsx`, eslint 9, Express 5 + Postgres, the login-oauth
 connector applied as a build applies it, a `SESSION_SECRET` the app refuses to start without,
 `boss.deploy.yaml`, `boss.preview.command`, and a few P0/P1 vitest tests. Its `package-lock.json`
-pins what is installed. Every failure on it is BOSS's, never the app's.
+pins what is installed. Every failure on it is BOSS's, never the app's. A second fixture,
+`tests/e2e/fixtures/plain-node`, is a plain Node ESM app with no build, typecheck or lint script
+and its own tests under `node --test`.
 
 **Where it runs.** A throwaway container of the installed worker image (it has `boss-sandbox-exec`
 and the run uid pool), next to a throwaway Postgres on a private Docker network. All three are
@@ -74,11 +76,12 @@ and every check calls the functions the pipeline calls, never a copy of them.
 | clone through a GitHub 502 | `EphemeralSandbox.provision` from a local git remote whose first answer is a 502 | a GitHub blip failing a whole build (crun_2f76585e) |
 | hardening keeps the app's eslint 9 | `verification_target.prepare_web_verify_env` | eslint-8 plugins added to an eslint-9 app (crun_6eaa478d) |
 | BOSS's clean install | `NPM_INSTALL_CMD` through `install_rounds` and the sandbox | ERESOLVE from BOSS's own changes |
-| verify | build, typecheck, lint (pass 1: no browser tests), then the app's own `npm test` against its real database | a verification target that breaks a known-good app |
+| verify | BOSS's web gate as `resolve_gate_plan` plans it in a first pass (`run_web_gate`): each of build, typecheck and lint the app defines, then its own `npm test`, against its real database | a verification target that breaks a known-good app, or never runs its tests |
+| a plain Node ESM app passes | the plain-node fixture cloned, prepared and run through BOSS's whole web gate, install first | a gate that runs scripts the app does not define (`Missing script: "build"`) and not the tests it does (crun_decc93db) |
 | the app's programs stay runnable | `workspace_perms.normalize` and `preview_service._proof_tree` | `.bin` targets losing execute for the run's uid (crun_247435e1) |
 | the app starts | `prove_app_serves`, called with the same arguments as `_check_app_serves`, plus the connector's route probes | `tsx: Permission denied`; an app-start proof without BOSS's generated secrets (SESSION_SECRET) |
 | connector gate | `templates.gate.evaluate` for the build (wiring smoke, secret scan); the app carries none of the connector's tests or test scripts (a connector is pre-tested, `templates.connector_policy`); the connector's own suite runs in its own tier from the template (`templates.trial.run_stack`, JUnit count) | a connector gate that cannot pass on a good app; a build asked to carry a pre-tested connector's suite |
-| a blocked build names the gate | `templates.gate.hold_outcome` on the two HelpDesk failures and on this run's own gates | "the template's tests did not pass" when the install or the app start failed |
+| a blocked build names the gate | `templates.gate.hold_outcome` on the two HelpDesk failures, a build whose own checks failed, and this run's own gates | "the template's tests did not pass" when the install, the app start or the app's own checks failed |
 | pull request through a 502 | `GitHubAdapter` (`ensure_branch`, `upsert_file`, `create_pull_request`) against a local GitHub whose `POST /pulls` answers 502 once | GitHub API blips not retried in place |
 | deploy to a local target | `load_manifest` and `render`, `preflight_host`, `GitHubSource` (the PR's tarball), and `StackApplier` with the container as the host, up to the health check | a deploy that cannot install or start the app, or that logs a generated secret |
 | retries | the retry suites on a full-schema database: delivery-only retry, BOSS's retries under the person's grant, a retry of nothing being a fresh build | without this database, every test tier skips these suites |

@@ -1680,6 +1680,7 @@ FIRST_PASS_CHECKLIST = (
     "- BOSS installs with a clean `npm install`; peer-dependency errors fail the build. Pick "
     "versions that agree (e.g. eslint 9 needs eslint-plugin-react-hooks >=5). Run BOSS's exact "
     f"install once to prove it: `{verification_target.NPM_INSTALL_CMD}`.\n"
+    + "- " + verification_target.WEB_GATE_RULE + "\n"
 )
 
 
@@ -4480,6 +4481,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # The last recorded verify's failed dependency install (verification_target.install_failure),
         # or None: a fix round is told it was the install, and a run that ends on it says so.
         _install_fail: list = [None]
+        # The last recorded verify's failing check (verification_target.failed_check): what ran
+        # and its first error line, so a blocked build names it (checks_headline).
+        _failed_check: list = [None]
 
         def _run_verify(*, record: bool = True):
             """Authoritative test command, scoped to the official app directory. BOSS's own
@@ -4487,6 +4491,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             result = _run_verify_once(record=record)
             if record:
                 _install_fail[0] = verification_target.install_failure(result)
+                _failed_check[0] = verification_target.failed_check(result)
             return result
 
         def _run_verify_once(*, record: bool = True):
@@ -4568,11 +4573,10 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             except Exception as exc:  # noqa: BLE001
                 _log_caught(logger)
                 prep_note += f"[boss] pre-verify restore failed: {type(exc).__name__}: {exc}\n"
-            class _CwdSandbox:
-                def run(self, command):
-                    return sandbox.run(command, cwd=str(cwd))
-
-            results = verification_target.run_until_failure(_CwdSandbox(), plan.commands)
+            # What the app's package.json defines (verification_target.web_gate_for), and its
+            # finding when it defines no test script.
+            results = verification_target.run_web_gate(
+                lambda command: sandbox.run(command, cwd=str(cwd)), plan)
             if not results:
                 from .sandbox import CommandResult
 
@@ -6454,6 +6458,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     "exit_code": test_exit_code,
                     "timed_out": False,
                     "ok": bool(tests_passed),
+                    **({"failed_check": _failed_check[0]}
+                       if _failed_check[0] and not tests_passed else {}),
                 }]
                 if test_cmd and test_exit_code is not None
                 else []
@@ -7212,7 +7218,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     _held = _tpl_hold_outcome(
                         failing, _install_fail[0], app_serves=app_serves_record,
                         template_tests=((_template_record or {}).get("evidence") or {}).get("template_tests"),
-                        secret_scan=((_template_record or {}).get("evidence") or {}).get("secret_scan"))
+                        secret_scan=((_template_record or {}).get("evidence") or {}).get("secret_scan"),
+                        tests={"failed_check": _failed_check[0]} if _failed_check[0] else None)
                     if _held is not None:
                         ctx["template_hold"] = _held
                     c.execute(sql(
@@ -7238,7 +7245,11 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                            if (_tpl_gates or {}).get(g) is not True],
                                           _install_fail[0],
                                           secret_scan=((_template_record or {}).get("evidence")
-                                                       or {}).get("secret_scan"))
+                                                       or {}).get("secret_scan"),
+                                          template_tests=((_template_record or {}).get("evidence")
+                                                          or {}).get("template_tests"),
+                                          tests=({"failed_check": _failed_check[0]}
+                                                 if _failed_check[0] else None))
                 c.execute(sql("UPDATE code_task_runs SET status='blocked', phase='done', error=:e, "
                               "updated_at=now() WHERE id=:id"),
                           {"e": (_held or {}).get("error") or template_push_hold(_tpl_applies, _tpl_gates),

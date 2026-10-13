@@ -70,7 +70,7 @@ def test_web_target_matches_scaffold_scripts():
 
 def test_verification_profile_shape():
     web = vt.verification_profile({"project_kind": "web"})
-    assert web["kind"] == "web" and len(web["steps"]) == 4
+    assert web["kind"] == "web" and len(web["steps"]) == 5  # build, typecheck, lint, test, e2e
     py = vt.verification_profile({"instructions": "backend task"})
     assert py["kind"] == "python" and py["command"] == vt.PYTHON_TEST_CMD
 

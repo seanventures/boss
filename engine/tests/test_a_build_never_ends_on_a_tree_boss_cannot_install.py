@@ -263,7 +263,7 @@ def test_pass_one_gates_without_test_e2e_and_more_tests_keeps_it():
     pass1 = build_scope.decide("HelpDesk AI", "React app with Playwright e2e tests")
     assert pass1["e2e"] is False and pass1["e2e_deferred"] is True
     assert _web_commands(pass1) == [vt.NPM_INSTALL_CMD, "npm run build", "npm run typecheck",
-                                    "npm run lint"]
+                                    "npm run lint", "npm test"]
     pass2 = build_scope.decide("HelpDesk AI", f"{build_scope.MORE_TESTS_MARKER}: add Playwright e2e")
     assert vt.E2E_STEP in _web_commands(pass2)
     assert vt.E2E_STEP in _web_commands(None)  # outside a build, as before
