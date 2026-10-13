@@ -222,6 +222,21 @@ KNOBS: dict[str, dict[str, Any]] = {
                 "1 = no fan-out).",
         "kind": "int", "min": 0, "max": 8,
     },
+    # BUILD STREAMS (build_streams): the bounds each writing stage sizes its parallel streams
+    # within, from the host's free cores, memory and load at the moment the stage starts.
+    "build_streams_min": {
+        "attr": "build_streams_min",
+        "label": "Fewest parallel streams",
+        "help": "The fewest parallel streams a build stage runs, even on a busy host (default 1).",
+        "kind": "int", "min": 1, "max": 8,
+    },
+    "build_streams_max": {
+        "attr": "build_streams_max",
+        "label": "Most parallel streams",
+        "help": "The most parallel streams a build stage may run when the host has room "
+                "(0 = Build speed: 3 balanced, 6 fastest).",
+        "kind": "int", "min": 0, "max": 8,
+    },
     "decision_model": {
         "attr": "decision_model",
         "label": "Claude model for decisions",
@@ -645,38 +660,30 @@ BUILD_SPEED_PARALLELISM = {"balanced": 3, "fastest": 6}
 
 
 def build_parallelism(connection, project_id: Optional[str], settings: Any) -> int:
-    """How many parallel sub-agents a build's writing stages may use. Never raises; 1 = none."""
+    """How many parallel streams a build's writing stage would run on this host NOW. Never
+    raises; 1 = none. build_parallelism, when set, is the explicit override."""
+    from . import build_streams
+
     try:
-        exact = int(effective(connection, project_id, settings, "build_parallelism") or 0)
-    except (TypeError, ValueError):
-        exact = 0
-    if exact > 0:
-        wanted = min(exact, 8)
-    else:
-        speed = str(effective(connection, project_id, settings, "build_speed") or "balanced").lower()
-        wanted = BUILD_SPEED_PARALLELISM.get(speed, BUILD_SPEED_PARALLELISM["balanced"])
-    return min(wanted, machine_parallelism())
+        lo, hi, explicit = build_streams.bounds(connection, project_id, settings)
+    except Exception:  # noqa: BLE001 — a sizing that cannot read its settings builds with one
+        return 1
+    if explicit > 0:
+        return min(explicit, build_streams.HARD_MAX)
+    # The host's capacity right now (free cores after load, free memory), within min..max.
+    # A stage refines this at its start with its part count and the model lane
+    # (build_streams.for_stage), and records the reasons.
+    return max(lo, min(hi, machine_parallelism()))
 
 
-#: What one sub-agent's own work (installs, builds, a test run) may take in memory.
+#: What one stream reserves in memory (build_streams.MEMORY_PER_STREAM_MB).
 _MEMORY_PER_SUB_AGENT_MB = 768
 
 
 def machine_parallelism() -> int:
-    """How many sub-agents THIS machine can carry at once: half its cores, and no more than its
-    free memory allows. Never below 1. A setting asks for parallelism; the machine decides how
-    much of it is real, so a small host is never driven into swap by "fastest"."""
-    import os
+    """How many streams THIS host could carry right now with no other bound: its free cores
+    (after load) and free memory, read inside the container (build_streams.read_host)."""
+    from . import build_streams
 
-    cores = os.cpu_count() or 2
-    by_cpu = max(1, cores // 2)
-    by_memory = by_cpu
-    try:
-        with open("/proc/meminfo") as fh:
-            info = dict(line.split(":", 1) for line in fh if ":" in line)
-        available_kb = int(str(info.get("MemAvailable", "0")).strip().split()[0])
-        if available_kb:
-            by_memory = max(1, (available_kb // 1024) // _MEMORY_PER_SUB_AGENT_MB)
-    except (OSError, ValueError, IndexError):
-        pass  # not Linux, or unreadable: the core count is the answer
-    return max(1, min(by_cpu, by_memory))
+    host = build_streams.read_host()
+    return build_streams.plan_streams(host, min_n=1, max_n=build_streams.HARD_MAX).n

@@ -3575,7 +3575,8 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
         </>) : undefined}
       </StepSection>
       {workflowRunId ? <StepActivity state={activity} href={logHref} live={phase === "now"}
-                                      settled={phase === "done" || phase === "findings"} /> : null}
+                                      settled={phase === "done" || phase === "findings"}
+                                      failed={phase === "failed" || phase === "failed_on"} /> : null}
     </section>
   );
 }
