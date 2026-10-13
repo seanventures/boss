@@ -211,8 +211,9 @@ KNOBS: dict[str, dict[str, Any]] = {
     "build_speed": {
         "attr": "build_speed",
         "label": "Build speed",
-        "help": "balanced runs a build's tests and code with up to 3 parallel sub-agents; fastest "
-                "with up to 6, using more tokens at once. Same model, same checks either way.",
+        "help": "Kept for older installs. A build writes its tests and code in one session unless "
+                "Most parallel streams (build_streams_max) opts into a split; same model, same "
+                "checks either way.",
         "kind": "choice", "choices": ("balanced", "fastest"),
     },
     "build_parallelism": {
@@ -234,7 +235,7 @@ KNOBS: dict[str, dict[str, Any]] = {
         "attr": "build_streams_max",
         "label": "Most parallel streams",
         "help": "The most parallel streams a build stage may run when the host has room "
-                "(0 = Build speed: 3 balanced, 6 fastest).",
+                "(0 = 1: the split is off; 2 or more opts in).",
         "kind": "int", "min": 0, "max": 8,
     },
     "decision_model": {
@@ -654,9 +655,10 @@ def effective(connection, project_id: Optional[str], settings: Any, key: str) ->
     return fallback if row is None else row
 
 
-#: Sub-agents per Build speed. Balanced is the default; Fastest trades more tokens at once for
-#: wall-clock time.
-BUILD_SPEED_PARALLELISM = {"balanced": 3, "fastest": 6}
+#: Sub-agents per Build speed. Both are one session now (build_streams.DEFAULT_MAX: the split is
+#: off unless build_streams_max opts in), so the console never promises parallel agents a build
+#: will not run.
+BUILD_SPEED_PARALLELISM = {"balanced": 1, "fastest": 1}
 
 
 def build_parallelism(connection, project_id: Optional[str], settings: Any) -> int:

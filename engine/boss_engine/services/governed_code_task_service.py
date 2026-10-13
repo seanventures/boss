@@ -2205,6 +2205,30 @@ def _build_fan_out(engine, project_id, settings) -> int:
         return 0
 
 
+def _record_split_off(engine, project_id, run_id, settings, stage: str) -> None:
+    """Record on the stage that it runs as ONE session and why (build_streams.split_off), the
+    same place and event a split records its stream count, so the choice is never invisible.
+    Never raises."""
+    try:
+        from . import build_streams as _streams
+
+        with _transaction(engine) as c:
+            why = _streams.split_off(c, project_id, settings)
+            if not why:
+                return
+            plan = {"n": 1, "why": why, "split": "off"}
+            c.execute(sql(
+                "UPDATE code_task_runs SET state=jsonb_set(COALESCE(state,'{}'::jsonb), "
+                "'{streams}', COALESCE(state->'streams','{}'::jsonb) "
+                "|| jsonb_build_object(CAST(:st AS text), CAST(:p AS JSONB))), "
+                "updated_at=now() WHERE id=:id"),
+                {"st": stage, "p": json.dumps(plan), "id": run_id})
+            emit_event(c, project_id, "code_task.streams_chosen", "boss", "code_task_run",
+                       run_id, {"stage": stage, **plan})
+    except Exception:  # noqa: BLE001 — the record never fails the build
+        _log_caught(logger)
+
+
 # --- Design phase (Wire-Phase 2): standards -> spec -> plan -> review plan, before any code. ---
 def _standards_prompt():
     return (
@@ -4486,6 +4510,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         cost += int(r.get("cost_usd_micros") or 0)
                         return r, [fc.path for fc in sandbox.diff() if _is_test_path(fc.path)
                                    and fc.path not in _placed_tpl_tests], None
+                if not fan:
+                    _record_split_off(engine, project_id, run_id, settings, "write_tests")
                 r = a.run_role(prompt, root, model=m, parallel_agents=fan)
                 cost += int(r.get("cost_usd_micros") or 0)
                 return r, [fc.path for fc in sandbox.diff() if _is_test_path(fc.path)
@@ -4734,6 +4760,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     # session stays one agent: it is a focused fix, not parallel volume.
                     fan = _build_fan_out(engine, project_id, settings)
                     split = None
+                    if not fan and attempt == 0:
+                        _record_split_off(engine, project_id, run_id, settings, "implement")
                     if fan and attempt == 0 and not escalate_impl:
                         # SPLIT BY BOSS (parallel_build), after the tamper snapshot: no part
                         # may touch QA's frozen tests even inside the paths it owns.

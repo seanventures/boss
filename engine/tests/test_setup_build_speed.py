@@ -1,6 +1,7 @@
 """Setup's Build speed row: the choice, what a build gets right now, and what the machine allows.
 
-Balanced asks for 3 parallel sub-agents, Fastest for 6; the machine caps either. Same model and
+A build writes in ONE session at either speed (build_streams: the split is off unless
+build_streams_max opts in), so the row never promises parallel agents a build will not run. Same model and
 same checks at every speed; only Owners and Admins change it.
 """
 from __future__ import annotations
@@ -26,17 +27,22 @@ def _view(monkeypatch, chosen: dict, machine: int):
                                                             build_parallelism=0), "boss-dogfood")
 
 
-def test_the_default_is_balanced_with_three_at_once(monkeypatch):
+def test_the_default_is_balanced_with_one_session(monkeypatch):
     view = _view(monkeypatch, {}, machine=6)
-    assert view == {"key": "build_speed", "mode": "balanced", "parallelism": 3, "machine": 6,
-                    "asks": {"balanced": 3, "fastest": 6}, "source": "default",
+    assert view == {"key": "build_speed", "mode": "balanced", "parallelism": 1, "machine": 6,
+                    "asks": {"balanced": 1, "fastest": 1}, "source": "default",
                     "permission": "settings:update"}
 
 
-def test_fastest_is_capped_by_the_machine_and_says_so(monkeypatch):
+def test_fastest_alone_does_not_split_a_build(monkeypatch):
     view = _view(monkeypatch, {"build_speed": "fastest"}, machine=4)
     assert view["mode"] == "fastest" and view["source"] == "project"
-    assert view["parallelism"] == 4 and view["machine"] == 4
+    assert view["parallelism"] == 1
+
+
+def test_an_explicit_stream_max_opts_in_and_the_machine_caps_it(monkeypatch):
+    view = _view(monkeypatch, {"build_streams_max": 6}, machine=4)
+    assert view["parallelism"] == 4
 
 
 def test_it_is_a_known_knob_only_owners_and_admins_change():

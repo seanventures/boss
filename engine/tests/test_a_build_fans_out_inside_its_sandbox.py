@@ -101,16 +101,17 @@ def test_the_rule_tells_the_parent_to_integrate_and_run_every_test():
 def test_the_machine_caps_what_a_setting_asks_for(monkeypatch):
     from boss_engine.services import project_settings as ps
 
-    # build_streams_min/max are unset here: Build speed sets the max.
+    # The split is opt-in: build_streams_max sets the max, the machine caps it.
     monkeypatch.setattr(ps, "effective", lambda c, p, s, key: {"build_parallelism": 0,
-                                                               "build_speed": "fastest"}.get(key))
+                                                               "build_streams_max": 6}.get(key))
     monkeypatch.setattr(ps, "machine_parallelism", lambda: 2)
     assert ps.build_parallelism(None, "p", object()) == 2
     monkeypatch.setattr(ps, "machine_parallelism", lambda: 12)
     assert ps.build_parallelism(None, "p", object()) == 6
+    # Build speed alone no longer fans out: one session.
     monkeypatch.setattr(ps, "effective", lambda c, p, s, key: {"build_parallelism": 0,
-                                                               "build_speed": "balanced"}.get(key))
-    assert ps.build_parallelism(None, "p", object()) == 3
+                                                               "build_speed": "fastest"}.get(key))
+    assert ps.build_parallelism(None, "p", object()) == 1
 
 
 def test_the_machine_answer_is_never_zero():
