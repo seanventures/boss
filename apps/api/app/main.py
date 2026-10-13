@@ -673,6 +673,7 @@ from .request_bodies import (
     DeploymentTargetCreateBody,
     DeploymentTargetPurgeBody,
     DeploymentTargetTeardownBody,
+    DeploymentTargetRemoveBody,
     DeploymentTargetUpdateBody,
     FirstDeployBody,
     ManualDeployBody,
@@ -8918,9 +8919,40 @@ def teardown_deployment_target_endpoint(target_id: str, payload: DeploymentTarge
                 **effect,
             }
     raise HTTPException(status_code=409, detail=(
-        "Direct teardown is disabled. Submit an approved Resource Plane ChangeSet with "
-        "a rollback plan, budget reservation, and ResourceReceipt before host removal."
+        "Direct teardown is disabled. Remove the app with POST "
+        f"/v1/deployment-targets/{target_id}/remove: a governed ChangeSet, approved like a "
+        "deploy, with its receipt."
     ))
+
+
+@app.post("/v1/deployment-targets/{target_id}/remove")
+@permit(P.DEPLOYMENT_CREATE, scope=Scope.of("deployment_target", path="target_id"))
+def remove_deployed_app_endpoint(target_id: str, payload: DeploymentTargetRemoveBody):
+    """Remove a deployed app from its host, governed like a deploy (services/app_removal.py):
+    a ChangeSet (`deployment_target.teardown`) approved by a person or the environment's policy,
+    applied by a leased job, with a receipt. Only the app's compose projects, container and
+    folder under /opt/boss-apps are touched; its data is kept unless `delete_data`."""
+    payload = payload.payload()
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    actor = _deployment_target_write_actor(payload)
+    from boss_engine.services.app_removal import RemovalRefused, plan_removal
+
+    with begin(engine) as connection:
+        row = connection.execute(text("SELECT * FROM deployment_targets WHERE id=:i"),
+                                 {"i": target_id}).mappings().first()
+        if not row:
+            raise HTTPException(status_code=404, detail="no such deployment target")
+        target = dict(row)
+        require_project_actor(connection, target["project_id"], actor, "providerops_manage")
+        try:
+            planned = plan_removal(ResourcePlaneService(settings), connection,
+                                   project_id=target["project_id"], target=target, actor=actor,
+                                   delete_data=bool(payload.get("delete_data")),
+                                   reason=str(payload.get("reason") or ""))
+        except RemovalRefused as refused:
+            raise HTTPException(status_code=422, detail=str(refused)) from None
+    return {**planned, **_planned_next_action(planned)}
 
 
 @app.post("/v1/deployment-targets/{target_id}/purge")

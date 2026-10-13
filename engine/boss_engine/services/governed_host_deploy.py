@@ -813,12 +813,19 @@ def apply_on_host(engine, settings: Settings, *, row: dict, governance: dict,
     from ..db import begin
     from .host_key_pin import CHANGED, pinned
 
+    from .app_removal import is_removal, remove_on_host
+
     with begin(engine) as c:
         host_id = c.execute(text("SELECT host_id FROM deployment_targets WHERE id = :t"),
                             {"t": row["deployment_target_id"]}).scalar()
     with pinned(engine, host_id) as pin:
-        outcome = _apply_on_host(engine, settings, row=row, governance=governance,
-                                 connector=connector)
+        # A REMOVAL (app_removal) is a deployment run of kind `remove`: same lease, ChangeSet,
+        # pinned host key and receipt, a different phase two.
+        if is_removal(row):
+            outcome = remove_on_host(engine, settings, row=row, governance=governance)
+        else:
+            outcome = _apply_on_host(engine, settings, row=row, governance=governance,
+                                     connector=connector)
     if pin is not None and pin.changed:
         outcome = {**outcome, "status": "failed" if outcome.get("status") != "rolled_back"
                    else outcome["status"], "reason": CHANGED}
@@ -991,7 +998,9 @@ def _finalize(connection: Connection, settings: Settings, *, row: dict, token: s
             "resource_external_id": f"app:{row['deployment_target_id']}",
             "resource_name": row.get("app_name"),
             "resource_type": "ssh_host.app",
-            "state": "active", "health_status": "healthy", "operation": "deployed",
+            "state": "deleted" if applied.get("operation") == "removed" else "active",
+            "health_status": "removed" if applied.get("operation") == "removed" else "healthy",
+            "operation": applied.get("operation") or "deployed",
             "deployment_run_id": row["id"], "commit": applied.get("deployed_sha"),
             "url": outcome.get("url"),
         }
@@ -1021,6 +1030,10 @@ def _finalize(connection: Connection, settings: Settings, *, row: dict, token: s
          "sha": applied.get("deployed_sha") if status == "succeeded" else None,
          "rr": json.dumps([receipt_id] if receipt_id else []), "i": row["id"], "tok": token})
     release_surface(connection, row)
+    from .app_removal import after_removal, is_removal
+
+    if is_removal(row):
+        after_removal(connection, row, status, actor)
     emit_event(connection, row["project_id"], f"delivery.{status}", actor, "deployment_run",
                row["id"], {"changeset_id": row["changeset_id"], "resource_receipt_id": receipt_id,
                            "governed": True, "url": outcome.get("url")})
