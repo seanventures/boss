@@ -67,9 +67,28 @@ def removal_scope(connection: Connection, target: dict) -> dict[str, list[str]]:
         manifest = r["manifest"] if isinstance(r["manifest"], dict) else json.loads(r["manifest"] or "{}")
         if r["deploy_dir"]:
             folders.append(guard_folder(r["deploy_dir"]))
-        proj = (manifest or {}).get("compose_project")
+        # A compose app's project is `compose.project`, else its name (app_deploy_manifest);
+        # manifests stored before `compose_project` was recorded carry only the name.
+        proj = (manifest or {}).get("compose_project") or (
+            (manifest or {}).get("name") if (manifest or {}).get("kind") == "compose" else None)
         if proj:
             projects.append(guard_project(proj))
+    # NEVER ANOTHER APP'S. A folder or compose project that another ACTIVE target on the same
+    # host also deploys to belongs to that app now (a rebuilt app reusing its predecessor's
+    # folder): removing the old target must not remove the new one.
+    shared = connection.execute(
+        text("SELECT s.deploy_dir, s.manifest FROM stack_deployments s "
+             "JOIN deployment_targets t ON t.id = s.target_id "
+             "WHERE s.target_id <> :t AND t.status = 'active' AND s.host_id = "
+             "(SELECT host_id FROM deployment_targets WHERE id = :t)"),
+        {"t": target["id"]}).mappings().all()
+    taken_dirs = {str(r["deploy_dir"] or "") for r in shared}
+    taken_projects = set()
+    for r in shared:
+        m = r["manifest"] if isinstance(r["manifest"], dict) else json.loads(r["manifest"] or "{}")
+        taken_projects.add((m or {}).get("compose_project") or (m or {}).get("name"))
+    folders = [f for f in folders if f not in taken_dirs]
+    projects = [p for p in projects if p not in taken_projects]
     container = _app_name(str(target.get("repo") or ""), target.get("app_name"))
     single = f"{REMOTE_BASE}/{container}"
     has_single = connection.execute(
@@ -80,6 +99,7 @@ def removal_scope(connection: Connection, target: dict) -> dict[str, list[str]]:
     if has_single:
         folders.append(guard_folder(single))
         containers.append(container)
+    folders = [f for f in folders if f not in taken_dirs]
     dedupe = lambda xs: list(dict.fromkeys(xs))  # noqa: E731
     return {"folders": dedupe(folders), "projects": dedupe(projects),
             "containers": dedupe(containers)}

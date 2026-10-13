@@ -58,3 +58,12 @@ def test_a_removal_runs_through_the_governed_host_apply():
     from boss_engine.services import governed_host_deploy as g
     assert "remove_on_host" in inspect.getsource(g.apply_on_host)
     assert "after_removal" in inspect.getsource(g._finalize)
+
+
+def test_a_folder_another_active_app_uses_is_never_removed():
+    """A rebuilt app (HelpDesk AI) can reuse its predecessor's folder and compose project;
+    removing the OLD target must leave the new one alone."""
+    import inspect
+    src = inspect.getsource(ar.removal_scope)
+    assert "t.status = 'active'" in src and "s.target_id <> :t" in src
+    assert "if f not in taken_dirs" in src and "if p not in taken_projects" in src
