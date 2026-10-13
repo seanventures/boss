@@ -78,8 +78,13 @@ def test_the_sweep_covers_every_step_up_permission_a_route_declares():
     swept = {o[2].permission for o in STEP_UP_OPS}
     catalogue = {k for k, m in PERMISSION_META.items() if m.step_up and not m.system_only}
     assert swept == declared and len(STEP_UP_OPS) > 300
-    # The step-up permissions no route declares are the reserved ones (no enforcement point yet).
-    assert catalogue - swept <= {"org:delete", "project:create", "project:delete"}, catalogue - swept
+    # The step-up permissions no route declares are the reserved ones (no enforcement point yet),
+    # and the ones a HANDLER checks as a second permission through the same PDP, which applies
+    # step-up itself (identity_access.require_permission -> authz.check -> STEP_UP_REQUIRED):
+    #   app_secret:live: PUT /v1/apps/{app_key}/secrets with mode=live (routes_templates.py).
+    handler_enforced = {"app_secret:live"}
+    reserved = {"org:delete", "project:create", "project:delete"}
+    assert catalogue - swept <= reserved | handler_enforced, catalogue - swept
     assert set(swept) <= role_perms("owner")
 
 
