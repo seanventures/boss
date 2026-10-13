@@ -104,8 +104,10 @@ def _fakes(c, project_id: str) -> dict[str, FakeTool]:
         run_id = new("mrun")
         _insert_awaited(c, pid, "meeting_runs", run_id, "completed")
         c.execute(text("UPDATE meeting_runs SET state = CAST(:s AS JSONB) WHERE id = :i"),
-                  {"i": run_id, "s": json.dumps({"prd_markdown": "# PRD\nOffer, claim, "
-                                                                 "approve."})})
+                  {"i": run_id, "s": json.dumps({"prd_markdown": (
+                      "# PRD\nOffer, claim, approve.\n"
+                      # Incremental Build reads its plan from here: every increment runs.
+                      + "".join(f"## Increment {k}\nPart {k}.\n" for k in range(1, 5)))})})
         return {"status": "started", "meeting_run_id": run_id}
 
     def code_task(pid, args):
@@ -134,12 +136,22 @@ def _fakes(c, project_id: str) -> dict[str, FakeTool]:
                   {"i": scan_id, "p": pid, "a": args.get("app_key")})
         return {"status": "queued", "scan_id": scan_id}
 
+    made_targets: dict = {}
+
     def deploy(pid, args):
-        target_id = new("dt")
-        _insert_awaited(c, pid, "deployment_targets", target_id, "active")
-        c.execute(text("UPDATE deployment_targets SET app_name = :a, domains = '[\"swap.test\"]' "
-                       "WHERE id = :i"), {"i": target_id, "a": TITLE})
+        # The app's target, made by its first deploy and reused by the next (Deploy again).
+        target_id = made_targets.get(pid)
+        if not target_id:
+            target_id = made_targets[pid] = new("dt")
+            _insert_awaited(c, pid, "deployment_targets", target_id, "active")
+            c.execute(text("UPDATE deployment_targets SET app_name = :a, "
+                           "domains = '[\"swap.test\"]' WHERE id = :i"),
+                      {"i": target_id, "a": TITLE})
         run_id = new("drn")
+        # The parent row _insert_awaited makes generically is named apart from the last one,
+        # so a second deploy (Deploy again) does not collide with it.
+        c.execute(text("UPDATE deployment_targets SET app_name = 'x-' || id "
+                       "WHERE project_id = :p AND app_name = 'x'"), {"p": pid})
         _insert_awaited(c, pid, "deployment_runs", run_id, "succeeded")
         c.execute(text("UPDATE deployment_runs SET deployment_target_id = :t WHERE id = :i"),
                   {"i": run_id, "t": target_id})
@@ -203,7 +215,10 @@ def test_every_catalogue_template_runs_to_its_last_step(eng, project, monkeypatc
     # SUCCEEDED, every one. A `skipped` row here would be a step the run never reached
     # (`path_not_reached`), which is the silent failure this test exists to catch.
     unfinished = {sid: (s["status"], s.get("last_error")) for sid, s in steps.items()
-                  if s["status"] != "succeeded"}
+                  if s["status"] != "succeeded"
+                  # The branch a condition did not take, by design (Incremental Build: every
+                  # increment is in the plan, so no "not in the plan" step runs).
+                  and not (s["status"] == "skipped" and sid.endswith("_not_planned"))}
     assert status == "completed", (key, status, unfinished)
     assert not unfinished, (key, unfinished)
     assert set(steps) == {s["id"] for s in entry["steps"]}, key

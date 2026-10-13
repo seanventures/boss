@@ -36,16 +36,23 @@ def _ids(key: str) -> list[str]:
 
 
 @pytest.mark.parametrize("key", ["standard_product_delivery", "minor_feature", "major_feature"])
-def test_more_tests_follows_the_preview_and_comes_before_the_deploy(key):
+def test_more_tests_follows_the_preview_and_runs_beside_the_deploy(key):
     ids = _ids(key)
-    assert ids.index("build") < ids.index("preview") < ids.index("more_tests") < ids.index("deploy")
+    assert ids.index("build") < ids.index("preview") < ids.index("more_tests")
+    spec = next(w for w in CATALOGUE if w["key"] == key)
+    fork = next(s for s in spec["steps"] if s["kind"] == "parallel")
+    assert "more_tests" in fork["branches"]
 
 
-def test_the_feature_workflows_deploy_what_the_last_pass_left():
-    for key in ("minor_feature", "major_feature"):
-        spec = next(w for w in CATALOGUE if w["key"] == key)
-        deploy = next(s for s in spec["steps"] if s["id"] == "deploy")
-        assert "more_tests" in str(deploy["binding"]["inputs"]["run_id"])
+def test_no_deploy_reads_more_tests_but_its_deploy_again_does():
+    """The operator, 2026-10-13: no deploy waits for P2, in any environment."""
+    for spec in CATALOGUE:
+        for step in spec["steps"]:
+            wired = (step.get("binding") or {}).get("inputs") or {}
+            if (step.get("binding") or {}).get("capability") != "deploy":
+                continue
+            reads_pass_2 = "more_tests" in str(wired.get("run_id"))
+            assert reads_pass_2 == bool(wired.get("pass_2_of")), (spec["key"], step["id"])
 
 
 def test_it_is_an_awaited_build_pass_and_advisory():

@@ -48,7 +48,9 @@ def test_asks_names_the_merge_and_reads_the_prd_setting(client, monkeypatch):
     assert body["project_id"] == _project() and body["prd_auto_approve"] is True
     minor = body["workflows"]["minor_feature"]
     assert [(a["step_id"], a["kind"], a["who"]) for a in minor] == [
-        ("meeting", "spec", "boss"), ("build", "merge", "you"), ("deploy", "gate", "you")]
+        ("meeting", "spec", "boss"), ("build", "merge", "you"), ("deploy", "gate", "you"),
+        # The More tests pass ships as a new deploy, asked again where its policy asks (two_pass).
+        ("deploy_again", "gate", "you")]
     assert all(a["label"] for a in minor)
     # Every workflow that builds asks for its merge, once.
     for key, asks in body["workflows"].items():

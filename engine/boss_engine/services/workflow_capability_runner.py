@@ -1526,13 +1526,12 @@ def _more_tests_step(ctx, connection: Connection, project_id: str, actor: str,
     run_id = str((context or {}).get("run_id") or "")
     build_run = ""
     try:
-        build_run = str(connection.execute(
-            text("SELECT COALESCE("
-                 "  (SELECT input->>'adopt_code_task_run_id' FROM workflow_runs WHERE id = :r),"
-                 "  (SELECT output->>'code_task_run_id' FROM workflow_step_runs "
-                 "     WHERE workflow_run_id = :r AND output ? 'code_task_run_id' "
-                 "     ORDER BY created_at DESC LIMIT 1)) AS build"),
-            {"r": run_id}).scalar() or "")
+        # THE NEWEST FINISHED PASS ON THE BRANCH (build, readiness, an earlier More tests), not
+        # the newest step that mentions a run: pass 2 now runs beside the deploy (two_pass), so
+        # "the latest output with a code_task_run_id" could be the deploy's.
+        build_run = _latest_code_run(connection, run_id) or str(connection.execute(
+            text("SELECT input->>'adopt_code_task_run_id' FROM workflow_runs WHERE id = :r"),
+            {"r": run_id}).scalar() or "") or str((inputs or {}).get("run_id") or "")
     except Exception:  # noqa: BLE001
         log.exception("more_tests could not resolve the build for %s", run_id)
     if not build_run:
@@ -1545,6 +1544,198 @@ def _more_tests_step(ctx, connection: Connection, project_id: str, actor: str,
     })
     return {"capability": "more_tests", "tool": "extend_code_task", "base_run_id": build_run,
             **started}
+
+
+# ── THE APP NEVER WAITS FOR PASS 2 (two_pass) ─────────────────────────────────────────────────
+
+def _is_advisory_preview_row(connection: Connection, run_id: str) -> bool:
+    try:
+        return bool(connection.execute(
+            text("SELECT 1 FROM workflow_step_runs WHERE workflow_run_id = :r "
+                 "AND step_id = 'preview' "
+                 "AND COALESCE(binding_snapshot->'inputs'->>'advisory', "
+                 "             binding_snapshot->'binding'->'inputs'->>'advisory') = 'true' "
+                 "LIMIT 1"),
+            {"r": run_id}).first())
+    except Exception:  # noqa: BLE001 — unknown means the ordinary rule applies
+        return False
+
+
+def deploy_environment(spec_step: dict[str, Any], run_input: Any) -> str:
+    """Where a deploy step ships: its own literal `environment`, the run's, else staging (the
+    deploy tool's own default)."""
+    wired = ((spec_step.get("binding") or {}).get("inputs") or {}).get("environment")
+    if isinstance(wired, str) and wired.strip():
+        return wired.strip()
+    if isinstance(run_input, dict) and str(run_input.get("environment") or "").strip():
+        return str(run_input["environment"]).strip()
+    return "staging"
+
+
+def policy_ships_without_asking(connection: Connection, project_id: str,
+                                environment: str) -> bool:
+    """The environment's policy, set by a person, says a deploy there asks nobody."""
+    from .deploy_policy import pre_approval
+
+    try:
+        return bool((pre_approval(connection, project_id, environment) or {}).get(
+            "source") == "policy")
+    except Exception:  # noqa: BLE001 — unknown means ask
+        return False
+
+
+def _seen_live_by_policy(connection: Connection, project_id: str,
+                         context: dict[str, Any]) -> Optional[str]:
+    """The environment this run's first deploy reaches with nobody asked, if it has one: the
+    app is seen there, straight after pass 1, so an automatic preview adds nothing."""
+    run_id = str(context.get("run_id") or "")
+    try:
+        steps = workflows._run_spec(connection, run_id).get("steps") or []
+    except Exception:  # noqa: BLE001
+        return None
+    for spec_step in steps:
+        binding = spec_step.get("binding") or {}
+        if binding.get("capability") == "deploy" and not (binding.get("inputs") or {}).get(
+                "pass_2_of"):
+            env = deploy_environment(spec_step, context.get("input"))
+            return env if policy_ships_without_asking(connection, project_id, env) else None
+    return None
+
+
+def _advisory_preview(connection: Connection, ctx: Any, *, project_id: str, actor: str,
+                      step: dict[str, Any], context: dict[str, Any], capability: Any,
+                      inputs: dict[str, Any]) -> dict[str, Any]:
+    """The preview BOSS adds after pass 1 where a workflow had none (two_pass): the first
+    running app. It never blocks: an app that cannot be previewed says so and the run goes on."""
+    def unpreviewable(why: str) -> dict[str, Any]:
+        return {"capability": "preview", "tool": None, "status": "not_applicable",
+                "advisory": True,
+                "note": (f"This app could not be previewed ({why.strip() or 'no reason given'})."
+                         " The run goes on without a preview.")[:600]}
+
+    live_on = _seen_live_by_policy(connection, project_id, context)
+    if live_on:
+        return {"capability": "preview", "tool": None, "status": "not_applicable",
+                "advisory": True,
+                "note": f"No separate preview: the app goes live on {live_on} straight after "
+                        "this build, by that environment's policy, and that is where to see it."}
+    try:
+        out = _perform_capability(connection, ctx, project_id=project_id, actor=actor,
+                                  step=step, context=context, key="preview",
+                                  capability=capability, inputs=inputs)
+    except CapabilityExecutionError as error:
+        if _as_wait(error) is not None:
+            raise
+        return unpreviewable(str(error))
+    if str(out.get("status") or "").lower() in _DID_NOT_SHIP:
+        return unpreviewable(str(out.get("error") or out.get("note") or ""))
+    return {**out, "advisory": True}
+
+
+def _latest_code_run(connection: Connection, run_id: str) -> str:
+    """The newest finished pass on this run's branch: the build, readiness or More tests run
+    the last of those steps left (a failed More tests pass leaves the build's)."""
+    return str(connection.execute(
+        text("SELECT output->>'code_task_run_id' FROM workflow_step_runs "
+             "WHERE workflow_run_id = :r AND status = 'succeeded' "
+             "AND COALESCE(binding_snapshot->>'capability', "
+             "             binding_snapshot->'binding'->>'capability', '') IN "
+             "    ('build', 'plrr', 'more_tests', 'retry_build') "
+             "AND COALESCE(output->>'code_task_run_id', '') <> '' "
+             "ORDER BY completed_at DESC NULLS LAST, updated_at DESC LIMIT 1"),
+        {"r": run_id}).scalar() or "")
+
+
+def _build_on_the_branch(connection: Connection, ctx: Any, *, project_id: str, actor: str,
+                         context: dict[str, Any], capability: Any,
+                         inputs: dict[str, Any]) -> dict[str, Any]:
+    """A build with `extend` (Incremental Build's later increments): it builds on THIS run's
+    branch, from the newest finished pass, as more commits on the same pull request."""
+    base = _latest_code_run(connection, str(context.get("run_id") or ""))
+    if not base:
+        raise SettledCapabilityError(
+            "this build adds to the app an earlier step of this run built, and no earlier "
+            "build in the run finished, so there is nothing to build on.")
+    started = _invoke_tool(ctx, "extend_code_task", project_id, actor, {
+        "run_id": base, "instructions": str(inputs.get("instructions") or ""),
+        "title": str(inputs.get("title") or "Next increment"),
+    })
+    return _settle_started_work(capability, "build", {
+        "capability": "build", "tool": "extend_code_task", "base_run_id": base, **started})
+
+
+def pass_two_summary(connection: Connection, run_id: str, more_step_id: str) -> dict[str, Any]:
+    """What a More tests pass did, for the redeploy's step and its approval card."""
+    row = connection.execute(
+        text("SELECT status, output FROM workflow_step_runs WHERE workflow_run_id = :r "
+             "AND step_id = :s ORDER BY iteration DESC LIMIT 1"),
+        {"r": run_id, "s": more_step_id}).mappings().first()
+    out = (row or {}).get("output") or {}
+    if isinstance(out, str):
+        out = json.loads(out or "{}")
+    summary: dict[str, Any] = {"step_id": more_step_id, "status": (row or {}).get("status"),
+                               "advisory_failed": bool(out.get("advisory_failed")),
+                               "code_task_run_id": out.get("code_task_run_id"),
+                               "base_run_id": out.get("base_run_id"), "changed": None,
+                               "test_files": 0, "files_changed": None, "bugs_fixed": []}
+    pass_two = str(out.get("code_task_run_id") or "")
+    if pass_two and pass_two != str(out.get("base_run_id") or ""):
+        task = connection.execute(
+            text("SELECT status, state FROM code_task_runs WHERE id = :i"),
+            {"i": pass_two}).mappings().first()
+        state = (task or {}).get("state") or {}
+        if isinstance(state, str):
+            state = json.loads(state or "{}")
+        tests = state.get("test_files") or []
+        impl = state.get("impl_files") or []
+        files = state.get("files_changed")
+        summary.update({"test_files": len(tests), "files_changed": files,
+                        "task_status": (task or {}).get("status")})
+        known = "files_changed" in state or "test_files" in state or "impl_files" in state
+        summary["changed"] = bool(tests or impl or files) if known else None
+        said = str(state.get("summary") or "")
+        at = said.find("BUGS FIXED:")
+        if at >= 0:
+            lines = [ln.strip(" -*") for ln in said[at + len("BUGS FIXED:"):].splitlines()]
+            summary["bugs_fixed"] = [ln for ln in lines[:12]
+                                     if ln and ln.lower() != "none"][:10]
+    return summary
+
+
+def pass_two_sentence(summary: dict[str, Any]) -> str:
+    bugs = summary.get("bugs_fixed") or []
+    tests = int(summary.get("test_files") or 0)
+    parts = [f"More tests added {tests} test file(s)" if tests else "More tests added tests"]
+    parts.append(f"and fixed {len(bugs)} bug(s): " + "; ".join(bugs[:5]) if bugs
+                 else "and fixed no bugs")
+    return " ".join(parts) + "."
+
+
+def pass_two_redeploy_refusal(connection: Connection, run_id: str, step: dict[str, Any],
+                              pass_2_of: str) -> Optional[str]:
+    """Why "Deploy again" ships nothing, or None when pass 2 landed commits on a deploy that
+    shipped pass 1. Said on the step, so the run says why there was no redeploy."""
+    wired = ((step.get("binding") or {}).get("inputs") or {}).get("run_id")
+    more_step = str(wired.get("from_step") or "") if isinstance(wired, dict) else ""
+    first = connection.execute(
+        text("SELECT status, output FROM workflow_step_runs WHERE workflow_run_id = :r "
+             "AND step_id = :s ORDER BY iteration DESC LIMIT 1"),
+        {"r": run_id, "s": pass_2_of}).mappings().first()
+    first_out = (first or {}).get("output") or {}
+    if isinstance(first_out, str):
+        first_out = json.loads(first_out or "{}")
+    if not first or first["status"] != "succeeded" or str(
+            first_out.get("status") or "") in ("not_applicable", "skipped"):
+        return ("No redeploy: the first deploy did not ship, so there is nothing running to "
+                "update with the More tests pass.")
+    summary = pass_two_summary(connection, run_id, more_step)
+    if summary["status"] != "succeeded" or summary["advisory_failed"] or not summary[
+            "code_task_run_id"] or summary["code_task_run_id"] == summary["base_run_id"]:
+        return ("No redeploy: the More tests pass did not finish, so what is deployed is the "
+                "first pass's build.")
+    if summary["changed"] is False:
+        return "No redeploy: the More tests pass changed nothing."
+    return None
 
 
 def _preview_missing_for_run(
@@ -1572,6 +1763,8 @@ def _preview_missing_for_run(
         return None
     if row is None:
         return None                       # no preview step in this workflow: nothing to require
+    if _is_advisory_preview_row(connection, run_id):
+        return None                       # BOSS added it to show the app; it never gates a ship
     if _preview_waived(row):
         return None                       # a person chose to ship without one, and said why
     if row["status"] != "succeeded":
@@ -1642,31 +1835,31 @@ def _live_preview_for_run(connection: Connection, run_id: str) -> Optional[str]:
     another project's app.
     """
     try:
-        task = connection.execute(
-            text("SELECT COALESCE("
-                 "  (SELECT input->>'adopt_code_task_run_id' FROM workflow_runs WHERE id = :r),"
-                 "  (SELECT output->>'code_task_run_id' FROM workflow_step_runs "
-                 "     WHERE workflow_run_id = :r AND output ? 'code_task_run_id' "
-                 "     ORDER BY created_at DESC LIMIT 1)"
-                 ") AS task_id"),
+        # EVERY BUILD OF THE RUN, not only the newest step's: pass 2 runs beside the deploy
+        # (two_pass), so the newest code task is often the More tests pass, still working, which
+        # has no preview of its own while pass 1's is serving.
+        tasks = [str(t) for t in connection.execute(
+            text("SELECT input->>'adopt_code_task_run_id' FROM workflow_runs WHERE id = :r "
+                 "UNION SELECT output->>'code_task_run_id' FROM workflow_step_runs "
+                 "WHERE workflow_run_id = :r AND output ? 'code_task_run_id'"),
             {"r": run_id},
-        ).scalar()
-        if not task:
+        ).scalars() if t]
+        if not tasks:
             return None
         return connection.execute(
             text("""
                 SELECT p.id FROM app_previews p
                 WHERE p.status = 'running'
-                  AND (p.run_id = :t
+                  AND (p.run_id = ANY(:t)
                        OR p.run_id IN (
                             SELECT c.id FROM code_task_runs c
-                            WHERE NULLIF(c.finalize_ctx->>'app_id', '') = (
+                            WHERE NULLIF(c.finalize_ctx->>'app_id', '') IN (
                                 SELECT NULLIF(finalize_ctx->>'app_id', '')
-                                FROM code_task_runs WHERE id = :t)
+                                FROM code_task_runs WHERE id = ANY(:t))
                               AND NULLIF(c.finalize_ctx->>'app_id', '') IS NOT NULL))
                 ORDER BY p.created_at DESC LIMIT 1
             """),
-            {"t": task},
+            {"t": tasks},
         ).scalar()
     except Exception:  # noqa: BLE001 — a check that cannot run must not block a release
         log.exception("could not read live previews for run %s", run_id)
@@ -2292,6 +2485,32 @@ def _perform_capability(
 ) -> dict[str, Any]:
     """Do the work of catalogue capability `key`, with its inputs already resolved. What it
     returns is judged by `workflow_outcomes` before the runner records anything."""
+    # THE TWO-PASS RULE'S OWN INPUTS (two_pass): said to BOSS, never passed to a tool.
+    inputs = dict(inputs or {})
+    advisory_preview = key == "preview" and bool(inputs.pop("advisory", False))
+    pass_2_of = str(inputs.pop("pass_2_of", "") or "") if key == "deploy" else ""
+    extend = key == "build" and bool(inputs.pop("extend", False))
+    increment = inputs.pop("increment", None) if key == "build" else None
+    if increment:
+        # INCREMENTAL BUILD: this build builds one increment of the plan, said first.
+        from .workflow_catalogue import increment_brief
+
+        told = increment_brief(int(increment))
+        inputs["instructions"] = (told if extend else
+                                  f"{told}\n\n{inputs.get('instructions') or ''}".strip())
+    if advisory_preview:
+        return _advisory_preview(connection, ctx, project_id=project_id, actor=actor,
+                                 step=step, context=context, capability=capability,
+                                 inputs=inputs)
+    if pass_2_of:
+        why_not = pass_two_redeploy_refusal(connection, str(context.get("run_id") or ""),
+                                            step, pass_2_of)
+        if why_not:
+            return {"capability": key, "tool": None, "status": "not_applicable",
+                    "pass_2_of": pass_2_of, "note": why_not}
+    if extend:
+        return _build_on_the_branch(connection, ctx, project_id=project_id, actor=actor,
+                                    context=context, capability=capability, inputs=inputs)
     if capability.tool is None:
         # `document` has no tool because it commissions nothing — it WRITES, from what the run
         # already produced. Falling through to the no-op below made the one step whose entire
@@ -2515,7 +2734,7 @@ def _perform_capability(
                 step_id=str(step.get("id") or "") or None,
                 # ONE APPROVAL PER DEPLOY: the gate a person already answered, passed on.
                 approval_decision_id=str(context.get("approval_decision_id") or "") or None)
-    if key == "deploy":
+    if key == "deploy" and not pass_2_of:
         missing = _preview_missing_for_run(connection, context)
         if missing:
             return {"capability": key, "tool": None, "status": "failed",
@@ -2909,7 +3128,7 @@ def _settle_started_work(capability: Any, key: str, result: dict[str, Any]) -> d
     Left as-is, the runner records the step succeeded and the workflow previews and opens the
     deploy gate while that repair is still editing the branch.
     """
-    if key in ("plrr", "more_tests") and not str(
+    if key in ("plrr", "more_tests", "build") and not str(
         result.get("run_id") or result.get("code_task_run_id") or ""
     ).strip():
         inner = result.get("result")
@@ -3399,7 +3618,20 @@ def _complete_advisory_failure(connection: Connection, *, project_id: str, run_i
                                done: list) -> bool:
     """Complete an advisory step whose work failed; True when it did."""
     if str((output or {}).get("capability") or "") not in _ADVISORY_CAPABILITIES:
-        return False
+        if not (output or {}).get("advisory"):
+            return False
+        # AN AUTOMATIC PREVIEW (two_pass) THAT DID NOT COME UP says so and the run goes on.
+        workflows.force_complete_waiting_step(
+            connection, project_id=project_id, step_run_id=step["id"],
+            output={**output, "status": "not_applicable", "advisory_failed": True,
+                    "awaited_status": status,
+                    "note": (f"this app could not be previewed: the preview ended as "
+                             f"'{status}'" + (f" ({why})" if why else "")
+                             + ". The run goes on without one.")[:600]},
+        )
+        done.append({"run_id": run_id, "step_id": step["step_id"],
+                     "outcome": "advisory_failed", "awaited_status": status})
+        return True
     base = str(output.get("base_run_id") or "")
     workflows.force_complete_waiting_step(
         connection, project_id=project_id, step_run_id=step["id"],
@@ -4167,6 +4399,18 @@ def _gate_subject(
         # plan, the host and the manifest — is the gate. Approving it releases the apply;
         # rejecting it rejects the step. Every other deploy keeps its gate exactly as before.
         return None
+    if key == "deploy" and context is not None:
+        # "DEPLOY AGAIN" THAT WILL SHIP NOTHING ASKS NOBODY: it runs, and says why (two_pass).
+        pass_2_of = str(((binding.get("inputs") or {}).get("pass_2_of")) or "")
+        if pass_2_of and pass_two_redeploy_refusal(
+                connection, str(context.get("run_id") or ""), spec_step, pass_2_of):
+            return None
+        # THE ENVIRONMENT'S POLICY, ON THE STEP AS ON THE DEPLOYMENT: a person who set an
+        # environment to deploy without asking (deploy_policy) is not asked at the step either.
+        # The deployment then runs on that policy and records whose it was.
+        if policy_ships_without_asking(connection, project_id,
+                                       deploy_environment(spec_step, context.get("input"))):
+            return None
     capability = get_capability(key)
     if capability.is_gate:
         if _no_prd_to_approve(key, context):
@@ -4329,6 +4573,17 @@ def _open_gate(
     # a fact about where the email went.
     if capability_key in {"deploy", "redeploy", "monitor"}:
         recommendation_extra["environment"] = str(run_input.get("environment") or "staging")
+    pass_2_of = str((((spec_step.get("binding") or {}).get("inputs") or {}).get("pass_2_of"))
+                    or "")
+    if capability_key == "deploy" and pass_2_of:
+        # WHAT THIS SECOND DEPLOY SHIPS: what the More tests pass added or fixed (two_pass).
+        wired = ((spec_step.get("binding") or {}).get("inputs") or {}).get("run_id")
+        found = pass_two_summary(connection, run["id"], str(
+            wired.get("from_step") if isinstance(wired, dict) else ""))
+        recommendation_extra["more_tests"] = {**found, "sentence": pass_two_sentence(found)}
+        subject = {**subject, "summary": (f"{subject['summary']} Ships the More tests pass on "
+                                          f"top of what is deployed. "
+                                          f"{pass_two_sentence(found)}")}
     if capability_key == "security_decide":
         # Where the checklist is: App › Security draws the recommendations as the choice this
         # approval records (approving without opening it takes the P0/P1 pre-ticks).

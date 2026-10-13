@@ -2991,10 +2991,14 @@ def _run_spec(connection: Connection, run_id: str) -> dict[str, Any]:
     # would now add, and gets its version as it was: a deploy rebound to a step that never ran
     # would fail a run that was fine.
     as_stored = _json(row["spec"], {})
-    two_passed = two_pass.with_more_tests(as_stored)
     started_with = {str(i) for i in (row["step_ids"] or [])}
-    if two_pass.added_step_ids(as_stored, two_passed) - started_with:
-        two_passed = as_stored
+    two_passed = as_stored
+    # Today's shape first, then the rc10.2 inline one a run may have started with.
+    for shape in (two_pass.with_more_tests, two_pass.with_more_tests_inline):
+        candidate = shape(as_stored)
+        if not two_pass.added_step_ids(as_stored, candidate) - started_with:
+            two_passed = candidate
+            break
     # A run in flight keeps the rules its version was published under — see _published_spec.
     # Each step is tagged with them, because the runner is handed a step, not the version.
     # Re-read on every step of a run, so a run whose step names an operator-made agent must not
@@ -3346,6 +3350,14 @@ def evaluate_expression(expression: dict[str, Any], payload: dict[str, Any]) -> 
         return exists and isinstance(expected, list) and actual in expected
     if operator == "not_in":
         return not exists or not isinstance(expected, list) or actual not in expected
+    if operator == "contains":
+        # Text that contains `value` (ignoring case), or a list holding it: "does the plan have
+        # an Increment 3" is a question about a document a step wrote.
+        if not exists:
+            return False
+        if isinstance(actual, str):
+            return str(expected).lower() in actual.lower()
+        return isinstance(actual, list) and expected in actual
     if operator in {"gt", "gte", "lt", "lte"}:
         if not exists:
             return False
@@ -3360,7 +3372,8 @@ def evaluate_expression(expression: dict[str, Any], payload: dict[str, Any]) -> 
         except TypeError:
             return False
     raise WorkflowValidationError(
-        "expression.op must be exists, truthy, eq, ne, in, not_in, gt, gte, lt, or lte."
+        "expression.op must be exists, truthy, eq, ne, in, not_in, contains, gt, gte, lt, "
+        "or lte."
     )
 
 
