@@ -184,8 +184,12 @@ describe("Connectors and ideas (operator, 2026-10-13: there is no Template tab)"
     await click($('[data-testid="np-ideas-tab-team"]'));
     expect($('[data-testid="np-idea-hello-endpoint"]')).toBeNull();
     await click($('[data-testid="np-ideas-tab-all"]'));
-    // A drawn preview where the mockup has one; the glyph cover otherwise.
-    expect($('[data-testid="np-idea-hello-endpoint"] svg')?.getAttribute("aria-label")).toBe("Hello endpoint preview");
+    // Every card shows a drawing of its app's screen, never the plain glyph cover.
+    expect($('[data-testid="np-idea-hello-endpoint"] svg')?.getAttribute("aria-label"))
+      .toMatch(/^Hello endpoint preview: a terminal/);
+    const cards = [...$('[data-testid="np-ideas"]')!.querySelectorAll(".np-idea")];
+    expect(cards.length).toBeGreaterThan(16);
+    expect(cards.filter((c) => !c.querySelector("svg.ip-svg")).map((c) => c.querySelector("b")?.textContent)).toEqual([]);
     await click($('[data-testid="np-idea-hello-endpoint"]'));
     expect($('[data-testid="np-ideas-dialog"]')).toBeNull();
     expect(($('[data-testid="dw-new-directive"]') as HTMLTextAreaElement).value).toContain("Build Hello endpoint");
