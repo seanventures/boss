@@ -39,7 +39,9 @@ _HEADING = re.compile(r"^\s{0,3}#{1,6}\s+")
 _BOLD_LINE = re.compile(r"^\s*(\*\*|__)(.+?)(\*\*|__)\s*:?\s*$")
 _BULLET = re.compile(r"^\s*(?:[-*+•▪◦]|\d+[.)]|[0-9]️?⃣)\s+")
 _KEYCAP = re.compile(r"[0-9#*]️?⃣")
-_MARKS = re.compile(r"[*_`>#~]")
+#: Emphasis and code marks. An underscore INSIDE a word is part of a name
+#: (GITHUB_CLIENT_ID, AUTH_AGENT_EMAILS), not emphasis: only underscores at a word's edge go.
+_MARKS = re.compile(r"[*`>#~]|(?<![A-Za-z0-9])_+|_+(?![A-Za-z0-9])")
 #: A fixture's "[standup]" / "[go/no-go]" / "[simulated]" lead tag, and BOSS's [boss:…] markers.
 _TAG = re.compile(r"^\s*\[[a-z][a-z/ _-]{1,20}\]\s*|\[boss:[^\]]*\]", re.I)
 _ONLY_PUNCT = re.compile(r"^[\s\-—–:|=.·•]*$")

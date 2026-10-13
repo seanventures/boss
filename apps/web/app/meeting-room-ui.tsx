@@ -264,7 +264,17 @@ function Synthesis({ meeting }: { meeting: Meeting }) {
                   style={{ alignSelf: "flex-start" }}>
             {prdOpen ? "Hide the PRD ↑" : "Read the PRD ↓"}
           </button>
-          {prdOpen ? <div className="rp-full"><Markdown text={meeting.prd_markdown} /></div> : null}
+        </div>
+      ) : null}
+      {/* THE PRD READS AT THE PAGE'S WIDTH. Opened inside the right-hand column it was a long
+          document in a narrow strip beside empty space; it opens as its own full-width row. */}
+      {!typed && !meeting.security_review?.run_id && meeting.prd_markdown && prdOpen ? (
+        <div className="rp-prd rp-prd-wide" data-testid="meeting-prd-full">
+          <div className="rp-card-h">
+            <b>PRD</b><span className="rp-spacer" />
+            <button type="button" className="rp-link sm" onClick={() => setPrdOpen(false)}>Hide the PRD ↑</button>
+          </div>
+          <div className="rp-full"><Markdown text={meeting.prd_markdown} /></div>
         </div>
       ) : null}
     </div>

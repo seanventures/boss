@@ -171,3 +171,12 @@ def test_round_two_debates_the_replies_not_the_gist_lines(monkeypatch):
     assert "GIST:" not in adapter.prompts[0].split("what the whole panel said in round 1")[1] \
         .split(mg.GIST_INSTRUCTION)[0]
     assert saved["state"]["round2_gists"]["UX Designer"]["headline"] == "Seat view"
+
+
+def test_a_name_with_underscores_survives_the_gist():
+    """The Facilitator's gist showed GITHUB_CLIENT_ID as "GITHUBCLIENTID": every underscore was
+    stripped as if it were emphasis. Only an underscore at a word's edge is emphasis."""
+    from boss_engine.services.meeting_gist import _plain
+    assert _plain("on only when `GITHUB_CLIENT_ID` set") == "on only when GITHUB_CLIENT_ID set"
+    assert _plain("(AUTH_AGENT_EMAILS/AUTH_ADMIN_EMAILS)") == "(AUTH_AGENT_EMAILS/AUTH_ADMIN_EMAILS)"
+    assert _plain("this is _emphasis_ here") == "this is emphasis here"
