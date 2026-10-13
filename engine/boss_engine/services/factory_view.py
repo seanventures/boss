@@ -392,6 +392,37 @@ def gate_station(name: str) -> str:
     return "check"
 
 
+def failing_gate_stop(fctx: Optional[Mapping[str, Any]]) -> Optional[tuple[str, str]]:
+    """WHERE A BUILD THAT FAILED ITS CHECKS STOPPED (rc10.5 walk M2): the first failing gate in
+    pipeline order, and the station that owns it. When the app does not start EVERY gate after
+    it fails too (review, consistency, …), so a gate's failure only names the station when it is
+    the first one; the rest are consequences. None when no gate failed."""
+    failing = [str(g) for g in ((fctx or {}).get("failing_gates") or [])]
+    if not failing:
+        return None
+    order = {key: i for i, key in enumerate(CORE_STATIONS)}
+    first = min(enumerate(failing),
+                key=lambda ig: (order.get(gate_station(ig[1]), len(order)), ig[0]))[1]
+    return first, gate_station(first)
+
+
+def stop_reason(run: Mapping[str, Any], fctx: Optional[Mapping[str, Any]]) -> str:
+    """Why a stopped build stopped, short: the run's own error in its first sentence, without the
+    `Blocked:` it opens with (`the app did not start: …`); else the first failing gate
+    (`Failed check: App starts`); else the failure class's words. The error first: it says what
+    actually went wrong, and the first failing gate in pipeline order may only be a symptom."""
+    stop = failing_gate_stop(fctx)
+    error = _first_line(re.sub(r"^\s*(Blocked|Failed)\s*:\s*", "", str(run.get("error") or ""),
+                               flags=re.I))
+    error = re.split(r"(?<=\.)\s+(?=[A-Z])", error, maxsplit=1)[0] if error else ""
+    if error:
+        return error
+    if stop:
+        return f"Failed check: {gate_label(stop[0])}"
+    said = failure_line(dict(fctx or {}), run.get("error"))
+    return error or said["tip"] or (said["line"] if said["line"] != "Failed" else "")
+
+
 _FAILURE_WORDS = {
     "recoverable": "Failed · retry may fix",
     "terminal": "Failed · needs a change",
@@ -856,10 +887,17 @@ def build_state(run: Mapping[str, Any], *, acts: Optional[list[Mapping[str, Any]
     open_act = _open_act(acts)
 
     def out(state: str, word: str, tip: Optional[str], verb: str,
-            at: Optional[str] = station) -> BuildState:
-        return {"state": state, "word": word, "tip": tip, "verb": verb, "station": at,
+            at: Optional[str] = "") -> BuildState:
+        return {"state": state, "word": word, "tip": tip, "verb": verb,
+                "station": station if at == "" else at,
                 "rounds": rounds, "preview": flag["status"] if flag else None}
 
+    # A BUILD THAT FAILED ITS CHECKS STOPPED AT THE FIRST FAILING GATE'S STATION, not at the
+    # last stage that happened to run (the build line and NOW must name the same station).
+    if status in ("failed", "blocked"):
+        gate_stop = failing_gate_stop(fctx)
+        if gate_stop:
+            station = gate_stop[1]
     label = STATION_LABELS.get(station or "", "")
     if status == "cancelled":
         when = _aware(fctx.get("cancelled_at")) or _aware(run.get("updated_at"))
@@ -951,20 +989,26 @@ def _act_station_status(act: Mapping[str, Any]) -> str:
 
 def _failed_tip(run: Mapping[str, Any], fctx: Mapping[str, Any], state_key: str,
                 bstate: Mapping[str, Any]) -> str:
-    """Why a station failed, short: the run's own error (`app didn't start`), else the failing
-    checks, else the failure class's words."""
+    """Why a station failed, short: the first failing gate and the run's own error
+    (stop_reason), else the failing checks, else plain words."""
+    reason = stop_reason(run, fctx)
+    if reason:
+        return reason
     if state_key == "needs_waiver" and bstate.get("tip"):
         return f"Checks failed: {bstate['tip']}"
-    said = failure_line(dict(fctx), run.get("error"))
-    return said["tip"] or (said["line"] if said["line"] != "Failed" else "This stage failed")
+    return "This stage failed"
 
 
-def _verdict(stage: str, state: Mapping[str, Any], failing: set[str]) -> Optional[str]:
+def _verdict(stage: str, state: Mapping[str, Any], failing: set[str],
+             gates_are_its_own: bool = True) -> Optional[str]:
+    """A seat's verdict: what the seat itself recorded. Its gate failing says `blocked` only when
+    review is where the build stopped (`gates_are_its_own`): when the app did not start, every
+    review gate fails as a consequence, and a seat that said "clean" did not block anything."""
+    raw = _VERDICT_OF.get(str(state.get(_SEAT_VERDICT_KEY.get(stage, "")) or ""))
     gate = _SEAT_GATE.get(stage)
-    if gate and gate in failing:
+    if gate and gate in failing and gates_are_its_own and raw != "approved":
         return "blocked"
-    raw = state.get(_SEAT_VERDICT_KEY.get(stage, ""))
-    return _VERDICT_OF.get(str(raw or ""))
+    return raw
 
 
 def _skip_tip(station: str, state: Mapping[str, Any],
@@ -1031,6 +1075,19 @@ def stations_for(run: Mapping[str, Any], *, acts: Optional[list[Mapping[str, Any
         here_i = -1
     else:
         here_i = len(order) if finished else -1
+    # WHERE A STOPPED BUILD ENDED (rc10.5 walk M2, m3). A build that failed its checks stopped
+    # at the station owning the first failing gate (build_state already says so); one that
+    # stopped before any station names none, so its first station carries the failure.
+    gate_stop = failing_gate_stop(fctx) if state_key in ("failed", "blocked", "needs_waiver") \
+        else None
+    stopped_line = state_key in STOPPED_STATES
+    no_station = stopped_line and state_key != "cancelled" and here_i < 0
+    if no_station:
+        here_i = 1 if order[0] == "plan" and order[1:2] == ["you_plan"] else 0
+    fails_here = state_key in ("failed", "needs_waiver") or no_station or (
+        state_key == "blocked" and gate_stop is not None)
+    #: Review seats' gates are their own verdict only when review is where the build stopped.
+    review_gates_own = gate_stop is None or gate_stop[1] == "review"
     rounds = _rounds(acts)
     kept = kept_stations(fctx)
     review_acts = by_station.get("review", [])
@@ -1071,6 +1128,11 @@ def stations_for(run: Mapping[str, Any], *, acts: Optional[list[Mapping[str, Any
                 # LEFT OPEN BECAUSE THE BUILD STOPPED (a blocked build does not close its
                 # stages): nothing is working here, and nothing failed here either.
                 status = "stopped"
+            if stopped_line and i > here_i and status != "done":
+                # PAST WHERE THE BUILD STOPPED: work that finished keeps its own word; work that
+                # never finished (stale, left open, closed by the stop) was not reached.
+                status = "pending"
+                s.update(face="none", role_key=None)
             s["status"] = status
             if status == "failed":
                 s["tip"] = _failed_tip(run, fctx, state_key, st) if (
@@ -1111,7 +1173,9 @@ def stations_for(run: Mapping[str, Any], *, acts: Optional[list[Mapping[str, Any
                 # STUCK, AND ONLY THIS: a live build whose station has had no activity for
                 # QUIET_AFTER_MINUTES. The tip says for how long.
                 s.update(status="stuck", tip=st.get("tip") or None)
-            elif state_key in ("failed", "needs_waiver"):
+            elif fails_here:
+                # The station that owns the first failing gate: Failed, with the reason — never
+                # "left open", whatever its own act's record says.
                 s.update(status="failed", tip=_failed_tip(run, fctx, state_key, st))
             elif state_key in ("blocked", "budget_refused"):
                 if s["status"] != "failed":
@@ -1137,7 +1201,9 @@ def stations_for(run: Mapping[str, Any], *, acts: Optional[list[Mapping[str, Any
                     seat_status = "failed" if state_key == "needs_waiver" else "done"
                 if seat_status == "working" and state_key in STOPPED_STATES:
                     seat_status = "stopped"
-                verdict = _verdict(str(a.get("step_id")), evidence, failing) \
+                if stopped_line and i > here_i and seat_status != "done":
+                    seat_status = "pending"   # a seat the stopped build never reached
+                verdict = _verdict(str(a.get("step_id")), evidence, failing, review_gates_own) \
                     if a.get("ended_at") or state_key == "needs_waiver" else None
                 if verdict == "blocked":
                     seat_status = "failed"

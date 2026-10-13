@@ -67,6 +67,28 @@ export function readComposeIntent(search: string): ComposeIntent {
 /** What a compose link carries besides the command, consumed with it. */
 export const COMPOSE_PARAMS = ["compose", "app", "preview"] as const;
 
+/**
+ * ONE PARAMETER, ONE READER (rc10.5 walk M1). A brief handed back from a discussion to the Ask
+ * BOSS hero used `?compose=<brief>` — the same name as the composer's command
+ * `compose=new|add|template`. The hero read ANY compose= as a brief and deleted it, so the
+ * Command Center's "+ Add a feature" (compose=add, pushState + popstate) put "add" in the hero
+ * box and landed on Runs. The hero's brief has its own name now, and the composer's command
+ * values are never a brief.
+ */
+export const HERO_BRIEF_PARAM = "hero_brief";
+export const COMPOSE_COMMANDS: readonly string[] = ["new", "add", "template"];
+
+/** The brief handed to the Ask BOSS hero, and the query string with it consumed; null when the
+ *  URL carries none. Only ever `hero_brief=`: a composer command is not a brief. */
+export function readHeroBrief(search: string): { brief: string; nextSearch: string } | null {
+  const params = new URLSearchParams(search);
+  const brief = params.get(HERO_BRIEF_PARAM)?.trim();
+  if (!brief || COMPOSE_COMMANDS.includes(brief)) return null;
+  params.delete(HERO_BRIEF_PARAM);
+  const rest = params.toString();
+  return { brief, nextSearch: rest ? `?${rest}` : "" };
+}
+
 /** The project being looked at, or null. A place, not a command — never consumed. */
 export function readRunParam(search: string): string | null {
   const run = new URLSearchParams(search).get("run");

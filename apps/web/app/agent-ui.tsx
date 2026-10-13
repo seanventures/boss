@@ -1,5 +1,6 @@
 "use client";
 
+import { HERO_BRIEF_PARAM } from "./url-intent";
 import { useCallback, useEffect, useState, useTransition, useRef} from "react";
 
 import { landingAnswerArrived } from "../lib/chat-landing";
@@ -504,7 +505,8 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
     try {
       const url = new URL(window.location.href);
       url.searchParams.set("area", "overview");
-      url.searchParams.set("compose", brief);
+      // Its own parameter (url-intent HERO_BRIEF_PARAM): `compose=` is the composer's command.
+      url.searchParams.set(HERO_BRIEF_PARAM, brief);
       url.searchParams.delete("agent");
       url.searchParams.delete("dock_mode");
       window.history.pushState(null, "", url.toString());

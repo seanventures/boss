@@ -17,6 +17,7 @@
  * no purely ornamental motion, and all of it collapses under prefers-reduced-motion.
  */
 
+import { readHeroBrief } from "./url-intent";
 import React from "react";
 import type { ReactElement } from "react";
 import { useCallback, useEffect, useRef, useState, useTransition } from "react";
@@ -1553,12 +1554,14 @@ export function AskBossHero({
   useEffect(() => {
     const take = () => {
       try {
-        const url = new URL(window.location.href);
-        const brief = url.searchParams.get("compose");
-        if (!brief) return;
+        // ONLY ITS OWN PARAMETER (readHeroBrief): `compose=new|add` is the New project
+        // composer's command, and taking it here sent "+ Add a feature" to Runs.
+        const handed = readHeroBrief(window.location.search);
+        if (!handed) return;
+        const brief = handed.brief;
         setInput(brief);
-        url.searchParams.delete("compose");
-        window.history.replaceState(null, "", url.toString());
+        window.history.replaceState(null, "",
+          `${window.location.pathname}${handed.nextSearch}${window.location.hash}`);
         window.requestAnimationFrame(() => {
           const box = boxRef.current;
           if (!box) return;

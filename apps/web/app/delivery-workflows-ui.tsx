@@ -587,6 +587,16 @@ export function readAreaUrl(search: string): { tab: AreaTab; wf: string | null }
   };
 }
 
+/** The query string with `tab=` corrected to the tab actually shown, or null when it already
+ *  says so (or names none). */
+export function urlWithTab(search: string, shown: AreaTab): string | null {
+  const params = new URLSearchParams(search);
+  const named = params.get("tab");
+  if (named === null || named === shown) return null;
+  params.set("tab", shown);
+  return `?${params}`;
+}
+
 /** Whether the URL names a tab at all. With none, an area with no runs yet opens on New project:
  *  an empty list is a dead end, and the composer is what there is to do. */
 export function namesATab(search: string): boolean {
@@ -627,6 +637,14 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
   useEffect(() => {
     const read = () => {
       const now = readAreaUrl(window.location.search);
+      // THE URL SAYS WHERE YOU ARE (rc10.5 walk m4): a run link opened Runs over a stale
+      // `tab=new`, and the URL went on saying New project, so a reload or a copied link lied.
+      const fixed = urlWithTab(window.location.search, now.tab);
+      if (fixed !== null) {
+        try {
+          window.history.replaceState(null, "", `${window.location.pathname}${fixed}${window.location.hash}`);
+        } catch { /* non-browser */ }
+      }
       setTabState(now.tab);
       setTabNamed(namesATab(window.location.search));
       setEditing(now.wf);

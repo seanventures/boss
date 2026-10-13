@@ -27,7 +27,7 @@ vi.mock("../app/workflows/new-project-composer", () => ({
 }));
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-const { DeliveryWorkflows, readAreaUrl, tabKeyTarget, namesATab } = await import("../app/delivery-workflows-ui");
+const { DeliveryWorkflows, readAreaUrl, tabKeyTarget, namesATab, urlWithTab } = await import("../app/delivery-workflows-ui");
 const { openNewProject } = await import("../lib/compose-links");
 const stub = await import("./_helpers/studio-parts-stub");
 
@@ -223,11 +223,19 @@ describe("the tab is in the URL", () => {
     expect(selected()).toBe("dw-tab-runs");
   });
 
-  it("a link to a run opens Runs even when the URL still said tab=new", async () => {
+  it("a link to a run opens Runs even when the URL still said tab=new, and the URL says so", async () => {
     window.history.replaceState(null, "", "/?area=delivery_workflows&tab=new&wfr=wfr_1");
     await mount();
     expect(selected()).toBe("dw-tab-runs");
     expect($('[data-run-id="wfr_1"]')?.dataset.open).toBe("true");
+    // rc10.5 m4: the stale tab=new is corrected in place, so a reload or a copied link is honest.
+    expect([params().get("tab"), params().get("wfr")]).toEqual(["runs", "wfr_1"]);
+  });
+
+  it("urlWithTab corrects only a tab that disagrees", () => {
+    expect(urlWithTab("?tab=new&wfr=w", "runs")).toBe("?tab=runs&wfr=w");
+    expect(urlWithTab("?tab=runs", "runs")).toBeNull();
+    expect(urlWithTab("?area=x", "runs")).toBeNull();
   });
 
   it("New project drops the run the URL named, so the next read stays on it", async () => {
