@@ -459,6 +459,9 @@ export interface AuthOptions {
     origin: string | null;
     expires_at: string | null;
     seats: string[];
+    /** The install has an admin key that can issue a claim link over the API
+     *  (POST /v1/identity/setup-link), for a host with no shell. */
+    link_over_api?: boolean;
   };
 }
 

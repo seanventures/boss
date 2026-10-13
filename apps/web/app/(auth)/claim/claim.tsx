@@ -203,7 +203,9 @@ function ClaimForm({ options, claim }: { options: AuthOptions; claim: Claim }) {
         {path === "setup_token" && !token ? (
           <div className="idn-note bad" role="alert" data-testid="claim-no-token">
             <Warning size={15} aria-hidden />
-            <span data-copy="prose">Claiming needs a one-hour link from the server. On the machine BOSS runs on:</span>
+            <span data-copy="prose">{claim.link_over_api
+              ? "Claiming needs a one-hour link. Ask whoever holds this install's admin key to issue one, or run this on the machine BOSS runs on:"
+              : "Claiming needs a one-hour link from the server. On the machine BOSS runs on:"}</span>
           </div>
         ) : null}
         {path === "setup_token" && !token ? <CopyCommand command={SETUP_LINK} /> : null}

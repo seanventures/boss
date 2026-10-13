@@ -260,6 +260,9 @@ def build_identity_auth_router() -> APIRouter:
                     "origin": _browser_origin(request) if path == "network_bridge" else None,
                     "expires_at": claim_module.setup_expires_at(db) if "setup_token" in paths else None,
                     "seats": claim_module.legacy_seats(db),
+                    # whoever holds the install's admin key can issue a link over the API
+                    # (POST /v1/identity/setup-link): the way in on a host with no shell
+                    "link_over_api": claim_module.links_over_api(),
                 }
             from boss_engine.config import get_settings
 
