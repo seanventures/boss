@@ -2311,6 +2311,19 @@ def _refused_agent_name(engine, reason: str) -> Optional[str]:
     return f"{name} ({agent_id})" if name else None
 
 
+def _transient_retry_recorder(engine, run_id: str):
+    """Each in-place retry of a GitHub/network operation in this build, as an event on the run
+    (`code_task.transient_retry`: which operation, which attempt, the error, the wait)."""
+    def record(info: dict) -> None:
+        project_id = _run_project(engine, run_id)
+        if not project_id:
+            return
+        with _transaction(engine) as c:
+            emit_event(c, project_id, "code_task.transient_retry", "boss", "code_task_run",
+                       run_id, dict(info))
+    return record
+
+
 def run_code_task(engine, settings: Settings, jobs, run_id: str,
                   *, fencing_token: Optional[str] = None) -> dict:
     """Execute one full code-task attempt. Safe to re-run after a crash.
@@ -2347,10 +2360,12 @@ def _run_code_task_once(engine, settings: Settings, jobs, run_id: str,
     from ..app_links.run_env import for_run as _link_env
 
     from .sandbox_identity import SandboxUnavailable
+    from . import transient_retry as _transient_retry
 
     try:
         with owned_process.owner_scope("code_run", run_id, fresh=True), _sandbox_bind(run_id), \
-                _link_env(engine, run_id, _run_project(engine, run_id)):
+                _link_env(engine, run_id, _run_project(engine, run_id)), \
+                _transient_retry.reporting(_transient_retry_recorder(engine, run_id)):
             return _run_code_task(engine, settings, jobs, run_id, fencing_token=fencing_token)
     except SandboxUnavailable as exc:
         # Fail closed: a build never runs unisolated when isolation is required.

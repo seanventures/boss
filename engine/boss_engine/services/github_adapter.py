@@ -140,6 +140,20 @@ class GitHubAdapter:
             "X-GitHub-Api-Version": "2022-11-28",
         }
 
+    @staticmethod
+    def _send(method: str, url: str, *, headers: dict[str, str], json: Any = None) -> httpx.Response:
+        """THE one way this adapter talks to GitHub: one request, raised on an error status, and
+        retried with backoff when GitHub is having a moment (a 5xx, a timeout, a reset
+        connection: transient_retry). A 401/403/404 is an answer and is raised at once."""
+        from .transient_retry import call, is_transient_http_error
+
+        def once() -> httpx.Response:
+            response = httpx.request(method, url, headers=headers, json=json, timeout=30.0)
+            response.raise_for_status()
+            return response
+
+        return call(once, operation=f"GitHub API {method}", transient=is_transient_http_error)
+
     def _request(
         self,
         method: str,
@@ -153,14 +167,8 @@ class GitHubAdapter:
         headers = self._headers()
         if accept:
             headers["Accept"] = accept
-        response = httpx.request(
-            method,
-            f"{self.api_base_url}{path}",
-            headers=headers,
-            json=json_body,
-            timeout=30.0,
-        )
-        response.raise_for_status()
+        response = self._send(method, f"{self.api_base_url}{path}", headers=headers,
+                              json=json_body)
         if response_text:
             return response.text
         if allow_empty and not response.content:
@@ -630,7 +638,8 @@ class GitHubAdapter:
         except httpx.HTTPStatusError:
             sha = None
 
-        response = httpx.put(
+        response = self._send(
+            "PUT",
             f"{self.api_base_url}/repos/{self.repository_full_name}/contents/{path}",
             headers=self._headers(),
             json={
@@ -639,9 +648,7 @@ class GitHubAdapter:
                 "branch": branch_name,
                 **({"sha": sha} if sha else {}),
             },
-            timeout=30.0,
         )
-        response.raise_for_status()
         data_json = response.json()
         return data_json["commit"]["sha"]
 

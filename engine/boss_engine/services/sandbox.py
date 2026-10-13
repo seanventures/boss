@@ -777,7 +777,53 @@ class EphemeralSandbox:
         if self.path is None:
             raise SandboxError("Sandbox is not provisioned.")
 
+    #: Git subcommands that talk to the remote: the ones a network blip can fail.
+    _NETWORK_GIT = frozenset({"clone", "fetch", "ls-remote", "push", "pull"})
+
+    @staticmethod
+    def _git_subcommand(args: list[str]) -> str:
+        """`clone` from `-c k=v -c k=v clone ...`: the first word that is not an option."""
+        skip = False
+        for arg in args:
+            if skip:
+                skip = False
+                continue
+            if arg == "-c":
+                skip = True
+                continue
+            if not arg.startswith("-"):
+                return arg
+        return args[0] if args else ""
+
     def _git(
+        self, args: list[str], *, raw: bool = False, redact: Optional[str] = None
+    ) -> str:
+        """Run one git command in this checkout. A command that talks to the remote is retried
+        when it fails on a TRANSIENT network error (transient_retry: HTTP 5xx, RPC failed, early
+        EOF, "expected 'packfile'", reset, timeout), never on an auth answer — crun_2f76585e
+        failed a whole build on one GitHub 502 during the clone."""
+        sub = self._git_subcommand(args)
+        if sub not in self._NETWORK_GIT:
+            return self._git_once(args, raw=raw, redact=redact)
+        from . import transient_retry
+
+        def attempt() -> str:
+            if sub == "clone" and self.path is not None and any(self.path.iterdir()):
+                # A clone cut off mid-transfer leaves a partial tree; git refuses a non-empty
+                # destination, so the next attempt starts from the empty checkout again.
+                for child in self.path.iterdir():
+                    if child.is_dir() and not child.is_symlink():
+                        shutil.rmtree(child, ignore_errors=True)
+                    else:
+                        with contextlib.suppress(OSError):
+                            child.unlink()
+            return self._git_once(args, raw=raw, redact=redact)
+
+        return transient_retry.call(
+            attempt, operation=f"git {sub}", redact=redact,
+            transient=lambda e: isinstance(e, SandboxError) and transient_retry.is_transient_git_error(e))
+
+    def _git_once(
         self, args: list[str], *, raw: bool = False, redact: Optional[str] = None
     ) -> str:
         assert self.path is not None
