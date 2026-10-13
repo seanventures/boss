@@ -364,10 +364,21 @@ def detect_kind(spec: dict[str, Any], title: str = "") -> str:
     return "web" if is_ui_bearing(spec, title) else "python"
 
 
+E2E_STEP = "npm run test:e2e"
+
+
+def web_test_commands() -> list[str]:
+    """BOSS's web gate for this build: install, build, typecheck, lint, and the browser suite
+    only where the build runs one (build_scope.gate_runs_e2e: never in a first pass)."""
+    from .build_scope import gate_runs_e2e
+
+    return [c for c in WEB_TEST_COMMANDS if c != E2E_STEP or gate_runs_e2e()]
+
+
 def default_test_commands(spec: dict[str, Any], title: str = "") -> list[str]:
     """The verification target when the task didn't specify one — web command set for web projects,
     the unittest default otherwise. (Callers use this as the fallback for ``spec['test_commands']``.)"""
-    return (list(WEB_TEST_COMMANDS) if detect_kind(spec, title) == "web"
+    return (web_test_commands() if detect_kind(spec, title) == "web"
             else [PYTHON_TEST_CMD])
 
 
@@ -638,8 +649,8 @@ def verification_profile(spec: dict[str, Any], title: str = "") -> dict[str, Any
     """Human-readable profile for the console / run evidence: the kind and the resolved steps."""
     kind = detect_kind(spec, title)
     return {"kind": kind,
-            "steps": list(_WEB_STEPS) if kind == "web" else [PYTHON_TEST_CMD],
-            "command": (WEB_TEST_CMD if kind == "web" else PYTHON_TEST_CMD)}
+            "steps": web_test_commands()[1:] if kind == "web" else [PYTHON_TEST_CMD],
+            "command": (" && ".join(web_test_commands()) if kind == "web" else PYTHON_TEST_CMD)}
 
 
 def resolve_verify_cwd(

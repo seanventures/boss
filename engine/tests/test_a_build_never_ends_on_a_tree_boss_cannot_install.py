@@ -15,6 +15,7 @@ implementation" under a `$ npm run verify` header. Each part of the class is pin
     crun_1fdfea1c9c904a8083dd, fixed a second conflict only after BOSS's last check);
   * a failed install reaches the warm session as an install failure, with npm's error and one
     instruction, in the implement loop and in a convergence round;
+  * pass 1's gate does not run the browser suite (the retry's gate still ran test:e2e);
   * a run that ends on it says "dependencies did not install: ERESOLVE ...";
   * every writing stage, and the implementer's hand-off checklist, is told up front.
 """
@@ -26,7 +27,7 @@ import re
 from pathlib import Path
 from types import SimpleNamespace
 
-from boss_engine.services import code_agent
+from boss_engine.services import build_scope, code_agent
 from boss_engine.services import governed_code_task_service as gov
 from boss_engine.services import verification_target as vt
 from boss_engine.services.sandbox import CommandResult
@@ -247,3 +248,22 @@ def test_the_pipeline_installs_before_it_judges_each_hand_off():
     fix = src[src.index('a_fix, m_fix, impl_session_id, "fix_round")'):]
     assert fix.index("_after = {fc.path") < fix.index("_post = _run_verify()")
 
+
+# ---- pass 1 does not gate on the browser suite ------------------------------------------------------
+
+def _web_commands(scope):
+    token = build_scope.set_scope(scope)
+    try:
+        return vt.default_test_commands({"project_kind": "web"}, "HelpDesk AI")
+    finally:
+        build_scope._SCOPE.reset(token)
+
+
+def test_pass_one_gates_without_test_e2e_and_more_tests_keeps_it():
+    pass1 = build_scope.decide("HelpDesk AI", "React app with Playwright e2e tests")
+    assert pass1["e2e"] is False and pass1["e2e_deferred"] is True
+    assert _web_commands(pass1) == [vt.NPM_INSTALL_CMD, "npm run build", "npm run typecheck",
+                                    "npm run lint"]
+    pass2 = build_scope.decide("HelpDesk AI", f"{build_scope.MORE_TESTS_MARKER}: add Playwright e2e")
+    assert vt.E2E_STEP in _web_commands(pass2)
+    assert vt.E2E_STEP in _web_commands(None)  # outside a build, as before

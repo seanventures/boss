@@ -119,6 +119,16 @@ def e2e_deferred() -> bool:
     return bool(scope and scope.get("e2e_deferred"))
 
 
+def gate_runs_e2e() -> bool:
+    """Does BOSS's own web gate run `npm run test:e2e`? Not in a first pass: browser tests are
+    the More tests pass's (crun_1fdfea1c9c904a8083dd's pass 1 still gated on Playwright). Outside
+    a build, and in pass 2, as before."""
+    scope = _SCOPE.get()
+    if scope is None or scope.get("more_tests"):
+        return True
+    return bool(scope.get("e2e"))
+
+
 DEFERRED_E2E_NOTE = (
     "\nBROWSER TESTS COME LATER: this pass ships the working app with a lean suite. Do NOT "
     "write, install or run Playwright or other browser/e2e tests now, even where the task asks "
