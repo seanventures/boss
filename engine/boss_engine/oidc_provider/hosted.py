@@ -527,7 +527,7 @@ def _signup(db, org_id, origin, pool, client, interaction, params, browser):
         email = customers.normalise_email(params.get("email"))
         if pool["signup"] == "domain" and email.rsplit("@", 1)[1].lower() not in pool["signup_domains"]:
             raise RealmError("signup_domain")
-        password = customers.check_password(pool, str(params.get("password") or ""), email=email)
+        password = customers.check_password(pool, str(params.get("password") or ""), email=email, db=db)
     except RealmError as exc:
         return signup_page(db, org_id=org_id, pool=pool, client=client, interaction=interaction,
                            error=_words(exc.code), status=400)

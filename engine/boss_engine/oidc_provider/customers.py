@@ -319,12 +319,17 @@ def _count(db: Any, bucket: str, ident: str, window: int) -> int:
 
 # ---- passwords ------------------------------------------------------------------------------------
 
-def check_password(pool: Mapping[str, Any], password: str, *, email: str) -> str:
+def check_password(pool: Mapping[str, Any], password: str, *, email: str, db: Any = None) -> str:
+    """A pool user's new password, checked like every other password BOSS sets: the pool's own
+    length rule AND the org's identity policy (its optional breach check, IDENTITY.md §4.2)."""
     from ..identity import passwords
+    from ..identity.policy import get_policy
 
-    policy = pool.get("password_policy") or {}
+    rules = pool.get("password_policy") or {}
+    org_policy = get_policy(str(pool["org_id"]), db=db) if db is not None and pool.get("org_id") else None
     try:
-        return passwords.check_new_password(password, email=email, min_length=int(policy.get("min_length") or 12))
+        return passwords.check_new_password(password, email=email, min_length=int(rules.get("min_length") or 12),
+                                            policy=org_policy)
     except passwords.PasswordRejected as exc:
         raise RealmError(str(exc) or "password_rejected") from None
 
@@ -367,7 +372,7 @@ def password_signin(db: Any, *, org_id: str, pool: Mapping[str, Any], email: str
 def set_password(db: Any, *, pool: Mapping[str, Any], user: Mapping[str, Any], password: str) -> None:
     from ..identity import passwords
 
-    value = check_password(pool, password, email=user["email"])
+    value = check_password(pool, password, email=user["email"], db=db)
     db.execute(text("UPDATE oidc_pool_users SET password_hash = :h WHERE id = :id"),
                {"h": passwords.hash_password(value), "id": user["id"]})
 
