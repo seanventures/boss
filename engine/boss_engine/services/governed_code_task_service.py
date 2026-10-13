@@ -1084,6 +1084,34 @@ def _connector_probe_paths(engine, run: dict) -> list[str]:
         return []
 
 
+def _app_run_declarations(engine, run: dict) -> tuple[dict, dict]:
+    """(what the app's templates declare, the values a person bound for its `build` environment)
+    for the app-start proof (templates.run_env). The proof reads the app's own files itself.
+    Never raises: with nothing known the proof still reads boss.deploy.yaml and .env.example."""
+    from ..templates import gate as template_gate
+    from ..templates.run_env import app_needs
+    from ..templates.secrets import values_for_env
+
+    try:
+        with _transaction(engine) as c:
+            applied = template_gate.applied_template(c, run)
+            if not applied or applied.get("error"):
+                return {}, {}
+            app_key = applied.get("app_key")
+            needs = app_needs(c, project_id=run["project_id"], app_key=app_key,
+                              manifests=[applied.get("manifest") or {}])
+            org = c.execute(sql("SELECT w.org_id FROM projects p JOIN workspaces w ON w.id = p.workspace_id "
+                                "WHERE p.id = :p"), {"p": run.get("project_id")}).scalar()
+            bound: dict = {}
+            if org and app_key:
+                bound, _withheld = values_for_env(c, org_id=org, project_id=run["project_id"],
+                                                  app_key=app_key, env="build")
+            return needs, bound
+    except Exception:  # noqa: BLE001
+        _log_caught(logger)
+        return {}, {}
+
+
 def _template_gates(engine, run: dict, sandbox, *, root, cwd, changed_files: dict,
                     tests_passed: bool, use_microvm: bool, stack_plan=None,
                     serve: Optional[dict] = None) -> Optional[dict]:
@@ -6017,12 +6045,16 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 # builds a named full-stack app — never inferred from the code (third review
                 # of b63717c), never `web_app_build`, which every build-on-existing/extend
                 # carries, CLIs and libraries included.
+                _run_needs, _run_bound = _app_run_declarations(engine, run)
                 record = prove_app_serves(
                     root, list(files.keys()), lineage=lineage,
                     known_service=serve_proof_known_service(spec, fctx),
                     timeout=float(getattr(settings, "code_task_serve_check_timeout_seconds",
                                           180) or 180),
                     probe_paths=_connector_probe_paths(engine, run) or None,
+                    # WHAT THE APP DECLARES, so a session key BOSS generates is there (fresh,
+                    # throwaway) and a secret only a person sets is named, not crashed on.
+                    needs=_run_needs, bound=_run_bound,
                 )
             with _transaction(engine) as c:
                 emit_event(c, project_id, "code_task.app_serve_checked", "boss",
@@ -6974,7 +7006,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
 
                     _held = _tpl_hold_outcome(
                         failing, _install_fail[0], app_serves=app_serves_record,
-                        template_tests=((_template_record or {}).get("evidence") or {}).get("template_tests"))
+                        template_tests=((_template_record or {}).get("evidence") or {}).get("template_tests"),
+                        secret_scan=((_template_record or {}).get("evidence") or {}).get("secret_scan"))
                     if _held is not None:
                         ctx["template_hold"] = _held
                     c.execute(sql(
@@ -6998,7 +7031,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
 
                 _held = _tpl_hold_outcome([g for g in TEMPLATE_GATES
                                            if (_tpl_gates or {}).get(g) is not True],
-                                          _install_fail[0])
+                                          _install_fail[0],
+                                          secret_scan=((_template_record or {}).get("evidence")
+                                                       or {}).get("secret_scan"))
                 c.execute(sql("UPDATE code_task_runs SET status='blocked', phase='done', error=:e, "
                               "updated_at=now() WHERE id=:id"),
                           {"e": (_held or {}).get("error") or template_push_hold(_tpl_applies, _tpl_gates),

@@ -58,6 +58,8 @@ P1:
   engine:
     # Operator-reported: tsx Permission denied in the serve proof (crun_247435e1)
     - engine/tests/test_an_installed_executable_stays_executable.py
+    # Operator-reported: SESSION_SECRET missing in the serve proof; vitest.config secret false positive (crun_db538dff)
+    - engine/tests/test_an_app_runs_with_the_environment_it_declares.py
     # Workflows
     - engine/tests/test_workflow_capability_runner.py
     - engine/tests/test_a_failed_step_stops_the_run.py

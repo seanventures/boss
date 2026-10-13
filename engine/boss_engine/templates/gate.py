@@ -251,6 +251,11 @@ def connector_smoke(manifest: Any, serve: Optional[Mapping[str, Any]], *,
         return False, tt
     if serve.get("ok") is False and not serve.get("harness"):
         tt["error"] = "the app did not start, so the connector's wiring was not checked"
+        if serve.get("needs_secret"):
+            # Started with the environment the app declares (templates.run_env): what was
+            # missing is a secret only a person can set, named.
+            tt["error"] = ("the app did not start: it needs " + ", ".join(serve["needs_secret"])
+                           + ", so the connector's wiring was not checked")
         tt["because"] = "app_serves"  # a consequence: the gate that failed is app_serves
         return False, tt
     tt["not_run"] = str(serve.get("skipped") or serve.get("not_a_service") or serve.get("source")
@@ -452,8 +457,20 @@ def _derived_from_app_serves(template_tests: Any) -> bool:
             or str(template_tests.get("error") or "").startswith("the app did not start"))
 
 
+def secret_scan_where(secret_scan: Any, limit: int = 3) -> str:
+    """" (helpdesk-ai/vitest.config.ts:14 assigned_secret, ...)" — WHERE the scan matched: file,
+    line and rule, never the matched text. Empty when the scan recorded no finding."""
+    findings = (secret_scan or {}).get("findings") if isinstance(secret_scan, Mapping) else None
+    if not findings:
+        return ""
+    shown = [f"{f.get('path')}:{f.get('line')} {f.get('rule')}" for f in findings[:limit]
+             if isinstance(f, Mapping)]
+    more = int((secret_scan or {}).get("count") or len(findings)) - len(shown)
+    return " (" + ", ".join(shown) + (f", and {more} more" if more > 0 else "") + ")"
+
+
 def hold_outcome(failing: Any, install_failure: Any = None, *, app_serves: Any = None,
-                 template_tests: Any = None) -> Optional[dict]:
+                 template_tests: Any = None, secret_scan: Any = None) -> Optional[dict]:
     """{gates, reason, next_step, error} for a build whose failing gates include a template gate,
     else None. `error` is the one line a blocked build shows: why, then what to do.
 
@@ -470,6 +487,9 @@ def hold_outcome(failing: Any, install_failure: Any = None, *, app_serves: Any =
     if not gates:
         return None
     whys = {g: _WHY[g] for g in gates}
+    if "no_committed_secrets" in whys:
+        # The blocked line says WHERE, so nobody has to open the Checks to learn which file.
+        whys["no_committed_secrets"] += secret_scan_where(secret_scan)
     next_step = _NEXT[gates[0]]
     install = install_reason(install_failure)
     if install and "template_tests" in whys:
@@ -497,7 +517,8 @@ def held_run(connection: Any, run_id: str) -> Optional[dict]:
     row = connection.execute(text(
         "SELECT q.gates_failed, r.finalize_ctx->'failing_gates' AS fctx_failing, "
         "r.finalize_ctx->'install_failure' AS install_failure, "
-        "q.evidence->'app_serves' AS app_serves, q.evidence->'template'->'template_tests' AS template_tests "
+        "q.evidence->'app_serves' AS app_serves, q.evidence->'template'->'template_tests' AS template_tests, "
+        "q.evidence->'template'->'secret_scan' AS secret_scan "
         "FROM code_task_runs r LEFT JOIN quality_gates q ON q.code_task_run_id = r.id "
         "WHERE r.id = :i ORDER BY q.created_at DESC NULLS LAST LIMIT 1"),
         {"i": run_id}).mappings().first()
@@ -508,4 +529,4 @@ def held_run(connection: Any, run_id: str) -> Optional[dict]:
         if isinstance(value, list):
             failing |= {str(g) for g in value}
     return hold_outcome(failing, row["install_failure"], app_serves=row.get("app_serves"),
-                        template_tests=row.get("template_tests"))
+                        template_tests=row.get("template_tests"), secret_scan=row.get("secret_scan"))
