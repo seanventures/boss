@@ -19,6 +19,7 @@ is the guidance, the model impersonates the role. See docs/product/GOVERNED_CODI
 """
 from __future__ import annotations
 
+import contextlib
 import contextvars
 import logging
 import os
@@ -2051,6 +2052,66 @@ def _mutate_prompt(impl_files):
         "step. Edit ONLY implementation files, never the test files. Make a single change and end "
         "with a one-line summary of what you changed."
     )
+
+
+def _template_tests_home(spec: dict, fctx: dict, instructions: str) -> Optional[str]:
+    """The app directory a template's tests belong in: the named app, else the folder the brief
+    names ("in the `helpdesk-ai/` folder"), else None (BOSS then leaves the copy to the agent)."""
+    named = verification_target.official_app_id(spec, fctx)
+    if named:
+        return named
+    m = re.search(r"\bin (?:the )?`?([a-z0-9][a-z0-9._-]{0,60})/`?\s+(?:folder|directory)",
+                  instructions or "", re.IGNORECASE)
+    return m.group(1) if m else None
+
+
+def place_template_tests(root: Path, home: Optional[str]) -> list[str]:
+    """Copy the applied template's own test files into `home`/tests/, BEFORE any agent runs.
+
+    BOSS holds them on disk (templates.run_ref). The brief used to ask the agent to copy them
+    "as they are", and a HelpDesk AI build spent a 407-second stretch re-typing and diffing them
+    against the reference. A file already in place (a repair, a resume) is left as it is.
+    Returns the repo-relative paths placed. Never raises: a copy that fails leaves the old
+    instruction to the agent."""
+    from ..templates import run_ref
+
+    if not home:
+        return []
+    stack_dir = run_ref.current().get(run_ref.STACK_DIR_ENV)
+    if not stack_dir:
+        return []
+    src = Path(stack_dir)
+    placed: list[str] = []
+    try:
+        for f in sorted((src / "tests").rglob("*")):
+            if not f.is_file():
+                continue
+            rel = f"{home.strip('/')}/{f.relative_to(src).as_posix()}"
+            dest = Path(root) / rel
+            if dest.exists():
+                continue
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            for parent in [dest.parent, *dest.parent.parents]:
+                if parent == Path(root) or Path(root) not in parent.parents:
+                    break
+                with contextlib.suppress(OSError):
+                    os.chmod(parent, 0o2777)   # the run's uid writes beside them
+            dest.write_bytes(f.read_bytes())
+            os.chmod(dest, 0o666)
+            placed.append(rel)
+    except OSError:
+        _log_caught(logger)
+    return placed
+
+
+def _placed_tests_note(placed: list[str]) -> str:
+    if not placed:
+        return ""
+    return ("\n\nTHE TEMPLATE'S TESTS ARE ALREADY IN PLACE. BOSS copied the applied template's "
+            "test files into the app, exactly as the template ships them:\n"
+            + "\n".join(f"  - {p}" for p in placed[:60])
+            + "\nThey are frozen: do NOT re-create, re-type, edit, move or diff them against "
+            "$BOSS_TEMPLATE_STACK_DIR. Build the app so they pass.")
 
 
 def _build_fan_out(engine, project_id, settings) -> int:
@@ -4138,6 +4199,17 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                             "why": ("no test-related gate failed, so the existing suite is the "
                                     "oracle for this repair")})
 
+        # THE TEMPLATE'S TESTS, PLACED BY BOSS (not typed by a model): before any agent runs.
+        _placed_tpl_tests: list[str] = []
+        if not use_microvm:
+            _placed_tpl_tests = place_template_tests(
+                Path(root), _template_tests_home(spec, fctx, instructions))
+            if _placed_tpl_tests:
+                with _transaction(engine) as c:
+                    emit_event(c, project_id, "code_task.template_tests_placed", "boss",
+                               "code_task_run", run_id,
+                               {"count": len(_placed_tpl_tests), "paths": _placed_tpl_tests[:40]})
+
         def _run_split(agent, model, stage_prompt: str, fan: int, *, tests: bool, protect=None):
             """The writing stage split across the design's WORK PACKAGES, run in parallel CLI
             sessions (parallel_build), or None to run today's single session. Never raises:
@@ -4205,7 +4277,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 prompt = _qa_prompt(
                     title, instructions, criteria, test_cmd,
                     iac=iac_task, web=_web_verify, app_root=_app_id, stack_note=_stack_note,
-                )
+                ) + _placed_tests_note(_placed_tpl_tests)
                 # AUGMENT, DON'T RE-AUTHOR. On a repair the prior attempt's tests are ALREADY in
                 # the working tree (the retry clones the lineage branch), and the review names the
                 # exact gap — e.g. "the defects are all in app.js, which no test covers". Sending
@@ -4289,10 +4361,12 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     if split is not None:
                         r = split.as_role_result()
                         cost += int(r.get("cost_usd_micros") or 0)
-                        return r, [fc.path for fc in sandbox.diff() if _is_test_path(fc.path)], None
+                        return r, [fc.path for fc in sandbox.diff() if _is_test_path(fc.path)
+                                   and fc.path not in _placed_tpl_tests], None
                 r = a.run_role(prompt, root, model=m, parallel_agents=fan)
                 cost += int(r.get("cost_usd_micros") or 0)
-                return r, [fc.path for fc in sandbox.diff() if _is_test_path(fc.path)], None
+                return r, [fc.path for fc in sandbox.diff() if _is_test_path(fc.path)
+                           and fc.path not in _placed_tpl_tests], None
 
             r1, test_files, test_changes = _attempt_write_tests(escalate=False)
             # On a REPAIR the tree ALREADY holds a passing suite, so "wrote no new test files"
@@ -4347,6 +4421,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         "the spec/acceptance criteria and retry.",
                         failure_class="needs_human", reason_code="no_test_files")
             if not use_microvm:
+                # The placed template tests are frozen with QA's own.
+                test_files = list(test_files) + [p for p in _placed_tpl_tests
+                                                 if p not in test_files]
                 tests_before = _hash_files(root, test_files)
                 # Snapshot the frozen tests so a tamper-then-retry starts from clean tests
                 # (the repair loop restores them before re-invoking the implementer).
@@ -4368,7 +4445,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                             if do_separate_tests
                             else _solo_prompt(
                                 title, instructions, criteria, test_cmd,
-                                iac=iac_task, web=_web_verify, app_root=_app_id)) + _stack_note
+                                iac=iac_task, web=_web_verify, app_root=_app_id)) + _stack_note \
+            + _placed_tests_note(_placed_tpl_tests)
         max_repair = max(0, min(5, int(
             spec.get("repair_retries", settings.code_repair_max_retries) or 0)))
         repair_attempts = 0

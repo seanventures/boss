@@ -167,8 +167,10 @@ def build_directive(*, row: dict, manifest: TemplateManifest, stack: str, framew
         + (f", framework {framework}" if framework else "") + ".",
         "",
         "ADAPT the reference implementation below into this app (its router, its data layer, its "
-        "UI); do not overlay files blindly. Copy the template's test files into the app at the same "
-        "relative paths (" + ", ".join(tests) + ") and keep them as they are: BOSS runs them as the "
+        "UI); do not overlay files blindly. The template's test files (" + ", ".join(tests) + ") "
+        "go into the app at the same relative paths, exactly as they are: BOSS places them there "
+        "before the build's agents start, so never re-type or diff them, and copy one from "
+        "$BOSS_TEMPLATE_STACK_DIR only if it is missing. BOSS runs them as the "
         f"`template_tests` gate with `{test_spec.command}` from the app's directory and requires "
         f"at least {test_spec.min_tests} passing tests.",
         "Never commit a secret: the template's secrets arrive at run time from the vault.",
