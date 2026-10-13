@@ -131,8 +131,12 @@ def test_the_shim_socket_belongs_to_the_run_and_answers_only_its_uid(fake_sandbo
             s = socket.socket(socket.AF_UNIX)
             s.settimeout(3)
             s.connect(path)
-            s.sendall(b"get\n")
-            assert s.recv(4096) == b""
+            # the shim may hang up before or after the request lands; either way it says nothing
+            try:
+                s.sendall(b"get\n")
+                assert s.recv(4096) == b""
+            except (BrokenPipeError, ConnectionResetError):
+                pass
             s.close()
         finally:
             runs.close_shim_socket(shim.run_id)
