@@ -133,7 +133,9 @@ LOW_EFFORT_THINKING_CAP = 4000
 #: Per-stage bounds. The security seat answers in ONE turn, so the per-step cap is its whole
 #: budget: a HelpDesk-lite security check thought ~11k tokens for 5.5 min while the other two
 #: seats (same diff, running beside it) were done in 1.9 and 2.9; it gated the whole panel.
-STAGE_THINKING_CAPS = {"security_check": 6000}
+#: The reviewer and the consistency check read across many turns, so their cap bounds the
+#: reasoning behind each step and the verdict, never how many files they may open.
+STAGE_THINKING_CAPS = {"security_check": 6000, "review_code": 6000, "consistency_check": 6000}
 _THINKING_CAP_ENV = "BOSS_CODE_AGENT_MAX_THINKING_TOKENS"
 
 

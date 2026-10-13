@@ -1418,6 +1418,24 @@ def _run_declaration_rule() -> str:
     return RUN_DECLARATION_INSTRUCTION
 
 
+#: WHAT THE REVIEWERS CHECK, GIVEN TO THE IMPLEMENTER BEFORE IT HANDS OFF. A HelpDesk-lite
+#: build (crun_4813f68c) spent 10.5 min in two fix rounds on findings any of these lines names:
+#: async handlers whose rejected queries crashed the process, an unvalidated id reaching SQL, an
+#: array in a login body. Getting the first pass right is cheaper than the round that fixes it.
+FIRST_PASS_CHECKLIST = (
+    "\nBEFORE YOU HAND OFF (the reviewers check exactly this; spend one minute on it and fix "
+    "what fails):\n"
+    "- Every async handler's errors reach the error handler (try/catch with next(err), or a "
+    "wrapper): no rejected promise or thrown error can crash the process.\n"
+    "- Every route checks who may call it (signed in, then role or ownership) before it reads "
+    "or writes anything.\n"
+    "- Every input is validated before use: required fields, types (a string is not an array or "
+    "object), ids well-formed and in range. Bad input is a 4xx, never a 500.\n"
+    "- No secret, password or key in code or committed config: read it from the environment.\n"
+    "- Exactly what the criteria name: nothing unasked, no unused dependencies.\n"
+)
+
+
 def _impl_prompt(title, instructions, test_files, test_cmd, *, criteria=(), iac=False, ui=False, app_root=None):
     tf = ", ".join(test_files) or "(the test files in this repo)"
     scope = (
@@ -1438,6 +1456,7 @@ def _impl_prompt(title, instructions, test_files, test_cmd, *, criteria=(), iac=
         + _run_declaration_rule()
         + "- Do NOT commit. End with a one-line summary of what you changed.\n"
         + _deferred_e2e_note()
+        + FIRST_PASS_CHECKLIST
         + (_IAC_GUIDANCE if iac else "")
         + (design_prompts.design_impl_clause() if ui else "")  # APP-2: design axis for UI tasks
     )
@@ -1918,6 +1937,7 @@ def _solo_prompt(title, instructions, criteria, test_cmd, *, iac=False, web=Fals
             "Create parent directories for SQLite/data files before opening them.\n"
             + _run_declaration_rule()
             + "- Do NOT commit. End with a one-line summary of what you built.\n"
+            + FIRST_PASS_CHECKLIST
             + (_IAC_GUIDANCE + _IAC_QA_GUIDANCE if iac else "")
         )
     return (
@@ -1932,6 +1952,22 @@ def _solo_prompt(title, instructions, criteria, test_cmd, *, iac=False, web=Fals
         + "- End with a one-line summary of what you built.\n"
         + (_IAC_GUIDANCE + _IAC_QA_GUIDANCE if iac else "")
     )
+
+
+def _fix_round_change(prior_findings: str, fixed: dict) -> str:
+    """WHAT A FAILED SEAT RE-REVIEWS AFTER A FIX ROUND: its own findings, and only the files
+    the fix changed. A HelpDesk-lite round re-reviewed the whole change from scratch (review_code
+    5 and 3 min per round) to confirm two fixes. Unchanged code was already judged; the seat
+    confirms its findings are resolved and looks for a NEW blocking defect in the fixed lines.
+    Findings still block: a finding the fix did not resolve is raised again."""
+    files = review_input.build(dict(fixed)).block()
+    return ("FIX ROUND RE-REVIEW. You reviewed this change before and raised the findings below. "
+            "The implementer has since changed ONLY the files inlined after them. (1) For each "
+            "of your blocking findings, confirm it is resolved; raise it again, in the same "
+            "FINDING format, if it is not. (2) Check these changed files for a NEW blocking "
+            "defect. Do not re-review unchanged code: it was judged already.\n\n"
+            "YOUR PREVIOUS FINDINGS:\n" + str(prior_findings or "")[:6000] + "\n\n"
+            "WHAT THE FIX CHANGED:\n" + files)
 
 
 def _render_change_for_review(files, *, max_total: int = 48000, max_per_file: int = 12000) -> str:
@@ -6277,6 +6313,16 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     change_block = _review_change.block()
                     impl_files = [fc.path for fc in sandbox.diff()
                                   if not _is_test_path(fc.path)] or impl_files
+                    # SCOPED TO WHAT THE FIX CHANGED (_fix_round_change). With nothing recorded
+                    # as changed (a test-only round), the seat judges the whole change as before.
+                    _fixed = ({p: c for p, c in _after.items() if _before.get(p) != c}
+                              if finding_bits else {})
+
+                    def _seat_change(prior: dict) -> str:
+                        if not _fixed:
+                            return change_block
+                        return _fix_round_change((prior or {}).get("summary") or "", _fixed)
+                    _rc_prior, _r6_prior, _r4_prior = dict(r3), dict(r6), dict(r4)
                     # THE FAILED SEATS RE-REVIEW SIDE BY SIDE, as the first panel does. They read
                     # the same delta and do not depend on each other; one after another, a
                     # HelpDesk-lite round spent 6.5 min (07:31 -> 07:37) where the slowest seat
@@ -6286,7 +6332,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                         run_id=run_id, stage="review_code")
                         rr, _hollow = _judge_seat("review_code", lambda pre: review_agent.run_role(
                             pre + _review_prompt(title, criteria, instructions=instructions,
-                                                 ui=ui_task, change=change_block),
+                                                 ui=ui_task, change=_seat_change(_rc_prior)),
                             review_root, read_only=True, model=review_model))
                         return rr, _hollow
 
@@ -6297,7 +6343,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                             "consistency_check", lambda pre: consistency_agent.run_role(
                                 pre + _consistency_prompt(title, criteria, design,
                                                           instructions=instructions,
-                                                          change=change_block),
+                                                          change=_seat_change(_r6_prior)),
                                 review_root, read_only=True, model=consistency_model))
                         return rc2, _hollow
 
@@ -6307,7 +6353,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         rs2, _hollow = _judge_seat(
                             "security_check", lambda pre: security_agent.run_role(
                                 pre + _security_prompt(title, instructions=instructions,
-                                                       criteria=criteria, change=change_block),
+                                                       criteria=criteria,
+                                                       change=_seat_change(_r4_prior)),
                                 review_root, read_only=True, model=security_model))
                         return rs2, _hollow
 
