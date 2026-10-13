@@ -27,6 +27,16 @@ from typing import Any, Iterable, Optional
 
 _SCOPE: ContextVar[Optional[dict[str, bool]]] = ContextVar("boss_build_scope", default=None)
 
+#: The phrase the More tests step's brief carries (workflow_capability_runner._more_tests_brief).
+MORE_TESTS_MARKER = "MORE TESTS PASS"
+#: How many times pass 1's test budget pass 2 may write.
+MORE_TESTS_BUDGET_FACTOR = 2
+
+
+def more_tests_pass() -> bool:
+    scope = _SCOPE.get()
+    return bool(scope and scope.get("more_tests"))
+
 # A health endpoint (/healthz) is not a request for metrics: the Notes Lite brief asked for
 # /healthz and got the whole Prometheus standard. Only metrics, monitoring or a deploy count.
 _OPS_WORDS = re.compile(
@@ -42,6 +52,15 @@ _OPS_CAPABILITIES = frozenset({"deploy", "monitor", "smoke_test", "preview_deplo
 def decide(title: str, instructions: str, criteria: Iterable[str] = (), *,
            workflow_deploys: bool = False, has_manifest: bool = False) -> dict[str, bool]:
     text = "\n".join([title or "", instructions or "", *[str(c) for c in criteria or ()]])
+    if MORE_TESTS_MARKER in text:
+        # PASS 2 (workflow step more_tests): the browser tests pass 1 deferred are written now.
+        return {
+            "ops": bool(workflow_deploys or has_manifest or _OPS_WORDS.search(text)),
+            "e2e": bool(_E2E_WORDS.search(text)),
+            "e2e_deferred": False,
+            "more_tests": True,
+            "bundler": bool(_BUNDLER_WORDS.search(text)),
+        }
     return {
         "ops": bool(workflow_deploys or has_manifest or _OPS_WORDS.search(text)),
         "e2e": False,

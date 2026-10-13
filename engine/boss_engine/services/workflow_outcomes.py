@@ -200,6 +200,7 @@ VERDICTS: dict[str, Callable[[Mapping[str, Any], Mapping[str, Any]], Verdict]] =
     "architecture": awaited_work,
     "preview": awaited_work,
     "plrr": awaited_work,
+    "more_tests": awaited_work,
     "deploy": awaited_work,
     "redeploy": awaited_work,
     "retry_build": awaited_work,

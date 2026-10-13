@@ -1216,8 +1216,13 @@ def test_budget(criteria, budget: Optional[int] = None) -> int:
     never more than the project's budget (build_test_budget, default 20), however long the brief.
     A HelpDesk-size brief's suite grew with the brief: 76 KB of tests and 27.6 minutes of
     write_tests, then 81 minutes of implement making them all pass."""
+    from .build_scope import MORE_TESTS_BUDGET_FACTOR, more_tests_pass
+
     n = max(1, len([c for c in (criteria or []) if str(c).strip()]))
     cap = int(budget or TEST_BUDGET_DEFAULT)
+    if more_tests_pass():
+        # Pass 2 adds coverage: twice pass 1's budget, not sized to the criteria.
+        return max(1, cap * MORE_TESTS_BUDGET_FACTOR)
     return max(1, min(cap, 3 * n + 3))
 
 

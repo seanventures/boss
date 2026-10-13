@@ -412,6 +412,24 @@ CAPABILITIES: dict[str, Capability] = {
                       "build-level model spend and time.",
         ),
         _cap(
+            key="more_tests",
+            # pass 2 of a build: coverage after the app already works
+            captain="qa",
+            label="More tests",
+            summary="After the app works and its preview is up, add tests for what was built "
+                    "(edge cases, error paths, API contracts, browser tests) on the same PR, and "
+                    "fix any bug they find. Never holds up the build, its PR or its preview.",
+            tool=None,
+            risk_tier=1,
+            required_inputs=("run_id",),
+            produces=("code_task_run_id", "bugs_fixed"),
+            typical_minutes=15,
+            is_async=True,
+            needs_model=True,
+            cost_note="A second, test-focused pass on the same branch and PR. If it fails, the "
+                      "run carries on with the first pass's code.",
+        ),
+        _cap(
             key="deploy",
             family="deploy",
             # gets it onto a machine and keeps it there

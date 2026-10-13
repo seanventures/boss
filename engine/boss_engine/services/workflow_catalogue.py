@@ -68,6 +68,7 @@ DEFAULT_STEP_AGENTS: dict[str, str] = {
     "preview": "qa",
     "review": "adversarial_reviewer",
     "plrr": "sre",
+    "more_tests": "qa",
     "monitor": "sre",
     "document": "docs_writer",
     # THE SECURITY REVIEW: the security reviewer scans, re-reviews and reports; the PM convenes
@@ -244,6 +245,9 @@ CATALOGUE: list[dict[str, Any]] = [
             _step("spec_review", "spec_review", approver_role="pm"),
             _step("build", "build", _build_inputs(after_meeting=True)),
             _step("preview", "preview", {"run_id": _from("build", "code_task_run_id")}),
+            # PASS 2 (operator, 2026-10-13): the build ships a working app with a lean suite and
+            # its preview first; this adds the coverage on the same PR, in its own commits.
+            _step("more_tests", "more_tests", {"run_id": _from("build", "code_task_run_id")}),
             # READINESS BEFORE PRODUCTION, NOT AFTER IT.
             #
             # Preview answers "does it do the thing". It says nothing about whether anyone can
@@ -292,6 +296,9 @@ CATALOGUE: list[dict[str, Any]] = [
             _step("meeting", "meeting", {"directive": _in("directive")}),
             _step("build", "build", _build_inputs(after_meeting=True)),
             _step("preview", "preview", {"run_id": _from("build", "code_task_run_id")}),
+            # PASS 2 (operator, 2026-10-13): the build ships a working app with a lean suite and
+            # its preview first; this adds the coverage on the same PR, in its own commits.
+            _step("more_tests", "more_tests", {"run_id": _from("build", "code_task_run_id")}),
             # THE NUMBERS, ONCE EVERYTHING THAT DOES WORK HAS DONE IT.
             #
             # Last, before the deploy gate — deliberately after readiness and its preview, so
@@ -304,7 +311,7 @@ CATALOGUE: list[dict[str, Any]] = [
             # report. And a run that stops even earlier is not left without one: the same
             # report is assembled on demand for any run, at any point, from the same evidence.
             _step("report", "report"),
-            _step("deploy", "deploy", {"run_id": _from("build", "code_task_run_id")},
+            _step("deploy", "deploy", {"run_id": _from("more_tests", "code_task_run_id")},
                   approver_role="release_manager"),
             _step("notify", "notify", _notify_inputs()),
         ]),
@@ -334,6 +341,9 @@ CATALOGUE: list[dict[str, Any]] = [
             _step("spec_review", "spec_review", approver_role="pm"),
             _step("build", "build", _build_inputs(after_meeting=True)),
             _step("preview", "preview", {"run_id": _from("build", "code_task_run_id")}),
+            # PASS 2 (operator, 2026-10-13): the build ships a working app with a lean suite and
+            # its preview first; this adds the coverage on the same PR, in its own commits.
+            _step("more_tests", "more_tests", {"run_id": _from("build", "code_task_run_id")}),
             _step("ux_review", "ux_review", approver_role="design_critic"),
             # THE NUMBERS, ONCE EVERYTHING THAT DOES WORK HAS DONE IT.
             #
@@ -347,7 +357,7 @@ CATALOGUE: list[dict[str, Any]] = [
             # report. And a run that stops even earlier is not left without one: the same
             # report is assembled on demand for any run, at any point, from the same evidence.
             _step("report", "report"),
-            _step("deploy", "deploy", {"run_id": _from("build", "code_task_run_id")},
+            _step("deploy", "deploy", {"run_id": _from("more_tests", "code_task_run_id")},
                   approver_role="release_manager"),
             _step("monitor", "monitor"),
         ]),

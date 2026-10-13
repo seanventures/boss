@@ -5800,6 +5800,7 @@ _AWAIT_LABELS: dict[str, str] = {
 #: A code task awaited by a step that is not the build, named after that step.
 _CODE_TASK_BY_CAPABILITY: dict[str, str] = {
     "plrr": "the readiness fixes to finish",
+    "more_tests": "the More tests pass to finish",
     "redeploy": "the rebuild to finish",
 }
 
