@@ -342,6 +342,19 @@ def _seed_project_defaults(
         )
 
 
+def _install_builtin_templates(connection, org_id: str) -> None:
+    """An org gets the shipped templates when it is CREATED, so reading its template list later
+    writes nothing (a GET stays a GET). Never fails the seed: a template that cannot be read is
+    the template validator's report, not a broken install."""
+    try:
+        from .templates.service import sync_builtins
+
+        with connection.begin_nested():
+            sync_builtins(connection, org_id)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[seed] built-in templates not installed for {org_id}: {type(exc).__name__}")
+
+
 def onboard_org(connection, settings, name, *, entitlements, members, specpack, slug=None):
     """Create a new organization (org → workspace → project) and seed it with the
     common defaults. Returns the new ids. Used by the admin onboarding endpoint."""
@@ -366,6 +379,7 @@ def onboard_org(connection, settings, name, *, entitlements, members, specpack, 
         connection, settings, project_id,
         entitlements=entitlements, members=members, specpack=specpack, actor="onboarding",
     )
+    _install_builtin_templates(connection, org_id)
     return {"org_id": org_id, "workspace_id": workspace_id, "project_id": project_id, "name": name}
 
 
@@ -389,6 +403,7 @@ def seed() -> None:
             ),
             {"id": settings.default_org_id},
         )
+        _install_builtin_templates(connection, settings.default_org_id)
         connection.execute(
             text(
                 """

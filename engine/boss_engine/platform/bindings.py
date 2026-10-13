@@ -177,8 +177,10 @@ def bind_attached(connection: Any, *, org_id: str, project_id: str, app_key: str
     name the app gets is bound to the same value. Refs come back; values never leave here."""
     from ..templates import secrets as app_secrets
     assert request.attach is not None
-    values, _withheld = app_secrets.values_for_env(connection, org_id=org_id, project_id=project_id,
-                                                   app_key=app_key, env="deploy")
+    from ..templates.base_url import deploy_secret_values
+
+    values, _withheld = deploy_secret_values(connection, org_id=org_id, project_id=project_id,
+                                             app_key=app_key)
     out: dict[str, SecretRef] = {}
     missing = [src for src in request.attach.bindings.values() if src not in values]
     if missing:

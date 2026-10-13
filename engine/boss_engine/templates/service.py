@@ -151,9 +151,21 @@ def _card(row: Any) -> dict:
     }
 
 
+def ensure_builtins(c, org_id: str) -> None:
+    """The built-ins for an org that has NEVER had them: an org created after the API booted.
+
+    Refreshing a CHANGED built-in is the API's boot step (main._sync_builtin_templates), so a
+    read stays a read: listing or describing templates writes nothing once an org has them.
+    """
+    have = c.execute(text("SELECT 1 FROM app_templates WHERE org_id = :o AND source = 'builtin' "
+                          "LIMIT 1"), {"o": org_id}).first()
+    if have is None:
+        sync_builtins(c, org_id)
+
+
 def list_templates(c, org_id: str, *, stack: Optional[str] = None, status: Optional[str] = None,
                    label: Optional[str] = None, include_hidden: bool = False) -> list[dict]:
-    sync_builtins(c, org_id)
+    ensure_builtins(c, org_id)
     rows = c.execute(text(f"SELECT {_COLS} FROM app_templates WHERE org_id = :o "
                           "ORDER BY template_key, created_at DESC"), {"o": org_id}).mappings().all()
     out = []
@@ -173,7 +185,7 @@ def list_templates(c, org_id: str, *, stack: Optional[str] = None, status: Optio
 
 def get_row(c, org_id: str, template_ref: str, *, for_update: bool = False) -> dict:
     """A template by its row id, or by its key (the newest active version)."""
-    sync_builtins(c, org_id)
+    ensure_builtins(c, org_id)
     lock = " FOR UPDATE" if for_update else ""
     row = c.execute(text(f"SELECT {_COLS} FROM app_templates WHERE org_id = :o AND id = :r{lock}"),
                     {"o": org_id, "r": template_ref}).mappings().first()
