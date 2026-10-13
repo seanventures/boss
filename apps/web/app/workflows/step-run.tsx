@@ -472,20 +472,25 @@ export function StepOutputFacts({ facts, details }: { facts: OutputFact[]; detai
 }
 
 /** The step's log as sentences, errors first, and the way into its whole log. */
-export function StepActivity({ state, href, live, settled = false }: {
+export function StepActivity({ state, href, live, settled = false, failed = false }: {
   state: StepActivityState; href: string; live: boolean;
   /** The step SUCCEEDED: what went wrong along the way was fixed by the step itself. */
   settled?: boolean;
+  /** The step FAILED (or stopped the run): now its warnings are worth a count too. */
+  failed?: boolean;
 }) {
   const rows = state.rows.slice(0, STEP_ACTIVITY_ROWS);
   // A BUILD THAT PASSED DID NOT END IN 29 ERRORS. Failing a test before fixing it is how the
   // work is done; once the step has succeeded those are counted as recovered, in a neutral
-  // voice, and red is kept for a step that is still failing or has failed.
+  // voice, and red is kept for a step that is still failing or has failed. Warnings ("npm WARN
+  // deprecated") are noise while a step works: they are counted only once it has failed.
+  const errors = state.errors ? `${state.errors} error${state.errors === 1 ? "" : "s"}` : "";
   const loud = settled
     ? (state.errors ? `${state.errors} recovered` : "")
-    : [state.errors ? `${state.errors} error${state.errors === 1 ? "" : "s"}` : "",
-       state.warnings ? `${state.warnings} warning${state.warnings === 1 ? "" : "s"}` : ""]
-      .filter(Boolean).join(" · ");
+    : failed
+      ? [errors, state.warnings ? `${state.warnings} warning${state.warnings === 1 ? "" : "s"}` : ""]
+          .filter(Boolean).join(" · ")
+      : errors;
   return (
     <section className="wf-step-sec" data-testid="dw-step-activity" aria-label="Activity">
       <header className="wf-step-sec-head">

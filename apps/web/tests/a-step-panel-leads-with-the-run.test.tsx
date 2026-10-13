@@ -218,6 +218,19 @@ describe("(A) the step's activity, and the way straight into its log", () => {
     expect(href.searchParams.get("step_name")).toBe("Plan it");
   });
 
+  it("warnings are counted only once a step has failed; a running step counts its errors", async () => {
+    const state = { rows: [], loaded: true, errors: 2, warnings: 29, model: "", cost: 0, calls: 0 };
+    const loud = () => q('[data-testid="dw-step-log-loud"]')!.textContent?.trim();
+    await render(<StepActivity state={state} live href="#" />);
+    expect(loud()).toBe("2 errors");
+    await render(<StepActivity state={state} live={false} failed href="#" />);
+    expect(loud()).toBe("2 errors · 29 warnings");
+    await render(<StepActivity state={state} live={false} settled href="#" />);
+    expect(loud()).toBe("2 recovered");
+    await render(<StepActivity state={{ ...state, errors: 0 }} live href="#" />);
+    expect(host!.querySelector('[data-testid="dw-step-log-loud"]')).toBeNull();
+  });
+
   it("a step that succeeded counts what it hit along the way as recovered, not as errors", async () => {
     window.history.replaceState({}, "", "/?org=org_boss&project=p1&area=delivery_workflows&wfr=wfr_1");
     function Probe() {
