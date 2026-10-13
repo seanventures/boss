@@ -75,3 +75,12 @@ def test_a_low_effort_writing_step_gets_a_small_thinking_budget(monkeypatch, tmp
     set_llm_context(stage="design")
     assert _launch(monkeypatch, tmp_path)["env"]["MAX_THINKING_TOKENS"] == str(
         code_agent.THINKING_TOKEN_CAP_DEFAULT)
+
+
+def test_the_one_turn_security_seat_has_a_bounded_thinking_budget(monkeypatch, tmp_path):
+    monkeypatch.delenv("MAX_THINKING_TOKENS", raising=False)
+    monkeypatch.delenv("BOSS_CODE_AGENT_MAX_THINKING_TOKENS", raising=False)
+    set_llm_context(stage="security_check")
+    seen = _launch(monkeypatch, tmp_path, read_only=True)
+    assert seen["env"]["MAX_THINKING_TOKENS"] == str(code_agent.STAGE_THINKING_CAPS["security_check"])
+    assert _flag(seen["cmd"], "--effort") == "high"

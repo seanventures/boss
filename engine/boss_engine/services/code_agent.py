@@ -130,6 +130,10 @@ _IDLE_TIMEOUT_DEFAULT = 600
 THINKING_TOKEN_CAP_DEFAULT = 12000
 #: The bound per step for a writing stage running at low effort.
 LOW_EFFORT_THINKING_CAP = 4000
+#: Per-stage bounds. The security seat answers in ONE turn, so the per-step cap is its whole
+#: budget: a HelpDesk-lite security check thought ~11k tokens for 5.5 min while the other two
+#: seats (same diff, running beside it) were done in 1.9 and 2.9; it gated the whole panel.
+STAGE_THINKING_CAPS = {"security_check": 6000}
 _THINKING_CAP_ENV = "BOSS_CODE_AGENT_MAX_THINKING_TOKENS"
 
 
@@ -201,6 +205,12 @@ def _mark_live(parsed: Optional[dict], live_written: dict) -> None:
     if isinstance(parsed, dict) and int((live_written or {}).get("rows") or 0) > 0:
         parsed["_turns"] = []
         parsed["_turns_live"] = True
+
+
+def _current_stage() -> str:
+    from .llm_telemetry import get_llm_context
+
+    return str(get_llm_context().get("stage") or "").strip().lower()
 
 
 def _current_effort() -> Optional[str]:
@@ -905,6 +915,9 @@ class ClaudeCodeAgent:
             # every one of a HelpDesk implement's 424 steps, reads and `ls` included.
             if _current_effort() == "low":
                 cap = min(cap, LOW_EFFORT_THINKING_CAP)
+            stage_cap = STAGE_THINKING_CAPS.get(_current_stage())
+            if stage_cap:
+                cap = min(cap, stage_cap)
             env["MAX_THINKING_TOKENS"] = str(cap)
         return env
 
