@@ -25,6 +25,8 @@ MANIFEST = {
         ("node", "node --test tests/deps"),
         ("java", "mvn -q -B test"))},
     "license": "Apache-2.0", "min_boss": "1.0.0",
+    # An idea: its tests are placed and run by the build (a connector's are not, gate.connector_smoke).
+    "labels": ["idea"],
 }
 JUNIT = b'<testsuite><testcase name="a"/><testcase name="b"/></testsuite>'
 

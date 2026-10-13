@@ -132,6 +132,31 @@
               }
             },
             "next": [
+              "more_tests"
+            ],
+            "captain": "qa",
+            "default_captain": "qa",
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "more_tests",
+            "kind": "capability",
+            "binding": {
+              "capability": "more_tests",
+              "inputs": {
+                "run_id": {
+                  "from_step": "build",
+                  "field": "code_task_run_id"
+                }
+              }
+            },
+            "next": [
               "plrr"
             ],
             "captain": "qa",
@@ -401,6 +426,31 @@
               }
             },
             "next": [
+              "more_tests"
+            ],
+            "captain": "qa",
+            "default_captain": "qa",
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "more_tests",
+            "kind": "capability",
+            "binding": {
+              "capability": "more_tests",
+              "inputs": {
+                "run_id": {
+                  "from_step": "build",
+                  "field": "code_task_run_id"
+                }
+              }
+            },
+            "next": [
               "report"
             ],
             "captain": "qa",
@@ -438,7 +488,7 @@
               "capability": "deploy",
               "inputs": {
                 "run_id": {
-                  "from_step": "build",
+                  "from_step": "more_tests",
                   "field": "code_task_run_id"
                 }
               }
@@ -672,6 +722,31 @@
               }
             },
             "next": [
+              "more_tests"
+            ],
+            "captain": "qa",
+            "default_captain": "qa",
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "more_tests",
+            "kind": "capability",
+            "binding": {
+              "capability": "more_tests",
+              "inputs": {
+                "run_id": {
+                  "from_step": "build",
+                  "field": "code_task_run_id"
+                }
+              }
+            },
+            "next": [
               "ux_review"
             ],
             "captain": "qa",
@@ -728,7 +803,7 @@
               "capability": "deploy",
               "inputs": {
                 "run_id": {
-                  "from_step": "build",
+                  "from_step": "more_tests",
                   "field": "code_task_run_id"
                 }
               }

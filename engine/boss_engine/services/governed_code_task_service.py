@@ -57,7 +57,7 @@ from .code_task_service import (
 from .core import create_blocking_decision, emit_event, make_id, record_policy_eval
 from .github_app_adapter import GitHubAppAdapter
 from .iac_verify import IacVerifyResult, detect_iac_files, is_iac_task, run_iac_verify_lane
-from .llm_telemetry import clear_llm_context, record_llm_call, set_llm_context
+from .llm_telemetry import clear_llm_context, get_llm_context, record_llm_call, set_llm_context
 
 logger = logging.getLogger(__name__)
 
@@ -999,8 +999,26 @@ _IAC_QA_GUIDANCE = (
 )
 
 
+def _connector_probe_paths(engine, run: dict) -> list[str]:
+    """The GET routes the serve proof probes for an applied CONNECTOR ([] otherwise)."""
+    from ..templates import gate as template_gate
+    from ..templates.manifest import validate_manifest
+
+    try:
+        with _transaction(engine) as c:
+            applied = template_gate.applied_template(c, run)
+        if not applied or applied.get("error"):
+            return []
+        manifest = validate_manifest(dict(applied.get("manifest") or {}))
+        return template_gate.probe_paths(manifest) if manifest.item_kind == "connector" else []
+    except Exception:  # noqa: BLE001 — no probe: the gate says the routes were not checked
+        _log_caught(logger)
+        return []
+
+
 def _template_gates(engine, run: dict, sandbox, *, root, cwd, changed_files: dict,
-                    tests_passed: bool, use_microvm: bool, stack_plan=None) -> Optional[dict]:
+                    tests_passed: bool, use_microvm: bool, stack_plan=None,
+                    serve: Optional[dict] = None) -> Optional[dict]:
     """THE TEMPLATE HOOK (APP_TEMPLATES_AND_SECURITY_LOOP.md §2.3, stream S2; the one function this
     file holds for F2, coordinated with S1's toolchain code).
 
@@ -1077,7 +1095,7 @@ def _template_gates(engine, run: dict, sandbox, *, root, cwd, changed_files: dic
             template=applied, files=applied.get("files") or {}, changed=changed_files,
             cwd=None if use_microvm else Path(cwd), run_command=None if use_microvm else _run,
             bound_values=bound, tests_passed=bool(tests_passed),
-            substrate="microvm" if use_microvm else "local")
+            substrate="microvm" if use_microvm else "local", serve=serve)
     if backend_note and isinstance(result.evidence.get("template_tests"), dict):
         result.evidence["template_tests"].update(backend_note)
     return {"gates": result.gates, "evidence": result.evidence}
@@ -1099,11 +1117,33 @@ def pg_json(value) -> str:
     return json.dumps(_clean(value), default=str)
 
 
+#: Whether a task's context block carries the service standards, sticky per task once any
+#: stage asked, so every stage of one build renders the SAME bytes (_ctx_block). Bounded: a
+#: long-lived worker builds many tasks.
+_CTX_SERVICE: dict = {}
+_CTX_SERVICE_MAX = 256
+
+
 def _ctx_block(title, instructions, criteria, *, service: bool = False) -> str:
     """Identical task-context preamble for EVERY pipeline stage — byte-identical on
     purpose. The model API's prompt cache is keyed on the request prefix, so stages
     launched back-to-back (within the cache TTL) re-READ this block from cache instead
-    of cold-ingesting it in each fresh session. Keep all stage-specific text AFTER it."""
+    of cold-ingesting it in each fresh session. Keep all stage-specific text AFTER it.
+
+    `service` used to make the block differ BY STAGE (QA and implement passed True for a
+    served app, the reviewers False), so the shared prefix broke at the standards line. Once
+    any stage of a task asks for the service standards, every later stage of the same task
+    gets them too (code_agent.SHARED_CONTEXT_START puts the block in the system prompt)."""
+    key = (str(title or ""), str(instructions or ""), tuple(str(c) for c in (criteria or [])))
+    sticky = bool(service) or bool(_CTX_SERVICE.get(key))
+    if sticky and not _CTX_SERVICE.get(key):
+        if len(_CTX_SERVICE) >= _CTX_SERVICE_MAX:
+            _CTX_SERVICE.pop(next(iter(_CTX_SERVICE)), None)
+        _CTX_SERVICE[key] = True
+    return _render_ctx_block(title, instructions, criteria, service=sticky)
+
+
+def _render_ctx_block(title, instructions, criteria, *, service: bool = False) -> str:
     crit = "\n".join(f"- {c}" for c in criteria or []) or "- (none specified)"
 
     # Standards the PLATFORM requires, as distinct from the ones `_standards_prompt` infers by
@@ -1159,20 +1199,77 @@ _NO_SECRETS_IN_TESTS = (
 )
 
 
-def _test_scope_clause(criteria) -> str:
+#: The most test cases a build writes when the project sets no build_test_budget.
+TEST_BUDGET_DEFAULT = 20
+
+#: One test case, per language: JS/TS it()/test(), Python def test_, JVM @Test, Go func Test.
+_TEST_CASE_RE = re.compile(
+    r"^\s*(?:(?:it|test)(?:\.(?:only|skip|concurrent|each\s*\([^\n]*?\)))?\s*\(\s*[`'\"]"
+    r"|(?:async\s+)?def\s+test_\w*\s*\("
+    r"|@Test\b"
+    r"|func\s+Test\w*\s*\()",
+    re.MULTILINE)
+
+
+def test_budget(criteria, budget: Optional[int] = None) -> int:
+    """The most test cases this build writes: 1-3 per acceptance criterion and 3 edge cases,
+    never more than the project's budget (build_test_budget, default 20), however long the brief.
+    A HelpDesk-size brief's suite grew with the brief: 76 KB of tests and 27.6 minutes of
+    write_tests, then 81 minutes of implement making them all pass."""
+    from .build_scope import MORE_TESTS_BUDGET_FACTOR, more_tests_pass
+
+    n = max(1, len([c for c in (criteria or []) if str(c).strip()]))
+    cap = int(budget or TEST_BUDGET_DEFAULT)
+    if more_tests_pass():
+        # Pass 2 adds coverage: twice pass 1's budget, not sized to the criteria.
+        return max(1, cap * MORE_TESTS_BUDGET_FACTOR)
+    return max(1, min(cap, 3 * n + 3))
+
+
+def count_test_cases(root: Path, files) -> int:
+    """Test cases in `files` (repo-relative), counted by BOSS, not reported by the model."""
+    total = 0
+    for rel in files or []:
+        try:
+            text = (Path(root) / rel).read_text(errors="ignore")
+        except OSError:
+            continue
+        total += len(_TEST_CASE_RE.findall(text))
+    return total
+
+
+def _test_budget_trim_prompt(written: int, cap: int) -> str:
+    """The test author's one trim turn when its suite is over the budget (resumed session)."""
+    return (
+        f"--- TEST BUDGET ---\nBOSS counted {written} test cases in the files you wrote; this "
+        f"build's hard limit is {cap}. Delete the lowest-priority cases until at most {cap} "
+        "remain: keep one per acceptance criterion first, then the riskiest behaviour; drop "
+        "duplicates, variations of one case and edge cases first. Edit the test files only; do "
+        "not add cases. End with the updated `TEST PLAN:`.\n")
+
+
+def _test_scope_clause(criteria, budget: Optional[int] = None) -> str:
     """QA's tests are SIZED to what was asked, and start with a plan the implementer gets.
 
     The Notes Lite check (crun_3a39cd19) wrote 34,564 tokens of tests for a three-criterion
     notes app. Over-specified tests (exact wording, internals, extras nobody asked for) are what
     the implementer then failed to satisfy for four rounds. One to three tests per criterion and
     a few edge cases is a suite a build can pass; the plan makes the contract explicit up front.
+    The cap (test_budget) never grows past the project's budget, and BOSS counts afterwards.
     """
     n = max(1, len([c for c in (criteria or []) if str(c).strip()]))
-    cap = 3 * n + 3
+    cap = test_budget(criteria, budget or get_llm_context().get("test_budget"))
     return (
-        "\nTEST SCOPE (mandatory):\n"
-        f"- At most {cap} test cases in total: 1-3 per acceptance criterion ({n} given) plus at "
-        "most 3 edge cases.\n"
+        "\nTEST SCOPE (mandatory; BOSS counts the cases and trims a suite that is over):\n"
+        f"- At most {cap} test cases in total. One per acceptance criterion ({n} given) FIRST; "
+        "then a second for the riskiest criteria; edge cases only if the budget remains. A "
+        "small suite that covers what was asked: more coverage comes in a later pass.\n"
+        # A HelpDesk-lite suite passed for BOSS and failed for every reviewer: one test promoted
+        # the seeded customer to agent and never put it back, so a second run (and any other
+        # file order) failed 4 tests, and the implementer may not edit tests to fix it.
+        "- Tests are independent of order and of each other: a test that changes shared state "
+        "(a seeded user's role, a shared row) creates its own records or restores what it "
+        "changed. The suite must pass when run twice in a row against the same database.\n"
         "- Test only behaviour the task or its criteria STATE, through public interfaces (HTTP "
         "responses, exported functions, visible DOM). Never exact copy text, CSS, internal names, "
         "timing, or anything the task did not ask for.\n"
@@ -1192,6 +1289,13 @@ def _test_plan_note(qa_summary: str) -> str:
     plan = text[at:at + 3000].strip()
     return ("\n\nTHE TESTS YOU MUST MAKE PASS (QA's plan, agreed before any code):\n" + plan
             + "\nImplement exactly what these need, and nothing the task did not ask for.\n")
+
+
+def _deferred_e2e_note() -> str:
+    """Browser tests the brief asked for go to the More tests pass (build_scope)."""
+    from .build_scope import deferred_note
+
+    return deferred_note()
 
 
 def _wants_e2e() -> bool:
@@ -1221,7 +1325,7 @@ def _qa_prompt(title, instructions, criteria, test_cmd, *, iac=False, web=False,
             f"- Do NOT run anything and do NOT commit. (BOSS will run: {test_cmd}.)\n"
             "- End with a one-line summary of the cases you wrote.\n"
             + _metrics_tests_clause(title, instructions, service=True)
-            + _test_scope_clause(criteria)
+            + _test_scope_clause(criteria) + _deferred_e2e_note()
             + (_IAC_GUIDANCE + _IAC_QA_GUIDANCE if iac else "")
             + stack_note
         )
@@ -1244,7 +1348,7 @@ def _qa_prompt(title, instructions, criteria, test_cmd, *, iac=False, web=False,
             f"- Do NOT run anything and do NOT commit. (BOSS will run `{test_cmd}` inside {scope}.)\n"
             "- End with a one-line summary of the cases you wrote.\n"
             + _NO_SECRETS_IN_TESTS + _metrics_tests_clause(title, instructions, service=service)
-            + _test_scope_clause(criteria)
+            + _test_scope_clause(criteria) + _deferred_e2e_note()
             + (_IAC_GUIDANCE + _IAC_QA_GUIDANCE if iac else "")
         )
     return (
@@ -1259,7 +1363,7 @@ def _qa_prompt(title, instructions, criteria, test_cmd, *, iac=False, web=False,
         f"- Do NOT run anything and do NOT commit. (BOSS will run `{test_cmd}`.)\n"
         "- End with a one-line summary of the cases you wrote.\n"
         + _NO_SECRETS_IN_TESTS + _metrics_tests_clause(title, instructions, service=service)
-        + _test_scope_clause(criteria)
+        + _test_scope_clause(criteria) + _deferred_e2e_note()
         + (_IAC_GUIDANCE + _IAC_QA_GUIDANCE if iac else "")
     )
 
@@ -1311,10 +1415,12 @@ def _impl_prompt(title, instructions, test_files, test_cmd, *, criteria=(), iac=
         f"{scope}"
         f"- Edit/create implementation files ONLY. You MUST NOT edit, delete, or weaken any test file "
         f"({tf}) — they are the spec. If a test looks wrong, STOP and explain rather than change it.\n"
-        f"- Run `{test_cmd}` from the app directory and iterate until the tests pass. "
+        f"- Run `{test_cmd}` from the app directory when a chunk of work is finished, and "
+        "iterate until the tests pass. "
         "Create parent directories for SQLite/data files before opening them.\n"
         + _run_declaration_rule()
         + "- Do NOT commit. End with a one-line summary of what you changed.\n"
+        + _deferred_e2e_note()
         + (_IAC_GUIDANCE if iac else "")
         + (design_prompts.design_impl_clause() if ui else "")  # APP-2: design axis for UI tasks
     )
@@ -1788,8 +1894,10 @@ def _solo_prompt(title, instructions, criteria, test_cmd, *, iac=False, web=Fals
             f"`{test_cmd}` will run inside {scope}.\n\n"
             "RULES:\n"
             f"- Work ONLY under {scope}. Do not edit sibling apps.\n"
-            "- Write JS/TS API and e2e tests, not Python unittest.\n"
-            f"- Run `{test_cmd}` from {scope} and iterate until it passes. "
+            + ("- Write JS/TS API and e2e tests, not Python unittest.\n" if _wants_e2e()
+               else "- Write JS/TS tests, not Python unittest.\n" + _deferred_e2e_note())
+            + f"- Run `{test_cmd}` from {scope} when a chunk of work is finished, and iterate "
+            "until it passes. "
             "Create parent directories for SQLite/data files before opening them.\n"
             + _run_declaration_rule()
             + "- Do NOT commit. End with a one-line summary of what you built.\n"
@@ -1801,7 +1909,8 @@ def _solo_prompt(title, instructions, criteria, test_cmd, *, iac=False, web=Fals
         "the tests pass. This is a low-risk task, so one agent does both.\n\n"
         "RULES:\n"
         "- Create the implementation file(s) and stdlib `unittest` test file(s).\n"
-        f"- Run `{test_cmd}` and iterate until it passes. Do NOT commit.\n"
+        f"- Run `{test_cmd}` when a chunk of work is finished, and iterate until it passes. "
+        "Do NOT commit.\n"
         + _run_declaration_rule()
         + "- End with a one-line summary of what you built.\n"
         + (_IAC_GUIDANCE + _IAC_QA_GUIDANCE if iac else "")
@@ -2149,6 +2258,10 @@ def place_template_tests(root: Path, home: Optional[str]) -> list[str]:
 
     if not home:
         return []
+    if run_ref.current().get(run_ref.KIND_ENV) == "connector":
+        # A CONNECTOR IS PRE-TESTED in its own test tier (templates.gate.connector_smoke): its
+        # suite is not copied into the app, not frozen, and not run by the build.
+        return []
     stack_dir = run_ref.current().get(run_ref.STACK_DIR_ENV)
     if not stack_dir:
         return []
@@ -2203,6 +2316,103 @@ def _build_fan_out(engine, project_id, settings) -> int:
     except Exception:  # noqa: BLE001 — speed is never worth failing a build over
         _log_caught(logger)
         return 0
+
+
+def _record_effort(engine, project_id, run_id, settings) -> None:
+    """EFFORT PER STAGE (code_agent.stage_effort): publish the project's writing effort to this
+    thread's LLM context, where every CLI step reads its --effort, and record each stage's level
+    on the run (state.effort) and as code_task.effort_chosen. Never raises."""
+    from .code_agent import WRITING_EFFORT_DEFAULT, effort_map, stage_effort
+
+    writing = WRITING_EFFORT_DEFAULT
+    try:
+        from .project_settings import effective
+
+        with _transaction(engine) as c:
+            writing = str(effective(c, project_id, settings, "build_effort_writing")
+                          or WRITING_EFFORT_DEFAULT)
+    except Exception:  # noqa: BLE001 — unreadable settings write at the default
+        _log_caught(logger)
+    writing = stage_effort("implement", writing) or WRITING_EFFORT_DEFAULT
+    set_llm_context(effort_writing=writing)
+    # THE TEST BUDGET (test_budget), read once with the effort: the QA prompt states it and
+    # BOSS counts against it after the test author's stage.
+    try:
+        from .project_settings import effective
+
+        with _transaction(engine) as c:
+            budget = int(effective(c, project_id, settings, "build_test_budget")
+                         or TEST_BUDGET_DEFAULT)
+    except Exception:  # noqa: BLE001 — the default budget
+        _log_caught(logger)
+        budget = TEST_BUDGET_DEFAULT
+    set_llm_context(test_budget=max(1, budget))
+    try:
+        efforts = effort_map(writing)
+        with _transaction(engine) as c:
+            c.execute(sql(
+                "UPDATE code_task_runs SET state=jsonb_set(COALESCE(state,'{}'::jsonb), "
+                "'{effort}', CAST(:e AS JSONB)), updated_at=now() WHERE id=:id"),
+                {"e": json.dumps(efforts), "id": run_id})
+            emit_event(c, project_id, "code_task.effort_chosen", "boss", "code_task_run",
+                       run_id, {"writing": writing, "stages": efforts})
+    except Exception:  # noqa: BLE001 — the record never fails the build
+        _log_caught(logger)
+
+
+#: Failing test names in a test run's output (node:test, vitest/jest, pytest, JUnit-ish).
+_FAILED_TEST_RE = re.compile(
+    r"^\s*(?:not ok \d+ - (?P<tap>.+)|(?:✗|×|✖|FAIL(?:ED)?)\s+(?P<name>\S.*?))\s*$", re.MULTILINE)
+
+
+def failing_tests(output: str, limit: int = 20) -> list[str]:
+    """The failing tests a test run printed, de-duplicated, at most `limit`."""
+    seen: list[str] = []
+    for m in _FAILED_TEST_RE.finditer(output or ""):
+        name = (m.group("tap") or m.group("name") or "").strip()[:200]
+        if name and name not in seen:
+            seen.append(name)
+        if len(seen) >= limit:
+            break
+    return seen
+
+
+def _implement_budget_seconds(engine, project_id, settings) -> int:
+    """build_implement_budget_minutes in seconds; 0 = no budget. Never raises."""
+    try:
+        from .project_settings import effective
+
+        with _transaction(engine) as c:
+            minutes = effective(c, project_id, settings, "build_implement_budget_minutes")
+        minutes = int(25 if minutes is None else minutes)
+    except Exception:  # noqa: BLE001 — the default budget
+        _log_caught(logger)
+        minutes = 25
+    return max(0, minutes) * 60
+
+
+def _record_split_off(engine, project_id, run_id, settings, stage: str) -> None:
+    """Record on the stage that it runs as ONE session and why (build_streams.split_off), the
+    same place and event a split records its stream count, so the choice is never invisible.
+    Never raises."""
+    try:
+        from . import build_streams as _streams
+
+        with _transaction(engine) as c:
+            why = _streams.split_off(c, project_id, settings)
+            if not why:
+                return
+            plan = {"n": 1, "why": why, "split": "off"}
+            c.execute(sql(
+                "UPDATE code_task_runs SET state=jsonb_set(COALESCE(state,'{}'::jsonb), "
+                "'{streams}', COALESCE(state->'streams','{}'::jsonb) "
+                "|| jsonb_build_object(CAST(:st AS text), CAST(:p AS JSONB))), "
+                "updated_at=now() WHERE id=:id"),
+                {"st": stage, "p": json.dumps(plan), "id": run_id})
+            emit_event(c, project_id, "code_task.streams_chosen", "boss", "code_task_run",
+                       run_id, {"stage": stage, **plan})
+    except Exception:  # noqa: BLE001 — the record never fails the build
+        _log_caught(logger)
 
 
 # --- Design phase (Wire-Phase 2): standards -> spec -> plan -> review plan, before any code. ---
@@ -2638,6 +2848,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
     # VAG Phase 0: publish the run's identity so every run_role call below records an
     # llm_calls row with the right attribution (stage is set before each step).
     set_llm_context(db_engine=engine, project_id=project_id, run_id=run_id)
+    _record_effort(engine, project_id, run_id, settings)
     # Rules a ROLE mandated, loaded once for the whole run so every stage's shared preamble is
     # byte-identical (the prompt cache depends on that) and so a rule added mid-build cannot
     # change the instructions between stages of the same task.
@@ -4486,6 +4697,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         cost += int(r.get("cost_usd_micros") or 0)
                         return r, [fc.path for fc in sandbox.diff() if _is_test_path(fc.path)
                                    and fc.path not in _placed_tpl_tests], None
+                if not fan:
+                    _record_split_off(engine, project_id, run_id, settings, "write_tests")
                 r = a.run_role(prompt, root, model=m, parallel_agents=fan)
                 cost += int(r.get("cost_usd_micros") or 0)
                 return r, [fc.path for fc in sandbox.diff() if _is_test_path(fc.path)
@@ -4522,6 +4735,37 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         emit_event(c, project_id, "code_task.step_recovered", "boss",
                                    "code_task_run", run_id,
                                    {"step": "write_tests", "recovered_by": "frontier_retry"})
+            # THE TEST BUDGET, COUNTED BY BOSS (test_budget). The prompt states the cap; a suite
+            # that is still over gets ONE trim turn on the test author's own warm session, and
+            # what remains over is recorded on the build, never passed silently.
+            if test_files and not use_microvm:
+                _cap = test_budget(criteria, get_llm_context().get("test_budget"))
+                _written = count_test_cases(
+                    root, [p for p in test_files if p not in _placed_tpl_tests])
+                _tb: dict = {"budget": _cap, "written": _written}
+                if _written > _cap and (r1 or {}).get("session_id"):
+                    try:
+                        set_llm_context(stage="write_tests")
+                        _a_tb, _m_tb = _route("write_tests")
+                        _rt = _a_tb.run_role(_test_budget_trim_prompt(_written, _cap), root,
+                                             model=(r1 or {}).get("model") or _m_tb,
+                                             resume_session_id=r1["session_id"])
+                        cost += int(_rt.get("cost_usd_micros") or 0)
+                        if "TEST PLAN:" in str(_rt.get("summary") or ""):
+                            r1 = {**r1, "summary": _rt["summary"]}
+                        test_files = [fc.path for fc in sandbox.diff() if _is_test_path(fc.path)
+                                      and fc.path not in _placed_tpl_tests]
+                        _tb["after_trim"] = count_test_cases(root, test_files)
+                    except Exception:  # noqa: BLE001 — an untrimmed suite is recorded below
+                        _log_caught(logger)
+                _tb["over"] = int(_tb.get("after_trim", _written)) > _cap
+                with _transaction(engine) as c:
+                    c.execute(sql(
+                        "UPDATE code_task_runs SET state=jsonb_set(COALESCE(state,'{}'::jsonb), "
+                        "'{test_budget}', CAST(:t AS JSONB)), updated_at=now() WHERE id=:id"),
+                        {"t": json.dumps(_tb), "id": run_id})
+                    emit_event(c, project_id, "code_task.test_budget", "boss", "code_task_run",
+                               run_id, _tb)
             if use_microvm:
                 # Commit ONLY test files — anything else the QA role wrote is discarded.
                 _commit_stage(test_changes or [], f"governed: tests-first (qa) — {title[:60]}")
@@ -4593,6 +4837,30 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # reaches a different engine or model.
         _esc_route: list = []   # the escalated route, resolved once when it is first needed
         _warm_fix = [False]     # the final attempt is a warm fix on the same model, not a "frontier" one
+        # FAIL FAST: THE IMPLEMENT STAGE HAS A WALL-TIME BUDGET (build_implement_budget_minutes,
+        # default 25), fix round and continuations included. Past it no new session starts, a
+        # running one is ended (code_agent caps its timeout at the deadline), and the build fails
+        # with its failing tests listed. The job's own timeout stays as the backstop.
+        _impl_budget_s = _implement_budget_seconds(engine, project_id, settings)
+        _impl_deadline = (time.time() + _impl_budget_s) if _impl_budget_s else None
+        set_llm_context(stage_deadline=_impl_deadline)
+
+        def _impl_over_budget() -> bool:
+            return _impl_deadline is not None and time.time() >= _impl_deadline
+
+        def _within_budget(call, model):
+            """A session the deadline ended is a finished attempt (its tests then run), not a
+            pipeline error."""
+            try:
+                return call()
+            except RuntimeError as exc:
+                if not (_impl_over_budget() and "timed out" in str(exc)):
+                    raise
+                _log_caught(logger)
+                return {"summary": "(the implement stage reached its time limit)",
+                        "cost_usd_micros": 0, "usage": {}, "model": model, "session_id": None}
+
+        _budget_exhausted = [False]
         for attempt in range(max_repair + 2):
             _impl_ran[0] = True
             escalate_impl = attempt == max_repair + 1 and not _warm_fix[0]
@@ -4727,13 +4995,21 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                             model=m, resume_session_id=resume_sid)
                     except Exception:
                         _log_caught(logger)
-                        r2 = a.run_role(impl_prompt, root, model=m,
-                                        parallel_agents=_build_fan_out(engine, project_id, settings))
+                        if _impl_over_budget():
+                            r2 = {"summary": "(the implement stage reached its time limit)",
+                                  "cost_usd_micros": 0, "usage": {}, "model": m,
+                                  "session_id": None}
+                        else:
+                            r2 = a.run_role(impl_prompt, root, model=m,
+                                            parallel_agents=_build_fan_out(engine, project_id,
+                                                                           settings))
                 else:
                     # The first implement fans out (build_speed); a repair resumed on its own
                     # session stays one agent: it is a focused fix, not parallel volume.
                     fan = _build_fan_out(engine, project_id, settings)
                     split = None
+                    if not fan and attempt == 0:
+                        _record_split_off(engine, project_id, run_id, settings, "implement")
                     if fan and attempt == 0 and not escalate_impl:
                         # SPLIT BY BOSS (parallel_build), after the tamper snapshot: no part
                         # may touch QA's frozen tests even inside the paths it owns.
@@ -4741,7 +5017,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         split = _run_split(a, m, impl_prompt, fan, tests=False,
                                            protect=(lambda rel: rel in _frozen))
                     r2 = (split.as_role_result() if split is not None
-                          else a.run_role(impl_prompt, root, model=m, parallel_agents=fan))
+                          else _within_budget(lambda: a.run_role(impl_prompt, root, model=m,
+                                                                 parallel_agents=fan), m))
                 impl_session_id = r2.get("session_id") or impl_session_id
                 cost += int(r2.get("cost_usd_micros") or 0)
                 # FINISH THE WORK BEFORE JUDGING IT. The implementer hitting its turn cap
@@ -4756,7 +5033,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 _cont = 0
                 _max_cont = max(0, int(getattr(settings, "code_impl_max_continuations", 3) or 3))
                 while (check_is_inconclusive(r2.get("summary", ""))
-                       and _cont < _max_cont and impl_session_id):
+                       and _cont < _max_cont and impl_session_id and not _impl_over_budget()):
                     _cont += 1
                     with _transaction(engine) as c:
                         emit_event(c, project_id, "code_task.implement_continued", "boss",
@@ -4812,6 +5089,15 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                 "attempt": attempt})
             if ok or attempt == max_repair + 1:
                 break
+            if _impl_over_budget():
+                # No fix round past the budget: fail now, with the failing tests named.
+                _budget_exhausted[0] = True
+                with _transaction(engine) as c:
+                    emit_event(c, project_id, "code_task.stage_budget_exhausted", "boss",
+                               "code_task_run", run_id,
+                               {"stage": "implement", "budget_minutes": _impl_budget_s // 60,
+                                "attempt": attempt, "failing_tests": failing_tests(fail_output)})
+                break
             if attempt == max_repair and not use_microvm:
                 _before = dict(stage_routes.get("implement") or {})
                 try:
@@ -4858,6 +5144,17 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     root,
                 )
 
+        # The implement budget ends with the stage: later writing turns are not cut by it.
+        set_llm_context(stage_deadline=None)
+        if _budget_exhausted[0] or (_impl_over_budget() and not tests_passed):
+            with _transaction(engine) as c:
+                c.execute(sql(
+                    "UPDATE code_task_runs SET state=jsonb_set(COALESCE(state,'{}'::jsonb), "
+                    "'{stage_budget}', CAST(:b AS JSONB)), updated_at=now() WHERE id=:id"),
+                    {"b": json.dumps({"stage": "implement", "exhausted": True,
+                                      "budget_minutes": _impl_budget_s // 60,
+                                      "failing_tests": failing_tests(fail_output)}),
+                     "id": run_id})
         # Freeze implement-time verify so later panel/mutation probes cannot
         # replace the official /report evidence.
         official_verify_output = last_verify_output
@@ -5466,6 +5763,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     known_service=serve_proof_known_service(spec, fctx),
                     timeout=float(getattr(settings, "code_task_serve_check_timeout_seconds",
                                           180) or 180),
+                    probe_paths=_connector_probe_paths(engine, run) or None,
                 )
             with _transaction(engine) as c:
                 emit_event(c, project_id, "code_task.app_serve_checked", "boss",
@@ -5489,7 +5787,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             cwd=(root / last_verify_cwd) if last_verify_cwd and not Path(str(last_verify_cwd)).is_absolute()
             else verification_target.resolve_verify_cwd(root, app_id=_app_id, changed=list(changed_files)),
             changed_files=changed_files, tests_passed=bool(tests_passed), use_microvm=use_microvm,
-            stack_plan=_last_stack_plan[0])
+            stack_plan=_last_stack_plan[0], serve=app_serves_record)
         if _template_record:
             gates.update(_template_record["gates"])
         # A SECRET IN QA'S FIXTURE GOES BACK TO QA. The coder may not edit tests and QA was never
@@ -5543,7 +5841,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         cwd=(root / last_verify_cwd) if last_verify_cwd and not Path(str(last_verify_cwd)).is_absolute()
                         else verification_target.resolve_verify_cwd(root, app_id=_app_id, changed=list(changed_files)),
                         changed_files=changed_files, tests_passed=bool(tests_passed),
-                        use_microvm=use_microvm, stack_plan=_last_stack_plan[0])
+                        use_microvm=use_microvm, stack_plan=_last_stack_plan[0],
+                        serve=app_serves_record)
                     if _template_record:
                         gates.update(_template_record["gates"])
                     fixture_repair_record["gate_after"] = bool(gates.get("no_committed_secrets"))
@@ -5797,9 +6096,13 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # Test gates are convergeable too. Previously a failing test skipped this loop entirely
             # and fell through to a FULL cold re-run — discarding the warm session and re-paying for
             # spec/plan — which is why repeated attempts never converged on test failures.
+            # A SECURITY FINDING IS FIXED IN THE SAME WARM ROUND. It was not convergeable, so a
+            # HelpDesk-lite build whose reviewer and security seat both named one real bug (async
+            # handlers that crash the process on a bad id) shipped it as "advisory" without a
+            # single fix turn, while the round that fixes it costs minutes on a warm session.
             _convergeable = {"code_review_passed", "consistent",
                              "written_tests_pass", "nothing_broke",
-                             "web_package_honest", "app_serves"}
+                             "web_package_honest", "app_serves", "security_clean"}
             if (failing and not use_microvm and impl_session_id
                     and set(failing) <= _convergeable):
               try:  # a convergence failure must DEGRADE to the legacy paths, never kill the run
@@ -5870,6 +6173,10 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         finding_bits.append(_anchored_findings(
                             r6.get("summary") or "", root, stage="consistency_check",
                             header="CONSISTENCY FINDINGS:"))
+                    if "security_clean" in failing:
+                        finding_bits.append(_anchored_findings(
+                            r4.get("summary") or "", root, stage="security_check",
+                            header="SECURITY FINDINGS:"))
                     if "app_serves" in failing:
                         # The app's OWN error, not "preview timed out": this is what lets the
                         # implementer fix an ImportError instead of guessing at a port.
@@ -5953,15 +6260,58 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     change_block = _review_change.block()
                     impl_files = [fc.path for fc in sandbox.diff()
                                   if not _is_test_path(fc.path)] or impl_files
-                    if "code_review_passed" in failing:
-                        with _transaction(engine) as c:
-                            _phase(c, "review_code")
+                    # THE FAILED SEATS RE-REVIEW SIDE BY SIDE, as the first panel does. They read
+                    # the same delta and do not depend on each other; one after another, a
+                    # HelpDesk-lite round spent 6.5 min (07:31 -> 07:37) where the slowest seat
+                    # alone took 2.7. Each thread publishes its own run identity and stage.
+                    def _reseat_review():
                         set_llm_context(routes=_route_ids(), db_engine=engine, project_id=project_id,
                                         run_id=run_id, stage="review_code")
                         rr, _hollow = _judge_seat("review_code", lambda pre: review_agent.run_role(
                             pre + _review_prompt(title, criteria, instructions=instructions,
                                                  ui=ui_task, change=change_block),
                             review_root, read_only=True, model=review_model))
+                        return rr, _hollow
+
+                    def _reseat_consistency():
+                        set_llm_context(routes=_route_ids(), db_engine=engine, project_id=project_id,
+                                        run_id=run_id, stage="consistency_check")
+                        rc2, _hollow = _judge_seat(
+                            "consistency_check", lambda pre: consistency_agent.run_role(
+                                pre + _consistency_prompt(title, criteria, design,
+                                                          instructions=instructions,
+                                                          change=change_block),
+                                review_root, read_only=True, model=consistency_model))
+                        return rc2, _hollow
+
+                    def _reseat_security():
+                        set_llm_context(routes=_route_ids(), db_engine=engine, project_id=project_id,
+                                        run_id=run_id, stage="security_check")
+                        rs2, _hollow = _judge_seat(
+                            "security_check", lambda pre: security_agent.run_role(
+                                pre + _security_prompt(title, instructions=instructions,
+                                                       criteria=criteria, change=change_block),
+                                review_root, read_only=True, model=security_model))
+                        return rs2, _hollow
+
+                    _seat_fns = {"code_review_passed": ("review_code", _reseat_review),
+                                 "consistent": ("consistency_check", _reseat_consistency),
+                                 "security_clean": ("security_check", _reseat_security)}
+                    _wanted = [_seat_fns[gname] for gname in failing if gname in _seat_fns]
+                    if _wanted:
+                        with _transaction(engine) as c:
+                            _phase(c, _wanted[0][0] if len(_wanted) == 1 else "review_panel")
+                    _reseat_pool = ThreadPoolExecutor(max_workers=max(1, len(_wanted)))
+                    try:
+                        # Each thread runs in a copy of this context: the owner scope (Stop ends
+                        # it), the template env and the build scope travel with it.
+                        _reseat = {stage_key: _reseat_pool.submit(contextvars.copy_context().run, fn)
+                                   for stage_key, fn in _wanted}
+                        _futures_wait(list(_reseat.values()))
+                    finally:
+                        _reseat_pool.shutdown(wait=False)
+                    if "code_review_passed" in failing:
+                        rr, _hollow = _reseat["review_code"].result()
                         cost += int(rr.get("cost_usd_micros") or 0)
                         rr = _with_ci_static(rr, accumulated if use_microvm else sandbox.diff())
                         if _hollow:
@@ -5990,16 +6340,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                             "hollow": _hollow}})
                         gates["code_review_passed"] = _rev_pass
                     if "consistent" in failing:
-                        with _transaction(engine) as c:
-                            _phase(c, "consistency_check")
-                        set_llm_context(routes=_route_ids(), db_engine=engine, project_id=project_id,
-                                        run_id=run_id, stage="consistency_check")
-                        rc2, _hollow = _judge_seat(
-                            "consistency_check", lambda pre: consistency_agent.run_role(
-                                pre + _consistency_prompt(title, criteria, design,
-                                                          instructions=instructions,
-                                                          change=change_block),
-                                review_root, read_only=True, model=consistency_model))
+                        rc2, _hollow = _reseat["consistency_check"].result()
                         cost += int(rc2.get("cost_usd_micros") or 0)
                         if _hollow:
                             _hollow_seats["consistency_check"] = _hollow
@@ -6009,6 +6350,21 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                         else _parse_consistency(rc2.get("summary", "")))
                         r6 = rc2
                         gates["consistent"] = cons_verdict not in ("drift", "hollow")
+                    if "security_clean" in failing:
+                        rs2, _hollow = _reseat["security_check"].result()
+                        cost += int(rs2.get("cost_usd_micros") or 0)
+                        if _hollow:
+                            _hollow_seats["security_check"] = _hollow
+                        else:
+                            _hollow_seats.pop("security_check", None)
+                        sec_verdict = ("hollow" if _hollow
+                                       else _parse_security(rs2.get("summary", "")))
+                        r4 = rs2
+                        _record_review_round(engine, run_id, project_id, round_i=round_i, seats={
+                            "security_check": {"verdict": sec_verdict,
+                                               "summary": rs2.get("summary", ""),
+                                               "hollow": _hollow}})
+                        gates["security_clean"] = sec_verdict == "clean"
                     failing = [k for k, v in gates.items() if not v]
                     evidence["review_hollow"] = dict(_hollow_seats)
                     if not failing:
@@ -6038,7 +6394,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                             emit_event(c, project_id, "code_task.inrun_convergence_pass",
                                        "boss", "code_task_run", run_id, {"rounds": round_i})
                         break
-                    if set(failing) - {"code_review_passed", "consistent", "app_serves"}:
+                    if set(failing) - {"code_review_passed", "consistent", "app_serves",
+                                       "security_clean"}:
                         break  # a non-judgment gate regressed — legacy handling below
               except Exception as exc:  # noqa: BLE001
                 _log_caught(logger)

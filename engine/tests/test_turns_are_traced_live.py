@@ -243,10 +243,29 @@ def test_the_batch_write_is_only_skipped_when_rows_were_really_written():
 
     from boss_engine.services.code_agent import ClaudeCodeAgent
 
+    from boss_engine.services.code_agent import _mark_live
+
     src = inspect.getsource(ClaudeCodeAgent._invoke)
-    assert 'live_written["rows"] > 0' in src, (
-        "the batch write is cancelled on parsed turns rather than on persisted rows")
+    assert "_mark_live(parsed, live_written)" in src
     assert "live_parser.turns:" not in src
+    nothing_written = {"result": "done", "_turns": ["t"]}
+    _mark_live(nothing_written, {"rows": 0})
+    assert "_turns_live" not in nothing_written and nothing_written["_turns"] == ["t"]
+
+
+def test_a_session_that_hit_its_turn_cap_is_not_rewritten_at_the_end():
+    """A HelpDesk session's 321 live-written turns were written again at its turn cap
+    (crun_566f8767, 05:41): the error_max_turns result skipped the live flag."""
+    import inspect
+
+    from boss_engine.services.code_agent import ClaudeCodeAgent, _mark_live
+
+    src = inspect.getsource(ClaudeCodeAgent._invoke)
+    cap = src[src.index('if data.get("subtype") == "error_max_turns":'):]
+    assert cap.index("_mark_live(data, live_written)") < cap.index("return data")
+    capped = {"subtype": "error_max_turns", "_turns": ["t"] * 321}
+    _mark_live(capped, {"rows": 321})
+    assert capped["_turns_live"] is True and capped["_turns"] == []
 
 
 def test_the_sink_counts_rows_returned_by_the_recorder():

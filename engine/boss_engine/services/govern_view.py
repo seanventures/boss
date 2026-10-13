@@ -45,6 +45,12 @@ ENFORCED: dict[str, tuple[str, str]] = {
     "code_agent_max_turns": ("Each agent", "each_agent"),
     # The build's writing stages, capped again by the machine (project_settings.build_parallelism).
     "build_parallelism": ("Each build", "each_build"),
+    "build_streams_min": ("Each build", "each_build"),
+    "build_streams_max": ("Each build", "each_build"),
+    # Counted after the test author's stage and trimmed when over (governed test_budget).
+    "build_test_budget": ("Each build", "each_build"),
+    # Checked before every implement session and caps a running one (governed stage budget).
+    "build_implement_budget_minutes": ("Each build", "each_build"),
     "code_review_inrun_max_rounds": ("Review loop", "review_loop"),
     "captain_leads_projects": ("Every build", "every_build"),
     "captain_auto_improve": ("Captain's own builds", "captain_own_builds"),

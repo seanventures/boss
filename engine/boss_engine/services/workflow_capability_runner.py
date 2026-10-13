@@ -1474,6 +1474,56 @@ def _plrr_step(ctx, connection: Connection, project_id: str, actor: str,
     return {"capability": "plrr", "tool": "extend_code_task", **started}
 
 
+from .build_scope import MORE_TESTS_MARKER  # noqa: E402 — the phrase pass 2 is known by
+
+
+def _more_tests_brief() -> str:
+    """Pass 2's instructions, appended to the build's brief by extend_code_task. The marker is
+    what build_scope reads to lift pass 1's limits (browser tests, a larger test budget)."""
+    return (
+        f"{MORE_TESTS_MARKER}: the app on this branch works and its first, lean test suite "
+        "passes. Add tests for the features already built: edge cases, error paths, input "
+        "validation and the API contracts (status codes, response shapes), and the browser "
+        "(Playwright) tests the task asked for, if it asked for any.\n"
+        "RULES\n"
+        "- Do not change behaviour the existing tests pin, and do not weaken or delete them.\n"
+        "- If a new test exposes a real bug, fix the implementation and list it under "
+        "`BUGS FIXED:` in your summary, one line each; write `BUGS FIXED: none` otherwise.\n"
+        "- Do not write tests for an applied connector (sign-in, payments): it is tested in its "
+        "own suite."
+    )
+
+
+def _more_tests_step(ctx, connection: Connection, project_id: str, actor: str,
+                     context: dict[str, Any]) -> dict[str, Any]:
+    """PASS 2 OF A BUILD: more tests on the same branch and PR, after the preview.
+
+    Pass 1 ships a working app with a lean suite, so the user sees it early; this pass adds the
+    coverage in its own commits. It never holds the run up: a failed pass 2 completes the step
+    with the failure said (resume_awaited, _ADVISORY_CAPABILITIES) and the run goes on with
+    pass 1's code."""
+    run_id = str((context or {}).get("run_id") or "")
+    build_run = ""
+    try:
+        build_run = str(connection.execute(
+            text("SELECT COALESCE("
+                 "  (SELECT input->>'adopt_code_task_run_id' FROM workflow_runs WHERE id = :r),"
+                 "  (SELECT output->>'code_task_run_id' FROM workflow_step_runs "
+                 "     WHERE workflow_run_id = :r AND output ? 'code_task_run_id' "
+                 "     ORDER BY created_at DESC LIMIT 1)) AS build"),
+            {"r": run_id}).scalar() or "")
+    except Exception:  # noqa: BLE001
+        log.exception("more_tests could not resolve the build for %s", run_id)
+    if not build_run:
+        return {"capability": "more_tests", "status": "not_applicable",
+                "note": "no build in this run, so there is nothing to add tests to."}
+    started = _invoke_tool(ctx, "extend_code_task", project_id, actor, {
+        "run_id": build_run, "instructions": _more_tests_brief(), "title": "More tests",
+    })
+    return {"capability": "more_tests", "tool": "extend_code_task", "base_run_id": build_run,
+            **started}
+
+
 def _preview_missing_for_run(
     connection: Connection, context: dict[str, Any]
 ) -> Optional[str]:
@@ -2016,7 +2066,7 @@ def _execute_step(
 #: What a multi-repo change set does itself, for every repository at once (multirepo/
 #: change_sets.py): preview and readiness repairs per build, the deploy with its one rollback. A
 #: run whose build was a change set does not do them again per build — there is no single build.
-_SET_OWNED = frozenset({"preview", "plrr", "deploy", "redeploy", "retry_build"})
+_SET_OWNED = frozenset({"preview", "plrr", "more_tests", "deploy", "redeploy", "retry_build"})
 
 
 def _owned_by_change_set(key: str, context: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
@@ -2029,6 +2079,7 @@ def _owned_by_change_set(key: str, context: Optional[dict[str, Any]]) -> Optiona
              "redeploy": "deployed together by the change set",
              "preview": "reviewed as a set: linked pull requests and the cross-repo check",
              "plrr": "checked per repository by each lane's own gates",
+             "more_tests": "tested per repository by each lane's own build",
              "retry_build": "retried per repository from the change set's lanes"}[key]
     return {"capability": key, "tool": None, "status": "not_applicable", "change_set_id": cs,
             "note": f"A change across several repositories: {words}."}
@@ -2241,6 +2292,11 @@ def _perform_capability(
             # nested under `result`. Completing the step there lets preview and deploy run
             # while the repair is still writing the same branch.
             started = _plrr_step(ctx, connection, project_id, actor, context)
+            if started.get("status") == "not_applicable":
+                return started
+            return _settle_started_work(capability, key, started)
+        if key == "more_tests":
+            started = _more_tests_step(ctx, connection, project_id, actor, context)
             if started.get("status") == "not_applicable":
                 return started
             return _settle_started_work(capability, key, started)
@@ -2760,6 +2816,7 @@ _AWAIT_KINDS: dict[str, tuple[str, tuple[str, ...]]] = {
     # task and waits for it exactly as `build` does. A review that only files findings leaves
     # the operator to do the work the review exists to prevent.
     "plrr": ("code_task", ("code_task_run_id", "run_id", "id")),
+    "more_tests": ("code_task", ("code_task_run_id", "run_id", "id")),
     # PLANNED IS NOT SHIPPED. `deploy_app` answers `{"status": "planned", "deployment_run_id"}`
     # and `redeploy` starts a new deployment run; both went green on that answer, so a
     # deployment that then failed its health check — or was never applied — never reached the
@@ -2829,7 +2886,7 @@ def _settle_started_work(capability: Any, key: str, result: dict[str, Any]) -> d
     Left as-is, the runner records the step succeeded and the workflow previews and opens the
     deploy gate while that repair is still editing the branch.
     """
-    if key == "plrr" and not str(
+    if key in ("plrr", "more_tests") and not str(
         result.get("run_id") or result.get("code_task_run_id") or ""
     ).strip():
         inner = result.get("result")
@@ -3308,6 +3365,32 @@ def _dossier_brief(title: Any, state: Any) -> str:
     return "\n\n".join(parts)[:_DOSSIER_CHARS]
 
 
+#: Steps whose failure never stops the run (operator, 2026-10-13: "pass 2 never blocks pass
+#: 1"). The ONE exception to "failed is terminal for the step": a failed More tests pass
+#: completes its step with the failure said, and the run carries on with pass 1's build.
+_ADVISORY_CAPABILITIES = frozenset({"more_tests"})
+
+
+def _complete_advisory_failure(connection: Connection, *, project_id: str, run_id: str,
+                               step: Any, output: dict, status: str, why: str,
+                               done: list) -> bool:
+    """Complete an advisory step whose work failed; True when it did."""
+    if str((output or {}).get("capability") or "") not in _ADVISORY_CAPABILITIES:
+        return False
+    base = str(output.get("base_run_id") or "")
+    workflows.force_complete_waiting_step(
+        connection, project_id=project_id, step_run_id=step["id"],
+        output={**output, "status": "succeeded", "advisory_failed": True,
+                "awaited_status": status, "code_task_run_id": base,
+                "note": (f"the More tests pass ended as '{status}'"
+                         + (f" ({why})" if why else "")
+                         + "; the run carries on with the first pass's build.")[:600]},
+    )
+    done.append({"run_id": run_id, "step_id": step["step_id"], "outcome": "advisory_failed",
+                 "awaited_status": status})
+    return True
+
+
 def resume_awaited(
     connection: Connection, *, project_id: str, run_id: str, worker_id: str
 ) -> list[dict[str, Any]]:
@@ -3424,6 +3507,10 @@ def resume_awaited(
                     continue
                 if status == "repairing":
                     continue  # the repair round is being started; the shepherd ends a dead one
+                if _complete_advisory_failure(connection, project_id=project_id, run_id=run_id,
+                                              step=step, output=output, status=status,
+                                              why=str(not_passed), done=done):
+                    continue
                 workflows.force_fail_waiting_step(
                     connection, project_id=project_id, step_run_id=step["id"],
                     error=str(not_passed)[:500],
@@ -3500,6 +3587,10 @@ def resume_awaited(
             # one or two tables away and this line used to discard it, leaving the operator
             # with a sentence that only restates the failure.
             why = _why_it_ended(connection, table, awaited_id)
+            if _complete_advisory_failure(connection, project_id=project_id, run_id=run_id,
+                                          step=step, output=output, status=status,
+                                          why=str(why or ""), done=done):
+                continue
             if kind == "stack_deployment" and status == "rejected":
                 # The deployment's decision IS this step's gate (see `_gate_subject`), so a
                 # deployment that was not approved is a release that was not approved.

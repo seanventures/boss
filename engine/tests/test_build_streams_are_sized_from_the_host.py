@@ -81,16 +81,28 @@ def test_an_explicit_build_parallelism_overrides_the_host(tmp_path):
     assert plan.n == 4 and "build_parallelism" in plan.why
 
 
-def test_the_project_bounds_follow_build_speed_and_its_own_settings():
-    assert ps.KNOBS["build_streams_min"]["kind"] == "int" if hasattr(ps, "KNOBS") else True
-    src = inspect.getsource(bs.bounds)
-    assert "build_streams_min" in src and "build_streams_max" in src and "build_speed" in src
-    assert bs.SPEED_MAX == {"balanced": 3, "fastest": 6}
+def test_the_split_is_off_unless_the_project_opts_in(monkeypatch):
+    from boss_engine.services import project_settings
+
+    def with_settings(values):
+        monkeypatch.setattr(project_settings, "effective",
+                            lambda c, p, s, key: values.get(key))
+
+    with_settings({"build_speed": "fastest"})
+    assert bs.bounds(None, "p", object()) == (1, 1, 0)
+    assert bs.split_off(None, "p", object()) == bs.SPLIT_OFF
+    with_settings({"build_streams_max": 4})
+    assert bs.bounds(None, "p", object())[1] == 4 and bs.split_off(None, "p", object()) is None
+    with_settings({"build_parallelism": 3})
+    assert bs.split_off(None, "p", object()) is None
+    assert set(ps.BUILD_SPEED_PARALLELISM.values()) == {1}
 
 
 def test_each_writing_stage_sizes_itself_and_records_why():
     src = inspect.getsource(g)
     assert "_streams.for_stage(" in src and "code_task.streams_chosen" in src
     assert "'{streams}'" in src
+    # One session records why it is one session, in the same place.
+    assert src.count("_record_split_off(engine, project_id, run_id, settings, \"") == 2
     # The old fixed half-cores rule is gone.
     assert "cores // 2" not in inspect.getsource(ps.machine_parallelism)

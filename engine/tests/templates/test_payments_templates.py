@@ -121,9 +121,9 @@ def test_the_build_directive_carries_the_brief_the_reference_and_the_tests(templ
                                               files=files, note="", app_name="Shop")
     tests = template_test_files(files, stack)
     assert tests
-    for t in tests:
-        assert t in directive
-    assert report.manifest.tests[stack].command in directive
+    # A payments connector is PRE-TESTED: its suite runs in its own tier, never in a build.
+    assert report.manifest.item_kind == "connector" and "PRE-TESTED" in directive
+    assert report.manifest.tests[stack].command not in directive
     assert "UNTRUSTED" not in directive  # a built-in is not wrapped as untrusted material
     for route in report.manifest.routes:
         assert route in directive
@@ -223,10 +223,10 @@ def test_the_stacks_real_tests_pass_through_the_gate(template_id, stack, tmp_pat
 # Was a strict xfail (the S2 48 KB inline limit dropped tests/): fixed by inlining tests first
 # and giving the build the whole file set (templates.run_ref).
 @pytest.mark.parametrize("template_id,stack", CASES)
-def test_the_directive_inlines_every_template_test_file(template_id, stack):
+def test_the_directive_inlines_no_connector_test_file(template_id, stack):
     report = _report(template_id)
     files = tree_from_dir(APPS / template_id).files()
     directive = apply_service.build_directive(row={"source": "builtin"}, manifest=report.manifest, stack=stack,
                                               framework=None, files=files, note="", app_name="Shop")
     for t in template_test_files(files, stack):
-        assert f"### tests/{t}" in directive, f"{t} is not inlined"
+        assert f"### tests/{t}" not in directive, f"{t} is inlined"

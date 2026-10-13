@@ -260,6 +260,8 @@ def _security_tool_args(monkeypatch) -> None:
 
 def _awaited_cases():
     for key, kind in sorted(AWAITED.items()):
+        if key in runner._ADVISORY_CAPABILITIES:
+            continue  # pass 2 never stops the run: test_a_more_tests_pass_never_blocks_the_build
         _table, _ok, bad = runner._AWAIT_TABLES[kind]
         for status in sorted(bad):
             yield pytest.param(key, kind, status, id=f"{key}-{status}")

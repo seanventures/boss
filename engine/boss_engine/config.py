@@ -1241,6 +1241,16 @@ class Settings(BaseSettings):
     # to the sandbox cwd; network egress is the deployment's responsibility.
     build_speed: str = Field(default="balanced", alias="BOSS_BUILD_SPEED")
     build_parallelism: int = Field(default=0, alias="BOSS_BUILD_PARALLELISM")
+    # The CLI's --effort for a build's WRITING stages (write_tests, implement, fix rounds).
+    # Reasoning stages (design, plan review, reviewers) run at high (code_agent.stage_effort).
+    build_effort_writing: str = Field(default="low", alias="BOSS_BUILD_EFFORT_WRITING")
+    # The most test cases a build's test author writes (governed test_budget): a small set that
+    # covers what the brief asks for. More coverage is a later "more tests" pass.
+    build_test_budget: int = Field(default=20, alias="BOSS_BUILD_TEST_BUDGET")
+    # The wall-time budget of a build's implement stage, fix round included (0 = none). Past it
+    # BOSS starts no new session and ends a running one, and the build fails with its failing
+    # tests listed, instead of running into the job's 2-hour limit.
+    build_implement_budget_minutes: int = Field(default=25, alias="BOSS_BUILD_IMPLEMENT_BUDGET_MINUTES")
     code_agent_allowed_tools: str = Field(
         default="Read,Edit,MultiEdit,Write,Glob,Grep,Bash,TodoWrite",
         alias="BOSS_CODE_AGENT_ALLOWED_TOOLS",

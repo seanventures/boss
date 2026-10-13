@@ -135,7 +135,7 @@ class TestReferenceMaterialReachesTheBuilder:
         """Material read only at design time is forgotten by the time code is written."""
         from boss_engine.services import governed_code_task_service as svc
 
-        body = inspect.getsource(svc._ctx_block)
+        body = inspect.getsource(svc._render_ctx_block)
         assert "reference_material()" in body
         assert "{references}" in body
 

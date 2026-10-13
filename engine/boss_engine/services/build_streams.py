@@ -23,8 +23,14 @@ from typing import Any, Optional
 #: What one stream's own work (installs, builds, a test run) reserves.
 MEMORY_PER_STREAM_MB = 768
 CORES_PER_STREAM = 1.0
-#: The max per Build speed when the project sets no build_streams_max.
-SPEED_MAX = {"balanced": 3, "fastest": 6}
+#: THE SPLIT IS OFF UNLESS A PROJECT OPTS IN (build_streams_max >= 2, or build_parallelism).
+#: Measured on a HelpDesk-size build (scratchpad profile, 2026-10-13): four parts on three lanes
+#: wrote 3.6x the test tokens and 2.3x the implement tokens of one session, then spent 45 min
+#: reconciling them, and finished slower than a single session. Build speed no longer turns it
+#: on: one lean session is the fast default.
+DEFAULT_MAX = 1
+SPLIT_OFF = ("split off: one session (the default; parallel parts duplicated work and were "
+             "slower; set build_streams_max to opt in)")
 HARD_MAX = 8
 
 
@@ -146,7 +152,8 @@ def plan_streams(host: HostShape, *, min_n: int = 1, max_n: int = 3,
 
 
 def bounds(connection: Any, project_id: Optional[str], settings: Any) -> tuple[int, int, int]:
-    """(min, max, explicit) for the project: build_streams_min/max, else Build speed's max."""
+    """(min, max, explicit) for the project: build_streams_min/max; the max is 1 (split off)
+    unless the project sets build_streams_max or build_parallelism."""
     from .project_settings import effective
 
     def _int(key: str) -> int:
@@ -155,10 +162,20 @@ def bounds(connection: Any, project_id: Optional[str], settings: Any) -> tuple[i
         except (TypeError, ValueError):
             return 0
 
-    speed = str(effective(connection, project_id, settings, "build_speed") or "balanced").lower()
     lo = _int("build_streams_min") or 1
-    hi = _int("build_streams_max") or SPEED_MAX.get(speed, SPEED_MAX["balanced"])
+    hi = _int("build_streams_max") or DEFAULT_MAX
     return lo, max(lo, hi), _int("build_parallelism")
+
+
+def split_off(connection: Any, project_id: Optional[str], settings: Any) -> Optional[str]:
+    """Why this project's writing stages run as one session, or None when it opted in."""
+    try:
+        lo, hi, explicit = bounds(connection, project_id, settings)
+    except Exception:  # noqa: BLE001 — unreadable settings build with one session
+        return SPLIT_OFF
+    if explicit > 1 or hi > 1:
+        return None
+    return SPLIT_OFF
 
 
 def running_builds(connection: Any, *, exclude_run: Optional[str] = None) -> int:

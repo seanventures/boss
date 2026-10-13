@@ -93,14 +93,20 @@ def test_the_build_directive_assembles_for_every_stack(name, stack):
     opening = {"connector": "Integrate the connector", "idea": "from the idea",
                "training": f'Apply "{m.name}"'}[m.item_kind]
     assert opening in text
-    if m.item_kind == "connector":
-        assert "read the app's UI conventions" in text and "SECURITY CORE stays exactly" in text
-    assert m.tests[stack].command in text and f"at least {m.tests[stack].min_tests} passing tests" in text
-    assert apply_service.UNTRUSTED_BEGIN not in text
     tests = template_test_files(files, stack)
     assert tests, f"{name}/{stack} has no tests"
-    for t in tests:  # every test file reaches the agent, inline or by name
-        assert f"tests/{t}" in text
+    if m.item_kind == "connector":
+        assert "read the app's UI conventions" in text and "SECURITY CORE stays exactly" in text
+        # PRE-TESTED: the build neither copies, inlines nor runs a connector's own tests.
+        assert "PRE-TESTED" in text and "Do NOT write tests for the connector" in text
+        assert m.tests[stack].command not in text
+        for t in tests:
+            assert f"### tests/{t}" not in text
+    else:
+        assert m.tests[stack].command in text and f"at least {m.tests[stack].min_tests} passing tests" in text
+        for t in tests:  # every test file reaches the agent, inline or by name
+            assert f"tests/{t}" in text
+    assert apply_service.UNTRUSTED_BEGIN not in text
     for route in m.routes:
         assert route in text
 
@@ -117,7 +123,9 @@ def test_a_build_that_copies_the_reference_passes_both_gates(name, stack, tmp_pa
         (Path(cwd) / "boss-template-junit.xml").write_text(junit)
         return _Result()
 
-    r = evaluate(template=tpl, files=files, changed=changed, cwd=tmp_path, run_command=run)
+    # as_connector=False: the item's OWN test tier runs its suite (a build of a connector does not).
+    r = evaluate(template=tpl, files=files, changed=changed, cwd=tmp_path, run_command=run,
+                 as_connector=False)
     assert r.gates == {"template_tests": True, "no_committed_secrets": True}, r.evidence
     assert r.evidence["secret_scan"]["count"] == 0
 
@@ -167,6 +175,6 @@ def test_the_real_tests_pass_the_gate(name, stack, tmp_path):
         return _Result(p.returncode, p.stdout[-4000:], p.stderr[-4000:])
 
     r = evaluate(template=_template(report, stack), files=files, changed=_copied_reference(files, stack),
-                 cwd=app, run_command=run)
+                 cwd=app, run_command=run, as_connector=False)
     assert r.gates["template_tests"], r.evidence
     assert r.evidence["template_tests"]["passed"] >= report.manifest.tests[stack].min_tests

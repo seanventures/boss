@@ -66,6 +66,56 @@ def _argv_safe(prompt: str) -> str:
     return cleaned
 
 
+#: THE SHARED TASK CONTEXT GOES IN THE SYSTEM PROMPT, SO EVERY STAGE OF A BUILD SHARES ONE
+#: CACHED PREFIX. The prompt cache is keyed on the request prefix: tools, then the system prompt,
+#: then the messages. The CLI's default system prompt carries the cwd, env and GIT STATUS, which
+#: change between stages (QA's tests are uncommitted files when implement starts), so every
+#: stage's session wrote its own cache from byte zero: 2.08M cache-write tokens across the 14
+#: sessions of one HelpDesk build, and no reuse between them. With the dynamic sections moved
+#: into the first user message (--exclude-dynamic-system-prompt-sections) and the governed
+#: pipeline's byte-identical TASK CONTEXT block appended to the system prompt, tools + system +
+#: task context are the same bytes for every stage started within the cache TTL.
+SHARED_CONTEXT_START = "=== TASK CONTEXT"
+SHARED_CONTEXT_END = "=== END TASK CONTEXT ===\n\n"
+#: Over this the block stays in the prompt (argv bound, as for the prompt itself).
+SHARED_CONTEXT_MAX_BYTES = 96_000
+#: A resumed session must send the SAME system prompt or its whole conversation is re-written to
+#: the cache: the block each session started with, by session id (bounded).
+_SESSION_SHARED: dict[str, str] = {}
+_SESSION_SHARED_MAX = 256
+
+
+def split_shared_context(prompt: str) -> tuple[str, str]:
+    """(the shared TASK CONTEXT block, the stage's own prompt). ("", prompt) when the prompt
+    does not start with the block."""
+    text = prompt or ""
+    if not text.startswith(SHARED_CONTEXT_START):
+        return "", text
+    at = text.find(SHARED_CONTEXT_END)
+    if at < 0:
+        return "", text
+    cut = at + len(SHARED_CONTEXT_END)
+    return text[:cut], text[cut:]
+
+
+def _shared_for(prompt: str, resume_session_id: Optional[str]) -> tuple[str, str]:
+    """What goes in the system prompt for this call, and what stays in the prompt."""
+    shared, own = split_shared_context(prompt)
+    if not shared and resume_session_id:
+        return _SESSION_SHARED.get(resume_session_id, ""), prompt
+    if len(shared.encode("utf-8", "ignore")) > SHARED_CONTEXT_MAX_BYTES:
+        return "", prompt
+    return shared, own
+
+
+def _remember_shared(session_id: Optional[str], shared: str) -> None:
+    if not session_id or not shared:
+        return
+    if len(_SESSION_SHARED) >= _SESSION_SHARED_MAX:
+        _SESSION_SHARED.pop(next(iter(_SESSION_SHARED)), None)
+    _SESSION_SHARED[session_id] = shared
+
+
 #: How long a code agent may say NOTHING before it is treated as stalled.
 #:
 #: Generous on purpose: a big install or a long model turn can be quiet for a while, and killing
@@ -78,6 +128,12 @@ _IDLE_TIMEOUT_DEFAULT = 600
 
 #: The default bound on a build agent's silent thinking per step, in tokens.
 THINKING_TOKEN_CAP_DEFAULT = 12000
+#: The bound per step for a writing stage running at low effort.
+LOW_EFFORT_THINKING_CAP = 4000
+#: Per-stage bounds. The security seat answers in ONE turn, so the per-step cap is its whole
+#: budget: a HelpDesk-lite security check thought ~11k tokens for 5.5 min while the other two
+#: seats (same diff, running beside it) were done in 1.9 and 2.9; it gated the whole panel.
+STAGE_THINKING_CAPS = {"security_check": 6000}
 _THINKING_CAP_ENV = "BOSS_CODE_AGENT_MAX_THINKING_TOKENS"
 
 
@@ -90,6 +146,79 @@ def thinking_token_cap() -> int:
         return max(0, int(raw))
     except ValueError:
         return THINKING_TOKEN_CAP_DEFAULT
+
+
+#: The CLI's --effort levels (claude --help, 2.1.x).
+EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
+#: Stages that WRITE (tests, code, fixes): the plan is already decided, so they run at the
+#: project's writing effort (build_effort_writing, default low). Measured on a HelpDesk-size
+#: build: ~89% of output tokens were reasoning and narration, ~11% file content.
+WRITING_STAGES = frozenset({"write_tests", "implement", "solo", "repair", "guest"})
+#: Stages that JUDGE or DESIGN: their thinking is the product, so they run at high.
+REASONING_STAGES = frozenset({"standards", "spec", "plan", "design", "review_plan",
+                              "review_code", "security_check", "consistency_check",
+                              "check_tests", "quality"})
+WRITING_EFFORT_DEFAULT = "low"
+REASONING_EFFORT = "high"
+
+
+def stage_effort(stage: Optional[str], writing: Optional[str] = None) -> Optional[str]:
+    """The --effort for a build stage, or None for anything that is not a build stage (a chat,
+    research) so the CLI keeps its own default there."""
+    name = (stage or "").strip().lower()
+    if name in WRITING_STAGES:
+        level = (writing or WRITING_EFFORT_DEFAULT).strip().lower()
+        return level if level in EFFORT_LEVELS else WRITING_EFFORT_DEFAULT
+    if name in REASONING_STAGES:
+        return REASONING_EFFORT
+    return None
+
+
+def effort_map(writing: Optional[str] = None) -> dict:
+    """Every build stage's effort, for the record on the run."""
+    return {st: stage_effort(st, writing) for st in sorted(WRITING_STAGES | REASONING_STAGES)}
+
+
+def _stage_deadline() -> Optional[float]:
+    """The wall-clock deadline (epoch seconds) of the stage this thread runs, if it has one."""
+    from .llm_telemetry import get_llm_context
+
+    raw = get_llm_context().get("stage_deadline")
+    try:
+        return float(raw) if raw else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _cap_to_deadline(timeout: int, *, read_only: bool) -> int:
+    """A writing session's timeout, cut to its stage's deadline (never below a minute). A
+    reviewer is never cut: the budget is the writing stage's."""
+    deadline = None if read_only else _stage_deadline()
+    if deadline is None:
+        return timeout
+    return max(60, min(int(timeout), int(deadline - time.time())))
+
+
+def _mark_live(parsed: Optional[dict], live_written: dict) -> None:
+    """ALREADY PERSISTED, TURN BY TURN, WHILE THE STAGE RAN: tell the caller, so it does not
+    write every row a second time. Only rows a write REPORTED count (see _live_sink)."""
+    if isinstance(parsed, dict) and int((live_written or {}).get("rows") or 0) > 0:
+        parsed["_turns"] = []
+        parsed["_turns_live"] = True
+
+
+def _current_stage() -> str:
+    from .llm_telemetry import get_llm_context
+
+    return str(get_llm_context().get("stage") or "").strip().lower()
+
+
+def _current_effort() -> Optional[str]:
+    """The effort for the stage this thread is running (llm_telemetry context)."""
+    from .llm_telemetry import get_llm_context
+
+    ctx = get_llm_context()
+    return stage_effort(ctx.get("stage"), ctx.get("effort_writing"))
 
 
 #: The CLI's sub-agent tool (Claude Code 2.x names it `Agent`; `Task` is its older alias).
@@ -531,6 +660,58 @@ _PARALLEL_TOOLS_RULE = (
 )
 
 
+#: HOW A WRITING STAGE WORKS: fewer, larger steps. Measured on a HelpDesk build's implement
+#: stage: 1,337 turns, 227 Reads, 268 Bash (build/test/lint/typecheck re-runs after each small
+#: change), 48 Edits, and ~89% of output tokens spent on reasoning and narration rather than
+#: file content. Every turn is a full model round trip. Writing stages only: a reviewer reads.
+_WRITING_RULE = (
+    "\nWORKING RULES (writing stages):\n"
+    "- No narration between tool calls. Act; summarise once, in one line, at the end.\n"
+    "- Read in batches: every file you need for the next piece of work in ONE turn.\n"
+    "- Write each new file WHOLE with one Write. Use Edit only to change a few lines of an "
+    "existing file, never to build a file up piece by piece.\n"
+    "- Do not re-read a file you just wrote or edited: you already know what is in it.\n"
+    "- Run the full test/build commands when a chunk of work is finished (a whole module, a "
+    "group of routes, a screen), not after every change. To check one thing, run only that "
+    "test file. Fix all failures a run shows before running it again.\n"
+)
+
+
+_SANDBOX_FACTS: dict = {}
+
+
+def sandbox_facts() -> str:
+    """WHAT THE BUILD SANDBOX HAS, read from this process's own environment (the agent runs
+    here), said up front. A HelpDesk build spent steps discovering each of these: curl missing
+    (3 failed probes), argon2 with no arm64 prebuild (node FATAL, repros in /tmp), a Node without
+    --experimental-strip-types, and Playwright's browser downloaded at run time (181 s)."""
+    if "text" in _SANDBOX_FACTS:
+        return _SANDBOX_FACTS["text"]
+    import platform
+    import shutil as _shutil
+
+    lines = []
+    try:
+        node = subprocess.run(["node", "--version"], capture_output=True, text=True,
+                              timeout=5).stdout.strip()
+    except Exception:  # noqa: BLE001 — no node: say nothing about it
+        node = ""
+    if node:
+        lines.append(f"- Node {node} with npm.")
+    lines.append("- curl is available." if _shutil.which("curl")
+                 else "- curl is NOT installed: probe HTTP with node (fetch) instead.")
+    browsers = os.environ.get("PLAYWRIGHT_BROWSERS_PATH") or ""
+    if browsers and Path(browsers).is_dir():
+        lines.append(f"- A Chromium for Playwright is preinstalled at {browsers} "
+                     "(PLAYWRIGHT_BROWSERS_PATH is set); do not download browsers.")
+    arch = {"aarch64": "arm64", "x86_64": "x64"}.get(platform.machine(), platform.machine())
+    lines.append(f"- {platform.system().lower()}-{arch}: a native npm module with no prebuilt binary for it fails to "
+                 "build here (argon2 does). Use pure-JS packages: bcryptjs for password hashing.")
+    text = "\nSANDBOX (facts, no need to check them):\n" + "\n".join(lines) + "\n"
+    _SANDBOX_FACTS["text"] = text
+    return text
+
+
 _SHARED_ROOT_HINTS = ("readme", "package.json", "pyproject", "requirements", "makefile",
                       "docker", ".gitignore", "conftest", "setup.cfg", "tsconfig")
 
@@ -730,6 +911,13 @@ class ClaudeCodeAgent:
         # BOSS_CODE_AGENT_MAX_THINKING_TOKENS=0 leaves the CLI's own default.
         cap = thinking_token_cap()
         if cap and "MAX_THINKING_TOKENS" not in env:
+            # A writing stage at low effort thinks briefly per step: ~870 thinking tokens on
+            # every one of a HelpDesk implement's 424 steps, reads and `ls` included.
+            if _current_effort() == "low":
+                cap = min(cap, LOW_EFFORT_THINKING_CAP)
+            stage_cap = STAGE_THINKING_CAPS.get(_current_stage())
+            if stage_cap:
+                cap = min(cap, stage_cap)
             env["MAX_THINKING_TOKENS"] = str(cap)
         return env
 
@@ -850,6 +1038,13 @@ class ClaudeCodeAgent:
         # only the transcript is lost.
         capturing = capture_enabled()
         model = model or getattr(self.settings, "claude_cli_model", None)
+        # EFFORT PER STAGE (stage_effort): writing stages at the project's writing effort,
+        # design and review at high, anything else at the CLI's own default.
+        effort = _current_effort()
+        # A STAGE'S WALL-TIME BUDGET (governed build_implement_budget_minutes): a writing session
+        # never runs past the stage's deadline, whatever the per-session timeout says.
+        timeout = _cap_to_deadline(timeout, read_only=read_only)
+        shared_ctx, own_prompt = _shared_for(_argv_safe(prompt), resume_session_id)
 
         def base_cmd(stream: bool) -> list[str]:
             """The argv for one attempt. Rebuilt per attempt so capture can be dropped."""
@@ -877,6 +1072,13 @@ class ClaudeCodeAgent:
                 argv += ["--resume", resume_session_id]
             if model:
                 argv += ["--model", model]
+            if effort:
+                argv += ["--effort", effort]
+            # One cached prefix for every stage (SHARED_CONTEXT_START): static system prompt,
+            # then the run's shared task context.
+            argv += ["--exclude-dynamic-system-prompt-sections"]
+            if shared_ctx:
+                argv += ["--append-system-prompt", shared_ctx]
             # `--` ends option parsing: a prompt that BEGINS with a dash (e.g. a
             # "--- SECTION ---" header) must never be read as a CLI option.
             # Single choke point: every stage (build AND review) goes through _invoke, so the
@@ -885,7 +1087,9 @@ class ClaudeCodeAgent:
             # and the whole command is then rejected before the process starts — measured on the
             # chat path as `OSError: [Errno 7] Argument list too long: 'nice'`. Over the limit
             # the prompt goes on stdin; under it, nothing changes.
-            body = _argv_safe(prompt) + _PARALLEL_TOOLS_RULE + (sub_agent_rule(fan_out) if fan_out else "")
+            body = (own_prompt + _PARALLEL_TOOLS_RULE
+                    + ("" if read_only else _WRITING_RULE + sandbox_facts())
+                    + (sub_agent_rule(fan_out) if fan_out else ""))
             if len(body.encode("utf-8", "ignore")) > 96_000:
                 return argv, body
             return argv + ["--", body], None
@@ -1056,12 +1260,7 @@ class ClaudeCodeAgent:
                 raise RuntimeError(f"claude code agent timed out after {timeout}s") from exc
             if proc.returncode == 0:
                 parsed = _parse_cli_output(proc.stdout)
-                if parsed is not None and live_written["rows"] > 0:
-                    # ALREADY PERSISTED, TURN BY TURN, WHILE THE STAGE RAN. Handing the same
-                    # turns back would write every row twice. The flag tells the caller the
-                    # transcript (including the prompt row) is already on disk.
-                    parsed["_turns"] = []
-                    parsed["_turns_live"] = True
+                _mark_live(parsed, live_written)
                 if parsed is None:
                     if capturing:
                         # Succeeded, but produced output this cannot read. That is a capture
@@ -1088,6 +1287,9 @@ class ClaudeCodeAgent:
                         "result",
                         "(ran out of turns before finishing — partial attempt; resume to continue)",
                     )
+                    # Its turns were written live too: the batch fallback re-wrote all 321 of a
+                    # HelpDesk session's turns at its turn cap (crun_566f8767, 05:41).
+                    _mark_live(data, live_written)
                     return data
                 reason = str(data.get("result") or data.get("error") or "").strip()
                 subtype = str(data.get("subtype") or data.get("stop_reason") or "").strip()
@@ -1187,6 +1389,7 @@ class ClaudeCodeAgent:
                             ok=False, error=str(exc))
             raise
         usage, cost_micros = self._usage(data, self.settings)
+        _remember_shared(data.get("session_id"), _shared_for(prompt, resume_session_id)[0])
         turns = int(data.get("num_turns") or 0)
         record_llm_call(engine_name=self.engine, usage=usage, cost_usd_micros=cost_micros,
                         latency_ms=int((time.monotonic() - started) * 1000), turns=turns)
