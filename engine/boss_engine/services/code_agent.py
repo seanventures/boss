@@ -193,6 +193,14 @@ def _cap_to_deadline(timeout: int, *, read_only: bool) -> int:
     return max(60, min(int(timeout), int(deadline - time.time())))
 
 
+def _mark_live(parsed: Optional[dict], live_written: dict) -> None:
+    """ALREADY PERSISTED, TURN BY TURN, WHILE THE STAGE RAN: tell the caller, so it does not
+    write every row a second time. Only rows a write REPORTED count (see _live_sink)."""
+    if isinstance(parsed, dict) and int((live_written or {}).get("rows") or 0) > 0:
+        parsed["_turns"] = []
+        parsed["_turns_live"] = True
+
+
 def _current_effort() -> Optional[str]:
     """The effort for the stage this thread is running (llm_telemetry context)."""
     from .llm_telemetry import get_llm_context
@@ -1197,12 +1205,7 @@ class ClaudeCodeAgent:
                 raise RuntimeError(f"claude code agent timed out after {timeout}s") from exc
             if proc.returncode == 0:
                 parsed = _parse_cli_output(proc.stdout)
-                if parsed is not None and live_written["rows"] > 0:
-                    # ALREADY PERSISTED, TURN BY TURN, WHILE THE STAGE RAN. Handing the same
-                    # turns back would write every row twice. The flag tells the caller the
-                    # transcript (including the prompt row) is already on disk.
-                    parsed["_turns"] = []
-                    parsed["_turns_live"] = True
+                _mark_live(parsed, live_written)
                 if parsed is None:
                     if capturing:
                         # Succeeded, but produced output this cannot read. That is a capture
@@ -1229,6 +1232,9 @@ class ClaudeCodeAgent:
                         "result",
                         "(ran out of turns before finishing — partial attempt; resume to continue)",
                     )
+                    # Its turns were written live too: the batch fallback re-wrote all 321 of a
+                    # HelpDesk session's turns at its turn cap (crun_566f8767, 05:41).
+                    _mark_live(data, live_written)
                     return data
                 reason = str(data.get("result") or data.get("error") or "").strip()
                 subtype = str(data.get("subtype") or data.get("stop_reason") or "").strip()
