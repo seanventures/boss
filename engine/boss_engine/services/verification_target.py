@@ -715,6 +715,36 @@ def official_app_id(spec: dict[str, Any] | None, finalize_ctx: dict[str, Any] | 
     return value or None
 
 
+#: "in the `helpdesk-ai/` folder", "ONE npm project in `helpdesk-ai/`", "`apps/web/` directory".
+_BRIEF_DIR = re.compile(
+    r"(?:\bin(?:to)?\s+(?:the\s+)?`(?P<a>[A-Za-z0-9][\w.-]*(?:/[\w.-]+)*)/`)"
+    r"|(?:`(?P<b>[A-Za-z0-9][\w.-]*(?:/[\w.-]+)*)/`\s+(?:folder|directory))")
+
+
+def brief_app_dir(instructions: Any) -> str | None:
+    """The app folder the brief itself names ("Build HelpDesk AI ... in the `helpdesk-ai/` folder
+    of this repository"), when it names exactly one. Only the brief, never the iteration notes a
+    retry appends. None when it names none, or several (then no single app is "the" app)."""
+    text = str(instructions or "").split("\n\n=== ITERATION FEEDBACK", 1)[0]
+    found = {(m.group("a") or m.group("b")).strip("/") for m in _BRIEF_DIR.finditer(text)}
+    found = {d for d in found if d and not d.startswith(".") and ".." not in d.split("/")}
+    return found.pop() if len(found) == 1 else None
+
+
+def app_scope(spec: dict[str, Any] | None, finalize_ctx: dict[str, Any] | None) -> str | None:
+    """THE app directory a build's tests belong to: the pinned benchmark app, else the folder its
+    brief names. None: the whole repository is the app (a single-app repo)."""
+    return official_app_id(spec, finalize_ctx) or brief_app_dir((spec or {}).get("instructions"))
+
+
+def in_app_scope(path: str, scope: str | None) -> bool:
+    """Is `path` (repo-relative) inside the app directory `scope` (everything is, with none)?"""
+    if not scope:
+        return True
+    path = str(path or "").lstrip("./")
+    return path == scope or path.startswith(scope.rstrip("/") + "/")
+
+
 def _semver_major(value: str) -> int | None:
     match = re.search(r"(\d+)", str(value or ""))
     return int(match.group(1)) if match else None

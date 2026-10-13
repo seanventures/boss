@@ -50,7 +50,7 @@ def test_boss_counts_cases_in_every_language(tmp_path):
 
 def test_an_over_budget_suite_is_trimmed_once_and_recorded():
     src = inspect.getsource(g)
-    assert "count_test_cases(" in src and "_test_budget_trim_prompt(_written, _cap)" in src
+    assert "count_test_cases(" in src and "_test_budget_trim_prompt(_written, _cap, _own_tests)" in src
     assert "resume_session_id=r1[\"session_id\"]" in src
     assert "'{test_budget}'" in src and "code_task.test_budget" in src
     assert "set_llm_context(test_budget=" in inspect.getsource(g._record_effort)

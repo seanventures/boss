@@ -450,8 +450,12 @@ def start_code_task(
     job_priority: Optional[int] = None,
     reference_links: Optional[list[str]] = None,
     role_key: Optional[str] = None,
+    automatic_retry: bool = False,
 ) -> str:
     """Create the durable run row and enqueue the single `code.task` job.
+
+    ``automatic_retry``: BOSS itself is starting this attempt (retry_code_task(automatic=True)).
+    It runs under the parent's carried grant or is not started at all (RetryNeedsPerson).
 
     ``role_key`` runs the task AS that agent: its held MCP servers reach the harness
     (code_task_mcp). It must name an agent of this project.
@@ -573,7 +577,16 @@ def start_code_task(
             identity_acting = _consent.carry_retry_authority(
                 connection, parent_run_id=parent_run, new_run_id=run_id, project_id=project_id,
                 role_keys=[builder], permissions=_consent.CODE_TASK_PERMISSIONS,
-                repos=_consent_repos(owner, repo, repo_host))
+                repos=_consent_repos(owner, repo, repo_host), by_boss=automatic_retry,
+                workflow_run_id=str((finalize_ctx or {}).get("workflow_run_id") or "") or None)
+        if automatic_retry and identity_acting is None:
+            # NOT STARTED rather than started to be refused: no person's grant covers this
+            # attempt, so identity would block it the moment it ran (crun_da5f6f72: "No one's
+            # authority covers this build"). Nothing is written; a person retries it.
+            raise RetryNeedsPerson(
+                "BOSS did not retry this build by itself: no person's grant covers another "
+                "attempt (the grant it ran under has ended or was for that build only). "
+                "Press Retry to run it again under your own consent.")
     if not simulated and identity_acting is None:
         from boss_engine.identity import consent as _consent
 
@@ -1502,22 +1515,156 @@ def previous_failure_block(prev: dict, gates_failed: Optional[list] = None) -> s
     return "\n".join(parts)
 
 
+def _lineage_produced_nothing(engine, prev: dict, run_id: str) -> bool:
+    """True when no attempt of this lineage (back to its root, or to a completed attempt) left any
+    work behind: no completed stage (so nothing checkpointed to the branch), no approved design,
+    no saved workspace, no PR. Then a retry has nothing to repair."""
+    node, node_id = prev, run_id
+    for _ in range(12):
+        if node is None:
+            return True
+        fc = node.get("finalize_ctx") or {}
+        st = node.get("state") or {}
+        if (node.get("status") == "completed" or node.get("pull_request_url")
+                or fc.get("completed_stages") or fc.get("saved_workspace") or fc.get("pending_diff")
+                or (isinstance(st.get("design"), dict) and st["design"])):
+            return False
+        node_id = str(fc.get("parent_run_id") or "")
+        if not node_id:
+            return True
+        with _transaction(engine) as c:
+            node = load_code_task_run(c, node_id)
+    return False
+
+
+#: How many times BOSS itself retries a held delivery before it is a person's to retry.
+AUTO_DELIVERY_RETRIES = 2
+
+
+def redeliver_code_task(engine, settings: Settings, run_id: str, *, automatic: bool = False) -> dict:
+    """Deliver a finished, gated build whose push / pull request failed: push the kept files to
+    the lineage branch and open the pull request, from `finalize_ctx.pending_delivery`. The same
+    run completes; nothing is re-planned, re-tested, re-built or re-reviewed. `automatic`: BOSS
+    asked, so the person's grant for the build must still cover it (RetryNeedsPerson if not)."""
+    from ..schemas import FileChange
+
+    with _transaction(engine) as c:
+        run = load_code_task_run(c, run_id)
+    if run is None:
+        raise ValueError(f"code task run not found: {run_id}")
+    fctx = run.get("finalize_ctx") or {}
+    held = fctx.get("pending_delivery") or {}
+    if run.get("pull_request_url"):
+        return {"status": "completed", "run_id": run_id, "delivery_only": True,
+                "pull_request_url": run["pull_request_url"], "already_open": True}
+    if not held.get("files"):
+        raise ValueError("nothing kept to deliver: retry the build instead.")
+    if automatic:
+        from boss_engine.identity import consent as _consent
+        from boss_engine.identity import runs as _identity_runs
+
+        spec = run.get("spec") or {}
+        with _transaction(engine) as c:
+            carried = _consent.carry_retry_authority(
+                c, parent_run_id=run_id, new_run_id="delivery", project_id=run["project_id"],
+                role_keys=[_identity_runs.resolved_builder({"role_key": spec.get("role_key")}, fctx)],
+                permissions=_consent.CODE_TASK_PERMISSIONS,
+                repos=_consent_repos(spec.get("owner"), spec.get("repo"), spec.get("repo_host")),
+                by_boss=True, workflow_run_id=str(fctx.get("workflow_run_id") or "") or None)
+        if carried is None:
+            raise RetryNeedsPerson(
+                "BOSS did not retry this delivery by itself: no person's grant covers it any "
+                "more. Press Retry to push and open the pull request.")
+        with _transaction(engine) as c:
+            tried = c.execute(sql(
+                "SELECT count(*) FROM events WHERE entity_id = :r AND event_type = "
+                "'code_task.delivery_retried' AND data->>'automatic' = 'true'"), {"r": run_id}).scalar()
+        if int(tried or 0) >= AUTO_DELIVERY_RETRIES:
+            # The same run is retried in place, so no lineage count bounds it: this does.
+            raise RetryNeedsPerson(
+                f"BOSS already retried this delivery {tried} times by itself and GitHub still "
+                "refused it. Press Retry to push and open the pull request.")
+    files = [FileChange(path=f["path"], content=f["content"]) for f in held["files"]]
+    ports = _engine_ports()
+    sf = SoftwareFactoryService(settings, ports=ports)
+    project_id = run["project_id"]
+    with _transaction(engine) as c:
+        reservation = ports.budget.reserve(
+            c, project_id, category="code_task", amount_usd_micros=200_000,
+            reason=f"deliver {run_id[:12]}: push and pull request only", expires_in_minutes=15)
+        _set_phase(c, run_id, "opening_pr")
+        emit_event(c, project_id, "code_task.delivery_retried", "boss", "code_task_run", run_id,
+                   {"files": len(files), "automatic": automatic,
+                    "why": "the build passed its gates; only the push and the pull request run"})
+        proposal = sf.propose_pull_request(
+            c, project_id, run.get("task_id"), reservation_id=reservation.get("reservation_id"),
+            dedupe_key=f"code:task:{run_id}", title=run["title"],
+            branch_name=held.get("branch") or f"boss/code/{fctx.get('root_run_id') or run_id}",
+            summary=str(held.get("summary") or ""), files=files,
+            created_by_job_id=fctx.get("created_by_job_id"),
+            quality_gate_id=held.get("quality_gate_id"), run_id=run_id)
+    status = proposal.get("status")
+    if status not in ("created", "succeeded") and not (
+            status == "reused" and proposal.get("pull_request_url")):
+        from .governed_code_task_service import delivery_failure_words
+
+        words = delivery_failure_words(str(proposal.get("message") or proposal.get("error") or status))
+        with _transaction(engine) as c:
+            _set_phase(c, run_id, "done")
+            c.execute(sql("UPDATE code_task_runs SET error=:e, updated_at=now() WHERE id=:id"),
+                      {"e": words, "id": run_id})
+        return {"status": "failed", "run_id": run_id, "delivery_only": True, "error": words}
+    with _transaction(engine) as c:
+        c.execute(sql(
+            "UPDATE code_task_runs SET status='completed', phase='done', pull_request_url=:u, "
+            "pull_request_number=:n, decision_id=:d, error=NULL, updated_at=now(), "
+            "finalize_ctx = COALESCE(finalize_ctx,'{}'::jsonb) - 'pending_delivery' WHERE id=:id"),
+            {"u": proposal.get("pull_request_url"), "n": proposal.get("pull_request_number"),
+             "d": proposal.get("decision_id"), "id": run_id})
+        emit_event(c, project_id, "code_task.pr_opened", "boss", "code_task_run", run_id,
+                   {"pull_request_url": proposal.get("pull_request_url"),
+                    "decision_id": proposal.get("decision_id"),
+                    "quality_gate_id": held.get("quality_gate_id"), "delivery_only": True})
+    return {"status": "completed", "run_id": run_id, "delivery_only": True,
+            "pull_request_url": proposal.get("pull_request_url"),
+            "pull_request_number": proposal.get("pull_request_number"),
+            "decision_id": proposal.get("decision_id")}
+
+
 def retry_code_task(
     engine, settings: Settings, jobs, run_id: str, *, fix_note: str = "",
     profile: Optional[str] = None, repair_retries: Optional[int] = None,
     allow_test_retirement: bool = False, job_priority: Optional[int] = None,
     attempt_ceiling: Optional[int] = None, workflow_version_id: str = "",
-    title: Optional[str] = None,
+    title: Optional[str] = None, automatic: bool = False,
 ) -> dict:
     """Resume a failed/blocked code task as a NEW attempt in the same lineage — carrying the prior
     attempt's findings forward as explicit feedback so the agent fixes the identified issues instead
     of regenerating blind. History is preserved: each attempt links to its parent + root run, and
-    accumulates the findings it must address."""
+    accumulates the findings it must address.
+
+    `automatic=True`: BOSS ITSELF decided to retry (the one-shot infra retry, the shepherd, an
+    autonomous review-repair), not a person. Such a retry
+    * runs under the grant the person gave the failed build — same person, same run, never wider
+      (identity.consent.carry_retry_authority(by_boss=True)) — or is not started at all;
+    * never retries a build that failed before this BOSS started (an upgrade or a restart in
+      between): that build is a person's to restart.
+    Either refusal raises RetryNeedsPerson, writes nothing, and leaves the build failed with Retry."""
     with _transaction(engine) as c:
         prev = load_code_task_run(c, run_id)
         prev_gates_failed = _recorded_failed_gates(c, run_id) if prev is not None else []
+        failed_at = _failed_at(c, run_id) if (prev is not None and automatic) else None
     if prev is None:
         raise ValueError(f"code task run not found: {run_id}")
+    if automatic and failed_at is not None and failed_at < PROCESS_STARTED_AT:
+        raise RetryNeedsPerson(
+            "BOSS did not retry this build by itself: it failed before BOSS last started "
+            "(an upgrade or a restart), and a build that died before a restart is only run "
+            "again when a person asks. Press Retry to run it again.")
+    if (prev.get("finalize_ctx") or {}).get("pending_delivery") and not prev.get("pull_request_url"):
+        # ONLY THE DELIVERY FAILED (governed_code_task_service.hold_delivery): retry exactly
+        # that — the push and the pull request — never the design, tests, build or review.
+        return redeliver_code_task(engine, settings, run_id, automatic=automatic)
     if is_simulated_run(prev):
         raise ValueError(
             "cannot retry a simulated fixture run; create a real code-task instead"
@@ -1667,6 +1814,20 @@ def retry_code_task(
         if whole:
             rid, n, _r = max(whole, key=lambda w: w[2])
             seed_files, seed_from = n, rid
+    # NOTHING TO REPAIR: every earlier attempt stopped before producing anything (crun_2f76585e
+    # died at the clone, 1.1 min in). The retry is then a FRESH build of the same brief — the
+    # same app folder, the same criteria — not a repair: telling it "the previous attempt's code
+    # is ALREADY PRESENT" and holding it to "the app's existing tests" sent crun_37f4ccef to treat
+    # other apps' suites at the repo root as its own.
+    fresh = (prev.get("status") != "completed" and not seed_files and not pr_url
+             and _lineage_produced_nothing(engine, prev, run_id))
+    if fresh:
+        why = str(prev.get("error") or "it stopped before producing anything").strip()
+        augmented = (f"{base_instr}\n\n=== ITERATION FEEDBACK (attempt {attempt}) ===\n"
+                     "This is a FRESH build of the brief above: the previous attempt stopped "
+                     f"before producing any work ({why[:300]}), so nothing of it exists to "
+                     "continue from. Build it as the brief says, in the place the brief names."
+                     + (f"\n\n## Note from the operator\n{fix_note}" if fix_note else ""))
     history = list(fctx_prev.get("feedback_history") or [])
     history.append({
         "attempt": attempt, "parent_run_id": run_id, "prev_status": prev.get("status"),
@@ -1682,7 +1843,7 @@ def retry_code_task(
             # change) is held to the app's existing tests, as every other change path is —
             # enforced here so no client can drop it. A blind retry keeps its own criteria.
             acceptance_criteria=(with_existing_tests_criterion(spec.get("acceptance_criteria"))
-                                 if str(fix_note or "").strip()
+                                 if str(fix_note or "").strip() and not fresh
                                  else spec.get("acceptance_criteria") or []),
             test_commands=spec.get("test_commands") or [],
             owner=spec.get("owner") or settings.target_github_owner,
@@ -1690,6 +1851,8 @@ def retry_code_task(
             base_branch=spec.get("base_branch") or "main",
             role_key=spec.get("role_key"),
             finalize_ctx={"parent_run_id": run_id, "root_run_id": root, "attempt": attempt,
+                          # A fresh build of the same brief, not a repair (see `fresh` above).
+                          **({"fresh_build": True} if fresh else {}),
                           # AN EXPLICIT CHOICE MAKES THIS A PIECE OF WORK IN ITS OWN RIGHT.
                           # A retry inherits its parent's run; a change the operator chose a
                           # workflow for is a new piece of work following that path.
@@ -1774,6 +1937,7 @@ def retry_code_task(
                             else spec.get("repair_retries")),
             substrate=substrate_override,
             job_priority=job_priority,
+            automatic_retry=automatic,
         )
         if pr_url:
             emit_event(
@@ -2263,6 +2427,11 @@ def _consent_repos(owner: Optional[str], repo: Optional[str], repo_host: Optiona
     return [f"{owner}/{repo}"]
 
 
+class RetryNeedsPerson(ValueError):
+    """BOSS will not start an automatic retry: only a person may (retry_code_task(automatic=True)).
+    A ValueError, so every automatic caller's existing "could not retry" handling applies."""
+
+
 class AuthorityRefused(RuntimeError):
     """The build has no authority to act (identity.runs.start_code_task_run refused it: no grant,
     a grant that no longer covers, an agent with no Passport). A REFUSAL, never a crash: the run
@@ -2311,6 +2480,31 @@ def _refused_agent_name(engine, reason: str) -> Optional[str]:
     return f"{name} ({agent_id})" if name else None
 
 
+#: When this BOSS process started. A build that failed before it is never retried automatically.
+PROCESS_STARTED_AT = datetime.now(timezone.utc)
+
+
+def _failed_at(connection, run_id: str):
+    """When the build failed: its last `code_task.failed` event, else when its row last moved."""
+    return connection.execute(sql(
+        "SELECT COALESCE((SELECT max(e.created_at) FROM events e WHERE e.entity_id = r.id "
+        "AND e.event_type = 'code_task.failed'), r.updated_at) FROM code_task_runs r WHERE r.id = :r"),
+        {"r": run_id}).scalar()
+
+
+def _transient_retry_recorder(engine, run_id: str):
+    """Each in-place retry of a GitHub/network operation in this build, as an event on the run
+    (`code_task.transient_retry`: which operation, which attempt, the error, the wait)."""
+    def record(info: dict) -> None:
+        project_id = _run_project(engine, run_id)
+        if not project_id:
+            return
+        with _transaction(engine) as c:
+            emit_event(c, project_id, "code_task.transient_retry", "boss", "code_task_run",
+                       run_id, dict(info))
+    return record
+
+
 def run_code_task(engine, settings: Settings, jobs, run_id: str,
                   *, fencing_token: Optional[str] = None) -> dict:
     """Execute one full code-task attempt. Safe to re-run after a crash.
@@ -2347,10 +2541,12 @@ def _run_code_task_once(engine, settings: Settings, jobs, run_id: str,
     from ..app_links.run_env import for_run as _link_env
 
     from .sandbox_identity import SandboxUnavailable
+    from . import transient_retry as _transient_retry
 
     try:
         with owned_process.owner_scope("code_run", run_id, fresh=True), _sandbox_bind(run_id), \
-                _link_env(engine, run_id, _run_project(engine, run_id)):
+                _link_env(engine, run_id, _run_project(engine, run_id)), \
+                _transient_retry.reporting(_transient_retry_recorder(engine, run_id)):
             return _run_code_task(engine, settings, jobs, run_id, fencing_token=fencing_token)
     except SandboxUnavailable as exc:
         # Fail closed: a build never runs unisolated when isolation is required.

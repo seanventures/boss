@@ -105,7 +105,7 @@ def test_a_seeded_retry_skips_design_write_tests_and_the_first_implement():
     assert SOURCE.index("seed_workspace(root, _seed_files)") < SOURCE.index(
         "preexisting_tests = sorted(")
     # A retry's first implement pass is the repair (cross-run), fed the iteration feedback.
-    assert "_cross_run_repair = (root_run != run_id) and attempt == 0" in SOURCE
+    assert "_cross_run_repair = _is_repair and attempt == 0" in SOURCE
     assert 'instructions.split("=== ITERATION FEEDBACK", 1)[-1]' in SOURCE
     assert "impl_prompt = _repair_prompt(base_impl_prompt, _ev, max(1, attempt))" in SOURCE
 

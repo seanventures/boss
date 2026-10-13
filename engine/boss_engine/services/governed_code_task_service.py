@@ -899,6 +899,44 @@ def _record_quality_gate(connection, *, run_id, project_id, task_id, job_id, evi
 AUTO_INFRA_RETRY_KEY = "auto_infra_retry"
 
 
+def delivery_failure_words(detail: str) -> str:
+    """Why delivering a finished build failed, naming the operation and what Retry will do."""
+    import re
+
+    text = str(detail or "")
+    code = re.search(r"\b(5\d\d)\b", text)
+    if code:
+        why = f"GitHub returned {code.group(1)}"
+    elif re.search(r"timed? ?out|timeout", text, re.I):
+        why = "GitHub did not answer in time"
+    elif re.search(r"connect|reset|resolve|network", text, re.I):
+        why = "BOSS could not reach GitHub"
+    else:
+        why = f"GitHub refused it ({text.strip()[:160] or 'no detail'})"
+    return (f"{why} while pushing the work and opening the pull request. The build, its tests and "
+            "its review are done; Retry pushes and opens the pull request only.")
+
+
+def hold_delivery(connection, run_id: str, project_id: str, *, files: list[dict], summary: str,
+                  quality_gate_id: Optional[str], branch: str, detail: str) -> dict:
+    """A gated build whose push / pull request failed: keep what to deliver on the run
+    (finalize_ctx.pending_delivery) and fail it `recoverable`, saying which operation failed.
+    code_task_service.retry_code_task sees `pending_delivery` and redelivers only."""
+    words = delivery_failure_words(detail)
+    connection.execute(sql(
+        "UPDATE code_task_runs SET finalize_ctx = COALESCE(finalize_ctx,'{}'::jsonb) "
+        "|| jsonb_build_object('pending_delivery', CAST(:d AS JSONB)) WHERE id = :id"),
+        {"id": run_id, "d": json.dumps({
+            "files": files, "summary": summary, "quality_gate_id": quality_gate_id,
+            "branch": branch, "failed_operation": "push_and_pull_request",
+            "error": str(detail or "")[:500]})})
+    emit_event(connection, project_id, "code_task.delivery_held", "boss", "code_task_run", run_id,
+               {"failed_operation": "push_and_pull_request", "files": len(files),
+                "quality_gate_id": quality_gate_id, "error": str(detail or "")[:300]})
+    return {**_fail(connection, run_id, project_id, words, failure_class="recoverable",
+                    reason_code="delivery_failed"), "delivery_held": True}
+
+
 def _retry_after_infra_failure(engine, settings, jobs, run_id: str, project_id: str,
                                fctx: dict, result: dict) -> dict:
     """ONE AUTOMATIC RETRY FOR A BUILD THAT DIED OF BOSS, NOT OF ITS CODE.
@@ -914,10 +952,17 @@ def _retry_after_infra_failure(engine, settings, jobs, run_id: str, project_id: 
         return {**result, "auto_retry": "not_again",
                 "next_step": ("BOSS already retried this build once after a platform error. "
                               "Fix the cause shown above, then press Retry.")}
-    try:
-        from .code_task_service import retry_code_task
+    from .code_task_service import RetryNeedsPerson, retry_code_task
 
-        retried = retry_code_task(engine, settings, jobs, run_id)
+    try:
+        # AS BOSS, UNDER THE PERSON'S GRANT, OR NOT AT ALL (retry_code_task(automatic=True)):
+        # crun_da5f6f72 was started bare and refused at once, "No one's authority covers this
+        # build", because the worker's own key was the caller. Now the attempt carries the grant
+        # the person gave the failed build, or is not started and the build stays failed with
+        # Retry for a person.
+        retried = retry_code_task(engine, settings, jobs, run_id, automatic=True)
+        if retried.get("delivery_only"):
+            return {**result, **retried}               # the same run, delivered (or not) in place
         new_id = str(retried.get("run_id") or "")
         with _transaction(engine) as c:
             c.execute(sql("UPDATE code_task_runs SET finalize_ctx = COALESCE(finalize_ctx,'{}'::jsonb)"
@@ -927,6 +972,14 @@ def _retry_after_infra_failure(engine, settings, jobs, run_id: str, project_id: 
                        {"retry_run_id": new_id, "why": "the build stopped on a BOSS platform "
                         "error, not on its code; retrying once automatically"})
         return {**result, "auto_retry_run_id": new_id}
+    except RetryNeedsPerson as withheld:
+        try:
+            with _transaction(engine) as c:
+                emit_event(c, project_id, "code_task.auto_retry_withheld", "boss",
+                           "code_task_run", run_id, {"why": str(withheld)[:300]})
+        except Exception:  # noqa: BLE001
+            _log_caught(logger)
+        return {**result, "auto_retry": "needs_person", "next_step": str(withheld)}
     except Exception as exc:  # noqa: BLE001 — the original failure stands
         _log_caught(logger)
         try:
@@ -1254,14 +1307,29 @@ def count_test_cases(root: Path, files) -> int:
     return total
 
 
-def _test_budget_trim_prompt(written: int, cap: int) -> str:
-    """The test author's one trim turn when its suite is over the budget (resumed session)."""
+def budget_files(test_files, preexisting, *, placed=(), scope=None) -> list[str]:
+    """The test files the TEST BUDGET counts: the ones THIS build wrote (not pre-existing in the
+    tree, not a template's placed tests), inside the app's own directory (`scope`). The repo's
+    existing tests, of this app or any other, are never counted and never trimmed."""
+    from .verification_target import in_app_scope
+
+    before, held = set(preexisting or ()), set(placed or ())
+    return [p for p in dict.fromkeys(test_files or ())
+            if p not in before and p not in held and in_app_scope(p, scope)]
+
+
+def _test_budget_trim_prompt(written: int, cap: int, files=()) -> str:
+    """The test author's one trim turn when its suite is over the budget (resumed session). It
+    names the files it may trim — the ones this build wrote — and nothing else."""
+    listing = "".join(f"  - {p}\n" for p in list(files)[:40])
     return (
-        f"--- TEST BUDGET ---\nBOSS counted {written} test cases in the files you wrote; this "
-        f"build's hard limit is {cap}. Delete the lowest-priority cases until at most {cap} "
+        f"--- TEST BUDGET ---\nBOSS counted {written} test cases in the files you wrote"
+        + (f":\n{listing}" if listing else "; ")
+        + f"this build's hard limit is {cap}. Delete the lowest-priority cases until at most {cap} "
         "remain: keep one per acceptance criterion first, then the riskiest behaviour; drop "
-        "duplicates, variations of one case and edge cases first. Edit the test files only; do "
-        "not add cases. End with the updated `TEST PLAN:`.\n")
+        "duplicates, variations of one case and edge cases first. Edit ONLY the files listed; "
+        "never edit or delete any other test file (the repository's existing tests are not "
+        "yours to trim); do not add cases. End with the updated `TEST PLAN:`.\n")
 
 
 def _test_scope_clause(criteria, budget: Optional[int] = None) -> str:
@@ -3069,6 +3137,11 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
     # regenerating from base. The PR on that branch is reused (see create_pull_request).
     root_run = fctx.get("root_run_id") or run_id
     work_branch = f"boss/code/{root_run}"
+    # A REPAIR continues earlier work of this lineage. A retry whose earlier attempts produced
+    # nothing (code_task_service.retry_code_task marks it `fresh_build`: crun_2f76585e died at
+    # the clone) is a FRESH build of the same brief: its tree holds no work of this app, so the
+    # repair paths (augment the existing suite, cross-run repair prompts) have nothing to act on.
+    _is_repair = root_run != run_id and not fctx.get("fresh_build")
     if root_run != run_id and sf.github.branch_exists(work_branch):
         base_branch = work_branch  # prior attempt's code is present in the clone
     app = GitHubAppAdapter(settings)
@@ -3362,6 +3435,10 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             pass
         return True
     _app_id = verification_target.official_app_id(spec, fctx)
+    # THE APP'S OWN DIRECTORY (the pinned app, else the folder the brief names: `helpdesk-ai/`).
+    # A build's tests are its app's tests: the budget counts only those, and a repair's
+    # "existing suite" oracle is only those — never other apps' suites at the repo root.
+    _app_scope = verification_target.app_scope(spec, fctx)
 
     def _guest_stage(step: str, stage_name: str, prompt: str, *, test_cmds: list[str],
                      stage_title: str, engine_override: str = ""):
@@ -4386,6 +4463,12 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             if p.is_file() and _is_test_path(str(p.relative_to(root)))
             and ".git/" not in str(p.relative_to(root))
         )
+        # The pre-existing tests OF THIS APP (its directory): the only suite a repair may treat
+        # as its oracle. crun_37f4ccef took a repo's 37 test files of OTHER apps (735 cases)
+        # as "the existing suite" of a new app. `preexisting_tests` stays repo-wide for the
+        # regression floor: no pre-existing test anywhere may be removed or weakened.
+        _app_tests = [p for p in preexisting_tests
+                      if verification_target.in_app_scope(p, _app_scope)]
         # Count the TESTS in each pre-existing file, not its bytes — see the floor below.
         preexisting_test_counts: dict[str, int] = {}
         for _p in preexisting_tests:
@@ -4606,13 +4689,13 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                            {"skipped_stage": "write_tests", "seeded_from": _seed_from,
                             "existing_tests": len(preexisting_tests),
                             "why": "continuing from the previous attempt's saved workspace"})
-        if (do_separate_tests and (_own_tests_done or (root_run != run_id and preexisting_tests))
+        if (do_separate_tests and (_own_tests_done or (_is_repair and _app_tests))
                 and (_own_tests_done or _lineage_wrote_tests)
                 and ("write_tests" in _resume_done
                      or not _repair_needs_write_tests(
                          fctx.get("prior_failing_gates"),
                          prior_error=fctx.get("prior_error"),
-                         tests_on_branch=bool(preexisting_tests)))):
+                         tests_on_branch=bool(_app_tests)))):
             do_separate_tests = False
             with _transaction(engine) as c:
                 emit_event(c, project_id, "code_task.tests_resumed", "boss",
@@ -4744,11 +4827,12 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 # working suite already present — and sending the from-scratch prompt into that
                 # tree is the exact failure this block was written to stop.
                 _resumed = bool(getattr(sandbox, "resumed_from_checkpoint", False))
-                if root_run != run_id or _resumed:
+                if _is_repair or _resumed:
                     existing = sorted(
                         str(p.relative_to(root)) for p in root.rglob("*")
                         if p.is_file() and _is_test_path(str(p.relative_to(root)))
-                        and ".git/" not in str(p.relative_to(root)))
+                        and ".git/" not in str(p.relative_to(root))
+                        and verification_target.in_app_scope(str(p.relative_to(root)), _app_scope))
                     if existing:
                         # NOTE: `evidence` is not bound this early in the pipeline — the
                         # findings live in the iteration feedback carried on fctx/instructions.
@@ -4809,7 +4893,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 # SPLIT BY BOSS, NOT LEFT TO THE MODEL (parallel_build): a first, from-scratch
                 # pass with a design partition writes each part's suite in its own session, at
                 # the same time. A repair or a resume augments an existing suite: one session.
-                if (fan and not escalate and root_run == run_id
+                if (fan and not escalate and not _is_repair
                         and not getattr(sandbox, "resumed_from_checkpoint", False)):
                     split = _run_split(a, m, prompt, fan, tests=True)
                     if split is not None:
@@ -4832,14 +4916,14 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # 23s / $0.16, then the escalation spent 31 turns / 356s / $1.84 on opus — worse than
             # the original from-scratch run it was meant to avoid. Only escalate when the tree has
             # NO tests at all.
-            _repair_with_tests = (root_run != run_id) and bool(preexisting_tests)
+            _repair_with_tests = _is_repair and bool(_app_tests)
             if not test_files and _repair_with_tests:
-                test_files = list(preexisting_tests)
+                test_files = list(_app_tests)
                 with _transaction(engine) as c:
                     emit_event(c, project_id, "code_task.tests_reused", "boss",
                                "code_task_run", run_id,
                                {"step": "write_tests", "reason": "repair_augment_added_no_files",
-                                "existing_tests": len(preexisting_tests),
+                                "existing_tests": len(_app_tests),
                                 "note": "the existing suite stands as the oracle; not re-authoring"})
             if not test_files:
                 # SELF-HEAL: don't hard-fail on a weak/empty first pass — escalate to a
@@ -4860,22 +4944,29 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # what remains over is recorded on the build, never passed silently.
             if test_files and not use_microvm:
                 _cap = test_budget(criteria, get_llm_context().get("test_budget"))
-                _written = count_test_cases(
-                    root, [p for p in test_files if p not in _placed_tpl_tests])
+                # ONLY WHAT THIS BUILD WROTE, IN ITS APP (budget_files): crun_37f4ccef counted the
+                # repo's 735 pre-existing cases of other apps against a budget of 20, and the
+                # trim turn was told to delete them.
+                _own_tests = budget_files(test_files, preexisting_tests,
+                                          placed=_placed_tpl_tests, scope=_app_scope)
+                _written = count_test_cases(root, _own_tests)
                 _tb: dict = {"budget": _cap, "written": _written}
                 if _written > _cap and (r1 or {}).get("session_id"):
                     try:
                         set_llm_context(stage="write_tests")
                         _a_tb, _m_tb = _route("write_tests")
-                        _rt = _a_tb.run_role(_test_budget_trim_prompt(_written, _cap), root,
-                                             model=(r1 or {}).get("model") or _m_tb,
+                        _rt = _a_tb.run_role(_test_budget_trim_prompt(_written, _cap, _own_tests),
+                                             root, model=(r1 or {}).get("model") or _m_tb,
                                              resume_session_id=r1["session_id"])
                         cost += int(_rt.get("cost_usd_micros") or 0)
                         if "TEST PLAN:" in str(_rt.get("summary") or ""):
                             r1 = {**r1, "summary": _rt["summary"]}
-                        test_files = [fc.path for fc in sandbox.diff() if _is_test_path(fc.path)
-                                      and fc.path not in _placed_tpl_tests]
-                        _tb["after_trim"] = count_test_cases(root, test_files)
+                        _kept = [p for p in test_files if p not in _own_tests]
+                        _own_tests = budget_files(
+                            [fc.path for fc in sandbox.diff() if _is_test_path(fc.path)],
+                            preexisting_tests, placed=_placed_tpl_tests, scope=_app_scope)
+                        test_files = _kept + [p for p in _own_tests if p not in _kept]
+                        _tb["after_trim"] = count_test_cases(root, _own_tests)
                     except Exception:  # noqa: BLE001 — an untrimmed suite is recorded below
                         _log_caught(logger)
                 _tb["over"] = int(_tb.get("after_trim", _written)) > _cap
@@ -5040,7 +5131,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                "code_task_run", run_id,
                                {"stage": "implement", "count": len(_steer),
                                 "guidance": [i.get("text", "")[:200] for i in _steer]})
-            _cross_run_repair = (root_run != run_id) and attempt == 0
+            _cross_run_repair = _is_repair and attempt == 0
             if attempt == 0 and not _cross_run_repair:
                 impl_prompt = base_impl_prompt
                 _iref = getattr(sandbox, "integration_ref", None)
@@ -5809,7 +5900,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # A REPAIR continuation that finds the prior code already correct makes NO new diff
         # (impl_files empty) — but the work branch still HAS that test-passing code. Treat a no-op
         # iteration on already-good code as "code present" so a CONVERGED run isn't false-failed.
-        _is_repair_iteration = root_run != run_id
+        _is_repair_iteration = _is_repair
         # Regression floor, evaluated at every tier (see the snapshot after provision).
         # Compares TEST COUNT, not file hashes. Hash equality flagged every edit as
         # "weakened", including strengthening ones: on PR #62 it blocked a change that
@@ -6806,10 +6897,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                    {"branch": work_branch,
                                     "error": f"{type(exc).__name__}: {exc}"[:200]})
                 _save_workspace("repair_handoff")
-                from .code_task_service import retry_code_task
-                nxt = retry_code_task(
-                    engine, settings, jobs, run_id,
-                    fix_note=("Autonomous review-repair: the quality gate blocked on "
+                from .code_task_service import RetryNeedsPerson, retry_code_task
+                try:
+                    _repair_note = ("Autonomous review-repair: the quality gate blocked on "
                               f"{', '.join(failing)}. Address EVERY review finding below so ALL "
                               "gates pass, and do NOT regress the checks that already passed. If "
                               "'tests_strong_enough' failed, STRENGTHEN the tests so a one-line "
@@ -6818,7 +6908,20 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                               # than rediscovering it (crun_3e370c11's ImportError).
                               + (" 'app_serves' failed: "
                                  + _app_serves_sentence(app_serves_record)[:1600]
-                                 if "app_serves" in failing else "")))
+                                 if "app_serves" in failing else ""))
+                    # BOSS's own decision, so under the person's grant or not at all
+                    # (retry_code_task(automatic=True)).
+                    nxt = retry_code_task(engine, settings, jobs, run_id, fix_note=_repair_note,
+                                          automatic=True)
+                except RetryNeedsPerson as withheld:
+                    with _transaction(engine) as c:
+                        emit_event(c, project_id, "code_task.auto_retry_withheld", "boss",
+                                   "code_task_run", run_id,
+                                   {"why": str(withheld)[:300], "failing_gates": failing})
+                        return _fail(c, run_id, project_id,
+                                     f"The quality gate blocked on {', '.join(failing)}, and "
+                                     f"{str(withheld)[0].lower()}{str(withheld)[1:]}",
+                                     failure_class="needs_human", reason_code="repair_needs_person")
                 with _transaction(engine) as c:
                     # Fenced: a stale execution must not be able to declare a repair round.
                     if not _fenced_status(
@@ -7058,6 +7161,22 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # Guarded on actually HAVING a url: a reuse of some earlier effect that produced no pull
         # request is not a shipped change, and must still block.
         _reused_pr = status == "reused" and bool(proposal.get("pull_request_url"))
+        if status not in ("created", "succeeded", "blocked", "reused"):
+            # THE BUILD IS DONE; ONLY THE DELIVERY FAILED (GitHub/network, after its in-place
+            # retries). Its diff, summary and gate verdict are kept on the run, and Retry runs
+            # ONLY the push and the pull request (code_task_service.redeliver_code_task) — no new
+            # design, tests, implementation or review. It used to block, or crash into a full
+            # automatic rebuild, after every gate had passed. A `blocked` answer (it waits on a
+            # person's decision) and a `reused` effect keep their own handling below.
+            _save_workspace("delivery_failed")
+            with _transaction(engine) as c:
+                _release(budget, c, project_id, reservation_id,
+                         "the build passed its gates; delivering it to GitHub failed", run_id=run_id)
+                return hold_delivery(
+                    c, run_id, project_id,
+                    files=[{"path": f.path, "content": f.content} for f in _pr_files],
+                    summary=_pr_summary, quality_gate_id=qg_id, branch=work_branch,
+                    detail=str(proposal.get("message") or proposal.get("error") or status))
         if status not in ("created", "succeeded") and not _reused_pr:
             rescued = _rescue_pr(f"the pull-request step failed 3 times ({status})")
             with _transaction(engine) as c:

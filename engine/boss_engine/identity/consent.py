@@ -43,7 +43,8 @@ def _github_summary(needs: dict[str, str], pattern: str) -> str:
 
 
 def carry_retry_authority(db: Any, *, parent_run_id: str, new_run_id: str, project_id: Optional[str],
-                          role_keys: Iterable[str], permissions: Iterable[str], repos: Iterable[str] = ()
+                          role_keys: Iterable[str], permissions: Iterable[str], repos: Iterable[str] = (),
+                          by_boss: bool = False, workflow_run_id: Optional[str] = None
                           ) -> Optional[Acting]:
     """A RETRY KEEPS ITS GRANT (R2): the authority the parent build was started under (its first
     code.task job), carried to the retry as a child run of the parent's (`<parent run>/retry:<new>`),
@@ -51,21 +52,41 @@ def carry_retry_authority(db: Any, *, parent_run_id: str, new_run_id: str, proje
 
     Only when the caller may continue it (BOSS itself — an auto-retry, the worker — or the parent's
     own person) and the grant STILL covers the retry's builder, permissions and repos; otherwise
-    None and the caller asks for authority as for any new build."""
+    None and the caller asks for authority as for any new build.
+
+    `by_boss`: BOSS ITSELF decided this retry (code_task_service.retry_code_task(automatic=True):
+    the one-shot infra retry, the shepherd, an autonomous review-repair) — whoever happens to be
+    calling in (the worker's own key, in production `sys_legacy_system`) is not the one asking, so
+    the caller check does not apply. crun_da5f6f72 (2026-10-13) was refused `no_grant` because the
+    worker's key, not a person, was the request context here. What is carried is never wider:
+    * only the parent's OWN person and grant (or, for a build of a workflow run whose job carries a
+      chain, that run's recorded live authority — the same person, the same consent); a parent
+      stamped as BOSS's own work has no person behind it, so nothing is carried;
+    * still live, still covering the builder, permissions and repos, and bound to the same run
+      (`<run>/retry:<new>`);
+    * never a "this build only" grant (`run_ct:`): it ends with the build it was given for."""
     from . import grants, lineage, passports, runs
 
     parent = runs.original_build_authority(db, parent_run_id)
+    if (by_boss and workflow_run_id and parent is not None and parent.chain
+            and not getattr(parent, "system", False)):
+        recorded = acting_for_workflow_run(db, workflow_run_id)
+        if recorded is not None and parent.principal_id == recorded.principal_id:
+            parent = recorded
     if parent is None or not parent.grant_id or getattr(parent, "system", False) or parent.chain:
         return None
     ctx = lineage.current_context()
     ambient = lineage.current()
-    if ctx is not None and ctx.run_token is None and ctx.principal.id != parent.principal_id:
-        return None                                       # someone else's build: their own grant
-    if ctx is None and ambient is not None and not (
-            ambient.system or str(ambient.principal_id).startswith("sys_")
-            or ambient.principal_id == parent.principal_id):
-        return None
+    if not by_boss:
+        if ctx is not None and ctx.run_token is None and ctx.principal.id != parent.principal_id:
+            return None                                       # someone else's build: their own grant
+        if ctx is None and ambient is not None and not (
+                ambient.system or str(ambient.principal_id).startswith("sys_")
+                or ambient.principal_id == parent.principal_id):
+            return None
     g = grants.load(parent.grant_id, db=db)
+    if by_boss and g is not None and str(g.task_run_id or "").startswith("run_ct:"):
+        return None                                           # "this build only": not past it
     if g is None or g.user_principal_id != parent.principal_id:
         return None
     agent_ids = []
