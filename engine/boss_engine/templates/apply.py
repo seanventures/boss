@@ -178,8 +178,11 @@ def build_directive(*, row: dict, manifest: TemplateManifest, stack: str, framew
             "in the app's own router, and map its data onto the app's own users, products or "
             "orders instead of adding parallel tables.",
             "Its SECURITY CORE stays exactly as the reference has it (sessions, state and PKCE for "
-            "sign-in; server-side prices, signature-verified and idempotent webhooks for payments), "
-            "and so do its tests.",
+            "sign-in; server-side prices, signature-verified and idempotent webhooks for payments).",
+            "The connector is PRE-TESTED in its own test suite. Do NOT write tests for the "
+            "connector and do NOT copy its test files into the app; the app's tests cover only "
+            "what the operator asked the app to do. BOSS checks the wiring once: the app starts "
+            "and the connector's routes answer.",
         ]
     elif kind == "idea":
         opening = [
@@ -194,14 +197,23 @@ def build_directive(*, row: dict, manifest: TemplateManifest, stack: str, framew
             f"Apply \"{manifest.name}\" ({manifest.id} {manifest.version}) to {target}{where}",
             "",
         ]
+    adapt = ("ADAPT the reference implementation below into this app (its router, its data layer, "
+             "its UI); do not overlay files blindly.")
+    if kind == "connector":
+        tests_line = adapt
+        # Its tests are neither inlined nor copied (gate.connector_smoke).
+        tests = []
+        ref = {p: b for p, b in ref.items() if not p.startswith("tests/")}
+    else:
+        tests_line = (
+            adapt + " The template's test files (" + ", ".join(tests) + ") "
+            "go into the app at the same relative paths, exactly as they are: BOSS places them there "
+            "before the build's agents start, so never re-type or diff them, and copy one from "
+            "$BOSS_TEMPLATE_STACK_DIR only if it is missing. BOSS runs them as the "
+            f"`template_tests` gate with `{test_spec.command}` from the app's directory and requires "
+            f"at least {test_spec.min_tests} passing tests.")
     head = opening + [
-        "ADAPT the reference implementation below into this app (its router, its data layer, its "
-        "UI); do not overlay files blindly. The template's test files (" + ", ".join(tests) + ") "
-        "go into the app at the same relative paths, exactly as they are: BOSS places them there "
-        "before the build's agents start, so never re-type or diff them, and copy one from "
-        "$BOSS_TEMPLATE_STACK_DIR only if it is missing. BOSS runs them as the "
-        f"`template_tests` gate with `{test_spec.command}` from the app's directory and requires "
-        f"at least {test_spec.min_tests} passing tests.",
+        tests_line,
         "Never commit a secret: the template's secrets arrive at run time from the vault.",
         "The template's COMPLETE files are on disk, read-only: the directory named by the "
         "environment variable BOSS_TEMPLATE_DIR (its brief, guide and every stack), and "

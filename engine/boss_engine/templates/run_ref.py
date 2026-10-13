@@ -27,6 +27,8 @@ log = logging.getLogger(__name__)
 
 DIR_ENV = "BOSS_TEMPLATE_DIR"
 STACK_DIR_ENV = "BOSS_TEMPLATE_STACK_DIR"
+#: connector / idea / training (manifest.kind_of): a connector's tests are not placed in the app.
+KIND_ENV = "BOSS_TEMPLATE_KIND"
 
 _ENV: dict[str, dict[str, str]] = {}
 _LOCK = threading.Lock()
@@ -101,6 +103,12 @@ def for_run(engine: Any, run: Optional[dict], ident: Any = None) -> Iterator[Opt
         env = {DIR_ENV: str(root)}
         if stack and (root / "stacks" / stack).is_dir():
             env[STACK_DIR_ENV] = str(root / "stacks" / stack)
+        try:
+            from .manifest import kind_of
+
+            env[KIND_ENV] = kind_of(applied.get("manifest") or {})
+        except Exception:  # noqa: BLE001 — unknown kind places tests as before
+            pass
         with _LOCK:
             _ENV[run_id] = env
         log.info("templates: build %s reads %s %s (%d bytes) at %s", run_id, applied.get("key") or applied.get("id"),

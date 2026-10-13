@@ -25,6 +25,8 @@ MANIFEST = {
     "tests": {"python": {"command": "python3 -m pytest -q tests/big --junitxml=r.xml", "report": "junit",
                          "min_tests": 1}},
     "license": "Apache-2.0", "min_boss": "1.0.0",
+    # An idea: its tests are placed and run by the build (a connector's are not, gate.connector_smoke).
+    "labels": ["idea"],
 }
 
 

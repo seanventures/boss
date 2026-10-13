@@ -2117,9 +2117,25 @@ def app_serves_failure_sentence(record: Optional[dict]) -> str:
     return f"{head}: {error}" if error else f"{head}."
 
 
+def probe_route(port: int, path: str, *, timeout: float = 5.0) -> Optional[int]:
+    """The HTTP status a GET of `path` on the started app returns (redirects not followed), or
+    None when it did not answer."""
+    import http.client
+
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", int(port), timeout=timeout)
+        try:
+            conn.request("GET", path)
+            return int(conn.getresponse().status)
+        finally:
+            conn.close()
+    except Exception:  # noqa: BLE001 — no answer is the finding
+        return None
+
+
 def prove_app_serves(workdir: Path, changed: Optional[list[str]], *,
                      lineage: Optional[list[str]] = None, known_service: bool = False,
-                     timeout: float = 180.0) -> dict:
+                     timeout: float = 180.0, probe_paths: Optional[list[str]] = None) -> dict:
     """START what the build built and require it to answer HTTP — before the build may pass.
 
     WHY. The Lead Triage Inbox build (crun_3e370c114b95425d8a7c, PR paramg/boss-sandbox#218)
@@ -2219,6 +2235,10 @@ def prove_app_serves(workdir: Path, changed: Optional[list[str]], *,
             exit_code = proc.poll()
             if port is not None:
                 record.update(proven=True, port=port)
+                if probe_paths:
+                    # A CONNECTOR'S WIRING SMOKE CHECK (templates.gate.connector_smoke): its
+                    # routes answer on the app that just started.
+                    record["route_probes"] = {p: probe_route(port, p) for p in probe_paths[:8]}
             elif exit_code is not None:
                 # It EXITED; it did not time out. "did not serve HTTP within timeout" for a
                 # process that died at 0.8s sent the reader looking for a slow start.

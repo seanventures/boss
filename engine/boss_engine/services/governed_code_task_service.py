@@ -999,8 +999,26 @@ _IAC_QA_GUIDANCE = (
 )
 
 
+def _connector_probe_paths(engine, run: dict) -> list[str]:
+    """The GET routes the serve proof probes for an applied CONNECTOR ([] otherwise)."""
+    from ..templates import gate as template_gate
+    from ..templates.manifest import validate_manifest
+
+    try:
+        with _transaction(engine) as c:
+            applied = template_gate.applied_template(c, run)
+        if not applied or applied.get("error"):
+            return []
+        manifest = validate_manifest(dict(applied.get("manifest") or {}))
+        return template_gate.probe_paths(manifest) if manifest.item_kind == "connector" else []
+    except Exception:  # noqa: BLE001 — no probe: the gate says the routes were not checked
+        _log_caught(logger)
+        return []
+
+
 def _template_gates(engine, run: dict, sandbox, *, root, cwd, changed_files: dict,
-                    tests_passed: bool, use_microvm: bool, stack_plan=None) -> Optional[dict]:
+                    tests_passed: bool, use_microvm: bool, stack_plan=None,
+                    serve: Optional[dict] = None) -> Optional[dict]:
     """THE TEMPLATE HOOK (APP_TEMPLATES_AND_SECURITY_LOOP.md §2.3, stream S2; the one function this
     file holds for F2, coordinated with S1's toolchain code).
 
@@ -1077,7 +1095,7 @@ def _template_gates(engine, run: dict, sandbox, *, root, cwd, changed_files: dic
             template=applied, files=applied.get("files") or {}, changed=changed_files,
             cwd=None if use_microvm else Path(cwd), run_command=None if use_microvm else _run,
             bound_values=bound, tests_passed=bool(tests_passed),
-            substrate="microvm" if use_microvm else "local")
+            substrate="microvm" if use_microvm else "local", serve=serve)
     if backend_note and isinstance(result.evidence.get("template_tests"), dict):
         result.evidence["template_tests"].update(backend_note)
     return {"gates": result.gates, "evidence": result.evidence}
@@ -2173,6 +2191,10 @@ def place_template_tests(root: Path, home: Optional[str]) -> list[str]:
     from ..templates import run_ref
 
     if not home:
+        return []
+    if run_ref.current().get(run_ref.KIND_ENV) == "connector":
+        # A CONNECTOR IS PRE-TESTED in its own test tier (templates.gate.connector_smoke): its
+        # suite is not copied into the app, not frozen, and not run by the build.
         return []
     stack_dir = run_ref.current().get(run_ref.STACK_DIR_ENV)
     if not stack_dir:
@@ -5550,6 +5572,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     known_service=serve_proof_known_service(spec, fctx),
                     timeout=float(getattr(settings, "code_task_serve_check_timeout_seconds",
                                           180) or 180),
+                    probe_paths=_connector_probe_paths(engine, run) or None,
                 )
             with _transaction(engine) as c:
                 emit_event(c, project_id, "code_task.app_serve_checked", "boss",
@@ -5573,7 +5596,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             cwd=(root / last_verify_cwd) if last_verify_cwd and not Path(str(last_verify_cwd)).is_absolute()
             else verification_target.resolve_verify_cwd(root, app_id=_app_id, changed=list(changed_files)),
             changed_files=changed_files, tests_passed=bool(tests_passed), use_microvm=use_microvm,
-            stack_plan=_last_stack_plan[0])
+            stack_plan=_last_stack_plan[0], serve=app_serves_record)
         if _template_record:
             gates.update(_template_record["gates"])
         # A SECRET IN QA'S FIXTURE GOES BACK TO QA. The coder may not edit tests and QA was never
@@ -5627,7 +5650,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         cwd=(root / last_verify_cwd) if last_verify_cwd and not Path(str(last_verify_cwd)).is_absolute()
                         else verification_target.resolve_verify_cwd(root, app_id=_app_id, changed=list(changed_files)),
                         changed_files=changed_files, tests_passed=bool(tests_passed),
-                        use_microvm=use_microvm, stack_plan=_last_stack_plan[0])
+                        use_microvm=use_microvm, stack_plan=_last_stack_plan[0],
+                        serve=app_serves_record)
                     if _template_record:
                         gates.update(_template_record["gates"])
                     fixture_repair_record["gate_after"] = bool(gates.get("no_committed_secrets"))

@@ -189,10 +189,61 @@ class GateResult:
     reports_removed: list[str] = field(default_factory=list)
 
 
+def probe_paths(manifest: Any) -> list[str]:
+    """The connector routes a smoke check can GET as they are: GET routes with no path
+    parameter (`GET /auth/providers`, not `GET /auth/login/:provider`)."""
+    out: list[str] = []
+    for route in list(getattr(manifest, "routes", None) or []):
+        parts = str(route).split()
+        if len(parts) != 2 or parts[0].upper() != "GET":
+            continue
+        path = parts[1]
+        if path.startswith("/") and not any(ch in path for ch in ":{*"):
+            out.append(path)
+    return out
+
+
+def connector_smoke(manifest: Any, serve: Optional[Mapping[str, Any]], *,
+                    tests_passed: bool) -> tuple[bool, dict[str, Any]]:
+    """A CONNECTOR IS PRE-TESTED (operator, 2026-10-13). Login, Stripe, PayPal are each a fully
+    tested path in their own test tier, so a build that adds one neither writes tests for it nor
+    runs its suite as a gate. What the build CAN break is the wiring, so the gate is one smoke
+    check: the app starts (the app_serves proof) and the connector's GET routes answer on it
+    (anything but no answer, 404 or a 5xx). An app BOSS cannot start (not a declared service)
+    is left to its own tests, and the record says so."""
+    paths = probe_paths(manifest)
+    tt: dict[str, Any] = {"kind": "connector", "check": "wiring smoke", "routes": paths,
+                          "connector_tests": "run in the connector's own test tier, not in this build"}
+    serve = dict(serve or {})
+    if not tests_passed:
+        tt["error"] = "the build's own tests did not pass, so the connector's wiring was not checked"
+        return False, tt
+    if serve.get("proven"):
+        probes = dict(serve.get("route_probes") or {})
+        tt["probes"] = probes
+        if not paths:
+            return True, tt
+        answered = [p for p, status in probes.items()
+                    if isinstance(status, int) and status != 404 and status < 500]
+        if answered:
+            tt["answered"] = answered
+            return True, tt
+        tt["error"] = ("the app started but none of the connector's routes answered: "
+                       + ", ".join(f"GET {p} -> {probes.get(p) or 'no answer'}" for p in paths))
+        return False, tt
+    if serve.get("ok") is False and not serve.get("harness"):
+        tt["error"] = "the app did not start, so the connector's wiring was not checked"
+        return False, tt
+    tt["not_run"] = str(serve.get("skipped") or serve.get("not_a_service") or serve.get("source")
+                        or "the app was not started")
+    return True, tt
+
+
 def evaluate(*, template: Mapping[str, Any], files: Mapping[str, bytes], changed: Mapping[str, Any],
              cwd: Optional[Path], run_command: Optional[Callable[[str, Path], Any]],
              bound_values: Optional[Mapping[str, str]] = None, tests_passed: bool = True,
-             substrate: str = "local") -> GateResult:
+             substrate: str = "local", serve: Optional[Mapping[str, Any]] = None,
+             as_connector: Optional[bool] = None) -> GateResult:
     """Both gates for one applied template.
 
     `template` is `{id, version, digest, stack, manifest}` (manifest as a dict), `files` the
@@ -217,6 +268,12 @@ def evaluate(*, template: Mapping[str, Any], files: Mapping[str, bytes], changed
                                "count": len(findings)}
 
     # ---- template_tests ------------------------------------------------------------------------
+    # `as_connector=False` runs a connector's own suite: its test tier (the trial), not a build.
+    if (manifest.item_kind == "connector") if as_connector is None else as_connector:
+        ok, tt = connector_smoke(manifest, serve, tests_passed=tests_passed)
+        evidence["template_tests"] = tt
+        return GateResult(gates={"template_tests": ok, "no_committed_secrets": not findings},
+                          evidence=evidence, reports_removed=removed)
     spec = manifest.tests.get(stack)  # type: ignore[call-overload]
     tt: dict[str, Any] = {"command": spec.command if spec else None,
                           "min_tests": spec.min_tests if spec else None}
