@@ -173,6 +173,26 @@ def effort_map(writing: Optional[str] = None) -> dict:
     return {st: stage_effort(st, writing) for st in sorted(WRITING_STAGES | REASONING_STAGES)}
 
 
+def _stage_deadline() -> Optional[float]:
+    """The wall-clock deadline (epoch seconds) of the stage this thread runs, if it has one."""
+    from .llm_telemetry import get_llm_context
+
+    raw = get_llm_context().get("stage_deadline")
+    try:
+        return float(raw) if raw else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _cap_to_deadline(timeout: int, *, read_only: bool) -> int:
+    """A writing session's timeout, cut to its stage's deadline (never below a minute). A
+    reviewer is never cut: the budget is the writing stage's."""
+    deadline = None if read_only else _stage_deadline()
+    if deadline is None:
+        return timeout
+    return max(60, min(int(timeout), int(deadline - time.time())))
+
+
 def _current_effort() -> Optional[str]:
     """The effort for the stage this thread is running (llm_telemetry context)."""
     from .llm_telemetry import get_llm_context
@@ -959,6 +979,9 @@ class ClaudeCodeAgent:
         # EFFORT PER STAGE (stage_effort): writing stages at the project's writing effort,
         # design and review at high, anything else at the CLI's own default.
         effort = _current_effort()
+        # A STAGE'S WALL-TIME BUDGET (governed build_implement_budget_minutes): a writing session
+        # never runs past the stage's deadline, whatever the per-session timeout says.
+        timeout = _cap_to_deadline(timeout, read_only=read_only)
         shared_ctx, own_prompt = _shared_for(_argv_safe(prompt), resume_session_id)
 
         def base_cmd(stream: bool) -> list[str]:

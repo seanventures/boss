@@ -1247,6 +1247,10 @@ class Settings(BaseSettings):
     # The most test cases a build's test author writes (governed test_budget): a small set that
     # covers what the brief asks for. More coverage is a later "more tests" pass.
     build_test_budget: int = Field(default=20, alias="BOSS_BUILD_TEST_BUDGET")
+    # The wall-time budget of a build's implement stage, fix round included (0 = none). Past it
+    # BOSS starts no new session and ends a running one, and the build fails with its failing
+    # tests listed, instead of running into the job's 2-hour limit.
+    build_implement_budget_minutes: int = Field(default=25, alias="BOSS_BUILD_IMPLEMENT_BUDGET_MINUTES")
     code_agent_allowed_tools: str = Field(
         default="Read,Edit,MultiEdit,Write,Glob,Grep,Bash,TodoWrite",
         alias="BOSS_CODE_AGENT_ALLOWED_TOOLS",

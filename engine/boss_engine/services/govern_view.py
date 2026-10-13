@@ -49,6 +49,8 @@ ENFORCED: dict[str, tuple[str, str]] = {
     "build_streams_max": ("Each build", "each_build"),
     # Counted after the test author's stage and trimmed when over (governed test_budget).
     "build_test_budget": ("Each build", "each_build"),
+    # Checked before every implement session and caps a running one (governed stage budget).
+    "build_implement_budget_minutes": ("Each build", "each_build"),
     "code_review_inrun_max_rounds": ("Review loop", "review_loop"),
     "captain_leads_projects": ("Every build", "every_build"),
     "captain_auto_improve": ("Captain's own builds", "captain_own_builds"),

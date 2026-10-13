@@ -240,6 +240,13 @@ KNOBS: dict[str, dict[str, Any]] = {
                 "More coverage comes from a later More tests pass.",
         "kind": "int", "min": 5, "max": 200,
     },
+    "build_implement_budget_minutes": {
+        "attr": "build_implement_budget_minutes",
+        "label": "Implement time limit",
+        "help": "Minutes the implement stage may take, its fix round included (default 25; 0 = "
+                "no limit). Past it the build stops and fails with its failing tests listed.",
+        "kind": "int", "min": 0, "max": 240,
+    },
     # BUILD STREAMS (build_streams): the bounds each writing stage sizes its parallel streams
     # within, from the host's free cores, memory and load at the moment the stage starts.
     "build_streams_min": {

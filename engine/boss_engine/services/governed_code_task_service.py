@@ -2340,6 +2340,37 @@ def _record_effort(engine, project_id, run_id, settings) -> None:
         _log_caught(logger)
 
 
+#: Failing test names in a test run's output (node:test, vitest/jest, pytest, JUnit-ish).
+_FAILED_TEST_RE = re.compile(
+    r"^\s*(?:not ok \d+ - (?P<tap>.+)|(?:✗|×|✖|FAIL(?:ED)?)\s+(?P<name>\S.*?))\s*$", re.MULTILINE)
+
+
+def failing_tests(output: str, limit: int = 20) -> list[str]:
+    """The failing tests a test run printed, de-duplicated, at most `limit`."""
+    seen: list[str] = []
+    for m in _FAILED_TEST_RE.finditer(output or ""):
+        name = (m.group("tap") or m.group("name") or "").strip()[:200]
+        if name and name not in seen:
+            seen.append(name)
+        if len(seen) >= limit:
+            break
+    return seen
+
+
+def _implement_budget_seconds(engine, project_id, settings) -> int:
+    """build_implement_budget_minutes in seconds; 0 = no budget. Never raises."""
+    try:
+        from .project_settings import effective
+
+        with _transaction(engine) as c:
+            minutes = effective(c, project_id, settings, "build_implement_budget_minutes")
+        minutes = int(25 if minutes is None else minutes)
+    except Exception:  # noqa: BLE001 — the default budget
+        _log_caught(logger)
+        minutes = 25
+    return max(0, minutes) * 60
+
+
 def _record_split_off(engine, project_id, run_id, settings, stage: str) -> None:
     """Record on the stage that it runs as ONE session and why (build_streams.split_off), the
     same place and event a split records its stream count, so the choice is never invisible.
@@ -4786,6 +4817,30 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # reaches a different engine or model.
         _esc_route: list = []   # the escalated route, resolved once when it is first needed
         _warm_fix = [False]     # the final attempt is a warm fix on the same model, not a "frontier" one
+        # FAIL FAST: THE IMPLEMENT STAGE HAS A WALL-TIME BUDGET (build_implement_budget_minutes,
+        # default 25), fix round and continuations included. Past it no new session starts, a
+        # running one is ended (code_agent caps its timeout at the deadline), and the build fails
+        # with its failing tests listed. The job's own timeout stays as the backstop.
+        _impl_budget_s = _implement_budget_seconds(engine, project_id, settings)
+        _impl_deadline = (time.time() + _impl_budget_s) if _impl_budget_s else None
+        set_llm_context(stage_deadline=_impl_deadline)
+
+        def _impl_over_budget() -> bool:
+            return _impl_deadline is not None and time.time() >= _impl_deadline
+
+        def _within_budget(call, model):
+            """A session the deadline ended is a finished attempt (its tests then run), not a
+            pipeline error."""
+            try:
+                return call()
+            except RuntimeError as exc:
+                if not (_impl_over_budget() and "timed out" in str(exc)):
+                    raise
+                _log_caught(logger)
+                return {"summary": "(the implement stage reached its time limit)",
+                        "cost_usd_micros": 0, "usage": {}, "model": model, "session_id": None}
+
+        _budget_exhausted = [False]
         for attempt in range(max_repair + 2):
             _impl_ran[0] = True
             escalate_impl = attempt == max_repair + 1 and not _warm_fix[0]
@@ -4920,8 +4975,14 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                             model=m, resume_session_id=resume_sid)
                     except Exception:
                         _log_caught(logger)
-                        r2 = a.run_role(impl_prompt, root, model=m,
-                                        parallel_agents=_build_fan_out(engine, project_id, settings))
+                        if _impl_over_budget():
+                            r2 = {"summary": "(the implement stage reached its time limit)",
+                                  "cost_usd_micros": 0, "usage": {}, "model": m,
+                                  "session_id": None}
+                        else:
+                            r2 = a.run_role(impl_prompt, root, model=m,
+                                            parallel_agents=_build_fan_out(engine, project_id,
+                                                                           settings))
                 else:
                     # The first implement fans out (build_speed); a repair resumed on its own
                     # session stays one agent: it is a focused fix, not parallel volume.
@@ -4936,7 +4997,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         split = _run_split(a, m, impl_prompt, fan, tests=False,
                                            protect=(lambda rel: rel in _frozen))
                     r2 = (split.as_role_result() if split is not None
-                          else a.run_role(impl_prompt, root, model=m, parallel_agents=fan))
+                          else _within_budget(lambda: a.run_role(impl_prompt, root, model=m,
+                                                                 parallel_agents=fan), m))
                 impl_session_id = r2.get("session_id") or impl_session_id
                 cost += int(r2.get("cost_usd_micros") or 0)
                 # FINISH THE WORK BEFORE JUDGING IT. The implementer hitting its turn cap
@@ -4951,7 +5013,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 _cont = 0
                 _max_cont = max(0, int(getattr(settings, "code_impl_max_continuations", 3) or 3))
                 while (check_is_inconclusive(r2.get("summary", ""))
-                       and _cont < _max_cont and impl_session_id):
+                       and _cont < _max_cont and impl_session_id and not _impl_over_budget()):
                     _cont += 1
                     with _transaction(engine) as c:
                         emit_event(c, project_id, "code_task.implement_continued", "boss",
@@ -5007,6 +5069,15 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                 "attempt": attempt})
             if ok or attempt == max_repair + 1:
                 break
+            if _impl_over_budget():
+                # No fix round past the budget: fail now, with the failing tests named.
+                _budget_exhausted[0] = True
+                with _transaction(engine) as c:
+                    emit_event(c, project_id, "code_task.stage_budget_exhausted", "boss",
+                               "code_task_run", run_id,
+                               {"stage": "implement", "budget_minutes": _impl_budget_s // 60,
+                                "attempt": attempt, "failing_tests": failing_tests(fail_output)})
+                break
             if attempt == max_repair and not use_microvm:
                 _before = dict(stage_routes.get("implement") or {})
                 try:
@@ -5053,6 +5124,17 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     root,
                 )
 
+        # The implement budget ends with the stage: later writing turns are not cut by it.
+        set_llm_context(stage_deadline=None)
+        if _budget_exhausted[0] or (_impl_over_budget() and not tests_passed):
+            with _transaction(engine) as c:
+                c.execute(sql(
+                    "UPDATE code_task_runs SET state=jsonb_set(COALESCE(state,'{}'::jsonb), "
+                    "'{stage_budget}', CAST(:b AS JSONB)), updated_at=now() WHERE id=:id"),
+                    {"b": json.dumps({"stage": "implement", "exhausted": True,
+                                      "budget_minutes": _impl_budget_s // 60,
+                                      "failing_tests": failing_tests(fail_output)}),
+                     "id": run_id})
         # Freeze implement-time verify so later panel/mutation probes cannot
         # replace the official /report evidence.
         official_verify_output = last_verify_output
