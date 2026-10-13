@@ -13,7 +13,10 @@
 // ── Faces and state ─────────────────────────────────────────────────────────────────────────
 
 export type AvatarState =
-  | "idle" | "thinking" | "speaking" | "working" | "needs_you" | "done" | "stuck" | "paused" | "retired";
+  | "idle" | "thinking" | "speaking" | "working" | "needs_you" | "done" | "stuck" | "paused" | "retired"
+  // HONEST ENDINGS (operator, 2026-10-13): work that ERRORED is `failed`; work left open because
+  // its run or build stopped is `stopped`. `stuck` is only live work with no activity for a while.
+  | "failed" | "stopped";
 export type AvatarVariant = "agent" | "auto" | "you" | "person" | "boss";
 export type AvatarSize = 16 | 20 | 24 | 32 | 48 | 96 | 320;
 export type AvatarSpec = {

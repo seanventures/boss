@@ -160,7 +160,7 @@ export function TeamGrid({ teams, agents, waiting, working: live, orgId, still }
                 {members.slice(0, 8).map((a) => {
                   const isWorking = isWorkingAgent(a);
                   const isWaiting = waiting.has(a.roleKey);
-                  const word = isWaiting ? "waiting on you" : isWorking ? "working" : a.state === "stuck" ? "stuck" : "ready";
+                  const word = isWaiting ? "waiting on you" : isWorking ? "working" : a.state === "stuck" ? "stuck" : a.state === "failed" ? "failed" : "ready";
                   const label = `${whoLine(a.roleKey, a.name)} · ${word}`;
                   // A FACE OPENS ITS AGENT'S LIVE LINE (parity d): what it is doing, Talk, and
                   // its page — the old Floor card, on tap or hover.

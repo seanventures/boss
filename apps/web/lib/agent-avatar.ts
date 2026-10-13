@@ -189,7 +189,8 @@ function ring(state: AvatarState, p: Palette | null): string {
 
 /** The state badge: a glyph, so the state is never colour or motion alone. */
 function badge(state: AvatarState, p: Palette | null): string {
-  const tint = {
+  const tint: string = {
+    failed: STATE_COLOURS.stuck, stopped: STATE_COLOURS.quiet,
     thinking: STATE_COLOURS.thinking, speaking: p?.glow ?? STATE_COLOURS.ink, working: p?.body ?? STATE_COLOURS.thinking,
     needs_you: STATE_COLOURS.needs_you, done: STATE_COLOURS.done, stuck: STATE_COLOURS.stuck,
     paused: STATE_COLOURS.quiet, retired: STATE_COLOURS.quiet, idle: "",
@@ -203,6 +204,10 @@ function badge(state: AvatarState, p: Palette | null): string {
     done: `<path d="M-5.5 0.2 L-1.6 4.2 L5.8 -4.4" fill="none" stroke="${tint}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>`,
     stuck: `<rect x="-1.5" y="-6.6" width="3" height="8.4" rx="1.5" fill="${tint}"/><circle cx="0" cy="5" r="1.7" fill="${tint}"/>`,
     paused: `<rect x="-4.6" y="-5" width="3.2" height="10" rx="1" fill="${tint}"/><rect x="1.4" y="-5" width="3.2" height="10" rx="1" fill="${tint}"/>`,
+    // Failed: a cross (it went wrong). Stopped: a stop square (it went no further). Each its own
+    // glyph, so neither reads as stuck's "!" or paused's bars by colour alone.
+    failed: `<path d="M-4.6 -4.6 L4.6 4.6 M4.6 -4.6 L-4.6 4.6" fill="none" stroke="${tint}" stroke-width="3" stroke-linecap="round"/>`,
+    stopped: `<rect x="-4.8" y="-4.8" width="9.6" height="9.6" rx="1.6" fill="${tint}"/>`,
     retired: `<rect x="-6.4" y="-5.4" width="12.8" height="3.6" rx="1" fill="${tint}"/><path d="M-5.2 -1 H5.2 V5.6 H-5.2 Z M-2 1.6 H2" fill="none" stroke="${tint}" stroke-width="1.8" stroke-linejoin="round"/>`,
   };
   return `<g class="av-badge" transform="translate(82 82)"><circle cx="0" cy="0" r="13" fill="${GLASS}" stroke="${tint}" stroke-width="2.5"/>`
@@ -215,24 +220,27 @@ const MEMO = new Map<string, string>();
 export function avatarSvg(spec: AvatarSpec, o: { size: number; state?: AvatarState; variant?: AvatarVariant }): string {
   const lod = lodFor(o.size);
   const state: AvatarState = own(STATE_WORDS, o.state) ? o.state! : "idle";
+  // HOW IT LOOKS: a failed face wears stuck's red ring and "!" (something went wrong), a stopped
+  // one paused's quiet dashes (nothing is happening). The word (aria, data-state) stays its own.
+  const look: AvatarState = state === "failed" ? "stuck" : state === "stopped" ? "paused" : state;
   const variant: AvatarVariant = o.variant ?? "agent";
   const key = `${variant}|${spec.seed}|${spec.hat ?? ""}|${spec.emblem ?? ""}|${spec.palette ?? ""}|${spec.visor ?? ""}|${o.size}|${state}`;
   const hit = MEMO.get(key);
   if (hit) return hit;
 
   const parts = variant === "agent" ? resolveParts(spec) : null;
-  const quiet = state === "paused" || state === "retired";
+  const quiet = look === "paused" || look === "retired";
   const body = parts
     ? (lod === 320 ? `<circle cx="51.5" cy="53" r="44" fill="#000000" opacity="0.35"/>` : "")
       + (state === "needs_you" && lod >= 24
         ? `<circle class="av-halo" cx="50" cy="50" r="47.5" fill="none" stroke="${STATE_COLOURS.needs_you}" stroke-width="5" opacity="0.5"/>` : "")
       + disc(parts.palette.disc)
       + (lod >= 48 ? `<circle cx="50" cy="50" r="35" fill="none" stroke="${parts.palette.body}" stroke-width="0.8" opacity="0.14"/>` : "")
-      + `<g class="av-char"${quiet ? ` opacity="0.55"` : ""}>${character(parts, lod, state, spec.seed || "boss")}</g>`
+      + `<g class="av-char"${quiet ? ` opacity="0.55"` : ""}>${character(parts, lod, look, spec.seed || "boss")}</g>`
     : (state === "needs_you" && lod >= 24
         ? `<circle class="av-halo" cx="50" cy="50" r="47.5" fill="none" stroke="${STATE_COLOURS.needs_you}" stroke-width="5" opacity="0.5"/>` : "")
       + `<g class="av-char"${quiet ? ` opacity="0.55"` : ""}>${systemGlyph(variant as Exclude<AvatarVariant, "agent">, lod)}</g>`;
-  const decorations = lod >= 24 ? ring(state, parts?.palette ?? null) + badge(state, parts?.palette ?? null) : "";
+  const decorations = lod >= 24 ? ring(look, parts?.palette ?? null) + badge(state, parts?.palette ?? null) : "";
 
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="${o.size}" height="${o.size}" `
     + `class="ag-av" data-kit="boss-v1" data-lod="${lod}" data-state="${state}" data-variant="${variant}" aria-hidden="true" focusable="false">`

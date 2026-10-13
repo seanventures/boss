@@ -13,6 +13,7 @@ import { notifyChanged, onChanged } from "./changed";
 import { Markdown } from "./markdown";
 import { AgentsOnThis } from "./agents-on-this";
 import { consoleHref, readComposeIntent } from "./url-intent";
+import { NEW_BUILD_TIP } from "../lib/compose-links";
 import { StepIcon, hasStepIcon } from "./step-icons";
 import { isLoopbackPreviewUrl, operatorPreviewOpenHref } from "../lib/code-tasks";
 import { previewRecordFromStepOutput } from "../lib/previews";
@@ -565,16 +566,40 @@ export async function sendRunAnswer(projectId: string, actor: string, runId: str
   }, key));
 }
 
-/** The Workflows area's two tabs. The editor is not a tab: `&wf=` replaces both, full width. */
-export type AreaTab = "runs" | "library";
+/** The Workflows area's three tabs (operator, 2026-10-13): New project · Runs · Library. The
+ *  composer is its own tab, never stacked over the runs ("where are my runs?"). The editor is not
+ *  a tab: `&wf=` replaces all three, full width. */
+export type AreaTab = "new" | "runs" | "library";
 
-/** What the URL says this area is showing. Read on every popstate, so Back works. */
+/** The tabs in order, for the tablist and its arrow keys. */
+export const AREA_TABS: readonly AreaTab[] = ["new", "runs", "library"];
+
+/** What the URL says this area is showing. Read on every popstate, so Back works.
+ *
+ *  A run named in the URL (`wfr=`) is a place in Runs: a link to a run opens Runs even when the
+ *  URL still says `tab=new` from an earlier visit, because a link copies the query it was on. */
 export function readAreaUrl(search: string): { tab: AreaTab; wf: string | null } {
   const params = new URLSearchParams(search);
+  const raw = params.get("tab");
   return {
-    tab: params.get("tab") === "library" ? "library" : "runs",
+    tab: raw === "library" ? "library" : raw === "new" && !params.get("wfr") ? "new" : "runs",
     wf: params.get("wf")?.trim() || null,
   };
+}
+
+/** Whether the URL names a tab at all. With none, an area with no runs yet opens on New project:
+ *  an empty list is a dead end, and the composer is what there is to do. */
+export function namesATab(search: string): boolean {
+  return new URLSearchParams(search).has("tab");
+}
+
+/** The arrow-key move in a tablist (WAI-ARIA APG, as Infra's AreaHead): wraps, Home and End. */
+export function tabKeyTarget(key: string, index: number, count: number): number {
+  if (key === "ArrowRight") return (index + 1) % count;
+  if (key === "ArrowLeft") return (index - 1 + count) % count;
+  if (key === "Home") return 0;
+  if (key === "End") return count - 1;
+  return -1;
 }
 
 /** Change this area's URL and tell every panel listening on it. */
@@ -596,21 +621,36 @@ const EDITOR_PARAMS = { wf: null, step: null, view: null, v: null, from: null } 
 
 export function DeliveryWorkflows({ projectId, actor }: { projectId: string; actor: string }) {
   const [tab, setTabState] = useState<AreaTab>("runs");
+  /** Whether the URL named the tab; when it did not, an empty project opens on New project. */
+  const [tabNamed, setTabNamed] = useState(false);
   const [editing, setEditing] = useState<string | null>(null);
   useEffect(() => {
     const read = () => {
       const now = readAreaUrl(window.location.search);
       setTabState(now.tab);
+      setTabNamed(namesATab(window.location.search));
       setEditing(now.wf);
     };
     read();
     window.addEventListener("popstate", read);
     return () => window.removeEventListener("popstate", read);
   }, []);
-  const setTab = useCallback((next: AreaTab) => {
+  /** Switch tab, in the URL (pushed, so Back returns to the tab you were on). New project drops
+   *  the run the URL named: `wfr=` is a place in Runs and would win the next read. */
+  const setTab = useCallback((next: AreaTab, mode: "push" | "replace" = "push") => {
     setTabState(next);
-    setAreaUrl({ tab: next, ...EDITOR_PARAMS });
+    setTabNamed(true);
+    setAreaUrl({ tab: next, ...EDITOR_PARAMS, ...(next === "new" ? { wfr: null } : {}) }, mode);
   }, []);
+  const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
+  /** The tab an arrow key moved to, to focus once its panel has rendered. */
+  const focusTab = useRef<AreaTab | null>(null);
+  useEffect(() => {
+    const want = focusTab.current;
+    if (!want || want !== tab) return;
+    focusTab.current = null;
+    tabRefs.current[AREA_TABS.indexOf(want)]?.focus();
+  });
 
   const [capabilities, setCapabilities] = useState<Capability[]>([]);
   const [riskFloor, setRiskFloor] = useState(2);
@@ -706,8 +746,8 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
   // because the list re-polls every few seconds: re-deciding each time would reopen a run the
   // operator had just closed, which is a page that argues with you.
   const openedOnce = useRef(false);
-  // The composer is collapsed to one button unless there is nothing to look at yet.
-  const [composerOpen, setComposerOpen] = useState(false);
+  /** The run Start just made: Runs opens on it, highlighted and scrolled into view. */
+  const [justStarted, setJustStarted] = useState<string | null>(null);
   /** The workflow Start chose, so the composer opens on it rather than on a blank question. */
   const [startWith, setStartWith] = useState<string | undefined>(undefined);
   /** "Try example" — the standard's own example brief, filled in for the operator to read. */
@@ -723,8 +763,7 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
     setStartWith(key);
     setStartExample(example ?? null);
     setCompose(null);
-    setComposerOpen(true);
-    setTab("runs");
+    setTab("new");
   }, [setTab]);
   const [schedules, setSchedules] = useState<Schedule[]>([]);
 
@@ -828,20 +867,22 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
     const read = () => {
       const intent = readComposeIntent(window.location.search);
       if (!intent.open) return;
-      setTabState("runs");
+      setTabState("new");
+      setTabNamed(true);
       setStartWith(undefined);
       setStartExample(null);
       setCompose((c) => ({ mode: intent.mode, app: intent.app, preview: intent.preview,
                            n: (c?.n ?? 0) + 1 }));
-      setComposerOpen(true);
       window.setTimeout(() => {
         document.querySelector<HTMLTextAreaElement>(
           intent.mode === "add" ? '[data-testid="np-gain"]' : '[data-testid="dw-new-directive"]')?.focus();
       }, 0);
       try {
-        // Consumed, and the URL says where it landed: the Runs tab, not an editor left open.
+        // Consumed, and the URL says where it landed: the New project tab, not an editor left
+        // open, and not a run (`wfr=` is a place in Runs).
         const next = new URLSearchParams(intent.nextSearch);
-        next.set("tab", "runs");
+        next.set("tab", "new");
+        next.delete("wfr");
         for (const key of Object.keys(EDITOR_PARAMS)) next.delete(key);
         window.history.replaceState(null, "",
           `${window.location.pathname}?${next}${window.location.hash}`);
@@ -862,11 +903,12 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
       if (!pre) return;
       setStartWith("standard_product_delivery");
       setStartExample(pre);
-      setTabState("runs");
-      setComposerOpen(true);
+      setTabState("new");
+      setTabNamed(true);
       try {
         const next = new URLSearchParams(window.location.search);
-        for (const key of ["compose", "brief", "title", "new"]) next.delete(key);
+        for (const key of ["compose", "brief", "title", "new", "wfr"]) next.delete(key);
+        next.set("tab", "new");
         window.history.replaceState(null, "", `${window.location.pathname}?${next}${window.location.hash}`);
       } catch { /* non-browser — the composer is on screen either way */ }
     };
@@ -1000,18 +1042,39 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
     );
   }
 
+  // AN EMPTY PROJECT OPENS ON NEW PROJECT, unless the URL asked for a tab: a list with nothing
+  // in it is a dead end, and starting something is all there is to do.
+  const shownTab: AreaTab = !tabNamed && tab === "runs" && runs.length === 0 ? "new" : tab;
   const tabs = (
     <div className="wf-tabs" role="tablist" aria-label="Workflows">
-      <button type="button" role="tab" aria-selected={tab === "runs"} className="wf-tab"
-              data-testid="dw-tab-runs" onClick={() => setTab("runs")}>
-        Runs <em>({runs.length})</em>
-      </button>
-      <button type="button" role="tab" aria-selected={tab === "library"} className="wf-tab"
-              data-testid="dw-tab-library" onClick={() => setTab("library")}>
-        Library
-      </button>
+      {AREA_TABS.map((key, i) => (
+        // ONE TAB STOP: the selected tab is the stop, the arrows move along (and select), Home
+        // and End go to the ends — Infra's AreaHead, the console's tablist.
+        <button key={key} type="button" role="tab" aria-selected={shownTab === key} className="wf-tab"
+                id={`dw-tab-${key}`} aria-controls={`dw-panel-${key}`}
+                tabIndex={shownTab === key ? 0 : -1} ref={(el) => { tabRefs.current[i] = el; }}
+                data-testid={`dw-tab-${key}`}
+                title={key === "new" ? NEW_BUILD_TIP : undefined}
+                onKeyDown={(e) => {
+                  const to = tabKeyTarget(e.key, i, AREA_TABS.length);
+                  if (to < 0) return;
+                  e.preventDefault();
+                  tabRefs.current[to]?.focus();
+                  // Each panel draws the tablist in its own header, so the tab focused above is
+                  // replaced by the next render; focus follows to the new one (effect below).
+                  focusTab.current = AREA_TABS[to];
+                  setTab(AREA_TABS[to]);
+                }}
+                onClick={() => setTab(key)}>
+          {key === "new" ? <>New project</> : key === "runs" ? <>Runs <em>({runs.length})</em></> : "Library"}
+        </button>
+      ))}
     </div>
   );
+  /** Leave the composer: its choices cleared, back to the runs. */
+  const closeComposer = () => {
+    setStartWith(undefined); setStartExample(null); setCompose(null);
+  };
   const installedStandards = new Set(installed.filter((i) => i.is_catalogue).map((i) => i.workflow_key));
 
   return (
@@ -1031,7 +1094,8 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
                       onDismiss={() => setRefusal(null)} />
       ) : null}
 
-      {tab === "library" ? (
+      {shownTab === "library" ? (
+        <div role="tabpanel" id="dw-panel-library" aria-labelledby="dw-tab-library">
         <Library
           projectId={projectId} tabs={tabs} busy={busy} schedules={schedules}
           inputSchemas={Object.fromEntries([
@@ -1110,46 +1174,42 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
           })}
           onStepsChanged={() => void load()}
         />
-      ) : (
-        <div className="wf-runs-area">
+        </div>
+      ) : shownTab === "new" ? (
+        <div className="wf-runs-area" role="tabpanel" id="dw-panel-new" aria-labelledby="dw-tab-new"
+             data-testid="dw-panel-new">
           <header className="wf-lib-head">
             {tabs}
-            <span className="wf-lib-spacer" />
-            {runs.length && !composerOpen ? (
-              <button type="button" className="wf-btn wf-btn-primary" data-testid="dw-composer-open"
-                      title="A new app, or a feature added to one you have"
-                      onClick={() => { setCompose(null); setComposerOpen(true); }}>
-                + New project
-              </button>
-            ) : null}
           </header>
-          {composerOpen || runs.length === 0 ? (
-            <div className="dw-composer-open">
-              <NewProjectComposer
-                projectId={projectId} actor={actor} workflows={installed} catalogue={catalogue}
-                startWith={startWith} example={startExample}
-                mode={compose?.mode ?? (startWith ? "new" : null)} appKey={compose?.app}
-                previewId={compose?.preview}
-                // KEYED ON THE CHOICE, so Start on a different workflow (or a link to another
-                // app) rebuilds the composer rather than leaving it on the first one's inputs.
-                key={`${startWith ?? "blank"}:${startExample ? "example" : "own"}:${compose?.n ?? 0}`}
-                // Cancel closes it; with no runs yet there is nothing behind it to go back to.
-                onCancel={runs.length ? () => {
-                  setComposerOpen(false); setStartWith(undefined); setStartExample(null);
-                  setCompose(null);
-                } : undefined}
-                onStarted={(runId) => {
-                  if (runId) setOpenRun(runId);
-                  setComposerOpen(false);
-                  setStartWith(undefined);
-                  setStartExample(null);
-                  setCompose(null);
-                  setNotice(runId ? `Started ${runId}.` : "Started.");
-                  void load();
-                }}
-              />
-            </div>
-          ) : null}
+          <div className="dw-composer-open">
+            <NewProjectComposer
+              projectId={projectId} actor={actor} workflows={installed} catalogue={catalogue}
+              startWith={startWith} example={startExample}
+              mode={compose?.mode ?? (startWith ? "new" : null)} appKey={compose?.app}
+              previewId={compose?.preview}
+              // KEYED ON THE CHOICE, so Start on a different workflow (or a link to another
+              // app) rebuilds the composer rather than leaving it on the first one's inputs.
+              key={`${startWith ?? "blank"}:${startExample ? "example" : "own"}:${compose?.n ?? 0}`}
+              // Cancel goes back to the runs; with no runs yet there is nothing to go back to.
+              onCancel={runs.length ? () => { closeComposer(); setTab("runs"); } : undefined}
+              // STARTED: to Runs, on the new run — opened, highlighted and scrolled into view.
+              onStarted={(runId) => {
+                closeComposer();
+                if (runId) { setOpenRun(runId); setJustStarted(runId); }
+                setTab("runs");
+                if (runId) setAreaUrl({ wfr: runId }, "replace");
+                setNotice(runId ? `Started ${runId}.` : "Started.");
+                void load();
+              }}
+            />
+          </div>
+        </div>
+      ) : (
+        <div className="wf-runs-area" role="tabpanel" id="dw-panel-runs" aria-labelledby="dw-tab-runs"
+             data-testid="dw-panel-runs">
+          <header className="wf-lib-head">
+            {tabs}
+          </header>
           {awaited ? (
             <p className="dw-awaiting detail" data-testid="dw-awaiting">
               Starting <code>{awaited}</code>…
@@ -1158,6 +1218,7 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
           <RunsView
             projectId={projectId}
             runs={runs} openRun={openRun} setOpenRun={setOpenRun} busy={busy}
+            highlightRun={justStarted} onNewProject={() => setTab("new")}
             capabilities={capabilities} targets={targets} hosts={hosts}
             actor={actor} roles={roles}
             onOpenWorkflow={(key) => openWorkflow(key)}
@@ -1464,8 +1525,12 @@ export function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilit
                    onRunPreview,
                    onBound, projectId, actor, roles,
                    previewStarting, onOpenWorkflow,
-                   targets, hosts }: {
+                   targets, hosts, highlightRun, onNewProject }: {
   projectId: string;
+  /** The run Start just made: highlighted, and scrolled into view once it is in the list. */
+  highlightRun?: string | null;
+  /** The empty list's way out: the New project tab. */
+  onNewProject?: () => void;
   actor: string;
   /** Open the workflow a run follows, in the editor. */
   onOpenWorkflow?: (workflowKey: string) => void;
@@ -1502,12 +1567,35 @@ export function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilit
   // operator is staring at the screen wondering why it is slow.
   const hostAdvice = useHostAdvice(projectId);
   const [bucket, setBucket] = useState<Bucket | "all">("all");
+  // A NEW RUN IS SHOWN WHEREVER THE FILTER WAS: a filter that hid it would read as "Start did
+  // nothing". Scrolled into view once, when it first appears in the list (it may arrive a poll
+  // after Start answers).
+  const listRef = useRef<HTMLDivElement | null>(null);
+  const scrolledTo = useRef<string | null>(null);
+  const highlightShown = !!highlightRun && runs.some((r) => r.id === highlightRun);
+  useEffect(() => {
+    if (highlightRun) setBucket("all");
+  }, [highlightRun]);
+  useEffect(() => {
+    if (!highlightRun || !highlightShown || scrolledTo.current === highlightRun) return;
+    const el = [...(listRef.current?.querySelectorAll<HTMLElement>("[data-run-id]") ?? [])]
+      .find((x) => x.dataset.runId === highlightRun);
+    if (!el) return;
+    scrolledTo.current = highlightRun;
+    try { el.scrollIntoView({ block: "nearest", behavior: "smooth" }); } catch { /* old browser */ }
+  }, [highlightRun, highlightShown, bucket]);
   if (runs.length === 0) {
     return (
       <div className="dw-empty" data-testid="dw-no-runs">
-        <p title="Describe what you want above, or press Start on a workflow in the Library">
+        <p title="Start one in New project, or press Start on a workflow in the Library">
           Nothing running yet
         </p>
+        {onNewProject ? (
+          <button type="button" className="wf-btn wf-btn-primary" data-testid="dw-empty-new"
+                  onClick={onNewProject}>
+            Start a project
+          </button>
+        ) : null}
       </div>
     );
   }
@@ -1526,7 +1614,7 @@ export function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilit
     .sort(byLiveness);
 
   return (
-    <div className="dw-runs">
+    <div className="dw-runs" ref={listRef}>
       {/* WHY RUNS ARE SLOW, ONCE. The host's advice (a nearly full disk) is about the machine,
           not about one run, and it was repeated on every live card. One banner above the list,
           while anything is running. Renders nothing on a healthy host. */}
@@ -1569,8 +1657,9 @@ export function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilit
           // 1px border and the same background, so an OPEN card's content ran into the next
           // card's header with nothing but 10px of gap between them. A 3px status stripe down
           // the left cannot separate two hundred lines of step detail from the row beneath it.
-          <article key={run.id} className="dw-run" data-status={run.status}
-                   data-open={open ? "true" : undefined} data-testid="dw-run">
+          <article key={run.id} className="dw-run" data-status={run.status} data-run-id={run.id}
+                   data-open={open ? "true" : undefined} data-testid="dw-run"
+                   data-just-started={run.id === highlightRun ? "true" : undefined}>
             {/* WHY THIS RUN IS SLOW, NEXT TO THE NUMBER THAT MISLEADS. The elapsed time is
                 what gets read as "BOSS is regressing"; if the machine took that time, it has
                 to say so in the same place. Renders nothing on a healthy host. */}

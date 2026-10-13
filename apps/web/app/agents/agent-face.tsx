@@ -67,7 +67,7 @@ export function AgFaceStack({ roleKeys, size = 24, max = 4, states, label, decor
 
 const GLYPH: Record<AvatarState, React.ComponentType<{ size?: number; weight?: "bold" | "fill" | "regular"; "aria-hidden"?: boolean }>> = {
   idle: Minus, thinking: DotsThree, speaking: ChatCircleDots, working: Gear, needs_you: Bell,
-  done: Check, stuck: Warning, paused: Pause, retired: Archive,
+  done: Check, stuck: Warning, paused: Pause, retired: Archive, failed: Warning, stopped: Pause,
 };
 
 /** A state is never colour alone: a glyph and a word, always (spec §7 rules). */

@@ -53,8 +53,8 @@ export type StoryProps = {
 /** A search match chosen: open this act's tool calls at this call. */
 type Jump = { actId: string; call: number; n: number };
 
-const ACT_STATE: Record<string, "working" | "needs_you" | "done" | "stuck" | "idle"> = {
-  active: "working", pending: "idle", awaiting_input: "needs_you", complete: "done", error: "stuck", stale: "stuck", skipped: "idle",
+const ACT_STATE: Record<string, "working" | "needs_you" | "done" | "failed" | "stopped" | "idle"> = {
+  active: "working", pending: "idle", awaiting_input: "needs_you", complete: "done", error: "failed", stale: "stopped", skipped: "idle",
 };
 
 function Fold({ label, testId, children, count }: { label: string; testId: string; count: number; children: () => React.ReactNode }) {
@@ -411,7 +411,7 @@ export function Story(props: StoryProps) {
 
 /** The station the build is at: where guidance sent now is filed. */
 export function currentStation(stations: Station[]): StationKey | null {
-  for (const want of ["needs_you", "stuck", "working", "waiting"]) {
+  for (const want of ["needs_you", "failed", "stuck", "stopped", "working", "waiting"]) {
     const hit = stations.find((st) => st.status === want);
     if (hit) return hit.key;
   }

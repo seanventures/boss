@@ -33,7 +33,9 @@
   padding: 8px 14px;
   border-radius: calc(var(--r) - 2px);
   cursor: pointer;
+  white-space: nowrap;
 }
+.wf-tab:focus-visible { outline: 2px solid var(--accent, var(--blue)); outline-offset: 1px; }
 .wf-tab:hover { color: var(--ink); }
 .wf-tab[aria-selected="true"] { background: var(--surface); color: var(--ink); box-shadow: var(--shadow-sm); }
 .wf-tab em { font-style: normal; color: var(--faint); margin-left: 4px; font-weight: 500; }
@@ -418,6 +420,11 @@ button.wf-tag:focus-visible { outline: 2px solid var(--accent); outline-offset: 
 @media (max-width: 720px) {
   .wf-libsteps-table td:nth-child(3), .wf-libsteps-used { display: none; }
   .wf-lib-search { flex: 1 1 100%; order: 10; }
+}
+/* A phone: the three area tabs share the row, none scrolls off it. */
+@media (max-width: 480px) {
+  .wf-tabs { max-width: 100%; }
+  .wf-tab { padding: 8px 10px; font-size: 0.8125rem; }
 }
 
 /* ── Runs: the run bar above an open run's lane ─────────────────────────────────── */

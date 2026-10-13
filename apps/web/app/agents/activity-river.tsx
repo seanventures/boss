@@ -66,17 +66,19 @@ const FILTERS: { key: ActivityFilter; label: string; tip: string }[] = [
 /** The face's FINAL state: what the work came to, never a motion. */
 export function riverState(status: string, item?: Pick<ActivityItem, "kind" | "verb">): AvatarState {
   // A person's answer is done whichever way it went; a run that ended badly STOPPED (its
-  // starter never got stuck — the step that failed did, and that row says so).
+  // starter never failed — the step that failed did, and that row says so). Work that errored
+  // FAILED; work left open when its run stopped STOPPED. A finished record is never "stuck".
   if (item && (item.verb === "Approved" || item.verb === "Rejected")) return "done";
   if (status === "awaiting_input") return "needs_you";
-  if (status === "error" || status === "stale") return item?.kind === "run" ? "paused" : "stuck";
+  if (status === "error") return item?.kind === "run" ? "stopped" : "failed";
+  if (status === "stale") return "stopped";
   if (status === "complete" || status === "skipped") return "done";
   return "working";
 }
 
-/** The word beside a row: the state's word, except a run that ended badly, which `Stopped`. */
+/** The word beside a row: the state's own word, except a run that ended badly, which `Stopped`. */
 export function riverStatusWord(state: AvatarState, item: Pick<ActivityItem, "kind">): string | null {
-  return item.kind === "run" && state === "paused" ? "Stopped" : null;
+  return item.kind === "run" && state === "stopped" ? "Stopped" : null;
 }
 
 /** WHO DID IT, AND WHAT. A gate is the operator's: approving or rejecting is something YOU did,

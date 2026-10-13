@@ -26,11 +26,11 @@ import { span, type Band } from "../agents/live-util";
 
 const AVATAR: Record<StationStatus, AvatarState> = {
   working: "working", needs_you: "needs_you", done: "done", stuck: "stuck",
-  waiting: "paused", pending: "idle", skipped: "idle",
+  waiting: "paused", pending: "idle", skipped: "idle", failed: "failed", stopped: "stopped",
 };
 const ACT_STATUS: Record<StationStatus, ActStatus> = {
-  working: "active", needs_you: "awaiting_input", done: "complete", stuck: "error",
-  waiting: "pending", pending: "pending", skipped: "pending",
+  working: "active", needs_you: "awaiting_input", done: "complete", stuck: "active",
+  waiting: "pending", pending: "pending", skipped: "pending", failed: "error", stopped: "stale",
 };
 
 /** The station as the Act card reads it: the server's words, nothing made up. */
@@ -58,9 +58,10 @@ export function stationMoves(s: Station): boolean {
   return (s.status === "working" || s.status === "needs_you") && (s.face === "agent" || s.face === "you");
 }
 
-/** The station being worked: needs-you first, then stuck, working, waiting. */
+/** The station being worked, or where the build ended: needs-you first, then failed, stuck,
+ *  stopped, working, waiting. */
 export function activeStation(stations: Station[]): Station | null {
-  for (const st of ["needs_you", "stuck", "working", "waiting"] as StationStatus[]) {
+  for (const st of ["needs_you", "failed", "stuck", "stopped", "working", "waiting"] as StationStatus[]) {
     const hit = stations.find((s) => s.status === st);
     if (hit) return hit;
   }
@@ -108,7 +109,9 @@ function Face({ s, size, still, viewer }: { s: Station; size: 16 | 24 | 32; stil
   }
   if (s.face === "agent" && s.roleKey) {
     if (s.actId && size !== 16) {
-      return <ActFace act={actOf(s)} viewer={viewer} size={size === 32 ? 32 : 24} state={still ? state : undefined} />;
+      // A stuck station's act is still open (active): the face says stuck, not the act's working.
+      return <ActFace act={actOf(s)} viewer={viewer} size={size === 32 ? 32 : 24}
+                      state={still || s.status === "stuck" ? state : undefined} />;
     }
     return <RunFace roleKey={s.roleKey} size={size} state={state} standalone />;
   }
@@ -188,7 +191,10 @@ export function StationLine({ stations, density = "row", band = "wide", still = 
       {stations.map((s, i) => {
         const who = whoAt(s);
         const secs = header ? seconds(s, now) : null;
-        const time = secs !== null && s.status !== "pending" && s.status !== "skipped" ? span(secs) : "";
+        // A time under a bay is how long the work there took or has taken. A STOPPED bay's act
+        // was left open, so its clock would only measure how long ago the build stopped.
+        const time = secs !== null && s.status !== "pending" && s.status !== "skipped" && s.status !== "stopped"
+          ? span(secs) : "";
         const isActive = s === active;
         // Row density: every face 24px, so the storm reads at a glance (walk D22).
         const size: 16 | 24 | 32 = header ? 32 : 24;
@@ -199,6 +205,7 @@ export function StationLine({ stations, density = "row", band = "wide", still = 
               data-key={s.key} data-status={s.status} data-face={s.face} data-active={isActive || undefined}
               data-role={s.face === "agent" ? s.roleKey ?? undefined : undefined}
               data-selected={selected === s.key || undefined} aria-label={ariaLabel}
+              data-not-reached={s.notReached || undefined}
               title={!header ? [`${s.label} · ${s.word}`, who, s.tip].filter(Boolean).join(" · ") : undefined}>
             {i > 0 ? (
               <span className="ag-chain-edge fx-edge" data-new={fresh.has(s.key) ? "true" : undefined}

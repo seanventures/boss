@@ -97,8 +97,8 @@ def test_a_no_fails_the_step_and_offers_what_is_safe(client, monkeypatch, shape)
     assert board["attention"][0]["kind"] == "failed_step"
     starter = next(h for h in row["hops"] if h.get("label") == "Started")
     assert starter["state"] != "stuck"
-    # Nobody is "needs you" for an answered gate, and the pilot is not stuck for it.
-    assert all(a["state"] not in ("needs_you", "stuck") for a in board["agents"]
+    # Nobody is "needs you" for an answered gate, and the pilot has not failed for it.
+    assert all(a["state"] not in ("needs_you", "stuck", "failed") for a in board["agents"]
                if a["role_key"] == pilot)
     # Activity says the person's no (D4).
     items = client.get("/v1/agents/activity", params={
@@ -106,7 +106,7 @@ def test_a_no_fails_the_step_and_offers_what_is_safe(client, monkeypatch, shape)
     answers = [i for i in items if i["kind"] == "approval"]
     assert [i["verb"] for i in answers] == ["Rejected"], [(i["kind"], i["verb"]) for i in items]
     assert answers[0]["role_key"] is None
-    assert not [i for i in items if i["role_key"] == pilot and i["verb"] in ("Stuck", "Needs you")]
+    assert not [i for i in items if i["role_key"] == pilot and i["verb"] in ("Stuck", "Failed", "Stopped", "Needs you")]
 
 
 @pytest.mark.parametrize("shape", ["decision", "capability"])

@@ -17,7 +17,11 @@ import { parseAttention, type AttentionItem } from "./agents-live-board";
 // ── Stations (§4.3) ─────────────────────────────────────────────────────────────────────────
 
 export type StationKey = "plan" | "you_plan" | "tests" | "build" | "check" | "review" | "pr" | "preview" | "ship";
-export type StationStatus = "pending" | "working" | "needs_you" | "done" | "stuck" | "skipped" | "waiting";
+/** `failed`: its work errored (the tip says why). `stopped`: left open when the build stopped.
+ *  `stuck`: only a LIVE build's station with no activity for a while (factory_view
+ *  QUIET_AFTER_MINUTES). A `pending` station after a stopped build says "Not reached". */
+export type StationStatus = "pending" | "working" | "needs_you" | "done" | "stuck" | "skipped" | "waiting"
+  | "failed" | "stopped";
 /** agent: roleKey's face · hollow: hollowRole's face, pending · boss: BOSS glyph · you: You glyph · none: empty slot. */
 export type StationFace = "agent" | "hollow" | "boss" | "you" | "none";
 
@@ -34,9 +38,12 @@ export type Station = {
   actId: string | null;
   actIds: string[];
   seats: Seat[];
-  /** `Done` · `Coding` · `Next` · `Stuck` · `Skipped` · `Waiting` · `Needs you` — the server's. */
+  /** `Done` · `Coding` · `Next` · `Not reached` · `Failed` · `Stopped` · `Stuck` · `Skipped` ·
+   *  `Waiting` · `Needs you` — the server's. */
   word: string;
   tip?: string;
+  /** A station after the one a STOPPED build ended at: it will not be reached by this attempt. */
+  notReached?: boolean;
   startedAt?: string;
   endedAt?: string;
   /** On the edge INTO this station. */
@@ -133,7 +140,8 @@ export const opt = (v: unknown): string | undefined => (typeof v === "string" &&
 export const num = (v: unknown, d = 0): number => (typeof v === "number" && Number.isFinite(v) ? v : d);
 export const roleOf = (v: unknown): string | null => (typeof v === "string" && v ? v : null);
 
-const STATION_STATUSES = new Set(["pending", "working", "needs_you", "done", "stuck", "skipped", "waiting"]);
+const STATION_STATUSES = new Set(["pending", "working", "needs_you", "done", "stuck", "skipped", "waiting",
+                                  "failed", "stopped"]);
 const FACES = new Set(["agent", "hollow", "boss", "you", "none"]);
 const stationStatus = (v: unknown): StationStatus => (STATION_STATUSES.has(str(v)) ? str(v) as StationStatus : "pending");
 
@@ -155,7 +163,8 @@ export function parseStation(w: unknown): Station {
       return { actId: str(x.act_id), roleKey: roleOf(x.role_key), seat: num(x.seat, 1),
                status: stationStatus(x.status), verdict: opt(x.verdict) ?? null };
     }),
-    word: str(o.word), tip: opt(o.tip), startedAt: opt(o.started_at), endedAt: opt(o.ended_at),
+    word: str(o.word), tip: opt(o.tip), ...(o.not_reached === true ? { notReached: true } : {}),
+    startedAt: opt(o.started_at), endedAt: opt(o.ended_at),
     edgeLabel: opt(o.edge_label), rounds: num(o.rounds), loopWith: roleOf(o.loop_with),
     links: arr(o.links).map((l) => { const x = obj(l); return { label: str(x.label), url: opt(x.url) }; }),
   };

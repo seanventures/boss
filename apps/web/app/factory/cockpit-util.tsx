@@ -35,6 +35,8 @@ export function faceState(status: StationStatus): AvatarState {
     case "needs_you": return "needs_you";
     case "done": return "done";
     case "stuck": return "stuck";
+    case "failed": return "failed";
+    case "stopped": return "stopped";
     default: return "idle";
   }
 }

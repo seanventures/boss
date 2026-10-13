@@ -28,7 +28,8 @@ type Hop = Extract<MissionHop, { kind: "hop" }>;
 
 const STATUS_OF: Record<string, ActStatus> = {
   working: "active", thinking: "active", speaking: "active", needs_you: "awaiting_input",
-  done: "complete", stuck: "error", idle: "pending", paused: "pending", retired: "pending",
+  done: "complete", stuck: "error", failed: "error", stopped: "stale", idle: "pending", paused: "pending",
+  retired: "pending",
 };
 
 /** The hop as the Act card reads it: the server's words only, nothing made up. */
@@ -44,14 +45,18 @@ function actOf(hop: Hop, mission: Mission): Act {
   };
 }
 
+/** The hop states that END work badly: failed (errored), stopped (left open when the run
+ *  stopped), and stuck (live, gone quiet — the server's call). The row's current hop is one. */
+export const ENDED_BADLY: ReadonlySet<string> = new Set(["stuck", "failed", "stopped"]);
+
 /** The lane as drawn (walk D11). A wait for a person is drawn ONCE, as the amber You / A person
  *  hop the row adds from its state: an agent's hop is never ringed amber for it. The person who
- *  started the run is never "stuck" — a run that failed failed at a step, not at its start. */
+ *  started the run never failed — a run that failed failed at a step, not at its start. */
 export function laneHops(m: Pick<Mission, "hops" | "state">): MissionHop[] {
   return m.hops.map((h) => {
     if (h.kind !== "hop") return h;
     if (h.state === "needs_you") return { ...h, state: "idle" };
-    if (!h.roleKey && h.state === "stuck") return { ...h, state: "done" };
+    if (!h.roleKey && ENDED_BADLY.has(h.state)) return { ...h, state: "done" };
     return h;
   });
 }
@@ -77,7 +82,7 @@ export function currentHopIndex(hops: MissionHop[]): number {
   for (let i = hops.length - 1; i >= 0; i -= 1) {
     const h = hops[i];
     if (h.kind === "hop" && ANIMATED_STATES.has(h.state)) return i;
-    if (h.kind === "hop" && h.state === "stuck") return i;
+    if (h.kind === "hop" && ENDED_BADLY.has(h.state)) return i;
   }
   for (let i = hops.length - 1; i >= 0; i -= 1) if (hops[i].kind === "hop") return i;
   return -1;

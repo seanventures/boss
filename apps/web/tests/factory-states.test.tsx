@@ -96,11 +96,12 @@ describe("the other sections", () => {
     expect(chips[1].querySelector("[data-variant=boss]")).not.toBeNull();
   });
 
-  it("a stopped row says why, with the stuck face and Retry", async () => {
+  it("a stopped row says why, with the failed face (never stuck) and Retry", async () => {
     await mount(view(floor()));
     const row = $("[data-testid=fx-stopped-crun_f]")!;
     expect(row.querySelector(".fx-word")?.textContent).toBe("Failed · Build");
-    expect(row.querySelector("[data-state=stuck]")).not.toBeNull();
+    expect(row.querySelector("[data-state=failed]")).not.toBeNull();
+    expect(row.querySelector("[data-state=stuck]")).toBeNull();
     expect(row.querySelector<HTMLButtonElement>("[data-testid=fx-retry-crun_f]")?.disabled).toBe(false);
   });
 

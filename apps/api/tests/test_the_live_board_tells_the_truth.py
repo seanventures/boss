@@ -203,7 +203,7 @@ def test_a_failed_step_is_a_card_with_the_runs_answers_and_its_run_stopped(clien
 
     board = _board(client).json()
     row = _mission(board, run_id)
-    assert row is not None and row["state"] == "stopped" and row["verb"] == "Stuck"
+    assert row is not None and row["state"] == "stopped" and row["verb"] == "Failed"
     card = next(a for a in board["attention"] if a["kind"] == "failed_step"
                 and a["run"]["id"] == run_id)
     assert card["id"] == f"run:{run_id}:build"
@@ -213,7 +213,8 @@ def test_a_failed_step_is_a_card_with_the_runs_answers_and_its_run_stopped(clien
                                    for a in card["answers"])
     assert card["run"]["step_index"] == 1 == row["step_index"]
     forge_now = next(a for a in board["agents"] if a["role_key"] == forge)
-    assert forge_now["state"] == "stuck"
+    # FAILED, never "stuck" (operator, 2026-10-13): stuck is live work gone quiet.
+    assert forge_now["state"] == "failed"
 
 
 def test_a_step_waiting_on_a_build_is_waiting_not_waiting_on_you(client, engine, monkeypatch):

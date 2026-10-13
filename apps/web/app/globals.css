@@ -932,6 +932,15 @@ h1, h2, h3, h4, h5, h6 {
 
 .dw-empty { padding: 26px; text-align: center; color: var(--muted); }
 .dw-empty p { margin: 0 0 6px; }
+/* THE RUN START JUST MADE: ringed for a moment when Runs opens on it, then an ordinary card. */
+.dw-run[data-just-started="true"] { animation: dw-just-started 4s ease-out 1; scroll-margin: 16px; }
+@keyframes dw-just-started {
+  0%, 60% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent, var(--blue)) 55%, transparent); }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dw-run[data-just-started="true"] { animation: none; box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent, var(--blue)) 45%, transparent); }
+}
 
 /* Status, as a word in a shape. Never colour alone. */
 .dw-badge {
