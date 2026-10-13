@@ -36,6 +36,7 @@ from sqlalchemy.exc import DBAPIError, InterfaceError, OperationalError, Program
 from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 
 from boss_engine.ports import configure_engine_ports
+from boss_engine.identity.authn import AuthnError
 from boss_engine.services.coordination_read_model import (
     CoordinationSnapshot,
     build_coordination_snapshot,
@@ -1296,6 +1297,25 @@ def _install_shipped_cast() -> dict:
         return {}
 
 
+def _sync_builtin_templates() -> None:
+    """THE SHIPPED TEMPLATES, REFRESHED AT BOOT for every org — not by whoever lists them.
+
+    Listing templates used to sync them, so GET /v1/templates wrote rows (a read that writes,
+    refused by the read-only-GET rule) and a changed built-in reached the stored manifest only
+    after someone happened to open the template list. Idempotent; never blocks boot.
+    """
+    from boss_engine.templates.service import sync_builtins
+
+    try:
+        with begin(engine) as c:
+            orgs = [str(r[0]) for r in c.execute(text("SELECT id FROM orgs")).all()]
+            written = sum(sync_builtins(c, org) for org in orgs)
+        if written:
+            print(f"[lifespan] built-in templates refreshed: {written} row(s)")
+    except Exception as exc:  # noqa: BLE001
+        print(f"[lifespan] built-in template sync skipped: {type(exc).__name__}")
+
+
 def _seed_work_tracker_defaults() -> None:
     """Every project's tracker catalogue rows and job quota (work_orchestration.seed_defaults:
     idempotent, never undoes an operator), refreshed at boot — the reads that used to seed them on
@@ -1397,6 +1417,7 @@ async def lifespan(_: FastAPI):
     except Exception as exc:  # noqa: BLE001
         print(f"[lifespan] ensure_schema skipped — DB not ready or migration error: {exc}")
     _install_shipped_cast()
+    _sync_builtin_templates()
     _seed_work_tracker_defaults()
     _backfill_agent_identities()
     # REFUSED DEPLOYMENT PLANS LEFT NOTHING BEHIND ONCE, AND NOW NEVER DID. An unverified host
@@ -1714,6 +1735,20 @@ async def identity_constraint_conflict(_request: Request, exc: DBAPIError):
                                                       "message": "Add another Owner first."})
     LOGGER.exception("database error (request %s)", getattr(_request.state, "request_id", None))
     return _internal_error_response(_request, exc)
+
+
+@app.exception_handler(AuthnError)
+async def authn_error_answers_with_its_own_status(_request: Request, exc: AuthnError):
+    """A refused credential is the caller's problem, never a 500.
+
+    `AuthnError` carries its stable code and HTTP status (401 unauthenticated, 403 step-up …).
+    The OIDC admin routes (and `/v1/apps/{app_key}/sign-in-with-boss`) resolve the caller with
+    `current_context`, which raises it; with no handler it fell through to the catch-all below
+    and an anonymous GET answered "500 AuthnError".
+    """
+    return JSONResponse(status_code=int(getattr(exc, "status", 401) or 401),
+                        content={"error": getattr(exc, "code", "unauthenticated")},
+                        headers={"Cache-Control": "no-store"})
 
 
 @app.exception_handler(Exception)

@@ -293,7 +293,7 @@ def apply_plan(engine: Any, *, project_id: str, app_key: str, doc: dict[str, Any
 def env_values(engine: Any, *, project_id: str, app_key: str, environment: str = "deploy") -> dict[str, str]:
     """The binding values a deploy writes into the app's env file: resolved from the vault at
     write time, for the env names this app's live resources bound. The caller hides them."""
-    from ..templates import secrets as app_secrets
+    from ..templates.base_url import deploy_secret_values
     with engine.begin() as c:
         names = set()
         for row in ledger_for_app(c, project_id, app_key, environment):
@@ -301,8 +301,8 @@ def env_values(engine: Any, *, project_id: str, app_key: str, environment: str =
         if not names:
             return {}
         org_id, _ws = org_scope(c, project_id)
-        values, _withheld = app_secrets.values_for_env(c, org_id=org_id, project_id=project_id,
-                                                       app_key=app_key, env="deploy")
+        values, _withheld = deploy_secret_values(c, org_id=org_id, project_id=project_id,
+                                                 app_key=app_key)
     return {k: v for k, v in values.items() if k in names}
 
 
