@@ -101,6 +101,12 @@ export const moveTarget = (projectId: string, targetId: string, actor: string, h
   send("POST", `/v1/infra/targets/${enc(targetId)}/move`, { project_id: projectId, actor, host_id: hostId }, P(`infra-target-${targetId}`, "Move"));
 export const retireTarget = (targetId: string, actor: string) =>
   send("DELETE", `/v1/deployment-targets/${enc(targetId)}?actor=${enc(actor)}`, null, P(`infra-target-${targetId}`, "Retire"));
+/** Remove the app from its host (services/app_removal.py): governed like a deploy — a ChangeSet
+ *  approved by a person or the environment's policy, a leased job, a receipt. Data is kept
+ *  unless `deleteData`. */
+export const removeTargetApp = (targetId: string, actor: string, deleteData: boolean, reason: string) =>
+  send<{ id?: string; next_action?: string; decision_id?: string }>("POST", `/v1/deployment-targets/${enc(targetId)}/remove`,
+       { actor, delete_data: deleteData, reason }, P(`infra-target-${targetId}`, "Remove app"));
 export const bindSecret = (projectId: string, targetId: string, actor: string, name: string, secretRefId: string) =>
   send("POST", `/v1/deployment-targets/${enc(targetId)}/secrets`, { project_id: projectId, actor, name, secret_ref_id: secretRefId },
        P(`infra-target-${targetId}`, "Bind secret"));
@@ -188,6 +194,7 @@ declareAction(deployTarget, "deployment:create");
 declareAction(setTargetToggles, "deployment_target:manage");
 declareAction(moveTarget, "deployment_target:manage");
 declareAction(retireTarget, "deployment_target:manage");
+declareAction(removeTargetApp, "deployment:create");
 declareAction(bindSecret, "deployment_target:manage");
 declareAction(createStackTarget, "deployment_target:manage");
 declareAction(updateTarget, "deployment_target:manage");

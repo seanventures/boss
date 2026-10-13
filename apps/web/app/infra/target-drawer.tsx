@@ -19,7 +19,7 @@ import { PulseStrip } from "../observability/pulse-strip";
 import { navigate } from "../agents/live-util";
 import { showToast } from "../client-forms";
 import {
-  afterWrite, bindSecret, deployTarget, listRefs, moveTarget, preflightTarget, retireTarget, setTargetToggles,
+  afterWrite, bindSecret, deployTarget, listRefs, moveTarget, preflightTarget, removeTargetApp, retireTarget, setTargetToggles,
   type PreflightBody,
 } from "./infra-actions";
 import { ago, copyText, dur, ErrorLine, localTime, Menu, useNow } from "./infra-util";
@@ -181,6 +181,48 @@ function MoveSheet({ t, projectId, actor, racks, onClose, onMoved }: {
   );
 }
 
+/** Remove the app from its host: what goes, a separate opt-in for its data, then the deploy flow
+ *  (approval or policy) — the run's state shows in Deploys like any deploy. */
+export function RemoveAppSheet({ t, actor, onClose, onPlanned }: { t: TargetDetail; actor: string; onClose: () => void; onPlanned: () => void }) {
+  const name = t.app;
+  const [typed, setTyped] = useState("");
+  const [deleteData, setDeleteData] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const host = t.where.host?.name ?? "its host";
+  return (
+    <Sheet title={`Remove ${t.app} · ${t.env}?`} testId="inf-target-remove-sheet" onClose={onClose}>
+      <form className="inf-form" onSubmit={async (e) => {
+        e.preventDefault();
+        if (!confirmed(name, typed)) return;
+        setBusy(true); setError(null);
+        const r = await removeTargetApp(t.id, actor, deleteData, "Removed from the console");
+        setBusy(false);
+        if (!r.ok) { setError(r.error); return; }
+        showToast("success", r.data?.next_action === "approve_decision" ? "Removal waiting for approval" : "Removing…");
+        afterWrite();
+        onPlanned();
+      }}>
+        <span className="inf-muted" data-testid="inf-target-remove-what"
+              title="Its compose project and container are stopped and removed, and its folder under /opt/boss-apps">
+          {`Stops and removes ${t.app} on ${host}: its containers and /opt/boss-apps folder.`}</span>
+        <label className="inf-check" title="Database volumes and the app's data folder">
+          <input type="checkbox" checked={deleteData} onChange={(e) => setDeleteData(e.target.checked)}
+                 data-testid="inf-target-remove-data" />
+          Also delete its data (database volumes) — can&apos;t be undone
+        </label>
+        <TypedConfirm name={name} value={typed} onChange={setTyped} testId="inf-target-remove-confirm" />
+        <div className="inf-actions">
+          <GatedButton permission="deployment:create" type="submit" className="ag-btn" data-tone="reject" disabled={!confirmed(name, typed) || busy}
+                  data-testid="inf-target-remove-submit">{busy ? "Removing…" : "Remove app"}</GatedButton>
+          <button type="button" className="inf-link" onClick={onClose}>Cancel</button>
+          <ErrorLine error={error} />
+        </div>
+      </form>
+    </Sheet>
+  );
+}
+
 function RetireTargetSheet({ t, actor, onClose, onRetired }: { t: TargetDetail; actor: string; onClose: () => void; onRetired: () => void }) {
   const name = t.app;
   const [typed, setTyped] = useState("");
@@ -321,7 +363,7 @@ export function TargetDrawer({ projectId, actor, targetId, canWrite, racks, onCl
 }) {
   const detail = useTargetDetail(projectId, targetId);
   const now = useNow(30_000);
-  const [sheet, setSheet] = useState<"move" | "retire" | null>(null);
+  const [sheet, setSheet] = useState<"move" | "retire" | "remove" | null>(null);
   const t = detail.data;
   const openDeploy = (ref: string) => go({ view: "deploys", target: null, host: null, deploy: ref });
   const label = t ? `${t.app} · ${t.env}` : "App";
@@ -335,6 +377,7 @@ export function TargetDrawer({ projectId, actor, targetId, canWrite, racks, onCl
           onPick: () => void copyText(`${window.location.origin}/?area=infra&view=fleet&target=${encodeURIComponent(t.id)}`) },
         { key: "move", label: "Move to…", testId: "inf-target-move", hidden: !(canWrite && t.can.move), onPick: () => setSheet("move") },
         { key: "retire", label: "Retire…", testId: "inf-target-retire", hidden: !(canWrite && t.can.retire), onPick: () => setSheet("retire") },
+        { key: "remove", label: "Remove app…", testId: "inf-target-remove", hidden: !canWrite, onPick: () => setSheet("remove") },
       ]} />
     </>
   ) : <span className="inf-drawer-title">App</span>;
@@ -390,6 +433,8 @@ export function TargetDrawer({ projectId, actor, targetId, canWrite, racks, onCl
           <Secrets projectId={projectId} actor={actor} t={t} canBind={canWrite} refresh={detail.refresh} />
           {sheet === "move" ? <MoveSheet t={t} projectId={projectId} actor={actor} racks={racks} onClose={() => setSheet(null)}
                                          onMoved={() => { setSheet(null); detail.refresh(); }} /> : null}
+          {sheet === "remove" ? <RemoveAppSheet t={t} actor={actor} onClose={() => setSheet(null)}
+                                                onPlanned={() => { setSheet(null); go({ view: "deploys", target: null }); }} /> : null}
           {sheet === "retire" ? <RetireTargetSheet t={t} actor={actor} onClose={() => setSheet(null)}
                                                    onRetired={() => { setSheet(null); onClose(); }} /> : null}
         </>

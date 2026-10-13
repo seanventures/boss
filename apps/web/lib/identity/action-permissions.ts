@@ -245,6 +245,7 @@ export const ACTION_PERMISSIONS: Readonly<Record<string, Permission>> = {
   "app/infra/infra-actions.ts#deployTarget": "deployment:create",
   "app/infra/infra-actions.ts#setTargetToggles": "deployment_target:manage",
   "app/infra/infra-actions.ts#moveTarget": "deployment_target:manage",
+  "app/infra/infra-actions.ts#removeTargetApp": "deployment:create",
   "app/infra/infra-actions.ts#enablePlugin": "setup:manage",
   "app/infra/infra-actions.ts#disablePlugin": "infra:provision",
   "app/infra/infra-actions.ts#retireTarget": "deployment_target:manage",
