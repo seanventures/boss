@@ -70,6 +70,9 @@ EXCLUSIONS: tuple[tuple[re.Pattern[str], str], ...] = (
      "The worker lease protocol carries its own fencing: a lease id and attempt number make a "
      "heartbeat or completion idempotent already, and replaying a STORED heartbeat would tell a "
      "worker it still holds a lease the server has since taken back."),
+    (re.compile(r"^/v1/identity/setup-link$"),
+     "The answer is a live, single-use claim link: storing it for replay would keep the setup "
+     "token in plain text for a day, and asking again already just mints a new one that voids the last."),
     (re.compile(r"^/v1/previews/[^/]+/web(/|$)"),
      "The preview capability proxy forwards the previewed APP's own traffic. An Idempotency-Key "
      "on those requests belongs to that app's API, not to BOSS, and must reach it untouched."),

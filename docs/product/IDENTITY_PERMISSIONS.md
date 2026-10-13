@@ -301,6 +301,7 @@ These routes do not exist yet. They are specified in IDENTITY.md §10.
 | POST | `/v1/auth/password/forgot · /v1/auth/password/reset` | public: rate-limited; reset token single-use |
 | GET/POST | `/v1/auth/sso/{provider_id}/start · /callback` | public: state + nonce + PKCE bound to the pre-auth cookie |
 | POST | `/v1/auth/setup/claim` | public: one-time setup token or the legacy password; returns 404 once an Owner exists |
+| POST | `/v1/identity/setup-link` | authenticated, then the install's admin key (BOSS_API_KEY) only, 403 to anyone else: `boss identity setup-link` for a host with no shell; 404 once an Owner exists |
 | POST | `/v1/auth/invitations/{token}/accept` | public: single-use invitation token |
 | POST | `/v1/auth/logout · /v1/auth/step-up` | authenticated |
 | GET | `/v1/identity/me · /me/permissions` | authenticated |

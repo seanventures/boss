@@ -177,6 +177,7 @@
   "GET /v1/identity/service-accounts/{sa_id}/scopes",
   "GET /v1/identity/sessions",
   "DELETE /v1/identity/sessions/{session_id}",
+  "POST /v1/identity/setup-link",
   "GET /v1/identity/shadow-report",
   "POST /v1/identity/shadow-report/explain",
   "POST /v1/identity/spawn",

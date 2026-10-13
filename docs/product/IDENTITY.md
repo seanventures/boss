@@ -901,7 +901,7 @@ Writes to this log are **not best-effort**. A security event is written in the s
 | Agents | `agent.passport.*`, `delegation.*`, `token.issued`, `token.exchanged`, `token.denied`, `credential.handed_out` |
 | Vault | `vault.connection.linked`/`refreshed`/`needs_reauth`/`revoked`, `vault.decrypt_failed`, `vault.master_key_rotated` |
 | Authorization | `authz.denied`, `authz.shadow_deny`, `authz.allowed_critical` |
-| Policy and system | `policy.changed` (diff), `bootstrap.claimed`, `owner.recovered_by_host`, `banner.acknowledged` (a person closed a security notice with "Got it"), `legacy.password_used`, `legacy.api_key_used`, `legacy.claimed_actor_ignored`, `audit.exported`, `audit.verified`, `audit.checkpoint` |
+| Policy and system | `policy.changed` (diff), `bootstrap.claimed`, `identity.setup_link_issued` (the admin key asked for a claim link; never the token), `owner.recovered_by_host`, `banner.acknowledged` (a person closed a security notice with "Got it"), `legacy.password_used`, `legacy.api_key_used`, `legacy.claimed_actor_ignored`, `audit.exported`, `audit.verified`, `audit.checkpoint` |
 
 Egress requests go to a separate high-volume table, `identity_egress_log`, partitioned by day with 30-day retention. Only egress **denials** are copied into the security log.
 

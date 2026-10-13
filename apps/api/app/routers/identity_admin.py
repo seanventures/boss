@@ -1,6 +1,6 @@
-"""/v1/identity/{audit,epoch,posture,policy,shadow-report,legacy}: the security audit log, the
-identity epoch (and its push stream), posture, the identity policy, the shadow -> enforce rollout
-report and the legacy bridges. Stream S5. Posture and policy answer S4's shapes
+"""/v1/identity/{audit,epoch,posture,policy,shadow-report,legacy,setup-link}: the security audit
+log, the identity epoch (and its push stream), posture, the identity policy, the shadow -> enforce
+rollout report, the legacy bridges and the admin key's claim link. Stream S5. Posture and policy answer S4's shapes
 (boss_engine/identity/console_shapes.py, which lists where the API keeps a stricter rule).
 
 IDENTITY.md §8 (audit), §9.1 (posture), §10 (routes), §12 (migration); IDENTITY_PERMISSIONS.md §5
@@ -150,6 +150,30 @@ def build_identity_admin_router(*, start_background: Optional[bool] = None) -> A
                                  before=datetime.now(timezone.utc) - timedelta(days=days),
                                  db=db, actor_principal_id=ctx.principal.id, ctx=ctx)
         return result.__dict__
+
+    # ---- the claim link, for an install with no shell --------------------------------------------
+
+    @router.post("/v1/identity/setup-link")
+    @authenticated(note="the install's admin key (BOSS_API_KEY) only, while unclaimed")
+    def issue_setup_link(request: Request):
+        """`boss identity setup-link` over HTTP, for a host with no shell (a managed host reached
+        only by an ops API). Answers only the install's admin key, only while there is no Owner
+        (404 for good after, like the claim); 403 to anyone else. A NEW link each call, voiding
+        the last. {url, expires_at}; the token is in the URL's fragment and in nothing logged."""
+        from boss_engine.identity import claim as claim_module
+
+        ctx = _context(request)
+        if ctx is None:
+            return _refuse(401, "unauthenticated")
+        try:
+            with begin() as db:
+                link = claim_module.setup_link_over_api(db, ctx)
+        except claim_module.SetupLinkRefused as exc:
+            response = _refuse(exc.status, exc.code)
+            if exc.retry_after:
+                response.headers["Retry-After"] = str(exc.retry_after)
+            return response
+        return JSONResponse(link, headers={"Cache-Control": "no-store"})
 
     # ---- the identity epoch: refetch when it moves --------------------------------------------
 

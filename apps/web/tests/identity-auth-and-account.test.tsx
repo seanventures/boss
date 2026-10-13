@@ -134,6 +134,16 @@ describe("Claim this BOSS", () => {
     expect(el.textContent).toContain("boss identity setup-link");
   });
 
+  it("setup link with no token, where the admin key can issue one over the API, says so too", async () => {
+    window.history.replaceState(null, "", "/claim");
+    const el = await mount(<ClaimFlow options={options({ path: "setup_token", origin: null, expires_at: null, seats: [], link_over_api: true })} />);
+    const note = el.querySelector("[data-testid='claim-no-token']")?.textContent ?? "";
+    expect(note).toContain("whoever holds this install's admin key");
+    expect(note).toContain("machine BOSS runs on");
+    expect(el.textContent).toContain("boss identity setup-link");
+    accessible(el);
+  });
+
   it("legacy password: the shared password is the proof, with where to find it", async () => {
     const el = await mount(<ClaimFlow options={options({ path: "legacy_password", origin: null, expires_at: null, seats: SEATS })} />);
     expect(el.querySelector("[data-testid='claim-legacy-password']")).not.toBeNull();
