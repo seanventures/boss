@@ -45,7 +45,8 @@ const KIND_WORD: Record<ActKind, string> = {
 export function actState(status: Act["status"]): AvatarState {
   if (status === "complete") return "done";
   if (status === "awaiting_input") return "needs_you";
-  if (status === "error" || status === "stale") return "stuck";
+  if (status === "error") return "failed";
+  if (status === "stale") return "stopped";
   if (status === "active" || status === "pending") return "working";
   return "idle";
 }

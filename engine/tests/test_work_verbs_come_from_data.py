@@ -68,8 +68,10 @@ def test_a_capability_with_no_family_is_working():
 def test_status_and_kind_come_first():
     assert work_verb({"kind": "stage", "status": "awaiting_input",
                       "step_id": "implement"}) == "Needs you"
-    assert work_verb({"kind": "step", "status": "error"}, capability="deploy") == "Stuck"
-    assert work_verb({"kind": "step", "status": "stale"}) == "Stuck"
+    # Honest endings: an act that errored Failed; one closed stale was left open when its run
+    # stopped. A closed act is never "Stuck" (that is a live build gone quiet).
+    assert work_verb({"kind": "step", "status": "error"}, capability="deploy") == "Failed"
+    assert work_verb({"kind": "step", "status": "stale"}) == "Stopped"
     assert work_verb({"kind": "approval", "status": "complete"}) == "Approved"
     assert work_verb({"kind": "seat", "status": "active"}) == "In a panel"
     assert work_verb({"kind": "chat", "status": "active"}) == "Talking"

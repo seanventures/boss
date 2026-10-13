@@ -41,7 +41,7 @@
 .ag-state-word[data-state="working"] { color: var(--teal); }
 .ag-state-word[data-state="needs_you"] { color: var(--amber); }
 .ag-state-word[data-state="done"] { color: var(--green); }
-.ag-state-word[data-state="stuck"] { color: var(--red); }
+.ag-state-word:is([data-state="stuck"], [data-state="failed"]) { color: var(--red); }
 
 /* Parts that move rotate and scale about themselves, not the SVG's origin. */
 .ag-av .av-ring, .ag-av .av-halo, .ag-av .av-eyes, .ag-av .av-bar,
@@ -65,7 +65,7 @@
   animation: agav-blink var(--agav-blink, 6s) var(--agav-blink-delay, 0s) infinite;
 }
 /* Paused and retired: grey from 48px (no filters on small faces), dimmed at every size. */
-.ag-av:is([data-state="paused"], [data-state="retired"]):is([data-lod="48"], [data-lod="96"], [data-lod="320"]) .av-char {
+.ag-av:is([data-state="paused"], [data-state="retired"], [data-state="stopped"]):is([data-lod="48"], [data-lod="96"], [data-lod="320"]) .av-char {
   filter: grayscale(1);
 }
 
@@ -185,7 +185,7 @@
 .ag-state[data-state="working"], .ag-state[data-state="thinking"], .ag-state[data-state="speaking"] { color: var(--accent-text); }
 .ag-state[data-state="needs_you"] { color: var(--amber); }
 .ag-state[data-state="done"] { color: var(--green); }
-.ag-state[data-state="stuck"] { color: var(--red); }
+.ag-state:is([data-state="stuck"], [data-state="failed"]) { color: var(--red); }
 
 .ag-ai-tag {
   display: inline-flex; align-items: center; gap: 4px; padding: 1px 7px; border-radius: 999px;

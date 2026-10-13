@@ -1859,7 +1859,7 @@ FAMILY_VERBS: dict[str, str] = {
     "research": "Researching",
 }
 #: Every verb work_verb can say. The web renders these words and maps none of its own.
-VERBS = frozenset({"Needs you", "Stuck", "Approved", "Rejected", "In a panel", "Talking",
+VERBS = frozenset({"Needs you", "Failed", "Stopped", "Approved", "Rejected", "In a panel", "Talking",
                    "Waiting", "Blocked", "Working", *STAGE_VERBS.values(),
                    *FAMILY_VERBS.values()})
 
@@ -1900,8 +1900,12 @@ def work_verb(act: dict[str, Any], *, capability: Optional[str] = None,
     if kind == "run":
         # The starter is never Stuck (agents-home D11): a stopped run waits on its operator.
         return "Blocked" if str(run_status or "") == "blocked" else "Started"
-    if status in ("error", "stale"):
-        return "Stuck"
+    # HONEST ENDINGS: an act that errored Failed; one closed stale was left open when its run
+    # stopped. "Stuck" is a live build gone quiet (factory_view), never a closed act's word.
+    if status == "error":
+        return "Failed"
+    if status == "stale":
+        return "Stopped"
     if kind == "seat":
         return "In a panel"
     if kind == "chat":

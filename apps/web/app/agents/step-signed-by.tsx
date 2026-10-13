@@ -44,16 +44,23 @@ export function StepSignedBy({ act, approval, projectId, viewer, failure, questi
   const detail = useActDetail(projectId, act.actId);
   const who = whoDid(act, viewer);
   const named = nameOf(who.roleKey, who.variant, who.personId, who.name);
-  const stuck = act.status === "error" || act.status === "stale" || !!failure;
+  // FAILED (it errored) or STOPPED (left open when its run stopped) — never "stuck".
+  const ending: "failed" | "stopped" | null = act.status === "error" || failure ? "failed"
+    : act.status === "stale" ? "stopped" : null;
+  const stuck = !!ending;
   const reason = (failure || "").trim();
   const said = detail?.turns ?? [];
   return (
     <section className="ag-signed" data-testid="ag-signed-by" aria-label="Signed by">
       <span className="eyebrow ag-signed-title">Signed by</span>
       {stuck ? (
-        <span className="ag-stuck" data-testid="ag-stuck" data-tip={reason || "Stopped with an error"}>
-          <RunFace roleKey={who.roleKey} variant={who.variant} size={32} state="stuck" />
-          <span className="ag-stuck-line">{named.name}: stuck on {reason || "an error"}</span>
+        <span className="ag-stuck" data-testid="ag-stuck" data-state={ending ?? undefined}
+              data-tip={reason || (ending === "stopped" ? "Left open when the run stopped" : "Stopped with an error")}>
+          <RunFace roleKey={who.roleKey} variant={who.variant} size={32} state={ending ?? "failed"} />
+          <span className="ag-stuck-line">
+            {ending === "stopped" ? `${named.name}: stopped${reason ? ` — ${reason}` : " when the run stopped"}`
+              : `${named.name}: failed — ${reason || "an error"}`}
+          </span>
         </span>
       ) : null}
       <ActCard act={act} viewer={viewer} inline askless={askless} />

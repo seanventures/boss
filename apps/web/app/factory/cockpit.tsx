@@ -14,6 +14,7 @@
  * word, `k of n`, each station's word, each output's word. Elapsed ticks here from `started_at`;
  * there is no percent and no ETA anywhere.
  */
+import { AVATAR_STATES } from "../../lib/avatar-kit/states";
 import { logHref } from "../../lib/log-url";
 import { DotsThree, SpinnerGap } from "@phosphor-icons/react";
 import React, { useCallback, useEffect, useId, useRef, useState } from "react";
@@ -66,7 +67,7 @@ export type CockpitProps = {
   onOpenBuild: (runId: string) => void;
 };
 
-const AGENT_STATES = new Set(["idle", "thinking", "speaking", "working", "needs_you", "done", "stuck", "paused", "retired"]);
+const AGENT_STATES = new Set<string>(AVATAR_STATES);
 const quietish = (s: string) => s === "quiet" || s === "budget_wait" || s === "blocked";
 
 function originHref(kind: string, id: string): string {

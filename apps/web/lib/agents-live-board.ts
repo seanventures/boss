@@ -8,6 +8,7 @@
  * (no percent, no ETA, no guessed face: `roleKey: null` stays null).
  */
 
+import { AVATAR_STATES as KNOWN_STATES } from "./avatar-kit/states";
 import { useAreaShown } from "./area-shown";
 import type { AvatarState } from "./agent-world-types";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -218,7 +219,7 @@ const num = (v: unknown, d = 0): number => (typeof v === "number" && Number.isFi
 const optNum = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
 const roleOf = (v: unknown): string | null => (typeof v === "string" && v ? v : null);
 
-const AVATAR_STATES = new Set(["idle", "thinking", "speaking", "working", "needs_you", "done", "stuck", "paused", "retired"]);
+const AVATAR_STATES = new Set<string>(KNOWN_STATES);
 const avatarState = (v: unknown): AvatarState => (AVATAR_STATES.has(str(v)) ? str(v) as AvatarState : "idle");
 
 export function parseAttention(w: unknown): AttentionItem {

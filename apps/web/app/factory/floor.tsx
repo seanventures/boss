@@ -142,8 +142,10 @@ function StoppedLine({ s, projectId, actor, onOpen, onRetried }: {
         </button>
       </span>
       <span className="fx-stopped-face" data-still>
-        {s.roleKey ? <RunFace roleKey={s.roleKey} size={24} state="stuck" standalone />
-          : <RunFace roleKey={null} variant={s.state === "cancelled" ? "you" : "boss"} size={24} state="stuck" standalone />}
+        {/* FAILED OR STOPPED, never "stuck": a stopped build is not live work gone quiet. */}
+        {s.roleKey ? <RunFace roleKey={s.roleKey} size={24} state={s.state === "failed" ? "failed" : "stopped"} standalone />
+          : <RunFace roleKey={null} variant={s.state === "cancelled" ? "you" : "boss"} size={24}
+                     state={s.state === "failed" ? "failed" : "stopped"} standalone />}
       </span>
       <span className="fx-row-now">
         <span className={`fx-word fx-word-${s.state}`} title={s.tip}>{s.word}</span>

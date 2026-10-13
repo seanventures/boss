@@ -41,7 +41,12 @@ STAGE_STATION: dict[str, str] = {
     "awaiting_gate_override": "review",
     "opening_pr": "pr",
 }
-StationStatus = Literal["pending", "working", "needs_you", "done", "stuck", "skipped", "waiting"]
+#: HONEST ENDINGS (operator, 2026-10-13). `failed`: the station's work errored (its tip says why).
+#: `stopped`: its work was left open because the build stopped. `stuck`: ONLY a live build's
+#: station with no activity for QUIET_AFTER_MINUTES. A pending station after a stopped build is
+#: `not_reached` and says so, never "Next".
+StationStatus = Literal["pending", "working", "needs_you", "done", "stuck", "skipped", "waiting",
+                        "failed", "stopped"]
 #: Who stands at a station. `agent`: role_key's face in `status`. `hollow`: hollow_role's face,
 #: pending (the role is certain). `boss`: the BOSS glyph (machinery). `you`: the You glyph.
 #: `none`: an empty slot (pending, nobody certain).
@@ -71,7 +76,9 @@ class Station(TypedDict, total=False):
     act_id: Optional[str]          # the latest act at this station
     act_ids: list[str]             # every act at this station, oldest first
     seats: list[Seat]              # review only: one per seat act
-    word: str                      # "Done" | "Coding" | "Next" | "Stuck" | "Skipped" | "Waiting" | "Needs you"
+    word: str                      # "Done" | "Coding" | "Next" | "Not reached" | "Failed" |
+    #                                "Stopped" | "Stuck" | "Skipped" | "Waiting" | "Needs you"
+    not_reached: bool              # after the station a stopped build ended at
     tip: Optional[str]             # e.g. "Lean profile skips Tests", "BOSS machinery. No agent at this station."
     started_at: Optional[str]
     ended_at: Optional[str]
@@ -98,6 +105,10 @@ SECTION_OF: dict[str, str] = {
     "pr_open": "shipped", "merged": "shipped", "deployed": "shipped", "done_no_pr": "shipped",
 }
 QUIET_AFTER_MINUTES = 20
+#: A build whose attempt went no further: failed, stopped by a person, blocked, or refused its
+#: budget. Its open work is Stopped and the stations after it are Not reached (a retry is a new
+#: attempt with its own line). Plan approval and a checks waiver wait on the operator instead.
+STOPPED_STATES = frozenset({"failed", "cancelled", "blocked", "budget_refused"})
 
 #: The one state that means a worker is running the build right now.
 RUNNING_STATES = frozenset({"building"})
@@ -263,7 +274,7 @@ class StoryAct(TypedDict, total=False):
     title: str                     # stage title: "Write tests", "Code review"
     seat: Optional[int]
     round: int
-    word: str                      # "Done" | "Working" | "Stuck" | verdict word
+    word: str                      # "Done" | "Working" | "Failed" | "Stopped" | verdict word
     verdict: Optional[str]         # approved | changes_asked | blocked
     files: Optional[list[str]]
     tool_calls: int
@@ -854,10 +865,10 @@ def build_state(run: Mapping[str, Any], *, acts: Optional[list[Mapping[str, Any]
         when = _aware(fctx.get("cancelled_at")) or _aware(run.get("updated_at"))
         tip = "Cancelled" + (f" at {label}" if label else "") + (
             f" · {when.strftime('%H:%M')}" if when else "")
-        return out("cancelled", _who_stopped(fctx, viewer), tip, "Stuck")
+        return out("cancelled", _who_stopped(fctx, viewer), tip, "Stopped")
     if status == "failed":
         return out("failed", f"Failed · {label}" if label else "Failed",
-                   failure_line(fctx, run.get("error"))["line"], "Stuck")
+                   failure_line(fctx, run.get("error"))["line"], "Failed")
     if status == "blocked":
         if phase == "awaiting_plan_approval":
             return out("needs_plan", "Needs you · plan", "Approve the plan to start building",
@@ -865,7 +876,7 @@ def build_state(run: Mapping[str, Any], *, acts: Optional[list[Mapping[str, Any]
         if phase == "awaiting_gate_override":
             failing = [gate_label(g) for g in fctx.get("failing_gates") or []]
             return out("needs_waiver", "Checks failed", " · ".join(failing)[:120] or None,
-                       "Stuck", station or "review")
+                       "Failed", station or "review")
         if str(fctx.get("reason_code") or "") == "budget_denied":
             last = _stage_acts(acts)
             here = _next_station(_station_of_stage(last[-1].get("step_id")) if last else None) \
@@ -931,9 +942,21 @@ def section_of(state: str) -> str:
 
 
 def _act_station_status(act: Mapping[str, Any]) -> str:
+    # An act that errored FAILED; one closed stale was left open when its build stopped. Neither
+    # is stuck: that is a live build gone quiet, which an act's record cannot say.
     return {"active": "working", "pending": "working", "awaiting_input": "needs_you",
-            "complete": "done", "error": "stuck", "stale": "stuck",
+            "complete": "done", "error": "failed", "stale": "stopped",
             "skipped": "skipped"}.get(str(act.get("status") or ""), "pending")
+
+
+def _failed_tip(run: Mapping[str, Any], fctx: Mapping[str, Any], state_key: str,
+                bstate: Mapping[str, Any]) -> str:
+    """Why a station failed, short: the run's own error (`app didn't start`), else the failing
+    checks, else the failure class's words."""
+    if state_key == "needs_waiver" and bstate.get("tip"):
+        return f"Checks failed: {bstate['tip']}"
+    said = failure_line(dict(fctx), run.get("error"))
+    return said["tip"] or (said["line"] if said["line"] != "Failed" else "This stage failed")
 
 
 def _verdict(stage: str, state: Mapping[str, Any], failing: set[str]) -> Optional[str]:
@@ -1042,9 +1065,19 @@ def stations_for(run: Mapping[str, Any], *, acts: Optional[list[Mapping[str, Any
                 s.update(face="boss", tip=BOSS_TIP)
             if status == "needs_you":
                 # A stage set to awaiting_input waits on the operator's answer elsewhere (the
-                # plan, the checks): it is the build that is stopped, not the agent's work.
-                status = "stuck" if state_key == "needs_waiver" else "done"
+                # plan, the checks): its own work is done, or — its checks failed — failed.
+                status = "failed" if state_key == "needs_waiver" else "done"
+            if status == "working" and state_key in STOPPED_STATES:
+                # LEFT OPEN BECAUSE THE BUILD STOPPED (a blocked build does not close its
+                # stages): nothing is working here, and nothing failed here either.
+                status = "stopped"
             s["status"] = status
+            if status == "failed":
+                s["tip"] = _failed_tip(run, fctx, state_key, st) if (
+                    state_key in STOPPED_STATES or state_key == "needs_waiver") \
+                    else "This attempt failed; the build went on"
+            elif status == "stopped":
+                s["tip"] = "Left open when the build stopped"
         elif before or (finished and key in ("plan", "tests", "build", "check", "review")):
             # Passed without an act of its own.
             if key in AGENT_STATIONS and key != "build" and key in kept:
@@ -1074,16 +1107,20 @@ def stations_for(run: Mapping[str, Any], *, acts: Optional[list[Mapping[str, Any
         if at_here:
             if state_key in ("budget_wait", "queued") and s["status"] in ("working", "pending"):
                 s["status"] = "waiting"
-            elif state_key in ("failed", "blocked", "needs_waiver", "budget_refused"):
-                s["status"] = "stuck"
+            elif state_key == "quiet" and s["status"] in ("working", "pending"):
+                # STUCK, AND ONLY THIS: a live build whose station has had no activity for
+                # QUIET_AFTER_MINUTES. The tip says for how long.
+                s.update(status="stuck", tip=st.get("tip") or None)
+            elif state_key in ("failed", "needs_waiver"):
+                s.update(status="failed", tip=_failed_tip(run, fctx, state_key, st))
+            elif state_key in ("blocked", "budget_refused"):
+                if s["status"] != "failed":
+                    s.update(status="stopped", tip=st.get("tip") or "The build stopped here")
                 if state_key == "budget_refused" and not mine:
-                    s.update(face="boss", tip=BOSS_TIP)
+                    s.update(face="boss")
             elif state_key == "cancelled":
-                if s["status"] in ("working", "pending"):
-                    s.update(status="skipped", stopped=True, tip="Stopped here")
-        if state_key == "cancelled" and i > here_i:
-            s.update(status="skipped", face="none", hollow_role=None, tip="Stopped before this",
-                     stopped=True)
+                if s["status"] in ("working", "pending", "skipped", "stopped"):
+                    s.update(status="stopped", stopped=True, tip=st.get("tip") or "Stopped here")
         # Review seats: every act at the review station of the latest round.
         if key == "review" and review_acts:
             seats: list[Seat] = []
@@ -1097,16 +1134,20 @@ def stations_for(run: Mapping[str, Any], *, acts: Optional[list[Mapping[str, Any
             for n, a in enumerate(current, start=1):
                 seat_status = _act_station_status(a)
                 if seat_status == "needs_you":
-                    seat_status = "stuck" if state_key == "needs_waiver" else "done"
+                    seat_status = "failed" if state_key == "needs_waiver" else "done"
+                if seat_status == "working" and state_key in STOPPED_STATES:
+                    seat_status = "stopped"
                 verdict = _verdict(str(a.get("step_id")), evidence, failing) \
                     if a.get("ended_at") or state_key == "needs_waiver" else None
                 if verdict == "blocked":
-                    seat_status = "stuck"
+                    seat_status = "failed"
                 seats.append({"act_id": a["act_id"], "role_key": a.get("role_key"), "seat": n,
                               "status": seat_status, "verdict": verdict})
             s["seats"] = seats
-            if any(x["status"] == "stuck" for x in seats):
-                s["status"] = "stuck"
+            if any(x["status"] == "failed" for x in seats):
+                if s["status"] != "failed":
+                    s["tip"] = _failed_tip(run, fctx, state_key, st)
+                s["status"] = "failed"
         if key == "build" and rounds:
             s["rounds"] = rounds
             loop = next((a.get("role_key") for a in reversed(review_acts) if a.get("role_key")),
@@ -1140,9 +1181,16 @@ def stations_for(run: Mapping[str, Any], *, acts: Optional[list[Mapping[str, Any
                                "url": None} for d in _one_per_env(ok_deploys)]
             elif state_key == "done_no_pr":
                 s.update(status="skipped", face="none", tip="Nothing to merge")
+        # NOT REACHED: past where a stopped build ended, nothing will happen in this attempt.
+        # "Next" there promised work that is not coming; a hollow face did too.
+        if state_key in STOPPED_STATES and i > here_i and s["status"] == "pending":
+            s.update(face="none", hollow_role=None, not_reached=True,
+                     tip="The build stopped before this")
         # The word under the bay.
-        s["word"] = {"done": "Done", "pending": "Next", "stuck": "Stuck", "skipped": "Skipped",
-                     "waiting": "Waiting", "needs_you": "Needs you"}.get(
+        s["word"] = "Not reached" if s.get("not_reached") else {
+            "done": "Done", "pending": "Next", "stuck": "Stuck", "skipped": "Skipped",
+            "waiting": "Waiting", "needs_you": "Needs you", "failed": "Failed",
+            "stopped": "Stopped"}.get(
             s["status"],
             agent_acts.work_verb(dict(latest)) if latest and s["status"] == "working"
             else STATION_VERB.get(key, "Working"))
@@ -1152,7 +1200,8 @@ def stations_for(run: Mapping[str, Any], *, acts: Optional[list[Mapping[str, Any
             s["word"] = kept_word(kept[key])
         out.append(s)
     if state_key in ("queued", "budget_wait") and not any(
-            x["status"] in ("working", "waiting", "stuck", "needs_you") for x in out):
+            x["status"] in ("working", "waiting", "stuck", "needs_you", "failed", "stopped")
+            for x in out):
         # NOTHING HAS STARTED: the build waits at its first station for a worker (or budget),
         # drawn as BOSS's hourglass — never an agent face claiming work (walk D22).
         first = next((x for x in out if x["status"] == "pending"), None)
@@ -1582,7 +1631,8 @@ def floor(connection: Any, settings: Any, project_id: str, *, viewer: Optional[s
         if sec == "shipped":
             outcomes.extend(_outcomes_of(b, r, facts, builder))
         elif sec == "stopped":
-            stuck = next((s for s in b["stations"] if s["status"] in ("stuck", "skipped")
+            stuck = next((s for s in b["stations"] if s["status"] in ("failed", "stopped", "stuck",
+                                                                     "skipped")
                           and s.get("role_key")), None)
             ok, why = _retry_offer(r)
             stopped.append({"run_id": b["run_id"], "app": b["app"], "title": b["title"],
@@ -1699,7 +1749,7 @@ def state_of(connection: Any, project_id: str, run_id: str, *,
 # ── GET /v1/code-tasks/{id}/cockpit (§6.3) ──────────────────────────────────────────────────
 
 _ACT_WORD = {"active": "Working", "pending": "Working", "awaiting_input": "Needs you",
-             "complete": "Done", "error": "Stuck", "stale": "Stuck", "skipped": "Skipped"}
+             "complete": "Done", "error": "Failed", "stale": "Stopped", "skipped": "Skipped"}
 ENGINEERING = frozenset({"implement", "solo", "guest", "repair"})
 
 
@@ -2617,7 +2667,8 @@ def cockpit(connection: Any, settings: Any, project_id: str, run_id: str, *,
         if a.get("role_key"):
             live = a.get("ended_at") is None
             state = "working" if live and a.get("status") == "active" else (
-                "stuck" if a.get("status") in ("error", "stale") else
+                "failed" if a.get("status") == "error" else
+                "stopped" if a.get("status") == "stale" else
                 "needs_you" if a.get("status") == "awaiting_input" else "done")
             agents[str(a["role_key"])] = state if live or agents.get(a["role_key"]) != "working" \
                 else agents[a["role_key"]]

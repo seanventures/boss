@@ -46,7 +46,13 @@ export type ChainItem = Hop | Loop;
 /** Kinds that are part of a step's own work when they hang off one. */
 const NESTED = new Set<Act["kind"]>(["stage", "seat", "run", "chat"]);
 
-/** What an act's status looks like on a face. Only real states, never decoration. */
+/** What an act's status looks like on a face. Only real states, never decoration.
+ *
+ *  HONEST ENDINGS (operator, 2026-10-13): an act that errored FAILED; an act closed `stale` was
+ *  left open because its run or build stopped, so it STOPPED. Neither is "stuck": the strip
+ *  said "Stuck · 29s" on a Check that had failed and "Stuck · 3m" on a Review that never ran
+ *  because the build was blocked. An act's record cannot say it went quiet, so nothing here
+ *  says stuck: that is the server's call on a live build (factory_view QUIET_AFTER_MINUTES). */
 export function actState(act: Pick<Act, "status" | "kind">): AvatarState {
   // A run's root is the person who started it: they are not "working" while the agents do.
   if (act.kind === "run" && act.status !== "error" && act.status !== "stale") return "idle";
@@ -54,8 +60,8 @@ export function actState(act: Pick<Act, "status" | "kind">): AvatarState {
     case "active": return act.kind === "seat" ? "speaking" : "working";
     case "awaiting_input": return "needs_you";
     case "complete": return "done";
-    case "error":
-    case "stale": return "stuck";
+    case "error": return "failed";
+    case "stale": return "stopped";
     default: return "idle";
   }
 }

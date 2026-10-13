@@ -112,6 +112,9 @@ describe("no state is shown by colour or motion alone", () => {
   it("tilts a stuck head and greys out paused and retired faces", () => {
     expect(avatarSvg(seededSpec("x"), { size: 48, state: "stuck" })).toContain('class="av-head" transform="rotate(4 50 50)"');
     for (const s of ["paused", "retired"] as const) expect(avatarSvg(seededSpec("x"), { size: 24, state: s })).toContain('class="av-char" opacity="0.55"');
+    // Failed wears stuck's tilt and red; stopped wears paused's grey. Each keeps its own word.
+    expect(avatarSvg(seededSpec("x"), { size: 48, state: "failed" })).toContain('class="av-head" transform="rotate(4 50 50)"');
+    expect(avatarSvg(seededSpec("x"), { size: 24, state: "stopped" })).toContain('class="av-char" opacity="0.55"');
     expect(ALL).toMatch(/\[data-state="paused"\][^{]*\[data-lod="48"\][^{]*\.av-char \{\s*filter: grayscale/);
   });
 });
@@ -124,8 +127,9 @@ describe("states map from real status, one mapper per source", () => {
     expect(stateFromAct("active", { kind: "chat", tokens: true })).toBe("working");
     expect(stateFromAct("active", { kind: "seat", streaming: true })).toBe("speaking");
     expect(stateFromAct("complete")).toBe("done");
-    expect(stateFromAct("error")).toBe("stuck");
-    expect(stateFromAct("stale")).toBe("stuck");
+    // Honest endings: an errored act FAILED, a stale one STOPPED. Never "stuck" (live, quiet).
+    expect(stateFromAct("error")).toBe("failed");
+    expect(stateFromAct("stale")).toBe("stopped");
     expect(stateFromAct("pending")).toBe("idle");
     expect(stateFromAct("skipped")).toBe("idle");
   });
@@ -139,14 +143,16 @@ describe("states map from real status, one mapper per source", () => {
 
   it("run phases on the lane", () => {
     expect(["moving", "needs_you", "done", "failed", "future", "skipped"].map(stateFromRunPhase))
-      .toEqual(["working", "needs_you", "done", "stuck", "idle", "idle"]);
+      .toEqual(["working", "needs_you", "done", "failed", "idle", "idle"]);
   });
 
   it("raw step and task statuses", () => {
     expect(stateFromStatus("running")).toBe("working");
     expect(stateFromStatus("awaiting_approval")).toBe("needs_you");
     expect(stateFromStatus("completed")).toBe("done");
-    expect(stateFromStatus("failed")).toBe("stuck");
+    expect(stateFromStatus("failed")).toBe("failed");
+    expect(stateFromStatus("stale")).toBe("stopped");
+    expect(stateFromStatus("stuck")).toBe("stuck");
     expect(stateFromStatus("queued")).toBe("idle");
     expect(stateFromStatus(undefined)).toBe("idle");
   });
@@ -155,7 +161,7 @@ describe("states map from real status, one mapper per source", () => {
     expect(stateFromTurn({ inFlight: true, streaming: false })).toBe("thinking");
     expect(stateFromTurn({ inFlight: true, streaming: true })).toBe("speaking");
     expect(stateFromTurn({ inFlight: false, streaming: false })).toBe("idle");
-    expect(stateFromTurn({ inFlight: false, streaming: false, error: true })).toBe("stuck");
+    expect(stateFromTurn({ inFlight: false, streaming: false, error: true })).toBe("failed");
     expect(withLifecycle("working", "paused")).toBe("paused");
     expect(withLifecycle("working", "retired")).toBe("retired");
     expect(withLifecycle("working", "active")).toBe("working");

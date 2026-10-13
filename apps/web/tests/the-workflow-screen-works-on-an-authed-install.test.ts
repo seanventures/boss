@@ -75,9 +75,10 @@ describe("names, not role keys", () => {
 });
 
 it("the empty Runs tab says how to start, without jargon", () => {
-  // REWRITTEN for Workflow Studio: with no runs the composer is already open above it, so the
-  // empty line is short and the how-to is its tooltip (labels, not paragraphs).
+  // REWRITTEN for the New project tab: with no runs the area opens on New project, so the
+  // empty line is short, the how-to is its tooltip (labels, not paragraphs), and one button
+  // goes to the tab.
   expect(UI).not.toContain("apply a workflow to a class of work");
-  expect(UI).toContain("composerOpen || runs.length === 0 ? (");
-  expect(UI).toContain('title="Describe what you want above, or press Start on a workflow in the Library"');
+  expect(UI).toContain('title="Start one in New project, or press Start on a workflow in the Library"');
+  expect(UI).toContain('data-testid="dw-empty-new"');
 });

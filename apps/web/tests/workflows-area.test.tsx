@@ -5,8 +5,8 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
- * The Workflows area, mounted: two tabs synced to the URL, the editor full width on `&wf=`,
- * every Start landing on the Runs composer preselected, and a run drawn on the lane with its
+ * The Workflows area, mounted: three tabs synced to the URL, the editor full width on `&wf=`,
+ * every Start landing on the New project tab preselected, and a run drawn on the lane with its
  * step's detail under it (Workflow Studio spec 2.1, 2.2, 3.6).
  *
  * The lane, the editor and the API client are stand-ins (tests/_helpers/studio-parts-stub.tsx):
@@ -97,7 +97,7 @@ const click = async (el: HTMLElement | null) => {
   await settle();
 };
 
-describe("two tabs, and the URL says which", () => {
+describe("the tabs, and the URL says which", () => {
   it("opens on Runs, counting them, and Library is one press away", async () => {
     await mount();
     expect($('[data-testid="dw-tab-runs"]')?.textContent).toBe("Runs (1)");
@@ -168,12 +168,13 @@ describe("the editor is full width, not a tab", () => {
   });
 });
 
-describe("every Start lands on the Runs composer, preselected", () => {
+describe("every Start lands on the New project tab, preselected", () => {
   it("from a Library card", async () => {
     window.history.replaceState(null, "", "/?area=delivery_workflows&tab=library");
     await mount();
     await click($('[data-testid="wf-card-start-family_video"]'));
-    expect(params().get("tab")).toBe("runs");
+    expect(params().get("tab")).toBe("new");
+    expect($('[data-testid="dw-tab-new"]')?.getAttribute("aria-selected")).toBe("true");
     expect($('[data-testid="dw-new-project"]')).not.toBeNull();
     // Preselected: the composer is on that workflow and opens on its own start form.
     expect($('[data-testid="dw-new-project"]')?.dataset.workflow).toBe("family_video");
@@ -184,7 +185,7 @@ describe("every Start lands on the Runs composer, preselected", () => {
     await mount();
     await click($('[data-testid="editor-start"]'));
     expect(params().get("wf")).toBeNull();
-    expect(params().get("tab")).toBe("runs");
+    expect(params().get("tab")).toBe("new");
     // Preselected: the composer is on that workflow and opens on its own start form.
     expect($('[data-testid="dw-new-project"]')?.dataset.workflow).toBe("family_video");
   });

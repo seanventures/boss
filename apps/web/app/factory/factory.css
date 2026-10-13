@@ -103,7 +103,7 @@
 .fx-bay[data-status="skipped"] .fx-slot { border-style: dashed; }
 .fx-hollow .ag-av, .fx-hollow .ag-avatar { opacity: 0.4; filter: grayscale(1); }
 .fx-bay[data-active] .ag-face-btn, .fx-bay[data-active] > .fx-bay-face { box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-text) 40%, transparent); border-radius: 50%; }
-.fx-bay[data-status="stuck"][data-active] > .fx-bay-face { box-shadow: 0 0 0 2px color-mix(in srgb, var(--red) 55%, transparent); }
+.fx-bay:is([data-status="stuck"], [data-status="failed"])[data-active] > .fx-bay-face { box-shadow: 0 0 0 2px color-mix(in srgb, var(--red) 55%, transparent); }
 .fx-bay[data-status="needs_you"][data-active] > .fx-bay-face { box-shadow: 0 0 0 2px color-mix(in srgb, var(--amber) 55%, transparent); }
 .fx-wait { position: absolute; right: -4px; bottom: -4px; color: var(--amber); background: var(--surface); border-radius: 50%; }
 .fx-row[data-state="quiet"] .fx-bay[data-active] > .fx-bay-face { box-shadow: none; outline: 1.5px dashed var(--amber); outline-offset: 1px; border-radius: 50%; }
@@ -123,7 +123,10 @@
 .fx-bay-name[aria-pressed="true"] { color: var(--accent-text); }
 .fx-bay-name:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; }
 .fx-bay-word { font-size: 0.74rem; color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
-.fx-bay[data-status="stuck"] .fx-bay-word { color: var(--red); }
+.fx-bay:is([data-status="stuck"], [data-status="failed"]) .fx-bay-word { color: var(--red); }
+/* Stopped and not reached: nothing happened there, so nothing red. */
+.fx-bay[data-status="stopped"] .fx-bay-word { color: var(--muted); }
+.fx-bay[data-status="pending"][data-not-reached] .fx-bay-word { color: var(--faint); }
 .fx-bay[data-status="needs_you"] .fx-bay-word { color: var(--amber); }
 .fx-bay-link { font-size: 0.74rem; color: var(--accent-text); text-decoration: none; }
 .fx-loop { display: inline-flex; align-items: center; gap: 4px; }

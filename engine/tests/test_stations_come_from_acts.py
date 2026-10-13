@@ -97,13 +97,15 @@ def test_each_review_seat_has_its_own_face():
     assert [s["seat"] for s in seats] == [1, 2, 3]
 
 
-def test_a_failed_gate_turns_its_seat_stuck():
+def test_a_failed_gate_fails_its_seat():
     acts = [act("review_code", "adversarial_reviewer", "awaiting_input", 5),
             act("security_check", "security_reviewer", "awaiting_input", 5)]
     r = run("blocked", "awaiting_gate_override", fctx={"failing_gates": ["code_review_passed"]},
             state={"adversarial_verdict": "refuted", "security_verdict": "clean"})
     got = line(r, acts)
-    assert got["review"]["status"] == "stuck"
+    # FAILED, never "stuck": the checks failed and wait on the operator's waiver.
+    assert got["review"]["status"] == "failed" and got["review"]["word"] == "Failed"
+    assert got["review"]["tip"].startswith("Checks failed")
     verdicts = {s["role_key"]: s["verdict"] for s in got["review"]["seats"]}
     assert verdicts == {"adversarial_reviewer": "blocked", "security_reviewer": "approved"}
 
@@ -115,11 +117,17 @@ def test_plan_approval_adds_the_you_station():
     assert got["plan"]["status"] == "done"
 
 
-def test_cancelled_skips_what_is_left():
+def test_cancelled_stops_where_it_was_and_reaches_nothing_after():
     got = line(run("cancelled", "implement", fctx={"cancelled_by": "ceo"}),
                [act("implement", "software_engineer", "skipped", 5)])
-    assert got["build"]["status"] == "skipped"
-    assert all(got[k]["status"] == "skipped" for k in ("check", "review", "pr", "preview", "ship"))
+    assert (got["build"]["status"], got["build"]["word"]) == ("stopped", "Stopped")
+    for k in ("check", "review", "pr", "preview", "ship"):
+        assert (got[k]["status"], got[k]["word"], got[k].get("not_reached")) == \
+            ("pending", "Not reached", True), k
+        assert got[k]["face"] == "none" and got[k]["hollow_role"] is None, k
+    # Still planned: a stop never shrinks the count. Plan and Tests were passed (skipped);
+    # Build and the five it never reached are the six planned.
+    assert fv.k_of_n(list(got.values()))[1] == 6
 
 
 def test_k_never_passes_n():
@@ -152,3 +160,70 @@ def test_a_queued_build_waits_at_its_first_station_with_boss():
     assert first["status"] == "waiting" and first["face"] == "boss"
     assert first["tip"] == "Waiting for a worker" and first.get("role_key") is None
     assert not any(s["status"] == "working" for s in stations.values())
+
+
+# ── HONEST STAGE LABELS (operator, 2026-10-13) ────────────────────────────────────────────────
+# The strip said "Stuck · 29s" on a Check that had FAILED (the app did not start) and
+# "Stuck · 3m" on a Review whose act never closed because the build was BLOCKED. Failed says
+# failed with the reason; work left open by a stop says Stopped; what the build never got to
+# says Not reached; Stuck is only a live build's station gone quiet.
+
+
+def test_a_failed_check_says_failed_with_the_reason_and_review_says_stopped():
+    acts = [act("plan", "chief_architect", minutes_ago=30), act("implement", "software_engineer",
+                                                                 minutes_ago=20),
+            act("serve_check", None, "error", minutes_ago=8),
+            act("review_code", "adversarial_reviewer", "active", minutes_ago=3)]
+    r = run("blocked", "review_code", error="app didn't start: port 8000 never answered")
+    got = line(r, acts)
+    assert (got["check"]["status"], got["check"]["word"]) == ("failed", "Failed")
+    assert got["check"]["tip"] == "app didn't start: port 8000 never answered"
+    assert (got["review"]["status"], got["review"]["word"]) == ("stopped", "Stopped")
+    for k in ("pr", "preview", "ship"):
+        assert (got[k]["word"], got[k].get("not_reached")) == ("Not reached", True), k
+    assert not [s for s in got.values() if s["status"] == "stuck" or s["word"] == "Stuck"]
+    assert not [k for k in ("pr", "preview", "ship") if got[k]["word"] == "Next"]
+
+
+def test_a_failed_build_fails_its_station_and_reaches_nothing_after():
+    acts = [act("implement", "software_engineer", minutes_ago=20),
+            act("serve_check", None, "error", minutes_ago=5)]
+    r = run("failed", "serve_check", error="app didn't start\ntraceback…")
+    got = line(r, acts)
+    assert (got["check"]["status"], got["check"]["word"], got["check"]["tip"]) == \
+        ("failed", "Failed", "app didn't start")
+    for k in ("review", "pr", "preview", "ship"):
+        assert got[k]["word"] == "Not reached", k
+
+
+def test_a_build_stopped_by_its_budget_stops_at_its_station():
+    acts = [act("implement", "software_engineer", minutes_ago=20)]
+    r = run("blocked", "implement", fctx={"reason_code": "budget_denied"})
+    got = line(r, acts)
+    here = next(s for s in got.values() if s["status"] in ("stopped", "failed", "stuck"))
+    assert (here["status"], here["word"]) == ("stopped", "Stopped")
+
+
+def test_stuck_is_only_a_live_build_gone_quiet():
+    # Live and moving: working, never stuck.
+    acts = [act("implement", "software_engineer", "active", minutes_ago=5)]
+    moving = run(updated_at=(NOW - timedelta(minutes=1)).isoformat())
+    assert line(moving, acts)["build"]["status"] == "working"
+    # Live, and nothing for longer than QUIET_AFTER_MINUTES: stuck, saying for how long.
+    quiet_for = fv.QUIET_AFTER_MINUTES + 5
+    old = [act("implement", "software_engineer", "active", minutes_ago=quiet_for)]
+    quiet = run(updated_at=(NOW - timedelta(minutes=quiet_for)).isoformat())
+    got = line(quiet, old)
+    assert (got["build"]["status"], got["build"]["word"]) == ("stuck", "Stuck")
+    assert "No progress for" in got["build"]["tip"]
+    # A live build's later stations are still Next, never Not reached.
+    assert got["review"]["word"] == "Next" and not got["review"].get("not_reached")
+
+
+def test_an_errored_attempt_in_a_live_build_says_failed_not_stuck():
+    acts = [act("serve_check", None, "error", minutes_ago=6),
+            act("repair", "software_engineer", "active", minutes_ago=2)]
+    got = line(run(phase="repair"), acts)
+    assert got["check"]["status"] == "failed"
+    assert got["check"]["tip"] == "This attempt failed; the build went on"
+    assert got["build"]["status"] == "working"

@@ -27,7 +27,7 @@ ChangeKind = Literal["born", "persona", "remit", "instructions", "grant", "revok
                      "lifecycle"]
 PromptMode = Literal["chat", "work", "panel"]
 PresenceState = Literal["idle", "thinking", "speaking", "working", "needs_you", "done", "stuck",
-                        "paused", "retired"]
+                        "paused", "retired", "failed", "stopped"]
 ConversationKind = Literal["talk", "plan", "room"]
 
 #: The words an edge may say (spec §9). The single source: the web renders the API's
