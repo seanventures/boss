@@ -286,14 +286,35 @@ app_secret_bindings(...)   -- §2.4
 
 ### 2.8 UX
 
-- **New project composer** (the one door, `openNewProject()`): the mode switch becomes
-  `A new app · Add to an existing app · From a template`. "From a template" shows the
-  **Templates gallery**: cards with name, one-line summary, stack chips (greyed if the toolchain
-  is not installed, tooltip says so), labels (`Insecure by design` in amber). Clicking a card
-  opens a side sheet: *What it adds* · *Secrets* (each row: name, `Test mode` / `Needs a key` /
-  `Set`, an inline write-only field) · *Talks to* (egress hosts) · *Security note* (collapsed) ·
-  **Start**. In "Add to an existing app" mode, a `+ Template` chip opens the same gallery
-  filtered to the app's stack.
+**Connectors and ideas (operator, 2026-10-13; supersedes the "From a template" tab).** The
+catalogue is not "templates". Each item declares its `kind` in `boss-template.yaml`:
+
+- **connector**: a capability ANY app adds, new or existing: `login-oauth`, `stripe-checkout`,
+  `paypal-checkout`. Its security core (sessions/state/PKCE; server-side prices, signed and
+  idempotent webhooks) and its tests are fixed and placed by BOSS. Its screens are built WITH the
+  app's own components, theme and layout, its routes are mounted in the app's router, and its
+  data is mapped onto the app's own users and orders. The build directive says so.
+- **idea**: an example app to start from: `banking-starter`, `catalog-cart`, `hello`.
+- **training**: insecure by design (`banking-starter-insecure`). It is never listed unless asked
+  for (`?kind=training`). Anything labelled `insecure_by_design` is training whatever it declares.
+
+`GET /v1/templates` keeps its name, returns `kind` on every card, and filters with `?kind=`.
+
+- **New project composer** (the one door, `openNewProject()`): two jobs, **New app** and
+  **Add a feature**. There is no Template tab; an old `?compose=template` link or remembered
+  choice opens New app.
+  - New app → **Start from an idea**: the ONE ideas list (`useIdeas`: the catalogue's ideas,
+    then the written briefs), which the Command Center's Ideas shelf also reads. An idea fills
+    the brief; a catalogue idea also offers *Build from its reference* (its sheet, its tests as a
+    gate).
+  - Both jobs → **Add a connector**: chips (Login, Stripe, PayPal) with what each adds and needs
+    and its stacks. In Add a feature, only those that fit the app's stack. One per build, since
+    each connector's tests are their own gate. With one chosen, Start opens its side sheet with
+    the app's name and brief already in: *What it adds* · *Secrets* (each row: name,
+    `Test mode` / `Needs a key` / `Set`, an inline write-only field) · *Talks to* (egress hosts)
+    · *Security note* (collapsed) · **Start**.
+- **Command Center ▸ Ideas and connectors**: the Ideas shelf (same list) and the connectors
+  shelf (connectors only).
 - **App ▸ Setup** tab (one surface for provider-side setup): the guides of every applied
   template, each step with copy buttons for generated values (redirect URI, webhook URL), and a
   per-secret status row with Set / Replace.
