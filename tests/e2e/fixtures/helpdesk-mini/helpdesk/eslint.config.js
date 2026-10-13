@@ -2,7 +2,7 @@ import js from "@eslint/js";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
-  { ignores: ["node_modules", "auth", "tests/template_login_oauth", "boss-template-junit.xml"] },
+  { ignores: ["node_modules", "auth"] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {

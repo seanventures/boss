@@ -226,7 +226,10 @@ def register_app_platform_tools(reg: ToolRegistry) -> None:  # noqa: C901 — on
         return {"status": "building", **out, "app_key": plan["app"]["app_key"],
                 "template": _safe(run_input["template"]), "workflow_key": plan["workflow_key"],
                 "next": "template_status shows where it stands; the PR opens once the "
-                        "template's tests pass"}
+                        + ("connector's wiring check passes (the app starts and its routes "
+                           "answer; a connector is pre-tested)"
+                           if getattr(plan["manifest"], "item_kind", None) == "connector"
+                           else "template's tests pass")}
 
     # ---- security scans, reports and reviews ----------------------------------------------------
     @reg.tool(

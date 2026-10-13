@@ -19,6 +19,7 @@ from typing import Any, Optional
 from sqlalchemy import text
 
 from ..services.core import make_id
+from . import connector_policy
 from . import secrets as app_secrets
 from .manifest import TemplateManifest
 from .service import TemplateError, files_of, get_row, manifest_of
@@ -179,10 +180,7 @@ def build_directive(*, row: dict, manifest: TemplateManifest, stack: str, framew
             "orders instead of adding parallel tables.",
             "Its SECURITY CORE stays exactly as the reference has it (sessions, state and PKCE for "
             "sign-in; server-side prices, signature-verified and idempotent webhooks for payments).",
-            "The connector is PRE-TESTED in its own test suite. Do NOT write tests for the "
-            "connector and do NOT copy its test files into the app; the app's tests cover only "
-            "what the operator asked the app to do. BOSS checks the wiring once: the app starts "
-            "and the connector's routes answer.",
+            connector_policy.POLICY,
         ]
     elif kind == "idea":
         opening = [
@@ -349,8 +347,12 @@ def plan(c, *, org_id: str, project_id: str, template_ref: str, body: dict,
     note = str(body.get("note") or "")
     directive = build_directive(row=row, manifest=manifest, stack=stack, framework=framework,
                                 files=files, note=note, app_name=None if new_app else app["app_name"])
-    criteria = [f"{route} behaves as the template's tests specify" for route in manifest.routes]
-    criteria.append(f"the template's tests pass: {manifest.tests[stack].command}")  # type: ignore[index]
+    if connector_policy.is_connector(manifest):
+        # Its wiring, never its suite (templates.connector_policy).
+        criteria = connector_policy.acceptance_criteria(manifest.routes)
+    else:
+        criteria = [f"{route} behaves as the template's tests specify" for route in manifest.routes]
+        criteria.append(f"the template's tests pass: {manifest.tests[stack].command}")  # type: ignore[index]
     options = body.get("options") if isinstance(body.get("options"), dict) else {}
     run_input: dict[str, Any] = {
         "title": (f"{app['app_name']}: add {manifest.name}")[:120],

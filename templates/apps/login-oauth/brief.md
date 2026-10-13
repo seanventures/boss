@@ -5,7 +5,7 @@ sign-out, roles and a protected route. Follow the reference implementation for t
 stack; adapt it to the app's router, data layer and UI rather than copying files over the top
 of the app's own.
 
-## The contract (the template's tests check exactly this, over HTTP)
+## The contract (the connector's own tests check exactly this, over HTTP)
 
 | Route | Behaviour |
 |---|---|
@@ -38,29 +38,26 @@ of the app's own.
 - **node** (Express): `auth/config.mjs`, `auth/providers.mjs` (openid-client), `auth/users.mjs`,
   `auth/routes.mjs` (`createAuth(config)` returns the router and the middleware), `server.mjs`
   (how to mount it), `ui/LoginButtons.jsx` (React). Add `express-session` and `openid-client`
-  at the versions in `package.json` to the app's dependencies, and add its two scripts
-  `pretest:login-oauth` and `test:login-oauth` to the app's `package.json` unchanged. If the app
-  is not ESM, keep these files as `.mjs` and load them with `import()`. Copy
-  `tests/template_login_oauth/` (the tests and the fake provider) to the same path.
+  at the versions in `package.json` to the app's dependencies. If the app is not ESM, keep
+  these files as `.mjs` and load them with `import()`.
 - **python** (FastAPI): the `auth/` package (`config.py`, `users.py`, `routes.py` with
   `create_auth(config)` returning the router, the session middleware settings and the
   `require_user` / `require_role` dependencies), `auth/sessions.py` (server-side sessions), `main.py`
   (how to mount it) and `ui/account.html` (framework-free login buttons). Add the lines of
-  `requirements.txt` to the app's requirements. Copy `tests/template_login_oauth/` (the tests,
-  `conftest.py` and the fake provider) to the same path.
+  `requirements.txt` to the app's requirements.
 - **java** (Spring Boot 3.5, Spring Security OAuth2 Client): the `auth` package
   (`SecurityConfig` with the filter chain, PKCE on every provider and the JSON error answers;
   `ProviderRegistrations`, lazy client registrations; `OneShotAuthorizationRequests`;
   `AppUserServices`, `UserStore`, `SignedInUser`, `AuthController`) and the session cookie
   settings in `application.properties`. Add `spring-boot-starter-oauth2-client` to the app's
-  build. Protect the app's own routes in `SecurityConfig.filterChain`. Copy
-  `tests/java/com/example/login/LoginOauthTemplateTest.java` and `LoginFakeIdp.java` into the
-  app's test sources (`src/test/java/<the app's package>/`, package line adjusted; keep the file
-  names). The servlet container's session ids are random and server-side, so the java stack
-  does not use `SESSION_SECRET`.
+  build. Protect the app's own routes in `SecurityConfig.filterChain`. The servlet container's
+  session ids are random and server-side, so the java stack does not use `SESSION_SECRET`.
 
-## The tests are the proof
+## Its tests stay with the connector
 
-Keep the template's tests as they are. They sign in through an in-process fake provider (no
+This connector is pre-tested. Its own tests sign in through an in-process fake provider (no
 network) and check the round trip, state, PKCE, nonce, linking, the cookie flags, CSRF on
-sign-out, `/api/me` and the admin route.
+sign-out, `/api/me` and the admin route. They run in the connector's own test tier, not in the
+app: do not copy them (or the reference `package.json`'s `test:login-oauth` scripts) into the
+app, and do not write tests for the connector. A build that adds it is checked for its wiring
+only: the app starts and these routes answer.

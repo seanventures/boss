@@ -738,7 +738,8 @@ def _app_serves_sentence(record: Optional[dict]) -> str:
 
 def blocked_gate_messages(qg_id: str, failing: list, app_serves_record: Optional[dict],
                           template_tests_record: Optional[dict] = None,
-                          install_failure: Optional[dict] = None) -> tuple[str, str]:
+                          install_failure: Optional[dict] = None,
+                          blockers: Optional[list] = None) -> tuple[str, str]:
     """(code_task_runs.error, partial-PR rescue reason) for a run the quality gate blocked.
 
     The error used to name the failing gates only — "failing gates: ['app_serves']" — so an
@@ -785,7 +786,82 @@ def blocked_gate_messages(qg_id: str, failing: list, app_serves_record: Optional
         error = (f"Blocked: {app_serves_headline(app_serves_record)}. "
                  f"{needs_secret_action(needs)}")
         reason = f"the app needs {', '.join(needs)}, which only a person can set"
+    elif blockers and not install and "app_serves" not in (failing or []):
+        # A BLOCKER STILL OPEN AFTER ITS FIX ROUND (unresolved_blockers): not done, named.
+        names = ", ".join(_BLOCKER_WORDS.get(g, g) for g in blockers)
+        error = (f"Not done: a BLOCKER finding is still open after its fix round ({names}). "
+                 + error)
+        reason = "a blocker finding is still open after its fix round, so the build is not done"
     return error, reason
+
+
+_BLOCKER_WORDS = {"code_review_passed": "code review", "security_clean": "security review",
+                  "consistent": "consistency check"}
+
+
+#: THE JUDGMENT SEATS. A blocking finding from any of them gets ONE warm fix round on the
+#: implementer's (or, for a weak suite, the test author's) session and a scoped re-review of the
+#: failed seats, before the gates are judged.
+_JUDGMENT_GATES = frozenset({"code_review_passed", "security_clean", "consistent",
+                             "tests_strong_enough"})
+#: What the in-run warm round can work on. Anything else failing (a template gate, an IaC gate,
+#: tests written after the code) is not a finding a warm round fixes: the legacy paths judge it.
+_CONVERGEABLE = _JUDGMENT_GATES | frozenset({"written_tests_pass", "nothing_broke",
+                                             "web_package_honest", "app_serves"})
+
+
+def warm_fix_rounds(failing, *, configured: int, repair_attempts: int, use_microvm: bool) -> int:
+    """How many warm fix rounds the in-run loop gives these failing gates.
+
+    WHY THIS IS ONE FUNCTION. The loop's entry test was "every failing gate is convergeable",
+    and `tests_strong_enough` was not in the set. So a build whose mutation probe survived
+    skipped the round for EVERY seat: the Onboarding Path Builder build (crun_2d097414, PR
+    paramg/boss-sandbox#227) had a reviewer BLOCKER, a HIGH security finding and consistency
+    drift, got no fix turn at all ("Round 1 of 1 — first review") and shipped all four as
+    advisory. Now a blocking finding from any judgment seat always gets its round.
+
+    `configured` is the Review rounds knob (effective_review_rounds, >= 1). Failing tests after
+    a repair get no further round (they are not satisfied by a third try), unless a judgment seat
+    is also failing: its one round is owed regardless. The micro-VM substrate has no warm
+    session in this process; it gets the cold repair instead (resolve_gate_failure_action)."""
+    failing = set(failing or ())
+    if use_microvm or not failing or not failing <= _CONVERGEABLE:
+        return 0
+    rounds = max(0, int(configured))
+    if failing & set(_FAIL_CLOSED_TEST_GATES):
+        rounds = min(rounds, 0 if repair_attempts >= 1 else 1)
+    if failing & _JUDGMENT_GATES:
+        rounds = max(rounds, 1)
+    return rounds
+
+
+def unresolved_blockers(failing, *, review_summary: str = "", security_verdict: str = "",
+                        consistency_summary: str = "", hollow: Optional[dict] = None) -> list[str]:
+    """The judgment gates still failing on a BLOCKER-level finding (after the fix round).
+
+    Advisory means a reviewer's OPINION cannot withhold the PR; a blocker is not an opinion
+    about polish. BLOCKER-level is: a review finding graded BLOCKER ("data loss, security hole,
+    or the feature does not work"); a security verdict of ISSUES (the seat says ISSUES only for
+    an exploitable CRITICAL/HIGH finding, the review's "security hole"); a consistency finding
+    graded BLOCKER. A weak suite (`tests_strong_enough`) is never blocker-level. A hollow seat
+    (it never saw the change) judged nothing, so it is the inconclusive path's, not this one's."""
+    failing = set(failing or ())
+    hollow = hollow or {}
+
+    def _graded_blocker(summary: str) -> bool:
+        return any(f.get("severity") == "blocker" for f in _parse_findings(summary or ""))
+
+    out = []
+    if ("code_review_passed" in failing and not hollow.get("review_code")
+            and _graded_blocker(review_summary)):
+        out.append("code_review_passed")
+    if ("security_clean" in failing and not hollow.get("security_check")
+            and str(security_verdict or "") == "issues"):
+        out.append("security_clean")
+    if ("consistent" in failing and not hollow.get("consistency_check")
+            and _graded_blocker(consistency_summary)):
+        out.append("consistent")
+    return out
 
 
 def review_repair_rounds(settings: Any) -> int:
@@ -806,8 +882,15 @@ def resolve_gate_failure_action(
     never_block: bool = True,
     faults: Optional[dict[str, str]] = None,
     template_repair_max: Optional[int] = None,
+    blockers: Optional[list[str]] = None,
+    fix_round_ran: bool = True,
 ) -> str:
     """Decide what to do after a non-passing quality gate.
+
+    ``blockers`` (unresolved_blockers) are judgment gates still failing on a BLOCKER-level
+    finding. After the warm fix round (``fix_round_ran``) they BLOCK the build as not done, on
+    every profile: advisory never ships a blocker. A build that could not have a warm round (the
+    micro-VM substrate) gets the cold repair first, within its budget.
 
     ``template_repair_max`` is the build's own repair budget (``repair_max``: the run's
     ``repair_retries``, else BOSS_CODE_REPAIR_MAX_RETRIES). A failed TEMPLATE gate is mechanical
@@ -852,6 +935,14 @@ def resolve_gate_failure_action(
     # opinion was never needed.
     if faults and all(faults.get(g) == "HARNESS" for g in failing):
         return "inconclusive"
+    # A BLOCKER STILL OPEN AFTER ITS FIX ROUND IS NOT DONE — checked before advisory, which
+    # would otherwise ship it as a reviewer's opinion (crun_2d097414 shipped four).
+    live_blockers = [g for g in (blockers or []) if g in failing
+                     and (faults or {}).get(g) != "HARNESS"]
+    if live_blockers:
+        if not fix_round_ran and rounds_used < max_repair_rounds and open_pr:
+            return "repair"
+        return "block"
     if advisory_gate:
         # Advisory means a REVIEWER'S OPINION cannot withhold the PR. It does not mean
         # "ignore the gates". Two failures are facts, not opinions, and still get the full
@@ -1086,8 +1177,9 @@ _IAC_QA_GUIDANCE = (
 )
 
 
-def _connector_probe_paths(engine, run: dict) -> list[str]:
-    """The GET routes the serve proof probes for an applied CONNECTOR ([] otherwise)."""
+def _applied_connector(engine, run: dict):
+    """The manifest of the CONNECTOR this build applies, or None (no template, or not a
+    connector, or it cannot be read)."""
     from ..templates import gate as template_gate
     from ..templates.manifest import validate_manifest
 
@@ -1095,12 +1187,34 @@ def _connector_probe_paths(engine, run: dict) -> list[str]:
         with _transaction(engine) as c:
             applied = template_gate.applied_template(c, run)
         if not applied or applied.get("error"):
-            return []
+            return None
         manifest = validate_manifest(dict(applied.get("manifest") or {}))
-        return template_gate.probe_paths(manifest) if manifest.item_kind == "connector" else []
-    except Exception:  # noqa: BLE001 — no probe: the gate says the routes were not checked
+        return manifest if manifest.item_kind == "connector" else None
+    except Exception:  # noqa: BLE001 — not known as a connector: the build runs as stored
         _log_caught(logger)
-        return []
+        return None
+
+
+def _connector_probe_paths(engine, run: dict) -> list[str]:
+    """The GET routes the serve proof probes for an applied CONNECTOR ([] otherwise)."""
+    from ..templates import gate as template_gate
+
+    manifest = _applied_connector(engine, run)
+    return template_gate.probe_paths(manifest) if manifest is not None else []
+
+
+def connector_build_input(engine, run: dict, instructions: str, criteria) -> tuple[str, list]:
+    """THE ONE CONNECTOR POLICY at run time (templates.connector_policy): a build that applies a
+    connector runs with the policy in its brief and wiring criteria, never "the template's tests
+    pass", whatever its stored spec says (a retry of a build started before the policy). Every
+    seat reads these two through _ctx_block, so the implementer, QA and every reviewer judge
+    against the same thing. Anything else is returned unchanged."""
+    from ..templates import connector_policy
+
+    manifest = _applied_connector(engine, run)
+    if manifest is None:
+        return instructions, list(criteria or [])
+    return connector_policy.normalize(instructions, criteria, manifest.routes)
 
 
 def _app_run_declarations(engine, run: dict) -> tuple[dict, dict]:
@@ -2410,6 +2524,22 @@ def _parse_security(summary: str) -> str:
     return "clean" if m[-1] == "CLEAN" else "issues"
 
 
+def _strengthen_tests_prompt(criteria, planted: str, round_i: int) -> str:
+    """The test author's fix round for a weak suite (`tests_strong_enough`): the probe planted a
+    one-line bug in the implementation and every test still passed."""
+    crit = "\n".join(f"- {c}" for c in (criteria or [])) or "- (none specified)"
+    return (
+        f"FIX ROUND {round_i} — THE TESTS ARE TOO WEAK. A mutation probe changed ONE line of the "
+        "implementation so it no longer meets the spec, and every test still passed. The bug it "
+        "planted (already reverted):\n"
+        f"{(planted or '(the probe did not say)')[:1500]}\n\n"
+        f"ACCEPTANCE CRITERIA:\n{crit}\n\n"
+        "Strengthen the tests so a change like that FAILS them: assert the behaviour the criteria "
+        "require (values, status codes, boundaries), not only that something ran. Edit ONLY test "
+        "files, never the implementation; keep every existing assertion; the suite must still pass "
+        "on the current code. End with one line naming what you strengthened.")
+
+
 def _mutate_prompt(impl_files):
     fl = ", ".join(impl_files) or "the implementation file(s)"
     return (
@@ -3108,6 +3238,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
     test_cmd = " && ".join(verify_commands) if verify_commands else ""
     instructions = spec.get("instructions", "")
     criteria = spec.get("acceptance_criteria", [])
+    # A CONNECTOR IS PRE-TESTED, on every entry path and every retry (connector_build_input).
+    instructions, criteria = connector_build_input(engine, run, instructions, criteria)
     # Infrastructure persona (spec 05 §3.2 / T4): IaC tasks get Terraform-aware role
     # guidance appended to the qa/impl/solo prompts; stage mechanics are unchanged.
     iac_task = is_iac_task(spec, title)
@@ -6397,26 +6529,21 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             inrun_max = effective_review_rounds(
                 _spec_rounds if isinstance(_spec_rounds, int)
                 else getattr(settings, "code_review_inrun_max_rounds", 2))
-            # ONE FIX ROUND FOR FAILING TESTS. A test that two warm rounds could not satisfy will
-            # not be satisfied by a third: the Notes Lite check spent 16 minutes on rounds 2-3 and
-            # ended where it started. After one round the build stops, failing, with the tests
-            # named, which is faster to act on than another loop.
-            if set(failing) & set(_FAIL_CLOSED_TEST_GATES):
-                inrun_max = min(inrun_max, 0 if repair_attempts >= 1 else 1)
-            # Test gates are convergeable too. Previously a failing test skipped this loop entirely
-            # and fell through to a FULL cold re-run — discarding the warm session and re-paying for
-            # spec/plan — which is why repeated attempts never converged on test failures.
-            # A SECURITY FINDING IS FIXED IN THE SAME WARM ROUND. It was not convergeable, so a
-            # HelpDesk-lite build whose reviewer and security seat both named one real bug (async
-            # handlers that crash the process on a bad id) shipped it as "advisory" without a
-            # single fix turn, while the round that fixes it costs minutes on a warm session.
-            _convergeable = {"code_review_passed", "consistent",
-                             "written_tests_pass", "nothing_broke",
-                             "web_package_honest", "app_serves", "security_clean"}
-            if (failing and not use_microvm and impl_session_id
-                    and set(failing) <= _convergeable):
+            # ONE FIX ROUND FOR FAILING TESTS (a test two warm rounds could not satisfy is not
+            # satisfied by a third: Notes Lite spent 16 minutes on rounds 2-3), and ALWAYS ONE
+            # for a blocking finding from any judgment seat: review, security, consistency or a
+            # weak suite. Test gates and security findings are convergeable for the reasons in
+            # warm_fix_rounds; so is `tests_strong_enough`, whose absence from this set skipped
+            # the round for every seat on crun_2d097414 ("Round 1 of 1"). With no warm session
+            # (a streamed implement), the round starts a fresh one with the same findings.
+            _convergeable = _CONVERGEABLE
+            inrun_max = warm_fix_rounds(failing, configured=inrun_max,
+                                        repair_attempts=repair_attempts, use_microvm=use_microvm)
+            _fix_rounds_run = 0
+            if inrun_max:
               try:  # a convergence failure must DEGRADE to the legacy paths, never kill the run
                 for round_i in range(1, inrun_max + 1):
+                    _fix_rounds_run = round_i
                     finding_bits = []
                     # TEST ARBITRATION: before making the implementer chase the oracle, establish
                     # that the oracle is right. An over-specified test is unsatisfiable, and every
@@ -6551,6 +6678,20 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                             "failing_gates": failing,
                                             "cost_usd_micros": int(rfix.get("cost_usd_micros") or 0)})
                         r2 = {**r2, "summary": (rfix.get("summary") or r2.get("summary", ""))}
+                    if "tests_strong_enough" in failing:
+                        # A WEAK SUITE IS THE TEST AUTHOR'S TO FIX, never the implementer's (it
+                        # may not edit tests): the lane that wrote them strengthens them against
+                        # the bug the probe planted, and the probe re-runs below.
+                        with _transaction(engine) as c:
+                            _phase(c, "write_tests")
+                        set_llm_context(routes=_route_ids(), db_engine=engine,
+                                        project_id=project_id, run_id=run_id, stage="write_tests")
+                        a_st, m_st = _route("write_tests")
+                        r_st = a_st.run_role(
+                            _strengthen_tests_prompt(criteria, (r5 or {}).get("summary") or "",
+                                                     round_i),
+                            root, model=m_st)
+                        cost += int(r_st.get("cost_usd_micros") or 0)
                     # Re-verify against the oracle. `nothing_broke` is the same full-suite run
                     # (regressions_ok = panel["full"]), so one execution refreshes both gates.
                     _post = _run_verify()
@@ -6695,6 +6836,38 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                                "summary": rs2.get("summary", ""),
                                                "hollow": _hollow}})
                         gates["security_clean"] = sec_verdict == "clean"
+                    if "tests_strong_enough" in failing:
+                        # THE WEAK-SUITE SEAT RE-JUDGES: plant one bug again and expect the
+                        # strengthened suite to catch it. Serial, after the read-only seats: it
+                        # edits the tree, then restores it, as the first probe does.
+                        with _transaction(engine) as c:
+                            _phase(c, "check_tests")
+                        _keep = (last_verify_output, tests_passed, test_exit_code, last_verify_cwd)
+                        _orig = {p: (root / p).read_text(errors="ignore")
+                                 for p in impl_files if (root / p).exists()}
+                        _caught = None
+                        if _orig:
+                            set_llm_context(routes=_route_ids(), db_engine=engine,
+                                            project_id=project_id, run_id=run_id,
+                                            stage="check_tests")
+                            a_mu, m_mu = _route("check_tests")
+                            try:
+                                r5 = a_mu.run_role(_mutate_prompt(list(_orig)), root, model=m_mu)
+                                cost += int(r5.get("cost_usd_micros") or 0)
+                                _caught = not bool(_run_verify(record=False).ok)
+                            finally:
+                                for _mp, _mc in _orig.items():
+                                    _ws_write(root / _mp, _mc)
+                        last_verify_output, tests_passed, test_exit_code, last_verify_cwd = _keep
+                        mutation_caught = _caught
+                        evidence["mutation_caught"] = _caught
+                        gates["tests_strong_enough"] = _caught is not False
+                        _record_review_round(engine, run_id, project_id, round_i=round_i, seats={
+                            "check_tests": {"verdict": ("caught" if _caught else
+                                                        "survived" if _caught is False
+                                                        else "not_run"),
+                                            "summary": (r5 or {}).get("summary", ""),
+                                            "hollow": None}})
                     failing = [k for k, v in gates.items() if not v]
                     evidence["review_hollow"] = dict(_hollow_seats)
                     if not failing:
@@ -6725,7 +6898,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                        "boss", "code_task_run", run_id, {"rounds": round_i})
                         break
                     if set(failing) - {"code_review_passed", "consistent", "app_serves",
-                                       "security_clean"}:
+                                       "security_clean", "tests_strong_enough"}:
                         break  # a non-judgment gate regressed — legacy handling below
               except Exception as exc:  # noqa: BLE001
                 _log_caught(logger)
@@ -6748,6 +6921,12 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             _nonfinal_slice = (isinstance(_didx, int) and isinstance(_dtot, int)
                                and _dtot > 1 and _didx < _dtot)
             _can_ship_pr = spec.get("open_pr", True) is not False and not _nonfinal_slice
+            # WHAT IS STILL A BLOCKER after the warm round: it blocks on every profile.
+            _blockers = unresolved_blockers(
+                failing, review_summary=r3.get("summary", ""), security_verdict=sec_verdict,
+                consistency_summary=r6.get("summary", ""), hollow=_hollow_seats)
+            if _blockers:
+                evidence["unresolved_blockers"] = _blockers
             action = resolve_gate_failure_action(
                 failing=failing,
                 advisory_gate=advisory_gate,
@@ -6757,6 +6936,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 never_block=bool(getattr(settings, "code_gate_never_block", True)),
                 faults=gate_faults,
                 template_repair_max=max_repair,
+                blockers=_blockers,
+                fix_round_ran=_fix_rounds_run > 0,
             )
             if action == "inconclusive":
                 # The checks never finished, so nothing is known about the code. Re-run the
@@ -6829,12 +7010,17 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                             "'check_escalations', CAST(:n AS int)), updated_at=now() "
                             "WHERE id=:id"), {"n": escalations + 1, "id": run_id})
                     gate_faults = classify_gate_faults(failing=failing, evidence=evidence)
+                    _blockers = unresolved_blockers(
+                        failing, review_summary=r3.get("summary", ""),
+                        security_verdict=sec_verdict, consistency_summary=r6.get("summary", ""),
+                        hollow=_hollow_seats)
                     action = resolve_gate_failure_action(
                         failing=failing, advisory_gate=advisory_gate,
                         rounds_used=rounds_used, max_repair_rounds=max_repair_rounds,
                         open_pr=_can_ship_pr,
                         never_block=bool(getattr(settings, "code_gate_never_block", True)),
-                        faults=gate_faults, template_repair_max=max_repair)
+                        faults=gate_faults, template_repair_max=max_repair,
+                        blockers=_blockers, fix_round_ran=_fix_rounds_run > 0)
                 if action == "inconclusive":
                     # Escalations exhausted: ship, recording that the code was NOT reviewed.
                     # Still respect _can_ship_pr — a non-final slice / open_pr=false run must
@@ -7000,7 +7186,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 _blocked_error, _blocked_reason = blocked_gate_messages(
                     qg_id, failing, app_serves_record,
                     ((_template_record or {}).get("evidence") or {}).get("template_tests"),
-                    _install_fail[0])
+                    _install_fail[0], blockers=_blockers)
                 # Human escape hatch: preserve the produced diff so an operator can WAIVE the failing
                 # gate(s) and open the PR without a re-run. Governance is kept — gates the human does
                 # NOT waive still block, and the PR still carries its own merge-gate Decision.

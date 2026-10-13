@@ -47,19 +47,19 @@ Keep that mapping when adapting the adapter.
 
 - **node (Express)**: `payments/config.js`, `paypal_client.js` (fetch, no SDK), `store.js`,
   `catalog.js`, `paypal.js` (an Express router) and `server.js`; the buttons in
-  `public/checkout.html`. Add `express` and the two scripts `pretest:template` / `test:template`
-  from the reference `package.json`. Copy `tests/template_paypal/` as is.
+  `public/checkout.html`. Add `express` to `package.json`.
 - **python (FastAPI)**: `payments/` (config, `paypal_client.py` on httpx, store, catalog,
   `paypal_checkout.py` with an `APIRouter` factory) and `main.py`. Add `fastapi`, `httpx` and
-  `pytest` to the app's requirements. Copy `tests/template_paypal/` as is.
+  `pytest` to the app's requirements.
 - **java (Spring Boot)**: the `com.example.payments` package (`PayPalSettings`, `PayPalClient` on
   `java.net.http`, `OrderStore`, `Catalog`, `PayPalCheckoutController`); no extra dependency
-  beyond `spring-boot-starter-web`. Move the package under the app's base package if needed. The
-  reference keeps its tests under `tests/template_paypal/` (its `pom.xml` points
-  `testSourceDirectory` there); in the app put `PayPalCheckoutTest.java`,
-  `PayPalCheckoutAppTest.java` and `FakePayPalApi.java` under `src/test/java/` in the controller's
-  package, keeping the file and class names (the gate runs `-Dtest=PayPal*`).
+  beyond `spring-boot-starter-web`. Move the package under the app's base package if needed.
 
-The template's tests run against an in-process fake of the PayPal API (token, orders, capture,
-refund, verify-webhook-signature) and never reach the network. Keep them as they are; they are
-the proof this template was applied.
+## Its tests stay with the connector
+
+This connector is pre-tested. Its own tests run against an in-process fake of the PayPal API
+(token, orders, capture, refund, verify-webhook-signature) and never reach the network. They run
+in the connector's own test tier, not in the app: do not copy `tests/template_paypal/` (or the
+reference `package.json`'s `test:template` scripts) into the app, and do not write tests for the
+connector. A build that adds it is checked for its wiring only: the app starts and these routes
+answer.

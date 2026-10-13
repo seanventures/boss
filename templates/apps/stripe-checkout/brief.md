@@ -48,19 +48,19 @@ Without it, keep the static catalog and a single "Buy now" button.
 
 - **node (Express)**: `payments/config.js`, `store.js`, `catalog.js`, `stripe.js` (an Express
   router) and `server.js` show the mounting. Mount the webhook **before** any global
-  `express.json()` (it needs the raw body). Add `express` and `stripe` to `package.json` and the
-  two scripts `pretest:template` / `test:template` from the reference `package.json`. Copy
-  `tests/template_stripe/` as is.
+  `express.json()` (it needs the raw body). Add `express` and `stripe` to `package.json`.
 - **python (FastAPI)**: `payments/` (config, store, catalog, `stripe_checkout.py` with an
   `APIRouter` factory) and `main.py`. Add `stripe`, `fastapi`, `httpx` and `pytest` to the app's
-  requirements. Copy `tests/template_stripe/` as is.
+  requirements.
 - **java (Spring Boot)**: the `com.example.payments` package (config, store, catalog, controller)
   and `pom.xml` dependencies (`com.stripe:stripe-java`). Move the package under the app's base
-  package if needed. The reference keeps its tests under `tests/template_stripe/` (its `pom.xml`
-  points `testSourceDirectory` there); in the app put `StripeCheckoutTest.java`,
-  `StripeCheckoutAppTest.java` and `FakeStripeApi.java` under `src/test/java/` in the same package
-  as the controller, keeping the file and class names (the gate runs `-Dtest=Stripe*`).
+  package if needed.
 
-The template's tests use an in-process fake of the Stripe API and compute webhook signatures
-with a signing secret generated in the test: they never reach the network. Keep them as they are;
-they are the proof this template was applied.
+## Its tests stay with the connector
+
+This connector is pre-tested. Its own tests use an in-process fake of the Stripe API and compute
+webhook signatures with a signing secret generated in the test: they never reach the network.
+They run in the connector's own test tier, not in the app: do not copy `tests/template_stripe/`
+(or the reference `package.json`'s `test:template` scripts) into the app, and do not write tests
+for the connector. A build that adds it is checked for its wiring only: the app starts and these
+routes answer.

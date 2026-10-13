@@ -85,7 +85,7 @@ def test_one_fix_round_before_review_and_failing_tests_skip_the_panel():
     # same model is gone; a build still failing after it is not reviewed or looped.
     assert '"instead": "warm_fix_round"' in src
     assert '"code_task.review_skipped_tests_failing"' in src
-    assert "inrun_max = min(inrun_max, 0 if repair_attempts >= 1 else 1)" in src
+    assert "rounds = min(rounds, 0 if repair_attempts >= 1 else 1)" in src
     assert '"code_task.light_plan"' in src
 
 

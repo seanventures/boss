@@ -24,10 +24,24 @@ def test_the_gate_is_a_p0_release_step():
 def test_the_fixtures_connector_is_the_templates_byte_for_byte():
     """The fixture applies login-oauth as a build does: its files unchanged."""
     ref = ROOT / "templates" / "apps" / "login-oauth" / "stacks" / "node"
-    for sub in ("auth", "tests/template_login_oauth"):
-        for path in sorted((ref / sub).iterdir()):
-            copy = FIXTURE / "helpdesk" / sub / path.name
-            assert copy.read_bytes() == path.read_bytes(), f"copy {path.relative_to(ROOT)} again"
+    for path in sorted((ref / "auth").iterdir()):
+        copy = FIXTURE / "helpdesk" / "auth" / path.name
+        assert copy.read_bytes() == path.read_bytes(), f"copy {path.relative_to(ROOT)} again"
+
+
+def test_the_fixture_carries_none_of_the_connectors_own_suite():
+    """A connector is pre-tested (templates.connector_policy): a build never copies its tests or
+    its test scripts into the app, so the golden app does not either. The gate runs that suite in
+    the connector's own tier, from the template (plumbing._connector_own_suite)."""
+    import json
+
+    ref = ROOT / "templates" / "apps" / "login-oauth" / "stacks" / "node"
+    assert not (FIXTURE / "helpdesk" / "tests" / "template_login_oauth").exists()
+    scripts = json.loads((FIXTURE / "helpdesk" / "package.json").read_text())["scripts"]
+    ref_scripts = json.loads((ref / "package.json").read_text())["scripts"]
+    assert not [k for k in ref_scripts if "test" in k and k in scripts]
+    src = (GATE / "plumbing.py").read_text()
+    assert "trial.run_stack(" in src and "as_connector=False" not in src
 
 
 def test_the_gate_calls_the_app_start_proof_as_the_pipeline_does():
