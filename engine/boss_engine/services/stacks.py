@@ -784,7 +784,10 @@ def check_text(text: str, *, template_stack: Optional[str] = None,
 
 # -- The architecture's declared stack -------------------------------------------------------
 
-_STACK_LINE = re.compile(r"^\s*(?:[-*]\s*)?\**\s*stack\s*\**\s*[:—-]\s*\**\s*(.+)$",
+#: The `Stack:` line, however the architect formatted it: a bullet, bold, or wrapped in backticks
+#: exactly as STACK_LINE_INSTRUCTION shows it. A backticked line was not matched, so the check
+#: fell back to prose and read "Rust/Ruby/PHP … unsupported" as a request (HelpDesk AI, D1 #3).
+_STACK_LINE = re.compile(r"^\s*(?:[-*]\s*)?[`*]*\s*stack\s*[`*]*\s*[:—-]\s*[`*]*\s*(.+)$",
                          re.I | re.M)
 #: Instructions for the architect: one line the approval check parses.
 STACK_LINE_INSTRUCTION = (

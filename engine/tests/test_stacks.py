@@ -541,3 +541,18 @@ def test_a_full_stack_app_at_the_root_is_still_planned_from_the_root(tmp_path):
          "scripts": {"build": "vite build"}}))
     got = stacks.find_stack_root(tmp_path, ["backend/main.py", "frontend/src/App.tsx"])
     assert got == tmp_path
+
+
+def test_a_backticked_stack_line_is_read_and_rejected_alternatives_are_not_requests():
+    """HelpDesk AI (D1 run 3) declared `Stack: backend=node/express, frontend=node/react` in
+    backticks, exactly as the architect is told to. The line was not matched, the check read the
+    context's "Go/Rust/Ruby/PHP/.NET/Elixir/Scala unsupported" as a request, and the approved
+    architecture failed before a build."""
+    from boss_engine.services import stacks
+    md = ("## Context\n- Platform constraint: only Python and Node stacks are enabled on this install "
+          "(Java available but off; Go/Rust/Ruby/PHP/.NET/Elixir/Scala unsupported).\n\n"
+          "## Components\n`Stack: backend=node/express, frontend=node/react`\n")
+    assert stacks.declared_stack(md) == [
+        {"service": "backend", "language": "node", "framework": "express"},
+        {"service": "frontend", "language": "node", "framework": "react"}]
+    assert stacks.check_architecture(md).ok
