@@ -4,7 +4,8 @@
  * Two shelves (cc v2), each ONE horizontally scrolling row — snap, a fade at the right edge and
  * a › button — never a wrapping grid:
  *
- *   START FROM A TEMPLATE: the composer's sixteen IDEAS with their cover art. A card opens the
+ *   START FROM AN IDEA: the one ideas list (components/v2/templates/catalogue useIdeas: the
+ *   catalogue's starters, then the written briefs) with their cover art. A card opens the
  *   template's own page (`?template=<slug>`, the page the composer already has); "All 16 ↗"
  *   opens the composer's gallery. Nothing is drawn twice.
  *
@@ -16,6 +17,8 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { IDEAS, IdeaCover, ideaFor, openTemplate, type Idea } from "../ask-boss-hero";
+import { useIdeas, type IdeaItem } from "../../components/v2/templates/catalogue";
+import { composerHref } from "../../lib/research-panels";
 import { appNeed, shelfOrder, shelfState, shelfWord, type AppNeed, type CcApp, type ShelfState } from "../../lib/command-center-apps";
 import type { AttentionItem } from "../../lib/agents-live-board";
 import { AgentAvatar } from "../agent-avatar";
@@ -74,11 +77,16 @@ export function Rail({ label, children, testId, resetKey }: {
   );
 }
 
-function TemplateCard({ idea, scope }: { idea: Idea; scope: string }) {
+/** One idea. A written brief opens its page; a catalogue starter opens New app with its brief
+ *  in, where "Build from its reference" also offers its tested reference implementation. */
+function TemplateCard({ idea, scope }: { idea: IdeaItem; scope: string }) {
   return (
-    <button type="button" className="cc-tpl" data-testid="cc-tpl"
+    <button type="button" className="cc-tpl" data-testid="cc-tpl" data-starter={idea.card ? idea.card.key : undefined}
             title={`${idea.title} — open the brief. Nothing builds until you press Build.`}
-            onClick={() => openTemplate(idea.title)}>
+            onClick={() => {
+              if (!idea.card) { openTemplate(idea.title); return; }
+              window.location.assign(composerHref(window.location.search, { title: idea.title, brief: idea.brief }));
+            }}>
       <span className="cc-tpl-art" aria-hidden><IdeaCover idea={idea} scope={scope} /></span>
       <span className="cc-tpl-body" data-user-text>
         <span className="cc-tpl-tag">{idea.tag}</span>
@@ -95,6 +103,7 @@ const GALLERY_PARAM = "templates";
  *  under the top bar). A page with a URL (`?templates=all`), Back and Escape close it, and a
  *  card opens that template's own page on top. */
 function Gallery({ onClose }: { onClose: () => void }) {
+  const ideas = useIdeas();
   useEffect(() => {
     const escape = (e: KeyboardEvent) => {
       if (e.key === "Escape" && !document.querySelector(".tpl-page:not(.cc-gallery)")) onClose();
@@ -105,21 +114,22 @@ function Gallery({ onClose }: { onClose: () => void }) {
     return () => { window.removeEventListener("keydown", escape); document.body.style.overflow = before; };
   }, [onClose]);
   return createPortal(
-    <div className="tpl-page cc-gallery" role="dialog" aria-modal="true" aria-label="Templates" data-testid="cc-gallery">
+    <div className="tpl-page cc-gallery" role="dialog" aria-modal="true" aria-label="Ideas" data-testid="cc-gallery">
       <header className="tpl-page-head">
         <button type="button" className="tpl-back" onClick={onClose} data-testid="cc-gallery-back">← Back</button>
-        <span className="tpl-crumb">Templates · {IDEAS.length}</span>
+        <span className="tpl-crumb">Ideas · {ideas.length}</span>
       </header>
       <div className="tpl-page-inner">
-        <h1 className="cc-gallery-h">Start from a template</h1>
+        <h1 className="cc-gallery-h">Start from an idea</h1>
         <div className="cc-gallery-grid">
-          {IDEAS.map((idea) => <TemplateCard key={idea.title} idea={idea} scope="gal" />)}
+          {ideas.map((idea) => <TemplateCard key={idea.title} idea={idea} scope="gal" />)}
         </div>
       </div>
     </div>, document.body);
 }
 
 export function TemplatesShelf() {
+  const ideas = useIdeas();
   const [all, setAll] = useState(false);
   useEffect(() => {
     const sync = () => {
@@ -148,14 +158,14 @@ export function TemplatesShelf() {
   return (
     <section className="cc-shelf" aria-labelledby="cc-tpl-h" data-testid="cc-templates">
       <div className="cc-sec-h">
-        <h2 id="cc-tpl-h" title="A whole app, described: the team builds it from the brief">Brief templates</h2>
+        <h2 id="cc-tpl-h" title="An app to start from: the team builds it from the brief">Ideas</h2>
         <span className="cc-sub">Each one is a full brief your team can build today</span>
         <span className="cc-spacer" />
         <button type="button" className="cc-link" data-testid="cc-templates-all"
-                title="All the templates on one page" onClick={open}>All {IDEAS.length} ↗</button>
+                title="All the ideas on one page" onClick={open}>All {ideas.length} ↗</button>
       </div>
-      <Rail label="Templates" testId="cc-tpl-rail">
-        {IDEAS.map((idea: Idea) => <TemplateCard key={idea.title} idea={idea} scope="cc" />)}
+      <Rail label="Ideas" testId="cc-tpl-rail">
+        {ideas.map((idea: IdeaItem) => <TemplateCard key={idea.title} idea={idea} scope="cc" />)}
       </Rail>
       {all ? <Gallery onClose={close} /> : null}
     </section>

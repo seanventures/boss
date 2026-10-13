@@ -8,9 +8,10 @@
  * screens that drift.
  */
 
-/** The composer's three jobs. Adding to an app that exists is the everyday one; "template"
- *  starts a new app from an approved template (the gallery, APP_TEMPLATES §2.8). */
-export type ComposeMode = "new" | "add" | "template";
+/** The composer's two jobs: a new app, or a feature on an app that exists (the everyday one).
+ *  There is no "template" job any more (operator, 2026-10-13): login and payments are
+ *  CONNECTORS either job can add, and the starters are IDEAS a new app starts from. */
+export type ComposeMode = "new" | "add";
 
 /** A path card. `key` is a workflow key, or `@quick` / `@spec` for the two change routes that
  *  are not workflows (the feedback proposal and the spec-first panel). */
@@ -330,7 +331,8 @@ const MODE_KEY = "boss.compose.mode";
 export function rememberedMode(): ComposeMode {
   try {
     const m = window.localStorage.getItem(MODE_KEY);
-    return m === "add" || m === "template" ? m : "new";
+    // An old "template" choice (the retired tab) opens New app, where the ideas are.
+    return m === "add" ? "add" : "new";
   } catch {
     return "new";
   }

@@ -34,7 +34,19 @@ export const STATUS_WORD: Record<string, string> = {
 
 export type TemplateSecret = { name: string; purpose: string; testDefault: "none" | "generated" | "stub" | string };
 
+/** What a catalogue item IS (operator, 2026-10-13): a CONNECTOR is a capability any app adds
+ *  (login, payments) and is built in that app's own look; an IDEA is an app to start from;
+ *  TRAINING is an insecure-by-design lab app, never offered unless asked for. */
+export type CatalogueKind = "connector" | "idea" | "training";
+
+/** The server's kind, else derived the way the server derives it (an older API, an old row). */
+export function kindOf(o: { kind?: unknown; labels?: string[] }): CatalogueKind {
+  if ((o.labels ?? []).includes(INSECURE)) return "training";
+  return o.kind === "idea" || o.kind === "training" ? o.kind : "connector";
+}
+
 export type TemplateCard = {
+  kind: CatalogueKind;
   id: string; key: string; version: string; source: "builtin" | "git" | string; status: string;
   name: string; summary: string; stacks: string[]; labels: string[]; adds: string[]; egress: string[];
   secrets: TemplateSecret[]; tested: string[]; digest: string; gitUrl: string; commitSha: string;
@@ -62,6 +74,7 @@ function parseSecrets(v: unknown): TemplateSecret[] {
 export function parseCard(v: unknown): TemplateCard {
   const o = obj(v);
   return {
+    kind: kindOf({ kind: o.kind, labels: strs(o.labels) }),
     id: str(o.id), key: str(o.template_key ?? o.key), version: str(o.version), source: str(o.source), status: str(o.status),
     name: str(o.name) || str(o.template_key), summary: str(o.summary), stacks: strs(o.stacks), labels: strs(o.labels),
     adds: strs(o.adds), egress: strs(o.egress), secrets: parseSecrets(o.secrets), tested: strs(o.tested),
