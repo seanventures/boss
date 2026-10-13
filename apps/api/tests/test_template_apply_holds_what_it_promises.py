@@ -141,7 +141,9 @@ def test_a_readiness_refusal_from_the_real_start_path_writes_nothing(world, peop
         r = client.post(f"/v1/templates/{tid}/apply", json={
             "project_id": world.project_a, "extends_run_id": run_id, "stack": "node",
             "workflow_key": "no_such_workflow_here"})
-    assert r.status_code in (404, 409), r.text
+    # 422 since a template is applied only through a published workflow with a build step
+    # (workflow_cannot_build): an unknown workflow key is invalid input. Nothing kept either way.
+    assert r.status_code in (404, 409, 422), r.text
     assert _counts(engine, world.project_a) == before
 
 

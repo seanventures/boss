@@ -1297,6 +1297,25 @@ def _install_shipped_cast() -> dict:
         return {}
 
 
+def _sync_builtin_templates() -> None:
+    """THE SHIPPED TEMPLATES, REFRESHED AT BOOT for every org — not by whoever lists them.
+
+    Listing templates used to sync them, so GET /v1/templates wrote rows (a read that writes,
+    refused by the read-only-GET rule) and a changed built-in reached the stored manifest only
+    after someone happened to open the template list. Idempotent; never blocks boot.
+    """
+    from boss_engine.templates.service import sync_builtins
+
+    try:
+        with begin(engine) as c:
+            orgs = [str(r[0]) for r in c.execute(text("SELECT id FROM orgs")).all()]
+            written = sum(sync_builtins(c, org) for org in orgs)
+        if written:
+            print(f"[lifespan] built-in templates refreshed: {written} row(s)")
+    except Exception as exc:  # noqa: BLE001
+        print(f"[lifespan] built-in template sync skipped: {type(exc).__name__}")
+
+
 def _seed_work_tracker_defaults() -> None:
     """Every project's tracker catalogue rows and job quota (work_orchestration.seed_defaults:
     idempotent, never undoes an operator), refreshed at boot — the reads that used to seed them on
@@ -1398,6 +1417,7 @@ async def lifespan(_: FastAPI):
     except Exception as exc:  # noqa: BLE001
         print(f"[lifespan] ensure_schema skipped — DB not ready or migration error: {exc}")
     _install_shipped_cast()
+    _sync_builtin_templates()
     _seed_work_tracker_defaults()
     _backfill_agent_identities()
     # REFUSED DEPLOYMENT PLANS LEFT NOTHING BEHIND ONCE, AND NOW NEVER DID. An unverified host
