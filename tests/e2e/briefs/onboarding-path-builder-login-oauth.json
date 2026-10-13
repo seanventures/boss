@@ -1,0 +1,11 @@
+{
+ "name": "onboarding-path-builder-login-oauth",
+ "extends": "onboarding-path-builder",
+ "title": "Onboarding Path Builder with sign-in",
+ "about": "The same brief, applied through the login-oauth connector (POST /v1/templates/{id}/apply, as the console's Apply sheet does) as a NEW app, so the connector path is in the gate: the template's brief, reference code, test-default secrets, egress and its template_tests gate. The connector starts the fast_fix workflow, whose first step is the build; the gate follows that build's code task and does not wait for the release gate after it.",
+ "start": "template_apply",
+ "budget_min": 30,
+ "connector": {"key": "login-oauth", "stack": "node", "framework": "express"},
+ "new_app": "Onboarding Path Builder",
+ "note_lead": "Build the app below as ONE Node 20 Express app (plain JavaScript ESM) that serves its own pages and its /api from one process, stores its data server-side, and puts the buddy dashboard and the path editor behind the template's sign-in. `npm test` must pass.\n\nTHE APP TO BUILD:\n"
+}
