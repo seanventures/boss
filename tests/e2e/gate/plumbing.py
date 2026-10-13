@@ -342,7 +342,7 @@ def _call_site_kwargs() -> set[str]:
 
 
 #: What the gate passes, as the pipeline does (governed_code_task_service._check_app_serves).
-_GATE_SERVE_KWARGS = {"lineage", "known_service", "timeout", "probe_paths"}
+_GATE_SERVE_KWARGS = {"lineage", "known_service", "timeout", "probe_paths", "needs", "bound"}
 
 
 @check("the app starts: BOSS's app-start proof", bug="2, 3")
@@ -362,6 +362,14 @@ def check_serve(g: Gate) -> str:
     kwargs: dict[str, Any] = {"lineage": [], "known_service": False, "timeout": 90.0}
     if "probe_paths" in inspect.signature(preview_service.prove_app_serves).parameters:
         kwargs["probe_paths"] = probes or None
+    params = inspect.signature(preview_service.prove_app_serves).parameters
+    if "needs" in params:
+        # What the app declares, as _app_run_declarations gives it: the connector's secret specs
+        # (SESSION_SECRET is generated). A fresh fixture has no person-bound `build` values.
+        from boss_engine.templates.run_env import app_needs
+        kwargs["needs"] = app_needs(None, project_id="", app_key=None,
+                                    manifests=[manifest] if manifest else [])
+        kwargs["bound"] = {}
     g.changed = _changed_files(g)
     g.serve = preview_service.prove_app_serves(g.root, list(g.changed), **kwargs)
     if extra:
