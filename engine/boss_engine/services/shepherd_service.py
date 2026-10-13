@@ -1062,7 +1062,7 @@ def act(engine, settings: Settings, jobs, run_id: str, *,
     before = _spent(engine, run_id)
     outcome, new_run = "error", None
     try:
-        from .code_task_service import retry_code_task
+        from .code_task_service import RetryNeedsPerson, retry_code_task
         note = (f"Task Shepherd: {p['class_name']}. {p['check']} "
                 f"Applying remedy {remedy.id!r}: {remedy.describe}.")
         no_access = (repo_access_blocker(engine, settings, run_id)
@@ -1083,9 +1083,13 @@ def act(engine, settings: Settings, jobs, run_id: str, *,
                 res = retry_code_task(engine, settings, jobs, run_id, fix_note=note,
                                       profile=("lean" if remedy.id == "reissue_lean" else None),
                                       job_priority=JOB_PRIORITY_BACKGROUND,
-                                      attempt_ceiling=SHEPHERD_MAX_LINEAGE_ATTEMPTS)
+                                      attempt_ceiling=SHEPHERD_MAX_LINEAGE_ATTEMPTS,
+                                      automatic=True)
                 new_run = res.get("run_id")
                 outcome = "started"
+            except RetryNeedsPerson as withheld:
+                _hand_to_person(engine, run_id, str(withheld))
+                outcome = f"no_action: {str(withheld)[:200]}"
             except ValueError as exc:
                 # Stopping silently would trade a spend loop for work nobody is told is stuck.
                 # The escalation also engages the open-escalation guard in `sweep`, so the run
@@ -1693,7 +1697,7 @@ def _retry_run(engine, settings, jobs, run_id: str, reason: str) -> int:
     """
     from ..db import begin
     from . import run_liveness
-    from .code_task_service import retry_code_task
+    from .code_task_service import RetryNeedsPerson, retry_code_task
 
     # Never retry what has already been retried: a newer attempt (lineage, a person's Retry on
     # the workflow step, the same work) is the live one, and a second retry only races it.
@@ -1706,12 +1710,19 @@ def _retry_run(engine, settings, jobs, run_id: str, reason: str) -> int:
         # No actor parameter: retry_code_task records lineage, not authorship. The
         # shepherd.retry event below is what attributes this to the shepherd.
         # BACKGROUND: an automatic retry never takes a build slot ahead of a person.
+        # automatic=True: under the grant the person gave this build, or not at all — and never
+        # a build that died before this BOSS started (crun_18eaa450: retried an hour after an
+        # upgrade and refused, "No one's authority covers this build").
         result = retry_code_task(
             engine, settings, jobs, run_id,
             fix_note=f"Automatic retry by the task shepherd: {reason}",
             job_priority=JOB_PRIORITY_BACKGROUND,
             attempt_ceiling=SHEPHERD_MAX_LINEAGE_ATTEMPTS,
+            automatic=True,
         )
+    except RetryNeedsPerson as withheld:
+        _hand_to_person(engine, run_id, str(withheld))
+        return 0
     except Exception as error:  # noqa: BLE001
         logger.warning("shepherd: retry of %s failed: %s", run_id, error)
         return 0
@@ -1976,6 +1987,28 @@ def watch(engine, settings: Settings, project_id: str, *, dry_run: bool = False,
                     escalated.append(record)
     return {"project_id": project_id, "in_flight": seen, "acted": acted,
             "escalated": escalated, "ineffective": ineffective, "dry_run": dry_run}
+
+
+def _hand_to_person(engine, run_id: str, reason: str) -> None:
+    """BOSS may not retry this build by itself (code_task_service.RetryNeedsPerson: no person's
+    grant covers another attempt, or it failed before BOSS last started). Asked ONCE — an open
+    question also takes the run out of the shepherd's candidates — and the build stays failed
+    with Retry for a person."""
+    from ..db import begin
+
+    project_id = _project_of(engine, run_id)
+    if not project_id:
+        return
+    try:
+        with begin(engine) as c:
+            if open_question(
+                    c, project_id=project_id, task_ref=run_id,
+                    question=f"{reason} Retry it, or leave it?",
+                    options=["retry", "leave"], evidence={"reason": reason}):
+                emit_event(c, project_id, "code_task.auto_retry_withheld", "shepherd",
+                           "code_task_run", run_id, {"why": reason[:300]})
+    except Exception:  # noqa: BLE001 — never let the escalation break the sweep
+        logger.exception("shepherd: could not hand %s to a person", run_id)
 
 
 def _escalate_exhausted_lineage(engine, project_id: Optional[str], run_id: str,

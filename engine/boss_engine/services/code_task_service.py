@@ -450,8 +450,12 @@ def start_code_task(
     job_priority: Optional[int] = None,
     reference_links: Optional[list[str]] = None,
     role_key: Optional[str] = None,
+    automatic_retry: bool = False,
 ) -> str:
     """Create the durable run row and enqueue the single `code.task` job.
+
+    ``automatic_retry``: BOSS itself is starting this attempt (retry_code_task(automatic=True)).
+    It runs under the parent's carried grant or is not started at all (RetryNeedsPerson).
 
     ``role_key`` runs the task AS that agent: its held MCP servers reach the harness
     (code_task_mcp). It must name an agent of this project.
@@ -573,7 +577,16 @@ def start_code_task(
             identity_acting = _consent.carry_retry_authority(
                 connection, parent_run_id=parent_run, new_run_id=run_id, project_id=project_id,
                 role_keys=[builder], permissions=_consent.CODE_TASK_PERMISSIONS,
-                repos=_consent_repos(owner, repo, repo_host))
+                repos=_consent_repos(owner, repo, repo_host), by_boss=automatic_retry,
+                workflow_run_id=str((finalize_ctx or {}).get("workflow_run_id") or "") or None)
+        if automatic_retry and identity_acting is None:
+            # NOT STARTED rather than started to be refused: no person's grant covers this
+            # attempt, so identity would block it the moment it ran (crun_da5f6f72: "No one's
+            # authority covers this build"). Nothing is written; a person retries it.
+            raise RetryNeedsPerson(
+                "BOSS did not retry this build by itself: no person's grant covers another "
+                "attempt (the grant it ran under has ended or was for that build only). "
+                "Press Retry to run it again under your own consent.")
     if not simulated and identity_acting is None:
         from boss_engine.identity import consent as _consent
 
@@ -1507,17 +1520,31 @@ def retry_code_task(
     profile: Optional[str] = None, repair_retries: Optional[int] = None,
     allow_test_retirement: bool = False, job_priority: Optional[int] = None,
     attempt_ceiling: Optional[int] = None, workflow_version_id: str = "",
-    title: Optional[str] = None,
+    title: Optional[str] = None, automatic: bool = False,
 ) -> dict:
     """Resume a failed/blocked code task as a NEW attempt in the same lineage — carrying the prior
     attempt's findings forward as explicit feedback so the agent fixes the identified issues instead
     of regenerating blind. History is preserved: each attempt links to its parent + root run, and
-    accumulates the findings it must address."""
+    accumulates the findings it must address.
+
+    `automatic=True`: BOSS ITSELF decided to retry (the one-shot infra retry, the shepherd, an
+    autonomous review-repair), not a person. Such a retry
+    * runs under the grant the person gave the failed build — same person, same run, never wider
+      (identity.consent.carry_retry_authority(by_boss=True)) — or is not started at all;
+    * never retries a build that failed before this BOSS started (an upgrade or a restart in
+      between): that build is a person's to restart.
+    Either refusal raises RetryNeedsPerson, writes nothing, and leaves the build failed with Retry."""
     with _transaction(engine) as c:
         prev = load_code_task_run(c, run_id)
         prev_gates_failed = _recorded_failed_gates(c, run_id) if prev is not None else []
+        failed_at = _failed_at(c, run_id) if (prev is not None and automatic) else None
     if prev is None:
         raise ValueError(f"code task run not found: {run_id}")
+    if automatic and failed_at is not None and failed_at < PROCESS_STARTED_AT:
+        raise RetryNeedsPerson(
+            "BOSS did not retry this build by itself: it failed before BOSS last started "
+            "(an upgrade or a restart), and a build that died before a restart is only run "
+            "again when a person asks. Press Retry to run it again.")
     if is_simulated_run(prev):
         raise ValueError(
             "cannot retry a simulated fixture run; create a real code-task instead"
@@ -1774,6 +1801,7 @@ def retry_code_task(
                             else spec.get("repair_retries")),
             substrate=substrate_override,
             job_priority=job_priority,
+            automatic_retry=automatic,
         )
         if pr_url:
             emit_event(
@@ -2263,6 +2291,11 @@ def _consent_repos(owner: Optional[str], repo: Optional[str], repo_host: Optiona
     return [f"{owner}/{repo}"]
 
 
+class RetryNeedsPerson(ValueError):
+    """BOSS will not start an automatic retry: only a person may (retry_code_task(automatic=True)).
+    A ValueError, so every automatic caller's existing "could not retry" handling applies."""
+
+
 class AuthorityRefused(RuntimeError):
     """The build has no authority to act (identity.runs.start_code_task_run refused it: no grant,
     a grant that no longer covers, an agent with no Passport). A REFUSAL, never a crash: the run
@@ -2309,6 +2342,18 @@ def _refused_agent_name(engine, reason: str) -> Optional[str]:
     except Exception:  # noqa: BLE001 — the id still says who
         return None
     return f"{name} ({agent_id})" if name else None
+
+
+#: When this BOSS process started. A build that failed before it is never retried automatically.
+PROCESS_STARTED_AT = datetime.now(timezone.utc)
+
+
+def _failed_at(connection, run_id: str):
+    """When the build failed: its last `code_task.failed` event, else when its row last moved."""
+    return connection.execute(sql(
+        "SELECT COALESCE((SELECT max(e.created_at) FROM events e WHERE e.entity_id = r.id "
+        "AND e.event_type = 'code_task.failed'), r.updated_at) FROM code_task_runs r WHERE r.id = :r"),
+        {"r": run_id}).scalar()
 
 
 def _transient_retry_recorder(engine, run_id: str):

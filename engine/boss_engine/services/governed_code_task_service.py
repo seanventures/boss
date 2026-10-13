@@ -907,10 +907,15 @@ def _retry_after_infra_failure(engine, settings, jobs, run_id: str, project_id: 
         return {**result, "auto_retry": "not_again",
                 "next_step": ("BOSS already retried this build once after a platform error. "
                               "Fix the cause shown above, then press Retry.")}
-    try:
-        from .code_task_service import retry_code_task
+    from .code_task_service import RetryNeedsPerson, retry_code_task
 
-        retried = retry_code_task(engine, settings, jobs, run_id)
+    try:
+        # AS BOSS, UNDER THE PERSON'S GRANT, OR NOT AT ALL (retry_code_task(automatic=True)):
+        # crun_da5f6f72 was started bare and refused at once, "No one's authority covers this
+        # build", because the worker's own key was the caller. Now the attempt carries the grant
+        # the person gave the failed build, or is not started and the build stays failed with
+        # Retry for a person.
+        retried = retry_code_task(engine, settings, jobs, run_id, automatic=True)
         new_id = str(retried.get("run_id") or "")
         with _transaction(engine) as c:
             c.execute(sql("UPDATE code_task_runs SET finalize_ctx = COALESCE(finalize_ctx,'{}'::jsonb)"
@@ -920,6 +925,14 @@ def _retry_after_infra_failure(engine, settings, jobs, run_id: str, project_id: 
                        {"retry_run_id": new_id, "why": "the build stopped on a BOSS platform "
                         "error, not on its code; retrying once automatically"})
         return {**result, "auto_retry_run_id": new_id}
+    except RetryNeedsPerson as withheld:
+        try:
+            with _transaction(engine) as c:
+                emit_event(c, project_id, "code_task.auto_retry_withheld", "boss",
+                           "code_task_run", run_id, {"why": str(withheld)[:300]})
+        except Exception:  # noqa: BLE001
+            _log_caught(logger)
+        return {**result, "auto_retry": "needs_person", "next_step": str(withheld)}
     except Exception as exc:  # noqa: BLE001 — the original failure stands
         _log_caught(logger)
         try:
@@ -6799,10 +6812,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                    {"branch": work_branch,
                                     "error": f"{type(exc).__name__}: {exc}"[:200]})
                 _save_workspace("repair_handoff")
-                from .code_task_service import retry_code_task
-                nxt = retry_code_task(
-                    engine, settings, jobs, run_id,
-                    fix_note=("Autonomous review-repair: the quality gate blocked on "
+                from .code_task_service import RetryNeedsPerson, retry_code_task
+                try:
+                    _repair_note = ("Autonomous review-repair: the quality gate blocked on "
                               f"{', '.join(failing)}. Address EVERY review finding below so ALL "
                               "gates pass, and do NOT regress the checks that already passed. If "
                               "'tests_strong_enough' failed, STRENGTHEN the tests so a one-line "
@@ -6811,7 +6823,20 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                               # than rediscovering it (crun_3e370c11's ImportError).
                               + (" 'app_serves' failed: "
                                  + _app_serves_sentence(app_serves_record)[:1600]
-                                 if "app_serves" in failing else "")))
+                                 if "app_serves" in failing else ""))
+                    # BOSS's own decision, so under the person's grant or not at all
+                    # (retry_code_task(automatic=True)).
+                    nxt = retry_code_task(engine, settings, jobs, run_id, fix_note=_repair_note,
+                                          automatic=True)
+                except RetryNeedsPerson as withheld:
+                    with _transaction(engine) as c:
+                        emit_event(c, project_id, "code_task.auto_retry_withheld", "boss",
+                                   "code_task_run", run_id,
+                                   {"why": str(withheld)[:300], "failing_gates": failing})
+                        return _fail(c, run_id, project_id,
+                                     f"The quality gate blocked on {', '.join(failing)}, and "
+                                     f"{str(withheld)[0].lower()}{str(withheld)[1:]}",
+                                     failure_class="needs_human", reason_code="repair_needs_person")
                 with _transaction(engine) as c:
                     # Fenced: a stale execution must not be able to declare a repair round.
                     if not _fenced_status(
