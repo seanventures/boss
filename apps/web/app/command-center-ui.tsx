@@ -289,7 +289,7 @@ export function CommandCenter({ projectId, orgId, actor, initial: given, initial
       <AppsShelf apps={appRows} attention={attention} orgId={orgId} />
       <details className="cc-secondary" data-testid="cc-template-details"
                onToggle={(e) => setTemplatesOpen((e.currentTarget as HTMLDetailsElement).open)}>
-        <summary title="Brief templates start a new app; app connectors add a feature such as sign-in or payments">Browse templates</summary>
+        <summary title="Ideas start a new app; connectors add a capability such as sign-in or payments to any app">Ideas and connectors</summary>
         {/* BOTH KINDS, GROUPED: the briefs (a whole app) and the app connectors (code templates
             such as login-oauth or Stripe), which were only under New build › From a template. */}
         <TemplatesShelf />

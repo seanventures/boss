@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 
 import { IDEAS } from "../app/ask-boss-hero";
 import { connectorsFrom, ideasFrom } from "../components/v2/templates/catalogue";
+import { galleryCards } from "../components/v2/templates/gallery";
 import { kindOf, parseCard } from "../lib/templates";
 
 const card = (key: string, kind?: string, labels: string[] = []) =>
@@ -30,6 +31,12 @@ describe("one ideas list", () => {
     expect(kindOf({ kind: "idea", labels: [] })).toBe("idea");
     expect(kindOf({ labels: [] })).toBe("connector");
     expect(kindOf({ kind: "idea", labels: ["insecure_by_design"] })).toBe("training");
+  });
+
+  it("the Command Center's connectors shelf is connectors only", () => {
+    const cards = [card("login-oauth", "connector"), card("hello", "idea"), card("lab", "training", ["insecure_by_design"])];
+    expect(galleryCards(cards, null, "connector").map((c) => c.key)).toEqual(["login-oauth"]);
+    expect(readFileSync("app/command-center/connectors-shelf.tsx", "utf8")).toContain('kind="connector"');
   });
 
   it("the Command Center shelf and the composer both read useIdeas, never IDEAS alone", () => {

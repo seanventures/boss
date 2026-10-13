@@ -89,7 +89,7 @@ export function AppContext({ projectId, app }: { projectId: string; app: AppRow 
               </>
             )}
         </dd>
-        <dt>Templates</dt>
+        <dt title="Connectors and the starter it was built from">Connectors</dt>
         <dd data-testid="np-ctx-templates">
           {applied === null ? <span className="np-dim">Loading…</span>
             : templates.length ? templates.map((t) => `${t.name} v${t.version}`).join(", ") : "None"}

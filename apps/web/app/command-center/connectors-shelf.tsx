@@ -25,11 +25,11 @@ export function ConnectorsShelf({ projectId }: { projectId: string }) {
     <section className="cc-shelf" aria-labelledby="cc-conn-h" data-testid="cc-connectors">
       <div className="cc-sec-h">
         <h2 id="cc-conn-h">App connectors</h2>
-        <span className="cc-sub" title="Code templates: each adds a tested feature, such as sign-in or payments, to a new app">
+        <span className="cc-sub" title="Each adds a tested capability, such as sign-in or payments, built in the app's own look">
           Add sign-in, payments and more
         </span>
       </div>
-      <TemplateGallery projectId={projectId} testId="cc-connectors-gallery" onPick={setPicked} />
+      <TemplateGallery projectId={projectId} kind="connector" testId="cc-connectors-gallery" onPick={setPicked} />
       {picked ? (
         <TemplateSheet projectId={projectId} card={picked} target={{ kind: "new" }} onClose={() => setPicked(null)}
                        onStarted={(runId) => {
