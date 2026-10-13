@@ -620,6 +620,23 @@ _PARALLEL_TOOLS_RULE = (
 )
 
 
+#: HOW A WRITING STAGE WORKS: fewer, larger steps. Measured on a HelpDesk build's implement
+#: stage: 1,337 turns, 227 Reads, 268 Bash (build/test/lint/typecheck re-runs after each small
+#: change), 48 Edits, and ~89% of output tokens spent on reasoning and narration rather than
+#: file content. Every turn is a full model round trip. Writing stages only: a reviewer reads.
+_WRITING_RULE = (
+    "\nWORKING RULES (writing stages):\n"
+    "- No narration between tool calls. Act; summarise once, in one line, at the end.\n"
+    "- Read in batches: every file you need for the next piece of work in ONE turn.\n"
+    "- Write each new file WHOLE with one Write. Use Edit only to change a few lines of an "
+    "existing file, never to build a file up piece by piece.\n"
+    "- Do not re-read a file you just wrote or edited: you already know what is in it.\n"
+    "- Run the full test/build commands when a chunk of work is finished (a whole module, a "
+    "group of routes, a screen), not after every change. To check one thing, run only that "
+    "test file. Fix all failures a run shows before running it again.\n"
+)
+
+
 _SHARED_ROOT_HINTS = ("readme", "package.json", "pyproject", "requirements", "makefile",
                       "docker", ".gitignore", "conftest", "setup.cfg", "tsconfig")
 
@@ -985,7 +1002,8 @@ class ClaudeCodeAgent:
             # and the whole command is then rejected before the process starts — measured on the
             # chat path as `OSError: [Errno 7] Argument list too long: 'nice'`. Over the limit
             # the prompt goes on stdin; under it, nothing changes.
-            body = own_prompt + _PARALLEL_TOOLS_RULE + (sub_agent_rule(fan_out) if fan_out else "")
+            body = (own_prompt + _PARALLEL_TOOLS_RULE + ("" if read_only else _WRITING_RULE)
+                    + (sub_agent_rule(fan_out) if fan_out else ""))
             if len(body.encode("utf-8", "ignore")) > 96_000:
                 return argv, body
             return argv + ["--", body], None

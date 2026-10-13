@@ -1333,7 +1333,8 @@ def _impl_prompt(title, instructions, test_files, test_cmd, *, criteria=(), iac=
         f"{scope}"
         f"- Edit/create implementation files ONLY. You MUST NOT edit, delete, or weaken any test file "
         f"({tf}) — they are the spec. If a test looks wrong, STOP and explain rather than change it.\n"
-        f"- Run `{test_cmd}` from the app directory and iterate until the tests pass. "
+        f"- Run `{test_cmd}` from the app directory when a chunk of work is finished, and "
+        "iterate until the tests pass. "
         "Create parent directories for SQLite/data files before opening them.\n"
         + _run_declaration_rule()
         + "- Do NOT commit. End with a one-line summary of what you changed.\n"
@@ -1811,7 +1812,8 @@ def _solo_prompt(title, instructions, criteria, test_cmd, *, iac=False, web=Fals
             "RULES:\n"
             f"- Work ONLY under {scope}. Do not edit sibling apps.\n"
             "- Write JS/TS API and e2e tests, not Python unittest.\n"
-            f"- Run `{test_cmd}` from {scope} and iterate until it passes. "
+            f"- Run `{test_cmd}` from {scope} when a chunk of work is finished, and iterate "
+            "until it passes. "
             "Create parent directories for SQLite/data files before opening them.\n"
             + _run_declaration_rule()
             + "- Do NOT commit. End with a one-line summary of what you built.\n"
@@ -1823,7 +1825,8 @@ def _solo_prompt(title, instructions, criteria, test_cmd, *, iac=False, web=Fals
         "the tests pass. This is a low-risk task, so one agent does both.\n\n"
         "RULES:\n"
         "- Create the implementation file(s) and stdlib `unittest` test file(s).\n"
-        f"- Run `{test_cmd}` and iterate until it passes. Do NOT commit.\n"
+        f"- Run `{test_cmd}` when a chunk of work is finished, and iterate until it passes. "
+        "Do NOT commit.\n"
         + _run_declaration_rule()
         + "- End with a one-line summary of what you built.\n"
         + (_IAC_GUIDANCE + _IAC_QA_GUIDANCE if iac else "")
