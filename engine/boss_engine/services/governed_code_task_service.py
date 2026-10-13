@@ -746,21 +746,28 @@ def blocked_gate_messages(qg_id: str, failing: list, app_serves_record: Optional
     error = (f"QualityGate FAIL ({qg_id}); failing gates: {failing}. "
              "A human can waive these + open the PR via /override.")
     reason = "quality gate blocked and never_block is disabled"
+    from ..templates.gate import _derived_from_app_serves, install_reason
+
+    install = install_reason(install_failure)
     if "app_serves" in (failing or []):
+        from .preview_service import app_serves_headline
+
         sentence = _app_serves_sentence(app_serves_record)
-        error += f" The app does not serve HTTP. {sentence[:700]}"
+        # Led by the gate that failed and its first error line (crun_247435e1); a failed install
+        # leads instead (below): nothing could start without it.
+        lead = "" if install else f"Blocked: {app_serves_headline(app_serves_record)}. "
+        error = lead + error + f" The app does not serve HTTP. {sentence[:700]}"
         reason = "the app does not serve HTTP, so the build is not done"
     # The template gate's own words (e.g. "cannot run on the micro-VM build substrate: …"), so a
-    # blocked apply says WHY and what to do, not only the gate's name.
+    # blocked apply says WHY and what to do, not only the gate's name — unless it is only the
+    # consequence of the app not starting.
     why = str((template_tests_record or {}).get("error") or "")
-    if "template_tests" in (failing or []) and why:
+    if ("template_tests" in (failing or []) and why
+            and not ("app_serves" in (failing or []) and _derived_from_app_serves(template_tests_record))):
         error += f" Template tests: {why[:700]}"
         if "app_serves" not in (failing or []):
             reason = "the applied template's tests did not pass, so the build is not done"
     # BOSS's own install failed, so no test ran: that is the reason, in npm's words.
-    from ..templates.gate import install_reason
-
-    install = install_reason(install_failure)
     if install:
         error = f"Blocked: {install}. " + error
         reason = f"{install}, so the build is not done"
@@ -6862,7 +6869,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     # waited for a waiver nobody could give.
                     from ..templates.gate import hold_outcome as _tpl_hold_outcome
 
-                    _held = _tpl_hold_outcome(failing, _install_fail[0])
+                    _held = _tpl_hold_outcome(
+                        failing, _install_fail[0], app_serves=app_serves_record,
+                        template_tests=((_template_record or {}).get("evidence") or {}).get("template_tests"))
                     if _held is not None:
                         ctx["template_hold"] = _held
                     c.execute(sql(

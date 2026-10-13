@@ -168,14 +168,9 @@ def _open_to_sandbox(root: Path) -> None:
     """What BOSS copied into a sandboxed preview's tree becomes editable by its uid (npm install
     writes beside the sources). Only that uid and BOSS can enter the 2770 run directory, so this
     opens nothing to anyone else. Never follows a symlink."""
-    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
-        with contextlib.suppress(OSError):
-            os.chmod(dirpath, 0o2777)
-        for name in filenames:
-            path = os.path.join(dirpath, name)
-            if not os.path.islink(path):
-                with contextlib.suppress(OSError):
-                    os.chmod(path, os.stat(path).st_mode | 0o666)
+    from . import workspace_perms
+
+    workspace_perms.open_tree(root)  # executables stay executable (workspace_perms.usable_mode)
 
 
 def _sandboxed_preview_port(ident) -> int:
@@ -2037,8 +2032,13 @@ def _proof_tree(workdir: Path) -> Path:
         os.chmod(proof, 0o2777)
     from .resource_ledger import claim_dir
     claim_dir(proof)
-    shutil.copytree(workdir, proof, dirs_exist_ok=True, symlinks=True,
-                    ignore=shutil.ignore_patterns(".git", "__pycache__", ".npm-cache"))
+    # workspace_perms.copy_tree, never a bare copytree: the copy is BOSS's and the app runs as
+    # the run's uid, so an executable must stay executable for "other" (crun_247435e1:
+    # `sh: 1: tsx: Permission denied`, node_modules/tsx/dist/cli.mjs copied 0776).
+    from . import workspace_perms
+
+    workspace_perms.copy_tree(workdir, proof,
+                              ignore=shutil.ignore_patterns(".git", "__pycache__", ".npm-cache"))
     return proof
 
 
@@ -2115,6 +2115,32 @@ def app_serves_failure_sentence(record: Optional[dict]) -> str:
     else:
         head = "BOSS found no command that runs this app"
     return f"{head}: {error}" if error else f"{head}."
+
+
+def app_serves_headline(record: Optional[dict]) -> str:
+    """The failed serve proof as the ONE line a blocked build leads with: "the app did not start:
+    tsx: Permission denied" — the gate that failed and the app's first error line, never the
+    command or the log tail (those are in app_serves_failure_sentence and the Checks).
+
+    crun_247435e1 ended "Blocked: the template's tests did not pass" although the template's
+    tests passed: the connector smoke check could not run because the app never started, and
+    the error named the consequence instead of the gate (app_serves) that failed."""
+    rec = record or {}
+    error = str(rec.get("error") or "").strip()
+    verb = ("the app did not start" if rec.get("exit_code") is not None or "exited" in error
+            else "the app did not serve HTTP")
+    line = ""
+    if "error: " in error:
+        # _why_it_failed's "error: <line> | <line> log tail: …": the first culprit line.
+        line = error.split("error: ", 1)[1].split(" log tail:", 1)[0].split(" | ", 1)[0]
+    elif error:
+        line = error.split(" log tail:", 1)[0]
+        if ": " in line and line.startswith("the app "):
+            line = line.split(": ", 1)[1]
+    line = re.sub(r"^(?:/bin/)?sh: \d+: ", "", line.strip()).strip(" .")
+    if not line:
+        return verb if rec.get("command") else "BOSS found no command that runs this app"
+    return f"{verb}: {line[:300]}"
 
 
 def probe_route(port: int, path: str, *, timeout: float = 5.0) -> Optional[int]:
@@ -2406,13 +2432,13 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
     if local_ws is not None:
         src = local_ws / "bugbox" if (local_ws / "bugbox" / "package.json").is_file() else local_ws
         try:
-            shutil.copytree(
-                src, workdir, dirs_exist_ok=True, ignore=shutil.ignore_patterns("node_modules")
-            )
+            from . import workspace_perms
+
+            # Modes carried over and, sandboxed, opened to the preview's uid executables included.
+            workspace_perms.copy_tree(src, workdir, ignore=shutil.ignore_patterns("node_modules"),
+                                      symlinks=False, open_to_run=ident is not None)
         except OSError as exc:
             return _fail(f"copy local workspace failed: {exc}")
-        if ident is not None:
-            _open_to_sandbox(workdir)
     else:
         # NOT settings.github_token. That field is the old install-wide way of naming a
         # target repo and is empty wherever the repository was connected through the

@@ -217,7 +217,8 @@ def project_cache_dir(project_id: str) -> Path:
 
 def _copy_tree(src: Path, dst: Path, *, open_modes: bool) -> int:
     """Copy what is readable; skip what is not (the run's uid may chmod its own files). With
-    `open_modes` every directory is 2777 and every file 0666: the run's uid is not the copier.
+    `open_modes` every directory is 2777 and every file 0666 (0777 when executable): the run's uid
+    is not the copier.
     Returns bytes copied."""
     total = 0
     for dirpath, dirnames, filenames in os.walk(src, followlinks=False):
@@ -232,10 +233,16 @@ def _copy_tree(src: Path, dst: Path, *, open_modes: bool) -> int:
                 continue
             try:
                 shutil.copyfile(s, out / name)
-                total += s.stat().st_size
+                st = s.stat()
+                total += st.st_size
             except OSError:
                 continue
-            os.chmod(out / name, 0o666 if open_modes else 0o600)
+            # An executable stays one (a Gradle wrapper's bin/gradle): workspace_perms.usable_mode
+            # for the run's uid, owner-only (0700) in BOSS's own cache.
+            from . import workspace_perms
+
+            own = 0o700 if st.st_mode & 0o111 else 0o600
+            os.chmod(out / name, workspace_perms.usable_mode(own, is_dir=False) if open_modes else own)
     return total
 
 
