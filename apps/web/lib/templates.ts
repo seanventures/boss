@@ -368,7 +368,9 @@ export const LEVEL_WORD: Record<string, string> = {
 };
 export const levelWord = (l: string): string => LEVEL_WORD[l] ?? l.replace(/_/g, " ");
 
-export type StackAdapter = { id: string; label: string; level: string; ready: boolean };
+export type StackAdapter = { id: string; label: string; level: string; ready: boolean;
+                             /** Its languages, front end first (services/stacks.py). */
+                             languages: string[] };
 
 /** What `GET /v1/stacks` (or `/v1/templates`' `stacks`) says BOSS builds: each language's support
  *  level, and the adapters with theirs. Empty when the API cannot say. */
@@ -378,7 +380,8 @@ export function parseStackSupport(body: unknown): { levels: Record<string, strin
   for (const l of arr(caps.languages)) { const o = obj(l); if (str(o.key)) levels[str(o.key)] = str(o.support_level); }
   const adapters = arr(caps.adapters).map((a) => {
     const o = obj(a);
-    return { id: str(o.id), label: str(o.label), level: str(o.support_level), ready: o.ready !== false };
+    return { id: str(o.id), label: str(o.label), level: str(o.support_level), ready: o.ready !== false,
+             languages: arr(o.languages).map(String) };
   }).filter((a) => a.id);
   return { levels, adapters };
 }

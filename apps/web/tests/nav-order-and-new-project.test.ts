@@ -214,7 +214,7 @@ describe("choosing the workflow", () => {
     // It is a step in the New Project wizard now rather than a dropdown beside the box: one
     // card per path, each carrying the description and the gates, because those are the whole
     // reason one path is right and another is not — and a <select> hides them.
-    expect(DWP).toContain('data-testid={`dw-new-workflow-${w.workflow_key}`}');
+    expect(DWP).toContain('`dw-new-workflow-${w.workflow_key}`');
     expect(DWP).toContain('data-testid="dw-new-workflow-default"');
     expect(CT).toContain('data-testid="ct-iterate-workflow"');
     expect(CT).toContain('name="workflow_version_id"');

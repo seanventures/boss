@@ -56,7 +56,7 @@ export function applyBlocker(o: {
   return "";
 }
 
-export function TemplateSheet({ projectId, card, target, onStarted, onClose, initialName = "", initialNote = "", initialWorkflow = "" }: {
+export function TemplateSheet({ projectId, card, target, onStarted, onClose, initialName = "", initialNote = "", initialWorkflow = "", initialStack = "" }: {
   projectId: string;
   card: TemplateCard;
   target: ApplyTarget;
@@ -67,6 +67,8 @@ export function TemplateSheet({ projectId, card, target, onStarted, onClose, ini
   initialNote?: string;
   /** The workflow the New project composer had chosen: the sheet starts on it, never on the default. */
   initialWorkflow?: string;
+  /** The new app's stack the composer had chosen (a language key): the sheet starts on it. */
+  initialStack?: string;
 }) {
   const [detail, setDetail] = useState<TemplateDetail | null>(null);
   const [loadError, setLoadError] = useState("");
@@ -116,8 +118,10 @@ export function TemplateSheet({ projectId, card, target, onStarted, onClose, ini
     // INTO AN APP, THE APP'S STACK: a Java template applied to a Node app because Java was first
     // in the list (walk). Its stack when known; else none, and the person picks.
     if (target.kind === "add") { setStack(target.stack && card.stacks.includes(target.stack) ? target.stack : ""); return; }
-    setStack(card.stacks.find((s) => !installed || installed.has(s)) ?? card.stacks[0] ?? "");
-  }, [card.stacks, installed, picked, target]);
+    const fits = (s: string) => !installed || installed.has(s);
+    setStack(initialStack && card.stacks.includes(initialStack) && fits(initialStack) ? initialStack
+      : card.stacks.find(fits) ?? card.stacks[0] ?? "");
+  }, [card.stacks, installed, picked, target, initialStack]);
 
   const secrets = detail?.secrets ?? card.secrets;
   const egress = detail?.egress ?? card.egress;

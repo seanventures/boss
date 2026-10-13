@@ -22,6 +22,7 @@ vi.mock("../app/factory/links-actions", () => ({
 const { NewProjectComposer } = await import("../app/workflows/new-project-composer");
 const { readComposeIntent } = await import("../app/url-intent");
 const { resetCatalogue } = await import("../components/v2/templates/catalogue");
+const { overBudget } = await import("./_helpers/copy-budget");
 
 const BRIEF = { type: "object", required: ["directive", "title"],
                 properties: { directive: { type: "string", format: "textarea" }, title: { type: "string" },
@@ -58,7 +59,7 @@ const CATALOGUE: CatalogueEntry[] = Object.entries(STEPS).map(([key, steps]) => 
 }));
 
 const APPS = { apps: [
-  { key: "crun_lead2", app: "Lead-Triage Inbox", run_id: "crun_lead2", builders: ["pm", "engineering_captain", "qa"],
+  { key: "crun_lead2", app: "Lead-Triage Inbox", app_key: "lead", run_id: "crun_lead2", builders: ["pm", "engineering_captain", "qa"],
     state: "pr_open", word: "PR open", builds: 2, run_ids: ["crun_lead2", "crun_lead1"], pr_number: 186, pr_state: "open",
     preview: { status: "running", url: "/v1/previews/prev_9/web/" },
     repo: "acme/sandbox", brief: "Lead triage", attempts: [
@@ -74,6 +75,9 @@ const TEMPLATES = { templates: [
   { id: "tpl_login", template_key: "login-oauth", version: "1.0.0", source: "builtin", status: "active", name: "Login",
     summary: "Google, GitHub or BOSS sign-in", stacks: ["node", "python"], labels: [], adds: ["routes"], egress: [],
     secrets: [], tested: ["node"], kind: "connector" },
+  { id: "tpl_stripe", template_key: "stripe-checkout", version: "1.0.0", source: "builtin", status: "active", name: "Stripe Checkout",
+    summary: "Card payments", stacks: ["node", "python"], labels: [], adds: ["routes"], egress: ["api.stripe.com"],
+    secrets: [], tested: ["node"], kind: "connector" },
   { id: "tpl_hello", template_key: "hello", version: "1.0.0", source: "builtin", status: "active", name: "Hello endpoint",
     summary: "Adds GET /hello", stacks: ["node"], labels: [], adds: ["GET /hello"], egress: [],
     secrets: [], tested: ["node"], kind: "idea" },
@@ -81,6 +85,14 @@ const TEMPLATES = { templates: [
     name: "Banking lab", summary: "Planted flaws", stacks: ["java"], labels: ["insecure_by_design"], adds: [], egress: [],
     secrets: [], tested: [] },
 ] };
+
+/** What GET /v1/stacks says BOSS builds (services/stacks.py ADAPTERS), two of them. */
+const STACK_ADAPTERS = [
+  { id: "react-vite+express+postgres", label: "React + Vite, Express, PostgreSQL", support_level: "experimental",
+    languages: ["node"], ready: true },
+  { id: "react-vite+fastapi+postgres", label: "React + Vite, FastAPI, PostgreSQL", support_level: "experimental",
+    languages: ["node", "python"], ready: true },
+];
 
 let posts: Record<string, unknown>[] = [];
 function stubApi() {
@@ -95,7 +107,11 @@ function stubApi() {
     if (url.pathname === "/v1/factory/apps") return json(APPS);
     if (url.pathname === "/v1/templates") return json(TEMPLATES);
     if (url.pathname.startsWith("/v1/templates/")) return json({ ...TEMPLATES.templates[0], manifest: {}, validation: { ok: true }, files: [], versions: [] });
+    if (url.pathname === "/v1/apps/lead/templates") {
+      return json({ templates: [{ id: "a1", template_key: "login-oauth", name: "Login", version: "1.0.0", stack: "node", status: "applied" }] });
+    }
     if (url.pathname.startsWith("/v1/apps/") && url.pathname.endsWith("/templates")) return json({ templates: [{ id: "t", template_key: "x", stack: "node", status: "applied" }] });
+    if (url.pathname === "/v1/stacks") return json({ supported: { languages: [], adapters: STACK_ADAPTERS } });
     if (url.pathname === "/api/project-agents") return json({ default_roles: ["pm"] });
     if (url.pathname === "/api/agent") return json({ items: [] });
     const view = url.searchParams.get("view");
@@ -147,14 +163,25 @@ describe("Connectors and ideas (operator, 2026-10-13: there is no Template tab)"
 
   it("New app starts from an idea: the catalogue's starter first, one list, never a training lab", async () => {
     await mount();
+    expect($('[data-testid="np-ideas-open"]')?.textContent).toContain("Start from an idea");
+    await click($('[data-testid="np-ideas-open"]'));
     const ideas = $('[data-testid="np-ideas"]')!;
-    expect(ideas.textContent).toContain("Start from an idea");
-    const pills = [...ideas.querySelectorAll("button")].map((b) => b.textContent);
-    expect(pills[0]).toBe("Hello endpoint");                    // the starter, before the written briefs
-    expect(pills.length).toBeGreaterThan(1);                     // …and the written briefs after it
+    const titles = [...ideas.querySelectorAll(".np-idea b")].map((b) => b.textContent);
+    expect(titles[0]).toBe("Hello endpoint");                   // the starter, before the written briefs
+    expect(titles.length).toBeGreaterThan(1);                    // …and the written briefs after it
     expect(document.body.textContent).not.toContain("Banking lab");
+    // The filter tabs: a starter app has a reference; a team tool is a written brief.
+    await click($('[data-testid="np-ideas-tab-starter"]'));
+    expect([...$('[data-testid="np-ideas"]')!.querySelectorAll(".np-idea b")].map((b) => b.textContent)).toEqual(["Hello endpoint"]);
+    await click($('[data-testid="np-ideas-tab-team"]'));
+    expect($('[data-testid="np-idea-hello-endpoint"]')).toBeNull();
+    await click($('[data-testid="np-ideas-tab-all"]'));
+    // A drawn preview where the mockup has one; the glyph cover otherwise.
+    expect($('[data-testid="np-idea-hello-endpoint"] svg')?.getAttribute("aria-label")).toBe("Hello endpoint preview");
     await click($('[data-testid="np-idea-hello-endpoint"]'));
+    expect($('[data-testid="np-ideas-dialog"]')).toBeNull();
     expect(($('[data-testid="dw-new-directive"]') as HTMLTextAreaElement).value).toContain("Build Hello endpoint");
+    expect(($('[data-testid="dw-new-title"]') as HTMLInputElement).value).toBe("Hello endpoint");
     await click($('[data-testid="np-idea-reference"]'));         // its tested reference, with its tests as a gate
     expect($('[data-testid="tpl-sheet"]')?.textContent).toContain("Hello endpoint");
     expect(posts).toEqual([]);
@@ -163,12 +190,14 @@ describe("Connectors and ideas (operator, 2026-10-13: there is no Template tab)"
   it("a connector chosen in New app: Start opens its sheet with the name and brief already in", async () => {
     await mount();
     const row = $('[data-testid="np-connectors"]')!;
-    expect(row.textContent).toContain("Add a connector");
+    expect(row.textContent).toContain("Connectors");
     expect(row.textContent).not.toContain("Hello endpoint");    // an idea is not a connector
     const chip = $('[data-testid="np-connector-login-oauth"]')!;
     expect(chip.getAttribute("title")).toContain("Built in your app's own look");
+    expect(chip.textContent).toContain("+ Add");
     await click(chip);
     expect(chip.getAttribute("aria-pressed")).toBe("true");
+    expect(chip.textContent).toContain("Added ✓");
     await type($('[data-testid="dw-new-title"]'), "HelpDesk AI");
     await type($('[data-testid="dw-new-directive"]'), "A support desk for customers and agents, with tickets.");
     await click($('[data-testid="dw-new-start"]'));
@@ -176,6 +205,72 @@ describe("Connectors and ideas (operator, 2026-10-13: there is no Template tab)"
     const sheet = $('[data-testid="tpl-sheet"]')!;
     expect(sheet.textContent).toContain("Login");
     expect((sheet.querySelector('[data-testid="tpl-note"]') as HTMLTextAreaElement).value).toContain("A support desk");
+  });
+
+  it("one connector per build: once one is added, the others say why they wait", async () => {
+    await mount();
+    await click($('[data-testid="np-connector-login-oauth"]'));
+    const stripe = $('[data-testid="np-connector-stripe-checkout"]')!;
+    expect(stripe.getAttribute("aria-disabled")).toBe("true");
+    expect(stripe.getAttribute("title")).toContain("One connector per build");
+    await click(stripe);
+    expect(stripe.getAttribute("aria-pressed")).toBe("false");
+    expect($('[data-testid="np-connector-login-oauth"]')!.getAttribute("aria-pressed")).toBe("true");
+    await click($('[data-testid="np-connector-login-oauth"]'));   // removing it frees the others
+    expect(stripe.getAttribute("aria-disabled")).toBeNull();
+  });
+
+  it("the stack chosen travels: in the brief the builder reads, and into the connector sheet", async () => {
+    await mount();
+    const stack = $('[data-testid="np-stack"]') as HTMLSelectElement;
+    expect(stack.value).toBe("");
+    expect([...stack.options].map((o) => o.textContent)).toContain("Node · React + Vite, Express, PostgreSQL");
+    expect(stack.getAttribute("title")).toContain("React + Vite, FastAPI, PostgreSQL: experimental");
+    await choose(stack, "react-vite+fastapi+postgres");
+    await type($('[data-testid="dw-new-title"]'), "HelpDesk AI");
+    await type($('[data-testid="dw-new-directive"]'), "A support desk for customers and agents, with tickets.");
+    await click($('[data-testid="np-connector-login-oauth"]'));
+    await click($('[data-testid="dw-new-start"]'));
+    const sheet = $('[data-testid="tpl-sheet"]')!;
+    expect((sheet.querySelector('[data-testid="tpl-note"]') as HTMLTextAreaElement).value)
+      .toContain("Stack: React + Vite, FastAPI, PostgreSQL.");
+    expect(sheet.querySelector('[data-testid="tpl-stack-python"]')?.getAttribute("aria-checked")).toBe("true");
+  });
+
+  it("keeps its copy to labels and tooltips: New app, the ideas dialog, Add a feature", async () => {
+    // What this redesign drew; the steps' own lines and Start's reason are the timeline's copy.
+    const drawn = () => [$('[data-testid="np-brief"]'), $(".np-head"), $(".np-plan-head"), $('[data-testid="np-flow"]'),
+                         $('[data-testid="np-deploy-note"]'), $(".np-foot .np-actions")]
+      .flatMap((el) => (el ? overBudget(el) : []));
+    await mount();
+    expect(drawn()).toEqual([]);
+    await click($('[data-testid="np-ideas-open"]'));
+    expect(overBudget($('[data-testid="np-ideas-dialog"]')!)).toEqual([]);
+    await click($('[data-testid="np-ideas-close"]'));
+    expect($('[data-testid="np-ideas-dialog"]')).toBeNull();
+    await click($('[data-testid="np-mode-add"]'));
+    await click($('[data-testid="np-app-crun_lead2"]'));
+    expect(drawn()).toEqual([]);
+  });
+
+  it("New app's Start sends the stack chosen in the brief", async () => {
+    await mount();
+    await choose($('[data-testid="np-stack"]'), "react-vite+express+postgres");
+    await type($('[data-testid="dw-new-title"]'), "HelpDesk AI");
+    await type($('[data-testid="dw-new-directive"]'), "A support desk for customers and agents, with tickets.");
+    await click($('[data-testid="dw-new-start"]'));
+    expect(posts).toHaveLength(1);
+    expect(String((posts[0].input as Record<string, unknown>).directive))
+      .toBe("A support desk for customers and agents, with tickets.\n\nStack: React + Vite, Express, PostgreSQL.");
+  });
+
+  it("Add a feature: a connector the app already carries is shown, disabled", async () => {
+    await mount({ mode: "add", appKey: "crun_lead2" });
+    const login = $('[data-testid="np-connector-login-oauth"]')!;
+    expect(login.textContent).toContain("Already in the app");
+    expect(login.getAttribute("aria-disabled")).toBe("true");
+    await click(login);
+    expect(login.getAttribute("aria-pressed")).toBe("false");
   });
 
   it("Add a feature offers the connectors that fit the app, after the app is picked", async () => {
