@@ -36,6 +36,7 @@ from sqlalchemy.exc import DBAPIError, InterfaceError, OperationalError, Program
 from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 
 from boss_engine.ports import configure_engine_ports
+from boss_engine.identity.authn import AuthnError
 from boss_engine.services.coordination_read_model import (
     CoordinationSnapshot,
     build_coordination_snapshot,
@@ -1714,6 +1715,20 @@ async def identity_constraint_conflict(_request: Request, exc: DBAPIError):
                                                       "message": "Add another Owner first."})
     LOGGER.exception("database error (request %s)", getattr(_request.state, "request_id", None))
     return _internal_error_response(_request, exc)
+
+
+@app.exception_handler(AuthnError)
+async def authn_error_answers_with_its_own_status(_request: Request, exc: AuthnError):
+    """A refused credential is the caller's problem, never a 500.
+
+    `AuthnError` carries its stable code and HTTP status (401 unauthenticated, 403 step-up …).
+    The OIDC admin routes (and `/v1/apps/{app_key}/sign-in-with-boss`) resolve the caller with
+    `current_context`, which raises it; with no handler it fell through to the catch-all below
+    and an anonymous GET answered "500 AuthnError".
+    """
+    return JSONResponse(status_code=int(getattr(exc, "status", 401) or 401),
+                        content={"error": getattr(exc, "code", "unauthenticated")},
+                        headers={"Cache-Control": "no-store"})
 
 
 @app.exception_handler(Exception)
