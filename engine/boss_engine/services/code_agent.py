@@ -681,6 +681,13 @@ _WRITING_RULE = (
 
 _SANDBOX_FACTS: dict = {}
 
+#: BOSS's own install is a clean `npm install` with no peer-dependency escape hatch. HelpDesk AI
+#: (crun_6eaa478dc33a42c6bdb7) put eslint 9 beside eslint-plugin-react-hooks 4 (peer eslint <= 8):
+#: the agent's tree installed, BOSS's clean install failed with ERESOLVE, and the build blocked.
+CLEAN_INSTALL_FACT = (
+    "- BOSS installs with a clean `npm install`; peer-dependency errors fail the build. Pick "
+    "versions that agree (e.g. eslint 9 needs eslint-plugin-react-hooks >=5).")
+
 
 def sandbox_facts() -> str:
     """WHAT THE BUILD SANDBOX HAS, read from this process's own environment (the agent runs
@@ -709,6 +716,7 @@ def sandbox_facts() -> str:
     arch = {"aarch64": "arm64", "x86_64": "x64"}.get(platform.machine(), platform.machine())
     lines.append(f"- {platform.system().lower()}-{arch}: a native npm module with no prebuilt binary for it fails to "
                  "build here (argon2 does). Use pure-JS packages: bcryptjs for password hashing.")
+    lines.append(CLEAN_INSTALL_FACT)
     text = "\nSANDBOX (facts, no need to check them):\n" + "\n".join(lines) + "\n"
     _SANDBOX_FACTS["text"] = text
     return text

@@ -732,7 +732,8 @@ def _app_serves_sentence(record: Optional[dict]) -> str:
 
 
 def blocked_gate_messages(qg_id: str, failing: list, app_serves_record: Optional[dict],
-                          template_tests_record: Optional[dict] = None) -> tuple[str, str]:
+                          template_tests_record: Optional[dict] = None,
+                          install_failure: Optional[dict] = None) -> tuple[str, str]:
     """(code_task_runs.error, partial-PR rescue reason) for a run the quality gate blocked.
 
     The error used to name the failing gates only — "failing gates: ['app_serves']" — so an
@@ -756,6 +757,13 @@ def blocked_gate_messages(qg_id: str, failing: list, app_serves_record: Optional
         error += f" Template tests: {why[:700]}"
         if "app_serves" not in (failing or []):
             reason = "the applied template's tests did not pass, so the build is not done"
+    # BOSS's own install failed, so no test ran: that is the reason, in npm's words.
+    from ..templates.gate import install_reason
+
+    install = install_reason(install_failure)
+    if install:
+        error = f"Blocked: {install}. " + error
+        reason = f"{install}, so the build is not done"
     return error, reason
 
 
@@ -1433,6 +1441,9 @@ FIRST_PASS_CHECKLIST = (
     "object), ids well-formed and in range. Bad input is a 4xx, never a 500.\n"
     "- No secret, password or key in code or committed config: read it from the environment.\n"
     "- Exactly what the criteria name: nothing unasked, no unused dependencies.\n"
+    "- BOSS installs with a clean `npm install`; peer-dependency errors fail the build. Pick "
+    "versions that agree (e.g. eslint 9 needs eslint-plugin-react-hooks >=5). Run BOSS's exact "
+    f"install once to prove it: `{verification_target.NPM_INSTALL_CMD}`.\n"
 )
 
 
@@ -4125,37 +4136,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 last_verify_output = output
             return result
 
-        def _run_verify(*, record: bool = True):
-            """Authoritative test command, scoped to the official app directory."""
-            nonlocal last_verify_cwd, last_verify_output
-            tampered_manifest = verification_target.verify_manifest_tampered(
-                _pinned_manifest, root)
-            if tampered_manifest:
-                # Fail this attempt like a frozen-test edit, then put the base version back so
-                # neither the next attempt nor the pull request carries the agent's copy.
-                from .sandbox import CommandResult
-                from .verify_manifest import MANIFEST_NAME
-
-                _manifest_path = Path(root) / MANIFEST_NAME
-                if _pinned_manifest.text is None:
-                    _manifest_path.unlink(missing_ok=True)
-                else:
-                    _ws_write(_manifest_path, _pinned_manifest.text)
-                if record:
-                    last_verify_output = f"[boss] {tampered_manifest}\n"
-                return CommandResult(command="", argv=[], exit_code=1, duration_ms=0,
-                                     timed_out=False, stdout="", stderr=tampered_manifest)
-            plan = verification_target.resolve_gate_plan(
-                spec, title, root, app_id=_app_id, changed=_changed_paths(),
-                pinned=_pinned_manifest, layout=_stack_layout)
-            _last_stack_plan[0] = plan.stack if plan.source == "stack" else None
-            cwd = plan.cwd
-            try:
-                last_verify_cwd = str(cwd.relative_to(root)) if cwd != root else "."
-            except ValueError:
-                last_verify_cwd = str(cwd)
-            if plan.runs_steps:
-                return _run_manifest_verify(plan, record=record)
+        def _prepare_app(plan, cwd):
+            """BOSS's preparation of the app before its install: the verify script and the
+            package.json hardening (prepare_web_verify_env). (app_cwd, prep, prep_note)."""
             # The command runs where it was written for (the root, for `npm --prefix app test`);
             # BOSS's own preparation — install, browsers, the verify script — happens in the app
             # directory that command names.
@@ -4189,17 +4172,94 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     f"[boss] restore restored={bool(restored.get('restored'))} "
                     f"changed={(prep.get('changed') or [])[:16]}\n"
                 )
+            return app_cwd, prep, prep_note
+
+        def _install_timeout() -> int:
+            return max(300, int(getattr(settings, "sandbox_validation_timeout_seconds", 120) or 120))
+
+        def _boss_install(app_cwd, prep):
+            """BOSS's one install (NPM_INSTALL_CMD), the command every gate runs."""
+            install = sandbox.run(
+                str(prep.get("install_command") or verification_target.NPM_INSTALL_CMD),
+                cwd=str(app_cwd),
+                timeout=_install_timeout(),
+            )
+            _emit_cmd("install dependencies", install)
+            return install
+
+        def _install_check():
+            """BOSS's install exactly as its gate runs it — the same preparation, the same
+            command, the same directory — on the tree as it now stands. (failure, output) when
+            it fails, else None. Only for the npm gate (a manifest or stack plan installs in its
+            own steps, and _run_verify names a failure there)."""
+            if use_microvm or not str(test_cmd or "").startswith("npm "):
+                return None
+            if verification_target.verify_manifest_tampered(_pinned_manifest, root):
+                return None
+            plan = verification_target.resolve_gate_plan(
+                spec, title, root, app_id=_app_id, changed=_changed_paths(),
+                pinned=_pinned_manifest, layout=_stack_layout)
+            if plan.runs_steps:
+                return None
+            app_cwd, prep, _note = _prepare_app(plan, plan.cwd)
+            install = _boss_install(app_cwd, prep)
+            failure = verification_target.install_failure(install)
+            if failure is None:
+                return None
+            failure["boss_added"] = [str(c).split(":", 1)[1] for c in (prep.get("changed") or [])
+                                     if str(c).startswith("add:")]
+            try:
+                failure["cwd"] = str(Path(app_cwd).relative_to(root)) or "."
+            except ValueError:
+                failure["cwd"] = str(app_cwd)
+            return failure, (install.stdout or "") + "\n" + (install.stderr or "")
+
+        # The last recorded verify's failed dependency install (verification_target.install_failure),
+        # or None: a fix round is told it was the install, and a run that ends on it says so.
+        _install_fail: list = [None]
+
+        def _run_verify(*, record: bool = True):
+            """Authoritative test command, scoped to the official app directory. BOSS's own
+            install (NPM_INSTALL_CMD, the one every gate runs) is its first step."""
+            result = _run_verify_once(record=record)
+            if record:
+                _install_fail[0] = verification_target.install_failure(result)
+            return result
+
+        def _run_verify_once(*, record: bool = True):
+            nonlocal last_verify_cwd, last_verify_output
+            tampered_manifest = verification_target.verify_manifest_tampered(
+                _pinned_manifest, root)
+            if tampered_manifest:
+                # Fail this attempt like a frozen-test edit, then put the base version back so
+                # neither the next attempt nor the pull request carries the agent's copy.
+                from .sandbox import CommandResult
+                from .verify_manifest import MANIFEST_NAME
+
+                _manifest_path = Path(root) / MANIFEST_NAME
+                if _pinned_manifest.text is None:
+                    _manifest_path.unlink(missing_ok=True)
+                else:
+                    _ws_write(_manifest_path, _pinned_manifest.text)
+                if record:
+                    last_verify_output = f"[boss] {tampered_manifest}\n"
+                return CommandResult(command="", argv=[], exit_code=1, duration_ms=0,
+                                     timed_out=False, stdout="", stderr=tampered_manifest)
+            plan = verification_target.resolve_gate_plan(
+                spec, title, root, app_id=_app_id, changed=_changed_paths(),
+                pinned=_pinned_manifest, layout=_stack_layout)
+            _last_stack_plan[0] = plan.stack if plan.source == "stack" else None
+            cwd = plan.cwd
+            try:
+                last_verify_cwd = str(cwd.relative_to(root)) if cwd != root else "."
+            except ValueError:
+                last_verify_cwd = str(cwd)
+            if plan.runs_steps:
+                return _run_manifest_verify(plan, record=record)
+            app_cwd, prep, prep_note = _prepare_app(plan, cwd)
             if str(test_cmd or "").startswith("npm "):
-                install_timeout = max(
-                    300,
-                    int(getattr(settings, "sandbox_validation_timeout_seconds", 120) or 120),
-                )
-                install = sandbox.run(
-                    str(prep.get("install_command") or verification_target.NPM_INSTALL_CMD),
-                    cwd=str(app_cwd),
-                    timeout=install_timeout,
-                )
-                _emit_cmd("install dependencies", install)
+                install_timeout = _install_timeout()
+                install = _boss_install(app_cwd, prep)
                 if install.exit_code != 0:
                     last_verify_output = verification_target.verify_log(
                         prep_note.removeprefix("[boss] ").rstrip("\n"), [install])
@@ -4913,6 +4973,39 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 return {"summary": "(the implement stage reached its time limit)",
                         "cost_usd_micros": 0, "usage": {}, "model": model, "session_id": None}
 
+        _cost_extra = [0]
+
+        def _install_until_it_passes(agent, model, session_id, stage: str):
+            """EDIT -> BOSS'S EXACT INSTALL -> REPEAT, IN THE SAME WARM SESSION, BEFORE ANY GATE.
+            A failed install goes straight back to the session that wrote the tree, with npm's
+            error and one instruction, and BOSS installs again after every reply, until it passes,
+            the rounds run out or the implement budget ends. So the agent cannot hand off a
+            workspace BOSS cannot install (HelpDesk AI: crun_6eaa478dc33a42c6bdb7 and its retry
+            crun_1fdfea1c9c904a8083dd each fixed one conflict after BOSS's last check). Returns
+            the session id to continue with."""
+            sid = [session_id]
+
+            def _emit(kind, data):
+                with _transaction(engine) as c:
+                    emit_event(c, project_id, kind, "boss", "code_task_run", run_id,
+                               {"stage": stage, **data})
+
+            def _ask(prompt) -> bool:
+                if not sid[0]:
+                    return False
+                try:
+                    rc = agent.run_role(prompt, root, model=model, resume_session_id=sid[0])
+                except Exception:  # noqa: BLE001 — the verify that follows names the failure
+                    _log_caught(logger)
+                    return False
+                _cost_extra[0] += int(rc.get("cost_usd_micros") or 0)
+                sid[0] = rc.get("session_id") or sid[0]
+                return True
+
+            verification_target.install_rounds(_install_check, _ask,
+                                               over_budget=_impl_over_budget, emit=_emit)
+            return sid[0]
+
         _budget_exhausted = [False]
         for attempt in range(max_repair + 2):
             _impl_ran[0] = True
@@ -5108,6 +5201,10 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     cost += int(rc.get("cost_usd_micros") or 0)
                     impl_session_id = rc.get("session_id") or impl_session_id
                     r2 = {**r2, "summary": (rc.get("summary") or r2.get("summary", ""))}
+                # BOSS's own install passes before the hand-off is judged (or the rounds end).
+                impl_session_id = _install_until_it_passes(a, m, impl_session_id, "implement")
+                cost += _cost_extra[0]
+                _cost_extra[0] = 0
                 if do_separate_tests:
                     tests_untouched = tests_before == _hash_files(root, test_files)
                     tampered = [p for p in test_files
@@ -5191,6 +5288,17 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 if not use_microvm:
                     for p, content in tests_orig.items():
                         _ws_write(root / p, content)
+            elif _install_fail[0] and not use_microvm:
+                # BOSS's clean install failed: nothing else ran. Said as that, with npm's error
+                # and what to do, not as failing tests to fix "in the implementation only".
+                evidence_text = verification_target.install_repair_evidence(
+                    _install_fail[0], fail_output)
+                with _transaction(engine) as c:
+                    emit_event(c, project_id, "code_task.install_failed", "boss",
+                               "code_task_run", run_id,
+                               {"stage": "implement", "attempt": attempt,
+                                "command": _install_fail[0].get("command"),
+                                "summary": _install_fail[0].get("summary")})
             else:
                 evidence_text = verification_target.attach_failing_sources(
                     f"$ {test_cmd} (exit {test_exit_code})\n{fail_output[-3000:]}",
@@ -6167,7 +6275,12 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     if ("written_tests_pass" in failing
                             and getattr(settings, "code_test_arbiter_enabled", True)):
                         _tr = _run_verify()
-                        if not _tr.ok:
+                        if not _tr.ok and _install_fail[0]:
+                            # BOSS's install failed, so no test ran: nothing for an arbiter to
+                            # judge. The warm session gets npm's error and what to do.
+                            finding_bits.append(verification_target.install_repair_evidence(
+                                _install_fail[0], (_tr.stdout or "") + (_tr.stderr or "")))
+                        elif not _tr.ok:
                             with _transaction(engine) as c:
                                 _phase(c, "test_arbitration")
                             set_llm_context(routes=_route_ids(), db_engine=engine, project_id=project_id,
@@ -6267,6 +6380,10 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                             root, model=m_fix, resume_session_id=impl_session_id)
                         impl_session_id = rfix.get("session_id") or impl_session_id
                         cost += int(rfix.get("cost_usd_micros") or 0)
+                        impl_session_id = _install_until_it_passes(
+                            a_fix, m_fix, impl_session_id, "fix_round")
+                        cost += _cost_extra[0]
+                        _cost_extra[0] = 0
                         _after = {fc.path: fc.content for fc in sandbox.diff()}
                         if _answered:
                             _record_comment_responses(
@@ -6714,9 +6831,15 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         "failing_gates": failing}
             elif action == "block":
                 _finish_vms(success=False)  # retain the stage VMs for inspection
+                if not _install_fail[0]:
+                    from ..templates.gate import install_failure_of as _tpl_install_failure
+
+                    _install_fail[0] = _tpl_install_failure(
+                        ((_template_record or {}).get("evidence") or {}).get("template_tests"))
                 _blocked_error, _blocked_reason = blocked_gate_messages(
                     qg_id, failing, app_serves_record,
-                    ((_template_record or {}).get("evidence") or {}).get("template_tests"))
+                    ((_template_record or {}).get("evidence") or {}).get("template_tests"),
+                    _install_fail[0])
                 # Human escape hatch: preserve the produced diff so an operator can WAIVE the failing
                 # gate(s) and open the PR without a re-run. Governance is kept — gates the human does
                 # NOT waive still block, and the PR still carries its own merge-gate Decision.
@@ -6731,14 +6854,15 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     _release(budget, c, project_id, reservation_id, f"quality gate failed: {qg_id}", run_id=run_id)
                     ctx = {**fctx, "pending_diff": pending, "failing_gates": failing,
                            "quality_gate_id": qg_id, "pr_summary": r2.get("summary", "")[:600],
-                           **({"sandbox_task_id": guest_vm_ids[-1]} if guest_vm_ids else {})}
+                           **({"sandbox_task_id": guest_vm_ids[-1]} if guest_vm_ids else {}),
+                           **({"install_failure": _install_fail[0]} if _install_fail[0] else {})}
                     # A TEMPLATE GATE CANNOT BE WAIVED (factory_view.UNWAIVABLE_GATES), so a build
                     # it stopped is not waiting on anybody's waiver: blocked and done, saying why
                     # and what to do. Parked at awaiting_gate_override, the workflow above it
                     # waited for a waiver nobody could give.
                     from ..templates.gate import hold_outcome as _tpl_hold_outcome
 
-                    _held = _tpl_hold_outcome(failing)
+                    _held = _tpl_hold_outcome(failing, _install_fail[0])
                     if _held is not None:
                         ctx["template_hold"] = _held
                     c.execute(sql(
@@ -6761,7 +6885,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 from ..templates.gate import hold_outcome as _tpl_hold_outcome
 
                 _held = _tpl_hold_outcome([g for g in TEMPLATE_GATES
-                                           if (_tpl_gates or {}).get(g) is not True])
+                                           if (_tpl_gates or {}).get(g) is not True],
+                                          _install_fail[0])
                 c.execute(sql("UPDATE code_task_runs SET status='blocked', phase='done', error=:e, "
                               "updated_at=now() WHERE id=:id"),
                           {"e": (_held or {}).get("error") or template_push_hold(_tpl_applies, _tpl_gates),
