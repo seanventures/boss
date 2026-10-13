@@ -1216,13 +1216,14 @@ def test_budget(criteria, budget: Optional[int] = None) -> int:
     never more than the project's budget (build_test_budget, default 20), however long the brief.
     A HelpDesk-size brief's suite grew with the brief: 76 KB of tests and 27.6 minutes of
     write_tests, then 81 minutes of implement making them all pass."""
-    from .build_scope import MORE_TESTS_BUDGET_FACTOR, more_tests_pass
+    from .build_scope import MORE_TESTS_BUDGET_FACTOR, more_tests_light, more_tests_pass
 
     n = max(1, len([c for c in (criteria or []) if str(c).strip()]))
     cap = int(budget or TEST_BUDGET_DEFAULT)
     if more_tests_pass():
-        # Pass 2 adds coverage: twice pass 1's budget, not sized to the criteria.
-        return max(1, cap * MORE_TESTS_BUDGET_FACTOR)
+        # Pass 2 adds coverage: twice pass 1's budget, not sized to the criteria. A light pass
+        # (a hotfix's regression tests) gets pass 1's budget.
+        return max(1, cap if more_tests_light() else cap * MORE_TESTS_BUDGET_FACTOR)
     return max(1, min(cap, 3 * n + 3))
 
 
@@ -1257,13 +1258,29 @@ def _test_scope_clause(criteria, budget: Optional[int] = None) -> str:
     a few edge cases is a suite a build can pass; the plan makes the contract explicit up front.
     The cap (test_budget) never grows past the project's budget, and BOSS counts afterwards.
     """
+    from .build_scope import more_tests_pass
+
     n = max(1, len([c for c in (criteria or []) if str(c).strip()]))
     cap = test_budget(criteria, budget or get_llm_context().get("test_budget"))
+    if more_tests_pass():
+        # PASS 2 (two_pass): the P0/P1 suite exists and passes; this pass is P2 coverage.
+        scope = (
+            f"- At most {cap} NEW test cases, all P2: edge cases, error paths, input validation, "
+            "API contracts (status codes, response shapes), and browser tests only where the "
+            "task asked for them. Pass 1's P0/P1 tests stay as they are; do not duplicate "
+            "them.\n")
+    else:
+        # PASS 1: only the critical paths, labelled, so the More tests pass knows what is left.
+        scope = (
+            f"- At most {cap} test cases in total, ONLY the critical paths, each named with its "
+            "priority: P0 = the app starts, sign-in/authorization, the core happy path; P1 = "
+            "the main path of each requested feature. One per acceptance criterion "
+            f"({n} given) FIRST. "
+            "No P2 (edge cases, error paths, contract detail): a More tests pass on this branch "
+            "adds those after the PR and preview.\n")
     return (
         "\nTEST SCOPE (mandatory; BOSS counts the cases and trims a suite that is over):\n"
-        f"- At most {cap} test cases in total. One per acceptance criterion ({n} given) FIRST; "
-        "then a second for the riskiest criteria; edge cases only if the budget remains. A "
-        "small suite that covers what was asked: more coverage comes in a later pass.\n"
+        + scope +
         # A HelpDesk-lite suite passed for BOSS and failed for every reviewer: one test promoted
         # the seeded customer to agent and never put it back, so a second run (and any other
         # file order) failed 4 tests, and the implementer may not edit tests to fix it.

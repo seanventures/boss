@@ -711,7 +711,10 @@ def load_runs(
     by_run: dict[str, list[dict[str, Any]]] = {r["id"]: [] for r in runs}
     for row in rows:
         template = templates.get(row["workflow_run_id"], {}).get(str(row["step_id"])) or {}
-        binding = template.get("binding") if isinstance(template.get("binding"), dict) else {}
+        # A step the run added (two_pass: More tests) is not in the stored version: its row's
+        # own binding says what it is.
+        binding = template.get("binding") if isinstance(template.get("binding"), dict) \
+            else (_json(row["binding_snapshot"], {}) or {})
         by_run[row["workflow_run_id"]].append({
             "id": row.get("id"),
             "step_id": row["step_id"],

@@ -805,7 +805,7 @@ def test_the_parked_step_holds_no_lease(eng, project, monkeypatch):
         runner.tick(c, Ctx(eng), project_id=project)
         row = c.execute(
             text("SELECT status, lease_owner, lease_expires_at FROM workflow_step_runs "
-                 "WHERE workflow_run_id=:r"), {"r": run["id"]}).mappings().first()
+                 "WHERE workflow_run_id=:r AND step_id='b'"), {"r": run["id"]}).mappings().first()
 
     assert row["status"] == "waiting"
     assert row["lease_owner"] is None
@@ -986,8 +986,10 @@ def _quality_gate(c, project_id, run_id, *, passed, failed, tests_passed=True, e
 
 
 def _observing_workflow(c, project, key, step_key):
+    # The step under test reads the build itself, so this build opts out of its More tests pass
+    # (two_pass) rather than have one in between.
     return _publish(c, project, key, [
-        {"id": "build", "kind": "capability",
+        {"id": "build", "kind": "capability", "more_tests": False,
          "binding": {"capability": "build", "inputs": {"title": "X", "instructions": "go"}},
          "next": [step_key]},
         {"id": step_key, "kind": "capability", "binding": {"capability": step_key}, "next": []},
@@ -1588,7 +1590,8 @@ def test_an_ordinary_failure_is_still_retried(eng, project, monkeypatch):
         run = _start(c, project, version["id"], {})
         runner.tick(c, Ctx(eng), project_id=project)
         row = c.execute(
-            text("SELECT status, attempt FROM workflow_step_runs WHERE workflow_run_id=:r"),
+            text("SELECT status, attempt FROM workflow_step_runs WHERE workflow_run_id=:r "
+                 "AND step_id='b'"),
             {"r": run["id"]},
         ).mappings().first()
 

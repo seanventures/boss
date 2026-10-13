@@ -1474,17 +1474,37 @@ def _plrr_step(ctx, connection: Connection, project_id: str, actor: str,
     return {"capability": "plrr", "tool": "extend_code_task", **started}
 
 
-from .build_scope import MORE_TESTS_MARKER  # noqa: E402 — the phrase pass 2 is known by
+from .build_scope import MORE_TESTS_LIGHT, MORE_TESTS_MARKER  # noqa: E402 — pass 2's phrases
+from .two_pass import LIGHT as LIGHT_PASS  # noqa: E402
 
 
-def _more_tests_brief() -> str:
+def _more_tests_brief(light: bool = False) -> str:
     """Pass 2's instructions, appended to the build's brief by extend_code_task. The marker is
-    what build_scope reads to lift pass 1's limits (browser tests, a larger test budget)."""
+    what build_scope reads to lift pass 1's limits (browser tests, a larger test budget).
+
+    Pass 1 wrote the P0/P1 tests (the app starts, sign-in/authz, the core happy path, the main
+    path of each feature); this asks for P2. A LIGHT pass (a hotfix, two_pass.LIGHT) asks only
+    for regression tests around the change, within pass 1's budget and without a browser suite.
+    """
+    if light:
+        return (
+            f"{MORE_TESTS_MARKER} ({MORE_TESTS_LIGHT}): the fix on this branch works and its "
+            "P0/P1 tests pass. Add P2 regression tests around THE CHANGE only: the failure it "
+            "fixes, its error paths and the inputs at its edges. No browser (Playwright) tests "
+            "and no tests for code the change did not touch.\n"
+            "RULES\n"
+            "- Do not change behaviour the existing tests pin, and do not weaken or delete them.\n"
+            "- If a new test exposes a real bug, fix the implementation and list it under "
+            "`BUGS FIXED:` in your summary, one line each; write `BUGS FIXED: none` otherwise.\n"
+            "- Do not write tests for an applied connector (sign-in, payments): it is tested in "
+            "its own suite."
+        )
     return (
         f"{MORE_TESTS_MARKER}: the app on this branch works and its first, lean test suite "
-        "passes. Add tests for the features already built: edge cases, error paths, input "
-        "validation and the API contracts (status codes, response shapes), and the browser "
-        "(Playwright) tests the task asked for, if it asked for any.\n"
+        "(the P0/P1 critical paths) passes. Add the P2 coverage for the features already built: "
+        "edge cases, error paths, input validation and the API contracts (status codes, "
+        "response shapes), and the browser (Playwright) tests the task asked for, if it asked "
+        "for any.\n"
         "RULES\n"
         "- Do not change behaviour the existing tests pin, and do not weaken or delete them.\n"
         "- If a new test exposes a real bug, fix the implementation and list it under "
@@ -1495,7 +1515,8 @@ def _more_tests_brief() -> str:
 
 
 def _more_tests_step(ctx, connection: Connection, project_id: str, actor: str,
-                     context: dict[str, Any]) -> dict[str, Any]:
+                     context: dict[str, Any],
+                     inputs: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     """PASS 2 OF A BUILD: more tests on the same branch and PR, after the preview.
 
     Pass 1 ships a working app with a lean suite, so the user sees it early; this pass adds the
@@ -1517,8 +1538,10 @@ def _more_tests_step(ctx, connection: Connection, project_id: str, actor: str,
     if not build_run:
         return {"capability": "more_tests", "status": "not_applicable",
                 "note": "no build in this run, so there is nothing to add tests to."}
+    light = str((inputs or {}).get("depth") or "") == LIGHT_PASS
     started = _invoke_tool(ctx, "extend_code_task", project_id, actor, {
-        "run_id": build_run, "instructions": _more_tests_brief(), "title": "More tests",
+        "run_id": build_run, "instructions": _more_tests_brief(light),
+        "title": "More tests (light)" if light else "More tests",
     })
     return {"capability": "more_tests", "tool": "extend_code_task", "base_run_id": build_run,
             **started}
@@ -2296,7 +2319,7 @@ def _perform_capability(
                 return started
             return _settle_started_work(capability, key, started)
         if key == "more_tests":
-            started = _more_tests_step(ctx, connection, project_id, actor, context)
+            started = _more_tests_step(ctx, connection, project_id, actor, context, inputs)
             if started.get("status") == "not_applicable":
                 return started
             return _settle_started_work(capability, key, started)

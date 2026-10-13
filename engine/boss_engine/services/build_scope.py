@@ -29,13 +29,20 @@ _SCOPE: ContextVar[Optional[dict[str, bool]]] = ContextVar("boss_build_scope", d
 
 #: The phrase the More tests step's brief carries (workflow_capability_runner._more_tests_brief).
 MORE_TESTS_MARKER = "MORE TESTS PASS"
-#: How many times pass 1's test budget pass 2 may write.
+#: A lighter pass 2 (a hotfix's: two_pass.LIGHT) says so after the marker, in brackets.
+MORE_TESTS_LIGHT = "LIGHT"
+#: How many times pass 1's test budget pass 2 may write. A light pass writes pass 1's budget.
 MORE_TESTS_BUDGET_FACTOR = 2
 
 
 def more_tests_pass() -> bool:
     scope = _SCOPE.get()
     return bool(scope and scope.get("more_tests"))
+
+
+def more_tests_light() -> bool:
+    scope = _SCOPE.get()
+    return bool(scope and scope.get("more_tests_light"))
 
 # A health endpoint (/healthz) is not a request for metrics: the Notes Lite brief asked for
 # /healthz and got the whole Prometheus standard. Only metrics, monitoring or a deploy count.
@@ -53,12 +60,15 @@ def decide(title: str, instructions: str, criteria: Iterable[str] = (), *,
            workflow_deploys: bool = False, has_manifest: bool = False) -> dict[str, bool]:
     text = "\n".join([title or "", instructions or "", *[str(c) for c in criteria or ()]])
     if MORE_TESTS_MARKER in text:
-        # PASS 2 (workflow step more_tests): the browser tests pass 1 deferred are written now.
+        # PASS 2 (workflow step more_tests): the browser tests pass 1 deferred are written now,
+        # unless it is a light pass (a hotfix's), which writes regression tests only.
+        light = f"{MORE_TESTS_MARKER} ({MORE_TESTS_LIGHT})" in text
         return {
             "ops": bool(workflow_deploys or has_manifest or _OPS_WORDS.search(text)),
-            "e2e": bool(_E2E_WORDS.search(text)),
+            "e2e": bool(_E2E_WORDS.search(text)) and not light,
             "e2e_deferred": False,
             "more_tests": True,
+            "more_tests_light": light,
             "bundler": bool(_BUNDLER_WORDS.search(text)),
         }
     return {

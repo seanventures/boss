@@ -18,6 +18,7 @@ import yaml
 from sqlalchemy import bindparam, text
 from sqlalchemy.engine import Connection
 
+from . import two_pass
 from .core import emit_event, json_hash, make_id, now_utc
 from .workflow_custom_steps import (
     optional_inputs as custom_step_optional_inputs,
@@ -2973,7 +2974,10 @@ def _run_spec(connection: Connection, run_id: str) -> dict[str, Any]:
     row = connection.execute(
         text(
             """
-            SELECT v.spec, r.project_id FROM workflow_runs r
+            SELECT v.spec, r.project_id,
+                   ARRAY(SELECT DISTINCT s.step_id FROM workflow_step_runs s
+                         WHERE s.workflow_run_id = r.id) AS step_ids
+            FROM workflow_runs r
             JOIN workflow_versions v ON v.id=r.workflow_version_id
             WHERE r.id=:run_id
             """
@@ -2982,16 +2986,27 @@ def _run_spec(connection: Connection, run_id: str) -> dict[str, Any]:
     ).mappings().first()
     if not row:
         raise WorkflowNotFoundError("Workflow run not found.")
+    # A RUN KEEPS THE SHAPE IT STARTED WITH. Every step's row is written when a run starts, so a
+    # run started before the two-pass rule (two_pass) has no row for the More tests step it
+    # would now add, and gets its version as it was: a deploy rebound to a step that never ran
+    # would fail a run that was fine.
+    as_stored = _json(row["spec"], {})
+    two_passed = two_pass.with_more_tests(as_stored)
+    started_with = {str(i) for i in (row["step_ids"] or [])}
+    if two_pass.added_step_ids(as_stored, two_passed) - started_with:
+        two_passed = as_stored
     # A run in flight keeps the rules its version was published under — see _published_spec.
     # Each step is tagged with them, because the runner is handed a step, not the version.
     # Re-read on every step of a run, so a run whose step names an operator-made agent must not
     # be refused half-way through by a check that only knows the bundled roles: the project's
     # roster goes with it.
     return tag_steps_with_agent_rules(
-        _published_spec(row["spec"], project_roster(connection, str(row["project_id"]))))
+        _published_spec(two_passed, project_roster(connection, str(row["project_id"])),
+                        two_pass_builds=False))
 
 
-def _published_spec(raw: Any, roster: Optional[Iterable[str]] = None) -> dict[str, Any]:
+def _published_spec(raw: Any, roster: Optional[Iterable[str]] = None, *,
+                    two_pass_builds: bool = True) -> dict[str, Any]:
     """A STORED version's spec, validated under the agent rules it was published under.
 
     THE INCIDENT THIS PREVENTS. The step-agent rules (`human` only on a gate; a custom step that
@@ -3003,6 +3018,11 @@ def _published_spec(raw: Any, roster: Optional[Iterable[str]] = None) -> dict[st
     read; publishing a new version is where the new rules are met, with the reason given.
     """
     spec = _json(raw, {})
+    if two_pass_builds:
+        # EVERY BUILD GETS ITS MORE TESTS PASS, in every workflow a run can start: catalogue,
+        # forked, drafted or written by hand (two_pass). Applied here, where a version becomes
+        # the steps a run walks, so no workflow has to remember to wire it.
+        spec = two_pass.with_more_tests(spec)
     return validate_workflow_spec(spec, roster, check_agents=under_current_agent_rules(spec))
 
 

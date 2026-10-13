@@ -422,6 +422,8 @@ CAPABILITIES: dict[str, Capability] = {
             tool=None,
             risk_tier=1,
             required_inputs=("run_id",),
+            # "light" (two_pass.LIGHT): a hotfix's pass 2, regression tests around the change.
+            optional_inputs=("depth",),
             produces=("code_task_run_id", "bugs_fixed"),
             typical_minutes=15,
             is_async=True,
