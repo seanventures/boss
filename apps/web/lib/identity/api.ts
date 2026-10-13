@@ -28,7 +28,8 @@ export class IdentityError extends Error {
   constructor(status: number, code: IdentityErrorCode, extra: { permission?: unknown; attempts_left?: unknown; retryAfter?: number | null; body?: Record<string, unknown> } = {}) {
     // A seat refusal names who holds the seat and where seats are changed: its own sentence.
     super(code === "seat_required" && typeof extra.body?.message === "string" && extra.body.message
-      ? extra.body.message : errorSentence(status, code, extra.permission));
+      ? extra.body.message
+      : (status === 422 && fieldSentence(extra.body?.detail)) || errorSentence(status, code, extra.permission));
     this.name = "IdentityError";
     this.status = status;
     this.code = code;
@@ -39,6 +40,19 @@ export class IdentityError extends Error {
     this.detail = typeof this.body.detail === "string" && typeof this.body.error === "string" ? this.body.detail : null;
   }
   get stepUp(): boolean { return this.status === 401 && this.code === "step_up_required"; }
+}
+
+/** A rejected form names its field and why: "Note: at most 20000 characters", never only
+ *  "Check the fields". A 422 whose body is FastAPI's validation list carries both. */
+export function fieldSentence(detail: unknown): string | null {
+  if (!Array.isArray(detail) || !detail.length) return null;
+  const first = detail[0] as { loc?: unknown[]; msg?: unknown };
+  const loc = Array.isArray(first?.loc) ? first.loc.filter((x) => x !== "body") : [];
+  const field = String(loc[loc.length - 1] ?? "").replace(/_/g, " ");
+  const msg = String(first?.msg ?? "").replace(/^String should have /, "").replace(/^Value error, /, "");
+  if (!field && !msg) return null;
+  const name = field ? field.charAt(0).toUpperCase() + field.slice(1) : "A field";
+  return msg ? `${name}: ${msg}` : `${name} is not valid`;
 }
 
 /** The words for a refusal. Short: they land in toasts (≤ 4 words) and inline lines. */

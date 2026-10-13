@@ -52,7 +52,9 @@ class ApplyBody(_Body):
     stack: str = Field(min_length=1, max_length=20)
     framework: Optional[str] = Field(default=None, max_length=48)
     options: Optional[dict[str, Any]] = None
-    note: Optional[str] = Field(default=None, max_length=4000)
+    # The brief a connector or idea is applied with: the same brief the New project composer
+    # takes (a full product brief is several thousand characters; D1's is about 7,000).
+    note: Optional[str] = Field(default=None, max_length=20000)
     workflow_key: Optional[str] = Field(default=None, max_length=120)
     accept_egress: Optional[Any] = None
     dedupe_key: Optional[str] = Field(default=None, max_length=200)

@@ -56,7 +56,7 @@ export function applyBlocker(o: {
   return "";
 }
 
-export function TemplateSheet({ projectId, card, target, onStarted, onClose, initialName = "", initialNote = "" }: {
+export function TemplateSheet({ projectId, card, target, onStarted, onClose, initialName = "", initialNote = "", initialWorkflow = "" }: {
   projectId: string;
   card: TemplateCard;
   target: ApplyTarget;
@@ -65,6 +65,8 @@ export function TemplateSheet({ projectId, card, target, onStarted, onClose, ini
   /** What the composer already holds: the new app's name and the brief, never typed twice. */
   initialName?: string;
   initialNote?: string;
+  /** The workflow the New project composer had chosen: the sheet starts on it, never on the default. */
+  initialWorkflow?: string;
 }) {
   const [detail, setDetail] = useState<TemplateDetail | null>(null);
   const [loadError, setLoadError] = useState("");
@@ -84,7 +86,7 @@ export function TemplateSheet({ projectId, card, target, onStarted, onClose, ini
   /** Does Start need the person's own GitHub link, and do they have it (said before Start). */
   const [githubAsMe, setGithubAsMe] = useState<GithubAsMe | null>(null);
   /** "" = the default workflow (nothing sent). */
-  const [workflowKey, setWorkflowKey] = useState("");
+  const [workflowKey, setWorkflowKey] = useState(initialWorkflow);
   const guarded = useGuardedCall();
   const startGate = useGate("workflow_run:start", projectId);
   const secretGate = useGate("app_secret:write", projectId);

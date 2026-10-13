@@ -256,6 +256,14 @@ describe("a template's sheet", () => {
     expect(started).toHaveBeenCalledWith("wfr_9");
   });
 
+  it("the workflow chosen in the New project composer is the sheet's workflow, not the default", async () => {
+    buildWorkflows = [{ workflow_key: "fast_fix", name: "Fast Fix / Hotfix", default: true },
+                      { workflow_key: "helpdesk_delivery_d1", name: "HelpDesk Delivery (D1)", default: false }];
+    await mount(<TemplateSheet projectId="p1" card={card(STRIPE)} target={{ kind: "new" }} onStarted={() => {}}
+                               onClose={() => {}} initialName="HelpDesk AI" initialWorkflow="helpdesk_delivery_d1" />, "operator");
+    expect(($('[data-testid="tpl-workflow"]') as HTMLSelectElement).value).toBe("helpdesk_delivery_d1");
+  });
+
   it("Workflow left on the default sends no workflow_key; with no list there is no picker", async () => {
     buildWorkflows = [{ workflow_key: "fast_fix", name: "Fast Fix / Hotfix", default: true },
                       { workflow_key: "major_feature", name: "Major Feature", default: false }];

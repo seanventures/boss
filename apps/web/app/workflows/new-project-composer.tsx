@@ -1610,7 +1610,7 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
       {error ? <p className="dw-new-error" role="alert" data-testid="dw-new-error" data-user-text>{error}</p> : null}
       {tplCard ? (
         <TemplateSheet projectId={projectId} card={tplCard.card} target={tplCard.target}
-                       initialName={tplCard.name} initialNote={tplCard.note}
+                       initialName={tplCard.name} initialNote={tplCard.note} initialWorkflow={flowKey}
                        onClose={() => setTplCard(null)}
                        onStarted={(runId) => {
                          setTplCard(null);
