@@ -63,9 +63,8 @@ import {
   youApproveWord, type ComposeMode, type CostHistory, type TimelineStep,
 } from "./compose-plan";
 import type { CatalogueEntry, Installed } from "../delivery-workflows-ui";
-import { TemplateGallery } from "../../components/v2/templates/gallery";
+import { ConnectorChips, useCatalogue, useIdeas } from "../../components/v2/templates/catalogue";
 import { TemplateSheet, type ApplyTarget } from "../../components/v2/templates/template-sheet";
-import { SideSheet } from "../../components/v2/templates/side-sheet";
 import { templatesApi, type TemplateCard } from "../../lib/templates";
 import { useIdentityVersion } from "../../lib/use-agent-identities";
 import { useGuardedCall } from "../../components/identity/identity-provider";
@@ -552,10 +551,16 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
   /** "Talks to": the project's other apps this one should call (§5.5). */
   const [talks, setTalks] = useState<TalksToRow[]>([]);
   const linkGate = useGate("app_link:manage");
-  // ── Templates (APP_TEMPLATES §2.8): the card whose sheet is open, and in add mode the gallery
-  //    sheet "+ Template" opens, filtered to the app's stack when its applied templates say it.
-  const [tplCard, setTplCard] = useState<{ card: TemplateCard; target: ApplyTarget } | null>(null);
-  const [tplPicking, setTplPicking] = useState(false);
+  // ── Connectors and ideas (operator, 2026-10-13). `connector`: the one chosen in "Add a
+  //    connector" (either mode); Start then opens its sheet (stack, test secrets, what it talks
+  //    to, the security note) with the name and brief already written. `tplCard`: that sheet, or
+  //    an idea's "Build from its reference".
+  const connectorCards = useCatalogue();
+  const ideas = useIdeas();
+  const [connector, setConnector] = useState<TemplateCard | null>(null);
+  const [ideaCard, setIdeaCard] = useState<TemplateCard | null>(null);
+  const [tplCard, setTplCard] = useState<{ card: TemplateCard; target: ApplyTarget;
+                                           name?: string; note?: string } | null>(null);
   const [appStack, setAppStack] = useState<string | null>(null);
   // A deep link to an app that is not on the first page of cards still shows it first.
   const shownApps = useMemo(() => {
@@ -728,8 +733,8 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
   // it. A required input left blank must stop the start at the form, not at the runtime.
   // CAN BOSS BUILD WHAT IT ASKS FOR ("build it in Go")? Asked while typing; said before Start.
   const stackCheck = useStackCheck(projectId, adding ? gain : `${draft.title}\n${draft.directive}`);
-  const blocked = (mode === "template" ? "" : adding ? addBlockingReason({ app, gain }) : blockingReason(0, draft, !brief))
-    || (mode !== "template" && stackCheck.blocks ? "BOSS cannot build the stack this asks for: see the note above." : "")
+  const blocked = (adding ? addBlockingReason({ app, gain }) : blockingReason(0, draft, !brief))
+    || (stackCheck.blocks ? "BOSS cannot build the stack this asks for: see the note above." : "")
     || (stillBlank.length ? `Needs ${stillBlank.join(", ")}` : "")
     || (malformed.length ? `Check ${malformed.join(", ")}` : "")
     || talksToProblem(talks)
@@ -936,9 +941,19 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
   const primaryGate = adding && addPath === QUICK ? steerGate : adding && addPath === SPEC ? conveneGate : runGate;
 
   const primary = async () => {
-    // From a template, Start is the template sheet's own: ⌘↵ here starts nothing.
-    if (mode === "template" && !formOnly) return;
     if (busy || (blocked && !(adding && proposal?.proposal))) return;
+    // A CONNECTOR CHOSEN: Start opens its sheet (stack, test secrets, what it talks to, the
+    // security note), with the app's name and the brief already in it. Its own Start applies it.
+    if (connector && !formOnly) {
+      if (adding && app) {
+        setTplCard({ card: connector, note: gain,
+                     target: { kind: "add", runId: baseRun, appKey: app.appKey ?? null, name: app.app, stack: appStack } });
+      } else if (!adding) {
+        setTplCard({ card: connector, target: { kind: "new" }, name: draft.title,
+                     note: [draft.directive, draft.audience ? `Who it is for: ${draft.audience}` : ""].filter(Boolean).join("\n\n") });
+      }
+      return;
+    }
     if (!primaryGate.allowed) { showToast("error", primaryGate.reason); return; }
     setBusy(true);
     setError(null);
@@ -1106,17 +1121,30 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
                   + "and colleagues can claim it, with the manager approving the swap."}
                 onFull={() => setFull("brief")} onSubmit={() => void primary()} />
         <StackSupportLine projectId={projectId} testId="np-stack-support" />
+        {/* START FROM AN IDEA: the one ideas list (catalogue starters, then written briefs) the
+            Command Center shows too. A starter also offers its reference implementation. */}
         <div className="np-ideas" data-testid="np-ideas">
-          <small>Or start from</small>
-          {IDEAS.slice(0, 6).map((idea) => (
-            <button key={idea.title} type="button" className="np-pill" title={idea.brief.split("\n")[0]}
+          <small title="An example app to start from: it fills in the brief, which you then change">Start from an idea</small>
+          {ideas.slice(0, 8).map((idea) => (
+            <button key={idea.title} type="button" className="np-pill" title={idea.brief.split("\n").slice(0, 2).join(" ")}
+                    aria-pressed={!!idea.card && ideaCard?.key === idea.card.key}
                     data-testid={`np-idea-${idea.title.toLowerCase().replace(/[^a-z]+/g, "-")}`}
-                    onClick={() => setDraft((d) => ({ ...d, directive: idea.brief,
-                                                      title: d.title || idea.title }))}>
+                    onClick={() => {
+                      setDraft((d) => ({ ...d, directive: idea.brief, title: d.title || idea.title }));
+                      setIdeaCard(idea.card ?? null);
+                    }}>
               {idea.title}
             </button>
           ))}
+          {ideaCard ? (
+            <button type="button" className="np-link" data-testid="np-idea-reference"
+                    title="Build it from the starter's tested reference implementation, with its own tests as a gate"
+                    onClick={() => setTplCard({ card: ideaCard, target: { kind: "new" }, name: draft.title, note: draft.directive })}>
+              Build from its reference ↗
+            </button>
+          ) : null}
         </div>
+        <ConnectorChips cards={connectorCards} selected={connector?.key ?? null} onSelect={setConnector} />
       </div>
       <div className="np-two">
         <div>
@@ -1217,12 +1245,12 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
               </button>
             );
           })}
-          {/* + TEMPLATE: the gallery, filtered to the app's stack (APP_TEMPLATES §2.8). */}
-          <GatedButton permission="template:read" type="button" className="np-pill np-kind np-tpl-chip"
-                       data-testid="np-add-template" aria-disabled={!app || undefined}
-                       title={app ? "Add a template to this app: login, payments, a catalog…" : "Pick the app first"}
-                       onClick={() => { if (app) setTplPicking(true); }}>+ Template</GatedButton>
         </div>
+        {/* ADD A CONNECTOR to this app: only the ones that fit its stack, built in its own look. */}
+        {app ? (
+          <ConnectorChips cards={connectorCards} stack={appStack} selected={connector?.key ?? null}
+                          onSelect={setConnector} testId="np-add-connectors" />
+        ) : null}
       </div>
       <div>
         <div className="np-lbl">Done when</div>
@@ -1529,9 +1557,6 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
                     onClick={() => setMode("new")}>New app</button>
             <button type="button" role="radio" aria-checked={adding} data-testid="np-mode-add"
                     onClick={() => setMode("add")}>Add a feature</button>
-            <button type="button" role="radio" aria-checked={mode === "template"} data-testid="np-mode-template"
-                    title="Start a new app from an approved template: login, payments, a catalog, a banking starter"
-                    onClick={() => setMode("template")}>Template</button>
           </div>
         )}
         <span className="np-spacer" />
@@ -1539,25 +1564,12 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
           <button type="button" className="np-x" aria-label="Close" data-testid="np-close" onClick={onCancel}>✕</button>
         ) : null}
       </header>
-      {mode === "template" && !formOnly ? (
-        <div className="np-body np-tpl" data-testid="np-templates">
-          <TemplateGallery projectId={projectId} onPick={(card) => setTplCard({ card, target: { kind: "new" } })} />
-        </div>
-      ) : (
       <div className="np-body">
         <div className="np-brief" data-testid="np-brief">
           {formOnly ? declaredForm ?? <p className="np-dim">Nothing to fill in.</p> : adding ? addBrief : newBrief}
         </div>
         {plan}
       </div>
-      )}
-      {mode === "template" && !formOnly ? (
-        <footer className="np-foot">
-          <span className="np-cost">Pick a template: its sheet says what it adds, needs and talks to.</span>
-          <span className="np-spacer" />
-          {onCancel ? <button type="button" className="np-btn" data-testid="np-cancel" onClick={onCancel}>Cancel</button> : null}
-        </footer>
-      ) : (
       <footer className="np-foot">
         <span className="np-cost" data-testid="np-cost">
           {cost ? <>{adding ? "Changes" : "Builds"} like this cost <b>{cost}</b> · </> : null}
@@ -1577,7 +1589,7 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
             Plan it with an agent
           </GatedButton>
         ) : null}
-        {mode !== "template" ? <StackWarning state={stackCheck} testId="np-stack-warning" /> : null}
+        <StackWarning state={stackCheck} testId="np-stack-warning" />
         {/* THE PAIR STAYS TOGETHER: the reason wraps above it, never between Cancel and Start. */}
         <span className="np-go">
           {blocked && !(adding && proposal?.proposal) ? (
@@ -1595,17 +1607,10 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
           </span>
         </span>
       </footer>
-      )}
       {error ? <p className="dw-new-error" role="alert" data-testid="dw-new-error" data-user-text>{error}</p> : null}
-      {tplPicking && app ? (
-        <SideSheet title="Add a template" sub={app.app} onClose={() => setTplPicking(false)} testId="np-template-picker" wide>
-          <TemplateGallery projectId={projectId} stack={appStack} testId="np-template-gallery"
-                           onPick={(card) => { setTplPicking(false);
-                                               setTplCard({ card, target: { kind: "add", runId: baseRun, appKey: app.appKey ?? null, name: app.app, stack: appStack } }); }} />
-        </SideSheet>
-      ) : null}
       {tplCard ? (
         <TemplateSheet projectId={projectId} card={tplCard.card} target={tplCard.target}
+                       initialName={tplCard.name} initialNote={tplCard.note}
                        onClose={() => setTplCard(null)}
                        onStarted={(runId) => {
                          setTplCard(null);

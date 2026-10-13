@@ -155,10 +155,13 @@ def build_templates_router() -> APIRouter:
     @router.get("/v1/templates")
     @permit(P.TEMPLATE_READ, scope=Scope.org())
     def list_templates(request: Request, stack: Optional[str] = None, status: Optional[str] = None,
-                       label: Optional[str] = None) -> dict:
+                       label: Optional[str] = None, kind: Optional[str] = None) -> dict:
         ctx = _ctx(request)
         with begin() as db:
-            items = service.list_templates(db, ctx.principal.org_id, stack=stack, status=status, label=label)
+            # `kind`: connector | idea | training (the catalogue is connectors and ideas; a
+            # training lab app is listed only when asked for). The route keeps its old name.
+            items = service.list_templates(db, ctx.principal.org_id, stack=stack, status=status,
+                                           label=label, kind=(kind or "").strip() or None)
         from boss_engine.services import stacks as stack_registry
         from boss_engine.services import toolchains
 

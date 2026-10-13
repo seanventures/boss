@@ -161,11 +161,40 @@ def build_directive(*, row: dict, manifest: TemplateManifest, stack: str, framew
     prefix = f"stacks/{stack}/"
     ref = {p[len(prefix):]: b for p, b in files.items() if p.startswith(prefix)}
     tests = sorted(p for p in ref if p.startswith("tests/"))
-    head = [
-        f"Apply the template \"{manifest.name}\" ({manifest.id} {manifest.version}) to "
-        f"{'the app ' + repr(app_name) if app_name else 'a new app'}, stack {stack}"
-        + (f", framework {framework}" if framework else "") + ".",
-        "",
+    kind = manifest.item_kind
+    target = "the app " + repr(app_name) if app_name else "a new app"
+    where = f", stack {stack}" + (f", framework {framework}" if framework else "") + "."
+    if kind == "connector":
+        # A CONNECTOR IS ADDED TO AN APP, NOT BUILT AS ONE (operator, 2026-10-13). Its security
+        # core is fixed; everything a person sees is the app's own.
+        opening = [
+            f"Integrate the connector \"{manifest.name}\" ({manifest.id} {manifest.version}) into "
+            f"{target}{where}",
+            "",
+            "It is a capability of this app, not an app of its own. Before writing any UI, read "
+            "the app's UI conventions: its component library, its styles or theme tokens and its "
+            "layout shell. Build the connector's screens, buttons and messages WITH those, so it "
+            "looks native; do not import the reference implementation's look. Mount its routes "
+            "in the app's own router, and map its data onto the app's own users, products or "
+            "orders instead of adding parallel tables.",
+            "Its SECURITY CORE stays exactly as the reference has it (sessions, state and PKCE for "
+            "sign-in; server-side prices, signature-verified and idempotent webhooks for payments), "
+            "and so do its tests.",
+        ]
+    elif kind == "idea":
+        opening = [
+            f"Start {target} from the idea \"{manifest.name}\" ({manifest.id} {manifest.version})"
+            f"{where}",
+            "",
+            "The reference implementation below is a worked example of this idea; shape it to the "
+            "operator's note.",
+        ]
+    else:
+        opening = [
+            f"Apply \"{manifest.name}\" ({manifest.id} {manifest.version}) to {target}{where}",
+            "",
+        ]
+    head = opening + [
         "ADAPT the reference implementation below into this app (its router, its data layer, its "
         "UI); do not overlay files blindly. The template's test files (" + ", ".join(tests) + ") "
         "go into the app at the same relative paths, exactly as they are: BOSS places them there "

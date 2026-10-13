@@ -21,7 +21,7 @@ from typing import Any, Callable, Iterable, Optional
 from sqlalchemy import text
 
 from ..services.core import make_id
-from .manifest import TemplateManifest, validate_manifest
+from .manifest import TemplateManifest, kind_of, validate_manifest
 from .validator import BRIEF_FILE, ValidationReport, tree_from_dir, validate_tree
 
 log = logging.getLogger("boss.templates")
@@ -141,6 +141,7 @@ def _card(row: Any) -> dict:
         "source": row["source"], "status": row["status"], "name": m.get("name"),
         "summary": m.get("summary"), "stacks": sorted((m.get("stacks") or {}).keys()),
         "labels": list(m.get("labels") or []), "adds": list(m.get("adds") or []),
+        "kind": kind_of(m),
         "egress": list(m.get("egress") or []),
         "secrets": [{"name": s.get("name"), "purpose": s.get("purpose"),
                      "test_default": s.get("test_default", "none")} for s in (m.get("secrets") or [])],
@@ -164,7 +165,10 @@ def ensure_builtins(c, org_id: str) -> None:
 
 
 def list_templates(c, org_id: str, *, stack: Optional[str] = None, status: Optional[str] = None,
-                   label: Optional[str] = None, include_hidden: bool = False) -> list[dict]:
+                   label: Optional[str] = None, include_hidden: bool = False,
+                   kind: Optional[str] = None) -> list[dict]:
+    """The catalogue. `kind` narrows it to connectors, ideas or training. Training (insecure by
+    design) is offered only to a caller that asks for it: by kind, by its label, or hidden ones."""
     ensure_builtins(c, org_id)
     rows = c.execute(text(f"SELECT {_COLS} FROM app_templates WHERE org_id = :o "
                           "ORDER BY template_key, created_at DESC"), {"o": org_id}).mappings().all()
@@ -178,6 +182,10 @@ def list_templates(c, org_id: str, *, stack: Optional[str] = None, status: Optio
         if stack and stack not in card["stacks"]:
             continue
         if label and label not in card["labels"]:
+            continue
+        if kind and card["kind"] != kind:
+            continue
+        if card["kind"] == "training" and not (kind == "training" or label or include_hidden):
             continue
         out.append(card)
     return out

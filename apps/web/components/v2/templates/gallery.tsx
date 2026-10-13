@@ -11,12 +11,12 @@ import React, { useEffect, useMemo, useState } from "react";
 
 import {
   INSECURE, STACKS, installedStacks, labelWord, levelWord, refusalWords, stackLabel, stackSupport,
-  templatesApi, testedWord, type TemplateCard,
+  templatesApi, testedWord, type CatalogueKind, type TemplateCard,
 } from "../../../lib/templates";
 
-/** The cards a gallery shows: approved ones, of the stack asked for (when one is). */
-export function galleryCards(all: TemplateCard[], stack: string | null): TemplateCard[] {
-  return all.filter((t) => t.status === "active" && (!stack || t.stacks.includes(stack)));
+/** The cards a gallery shows: approved ones, of the stack and the kind asked for (when one is). */
+export function galleryCards(all: TemplateCard[], stack: string | null, kind?: CatalogueKind | null): TemplateCard[] {
+  return all.filter((t) => t.status === "active" && (!stack || t.stacks.includes(stack)) && (!kind || t.kind === kind));
 }
 
 /** A stack chip's tooltip: on, off (how to turn it on), or unknown. */
@@ -79,8 +79,10 @@ export function LabelChips({ labels }: { labels: string[] }) {
   );
 }
 
-export function TemplateGallery({ projectId, stack, onPick, testId = "tpl-gallery" }: {
+export function TemplateGallery({ projectId, stack, kind, onPick, testId = "tpl-gallery" }: {
   projectId: string;
+  /** Only connectors, or only ideas (operator, 2026-10-13); all when absent. */
+  kind?: CatalogueKind | null;
   /** Only templates for this stack (the app's, in "Add to an existing app"). */
   stack?: string | null;
   onPick: (t: TemplateCard) => void;
@@ -96,13 +98,13 @@ export function TemplateGallery({ projectId, stack, onPick, testId = "tpl-galler
     templatesApi.list().then((t) => { if (alive) setAll(t); }).catch((e) => { if (alive) { setError(refusalWords(e)); setAll([]); } });
     return () => { alive = false; };
   }, []);
-  const cards = useMemo(() => galleryCards(all ?? [], filter), [all, filter]);
+  const cards = useMemo(() => galleryCards(all ?? [], filter, kind), [all, filter, kind]);
   const stacksHere = useMemo(() => STACKS.filter((s) => (all ?? []).some((t) => t.status === "active" && t.stacks.includes(s))), [all]);
   return (
-    <section className="tpl-gallery" data-testid={testId} aria-label="Templates">
+    <section className="tpl-gallery" data-testid={testId} aria-label={kind === "connector" ? "Connectors" : kind === "idea" ? "Ideas" : "Connectors and ideas"}>
       <div className="tpl-gallery-head" role="radiogroup" aria-label="Stack">
         {stack ? (
-          <span className="tpl-chip" title="The app's stack: only templates that fit it">{stackLabel(stack)} only</span>
+          <span className="tpl-chip" title="The app's stack: only the ones that fit it">{stackLabel(stack)} only</span>
         ) : (
           <>
             <button type="button" role="radio" className="tpl-chip" aria-checked={!filter} data-testid="tpl-filter-all"
@@ -114,7 +116,7 @@ export function TemplateGallery({ projectId, stack, onPick, testId = "tpl-galler
           </>
         )}
       </div>
-      {all === null ? <p className="tpl-muted">Loading templates…</p> : null}
+      {all === null ? <p className="tpl-muted">Loading…</p> : null}
       {error ? <p className="tpl-err" role="alert">{error}</p> : null}
       {all !== null && !error && !cards.length ? (
         <p className="tpl-muted" data-testid="tpl-gallery-empty">
@@ -130,7 +132,7 @@ export function TemplateGallery({ projectId, stack, onPick, testId = "tpl-galler
             <LabelChips labels={t.labels} />
             <span className="tpl-card-foot">
               <StackChips stacks={t.stacks} installed={installed} levels={levels} />
-              {t.tested.length ? <span className="tpl-tested" title="A trial ran the template's own tests in a throwaway sandbox">{testedWord(t.tested)}</span> : null}
+              {t.tested.length ? <span className="tpl-tested" title="A trial ran its own tests in a throwaway sandbox">{testedWord(t.tested)}</span> : null}
               {t.source === "git" ? <span className="tpl-faint" title={t.gitUrl}>Imported</span> : null}
             </span>
           </button>

@@ -34,5 +34,6 @@ tests:
 security_note: SECURITY.md
 guide: guide.md
 labels: []
+kind: idea
 license: Apache-2.0
 min_boss: 1.0.0

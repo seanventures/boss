@@ -204,7 +204,7 @@ def test_a_built_in_brief_is_labelled_material_with_the_reference_inline():
     row, m, files = _row("builtin")
     text = apply_service.build_directive(row=row, manifest=m, stack="node", framework=None, files=files,
                                          note="keep the style", app_name="Hello App")
-    assert "Apply the template \"Hello endpoint\" (hello 1.0.0)" in text
+    assert "\"Hello endpoint\" (hello 1.0.0)" in text
     assert "### tests/template_hello/hello.test.mjs" in text and "### hello.js" in text
     assert "boss-template-junit.xml" in text and "at least 2 passing tests" in text
     assert apply_service.UNTRUSTED_BEGIN not in text

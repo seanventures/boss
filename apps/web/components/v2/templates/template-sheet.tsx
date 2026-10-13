@@ -56,20 +56,23 @@ export function applyBlocker(o: {
   return "";
 }
 
-export function TemplateSheet({ projectId, card, target, onStarted, onClose }: {
+export function TemplateSheet({ projectId, card, target, onStarted, onClose, initialName = "", initialNote = "" }: {
   projectId: string;
   card: TemplateCard;
   target: ApplyTarget;
   onStarted: (workflowRunId: string | null) => void;
   onClose: () => void;
+  /** What the composer already holds: the new app's name and the brief, never typed twice. */
+  initialName?: string;
+  initialNote?: string;
 }) {
   const [detail, setDetail] = useState<TemplateDetail | null>(null);
   const [loadError, setLoadError] = useState("");
   const installed = useInstalledStacks(projectId);
   const levels = useStackLevels();
   const [stack, setStack] = useState<string>("");
-  const [name, setName] = useState("");
-  const [note, setNote] = useState("");
+  const [name, setName] = useState(initialName);
+  const [note, setNote] = useState(initialNote);
   const [egressOk, setEgressOk] = useState(false);
   const [typed, setTyped] = useState<Record<string, string>>({});
   const [stored, setStored] = useState<Set<string>>(new Set());

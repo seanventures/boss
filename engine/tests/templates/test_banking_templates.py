@@ -55,7 +55,7 @@ def test_the_banking_starters_directive_carries_the_java_reference():
     text = apply_service.build_directive(row={"source": "builtin", "digest": r.digest}, manifest=r.manifest,
                                          stack="java", framework="dropwizard", files=files, note="",
                                          app_name="Bank")
-    assert "Apply the template \"Banking starter\" (banking-starter 1.0.0)" in text
+    assert "from the idea \"Banking starter\" (banking-starter 1.0.0)" in text
     assert "at least 14 passing tests" in text
     assert apply_service.UNTRUSTED_BEGIN not in text
 

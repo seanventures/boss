@@ -153,6 +153,20 @@ def _hostname(v: str) -> str:
     return host
 
 
+KINDS = ("connector", "idea", "training")
+
+
+def kind_of(manifest: Any) -> str:
+    """A catalogue item's kind: as declared, else derived. An insecure-by-design item is ALWAYS
+    training, whatever it says, so a lab app can never be offered as an idea or a connector."""
+    m = manifest if isinstance(manifest, dict) else {}
+    labels = list(m.get("labels") or [])
+    if INSECURE_BY_DESIGN in labels:
+        return "training"
+    k = str(m.get("kind") or "").strip()
+    return k if k in KINDS else "connector"
+
+
 class TemplateManifest(_Strict):
     """`boss-template.yaml`, schema `boss.template/v1` (§2.2)."""
 
@@ -175,6 +189,12 @@ class TemplateManifest(_Strict):
     security_note: str = "SECURITY.md"
     guide: str = "guide.md"
     labels: tuple[str, ...] = ()
+    #: What this catalogue item IS (operator, 2026-10-13: "these are not templates").
+    #: connector: a capability added to ANY app, new or existing (login, payments), whose UI is
+    #: built in that app's own components and theme; idea: an example app to start from;
+    #: training: an insecure-by-design lab app, never offered unless asked for. Absent on an
+    #: older imported manifest: `kind_of` derives it.
+    kind: Optional[Literal["connector", "idea", "training"]] = None
     license: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9.+()-]*( (AND|OR|WITH) [A-Za-z0-9][A-Za-z0-9.+()-]*)*$",
                          max_length=100)
     min_boss: str = Field(pattern=SEMVER)
@@ -256,6 +276,10 @@ class TemplateManifest(_Strict):
     @property
     def insecure_by_design(self) -> bool:
         return INSECURE_BY_DESIGN in self.labels
+
+    @property
+    def item_kind(self) -> str:
+        return kind_of(self.model_dump(mode="json", by_alias=True))
 
     def secret(self, name: str) -> Optional[SecretSpec]:
         return next((s for s in self.secrets if s.name == name), None)

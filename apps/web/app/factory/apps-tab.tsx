@@ -373,7 +373,7 @@ export function AppsTab({ projectId, runs, previews, query = "", onOpen, onNew, 
                                     title="What it is built from: its components and their repositories"
                                     onClick={(e) => { e.stopPropagation(); setMenu(null); onComponents(a.appKey ?? opens); }}>Components</button>
                           ) : null}
-                          <button type="button" role="menuitem" title="Its templates, secrets and setup guide"
+                          <button type="button" role="menuitem" title="Its connectors, secrets and setup guide"
                                   data-testid={`fx-app-menu-setup-${a.key}`}
                                   onClick={(e) => { e.stopPropagation(); setMenu(null); setSetupOf(a); }}>Setup</button>
                           <button type="button" role="menuitem" title={LINKS_TIP} data-testid={`fx-app-menu-links-${a.key}`}

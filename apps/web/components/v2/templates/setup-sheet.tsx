@@ -169,11 +169,11 @@ export function AppSetup({ projectId, appKey }: { projectId: string; appKey: str
     <div className="tpl-setup" data-testid="tpl-setup">
       {error ? <p className="tpl-err" role="alert" data-user-text>{error}</p> : null}
 
-      <section className="tpl-sec" aria-label="Templates" data-testid="tpl-setup-applied">
-        <h3>Templates</h3>
+      <section className="tpl-sec" aria-label="Connectors" data-testid="tpl-setup-applied">
+        <h3 title="The connectors added to this app, and the starter it was built from">Connectors</h3>
         {applied === null ? <span className="tpl-muted">Loading…</span> : null}
         {applied && !applied.length ? (
-          <span className="tpl-muted" data-testid="tpl-setup-none">No template applied yet. Add one from the app&apos;s Add a feature, then + Template.</span>
+          <span className="tpl-muted" data-testid="tpl-setup-none">No connector added yet. Add one from the app&apos;s Add a feature › Add a connector.</span>
         ) : null}
         {applied?.length ? (
           <ul className="tpl-rows">
@@ -196,7 +196,7 @@ export function AppSetup({ projectId, appKey }: { projectId: string; appKey: str
       <section className="tpl-sec" aria-label="Secrets" data-testid="tpl-setup-secrets">
         <h3 title="Write-only: stored in the vault, never shown again">Secrets</h3>
         {secretsWhy ? <span className="tpl-muted" data-testid="tpl-setup-secrets-why">{secretsWhy}</span> : null}
-        {secrets && !declared.length ? <span className="tpl-muted">No template of this app needs a secret.</span> : null}
+        {secrets && !declared.length ? <span className="tpl-muted">Nothing added to this app needs a secret.</span> : null}
         {declared.length ? (
           <ul className="tpl-rows">
             {declared.map((d) => {
@@ -267,7 +267,7 @@ export function AppSetup({ projectId, appKey }: { projectId: string; appKey: str
         ) : null}
         {secrets ? (
           <div className="tpl-deploy-values" data-testid="tpl-deploy-values">
-            <h4 title="Settings the app reads at deploy that no template declares, e.g. DEMO_PASSWORD. Write-only.">App settings for deploy</h4>
+            <h4 title="Settings the app reads at deploy that no connector declares, e.g. DEMO_PASSWORD. Write-only.">App settings for deploy</h4>
             {deployValues.length ? (
               <ul className="tpl-rows">
                 {deployValues.map((n) => (
