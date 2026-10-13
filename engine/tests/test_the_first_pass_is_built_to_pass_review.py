@@ -41,7 +41,7 @@ def test_a_fix_round_re_review_sees_its_findings_and_only_the_fixed_files():
 
 def test_the_round_scopes_each_seat_and_falls_back_to_the_whole_change():
     src = inspect.getsource(g)
-    block = src[src.index("_convergeable = {"):src.index("rounds_used = max(0")]
+    block = src[src.index("_convergeable = _CONVERGEABLE"):src.index("rounds_used = max(0")]
     for prior in ("_rc_prior", "_r6_prior", "_r4_prior"):
         assert f"change=_seat_change({prior})" in block
     assert "if not _fixed:\n                            return change_block" in block

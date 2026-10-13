@@ -2,7 +2,7 @@
   "name": "boss-template-login-oauth",
   "private": true,
   "version": "1.0.0",
-  "description": "Reference implementation of the login-oauth template (Express + openid-client). Merge the dependencies and the two test:login-oauth scripts into the app's package.json.",
+  "description": "Reference implementation of the login-oauth template (Express + openid-client). Merge the dependencies into the app's package.json; the test:login-oauth scripts run the connector's own suite in its own test tier and stay here.",
   "engines": { "node": ">=20" },
   "scripts": {
     "start": "node server.mjs",

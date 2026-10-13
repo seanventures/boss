@@ -3,8 +3,9 @@
 What a build agent produced for HelpDesk AI on 2026-10-13 (crun_247435e1), trimmed to what the
 post-agent pipeline exercises: Node 22 + TypeScript run by `tsx`, eslint 9 (flat config,
 `typescript-eslint` 8), Express 5 + Postgres (`DATABASE_URL`), the login-oauth connector as a
-build applies it (`helpdesk/auth/*.mjs` byte-for-byte from `templates/apps/login-oauth/stacks/node`,
-its tests in `helpdesk/tests/template_login_oauth/`, its two `test:login-oauth` scripts), a
+build applies it (`helpdesk/auth/*.mjs` byte-for-byte from `templates/apps/login-oauth/stacks/node`;
+a connector is pre-tested, so the app carries none of its tests or `test:login-oauth` scripts:
+the gate runs that suite in the connector's own tier, from the template), a
 `SESSION_SECRET` of at least 32 characters required at start (the connector refuses otherwise),
 `boss.deploy.yaml` at the repository root and `helpdesk/boss.preview.command`, and a few P0/P1
 vitest tests.

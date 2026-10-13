@@ -15,20 +15,23 @@ from boss_engine.services import governed_code_task_service as g
 
 def test_security_is_convergeable_and_its_findings_reach_the_implementer():
     src = inspect.getsource(g)
-    block = src[src.index("_convergeable = {"):src.index("rounds_used = max(0")]
-    assert '"security_clean"}' in block
+    block = src[src.index("_convergeable = _CONVERGEABLE"):src.index("rounds_used = max(0")]
+    assert "security_clean" in g._CONVERGEABLE
     assert 'header="SECURITY FINDINGS:"' in block
     # The failed security seat re-reviews the delta, and only it decides the gate.
     assert "security_agent.run_role(" in block
     assert 'gates["security_clean"] = sec_verdict == "clean"' in block
-    assert '"security_clean"}:\n                        break' in block
+    assert '"security_clean", "tests_strong_enough"}:\n                        break' in block
 
 
 def test_the_failed_seats_re_review_side_by_side():
     src = inspect.getsource(g)
-    block = src[src.index("_convergeable = {"):src.index("rounds_used = max(0")]
+    block = src[src.index("_convergeable = _CONVERGEABLE"):src.index("rounds_used = max(0")]
     assert "_reseat_pool.submit(contextvars.copy_context().run, fn)" in block
     assert "_futures_wait(list(_reseat.values()))" in block
-    # Every seat call lives in a pooled closure, none runs inline after the wait.
+    # Every READ-ONLY seat call lives in a pooled closure, none runs inline after the wait. The
+    # one exception is the weak-suite probe, which edits the tree and so runs after them, alone.
     after = block[block.index("_futures_wait(list(_reseat.values()))"):]
-    assert ".run_role(" not in after[:after.index("if not failing:")]
+    inline = after[:after.index("if not failing:")]
+    assert inline.count(".run_role(") == 1
+    assert "a_mu.run_role(_mutate_prompt(" in inline

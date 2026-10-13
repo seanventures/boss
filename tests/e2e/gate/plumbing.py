@@ -425,19 +425,26 @@ def _login_oauth(g: Gate) -> dict:
 
 @check("connector gate: login-oauth wiring + its own suite", bug="(3)")
 def check_connector(g: Gate) -> str:
-    """templates.gate.evaluate as _template_gates calls it for the applied connector (the wiring
-    smoke on the started app, the secret scan), and the connector's own suite through the same
-    gate (its install command and JUnit count), as its test tier runs it."""
+    """ONE CONNECTOR POLICY (templates.connector_policy): a connector is pre-tested. The build
+    gate is templates.gate.evaluate as _template_gates calls it for the applied connector (the
+    wiring smoke on the started app, the secret scan); the app carries none of the connector's
+    tests or test scripts; and the connector's own suite runs in ITS tier, from the template's
+    reference stack, as the template trial runs it (templates.trial.run_stack), as this build's
+    uid. Never from the app."""
     from boss_engine.templates import gate as template_gate
 
     tpl = _login_oauth(g)
     reference = {p.split("stacks/node/", 1)[1]: c for p, c in tpl["files"].items()
-                 if p.startswith("stacks/node/auth/") or p.startswith("stacks/node/tests/")}
+                 if p.startswith("stacks/node/auth/")}
     drift = [p for p, c in reference.items()
              if (g.app / p).read_bytes() != (c if isinstance(c, bytes) else str(c).encode())]
     if drift:
         raise CheckFailed("the fixture's connector files no longer match the template (copy them "
                           "again from templates/apps/login-oauth/stacks/node): " + ", ".join(drift))
+    carried = sorted(_connector_suite_in_app(g, tpl))
+    if carried:
+        raise CheckFailed("the app carries the pre-tested connector's own suite (a build never "
+                          "copies it): " + ", ".join(carried))
     if not g.changed:
         g.changed = _changed_files(g)
     params = inspect.signature(template_gate.evaluate).parameters
@@ -454,21 +461,47 @@ def check_connector(g: Gate) -> str:
     if failing:
         tt = result.evidence.get("template_tests") or {}
         said.append(f"build gate failed {failing}: {tt.get('error') or result.evidence.get('secret_scan')}")
-    if "as_connector" in params:
-        suite = template_gate.evaluate(
-            template=tpl, files=tpl["files"], changed=g.changed, cwd=g.app,
-            run_command=lambda command, where: g.run(command, cwd=Path(where), timeout=600),
-            bound_values={}, tests_passed=True, substrate="local", as_connector=False)
-        tt = suite.evidence.get("template_tests") or {}
-        if not suite.gates.get("template_tests"):
-            said.append(f"the connector's own suite failed: {tt.get('error')} {_tail(str(tt.get('output_tail') or ''), 3)}")
-        suite_note = f"own suite {tt.get('passed')}/{tt.get('tests')} passed"
-    else:
-        suite_note = "own suite run as the build gate"
+    tt = result.evidence.get("template_tests") or {}
+    if "serve" in params and tt.get("kind") != "connector":
+        said.append("the build gate ran the connector's suite instead of the wiring smoke check")
+    suite = _connector_own_suite(g, tpl)
+    if not suite.get("ok"):
+        said.append(f"the connector's own suite failed in its tier: {suite.get('error')} "
+                    f"{_tail(str(suite.get('output_tail') or ''), 3)}")
     if said:
         raise CheckFailed("; ".join(said))
-    tt = result.evidence.get("template_tests") or {}
-    return f"wiring {tt.get('answered') or tt.get('passed') or tt.get('not_run')}; {suite_note}"
+    return (f"wiring {tt.get('answered') or tt.get('passed') or tt.get('not_run')}; own suite "
+            f"{suite.get('passed')}/{suite.get('tests')} passed in its tier, not in the app")
+
+
+def _connector_suite_in_app(g: Gate, tpl: dict) -> list[str]:
+    """What of the connector's own suite the app carries: its test files and its test scripts."""
+    found = [p.split("stacks/node/", 1)[1] for p in tpl["files"]
+             if p.startswith("stacks/node/tests/") and (g.app / p.split("stacks/node/", 1)[1]).exists()]
+    scripts = (json.loads((g.app / "package.json").read_text(encoding="utf-8")).get("scripts") or {})
+    ref = json.loads(tpl["files"]["stacks/node/package.json"]).get("scripts") or {}
+    found += [f"package.json scripts.{k}" for k in ref if k != "start" and k in scripts
+              and ("test" in k)]
+    return found
+
+
+def _connector_own_suite(g: Gate, tpl: dict) -> dict:
+    """The connector's own suite in its own tier: the template trial's run_stack on a copy of
+    the reference stack, as this build's uid (the sandbox identity's workspace)."""
+    from boss_engine.services import sandbox_identity
+    from boss_engine.templates import trial
+
+    manifest = _template_manifest(g)
+    ident = sandbox_identity.current() if hasattr(sandbox_identity, "current") else None
+    base = (ident.workspace("connector-suite-") if ident is not None and hasattr(ident, "workspace")
+            else Path(tempfile.mkdtemp(prefix="boss-connector-suite-")))
+    try:
+        os.chmod(base, 0o2777)
+        return trial.run_stack(manifest, tpl["files"], "node",
+                               runner=lambda command, where: g.run(command, cwd=Path(where), timeout=600),
+                               workdir=base)
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
 
 
 @check("a blocked build names the gate that failed", bug="6")
