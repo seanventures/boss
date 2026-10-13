@@ -352,6 +352,14 @@ class DeploymentTargetTeardownBody(OpenRequestBody):
     include_data: SkipValidation[bool | None] = None
 
 
+class DeploymentTargetRemoveBody(OpenRequestBody):
+    model_config = ConfigDict(json_schema_extra={"required": ["actor"]})
+
+    actor: SkipValidation[str | None] = None
+    delete_data: SkipValidation[bool | None] = None
+    reason: SkipValidation[str | None] = None
+
+
 class DeploymentTargetPurgeBody(OpenRequestBody):
     model_config = ConfigDict(json_schema_extra={"required": ["actor", "confirm"]})
 
