@@ -21,8 +21,9 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import uuid
-from typing import Any, Iterable, Mapping, Optional
+from typing import Any, Callable, Iterable, Mapping, Optional
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
@@ -143,7 +144,8 @@ class StreamParser:
     so the batch and live paths cannot drift apart.
     """
 
-    def __init__(self, cap: Optional[int] = None):
+    def __init__(self, cap: Optional[int] = None,
+                 clock: Optional[Callable[[], float]] = time.monotonic):
         self.result: Optional[dict[str, Any]] = None
         self.turns: list[dict[str, Any]] = []
         self._index = 0
@@ -153,6 +155,11 @@ class StreamParser:
         # tool_use that preceded it is the difference between "Bash failed" and an anonymous
         # error. It must therefore survive ACROSS lines, which is why it lives on the instance.
         self._tool_names: dict[str, str] = {}
+        # When each tool_use was seen, so its result row records how long the tool ran
+        # (`latency_ms`). Only meaningful when lines are fed as they arrive; `clock=None` (the
+        # after-the-fact batch parse) records nothing rather than a fake near-zero.
+        self._clock = clock
+        self._tool_started: dict[str, float] = {}
         # The last `rate_limit_event` the CLI emitted: its subscription windows' utilisation
         # and reset times, which the model router's headroom reads (model_router.headroom).
         self.rate_limit: Optional[dict[str, Any]] = None
@@ -186,12 +193,15 @@ class StreamParser:
         if kind == "user" and isinstance(message, Mapping):
             for block in _blocks(message):
                 if block.get("type") == "tool_result":
+                    started = self._tool_started.pop(str(block.get("tool_use_id") or ""), None)
                     produced.append({
                         "direction": "tool_result",
                         "tool_name": self._tool_names.get(
                             str(block.get("tool_use_id") or ""), ""),
                         "content": block.get("content"),
                         "ok": not bool(block.get("is_error")),
+                        "latency_ms": (int((self._clock() - started) * 1000)
+                                       if started is not None and self._clock else 0),
                         "turn_index": self._index,
                     })
                     self._index += 1
@@ -213,6 +223,8 @@ class StreamParser:
                 elif btype == "tool_use":
                     if block.get("id"):
                         self._tool_names[str(block["id"])] = str(block.get("name") or "")
+                        if self._clock:
+                            self._tool_started[str(block["id"])] = self._clock()
                     produced.append({
                         "direction": "tool_call",
                         "tool_name": str(block.get("name") or ""),
@@ -237,7 +249,7 @@ def parse_stream(stdout: str) -> tuple[Optional[dict[str, Any]], list[dict[str, 
     single-object parsing path untouched. This function never raises on malformed input: a log
     line we cannot read is a log line we drop, not a failed build.
     """
-    parser = StreamParser()
+    parser = StreamParser(clock=None)
     for line in (stdout or "").splitlines():
         parser.feed(line)
     if parser.result is not None and parser.rate_limit is not None:

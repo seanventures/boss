@@ -1456,6 +1456,11 @@ def settle_code_task(engine: Any, code_task_run_id: str) -> None:
     from .scorecards import settle as _settle_scorecard
 
     _settle_scorecard(engine, code_task_run_id)
+    # WHERE ITS TIME AND TOKENS WENT (services/build_profile.py), as a `code_task.build_profile`
+    # event once the run is terminal. Same reason it lives here; never raises.
+    from .build_profile import emit_build_profile
+
+    emit_build_profile(engine, code_task_run_id)
 
 
 def _agent_name(connection: Connection, project_id: str, role_key: str) -> str:
