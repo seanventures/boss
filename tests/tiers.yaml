@@ -53,6 +53,10 @@ P0:
     - apps/web/tests/a-press-is-sent-once.test.ts
     - apps/web/tests/a-workflow-is-started-once-per-press.test.ts
     - apps/web/tests/a-deploy-is-approved-once-and-opens-its-app.test.tsx
+  # Release steps: commands, not test files (scripts/test-tier.sh does not run them). Before a
+  # release: test-tier major + e2e-gate plumbing + e2e-gate agent (docs/operations/TEST_TIERS.md).
+  release:
+    - scripts/e2e-gate.sh plumbing
 
 P1:
   engine:
