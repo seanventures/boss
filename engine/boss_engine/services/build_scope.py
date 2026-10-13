@@ -24,9 +24,11 @@ from typing import Any, Iterable, Optional
 
 _SCOPE: ContextVar[Optional[dict[str, bool]]] = ContextVar("boss_build_scope", default=None)
 
+# A health endpoint (/healthz) is not a request for metrics: the Notes Lite brief asked for
+# /healthz and got the whole Prometheus standard. Only metrics, monitoring or a deploy count.
 _OPS_WORDS = re.compile(
-    r"\b(metrics?|observability|prometheus|opentelemetry|monitor(ing|ed)?|healthz|readyz|"
-    r"health ?checks?|deploy(ed|ment|s)?|production|sre)\b", re.I)
+    r"\b(metrics?|observability|prometheus|opentelemetry|monitor(ing|ed)?|"
+    r"deploy(ed|ment|s)?|production|sre)\b", re.I)
 _E2E_WORDS = re.compile(
     r"\b(playwright|e2e|end[- ]to[- ]end|browser tests?|test:e2e|ui tests?)\b", re.I)
 _BUNDLER_WORDS = re.compile(r"\b(vite|react|vue|svelte|next(\.js)?|tailwind|spa)\b", re.I)

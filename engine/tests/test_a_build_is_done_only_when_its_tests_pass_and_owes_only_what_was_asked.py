@@ -12,7 +12,8 @@ from boss_engine.services.platform_standards import platform_standards
 
 NOTES = ("Speed check: Notes Lite",
          "Build 'Notes Lite': an Express API in notes-lite/server/ with GET/POST/DELETE "
-         "/api/notes, a small static page in notes-lite/web/, Vitest + supertest tests.",
+         "/api/notes plus /healthz, a small static page in notes-lite/web/, Vitest + "
+         "supertest tests.",
          ["npm test passes", "API validates input", "the page lists, adds and deletes notes"])
 
 
