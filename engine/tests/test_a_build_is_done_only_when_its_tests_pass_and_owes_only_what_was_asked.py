@@ -66,10 +66,21 @@ def test_qa_tests_are_sized_to_the_criteria_and_planned_first():
     assert g._test_plan_note("no plan here") == ""
 
 
-def test_one_fix_round_for_failing_tests_and_no_same_model_escalation():
+def test_one_fix_round_before_review_and_failing_tests_skip_the_panel():
     import inspect
 
     src = inspect.getsource(g)
-    assert "inrun_max = min(inrun_max, 1)" in src
-    assert '"code_task.escalation_skipped"' in src
+    # The one fix round is warm and comes right after implement; the "frontier" retry on the
+    # same model is gone; a build still failing after it is not reviewed or looped.
+    assert '"instead": "warm_fix_round"' in src
+    assert '"code_task.review_skipped_tests_failing"' in src
+    assert "inrun_max = min(inrun_max, 0 if repair_attempts >= 1 else 1)" in src
     assert '"code_task.light_plan"' in src
+
+
+def test_a_nul_in_file_text_never_crashes_the_final_write():
+    import json
+
+    out = g.pg_json({"files": {"metrics.js": "const key = route + '\x00' + status"}})
+    assert "\\u0000" not in out
+    assert json.loads(out)["files"]["metrics.js"].endswith("+ '' + status")

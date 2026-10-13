@@ -1081,6 +1081,22 @@ def _template_gates(engine, run: dict, sandbox, *, root, cwd, changed_files: dic
     return {"gates": result.gates, "evidence": result.evidence}
 
 
+def pg_json(value) -> str:
+    """JSON Postgres will store: no NUL. A build's context can carry file text, and one NUL
+    in it ("\\u0000 cannot be converted to text") crashed the Notes Lite check's final write,
+    turning a clean fail-closed stop into a pipeline exception."""
+    def _clean(v):
+        if isinstance(v, str):
+            return v.replace("\x00", "")
+        if isinstance(v, dict):
+            return {_clean(k): _clean(x) for k, x in v.items()}
+        if isinstance(v, (list, tuple)):
+            return [_clean(x) for x in v]
+        return v
+
+    return json.dumps(_clean(value), default=str)
+
+
 def _ctx_block(title, instructions, criteria, *, service: bool = False) -> str:
     """Identical task-context preamble for EVERY pipeline stage — byte-identical on
     purpose. The model API's prompt cache is keyed on the request prefix, so stages
@@ -4568,9 +4584,10 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # minutes that changed nothing the warm fix round below could not. Escalate only when it
         # reaches a different engine or model.
         _esc_route: list = []   # the escalated route, resolved once when it is first needed
+        _warm_fix = [False]     # the final attempt is a warm fix on the same model, not a "frontier" one
         for attempt in range(max_repair + 2):
             _impl_ran[0] = True
-            escalate_impl = attempt == max_repair + 1
+            escalate_impl = attempt == max_repair + 1 and not _warm_fix[0]
             if escalate_impl:
                 with _transaction(engine) as c:
                     emit_event(c, project_id, "code_task.step_escalating", "boss",
@@ -4798,12 +4815,17 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     _log_caught(logger)
                     _same = False
                 if _same:
+                    # THE FIX ROUND HAPPENS HERE, BEFORE ANY REVIEW: the same session, warm, with
+                    # the failing tests as its evidence. A cold "frontier" pass on the same model
+                    # bought nothing, and reviewing code whose tests fail cost the Notes Lite
+                    # check 12 minutes of panel time on a build that then failed anyway.
+                    _warm_fix[0] = True
                     with _transaction(engine) as c:
                         emit_event(c, project_id, "code_task.escalation_skipped", "boss",
                                    "code_task_run", run_id,
                                    {"step": "implement", "reason": "same_model",
-                                    "model": _before.get("model")})
-                    break
+                                    "model": _before.get("model"),
+                                    "instead": "warm_fix_round"})
             repair_attempts += 1
             # Evidence for the router: the next implement boundary may move up a tier
             # (Smart mode's escalation rules; Fixed mode ignores the ledger).
@@ -5102,6 +5124,18 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 else (profile.get("panel_checks") or _ALL_PANEL_SEATS))
             if _ci_files:
                 enabled_seats |= {"review_code", "security_check"}
+            # TESTS THAT STILL FAIL AFTER THE FIX ROUND END THE BUILD; THEY ARE NOT REVIEWED.
+            # Reviewing code that does not pass its own tests is time spent on a verdict the
+            # test gate already decided (fail closed, one fix round). The deterministic
+            # regression seat still runs.
+            if not official_tests_passed and repair_attempts >= 1:
+                _skipped = sorted(enabled_seats & {"review_code", "security_check",
+                                                   "consistency_check"})
+                enabled_seats -= {"review_code", "security_check", "consistency_check"}
+                if _skipped:
+                    with _transaction(engine) as c:
+                        emit_event(c, project_id, "code_task.review_skipped_tests_failing", "boss",
+                                   "code_task_run", run_id, {"seats": _skipped})
             checks = []
             if "review_code" in enabled_seats:
                 checks += review_checks
@@ -5751,7 +5785,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # ended where it started. After one round the build stops, failing, with the tests
             # named, which is faster to act on than another loop.
             if set(failing) & set(_TEST_GATES):
-                inrun_max = min(inrun_max, 1)
+                inrun_max = min(inrun_max, 0 if repair_attempts >= 1 else 1)
             # Test gates are convergeable too. Previously a failing test skipped this loop entirely
             # and fell through to a FULL cold re-run — discarding the warm session and re-paying for
             # spec/plan — which is why repeated attempts never converged on test failures.
@@ -6283,7 +6317,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         "error=:e, finalize_ctx=CAST(:fc AS JSONB), updated_at=now() WHERE id=:id"),
                         {"e": _held["error"] if _held else _blocked_error,
                          "ph": "done" if _held else "awaiting_gate_override",
-                         "fc": json.dumps(ctx), "id": run_id})
+                         "fc": pg_json(ctx), "id": run_id})
                 _rescue_pr(_blocked_reason)
                 return {"status": "blocked", "done": True, "awaiting_gate_override": _held is None,
                         "quality_gate_id": qg_id, "failing_gates": failing}
