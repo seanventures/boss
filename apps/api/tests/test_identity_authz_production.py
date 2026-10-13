@@ -169,6 +169,9 @@ def test_every_deployment_create_route_says_where_its_target_comes_from():
         "POST /v1/deployment-runs/{deployment_run_id}/health-check": "checks a run; ships nothing",
         "POST /v1/code-tasks/{run_id}/deploy": "a caller-named SSH host: the handler treats every "
                                                "ssh deploy as production (require_production always)",
+        "POST /v1/change-sets/{cs_id}/deploy": "Deploy all ships each component to its own target: "
+                                               "the handler treats it as production (require_production "
+                                               "always)",
     }
     wrong = []
     for entry in identity_guard.route_inventory(app):

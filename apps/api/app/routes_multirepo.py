@@ -32,7 +32,7 @@ from fastapi import APIRouter, Body, Request
 from fastapi.responses import JSONResponse
 
 from boss_engine.db import begin
-from boss_engine.identity import P, Production, Scope, audit, permit
+from boss_engine.identity import P, Scope, audit, permit
 
 SPEC = "docs/product/MULTIREPO.md"
 
@@ -450,16 +450,18 @@ def build_multirepo_router() -> APIRouter:
             return _refuse(exc)
 
     @router.post("/v1/change-sets/{cs_id}/deploy")
-    # "Deploy all" ships every component to its own target, any of which may be production, and
-    # no single id names them: every call counts as production (deployment:production).
-    @permit(P.DEPLOYMENT_CREATE, scope=Scope.project(body="project_id"),
-            production=Production(always=True))
+    @permit(P.DEPLOYMENT_CREATE, scope=Scope.project(body="project_id"))
     def deploy_change_set(cs_id: str, request: Request, payload: dict = Body(...)) -> Any:
         """"Deploy all": a merged set whose plan was waiting for somewhere to ship."""
+        from .routers.identity_access import require_production
+
         project_id = str(payload.get("project_id") or "")
         try:
             with begin() as db:
                 _mine(db, cs_id, project_id)
+                # "Deploy all" ships every component to its own target, any of which may be
+                # production, and no single id names them: every call counts as production.
+                require_production(request, project_id, always=True)
                 release.start(db, _settings(), cs_id, actor=_actor(request))
                 return release.plan(db, cs_id)
         except MultiRepoError as exc:
