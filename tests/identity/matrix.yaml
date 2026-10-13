@@ -3,7 +3,7 @@
 # One line per operation: its declaration, then the built-in roles allowed
 # (O owner, A admin, P operator, V viewer, U auditor; '-' none). Every other role is denied
 # 403, or 404 when the operation names an object the role cannot even read.
-# 1517 operations.
+# 1518 operations.
 "GET /.well-known/boss-jwks.json": ["public:jwks", "OAPVU"]
 "GET /docs": ["public:api_description", "OAPVU"]
 "GET /docs/oauth2-redirect": ["public:api_description", "OAPVU"]
@@ -521,6 +521,7 @@
 "POST /v1/deployment-targets/{target_id}/auto-deploy": ["permit deployment_target:manage @ deployment_target(path=target_id)", "OA"]
 "POST /v1/deployment-targets/{target_id}/bootstrap": ["permit deployment_target:manage @ deployment_target(path=target_id)", "OA"]
 "POST /v1/deployment-targets/{target_id}/purge": ["permit deployment_target:manage @ deployment_target(path=target_id)", "OA"]
+"POST /v1/deployment-targets/{target_id}/remove": ["permit deployment:create @ deployment_target(path=target_id)", "OAP"]
 "POST /v1/deployment-targets/{target_id}/secrets": ["permit deployment_target:manage @ project(body=project_id)", "OA"]
 "POST /v1/deployment-targets/{target_id}/teardown": ["permit deployment_target:manage @ deployment_target(path=target_id)", "OA"]
 "GET /v1/deployments": ["permit deployment:read @ project(query=project_id)", "OAPVU"]
