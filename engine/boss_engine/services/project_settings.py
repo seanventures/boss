@@ -223,6 +223,15 @@ KNOBS: dict[str, dict[str, Any]] = {
                 "1 = no fan-out).",
         "kind": "int", "min": 0, "max": 8,
     },
+    # BUILD EFFORT (code_agent.stage_effort): how hard a build's writing stages think per step.
+    "build_effort_writing": {
+        "attr": "build_effort_writing",
+        "label": "Writing effort",
+        "help": "The reasoning effort for writing tests and code (and fix rounds): medium (the "
+                "default) writes the planned change without re-deliberating it; design, plan "
+                "review and reviewers always run at high.",
+        "kind": "choice", "choices": ("low", "medium", "high", "xhigh", "max"),
+    },
     # BUILD STREAMS (build_streams): the bounds each writing stage sizes its parallel streams
     # within, from the host's free cores, memory and load at the moment the stage starts.
     "build_streams_min": {

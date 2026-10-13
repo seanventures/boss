@@ -2205,6 +2205,36 @@ def _build_fan_out(engine, project_id, settings) -> int:
         return 0
 
 
+def _record_effort(engine, project_id, run_id, settings) -> None:
+    """EFFORT PER STAGE (code_agent.stage_effort): publish the project's writing effort to this
+    thread's LLM context, where every CLI step reads its --effort, and record each stage's level
+    on the run (state.effort) and as code_task.effort_chosen. Never raises."""
+    from .code_agent import WRITING_EFFORT_DEFAULT, effort_map, stage_effort
+
+    writing = WRITING_EFFORT_DEFAULT
+    try:
+        from .project_settings import effective
+
+        with _transaction(engine) as c:
+            writing = str(effective(c, project_id, settings, "build_effort_writing")
+                          or WRITING_EFFORT_DEFAULT)
+    except Exception:  # noqa: BLE001 — unreadable settings write at the default
+        _log_caught(logger)
+    writing = stage_effort("implement", writing) or WRITING_EFFORT_DEFAULT
+    set_llm_context(effort_writing=writing)
+    try:
+        efforts = effort_map(writing)
+        with _transaction(engine) as c:
+            c.execute(sql(
+                "UPDATE code_task_runs SET state=jsonb_set(COALESCE(state,'{}'::jsonb), "
+                "'{effort}', CAST(:e AS JSONB)), updated_at=now() WHERE id=:id"),
+                {"e": json.dumps(efforts), "id": run_id})
+            emit_event(c, project_id, "code_task.effort_chosen", "boss", "code_task_run",
+                       run_id, {"writing": writing, "stages": efforts})
+    except Exception:  # noqa: BLE001 — the record never fails the build
+        _log_caught(logger)
+
+
 def _record_split_off(engine, project_id, run_id, settings, stage: str) -> None:
     """Record on the stage that it runs as ONE session and why (build_streams.split_off), the
     same place and event a split records its stream count, so the choice is never invisible.
@@ -2662,6 +2692,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
     # VAG Phase 0: publish the run's identity so every run_role call below records an
     # llm_calls row with the right attribution (stage is set before each step).
     set_llm_context(db_engine=engine, project_id=project_id, run_id=run_id)
+    _record_effort(engine, project_id, run_id, settings)
     # Rules a ROLE mandated, loaded once for the whole run so every stage's shared preamble is
     # byte-identical (the prompt cache depends on that) and so a rule added mid-build cannot
     # change the instructions between stages of the same task.

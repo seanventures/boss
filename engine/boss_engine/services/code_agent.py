@@ -92,6 +92,45 @@ def thinking_token_cap() -> int:
         return THINKING_TOKEN_CAP_DEFAULT
 
 
+#: The CLI's --effort levels (claude --help, 2.1.x).
+EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
+#: Stages that WRITE (tests, code, fixes): the plan is already decided, so they run at the
+#: project's writing effort (build_effort_writing, default medium). Measured on a HelpDesk-size
+#: build: ~89% of output tokens were reasoning and narration, ~11% file content.
+WRITING_STAGES = frozenset({"write_tests", "implement", "solo", "repair", "guest"})
+#: Stages that JUDGE or DESIGN: their thinking is the product, so they run at high.
+REASONING_STAGES = frozenset({"standards", "spec", "plan", "design", "review_plan",
+                              "review_code", "security_check", "consistency_check",
+                              "check_tests", "quality"})
+WRITING_EFFORT_DEFAULT = "medium"
+REASONING_EFFORT = "high"
+
+
+def stage_effort(stage: Optional[str], writing: Optional[str] = None) -> Optional[str]:
+    """The --effort for a build stage, or None for anything that is not a build stage (a chat,
+    research) so the CLI keeps its own default there."""
+    name = (stage or "").strip().lower()
+    if name in WRITING_STAGES:
+        level = (writing or WRITING_EFFORT_DEFAULT).strip().lower()
+        return level if level in EFFORT_LEVELS else WRITING_EFFORT_DEFAULT
+    if name in REASONING_STAGES:
+        return REASONING_EFFORT
+    return None
+
+
+def effort_map(writing: Optional[str] = None) -> dict:
+    """Every build stage's effort, for the record on the run."""
+    return {st: stage_effort(st, writing) for st in sorted(WRITING_STAGES | REASONING_STAGES)}
+
+
+def _current_effort() -> Optional[str]:
+    """The effort for the stage this thread is running (llm_telemetry context)."""
+    from .llm_telemetry import get_llm_context
+
+    ctx = get_llm_context()
+    return stage_effort(ctx.get("stage"), ctx.get("effort_writing"))
+
+
 #: The CLI's sub-agent tool (Claude Code 2.x names it `Agent`; `Task` is its older alias).
 SUB_AGENT_TOOL = "Agent"
 #: Never available to a build, sub-agent or not: the build reaches the network only through
@@ -850,6 +889,9 @@ class ClaudeCodeAgent:
         # only the transcript is lost.
         capturing = capture_enabled()
         model = model or getattr(self.settings, "claude_cli_model", None)
+        # EFFORT PER STAGE (stage_effort): writing stages at the project's writing effort,
+        # design and review at high, anything else at the CLI's own default.
+        effort = _current_effort()
 
         def base_cmd(stream: bool) -> list[str]:
             """The argv for one attempt. Rebuilt per attempt so capture can be dropped."""
@@ -877,6 +919,8 @@ class ClaudeCodeAgent:
                 argv += ["--resume", resume_session_id]
             if model:
                 argv += ["--model", model]
+            if effort:
+                argv += ["--effort", effort]
             # `--` ends option parsing: a prompt that BEGINS with a dash (e.g. a
             # "--- SECTION ---" header) must never be read as a CLI option.
             # Single choke point: every stage (build AND review) goes through _invoke, so the

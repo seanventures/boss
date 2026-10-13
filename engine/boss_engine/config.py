@@ -1241,6 +1241,9 @@ class Settings(BaseSettings):
     # to the sandbox cwd; network egress is the deployment's responsibility.
     build_speed: str = Field(default="balanced", alias="BOSS_BUILD_SPEED")
     build_parallelism: int = Field(default=0, alias="BOSS_BUILD_PARALLELISM")
+    # The CLI's --effort for a build's WRITING stages (write_tests, implement, fix rounds).
+    # Reasoning stages (design, plan review, reviewers) run at high (code_agent.stage_effort).
+    build_effort_writing: str = Field(default="medium", alias="BOSS_BUILD_EFFORT_WRITING")
     code_agent_allowed_tools: str = Field(
         default="Read,Edit,MultiEdit,Write,Glob,Grep,Bash,TodoWrite",
         alias="BOSS_CODE_AGENT_ALLOWED_TOOLS",
