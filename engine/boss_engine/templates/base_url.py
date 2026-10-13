@@ -144,17 +144,25 @@ def deploy_address(c, project_id: str, app_key: str, target: Optional[dict] = No
     return {"env": BASE_URL_ENV, "base_url": base, "callbacks": callbacks(manifests, base)}
 
 
+def deploy_secret_values(c, *, org_id: str, project_id: str,
+                         app_key: str) -> tuple[dict[str, str], list[str]]:
+    """THE ONE READ of an app's `deploy` secret values, for every deploy-side caller: the app's
+    environment (deploy_environment, below) and a platform resource's bindings
+    (platform.bindings, platform.executor). Values never leave the caller."""
+    from .secrets import values_for_env
+
+    return values_for_env(c, org_id=org_id, project_id=project_id, app_key=app_key, env="deploy")
+
+
 def deploy_environment(c, *, org_id: Optional[str], project_id: str, app_key: str,
                        target: dict) -> tuple[dict[str, str], list[str], dict[str, Any]]:
     """What a deploy of the app on `target` puts in the app's environment (.boss/app.env): its
     `deploy` secret values, plus APP_BASE_URL when a template declares it. Returns
     (env, withheld, address) — `address` is {base_url, callbacks} for the deploy's record."""
-    from .secrets import values_for_env
-
     env: dict[str, str] = {}
     withheld: list[str] = []
     if org_id:
-        env, withheld = values_for_env(c, org_id=org_id, project_id=project_id, app_key=app_key, env="deploy")
+        env, withheld = deploy_secret_values(c, org_id=org_id, project_id=project_id, app_key=app_key)
     address = deploy_address(c, project_id, app_key, target)
     if address:
         env.setdefault(BASE_URL_ENV, address["base_url"])
