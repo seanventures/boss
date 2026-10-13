@@ -132,31 +132,6 @@
               }
             },
             "next": [
-              "more_tests"
-            ],
-            "captain": "qa",
-            "default_captain": "qa",
-            "max_attempts": 3,
-            "approval": {
-              "mode": "auto",
-              "on_timeout": "block",
-              "risk_tier": 1,
-              "forced_manual": false
-            }
-          },
-          {
-            "id": "more_tests",
-            "kind": "capability",
-            "binding": {
-              "capability": "more_tests",
-              "inputs": {
-                "run_id": {
-                  "from_step": "build",
-                  "field": "code_task_run_id"
-                }
-              }
-            },
-            "next": [
               "plrr"
             ],
             "captain": "qa",
@@ -176,16 +151,53 @@
               "capability": "plrr",
               "inputs": {
                 "run_id": {
-                  "from_step": "more_tests",
+                  "from_step": "build",
                   "field": "code_task_run_id"
                 }
               }
             },
             "next": [
-              "report"
+              "pass_2"
             ],
             "captain": "sre",
             "default_captain": "sre",
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "pass_2",
+            "kind": "parallel",
+            "branches": [
+              "more_tests",
+              "report"
+            ],
+            "join": "pass_2_joined",
+            "next": [],
+            "max_attempts": 3,
+            "binding": {}
+          },
+          {
+            "id": "more_tests",
+            "kind": "capability",
+            "binding": {
+              "capability": "more_tests",
+              "inputs": {
+                "run_id": {
+                  "from_step": "build",
+                  "field": "code_task_run_id"
+                }
+              }
+            },
+            "captain": "qa",
+            "default_captain": "qa",
+            "next": [
+              "pass_2_joined"
+            ],
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -270,7 +282,9 @@
                 }
               }
             },
-            "next": [],
+            "next": [
+              "pass_2_joined"
+            ],
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -278,6 +292,44 @@
               "risk_tier": 1,
               "forced_manual": false
             }
+          },
+          {
+            "id": "pass_2_joined",
+            "kind": "join",
+            "wait_for": [
+              "more_tests",
+              "notify"
+            ],
+            "success_policy": "all",
+            "next": [
+              "deploy_again"
+            ],
+            "max_attempts": 3,
+            "binding": {}
+          },
+          {
+            "id": "deploy_again",
+            "kind": "capability",
+            "title": "Deploy again (More tests)",
+            "binding": {
+              "capability": "deploy",
+              "inputs": {
+                "run_id": {
+                  "from_step": "more_tests",
+                  "field": "code_task_run_id"
+                },
+                "pass_2_of": "deploy"
+              }
+            },
+            "next": [],
+            "approval": {
+              "mode": "manual",
+              "on_timeout": "block",
+              "approver_role": "release_manager",
+              "risk_tier": 2,
+              "forced_manual": true
+            },
+            "max_attempts": 3
           }
         ],
         "objective": "Ship working, watched software. The panel's PRD is the build brief: it is handed straight to an engineering agent, so it must be specific enough to implement and to test against.",
@@ -426,7 +478,7 @@
               }
             },
             "next": [
-              "more_tests"
+              "pass_2"
             ],
             "captain": "qa",
             "default_captain": "qa",
@@ -437,6 +489,18 @@
               "risk_tier": 1,
               "forced_manual": false
             }
+          },
+          {
+            "id": "pass_2",
+            "kind": "parallel",
+            "branches": [
+              "more_tests",
+              "report"
+            ],
+            "join": "pass_2_joined",
+            "next": [],
+            "max_attempts": 3,
+            "binding": {}
           },
           {
             "id": "more_tests",
@@ -450,11 +514,11 @@
                 }
               }
             },
-            "next": [
-              "report"
-            ],
             "captain": "qa",
             "default_captain": "qa",
+            "next": [
+              "pass_2_joined"
+            ],
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -488,7 +552,7 @@
               "capability": "deploy",
               "inputs": {
                 "run_id": {
-                  "from_step": "more_tests",
+                  "from_step": "build",
                   "field": "code_task_run_id"
                 }
               }
@@ -519,7 +583,9 @@
                 }
               }
             },
-            "next": [],
+            "next": [
+              "pass_2_joined"
+            ],
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -527,6 +593,44 @@
               "risk_tier": 1,
               "forced_manual": false
             }
+          },
+          {
+            "id": "pass_2_joined",
+            "kind": "join",
+            "wait_for": [
+              "more_tests",
+              "notify"
+            ],
+            "success_policy": "all",
+            "next": [
+              "deploy_again"
+            ],
+            "max_attempts": 3,
+            "binding": {}
+          },
+          {
+            "id": "deploy_again",
+            "kind": "capability",
+            "title": "Deploy again (More tests)",
+            "binding": {
+              "capability": "deploy",
+              "inputs": {
+                "run_id": {
+                  "from_step": "more_tests",
+                  "field": "code_task_run_id"
+                },
+                "pass_2_of": "deploy"
+              }
+            },
+            "next": [],
+            "approval": {
+              "mode": "manual",
+              "on_timeout": "block",
+              "approver_role": "release_manager",
+              "risk_tier": 2,
+              "forced_manual": true
+            },
+            "max_attempts": 3
           }
         ],
         "objective": "Add one small thing to software that already exists, quickly. There is no research step and no spec review — the PRD goes straight to the build, so keep it tight and do not redesign the surrounding product.",
@@ -722,7 +826,7 @@
               }
             },
             "next": [
-              "more_tests"
+              "pass_2"
             ],
             "captain": "qa",
             "default_captain": "qa",
@@ -733,6 +837,18 @@
               "risk_tier": 1,
               "forced_manual": false
             }
+          },
+          {
+            "id": "pass_2",
+            "kind": "parallel",
+            "branches": [
+              "more_tests",
+              "ux_review"
+            ],
+            "join": "pass_2_joined",
+            "next": [],
+            "max_attempts": 3,
+            "binding": {}
           },
           {
             "id": "more_tests",
@@ -746,11 +862,11 @@
                 }
               }
             },
-            "next": [
-              "ux_review"
-            ],
             "captain": "qa",
             "default_captain": "qa",
+            "next": [
+              "pass_2_joined"
+            ],
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -803,7 +919,7 @@
               "capability": "deploy",
               "inputs": {
                 "run_id": {
-                  "from_step": "more_tests",
+                  "from_step": "build",
                   "field": "code_task_run_id"
                 }
               }
@@ -827,7 +943,9 @@
               "capability": "monitor",
               "inputs": {}
             },
-            "next": [],
+            "next": [
+              "pass_2_joined"
+            ],
             "captain": "sre",
             "default_captain": "sre",
             "max_attempts": 3,
@@ -837,6 +955,44 @@
               "risk_tier": 1,
               "forced_manual": false
             }
+          },
+          {
+            "id": "pass_2_joined",
+            "kind": "join",
+            "wait_for": [
+              "more_tests",
+              "monitor"
+            ],
+            "success_policy": "all",
+            "next": [
+              "deploy_again"
+            ],
+            "max_attempts": 3,
+            "binding": {}
+          },
+          {
+            "id": "deploy_again",
+            "kind": "capability",
+            "title": "Deploy again (More tests)",
+            "binding": {
+              "capability": "deploy",
+              "inputs": {
+                "run_id": {
+                  "from_step": "more_tests",
+                  "field": "code_task_run_id"
+                },
+                "pass_2_of": "deploy"
+              }
+            },
+            "next": [],
+            "approval": {
+              "mode": "manual",
+              "on_timeout": "block",
+              "approver_role": "release_manager",
+              "risk_tier": 2,
+              "forced_manual": true
+            },
+            "max_attempts": 3
           }
         ],
         "objective": "Specify a feature large enough to deserve its own spec, then build it. The PRD is the build brief and must be arguable on its merits, not just implementable. Once it is built, a person signs off the way it looks and works.",
@@ -924,7 +1080,7 @@
               }
             },
             "next": [
-              "more_tests"
+              "preview"
             ],
             "captain": "engineering_captain",
             "default_captain": "engineering_captain",
@@ -935,6 +1091,44 @@
               "risk_tier": 1,
               "forced_manual": false
             }
+          },
+          {
+            "id": "preview",
+            "kind": "capability",
+            "binding": {
+              "capability": "preview",
+              "inputs": {
+                "run_id": {
+                  "from_step": "build",
+                  "field": "code_task_run_id"
+                },
+                "advisory": true
+              }
+            },
+            "captain": "qa",
+            "default_captain": "qa",
+            "next": [
+              "pass_2"
+            ],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "pass_2",
+            "kind": "parallel",
+            "branches": [
+              "more_tests",
+              "report"
+            ],
+            "join": "pass_2_joined",
+            "next": [],
+            "max_attempts": 3,
+            "binding": {}
           },
           {
             "id": "more_tests",
@@ -949,11 +1143,11 @@
                 "depth": "light"
               }
             },
-            "next": [
-              "report"
-            ],
             "captain": "qa",
             "default_captain": "qa",
+            "next": [
+              "pass_2_joined"
+            ],
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -987,7 +1181,7 @@
               "capability": "deploy",
               "inputs": {
                 "run_id": {
-                  "from_step": "more_tests",
+                  "from_step": "build",
                   "field": "code_task_run_id"
                 }
               }
@@ -1018,7 +1212,9 @@
                 }
               }
             },
-            "next": [],
+            "next": [
+              "pass_2_joined"
+            ],
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -1026,6 +1222,44 @@
               "risk_tier": 1,
               "forced_manual": false
             }
+          },
+          {
+            "id": "pass_2_joined",
+            "kind": "join",
+            "wait_for": [
+              "more_tests",
+              "notify"
+            ],
+            "success_policy": "all",
+            "next": [
+              "deploy_again"
+            ],
+            "max_attempts": 3,
+            "binding": {}
+          },
+          {
+            "id": "deploy_again",
+            "kind": "capability",
+            "title": "Deploy again (More tests)",
+            "binding": {
+              "capability": "deploy",
+              "inputs": {
+                "run_id": {
+                  "from_step": "more_tests",
+                  "field": "code_task_run_id"
+                },
+                "pass_2_of": "deploy"
+              }
+            },
+            "next": [],
+            "approval": {
+              "mode": "manual",
+              "on_timeout": "block",
+              "approver_role": "release_manager",
+              "risk_tier": 2,
+              "forced_manual": true
+            },
+            "max_attempts": 3
           }
         ],
         "objective": "Something is broken in production now. Fix exactly that: the smallest change that makes the failure stop, with a test that would have caught it. Do not redesign the surrounding code; a person approves the release.",
@@ -1301,7 +1535,7 @@
               }
             },
             "next": [
-              "more_tests"
+              "preview"
             ],
             "captain": "backend_engineer",
             "default_captain": "backend_engineer",
@@ -1312,6 +1546,44 @@
               "risk_tier": 1,
               "forced_manual": false
             }
+          },
+          {
+            "id": "preview",
+            "kind": "capability",
+            "binding": {
+              "capability": "preview",
+              "inputs": {
+                "run_id": {
+                  "from_step": "build",
+                  "field": "code_task_run_id"
+                },
+                "advisory": true
+              }
+            },
+            "captain": "qa",
+            "default_captain": "qa",
+            "next": [
+              "pass_2"
+            ],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "pass_2",
+            "kind": "parallel",
+            "branches": [
+              "more_tests",
+              "report"
+            ],
+            "join": "pass_2_joined",
+            "next": [],
+            "max_attempts": 3,
+            "binding": {}
           },
           {
             "id": "more_tests",
@@ -1325,11 +1597,11 @@
                 }
               }
             },
-            "next": [
-              "report"
-            ],
             "captain": "qa",
             "default_captain": "qa",
+            "next": [
+              "pass_2_joined"
+            ],
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -1363,7 +1635,7 @@
               "capability": "deploy",
               "inputs": {
                 "run_id": {
-                  "from_step": "more_tests",
+                  "from_step": "build",
                   "field": "code_task_run_id"
                 }
               }
@@ -1411,7 +1683,9 @@
                 }
               }
             },
-            "next": [],
+            "next": [
+              "pass_2_joined"
+            ],
             "captain": "docs_writer",
             "default_captain": "docs_writer",
             "max_attempts": 3,
@@ -1421,6 +1695,44 @@
               "risk_tier": 1,
               "forced_manual": false
             }
+          },
+          {
+            "id": "pass_2_joined",
+            "kind": "join",
+            "wait_for": [
+              "more_tests",
+              "document"
+            ],
+            "success_policy": "all",
+            "next": [
+              "deploy_again"
+            ],
+            "max_attempts": 3,
+            "binding": {}
+          },
+          {
+            "id": "deploy_again",
+            "kind": "capability",
+            "title": "Deploy again (More tests)",
+            "binding": {
+              "capability": "deploy",
+              "inputs": {
+                "run_id": {
+                  "from_step": "more_tests",
+                  "field": "code_task_run_id"
+                },
+                "pass_2_of": "deploy"
+              }
+            },
+            "next": [],
+            "approval": {
+              "mode": "manual",
+              "on_timeout": "block",
+              "approver_role": "release_manager",
+              "risk_tier": 2,
+              "forced_manual": true
+            },
+            "max_attempts": 3
           }
         ],
         "objective": "Stand up a new service: scaffold, endpoints, tests, deployment and monitoring. The PRD is the build brief and must name the endpoints, the data it owns and how it is watched.",
@@ -1561,7 +1873,7 @@
               }
             },
             "next": [
-              "more_tests"
+              "pass_2"
             ],
             "captain": "qa",
             "default_captain": "qa",
@@ -1572,6 +1884,18 @@
               "risk_tier": 1,
               "forced_manual": false
             }
+          },
+          {
+            "id": "pass_2",
+            "kind": "parallel",
+            "branches": [
+              "more_tests",
+              "ux_review"
+            ],
+            "join": "pass_2_joined",
+            "next": [],
+            "max_attempts": 3,
+            "binding": {}
           },
           {
             "id": "more_tests",
@@ -1585,11 +1909,11 @@
                 }
               }
             },
-            "next": [
-              "ux_review"
-            ],
             "captain": "qa",
             "default_captain": "qa",
+            "next": [
+              "pass_2_joined"
+            ],
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -1642,7 +1966,7 @@
               "capability": "deploy",
               "inputs": {
                 "run_id": {
-                  "from_step": "more_tests",
+                  "from_step": "build",
                   "field": "code_task_run_id"
                 }
               }
@@ -1666,7 +1990,9 @@
               "capability": "monitor",
               "inputs": {}
             },
-            "next": [],
+            "next": [
+              "pass_2_joined"
+            ],
             "captain": "sre",
             "default_captain": "sre",
             "max_attempts": 3,
@@ -1676,6 +2002,44 @@
               "risk_tier": 1,
               "forced_manual": false
             }
+          },
+          {
+            "id": "pass_2_joined",
+            "kind": "join",
+            "wait_for": [
+              "more_tests",
+              "monitor"
+            ],
+            "success_policy": "all",
+            "next": [
+              "deploy_again"
+            ],
+            "max_attempts": 3,
+            "binding": {}
+          },
+          {
+            "id": "deploy_again",
+            "kind": "capability",
+            "title": "Deploy again (More tests)",
+            "binding": {
+              "capability": "deploy",
+              "inputs": {
+                "run_id": {
+                  "from_step": "more_tests",
+                  "field": "code_task_run_id"
+                },
+                "pass_2_of": "deploy"
+              }
+            },
+            "next": [],
+            "approval": {
+              "mode": "manual",
+              "on_timeout": "block",
+              "approver_role": "release_manager",
+              "risk_tier": 2,
+              "forced_manual": true
+            },
+            "max_attempts": 3
           }
         ],
         "objective": "The point of this work is how it looks and feels. A person will use the preview and sign it off. The PRD must therefore state the interaction, the states (empty, loading, error) and what 'good' means concretely enough for a reviewer to judge against.",
@@ -1791,7 +2155,7 @@
               }
             },
             "next": [
-              "more_tests"
+              "preview"
             ],
             "captain": "engineering_captain",
             "default_captain": "engineering_captain",
@@ -1802,6 +2166,44 @@
               "risk_tier": 1,
               "forced_manual": false
             }
+          },
+          {
+            "id": "preview",
+            "kind": "capability",
+            "binding": {
+              "capability": "preview",
+              "inputs": {
+                "run_id": {
+                  "from_step": "build",
+                  "field": "code_task_run_id"
+                },
+                "advisory": true
+              }
+            },
+            "captain": "qa",
+            "default_captain": "qa",
+            "next": [
+              "pass_2"
+            ],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "pass_2",
+            "kind": "parallel",
+            "branches": [
+              "more_tests",
+              "review"
+            ],
+            "join": "pass_2_joined",
+            "next": [],
+            "max_attempts": 3,
+            "binding": {}
           },
           {
             "id": "more_tests",
@@ -1815,11 +2217,11 @@
                 }
               }
             },
-            "next": [
-              "review"
-            ],
             "captain": "qa",
             "default_captain": "qa",
+            "next": [
+              "pass_2_joined"
+            ],
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -1896,7 +2298,7 @@
               "capability": "deploy",
               "inputs": {
                 "run_id": {
-                  "from_step": "more_tests",
+                  "from_step": "build",
                   "field": "code_task_run_id"
                 }
               }
@@ -1920,7 +2322,9 @@
               "capability": "monitor",
               "inputs": {}
             },
-            "next": [],
+            "next": [
+              "pass_2_joined"
+            ],
             "captain": "sre",
             "default_captain": "sre",
             "max_attempts": 3,
@@ -1930,6 +2334,44 @@
               "risk_tier": 1,
               "forced_manual": false
             }
+          },
+          {
+            "id": "pass_2_joined",
+            "kind": "join",
+            "wait_for": [
+              "more_tests",
+              "monitor"
+            ],
+            "success_policy": "all",
+            "next": [
+              "deploy_again"
+            ],
+            "max_attempts": 3,
+            "binding": {}
+          },
+          {
+            "id": "deploy_again",
+            "kind": "capability",
+            "title": "Deploy again (More tests)",
+            "binding": {
+              "capability": "deploy",
+              "inputs": {
+                "run_id": {
+                  "from_step": "more_tests",
+                  "field": "code_task_run_id"
+                },
+                "pass_2_of": "deploy"
+              }
+            },
+            "next": [],
+            "approval": {
+              "mode": "manual",
+              "on_timeout": "block",
+              "approver_role": "release_manager",
+              "risk_tier": 2,
+              "forced_manual": true
+            },
+            "max_attempts": 3
           }
         ],
         "objective": "Threat-led work ending in a security sign-off that cannot be automated away. The research names what an attacker would try and what is exposed; the build closes those, and the reviewer gets the evidence for each.",
@@ -2362,7 +2804,7 @@
               }
             },
             "next": [
-              "more_tests"
+              "preview"
             ],
             "captain": "backend_engineer",
             "default_captain": "backend_engineer",
@@ -2373,6 +2815,44 @@
               "risk_tier": 1,
               "forced_manual": false
             }
+          },
+          {
+            "id": "preview",
+            "kind": "capability",
+            "binding": {
+              "capability": "preview",
+              "inputs": {
+                "run_id": {
+                  "from_step": "build",
+                  "field": "code_task_run_id"
+                },
+                "advisory": true
+              }
+            },
+            "captain": "qa",
+            "default_captain": "qa",
+            "next": [
+              "pass_2"
+            ],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "pass_2",
+            "kind": "parallel",
+            "branches": [
+              "more_tests",
+              "report"
+            ],
+            "join": "pass_2_joined",
+            "next": [],
+            "max_attempts": 3,
+            "binding": {}
           },
           {
             "id": "more_tests",
@@ -2386,11 +2866,11 @@
                 }
               }
             },
-            "next": [
-              "report"
-            ],
             "captain": "qa",
             "default_captain": "qa",
+            "next": [
+              "pass_2_joined"
+            ],
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -2424,7 +2904,7 @@
               "capability": "deploy",
               "inputs": {
                 "run_id": {
-                  "from_step": "more_tests",
+                  "from_step": "build",
                   "field": "code_task_run_id"
                 }
               }
@@ -2472,7 +2952,9 @@
                 }
               }
             },
-            "next": [],
+            "next": [
+              "pass_2_joined"
+            ],
             "captain": "docs_writer",
             "default_captain": "docs_writer",
             "max_attempts": 3,
@@ -2482,6 +2964,44 @@
               "risk_tier": 1,
               "forced_manual": false
             }
+          },
+          {
+            "id": "pass_2_joined",
+            "kind": "join",
+            "wait_for": [
+              "more_tests",
+              "document"
+            ],
+            "success_policy": "all",
+            "next": [
+              "deploy_again"
+            ],
+            "max_attempts": 3,
+            "binding": {}
+          },
+          {
+            "id": "deploy_again",
+            "kind": "capability",
+            "title": "Deploy again (More tests)",
+            "binding": {
+              "capability": "deploy",
+              "inputs": {
+                "run_id": {
+                  "from_step": "more_tests",
+                  "field": "code_task_run_id"
+                },
+                "pass_2_of": "deploy"
+              }
+            },
+            "next": [],
+            "approval": {
+              "mode": "manual",
+              "on_timeout": "block",
+              "approver_role": "release_manager",
+              "risk_tier": 2,
+              "forced_manual": true
+            },
+            "max_attempts": 3
           }
         ],
         "objective": "Change data, which is the change you cannot take back. The PRD must state the rollback, how the migration is verified, and what happens to in-flight work — a person approves the release before the migration runs.",
@@ -2688,7 +3208,7 @@
               }
             },
             "next": [
-              "more_tests"
+              "pass_2"
             ],
             "captain": "qa",
             "default_captain": "qa",
@@ -2699,6 +3219,18 @@
               "risk_tier": 1,
               "forced_manual": false
             }
+          },
+          {
+            "id": "pass_2",
+            "kind": "parallel",
+            "branches": [
+              "more_tests",
+              "report"
+            ],
+            "join": "pass_2_joined",
+            "next": [],
+            "max_attempts": 3,
+            "binding": {}
           },
           {
             "id": "more_tests",
@@ -2712,11 +3244,11 @@
                 }
               }
             },
-            "next": [
-              "report"
-            ],
             "captain": "qa",
             "default_captain": "qa",
+            "next": [
+              "pass_2_joined"
+            ],
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -2750,7 +3282,7 @@
               "capability": "deploy",
               "inputs": {
                 "run_id": {
-                  "from_step": "more_tests",
+                  "from_step": "build",
                   "field": "code_task_run_id"
                 }
               }
@@ -2798,7 +3330,9 @@
                 }
               }
             },
-            "next": [],
+            "next": [
+              "pass_2_joined"
+            ],
             "captain": "docs_writer",
             "default_captain": "docs_writer",
             "max_attempts": 3,
@@ -2808,6 +3342,44 @@
               "risk_tier": 1,
               "forced_manual": false
             }
+          },
+          {
+            "id": "pass_2_joined",
+            "kind": "join",
+            "wait_for": [
+              "more_tests",
+              "document"
+            ],
+            "success_policy": "all",
+            "next": [
+              "deploy_again"
+            ],
+            "max_attempts": 3,
+            "binding": {}
+          },
+          {
+            "id": "deploy_again",
+            "kind": "capability",
+            "title": "Deploy again (More tests)",
+            "binding": {
+              "capability": "deploy",
+              "inputs": {
+                "run_id": {
+                  "from_step": "more_tests",
+                  "field": "code_task_run_id"
+                },
+                "pass_2_of": "deploy"
+              }
+            },
+            "next": [],
+            "approval": {
+              "mode": "manual",
+              "on_timeout": "block",
+              "approver_role": "release_manager",
+              "risk_tier": 2,
+              "forced_manual": true
+            },
+            "max_attempts": 3
           }
         ],
         "objective": "Everything the standard path does, plus the evidence and the signature that make it auditable. The PRD must name the controls being satisfied and the evidence each produces.",
@@ -2970,7 +3542,7 @@
               }
             },
             "next": [
-              "more_tests"
+              "preview"
             ],
             "captain": "backend_engineer",
             "default_captain": "backend_engineer",
@@ -2981,6 +3553,44 @@
               "risk_tier": 1,
               "forced_manual": false
             }
+          },
+          {
+            "id": "preview",
+            "kind": "capability",
+            "binding": {
+              "capability": "preview",
+              "inputs": {
+                "run_id": {
+                  "from_step": "build",
+                  "field": "code_task_run_id"
+                },
+                "advisory": true
+              }
+            },
+            "captain": "qa",
+            "default_captain": "qa",
+            "next": [
+              "pass_2"
+            ],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "pass_2",
+            "kind": "parallel",
+            "branches": [
+              "more_tests",
+              "report"
+            ],
+            "join": "pass_2_joined",
+            "next": [],
+            "max_attempts": 3,
+            "binding": {}
           },
           {
             "id": "more_tests",
@@ -2994,11 +3604,11 @@
                 }
               }
             },
-            "next": [
-              "report"
-            ],
             "captain": "qa",
             "default_captain": "qa",
+            "next": [
+              "pass_2_joined"
+            ],
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -3032,7 +3642,7 @@
               "capability": "deploy",
               "inputs": {
                 "run_id": {
-                  "from_step": "more_tests",
+                  "from_step": "build",
                   "field": "code_task_run_id"
                 }
               }
@@ -3056,7 +3666,9 @@
               "capability": "monitor",
               "inputs": {}
             },
-            "next": [],
+            "next": [
+              "pass_2_joined"
+            ],
             "captain": "sre",
             "default_captain": "sre",
             "max_attempts": 3,
@@ -3066,6 +3678,44 @@
               "risk_tier": 1,
               "forced_manual": false
             }
+          },
+          {
+            "id": "pass_2_joined",
+            "kind": "join",
+            "wait_for": [
+              "more_tests",
+              "monitor"
+            ],
+            "success_policy": "all",
+            "next": [
+              "deploy_again"
+            ],
+            "max_attempts": 3,
+            "binding": {}
+          },
+          {
+            "id": "deploy_again",
+            "kind": "capability",
+            "title": "Deploy again (More tests)",
+            "binding": {
+              "capability": "deploy",
+              "inputs": {
+                "run_id": {
+                  "from_step": "more_tests",
+                  "field": "code_task_run_id"
+                },
+                "pass_2_of": "deploy"
+              }
+            },
+            "next": [],
+            "approval": {
+              "mode": "manual",
+              "on_timeout": "block",
+              "approver_role": "release_manager",
+              "risk_tier": 2,
+              "forced_manual": true
+            },
+            "max_attempts": 3
           }
         ],
         "objective": "Bring someone else's system in. Research went first because their API decides the design; the PRD must state the contract, the failure modes and what happens when they are down.",
@@ -3216,7 +3866,7 @@
               }
             },
             "next": [
-              "more_tests"
+              "preview"
             ],
             "captain": "backend_engineer",
             "default_captain": "backend_engineer",
@@ -3227,6 +3877,44 @@
               "risk_tier": 1,
               "forced_manual": false
             }
+          },
+          {
+            "id": "preview",
+            "kind": "capability",
+            "binding": {
+              "capability": "preview",
+              "inputs": {
+                "run_id": {
+                  "from_step": "build",
+                  "field": "code_task_run_id"
+                },
+                "advisory": true
+              }
+            },
+            "captain": "qa",
+            "default_captain": "qa",
+            "next": [
+              "pass_2"
+            ],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "pass_2",
+            "kind": "parallel",
+            "branches": [
+              "more_tests",
+              "report"
+            ],
+            "join": "pass_2_joined",
+            "next": [],
+            "max_attempts": 3,
+            "binding": {}
           },
           {
             "id": "more_tests",
@@ -3240,11 +3928,11 @@
                 }
               }
             },
-            "next": [
-              "report"
-            ],
             "captain": "qa",
             "default_captain": "qa",
+            "next": [
+              "pass_2_joined"
+            ],
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -3278,7 +3966,7 @@
               "capability": "deploy",
               "inputs": {
                 "run_id": {
-                  "from_step": "more_tests",
+                  "from_step": "build",
                   "field": "code_task_run_id"
                 }
               }
@@ -3306,7 +3994,9 @@
                 }
               }
             },
-            "next": [],
+            "next": [
+              "pass_2_joined"
+            ],
             "captain": "docs_writer",
             "default_captain": "docs_writer",
             "max_attempts": 3,
@@ -3316,6 +4006,44 @@
               "risk_tier": 1,
               "forced_manual": false
             }
+          },
+          {
+            "id": "pass_2_joined",
+            "kind": "join",
+            "wait_for": [
+              "more_tests",
+              "document"
+            ],
+            "success_policy": "all",
+            "next": [
+              "deploy_again"
+            ],
+            "max_attempts": 3,
+            "binding": {}
+          },
+          {
+            "id": "deploy_again",
+            "kind": "capability",
+            "title": "Deploy again (More tests)",
+            "binding": {
+              "capability": "deploy",
+              "inputs": {
+                "run_id": {
+                  "from_step": "more_tests",
+                  "field": "code_task_run_id"
+                },
+                "pass_2_of": "deploy"
+              }
+            },
+            "next": [],
+            "approval": {
+              "mode": "manual",
+              "on_timeout": "block",
+              "approver_role": "release_manager",
+              "risk_tier": 2,
+              "forced_manual": true
+            },
+            "max_attempts": 3
           }
         ],
         "objective": "Take something away without stranding anyone. The panel must define the grace period, who is told and when, and what replaces it — the notification is a step, not an afterthought.",
@@ -3374,6 +4102,939 @@
               },
               "title": "Links to read first (optional)",
               "description": "Docs, designs or tickets the builder should read."
+            }
+          }
+        },
+        "output_schema": {},
+        "step_agent_rules": 2
+      }
+    },
+    {
+      "workflow_key": "incremental_build",
+      "name": "Incremental Build",
+      "description": "Builds the basics first, deploys them, then improves in steps.",
+      "spec": {
+        "entry_step": "meeting",
+        "steps": [
+          {
+            "id": "meeting",
+            "kind": "capability",
+            "binding": {
+              "capability": "meeting",
+              "inputs": {
+                "directive": {
+                  "from_input": "directive"
+                }
+              }
+            },
+            "next": [
+              "spec_review"
+            ],
+            "captain": "pm",
+            "default_captain": "pm",
+            "title": "Plan the increments",
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "spec_review",
+            "kind": "capability",
+            "binding": {
+              "capability": "spec_review",
+              "inputs": {}
+            },
+            "next": [
+              "inc1_build"
+            ],
+            "approval": {
+              "mode": "manual",
+              "on_timeout": "block",
+              "approver_role": "pm",
+              "risk_tier": 2,
+              "forced_manual": true
+            },
+            "title": "Approve the plan",
+            "max_attempts": 3
+          },
+          {
+            "id": "inc1_build",
+            "kind": "capability",
+            "binding": {
+              "capability": "build",
+              "inputs": {
+                "title": {
+                  "from_input": "title"
+                },
+                "instructions": {
+                  "from_input": "directive"
+                },
+                "repository": {
+                  "from_input": "repository"
+                },
+                "acceptance_criteria": {
+                  "from_input": "acceptance_criteria"
+                },
+                "reference_links": {
+                  "from_input": "reference_links"
+                },
+                "spec_markdown": {
+                  "from_step": "meeting",
+                  "field": "prd_markdown"
+                },
+                "increment": 1
+              }
+            },
+            "next": [
+              "inc1_preview"
+            ],
+            "captain": "engineering_captain",
+            "default_captain": "engineering_captain",
+            "title": "Increment 1 · Build",
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "inc1_preview",
+            "kind": "capability",
+            "title": "Increment 1 · Preview",
+            "binding": {
+              "capability": "preview",
+              "inputs": {
+                "run_id": {
+                  "from_step": "inc1_build",
+                  "field": "code_task_run_id"
+                },
+                "advisory": true
+              }
+            },
+            "captain": "qa",
+            "default_captain": "qa",
+            "next": [
+              "inc1_pass_2"
+            ],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "inc1_pass_2",
+            "kind": "parallel",
+            "title": "Increment 1 · Pass 2 alongside",
+            "branches": [
+              "inc1_more_tests",
+              "inc1_deploy"
+            ],
+            "join": "inc1_pass_2_joined",
+            "next": [],
+            "max_attempts": 3,
+            "binding": {}
+          },
+          {
+            "id": "inc1_more_tests",
+            "kind": "capability",
+            "title": "Increment 1 · More tests",
+            "binding": {
+              "capability": "more_tests",
+              "inputs": {
+                "run_id": {
+                  "from_step": "inc1_build",
+                  "field": "code_task_run_id"
+                }
+              }
+            },
+            "captain": "qa",
+            "default_captain": "qa",
+            "next": [
+              "inc1_pass_2_joined"
+            ],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "inc1_deploy",
+            "kind": "capability",
+            "binding": {
+              "capability": "deploy",
+              "inputs": {
+                "run_id": {
+                  "from_step": "inc1_build",
+                  "field": "code_task_run_id"
+                }
+              }
+            },
+            "next": [
+              "inc1_pass_2_joined"
+            ],
+            "approval": {
+              "mode": "manual",
+              "on_timeout": "block",
+              "approver_role": "release_manager",
+              "risk_tier": 2,
+              "forced_manual": true
+            },
+            "title": "Increment 1 · Deploy",
+            "max_attempts": 3
+          },
+          {
+            "id": "inc1_pass_2_joined",
+            "kind": "join",
+            "title": "Increment 1 · Pass 2 done",
+            "wait_for": [
+              "inc1_more_tests",
+              "inc1_deploy"
+            ],
+            "success_policy": "all",
+            "next": [
+              "inc1_deploy_again"
+            ],
+            "max_attempts": 3,
+            "binding": {}
+          },
+          {
+            "id": "inc1_deploy_again",
+            "kind": "capability",
+            "title": "Increment 1 · Deploy again",
+            "binding": {
+              "capability": "deploy",
+              "inputs": {
+                "run_id": {
+                  "from_step": "inc1_more_tests",
+                  "field": "code_task_run_id"
+                },
+                "pass_2_of": "inc1_deploy"
+              }
+            },
+            "next": [
+              "inc2_planned"
+            ],
+            "approval": {
+              "mode": "manual",
+              "on_timeout": "block",
+              "approver_role": "release_manager",
+              "risk_tier": 2,
+              "forced_manual": true
+            },
+            "max_attempts": 3
+          },
+          {
+            "id": "inc2_planned",
+            "kind": "condition",
+            "title": "Increment 2 · In the plan?",
+            "expression": {
+              "path": "steps.meeting.output.prd_markdown",
+              "op": "contains",
+              "value": "## Increment 2"
+            },
+            "on_true": "inc2_build",
+            "on_false": "inc2_not_planned",
+            "next": [],
+            "max_attempts": 3,
+            "binding": {}
+          },
+          {
+            "id": "inc2_not_planned",
+            "kind": "timer",
+            "wait_seconds": 0,
+            "binding": {},
+            "title": "Increment 2 · Not in the plan",
+            "next": [
+              "report"
+            ],
+            "max_attempts": 3
+          },
+          {
+            "id": "inc2_build",
+            "kind": "capability",
+            "binding": {
+              "capability": "build",
+              "inputs": {
+                "title": {
+                  "from_input": "title"
+                },
+                "instructions": {
+                  "from_input": "directive"
+                },
+                "repository": {
+                  "from_input": "repository"
+                },
+                "acceptance_criteria": {
+                  "from_input": "acceptance_criteria"
+                },
+                "reference_links": {
+                  "from_input": "reference_links"
+                },
+                "spec_markdown": {
+                  "from_step": "meeting",
+                  "field": "prd_markdown"
+                },
+                "increment": 2,
+                "extend": true
+              }
+            },
+            "next": [
+              "inc2_preview"
+            ],
+            "captain": "engineering_captain",
+            "default_captain": "engineering_captain",
+            "title": "Increment 2 · Build",
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "inc2_preview",
+            "kind": "capability",
+            "title": "Increment 2 · Preview",
+            "binding": {
+              "capability": "preview",
+              "inputs": {
+                "run_id": {
+                  "from_step": "inc2_build",
+                  "field": "code_task_run_id"
+                },
+                "advisory": true
+              }
+            },
+            "captain": "qa",
+            "default_captain": "qa",
+            "next": [
+              "inc2_pass_2"
+            ],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "inc2_pass_2",
+            "kind": "parallel",
+            "title": "Increment 2 · Pass 2 alongside",
+            "branches": [
+              "inc2_more_tests",
+              "inc2_deploy"
+            ],
+            "join": "inc2_pass_2_joined",
+            "next": [],
+            "max_attempts": 3,
+            "binding": {}
+          },
+          {
+            "id": "inc2_more_tests",
+            "kind": "capability",
+            "title": "Increment 2 · More tests",
+            "binding": {
+              "capability": "more_tests",
+              "inputs": {
+                "run_id": {
+                  "from_step": "inc2_build",
+                  "field": "code_task_run_id"
+                }
+              }
+            },
+            "captain": "qa",
+            "default_captain": "qa",
+            "next": [
+              "inc2_pass_2_joined"
+            ],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "inc2_deploy",
+            "kind": "capability",
+            "binding": {
+              "capability": "deploy",
+              "inputs": {
+                "run_id": {
+                  "from_step": "inc2_build",
+                  "field": "code_task_run_id"
+                }
+              }
+            },
+            "next": [
+              "inc2_pass_2_joined"
+            ],
+            "approval": {
+              "mode": "manual",
+              "on_timeout": "block",
+              "approver_role": "release_manager",
+              "risk_tier": 2,
+              "forced_manual": true
+            },
+            "title": "Increment 2 · Deploy",
+            "max_attempts": 3
+          },
+          {
+            "id": "inc2_pass_2_joined",
+            "kind": "join",
+            "title": "Increment 2 · Pass 2 done",
+            "wait_for": [
+              "inc2_more_tests",
+              "inc2_deploy"
+            ],
+            "success_policy": "all",
+            "next": [
+              "inc2_deploy_again"
+            ],
+            "max_attempts": 3,
+            "binding": {}
+          },
+          {
+            "id": "inc2_deploy_again",
+            "kind": "capability",
+            "title": "Increment 2 · Deploy again",
+            "binding": {
+              "capability": "deploy",
+              "inputs": {
+                "run_id": {
+                  "from_step": "inc2_more_tests",
+                  "field": "code_task_run_id"
+                },
+                "pass_2_of": "inc2_deploy"
+              }
+            },
+            "next": [
+              "inc3_planned"
+            ],
+            "approval": {
+              "mode": "manual",
+              "on_timeout": "block",
+              "approver_role": "release_manager",
+              "risk_tier": 2,
+              "forced_manual": true
+            },
+            "max_attempts": 3
+          },
+          {
+            "id": "inc3_planned",
+            "kind": "condition",
+            "title": "Increment 3 · In the plan?",
+            "expression": {
+              "path": "steps.meeting.output.prd_markdown",
+              "op": "contains",
+              "value": "## Increment 3"
+            },
+            "on_true": "inc3_build",
+            "on_false": "inc3_not_planned",
+            "next": [],
+            "max_attempts": 3,
+            "binding": {}
+          },
+          {
+            "id": "inc3_not_planned",
+            "kind": "timer",
+            "wait_seconds": 0,
+            "binding": {},
+            "title": "Increment 3 · Not in the plan",
+            "next": [
+              "report"
+            ],
+            "max_attempts": 3
+          },
+          {
+            "id": "inc3_build",
+            "kind": "capability",
+            "binding": {
+              "capability": "build",
+              "inputs": {
+                "title": {
+                  "from_input": "title"
+                },
+                "instructions": {
+                  "from_input": "directive"
+                },
+                "repository": {
+                  "from_input": "repository"
+                },
+                "acceptance_criteria": {
+                  "from_input": "acceptance_criteria"
+                },
+                "reference_links": {
+                  "from_input": "reference_links"
+                },
+                "spec_markdown": {
+                  "from_step": "meeting",
+                  "field": "prd_markdown"
+                },
+                "increment": 3,
+                "extend": true
+              }
+            },
+            "next": [
+              "inc3_preview"
+            ],
+            "captain": "engineering_captain",
+            "default_captain": "engineering_captain",
+            "title": "Increment 3 · Build",
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "inc3_preview",
+            "kind": "capability",
+            "title": "Increment 3 · Preview",
+            "binding": {
+              "capability": "preview",
+              "inputs": {
+                "run_id": {
+                  "from_step": "inc3_build",
+                  "field": "code_task_run_id"
+                },
+                "advisory": true
+              }
+            },
+            "captain": "qa",
+            "default_captain": "qa",
+            "next": [
+              "inc3_pass_2"
+            ],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "inc3_pass_2",
+            "kind": "parallel",
+            "title": "Increment 3 · Pass 2 alongside",
+            "branches": [
+              "inc3_more_tests",
+              "inc3_deploy"
+            ],
+            "join": "inc3_pass_2_joined",
+            "next": [],
+            "max_attempts": 3,
+            "binding": {}
+          },
+          {
+            "id": "inc3_more_tests",
+            "kind": "capability",
+            "title": "Increment 3 · More tests",
+            "binding": {
+              "capability": "more_tests",
+              "inputs": {
+                "run_id": {
+                  "from_step": "inc3_build",
+                  "field": "code_task_run_id"
+                }
+              }
+            },
+            "captain": "qa",
+            "default_captain": "qa",
+            "next": [
+              "inc3_pass_2_joined"
+            ],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "inc3_deploy",
+            "kind": "capability",
+            "binding": {
+              "capability": "deploy",
+              "inputs": {
+                "run_id": {
+                  "from_step": "inc3_build",
+                  "field": "code_task_run_id"
+                }
+              }
+            },
+            "next": [
+              "inc3_pass_2_joined"
+            ],
+            "approval": {
+              "mode": "manual",
+              "on_timeout": "block",
+              "approver_role": "release_manager",
+              "risk_tier": 2,
+              "forced_manual": true
+            },
+            "title": "Increment 3 · Deploy",
+            "max_attempts": 3
+          },
+          {
+            "id": "inc3_pass_2_joined",
+            "kind": "join",
+            "title": "Increment 3 · Pass 2 done",
+            "wait_for": [
+              "inc3_more_tests",
+              "inc3_deploy"
+            ],
+            "success_policy": "all",
+            "next": [
+              "inc3_deploy_again"
+            ],
+            "max_attempts": 3,
+            "binding": {}
+          },
+          {
+            "id": "inc3_deploy_again",
+            "kind": "capability",
+            "title": "Increment 3 · Deploy again",
+            "binding": {
+              "capability": "deploy",
+              "inputs": {
+                "run_id": {
+                  "from_step": "inc3_more_tests",
+                  "field": "code_task_run_id"
+                },
+                "pass_2_of": "inc3_deploy"
+              }
+            },
+            "next": [
+              "inc4_planned"
+            ],
+            "approval": {
+              "mode": "manual",
+              "on_timeout": "block",
+              "approver_role": "release_manager",
+              "risk_tier": 2,
+              "forced_manual": true
+            },
+            "max_attempts": 3
+          },
+          {
+            "id": "inc4_planned",
+            "kind": "condition",
+            "title": "Increment 4 · In the plan?",
+            "expression": {
+              "path": "steps.meeting.output.prd_markdown",
+              "op": "contains",
+              "value": "## Increment 4"
+            },
+            "on_true": "inc4_build",
+            "on_false": "inc4_not_planned",
+            "next": [],
+            "max_attempts": 3,
+            "binding": {}
+          },
+          {
+            "id": "inc4_not_planned",
+            "kind": "timer",
+            "wait_seconds": 0,
+            "binding": {},
+            "title": "Increment 4 · Not in the plan",
+            "next": [
+              "report"
+            ],
+            "max_attempts": 3
+          },
+          {
+            "id": "inc4_build",
+            "kind": "capability",
+            "binding": {
+              "capability": "build",
+              "inputs": {
+                "title": {
+                  "from_input": "title"
+                },
+                "instructions": {
+                  "from_input": "directive"
+                },
+                "repository": {
+                  "from_input": "repository"
+                },
+                "acceptance_criteria": {
+                  "from_input": "acceptance_criteria"
+                },
+                "reference_links": {
+                  "from_input": "reference_links"
+                },
+                "spec_markdown": {
+                  "from_step": "meeting",
+                  "field": "prd_markdown"
+                },
+                "increment": 4,
+                "extend": true
+              }
+            },
+            "next": [
+              "inc4_preview"
+            ],
+            "captain": "engineering_captain",
+            "default_captain": "engineering_captain",
+            "title": "Increment 4 · Build",
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "inc4_preview",
+            "kind": "capability",
+            "title": "Increment 4 · Preview",
+            "binding": {
+              "capability": "preview",
+              "inputs": {
+                "run_id": {
+                  "from_step": "inc4_build",
+                  "field": "code_task_run_id"
+                },
+                "advisory": true
+              }
+            },
+            "captain": "qa",
+            "default_captain": "qa",
+            "next": [
+              "inc4_pass_2"
+            ],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "inc4_pass_2",
+            "kind": "parallel",
+            "title": "Increment 4 · Pass 2 alongside",
+            "branches": [
+              "inc4_more_tests",
+              "inc4_deploy"
+            ],
+            "join": "inc4_pass_2_joined",
+            "next": [],
+            "max_attempts": 3,
+            "binding": {}
+          },
+          {
+            "id": "inc4_more_tests",
+            "kind": "capability",
+            "title": "Increment 4 · More tests",
+            "binding": {
+              "capability": "more_tests",
+              "inputs": {
+                "run_id": {
+                  "from_step": "inc4_build",
+                  "field": "code_task_run_id"
+                }
+              }
+            },
+            "captain": "qa",
+            "default_captain": "qa",
+            "next": [
+              "inc4_pass_2_joined"
+            ],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "inc4_deploy",
+            "kind": "capability",
+            "binding": {
+              "capability": "deploy",
+              "inputs": {
+                "run_id": {
+                  "from_step": "inc4_build",
+                  "field": "code_task_run_id"
+                }
+              }
+            },
+            "next": [
+              "inc4_pass_2_joined"
+            ],
+            "approval": {
+              "mode": "manual",
+              "on_timeout": "block",
+              "approver_role": "release_manager",
+              "risk_tier": 2,
+              "forced_manual": true
+            },
+            "title": "Increment 4 · Deploy",
+            "max_attempts": 3
+          },
+          {
+            "id": "inc4_pass_2_joined",
+            "kind": "join",
+            "title": "Increment 4 · Pass 2 done",
+            "wait_for": [
+              "inc4_more_tests",
+              "inc4_deploy"
+            ],
+            "success_policy": "all",
+            "next": [
+              "inc4_deploy_again"
+            ],
+            "max_attempts": 3,
+            "binding": {}
+          },
+          {
+            "id": "inc4_deploy_again",
+            "kind": "capability",
+            "title": "Increment 4 · Deploy again",
+            "binding": {
+              "capability": "deploy",
+              "inputs": {
+                "run_id": {
+                  "from_step": "inc4_more_tests",
+                  "field": "code_task_run_id"
+                },
+                "pass_2_of": "inc4_deploy"
+              }
+            },
+            "next": [
+              "report"
+            ],
+            "approval": {
+              "mode": "manual",
+              "on_timeout": "block",
+              "approver_role": "release_manager",
+              "risk_tier": 2,
+              "forced_manual": true
+            },
+            "max_attempts": 3
+          },
+          {
+            "id": "report",
+            "kind": "capability",
+            "binding": {
+              "capability": "report",
+              "inputs": {}
+            },
+            "next": [
+              "notify"
+            ],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 0,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "notify",
+            "kind": "capability",
+            "binding": {
+              "capability": "notify",
+              "inputs": {
+                "message": {
+                  "from_input": "title"
+                },
+                "channel": {
+                  "from_input": "notify_channel"
+                }
+              }
+            },
+            "next": [],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          }
+        ],
+        "objective": "Ship the app in visible increments: the basics live first, then improved in steps. The PRD MUST end with an increment plan, headed exactly '## Increment 1', '## Increment 2', … — at most 4 increments. Increment 1 is the core of the brief (the smallest app a person can use end to end); each later increment is a small set of the remaining requirements, in the order they add the most. Each build builds only its own increment, on the branch the earlier ones left.",
+        "workflow_name": "Incremental Build",
+        "input_schema": {
+          "type": "object",
+          "required": [
+            "directive",
+            "title"
+          ],
+          "properties": {
+            "directive": {
+              "type": "string",
+              "format": "textarea",
+              "title": "What should it do?",
+              "description": "Who it is for and what a person can do with it. The panel splits it into increments: the basics go live first, the rest arrive in steps.",
+              "examples": [
+                "A lunch poll for a team: anyone proposes places, everyone votes once, the poll closes at 11:30 and shows the winner. Later: recurring polls, dietary tags and a Slack reminder."
+              ]
+            },
+            "title": {
+              "type": "string",
+              "title": "Name",
+              "description": "A short name for this piece of work. It names the run, the app it builds and the written record.",
+              "examples": [
+                "Shift swap board"
+              ]
+            },
+            "repository": {
+              "type": "string",
+              "title": "Repository (optional)",
+              "description": "owner/name of the GitHub repository to build in. Leave blank for this project's primary repository."
+            },
+            "acceptance_criteria": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "title": "How you will know it works (optional)",
+              "description": "Each line becomes a check the build is held to. Leave blank and the panel proposes them."
+            },
+            "reference_links": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "format": "uri"
+              },
+              "title": "Links to read first (optional)",
+              "description": "Docs, designs or tickets the builder should read."
+            },
+            "notify_channel": {
+              "type": "string",
+              "title": "Who to tell",
+              "description": "Where the outcome is posted: email:someone@example.com or mattermost:<channel id>. Leave blank and the notify step is skipped and says so.",
+              "examples": [
+                "email:team@example.com"
+              ]
             }
           }
         },

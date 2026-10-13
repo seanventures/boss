@@ -17,6 +17,8 @@ successful deploy is a report most runs never get.
 
 from __future__ import annotations
 
+from boss_engine.services import two_pass
+
 import pytest
 
 from boss_engine.services.workflow_catalogue import CATALOGUE
@@ -78,5 +80,6 @@ def test_the_report_step_is_wired_into_the_run(workflow):
         if current in reachable:
             continue
         reachable.add(current)
-        frontier.extend(by_id[current].get("next") or [])
+        # Every edge, branches too: pass 2 runs beside the report (two_pass).
+        frontier.extend(two_pass._targets(by_id[current]))
     assert "report" in reachable, f"{workflow['key']} lists a report step nothing leads to"

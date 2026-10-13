@@ -203,8 +203,11 @@ CAPABILITIES: dict[str, Capability] = {
             # spec_markdown is the PRD the panel wrote. Optional, because a build reached
             # directly from a one-line directive has no panel behind it — but when there IS
             # one, this is the whole point of having held it.
+            # `extend`: build on THIS run's branch, from its newest finished pass, as more
+            # commits on the same PR (Incremental Build's later increments). `increment`: which
+            # increment of the PRD's plan this build builds (workflow_catalogue.increment_brief).
             optional_inputs=("acceptance_criteria", "test_commands", "task_id", "repository",
-                             "reference_links", "spec_markdown"),
+                             "reference_links", "spec_markdown", "extend", "increment"),
             produces=("code_task_run_id", "pull_request_url"),
             requires_project=("repository",),
             skills=("github.create_pr_real", "software_factory.sandbox_validation"),
@@ -273,7 +276,9 @@ CAPABILITIES: dict[str, Capability] = {
             tool="start_preview",
             risk_tier=1,
             required_inputs=("run_id",),
-            optional_inputs=("ttl_minutes",),
+            # `advisory`: a preview BOSS added after pass 1 (two_pass). If the app cannot be
+            # previewed it says so and the run goes on.
+            optional_inputs=("ttl_minutes", "advisory"),
             produces=("preview_id", "preview_url"),
             typical_minutes=5,
             is_async=True,
@@ -443,7 +448,9 @@ CAPABILITIES: dict[str, Capability] = {
             required_inputs=("run_id",),
             # WHERE is the only question (host_id: a Fleet machine, or blank = the project's one
             # verified host / ask at deploy time). The target is created at the first deploy.
-            optional_inputs=("environment", "target_id", "host_id"),
+            # `pass_2_of`: "Deploy again" — ship the More tests pass where that deploy step
+            # shipped pass 1, as a new deploy under the same policy (two_pass).
+            optional_inputs=("environment", "target_id", "host_id", "pass_2_of"),
             produces=("deployment_id", "deployed_url"),
             requires_project=("deployment_target",),
             typical_minutes=8,

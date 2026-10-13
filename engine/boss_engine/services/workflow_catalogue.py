@@ -207,6 +207,69 @@ def _chain(steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return steps
 
 
+#: INCREMENTAL BUILD's most increments. A bounded sequence expanded here, not a loop engine:
+#: increment k > 1 starts with a condition that asks the approved plan whether it HAS an
+#: increment k, and goes straight to the report when it does not.
+MAX_INCREMENTS = 4
+
+
+def increment_brief(k: int) -> str:
+    """What the build of increment k is told, on top of the run's brief (the runner adds it
+    for a build step with `increment`)."""
+    if k == 1:
+        return ("INCREMENT 1 of the plan at the end of the PRD: build ONLY what '## Increment 1' "
+                "lists — the core of the brief, working end to end, so it can go live first. "
+                "Later increments add the rest on this branch; do not build them now.")
+    return (f"INCREMENT {k} of the plan at the end of the PRD: build ONLY what '## Increment "
+            f"{k}' lists, on top of the increments already on this branch. Keep everything "
+            "they built working; do not start later increments.")
+
+
+def _increments(count: int) -> list[dict[str, Any]]:
+    """Plan → approve → for each increment: build (pass 1) → deploy; the two-pass rule adds
+    each increment's preview, More tests and Deploy again (two_pass). Every step of increment k
+    is titled "Increment k · …" and its id starts `inc{k}_`, so a run shows it as one group.
+
+    ONE BRANCH, ONE PULL REQUEST, A COMMIT SET PER INCREMENT. Increment k > 1 builds with
+    `extend` — on this run's branch, from the newest finished pass — so the increments stack.
+    Separate PRs would be stacked PRs, none reviewable or mergeable without the one before it;
+    one PR whose commits arrive increment by increment, each previewed and deployed, keeps the
+    review linear and every increment visible as it lands."""
+    steps: list[dict[str, Any]] = [
+        {**_step("meeting", "meeting", {"directive": _in("directive")}, nxt=["spec_review"]),
+         "title": "Plan the increments"},
+        {**_step("spec_review", "spec_review", nxt=["inc1_build"], approver_role="pm"),
+         "title": "Approve the plan"},
+    ]
+    for k in range(1, count + 1):
+        build_inputs = {**_build_inputs(after_meeting=True), "increment": k,
+                        **({"extend": True} if k > 1 else {})}
+        after_deploy = f"inc{k + 1}_planned" if k < count else "report"
+        if k > 1:
+            steps.append({
+                "id": f"inc{k}_planned", "kind": "condition",
+                "title": f"Increment {k} · In the plan?",
+                "expression": {"path": "steps.meeting.output.prd_markdown", "op": "contains",
+                               "value": f"## Increment {k}"},
+                "on_true": f"inc{k}_build", "on_false": f"inc{k}_not_planned", "next": [],
+            })
+            # ITS OWN "NO" STEP, not the report itself: the branch a condition does not take is
+            # marked skipped, and the report is where every path ends.
+            steps.append({"id": f"inc{k}_not_planned", "kind": "timer", "wait_seconds": 0,
+                          "binding": {}, "title": f"Increment {k} · Not in the plan",
+                          "next": ["report"]})
+        steps.append({**_step(f"inc{k}_build", "build", build_inputs,
+                              nxt=[f"inc{k}_deploy"]),
+                      "title": f"Increment {k} · Build"})
+        steps.append({**_step(f"inc{k}_deploy", "deploy",
+                              {"run_id": _from(f"inc{k}_build", "code_task_run_id")},
+                              nxt=[after_deploy], approver_role="release_manager"),
+                      "title": f"Increment {k} · Deploy"})
+    steps.append(_step("report", "report", nxt=["notify"]))
+    steps.append(_step("notify", "notify", _notify_inputs()))
+    return steps
+
+
 #: The catalogue. `key` is stable and is what a mapping points at.
 # WHY THERE IS NO `review` OR `test` STEP IN ANY OF THESE.
 #
@@ -713,6 +776,21 @@ CATALOGUE: list[dict[str, Any]] = [
             _step("document", "document", {"title": _in("title")}),
         ],
     },
+    {
+        "key": "incremental_build",
+        "name": "Incremental Build",
+        "description": "Builds the basics first, deploys them, then improves in steps.",
+        "objective": (
+            "Ship the app in visible increments: the basics live first, then improved in steps. "
+            "The PRD MUST end with an increment plan, headed exactly '## Increment 1', "
+            "'## Increment 2', … — at most " + str(4) + " increments. Increment 1 is the core "
+            "of the brief (the smallest app a person can use end to end); each later increment "
+            "is a small set of the remaining requirements, in the order they add the most. "
+            "Each build builds only its own increment, on the branch the earlier ones left."
+        ),
+        "work_class": "project.new",
+        "steps": _increments(4),
+    },
 ]
 
 
@@ -738,7 +816,7 @@ def _two_pass_builds() -> None:
         if "more_tests" in entry:
             spec["more_tests"] = entry["more_tests"]
         entry["steps"] = two_pass.with_more_tests(
-            spec, captain=DEFAULT_STEP_AGENTS["more_tests"])["steps"]
+            spec, captains={k: DEFAULT_STEP_AGENTS[k] for k in ("more_tests", "preview")})["steps"]
 
 
 _two_pass_builds()
@@ -790,6 +868,15 @@ _FIELD_TEXT: dict[str, dict[str, Any]] = {
 #: placeholder and the explicit "try an example"), and any input required beyond what its steps
 #: demand. Every CATALOGUE key must be here — `test_every_template_asks_for_its_own_brief`.
 BRIEFS: dict[str, dict[str, Any]] = {
+    "incremental_build": {
+        "directive": ("What should it do?",
+                      "Who it is for and what a person can do with it. The panel splits it into "
+                      "increments: the basics go live first, the rest arrive in steps."),
+        "example": {"title": "Team lunch poll",
+                    "directive": "A lunch poll for a team: anyone proposes places, everyone "
+                                 "votes once, the poll closes at 11:30 and shows the winner. "
+                                 "Later: recurring polls, dietary tags and a Slack reminder."},
+    },
     "standard_product_delivery": {
         "directive": ("What should it do?",
                       "Who it is for and what a person can do with it, in two or three "
