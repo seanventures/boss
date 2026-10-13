@@ -6090,9 +6090,13 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # Test gates are convergeable too. Previously a failing test skipped this loop entirely
             # and fell through to a FULL cold re-run — discarding the warm session and re-paying for
             # spec/plan — which is why repeated attempts never converged on test failures.
+            # A SECURITY FINDING IS FIXED IN THE SAME WARM ROUND. It was not convergeable, so a
+            # HelpDesk-lite build whose reviewer and security seat both named one real bug (async
+            # handlers that crash the process on a bad id) shipped it as "advisory" without a
+            # single fix turn, while the round that fixes it costs minutes on a warm session.
             _convergeable = {"code_review_passed", "consistent",
                              "written_tests_pass", "nothing_broke",
-                             "web_package_honest", "app_serves"}
+                             "web_package_honest", "app_serves", "security_clean"}
             if (failing and not use_microvm and impl_session_id
                     and set(failing) <= _convergeable):
               try:  # a convergence failure must DEGRADE to the legacy paths, never kill the run
@@ -6163,6 +6167,10 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         finding_bits.append(_anchored_findings(
                             r6.get("summary") or "", root, stage="consistency_check",
                             header="CONSISTENCY FINDINGS:"))
+                    if "security_clean" in failing:
+                        finding_bits.append(_anchored_findings(
+                            r4.get("summary") or "", root, stage="security_check",
+                            header="SECURITY FINDINGS:"))
                     if "app_serves" in failing:
                         # The app's OWN error, not "preview timed out": this is what lets the
                         # implementer fix an ImportError instead of guessing at a port.
@@ -6302,6 +6310,29 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                         else _parse_consistency(rc2.get("summary", "")))
                         r6 = rc2
                         gates["consistent"] = cons_verdict not in ("drift", "hollow")
+                    if "security_clean" in failing:
+                        with _transaction(engine) as c:
+                            _phase(c, "security_check")
+                        set_llm_context(routes=_route_ids(), db_engine=engine, project_id=project_id,
+                                        run_id=run_id, stage="security_check")
+                        rs2, _hollow = _judge_seat(
+                            "security_check", lambda pre: security_agent.run_role(
+                                pre + _security_prompt(title, instructions=instructions,
+                                                       criteria=criteria, change=change_block),
+                                review_root, read_only=True, model=security_model))
+                        cost += int(rs2.get("cost_usd_micros") or 0)
+                        if _hollow:
+                            _hollow_seats["security_check"] = _hollow
+                        else:
+                            _hollow_seats.pop("security_check", None)
+                        sec_verdict = ("hollow" if _hollow
+                                       else _parse_security(rs2.get("summary", "")))
+                        r4 = rs2
+                        _record_review_round(engine, run_id, project_id, round_i=round_i, seats={
+                            "security_check": {"verdict": sec_verdict,
+                                               "summary": rs2.get("summary", ""),
+                                               "hollow": _hollow}})
+                        gates["security_clean"] = sec_verdict == "clean"
                     failing = [k for k, v in gates.items() if not v]
                     evidence["review_hollow"] = dict(_hollow_seats)
                     if not failing:
@@ -6331,7 +6362,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                             emit_event(c, project_id, "code_task.inrun_convergence_pass",
                                        "boss", "code_task_run", run_id, {"rounds": round_i})
                         break
-                    if set(failing) - {"code_review_passed", "consistent", "app_serves"}:
+                    if set(failing) - {"code_review_passed", "consistent", "app_serves",
+                                       "security_clean"}:
                         break  # a non-judgment gate regressed — legacy handling below
               except Exception as exc:  # noqa: BLE001
                 _log_caught(logger)
