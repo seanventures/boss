@@ -33,7 +33,6 @@ tests:
   java: {command: mvn -B -ntp verify, report: junit, min_tests: 14}
 security_note: SECURITY.md
 guide: guide.md
-labels: [insecure_by_design]
-kind: training
+labels: [insecure_by_design, training]
 license: Apache-2.0
 min_boss: 1.0.0

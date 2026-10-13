@@ -163,7 +163,14 @@ def kind_of(manifest: Any) -> str:
     labels = list(m.get("labels") or [])
     if INSECURE_BY_DESIGN in labels:
         return "training"
-    k = str(m.get("kind") or "").strip()
+    # What the item IS (operator, 2026-10-13: "these are not templates") is a LABEL, so the
+    # frozen boss.template/v1 schema is unchanged and older manifests still load. connector: a
+    # capability added to ANY app (its UI built in that app's own components and theme); idea:
+    # an example app to start from; training: an insecure-by-design lab, offered only on request.
+    for k in ("training", "idea", "connector"):
+        if k in labels:
+            return k
+    k = str(m.get("kind") or "").strip()      # a stored card written while `kind` was a field
     return k if k in KINDS else "connector"
 
 
@@ -189,12 +196,6 @@ class TemplateManifest(_Strict):
     security_note: str = "SECURITY.md"
     guide: str = "guide.md"
     labels: tuple[str, ...] = ()
-    #: What this catalogue item IS (operator, 2026-10-13: "these are not templates").
-    #: connector: a capability added to ANY app, new or existing (login, payments), whose UI is
-    #: built in that app's own components and theme; idea: an example app to start from;
-    #: training: an insecure-by-design lab app, never offered unless asked for. Absent on an
-    #: older imported manifest: `kind_of` derives it.
-    kind: Optional[Literal["connector", "idea", "training"]] = None
     license: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9.+()-]*( (AND|OR|WITH) [A-Za-z0-9][A-Za-z0-9.+()-]*)*$",
                          max_length=100)
     min_boss: str = Field(pattern=SEMVER)

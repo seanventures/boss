@@ -46,7 +46,6 @@ tests:
   java:   {command: mvn -q test -Dtest=PayPal*, report: junit, min_tests: 12}
 security_note: SECURITY.md
 guide: guide.md
-labels: []
-kind: connector
+labels: [connector]
 license: Apache-2.0
 min_boss: 1.0.0

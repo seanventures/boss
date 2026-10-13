@@ -60,6 +60,7 @@ def test_a_card_carries_its_kind_and_training_is_listed_only_when_asked(monkeypa
             return _Rows()
 
     monkeypatch.setattr(service, "sync_builtins", lambda *_a, **_k: 0)
+    monkeypatch.setattr(service, "ensure_builtins", lambda *_a, **_k: None)
     everything = service.list_templates(_Conn(), "org")
     assert {c["kind"] for c in everything} == {"connector", "idea"}  # no training by default
     connectors = service.list_templates(_Conn(), "org", kind="connector")
