@@ -32,6 +32,7 @@ from concurrent.futures import ThreadPoolExecutor, wait as _futures_wait
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from . import parallel_build as _parallel_build
 from ..config import Settings
 from ..ports import sql
 from ..schemas import FileChange
@@ -2062,6 +2063,9 @@ def _build_fan_out(engine, project_id, settings) -> int:
 
         with _transaction(engine) as c:
             n = int(build_parallelism(c, project_id, settings) or 0)
+        # No more parts than the model limiter lets run AT ONCE (model_rate_limiter, one lane
+        # per provider): a sixth part behind a limit of three only queues, it is not parallel.
+        n = min(n, max(1, int(getattr(settings, "model_max_concurrency", 3) or 3)))
         return n if n > 1 else 0
     except Exception:  # noqa: BLE001 — speed is never worth failing a build over
         _log_caught(logger)
@@ -2097,14 +2101,15 @@ def _plan_prompt(title, spec):
     )
 
 
-_DESIGN_HEADS = (("standards", "STANDARDS"), ("spec", "SPEC"), ("plan", "PLAN"))
+_DESIGN_HEADS = (("standards", "STANDARDS"), ("spec", "SPEC"), ("plan", "PLAN"),
+                 ("packages", "WORK PACKAGES"))
 
 
 def _design_prompt(title, instructions, criteria):
     """Standards, spec and plan from ONE read of the repository, in three marked sections."""
     return (
         _ctx_block(title, instructions, criteria)
-        + "You are the design lead for this change. Read this repository ONCE, then write three "
+        + "You are the design lead for this change. Read this repository ONCE, then write four "
         "sections, each starting with its own heading line exactly as shown. Do NOT edit any "
         "files.\n\n"
         "=== STANDARDS ===\nA short bulleted list of the coding standards a new change here "
@@ -2117,6 +2122,7 @@ def _design_prompt(title, instructions, criteria):
         "end the plan with the line `database: postgres` (BOSS then gives every build its own "
         "PostgreSQL database, DATABASE_URL in the environment); otherwise end with "
         "`database: none`."
+        + _parallel_build.design_prompt_section()
     )
 
 
@@ -4025,7 +4031,10 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             plan_ok = "REVISE" not in d4.get("summary", "").upper()
             design = {"standards": d1.get("summary", ""), "spec": d2.get("summary", ""),
                       "plan": d3.get("summary", ""), "plan_review": d4.get("summary", ""),
-                      "plan_ok": plan_ok}
+                      "plan_ok": plan_ok,
+                      # The partition BOSS runs the writing stages in parallel from
+                      # (parallel_build); empty when the change is too small to split.
+                      "packages": parts.get("packages", "")}
             # PERSIST THE PLAN THE MOMENT IT EXISTS.
             # `state` was only written when a run FINISHED, so a mid-run death lost the design
             # along with everything else — both spend-limit failures recorded an EMPTY state, and
@@ -4129,6 +4138,60 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                             "why": ("no test-related gate failed, so the existing suite is the "
                                     "oracle for this repair")})
 
+        def _run_split(agent, model, stage_prompt: str, fan: int, *, tests: bool, protect=None):
+            """The writing stage split across the design's WORK PACKAGES, run in parallel CLI
+            sessions (parallel_build), or None to run today's single session. Never raises:
+            a split that cannot run falls back, it never fails the build."""
+            packages = _parallel_build.parse_packages((design or {}).get("packages"))
+            if not packages:
+                return None
+
+            def _event(kind: str, data: dict) -> None:
+                try:
+                    with _transaction(engine) as c:
+                        emit_event(c, project_id, kind, "boss", "code_task_run", run_id, data)
+                except Exception:  # noqa: BLE001 — the record never fails the build
+                    _log_caught(logger)
+
+            # SIZED AT THE STAGE'S START, FROM THE HOST AS IT IS NOW (build_streams): free
+            # cores after load and other builds, free memory (cgroup, else /proc), the
+            # project's min/max and the plan's part count. The choice and why are recorded on
+            # the stage, so the console shows it and anyone can check it.
+            stage_name = "write_tests" if tests else "implement"
+            n_parts = len([p for p in packages if p.name != _parallel_build.SCAFFOLD
+                           and (p.tests if tests else p.owns)])
+            try:
+                from . import build_streams as _streams
+
+                with _transaction(engine) as c:
+                    plan = _streams.for_stage(c, project_id, settings, packages=n_parts,
+                                              exclude_run=run_id)
+                    c.execute(sql(
+                        "UPDATE code_task_runs SET state=jsonb_set(COALESCE(state,'{}'::jsonb), "
+                        "'{streams}', COALESCE(state->'streams','{}'::jsonb) "
+                        "|| jsonb_build_object(CAST(:st AS text), CAST(:p AS JSONB))), "
+                        "updated_at=now() WHERE id=:id"),
+                        {"st": stage_name, "p": json.dumps(plan.as_dict()), "id": run_id})
+                    emit_event(c, project_id, "code_task.streams_chosen", "boss",
+                               "code_task_run", run_id, {"stage": stage_name, **plan.as_dict()})
+                fan = int(plan.n)
+            except Exception:  # noqa: BLE001 — a sizing that fails keeps the caller's number
+                _log_caught(logger)
+
+            def _one(part_prompt: str) -> dict:
+                # Each part is ONE agent: the parallelism is BOSS's, not a sub-agent's.
+                return agent.run_role(part_prompt, root, model=model, parallel_agents=0)
+
+            try:
+                return _parallel_build.run_split(
+                    run_role=_one, root=Path(root), base_prompt=stage_prompt, packages=packages,
+                    parallel=fan, test_cmd=test_cmd, tests=tests, on_event=_event,
+                    protect=protect)
+            except Exception:  # noqa: BLE001 — fall back to the single session
+                _log_caught(logger)
+                _event("code_task.split_fell_back", {"why": "the split raised", "tests": tests})
+                return None
+
         if do_separate_tests:
             # STEP write tests (qa), tests only.
             _abort_if_cancelled("write_tests")
@@ -4216,8 +4279,18 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     return r, [fc.path for fc in changes], changes
                 set_llm_context(stage="write_tests")
                 a, m = _route_escalated("write_tests") if escalate else _route("write_tests")
-                r = a.run_role(prompt, root, model=m,
-                               parallel_agents=_build_fan_out(engine, project_id, settings))
+                fan = _build_fan_out(engine, project_id, settings)
+                # SPLIT BY BOSS, NOT LEFT TO THE MODEL (parallel_build): a first, from-scratch
+                # pass with a design partition writes each part's suite in its own session, at
+                # the same time. A repair or a resume augments an existing suite: one session.
+                if (fan and not escalate and root_run == run_id
+                        and not getattr(sandbox, "resumed_from_checkpoint", False)):
+                    split = _run_split(a, m, prompt, fan, tests=True)
+                    if split is not None:
+                        r = split.as_role_result()
+                        cost += int(r.get("cost_usd_micros") or 0)
+                        return r, [fc.path for fc in sandbox.diff() if _is_test_path(fc.path)], None
+                r = a.run_role(prompt, root, model=m, parallel_agents=fan)
                 cost += int(r.get("cost_usd_micros") or 0)
                 return r, [fc.path for fc in sandbox.diff() if _is_test_path(fc.path)], None
 
@@ -4449,8 +4522,16 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 else:
                     # The first implement fans out (build_speed); a repair resumed on its own
                     # session stays one agent: it is a focused fix, not parallel volume.
-                    r2 = a.run_role(impl_prompt, root, model=m,
-                                    parallel_agents=_build_fan_out(engine, project_id, settings))
+                    fan = _build_fan_out(engine, project_id, settings)
+                    split = None
+                    if fan and attempt == 0 and not escalate_impl:
+                        # SPLIT BY BOSS (parallel_build), after the tamper snapshot: no part
+                        # may touch QA's frozen tests even inside the paths it owns.
+                        _frozen = set(test_files or []) if do_separate_tests else set()
+                        split = _run_split(a, m, impl_prompt, fan, tests=False,
+                                           protect=(lambda rel: rel in _frozen))
+                    r2 = (split.as_role_result() if split is not None
+                          else a.run_role(impl_prompt, root, model=m, parallel_agents=fan))
                 impl_session_id = r2.get("session_id") or impl_session_id
                 cost += int(r2.get("cost_usd_micros") or 0)
                 # FINISH THE WORK BEFORE JUDGING IT. The implementer hitting its turn cap

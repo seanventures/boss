@@ -36,7 +36,8 @@ def test_a_missing_section_is_empty_so_its_own_session_writes_it():
     parts = g._split_design("=== SPEC ===\nOnly a spec.")
     assert parts["spec"] == "Only a spec."
     assert parts["standards"] == "" and parts["plan"] == ""
-    assert g._split_design("") == {"standards": "", "spec": "", "plan": ""}
+    # WORK PACKAGES (parallel_build) is the fourth section; empty means "do not split".
+    assert g._split_design("") == {"standards": "", "spec": "", "plan": "", "packages": ""}
 
 
 def test_the_joint_prompt_asks_for_every_part_the_old_sessions_did():
