@@ -689,6 +689,12 @@ CLEAN_INSTALL_FACT = (
     "versions that agree (e.g. eslint 9 needs eslint-plugin-react-hooks >=5).")
 
 
+#: Said when the sandbox has no C/C++ toolchain (read from this process, like every fact).
+NO_COMPILER_FACT = (
+    "- The build sandbox has no C/C++ compiler: avoid packages with native builds "
+    "(better-sqlite3, bcrypt, sharp…); use pure-JS alternatives (pg, node:sqlite, bcryptjs).")
+
+
 def sandbox_facts() -> str:
     """WHAT THE BUILD SANDBOX HAS, read from this process's own environment (the agent runs
     here), said up front. A HelpDesk build spent steps discovering each of these: curl missing
@@ -716,6 +722,10 @@ def sandbox_facts() -> str:
     arch = {"aarch64": "arm64", "x86_64": "x64"}.get(platform.machine(), platform.machine())
     lines.append(f"- {platform.system().lower()}-{arch}: a native npm module with no prebuilt binary for it fails to "
                  "build here (argon2 does). Use pure-JS packages: bcryptjs for password hashing.")
+    if not any(_shutil.which(tool) for tool in ("make", "cc", "gcc", "g++")):
+        # onboarding_path_builder's agent (crun_decc93dbb0154e768871) picked better-sqlite3,
+        # whose install runs node-gyp, which needs make: the sandbox has none.
+        lines.append(NO_COMPILER_FACT)
     lines.append(CLEAN_INSTALL_FACT)
     text = "\nSANDBOX (facts, no need to check them):\n" + "\n".join(lines) + "\n"
     _SANDBOX_FACTS["text"] = text

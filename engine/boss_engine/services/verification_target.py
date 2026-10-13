@@ -64,7 +64,12 @@ PYTEST_CMD = "python3 -m pytest -q"
 # preview died on "tsc: not found" (2026-10-03) for exactly that. Every install BOSS runs to
 # build or test an app is this one command; preview_service imports it rather than retyping it.
 NPM_INSTALL_CMD = "npm install --include=dev --no-audit --no-fund --loglevel=error"
-_WEB_STEPS = ["npm run build", "npm run typecheck", "npm run lint", "npm run test:e2e"]
+#: The app's own tests are its oracle: `npm test` is in every web gate whose app defines it.
+#: It was missing, so onboarding_path_builder's 16 tests (crun_decc93dbb0154e768871) were never
+#: the gate. With a package.json on disk the gate is composed from what it defines
+#: (web_gate_for); this full list is the target before there is one.
+TEST_STEP = "npm test"
+_WEB_STEPS = ["npm run build", "npm run typecheck", "npm run lint", TEST_STEP, "npm run test:e2e"]
 WEB_TEST_COMMANDS = [NPM_INSTALL_CMD, *_WEB_STEPS]
 #: Display only — the console shows the sequence as one line. Never execute this.
 WEB_TEST_CMD = " && ".join(WEB_TEST_COMMANDS)
@@ -375,6 +380,135 @@ def web_test_commands() -> list[str]:
     return [c for c in WEB_TEST_COMMANDS if c != E2E_STEP or gate_runs_e2e()]
 
 
+#: The package scripts BOSS's web gate runs, in order, each only where the app defines it.
+WEB_GATE_SCRIPTS = ("build", "typecheck", "lint")
+#: The finding for an app whose package.json defines no test script at all.
+NO_TEST_SCRIPT = ("the app has no test script: add a `test` script to package.json that runs "
+                  "the app's own tests (e.g. `node --test`), so BOSS's gate can run them")
+
+
+#: What the writing stages are told about the gate (FIRST_PASS_CHECKLIST), so nobody adds a
+#: script only to satisfy it (onboarding_path_builder's agent bolted a vite build onto a Node app).
+WEB_GATE_RULE = ("BOSS's gate runs, in the app directory, its install, then each of `npm run "
+                 "build`, `npm run typecheck` and `npm run lint` that package.json defines, then "
+                 "`npm test` (the app's own tests; an app with no test script fails the gate). "
+                 "Never add a script only to satisfy the gate.")
+
+
+def package_scripts(app_dir: Path | str) -> dict[str, str] | None:
+    """The scripts the app's package.json defines, or None without a readable one."""
+    try:
+        payload = json.loads((Path(app_dir) / "package.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    scripts = payload.get("scripts")
+    return {str(k): str(v) for k, v in scripts.items()} if isinstance(scripts, dict) else {}
+
+
+def _defines(scripts: dict[str, str], name: str) -> bool:
+    """A script that does something: present and not a stub (`echo ... && exit 1`, `|| true`)."""
+    raw = str(scripts.get(name) or "").strip()
+    return bool(raw) and not _STUB_SCRIPT.search(raw)
+
+
+def web_gate_for(app_dir: Path | str) -> tuple[list[str], str | None]:
+    """VERIFY WHAT THE APP DEFINES. (commands, finding) for BOSS's web gate in `app_dir`.
+
+    onboarding_path_builder (crun_decc93dbb0154e768871), a plain Node ESM app with no build step,
+    was gated on `npm run build && npm run typecheck && npm run lint`: npm said `Missing script:
+    "build"`, the agent bolted a vite build onto it to please the gate, and its own 16 tests never
+    ran. Now: install, then each of build, typecheck and lint the package.json defines, then
+    `npm test` whenever it defines one (the app's own oracle), then the browser suite where this
+    build runs one (build_scope.gate_runs_e2e) and the app defines it or the pass asked for it.
+    An app with no test script at all is a finding (NO_TEST_SCRIPT), not a crash. Without a
+    package.json, the full target (web_test_commands)."""
+    scripts = package_scripts(app_dir)
+    if scripts is None:
+        return web_test_commands(), None
+    from .build_scope import current, gate_runs_e2e
+
+    commands = [NPM_INSTALL_CMD] + [f"npm run {n}" for n in WEB_GATE_SCRIPTS if _defines(scripts, n)]
+    if _defines(scripts, "test"):
+        commands.append(TEST_STEP)
+    if gate_runs_e2e() and (_defines(scripts, "test:e2e") or bool((current() or {}).get("e2e"))):
+        commands.append(E2E_STEP)
+    has_tests = any(n == "test" or n.startswith("test:") for n in scripts if _defines(scripts, n))
+    return commands, (None if has_tests else NO_TEST_SCRIPT)
+
+
+def run_web_gate(run, plan: "GatePlan") -> list:
+    """BOSS's web gate: the plan's commands until the first failure (`run(command)` -> result),
+    then the plan's finding as a failed check when everything ran green. The pipeline and the
+    plumbing gate both run it, so neither can drift from the other."""
+    from .sandbox import CommandResult
+
+    results = []
+    for command in plan.commands:
+        result = run(command)
+        results.append(result)
+        if not getattr(result, "ok", False):
+            return results
+    if plan.finding:
+        results.append(CommandResult(command=TEST_STEP, argv=[], exit_code=1, duration_ms=0,
+                                     timed_out=False, stdout="", stderr=plan.finding))
+    return results
+
+
+#: npm's own prefixes on an error line, and the script echo it prints before running one.
+_NPM_PREFIX = re.compile(r"^\s*(?:npm (?:error|ERR!)\s*)+", re.I)
+_ERROR_LINE = re.compile(r"\berror\b|\bERR!|\bfailed\b|\bnot found\b|Missing script|\bFAIL\b"
+                         r"|✖|✗|AssertionError|not ok\b|Cannot find", re.I)
+
+
+def failed_check(result: Any) -> dict[str, Any] | None:
+    """{command, line} for a failed gate command: what ran and its first error line, in the
+    tool's own words ("Missing script: \"build\""). None for a pass."""
+    if result is None or getattr(result, "ok", False):
+        return None
+    command = str(getattr(result, "command", "") or "").strip()
+    lines = []
+    for line in _meaningful_lines(f"{getattr(result, 'stdout', '') or ''}\n"
+                                  f"{getattr(result, 'stderr', '') or ''}"):
+        line = _NPM_PREFIX.sub("", line).strip()
+        if line and not line.startswith(">"):
+            lines.append(line)
+    line = ""
+    for i, candidate in enumerate(lines):
+        if _ERROR_LINE.search(candidate):
+            line = candidate
+            if line.endswith(":") and i + 1 < len(lines):
+                line = f"{line} {lines[i + 1]}"
+            break
+    if not line:
+        line = (lines[-1] if lines else ("timed out" if getattr(result, "timed_out", False)
+                                         else f"exit {getattr(result, 'exit_code', None)}"))
+    return {"command": command, "line": line[:300]}
+
+
+def checks_headline(record: Any) -> str:
+    """The failed web gate as the ONE line a blocked build shows: "the app's checks failed:
+    npm run build — Missing script: \"build\"". `record` is failed_check's dict, or the run's
+    `tests` evidence (a list of them, or one) carrying it as `failed_check`. Never "the
+    template's tests did not pass" (crun_decc93dbb0154e768871 said that; the template had not
+    run)."""
+    if isinstance(record, (list, tuple)):
+        record = next((r for r in record if isinstance(r, dict) and not r.get("ok", False)),
+                      record[0] if record else None)
+    rec = record if isinstance(record, dict) else {}
+    check = rec.get("failed_check") if isinstance(rec.get("failed_check"), dict) else rec
+    command = str(check.get("command") or "").strip()
+    line = str(check.get("line") or "").strip()
+    if not line and rec.get("exit_code") is not None:
+        line = f"exit {rec.get('exit_code')}"
+    if command and line:
+        return f"the app's checks failed: {command} — {line}"
+    if command or line:
+        return f"the app's checks failed: {command or line}"
+    return "the app's checks failed"
+
+
 def default_test_commands(spec: dict[str, Any], title: str = "") -> list[str]:
     """The verification target when the task didn't specify one — web command set for web projects,
     the unittest default otherwise. (Callers use this as the fallback for ``spec['test_commands']``.)"""
@@ -491,6 +625,9 @@ class GatePlan:
     #: service's own steps, then the backend started and the e2e run against it
     #: (services.stack_verify).
     stack: Any = None
+    #: Default web plans only: what the app's package.json leaves the gate unable to check
+    #: (NO_TEST_SCRIPT). The gate fails on it after the commands pass (run_web_gate).
+    finding: str | None = None
 
     @property
     def from_manifest(self) -> bool:
@@ -624,7 +761,10 @@ def resolve_gate_plan(
     cwd = _cwd(commands)
     if commands == [PYTHON_TEST_CMD] and is_pytest_project(cwd):
         commands = [PYTEST_CMD]
-    return GatePlan(commands, cwd, "default", " && ".join(commands))
+    finding = None
+    if commands and commands[0] == NPM_INSTALL_CMD:
+        commands, finding = web_gate_for(cwd)
+    return GatePlan(commands, cwd, "default", " && ".join(commands), finding=finding)
 
 
 def manifest_display(root: Path | str, pinned: PinnedVerifyManifest | None = None) -> str | None:

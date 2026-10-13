@@ -63,3 +63,21 @@ def test_the_fixture_declares_how_it_runs_and_deploys():
 
     manifest = load_manifest(FIXTURE / "boss.deploy.yaml")
     assert {e.key for e in manifest.env} >= {"SESSION_SECRET", "DATABASE_URL"}
+
+
+PLAIN = ROOT / "tests" / "e2e" / "fixtures" / "plain-node"
+
+
+def test_the_plain_node_fixture_defines_only_its_tests_and_boss_gates_on_them():
+    """The second golden fixture stays what it proves: a plain Node ESM app with no build,
+    typecheck or lint script, gated on exactly the install and its own `npm test`."""
+    import json
+
+    from boss_engine.services import verification_target as vt
+
+    scripts = json.loads((PLAIN / "plain" / "package.json").read_text())["scripts"]
+    assert not {"build", "typecheck", "lint"} & set(scripts) and scripts["test"] == "node --test"
+    plan = vt.resolve_gate_plan({"project_kind": "web"}, "Plain Node", PLAIN,
+                                changed=["plain/package.json"])
+    assert plan.commands == [vt.NPM_INSTALL_CMD, vt.TEST_STEP] and plan.finding is None
+    assert "check_plain_node(g)" in (GATE / "plumbing.py").read_text()

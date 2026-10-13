@@ -373,7 +373,9 @@ def test_a_node_only_app_is_unchanged(tmp_path):
     plan = verification_target.resolve_gate_plan({"project_kind": "web"}, "a UI", tmp_path,
                                                   changed=["web/package.json"])
     assert plan.source == "default"
-    assert plan.commands == verification_target.WEB_TEST_COMMANDS
+    # The gate runs what the app defines (verification_target.web_gate_for): its build only.
+    assert plan.commands == [verification_target.NPM_INSTALL_CMD, "npm run build"]
+    assert plan.finding == verification_target.NO_TEST_SCRIPT
     assert plan.cwd == tmp_path / "web"
     # A Node backend and a React UI named in words do not force a layout: the tree decides.
     assert stacks.build_layout("an Express API with a React front end") is None

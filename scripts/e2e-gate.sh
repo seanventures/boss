@@ -4,7 +4,8 @@
 #   scripts/e2e-gate.sh plumbing [--boss-root DIR] [--image IMAGE] [--keep]
 #       Tier A, <= 5 min, no model calls: BOSS's real post-agent pipeline on a known-good app
 #       (tests/e2e/fixtures/helpdesk-mini): clone through a GitHub 502, package.json hardening,
-#       the clean install as the run's uid, verify, the app-start proof with the connector's
+#       the clean install as the run's uid, the web gate composed from what the app defines (and
+#       on a second, plain Node ESM fixture: tests/e2e/fixtures/plain-node), the app-start proof with the connector's
 #       wiring smoke, the connector's own suite, the blocked-build words, the pull request
 #       through a 502, a deploy to a local target, the retry policy, and an approval that needs
 #       step-up. One PASS/FAIL table; exit 1 on any FAIL.
