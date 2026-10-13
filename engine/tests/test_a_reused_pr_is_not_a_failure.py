@@ -25,7 +25,7 @@ from boss_engine.services import governed_code_task_service as g
 def _terminal_check() -> str:
     src = inspect.getsource(g)
     start = src.index("AN ALREADY-OPEN PULL REQUEST IS A SUCCESS")
-    return src[start:start + 1400]
+    return src[start:start + 3000]
 
 
 def test_a_reused_proposal_is_accepted():

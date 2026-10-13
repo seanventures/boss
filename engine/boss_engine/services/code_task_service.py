@@ -1537,6 +1537,100 @@ def _lineage_produced_nothing(engine, prev: dict, run_id: str) -> bool:
     return False
 
 
+#: How many times BOSS itself retries a held delivery before it is a person's to retry.
+AUTO_DELIVERY_RETRIES = 2
+
+
+def redeliver_code_task(engine, settings: Settings, run_id: str, *, automatic: bool = False) -> dict:
+    """Deliver a finished, gated build whose push / pull request failed: push the kept files to
+    the lineage branch and open the pull request, from `finalize_ctx.pending_delivery`. The same
+    run completes; nothing is re-planned, re-tested, re-built or re-reviewed. `automatic`: BOSS
+    asked, so the person's grant for the build must still cover it (RetryNeedsPerson if not)."""
+    from ..schemas import FileChange
+
+    with _transaction(engine) as c:
+        run = load_code_task_run(c, run_id)
+    if run is None:
+        raise ValueError(f"code task run not found: {run_id}")
+    fctx = run.get("finalize_ctx") or {}
+    held = fctx.get("pending_delivery") or {}
+    if run.get("pull_request_url"):
+        return {"status": "completed", "run_id": run_id, "delivery_only": True,
+                "pull_request_url": run["pull_request_url"], "already_open": True}
+    if not held.get("files"):
+        raise ValueError("nothing kept to deliver: retry the build instead.")
+    if automatic:
+        from boss_engine.identity import consent as _consent
+        from boss_engine.identity import runs as _identity_runs
+
+        spec = run.get("spec") or {}
+        with _transaction(engine) as c:
+            carried = _consent.carry_retry_authority(
+                c, parent_run_id=run_id, new_run_id="delivery", project_id=run["project_id"],
+                role_keys=[_identity_runs.resolved_builder({"role_key": spec.get("role_key")}, fctx)],
+                permissions=_consent.CODE_TASK_PERMISSIONS,
+                repos=_consent_repos(spec.get("owner"), spec.get("repo"), spec.get("repo_host")),
+                by_boss=True, workflow_run_id=str(fctx.get("workflow_run_id") or "") or None)
+        if carried is None:
+            raise RetryNeedsPerson(
+                "BOSS did not retry this delivery by itself: no person's grant covers it any "
+                "more. Press Retry to push and open the pull request.")
+        with _transaction(engine) as c:
+            tried = c.execute(sql(
+                "SELECT count(*) FROM events WHERE entity_id = :r AND event_type = "
+                "'code_task.delivery_retried' AND data->>'automatic' = 'true'"), {"r": run_id}).scalar()
+        if int(tried or 0) >= AUTO_DELIVERY_RETRIES:
+            # The same run is retried in place, so no lineage count bounds it: this does.
+            raise RetryNeedsPerson(
+                f"BOSS already retried this delivery {tried} times by itself and GitHub still "
+                "refused it. Press Retry to push and open the pull request.")
+    files = [FileChange(path=f["path"], content=f["content"]) for f in held["files"]]
+    ports = _engine_ports()
+    sf = SoftwareFactoryService(settings, ports=ports)
+    project_id = run["project_id"]
+    with _transaction(engine) as c:
+        reservation = ports.budget.reserve(
+            c, project_id, category="code_task", amount_usd_micros=200_000,
+            reason=f"deliver {run_id[:12]}: push and pull request only", expires_in_minutes=15)
+        _set_phase(c, run_id, "opening_pr")
+        emit_event(c, project_id, "code_task.delivery_retried", "boss", "code_task_run", run_id,
+                   {"files": len(files), "automatic": automatic,
+                    "why": "the build passed its gates; only the push and the pull request run"})
+        proposal = sf.propose_pull_request(
+            c, project_id, run.get("task_id"), reservation_id=reservation.get("reservation_id"),
+            dedupe_key=f"code:task:{run_id}", title=run["title"],
+            branch_name=held.get("branch") or f"boss/code/{fctx.get('root_run_id') or run_id}",
+            summary=str(held.get("summary") or ""), files=files,
+            created_by_job_id=fctx.get("created_by_job_id"),
+            quality_gate_id=held.get("quality_gate_id"), run_id=run_id)
+    status = proposal.get("status")
+    if status not in ("created", "succeeded") and not (
+            status == "reused" and proposal.get("pull_request_url")):
+        from .governed_code_task_service import delivery_failure_words
+
+        words = delivery_failure_words(str(proposal.get("message") or proposal.get("error") or status))
+        with _transaction(engine) as c:
+            _set_phase(c, run_id, "done")
+            c.execute(sql("UPDATE code_task_runs SET error=:e, updated_at=now() WHERE id=:id"),
+                      {"e": words, "id": run_id})
+        return {"status": "failed", "run_id": run_id, "delivery_only": True, "error": words}
+    with _transaction(engine) as c:
+        c.execute(sql(
+            "UPDATE code_task_runs SET status='completed', phase='done', pull_request_url=:u, "
+            "pull_request_number=:n, decision_id=:d, error=NULL, updated_at=now(), "
+            "finalize_ctx = COALESCE(finalize_ctx,'{}'::jsonb) - 'pending_delivery' WHERE id=:id"),
+            {"u": proposal.get("pull_request_url"), "n": proposal.get("pull_request_number"),
+             "d": proposal.get("decision_id"), "id": run_id})
+        emit_event(c, project_id, "code_task.pr_opened", "boss", "code_task_run", run_id,
+                   {"pull_request_url": proposal.get("pull_request_url"),
+                    "decision_id": proposal.get("decision_id"),
+                    "quality_gate_id": held.get("quality_gate_id"), "delivery_only": True})
+    return {"status": "completed", "run_id": run_id, "delivery_only": True,
+            "pull_request_url": proposal.get("pull_request_url"),
+            "pull_request_number": proposal.get("pull_request_number"),
+            "decision_id": proposal.get("decision_id")}
+
+
 def retry_code_task(
     engine, settings: Settings, jobs, run_id: str, *, fix_note: str = "",
     profile: Optional[str] = None, repair_retries: Optional[int] = None,
@@ -1567,6 +1661,10 @@ def retry_code_task(
             "BOSS did not retry this build by itself: it failed before BOSS last started "
             "(an upgrade or a restart), and a build that died before a restart is only run "
             "again when a person asks. Press Retry to run it again.")
+    if (prev.get("finalize_ctx") or {}).get("pending_delivery") and not prev.get("pull_request_url"):
+        # ONLY THE DELIVERY FAILED (governed_code_task_service.hold_delivery): retry exactly
+        # that — the push and the pull request — never the design, tests, build or review.
+        return redeliver_code_task(engine, settings, run_id, automatic=automatic)
     if is_simulated_run(prev):
         raise ValueError(
             "cannot retry a simulated fixture run; create a real code-task instead"

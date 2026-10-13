@@ -892,6 +892,44 @@ def _record_quality_gate(connection, *, run_id, project_id, task_id, job_id, evi
 AUTO_INFRA_RETRY_KEY = "auto_infra_retry"
 
 
+def delivery_failure_words(detail: str) -> str:
+    """Why delivering a finished build failed, naming the operation and what Retry will do."""
+    import re
+
+    text = str(detail or "")
+    code = re.search(r"\b(5\d\d)\b", text)
+    if code:
+        why = f"GitHub returned {code.group(1)}"
+    elif re.search(r"timed? ?out|timeout", text, re.I):
+        why = "GitHub did not answer in time"
+    elif re.search(r"connect|reset|resolve|network", text, re.I):
+        why = "BOSS could not reach GitHub"
+    else:
+        why = f"GitHub refused it ({text.strip()[:160] or 'no detail'})"
+    return (f"{why} while pushing the work and opening the pull request. The build, its tests and "
+            "its review are done; Retry pushes and opens the pull request only.")
+
+
+def hold_delivery(connection, run_id: str, project_id: str, *, files: list[dict], summary: str,
+                  quality_gate_id: Optional[str], branch: str, detail: str) -> dict:
+    """A gated build whose push / pull request failed: keep what to deliver on the run
+    (finalize_ctx.pending_delivery) and fail it `recoverable`, saying which operation failed.
+    code_task_service.retry_code_task sees `pending_delivery` and redelivers only."""
+    words = delivery_failure_words(detail)
+    connection.execute(sql(
+        "UPDATE code_task_runs SET finalize_ctx = COALESCE(finalize_ctx,'{}'::jsonb) "
+        "|| jsonb_build_object('pending_delivery', CAST(:d AS JSONB)) WHERE id = :id"),
+        {"id": run_id, "d": json.dumps({
+            "files": files, "summary": summary, "quality_gate_id": quality_gate_id,
+            "branch": branch, "failed_operation": "push_and_pull_request",
+            "error": str(detail or "")[:500]})})
+    emit_event(connection, project_id, "code_task.delivery_held", "boss", "code_task_run", run_id,
+               {"failed_operation": "push_and_pull_request", "files": len(files),
+                "quality_gate_id": quality_gate_id, "error": str(detail or "")[:300]})
+    return {**_fail(connection, run_id, project_id, words, failure_class="recoverable",
+                    reason_code="delivery_failed"), "delivery_held": True}
+
+
 def _retry_after_infra_failure(engine, settings, jobs, run_id: str, project_id: str,
                                fctx: dict, result: dict) -> dict:
     """ONE AUTOMATIC RETRY FOR A BUILD THAT DIED OF BOSS, NOT OF ITS CODE.
@@ -916,6 +954,8 @@ def _retry_after_infra_failure(engine, settings, jobs, run_id: str, project_id: 
         # the person gave the failed build, or is not started and the build stays failed with
         # Retry for a person.
         retried = retry_code_task(engine, settings, jobs, run_id, automatic=True)
+        if retried.get("delivery_only"):
+            return {**result, **retried}               # the same run, delivered (or not) in place
         new_id = str(retried.get("run_id") or "")
         with _transaction(engine) as c:
             c.execute(sql("UPDATE code_task_runs SET finalize_ctx = COALESCE(finalize_ctx,'{}'::jsonb)"
@@ -7112,6 +7152,22 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # Guarded on actually HAVING a url: a reuse of some earlier effect that produced no pull
         # request is not a shipped change, and must still block.
         _reused_pr = status == "reused" and bool(proposal.get("pull_request_url"))
+        if status not in ("created", "succeeded", "blocked", "reused"):
+            # THE BUILD IS DONE; ONLY THE DELIVERY FAILED (GitHub/network, after its in-place
+            # retries). Its diff, summary and gate verdict are kept on the run, and Retry runs
+            # ONLY the push and the pull request (code_task_service.redeliver_code_task) — no new
+            # design, tests, implementation or review. It used to block, or crash into a full
+            # automatic rebuild, after every gate had passed. A `blocked` answer (it waits on a
+            # person's decision) and a `reused` effect keep their own handling below.
+            _save_workspace("delivery_failed")
+            with _transaction(engine) as c:
+                _release(budget, c, project_id, reservation_id,
+                         "the build passed its gates; delivering it to GitHub failed", run_id=run_id)
+                return hold_delivery(
+                    c, run_id, project_id,
+                    files=[{"path": f.path, "content": f.content} for f in _pr_files],
+                    summary=_pr_summary, quality_gate_id=qg_id, branch=work_branch,
+                    detail=str(proposal.get("message") or proposal.get("error") or status))
         if status not in ("created", "succeeded") and not _reused_pr:
             rescued = _rescue_pr(f"the pull-request step failed 3 times ({status})")
             with _transaction(engine) as c:
