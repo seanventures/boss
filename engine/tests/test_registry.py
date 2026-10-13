@@ -63,6 +63,8 @@ _EXPECTED_TOOLS: set[str] = {
     "read_pull_request",
     "run_on_host",
     "redeploy", "preflight_deployment_target",
+    # Removing a deployed app: governed like a deploy, and only ever a button a person presses.
+    "remove_app",
 
     "cancel_code_task",
     # The first deployment. BOSS could create hosts and targets and could redeploy, and had
@@ -211,11 +213,11 @@ def test_default_registry_shape():
     read = {s.name for s in reg.specs(kind="read")}
     write = {s.name for s in reg.specs(kind="write")}
     assert read | write == set(reg.names())
-    assert len(reg.names()) == 125, (
+    assert len(reg.names()) == 126, (
         f"tool set changed: unexpected={sorted(set(reg.names()) - _EXPECTED_TOOLS)}, "
         f"missing={sorted(_EXPECTED_TOOLS - set(reg.names()))}")
     assert len(read) == 72  # + read_app_logs, + my_recent_work, + system_health, + 7 template/security reads
-    assert len(write) == 53  # + system_doctor_act, + run_security_scan (F4), + apply_template (F2),
+    assert len(write) == 54  # + remove_app, + system_doctor_act, + run_security_scan (F4), + apply_template (F2),
     #                         + review_pull_request_again
     # the capabilities the user explicitly asked the agent to cover
     for name in (
@@ -487,6 +489,7 @@ def test_the_tools_that_are_never_pressed_by_the_model():
         "cancel_job",         # the one that caused this
         "decide",             # approves a gate; an agent that approves its own gates is ungated
         "delete_workflow",    # removes a path a person authored
+        "remove_app",         # stops an app and removes it from its host
         "run_on_host",        # arbitrary command on a live machine
         "system_doctor_act",  # may pause or cancel a build to free the machine
         "waive_gates",        # removes a check somebody put there

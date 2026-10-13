@@ -2270,6 +2270,45 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
                 "reason": reason}
 
     @reg.tool(
+        "remove_app",
+        "Remove a deployed app from its host: stop and remove its compose project or container "
+        "and its folder under /opt/boss-apps. Governed like a deploy: a ChangeSet approved by a "
+        "person (or the environment's policy), a leased job, a receipt. Its data is KEPT unless "
+        "delete_data is true. Offer it as a button with propose_action; never run it unasked. "
+        "Takes the app name or its deployment target id (deptgt_...).",
+        _obj({"app_or_target": {"type": "string", "description": "app name or deptgt_... id"},
+              "delete_data": {"type": "boolean", "default": False,
+                              "description": "also delete its database volumes and data"},
+              "reason": {"type": "string", "description": "why — recorded on the removal"}},
+             required=["app_or_target"]),
+        kind="write",
+        reversibility="destroys_work", permission="deployment:create")
+    def remove_app(ctx, *, project_id, actor, args):
+        from sqlalchemy import text
+
+        from ..services.app_removal import RemovalRefused, plan_removal
+        from ..services.resource_plane import ResourcePlaneService
+
+        key = str(args.get("app_or_target") or "").strip()
+        with ctx.engine.begin() as c:
+            row = c.execute(text(
+                "SELECT * FROM deployment_targets WHERE project_id = :p AND (id = :k OR "
+                "lower(app_name) = lower(:k)) ORDER BY (status = 'active') DESC, updated_at DESC "
+                "LIMIT 1"), {"p": project_id, "k": key}).mappings().first()
+            if not row:
+                return {"ok": False, "error": f"no deployed app or target named {key!r}"}
+            try:
+                planned = plan_removal(ResourcePlaneService(ctx.settings), c, project_id=project_id,
+                                       target=dict(row), actor=actor,
+                                       delete_data=bool(args.get("delete_data")),
+                                       reason=str(args.get("reason") or ""))
+            except RemovalRefused as refused:
+                return {"ok": False, "error": str(refused)}
+        return {"ok": True, "deployment_run_id": planned.get("id"),
+                "status": planned.get("status"), "decision_id": planned.get("decision_id"),
+                "target_id": row["id"]}
+
+    @reg.tool(
         "deploy_app",
         "Deploy a SUCCESSFUL build to an environment for the FIRST time. This is the tool to "
         "use when an operator says 'deploy it', 'ship it', or 'deploy to staging/live' and the "
@@ -7306,6 +7345,8 @@ _DISCUSS_OPERATIONS_TOOLS: frozenset[str] = frozenset({
     # admitting it here does not by itself hand anybody a shell.
     "run_on_host",
     "redeploy",
+    # Removing an app: a button the person presses, governed like a deploy (app_removal).
+    "remove_app",
     "start_preview",
     "stop_preview",
     "register_repository",
