@@ -8,7 +8,6 @@ actor, recorded as an event; findings are never deleted (S4.5).
 """
 from __future__ import annotations
 
-import contextlib
 import json
 import logging
 import os
@@ -118,14 +117,9 @@ def request_scan(conn: Any, *, project_id: str, app_key: str, ref: Optional[str]
 
 def _open_tree(root: Path) -> None:
     """BOSS cloned it; the run's uid must be able to write in it (npm install, build output)."""
-    for dirpath, dirnames, filenames in os.walk(root):
-        with contextlib.suppress(OSError):
-            os.chmod(dirpath, 0o2777)
-        for name in filenames:
-            p = Path(dirpath) / name
-            if not p.is_symlink():
-                with contextlib.suppress(OSError):
-                    os.chmod(p, 0o666 | (p.stat().st_mode & 0o111))
+    from ..services import workspace_perms
+
+    workspace_perms.open_tree(root)  # executables stay executable for the scan's uid
 
 
 def checkout(engine: Any, settings: Any, src: scope.AppSource, workdir: Path) -> str:
@@ -136,8 +130,10 @@ def checkout(engine: Any, settings: Any, src: scope.AppSource, workdir: Path) ->
 
     local = None if src.pull_request_url else preview_service.find_local_run_workspace(src.run_id)
     if local is not None:
-        shutil.copytree(local, workdir, symlinks=True, dirs_exist_ok=True,
-                        ignore=shutil.ignore_patterns("node_modules", ".npm-cache"))
+        from ..services import workspace_perms
+
+        workspace_perms.copy_tree(local, workdir,
+                                  ignore=shutil.ignore_patterns("node_modules", ".npm-cache"))
     else:
         from ..identity import runs as identity_runs
         from ..services.github_connections import github_token_for

@@ -16,6 +16,14 @@ The rule, in one place:
   boss-sandbox-exec as the run's uid; what BOSS owns it chmods itself.
 * `make_writable(path)` — the lazy form, for one path and its parent: what a BOSS-side write does
   on EACCES before retrying once (`write_text`).
+* `copy_tree(src, dst)` / `open_tree(root)` / `usable_mode(mode)` — EXECUTABLES STAY EXECUTABLE.
+  Every place BOSS copies, seeds or opens a tree for another uid (the serve proof's copy, a
+  preview's copy, a security scan's checkout, a toolchain cache) goes through these. Opening a
+  file to "every uid" with `a+rw` / `0666 | mode` dropped the execute bit for the uid that is
+  not the owner: HelpDesk AI crun_247435e1 installed tsx as the run's uid under umask 007
+  (node_modules/tsx/dist/cli.mjs 0770), the readable pass made it 0776, BOSS's copy for the
+  serve proof became BOSS-owned 0776 — and the run's uid, now "other", got
+  `sh: 1: tsx: Permission denied`. Here an entry anyone could execute is executable by all.
 
 The template reference itself stays read-only: it lives outside the workspace and nothing here
 is ever pointed at it.
@@ -26,6 +34,7 @@ import contextlib
 import functools
 import logging
 import os
+import shutil
 import stat
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -46,9 +55,13 @@ _FIND_FIX = (
     '-o \\( -type f ! -perm -0660 -exec chmod ug+rw {} + \\) \\) 2>/dev/null; true'
 )
 #: As the run's uid: every file and directory it owns under "$1" readable (and dirs enterable).
-_READABLE = 'find "$1" -user "$(id -u)" \\( -type d ! -perm -o+rwx -exec chmod a+rwx {} + \\) -o \\( -type f ! -perm -o+rw -exec chmod a+rw {} + \\) 2>/dev/null; true'
+#: `a+rwX`, never `a+rw`: a file its owner can execute (node_modules/.bin targets, scripts) stays
+#: executable for whoever runs a COPY of it (see copy_tree).
+_READABLE = ('find "$1" -user "$(id -u)" \\( -type d ! -perm -o+rwx -exec chmod a+rwx {} + \\) '
+             '-o \\( -type f \\( ! -perm -o+rw -o \\( -perm -u+x ! -perm -o+x \\) \\) '
+             '-exec chmod a+rwX {} + \\) 2>/dev/null; true')
 #: The lazy form: exactly the named paths (a file and its parent), as the run's uid.
-_CHMOD_PATHS = 'for p in "$@"; do if [ -d "$p" ]; then chmod a+rwx "$p"; else chmod a+rw "$p"; fi; done 2>/dev/null; true'
+_CHMOD_PATHS = 'for p in "$@"; do if [ -d "$p" ]; then chmod a+rwx "$p"; else chmod a+rwX "$p"; fi; done 2>/dev/null; true'
 
 
 def _identity(root: Path) -> Any:
@@ -173,6 +186,56 @@ def make_writable(path: Any, *, within: Any = None) -> None:
         ident = _identity(p.parent)
         if ident is not None:
             _as_run_uid(ident, _CHMOD_PATHS, *foreign)
+
+
+def usable_mode(mode: int, *, is_dir: bool) -> int:
+    """`mode` opened to every uid in a run directory (only that run and BOSS can enter it):
+    read+write for all, directories enterable, and EXECUTE FOR ALL WHEN ANYONE HAD IT. Never
+    drops a bit. The one formula behind open_tree and copy_tree."""
+    if is_dir:
+        return mode | 0o2777
+    return mode | 0o666 | (0o111 if mode & 0o111 else 0)
+
+
+def open_tree(root: Any) -> int:
+    """Every entry BOSS owns under `root` (node_modules included) gets `usable_mode`, so the uid
+    that runs what BOSS copied or seeded there can read, write and EXECUTE it. Symlinks are never
+    followed. Returns how many entries changed. Never raises."""
+    changed = 0
+    me = os.geteuid()
+    for dirpath, dirnames, filenames in os.walk(root, topdown=True, followlinks=False):
+        for name in ["", *dirnames, *filenames]:
+            p = os.path.join(dirpath, name) if name else dirpath
+            try:
+                st = os.lstat(p)
+            except OSError:
+                continue
+            if st.st_uid != me or stat.S_ISLNK(st.st_mode):
+                continue
+            is_dir = stat.S_ISDIR(st.st_mode)
+            if not (is_dir or stat.S_ISREG(st.st_mode)):
+                continue
+            mode = stat.S_IMODE(st.st_mode)
+            want = usable_mode(mode, is_dir=is_dir)
+            if want != mode:
+                with contextlib.suppress(OSError):
+                    os.chmod(p, want)
+                    changed += 1
+    return changed
+
+
+def copy_tree(src: Any, dst: Any, *, ignore: Optional[Callable[..., Any]] = None,
+              symlinks: bool = True, open_to_run: bool = True) -> Path:
+    """Copy a workspace (or part of one) for ANOTHER uid to run: modes are carried over
+    (shutil.copy2) and then opened with `open_tree`, so a file executable in `src` is executable
+    in `dst` for whoever runs it — the copy is BOSS's, the run's uid is "other" to it. Links are
+    kept as links (npm's relative .bin links resolve inside the copy). Raises what copytree
+    raises. `open_to_run=False` (no sandbox uid: BOSS runs it itself) only carries the modes."""
+    shutil.copytree(src, dst, dirs_exist_ok=True, symlinks=symlinks, ignore=ignore,
+                    copy_function=shutil.copy2)
+    if open_to_run:
+        open_tree(dst)
+    return Path(dst)
 
 
 def write_text(path: Any, content: str, *, encoding: str = "utf-8") -> None:

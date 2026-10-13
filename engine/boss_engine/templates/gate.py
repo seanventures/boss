@@ -251,6 +251,7 @@ def connector_smoke(manifest: Any, serve: Optional[Mapping[str, Any]], *,
         return False, tt
     if serve.get("ok") is False and not serve.get("harness"):
         tt["error"] = "the app did not start, so the connector's wiring was not checked"
+        tt["because"] = "app_serves"  # a consequence: the gate that failed is app_serves
         return False, tt
     tt["not_run"] = str(serve.get("skipped") or serve.get("not_a_service") or serve.get("source")
                         or "the app was not started")
@@ -437,23 +438,53 @@ def install_reason(install_failure: Any) -> Optional[str]:
     return f"dependencies did not install: {summary[:500]}"
 
 
-def hold_outcome(failing: Any, install_failure: Any = None) -> Optional[dict]:
+#: What to do when the app BOSS started for the serve proof did not serve.
+APP_SERVES_NEXT = ("Open the build's Checks to read the app's start log, fix what stopped it, "
+                   "then retry the build.")
+
+
+def _derived_from_app_serves(template_tests: Any) -> bool:
+    """The template_tests failure is only the consequence of the app not starting (the connector
+    smoke check had no app to probe), not a failure of its own."""
+    if not isinstance(template_tests, Mapping):
+        return False
+    return (template_tests.get("because") == "app_serves"
+            or str(template_tests.get("error") or "").startswith("the app did not start"))
+
+
+def hold_outcome(failing: Any, install_failure: Any = None, *, app_serves: Any = None,
+                 template_tests: Any = None) -> Optional[dict]:
     """{gates, reason, next_step, error} for a build whose failing gates include a template gate,
     else None. `error` is the one line a blocked build shows: why, then what to do.
 
-    When the build's own install failed (`install_failure`, recorded by the pipeline), its tests
-    never ran, so the template's could not either: the reason is the install, in npm's words, not
-    "the template's tests did not pass" (HelpDesk AI, crun_6eaa478dc33a42c6bdb7)."""
-    gates = [g for g in TEMPLATE_GATES if g in set(failing or ())]
+    THE GATE THAT FAILED, NOT ITS CONSEQUENCE. Every reason names the gate that actually failed,
+    with its first error line:
+    * the build's own install failed (`install_failure`): its tests never ran, so the template's
+      could not either — the install, in npm's words (HelpDesk AI, crun_6eaa478dc33a42c6bdb7);
+    * the app did not start (`app_serves` failing, its record given): a connector's smoke check
+      had nothing to probe — "the app did not start: tsx: Permission denied", never "the
+      template's tests did not pass" (HelpDesk AI crun_247435e17c00478483b2, whose template
+      tests had passed)."""
+    failing_set = set(failing or ())
+    gates = [g for g in TEMPLATE_GATES if g in failing_set]
     if not gates:
         return None
-    reason = "; ".join(_WHY[g] for g in gates)
+    whys = {g: _WHY[g] for g in gates}
     next_step = _NEXT[gates[0]]
     install = install_reason(install_failure)
-    if install and "template_tests" in gates:
-        rest = [_WHY[g] for g in gates if g != "template_tests"]
-        reason = "; ".join([install, *rest])
+    if install and "template_tests" in whys:
+        whys["template_tests"] = install
         next_step = INSTALL_NEXT if gates[0] == "template_tests" else next_step
+    lead: list[str] = []
+    if "app_serves" in failing_set and not install:
+        from ..services.preview_service import app_serves_headline
+
+        lead = [app_serves_headline(app_serves if isinstance(app_serves, Mapping) else None)]
+        if "template_tests" in whys and _derived_from_app_serves(template_tests):
+            whys.pop("template_tests")
+        if gates[0] == "template_tests":
+            next_step = APP_SERVES_NEXT
+    reason = "; ".join([*lead, *whys.values()])
     return {"gates": gates, "reason": reason[:1].upper() + reason[1:], "next_step": next_step,
             "error": f"Blocked: {reason}. {next_step}"}
 
@@ -465,7 +496,8 @@ def held_run(connection: Any, run_id: str) -> Optional[dict]:
 
     row = connection.execute(text(
         "SELECT q.gates_failed, r.finalize_ctx->'failing_gates' AS fctx_failing, "
-        "r.finalize_ctx->'install_failure' AS install_failure "
+        "r.finalize_ctx->'install_failure' AS install_failure, "
+        "q.evidence->'app_serves' AS app_serves, q.evidence->'template'->'template_tests' AS template_tests "
         "FROM code_task_runs r LEFT JOIN quality_gates q ON q.code_task_run_id = r.id "
         "WHERE r.id = :i ORDER BY q.created_at DESC NULLS LAST LIMIT 1"),
         {"i": run_id}).mappings().first()
@@ -475,4 +507,5 @@ def held_run(connection: Any, run_id: str) -> Optional[dict]:
     for value in (row["gates_failed"], row["fctx_failing"]):
         if isinstance(value, list):
             failing |= {str(g) for g in value}
-    return hold_outcome(failing, row["install_failure"])
+    return hold_outcome(failing, row["install_failure"], app_serves=row.get("app_serves"),
+                        template_tests=row.get("template_tests"))
