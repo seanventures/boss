@@ -475,9 +475,11 @@ _ALL_PANEL_SEATS = ("review_code", "security_check", "regression", "consistency_
 # this floor, so an advisory build whose own tests never passed shipped as "completed": the Notes
 # Lite check (crun_3a39cd19) ran four rounds, never turned its tests green, and ended
 # completed_no_pr with both gates marked advisory. A build whose tests fail is not done.
-_TEST_GATES = ("written_tests_pass", "nothing_broke")
+#: Named apart from _TEST_GATES (which decides when a repair re-authors tests): reusing the name
+#: silently replaced that set at import and stopped weak-suite gates from re-running write_tests.
+_FAIL_CLOSED_TEST_GATES = ("written_tests_pass", "nothing_broke", "coder_did_not_edit_tests")
 _ADVISORY_HARD_FLOOR = ("code_written", "app_serves", "template_tests", "no_committed_secrets",
-                        *_TEST_GATES)
+                        *_FAIL_CLOSED_TEST_GATES)
 
 # Gates no autonomy setting may ship past. `app_serves` is not a reviewer's opinion: BOSS
 # started the build's own run command and nothing answered HTTP. The Lead Triage Inbox build
@@ -485,7 +487,7 @@ _ADVISORY_HARD_FLOOR = ("code_written", "app_serves", "template_tests", "no_comm
 # ImportError on its first line — and the operator found out from a preview timeout. A build
 # whose app does not run is not done, so exhausting the repairs BLOCKS with the app's own
 # error (and the partial PR rescue keeps the work), rather than shipping with dissent.
-_NEVER_SHIP_PAST = frozenset({"app_serves", "template_tests", "no_committed_secrets", *_TEST_GATES})
+_NEVER_SHIP_PAST = frozenset({"app_serves", "template_tests", "no_committed_secrets", *_FAIL_CLOSED_TEST_GATES})
 _TEMPLATE_GATE_SET = frozenset({"template_tests", "no_committed_secrets"})
 
 # THE TEMPLATE HOLD (F2 §2.3, S2.1). A build that applies a template carries two mechanical
@@ -5790,7 +5792,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # not be satisfied by a third: the Notes Lite check spent 16 minutes on rounds 2-3 and
             # ended where it started. After one round the build stops, failing, with the tests
             # named, which is faster to act on than another loop.
-            if set(failing) & set(_TEST_GATES):
+            if set(failing) & set(_FAIL_CLOSED_TEST_GATES):
                 inrun_max = min(inrun_max, 0 if repair_attempts >= 1 else 1)
             # Test gates are convergeable too. Previously a failing test skipped this loop entirely
             # and fell through to a FULL cold re-run — discarding the warm session and re-paying for

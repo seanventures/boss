@@ -33,3 +33,12 @@ def test_the_cli_child_gets_the_cap():
     import inspect
     src = inspect.getsource(code_agent.ClaudeCodeAgent._child_env) if hasattr(code_agent, "ClaudeCodeAgent") else inspect.getsource(code_agent)
     assert 'env["MAX_THINKING_TOKENS"]' in src
+
+
+def test_the_fail_closed_list_never_replaces_the_repair_list():
+    """Both lists must exist side by side: one decides when a repair re-authors tests, the other
+    which failing gates can never ship. A merge that reused one name replaced the first."""
+    from boss_engine.services import governed_code_task_service as g
+    assert {"tests_strong_enough", "tests_written_first", "existing_tests_intact"} <= set(g._TEST_GATES)
+    assert set(g._FAIL_CLOSED_TEST_GATES) == {"written_tests_pass", "nothing_broke", "coder_did_not_edit_tests"}
+    assert set(g._FAIL_CLOSED_TEST_GATES) <= g._NEVER_SHIP_PAST
