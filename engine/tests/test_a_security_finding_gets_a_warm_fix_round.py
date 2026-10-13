@@ -22,3 +22,13 @@ def test_security_is_convergeable_and_its_findings_reach_the_implementer():
     assert "security_agent.run_role(" in block
     assert 'gates["security_clean"] = sec_verdict == "clean"' in block
     assert '"security_clean"}:\n                        break' in block
+
+
+def test_the_failed_seats_re_review_side_by_side():
+    src = inspect.getsource(g)
+    block = src[src.index("_convergeable = {"):src.index("rounds_used = max(0")]
+    assert "_reseat_pool.submit(contextvars.copy_context().run, fn)" in block
+    assert "_futures_wait(list(_reseat.values()))" in block
+    # Every seat call lives in a pooled closure, none runs inline after the wait.
+    after = block[block.index("_futures_wait(list(_reseat.values()))"):]
+    assert ".run_role(" not in after[:after.index("if not failing:")]

@@ -1264,6 +1264,12 @@ def _test_scope_clause(criteria, budget: Optional[int] = None) -> str:
         f"- At most {cap} test cases in total. One per acceptance criterion ({n} given) FIRST; "
         "then a second for the riskiest criteria; edge cases only if the budget remains. A "
         "small suite that covers what was asked: more coverage comes in a later pass.\n"
+        # A HelpDesk-lite suite passed for BOSS and failed for every reviewer: one test promoted
+        # the seeded customer to agent and never put it back, so a second run (and any other
+        # file order) failed 4 tests, and the implementer may not edit tests to fix it.
+        "- Tests are independent of order and of each other: a test that changes shared state "
+        "(a seeded user's role, a shared row) creates its own records or restores what it "
+        "changed. The suite must pass when run twice in a row against the same database.\n"
         "- Test only behaviour the task or its criteria STATE, through public interfaces (HTTP "
         "responses, exported functions, visible DOM). Never exact copy text, CSS, internal names, "
         "timing, or anything the task did not ask for.\n"
@@ -6254,15 +6260,58 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     change_block = _review_change.block()
                     impl_files = [fc.path for fc in sandbox.diff()
                                   if not _is_test_path(fc.path)] or impl_files
-                    if "code_review_passed" in failing:
-                        with _transaction(engine) as c:
-                            _phase(c, "review_code")
+                    # THE FAILED SEATS RE-REVIEW SIDE BY SIDE, as the first panel does. They read
+                    # the same delta and do not depend on each other; one after another, a
+                    # HelpDesk-lite round spent 6.5 min (07:31 -> 07:37) where the slowest seat
+                    # alone took 2.7. Each thread publishes its own run identity and stage.
+                    def _reseat_review():
                         set_llm_context(routes=_route_ids(), db_engine=engine, project_id=project_id,
                                         run_id=run_id, stage="review_code")
                         rr, _hollow = _judge_seat("review_code", lambda pre: review_agent.run_role(
                             pre + _review_prompt(title, criteria, instructions=instructions,
                                                  ui=ui_task, change=change_block),
                             review_root, read_only=True, model=review_model))
+                        return rr, _hollow
+
+                    def _reseat_consistency():
+                        set_llm_context(routes=_route_ids(), db_engine=engine, project_id=project_id,
+                                        run_id=run_id, stage="consistency_check")
+                        rc2, _hollow = _judge_seat(
+                            "consistency_check", lambda pre: consistency_agent.run_role(
+                                pre + _consistency_prompt(title, criteria, design,
+                                                          instructions=instructions,
+                                                          change=change_block),
+                                review_root, read_only=True, model=consistency_model))
+                        return rc2, _hollow
+
+                    def _reseat_security():
+                        set_llm_context(routes=_route_ids(), db_engine=engine, project_id=project_id,
+                                        run_id=run_id, stage="security_check")
+                        rs2, _hollow = _judge_seat(
+                            "security_check", lambda pre: security_agent.run_role(
+                                pre + _security_prompt(title, instructions=instructions,
+                                                       criteria=criteria, change=change_block),
+                                review_root, read_only=True, model=security_model))
+                        return rs2, _hollow
+
+                    _seat_fns = {"code_review_passed": ("review_code", _reseat_review),
+                                 "consistent": ("consistency_check", _reseat_consistency),
+                                 "security_clean": ("security_check", _reseat_security)}
+                    _wanted = [_seat_fns[gname] for gname in failing if gname in _seat_fns]
+                    if _wanted:
+                        with _transaction(engine) as c:
+                            _phase(c, _wanted[0][0] if len(_wanted) == 1 else "review_panel")
+                    _reseat_pool = ThreadPoolExecutor(max_workers=max(1, len(_wanted)))
+                    try:
+                        # Each thread runs in a copy of this context: the owner scope (Stop ends
+                        # it), the template env and the build scope travel with it.
+                        _reseat = {stage_key: _reseat_pool.submit(contextvars.copy_context().run, fn)
+                                   for stage_key, fn in _wanted}
+                        _futures_wait(list(_reseat.values()))
+                    finally:
+                        _reseat_pool.shutdown(wait=False)
+                    if "code_review_passed" in failing:
+                        rr, _hollow = _reseat["review_code"].result()
                         cost += int(rr.get("cost_usd_micros") or 0)
                         rr = _with_ci_static(rr, accumulated if use_microvm else sandbox.diff())
                         if _hollow:
@@ -6291,16 +6340,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                             "hollow": _hollow}})
                         gates["code_review_passed"] = _rev_pass
                     if "consistent" in failing:
-                        with _transaction(engine) as c:
-                            _phase(c, "consistency_check")
-                        set_llm_context(routes=_route_ids(), db_engine=engine, project_id=project_id,
-                                        run_id=run_id, stage="consistency_check")
-                        rc2, _hollow = _judge_seat(
-                            "consistency_check", lambda pre: consistency_agent.run_role(
-                                pre + _consistency_prompt(title, criteria, design,
-                                                          instructions=instructions,
-                                                          change=change_block),
-                                review_root, read_only=True, model=consistency_model))
+                        rc2, _hollow = _reseat["consistency_check"].result()
                         cost += int(rc2.get("cost_usd_micros") or 0)
                         if _hollow:
                             _hollow_seats["consistency_check"] = _hollow
@@ -6311,15 +6351,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         r6 = rc2
                         gates["consistent"] = cons_verdict not in ("drift", "hollow")
                     if "security_clean" in failing:
-                        with _transaction(engine) as c:
-                            _phase(c, "security_check")
-                        set_llm_context(routes=_route_ids(), db_engine=engine, project_id=project_id,
-                                        run_id=run_id, stage="security_check")
-                        rs2, _hollow = _judge_seat(
-                            "security_check", lambda pre: security_agent.run_role(
-                                pre + _security_prompt(title, instructions=instructions,
-                                                       criteria=criteria, change=change_block),
-                                review_root, read_only=True, model=security_model))
+                        rs2, _hollow = _reseat["security_check"].result()
                         cost += int(rs2.get("cost_usd_micros") or 0)
                         if _hollow:
                             _hollow_seats["security_check"] = _hollow

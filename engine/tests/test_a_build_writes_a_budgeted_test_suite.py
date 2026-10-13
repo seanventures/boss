@@ -32,6 +32,7 @@ def test_the_prompt_states_the_projects_budget():
         clear_llm_context()
     assert "At most 12 test cases" in clause and "BOSS counts the cases" in clause
     assert "One per acceptance criterion" in clause and "START your final reply with `TEST PLAN:`" in clause
+    assert "run twice in a row against the same database" in clause
 
 
 def test_boss_counts_cases_in_every_language(tmp_path):
