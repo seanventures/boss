@@ -128,6 +128,8 @@ _IDLE_TIMEOUT_DEFAULT = 600
 
 #: The default bound on a build agent's silent thinking per step, in tokens.
 THINKING_TOKEN_CAP_DEFAULT = 12000
+#: The bound per step for a writing stage running at low effort.
+LOW_EFFORT_THINKING_CAP = 4000
 _THINKING_CAP_ENV = "BOSS_CODE_AGENT_MAX_THINKING_TOKENS"
 
 
@@ -145,14 +147,14 @@ def thinking_token_cap() -> int:
 #: The CLI's --effort levels (claude --help, 2.1.x).
 EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
 #: Stages that WRITE (tests, code, fixes): the plan is already decided, so they run at the
-#: project's writing effort (build_effort_writing, default medium). Measured on a HelpDesk-size
+#: project's writing effort (build_effort_writing, default low). Measured on a HelpDesk-size
 #: build: ~89% of output tokens were reasoning and narration, ~11% file content.
 WRITING_STAGES = frozenset({"write_tests", "implement", "solo", "repair", "guest"})
 #: Stages that JUDGE or DESIGN: their thinking is the product, so they run at high.
 REASONING_STAGES = frozenset({"standards", "spec", "plan", "design", "review_plan",
                               "review_code", "security_check", "consistency_check",
                               "check_tests", "quality"})
-WRITING_EFFORT_DEFAULT = "medium"
+WRITING_EFFORT_DEFAULT = "low"
 REASONING_EFFORT = "high"
 
 
@@ -665,6 +667,41 @@ _WRITING_RULE = (
 )
 
 
+_SANDBOX_FACTS: dict = {}
+
+
+def sandbox_facts() -> str:
+    """WHAT THE BUILD SANDBOX HAS, read from this process's own environment (the agent runs
+    here), said up front. A HelpDesk build spent steps discovering each of these: curl missing
+    (3 failed probes), argon2 with no arm64 prebuild (node FATAL, repros in /tmp), a Node without
+    --experimental-strip-types, and Playwright's browser downloaded at run time (181 s)."""
+    if "text" in _SANDBOX_FACTS:
+        return _SANDBOX_FACTS["text"]
+    import platform
+    import shutil as _shutil
+
+    lines = []
+    try:
+        node = subprocess.run(["node", "--version"], capture_output=True, text=True,
+                              timeout=5).stdout.strip()
+    except Exception:  # noqa: BLE001 — no node: say nothing about it
+        node = ""
+    if node:
+        lines.append(f"- Node {node} with npm.")
+    lines.append("- curl is available." if _shutil.which("curl")
+                 else "- curl is NOT installed: probe HTTP with node (fetch) instead.")
+    browsers = os.environ.get("PLAYWRIGHT_BROWSERS_PATH") or ""
+    if browsers and Path(browsers).is_dir():
+        lines.append(f"- A Chromium for Playwright is preinstalled at {browsers} "
+                     "(PLAYWRIGHT_BROWSERS_PATH is set); do not download browsers.")
+    arch = {"aarch64": "arm64", "x86_64": "x64"}.get(platform.machine(), platform.machine())
+    lines.append(f"- {platform.system().lower()}-{arch}: a native npm module with no prebuilt binary for it fails to "
+                 "build here (argon2 does). Use pure-JS packages: bcryptjs for password hashing.")
+    text = "\nSANDBOX (facts, no need to check them):\n" + "\n".join(lines) + "\n"
+    _SANDBOX_FACTS["text"] = text
+    return text
+
+
 _SHARED_ROOT_HINTS = ("readme", "package.json", "pyproject", "requirements", "makefile",
                       "docker", ".gitignore", "conftest", "setup.cfg", "tsconfig")
 
@@ -864,6 +901,10 @@ class ClaudeCodeAgent:
         # BOSS_CODE_AGENT_MAX_THINKING_TOKENS=0 leaves the CLI's own default.
         cap = thinking_token_cap()
         if cap and "MAX_THINKING_TOKENS" not in env:
+            # A writing stage at low effort thinks briefly per step: ~870 thinking tokens on
+            # every one of a HelpDesk implement's 424 steps, reads and `ls` included.
+            if _current_effort() == "low":
+                cap = min(cap, LOW_EFFORT_THINKING_CAP)
             env["MAX_THINKING_TOKENS"] = str(cap)
         return env
 
@@ -1033,7 +1074,8 @@ class ClaudeCodeAgent:
             # and the whole command is then rejected before the process starts — measured on the
             # chat path as `OSError: [Errno 7] Argument list too long: 'nice'`. Over the limit
             # the prompt goes on stdin; under it, nothing changes.
-            body = (own_prompt + _PARALLEL_TOOLS_RULE + ("" if read_only else _WRITING_RULE)
+            body = (own_prompt + _PARALLEL_TOOLS_RULE
+                    + ("" if read_only else _WRITING_RULE + sandbox_facts())
                     + (sub_agent_rule(fan_out) if fan_out else ""))
             if len(body.encode("utf-8", "ignore")) > 96_000:
                 return argv, body

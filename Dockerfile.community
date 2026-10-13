@@ -132,20 +132,21 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     BOSS_RUNTIME_USER=boss
 WORKDIR /app
 
-# The official Node image supplies Node 20 and npm for coding CLIs and project
-# verification. Debian's nodejs package can lag the CLI minimum Node version.
+# The official Node image supplies Node 22 and npm for coding CLIs and project
+# verification. Debian's nodejs package can lag the CLI minimum Node version. 22, not 20: a
+# HelpDesk build lost steps to a Node without --experimental-strip-types.
 # pnpm is here too, at the web image's version: the code-task gate runs a pnpm
 # workspace's verify (BOSS's own boss.verify.yaml) in THIS image, not the web one.
-COPY --from=node:20-bookworm-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0 /usr/local/bin/node /usr/local/bin/node
-COPY --from=node:20-bookworm-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0 /usr/local/lib/node_modules /usr/local/lib/node_modules
+COPY --from=node:22-bookworm-slim@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392 /usr/local/bin/node /usr/local/bin/node
+COPY --from=node:22-bookworm-slim@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392 /usr/local/lib/node_modules /usr/local/lib/node_modules
 # Keep the Node distribution's license alongside its binary in the API/worker image.
-COPY --from=node:20-bookworm-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0 /usr/local/LICENSE /usr/local/LICENSE
+COPY --from=node:22-bookworm-slim@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392 /usr/local/LICENSE /usr/local/LICENSE
 RUN ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
     && ln -s /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
     && apt-get update \
     && apt-get install -y --no-install-recommends \
        ca-certificates git openssh-client ffmpeg libavfilter-extra fonts-dejavu-core \
-       iptables libcap2-bin \
+       iptables libcap2-bin curl \
     && addgroup --system boss \
     && adduser --system --ingroup boss --home /home/boss boss \
     && mkdir -p /home/boss/.codex /home/boss/.claude /var/lib/boss/artifacts /var/lib/boss/identity \

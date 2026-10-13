@@ -1280,6 +1280,13 @@ def _test_plan_note(qa_summary: str) -> str:
             + "\nImplement exactly what these need, and nothing the task did not ask for.\n")
 
 
+def _deferred_e2e_note() -> str:
+    """Browser tests the brief asked for go to the More tests pass (build_scope)."""
+    from .build_scope import deferred_note
+
+    return deferred_note()
+
+
 def _wants_e2e() -> bool:
     """Browser/e2e tests only when the task asked for them (build_scope)."""
     from .build_scope import wants_e2e
@@ -1307,7 +1314,7 @@ def _qa_prompt(title, instructions, criteria, test_cmd, *, iac=False, web=False,
             f"- Do NOT run anything and do NOT commit. (BOSS will run: {test_cmd}.)\n"
             "- End with a one-line summary of the cases you wrote.\n"
             + _metrics_tests_clause(title, instructions, service=True)
-            + _test_scope_clause(criteria)
+            + _test_scope_clause(criteria) + _deferred_e2e_note()
             + (_IAC_GUIDANCE + _IAC_QA_GUIDANCE if iac else "")
             + stack_note
         )
@@ -1330,7 +1337,7 @@ def _qa_prompt(title, instructions, criteria, test_cmd, *, iac=False, web=False,
             f"- Do NOT run anything and do NOT commit. (BOSS will run `{test_cmd}` inside {scope}.)\n"
             "- End with a one-line summary of the cases you wrote.\n"
             + _NO_SECRETS_IN_TESTS + _metrics_tests_clause(title, instructions, service=service)
-            + _test_scope_clause(criteria)
+            + _test_scope_clause(criteria) + _deferred_e2e_note()
             + (_IAC_GUIDANCE + _IAC_QA_GUIDANCE if iac else "")
         )
     return (
@@ -1345,7 +1352,7 @@ def _qa_prompt(title, instructions, criteria, test_cmd, *, iac=False, web=False,
         f"- Do NOT run anything and do NOT commit. (BOSS will run `{test_cmd}`.)\n"
         "- End with a one-line summary of the cases you wrote.\n"
         + _NO_SECRETS_IN_TESTS + _metrics_tests_clause(title, instructions, service=service)
-        + _test_scope_clause(criteria)
+        + _test_scope_clause(criteria) + _deferred_e2e_note()
         + (_IAC_GUIDANCE + _IAC_QA_GUIDANCE if iac else "")
     )
 
@@ -1402,6 +1409,7 @@ def _impl_prompt(title, instructions, test_files, test_cmd, *, criteria=(), iac=
         "Create parent directories for SQLite/data files before opening them.\n"
         + _run_declaration_rule()
         + "- Do NOT commit. End with a one-line summary of what you changed.\n"
+        + _deferred_e2e_note()
         + (_IAC_GUIDANCE if iac else "")
         + (design_prompts.design_impl_clause() if ui else "")  # APP-2: design axis for UI tasks
     )
@@ -1875,8 +1883,9 @@ def _solo_prompt(title, instructions, criteria, test_cmd, *, iac=False, web=Fals
             f"`{test_cmd}` will run inside {scope}.\n\n"
             "RULES:\n"
             f"- Work ONLY under {scope}. Do not edit sibling apps.\n"
-            "- Write JS/TS API and e2e tests, not Python unittest.\n"
-            f"- Run `{test_cmd}` from {scope} when a chunk of work is finished, and iterate "
+            + ("- Write JS/TS API and e2e tests, not Python unittest.\n" if _wants_e2e()
+               else "- Write JS/TS tests, not Python unittest.\n" + _deferred_e2e_note())
+            + f"- Run `{test_cmd}` from {scope} when a chunk of work is finished, and iterate "
             "until it passes. "
             "Create parent directories for SQLite/data files before opening them.\n"
             + _run_declaration_rule()

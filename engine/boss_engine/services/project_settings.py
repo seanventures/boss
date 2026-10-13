@@ -227,9 +227,9 @@ KNOBS: dict[str, dict[str, Any]] = {
     "build_effort_writing": {
         "attr": "build_effort_writing",
         "label": "Writing effort",
-        "help": "The reasoning effort for writing tests and code (and fix rounds): medium (the "
-                "default) writes the planned change without re-deliberating it; design, plan "
-                "review and reviewers always run at high.",
+        "help": "The reasoning effort for writing tests and code (and fix rounds): low (the "
+                "default) writes the planned change without re-deliberating every step; design, "
+                "plan review and reviewers always run at high.",
         "kind": "choice", "choices": ("low", "medium", "high", "xhigh", "max"),
     },
     "build_test_budget": {

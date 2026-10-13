@@ -34,7 +34,7 @@ def test_failing_tests_never_ship_even_on_an_advisory_pass():
 
 def test_a_small_app_owes_no_ops_endpoints_or_browser_suite():
     scope = build_scope.decide(*NOTES)
-    assert scope == {"ops": False, "e2e": False, "bundler": False}
+    assert scope == {"ops": False, "e2e": False, "e2e_deferred": False, "bundler": False}
     token = build_scope.set_scope(scope)
     try:
         assert "OBSERVABILITY" not in platform_standards(NOTES[1], force=True).upper()
@@ -45,10 +45,21 @@ def test_a_small_app_owes_no_ops_endpoints_or_browser_suite():
         build_scope._SCOPE.reset(token)
 
 
-def test_a_deployed_or_e2e_app_still_gets_them():
+def test_a_deployed_app_gets_ops_and_its_browser_suite_comes_in_the_next_pass():
     scope = build_scope.decide("HelpDesk AI", "React + Vite + Tailwind; test:e2e with "
                                "Playwright; expose /metrics", [])
-    assert scope == {"ops": True, "e2e": True, "bundler": True}
+    assert scope == {"ops": True, "e2e": False, "e2e_deferred": True, "bundler": True}
+    token = build_scope.set_scope(scope)
+    try:
+        assert build_scope.web_runners() == ("vite",)
+        for prompt in (g._qa_prompt("HelpDesk AI", "Playwright e2e", ["c"], "npm test", web=True,
+                                    app_root="helpdesk"),
+                       g._impl_prompt("HelpDesk AI", "Playwright e2e", ["t.test.js"], "npm test",
+                                      criteria=["c"]),
+                       g._solo_prompt("HelpDesk AI", "Playwright e2e", ["c"], "npm test", web=True)):
+            assert "BROWSER TESTS COME LATER" in prompt
+    finally:
+        build_scope._SCOPE.reset(token)
     assert build_scope.decide(*NOTES, workflow_deploys=True)["ops"] is True
     # Outside a build, nothing changes.
     assert build_scope.current() is None

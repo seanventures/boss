@@ -11,7 +11,10 @@ The rule, decided ONCE per run and read by every prompt and gate:
 - ``ops`` (the observability standard: /metrics, health, version) when the brief or criteria
   ask for it, the run belongs to a workflow that deploys or monitors, or the app declares a
   ``boss.deploy.yaml``. BOSS scrapes what it deploys, so a deployed app still gets it.
-- ``e2e`` (Playwright and its runners) when the brief or criteria ask for browser/e2e tests.
+- ``e2e`` (Playwright and its runners): NEVER in the first pass. A brief that asks for browser
+  tests gets ``e2e_deferred``: the build ships a working app with a lean suite first, and the
+  More tests pass that follows adds the browser suite (a HelpDesk build lost 181 s to a
+  browser download alone, and its e2e harness to a first pass that never finished).
 - ``bundler`` (vite as a required runner) when the brief names a bundled front end.
 
 Outside a build (no scope set) every caller keeps its previous behaviour.
@@ -41,7 +44,8 @@ def decide(title: str, instructions: str, criteria: Iterable[str] = (), *,
     text = "\n".join([title or "", instructions or "", *[str(c) for c in criteria or ()]])
     return {
         "ops": bool(workflow_deploys or has_manifest or _OPS_WORDS.search(text)),
-        "e2e": bool(_E2E_WORDS.search(text)),
+        "e2e": False,
+        "e2e_deferred": bool(_E2E_WORDS.search(text)),
         "bundler": bool(_BUNDLER_WORDS.search(text)),
     }
 
@@ -78,6 +82,22 @@ def wants_ops(default: bool) -> bool:
 def wants_e2e(default: bool = True) -> bool:
     scope = _SCOPE.get()
     return default if scope is None else bool(scope.get("e2e"))
+
+
+def e2e_deferred() -> bool:
+    """The brief asked for browser tests, and the More tests pass will write them."""
+    scope = _SCOPE.get()
+    return bool(scope and scope.get("e2e_deferred"))
+
+
+DEFERRED_E2E_NOTE = (
+    "\nBROWSER TESTS COME LATER: this pass ships the working app with a lean suite. Do NOT "
+    "write, install or run Playwright or other browser/e2e tests now, even where the task asks "
+    "for them; the More tests pass that follows adds them.\n")
+
+
+def deferred_note() -> str:
+    return DEFERRED_E2E_NOTE if e2e_deferred() else ""
 
 
 def web_runners(default: tuple[str, ...] = ("vite", "@playwright/test")) -> tuple[str, ...]:
