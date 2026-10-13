@@ -30,9 +30,27 @@ export function settingNames(s: AppSecrets | null): { deploy: string[]; other: s
   return { deploy: [...deploy].sort(), other: [...other].sort() };
 }
 
+/** Each connector once: an app that applied one twice (a retry, a new version) lists it once,
+ *  at its newest version. */
+export function distinctTemplates(applied: Applied[]): Applied[] {
+  const byKey = new Map<string, Applied>();
+  for (const a of applied) {
+    if (a.status === "abandoned") continue;
+    const k = a.key || a.name;
+    const had = byKey.get(k);
+    if (!had || (a.createdAt || "") > (had.createdAt || "")) byKey.set(k, a);
+  }
+  return [...byKey.values()];
+}
+
+/** A tile's list, short: the first few names, the rest as "+N" (all of them in the tooltip). */
+export function shortList(names: string[], shown = 3): string {
+  return names.length <= shown ? names.join(", ") : `${names.slice(0, shown).join(", ")} +${names.length - shown}`;
+}
+
 /** The context card's tiles and its Details fold; the card's header is the composer's. */
 export function AppContext({ projectId, app }: { projectId: string; app: AppRow }) {
-  const { data } = useDeploys(projectId, { app: app.app });
+  const { data, loading } = useDeploys(projectId, { app: app.app });
   const [secrets, setSecrets] = useState<AppSecrets | null>(null);
   const [secretsWhy, setSecretsWhy] = useState("");
   const [applied, setApplied] = useState<Applied[] | null>(null);
@@ -52,12 +70,15 @@ export function AppContext({ projectId, app }: { projectId: string; app: AppRow 
   const dep = currentDeploy(data?.rows ?? [], app.app);
   const names = settingNames(secrets);
   const allNames = [...names.deploy, ...names.other];
-  const templates = (applied ?? []).filter((a) => a.status !== "abandoned");
+  const templates = distinctTemplates(applied ?? []);
+  const templateWords = templates.map((t) => `${t.name}${t.version ? ` v${t.version}` : ""}`);
   const healthy = dep ? dep.phase === "live" : false;
 
+  // "Not deployed" only once the deploys have answered: while they load, it says so.
   const where = dep
     ? `${dep.word} · ${dep.env}${dep.host ? ` on ${dep.host.name}` : ""}`
-    : app.deploys.length ? `${app.deploys[0].word ?? "Deployed"} · ${app.deploys[0].env}` : "Not deployed";
+    : app.deploys.length ? `${app.deploys[0].word ?? "Deployed"} · ${app.deploys[0].env}`
+    : loading && !data ? "Loading…" : "Not deployed";
 
   return (
     <>
@@ -70,9 +91,8 @@ export function AppContext({ projectId, app }: { projectId: string; app: AppRow 
         </div>
         <div className="np-ctx-tile">
           <small title="Connectors and the starter it was built from">Connectors</small>
-          <span data-testid="np-ctx-templates" data-user-text>
-            {applied === null ? "Loading…"
-              : templates.length ? templates.map((t) => `${t.name} v${t.version}`).join(", ") : "None"}
+          <span data-testid="np-ctx-templates" data-user-text title={templateWords.join(", ") || undefined}>
+            {applied === null ? "Loading…" : templates.length ? shortList(templateWords, 2) : "None"}
           </span>
         </div>
         <div className="np-ctx-tile">
@@ -83,7 +103,7 @@ export function AppContext({ projectId, app }: { projectId: string; app: AppRow 
             {secretsWhy ? <span className="np-dim">{secretsWhy}</span>
               : !secrets ? <span className="np-dim">Loading…</span>
               : !allNames.length ? "None set"
-              : <code>{allNames.join(", ")}</code>}
+              : <code>{shortList(allNames)}</code>}
           </span>
         </div>
       </div>

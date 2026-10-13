@@ -117,7 +117,8 @@
 .np-conn-card[aria-disabled="true"] { cursor: not-allowed; opacity: 0.55; }
 .np-conn-card[aria-disabled="true"]:hover { border-color: var(--border-strong); }
 .np-conn-card[data-in-app] { opacity: 1; border-style: dashed; background: rgba(8, 12, 24, 0.35); color: var(--np-faint); }
-.np-conn-top { display: flex; justify-content: space-between; align-items: center; width: 100%; }
+.np-conn-top { display: flex; justify-content: space-between; align-items: center; gap: 8px; width: 100%; min-width: 0; }
+.np-conn-icon { flex: none; }
 .np-conn-icon {
   width: 40px; height: 40px; border-radius: 10px; display: grid; place-items: center;
   background: rgba(47, 111, 224, 0.16); color: #A5B4FC;
@@ -129,7 +130,8 @@
   border-radius: 999px; padding: 3px 10px; white-space: nowrap;
 }
 .np-conn-card[aria-pressed="true"] .np-conn-state { background: #5EEAD4; color: #04201F; border-color: transparent; }
-.np-conn-card[data-in-app] .np-conn-state { border: 0; padding: 0; }
+/* "Already in the app" is a sentence, not a pill: it wraps rather than clips in a narrow card. */
+.np-conn-card[data-in-app] .np-conn-state { border: 0; padding: 0; white-space: normal; text-align: right; min-width: 0; }
 .np-conn-card b { font-size: 0.78947rem; }
 .np-conn-line {
   font-size: 0.68421rem; line-height: 1.45; color: var(--np-faint);
@@ -144,12 +146,17 @@
 .np-more-body { display: flex; flex-direction: column; gap: 18px; margin-top: 14px; }
 
 /* Start from an idea (ideas-dialog.tsx): filter tabs and illustrated cards. */
-.np-ideas-fs { align-items: start; overflow-y: auto; }
+/* A VIEWPORT-HIGH CARD: the overlay never scrolls, the card is never taller than the screen,
+   and only .np-ideas-scroll scrolls — so the header, Close and the filters are always on screen.
+   (Two classes, so the later `.np-fs { place-items: center }` cannot centre a tall card off-screen.) */
+.np-fs.np-ideas-fs { place-items: center; overflow: hidden; }
 .np-ideas-card {
-  width: min(1120px, 100%); margin: 40px auto; border: 1px solid var(--border-strong); border-radius: 18px;
+  width: min(1120px, 100%); max-height: calc(100vh - 48px); max-height: calc(100dvh - 48px); min-height: 0;
+  border: 1px solid var(--border-strong); border-radius: 18px; overflow: hidden;
   background: #0C1529; padding: 26px 30px; display: flex; flex-direction: column; gap: 18px; box-shadow: var(--shadow-lg);
   color: var(--ink); font-family: var(--sans);
 }
+.np-ideas-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; margin: 0 -8px; padding: 2px 8px 8px; }
 .np-ideas-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
 .np-ideas-head h2 { margin: 0 0 4px; font: 700 1.15789rem var(--display); }
 .np-ideas-head .np-dim { font-size: 0.73684rem; }
@@ -351,7 +358,10 @@
 .np-who-you { color: var(--amber); }
 .np-you { font: 700 0.55263rem var(--sans); background: var(--amber); color: #2A1A00; border-radius: 999px; padding: 2px 8px; }
 
-.np-facts { display: grid; grid-template-columns: 1.45fr 1fr; gap: 10px; }
+/* One fact per row: the side card is narrow, and a repository name must not break mid-word. */
+.np-facts { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; }
+.np-layout-hint { display: flex; gap: 10px; flex-wrap: wrap; align-items: baseline; font-size: 0.65789rem; }
+.np-fact b.np-fact-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; overflow-wrap: normal; }
 .np-fact {
   border: 1px solid var(--border); border-radius: 12px; padding: 11px 12px; background: rgba(16, 26, 48, 0.55);
   display: flex; flex-direction: column; gap: 6px; min-width: 0;
@@ -449,14 +459,14 @@
   .np-body { grid-template-columns: minmax(0, 1fr); }
   .np-brief { padding: 18px 16px; }
   .np-plan { margin: 0 16px 16px; padding: 12px 14px 16px; }
-  .np-plan-toggle + .np-plan-body .np-plan-head { display: none; }
+  .np-plan-head { order: -1; }
   .np-conn-grid, .np-ctx-tiles, .np-ideas-grid { grid-template-columns: minmax(0, 1fr); }
   .np-conn-card { min-height: 0; }
   .np-ctx-head { grid-template-columns: 3rem minmax(0, 1fr); }
   .np-ctx-head .np-link { grid-column: 1 / -1; justify-self: start; min-height: 44px; }
   .np-link, .np-ideas-tabs button { min-height: 44px; }
   .np-more-detail > summary { min-height: 44px; display: flex; align-items: center; }
-  .np-ideas-card { margin: 0; border-radius: 0; padding: 16px; min-height: 100%; }
+  .np-ideas-card { border-radius: 0; padding: 16px; height: 100%; max-height: 100vh; max-height: 100dvh; gap: 12px; }
   .np-idea-art { aspect-ratio: 320 / 170; }
   .np-plan-toggle {
     display: flex; width: 100%; justify-content: space-between; align-items: center; min-height: 44px;

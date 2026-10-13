@@ -23,6 +23,10 @@ const { NewProjectComposer } = await import("../app/workflows/new-project-compos
 const { readComposeIntent } = await import("../app/url-intent");
 const { resetCatalogue } = await import("../components/v2/templates/catalogue");
 const { overBudget } = await import("./_helpers/copy-budget");
+const { parseStackSupport } = await import("../lib/templates");
+const { adapterLanguage, adapterWord } = await import("../components/v2/templates/stack-warning");
+const { distinctTemplates, shortList } = await import("../app/workflows/app-context");
+const { readFileSync } = await import("node:fs");
 
 const BRIEF = { type: "object", required: ["directive", "title"],
                 properties: { directive: { type: "string", format: "textarea" }, title: { type: "string" },
@@ -87,11 +91,15 @@ const TEMPLATES = { templates: [
 ] };
 
 /** What GET /v1/stacks says BOSS builds (services/stacks.py ADAPTERS), two of them. */
+const comp = (role: string, language: string) => ({ role, language });
 const STACK_ADAPTERS = [
   { id: "react-vite+express+postgres", label: "React + Vite, Express, PostgreSQL", support_level: "experimental",
-    languages: ["node"], ready: true },
+    languages: ["node"], components: [comp("frontend", "node"), comp("backend", "node")], ready: true },
   { id: "react-vite+fastapi+postgres", label: "React + Vite, FastAPI, PostgreSQL", support_level: "experimental",
-    languages: ["node", "python"], ready: true },
+    languages: ["node", "python"], components: [comp("frontend", "node"), comp("backend", "python")], ready: true },
+  // Java first, its React front end last: the LAST language is Node, the builder is Java.
+  { id: "java-spring", label: "Java Spring Boot (with an optional React + Vite front end)", support_level: "experimental",
+    languages: ["java", "node"], components: [comp("backend", "java"), comp("frontend", "node")], ready: true },
 ];
 
 let posts: Record<string, unknown>[] = [];
@@ -282,6 +290,122 @@ describe("Connectors and ideas (operator, 2026-10-13: there is no Template tab)"
     await click($('[data-testid="dw-new-start"]'));
     expect($('[data-testid="tpl-sheet"]')?.textContent).toContain("Change Calendar");
     expect(posts).toEqual([]);
+  });
+});
+
+// ── The independent walk's findings (fix/new-project-redesign 1c9f3ea8), each as a class ────────
+
+/** compose.css with comments removed, and its phone block. */
+const CSS = readFileSync("app/workflows/compose.css", "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+const PHONE = CSS.slice(CSS.indexOf("@media (max-width: 720px)"));
+const ruleFor = (css: string, selector: string) => {
+  const i = css.indexOf(`${selector} {`);
+  return i < 0 ? "" : css.slice(i, css.indexOf("}", i));
+};
+
+describe("the walk's findings", () => {
+  it("B1: a dialog taller than the screen never starts off it — the card is viewport-high and only its cards scroll", async () => {
+    // Two classes beat the later `.np-fs { place-items: center }`, and the overlay itself never scrolls.
+    expect(ruleFor(CSS, ".np-fs.np-ideas-fs")).toContain("overflow: hidden");
+    expect(ruleFor(CSS, ".np-ideas-card")).toMatch(/max-height: calc\(100d?vh/);
+    expect(ruleFor(CSS, ".np-ideas-scroll")).toContain("overflow-y: auto");
+    expect(ruleFor(PHONE, ".np-ideas-card")).toContain("max-height: 100dvh");
+    await mount();
+    await click($('[data-testid="np-ideas-open"]'));
+    const scroll = $('[data-testid="np-ideas-scroll"]')!;
+    // The header, Close and the filters are outside what scrolls; the cards inside it.
+    for (const sel of ["#np-ideas-h", '[data-testid="np-ideas-close"]', '[data-testid="np-ideas-tab-all"]']) {
+      expect(scroll.contains($(sel)), sel).toBe(false);
+    }
+    expect(scroll.contains($('[data-testid="np-ideas"]'))).toBe(true);
+  });
+
+  it("M2: nothing the composer needs is hidden on a phone; Change workflow sits outside the fold", async () => {
+    const hidden = [...PHONE.matchAll(/([^{}]+)\{[^}]*display:\s*none/g)].map((m) => m[1].trim());
+    // Only the keyboard hint and the plan's folded body (its toggle opens it) may vanish.
+    expect(hidden.sort()).toEqual([".np-kbd", ".np-plan:not([data-open]) .np-plan-body"]);
+    await mount();
+    const change = $('[data-testid="np-all-paths"]')!;
+    expect(change.closest(".np-plan-body")).toBeNull();
+    await click(change);                                          // it opens the fold, with the paths
+    expect($(".np-plan")?.hasAttribute("data-open")).toBe(true);
+    expect($('[data-testid="np-chooser"]')).not.toBeNull();
+  });
+
+  it("M1: a connector choice never crosses jobs or apps, and one the app has never counts", async () => {
+    await mount();
+    await click($('[data-testid="np-connector-login-oauth"]'));     // chosen for a NEW app…
+    await click($('[data-testid="np-mode-add"]'));
+    await click($('[data-testid="np-app-crun_lead2"]'));            // …which this app already carries
+    const login = $('[data-testid="np-connector-login-oauth"]')!;
+    const stripe = $('[data-testid="np-connector-stripe-checkout"]')!;
+    expect(login.getAttribute("aria-pressed")).toBe("false");
+    expect(login.textContent).toContain("Already in the app");
+    expect(stripe.getAttribute("aria-disabled")).toBeNull();       // the in-app one does not count
+    // Start starts the feature: no connector sheet.
+    await type($('[data-testid="np-gain"]'), "Let a sales rep snooze a lead until a date.");
+    await click($('[data-testid="dw-new-start"]'));
+    expect($('[data-testid="tpl-sheet"]')).toBeNull();
+    expect(posts).toHaveLength(1);
+  });
+
+  it("M1: switching app forgets the connector chosen for the last one", async () => {
+    await mount({ mode: "add", appKey: "crun_cal" });
+    await click($('[data-testid="np-connector-stripe-checkout"]'));
+    expect($('[data-testid="np-connector-stripe-checkout"]')!.getAttribute("aria-pressed")).toBe("true");
+    await click($('[data-testid="np-app-change"]'));
+    await click($('[data-testid="np-app-crun_lead2"]'));
+    expect($('[data-testid="np-connector-stripe-checkout"]')!.getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("M3: a stack is named and sent by its backend's language, never by the order of its languages", () => {
+    const { adapters } = parseStackSupport({ supported: { languages: [], adapters: STACK_ADAPTERS } });
+    const java = adapters.find((a) => a.id === "java-spring")!;
+    expect(adapterLanguage(java)).toBe("java");
+    expect(adapterWord(java)).toBe("Java Spring Boot (with an optional React + Vite front end)");
+    expect(adapterLanguage(adapters.find((a) => a.id === "react-vite+fastapi+postgres")!)).toBe("python");
+    expect(adapterWord(adapters.find((a) => a.id === "react-vite+express+postgres")!)).toBe("Node · React + Vite, Express, PostgreSQL");
+  });
+
+  it("the app card lists each connector once and keeps long lists short, the rest in a tooltip", () => {
+    const a = (key: string, version: string, createdAt: string, status = "applied") =>
+      ({ id: `${key}${version}`, templateId: "", key, name: key, version, stack: "node", status, workflowRunId: "", codeTaskRunId: "", createdAt });
+    expect(distinctTemplates([a("login", "1.0.0", "2026-10-01"), a("login", "1.1.0", "2026-10-05"), a("x", "1", "", "abandoned")])
+      .map((t) => t.version)).toEqual(["1.1.0"]);
+    expect(shortList(["A", "B", "C", "D", "E"])).toBe("A, B, C +2");
+    expect(shortList(["A", "B"])).toBe("A, B");
+  });
+
+  it("picking an idea over a typed brief offers Undo, which puts the brief and name back", async () => {
+    await mount();
+    await type($('[data-testid="dw-new-title"]'), "Desk");
+    await type($('[data-testid="dw-new-directive"]'), "My own brief, written by hand, for a support desk.");
+    await click($('[data-testid="np-ideas-open"]'));
+    await click($('[data-testid="np-idea-incident-timeline-builder"]'));
+    expect(($('[data-testid="dw-new-directive"]') as HTMLTextAreaElement).value).toMatch(/^Build an incident timeline builder/);
+    await click($('[data-testid="np-idea-undo"]'));
+    expect(($('[data-testid="dw-new-directive"]') as HTMLTextAreaElement).value).toBe("My own brief, written by hand, for a support desk.");
+    expect(($('[data-testid="dw-new-title"]') as HTMLInputElement).value).toBe("Desk");
+    expect($('[data-testid="np-idea-undo"]')).toBeNull();
+    // Over an empty brief there is nothing to undo.
+    await type($('[data-testid="dw-new-directive"]'), "");
+    await click($('[data-testid="np-ideas-open"]'));
+    await click($('[data-testid="np-idea-incident-timeline-builder"]'));
+    expect($('[data-testid="np-idea-undo"]')).toBeNull();
+  });
+
+  it("names, tooltips and placeholders say what they are", async () => {
+    await mount();
+    const plan = $('[data-testid="np-plan-agent"]')!;
+    expect(plan.getAttribute("aria-label")).toBe("Plan it with an agent");
+    expect(document.getElementById(plan.getAttribute("aria-describedby")!)?.textContent).toContain("a PRD, then the build");
+    expect($('[data-testid="dw-new-title"]')!.getAttribute("placeholder")).toBe("Your app's name");
+    expect($('[data-testid="np-team-names"]')!.getAttribute("title")).toBeTruthy();
+    const repo = $('[data-testid="np-repo-name"]')!;
+    expect(repo.classList.contains("np-fact-name")).toBe(true);
+    expect(repo.getAttribute("title")).toBe("acme/sandbox");
+    expect(ruleFor(CSS, ".np-fact b.np-fact-name")).toContain("white-space: nowrap");
+    expect(ruleFor(CSS, '.np-conn-card[data-in-app] .np-conn-state')).toContain("white-space: normal");
   });
 });
 

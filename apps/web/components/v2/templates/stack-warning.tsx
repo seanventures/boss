@@ -44,9 +44,9 @@ export function StackWarning({ state, testId = "stack-warning" }: {
   );
 }
 
-/** The language that runs the server: the last of an adapter's languages (front end first). */
+/** The language that builds the adapter (its backend's): what is said, and what is sent as `stack`. */
 export function adapterLanguage(a: StackAdapter): string {
-  return a.languages[a.languages.length - 1] ?? "";
+  return a.primary;
 }
 
 /** "Node · React + Vite, Express, PostgreSQL": the language first, unless the label says it. */

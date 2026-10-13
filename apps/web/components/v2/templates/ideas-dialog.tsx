@@ -69,21 +69,24 @@ export function IdeasDialog({ ideas, onPick, onClose }: {
                     onClick={() => setFilter(f.key)}>{f.label}</button>
           ))}
         </div>
-        <div className="np-ideas-grid" data-testid="np-ideas">
-          {shown.map((idea) => (
-            <button key={idea.title} type="button" className="np-idea" data-testid={ideaTestId(idea.title)}
-                    title={idea.brief.split("\n").slice(0, 2).join(" ")} onClick={() => onPick(idea)}>
-              <span className="np-idea-art">
-                {hasIdeaPreview(idea.title) ? <IdeaPreview title={idea.title} />
-                  : <IdeaCover idea={idea} scope="np-idea" />}
-              </span>
-              <span className="np-idea-t">
-                <small>{ideaKind(idea) === "starter" ? "Starter app" : "Team tool"}</small>
-                <b>{idea.title}</b>
-                <span>{ideaLine(idea)}</span>
-              </span>
-            </button>
-          ))}
+        {/* Only the cards scroll: the header, Close and the filters stay put, on a phone too. */}
+        <div className="np-ideas-scroll" data-testid="np-ideas-scroll">
+          <div className="np-ideas-grid" data-testid="np-ideas">
+            {shown.map((idea) => (
+              <button key={idea.title} type="button" className="np-idea" data-testid={ideaTestId(idea.title)}
+                      title={idea.brief.split("\n").slice(0, 2).join(" ")} onClick={() => onPick(idea)}>
+                <span className="np-idea-art">
+                  {hasIdeaPreview(idea.title) ? <IdeaPreview title={idea.title} />
+                    : <IdeaCover idea={idea} scope="np-idea" />}
+                </span>
+                <span className="np-idea-t">
+                  <small>{ideaKind(idea) === "starter" ? "Starter app" : "Team tool"}</small>
+                  <b>{idea.title}</b>
+                  <span>{ideaLine(idea)}</span>
+                </span>
+              </button>
+            ))}
+          </div>
         </div>
       </div>
     </div>

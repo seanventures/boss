@@ -78,10 +78,20 @@ const ICONS: Record<string, React.ComponentType<{ size?: number; "aria-hidden"?:
   "login-oauth": LockKey, "stripe-checkout": CreditCard, "paypal-checkout": PaypalLogo,
 };
 
-/** Why a card cannot be added now ("" when it can). */
+/** THE connector this build adds: the one picked, only while it is on offer here (fits the app's
+ *  stack) and new to the app. A connector the app already carries is never "selected", so it
+ *  never counts against one-per-build and Start never opens its sheet. */
+export function effectiveConnector(picked: TemplateCard | null, cards: TemplateCard[] | null,
+                                   where: { inApp: string[]; stack: string | null }): TemplateCard | null {
+  if (!picked || where.inApp.includes(picked.key)) return null;
+  return connectorsFrom(cards, where.stack).some((c) => c.key === picked.key) ? picked : null;
+}
+
+/** Why a card cannot be added now ("" when it can). `selected` counts only a connector new to
+ *  this build: one the app already has is not a choice. */
 export function connectorBlock(card: TemplateCard, selected: string | null, inApp: string[], appName = "the app"): string {
   if (inApp.includes(card.key)) return `Already in ${appName}: added in an earlier build.`;
-  if (selected && selected !== card.key) {
+  if (selected && !inApp.includes(selected) && selected !== card.key) {
     return "One connector per build for now. Add the next one with Add a feature once this build is done.";
   }
   return "";
@@ -119,8 +129,8 @@ export function ConnectorCards({ cards, stack, selected, inApp = [], appName, on
       {cards === null ? <span className="np-dim">Loading…</span> : null}
       <div className="np-conn-grid">
         {shown.map((c) => {
-          const on = selected === c.key;
           const there = inApp.includes(c.key);
+          const on = selected === c.key && !there;
           const why = connectorBlock(c, selected, inApp, appName);
           const Icon = ICONS[c.key] ?? PuzzlePiece;
           return (

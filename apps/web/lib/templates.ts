@@ -369,8 +369,17 @@ export const LEVEL_WORD: Record<string, string> = {
 export const levelWord = (l: string): string => LEVEL_WORD[l] ?? l.replace(/_/g, " ");
 
 export type StackAdapter = { id: string; label: string; level: string; ready: boolean;
-                             /** Its languages, front end first (services/stacks.py). */
-                             languages: string[] };
+                             /** Its languages, in its components' order (services/stacks.py). */
+                             languages: string[];
+                             /** THE language that builds it: its backend component's, never a guess from
+                              *  the order (java-spring lists Java first, react-vite+fastapi lists Node first). */
+                             primary: string };
+
+/** The backend component's language; with no backend (a front end only), the first language. */
+export function primaryLanguage(o: Record<string, unknown>): string {
+  const backend = arr(o.components).map(obj).find((c) => str(c.role) === "backend");
+  return str(backend?.language) || str(arr(o.languages)[0]);
+}
 
 /** What `GET /v1/stacks` (or `/v1/templates`' `stacks`) says BOSS builds: each language's support
  *  level, and the adapters with theirs. Empty when the API cannot say. */
@@ -381,7 +390,7 @@ export function parseStackSupport(body: unknown): { levels: Record<string, strin
   const adapters = arr(caps.adapters).map((a) => {
     const o = obj(a);
     return { id: str(o.id), label: str(o.label), level: str(o.support_level), ready: o.ready !== false,
-             languages: arr(o.languages).map(String) };
+             languages: arr(o.languages).map(String), primary: primaryLanguage(o) };
   }).filter((a) => a.id);
   return { levels, adapters };
 }

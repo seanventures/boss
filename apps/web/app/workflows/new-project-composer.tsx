@@ -64,7 +64,8 @@ import {
   youApproveWord, type ComposeMode, type CostHistory, type TimelineStep,
 } from "./compose-plan";
 import type { CatalogueEntry, Installed } from "../delivery-workflows-ui";
-import { ConnectorCards, useCatalogue, useIdeas, type IdeaItem } from "../../components/v2/templates/catalogue";
+import { ConnectorCards, effectiveConnector, useCatalogue, useIdeas, type IdeaItem }
+  from "../../components/v2/templates/catalogue";
 import { IdeasDialog } from "../../components/v2/templates/ideas-dialog";
 import { TemplateSheet, type ApplyTarget } from "../../components/v2/templates/template-sheet";
 import { stackLabel, templatesApi, type Applied, type TemplateCard } from "../../lib/templates";
@@ -564,17 +565,24 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
   //    an idea's "Build from its reference".
   const connectorCards = useCatalogue();
   const ideas = useIdeas();
-  const [connector, setConnector] = useState<TemplateCard | null>(null);
+  const [pickedConnector, setConnector] = useState<TemplateCard | null>(null);
   const [ideaCard, setIdeaCard] = useState<TemplateCard | null>(null);
   const [tplCard, setTplCard] = useState<{ card: TemplateCard; target: ApplyTarget;
                                            name?: string; note?: string; stack?: string } | null>(null);
   const [appStack, setAppStack] = useState<string | null>(null);
   /** What the app already carries (connectors, its starter): "Already in the app" on their cards. */
   const [appTemplates, setAppTemplates] = useState<Applied[]>([]);
+  // A CONNECTOR CHOICE BELONGS TO ONE JOB AND ONE APP: switching mode or app forgets it, and
+  // the one counted is only ever new to this build (shown on its card, fit for the app's stack).
+  useEffect(() => { setConnector(null); }, [mode, app?.key]);
+  const connector = effectiveConnector(pickedConnector, connectorCards, mode === "add"
+    ? { inApp: appTemplates.map((t) => t.key), stack: appStack } : { inApp: [], stack: null });
   /** Add a feature: the app picker, reopened by "Change app" once an app is chosen. */
   const [pickApp, setPickApp] = useState(false);
-  /** "Start from an idea ▸": the ideas dialog. */
+  /** "Start from an idea ▸": the ideas dialog; the idea picked, and what it replaced (for Undo). */
   const [ideasOpen, setIdeasOpen] = useState(false);
+  const [ideaPicked, setIdeaPicked] = useState<string | null>(null);
+  const [ideaUndo, setIdeaUndo] = useState<{ directive: string; title: string; card: TemplateCard | null } | null>(null);
   /** "More detail": who it is for, done when, read first, talks to. */
   const [moreOpen, setMoreOpen] = useState(false);
   /** A new app's stack: an adapter id, or "" for BOSS to pick from the brief. */
@@ -1151,10 +1159,22 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
   ) : null;
 
   /** Picking an idea fills the brief and the name; a starter also offers its reference. */
+  // A TYPED BRIEF IS NEVER LOST TO AN IDEA: picking one over words you wrote keeps them for Undo.
   const pickIdea = (idea: IdeaItem) => {
+    const typed = draft.directive.trim();
+    setIdeaUndo(typed && draft.directive !== idea.brief
+      ? { directive: draft.directive, title: draft.title, card: ideaCard } : null);
     setDraft((d) => ({ ...d, directive: idea.brief, title: idea.title }));
     setIdeaCard(idea.card ?? null);
+    setIdeaPicked(idea.title);
     setIdeasOpen(false);
+  };
+  const undoIdea = () => {
+    if (!ideaUndo) return;
+    setDraft((d) => ({ ...d, directive: ideaUndo.directive, title: ideaUndo.title }));
+    setIdeaCard(ideaUndo.card);
+    setIdeaUndo(null);
+    setIdeaPicked(null);
   };
 
   /** "More detail": who it is for, done when, read first, talks to. Open while any is filled. */
@@ -1189,16 +1209,22 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
                 placeholder={"A shift-swap board where staff can offer a shift they cannot work "
                   + "and colleagues can claim it, with the manager approving the swap."}
                 onFull={() => setFull("brief")} onSubmit={() => void primary()} />
-        {ideaCard ? (
+        {ideaCard || ideaUndo ? (
           <div className="np-idea-chosen" data-testid="np-idea-chosen">
-            <span className="np-dim">From the idea <b data-user-text>{ideaCard.name}</b></span>
-            <button type="button" className="np-link" data-testid="np-idea-reference"
-                    title="Build it from the starter's tested reference implementation, with its own tests as a gate"
-                    onClick={() => setTplCard({ card: ideaCard, target: { kind: "new" }, name: draft.title,
-                                                note: directiveOut,
-                                                stack: stackAdapter ? adapterLanguage(stackAdapter) : undefined })}>
-              Build from its reference ↗
-            </button>
+            <span className="np-dim">From the idea <b data-user-text>{ideaCard?.name ?? ideaPicked}</b></span>
+            {ideaUndo ? (
+              <button type="button" className="np-link" data-testid="np-idea-undo"
+                      title="Put back the brief and name you had typed" onClick={undoIdea}>Undo</button>
+            ) : null}
+            {ideaCard ? (
+              <button type="button" className="np-link" data-testid="np-idea-reference"
+                      title="Build it from the starter's tested reference implementation, with its own tests as a gate"
+                      onClick={() => setTplCard({ card: ideaCard, target: { kind: "new" }, name: draft.title,
+                                                  note: directiveOut,
+                                                  stack: stackAdapter ? adapterLanguage(stackAdapter) : undefined })}>
+                Build from its reference ↗
+              </button>
+            ) : null}
           </div>
         ) : null}
       </div>
@@ -1206,7 +1232,7 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
         <div>
           <div className="np-lbl"><label htmlFor="dw-new-title">Name</label> <em>optional</em></div>
           <input id="dw-new-title" className="input np-line" value={draft.title} data-testid="dw-new-title"
-                 placeholder="Shift swap board" onChange={(e) => set("title", e.target.value)} />
+                 placeholder="Your app's name" onChange={(e) => set("title", e.target.value)} />
         </div>
         <div>
           <div className="np-lbl"><label htmlFor="np-stack">Stack</label></div>
@@ -1398,7 +1424,8 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
             <span key={k} className="np-face" title={nameOf(k).name}><AgentAvatar agent={k} size={26} /></span>
           ))}
         </span>
-        <b className="np-team-names">{crewNamed ? "The crew that built it" : teamNames || "Chosen when it starts"}</b>
+        <b className="np-team-names" data-testid="np-team-names"
+           title={faces.length ? faces.map((k) => nameOf(k).name).join(", ") : "Chosen when it starts"}>{crewNamed ? "The crew that built it" : teamNames || "Chosen when it starts"}</b>
         {!crewNamed && teamMore ? <span className="np-team-more">{teamMore}</span> : null}
       </div>
     </div>
@@ -1415,8 +1442,9 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
               onClick={manageGate.guard(() => void chooseLayout("several"))}>Several repos{manageGate.sr}</button>
     </span>
   ) : (
-    <span className="mr-map-hint" data-testid="np-layout-hint">
-      Several repos needs two or more in this project ·{" "}
+    <span className="mr-map-hint np-layout-hint" data-testid="np-layout-hint"
+          title="Several repos needs two or more repositories in this project">
+      <span>One repo here</span>
       <a className="mr-ui-link" href={consoleHref(typeof window !== "undefined" ? window.location.search : "",
                                                   MULTIREPO_PLACES.projectRepos)}>Add repositories</a>
     </span>
@@ -1469,7 +1497,8 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
       <small>Repository<button type="button" className="np-fact-act" aria-expanded={editRepo}
                              data-testid="np-repo-change" onClick={() => setEditRepo((v) => !v)}>
         {editRepo ? "Done" : "Change"}</button></small>
-      <b data-user-text>{draft.repository || suggested?.name
+      <b data-user-text className="np-fact-name" data-testid="np-repo-name"
+         title={draft.repository || suggested?.name || undefined}>{draft.repository || suggested?.name
           || (repoHint.needsConnection ? "No repository yet" : "The project default")}
         <span className="np-dim"> · {(repos.find((r) => r.full_name === (draft.repository || suggested?.name))
           ?.default_branch) || "main"}</span></b>
@@ -1578,14 +1607,16 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
               data-testid="np-plan-toggle" onClick={() => setPlanOpen((v) => !v)}>
         <span>{summary}</span><span aria-hidden>{planOpen ? "⌃" : "⌄"}</span>
       </button>
+      {/* OUTSIDE the fold: on a phone the body folds to its summary, and Change workflow must
+          still be one tap away (it opens the fold with the paths in it). */}
+      <div className="np-plan-head">
+        <h3>How it&apos;s built</h3>
+        <button type="button" className="np-link" aria-expanded={allPaths} data-testid="np-all-paths"
+                onClick={() => { setAllPaths((v) => !v); setPlanOpen(true); }}>
+          {allPaths ? "Done" : "Change workflow"}
+        </button>
+      </div>
       <div className="np-plan-body">
-        <div className="np-plan-head">
-          <h3>How it&apos;s built</h3>
-          <button type="button" className="np-link" aria-expanded={allPaths} data-testid="np-all-paths"
-                  onClick={() => setAllPaths((v) => !v)}>
-            {allPaths ? "Done" : "Change workflow"}
-          </button>
-        </div>
         <div className="np-flow" data-testid="np-flow" title={String(entry?.description || chosen?.description || "")}>
           <b data-user-text>{currentName}</b>
           <span>{adding && app ? `Builds on ${app.app}'s branch · ` : ""}{currentFacts.sub} · {currentFacts.gates}</span>
@@ -1628,10 +1659,14 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
           {/* NOT THE DEFAULT, STILL HERE: talk it through with the planner first (a PRD, then the
               build). Every "New build" door opens this composer; this is its agent route. */}
           {!formOnly ? (
-            <GatedButton permission="meeting:convene" type="button" className="np-link np-plan-agent" data-testid="np-plan-agent"
-                         title="Talk it through first: a PRD, then the build" onClick={() => openPlan("pm", { from: "composer" })}>
-              Plan it with an agent
-            </GatedButton>
+            <>
+              <GatedButton permission="meeting:convene" type="button" className="np-link np-plan-agent" data-testid="np-plan-agent"
+                           aria-label="Plan it with an agent" aria-describedby="np-plan-agent-why"
+                           title="Talk it through first: a PRD, then the build" onClick={() => openPlan("pm", { from: "composer" })}>
+                Plan it with an agent
+              </GatedButton>
+              <span id="np-plan-agent-why" hidden>Talk it through first: a PRD, then the build</span>
+            </>
           ) : null}
           {onCancel ? (
             <button type="button" className="np-link" data-testid="np-cancel" onClick={onCancel}>Cancel</button>
