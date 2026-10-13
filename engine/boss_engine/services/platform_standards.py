@@ -293,7 +293,11 @@ def platform_standards(instructions: str = "", *, force: bool = False) -> str:
     Returning an empty string matters: appending an empty heading to every prompt trains agents
     to skim past the section, and a standard nobody reads is not a standard.
     """
-    service = bool(force or applies_to(instructions))
+    from .build_scope import wants_ops
+
+    # Inside a build, build_scope decides (ops only when asked for or deployed); outside one,
+    # the old prose-and-force rule stands.
+    service = wants_ops(bool(force or applies_to(instructions)))
     mandated = _mandated_block(service=service)
     if not service:
         # A library still gets rules explicitly scoped to 'all' — an org-wide licence header,
