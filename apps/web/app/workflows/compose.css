@@ -40,8 +40,8 @@
   outline: 2px solid var(--teal); outline-offset: 2px;
 }
 
-.np-body { display: grid; grid-template-columns: minmax(0, 1.08fr) minmax(0, 0.92fr); }
-.np-brief { padding: 24px 26px 26px; display: flex; flex-direction: column; gap: 20px; border-right: 1px solid var(--border); min-width: 0; }
+.np-body { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr); gap: 0 4px; }
+.np-brief { padding: 24px 26px 26px; display: flex; flex-direction: column; gap: 22px; min-width: 0; }
 
 .np-lbl {
   font: 600 0.68421rem var(--sans); color: var(--ink);
@@ -70,14 +70,124 @@
                               transparent 70%, #4A5D88 70%, #4A5D88 80%, transparent 80%);
 }
 .np-full {
-  position: absolute; right: 10px; top: -34px; font: 600 0.63158rem var(--sans); color: var(--muted);
+  position: absolute; left: 10px; bottom: 8px; font: 600 0.63158rem var(--sans); color: var(--muted);
   border: 1px solid var(--border-strong); border-radius: 7px; padding: 3px 9px;
   background: rgba(16, 26, 48, 0.8); cursor: pointer;
 }
 .np-full:hover { color: var(--ink); }
+/* The box's foot (Full screen, drag to resize) sits on its own strip: long text scrolls under it. */
+.np-big-wrap::after {
+  content: ""; position: absolute; left: 1px; right: 1px; bottom: 1px; height: 36px; pointer-events: none;
+  border-radius: 0 0 13px 13px; background: #0B1225;
+}
+.np-grip, .np-full { z-index: 1; }
 
-.np-ideas, .np-kinds { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; align-items: center; }
-.np-ideas small { color: var(--np-faint); font-size: 0.65789rem; margin-right: 4px; }
+.np-kinds { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.np-link {
+  color: var(--teal); font: 600 0.71053rem var(--sans); background: none; border: 0; cursor: pointer;
+  padding: 4px 2px; white-space: nowrap;
+}
+.np-link:hover { text-decoration: underline; }
+.np-lbl-row { display: flex; align-items: center; gap: 6px; }
+.np-lbl-row .np-link { letter-spacing: 0; text-transform: none; }
+.np-idea-chosen { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 8px; font-size: 0.68421rem; }
+.np-idea-chosen b { color: var(--ink-soft); }
+.np .np-stack {
+  width: 100%; cursor: pointer; appearance: none; padding-right: 36px;
+  background-image: linear-gradient(45deg, transparent 50%, var(--np-faint) 50%), linear-gradient(135deg, var(--np-faint) 50%, transparent 50%);
+  background-position: calc(100% - 20px) 50%, calc(100% - 14px) 50%; background-size: 6px 6px; background-repeat: no-repeat;
+}
+
+/* Connectors as cards (catalogue.tsx ConnectorCards). */
+.np-conn { display: flex; flex-direction: column; gap: 10px; }
+.np-conn-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.np-conn-head h3 { margin: 0; font: 600 0.78947rem var(--sans); }
+.np-conn-head .np-dim { font-size: 0.68421rem; }
+.np-conn-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.np-conn-card {
+  text-align: left; color: inherit; font-family: var(--sans); cursor: pointer;
+  border: 1px solid var(--border-strong); border-radius: 14px; padding: 14px; min-height: 140px;
+  background: rgba(16, 26, 48, 0.6); display: flex; flex-direction: column; gap: 8px; min-width: 0;
+  transition: border-color 0.2s;
+}
+.np-conn-card:hover { border-color: #3B5590; }
+.np-conn-card[aria-pressed="true"] {
+  border: 2px solid var(--teal); padding: 13px; background: linear-gradient(160deg, rgba(46, 197, 197, 0.16), rgba(16, 26, 48, 0.6));
+}
+.np-conn-card[aria-disabled="true"] { cursor: not-allowed; opacity: 0.55; }
+.np-conn-card[aria-disabled="true"]:hover { border-color: var(--border-strong); }
+.np-conn-card[data-in-app] { opacity: 1; border-style: dashed; background: rgba(8, 12, 24, 0.35); color: var(--np-faint); }
+.np-conn-top { display: flex; justify-content: space-between; align-items: center; gap: 8px; width: 100%; min-width: 0; }
+.np-conn-icon { flex: none; }
+.np-conn-icon {
+  width: 40px; height: 40px; border-radius: 10px; display: grid; place-items: center;
+  background: rgba(47, 111, 224, 0.16); color: #A5B4FC;
+}
+.np-conn-card[aria-pressed="true"] .np-conn-icon { background: rgba(46, 197, 197, 0.2); color: var(--teal); }
+.np-conn-card[data-in-app] .np-conn-icon { background: rgba(255, 255, 255, 0.04); color: var(--np-faint); }
+.np-conn-state {
+  font: 600 0.63158rem var(--sans); color: var(--np-faint); border: 1px solid var(--border-strong);
+  border-radius: 999px; padding: 3px 10px; white-space: nowrap;
+}
+.np-conn-card[aria-pressed="true"] .np-conn-state { background: #5EEAD4; color: #04201F; border-color: transparent; }
+/* "Already in the app" is a sentence, not a pill: it wraps rather than clips in a narrow card. */
+.np-conn-card[data-in-app] .np-conn-state { border: 0; padding: 0; white-space: normal; text-align: right; min-width: 0; }
+.np-conn-card b { font-size: 0.78947rem; }
+.np-conn-line {
+  font-size: 0.68421rem; line-height: 1.45; color: var(--np-faint);
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+}
+.np-conn-note { font-size: 0.63158rem; color: var(--np-faint); }
+
+/* "More detail": the optional fields, folded. */
+.np-more-detail { border: 1px solid var(--border); border-radius: 12px; background: rgba(16, 26, 48, 0.35); padding: 12px 16px; }
+.np-more-detail > summary { cursor: pointer; font: 600 0.78947rem var(--sans); min-height: 24px; }
+.np-more-detail > summary em { font: 500 0.68421rem var(--sans); font-style: normal; color: var(--np-faint); margin-left: 6px; }
+.np-more-body { display: flex; flex-direction: column; gap: 18px; margin-top: 14px; }
+
+/* Start from an idea (ideas-dialog.tsx): filter tabs and illustrated cards. */
+/* A VIEWPORT-HIGH CARD: the overlay never scrolls, the card is never taller than the screen,
+   and only .np-ideas-scroll scrolls — so the header, Close and the filters are always on screen.
+   (Two classes, so the later `.np-fs { place-items: center }` cannot centre a tall card off-screen.) */
+.np-fs.np-ideas-fs { place-items: center; overflow: hidden; }
+.np-ideas-card {
+  width: min(1120px, 100%); max-height: calc(100vh - 48px); max-height: calc(100dvh - 48px); min-height: 0;
+  border: 1px solid var(--border-strong); border-radius: 18px; overflow: hidden;
+  background: #0C1529; padding: 26px 30px; display: flex; flex-direction: column; gap: 18px; box-shadow: var(--shadow-lg);
+  color: var(--ink); font-family: var(--sans);
+}
+.np-ideas-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; margin: 0 -8px; padding: 2px 8px 8px; }
+.np-ideas-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.np-ideas-head h2 { margin: 0 0 4px; font: 700 1.15789rem var(--display); }
+.np-ideas-head .np-dim { font-size: 0.73684rem; }
+.np-ideas-tabs { display: flex; gap: 8px; flex-wrap: wrap; }
+.np-ideas-tabs button {
+  font: 500 0.71053rem var(--sans); color: var(--muted); background: rgba(16, 26, 48, 0.6);
+  border: 1px solid var(--border-strong); border-radius: 999px; padding: 6px 14px; cursor: pointer;
+}
+.np-ideas-tabs button[aria-selected="true"] { background: #5EEAD4; color: #04201F; border-color: transparent; font-weight: 600; }
+.np-ideas-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.np-idea {
+  text-align: left; color: inherit; font-family: var(--sans); cursor: pointer; padding: 0; overflow: hidden;
+  border: 1px solid var(--border-strong); border-radius: 14px; background: rgba(16, 26, 48, 0.6);
+  display: flex; flex-direction: column; transition: border-color 0.2s, transform 0.2s;
+}
+.np-idea:hover, .np-idea:focus-visible { border-color: var(--teal); transform: translateY(-2px); }
+.np-idea-art {
+  position: relative; overflow: hidden; display: block; aspect-ratio: 320 / 190; background: #070C16;
+  border-bottom: 1px solid var(--border); padding: 12px;
+}
+.np-idea-art .askboss-idea-shot { opacity: 1; }
+.np-idea-art svg { width: 100%; height: 100%; display: block; }
+.ip-svg text { font-family: var(--sans); }
+.ip-svg text.ip-mono { font-family: var(--mono); }
+.np-idea-t { display: flex; flex-direction: column; gap: 5px; padding: 12px 16px 16px; }
+.np-idea-t small { font: 600 0.57895rem var(--sans); letter-spacing: 0.06em; text-transform: uppercase; color: var(--teal); }
+.np-idea-t b { font-size: 0.84211rem; }
+.np-idea-t span {
+  font-size: 0.68421rem; line-height: 1.45; color: var(--np-faint);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
 .np-pill {
   font: 500 0.65789rem var(--sans); border: 1px solid var(--border-strong); border-radius: 999px;
   padding: 4px 11px; color: var(--muted); background: rgba(22, 33, 60, 0.5); cursor: pointer;
@@ -158,8 +268,43 @@
 .np-empty { grid-column: 1 / -1; color: var(--np-faint); font-size: 0.68421rem; padding: 10px 0; }
 
 /* the plan */
-.np-plan { padding: 24px 24px 22px; background: rgba(8, 12, 24, 0.35); min-width: 0; }
-.np-plan-body { display: flex; flex-direction: column; gap: 18px; }
+/* "How it's built": a card beside the brief, Start at its foot (approved mockup, 2026-10-13). */
+.np-plan {
+  margin: 24px 26px 26px 0; padding: 20px; border: 1px solid var(--border-strong); border-radius: 16px;
+  background: rgba(8, 12, 24, 0.35); min-width: 0; align-self: start; display: flex; flex-direction: column; gap: 16px;
+}
+.np-plan-body { display: flex; flex-direction: column; gap: 16px; }
+.np-plan-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+.np-plan-head h3 { margin: 0; font: 600 0.78947rem var(--sans); }
+.np-flow {
+  display: flex; flex-direction: column; gap: 4px; border: 1px solid rgba(94, 234, 212, 0.35); border-radius: 12px;
+  padding: 12px 14px; background: linear-gradient(160deg, rgba(46, 197, 197, 0.10), rgba(16, 26, 48, 0.55));
+}
+.np-flow b { font-size: 0.84211rem; }
+.np-flow span { font-size: 0.68421rem; color: var(--np-faint); }
+.np-chooser { display: flex; flex-direction: column; gap: 10px; padding-top: 8px; }
+.np-chooser .np-choices { margin-top: 0; }
+.np-chooser .np-paths { grid-template-columns: repeat(2, minmax(0, 1fr)); row-gap: 14px; }
+.np-chooser .np-paths[data-n] { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+/* The app being changed (Add a feature): header, then the tiles (app-context.tsx). */
+.np-ctx-card {
+  border: 1px solid var(--border-strong); border-radius: 16px; padding: 16px 18px; background: rgba(16, 26, 48, 0.55);
+  display: flex; flex-direction: column; gap: 12px;
+}
+.np-ctx-head { display: grid; grid-template-columns: 4.2rem minmax(0, 1fr) auto; gap: 14px; align-items: center; }
+.np-ctx-head .np-art { height: 48px; border-radius: 10px; }
+.np-ctx-name { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.np-ctx-name h3 { margin: 0; font: 700 0.94737rem var(--sans); }
+.np-ctx-name > span { font-size: 0.68421rem; color: var(--np-faint); overflow-wrap: anywhere; }
+.np-ctx-name .np-keep { color: var(--green); }
+.np-ctx-tiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.np-ctx-tile { background: rgba(8, 12, 24, 0.45); border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.np-ctx-tile small { font: 600 0.57895rem var(--sans); letter-spacing: 0.06em; text-transform: uppercase; color: var(--np-faint); }
+.np-ctx-tile > span { font-size: 0.71053rem; overflow-wrap: anywhere; }
+.np-ctx-tile code { font: 500 0.65789rem var(--mono); }
+.np-ctx-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--np-faint); margin-right: 6px; vertical-align: 1px; }
+.np-ctx-dot[data-ok] { background: var(--green); box-shadow: 0 0 6px rgba(52, 211, 153, 0.7); }
 .np-plan-toggle { display: none; }
 .np-paths { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
 .np-paths[data-n="4"] { grid-template-columns: repeat(4, minmax(0, 1fr)); }
@@ -213,7 +358,10 @@
 .np-who-you { color: var(--amber); }
 .np-you { font: 700 0.55263rem var(--sans); background: var(--amber); color: #2A1A00; border-radius: 999px; padding: 2px 8px; }
 
-.np-facts { display: grid; grid-template-columns: 1.45fr 1fr; gap: 10px; }
+/* One fact per row: the side card is narrow, and a repository name must not break mid-word. */
+.np-facts { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; }
+.np-layout-hint { display: flex; gap: 10px; flex-wrap: wrap; align-items: baseline; font-size: 0.65789rem; }
+.np-fact b.np-fact-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; overflow-wrap: normal; }
 .np-fact {
   border: 1px solid var(--border); border-radius: 12px; padding: 11px 12px; background: rgba(16, 26, 48, 0.55);
   display: flex; flex-direction: column; gap: 6px; min-width: 0;
@@ -239,19 +387,8 @@
 }
 .np-ready [data-missing] i { background: var(--amber); box-shadow: 0 0 6px rgba(245, 181, 68, 0.7); }
 
-.np-base {
-  border: 1px solid rgba(94, 234, 212, 0.28); border-radius: 14px; padding: 12px 14px;
-  background: linear-gradient(160deg, rgba(46, 197, 197, 0.09), rgba(16, 26, 48, 0.5));
-  display: grid; grid-template-columns: 3.78947rem minmax(0, 1fr); gap: 12px; align-items: center;
-}
-.np-base .np-art { height: 52px; border-radius: 9px; }
-.np-base b { font-size: 0.76316rem; }
-.np-base span span { display: block; font-size: 0.65789rem; color: var(--np-faint); margin-top: 2px; }
-.np-base .np-keep { color: var(--green); }
-.np-base-empty { display: block; color: var(--np-faint); font-size: 0.68421rem; }
-
-/* What the feature builds onto: one summary line, the detail behind it (app-context.tsx). */
-.np-ctx { margin-top: 8px; border: 1px solid var(--border); border-radius: 12px; padding: 8px 12px; font-size: 0.65789rem; }
+/* The context card's Details fold (app-context.tsx). */
+.np-ctx { border-top: 1px solid var(--border); padding-top: 8px; font-size: 0.65789rem; }
 .np-ctx > summary { cursor: pointer; display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; color: var(--ink-soft); }
 .np-ctx-open { margin-left: auto; color: var(--teal, #5eead4); white-space: nowrap; }
 .np-ctx-grid { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 12px; margin: 8px 0 2px; }
@@ -264,16 +401,15 @@
 .np-proposal-note { white-space: pre-wrap; font: 500 0.65789rem/1.5 var(--mono); color: var(--ink-soft); margin: 8px 0; max-height: 220px; overflow: auto; }
 .np-ask { color: var(--amber); font-size: 0.71053rem; margin: 0; }
 
-/* footer */
-.np-foot {
-  display: flex; align-items: center; gap: 14px; padding: 16px 26px; border-top: 1px solid var(--border);
-  background: rgba(8, 12, 24, 0.5); flex-wrap: wrap;
-}
-.np-cost { font-size: 0.68421rem; color: var(--np-faint); display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+/* Start, at the foot of "How it's built" */
+.np-foot { display: flex; flex-direction: column; gap: 10px; padding-top: 14px; border-top: 1px solid var(--border); }
+.np-cost { font-size: 0.65789rem; color: var(--np-faint); display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .np-cost b { color: var(--ink-soft); }
-.np-go { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; min-width: 0; }
-.np-actions { display: flex; gap: 14px; flex-wrap: nowrap; }
-.np-blocked { font-size: 0.65789rem; color: var(--amber); max-width: 460px; text-align: right; }
+.np-chip { border: 1px solid var(--border-strong); border-radius: 999px; padding: 3px 10px; }
+.np-actions { display: flex; gap: 18px; justify-content: center; flex-wrap: wrap; }
+.np-blocked { font-size: 0.65789rem; color: var(--amber); }
+.np-start { width: 100%; justify-content: center; font-size: 0.84211rem; min-height: 48px; }
+.np-deploy-note { font-size: 0.65789rem; color: var(--np-faint); text-align: center; }
 .np-anchor { display: block; margin-top: 4px; font-size: 0.65789rem; color: var(--teal); }
 .np-timeline li.np-merge .np-dot { font-size: 0.5rem; letter-spacing: .02em; }
 .np-btn {
@@ -308,6 +444,11 @@
   .np-path:hover, .np-app:hover { transform: none; }
 }
 
+/* A NARROW DESKTOP: the brief keeps its width; the side cards go to two across. */
+@media (max-width: 1180px) {
+  .np-conn-grid, .np-ideas-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
 /* A PHONE: the panes stack, the plan folds to its one-line summary, every target ≥44px. */
 @media (max-width: 720px) {
   .np { border-radius: 14px; }
@@ -316,8 +457,17 @@
   .np-head h2 { font-size: 1.05263rem; }
   .np-mode button { flex: 1; justify-content: center; min-height: 44px; padding: 8px 6px; font-size: 0.68421rem; }
   .np-body { grid-template-columns: minmax(0, 1fr); }
-  .np-brief { padding: 18px 16px; border-right: 0; border-bottom: 1px solid var(--border); }
-  .np-plan { padding: 12px 16px 16px; }
+  .np-brief { padding: 18px 16px; }
+  .np-plan { margin: 0 16px 16px; padding: 12px 14px 16px; }
+  .np-plan-head { order: -1; }
+  .np-conn-grid, .np-ctx-tiles, .np-ideas-grid { grid-template-columns: minmax(0, 1fr); }
+  .np-conn-card { min-height: 0; }
+  .np-ctx-head { grid-template-columns: 3rem minmax(0, 1fr); }
+  .np-ctx-head .np-link { grid-column: 1 / -1; justify-self: start; min-height: 44px; }
+  .np-link, .np-ideas-tabs button { min-height: 44px; }
+  .np-more-detail > summary { min-height: 44px; display: flex; align-items: center; }
+  .np-ideas-card { border-radius: 0; padding: 16px; height: 100%; max-height: 100vh; max-height: 100dvh; gap: 12px; }
+  .np-idea-art { aspect-ratio: 320 / 170; }
   .np-plan-toggle {
     display: flex; width: 100%; justify-content: space-between; align-items: center; min-height: 44px;
     background: rgba(16, 26, 48, 0.6); border: 1px solid var(--border-strong); border-radius: 12px;
@@ -334,16 +484,9 @@
   .np-rm, .np-x { min-width: 44px; min-height: 44px; }
   .np-check-text { min-height: 36px; }
   .np .np-line, .np .input { min-height: 44px; }
-  .np-full { top: -50px; min-height: 44px; }
+  .np-full { min-height: 36px; }
   .np-lbl { min-height: 44px; margin-bottom: 4px; }
-  .np .np-big { min-height: 160px; font-size: 0.84211rem; }
-  .np-foot { padding: 12px 16px; background: var(--surface); }
-  .np-foot .np-spacer { display: none; }
-  .np-foot .np-cost { width: 100%; }
-  .np-go { width: 100%; align-items: stretch; }
-  .np-blocked { text-align: left; max-width: none; }
-  .np-actions { width: 100%; }
-  .np-btn { flex: 1; }
+  .np .np-big { min-height: 160px; font-size: 0.84211rem; padding-bottom: 50px; }
   .np { overflow: visible; }
   .np-primary { justify-content: center; }
   .np-kbd { display: none; }

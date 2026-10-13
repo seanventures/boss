@@ -337,6 +337,10 @@ describe("a new app", () => {
     await mount();
     expect($('[data-testid="dw-new-project"]')?.dataset.mode).toBe("new");
     expect($('[data-testid="np-mode-new"]')?.getAttribute("aria-checked")).toBe("true");
+    // "How it's built" shows the one workflow; "Change workflow" opens the paths.
+    expect($('[data-testid="np-chooser"]')).toBeNull();
+    expect($('[data-testid="np-flow"]')?.textContent).toContain("10 steps");
+    await click($('[data-testid="np-all-paths"]'));
     expect($('[data-testid="np-path-standard_product_delivery"]')?.getAttribute("aria-checked")).toBe("true");
     expect($('[data-testid="np-path-standard_product_delivery"]')?.textContent).toContain("Recommended");
     expect(steps().map((s) => s.id).filter((id) => !id!.startsWith("merge-")))
@@ -351,14 +355,15 @@ describe("a new app", () => {
     expect($('[data-testid="np-ready"]')?.textContent).toContain("Models ready");
     // No history: no price is guessed.
     expect($('[data-testid="np-cost"]')?.textContent).not.toContain("cost");
-    expect($('[data-testid="np-cost"]')?.textContent).toContain("10 steps · you approve 2 times · nothing deploys without you");
+    expect($('[data-testid="np-cost"]')?.textContent).toContain("10 steps · you approve 2 times");
+    expect($('[data-testid="np-deploy-note"]')?.textContent).toBe("Nothing deploys without your approval.");
   });
 
   it("switching path redraws the plan; All workflows offers the rest", async () => {
     await mount();
+    await click($('[data-testid="np-all-paths"]'));
     await click($('[data-testid="np-path-fast_fix"]'));
     expect(steps().map((s) => s.id)).toEqual(["build", "merge-build", "report", "deploy", "notify"]);
-    await click($('[data-testid="np-all-paths"]'));
     expect($('[data-testid="dw-new-workflow-default"]')).not.toBeNull();
     await click($('[data-testid="dw-new-workflow-major_feature"]'));
     expect($('[data-testid="np-path-major_feature"]')?.getAttribute("aria-checked")).toBe("true");
@@ -368,7 +373,9 @@ describe("a new app", () => {
     costs = { standard_product_delivery: { runs: 5, low_usd: 4, high_usd: 7, metered: true } };
     await mount();
     expect($('[data-testid="np-cost"]')?.textContent).toContain("Builds like this cost $4–$7");
-    await click($('[data-testid="np-idea-incident-timeline-builder"]'));
+    await click($('[data-testid="np-ideas-open"]'));
+    await click(document.querySelector('[data-testid="np-idea-incident-timeline-builder"]'));
+    expect(document.querySelector('[data-testid="np-ideas-dialog"]')).toBeNull();
     expect(($('[data-testid="dw-new-directive"]') as HTMLTextAreaElement).value).toMatch(/^Build an incident timeline builder/);
     await click($('[data-testid="dw-new-criterion-add"]'));
     await type($('[data-testid="dw-new-criterion-0"]'), "A real log produces all four milestones");
@@ -415,9 +422,10 @@ describe("adding a feature to an app that exists", () => {
     await settle(); await settle();
     const ctx = $('[data-testid="np-app-context"]');
     expect(ctx).not.toBeNull();
-    expect($('[data-testid="np-app-context-summary"]')!.textContent).toContain("Live · staging on box-1");
-    // DEMO_PASSWORD and ALLOW_DEMO_SEED, plus the generated SESSION_SECRET.
-    expect($('[data-testid="np-app-context-summary"]')!.textContent).toContain("3 deploy settings");
+    expect($('[data-testid="np-ctx-live"]')!.textContent).toContain("Live · staging on box-1");
+    // DEMO_PASSWORD and ALLOW_DEMO_SEED, plus the generated SESSION_SECRET: by name, never a value.
+    expect($('[data-testid="np-ctx-settings"]')!.textContent).toContain("ALLOW_DEMO_SEED");
+    expect($('[data-testid="np-ctx-settings"]')!.textContent).toContain("SESSION_SECRET");
     expect($('[data-testid="np-app-context-open"]')?.getAttribute("href")).toBe("http://box-1:8000");
     expect($('[data-testid="np-ctx-deploy"]')!.textContent).toContain("Health check passed");
     expect($('[data-testid="np-ctx-settings"]')!.textContent).toContain("DEMO_PASSWORD");
@@ -427,7 +435,12 @@ describe("adding a feature to an app that exists", () => {
 
   it("a link's app is chosen; the plan says what it builds on and how it lands", async () => {
     await mount({ mode: "add", appKey: "crun_lead1" });
+    // The chosen app is a card; the picker comes back with "Change app".
+    expect($('[data-testid="np-apps"]')).toBeNull();
+    await click($('[data-testid="np-app-change"]'));
     expect($('[data-testid="np-app-crun_lead2"]')?.getAttribute("aria-checked")).toBe("true");
+    await click($('[data-testid="np-app-crun_lead2"]'));
+    expect($('[data-testid="np-apps"]')).toBeNull();
     const on = $('[data-testid="np-builds-on"]')!.textContent!;
     expect(on).toContain("Lead-Triage Inbox");
     expect(on).toContain("acme/sandbox · PR #186 branch · 2 builds so far");
@@ -436,6 +449,8 @@ describe("adding a feature to an app that exists", () => {
     expect($('[data-testid="np-lands"]')?.textContent).toContain("Updates PR #186");
     expect($('[data-testid="np-lands"] button, [data-testid="np-lands"] a')).toBeNull();
     expect($('[data-testid="np-team"]')?.textContent).toContain("The crew that built it");
+    expect($('[data-testid="np-flow"]')?.textContent).toContain("Builds on Lead-Triage Inbox's branch");
+    await click($('[data-testid="np-all-paths"]'));
     expect($('[data-testid="np-path-minor_feature"]')?.getAttribute("aria-checked")).toBe("true");
     expect(steps().map((s) => s.id)).toEqual(["meeting", "build", "keep", "merge-build", "preview", "report", "deploy", "notify"]);
     // The first check is the one every change keeps.
@@ -462,6 +477,7 @@ describe("adding a feature to an app that exists", () => {
 
   it("Quick change: the agent's proposal shows inline, and only Start runs it", async () => {
     await mount({ mode: "add", appKey: "crun_cal", previewId: "prev_7" });
+    await click($('[data-testid="np-all-paths"]'));
     await click($('[data-testid="np-path-quick"]'));
     expect(steps().map((s) => s.id)).toEqual(["scope", "confirm", "build", "keep", "merge-build", "preview"]);
     // No live preview, merged PR: not claimed to be working; a new PR.
@@ -484,6 +500,7 @@ describe("adding a feature to an app that exists", () => {
 
   it("Spec it first convenes the panel onto this app's branch", async () => {
     await mount({ mode: "add", appKey: "crun_cal" });
+    await click($('[data-testid="np-all-paths"]'));
     await click($('[data-testid="np-path-spec"]'));
     await type($('[data-testid="np-gain"]'), "Recurring changes that repeat weekly.");
     await click($('[data-testid="dw-new-start"]'));
@@ -525,17 +542,20 @@ describe("the walk's findings, as checks", () => {
       minor_feature: [{ step_id: "build", kind: "merge", who: "you" }, { step_id: "deploy", kind: "gate", who: "you" }] },
       routes: {} };
     await mount();
+    expect($('[data-testid="np-flow"]')?.textContent).toContain("3 approvals");
+    await click($('[data-testid="np-all-paths"]'));
     expect($('[data-testid="np-path-standard_product_delivery"]')?.textContent).toContain("3 approvals");
     expect(steps().find((s) => s.id === "spec_review")?.who).toBe("you");
     expect($('[data-testid="np-cost"]')?.textContent).toContain("you approve 3 times");
   });
 
-  it("Cancel and Start stay together; the reason sits above them", async () => {
+  it("Start sits at the foot of How it's built: the reason above it, the deploy promise below", async () => {
     await mount({ mode: "add" });
-    const go = $('.np-go')!;
-    expect(go.querySelector('[data-testid="np-blocked"]')).not.toBeNull();
-    const pair = go.querySelector('.np-actions')!;
-    expect([...pair.children].map((c) => (c as HTMLElement).dataset.testid)).toEqual(["np-cancel", "dw-new-start"]);
+    const foot = $('.np-plan .np-foot')!;
+    const order = [...foot.children].map((c) => (c as HTMLElement).dataset.testid ?? c.className);
+    expect(order.indexOf("np-blocked")).toBeLessThan(order.indexOf("dw-new-start"));
+    expect(order.indexOf("dw-new-start")).toBeLessThan(order.indexOf("np-deploy-note"));
+    expect(foot.querySelector('.np-actions [data-testid="np-cancel"]')).not.toBeNull();
   });
 
   it("the full-screen editor opens with the caret at the end", async () => {

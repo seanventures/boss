@@ -151,7 +151,7 @@ describe("Where the code lives", () => {
     api({ repos: "one" });
     await mount();
     expect(tid("np-layout")).toBeNull();
-    expect(tid("np-layout-hint")?.textContent).toContain("Several repos needs two or more");
+    expect(tid("np-layout-hint")?.getAttribute("title")).toContain("Several repos needs two or more");
     expect(tid("np-layout-hint")?.querySelector("a")?.getAttribute("href")).toContain("view=repositories");
   });
 
