@@ -270,3 +270,43 @@ def test_the_blocked_line_says_where_the_secret_scan_matched_and_never_what():
             "helpdesk-ai/src/config.ts:15 assigned_secret, helpdesk-ai/src/db.ts:3 "
             "url_with_password, and 1 more)") in held["error"]
     assert "secret_scan" in inspect.getsource(gate.held_run)
+
+
+# ---- a secret only a person can set is the person's act: no repair round, blocked with where --
+
+NEEDS = {"ok": False, "needs_secret": ["STRIPE_SECRET_KEY"], "harness": False,
+         "command": "python3 server.py", "source": "declared",
+         "error": ("the app needs a secret: STRIPE_SECRET_KEY (declared by template payments). BOSS "
+                   "cannot make it; set it in the app's Secrets (environment build), then retry "
+                   "the build. BOSS did not start it.")}
+
+
+def test_a_needs_secret_verdict_is_a_persons_fault_not_the_coders():
+    faults = gov.classify_gate_faults(failing=["app_serves"], evidence={"app_serves": NEEDS})
+    assert faults == {"app_serves": "PERSON"}
+    # The control: the app crashing on its own is still the coder's.
+    assert gov.classify_gate_faults(failing=["app_serves"], evidence={"app_serves": {
+        "ok": False, "error": "the app exited (code 1)"}}) == {"app_serves": "WORK"}
+
+
+@pytest.mark.parametrize("never_block", [True, False])
+@pytest.mark.parametrize("advisory", [True, False])
+def test_no_repair_round_goes_to_the_coder_and_nothing_ships(never_block, advisory):
+    failing = ["app_serves", "template_tests", "code_review_passed"]
+    faults = gov.classify_gate_faults(failing=failing, evidence={"app_serves": NEEDS})
+    action = gov.resolve_gate_failure_action(
+        failing=failing, advisory_gate=advisory, rounds_used=0, max_repair_rounds=2,
+        never_block=never_block, faults=faults, template_repair_max=2)
+    assert action == "block"
+
+
+def test_the_blocked_build_names_the_secret_and_where_to_set_it():
+    error, reason = gov.blocked_gate_messages("qg_1", ["app_serves"], NEEDS)
+    assert error.startswith("Blocked: the app needs a secret: STRIPE_SECRET_KEY "
+                            "(declared by template payments). Set STRIPE_SECRET_KEY for "
+                            "environment build in the app's Secrets, then press Retry")
+    assert "STRIPE_SECRET_KEY" in reason
+    held = gate.hold_outcome(["app_serves", "template_tests"], app_serves=NEEDS,
+                             template_tests={"because": "app_serves"})
+    assert held["next_step"].startswith("Set STRIPE_SECRET_KEY for environment build in the "
+                                        "app's Secrets, then press Retry")

@@ -103,6 +103,13 @@ class RunEnvironment:
                 "in the app's Secrets, or make the app start without it")
 
 
+def needs_secret_action(names, *, env: str = "build") -> str:
+    """What a person does when a run stopped for a secret only they can set."""
+    listed = ", ".join(names) or "the missing secret"
+    return (f"Set {listed} for environment {env} in the app's Secrets, then press Retry "
+            "(the coder is not asked to work around a missing secret).")
+
+
 def decide(need: Need, *, has_value: bool, purpose: str) -> str:
     """THE ONE RULE, for every runner: "use" | "generate" | "unset" | "needs"."""
     if purpose not in PURPOSES:

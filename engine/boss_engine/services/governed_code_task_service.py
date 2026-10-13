@@ -219,6 +219,11 @@ def classify_gate_faults(
         elif gate == "app_serves":
             # The app did not answer is WORK. The check could not even start it (no tree to
             # copy, launcher failed) is BOSS's fault, and must not send the coder to fix it.
+            # A SECRET ONLY A PERSON CAN SET (templates.run_env: needs_secret) is neither: no
+            # repair round can produce it, and a coder told to "fix" it would code around it.
+            if (evidence.get("app_serves") or {}).get("needs_secret"):
+                faults[gate] = "PERSON"
+                continue
             inconclusive = bool((evidence.get("app_serves") or {}).get("harness"))
         else:
             # Test gates are authoritative: BOSS re-runs the suite itself, so a red suite is
@@ -771,6 +776,15 @@ def blocked_gate_messages(qg_id: str, failing: list, app_serves_record: Optional
     if install:
         error = f"Blocked: {install}. " + error
         reason = f"{install}, so the build is not done"
+    needs = list((app_serves_record or {}).get("needs_secret") or [])
+    if "app_serves" in (failing or []) and needs and not install:
+        # A PERSON'S ACT, not a waiver and not a repair: what to set, and where.
+        from ..templates.run_env import needs_secret_action
+        from .preview_service import app_serves_headline
+
+        error = (f"Blocked: {app_serves_headline(app_serves_record)}. "
+                 f"{needs_secret_action(needs)}")
+        reason = f"the app needs {', '.join(needs)}, which only a person can set"
     return error, reason
 
 
@@ -819,6 +833,11 @@ def resolve_gate_failure_action(
     """
     if not failing:
         return "ship"
+    # A PERSON MUST ACT (a secret only they can set, classify_gate_faults "PERSON"): the build
+    # cannot pass until they do, so no repair round goes to the coder and nothing ships. Blocked,
+    # naming what to set and where; their Retry runs the build again.
+    if faults and any(faults.get(g) == "PERSON" for g in failing):
+        return "block"
     # A CHECK THAT NEVER RAN IS NOT AN OPINION TO SHIP PAST — checked BEFORE advisory.
     #
     # This sat below the advisory branch, which returns "ship" for anything outside the hard

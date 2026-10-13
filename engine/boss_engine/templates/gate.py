@@ -504,6 +504,11 @@ def hold_outcome(failing: Any, install_failure: Any = None, *, app_serves: Any =
             whys.pop("template_tests")
         if gates[0] == "template_tests":
             next_step = APP_SERVES_NEXT
+        needs = list((app_serves or {}).get("needs_secret") or []) if isinstance(app_serves, Mapping) else []
+        if needs and gates[0] == "template_tests":
+            from .run_env import needs_secret_action
+
+            next_step = needs_secret_action(needs)
     reason = "; ".join([*lead, *whys.values()])
     return {"gates": gates, "reason": reason[:1].upper() + reason[1:], "next_step": next_step,
             "error": f"Blocked: {reason}. {next_step}"}
