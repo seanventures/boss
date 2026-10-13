@@ -471,7 +471,13 @@ _ALL_PANEL_SEATS = ("review_code", "security_check", "regression", "consistency_
 # and that is where the weakened-tests verdict already blocks (_pull_request_ci_gate's
 # blocked_weakened_existing_tests hard stop). Holding the PR back as well meant the operator
 # got nothing to look at, which is how "22 runs, 2 PRs" happened. Findings ride ON the PR.
-_ADVISORY_HARD_FLOOR = ("code_written", "app_serves", "template_tests", "no_committed_secrets")
+# A FAILING TEST IS A FACT, NOT AN OPINION. `written_tests_pass` and `nothing_broke` were outside
+# this floor, so an advisory build whose own tests never passed shipped as "completed": the Notes
+# Lite check (crun_3a39cd19) ran four rounds, never turned its tests green, and ended
+# completed_no_pr with both gates marked advisory. A build whose tests fail is not done.
+_TEST_GATES = ("written_tests_pass", "nothing_broke")
+_ADVISORY_HARD_FLOOR = ("code_written", "app_serves", "template_tests", "no_committed_secrets",
+                        *_TEST_GATES)
 
 # Gates no autonomy setting may ship past. `app_serves` is not a reviewer's opinion: BOSS
 # started the build's own run command and nothing answered HTTP. The Lead Triage Inbox build
@@ -479,7 +485,7 @@ _ADVISORY_HARD_FLOOR = ("code_written", "app_serves", "template_tests", "no_comm
 # ImportError on its first line — and the operator found out from a preview timeout. A build
 # whose app does not run is not done, so exhausting the repairs BLOCKS with the app's own
 # error (and the partial PR rescue keeps the work), rather than shipping with dissent.
-_NEVER_SHIP_PAST = frozenset({"app_serves", "template_tests", "no_committed_secrets"})
+_NEVER_SHIP_PAST = frozenset({"app_serves", "template_tests", "no_committed_secrets", *_TEST_GATES})
 _TEMPLATE_GATE_SET = frozenset({"template_tests", "no_committed_secrets"})
 
 # THE TEMPLATE HOLD (F2 §2.3, S2.1). A build that applies a template carries two mechanical
@@ -1075,6 +1081,22 @@ def _template_gates(engine, run: dict, sandbox, *, root, cwd, changed_files: dic
     return {"gates": result.gates, "evidence": result.evidence}
 
 
+def pg_json(value) -> str:
+    """JSON Postgres will store: no NUL. A build's context can carry file text, and one NUL
+    in it ("\\u0000 cannot be converted to text") crashed the Notes Lite check's final write,
+    turning a clean fail-closed stop into a pipeline exception."""
+    def _clean(v):
+        if isinstance(v, str):
+            return v.replace("\x00", "")
+        if isinstance(v, dict):
+            return {_clean(k): _clean(x) for k, x in v.items()}
+        if isinstance(v, (list, tuple)):
+            return [_clean(x) for x in v]
+        return v
+
+    return json.dumps(_clean(value), default=str)
+
+
 def _ctx_block(title, instructions, criteria, *, service: bool = False) -> str:
     """Identical task-context preamble for EVERY pipeline stage — byte-identical on
     purpose. The model API's prompt cache is keyed on the request prefix, so stages
@@ -1135,6 +1157,48 @@ _NO_SECRETS_IN_TESTS = (
 )
 
 
+def _test_scope_clause(criteria) -> str:
+    """QA's tests are SIZED to what was asked, and start with a plan the implementer gets.
+
+    The Notes Lite check (crun_3a39cd19) wrote 34,564 tokens of tests for a three-criterion
+    notes app. Over-specified tests (exact wording, internals, extras nobody asked for) are what
+    the implementer then failed to satisfy for four rounds. One to three tests per criterion and
+    a few edge cases is a suite a build can pass; the plan makes the contract explicit up front.
+    """
+    n = max(1, len([c for c in (criteria or []) if str(c).strip()]))
+    cap = 3 * n + 3
+    return (
+        "\nTEST SCOPE (mandatory):\n"
+        f"- At most {cap} test cases in total: 1-3 per acceptance criterion ({n} given) plus at "
+        "most 3 edge cases.\n"
+        "- Test only behaviour the task or its criteria STATE, through public interfaces (HTTP "
+        "responses, exported functions, visible DOM). Never exact copy text, CSS, internal names, "
+        "timing, or anything the task did not ask for.\n"
+        "- No test infrastructure the task did not ask for (no browser suite, metrics or extra "
+        "services unless the task names them).\n"
+        "- START your final reply with `TEST PLAN:` and one line per test: "
+        "`<file>::<test name> -> <criterion>`. The implementer receives this plan.\n"
+    )
+
+
+def _test_plan_note(qa_summary: str) -> str:
+    """The QA plan, handed to the implementer before it writes code."""
+    text = str(qa_summary or "")
+    at = text.find("TEST PLAN:")
+    if at < 0:
+        return ""
+    plan = text[at:at + 3000].strip()
+    return ("\n\nTHE TESTS YOU MUST MAKE PASS (QA's plan, agreed before any code):\n" + plan
+            + "\nImplement exactly what these need, and nothing the task did not ask for.\n")
+
+
+def _wants_e2e() -> bool:
+    """Browser/e2e tests only when the task asked for them (build_scope)."""
+    from .build_scope import wants_e2e
+
+    return wants_e2e(True)
+
+
 def _qa_prompt(title, instructions, criteria, test_cmd, *, iac=False, web=False, app_root=None,
                stack_note=""):
     service = bool(web or app_root)
@@ -1155,6 +1219,7 @@ def _qa_prompt(title, instructions, criteria, test_cmd, *, iac=False, web=False,
             f"- Do NOT run anything and do NOT commit. (BOSS will run: {test_cmd}.)\n"
             "- End with a one-line summary of the cases you wrote.\n"
             + _metrics_tests_clause(title, instructions, service=True)
+            + _test_scope_clause(criteria)
             + (_IAC_GUIDANCE + _IAC_QA_GUIDANCE if iac else "")
             + stack_note
         )
@@ -1165,9 +1230,11 @@ def _qa_prompt(title, instructions, criteria, test_cmd, *, iac=False, web=False,
             + "You are a QA engineer for a web application. Your ONLY job is to author tests "
             "that the authoritative `npm run verify` command will actually run.\n\n"
             "RULES:\n"
-            f"- Write JS/TS API tests and a Playwright/e2e spec under {scope}. "
-            "Prefer `tests/` and `e2e/` inside that app.\n"
-            "- Do NOT write Python unittest files. Do NOT put tests at the monorepo root.\n"
+            + (f"- Write JS/TS API tests and a Playwright/e2e spec under {scope}. "
+               "Prefer `tests/` and `e2e/` inside that app.\n" if _wants_e2e() else
+               f"- Write JS/TS tests under {scope} (prefer `tests/`), with the test tools the "
+               "task names. No browser/Playwright suite: the task did not ask for one.\n")
+            + "- Do NOT write Python unittest files. Do NOT put tests at the monorepo root.\n"
             "- Do NOT edit sibling apps or repo-root tests that belong to other products.\n"
             f"- You MAY add `{app_root or '.'}/package.json` scripts "
             "(verify, test:api, test:e2e, typecheck, lint, build, healthcheck) if they are missing.\n"
@@ -1175,6 +1242,7 @@ def _qa_prompt(title, instructions, criteria, test_cmd, *, iac=False, web=False,
             f"- Do NOT run anything and do NOT commit. (BOSS will run `{test_cmd}` inside {scope}.)\n"
             "- End with a one-line summary of the cases you wrote.\n"
             + _NO_SECRETS_IN_TESTS + _metrics_tests_clause(title, instructions, service=service)
+            + _test_scope_clause(criteria)
             + (_IAC_GUIDANCE + _IAC_QA_GUIDANCE if iac else "")
         )
     return (
@@ -1189,6 +1257,7 @@ def _qa_prompt(title, instructions, criteria, test_cmd, *, iac=False, web=False,
         f"- Do NOT run anything and do NOT commit. (BOSS will run `{test_cmd}`.)\n"
         "- End with a one-line summary of the cases you wrote.\n"
         + _NO_SECRETS_IN_TESTS + _metrics_tests_clause(title, instructions, service=service)
+        + _test_scope_clause(criteria)
         + (_IAC_GUIDANCE + _IAC_QA_GUIDANCE if iac else "")
     )
 
@@ -1204,9 +1273,10 @@ def _metrics_tests_clause(title: str, instructions: str, *,
     Same `applies_to` gate as the standard itself, so a CLI tool or a library is not asked for
     an endpoint it has no reason to have.
     """
+    from .build_scope import wants_ops
     from .platform_standards import METRICS_TEST_REQUIREMENT, applies_to
 
-    if not (service or applies_to(f"{title}\n{instructions}")):
+    if not wants_ops(bool(service or applies_to(f"{title}\n{instructions}"))):
         return ""
     return "\n\n" + METRICS_TEST_REQUIREMENT + "\n"
 
@@ -2573,6 +2643,21 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
     from .platform_standards import load_reference_links
     with engine.begin() as _c:
         _n_mandated = load_mandated_standards(_c, project_id)
+    # WHAT THIS BUILD OWES BEYOND ITS BRIEF (build_scope): ops endpoints and browser e2e only
+    # when the brief asks, or the workflow deploys what it builds. Set once, read everywhere.
+    from . import build_scope as _build_scope
+    try:
+        with engine.begin() as _c:
+            _deploys = _build_scope.workflow_deploys(_c, fctx.get("workflow_run_id"))
+    except Exception:  # noqa: BLE001
+        _log_caught(logger)
+        _deploys = False
+    _scope = _build_scope.decide(
+        str((spec or {}).get("title") or ""), str((spec or {}).get("instructions") or ""),
+        (spec or {}).get("acceptance_criteria") or (), workflow_deploys=_deploys,
+        has_manifest=bool(fctx.get("deploy_manifest")))
+    _build_scope.set_scope(_scope)
+    logger.info("code_task.build_scope run=%s scope=%s", run_id, _scope)
     _n_refs = load_reference_links((spec or {}).get("reference_links"))
     if _n_refs:
         logger.info("code_task.reference_links run=%s count=%s", run_id, _n_refs)
@@ -3805,15 +3890,21 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 last_verify_cwd = str(cwd)
             if plan.runs_steps:
                 return _run_manifest_verify(plan, record=record)
+            # The command runs where it was written for (the root, for `npm --prefix app test`);
+            # BOSS's own preparation — install, browsers, the verify script — happens in the app
+            # directory that command names.
+            _named = next((d for d in (verification_target.named_directory(c)
+                                       for c in plan.commands) if d), None)
+            app_cwd = (Path(root) / _named) if _named and (Path(root) / _named).is_dir() else cwd
             try:
-                verification_target.ensure_verify_script(cwd)
+                verification_target.ensure_verify_script(app_cwd)
             except Exception:  # noqa: BLE001 — never fail a run on script bookkeeping
                 _log_caught(logger)
                 pass
             prep_note = ""
             try:
                 prep = verification_target.prepare_web_verify_env(
-                    cwd,
+                    app_cwd,
                     scenarios=(fctx.get("qa_benchmark") or {}).get("acceptance_scenarios"),
                     app_id=_app_id,
                 )
@@ -3839,7 +3930,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 )
                 install = sandbox.run(
                     str(prep.get("install_command") or verification_target.NPM_INSTALL_CMD),
-                    cwd=str(cwd),
+                    cwd=str(app_cwd),
                     timeout=install_timeout,
                 )
                 _emit_cmd("install dependencies", install)
@@ -3854,7 +3945,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 from . import playwright_cache
                 from .sandbox import CommandResult as _PwResult
 
-                _pw = playwright_cache.ensure(playwright_cache.project_version(cwd))
+                _pw = playwright_cache.ensure(playwright_cache.project_version(app_cwd))
                 if _pw.get("ok"):
                     _emit_cmd("install browsers", _PwResult(
                         command=f"boss: {_pw.get('detail')}", argv=[], exit_code=0,
@@ -3867,7 +3958,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                             prep.get("browser_install_command")
                             or verification_target.PLAYWRIGHT_INSTALL_CMD
                         ),
-                        cwd=str(cwd),
+                        cwd=str(app_cwd),
                         timeout=max(install_timeout, playwright_cache.install_timeout()),
                     ))
             # npm install / the implementer can recreate leftover Playwright
@@ -3876,7 +3967,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # or a metrics stub.
             try:
                 forced = verification_target.prepare_web_verify_env(
-                    cwd,
+                    app_cwd,
                     scenarios=(fctx.get("qa_benchmark") or {}).get("acceptance_scenarios"),
                     app_id=_app_id,
                 )
@@ -4199,6 +4290,36 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                             "why": ("no test-related gate failed, so the existing suite is the "
                                     "oracle for this repair")})
 
+        # A LIGHT PLAN FOR A BUILD WITH NO DESIGN STAGE. The parallel split runs from the
+        # design's WORK PACKAGES, and a direct build (tier < 2, no design chain) had none, so the
+        # Notes Lite check ran as one session whatever the host could carry. One short read-only
+        # call now produces just the partition, and only when the host allows 2+ streams.
+        if (do_separate_tests and not use_microvm and not _seeded
+                and not str((design or {}).get("packages") or "").strip()
+                and _build_fan_out(engine, project_id, settings) >= 2):
+            try:
+                with _transaction(engine) as c:
+                    _phase(c, "design")
+                set_llm_context(stage="design")
+                a_lp, m_lp = _route("plan")
+                lp = a_lp.run_role(
+                    _ctx_block(title, instructions, criteria)
+                    + "You are planning how separate agents will write this change IN PARALLEL. "
+                    "Read only what you need of the repository (a few files at most); do NOT "
+                    "edit anything. Answer with the section below and nothing else."
+                    + _parallel_build.design_prompt_section(),
+                    root, read_only=True, model=m_lp, max_turns=8)
+                cost += int(lp.get("cost_usd_micros") or 0)
+                _lp_parts = _split_design(lp.get("summary", ""))
+                _pk = _lp_parts.get("packages") or lp.get("summary", "")
+                if _parallel_build.parse_packages(_pk):
+                    design = {**(design or {}), "packages": _pk, "packages_source": "light_plan"}
+                with _transaction(engine) as c:
+                    emit_event(c, project_id, "code_task.light_plan", "boss", "code_task_run",
+                               run_id, {"packages": len(_parallel_build.parse_packages(_pk))})
+            except Exception:  # noqa: BLE001 — no partition means one session, never a failure
+                _log_caught(logger)
+
         # THE TEMPLATE'S TESTS, PLACED BY BOSS (not typed by a model): before any agent runs.
         _placed_tpl_tests: list[str] = []
         if not use_microvm:
@@ -4446,7 +4567,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                             else _solo_prompt(
                                 title, instructions, criteria, test_cmd,
                                 iac=iac_task, web=_web_verify, app_root=_app_id)) + _stack_note \
-            + _placed_tests_note(_placed_tpl_tests)
+            + _placed_tests_note(_placed_tpl_tests) \
+            + (_test_plan_note((locals().get("r1") or {}).get("summary", ""))
+               if do_separate_tests else "")
         max_repair = max(0, min(5, int(
             spec.get("repair_retries", settings.code_repair_max_retries) or 0)))
         repair_attempts = 0
@@ -4462,9 +4585,15 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # a failing result to the gate. A cheap implementer shouldn't sink an otherwise-sound
         # task when a stronger model can pass the same frozen tests — reliability over cost.
         escalated_recovered = False
+        # A "FRONTIER RETRY" ON THE SAME MODEL IS JUST ANOTHER COLD PASS. The Notes Lite check
+        # (crun_3a39cd19) escalated implement from claude-sonnet-5 to claude-sonnet-5: six cold
+        # minutes that changed nothing the warm fix round below could not. Escalate only when it
+        # reaches a different engine or model.
+        _esc_route: list = []   # the escalated route, resolved once when it is first needed
+        _warm_fix = [False]     # the final attempt is a warm fix on the same model, not a "frontier" one
         for attempt in range(max_repair + 2):
             _impl_ran[0] = True
-            escalate_impl = attempt == max_repair + 1
+            escalate_impl = attempt == max_repair + 1 and not _warm_fix[0]
             if escalate_impl:
                 with _transaction(engine) as c:
                     emit_event(c, project_id, "code_task.step_escalating", "boss",
@@ -4577,7 +4706,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             else:
                 set_llm_context(stage="implement" if do_separate_tests else "solo")
                 _prev_route = dict(stage_routes.get("implement") or {})
-                a, m = _route_escalated("implement") if escalate_impl else _route("implement")
+                a, m = ((tuple(_esc_route) if _esc_route else _route_escalated("implement"))
+                        if escalate_impl else _route("implement"))
                 # Resume-based repair: continue the implementer's own session so the
                 # repair rides the warm prompt cache (task context + its prior work are
                 # cache READS, not fresh ingestion). Escalated attempts stay cold —
@@ -4680,6 +4810,28 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                 "attempt": attempt})
             if ok or attempt == max_repair + 1:
                 break
+            if attempt == max_repair and not use_microvm:
+                _before = dict(stage_routes.get("implement") or {})
+                try:
+                    _esc_route[:] = list(_route_escalated("implement"))
+                    _after = stage_routes.get("implement") or {}
+                    _same = (_after.get("engine"), _after.get("model")) == (
+                        _before.get("engine"), _before.get("model"))
+                except Exception:  # noqa: BLE001 — unknown routes keep the escalation
+                    _log_caught(logger)
+                    _same = False
+                if _same:
+                    # THE FIX ROUND HAPPENS HERE, BEFORE ANY REVIEW: the same session, warm, with
+                    # the failing tests as its evidence. A cold "frontier" pass on the same model
+                    # bought nothing, and reviewing code whose tests fail cost the Notes Lite
+                    # check 12 minutes of panel time on a build that then failed anyway.
+                    _warm_fix[0] = True
+                    with _transaction(engine) as c:
+                        emit_event(c, project_id, "code_task.escalation_skipped", "boss",
+                                   "code_task_run", run_id,
+                                   {"step": "implement", "reason": "same_model",
+                                    "model": _before.get("model"),
+                                    "instead": "warm_fix_round"})
             repair_attempts += 1
             # Evidence for the router: the next implement boundary may move up a tier
             # (Smart mode's escalation rules; Fixed mode ignores the ledger).
@@ -4978,6 +5130,18 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 else (profile.get("panel_checks") or _ALL_PANEL_SEATS))
             if _ci_files:
                 enabled_seats |= {"review_code", "security_check"}
+            # TESTS THAT STILL FAIL AFTER THE FIX ROUND END THE BUILD; THEY ARE NOT REVIEWED.
+            # Reviewing code that does not pass its own tests is time spent on a verdict the
+            # test gate already decided (fail closed, one fix round). The deterministic
+            # regression seat still runs.
+            if not official_tests_passed and repair_attempts >= 1:
+                _skipped = sorted(enabled_seats & {"review_code", "security_check",
+                                                   "consistency_check"})
+                enabled_seats -= {"review_code", "security_check", "consistency_check"}
+                if _skipped:
+                    with _transaction(engine) as c:
+                        emit_event(c, project_id, "code_task.review_skipped_tests_failing", "boss",
+                                   "code_task_run", run_id, {"seats": _skipped})
             checks = []
             if "review_code" in enabled_seats:
                 checks += review_checks
@@ -5237,7 +5401,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         _sp.dir_of(_sp.frontend),
                         runners=(verification_target.NEXT_RUNNERS
                                  if _sp.frontend.framework == "next"
-                                 else ("vite", "@playwright/test")))
+                                 else __import__("boss_engine.services.build_scope",
+                                                 fromlist=["web_runners"]).web_runners()))
                 except Exception:  # noqa: BLE001
                     _log_caught(logger)
                     _web_contract = {"ok": False, "stubs": ["unreadable"], "missing_runners": []}
@@ -5249,9 +5414,12 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 # that helpdesk-ai/package.json declares (crun_cb6e15f4).
                 _ran_in = (root / last_verify_cwd) if last_verify_cwd and last_verify_cwd != "." \
                     and not Path(last_verify_cwd).is_absolute() else None
+                from .build_scope import web_runners
+
                 _web_contract = verification_target.evaluate_web_package_contract(
                     _ran_in if _ran_in is not None and _ran_in.is_dir()
-                    else verification_target.resolve_verify_cwd(root, app_id=_app_id)
+                    else verification_target.resolve_verify_cwd(root, app_id=_app_id),
+                    runners=web_runners(),
                 )
             except Exception:  # noqa: BLE001
                 _log_caught(logger)
@@ -5618,6 +5786,12 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             inrun_max = effective_review_rounds(
                 _spec_rounds if isinstance(_spec_rounds, int)
                 else getattr(settings, "code_review_inrun_max_rounds", 2))
+            # ONE FIX ROUND FOR FAILING TESTS. A test that two warm rounds could not satisfy will
+            # not be satisfied by a third: the Notes Lite check spent 16 minutes on rounds 2-3 and
+            # ended where it started. After one round the build stops, failing, with the tests
+            # named, which is faster to act on than another loop.
+            if set(failing) & set(_TEST_GATES):
+                inrun_max = min(inrun_max, 0 if repair_attempts >= 1 else 1)
             # Test gates are convergeable too. Previously a failing test skipped this loop entirely
             # and fell through to a FULL cold re-run — discarding the warm session and re-paying for
             # spec/plan — which is why repeated attempts never converged on test failures.
@@ -6149,7 +6323,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         "error=:e, finalize_ctx=CAST(:fc AS JSONB), updated_at=now() WHERE id=:id"),
                         {"e": _held["error"] if _held else _blocked_error,
                          "ph": "done" if _held else "awaiting_gate_override",
-                         "fc": json.dumps(ctx), "id": run_id})
+                         "fc": pg_json(ctx), "id": run_id})
                 _rescue_pr(_blocked_reason)
                 return {"status": "blocked", "done": True, "awaiting_gate_override": _held is None,
                         "quality_gate_id": qg_id, "failing_gates": failing}

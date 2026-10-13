@@ -367,6 +367,26 @@ class GatePlan:
                                                      "stack_missing")
 
 
+_DIR_FLAG = re.compile(r"(?:^|\s)(?:--prefix|--cwd|--dir|-C)(?:=|\s+)\S+")
+
+
+def names_its_directory(command: str) -> bool:
+    """Does this package-manager command already say which directory it runs in?"""
+    return named_directory(command) is not None
+
+
+def named_directory(command: str) -> str | None:
+    """The directory a package-manager command names (`npm --prefix X`), or None."""
+    head = str(command or "").strip().split(" ", 1)[0]
+    if head not in ("npm", "npx", "pnpm", "yarn"):
+        return None
+    m = _DIR_FLAG.search(command)
+    if not m:
+        return None
+    value = re.split(r"=|\s+", m.group(0).strip(), maxsplit=1)[-1].strip("'\"")
+    return value or None
+
+
 def resolve_gate_plan(
     spec: dict[str, Any],
     title: str,
@@ -402,7 +422,12 @@ def resolve_gate_plan(
     raw = spec.get("test_commands")
     if (isinstance(raw, str) and raw.strip()) or (isinstance(raw, (list, tuple)) and raw):
         commands = resolve_authoritative_test_commands(spec, title)
-        return GatePlan(commands, _cwd(commands), "task", " && ".join(commands))
+        # A COMMAND THAT NAMES ITS OWN DIRECTORY RUNS FROM THE ROOT IT WAS WRITTEN FOR.
+        # `npm --prefix notes-lite test` was run INSIDE notes-lite/, so npm looked for
+        # notes-lite/notes-lite; the agent "fixed" that with a symlink to `.` and the sandbox's
+        # diff then refused it, failing a build whose code was fine (crun_a936b22f).
+        cwd = base if any(names_its_directory(c) for c in commands) else _cwd(commands)
+        return GatePlan(commands, cwd, "task", " && ".join(commands))
     # An official/benchmark app is scaffolded and verified by its own package scripts; a
     # sandbox monorepo's manifest is not its contract.
     if not app_id:
