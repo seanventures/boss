@@ -60,7 +60,7 @@ def test_qa_tests_are_sized_to_the_criteria_and_planned_first():
     assert "At most 12 test cases" in clause and "TEST PLAN:" in clause
     for prompt in (g._qa_prompt(*NOTES, "npm test"),
                    g._qa_prompt(*NOTES, "npm test", web=True, app_root="notes-lite")):
-        assert "TEST SCOPE (mandatory)" in prompt
+        assert "TEST SCOPE (mandatory" in prompt
     note = g._test_plan_note("Wrote 6 tests.\nTEST PLAN:\ntests/api.test.js::creates -> c1")
     assert "tests/api.test.js::creates -> c1" in note
     assert g._test_plan_note("no plan here") == ""

@@ -232,6 +232,14 @@ KNOBS: dict[str, dict[str, Any]] = {
                 "review and reviewers always run at high.",
         "kind": "choice", "choices": ("low", "medium", "high", "xhigh", "max"),
     },
+    "build_test_budget": {
+        "attr": "build_test_budget",
+        "label": "Tests per build",
+        "help": "The most test cases a build writes (default 20): one per acceptance criterion "
+                "first, then the riskiest ones. BOSS counts them and trims a suite that is over. "
+                "More coverage comes from a later More tests pass.",
+        "kind": "int", "min": 5, "max": 200,
+    },
     # BUILD STREAMS (build_streams): the bounds each writing stage sizes its parallel streams
     # within, from the host's free cores, memory and load at the moment the stage starts.
     "build_streams_min": {

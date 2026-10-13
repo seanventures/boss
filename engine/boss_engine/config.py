@@ -1244,6 +1244,9 @@ class Settings(BaseSettings):
     # The CLI's --effort for a build's WRITING stages (write_tests, implement, fix rounds).
     # Reasoning stages (design, plan review, reviewers) run at high (code_agent.stage_effort).
     build_effort_writing: str = Field(default="medium", alias="BOSS_BUILD_EFFORT_WRITING")
+    # The most test cases a build's test author writes (governed test_budget): a small set that
+    # covers what the brief asks for. More coverage is a later "more tests" pass.
+    build_test_budget: int = Field(default=20, alias="BOSS_BUILD_TEST_BUDGET")
     code_agent_allowed_tools: str = Field(
         default="Read,Edit,MultiEdit,Write,Glob,Grep,Bash,TodoWrite",
         alias="BOSS_CODE_AGENT_ALLOWED_TOOLS",

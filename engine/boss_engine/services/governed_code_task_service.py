@@ -57,7 +57,7 @@ from .code_task_service import (
 from .core import create_blocking_decision, emit_event, make_id, record_policy_eval
 from .github_app_adapter import GitHubAppAdapter
 from .iac_verify import IacVerifyResult, detect_iac_files, is_iac_task, run_iac_verify_lane
-from .llm_telemetry import clear_llm_context, record_llm_call, set_llm_context
+from .llm_telemetry import clear_llm_context, get_llm_context, record_llm_call, set_llm_context
 
 logger = logging.getLogger(__name__)
 
@@ -1199,20 +1199,66 @@ _NO_SECRETS_IN_TESTS = (
 )
 
 
-def _test_scope_clause(criteria) -> str:
+#: The most test cases a build writes when the project sets no build_test_budget.
+TEST_BUDGET_DEFAULT = 20
+
+#: One test case, per language: JS/TS it()/test(), Python def test_, JVM @Test, Go func Test.
+_TEST_CASE_RE = re.compile(
+    r"^\s*(?:(?:it|test)(?:\.(?:only|skip|concurrent|each\s*\([^\n]*?\)))?\s*\(\s*[`'\"]"
+    r"|(?:async\s+)?def\s+test_\w*\s*\("
+    r"|@Test\b"
+    r"|func\s+Test\w*\s*\()",
+    re.MULTILINE)
+
+
+def test_budget(criteria, budget: Optional[int] = None) -> int:
+    """The most test cases this build writes: 1-3 per acceptance criterion and 3 edge cases,
+    never more than the project's budget (build_test_budget, default 20), however long the brief.
+    A HelpDesk-size brief's suite grew with the brief: 76 KB of tests and 27.6 minutes of
+    write_tests, then 81 minutes of implement making them all pass."""
+    n = max(1, len([c for c in (criteria or []) if str(c).strip()]))
+    cap = int(budget or TEST_BUDGET_DEFAULT)
+    return max(1, min(cap, 3 * n + 3))
+
+
+def count_test_cases(root: Path, files) -> int:
+    """Test cases in `files` (repo-relative), counted by BOSS, not reported by the model."""
+    total = 0
+    for rel in files or []:
+        try:
+            text = (Path(root) / rel).read_text(errors="ignore")
+        except OSError:
+            continue
+        total += len(_TEST_CASE_RE.findall(text))
+    return total
+
+
+def _test_budget_trim_prompt(written: int, cap: int) -> str:
+    """The test author's one trim turn when its suite is over the budget (resumed session)."""
+    return (
+        f"--- TEST BUDGET ---\nBOSS counted {written} test cases in the files you wrote; this "
+        f"build's hard limit is {cap}. Delete the lowest-priority cases until at most {cap} "
+        "remain: keep one per acceptance criterion first, then the riskiest behaviour; drop "
+        "duplicates, variations of one case and edge cases first. Edit the test files only; do "
+        "not add cases. End with the updated `TEST PLAN:`.\n")
+
+
+def _test_scope_clause(criteria, budget: Optional[int] = None) -> str:
     """QA's tests are SIZED to what was asked, and start with a plan the implementer gets.
 
     The Notes Lite check (crun_3a39cd19) wrote 34,564 tokens of tests for a three-criterion
     notes app. Over-specified tests (exact wording, internals, extras nobody asked for) are what
     the implementer then failed to satisfy for four rounds. One to three tests per criterion and
     a few edge cases is a suite a build can pass; the plan makes the contract explicit up front.
+    The cap (test_budget) never grows past the project's budget, and BOSS counts afterwards.
     """
     n = max(1, len([c for c in (criteria or []) if str(c).strip()]))
-    cap = 3 * n + 3
+    cap = test_budget(criteria, budget or get_llm_context().get("test_budget"))
     return (
-        "\nTEST SCOPE (mandatory):\n"
-        f"- At most {cap} test cases in total: 1-3 per acceptance criterion ({n} given) plus at "
-        "most 3 edge cases.\n"
+        "\nTEST SCOPE (mandatory; BOSS counts the cases and trims a suite that is over):\n"
+        f"- At most {cap} test cases in total. One per acceptance criterion ({n} given) FIRST; "
+        "then a second for the riskiest criteria; edge cases only if the budget remains. A "
+        "small suite that covers what was asked: more coverage comes in a later pass.\n"
         "- Test only behaviour the task or its criteria STATE, through public interfaces (HTTP "
         "responses, exported functions, visible DOM). Never exact copy text, CSS, internal names, "
         "timing, or anything the task did not ask for.\n"
@@ -2269,6 +2315,18 @@ def _record_effort(engine, project_id, run_id, settings) -> None:
         _log_caught(logger)
     writing = stage_effort("implement", writing) or WRITING_EFFORT_DEFAULT
     set_llm_context(effort_writing=writing)
+    # THE TEST BUDGET (test_budget), read once with the effort: the QA prompt states it and
+    # BOSS counts against it after the test author's stage.
+    try:
+        from .project_settings import effective
+
+        with _transaction(engine) as c:
+            budget = int(effective(c, project_id, settings, "build_test_budget")
+                         or TEST_BUDGET_DEFAULT)
+    except Exception:  # noqa: BLE001 — the default budget
+        _log_caught(logger)
+        budget = TEST_BUDGET_DEFAULT
+    set_llm_context(test_budget=max(1, budget))
     try:
         efforts = effort_map(writing)
         with _transaction(engine) as c:
@@ -4626,6 +4684,37 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         emit_event(c, project_id, "code_task.step_recovered", "boss",
                                    "code_task_run", run_id,
                                    {"step": "write_tests", "recovered_by": "frontier_retry"})
+            # THE TEST BUDGET, COUNTED BY BOSS (test_budget). The prompt states the cap; a suite
+            # that is still over gets ONE trim turn on the test author's own warm session, and
+            # what remains over is recorded on the build, never passed silently.
+            if test_files and not use_microvm:
+                _cap = test_budget(criteria, get_llm_context().get("test_budget"))
+                _written = count_test_cases(
+                    root, [p for p in test_files if p not in _placed_tpl_tests])
+                _tb: dict = {"budget": _cap, "written": _written}
+                if _written > _cap and (r1 or {}).get("session_id"):
+                    try:
+                        set_llm_context(stage="write_tests")
+                        _a_tb, _m_tb = _route("write_tests")
+                        _rt = _a_tb.run_role(_test_budget_trim_prompt(_written, _cap), root,
+                                             model=(r1 or {}).get("model") or _m_tb,
+                                             resume_session_id=r1["session_id"])
+                        cost += int(_rt.get("cost_usd_micros") or 0)
+                        if "TEST PLAN:" in str(_rt.get("summary") or ""):
+                            r1 = {**r1, "summary": _rt["summary"]}
+                        test_files = [fc.path for fc in sandbox.diff() if _is_test_path(fc.path)
+                                      and fc.path not in _placed_tpl_tests]
+                        _tb["after_trim"] = count_test_cases(root, test_files)
+                    except Exception:  # noqa: BLE001 — an untrimmed suite is recorded below
+                        _log_caught(logger)
+                _tb["over"] = int(_tb.get("after_trim", _written)) > _cap
+                with _transaction(engine) as c:
+                    c.execute(sql(
+                        "UPDATE code_task_runs SET state=jsonb_set(COALESCE(state,'{}'::jsonb), "
+                        "'{test_budget}', CAST(:t AS JSONB)), updated_at=now() WHERE id=:id"),
+                        {"t": json.dumps(_tb), "id": run_id})
+                    emit_event(c, project_id, "code_task.test_budget", "boss", "code_task_run",
+                               run_id, _tb)
             if use_microvm:
                 # Commit ONLY test files — anything else the QA role wrote is discarded.
                 _commit_stage(test_changes or [], f"governed: tests-first (qa) — {title[:60]}")
