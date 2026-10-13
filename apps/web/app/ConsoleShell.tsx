@@ -356,6 +356,15 @@ export type ConsoleShellProps = {
 /** IDENTITY AREAS LIVE ON THEIR OWN ROUTES (/identity/**), not as a section of this page. */
 const ROUTE_AREAS: Partial<Record<AreaId, string>> = { enterprise: "/identity" };
 
+/** The palette's Enter: press the first choice the list shows — an area, New build, or a
+ *  conversation — exactly as a click would. False when the list shows nothing. */
+export function activatePaletteChoice(list: HTMLElement | null): boolean {
+  const first = list?.querySelector<HTMLButtonElement>(".bx-palette-item");
+  if (!first) return false;
+  first.click();
+  return true;
+}
+
 export default function ConsoleShell(props: ConsoleShellProps) {
   const { identity, scope } = props;
   return (
@@ -550,6 +559,7 @@ function ConsoleShellInner({
   // Published for the panels that poll on their own (Agents › Live, the presence pill).
   useEffect(() => { setConsoleLive(live); }, [live]);
   const paletteInput = useRef<HTMLInputElement>(null);
+  const paletteList = useRef<HTMLDivElement>(null);
   const router = useRouter();
   const searchParams = useSearchParams();
   const queryString = searchParams.toString();
@@ -1713,10 +1723,12 @@ function ConsoleShellInner({
               placeholder="Jump to an area…"
               onChange={(e) => setQuery(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === "Enter" && filtered[0]) go(filtered[0].id);
+                // ENTER TAKES THE FIRST CHOICE SHOWN, whatever it is (rc10.5 walk m2): it acted
+                // on areas only, so "new build" + Enter did nothing.
+                if (e.key === "Enter" && activatePaletteChoice(paletteList.current)) e.preventDefault();
               }}
             />
-            <div className="bx-palette-list">
+            <div className="bx-palette-list" ref={paletteList}>
               {filtered.map((a, i) => {
                 const Icon = a.icon;
                 return (
@@ -1736,7 +1748,8 @@ function ConsoleShellInner({
               })}
               {/* START SOMETHING: the New project composer, like the top bar's New build. */}
               {!query.trim() || "new build new project".includes(query.trim().toLowerCase()) ? (
-                <button type="button" className="bx-palette-item" data-testid="palette-new-build"
+                <button type="button" className={`bx-palette-item${filtered.length ? "" : " active"}`}
+                        data-testid="palette-new-build"
                         title={NEW_BUILD_TIP}
                         onClick={() => { setPaletteOpen(false); openNewProject(); }}>
                   <Plus size={17} aria-hidden />

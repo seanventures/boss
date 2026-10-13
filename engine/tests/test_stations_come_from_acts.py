@@ -105,7 +105,7 @@ def test_a_failed_gate_fails_its_seat():
     got = line(r, acts)
     # FAILED, never "stuck": the checks failed and wait on the operator's waiver.
     assert got["review"]["status"] == "failed" and got["review"]["word"] == "Failed"
-    assert got["review"]["tip"].startswith("Checks failed")
+    assert got["review"]["tip"] == "Failed check: Review passed"
     verdicts = {s["role_key"]: s["verdict"] for s in got["review"]["seats"]}
     assert verdicts == {"adversarial_reviewer": "blocked", "security_reviewer": "approved"}
 
@@ -227,3 +227,106 @@ def test_an_errored_attempt_in_a_live_build_says_failed_not_stuck():
     assert got["check"]["status"] == "failed"
     assert got["check"]["tip"] == "This attempt failed; the build went on"
     assert got["build"]["status"] == "working"
+
+
+# ── WHERE A BLOCKED BUILD STOPPED (rc10.5 walk M2, m3) ────────────────────────────────────────
+# Three real runs from the walk (local install, 2026-10-13), their acts and finalize context as
+# recorded. When the app does not start, EVERY gate after it fails as a consequence; the
+# station that owns the FIRST failing gate in pipeline order is the one that failed.
+
+def _real(step, role, status, start, end):
+    t0 = NOW - timedelta(hours=2)
+    return {"act_id": f"act_{step}_{start}", "kind": "stage", "step_id": step, "role_key": role,
+            "status": status, "seat": None, "how": "next_stage", "handed_by_kind": "boss",
+            "label": step, "started_at": t0 + timedelta(minutes=start),
+            "ended_at": t0 + timedelta(minutes=end)}
+
+
+_LEAN = {"risk_tier": 2, "profile": "lean", "adversarial_verdict": "refuted",
+         "consistency_verdict": "drift"}
+_APP_DID_NOT_START = ("Blocked: the app did not start: failed to start helpdesk-ai Error: "
+                      "SESSION_SECRET must be set to at least 32 characters (BOSS generates one)")
+_TEMPLATE_TESTS = ("Blocked: the template's tests did not pass. Open the build's Checks to read "
+                   "the template test output, then retry the build with a note on what to fix, "
+                   "or apply the template again.")
+
+
+def _review_then_check(check_status="stale"):
+    return [_real("design", "chief_architect", "complete", 0, 5),
+            _real("review_plan", "chief_architect", "complete", 4, 5),
+            _real("write_tests", "qa", "complete", 5, 7),
+            _real("implement", "software_engineer", "complete", 7, 15),
+            _real("review_code", "adversarial_reviewer", "complete", 15, 19),
+            _real("security_check", "security_reviewer", "complete", 15, 19),
+            _real("consistency_check", "adversarial_reviewer", "complete", 15, 19),
+            _real("check_tests", "qa", check_status, 19, 20)]
+
+
+def test_crun_db538dff_app_did_not_start_fails_check_not_review():
+    r = run("blocked", "done", error=_APP_DID_NOT_START, state={**_LEAN, "security_verdict": "issues"},
+            fctx={"failing_gates": ["app_serves", "template_tests", "no_committed_secrets",
+                                    "code_review_passed", "security_clean", "tests_strong_enough",
+                                    "consistent"]})
+    got = line(r, _review_then_check())
+    assert (got["check"]["status"], got["check"]["word"]) == ("failed", "Failed")
+    assert got["check"]["tip"].startswith("the app did not start: failed to start helpdesk-ai")
+    assert "left open" not in got["check"]["tip"].lower()
+    # Every review act completed: Review says what it did, never Failed for the app's failure.
+    assert got["review"]["status"] == "done", got["review"]
+    assert {s["status"] for s in got["review"]["seats"]} == {"done"}
+    assert "blocked" not in {s["verdict"] for s in got["review"]["seats"]}
+    for k in ("pr", "preview", "ship"):
+        assert got[k]["word"] == "Not reached", k
+    # NOW names the same station.
+    assert fv.build_state(r, acts=_review_then_check(), now=NOW)["station"] == "check"
+
+
+def test_crun_247435e1_template_tests_fail_check_and_now_agrees():
+    r = run("blocked", "done", error=_TEMPLATE_TESTS, state={**_LEAN, "security_verdict": "clean"},
+            fctx={"failing_gates": ["app_serves", "template_tests", "code_review_passed",
+                                    "tests_strong_enough", "consistent"]})
+    acts = _review_then_check()
+    got = line(r, acts)
+    assert got["check"]["status"] == "failed"
+    assert got["check"]["tip"] == "the template's tests did not pass."
+    assert got["review"]["status"] != "failed"
+    st = fv.build_state(r, acts=acts, now=NOW)
+    assert (st["state"], st["station"]) == ("blocked", "check")
+
+
+def test_crun_6eaa478d_a_failed_template_test_is_never_check_done():
+    acts = [_real("design", "chief_architect", "complete", 0, 3),
+            _real("review_plan", "chief_architect", "complete", 2, 3),
+            _real("write_tests", "qa", "complete", 3, 4),
+            _real("implement", "software_engineer", "complete", 4, 13),
+            _real("review_code", "adversarial_reviewer", "stale", 13, 21),
+            _real("security_check", "security_reviewer", "stale", 15, 21),
+            _real("consistency_check", "adversarial_reviewer", "stale", 18, 21)]
+    r = run("blocked", "done", error=_TEMPLATE_TESTS,
+            state={**_LEAN, "security_verdict": "issues",
+                   "review_code_skipped": "not convened: profile 'lean' does not include this seat"},
+            fctx={"failing_gates": ["written_tests_pass", "template_tests", "consistent",
+                                    "nothing_broke"]})
+    got = line(r, acts)
+    assert (got["check"]["status"], got["check"]["word"]) == ("failed", "Failed")
+    assert got["check"]["tip"] == "the template's tests did not pass."
+    # The review seats never finished: not reached, not Failed and not Stopped.
+    assert (got["review"]["status"], got["review"]["word"]) == ("pending", "Not reached")
+    assert {s["status"] for s in got["review"]["seats"]} == {"pending"}
+
+
+def test_a_blocked_build_with_no_acts_fails_its_first_station_with_the_error():
+    r = run("blocked", "queued", error="Blocked: the repository could not be cloned")
+    got = line(r, [])
+    assert (got["plan"]["status"], got["plan"]["word"]) == ("failed", "Failed")
+    assert got["plan"]["tip"] == "the repository could not be cloned"
+    assert all(got[k]["word"] == "Not reached" for k in ("tests", "build", "check", "review", "pr",
+                                                         "preview", "ship"))
+
+
+def test_the_first_failing_gate_is_in_pipeline_order_not_list_order():
+    assert fv.failing_gate_stop({"failing_gates": ["consistent", "app_serves"]}) == \
+        ("app_serves", "check")
+    assert fv.failing_gate_stop({"failing_gates": ["code_review_passed"]}) == \
+        ("code_review_passed", "review")
+    assert fv.failing_gate_stop({"failing_gates": []}) is None

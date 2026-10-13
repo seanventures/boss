@@ -76,6 +76,21 @@ function seconds(s: Station, now: number | null): number | null {
   return Math.max(0, (end - start) / 1000);
 }
 
+/** Whether a bay shows a clock. Only for work that happened or is happening: never for a
+ *  station not started, skipped, not reached, or STOPPED (its act was left open, so its clock
+ *  would only time how long ago the build stopped). */
+export function bayHasClock(s: Station): boolean {
+  return s.status !== "pending" && s.status !== "skipped" && s.status !== "stopped" && !s.notReached;
+}
+
+/** THE WORD UNDER A BAY, everywhere a station is listed (the header line and the cockpit's
+ *  vertical list at phone width): the server's word, then how long, by the one clock rule. The
+ *  tooltip is the station's tip — a Failed station's reason. */
+export function bayWord(s: Station, now: number | null): { text: string; tip?: string } {
+  const secs = bayHasClock(s) ? seconds(s, now) : null;
+  return { text: secs !== null ? `${s.word} · ${span(secs)}` : s.word, tip: s.tip || undefined };
+}
+
 /** BOSS waiting on a worker or on budget: an hourglass, never a face that claims work (walk D22). */
 export function WaitGlyph({ size = 24, tip }: { size?: number; tip?: string }) {
   return (
@@ -190,11 +205,8 @@ export function StationLine({ stations, density = "row", band = "wide", still = 
     <ol className="fx-line" data-density={density} aria-label={label} data-still={still || undefined}>
       {stations.map((s, i) => {
         const who = whoAt(s);
-        const secs = header ? seconds(s, now) : null;
-        // A time under a bay is how long the work there took or has taken. A STOPPED bay's act
-        // was left open, so its clock would only measure how long ago the build stopped.
-        const time = secs !== null && s.status !== "pending" && s.status !== "skipped" && s.status !== "stopped"
-          ? span(secs) : "";
+        const secs = header && bayHasClock(s) ? seconds(s, now) : null;
+        const time = secs !== null ? span(secs) : "";
         const isActive = s === active;
         // Row density: every face 24px, so the storm reads at a glance (walk D22).
         const size: 16 | 24 | 32 = header ? 32 : 24;
@@ -229,8 +241,8 @@ export function StationLine({ stations, density = "row", band = "wide", still = 
                   ) : <Face s={s} size={32} still={still} viewer={viewer} />}
                   {s.status === "waiting" ? <Hourglass size={12} weight="bold" className="fx-wait" aria-hidden /> : null}
                 </span>
-                <span className="fx-bay-word" title={s.tip || undefined}>
-                  {s.word}{time ? ` · ${time}` : ""}
+                <span className="fx-bay-word" title={bayWord(s, now).tip}>
+                  {bayWord(s, now).text}
                 </span>
                 {s.links.map((l) => (
                   l.url ? <a key={l.label} className="fx-bay-link" href={l.url} target="_blank" rel="noreferrer">{l.label}</a>

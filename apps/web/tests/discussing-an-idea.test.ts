@@ -141,14 +141,14 @@ describe("the conversation becomes the thing you build", () => {
   it("and it is still a press — the chat never starts a build itself", () => {
     const at = DOCK.indexOf("const useBrief");
     const fn = DOCK.slice(at, at + 700);
-    expect(fn).toContain('url.searchParams.set("compose", brief)');
+    expect(fn).toContain("url.searchParams.set(HERO_BRIEF_PARAM, brief)");
     expect(fn).not.toContain("assign(");
     expect(DOCK).toContain("Nothing starts until you press Build");
   });
 
   it("the composer picks it up instead of losing it", () => {
     // Arriving at an empty box would throw away the part that took the effort.
-    expect(HERO).toContain('url.searchParams.get("compose")');
+    expect(HERO).toContain("readHeroBrief(window.location.search)");
     expect(HERO).toContain("setInput(brief)");
   });
 

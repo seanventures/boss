@@ -16,7 +16,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { setConsoleLive } from "../lib/console-live";
 import { $, $$, click, mount, unmount } from "./_helpers/live-render";
 import { stubFetch } from "./_helpers/cockpit-render";
-import { cockpit, cockpitPrOpen } from "./_helpers/factory-fixtures";
+import { at, cockpit, cockpitPrOpen, stations } from "./_helpers/factory-fixtures";
 
 vi.mock("../app/factory/legacy-build-parts", async (orig) => ({ ...(await orig<object>()), DeploymentLine: () => <span data-testid="deploy-line" /> }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }) }));
@@ -91,6 +91,25 @@ describe("at 390px", () => {
       ["Plan", "Tests", "Build", "Check", "Review", "PR", "Preview", "Ship"]);
     expect(items[2].getAttribute("aria-label")).toMatch(/^Build, .+, coding$/);
     expect($('[data-testid="fx-cockpit"]')?.dataset.band).toBe("phone");
+  });
+
+  it("the vertical list says what the header line says: Failed with its reason, Stopped with no clock (rc10.5 m1)", async () => {
+    window.innerWidth = 390;
+    const wire = stations("review", "stopped", [
+      { key: "check", status: "failed", word: "Failed", face: "boss", started_at: at(6), ended_at: at(6.5),
+        tip: "Failed check: App starts — the app did not start" },
+      { key: "review", word: "Stopped", tip: "Left open when the build stopped", started_at: at(8), ended_at: null },
+      ...["pr", "preview", "ship"].map((key) => ({ key, word: "Not reached", not_reached: true, face: "none",
+                                                   hollow_role: null, started_at: at(9) }))]);
+    stubFetch(cockpit({ stations: wire }));
+    await mount(view());
+    const word = (key: string) => $$('[data-testid="fx-stations-v"] .fx-vstation')
+      .find((li) => li.getAttribute("data-status") !== null
+        && li.querySelector(".fx-vstation-label")?.textContent === key)?.querySelector(".fx-vstation-word");
+    expect(word("Check")?.textContent).toBe("Failed · 30s");
+    expect(word("Check")?.getAttribute("title")).toBe("Failed check: App starts — the app did not start");
+    expect(word("Review")?.textContent).toBe("Stopped");
+    expect(word("PR")?.textContent).toBe("Not reached");
   });
 
   it("Steer and Stop are in ⋯", async () => {
