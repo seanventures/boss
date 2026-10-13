@@ -74,7 +74,7 @@ def test_a_failed_install_fails_the_gate_and_runs_no_test(tmp_path):
     calls: list[str] = []
     result = _gate(tmp_path, calls, install_exit=1)
     assert len(calls) == 1 and result.gates["template_tests"] is False
-    assert "installing the app's dependencies failed" in result.evidence["template_tests"]["error"]
+    assert result.evidence["template_tests"]["error"].startswith("dependencies did not install: ")
 
 
 def test_the_trial_installs_before_it_runs_the_tests(tmp_path):
@@ -86,7 +86,7 @@ def test_the_trial_installs_before_it_runs_the_tests(tmp_path):
     assert calls[0].startswith("python3 -m pip install --user") and out["ok"] is True
     calls.clear()
     out = trial.run_stack(manifest, files, "python", runner=_runner(calls, install_exit=1), workdir=tmp_path)
-    assert out["ok"] is False and len(calls) == 1 and "dependencies failed" in out["error"]
+    assert out["ok"] is False and len(calls) == 1 and "dependencies did not install" in out["error"]
 
 
 def test_a_reapply_whose_tests_are_already_on_the_branch_is_not_refused(tmp_path):

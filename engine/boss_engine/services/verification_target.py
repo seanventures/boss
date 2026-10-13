@@ -94,6 +94,124 @@ def run_until_failure(sandbox, commands):
     return results
 
 
+# A DEPENDENCY INSTALL THAT FAILED IS NOT A FAILING TEST.
+#
+# HelpDesk AI (crun_6eaa478dc33a42c6bdb7) failed BOSS's `npm install` with ERESOLVE three times;
+# the fix round was told "the tests are FROZEN ... fix ONLY the implementation" under a
+# `$ npm run verify (exit 1)` header, and the run ended "the template's tests did not pass".
+# An install failure is named as one: in the fix round's evidence (with what to do) and in the
+# run's error. There is deliberately NO --legacy-peer-deps / --force fallback: it would hide a
+# broken tree that the app's own installs (a `pretest` script, a deploy) then trip on.
+_INSTALL_COMMAND = re.compile(
+    r"^\s*(?:npm\s+(?:install|i|ci)\b|pnpm\s+(?:install|i)\b|yarn(?:\s+install)?\s*$"
+    r"|python3?\s+-m\s+pip\s+install\b|pip3?\s+install\b|mvn\b.*dependency:)")
+#: The one instruction a fix round gets with an install failure.
+INSTALL_REPAIR_INSTRUCTION = (
+    "Resolve the dependency conflict in package.json (pick versions whose peer dependencies "
+    "agree); do not use --force or --legacy-peer-deps, in scripts or in .npmrc.")
+
+
+def is_install_command(command: str) -> bool:
+    """True for a dependency install (npm install/ci, pnpm, yarn, pip, maven go-offline)."""
+    return bool(_INSTALL_COMMAND.match(str(command or "")))
+
+
+def install_error_summary(output: str) -> str:
+    """The install's error in one line: npm's code and the lines that say what conflicted
+    ("ERESOLVE unable to resolve dependency tree; Found: eslint@9.39.5; Could not resolve
+    dependency: peer eslint@... from eslint-plugin-react-hooks@4.6.2"), else its last line."""
+    lines = [ln for ln in _meaningful_lines(output)]
+    npm = [re.sub(r"^npm (?:error|ERR!)\s*", "", ln).strip() for ln in lines
+           if re.match(r"^npm (?:error|ERR!)", ln)]
+    npm = [ln for ln in npm if ln]
+    if npm:
+        code = next((ln.split(None, 1)[1] for ln in npm if ln.startswith("code ")), "")
+        keep = []
+        for ln in npm:
+            if ln.startswith(("code ", "A complete log", "For a full report", "/", "Fix the upstream",
+                              "this command with", "to accept an incorrect", "node_modules/",
+                              "While resolving", "Could not resolve dependency:")):
+                continue
+            if ln.startswith(("Found:", "peer ", "ERESOLVE",
+                              "notarget", "404", "gyp ERR! stack Error", "command failed",
+                              "path ", "Conflicting peer", "code E")) or not keep:
+                keep.append(ln)
+        head = (code if code and not code.isdigit() and not any(k.startswith(code) for k in keep)
+                else "")
+        return "; ".join(([head] if head else []) + keep[:6])[:600]
+    return (lines[-1] if lines else "(the install printed nothing)")[:600]
+
+
+def install_failure(result) -> dict | None:
+    """{command, exit_code, summary} when `result` is a FAILED dependency install, else None."""
+    if result is None or getattr(result, "ok", True):
+        return None
+    command = str(getattr(result, "command", "") or "")
+    if not is_install_command(command):
+        return None
+    out = (getattr(result, "stdout", "") or "") + "\n" + (getattr(result, "stderr", "") or "")
+    return {"command": command, "exit_code": getattr(result, "exit_code", None),
+            "timed_out": bool(getattr(result, "timed_out", False)),
+            "summary": install_error_summary(out)}
+
+
+def install_repair_evidence(failure: dict, output: str = "") -> str:
+    """What a fix round is told when BOSS's own install failed: that it was the install, the
+    command BOSS runs, npm's error text, and the one instruction."""
+    how = "timed out" if failure.get("timed_out") else f"exit {failure.get('exit_code')}"
+    tail = "\n".join(_meaningful_lines(output)[-VERIFY_FAILURE_LINES:])
+    return (f"BOSS's dependency install failed, so nothing else ran: `{failure.get('command')}` "
+            f"({how}) in a clean sandbox.\n{tail}\n\n{INSTALL_REPAIR_INSTRUCTION} Then run "
+            f"exactly `{failure.get('command')}` yourself and make sure it passes.")
+
+
+#: How many times one hand-off may go back to the warm session for BOSS's install alone (the
+#: implement budget ends it sooner). The retry of HelpDesk AI (crun_1fdfea1c9c904a8083dd) fixed one
+#: conflict, met a second, and fixed that one only after BOSS's last install check had run.
+INSTALL_FIX_ROUNDS = 4
+
+
+def install_fix_prompt(failure: dict, output: str, round_i: int) -> str:
+    """The warm session's brief when BOSS's install failed on its hand-off: the evidence, what
+    BOSS itself put in package.json (it adds only what is missing, so declaring a compatible
+    version keeps it), and that BOSS runs the install again before anything else."""
+    added = [a for a in (failure.get("boss_added") or []) if a]
+    where = failure.get("cwd") or "."
+    return (
+        f"--- BOSS'S INSTALL FAILED (round {round_i}) ---\n"
+        + install_repair_evidence(failure, output) + "\n"
+        + (f"Before installing, BOSS added these missing dev dependencies to package.json: "
+           f"{', '.join(added)}. It adds only what is missing: declare a version of each that "
+           "agrees with your other packages, or keep them as they are.\n" if added else "")
+        + f"Work in `{where}`. BOSS runs the same install again as soon as you stop, before any "
+        "test or review; the build cannot finish until it passes. Change only package.json (and "
+        "the code a version change needs); end with one line.\n")
+
+
+def install_rounds(check, ask, *, rounds: int = INSTALL_FIX_ROUNDS, over_budget=lambda: False,
+                   emit=lambda kind, data: None) -> bool:
+    """The edit -> install -> edit loop, with the pipeline's parts passed in.
+
+    `check()` runs BOSS's exact install and returns None when it passed, else (failure, output);
+    `ask(prompt)` sends the prompt to the warm session and returns False when it could not.
+    The install is checked again after every reply. Returns True when the install passes."""
+    for round_i in range(1, rounds + 2):
+        checked = check()
+        if checked is None:
+            if round_i > 1:
+                emit("code_task.install_fixed", {"rounds": round_i - 1})
+            return True
+        failure, output = checked
+        emit("code_task.install_failed", {"round": round_i, "command": failure.get("command"),
+                                          "summary": failure.get("summary"),
+                                          "boss_added": failure.get("boss_added") or []})
+        if round_i > rounds or over_budget():
+            return False
+        if not ask(install_fix_prompt(failure, output, round_i)):
+            return False
+    return False
+
+
 #: How much of a verify run is kept as its evidence (code_task_runs.state.last_verify_output).
 VERIFY_LOG_LIMIT = 4000
 #: When the tail is all BOSS's own bookkeeping, how many of the failing command's last lines are
@@ -180,6 +298,15 @@ REQUIRED_WEB_DEV_DEPS = {
     "@typescript-eslint/eslint-plugin": "^7.13.1",
     "@typescript-eslint/parser": "^7.13.1",
 }
+
+#: The lint plugins above are the eslint-8 set (eslint-plugin-react-hooks 4 declares a peer of
+#: eslint <= 8, @typescript-eslint 7 of eslint 8). An app that declares eslint 9 or later owns its
+#: lint toolchain (flat config; it lists the plugins it uses), so BOSS adds none of them: adding
+#: them is an ERESOLVE. HelpDesk AI (crun_6eaa478dc33a42c6bdb7) declared eslint ^9; BOSS added
+#: eslint-plugin-react-hooks ^4.6.2 before every install, the agent removed it in its fix round,
+#: BOSS put it back, and all three of BOSS's installs failed in 0.7 s.
+ESLINT_COMPANIONS = frozenset({"eslint-plugin-react", "eslint-plugin-react-hooks",
+                               "@typescript-eslint/eslint-plugin", "@typescript-eslint/parser"})
 
 # Live official follow-ups used `exit 0`, `node -e 'process.exit(0)'`,
 # and `playwright test || true` to make verify green. Those are stubs.
@@ -612,7 +739,10 @@ def harden_web_package(app_dir: Path | str) -> dict[str, Any]:
         dev = {}
         payload["devDependencies"] = dev
 
+    eslint_major = _semver_major(str(dev.get("eslint") or deps.get("eslint") or ""))
     for name, version in REQUIRED_WEB_DEV_DEPS.items():
+        if name in ESLINT_COMPANIONS and eslint_major is not None and eslint_major > 8:
+            continue
         if name not in dev and name not in deps:
             dev[name] = version
             changed.append(f"add:{name}")

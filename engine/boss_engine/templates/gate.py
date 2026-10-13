@@ -112,7 +112,12 @@ def install_command(stack: str, cwd: Path) -> Optional[str]:
     if stack == "node" and (cwd / "package-lock.json").is_file():
         return "npm ci --no-audit --no-fund"
     if stack == "node" and (cwd / "package.json").is_file():
-        return "npm install --no-audit --no-fund"
+        # BOSS's one install (verification_target.NPM_INSTALL_CMD): the build's verify ran this
+        # exact command, so the gate cannot fail an install the build already passed, or pass
+        # one it failed.
+        from ..services.verification_target import NPM_INSTALL_CMD
+
+        return NPM_INSTALL_CMD
     if stack == "java" and (cwd / "pom.xml").is_file():
         return "mvn -q -B dependency:go-offline"
     return None
@@ -128,10 +133,23 @@ def install_dependencies(stack: str, cwd: Path, run_command: Callable[[str, Path
     if out["exit_code"] not in (0, None):
         from ..identity.redaction import redact_text
 
-        tail = str(getattr(result, "stdout", "") or "") + str(getattr(result, "stderr", "") or "")
-        out["error"] = f"installing the app's dependencies failed (exit {out['exit_code']})"
+        from ..services.verification_target import install_error_summary
+
+        tail = str(getattr(result, "stdout", "") or "") + "\n" + str(getattr(result, "stderr", "") or "")
+        out["summary"] = redact_text(install_error_summary(tail))
+        out["error"] = f"dependencies did not install: {out['summary']}"
         out["output_tail"] = redact_text(tail[-1500:])
     return out
+
+
+def install_failure_of(template_tests_record: Any) -> Optional[dict]:
+    """The gate's own failed install from its template_tests evidence, shaped like
+    verification_target.install_failure, else None."""
+    install = (template_tests_record or {}).get("install") if isinstance(template_tests_record, Mapping) else None
+    if not isinstance(install, Mapping) or not install.get("error"):
+        return None
+    return {"command": install.get("command"), "exit_code": install.get("exit_code"),
+            "summary": install.get("summary")}
 
 
 def present_in_app(test_files: list[str], cwd: Optional[Path]) -> set[str]:
@@ -401,14 +419,41 @@ _NEXT = {
 }
 
 
-def hold_outcome(failing: Any) -> Optional[dict]:
+#: What to do when the build's tests never ran because BOSS's dependency install failed.
+INSTALL_NEXT = ("Open the build's Checks to read the install output, resolve the dependency "
+                "conflict in package.json (versions whose peer dependencies agree; no --force or "
+                "--legacy-peer-deps), then retry the build.")
+
+
+def install_reason(install_failure: Any) -> Optional[str]:
+    """"dependencies did not install: ERESOLVE …" for a recorded install failure
+    (verification_target.install_failure), else None."""
+    if not isinstance(install_failure, Mapping):
+        return None
+    summary = str(install_failure.get("summary") or "").strip()
+    if not summary:
+        how = "timed out" if install_failure.get("timed_out") else f"exit {install_failure.get('exit_code')}"
+        summary = f"`{install_failure.get('command') or 'the install'}` {how}"
+    return f"dependencies did not install: {summary[:500]}"
+
+
+def hold_outcome(failing: Any, install_failure: Any = None) -> Optional[dict]:
     """{gates, reason, next_step, error} for a build whose failing gates include a template gate,
-    else None. `error` is the one line a blocked build shows: why, then what to do."""
+    else None. `error` is the one line a blocked build shows: why, then what to do.
+
+    When the build's own install failed (`install_failure`, recorded by the pipeline), its tests
+    never ran, so the template's could not either: the reason is the install, in npm's words, not
+    "the template's tests did not pass" (HelpDesk AI, crun_6eaa478dc33a42c6bdb7)."""
     gates = [g for g in TEMPLATE_GATES if g in set(failing or ())]
     if not gates:
         return None
     reason = "; ".join(_WHY[g] for g in gates)
     next_step = _NEXT[gates[0]]
+    install = install_reason(install_failure)
+    if install and "template_tests" in gates:
+        rest = [_WHY[g] for g in gates if g != "template_tests"]
+        reason = "; ".join([install, *rest])
+        next_step = INSTALL_NEXT if gates[0] == "template_tests" else next_step
     return {"gates": gates, "reason": reason[:1].upper() + reason[1:], "next_step": next_step,
             "error": f"Blocked: {reason}. {next_step}"}
 
@@ -419,7 +464,8 @@ def held_run(connection: Any, run_id: str) -> Optional[dict]:
     from sqlalchemy import text
 
     row = connection.execute(text(
-        "SELECT q.gates_failed, r.finalize_ctx->'failing_gates' AS fctx_failing "
+        "SELECT q.gates_failed, r.finalize_ctx->'failing_gates' AS fctx_failing, "
+        "r.finalize_ctx->'install_failure' AS install_failure "
         "FROM code_task_runs r LEFT JOIN quality_gates q ON q.code_task_run_id = r.id "
         "WHERE r.id = :i ORDER BY q.created_at DESC NULLS LAST LIMIT 1"),
         {"i": run_id}).mappings().first()
@@ -429,4 +475,4 @@ def held_run(connection: Any, run_id: str) -> Optional[dict]:
     for value in (row["gates_failed"], row["fctx_failing"]):
         if isinstance(value, list):
             failing |= {str(g) for g in value}
-    return hold_outcome(failing)
+    return hold_outcome(failing, row["install_failure"])
