@@ -8,8 +8,10 @@
 #       wiring smoke, the connector's own suite, the blocked-build words, the pull request
 #       through a 502, a deploy to a local target, the retry policy, and an approval that needs
 #       step-up. One PASS/FAIL table; exit 1 on any FAIL.
-#   scripts/e2e-gate.sh agent ...
-#       Tier B (a real build with a model), where this checkout has it.
+#   scripts/e2e-gate.sh agent [--brief <name>] [--with-connector] [--budget-min N] [--keep]
+#       Tier B: ONE real, model-driven build of a known-good brief (tests/e2e/briefs/), started
+#       on the local install as the test owner through BOSS's API, watched to an opened PR,
+#       asserted, timed, and cleaned up after a PASS (scripts/e2e_gate_agent.py).
 #
 # WHERE IT RUNS. In a THROWAWAY container of the installed worker image (it has boss-sandbox-exec,
 # the run uid pool, Node and npm: commands run as a build's own uid, umask 007), next to a
@@ -27,10 +29,9 @@ TIER="${1:-}"; shift || true
 
 case "$TIER" in
   plumbing) ;;
-  agent)
-    if [ -x "$ROOT/tests/e2e/gate/agent.sh" ]; then exec "$ROOT/tests/e2e/gate/agent.sh" "$@"; fi
-    echo "e2e-gate: tier 'agent' is not in this checkout" >&2; exit 2 ;;
-  *) echo "usage: scripts/e2e-gate.sh plumbing [--boss-root DIR] [--image IMAGE] [--keep]" >&2; exit 2 ;;
+  agent) exec python3 "$ROOT/scripts/e2e_gate_agent.py" "$@" ;;
+  *) echo "usage: scripts/e2e-gate.sh plumbing [--boss-root DIR] [--image IMAGE] [--keep]" >&2
+     echo "       scripts/e2e-gate.sh agent [--brief <name>] [--with-connector] [--budget-min N] [--keep]" >&2; exit 2 ;;
 esac
 
 BOSS_ROOT="$ROOT"
