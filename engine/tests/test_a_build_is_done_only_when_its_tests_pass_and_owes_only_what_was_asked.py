@@ -78,6 +78,21 @@ def test_one_fix_round_before_review_and_failing_tests_skip_the_panel():
     assert '"code_task.light_plan"' in src
 
 
+def test_a_test_command_that_names_its_directory_runs_from_the_root(tmp_path):
+    """`npm --prefix notes-lite test` ran inside notes-lite/, so npm looked for
+    notes-lite/notes-lite; the agent symlinked `.` there and the sandbox refused it (crun_a936b22f)."""
+    from boss_engine.services import verification_target as vt
+
+    (tmp_path / "notes-lite").mkdir()
+    (tmp_path / "notes-lite" / "package.json").write_text('{"name": "notes-lite"}')
+    plan = vt.resolve_gate_plan({"test_commands": ["npm --prefix notes-lite test"]}, "t",
+                                tmp_path, changed=["notes-lite/server/app.js"])
+    assert plan.cwd == tmp_path
+    assert vt.named_directory("npm --prefix notes-lite test") == "notes-lite"
+    assert vt.named_directory("pnpm -C web test") == "web"
+    assert vt.named_directory("npm test") is None
+
+
 def test_a_nul_in_file_text_never_crashes_the_final_write():
     import json
 

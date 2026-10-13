@@ -3890,15 +3890,21 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 last_verify_cwd = str(cwd)
             if plan.runs_steps:
                 return _run_manifest_verify(plan, record=record)
+            # The command runs where it was written for (the root, for `npm --prefix app test`);
+            # BOSS's own preparation — install, browsers, the verify script — happens in the app
+            # directory that command names.
+            _named = next((d for d in (verification_target.named_directory(c)
+                                       for c in plan.commands) if d), None)
+            app_cwd = (Path(root) / _named) if _named and (Path(root) / _named).is_dir() else cwd
             try:
-                verification_target.ensure_verify_script(cwd)
+                verification_target.ensure_verify_script(app_cwd)
             except Exception:  # noqa: BLE001 — never fail a run on script bookkeeping
                 _log_caught(logger)
                 pass
             prep_note = ""
             try:
                 prep = verification_target.prepare_web_verify_env(
-                    cwd,
+                    app_cwd,
                     scenarios=(fctx.get("qa_benchmark") or {}).get("acceptance_scenarios"),
                     app_id=_app_id,
                 )
@@ -3924,7 +3930,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 )
                 install = sandbox.run(
                     str(prep.get("install_command") or verification_target.NPM_INSTALL_CMD),
-                    cwd=str(cwd),
+                    cwd=str(app_cwd),
                     timeout=install_timeout,
                 )
                 _emit_cmd("install dependencies", install)
@@ -3939,7 +3945,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 from . import playwright_cache
                 from .sandbox import CommandResult as _PwResult
 
-                _pw = playwright_cache.ensure(playwright_cache.project_version(cwd))
+                _pw = playwright_cache.ensure(playwright_cache.project_version(app_cwd))
                 if _pw.get("ok"):
                     _emit_cmd("install browsers", _PwResult(
                         command=f"boss: {_pw.get('detail')}", argv=[], exit_code=0,
@@ -3952,7 +3958,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                             prep.get("browser_install_command")
                             or verification_target.PLAYWRIGHT_INSTALL_CMD
                         ),
-                        cwd=str(cwd),
+                        cwd=str(app_cwd),
                         timeout=max(install_timeout, playwright_cache.install_timeout()),
                     ))
             # npm install / the implementer can recreate leftover Playwright
@@ -3961,7 +3967,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # or a metrics stub.
             try:
                 forced = verification_target.prepare_web_verify_env(
-                    cwd,
+                    app_cwd,
                     scenarios=(fctx.get("qa_benchmark") or {}).get("acceptance_scenarios"),
                     app_id=_app_id,
                 )
