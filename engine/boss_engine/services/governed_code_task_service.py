@@ -1099,11 +1099,33 @@ def pg_json(value) -> str:
     return json.dumps(_clean(value), default=str)
 
 
+#: Whether a task's context block carries the service standards, sticky per task once any
+#: stage asked, so every stage of one build renders the SAME bytes (_ctx_block). Bounded: a
+#: long-lived worker builds many tasks.
+_CTX_SERVICE: dict = {}
+_CTX_SERVICE_MAX = 256
+
+
 def _ctx_block(title, instructions, criteria, *, service: bool = False) -> str:
     """Identical task-context preamble for EVERY pipeline stage — byte-identical on
     purpose. The model API's prompt cache is keyed on the request prefix, so stages
     launched back-to-back (within the cache TTL) re-READ this block from cache instead
-    of cold-ingesting it in each fresh session. Keep all stage-specific text AFTER it."""
+    of cold-ingesting it in each fresh session. Keep all stage-specific text AFTER it.
+
+    `service` used to make the block differ BY STAGE (QA and implement passed True for a
+    served app, the reviewers False), so the shared prefix broke at the standards line. Once
+    any stage of a task asks for the service standards, every later stage of the same task
+    gets them too (code_agent.SHARED_CONTEXT_START puts the block in the system prompt)."""
+    key = (str(title or ""), str(instructions or ""), tuple(str(c) for c in (criteria or [])))
+    sticky = bool(service) or bool(_CTX_SERVICE.get(key))
+    if sticky and not _CTX_SERVICE.get(key):
+        if len(_CTX_SERVICE) >= _CTX_SERVICE_MAX:
+            _CTX_SERVICE.pop(next(iter(_CTX_SERVICE)), None)
+        _CTX_SERVICE[key] = True
+    return _render_ctx_block(title, instructions, criteria, service=sticky)
+
+
+def _render_ctx_block(title, instructions, criteria, *, service: bool = False) -> str:
     crit = "\n".join(f"- {c}" for c in criteria or []) or "- (none specified)"
 
     # Standards the PLATFORM requires, as distinct from the ones `_standards_prompt` infers by

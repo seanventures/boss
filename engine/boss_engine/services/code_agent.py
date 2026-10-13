@@ -66,6 +66,56 @@ def _argv_safe(prompt: str) -> str:
     return cleaned
 
 
+#: THE SHARED TASK CONTEXT GOES IN THE SYSTEM PROMPT, SO EVERY STAGE OF A BUILD SHARES ONE
+#: CACHED PREFIX. The prompt cache is keyed on the request prefix: tools, then the system prompt,
+#: then the messages. The CLI's default system prompt carries the cwd, env and GIT STATUS, which
+#: change between stages (QA's tests are uncommitted files when implement starts), so every
+#: stage's session wrote its own cache from byte zero: 2.08M cache-write tokens across the 14
+#: sessions of one HelpDesk build, and no reuse between them. With the dynamic sections moved
+#: into the first user message (--exclude-dynamic-system-prompt-sections) and the governed
+#: pipeline's byte-identical TASK CONTEXT block appended to the system prompt, tools + system +
+#: task context are the same bytes for every stage started within the cache TTL.
+SHARED_CONTEXT_START = "=== TASK CONTEXT"
+SHARED_CONTEXT_END = "=== END TASK CONTEXT ===\n\n"
+#: Over this the block stays in the prompt (argv bound, as for the prompt itself).
+SHARED_CONTEXT_MAX_BYTES = 96_000
+#: A resumed session must send the SAME system prompt or its whole conversation is re-written to
+#: the cache: the block each session started with, by session id (bounded).
+_SESSION_SHARED: dict[str, str] = {}
+_SESSION_SHARED_MAX = 256
+
+
+def split_shared_context(prompt: str) -> tuple[str, str]:
+    """(the shared TASK CONTEXT block, the stage's own prompt). ("", prompt) when the prompt
+    does not start with the block."""
+    text = prompt or ""
+    if not text.startswith(SHARED_CONTEXT_START):
+        return "", text
+    at = text.find(SHARED_CONTEXT_END)
+    if at < 0:
+        return "", text
+    cut = at + len(SHARED_CONTEXT_END)
+    return text[:cut], text[cut:]
+
+
+def _shared_for(prompt: str, resume_session_id: Optional[str]) -> tuple[str, str]:
+    """What goes in the system prompt for this call, and what stays in the prompt."""
+    shared, own = split_shared_context(prompt)
+    if not shared and resume_session_id:
+        return _SESSION_SHARED.get(resume_session_id, ""), prompt
+    if len(shared.encode("utf-8", "ignore")) > SHARED_CONTEXT_MAX_BYTES:
+        return "", prompt
+    return shared, own
+
+
+def _remember_shared(session_id: Optional[str], shared: str) -> None:
+    if not session_id or not shared:
+        return
+    if len(_SESSION_SHARED) >= _SESSION_SHARED_MAX:
+        _SESSION_SHARED.pop(next(iter(_SESSION_SHARED)), None)
+    _SESSION_SHARED[session_id] = shared
+
+
 #: How long a code agent may say NOTHING before it is treated as stalled.
 #:
 #: Generous on purpose: a big install or a long model turn can be quiet for a while, and killing
@@ -892,6 +942,7 @@ class ClaudeCodeAgent:
         # EFFORT PER STAGE (stage_effort): writing stages at the project's writing effort,
         # design and review at high, anything else at the CLI's own default.
         effort = _current_effort()
+        shared_ctx, own_prompt = _shared_for(_argv_safe(prompt), resume_session_id)
 
         def base_cmd(stream: bool) -> list[str]:
             """The argv for one attempt. Rebuilt per attempt so capture can be dropped."""
@@ -921,6 +972,11 @@ class ClaudeCodeAgent:
                 argv += ["--model", model]
             if effort:
                 argv += ["--effort", effort]
+            # One cached prefix for every stage (SHARED_CONTEXT_START): static system prompt,
+            # then the run's shared task context.
+            argv += ["--exclude-dynamic-system-prompt-sections"]
+            if shared_ctx:
+                argv += ["--append-system-prompt", shared_ctx]
             # `--` ends option parsing: a prompt that BEGINS with a dash (e.g. a
             # "--- SECTION ---" header) must never be read as a CLI option.
             # Single choke point: every stage (build AND review) goes through _invoke, so the
@@ -929,7 +985,7 @@ class ClaudeCodeAgent:
             # and the whole command is then rejected before the process starts — measured on the
             # chat path as `OSError: [Errno 7] Argument list too long: 'nice'`. Over the limit
             # the prompt goes on stdin; under it, nothing changes.
-            body = _argv_safe(prompt) + _PARALLEL_TOOLS_RULE + (sub_agent_rule(fan_out) if fan_out else "")
+            body = own_prompt + _PARALLEL_TOOLS_RULE + (sub_agent_rule(fan_out) if fan_out else "")
             if len(body.encode("utf-8", "ignore")) > 96_000:
                 return argv, body
             return argv + ["--", body], None
@@ -1231,6 +1287,7 @@ class ClaudeCodeAgent:
                             ok=False, error=str(exc))
             raise
         usage, cost_micros = self._usage(data, self.settings)
+        _remember_shared(data.get("session_id"), _shared_for(prompt, resume_session_id)[0])
         turns = int(data.get("num_turns") or 0)
         record_llm_call(engine_name=self.engine, usage=usage, cost_usd_micros=cost_micros,
                         latency_ms=int((time.monotonic() - started) * 1000), turns=turns)
