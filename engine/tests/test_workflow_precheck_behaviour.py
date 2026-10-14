@@ -408,19 +408,36 @@ def _start_failure(store: Store, rid: str, log: str, environment: dict | None) -
               "environment": environment})
 
 
-def test_the_matcher_on_a_real_log_blames_the_wrong_variable(store):
-    # The build's own matcher (run_env.unset_named_in) takes the FIRST unset name the log
-    # mentions; this app printed its config before dying on the variable it named.
-    log = ("config: APP_BASE_URL=(unset) PORT=3000\n"
-           "Error: DEMO_PASSWORD must be set (the seed refuses to run without it)")
-    _start_failure(store, "crun_l", log, {"unset": ["APP_BASE_URL", "DEMO_PASSWORD"],
-                                          "generated": ["SESSION_SECRET"]})
+_CONFIG_THEN_DIE = ("config: APP_BASE_URL=(unset) PORT=3000\n"
+                    "Error: DEMO_PASSWORD must be set (the seed refuses to run without it)")
+
+
+def test_the_matcher_on_a_real_log_blames_the_wrong_variable(store, monkeypatch):
+    # The matcher the build used to run (run_env.unset_named_in before 9d11267f) took the FIRST
+    # unset name the log mentions; this app printed its config before dying on the variable it
+    # named. The pre-check must still catch that class if the matcher ever regresses to it.
+    def first_unset_mentioned(log, environment):
+        return next((n for n in environment.get("unset") or [] if n in log), None)
+
+    monkeypatch.setattr(bh, "blame", first_unset_mentioned)
+    _start_failure(store, "crun_l", _CONFIG_THEN_DIE,
+                   {"unset": ["APP_BASE_URL", "DEMO_PASSWORD"], "generated": ["SESSION_SECRET"]})
     found = bh.check_crash_blame(_ctx())
     wrong = [f for f in found if f["verdict"] == "will_fail"]
     assert wrong, found
     assert wrong[0]["details"] == {"run": "crun_l", "named": "DEMO_PASSWORD",
                                    "blamed": "APP_BASE_URL"}
     assert "BOSS bug" in wrong[0]["fix"]["action"]
+
+
+def test_the_build_matcher_now_blames_the_line_the_app_died_on(store):
+    # The real matcher (fixed in 9d11267f: the LAST error line wins) reads the same log right,
+    # so the pre-check has nothing to flag.
+    _start_failure(store, "crun_l", _CONFIG_THEN_DIE,
+                   {"unset": ["APP_BASE_URL", "DEMO_PASSWORD"], "generated": ["SESSION_SECRET"]})
+    found = bh.check_crash_blame(_ctx())
+    assert [f["verdict"] for f in found] == ["ready"], found
+    assert "matcher blames DEMO_PASSWORD" in found[0]["evidence"]
 
 
 def test_a_log_the_matcher_reads_right_is_ready(store):
