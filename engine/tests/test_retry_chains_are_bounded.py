@@ -86,7 +86,9 @@ def test_the_escalation_is_what_makes_the_bound_stick():
     assert "task_ref = :t" in door and "status = 'open'" in door, \
         "a second escalation per tick is the loop wearing a new hat"
     sweep = inspect.getsource(shepherd_service.sweep)
-    assert "shepherd_escalations" in sweep and "status = 'open'" in sweep
+    assert "SWEEP_CANDIDATES_SQL" in sweep
+    candidates = shepherd_service.SWEEP_CANDIDATES_SQL
+    assert "shepherd_escalations" in candidates and "status = 'open'" in candidates
 
 
 def test_the_refusal_says_what_was_tried_and_what_failed():

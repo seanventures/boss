@@ -312,13 +312,16 @@ class CaptainCoordinationService:
             assigned += self._persist_assignments(
                 connection, project_id, item, plan, actor=actor,
             )
-        emit = __import__(
-            "boss_engine.services.core", fromlist=["emit_event"]
-        ).emit_event
-        emit(
-            connection, project_id, "captain.coordinated", actor, "project", project_id,
-            {"plans": len(plans), "assignments": assigned},
-        )
+        # ONLY WHEN IT STAFFED SOMEONE. Every sweep re-plans the same board, and 2,130 of the
+        # 2,182 captain.coordinated events on 2026-10-13 said "20 plans, 0 assignments".
+        if assigned:
+            emit = __import__(
+                "boss_engine.services.core", fromlist=["emit_event"]
+            ).emit_event
+            emit(
+                connection, project_id, "captain.coordinated", actor, "project", project_id,
+                {"plans": len(plans), "assignments": assigned},
+            )
         return {
             "project_id": project_id,
             "plans": plans,

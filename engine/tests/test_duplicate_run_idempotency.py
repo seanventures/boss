@@ -92,6 +92,9 @@ def test_both_guards_run_before_a_run_is_created():
 
     from boss_engine.services import code_task_service
 
+    # Both guards live in the one "same work" rule (in_flight_same_work), which supersession
+    # shares, and the start asks it before it makes a run.
+    rule = inspect.getsource(code_task_service.in_flight_same_work)
+    assert "active_duplicate(" in rule and "active_same_app(" in rule
     src = inspect.getsource(code_task_service.start_code_task)
-    assert "active_duplicate(" in src and "active_same_app(" in src
-    assert src.index("active_same_app(") < src.index('make_id("crun")')
+    assert src.index("in_flight_same_work(") < src.index('make_id("crun")')

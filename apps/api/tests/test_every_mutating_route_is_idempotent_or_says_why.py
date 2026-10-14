@@ -115,6 +115,14 @@ def test_what_a_key_remembers():
         assert not idempotency.remembers(transient), transient
 
 
+def test_an_identity_refusal_is_not_remembered():
+    """BOSSAPP-510: `401 step_up_required` was stored against the press's key, so the console's
+    re-send after the person entered their code got the same refusal back and the approval
+    never landed. 401/403 describe the session at that moment; the key stays free."""
+    assert not idempotency.remembers(401)
+    assert not idempotency.remembers(403)
+
+
 def test_every_covered_route_really_reaches_the_claim_and_every_excluded_one_does_not(
         monkeypatch, client, engine):
     """NOT A TAUTOLOGY. The test above calls a route "covered" when the exclusion regex does not

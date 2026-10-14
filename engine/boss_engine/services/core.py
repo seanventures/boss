@@ -101,6 +101,63 @@ def emit_event(
     return event_id
 
 
+def _last_event_data(connection: Any, project_id: str, event_type: str) -> Any:
+    """This project's latest event of a type, or None — inside a savepoint, so a store that
+    cannot answer never aborts the caller's transaction."""
+    nested = None
+    try:
+        if hasattr(connection, "begin_nested"):
+            nested = connection.begin_nested()
+        row = connection.execute(
+            sql("SELECT data FROM events WHERE project_id = :p AND event_type = :t "
+                "ORDER BY created_at DESC LIMIT 1"),
+            {"p": project_id, "t": event_type}).first()
+        if nested is not None:
+            nested.commit()
+        return row[0] if row is not None else None
+    except Exception:  # noqa: BLE001 — an unanswerable check never swallows the event
+        try:
+            if nested is not None and nested.is_active:
+                nested.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+        return None
+
+
+def emit_if_changed(
+    connection: Any,
+    project_id: str,
+    event_type: str,
+    actor: str,
+    entity_type: str,
+    entity_id: str,
+    data: dict,
+    *,
+    compare: tuple[str, ...],
+) -> Optional[str]:
+    """Emit only when ``data``'s ``compare`` fields differ from this project's last event of the
+    same type. Returns the new event id, or None when nothing changed.
+
+    A sweep that reports the same state every two minutes is not news: on 2026-10-13 five
+    metatron events were written 943 times each and captain.coordinated 2,191 times, almost all
+    "nothing new", burying the events that did say something. The volatile parts of a payload (a
+    receipt id, a tick id) are left out of ``compare``; the meaning is in it.
+
+    A store that cannot answer the question (no SQL) emits, exactly as before.
+    """
+    wanted = {k: data.get(k) for k in compare}
+    last = _last_event_data(connection, project_id, event_type)
+    if isinstance(last, str):
+        try:
+            last = json.loads(last)
+        except ValueError:
+            last = None
+    if isinstance(last, dict) and {k: last.get(k) for k in compare} == json.loads(
+            json.dumps(wanted, default=str)):
+        return None
+    return emit_event(connection, project_id, event_type, actor, entity_type, entity_id, data)
+
+
 #: Events that finish a unit of work, or change one that finished (scorecards._EVENT_UNITS and
 #: its decision events). Checked before anything is imported: every other event costs a lookup.
 _SCORECARD_PREFIXES = ("workflow.run_", "workflow.step_", "workflow.compensation_completed",

@@ -312,7 +312,8 @@ _APPENDED_BLOCKS = (
 )
 
 
-def active_same_app(connection, project_id: str, repo: str, title: str) -> Optional[str]:
+def active_same_app(connection, project_id: str, repo: str, title: str,
+                    exclude: Optional[str] = None) -> Optional[str]:
     """An in-flight run building the SAME APP in the same repo, if there is one.
 
     The fingerprint above is exact: change one sentence of the brief and it is, correctly, a
@@ -335,9 +336,9 @@ def active_same_app(connection, project_id: str, repo: str, title: str) -> Optio
             rows = connection.execute(
                 sql("SELECT id, title FROM code_task_runs "
                     "WHERE project_id = :p AND status IN ('running', 'queued') "
-                    "  AND spec->>'repo' = :r "
+                    "  AND spec->>'repo' = :r AND id <> :x "
                     "ORDER BY created_at ASC LIMIT 40"),
-                {"p": project_id, "r": repo}).mappings().all()
+                {"p": project_id, "r": repo, "x": exclude or ""}).mappings().all()
         except RuntimeError:
             # See active_duplicate: a store can define execute() and still be unable to run
             # SQL. Ask the port rather than letting the guard take down the retry it guards.
@@ -353,6 +354,8 @@ def active_same_app(connection, project_id: str, repo: str, title: str) -> Optio
     from .naming import identity_key
 
     for row in rows:
+        if exclude and str(row["id"]) == exclude:
+            continue
         other, _b, _l = project_name(str(row["title"] or ""))
         if identity_key(other) and identity_key(other) == identity_key(wanted):
             return row["id"]
@@ -379,7 +382,8 @@ def _in_flight_via_port(project_id: str, *, repo: Optional[str] = None) -> list[
     return out
 
 
-def active_duplicate(connection, project_id: str, fingerprint: str) -> Optional[str]:
+def active_duplicate(connection, project_id: str, fingerprint: str,
+                     exclude: Optional[str] = None) -> Optional[str]:
     """The id of an identical run that is STILL IN FLIGHT, if there is one.
 
     In flight only. Running the same task again after it finished is a legitimate act — that
@@ -388,14 +392,14 @@ def active_duplicate(connection, project_id: str, fingerprint: str) -> Optional[
     first was not already producing, and each one is a full budgeted pipeline.
     """
     if not hasattr(connection, "execute"):
-        return _active_duplicate_via_port(project_id, fingerprint)
+        return _active_duplicate_via_port(project_id, fingerprint, exclude)
     try:
         row = connection.execute(
             sql("SELECT id FROM code_task_runs "
                 "WHERE project_id = :p AND status IN ('running', 'queued') "
-                "  AND spec->>'work_fingerprint' = :fp "
+                "  AND spec->>'work_fingerprint' = :fp AND id <> :x "
                 "ORDER BY created_at ASC LIMIT 1"),
-            {"p": project_id, "fp": fingerprint}).first()
+            {"p": project_id, "fp": fingerprint, "x": exclude or ""}).first()
     except RuntimeError:
         # HAVING `execute` IS NOT THE SAME AS BEING ABLE TO RUN SQL.
         #
@@ -406,11 +410,12 @@ def active_duplicate(connection, project_id: str, fingerprint: str) -> Optional[
         # Falling back to the port keeps the protection working there rather than switching it
         # off, which matters: without it the OSS path would happily start the same pipeline
         # twice, and each one is a full budget.
-        return _active_duplicate_via_port(project_id, fingerprint)
+        return _active_duplicate_via_port(project_id, fingerprint, exclude)
     return row[0] if row else None
 
 
-def _active_duplicate_via_port(project_id: str, fingerprint: str) -> Optional[str]:
+def _active_duplicate_via_port(project_id: str, fingerprint: str,
+                               exclude: Optional[str] = None) -> Optional[str]:
     """The same question, asked of a store that cannot run SQL.
 
     Returns None when the store cannot answer at all — an unanswerable duplicate check must not
@@ -419,8 +424,30 @@ def _active_duplicate_via_port(project_id: str, fingerprint: str) -> Optional[st
     matching = [
         r for r in _in_flight_via_port(project_id)
         if (r.get("spec") or {}).get("work_fingerprint") == fingerprint
+        and not (exclude and str(r.get("id")) == exclude)
     ]
     return str(matching[0].get("id")) if matching else None
+
+
+def in_flight_same_work(connection, project_id: str, *, fingerprint: Optional[str],
+                        repo: Optional[str], title: Optional[str],
+                        exclude: Optional[str] = None) -> Optional[str]:
+    """THE ONE "SAME WORK" RULE: an in-flight run doing this work, if there is one.
+
+    The exact work fingerprint first, then the same app in the same repo. start_code_task
+    dedupes onto what this returns, and run_liveness.superseded_by asks the same question —
+    they used two rules, so the shepherd retried crun_37f4ccef every two minutes while each
+    retry was deduped onto the live crun_247435e1 (17 retries + 17 duplicate_suppressed in half
+    an hour): the start said "that work is running", supersession said "nothing newer exists".
+    """
+    existing = active_duplicate(connection, project_id, fingerprint, exclude) if fingerprint else None
+    if not existing and repo and title:
+        # Second, coarser guard. The fingerprint is exact by design — reword one sentence
+        # and it is correctly a different fingerprint — which makes it too strict to be the
+        # ONLY check. Two runs building the same app in one repo at the same time is wrong
+        # however the briefs are worded.
+        existing = active_same_app(connection, project_id, repo, title, exclude)
+    return existing
 
 
 # Simulated fixture: create→persist→read without a model, reservation, job, or PR.
@@ -451,8 +478,13 @@ def start_code_task(
     reference_links: Optional[list[str]] = None,
     role_key: Optional[str] = None,
     automatic_retry: bool = False,
+    outcome: Optional[dict] = None,
 ) -> str:
     """Create the durable run row and enqueue the single `code.task` job.
+
+    ``outcome``: when given, filled with ``{"created": bool, "run_id": str}`` — whether THIS
+    call made a run or returned the in-flight one doing the same work. An automatic caller (the
+    shepherd's retry) must not count a dedupe hit as a new attempt.
 
     ``automatic_retry``: BOSS itself is starting this attempt (retry_code_task(automatic=True)).
     It runs under the parent's carried grant or is not started at all (RetryNeedsPerson).
@@ -511,13 +543,8 @@ def start_code_task(
                                    base_branch=base_branch, title=title,
                                    instructions=instructions.replace(_DEPLOYABILITY_NOTE, ""))
     if not allow_duplicate:
-        existing = active_duplicate(connection, project_id, fingerprint)
-        if not existing:
-            # Second, coarser guard. The fingerprint is exact by design — reword one sentence
-            # and it is correctly a different fingerprint — which makes it too strict to be the
-            # ONLY check. Two runs building the same app in one repo at the same time is wrong
-            # however the briefs are worded.
-            existing = active_same_app(connection, project_id, repo, title)
+        existing = in_flight_same_work(connection, project_id, fingerprint=fingerprint,
+                                       repo=repo, title=title)
         if existing:
             # Idempotent, not an error: the caller wanted this work running, and it is.
             # Raising would make an impatient second click look like a broken button, which
@@ -528,6 +555,8 @@ def start_code_task(
                            {"title": title, "fingerprint": fingerprint})
             except Exception:  # noqa: BLE001 — never fail a start over its own audit trail
                 pass
+            if outcome is not None:
+                outcome.update({"created": False, "run_id": existing})
             return existing
 
     run_id = make_id("crun")
@@ -800,6 +829,8 @@ def start_code_task(
                 "fc": json.dumps(run_finalize),
             },
         )
+    if outcome is not None:
+        outcome.update({"created": True, "run_id": run_id})
     if simulated:
         emit_event(
             connection,
@@ -1835,6 +1866,7 @@ def retry_code_task(
         **({"substrate_fallback": substrate_fallback_note} if substrate_fallback_note else {}),
     })
 
+    started: dict = {}
     with _transaction(engine) as c:
         new_id = start_code_task(
             c, project_id=prev["project_id"], task_id=prev.get("task_id"), title=title,
@@ -1938,6 +1970,7 @@ def retry_code_task(
             substrate=substrate_override,
             job_priority=job_priority,
             automatic_retry=automatic,
+            outcome=started,
         )
         if pr_url:
             emit_event(
@@ -1953,6 +1986,9 @@ def retry_code_task(
                           "|| jsonb_build_object('allow_test_retirement', true) WHERE id=:i"),
                       {"i": new_id})
     return {"status": "queued", "run_id": new_id, "attempt": attempt,
+            # False when the same work was already in flight and this returned THAT run: the
+            # caller asked for a retry and got the live attempt, not a new one.
+            "created": bool(started.get("created", True)),
             "parent_run_id": run_id, "root_run_id": root,
             "continues_from_workspace": seed_files,
             "resume": (f"repairs the previous attempt's saved workspace ({seed_files} files): "
@@ -2654,9 +2690,13 @@ def _run_code_task(engine, settings: Settings, jobs, run_id: str,
 
     # 1) Reserve budget for this code task's model spend.
     with _transaction(engine) as c:
+        from .included_spend import routed_reservation_estimate
+
         reservation = budget.reserve(
             c, project_id, category="code_task",
-            amount_usd_micros=int(settings.code_task_budget_usd_micros),
+            # Marginal cost: $0 held on subscription capacity (included_spend).
+            amount_usd_micros=routed_reservation_estimate(
+                c, settings, project_id, int(settings.code_task_budget_usd_micros)),
             reason=f"code task: {run['title'][:80]}",
             expires_in_minutes=30, job_id=fctx.get("created_by_job_id"),
         )

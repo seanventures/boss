@@ -217,19 +217,32 @@ class MetatronCommand:
             return self._loop(connection, project_id, actor)
         return {"status": "rejected", "error": f"unknown power {kind}"}
 
-    def _receipt(self, connection: Any, project_id: str, kind: str, payload: dict[str, Any]) -> str | None:
+    def _receipt(self, connection: Any, project_id: str, kind: str, payload: dict[str, Any],
+                 *, changed: bool | None = None) -> str | None:
+        """Say what a command did — only when it did something new.
+
+        ``changed`` is the command's own answer (rows boosted, agents staffed); left None, the
+        payload is compared with the last one. Every overwatch tick applied staff + loop, and
+        each wrote its event: 939 identical `{"assignments": 0}` / `{"playbook": …}` a day.
+        """
         try:
             from datetime import datetime, timezone
 
-            from .core import emit_event
+            from .core import emit_event, emit_if_changed
             from .receipts import ReceiptService
 
             minute = datetime.now(timezone.utc).strftime("%Y%m%d%H%M")
             # org/workspace unknown here — emit only if receipts need scope.
-            emit_event(
-                connection, project_id, f"metatron.command.{kind}", "metatron",
-                "project", project_id, payload,
-            )
+            if changed is None:
+                emit_if_changed(
+                    connection, project_id, f"metatron.command.{kind}", "metatron",
+                    "project", project_id, payload, compare=tuple(sorted(payload)),
+                )
+            elif changed:
+                emit_event(
+                    connection, project_id, f"metatron.command.{kind}", "metatron",
+                    "project", project_id, payload,
+                )
             _ = ReceiptService
             _ = minute
         except Exception:
@@ -273,7 +286,8 @@ class MetatronCommand:
             ).rowcount
         except Exception as exc:  # noqa: BLE001
             return {"status": "rejected", "error": f"reprioritize failed: {type(exc).__name__}"}
-        self._receipt(connection, project_id, "reprioritize", {"boosted": int(changed or 0), "actor": actor})
+        self._receipt(connection, project_id, "reprioritize", {"boosted": int(changed or 0), "actor": actor},
+                      changed=bool(changed))
         return {"status": "applied", "boosted": int(changed or 0)}
 
     def _staff(self, connection: Any, project_id: str, actor: str) -> dict[str, Any]:
@@ -285,7 +299,8 @@ class MetatronCommand:
             )
         except Exception as exc:  # noqa: BLE001
             return {"status": "rejected", "error": f"staff failed: {type(exc).__name__}"}
-        self._receipt(connection, project_id, "staff", {"assignments": result.get("assignments_written")})
+        self._receipt(connection, project_id, "staff", {"assignments": result.get("assignments_written")},
+                      changed=bool(result.get("assignments_written")))
         return {"status": "applied", "assignments_written": result.get("assignments_written")}
 
     def _loop(self, connection: Any, project_id: str, actor: str) -> dict[str, Any]:

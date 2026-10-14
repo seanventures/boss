@@ -703,16 +703,21 @@ export async function resolveDecisionAction(formData: FormData): Promise<ActionR
     delegate: `Handed to ${target}.`,
     execute: "Marked as executed.",
   };
+  // THE ANSWER NAMES ITS DECISION, so every gate in the console reads it at once
+  // (lib/decided-gates.ts, BOSSAPP-511) instead of waiting for the next poll.
+  const answered = action === "approve" || action === "reject"
+    ? { decision: { id: decisionId, status: action === "approve" ? "approved" : "rejected" } } : undefined;
   if (action === "approve" && (runId || startsWork)) {
     return {
       ok: true,
+      data: answered,
       message: runId ? "Approved — the run carries on from this step."
         : "Approved — the project starts in a few seconds.",
       href: workflowHref(runId || null, org),
       hrefLabel: runId ? "Watch the run" : "Watch it in Workflow",
     };
   }
-  return { ok: true, message: done[action] };
+  return { ok: true, message: done[action], ...(answered ? { data: answered } : {}) };
 }); }
 
 const DECISION_ACTIONS = ["approve", "reject", "revise", "delegate", "execute"] as const;

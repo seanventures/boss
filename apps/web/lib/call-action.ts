@@ -2,6 +2,7 @@
 
 import { runPressedAction } from "../app/press-relay";
 import { INTENT_FIELD, type Press, runPress } from "./api-write";
+import { noteDecisionResult } from "./decided-gates";
 import { currentMirror, wantsStepUp, wasForbidden } from "./identity/mirror";
 import type { Permission } from "./identity/permissions.gen";
 import { permissionName } from "./identity/words";
@@ -60,31 +61,72 @@ function fingerprintOf(action: object, args: unknown[]): string {
 }
 
 /**
+ * The arguments as THIS press sends them: a FormData argument carries the press's own key in its
+ * `__boss_intent` field. A form's SubmitButton put its key there, and that key stays the same
+ * while the press is pending — so the re-send after a step-up carried the refused press's key,
+ * middleware.ts lifted it (it is the first `__boss_intent` in the body), and the API replayed
+ * the stored refusal (BOSSAPP-510). Every press now names itself, so a re-send is a new press.
+ */
+function argsForPress<A extends unknown[]>(args: A, key: string): A {
+  if (typeof FormData === "undefined") return args;
+  return args.map((arg) => {
+    if (!(arg instanceof FormData) || !arg.has(INTENT_FIELD)) return arg;
+    const copy = new FormData();
+    arg.forEach((v, k) => { if (k !== INTENT_FIELD) copy.append(k, v); });
+    copy.set(INTENT_FIELD, key);
+    return copy;
+  }) as A;
+}
+
+/** Whether a call's answer — a result, or a thrown refusal carrying `identity` — asks for a fresh
+ *  second factor. */
+function askedForStepUp(outcome: { value?: unknown; error?: unknown }): boolean {
+  if ("error" in outcome) {
+    const identity = (outcome.error as { identity?: { error?: unknown } } | null)?.identity;
+    return identity?.error === "step_up_required";
+  }
+  return wantsStepUp(outcome.value);
+}
+
+/**
  * Wrap a server action so every invocation is a keyed press. `press` (fixed, or decided from the
  * arguments) is for an operator's button; leave it out for loads and background calls.
+ *
+ * STEP-UP REPLAYS HERE, ONCE, FOR EVERY ACTION. A `step_up_required` answer (a result or a thrown
+ * refusal) opens "Confirm it's you"; when the person confirms, the SAME call is sent exactly once
+ * more as a new press, and its answer is what the caller gets — so Approve, a grant or a Retry
+ * lands without a second press (BOSSAPP-510). ActionForm relies on this; it does not replay.
  */
 export function callAction<A extends unknown[], R>(
   action: (...args: A) => Promise<R>,
   press?: Press | ((...args: A) => Press | undefined),
-  /** The permission the action declares (lib/identity/action-permissions.ts). With it, a result
-   *  that says `step_up_required` opens the step-up sheet and the call is made once more, and a
-   *  `forbidden` refreshes the console's mirror so the control disables. The API decides. */
+  /** The permission the action declares (lib/identity/action-permissions.ts). It names the
+   *  permission in the step-up sheet; a `forbidden` refreshes the console's mirror so the
+   *  control disables. The API decides. */
   permission?: Permission,
 ): (...args: A) => Promise<R> {
   const once = (...args: A) => runPress<R>({
     press: typeof press === "function" ? press(...args) : press,
     fingerprint: fingerprintOf(action, args),
   }, (key) => runPressedAction({ [INTENT_FIELD]: key } as { __boss_intent: string },
-                               action, ...args));
-  if (!permission) return once;
+                               action, ...argsForPress(args, key)));
   return async (...args: A) => {
-    const first = await once(...args);
+    let first: { value?: R; error?: unknown };
+    try { first = { value: await once(...args) }; } catch (error) { first = { error }; }
     const mirror = currentMirror();
-    if (mirror && wantsStepUp(first)) {
-      if (await mirror.stepUp(`This needs “${permissionName(permission)}”.`)) return once(...args);
-    } else if (mirror && wasForbidden(first)) {
+    if (mirror && askedForStepUp(first)) {
+      const reason = permission ? `This needs “${permissionName(permission)}”.` : "This needs a fresh check.";
+      if (await mirror.stepUp(reason)) {
+        const again = await once(...args);
+        noteDecisionResult(again);
+        return again;
+      }
+    } else if (mirror && !("error" in first) && wasForbidden(first.value)) {
       mirror.refresh().catch(() => undefined);
     }
-    return first;
+    if ("error" in first) throw first.error;
+    // An accepted answer to a decision shows on every gate at once (lib/decided-gates.ts).
+    noteDecisionResult(first.value);
+    return first.value as R;
   };
 }
