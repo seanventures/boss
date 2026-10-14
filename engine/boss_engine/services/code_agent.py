@@ -918,9 +918,7 @@ class ClaudeCodeAgent:
         # (claude_credential.resolve_claude_credential): the subscription login or the console's
         # Anthropic API key, in the operator's order, exactly one of them in the child's env.
         # It raises rather than start the CLI with no login when the store did not answer.
-        from .claude_credential import resolve_claude_credential
-
-        cred = resolve_claude_credential(self.settings)
+        cred = self._resolve_credential()
         cred.apply(env)
         #: Who pays for this run's calls (included_spend.py), stamped on its usage.
         self._billing = cred.billing
@@ -941,6 +939,13 @@ class ClaudeCodeAgent:
                 cap = min(cap, stage_cap)
             env["MAX_THINKING_TOKENS"] = str(cap)
         return env
+
+    def _resolve_credential(self):
+        """Which Anthropic credential this engine's child runs on (claude_credential). The
+        claude_agent_sdk engine overrides this: the API key only, never the login."""
+        from .claude_credential import resolve_claude_credential
+
+        return resolve_claude_credential(self.settings)
 
     def _build_prompt(self, spec: CodeTaskSpec, repo: RepoContext,
                       cwd: Optional[Path] = None) -> str:
@@ -2115,6 +2120,12 @@ def _bind_lane_credentials(
         from .claude_credential import bind_claude_credential
 
         return bind_claude_credential(settings, connection=connection, project_id=project_id)
+    if lane == "claude_agent_sdk":
+        # The Anthropic API key ONLY (never the subscription login): Agent SDK usage is metered
+        # on the operator's API account (agent_sdk_engine).
+        from .claude_credential import bind_anthropic_api_key
+
+        return bind_anthropic_api_key(settings, connection=connection, project_id=project_id)
     if lane == "azure":
         key = resolve_project_credential(
             connection,
@@ -2297,6 +2308,16 @@ def _register_builtin_harnesses() -> None:
         requires=("CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY", "claude CLI on PATH"),
         description="Claude Code headless (`claude -p`) with its own file/bash tools, "
                     "scoped to the sandbox working tree.",
+    )
+    from .agent_sdk_engine import ENGINE as _SDK_ENGINE, SDK_PACKAGE, build_agent
+
+    # Unverified until a governed task completes on it: Auto never picks it, an operator does.
+    register_harness(
+        _SDK_ENGINE, build_agent, kind="sdk", verified=False,
+        requires=("an Anthropic API key (Repo and models -> Anthropic API, or ANTHROPIC_API_KEY)",
+                  f"the {SDK_PACKAGE} Python package"),
+        description="Claude Agent SDK on an Anthropic API key (metered Agent SDK usage): "
+                    "Claude Code's tools and sessions, scoped to the sandbox working tree.",
     )
     register_harness(
         "native", NativeCodeAgent, kind="native", verified=True, aliases=("openai",),

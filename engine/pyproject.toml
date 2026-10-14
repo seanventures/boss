@@ -43,6 +43,8 @@ dependencies = [
 # (`serve-mcp --http`). stdio MCP + the engine-native agent do not need these.
 mcp-http = ["fastapi>=0.110", "uvicorn>=0.29"]
 visual = ["playwright>=1.60,<2"]
+# The claude_agent_sdk engine (services/agent_sdk_engine.py).
+agent-sdk = ["claude-agent-sdk==0.2.166"]
 dev = ["pytest>=8.0"]
 
 [project.scripts]

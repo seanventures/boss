@@ -113,6 +113,10 @@ class Settings(BaseSettings):
     llm_engine: str = Field(default="auto", alias="BOSS_LLM_ENGINE")
     claude_cli_path: str = Field(default="claude", alias="BOSS_CLAUDE_CLI_PATH")
     claude_cli_model: Optional[str] = Field(default=None, alias="BOSS_CLAUDE_CLI_MODEL")
+    # The claude_agent_sdk engine (services/agent_sdk_engine.py): its default model, and an
+    # optional Claude Code binary for the SDK to drive (empty: the one the package bundles).
+    agent_sdk_model: str = Field(default="claude-sonnet-5", alias="BOSS_AGENT_SDK_MODEL")
+    agent_sdk_cli_path: str = Field(default="", alias="BOSS_AGENT_SDK_CLI_PATH")
     # THE BRAIN BEHIND THE CHAT AGENT, CHOSEN SEPARATELY FROM EVERYTHING ELSE.
     #
     # `llm_engine` is global, and flipping it to claude_cli would take the WORKER with it —
