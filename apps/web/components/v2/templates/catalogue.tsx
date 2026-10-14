@@ -14,7 +14,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 
 import { IDEAS, type Idea } from "../../../app/ask-boss-hero";
-import { CreditCard, LockKey, PaypalLogo, PuzzlePiece } from "@phosphor-icons/react";
+import { CreditCard, EnvelopeSimple, LockKey, PaypalLogo, PuzzlePiece } from "@phosphor-icons/react";
 
 import { stackLabel, templatesApi, type TemplateCard } from "../../../lib/templates";
 
@@ -76,7 +76,11 @@ export function connectorTip(card: TemplateCard): string {
 /** A connector's mark on its card. */
 const ICONS: Record<string, React.ComponentType<{ size?: number; "aria-hidden"?: boolean }>> = {
   "login-oauth": LockKey, "stripe-checkout": CreditCard, "paypal-checkout": PaypalLogo,
+  "transactional-email": EnvelopeSimple,
 };
+
+/** The built-in connectors with a mark of their own (an imported one shows the puzzle piece). */
+export const MARKED_CONNECTORS: readonly string[] = Object.keys(ICONS);
 
 /** THE connector this build adds: the one picked, only while it is on offer here (fits the app's
  *  stack) and new to the app. A connector the app already carries is never "selected", so it
