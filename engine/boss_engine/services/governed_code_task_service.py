@@ -613,6 +613,45 @@ def layered_workspace_files(load: Callable[[str], Optional[dict]], run: Optional
     return list(base.values())
 
 
+def previous_attempt_paths(load: Callable[[str], Optional[dict]], fctx: Optional[dict]) -> list[str]:
+    """The files the attempt this one repairs produced: its kept workspace (layered) and the
+    implementation and test files its gate recorded. [] for a first attempt."""
+    parent_id = str((fctx or {}).get("parent_run_id") or "").strip()
+    parent = load(parent_id) if parent_id else None
+    if parent is None:
+        return []
+    st = parent.get("state") or {}
+    paths = {str(f.get("path")) for f in layered_workspace_files(load, parent)}
+    for key in ("impl_files", "test_files"):
+        if isinstance(st.get(key), list):
+            paths |= {str(p) for p in st[key] if isinstance(p, str)}
+    return sorted(p for p in paths if workspace_keepable(p))
+
+
+def repair_lost_the_work(expected: list[str], root: Path, *,
+                         scope: Optional[str] = None) -> Optional[str]:
+    """A HARNESS VERDICT, before review and the gates: this repair's tree holds NONE of the files
+    the attempt it repairs produced (`expected`; within the app's folder when the brief names
+    one). None when it holds any of them, or when nothing is expected.
+
+    crun_3933d79d "repaired" crun_ced396a4 on the bare base branch: the reviewers spent a round
+    finding "no helpdesk-ai application code whatsoever", four gates failed, and an override would
+    have opened an empty PR. Reviewing an empty change judges nothing; this says so at once."""
+    from .verification_target import in_app_scope
+
+    wanted = [p for p in expected if in_app_scope(p, scope)]
+    if not wanted:
+        return None
+    base = Path(root)
+    if any((base / p).exists() for p in wanted):
+        return None
+    shown = ", ".join(wanted[:3]) + (f" and {len(wanted) - 3} more" if len(wanted) > 3 else "")
+    return ("Stopped before review: this attempt repairs earlier work, but none of the "
+            f"{len(wanted)} file(s) the previous attempt produced ({shown}) is in its working "
+            "tree, so there is nothing to review or gate. This is BOSS's fault, not the code's: "
+            "Retry starts from the work the build kept, or builds it in full when none was kept.")
+
+
 def seed_workspace(root: Path, files: list[dict]) -> int:
     """Write a saved workspace into a freshly provisioned sandbox. Paths are confined to `root`
     (they were written by an agent); returns how many files were written."""
@@ -909,6 +948,48 @@ def warm_fix_rounds(failing, *, configured: int, repair_attempts: int, use_micro
     if failing & _JUDGMENT_GATES:
         rounds = max(rounds, 1)
     return rounds
+
+
+def secret_repair_prompt(findings) -> str:
+    """The implementer's secret repair turn: WHERE the scan matched (file, line, rule) and what
+    to do instead. Never the matched text: the scan's report must not become the leak."""
+    where = "\n".join(f"- {f.get('path')}:{f.get('line')} ({f.get('rule')})"
+                      for f in list(findings or [])[:30] if isinstance(f, dict))
+    return ("--- SECRET SCAN: ONE REPAIR TURN ---\n"
+            "BOSS's secret scan found a committed secret literal at these places in your change. "
+            "The build cannot ship while any remains:\n"
+            f"{where}\n\n"
+            "Fix each one: " + SECRETS_FROM_ENV_RULE + " Replace the literal with a read of the "
+            "environment variable (declare it where the app declares its settings), and in an "
+            "example or a document write a placeholder such as ${NAME} or <your value>. Change "
+            "nothing else, do NOT touch any test file, run the tests to confirm they still pass, "
+            "then end with a one-line summary of what you changed.\n")
+
+
+def repair_committed_secrets(findings, *, run_fix: Callable[[str], dict],
+                             rejudge: Callable[[], dict]) -> dict:
+    """ONE REPAIR TURN FOR A COMMITTED SECRET, before the build is blocked for it.
+
+    crun_ced396a4 ran 26 minutes, its tests passed and its app served, and then the secret scan
+    blocked it for a literal at auth/demo.mjs:58 that the implementer was never shown: its one
+    warm round had carried the earlier findings (lines 52-53) among a dozen review comments, and
+    the line its fix left was judged after the last round. Now the implementer gets the scan's
+    findings in a turn of their own (`secret_repair_prompt`), the gates re-run exactly as strict
+    (`rejudge`: tests, then the scan), and the build blocks only if a secret is still there.
+
+    `run_fix(prompt)` runs the turn and returns its result; `rejudge()` returns the secret
+    scan's evidence after it ({"passed": bool, "findings": [...]})."""
+    shown = [{k: f.get(k) for k in ("path", "line", "rule")}
+             for f in list(findings or [])[:30] if isinstance(f, dict)]
+    record: dict = {"attempted": True, "findings": shown}
+    result = run_fix(secret_repair_prompt(shown)) or {}
+    record["cost_usd_micros"] = int(result.get("cost_usd_micros") or 0)
+    after = rejudge() or {}
+    record["findings_after"] = [{k: f.get(k) for k in ("path", "line", "rule")}
+                                for f in list(after.get("findings") or [])[:30]
+                                if isinstance(f, dict)]
+    record["cleared"] = bool(after.get("passed"))
+    return record
 
 
 def unresolved_blockers(failing, *, review_summary: str = "", security_verdict: str = "",
@@ -1813,6 +1894,14 @@ def _run_declaration_rule() -> str:
 #: build (crun_4813f68c) spent 10.5 min in two fix rounds on findings any of these lines names:
 #: async handlers whose rejected queries crashed the process, an unvalidated id reaching SQL, an
 #: array in a login body. Getting the first pass right is cheaper than the round that fixes it.
+#: THE SECRETS RULE, up front for every builder and again in the secret repair turn. A build the
+#: secret scan blocks opens no pull request (crun_ced396a4: one literal at auth/demo.mjs:58).
+SECRETS_FROM_ENV_RULE = (
+    "Secrets come from the app's Secrets / environment (e.g. process.env.DEMO_PASSWORD); never a "
+    "literal. No password, token, API key or secret in code or committed config: read it from the "
+    "environment. BOSS's secret scan blocks a literal one, and a blocked build opens no pull "
+    "request.")
+
 FIRST_PASS_CHECKLIST = (
     "\nBEFORE YOU HAND OFF (the reviewers check exactly this; spend one minute on it and fix "
     "what fails):\n"
@@ -1822,7 +1911,7 @@ FIRST_PASS_CHECKLIST = (
     "or writes anything.\n"
     "- Every input is validated before use: required fields, types (a string is not an array or "
     "object), ids well-formed and in range. Bad input is a 4xx, never a 500.\n"
-    "- No secret, password or key in code or committed config: read it from the environment.\n"
+    "- " + SECRETS_FROM_ENV_RULE + "\n"
     "- A demo/seed password BOSS provides (DEMO_PASSWORD) is allowed in production: never refuse "
     "it. Gate demo seeding on an explicit opt-in flag (e.g. ALLOW_DEMO_SEED) instead.\n"
     "- Exactly what the criteria name: nothing unasked, no unused dependencies.\n"
@@ -2346,6 +2435,7 @@ def _solo_prompt(title, instructions, criteria, test_cmd, *, iac=False, web=Fals
         "- Create the implementation file(s) and stdlib `unittest` test file(s).\n"
         f"- Run `{test_cmd}` when a chunk of work is finished, and iterate until it passes. "
         "Do NOT commit.\n"
+        + "- " + SECRETS_FROM_ENV_RULE + "\n"
         + _run_declaration_rule()
         + "- End with a one-line summary of what you built.\n"
         + (_IAC_GUIDANCE + _IAC_QA_GUIDANCE if iac else "")
@@ -3761,6 +3851,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
     # THE TEMPLATE HOLD (template_push_hold): every push below asks _push_held first.
     _tpl_applies = _applies_template(engine, run)
     _tpl_gates: Optional[dict] = None     # the template gates' verdicts, once they ran
+    _template_record: Optional[dict] = None   # their receipt (the secret scan's findings)
     # A MULTI-SERVICE APP (services.stacks): the layout the brief asks for, so the test author
     # and the coder are told the per-service layout and commands, and the gate checks for it.
     _stack_ctx = _stack_context(engine, run, title, instructions)
@@ -3889,6 +3980,20 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             sf.github.upsert_file(work_branch, fc.path, fc.content, message)
             accumulated[fc.path] = fc.content
         guest_base = work_branch
+        _record_work_branch("stage_commit")
+
+    def _record_work_branch(label: str) -> None:
+        """Record on the run that its work is on the lineage branch: how a retry knows there is
+        work to build onto (code_task_service.lineage_kept_work). Best-effort, never fatal."""
+        try:
+            with _transaction(engine) as c:
+                c.execute(sql(
+                    "UPDATE code_task_runs SET finalize_ctx=COALESCE(finalize_ctx,'{}'::jsonb) "
+                    "|| jsonb_build_object('work_branch', CAST(:b AS text), "
+                    "'checkpointed_after', CAST(:s AS text)), updated_at=now() WHERE id=:id"),
+                    {"b": work_branch, "s": label, "id": run_id})
+        except Exception:  # noqa: BLE001 — the push happened whether or not it was recorded
+            _log_caught(logger)
 
     def _declare_preview_app() -> None:
         """Record WHICH app this build produced, so no later step has to work it out.
@@ -4173,15 +4278,32 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
 
     def _save_workspace(where: str) -> int:
         """Keep this attempt's changed files on the run so a retry continues from them
-        (`saved_workspace_files`). Local only — nothing is pushed, so the template hold stands —
-        and never when the secret gate failed: a diff with a secret in it is not kept anywhere.
+        (`saved_workspace_files`). Local only — nothing is pushed, so the template hold stands.
+
+        A BLOCKED BUILD KEEPS ITS WORK, NEVER ITS SECRET. When the secret gate failed, the tree
+        is kept with each flagged value redacted in place (secret_scan.without_secrets; a file
+        that cannot be cleaned is dropped). It used to keep nothing: crun_ced396a4 was blocked
+        for one literal, its sandbox was thrown away, and the Retry "repaired" an empty tree.
+        Pushing instead was rejected: a template build's pushes wait for its gates (the hold),
+        and the lineage branch may already carry an open PR.
         Best-effort, never fatal; returns how many files were saved."""
-        if not _impl_ran[0] or (_tpl_gates or {}).get("no_committed_secrets") is False:
+        if not _impl_ran[0]:
             return 0
         try:
             files = (list(accumulated.items()) if use_microvm
                      else [(fc.path, fc.content) for fc in sandbox.diff()])
             kept = [{"path": p, "content": c} for p, c in files if workspace_keepable(p)]
+            redacted: list[str] = []
+            dropped: list[str] = []
+            if (_tpl_gates or {}).get("no_committed_secrets") is False:
+                from ..templates.secret_scan import without_secrets
+
+                _found = (((_template_record or {}).get("evidence") or {})
+                          .get("secret_scan") or {}).get("findings") or []
+                clean, redacted, dropped = without_secrets(
+                    {f["path"]: f["content"] for f in kept if isinstance(f["content"], str)},
+                    _found)
+                kept = [{"path": p, "content": c} for p, c in clean.items()]
             if not kept:
                 return 0
             with _transaction(engine) as c:
@@ -4190,9 +4312,14 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     "|| jsonb_build_object('saved_workspace', CAST(:w AS JSONB)), "
                     "updated_at=now() WHERE id=:id"),
                     {"w": json.dumps({"files": kept, "after": where[:120],
-                                      "file_count": len(kept)}), "id": run_id})
+                                      "file_count": len(kept),
+                                      **({"secrets_redacted_in": redacted} if redacted else {}),
+                                      **({"dropped_for_secrets": dropped} if dropped else {})}),
+                     "id": run_id})
                 emit_event(c, project_id, "code_task.workspace_saved", "boss", "code_task_run",
-                           run_id, {"after": where[:120], "files": len(kept)})
+                           run_id, {"after": where[:120], "files": len(kept),
+                                    **({"secrets_redacted_in": redacted} if redacted else {}),
+                                    **({"dropped_for_secrets": dropped} if dropped else {})})
             return len(kept)
         except Exception:  # noqa: BLE001 — saving the work must never mask the real exit
             _log_caught(logger)
@@ -6016,6 +6143,25 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 _log_caught(logger)
                 pass
 
+        # A REPAIR IS NEVER REVIEWED WITHOUT THE WORK IT REPAIRS (repair_lost_the_work): a
+        # harness verdict now, not review rounds and gates spent on an empty change.
+        if _is_repair and not use_microvm:
+            def _load_prev(rid: str) -> Optional[dict]:
+                with _transaction(engine) as c:
+                    return load_code_task_run(c, rid)
+            _lost = repair_lost_the_work(previous_attempt_paths(_load_prev, fctx), root,
+                                         scope=_app_scope)
+            if _lost:
+                with _transaction(engine) as c:
+                    _release(budget, c, project_id, reservation_id,
+                             "repair without the work it repairs", run_id=run_id)
+                    emit_event(c, project_id, "code_task.repair_lost_the_work", "boss",
+                               "code_task_run", run_id,
+                               {"parent_run_id": fctx.get("parent_run_id"),
+                                "app_scope": _app_scope})
+                    return _fail(c, run_id, project_id, _lost, failure_class="infra",
+                                 reason_code="repair_without_the_work")
+
         # REVIEW PANEL (tier >= 2). The read-only checks — adversarial review, security review, and
         # the full-suite regression run — are independent, so they run CONCURRENTLY, bounded by
         # code_agent_max_concurrency (the lane capacity: extra checks wait for a free slot, and any
@@ -7266,6 +7412,97 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                {"error": f"{type(exc).__name__}: {exc}"[:300]})
                 failing = [k for k, v in gates.items() if not v]
 
+            # ONE SECRET REPAIR TURN BEFORE A SECRET BLOCKS THE BUILD (repair_committed_secrets):
+            # the scan's findings (file, line, rule — never the value) go to the implementer's
+            # warm session in a turn of their own, then the tests, the serve proof and the
+            # template gates re-run exactly as strict. Blocked below only if a secret remains.
+            if (_template_record and gates.get("no_committed_secrets") is False
+                    and not use_microvm and _coder_owned_secrets()):
+                _rj: dict = {}
+
+                def _secret_fix(prompt: str) -> dict:
+                    nonlocal impl_session_id, cost
+                    with _transaction(engine) as c:
+                        _phase(c, "implement")
+                    set_llm_context(routes=_route_ids(), db_engine=engine, project_id=project_id,
+                                    run_id=run_id, stage="implement")
+                    a_sec, m_sec = _route("implement")
+                    r_sec = a_sec.run_role(prompt, root, model=m_sec,
+                                           resume_session_id=impl_session_id)
+                    impl_session_id = r_sec.get("session_id") or impl_session_id
+                    cost += int(r_sec.get("cost_usd_micros") or 0)
+                    impl_session_id = _install_until_it_passes(
+                        a_sec, m_sec, impl_session_id, "secret_repair")
+                    cost += _cost_extra[0]
+                    _cost_extra[0] = 0
+                    return r_sec
+
+                def _secret_rejudge() -> dict:
+                    _post = _run_verify()
+                    _rj["post"] = _post
+                    _serve = app_serves_record
+                    if bool(_post.ok) and "app_serves" in gates:
+                        _serve = _check_app_serves({fc.path: fc.content for fc in sandbox.diff()})
+                        _rj["serve"] = _serve
+                    _changed = {fc.path: fc.content for fc in sandbox.diff()}
+                    _rec = _template_gates(
+                        engine, run, sandbox, root=root,
+                        cwd=(root / last_verify_cwd) if last_verify_cwd and not Path(str(last_verify_cwd)).is_absolute()
+                        else verification_target.resolve_verify_cwd(root, app_id=_app_id, changed=list(_changed)),
+                        changed_files=_changed, tests_passed=bool(_post.ok),
+                        use_microvm=use_microvm, stack_plan=_last_stack_plan[0], serve=_serve)
+                    _rj["record"] = _rec
+                    _scan = ((_rec or {}).get("evidence") or {}).get("secret_scan") or {}
+                    return {"passed": bool(((_rec or {}).get("gates") or {}).get("no_committed_secrets")),
+                            "findings": _scan.get("findings") or []}
+
+                _sf0 = (_tpl_evidence().get("secret_scan") or {}).get("findings") or []
+                try:
+                    with _transaction(engine) as c:
+                        emit_event(c, project_id, "code_task.secret_repair_started", "boss",
+                                   "code_task_run", run_id,
+                                   {"findings": [{k: f.get(k) for k in ("path", "line", "rule")}
+                                                 for f in _sf0[:20] if isinstance(f, dict)]})
+                    secret_repair_record = repair_committed_secrets(
+                        _sf0, run_fix=_secret_fix, rejudge=_secret_rejudge)
+                except Exception as exc:  # noqa: BLE001 — the gate's verdict stands as it was
+                    _log_caught(logger)
+                    secret_repair_record = {"attempted": True, "cleared": False,
+                                            "error": f"{type(exc).__name__}: {exc}"[:300]}
+                _post = _rj.get("post")
+                if _post is not None:
+                    tests_passed = bool(_post.ok)
+                    official_tests_passed = tests_passed
+                    official_test_exit = _post.exit_code
+                    official_verify_output = last_verify_output
+                    if "written_tests_pass" in gates:
+                        gates["written_tests_pass"] = tests_passed
+                    if "nothing_broke" in gates:
+                        gates["nothing_broke"] = tests_passed
+                if "serve" in _rj and "app_serves" in gates:
+                    app_serves_record = _rj["serve"]
+                    gates["app_serves"] = bool(app_serves_record.get("ok"))
+                    evidence["app_serves"] = app_serves_record
+                if _rj.get("record"):
+                    _template_record = _rj["record"]
+                    gates.update(_template_record["gates"])
+                    _tpl_gates = dict(gates)
+                    evidence["template"] = _template_record["evidence"]
+                evidence["secret_repair"] = secret_repair_record
+                failing = [k for k, v in gates.items() if not v]
+                with _transaction(engine) as c:
+                    emit_event(c, project_id, "code_task.secret_repair_finished", "boss",
+                               "code_task_run", run_id,
+                               {k: secret_repair_record.get(k) for k in
+                                ("cleared", "findings_after", "cost_usd_micros", "error")})
+                    if not failing:
+                        c.execute(sql(
+                            "UPDATE code_task_runs SET state=CAST(:s AS JSONB), updated_at=now() "
+                            "WHERE id=:id"), {"s": json.dumps(evidence), "id": run_id})
+                        qg_id, qg_status = _record_quality_gate(
+                            c, run_id=run_id, project_id=project_id, task_id=task_id,
+                            job_id=job_id, evidence=evidence, gates=gates)
+
             rounds_used = max(0, int(fctx.get("attempt", 1)) - 1)
             # Fallback 2 (not 0): a missing/blank config field must never SILENTLY disable the moat.
             max_repair_rounds = review_repair_rounds(settings)
@@ -7478,6 +7715,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                             sf.github.upsert_file(
                                 work_branch, _path, _content,
                                 f"wip({run_id}): persist attempt for repair")
+                        _record_work_branch("repair_handoff")
                         with _transaction(engine) as c:
                             emit_event(c, project_id, "code_task.work_persisted", "boss",
                                        "code_task_run", run_id,
