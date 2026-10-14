@@ -99,20 +99,26 @@ def test_14_a_workflow_runs_this_run_grant_ends_with_the_run(env):
         assert grants.load(g.id, db=c).status.value == "expired"
 
 
+def _child_work_tables(c):
+    """What a full install has and this throwaway schema leaves out."""
+    c.execute(text("ALTER TABLE code_task_runs ADD COLUMN IF NOT EXISTS finalize_ctx JSONB "
+                   "NOT NULL DEFAULT '{}'::jsonb"))
+    c.execute(text("CREATE TABLE IF NOT EXISTS workflow_step_runs (id TEXT PRIMARY KEY, "
+                   "workflow_run_id TEXT, output JSONB)"))
+    for column in ("step_id TEXT", "status TEXT", "lease_expires_at TIMESTAMPTZ"):
+        c.execute(text(f"ALTER TABLE workflow_step_runs ADD COLUMN IF NOT EXISTS {column}"))
+    c.execute(text("CREATE TABLE IF NOT EXISTS stack_deployments (id TEXT PRIMARY KEY, "
+                   "project_id TEXT, target_id TEXT, repository TEXT, ref TEXT, commit_sha TEXT, "
+                   "created_by TEXT, status TEXT, workflow_run_id TEXT)"))
+
+
 def test_14_a_finished_runs_grant_waits_for_its_live_child_work(env):
     """A run that went terminal on one branch while another still works (a deploy failed while
     More tests was writing tests) keeps its grant until the last child settles: ending it killed
     that live code task, and every Retry re-asked consent."""
     g = env.grant(agents=(env.forge,), children=(), task_run_id="run_wf:wfr_kids")
     with env.db() as c:
-        # What a full install has and this throwaway schema leaves out.
-        c.execute(text("ALTER TABLE code_task_runs ADD COLUMN IF NOT EXISTS finalize_ctx JSONB "
-                       "NOT NULL DEFAULT '{}'::jsonb"))
-        c.execute(text("CREATE TABLE IF NOT EXISTS workflow_step_runs (id TEXT PRIMARY KEY, "
-                       "workflow_run_id TEXT, output JSONB)"))
-        c.execute(text("CREATE TABLE IF NOT EXISTS stack_deployments (id TEXT PRIMARY KEY, "
-                       "project_id TEXT, target_id TEXT, repository TEXT, ref TEXT, commit_sha TEXT, "
-                       "created_by TEXT, status TEXT, workflow_run_id TEXT)"))
+        _child_work_tables(c)
         c.execute(text("INSERT INTO workflow_runs (id, status) VALUES ('wfr_kids', 'failed')"))
         c.execute(text("INSERT INTO code_task_runs (id, project_id, status, spec, finalize_ctx) VALUES "
                        "('crun_kid', :p, 'running', '{}', '{\"workflow_run_id\": \"wfr_kids\"}')"),
@@ -134,6 +140,49 @@ def test_14_a_finished_runs_grant_waits_for_its_live_child_work(env):
     with env.db() as c:
         c.execute(text("DELETE FROM stack_deployments WHERE id = 'sdep_kid'"))
         c.execute(text("DELETE FROM code_task_runs WHERE id = 'crun_kid'"))
+
+
+def test_14_a_finished_runs_grant_waits_for_a_branch_still_in_flight(env):
+    """BOSSAPP-540: pass 2 runs More tests beside deploy, monitor, report and smoke_test on an
+    `all` join. A failure in one branch ends the run while a step of the other is still inside
+    its call, before it has any child work of its own; ending the grant took that step's
+    authority away mid-call. The grant waits while a worker holds a live lease on a step of the
+    run, and ends once the lease is gone or has expired (a dead worker never holds it for ever)."""
+    g = env.grant(agents=(env.forge,), children=(), task_run_id="run_wf:wfr_branch")
+    with env.db() as c:
+        _child_work_tables(c)
+        c.execute(text("INSERT INTO workflow_runs (id, status) VALUES ('wfr_branch', 'failed')"))
+        c.execute(text("INSERT INTO workflow_step_runs (id, workflow_run_id, step_id, status, "
+                       "lease_expires_at, output) VALUES ('wfs_deploy', 'wfr_branch', 'deploy', "
+                       "'running', now() + interval '5 minutes', '{}')"))
+    with env.db() as c:
+        assert maintenance.end_finished_workflow_grants(db=c) == [], "ended under a live branch"
+    with env.db() as c:
+        c.execute(text("UPDATE workflow_step_runs SET lease_expires_at = now() - interval '1 second' "
+                       "WHERE id = 'wfs_deploy'"))
+    with env.db() as c:
+        assert maintenance.end_finished_workflow_grants(db=c) == [g.id], "a dead lease holds it"
+    with env.db() as c:
+        c.execute(text("DELETE FROM workflow_step_runs WHERE id = 'wfs_deploy'"))
+
+
+def test_14_a_finished_runs_grant_ends_once_its_last_branch_settles(env):
+    g = env.grant(agents=(env.forge,), children=(), task_run_id="run_wf:wfr_settled")
+    with env.db() as c:
+        _child_work_tables(c)
+        c.execute(text("INSERT INTO workflow_runs (id, status) VALUES ('wfr_settled', 'failed')"))
+        c.execute(text("INSERT INTO workflow_step_runs (id, workflow_run_id, step_id, status, "
+                       "lease_expires_at, output) VALUES ('wfs_smoke', 'wfr_settled', 'smoke_test', "
+                       "'leased', now() + interval '5 minutes', '{}')"))
+    with env.db() as c:
+        assert maintenance.end_finished_workflow_grants(db=c) == []
+    with env.db() as c:
+        c.execute(text("UPDATE workflow_step_runs SET status = 'succeeded', lease_expires_at = NULL "
+                       "WHERE id = 'wfs_smoke'"))
+    with env.db() as c:
+        assert maintenance.end_finished_workflow_grants(db=c) == [g.id]
+    with env.db() as c:
+        c.execute(text("DELETE FROM workflow_step_runs WHERE id = 'wfs_smoke'"))
 
 
 # ---- #15 ---------------------------------------------------------------------------------------------------

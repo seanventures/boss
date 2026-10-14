@@ -5434,6 +5434,9 @@ def fail_step(
         output = {**(output or {}), "error_detail": said["detail"]}
         error = f"{said['headline']} {said['action']}"
     can_retry = retryable and int(row["attempt"]) < int(row["max_attempts"])
+    if not can_retry and _is_advisory_step(row):
+        # AN ADVISORY STEP NEVER STOPS THE RUN, AT START EITHER — see `ADVISORY_CAPABILITIES`.
+        return _complete_advisory_failure(connection, row, error, output)
     status = "ready" if can_retry else "deadlettered"
     run_after = now_utc() + timedelta(seconds=max(0, int(retry_delay_seconds)))
     updated = connection.execute(
@@ -5493,6 +5496,64 @@ def fail_step(
             # Gone on without: the run may now have nothing left to do but finish.
             _maybe_finish_run(connection, row["workflow_run_id"])
     _refresh_frontier(connection, row["workflow_run_id"])
+    return _serialize_step(updated)
+
+
+#: Steps whose failure never stops the run (operator, 2026-10-13: "pass 2 never blocks pass 1").
+#: The runner's `_ADVISORY_CAPABILITIES` is the same set (a test holds them equal); it covers an
+#: advisory step whose WORK failed. This covers one that failed to START (refused, broken, or out
+#: of attempts before its work existed). That failure came through `fail_step`, which did not
+#: ask, so a More tests pass that could not start stopped the whole run, and the `all` join of
+#: two_pass's pass 2 took the deploy running beside it down too (BOSSAPP-540).
+ADVISORY_CAPABILITIES = frozenset({"more_tests"})
+
+
+def _is_advisory_step(row: Any) -> bool:
+    """A step bound to an advisory capability, or marked `inputs.advisory` (two_pass's
+    automatic preview): the two the runner completes rather than fails."""
+    binding = _json(dict(row).get("binding_snapshot"), {}) or {}
+    inner = binding.get("binding") if isinstance(binding.get("binding"), dict) else {}
+    capability = str(binding.get("capability") or inner.get("capability") or "")
+    inputs = binding.get("inputs") or inner.get("inputs") or {}
+    marked = isinstance(inputs, dict) and str(inputs.get("advisory")).lower() == "true"
+    return capability in ADVISORY_CAPABILITIES or marked
+
+
+def _complete_advisory_failure(
+    connection: Connection, row: Any, error: str, output: Optional[dict[str, Any]],
+) -> dict[str, Any]:
+    """An advisory step out of attempts completes WITH THE FAILURE SAID, and the run goes on.
+
+    Never silent: `last_error` keeps the cause, the output says `advisory_failed` with a
+    sentence, and `workflow.step_advisory_failed` is recorded before the step's success is.
+    Nothing is dead-lettered: the run did not stop, so there is nothing for an operator to
+    decide. The output does not enter the run context: nothing downstream reads a step that
+    did not do its work.
+    """
+    note = (f"this step could not start ({str(error).strip() or 'no reason given'}); it is "
+            "advisory, so the run carries on without it.")[:600]
+    said = {**(output or {}), "status": "not_applicable", "advisory": True,
+            "advisory_failed": True, "note": note}
+    updated = connection.execute(
+        text(
+            """
+            UPDATE workflow_step_runs
+            SET status='succeeded', last_error=:error,
+                lease_owner=NULL, lease_expires_at=NULL, heartbeat_at=NULL,
+                completed_at=clock_timestamp(),
+                output = COALESCE(output, '{}'::jsonb) || CAST(:output AS JSONB),
+                updated_at=now()
+            WHERE id=:id RETURNING *
+            """
+        ),
+        {"id": row["id"], "error": _clean_text(error, "error"), "output": json.dumps(said)},
+    ).mappings().one()
+    run = _run_row(connection, row["workflow_run_id"])
+    _emit_step_event(connection, run, "workflow.step_advisory_failed", updated,
+                     {"error": error, "note": note})
+    _emit_step_event(connection, run, "workflow.step_succeeded", updated,
+                     {"advisory_failed": True})
+    _after_success(connection, row["workflow_run_id"], row["step_id"], int(row["iteration"]))
     return _serialize_step(updated)
 
 

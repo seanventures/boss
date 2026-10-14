@@ -2188,6 +2188,7 @@ def _pushes_to_branch(step: Mapping[str, Any]) -> bool:
 def lifecycle_checks(ctx: Context, step_results: Mapping[str, list[dict[str, Any]]]
                      ) -> list[dict[str, Any]]:
     """Static policy checks over the spec: what a failure in one branch does to the others."""
+    from ..identity import maintenance
     from ..identity.maintenance import TERMINAL_WORKFLOW_STATUSES
     from . import workflow_capability_runner as runner
 
@@ -2196,7 +2197,13 @@ def lifecycle_checks(ctx: Context, step_results: Mapping[str, list[dict[str, Any
     by_id = {str(s["id"]): s for s in _steps(ctx.spec)}
     failing = {sid for sid, checks in step_results.items()
                if any(c["verdict"] == "will_fail" for c in checks)}
-    grant_ends = "failed" in TERMINAL_WORKFLOW_STATUSES
+    # BOSSAPP-540: the grant waits for live branches, and an advisory step's failure (at start
+    # too) completes it rather than stopping the run. Once both hold, neither is flagged.
+    grant_ends = ("failed" in TERMINAL_WORKFLOW_STATUSES
+                  and not hasattr(maintenance, "live_branch_sql"))
+    tolerated = (frozenset(getattr(runner, "_ADVISORY_CAPABILITIES", frozenset()))
+                 if _fail_step_consults_advisory() else frozenset())
+    failing = {sid for sid in failing if _cap_key(by_id.get(sid) or {}) not in tolerated}
     for g in groups:
         branch_steps = {b: steps for b, steps in g["branches"].items()}
         if g["policy"] == "any" or len(branch_steps) < 2:
@@ -2214,9 +2221,10 @@ def lifecycle_checks(ctx: Context, step_results: Mapping[str, list[dict[str, Any
             out.append(result("lifecycle.branch_failure", "will_fail", evidence + ". Expected "
                               "here: " + "; ".join(f"{', '.join(s)} will fail" for s in
                                                     doomed.values()),
-                              action="Fix the failing branch step first; and (BOSS change) do "
-                                     "not end a run's grant while any branch is live."))
-        else:
+                              action="Fix the failing branch step first"
+                                     + ("; and (BOSS change) do not end a run's grant while any "
+                                        "branch is live." if grant_ends else ".")))
+        elif grant_ends or not tolerated:
             out.append(result("lifecycle.branch_failure", "unknown", evidence + ". Nothing "
                               "here is known to fail, so this is a risk, not a verdict.",
                               action="BOSS change: end the grant only when no branch is live; "
