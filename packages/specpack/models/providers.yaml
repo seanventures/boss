@@ -66,7 +66,7 @@ providers:
         connection_ref: ANTHROPIC_API_KEY
         workload_classes_allowed: [owner_sandbox, single_tenant_customer, multi_tenant_customer, internal_batch]
         multi_tenant_allowed: true
-        supported_models: [claude-sonnet, claude-opus]
+        supported_models: [claude-sonnet, claude-opus, claude-haiku, claude-fable]
         task_strengths: [coding, reasoning, review]
         limit_shape: {max_concurrent: 128}
   # TYPESAFE JEV — DECISIONS ONLY. Answers a workflow's multiple-choice typed_decision steps on
@@ -267,6 +267,18 @@ models:
     cost_class: token_metered
     enabled: true
   - id: anthropic:claude-opus
+    provider: anthropic
+    tier: mid
+    strengths: [coding, reasoning, review]
+    cost_class: token_metered
+    enabled: true
+  - id: anthropic:claude-haiku
+    provider: anthropic
+    tier: cheap
+    strengths: [coding, summarization]
+    cost_class: token_metered
+    enabled: true
+  - id: anthropic:claude-fable
     provider: anthropic
     tier: mid
     strengths: [coding, reasoning, review]
