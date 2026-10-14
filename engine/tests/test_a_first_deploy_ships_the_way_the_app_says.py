@@ -41,13 +41,48 @@ NOTES = ["notes/server.mjs", "notes/package.json", "notes/boss.deploy.yaml"]
 
 # ── the manifest is the app's own ───────────────────────────────────────────────────────────
 
-def test_a_root_manifest_is_not_the_app_in_a_folder_of_its_own():
-    assert declared_manifest(ONBOARDING) is None
+def test_an_apps_own_folder_is_told_from_what_its_build_wrote():
     assert app_folder(ONBOARDING) == "onboarding-path-builder"
-    # An app at the root keeps its root manifest.
-    assert declared_manifest(["boss.deploy.yaml", "package.json", "src/app.js"]) == "boss.deploy.yaml"
-    assert declared_manifest(["boss.deploy.yaml", "src/app.js", "src/db.js"]) == "boss.deploy.yaml"
+    assert app_folder(["boss.deploy.yaml", "package.json", "src/app.js"]) is None
+    assert app_folder(["src/app.js", "src/db.js"]) is None, "src/ is part of a root app"
     assert declared_manifest(NOTES) == "notes/boss.deploy.yaml"
+    assert declared_manifest(ONBOARDING) == "boss.deploy.yaml", "judged by its content at plan"
+
+
+STACK_DEMO = """
+version: 1
+name: stack-demo
+kind: compose
+compose: {file: docker-compose.yml}
+health: [{url: "{target.public_url}", expect: 200}]
+"""
+HELPDESK_MINI = """
+version: 1
+name: helpdesk-mini
+kind: commands
+install: ["cd helpdesk && npm ci", "cd helpdesk && (nohup npx tsx src/server/index.ts &)"]
+health: [{url: "{target.public_url}/healthz", expect: 200}]
+"""
+
+
+def test_another_apps_root_manifest_is_refused_at_plan(db):
+    from boss_engine.services.stack_deploy import root_manifest_misfit
+
+    with db.engine.begin() as c:
+        onboarding = _build(c, db.project, ONBOARDING, app="Onboarding", briefed=True)
+        refused = root_manifest_misfit(c, load_manifest(STACK_DEMO), onboarding,
+                                       {"docker-compose.yml": "services: {web: {build: .}}"}.get)
+        assert refused and "'stack-demo'" in refused[0] and "onboarding-path-builder/" in refused[0]
+        assert "onboarding-path-builder/boss.deploy.yaml" in refused[1]
+        # The HelpDesk shape: a root manifest whose steps run in the app's folder is the app's.
+        helpdesk = _build(c, db.project, ["boss.deploy.yaml", "helpdesk/package.json",
+                                          "helpdesk/src/server/index.ts"], app="HelpDesk")
+        assert root_manifest_misfit(c, load_manifest(HELPDESK_MINI), helpdesk, {}.get) is None
+        # A root manifest named for the folder is the app's too; a root app owns the root one.
+        named = load_manifest(STACK_DEMO.replace("stack-demo", "onboarding-path-builder"))
+        assert root_manifest_misfit(c, named, onboarding, {}.get) is None
+        root_app = _build(c, db.project, ["boss.deploy.yaml", "package.json", "server.mjs"])
+        assert root_manifest_misfit(c, load_manifest(STACK_DEMO), root_app, {}.get) is None
 
 
 def test_the_brief_asks_for_the_apps_own_manifest_and_its_database():
@@ -171,10 +206,9 @@ def test_an_app_that_declares_nothing_keeps_the_one_container_path(db):
 
 def test_a_briefed_build_that_wrote_no_manifest_of_its_own_is_refused(db):
     with db.engine.begin() as c:
-        onboarding = _build(c, db.project, ONBOARDING, app="Onboarding", briefed=True)
+        onboarding = _build(c, db.project, ONBOARDING[1:], app="Onboarding", briefed=True)
         said = undeclared_deploy_refusal(c, onboarding)
         assert said and "onboarding-path-builder/boss.deploy.yaml" in said, said
-        assert "belongs to another app" in said
         # Told and did it: deployable.
         assert undeclared_deploy_refusal(c, _build(c, db.project, NOTES, briefed=True)) is None
         # Never told, no database: the one-container path stays.
@@ -263,3 +297,33 @@ def test_a_compose_manifest_with_a_postgres_service_brings_the_database(db):
     with_db = {"docker-compose.yml": "services:\n  db:\n    image: postgres:16\n"}
     assert manifest_declares_database(manifest, with_db.get)
     assert not manifest_declares_database(manifest, {"docker-compose.yml": "services: {}"}.get)
+
+
+def test_a_production_deploy_flags_an_app_that_refuses_its_demo_password(db):
+    from boss_engine.services.stack_deploy import refuses_in_production
+
+    config = ("const prod = process.env.NODE_ENV === 'production';\n"
+              "if (!prod && !process.env.DEMO_PASSWORD) throw new Error('DEMO_PASSWORD is required');\n"
+              "if (prod && process.env.DEMO_PASSWORD) {\n"
+              "  throw new Error('DEMO_PASSWORD must not be set in production');\n}\n")
+    assert refuses_in_production(config, "DEMO_PASSWORD")
+    assert not refuses_in_production("const seed = process.env.ALLOW_DEMO_SEED === '1' && "
+                                      "process.env.DEMO_PASSWORD;\n", "DEMO_PASSWORD")
+    served = {"notes/server.mjs": "app.get('/', home)", "notes/config.mjs": config}
+    with db.engine.begin() as c:
+        run_id = _build(c, db.project, NOTES + ["notes/config.mjs"])
+        manifest = load_manifest(MANIFEST % ("", "env: {DEMO_PASSWORD: {generate: password}}"))
+        target = {"id": "t", "app_name": "Notes", "target_kind": "ssh", "environment": "production",
+                  "domains": [f"{ADDRESS}:8000"], "host_id": "dh"}
+        host = {"id": "dh", "address": ADDRESS, "name": "vm"}
+        rendered = render(manifest, {"commit": "c" * 40, "ref": "pull/7", "target.host": ADDRESS,
+                                     "target.user": "root", "target.public_url": f"http://{ADDRESS}:8000"})
+
+        def misfit(env, provided=()):
+            return manifest_misfit(c, manifest=manifest, rendered=rendered,
+                                   path="notes/boss.deploy.yaml", target={**target, "environment": env},
+                                   host=host, run_id=run_id, read=served.get, provided=provided)
+
+        refused = misfit("production")
+        assert refused and "DEMO_PASSWORD in production" in refused[0] and "ALLOW_DEMO_SEED" in refused[1]
+        assert misfit("staging") is None

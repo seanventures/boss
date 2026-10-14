@@ -350,6 +350,8 @@ DEPLOY_MANIFEST_BRIEF = (
     "database.relational, engine: postgres}}` (BOSS provisions it and passes DATABASE_URL), or "
     "kind: compose with a postgres service in its compose file. A deploy of a Postgres app whose "
     "manifest declares no database is refused before anyone is asked to approve it. "
+    "A demo/seed password BOSS provides (DEMO_PASSWORD) is allowed in production: do not refuse "
+    "it; make demo seeding an explicit opt-in flag (e.g. ALLOW_DEMO_SEED) instead. "
     "Use compose (kind: compose, compose: {file: docker-compose.yml}) when the app already runs "
     "with docker compose. Keep it in the same pull request.")
 
@@ -2855,10 +2857,15 @@ def _perform_capability(
             return _perform_toolless(connection, ctx, project_id=project_id, actor=actor,
                                      step=step, context=context, key=key,
                                      capability=capability, inputs=inputs, extend=extend)
+        from .step_agents import StepAgentError
         from .step_agents import resolve as who_runs_it
 
-        agent = who_runs_it(connection, getattr(ctx, "settings", None), project_id, step,
-                            actor=actor)["agent"]
+        try:
+            agent: Optional[str] = who_runs_it(connection, getattr(ctx, "settings", None),
+                                               project_id, step, actor=actor)["agent"]
+        except StepAgentError:
+            # A tool-less step never needed an agent on duty to run: the person's own authority.
+            agent = None
         with _step_authority(ctx, connection, project_id, context, step, agent):
             return _perform_toolless(connection, ctx, project_id=project_id, actor=actor,
                                      step=step, context=context, key=key,
@@ -3198,6 +3205,12 @@ def _perform_capability(
               **({"retry_note": retry_note} if retry_note else {})}
     skipped = _preview_not_permitted(key, result, step_actor)
     if skipped:
+        # NEVER A SILENT SKIP: the run's history records that a whole step did not run, and why.
+        emit_event(connection, project_id, "workflow.step_skipped", step_actor or actor,
+                   "workflow_run", str(context.get("run_id") or ""),
+                   {"step_id": step.get("id"), "capability": key,
+                    "reason": f"skipped: {skipped['reason']}"[:500],
+                    "permission": result.get("permission")})
         return skipped
     if output.get("ok") is False and output.get("permission"):
         # AN IDENTITY REFUSAL IS SETTLED: the same grant refuses the same call on every retry.
@@ -3535,7 +3548,9 @@ def _preview_not_permitted(key: str, output: dict[str, Any],
               "Grant it on that agent's Passport to get a preview here, or start one from the "
               "build's card.")
     return {**output, "ok": True, "status": "skipped", "skipped": True, "error": None,
-            "reason": reason, "message": reason, "summary": reason}
+            "reason": reason, "message": reason, "summary": reason,
+            # Said on the step as what it is: a whole step that did not run.
+            "note": f"skipped: {reason}"}
 
 
 def _tool_failed_to_start(key: str, output: dict[str, Any]) -> Optional[str]:

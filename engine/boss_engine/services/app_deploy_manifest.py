@@ -69,13 +69,8 @@ def declared_manifest(files: Any) -> Optional[str]:
         return None
     nested = [m for m in manifests if "/" in m]
     if not nested:
-        home = app_folder(paths)
-        if home:
-            # THE ROOT MANIFEST IS ANOTHER APP'S when everything this build wrote lives in one
-            # folder of its own: Onboarding (crun_2d097414) edited boss-sandbox's root
-            # boss.deploy.yaml — stack-demo's — and wrote its app under
-            # onboarding-path-builder/, so it declared nothing of its own.
-            return None
+        # Whether a root manifest is THIS app's is read from what it says (its name, the folder
+        # its steps run in): stack_deploy.root_manifest_misfit, at plan time.
         return DEFAULT_MANIFEST_PATH
 
     def held(manifest: str) -> tuple[int, int]:

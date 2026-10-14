@@ -757,18 +757,29 @@ def check_deploy(g: Gate) -> str:
     problems = stack_deploy.preflight_host(access, manifest)
     if problems:
         raise CheckFailed("preflight: " + "; ".join(p["headline"] for p in problems))
+    # THE APP'S DATABASE IS THE ONE ITS MANIFEST DECLARES. This wired DATABASE_URL by hand,
+    # which is how a manifest that declared no database (HelpDesk, wfr_9575c86a) passed here and
+    # then shipped without one. The resource's bindings come from the plugin that provides it;
+    # the gate's per-run database stands in for what that plugin provisions.
+    bindings = _database_bindings(manifest)
+    if not bindings:
+        raise CheckFailed("the app uses Postgres and boss.deploy.yaml declares no database "
+                          "(resources: {db: {capability: database.relational, engine: postgres}})")
     lease = build_services.provision(f"{g.run_id}-deploy", server_url=g.pg_url)
     env_values = {"BOSS_DEPLOY_COMMIT": commit, "BOSS_DEPLOY_REF": ctx["ref"], "BOSS_DEPLOY_DIR": manifest.dir}
     hidden = []
+    for name in bindings:
+        env_values[name] = lease.env()["DATABASE_URL"]
+        hidden.append(env_values[name])
     for item in manifest.env:
         if item.source == "literal":
             env_values[item.key] = rendered["env_literals"][item.key]
         elif item.source == "generate":
             env_values[item.key] = stack_deploy._GENERATE[item.value]()
             hidden.append(env_values[item.key])
-        elif item.key == "DATABASE_URL":
-            env_values[item.key] = lease.env()["DATABASE_URL"]
-            hidden.append(env_values[item.key])
+        else:
+            raise CheckFailed(f"the manifest reads the secret {item.value!r} ({item.key}), which a "
+                              "first deploy cannot have: declare what BOSS provides instead")
     steps_seen: list[str] = []
     applier = stack_deploy.StackApplier(
         access=access, rendered=rendered, commit=commit, ref=ctx["ref"], env_values=env_values,
@@ -787,6 +798,27 @@ def check_deploy(g: Gate) -> str:
     if leaked:
         raise CheckFailed("the deploy log carries a generated secret")
     return f"{out['mode']}: " + ", ".join(s["name"] for s in out["steps"] if s["status"] == "succeeded")
+
+
+def _database_bindings(manifest: Any) -> list[str]:
+    """The env names the manifest's database.relational resources bind, by the plugin that
+    provides each (its `bindings:`, renamed by the resource's own `bindings:`)."""
+    from boss_engine.platform.registry import discover
+
+    names: list[str] = []
+    plugins = [p for p in discover() if p.manifest is not None]
+    for resource in manifest.resources or ():
+        if resource.capability != "database.relational":
+            continue
+        provider = next((p for p in plugins if resource.capability in p.manifest.spec.capabilities
+                         and (p.id == resource.provider if resource.provider
+                              else (resource.engine or "") in p.id)), None)
+        if provider is None:
+            raise CheckFailed(f"no plugin provides {resource.capability} "
+                              f"({resource.engine or 'any engine'}) for resource {resource.name!r}")
+        for binding in provider.manifest.spec.bindings:
+            names.append((resource.bindings or {}).get(binding, binding))
+    return names
 
 
 def _kill_matching(needle: str) -> None:
@@ -812,6 +844,214 @@ class _TextHost:
         return SimpleNamespace(returncode=done.returncode,
                                stdout=(done.stdout or b"").decode(errors="replace"),
                                stderr=(done.stderr or b"").decode(errors="replace"))
+
+
+# ── After the pull request: pass 2, the first deploy, the smoke test (wfr_9575c86a) ──────────────
+#
+# These call BOSS's own runner and deploy functions against a full-schema throwaway database: a
+# workflow run whose build finished, then what comes after it.
+
+class PostPr:
+    """A full-schema database, a project in it, and a workflow run whose build step finished."""
+
+    def __init__(self, pg_url: str):
+        from sqlalchemy import create_engine, text
+
+        url = _database(pg_url, "boss_test_e2egate_postpr")
+        _full_schema(url)
+        self.engine = create_engine(url.replace("postgresql://", "postgresql+psycopg://"), future=True)
+        self.text = text
+        self.project = f"p_gate{uuid.uuid4().hex[:8]}"
+        with self.engine.begin() as c:
+            c.execute(text("INSERT INTO orgs (id, name) VALUES ('org_gate', 'gate') ON CONFLICT DO NOTHING"))
+            c.execute(text("INSERT INTO workspaces (id, org_id, name) VALUES ('ws_gate', 'org_gate', 'gate') "
+                           "ON CONFLICT DO NOTHING"))
+            c.execute(text("INSERT INTO projects (id, workspace_id, name, slug) VALUES (:p, 'ws_gate', 'gate', :p)"),
+                      {"p": self.project})
+
+    def build(self, c: Any, files: list[str], *, app: str = "Notes", pr: int = 7) -> str:
+        run_id = f"crun_{uuid.uuid4().hex[:12]}"
+        c.execute(self.text(
+            "INSERT INTO code_task_runs (id, project_id, title, status, spec, state, finalize_ctx, "
+            " pull_request_number) VALUES (:i, :p, :t, 'completed', CAST(:s AS JSONB), CAST(:st AS JSONB), "
+            " CAST(:f AS JSONB), :n)"),
+            {"i": run_id, "p": self.project, "t": app, "n": pr,
+             "s": json.dumps({"owner": OWNER, "repo": REPO, "instructions": "build it"}),
+             "st": json.dumps({"impl_files": files}), "f": json.dumps({"app_name": app})})
+        return run_id
+
+    def workflow_run(self, c: Any, steps: list[dict]) -> str:
+        from boss_engine.services import workflows
+
+        for i, step in enumerate(steps):
+            step["next"] = [steps[i + 1]["id"]] if i + 1 < len(steps) else []
+        d = workflows.create_definition(c, project_id=self.project, workflow_key=f"g_{uuid.uuid4().hex[:8]}",
+                                        name="gate", description=None, actor="gate", namespace="product")
+        v = workflows.publish_version(c, project_id=self.project, definition_id=d["id"], actor="gate",
+                                      spec={"entry_step": steps[0]["id"], "steps": steps})
+        return workflows.start_run(c, project_id=self.project, actor="ceo", input_data={"title": "t"},
+                                   dedupe_key=f"dk_{uuid.uuid4().hex[:8]}",
+                                   workflow_version_id=v["id"])["id"]
+
+    def finish(self, c: Any, run_id: str, step_id: str, output: dict, capability: str) -> None:
+        c.execute(self.text(
+            "UPDATE workflow_step_runs SET status = 'succeeded', completed_at = now(), "
+            "output = CAST(:o AS JSONB), binding_snapshot = COALESCE(binding_snapshot, '{}'::jsonb) "
+            "|| CAST(:b AS JSONB) WHERE workflow_run_id = :r AND step_id = :s"),
+            {"o": json.dumps(output), "b": json.dumps({"capability": capability}), "r": run_id, "s": step_id})
+
+
+@check("more tests (pass 2) starts under the run's authority and never stops the run", bug="P1")
+def check_pass_two(post: PostPr) -> str:
+    """Under enforce, with no live authority to act for, a More tests pass is refused at start:
+    it must complete ADVISORY (the run goes on with pass 1) — it failed its step, was retried 3x
+    and the all-join stopped the run (wfr_9575c86a). And the consent a workflow holding it asks
+    for must name code_task:retry, the permission its in-process extend_code_task is checked
+    against (it never did: the capability's tool is None)."""
+    from boss_engine.config import get_settings
+    from boss_engine.identity import consent
+    from boss_engine.services import workflow_capabilities
+    from boss_engine.services import workflow_capability_runner as runner
+
+    steps = [{"id": "build", "kind": "capability",
+              "binding": {"capability": "build", "inputs": {"instructions": "go", "title": "t"}}},
+             {"id": "more_tests", "kind": "capability",
+              "binding": {"capability": "more_tests", "inputs": {"run_id": "crun_x"}}}]
+    with post.engine.begin() as c:
+        _, perms, _ = consent.workflow_needs(c, post.project, {"steps": steps}, {})
+    if "code_task:retry" not in perms:
+        raise CheckFailed("the consent for a workflow with More tests does not ask for "
+                          f"code_task:retry, which its extend_code_task needs (asks: {sorted(perms)})")
+    settings = get_settings()
+    was = settings.authz_mode
+    real = runner._tool_registry
+    started: list[dict] = []
+
+    class Stub:
+        def __init__(self, spec: Any):
+            self.__dict__.update({k: getattr(spec, k) for k in dir(spec) if not k.startswith("__")})
+            self.handler = lambda ctx, **kw: started.append(kw) or {
+                "status": "extending", "result": {"run_id": "crun_pass2"}}
+
+    runner._tool_registry = lambda: SimpleNamespace(specs=lambda: [
+        Stub(sp) if sp.name == "extend_code_task" else sp for sp in real().specs()])
+    settings.authz_mode = "enforce"
+    try:
+        with post.engine.begin() as c:
+            base = post.build(c, ["notes/server.mjs"])
+            run_id = post.workflow_run(c, json.loads(json.dumps(steps)))
+            post.finish(c, run_id, "build", {"code_task_run_id": base}, "build")
+            try:
+                out = runner._perform_capability(
+                    c, SimpleNamespace(engine=post.engine, settings=None), project_id=post.project,
+                    actor="ceo", step=steps[1], context={"run_id": run_id, "input": {}},
+                    key="more_tests", capability=workflow_capabilities.CAPABILITIES["more_tests"],
+                    inputs={"run_id": base})
+            except runner.CapabilityExecutionError as exc:
+                raise CheckFailed(f"More tests raised at start instead of completing advisory: {exc}")
+    finally:
+        settings.authz_mode = was
+        runner._tool_registry = real
+    if started:
+        raise CheckFailed("extend_code_task ran with no authority to act for, under enforce")
+    if not out.get("advisory_failed") or str(out.get("status")) == "failed":
+        raise CheckFailed("a More tests pass refused at start would fail its step (and stop the run): "
+                          f"{str(out.get('error') or out.get('note') or out)[:200]}")
+    return f"refused at start → completed advisory; consent asks code_task:retry"
+
+
+@check("the first deploy of an app that declares how it runs takes its manifest", bug="P2")
+def check_first_declared_deploy(post: PostPr) -> str:
+    """No target yet, a build that wrote notes/boss.deploy.yaml: the deploy must ship from that
+    manifest on a target made on the step's host — it fell to the one-container deploy_app, whose
+    apply was then refused (deprun_22f9650e)."""
+    from boss_engine.services import stack_deploy
+
+    host = f"dh_{uuid.uuid4().hex[:10]}"
+    with post.engine.begin() as c:
+        c.execute(post.text("INSERT INTO deployment_hosts (id, project_id, name, address, status, port_min, "
+                            "port_max) VALUES (:h, :p, :h, '127.0.0.1', 'verified', 39100, 39199)"),
+                  {"h": host, "p": post.project})
+        run_id = post.build(c, ["notes/server.mjs", "notes/package.json", "notes/boss.deploy.yaml"])
+        inputs = {"run_id": run_id, "host_id": host}
+        kwargs = ({"create": True} if "create" in inspect.signature(
+            stack_deploy.stack_target_for_deploy).parameters else {})
+        target = stack_deploy.stack_target_for_deploy(c, post.project, inputs, **kwargs)
+    if target is None:
+        raise CheckFailed("an app that declares notes/boss.deploy.yaml and has no target falls to the "
+                          "one-container deploy (no stack target, no manifest)")
+    if not target.get("id") or target.get("host_id") != host:
+        raise CheckFailed(f"the declared app's target was not made on the step's host: {target}")
+    if target.get("manifest_path") != "notes/boss.deploy.yaml":
+        raise CheckFailed(f"the deploy would ship {target.get('manifest_path')!r}, not the app's own manifest")
+    return f"target {target['id']} on the step's host, from notes/boss.deploy.yaml"
+
+
+@check("smoke test after a stack deploy asks the target's declared health", bug="P4")
+def check_stack_smoke(post: PostPr) -> str:
+    """A deploy from the app's manifest is a stack deployment; the smoke test after it only knew
+    `deployment` and fell to http_probe, which Community refuses. It must ask the deployed
+    manifest's health (/healthz) at the target's address."""
+    import http.server
+    import socket
+    import threading
+
+    from boss_engine.services import deployment_smoke
+
+    asked: list[str] = []
+
+    class Health(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            asked.append(self.path)
+            code = 200 if self.path in ("/", "/healthz") else 404
+            self.send_response(code)
+            self.end_headers()
+            self.wfile.write(b"<!doctype html><title>ok</title>")
+
+        def log_message(self, *a: Any) -> None:
+            pass
+
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    server = http.server.HTTPServer(("127.0.0.1", port), Health)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    manifest = ("version: 1\nname: notes\nkind: commands\ninstall: [\"true\"]\n"
+                "health: [{url: \"{target.public_url}/healthz\", expect: 200}]\n")
+    try:
+        with post.engine.begin() as c:
+            host, target, sdep = (f"dh_{uuid.uuid4().hex[:10]}", f"deptgt_{uuid.uuid4().hex[:10]}",
+                                  f"sdep_{uuid.uuid4().hex[:10]}")
+            c.execute(post.text("INSERT INTO deployment_hosts (id, project_id, name, address, status) "
+                                "VALUES (:h, :p, :h, '127.0.0.1', 'verified')"), {"h": host, "p": post.project})
+            c.execute(post.text(
+                "INSERT INTO deployment_targets (id, project_id, app_name, repo, environment, target_kind, "
+                " target_ref, host_id, created_by, domains, health_checks) VALUES (:t, :p, 'Smoke Notes', :r, "
+                " 'staging', 'ssh', 'boss@127.0.0.1:22', :h, 'gate', CAST(:d AS JSONB), '[]'::jsonb)"),
+                {"t": target, "p": post.project, "r": f"{OWNER}/{REPO}", "h": host,
+                 "d": json.dumps([f"127.0.0.1:{port}"])})
+            c.execute(post.text(
+                "INSERT INTO stack_deployments (id, project_id, target_id, host_id, repository, ref, "
+                " commit_sha, created_by, status, manifest_text) VALUES (:s, :p, :t, :h, :r, 'pull/7', "
+                " :sha, 'gate', 'healthy', :m)"),
+                {"s": sdep, "p": post.project, "t": target, "h": host, "r": f"{OWNER}/{REPO}",
+                 "sha": "c" * 40, "m": manifest})
+            steps = [{"id": "deploy", "kind": "capability",
+                      "binding": {"capability": "deploy", "inputs": {"run_id": "crun_x"}}},
+                     {"id": "smoke_test", "kind": "capability",
+                      "binding": {"capability": "smoke_test", "inputs": {"url": "http://127.0.0.1/"}}}]
+            run_id = post.workflow_run(c, steps)
+            post.finish(c, run_id, "deploy", {"await": {"kind": "stack_deployment", "id": sdep},
+                                              "stack_deployment_id": sdep}, "deploy")
+            out = deployment_smoke.smoke_deployment(c, None, post.engine, project_id=post.project,
+                                                    run_id=run_id)
+    finally:
+        server.shutdown()
+    if out.get("ok") is False:
+        raise CheckFailed(f"the smoke test after a stack deploy: {out.get('error')}")
+    if "/healthz" not in asked:
+        raise CheckFailed(f"the deployed manifest's /healthz was never asked (asked: {asked})")
+    return f"asked {', '.join(dict.fromkeys(asked))} at the target's address"
 
 
 def start_approval(db_url: str, work: Path) -> Optional[Background]:
@@ -890,6 +1130,10 @@ def main() -> int:
         if g.root is not None:
             check_pull_request(g)
             check_deploy(g)
+        post = PostPr(pg_url)
+        check_pass_two(post)
+        check_first_declared_deploy(post)
+        check_stack_smoke(post)
         check_retry_regressions(retries)
         check_approval(approval)
     except Exception as exc:  # noqa: BLE001 — the gate's own set-up failing is a FAIL

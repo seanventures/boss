@@ -279,8 +279,9 @@ CAPABILITIES: dict[str, Capability] = {
         _cap(
             key="preview",
             family="deploy",
-            # a person has to be able to use it
-            captain="qa",
+            # a person has to be able to use it — started by the role that built it, whose
+            # Passport (Builder) holds preview:manage; QA's (Reviewer) does not.
+            captain="engineering_captain",
             label="Preview",
             summary="Start a live preview of the app so a person can use it.",
             tool="start_preview",

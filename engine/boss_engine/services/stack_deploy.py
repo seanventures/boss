@@ -1233,13 +1233,6 @@ def plan_stack_deploy(engine, settings: Settings, *, project_id: str, target_id:
     except ManifestError as exc:
         raise StackDeployError(f"{path} at {commit[:12]} is not valid: {exc}",
                                f"Fix {path} in the repository and deploy again.")
-    with engine.begin() as connection:
-        unfit = manifest_misfit(connection, manifest=manifest, rendered=rendered, path=path,
-                                target=target, host=host, run_id=run_id,
-                                read=lambda p: github.read_file(owner, repo, p, commit))
-    if unfit:
-        # BEFORE ANYONE IS ASKED TO APPROVE: a plan that cannot work is refused in words.
-        raise StackDeployError(unfit[0], unfit[1])
 
     with engine.begin() as connection:
         # THE APP'S DEPLOY ENVIRONMENT, by name — the same set the one-container deploy passes
@@ -1252,6 +1245,14 @@ def plan_stack_deploy(engine, settings: Settings, *, project_id: str, target_id:
         if secret_refusal:
             raise StackDeployError(secret_refusal, APP_SECRET_ACTION)
         app_secret_names = sorted({str(a["name"]) for a in app_secrets})
+        unfit = manifest_misfit(connection, manifest=manifest, rendered=rendered, path=path,
+                                target=target, host=host, run_id=run_id,
+                                read=lambda p: github.read_file(owner, repo, p, commit),
+                                provided=app_secret_names)
+    if unfit:
+        # BEFORE ANYONE IS ASKED TO APPROVE: a plan that cannot work is refused in words.
+        raise StackDeployError(unfit[0], unfit[1])
+    with engine.begin() as connection:
         missing = {key: name for key, name in rendered["env_secrets"].items()
                    if not operator_secret_ref(connection, project_id, target_id, name)}
     if missing:
@@ -2172,7 +2173,8 @@ def manifest_declares_database(manifest: Any, read: Callable[[str], Optional[str
 def manifest_misfit(connection: Connection, *, manifest: Any, rendered: Mapping[str, Any],
                     path: str, target: Mapping[str, Any], host: Mapping[str, Any],
                     run_id: Optional[str],
-                    read: Callable[[str], Optional[str]]) -> Optional[tuple[str, str]]:
+                    read: Callable[[str], Optional[str]],
+                    provided: Any = ()) -> Optional[tuple[str, str]]:
     """(headline, action) when a manifest cannot run THIS app on THIS target, else None.
 
     Asked at plan time, before an approval is raised, for what failed after it on real runs:
@@ -2180,10 +2182,16 @@ def manifest_misfit(connection: Connection, *, manifest: Any, rendered: Mapping[
         shipped HelpDesk with no database; the plumbing gate wired DATABASE_URL by hand);
       * the manifest pins PORT, or health-checks a local port, other than the target's (a
         target on :8001 behind OAuth callbacks registered for :8000);
-      * a health path no file the build wrote serves (the old target's /readyz)."""
+      * a health path no file the build wrote serves (the old target's /readyz);
+      * a production deploy that gives the app a demo password its code refuses in production
+        (HelpDesk's config.ts threw on DEMO_PASSWORD under NODE_ENV=production)."""
     from urllib.parse import urlsplit
 
     workdir = manifest_workdir(path)
+    if not workdir and run_id:
+        foreign = root_manifest_misfit(connection, manifest, run_id, read)
+        if foreign:
+            return foreign
 
     def in_dir(p: str) -> str:
         return f"{workdir}/{p}" if workdir and not p.startswith(workdir + "/") else p
@@ -2194,9 +2202,8 @@ def manifest_misfit(connection: Connection, *, manifest: Any, rendered: Mapping[
                 f"Declare it in {path}: `resources: {{db: {{capability: database.relational, "
                 "engine: postgres}}}}`, or a postgres service in its compose file, then deploy "
                 "again.")
-    if is_stack_target(dict(target)):
-        return None
-    port = (address_env(dict(target), dict(host)).get("PORT") or "").strip()
+    port = ("" if is_stack_target(dict(target))
+            else (address_env(dict(target), dict(host)).get("PORT") or "").strip())
     if port:
         pinned = [e for e in manifest.env or () if e.key == "PORT" and e.source == "literal"]
         said = str((rendered.get("env_literals") or {}).get("PORT") or "").strip()
@@ -2212,6 +2219,15 @@ def manifest_misfit(connection: Connection, *, manifest: Any, rendered: Mapping[
                         f"on port {port}.",
                         "Health-check {target.public_url} (or $PORT) in the manifest.")
     served = _served_text(connection, run_id, workdir, read)
+    given = {e.key for e in manifest.env or ()} | {str(n) for n in provided or ()}
+    if (served is not None and "DEMO_PASSWORD" in given
+            and str(target.get("environment") or "").lower() == "production"
+            and refuses_in_production(served, "DEMO_PASSWORD")):
+        return ("The app refuses DEMO_PASSWORD in production, and this production deploy "
+                "gives it one: it would not start.",
+                "Allow the demo/seed password BOSS provides in production, and make demo seeding "
+                "an explicit opt-in (e.g. ALLOW_DEMO_SEED) instead of refusing the password; "
+                "then deploy again.")
     if served is not None:
         for check in rendered.get("health") or []:
             route = urlsplit(str(check.get("url") or "")).path.rstrip("/")
@@ -2222,6 +2238,52 @@ def manifest_misfit(connection: Connection, *, manifest: Any, rendered: Mapping[
                         f"Health-check a route the app serves (its / or a /health it "
                         f"defines), or add {route} to the app, then deploy again.")
     return None
+
+
+def root_manifest_misfit(connection: Connection, manifest: Any, run_id: str,
+                         read: Callable[[str], Optional[str]]) -> Optional[tuple[str, str]]:
+    """(headline, action) when the repository ROOT's manifest belongs to another app than the
+    one this build made, else None.
+
+    A repository holds several apps. boss-sandbox's root boss.deploy.yaml is stack-demo's; the
+    Onboarding build (crun_2d097414) wrote its app under onboarding-path-builder/, edited that
+    root manifest instead of writing its own, and the deploy took stack-demo's for it. A root
+    manifest is the app's when the app lives at the root, or when it names the app's folder (its
+    `name`, or steps / a compose file that run in that folder: `cd helpdesk && …`)."""
+    from .app_deploy_manifest import app_folder
+    from .naming import identity_key
+
+    files = [str(f) for a in lineage_of(connection, run_id)
+             for f in ((a["state"] or {}).get("impl_files") or [])]
+    folder = app_folder(files)
+    if not folder:
+        return None
+    if identity_key(manifest.name) == identity_key(folder):
+        return None
+    said = "\n".join(s.run for s in (*manifest.install, *manifest.update, *manifest.teardown))
+    if manifest.compose_file:
+        said += "\n" + manifest.compose_file + "\n" + (read(manifest.compose_file) or "")
+    if re.search(rf"(^|[\s/'\"=]){re.escape(folder)}(/|\s|$|['\"])", said):
+        return None
+    return (f"The repository root's {DEFAULT_MANIFEST_PATH} is {manifest.name!r}'s, not this "
+            f"app's: this build's app lives in {folder}/, and that manifest neither names it "
+            "nor runs anything there.",
+            f"Write {folder}/{DEFAULT_MANIFEST_PATH} for this app (and leave the root one to "
+            f"{manifest.name!r}), then deploy again.")
+
+
+def refuses_in_production(source: str, name: str) -> bool:
+    """The code throws (or exits) when `name` is set under production: `name`, `production`
+    and a throw/exit within a few lines of each other."""
+    lines = source.splitlines()
+    for i, line in enumerate(lines):
+        if name not in line:
+            continue
+        window = "\n".join(lines[max(0, i - 4):i + 5])
+        if re.search(r"production", window) and re.search(
+                r"\bthrow\b|process\.exit\(|\braise\b|sys\.exit\(|panic\(", window):
+            return True
+    return False
 
 
 _SERVED_SUFFIXES = (".js", ".mjs", ".cjs", ".ts", ".py", ".go", ".rb", ".java", ".kt", ".rs",
@@ -2253,9 +2315,8 @@ def undeclared_deploy_refusal(connection: Connection, run_id: Optional[str]) -> 
 
     The one-container path guesses how an app runs and ships no database. It stays for an app
     that never said otherwise; it is refused for one that
-      * was ASKED for its own boss.deploy.yaml (the deploy brief) and wrote none in its folder —
-        Onboarding edited the repository root's, stack-demo's, and its deploy then picked that
-        (wfr_9575c86a); or
+      * was ASKED for its own boss.deploy.yaml (the deploy brief) and wrote none (one that took
+        another app's root manifest instead is refused at plan: root_manifest_misfit); or
       * uses Postgres (state.build_database.postgres) and declares no manifest to bring it.
     Asked before the deploy's approval is raised (the runner's gate) and by the deploy itself."""
     run_id = str(run_id or "").strip()
@@ -2273,12 +2334,9 @@ def undeclared_deploy_refusal(connection: Connection, run_id: Optional[str]) -> 
     briefed = bool(connection.execute(
         text("SELECT 1 FROM code_task_runs WHERE id = ANY(:ids) AND strpos(spec::text, :m) > 0 "
              "LIMIT 1"), {"ids": [a["id"] for a in attempts], "m": DEPLOY_BRIEF_MARKER}).first())
-    touched_root = DEFAULT_MANIFEST_PATH in [f.strip().lstrip("./") for f in files]
     if briefed:
-        return (f"The build was asked to declare how its app runs ({where}) and wrote none"
-                + (" — it edited the repository root's boss.deploy.yaml, which belongs to "
-                   "another app" if touched_root and folder else "")
-                + ". Nothing was deployed: BOSS would only be guessing how to run it. Retry "
+        return (f"The build was asked to declare how its app runs ({where}) and wrote none. "
+                "Nothing was deployed: BOSS would only be guessing how to run it. Retry "
                 f"the build with the note \"write {where}\", or add it to the pull request, "
                 "then deploy again.")
     if app_needs_postgres(connection, run_id):

@@ -62,7 +62,12 @@ def test_the_fixture_declares_how_it_runs_and_deploys():
     from boss_engine.services.app_deploy_manifest import load_manifest
 
     manifest = load_manifest(FIXTURE / "boss.deploy.yaml")
-    assert {e.key for e in manifest.env} >= {"SESSION_SECRET", "DATABASE_URL"}
+    assert {e.key for e in manifest.env} >= {"SESSION_SECRET"}
+    # Its Postgres is DECLARED (a resource BOSS provisions), never a secret the gate wires by hand.
+    assert "DATABASE_URL" not in {e.key for e in manifest.env}
+    assert [(r.capability, r.engine) for r in manifest.resources] == [("database.relational", "postgres")]
+    src = (GATE / "plumbing.py").read_text()
+    assert 'item.key == "DATABASE_URL"' not in src and "_database_bindings(manifest)" in src
 
 
 PLAIN = ROOT / "tests" / "e2e" / "fixtures" / "plain-node"
