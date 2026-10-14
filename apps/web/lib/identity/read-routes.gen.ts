@@ -505,6 +505,7 @@ export const READ_ROUTES: ReadonlyArray<readonly [string, Permission]> = [
   ["setup", "setup:read"],
   ["setup/coding-agents", "setup:read"],
   ["setup/decision-model", "setup:read"],
+  ["setup/holds/{}", "setup:read"],
   ["setup/model-providers", "setup:read"],
   ["setup/models/{}/catalogue", "setup:read"],
   ["setup/repository/repos", "github:read"],
