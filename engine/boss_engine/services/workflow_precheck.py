@@ -112,7 +112,8 @@ _INFRA = ("sandbox.worker",)
 #: A step that runs an agent: the model its route reaches, whether that engine can start, and
 #: (once per run) whether the run's estimated cost fits the caps.
 _AGENT = ("sandbox.model", "sandbox.engine", "budget.run_cost")
-_BUILDS = ("authority.consent", "github.access", "sandbox.worker", "sandbox.toolchain",
+_BUILDS = ("authority.consent", "github.access", "github.own_link", "sandbox.worker",
+           "sandbox.toolchain",
            "sandbox.build_services", "sandbox.disk") + _AGENT + ("budget.headroom",)
 
 #: EVERY capability has an entry (test_every_capability_declares_its_prechecks).
@@ -667,6 +668,84 @@ def check_github(ctx: Context, step: dict[str, Any]) -> dict[str, Any]:
         return result("github.access", "unknown", recorded + live + " (stale: not re-probed)",
                       action="Run test_github_access to re-probe read, write and pull requests.")
     return result("github.access", "ready", recorded + live)
+
+
+def _starting_person(ctx: Context) -> Optional[tuple[str, str]]:
+    """(org id, principal id) of the person who presses Start: the signed-in person this
+    pre-check runs for, else `actor` when it names an active person (principal id or email)."""
+    def read() -> Optional[tuple[str, str]]:
+        from ..identity import lineage
+
+        auth = lineage.current_context()
+        if auth is not None and auth.is_human_session:
+            return auth.principal.org_id, auth.principal.id
+        row = ctx.connection.execute(text(
+            "SELECT p.org_id, p.id FROM identity_principals p LEFT JOIN identity_users u "
+            "ON u.principal_id = p.id WHERE p.kind = 'user' AND p.status = 'active' "
+            "AND (p.id = :a OR lower(u.email) = lower(:a)) LIMIT 1"), {"a": ctx.actor}).first()
+        return (str(row[0]), str(row[1])) if row else None
+    return ctx.once("starting_person", lambda: ctx.savepoint(read, default=None))
+
+
+@_check("github.own_link", "The person starting the run can push to its repository with their "
+        "own GitHub", fast=True, shared=True)
+def check_github_own_link(ctx: Context, step: dict[str, Any]) -> Optional[dict[str, Any]]:
+    """github.access checks BOSS's repository binding; the consent at Start checks the starting
+    person's OWN GitHub link and push rights. Asked with the start door's own rules
+    (consent.own_github_refusal → grants.user_repo_access_refusal), so the two cannot disagree."""
+    from ..identity.grants import GITHUB_LINK_FIX
+
+    derived = _consent_derivation(ctx) or {}
+    repos = list(derived.get("repos") or [])
+    if not repos:
+        return None                       # no repository in the consent (or authority.consent says why)
+    person = _starting_person(ctx)
+    if person is None:
+        return result("github.own_link", "unknown",
+                      f"no signed-in person is starting this run, so their own GitHub push access "
+                      f"to {', '.join(repos)} was not checked (the consent at Start checks it)",
+                      action="Run the pre-check signed in, or as the person who will press Start "
+                             "(--as).")
+
+    def ask() -> dict[str, Any]:
+        from ..identity import consent
+
+        try:
+            return consent.own_github_refusal(
+                ctx.connection, org_id=person[0], person_id=person[1], project_id=ctx.project_id,
+                role_keys=derived["roles"], permissions=derived["permissions"], repos=repos,
+                probe=not ctx.offline)
+        except Exception as exc:  # noqa: BLE001 — GitHub or the vault could not answer
+            return {"state": "error", "why": f"{type(exc).__name__}: {exc}"[:200]}
+    answer = ctx.once("own_github", lambda: ctx.savepoint(ask, default=None)) \
+        or {"state": "error", "why": "the read failed"}
+    state, who, repo = answer["state"], person[1], answer.get("repo") or repos[0]
+    if state == "not_asked":
+        return (result("github.own_link", "ready", f"a grant of {who}'s already covers this run; "
+                       "Start asks for no consent") if answer.get("covered") else None)
+    if state == "not_checked":
+        return result("github.own_link", "ready", "this install does not check people's own "
+                      "GitHub access (one person, or the policy)")
+    if state == "ok":
+        return result("github.own_link", "ready",
+                      f"{who}'s own GitHub can {answer['needs']} to {', '.join(repos)}")
+    if state == "refused" and answer.get("answer") is False:
+        return result("github.own_link", "fixable",
+                      f"Your own GitHub account can't {answer['needs']} to {repo}, so you can't let "
+                      "an agent do it for you (" + ("the GitHub linked lacks that access"
+                                                    if answer.get("linked") else
+                                                    f"{who} has no GitHub linked")
+                      + "). The consent at Start refuses it (github_access_lacking).",
+                      action=f"{GITHUB_LINK_FIX}, then try again.",
+                      details={"repo": repo, "needs": answer["needs"],
+                               "linked": bool(answer.get("linked"))})
+    why = {"unprobed": f"{who} has a GitHub linked; its {answer.get('needs')} access to "
+                       f"{', '.join(repos)} was not asked of GitHub (offline)",
+           "refused": f"GitHub did not answer whether {who}'s own GitHub can "
+                      f"{answer.get('needs')} to {repo}; the consent at Start refuses that too",
+           }.get(state, f"could not check {who}'s own GitHub: {answer.get('why')}")
+    return result("github.own_link", "unknown", why,
+                  action=f"Re-run the pre-check online; if it still fails, {GITHUB_LINK_FIX}.")
 
 
 def _repo_files(ctx: Context, rel_dir: str) -> Optional[list[str]]:
@@ -2711,6 +2790,8 @@ CHECK_DOCS: dict[str, str] = {
     "github.access": "the repository binding's last probes and a live GET: read, push, the "
                      "default branch",
     "github.ci": "the repository's CI covers the app's path and has the services it needs",
+    "github.own_link": "the person starting the run has their own GitHub linked with push "
+                       "access to the run's repository, as the consent at Start checks",
     "sandbox.worker": "a worker is alive to lease the step's job",
     "sandbox.toolchain": "node, npm, git and a C toolchain where builds run; the app's engines",
     "sandbox.build_services": "the build-services database is up for a Postgres app's build",

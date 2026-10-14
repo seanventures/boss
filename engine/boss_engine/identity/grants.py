@@ -218,27 +218,51 @@ def _github_link_version(db: Any, person_id: str) -> str:
     return ",".join(f"{r[0]}:{r[1]}" for r in rows) or "none"
 
 
-def check_user_repo_access(org_id: str, person_id: str, gh: Mapping[str, Any], *, db: Any,
-                           use_cache: bool = True) -> None:
-    """The confused-deputy guard: on multi-person installs the person must have at least the
-    granted access on GitHub, checked with THEIR linked GitHub identity. Raises GrantRefused."""
+def repo_access_needed(gh: Mapping[str, Any]) -> str:
+    """What the guard asks GitHub for: "push" when `gh` grants any write, else "pull"."""
+    needs_write = any(LEVELS.get(str(v), 0) >= 2 for k, v in gh.items() if k in GITHUB_PERMISSIONS)
+    return "push" if needs_write else "pull"
+
+
+#: The fix for github_access_lacking, as the consent sheet (consentRefusal) and the workflow
+#: pre-check (github.own_link) both say it.
+GITHUB_LINK_FIX = "Connect your GitHub in My account › Agents"
+
+
+def user_repo_access_refusal(org_id: str, person_id: str, gh: Mapping[str, Any], *, db: Any,
+                             use_cache: bool = True) -> Optional[dict[str, Any]]:
+    """THE confused-deputy guard's answer, without raising: None when the person may grant `gh`
+    (or the guard is off on this install); else {"repo", "needs", "answer"} for the first repo
+    it refuses — answer False (no link, or no access) or None (GitHub did not answer). The start
+    door refuses both (check_user_repo_access); the workflow pre-check asks the same question."""
     if not gh.get("repos") or not repo_guard_active(org_id, db=db):
-        return
+        return None
     from . import github_app
 
-    needs_write = any(LEVELS.get(str(v), 0) >= 2 for k, v in gh.items() if k in GITHUB_PERMISSIONS)
-    need = "push" if needs_write else "pull"
+    need = repo_access_needed(gh)
     link = _github_link_version(db, person_id)
     for repo in gh["repos"]:
         key = (person_id, repo, need, link)
         hit = _GUARD_CACHE.get(key)
         if use_cache and hit and time.monotonic() - hit[1] < GUARD_TTL_SECONDS:
-            ok = hit[0]
+            ok: Optional[bool] = hit[0]
         else:
-            ok = github_app.user_has_repo_access(person_id, repo, need, db=db)
-            _GUARD_CACHE[key] = (ok, time.monotonic())
-        if not ok:
-            raise GrantRefused("github_access_lacking", 403, {"repo": repo, "needs": need})
+            ok = github_app.user_repo_access(person_id, repo, need, db=db)
+            if ok is not None:                   # "GitHub did not answer" is asked again next time
+                _GUARD_CACHE[key] = (ok, time.monotonic())
+        if ok is not True:
+            return {"repo": repo, "needs": need, "answer": ok}
+    return None
+
+
+def check_user_repo_access(org_id: str, person_id: str, gh: Mapping[str, Any], *, db: Any,
+                           use_cache: bool = True) -> None:
+    """The confused-deputy guard: on multi-person installs the person must have at least the
+    granted access on GitHub, checked with THEIR linked GitHub identity. Raises GrantRefused."""
+    refused = user_repo_access_refusal(org_id, person_id, gh, db=db, use_cache=use_cache)
+    if refused is not None:
+        raise GrantRefused("github_access_lacking", 403,
+                           {"repo": refused["repo"], "needs": refused["needs"]})
 
 
 def clear_guard_cache() -> None:

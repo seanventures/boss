@@ -120,6 +120,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--input-from-run", help="start as this earlier run (wfr_…) was: its "
                         "input (the brief, the template, the app)")
     parser.add_argument("--offline", action="store_true", help="no network, no subprocesses")
+    parser.add_argument("--as", dest="actor", default="ceo",
+                        help="the person who will press Start (principal id or email): checks "
+                        "their own GitHub link (github.own_link)")
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--days", type=int, default=7, help="how far back the history reads")
     parser.add_argument("--families", default="history,logs,data",
@@ -161,7 +164,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                      **run_input}
     try:
         report = wp.precheck(
-            engine, settings, project_id=args.project, workflow=args.workflow,
+            engine, settings, project_id=args.project, actor=args.actor, workflow=args.workflow,
             run_id=args.run, run_input=run_input or None,
             checkpoint=args.checkpoint, app_dir=args.app_dir, repo_root=args.repo_root,
             build_run_id=args.build_run, offline=args.offline,

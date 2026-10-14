@@ -35,6 +35,9 @@ class ConsentRequired(_Base):  # type: ignore[misc,valid-type]
 
 GITHUB_LABELS = {"contents": "code", "pull_requests": "pull requests", "issues": "issues", "workflows": "workflows",
                  "checks": "checks", "statuses": "statuses", "actions": "actions"}
+#: The GitHub access every consent sheet asks for on the run's repositories (the sheet's grant
+#: body sends it back as `resources.github`, which grants.check_user_repo_access checks).
+CONSENT_GITHUB_NEEDS = {"contents": "write", "pull_requests": "write"}
 
 
 def _github_summary(needs: dict[str, str], pattern: str) -> str:
@@ -139,7 +142,7 @@ def require_authority(*, org_id: Optional[str], project_id: Optional[str], role_
     if grant is not None:
         return Acting(principal_id=ctx.principal.id, org_id=ctx.principal.org_id, grant_id=grant.id, run_id=run_id)
     pol = grants.policy_for(ctx.principal.org_id, db=db)
-    needs = dict(github_needs or {"contents": "write", "pull_requests": "write"})
+    needs = dict(github_needs or CONSENT_GITHUB_NEEDS)
     if not ctx.is_human_session:
         if not lineage._enforced():
             import logging
@@ -494,7 +497,7 @@ def _consent_body(db: Any, *, ctx_person: str, org_id: str, agents, needed, proj
     from . import grants
 
     pol = grants.policy_for(org_id, db=db)
-    needs = {"contents": "write", "pull_requests": "write"}
+    needs = dict(CONSENT_GITHUB_NEEDS)
     durations = [] if standing_only else [{"kind": "task", "label": "For this run only", "days": None, "scope": scope}]
     durations.append({"kind": "standing", "label": f"For {int(pol.delegation_default_days)} days",
                       "days": int(pol.delegation_default_days)})
@@ -508,6 +511,53 @@ def _consent_body(db: Any, *, ctx_person: str, org_id: str, agents, needed, proj
                    if repos else None),
         "durations": durations, "max_days": int(pol.delegation_max_days),
     }
+
+
+def own_github_refusal(db: Any, *, org_id: str, person_id: str, project_id: str,
+                       role_keys: Iterable[str], permissions: Iterable[str], repos: Iterable[str],
+                       probe: bool = True, use_cache: bool = True) -> dict[str, Any]:
+    """WOULD THIS PERSON'S CONSENT TO A RUN BE REFUSED FOR THEIR OWN GITHUB? The workflow
+    pre-check's question (github.own_link), answered with the start door's own rules so the two
+    cannot disagree: require_for_workflow asks for consent, the sheet posts a grant with
+    CONSENT_GITHUB_NEEDS, and grants.check_user_repo_access refuses it github_access_lacking.
+
+      {"state": "not_asked"}    no repository; a role with no agent (identity does not apply); or
+                                a live grant of the person's already covers the run (no sheet)
+      {"state": "not_checked"}  this install does not check people's own GitHub
+                                (grants.repo_guard_active: one person, or the policy)
+      {"state": "ok", "needs"}
+      {"state": "refused", "repo", "needs", "answer", "linked"}  answer False (no link or no
+                                access) or None (GitHub did not answer)
+      {"state": "unprobed", "needs"}  `probe=False` and the person has a link: GitHub not asked
+
+    Read-only: one GET per repository with the person's own token (github_app.user_repo_access);
+    none with `probe=False` (a person with no link is refused without asking GitHub anyway)."""
+    from sqlalchemy import text
+
+    from . import grants, runs
+
+    repos, role_keys = list(repos), list(role_keys)
+    if not repos:
+        return {"state": "not_asked"}
+    agent_ids = [runs.agent_for_role(db, project_id, rk) for rk in role_keys]
+    if not all(agent_ids):
+        return {"state": "not_asked"}
+    needed = frozenset(permissions)
+    if any(grants.covers(g, agent_ids=agent_ids, permissions=needed, project_id=project_id,
+                         repos=repos, run_id=None) for g in grants.for_person(person_id, db=db)):
+        return {"state": "not_asked", "covered": True}
+    if not grants.repo_guard_active(org_id, db=db):
+        return {"state": "not_checked"}
+    gh = {"repos": repos, **CONSENT_GITHUB_NEEDS}
+    linked = bool(db.execute(text(
+        "SELECT 1 FROM identity_vault_items WHERE owner_principal_id = :p AND kind = 'oauth_user' "
+        "AND provider = 'github' AND status = 'active' LIMIT 1"), {"p": person_id}).first())
+    if linked and not probe:
+        return {"state": "unprobed", "needs": grants.repo_access_needed(gh)}
+    refused = grants.user_repo_access_refusal(org_id, person_id, gh, db=db, use_cache=use_cache)
+    if refused is None:
+        return {"state": "ok", "needs": grants.repo_access_needed(gh)}
+    return {"state": "refused", **refused, "linked": linked}
 
 
 def require_for_workflow(db: Any, *, project_id: str, spec: Any, input_data: Any, run_id: str,
