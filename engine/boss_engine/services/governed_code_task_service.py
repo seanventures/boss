@@ -62,6 +62,7 @@ from .llm_telemetry import clear_llm_context, get_llm_context, record_llm_call, 
 logger = logging.getLogger(__name__)
 
 from .crash_frames import log_caught as _log_caught  # noqa: E402 — every caught exception keeps its traceback
+from .crash_frames import record_swallowed as _record_swallowed  # noqa: E402
 from .pipeline_profile_service import resolve_for_run
 from .project_settings import effective_review_lanes, effective_review_rounds
 from .factory_quality_loop import (
@@ -231,6 +232,34 @@ def classify_gate_faults(
             inconclusive = False
         faults[gate] = "HARNESS" if inconclusive else "WORK"
     return faults
+
+
+def mark_stage_done(engine, project_id: str, run_id: str, stage: str) -> bool:
+    """Record that a stage finished, so a resumed attempt can skip it. Never raises.
+
+    Paired with the pipeline's _checkpoint: the checkpoint preserves the WORK, this preserves
+    the KNOWLEDGE of what is already done. Without both, a retry after a provider spend-limit
+    re-derives stages whose output is already sitting on the branch.
+
+    The cast is CAST(:s AS text), never `:s::text`: a SQLAlchemy text clause does not read `:s::`
+    as a bind parameter, so that spelling reached Postgres as a syntax error on every build
+    (test_no_text_sql_uses_a_colon_cast guards the whole engine).
+    """
+    try:
+        with _transaction(engine) as c:
+            c.execute(sql(
+                "UPDATE code_task_runs SET finalize_ctx="
+                "COALESCE(finalize_ctx,'{}'::jsonb) || jsonb_build_object("
+                "  'completed_stages', "
+                "  COALESCE(finalize_ctx->'completed_stages','[]'::jsonb) || to_jsonb(CAST(:s AS text))"
+                "), updated_at=now() WHERE id=:id"),
+                {"s": stage, "id": run_id})
+        return True
+    except Exception:  # noqa: BLE001 — bookkeeping must never fail a run, but a resume
+        # that cannot see this marker redoes the stage, so it is never silent either.
+        _record_swallowed(logger, f"mark_stage_done:{stage}", project_id=project_id,
+                          run_id=run_id, transaction=lambda: _transaction(engine))
+        return False
 
 
 def take_pending_guidance(engine, run_id: str, stage: Optional[str] = None) -> list[dict]:
@@ -3442,8 +3471,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         with _transaction(engine) as c:
             _budget_state = str(budget.status_for_project(c, project_id).get(
                 "budget_state") or "green")
-    except Exception:
-        _log_caught(logger)
+    except Exception:  # noqa: BLE001 — an unreadable budget never fails the build: route as green
+        _record_swallowed(logger, "budget_state", project_id=project_id, run_id=run_id,
+                          transaction=lambda: _transaction(engine))
         _budget_state = "green"
 
     # THE MODEL ROUTER (docs/product/MODEL_ROUTER.md). Every stage boundary asks it. In Fixed
@@ -4067,24 +4097,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         return None
 
     def _mark_stage_done(stage: str) -> None:
-        """Record that a stage finished, so a resumed attempt can skip it.
-
-        Paired with _checkpoint: the checkpoint preserves the WORK, this preserves the
-        KNOWLEDGE of what is already done. Without both, a retry after a provider spend-limit
-        re-derives stages whose output is already sitting on the branch.
-        """
-        try:
-            with _transaction(engine) as c:
-                c.execute(sql(
-                    "UPDATE code_task_runs SET finalize_ctx="
-                    "COALESCE(finalize_ctx,'{}'::jsonb) || jsonb_build_object("
-                    "  'completed_stages', "
-                    "  COALESCE(finalize_ctx->'completed_stages','[]'::jsonb) || to_jsonb(:s::text)"
-                    "), updated_at=now() WHERE id=:id"),
-                    {"s": stage, "id": run_id})
-        except Exception:  # noqa: BLE001 — bookkeeping must never fail a run
-            _log_caught(logger)
-            pass
+        mark_stage_done(engine, project_id, run_id, stage)
 
     def _checkpoint(label: str) -> int:
         """Push whatever the sandbox holds to the work branch. Best-effort, never fatal.

@@ -2124,16 +2124,20 @@ def _release(
                 effect_scope={"run_id": run_id, "reservation_id": reservation_id},
                 payload={"actual_usd_micros": actual, "reason": reason},
             )
-            budget.consume(
+            # settle(), not consume(): `budget` is the BudgetPort, and the port has no
+            # consume — the call raised AttributeError and the spend was released unrecorded.
+            budget.settle(
                 connection, project_id, reservation_id,
                 receipt_id=receipt["id"], category="code_task",
                 skill_or_model_id=f"code_task:{run_id}",
                 estimated_usd_micros=actual, actual_usd_micros=actual,
-                actor="budget_reconciler",
             )
         else:
             budget.release(connection, project_id, reservation_id, reason)
-    except Exception:
+    except Exception:  # noqa: BLE001 — always fail-soft, but an unsettled spend is never silent
+        from .crash_frames import record_swallowed
+        record_swallowed(logger, "release_budget", project_id=project_id, run_id=run_id,
+                         connection=connection if hasattr(connection, "begin_nested") else None)
         try:
             budget.release(connection, project_id, reservation_id, reason)
         except Exception:

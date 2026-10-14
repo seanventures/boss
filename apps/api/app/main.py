@@ -8435,7 +8435,7 @@ def code_task_redelivered_endpoint(run_id: str, payload: open_bodies.CodeTaskRed
                 SET finalize_ctx = COALESCE(finalize_ctx, '{}'::jsonb)
                                    || jsonb_build_object('redelivered_attempts',
                                         COALESCE(finalize_ctx->'redelivered_attempts', '[]'::jsonb)
-                                        || to_jsonb(:attempt::int)),
+                                        || to_jsonb(CAST(:attempt AS int))),
                     updated_at = now()
                 WHERE id = :run_id
                 """
