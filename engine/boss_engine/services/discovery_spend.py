@@ -44,6 +44,19 @@ SKILL_ID = "discovery.research"
 STAGE_TTL_SECONDS = 3600
 # The research agent is the Claude CLI, so its capacity is the Claude subscription.
 RESEARCH_SOURCE_ID = "anthropic_claude_code"
+
+
+def research_source_id(connection, settings, project_id: str) -> str:
+    """The source a research stage books on: the Claude subscription, or the Anthropic API source
+    when the CLI runs on the console's key (claude_credential, BOSSAPP-530). A deployment that
+    points RESEARCH_SOURCE_ID elsewhere keeps its choice."""
+    if RESEARCH_SOURCE_ID != "anthropic_claude_code":
+        return RESEARCH_SOURCE_ID
+    from .claude_credential import active_source_id
+
+    return active_source_id(connection, settings, project_id)
+
+
 # The ceiling reserved before a stage; settlement keeps only what the call actually cost.
 STAGE_ESTIMATE_USD_MICROS = 2_000_000
 
