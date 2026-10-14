@@ -39,9 +39,14 @@ ALLOW_EXACT: frozenset[str] = frozenset({
     # TLS trust. Without these, every https call from the sandbox fails.
     "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "NODE_EXTRA_CA_CERTS",
     "CURL_CA_BUNDLE",
-    # The agent's own model access. This is a credential, and it is the one it cannot work
-    # without — it buys model turns, not access to customer data.
-    "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL",
+    # The agent's own model access. The subscription login is a credential, and it is the one a
+    # Claude CLI on a subscription cannot work without — it buys model turns, not access to
+    # customer data. An Anthropic API KEY is NOT inherited (it is credential-shaped, so it is
+    # withheld): every Claude child gets its credential from claude_credential, and an API key
+    # goes to it as a model-proxy run token (model_proxy), never as the key. Inherited, the
+    # install's key reached every command BOSS runs in a sandbox — a build's test suite, the
+    # native engine's shell tool.
+    "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL",
     "CLAUDE_CONFIG_DIR",
     # Committing inside the sandbox. Identity only; no push credential.
     "GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL",
@@ -83,8 +88,8 @@ NEVER: frozenset[str] = frozenset({
 })
 
 #: Substrings that mark a name as credential-shaped. Anything matching is withheld unless it is
-#: explicitly in ALLOW_EXACT — which is how ANTHROPIC_API_KEY and the OAuth token get through,
-#: on purpose and in writing, rather than by accident of pattern matching.
+#: explicitly in ALLOW_EXACT — which is how the OAuth token gets through, on purpose and in
+#: writing, rather than by accident of pattern matching.
 SECRET_SHAPED: tuple[str, ...] = (
     "SECRET", "PASSWORD", "PASSWD", "TOKEN", "CREDENTIAL", "PRIVATE_KEY", "API_KEY", "APIKEY",
 )

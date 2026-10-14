@@ -7,8 +7,9 @@ key, behind the same engine interface. These pin, with the SDK stubbed (no API c
   * what a session is started with — cwd, tools, read-only permission mode for review seats,
     max turns, model (default claude-sonnet-5), resume and its fallback;
   * the message stream -> agent_turns rows, and the result -> llm_calls usage/cost, metered;
-  * the credential: the API key only (never the login), only in the CLI child's environment,
-    scrubbed from the agent's own tools, redacted, never logged;
+  * the credential: the API key only (never the login) — and never the key itself in the
+    session: a model-proxy run token and the proxy's base URL, no CLI sandbox forced (no
+    CLAUDE_CODE_SUBPROCESS_ENV_SCRUB), redacted, never logged;
   * selection (install-wide and per job) and readiness;
   * and, as plumbing, one real session through the SDK and BOSS's owned transport against a
     fake `claude` binary that speaks the stream-json protocol.
@@ -307,10 +308,17 @@ def test_only_the_api_key_reaches_the_child_never_the_login(monkeypatch, tmp_pat
     sessions, _ = fake_sdk
     _agent().run_role("Implement it.", tmp_path)
     env = sessions[0]["options"].env
-    assert env["ANTHROPIC_API_KEY"] == KEY
+    assert env["ANTHROPIC_API_KEY"].startswith("boss_mdl_")         # a run token, never the key
+    assert KEY not in env.values()
+    assert env["ANTHROPIC_BASE_URL"].startswith("http://127.0.0.1:")
     assert "CLAUDE_CODE_OAUTH_TOKEN" not in env
     assert "DATABASE_URL" not in env                                # the agent allow-list
-    assert env[sdk.SCRUB_ENV] == "1"                                # hidden from its own tools
+    assert sdk.SCRUB_ENV not in env                                 # no bubblewrap sandbox
+    # The session is over: its token no longer works.
+    from boss_engine.services import model_proxy
+
+    grant = model_proxy.get().grant_for(env["ANTHROPIC_API_KEY"])
+    assert grant is not None and grant.revoked and grant.credential == ""
     assert KEY not in caplog.text and KEY not in repr(sessions[0]["options"].__dict__.get(
         "model"))
     from boss_engine.identity.redaction import redact_text
@@ -435,7 +443,8 @@ FAKE_CLI = textwrap.dedent('''\
         sys.stdout.write(json.dumps(o) + "\\n"); sys.stdout.flush()
     with open("record.json", "w") as f:
         json.dump({"argv": sys.argv[1:],
-                   "has_key": bool(os.environ.get("ANTHROPIC_API_KEY")),
+                   "key": os.environ.get("ANTHROPIC_API_KEY", ""),
+                   "base": os.environ.get("ANTHROPIC_BASE_URL", ""),
                    "has_login": "CLAUDE_CODE_OAUTH_TOKEN" in os.environ,
                    "has_db": "DATABASE_URL" in os.environ,
                    "scrub": os.environ.get("CLAUDE_CODE_SUBPROCESS_ENV_SCRUB"),
@@ -475,8 +484,10 @@ def test_a_session_runs_end_to_end_through_the_owned_transport(monkeypatch, tmp_
     out = agent.run_role("reply OK", work, read_only=True)
     assert out["summary"] == "OK" and out["session_id"] == "s_fake"
     seen = json.loads((work / "record.json").read_text())
-    assert seen["has_key"] and not seen["has_login"] and not seen["has_db"]
-    assert seen["scrub"] == "1" and seen["entry"] == "sdk-py"
+    assert seen["key"].startswith("boss_mdl_") and seen["key"] != KEY
+    assert seen["base"].startswith("http://127.0.0.1:")
+    assert not seen["has_login"] and not seen["has_db"]
+    assert seen["scrub"] is None and seen["entry"] == "sdk-py"
     argv = seen["argv"]
     assert argv[argv.index("--permission-mode") + 1] == "default"
     assert argv[argv.index("--model") + 1] == "claude-sonnet-5"

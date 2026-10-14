@@ -23,10 +23,11 @@ What this module adds:
     fed to the one StreamParser every Claude transcript goes through (agent_turns), so
     agent_turns rows are identical to claude_code's.
   * the credential: `claude_credential.resolve_anthropic_api_key` — the console's stored key,
-    else ANTHROPIC_API_KEY — and never the subscription login. It reaches only the CLI child's
-    environment; CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 makes the CLI strip it from every
-    subprocess its tools start (Bash, hooks, MCP servers), and it is registered with the log
-    redactor the moment it is read.
+    else ANTHROPIC_API_KEY — and never the subscription login. It never reaches the session at
+    all: the CLI gets a per-session run token and the loopback model proxy's base URL
+    (model_proxy), and the proxy injects the key. So the CLI's own sandbox is not needed to hide
+    it — CLAUDE_CODE_SUBPROCESS_ENV_SCRUB, which forced bubblewrap and failed every Bash call in
+    BOSS's containers ("bwrap: No permissions to create new namespace"), is not set.
 """
 from __future__ import annotations
 
@@ -49,9 +50,10 @@ ENGINE = "claude_agent_sdk"
 SDK_PACKAGE = "claude-agent-sdk"
 SDK_PIN = "0.2.166"
 DEFAULT_MODEL = "claude-sonnet-5"
-#: Claude Code strips Anthropic and cloud credentials from the environment of every subprocess
-#: it starts (its Bash tool, hooks, MCP servers) when this is 1: the key runs the session and
-#: is not something the agent's own commands can read.
+#: Claude Code strips credentials from its subprocesses when this is 1 — and then REQUIRES its
+#: Linux sandbox (bubblewrap), which cannot start in BOSS's containers. Never set by this engine:
+#: the session holds a model-proxy run token, not the key (model_proxy). Named so tests and the
+#: pre-check can say so.
 SCRUB_ENV = "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB"
 
 #: The CLI's tool names ARE BOSS's common names (Read/Write/Edit/Bash/Grep/Glob…): the SDK
@@ -89,15 +91,17 @@ def normalise_tool_name(name: Any) -> str:
 # ── Credential ────────────────────────────────────────────────────────────────────────────────
 
 def key_env(settings: Any, env: dict) -> tuple[dict, Any]:
-    """`env` with exactly the Anthropic API key in it (never the login), and the scrub on.
-    Raises NoAnthropicKey when none is held."""
+    """`env` with a model-proxy run token for the Anthropic API key (never the login, never the
+    key itself). Raises NoAnthropicKey when none is held."""
+    from . import model_proxy
     from .claude_credential import resolve_anthropic_api_key
 
     cred = resolve_anthropic_api_key(settings)
     if not cred.is_key:
         raise NoAnthropicKey(NO_KEY_MESSAGE)
     cred.apply(env)
-    env[SCRUB_ENV] = "1"
+    env.pop(SCRUB_ENV, None)
+    model_proxy.shield(env, "anthropic", cred.value, settings=settings)
     return env, cred
 
 
@@ -429,7 +433,7 @@ def _transient(detail: str) -> bool:
 def build_agent_class():
     """`ClaudeAgentSdkAgent`, defined against code_agent at call time (no import cycle)."""
     from . import code_agent as ca
-    from . import harness_failures
+    from . import harness_failures, model_proxy
     from .agent_turns import StreamParser, capture_enabled
 
     class ClaudeAgentSdkAgent(ca.ClaudeCodeAgent):
@@ -447,8 +451,10 @@ def build_agent_class():
             return cred
 
         def _child_env(self) -> dict:
+            # claude_code's environment: the key is already a model-proxy run token there
+            # (`_resolve_credential` returns only a key, and a key is always proxied).
             env = super()._child_env()
-            env[SCRUB_ENV] = "1"
+            env.pop(SCRUB_ENV, None)
             return env
 
         def _model(self, model: Optional[str]) -> str:
@@ -464,7 +470,7 @@ def build_agent_class():
                                              "exclude_dynamic_sections": True}
             if shared_ctx:
                 system_prompt["append"] = shared_ctx
-            # The agent allow-list + the key (_child_env). OwnedTransport passes exactly this,
+            # The agent allow-list + the run token (_child_env). OwnedTransport passes exactly this,
             # never the worker's environment underneath (the SDK's own transport would).
             env = self._child_env()
             env.pop("CLAUDECODE", None)
@@ -486,6 +492,7 @@ def build_agent_class():
                 max_thinking_tokens=int(thinking) if thinking else None,
             )
 
+        @model_proxy.scoped(attach_usage=True)
         def _invoke(
             self, prompt: str, cwd: Path, *, read_only: bool = False,
             model: Optional[str] = None, allowed_tools: Optional[str] = None,
@@ -665,6 +672,7 @@ def make_chat_adapter(settings: Any, *, model: Optional[str] = None):
     """The chat/generation backend for a project whose Chat job is pinned to this engine
     (model_routing.adapter_for): ClaudeCliAdapter's prompt rendering and JSON contract, each
     call a tool-less SDK session on the Anthropic API key."""
+    from . import model_proxy
     from .agent_env import agent_environment
     from .claude_cli_adapter import ClaudeCliAdapter
 
@@ -677,6 +685,7 @@ def make_chat_adapter(settings: Any, *, model: Optional[str] = None):
             self._billing = cred.billing
             return env
 
+        @model_proxy.scoped()
         def _invoke_once(self, prompt: str, *, system_prompt: Optional[str] = None) -> dict:
             from claude_agent_sdk import ClaudeAgentOptions
 

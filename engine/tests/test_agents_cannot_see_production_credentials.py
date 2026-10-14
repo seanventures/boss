@@ -82,10 +82,13 @@ class TestItStillLetsTheAgentWork:
         assert agent_environment(PRODUCTION_LIKE, {"CI": "1"})["CI"] == "1"
 
     def test_the_model_credential_is_allowed_deliberately_and_in_writing(self):
-        """It is credential-shaped and it is allowed anyway: it buys model turns, not access to
-        anybody's data. That distinction is the whole basis of the list, so it is asserted."""
+        """The subscription login is credential-shaped and it is allowed anyway: it buys model
+        turns, not access to anybody's data. An Anthropic API key is NOT inherited: a Claude
+        child gets a model-proxy run token from claude_credential + model_proxy, and nothing
+        else BOSS runs needs the key."""
         assert "CLAUDE_CODE_OAUTH_TOKEN" in ALLOW_EXACT
-        assert "ANTHROPIC_API_KEY" in ALLOW_EXACT
+        assert "ANTHROPIC_API_KEY" not in ALLOW_EXACT
+        assert "ANTHROPIC_API_KEY" not in agent_environment({"ANTHROPIC_API_KEY": "sk-ant-x" * 4})
 
     def test_the_shared_tool_caches_still_get_through(self):
         env = agent_environment(

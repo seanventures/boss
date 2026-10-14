@@ -24,7 +24,11 @@ So this module answers both, for the pre-check's `sandbox.engine` and `sandbox.m
     run_role, sandbox and all), as one tiny session that must run one harmless command. Its
     cost goes through the engine's normal metering (run_role → record_llm_call).
 
-The binaries an engine needs are its own declaration (harness_registry.RuntimeBinary).
+The binaries an engine needs are its own declaration (harness_registry.RuntimeBinary). The
+claude_agent_sdk engine no longer declares bubblewrap/socat: it stopped forcing the Claude CLI's
+own sandbox once its session held a model-proxy run token instead of the key (model_proxy). The
+probe starts that proxy exactly as a build does, so a proxy that cannot listen is the probe's
+`will_fail`, in the proxy's own words.
 """
 from __future__ import annotations
 

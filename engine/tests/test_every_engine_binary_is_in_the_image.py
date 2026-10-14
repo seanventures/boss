@@ -64,10 +64,14 @@ def test_every_engine_binary_is_in_the_image():
     assert not missing, "\n".join(missing)
 
 
-def test_the_claude_sandbox_needs_are_declared():
-    """The two the Claude CLI checks at sandbox start-up, declared by the engine that runs it."""
-    sdk = {r.binary for r in hr.runtime_requirements("claude_agent_sdk")}
-    assert {"bwrap", "socat"} <= sdk
+def test_no_engine_needs_the_claude_cli_sandbox():
+    """The SDK engine no longer forces the Claude CLI's Linux sandbox (its session holds a
+    model-proxy run token, not the key), so no engine declares bubblewrap or socat — and the
+    image does not carry them for nobody."""
+    for engine, needs in hr.all_runtime_requirements().items():
+        assert not {"bwrap", "socat"} & {r.binary for r in needs}, engine
+    have = installed_by_image(_runtime_stage())["apt"]
+    assert not {"bubblewrap", "socat"} & have
 
 
 def test_the_check_names_the_engine_and_the_package():
@@ -109,5 +113,6 @@ def test_an_unknown_via_is_refused():
 
 def test_missing_runtime_reads_path():
     assert [r.binary for r in hr.missing_runtime(
-        "claude_agent_sdk", which=lambda b: None if b == "socat" else "/usr/bin/" + b)] == ["socat"]
+        "claude_code", which=lambda b: None if b == "claude" else "/usr/bin/" + b)] == ["claude"]
+    assert hr.missing_runtime("claude_agent_sdk", which=lambda b: None) == []
     assert hr.missing_runtime("no_such_engine") == []

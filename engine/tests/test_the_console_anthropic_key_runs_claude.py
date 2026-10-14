@@ -105,9 +105,14 @@ def test_the_key_reaches_the_cli_child_and_nothing_else(monkeypatch, tmp_path):
     monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "")
     agent = ClaudeCodeAgent(_settings())
     env = agent._child_env()
-    assert env["ANTHROPIC_API_KEY"] == KEY and "CLAUDE_CODE_OAUTH_TOKEN" not in env
+    # The coding agent gets a model-proxy run token, never the key (model_proxy).
+    assert env["ANTHROPIC_API_KEY"].startswith("boss_mdl_") and KEY not in env.values()
+    assert env["ANTHROPIC_BASE_URL"].startswith("http://127.0.0.1:")
+    assert "CLAUDE_CODE_OAUTH_TOKEN" not in env
     assert agent._billing == "metered"
 
+    # The chat adapter runs the CLI with no tools at all (`--tools ""`): nothing it starts
+    # could read its environment.
     chat = ClaudeCliAdapter(_settings())
     env = chat._child_env()
     assert env["ANTHROPIC_API_KEY"] == KEY and chat._billing == "metered"
