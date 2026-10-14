@@ -33,6 +33,12 @@ requirement, and the self-test fails when no journey labelled with it uses all o
                         the amber You hop focuses its card → Approve on the card → the decision is
                         approved, the run moves on, and the pill fell by one and still equals what
                         the other surfaces count (agents-home spec §8.3)
+  DS  designer_control_flow  A built-in step, Do at the same time, Repeat until, Notify and a
+                        Branch from the palette, each after the one before → every block drawn
+                        in its own shape, no step's words over another's → the Branch's and the
+                        Repeat's checks built from parts → Notify dragged off the grid, its
+                        arrows following → saved → reopened after a reload: the same shapes, the
+                        checks and where Notify was put all came back from the server
 
 Every selector a journey uses is listed in JOURNEY_SELECTORS, which the self-test checks against
 the console source — a renamed testid fails a fast test, not a forty-minute walk. Controls the
@@ -154,6 +160,26 @@ JOURNEY_SELECTORS: tuple[tuple[str, str, str], ...] = (
     ("workflow_build", "app/workflows/library.tsx", "wf-lib-search"),
     ("workflow_build", "app/workflows/library.tsx", "wf-card-open-${w.workflow_key}"),
     ("workflow_build", "app/workflows/editor/summary-chips.tsx", "wf-chip-steps"),
+    ("designer_control_flow", "app/delivery-workflows-ui.tsx", "dw-tab-library"),
+    ("designer_control_flow", "app/workflows/library.tsx", "wf-lib-new"),
+    ("designer_control_flow", "app/workflows/editor/workflow-editor.tsx", "wf-editor"),
+    ("designer_control_flow", "app/workflows/editor/top-bar.tsx", "wf-name"),
+    ("designer_control_flow", "app/workflows/editor/palette.tsx", "wf-pal-${entry.key}"),
+    ("designer_control_flow", "app/workflows/flow/step-node.tsx", "wf-node"),
+    ("designer_control_flow", "app/workflows/flow/step-node.tsx", "wf-node-shape"),
+    ("designer_control_flow", "app/workflows/flow/flow-lane.tsx", "wf-lane"),
+    ("designer_control_flow", "app/workflows/flow/flow-lane.tsx", "wf-announce"),
+    ("designer_control_flow", "app/workflows/editor/inspector/step-inspector.tsx", "wf-inspector-${step.id}"),
+    ("designer_control_flow", "app/workflows/editor/inspector/input-source.tsx", "wf-input-source-${name}"),
+    ("designer_control_flow", "app/workflows/editor/inspector/input-source.tsx", "wf-input-fixed-${name}"),
+    ("designer_control_flow", "app/workflows/editor/inspector/structure-settings.tsx", "wf-expr-add"),
+    ("designer_control_flow", "app/workflows/editor/inspector/structure-settings.tsx", "wf-expr-source-${index}"),
+    ("designer_control_flow", "app/workflows/editor/inspector/structure-settings.tsx", "wf-expr-value-${index}"),
+    ("designer_control_flow", "app/workflows/editor/top-bar.tsx", "wf-save"),
+    ("designer_control_flow", "app/workflows/editor/save/use-save-flow.tsx", "wf-issues"),
+    ("designer_control_flow", "app/workflows/library.tsx", "wf-lib-search"),
+    ("designer_control_flow", "app/workflows/library.tsx", "wf-card-open-${w.workflow_key}"),
+    ("designer_control_flow", "app/workflows/editor/summary-chips.tsx", "wf-chip-steps"),
     ("advance_now", "app/delivery-workflows-ui.tsx", "dw-tab-runs"),
     ("advance_now", "app/delivery-workflows-ui.tsx", "dw-advance"),
     ("advance_now", "app/delivery-workflows-ui.tsx", "dw-notice"),
@@ -1097,6 +1123,143 @@ def workflow_build(page, ctx: Context, goto: Callable[[str], None]) -> str:
             f"saved, and after a reload the summary says {meta[:40]!r}")
 
 
+# ----------------------------------------------------------------------------- DS
+#: The shape each kind of block is drawn as (step-node.tsx nodeShape), by the step's type.
+BLOCK_SHAPES = {"condition": "diamond", "parallel": "fork", "join": "join", "loop": "hexagon"}
+
+
+def _saved_spec(ctx: Context, workflow_key: str) -> dict[str, Any]:
+    body = _api(ctx).get(f"/v1/delivery-workflows/{workflow_key}/spec",
+                         project_id=ctx.target.project_id) or {}
+    return body.get("spec") if isinstance(body.get("spec"), dict) else body
+
+
+def _shapes(page) -> dict[str, tuple[str, str]]:
+    """Every step on the lane: (its type, the shape it is drawn as, '' for a plain card)."""
+    rows = page.locator('.wf-lane [data-testid="wf-node"]').evaluate_all(
+        "els => els.map(e => [e.dataset.stepId, e.dataset.type, e.dataset.shape || '',"
+        " !!e.querySelector('[data-testid=wf-node-shape]')])")
+    out = {}
+    for sid, kind, shape, drawn in rows:
+        if shape and not drawn:
+            raise JourneyFailed(f"step {sid} says it is a {shape} but no outline is drawn")
+        out[sid] = (kind, shape)
+    return out
+
+
+def _check_shapes(page, where: str) -> dict[str, tuple[str, str]]:
+    shapes = _shapes(page)
+    for kind, want in BLOCK_SHAPES.items():
+        drawn = [s for k, s in shapes.values() if k == kind]
+        if not drawn or any(s != want for s in drawn):
+            raise JourneyFailed(f"{where}: a {kind} step should be drawn as a {want}; "
+                                f"the lane draws {drawn or 'none'}")
+    if not any(s == "send" for _, s in shapes.values()):
+        raise JourneyFailed(f"{where}: the Notify step is drawn as a plain card, not a send shape")
+    return shapes
+
+
+def _words_overlap(page) -> list[str]:
+    """Pairs of words on the lane drawn over each other: step titles, who runs them, and the
+    arrows' labels, compared by their boxes on the screen."""
+    return page.evaluate("""() => {
+      const els = [...document.querySelectorAll('.wf-lane .wf-node-title, .wf-lane .wf-node-agent-name,'
+        + ' .wf-lane .wf-edge-label, .wf-lane .wf-flag-label')].filter(e => e.getClientRects().length);
+      const box = (e) => e.getBoundingClientRect();
+      const name = (e) => (e.closest('[data-step-id]')?.dataset.stepId || e.className.baseVal
+        || e.className) + ':' + (e.textContent || '').trim().slice(0, 20);
+      const out = [];
+      for (let i = 0; i < els.length; i++) for (let j = i + 1; j < els.length; j++) {
+        const a = box(els[i]), b = box(els[j]);
+        const w = Math.min(a.right, b.right) - Math.max(a.left, b.left);
+        const h = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
+        if (w > 2 && h > 2) out.push(name(els[i]) + ' / ' + name(els[j]));
+      }
+      return out;
+    }""")
+
+
+def _build_check(page, step_id: str, value: str) -> None:
+    """Say what a Branch or a Repeat checks, from parts: + Add a check, the first value the
+    picker offers, and what to compare it with — never typed as code."""
+    _select_step(page, step_id)
+    _visible(page, "wf-expr-add").click()
+    options = [o for o in _options(page, "wf-expr-source-0")
+               if o["value"] and o["value"] != "__other__"]
+    if not options:
+        raise JourneyFailed(f"the check on {step_id} offers no value to check")
+    page.locator('[data-testid="wf-expr-source-0"]').select_option(options[0]["value"])
+    field = page.locator('input[data-testid="wf-expr-value-0"]')
+    if field.count():
+        field.fill(value)
+
+
+def designer_control_flow(page, ctx: Context, goto: Callable[[str], None]) -> str:
+    """The designer's blocks (#512 Phase 1) and its canvas (#551), as an operator uses them."""
+    name = f"E2E control flow {ctx.stamp}"
+    _new_workflow(page, goto, name)
+    palette = page.locator('[data-testid^="wf-pal-cap:"]:not([aria-disabled="true"]) >> visible=true')
+    palette.first.wait_for(state="visible", timeout=30_000)
+    free = [palette.nth(i).get_attribute("data-testid") or "" for i in range(palette.count())
+            if "Needs:" not in (palette.nth(i).get_attribute("data-tip") or "")]
+    if not free:
+        raise JourneyFailed("the step palette offers no built-in step that needs no input")
+    # Each pressed with the one before still selected: a block's head is selected once placed,
+    # and the next row goes after the WHOLE block, not into its first path.
+    for testid in (free[0], "wf-pal-control:parallel", "wf-pal-control:bounded_loop",
+                   "wf-pal-cap:notify", "wf-pal-control:condition"):
+        _add_from_palette(page, testid)
+    shapes = _check_shapes(page, "placed from the palette")
+    notify = next(sid for sid, (_, shape) in shapes.items() if shape == "send")
+    _select_step(page, notify)
+    page.locator('[data-testid="wf-input-source-message"]').select_option("fixed")
+    _visible(page, "wf-input-fixed-message").fill(f"E2E control flow {ctx.stamp} done")
+    branch = next(sid for sid, (kind, _) in shapes.items() if kind == "condition")
+    repeat = next(sid for sid, (kind, _) in shapes.items() if kind == "loop")
+    _build_check(page, branch, "ok")
+    _build_check(page, repeat, "done")
+    page.locator(".wf-lane-canvas").first.click(position={"x": 4, "y": 4})
+    page.wait_for_timeout(800)
+    crossed = _words_overlap(page)
+    if crossed:
+        raise JourneyFailed(f"words on the lane are drawn over each other: {crossed[:4]}")
+    # Put Notify somewhere else: a drag that ends away from every connector places it there.
+    slot = page.locator(f'.wf-slot[data-slot="{notify}"]').first
+    before = slot.bounding_box()
+    node = page.locator(f'.wf-lane [data-testid="wf-node"][data-step-id="{notify}"]').first.bounding_box()
+    x, y = node["x"] + node["width"] / 2, node["y"] + 12
+    page.mouse.move(x, y)
+    page.mouse.down()
+    for i in range(1, 13):
+        page.mouse.move(x + i * 2, y + i * 12)
+        page.wait_for_timeout(25)
+    page.mouse.up()
+    page.wait_for_timeout(600)
+    said = _text(page, "wf-announce")
+    after = slot.bounding_box()
+    if not said.startswith("Placed") or not after or abs(after["y"] - before["y"]) < 20:
+        raise JourneyFailed(f"dragged Notify down off the grid; the lane said {said!r} and it "
+                            f"moved from {before} to {after}")
+    key, meta = _save_and_reopen(page, goto, name, len(shapes))
+    page.locator(f'.wf-lane [data-testid="wf-node"][data-step-id="{notify}"]').first.wait_for(
+        state="visible", timeout=WAIT_MS)
+    _check_shapes(page, "reopened after a reload")
+    if page.locator(f'.wf-slot[data-slot="{notify}"][data-placed]').count() != 1:
+        raise JourneyFailed("reopened after a reload, Notify is back on the grid: where it was "
+                            "put was not saved")
+    spec = _saved_spec(ctx, key)
+    positions = ((spec.get("layout") or {}).get("positions") or {})
+    if notify not in positions:
+        raise JourneyFailed(f"the saved spec has no position for Notify: layout={spec.get('layout')}")
+    steps = {str(s.get("id")): s for s in spec.get("steps") or []}
+    empty = [sid for sid in (branch, repeat) if not (steps.get(sid) or {}).get("expression")]
+    if empty:
+        raise JourneyFailed(f"saved, but {empty} lost what they check")
+    return (f"built {name!r}: {len(shapes)} steps, blocks drawn as "
+            f"{sorted({s for _, s in shapes.values() if s})}; checks built from parts; Notify "
+            f"placed at {positions[notify]}; saved and reopened with all of it ({meta[:20]!r})")
+
+
 def advance_now(page, ctx: Context, goto: Callable[[str], None]) -> str:
     """A console smoke check (R6): "Advance now" answers with a sentence, not a 403 — the
     boss-1 bug where it sent the console key to a worker-only route."""
@@ -1370,6 +1533,7 @@ JOURNEYS: tuple[tuple[str, str, Callable[..., str]], ...] = (
     ("R4", "step_agents", step_agents),
     ("R6", "workflow_build", workflow_build),
     ("R6", "advance_now", advance_now),
+    ("DS", "designer_control_flow", designer_control_flow),
     ("R7", "live_gate", live_gate),
     ("SU", "setup_first_run", setup_first_run),
     ("SU", "setup_replace_token", setup_replace_token),

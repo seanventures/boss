@@ -106,6 +106,7 @@ PRIMARY_ACTIONS: dict[str, tuple[Entry, ...]] = {
         Journey("step_bindings"),
         Journey("step_agents"),
         Journey("workflow_build"),
+        Journey("designer_control_flow"),
         Journey("advance_now"),
     ),
     "workforce": (
