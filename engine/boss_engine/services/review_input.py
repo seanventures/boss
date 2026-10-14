@@ -39,6 +39,18 @@ HOLLOW_GATE_REASON = "review did not see the change"
 MAX_TOTAL = 48000
 MAX_PER_FILE = 12000
 
+#: Generated dependency lockfiles are LISTED but never inlined: a 270 KB package-lock.json is
+#: no one's work to judge, and inlined it ate the context (and the seat's time) the code needed.
+LOCKFILES = frozenset({
+    "package-lock.json", "npm-shrinkwrap.json", "yarn.lock", "pnpm-lock.yaml", "bun.lockb",
+    "bun.lock", "poetry.lock", "Pipfile.lock", "uv.lock", "Cargo.lock", "Gemfile.lock",
+    "composer.lock", "go.sum", "mix.lock", "pubspec.lock", "packages.lock.json",
+})
+
+
+def is_lockfile(path: str) -> bool:
+    return str(path or "").replace("\\", "/").rsplit("/", 1)[-1] in LOCKFILES
+
 
 @dataclass
 class ChangeUnderReview:
@@ -75,12 +87,14 @@ def build(live_files: Optional[dict] = None, changed_paths: Iterable[str] = (), 
         if keep(path) and isinstance(content, str):
             files[str(path)] = content
     paths = set(files)
+    for path in [p for p in files if is_lockfile(p)]:
+        del files[path]
     for path in changed_paths or ():
         path = str(path or "").strip()
         if not path or not keep(path):
             continue
         paths.add(path)
-        if path in files or read is None:
+        if path in files or read is None or is_lockfile(path):
             continue
         try:
             text = read(path)
@@ -101,11 +115,13 @@ def render(change: ChangeUnderReview, *, max_total: int = MAX_TOTAL,
             "already be committed or carried over from an earlier attempt, so an empty "
             "`git diff` does NOT mean there is nothing to review.",
             "CHANGED FILES:"]
-    head += [f"  - {p}" + ("" if p in change.files else "  (not inlined: open it in the tree)")
+    head += [f"  - {p}" + ("" if p in change.files else
+                          "  (generated lockfile: not inlined)" if is_lockfile(p) else
+                          "  (not inlined: open it in the tree)")
              for p in change.paths]
     parts, total = ["\n".join(head)], 0
     for path in change.paths:
-        if path not in change.files:
+        if path not in change.files or is_lockfile(path):
             continue
         content = change.files[path] or ""
         body = content

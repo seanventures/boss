@@ -138,7 +138,7 @@ def test_the_pipeline_feeds_an_install_failure_back_to_the_warm_session():
     assert loop.index("install_repair_evidence") < loop.index("attach_failing_sources")
     # A convergence round does not arbitrate tests that never ran.
     conv = src[src.index("_tr = _run_verify()"):]
-    assert conv.index("install_repair_evidence") < conv.index("_test_arbiter_prompt")
+    assert conv.index("install_repair_evidence") < conv.index("_arbitrate_tests(")
 
 
 # ---- the run's error says it ---------------------------------------------------------------------

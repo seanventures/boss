@@ -65,6 +65,22 @@ def test_routes_that_do_not_answer_fail_the_wiring(probes):
     assert "none of the connector's routes answered" in r.evidence["template_tests"]["error"]
 
 
+@pytest.mark.parametrize("probes,ok", [
+    # A route that needs sign-in refusing a signed-out probe is that route working.
+    ({"/auth/providers": 200, "/api/me": 401, "/api/admin": 403}, True),
+    ({"/auth/providers": 302, "/api/me": 401}, True),
+    # A PUBLIC route refusing is broken wiring (pre-mortem finding 13): 401 counted as answered.
+    ({"/auth/providers": 401}, False),
+    ({"/auth/providers": 403, "/api/me": 401}, False),
+    ({"/auth/providers": 400, "/api/me": 200}, False),
+])
+def test_401_answers_only_for_a_route_that_needs_sign_in(probes, ok):
+    r = _gate({"ok": True, "proven": True, "route_probes": probes})
+    assert r.gates["template_tests"] is ok, r.evidence["template_tests"]
+    assert gate.route_needs_auth("/api/me") and gate.route_needs_auth("/api/admin")
+    assert not gate.route_needs_auth("/auth/providers")
+
+
 def test_an_app_that_did_not_start_fails_and_red_tests_fail():
     assert _gate({"ok": False, "error": "exited 1"}).gates["template_tests"] is False
     assert _gate({"ok": True, "proven": True, "route_probes": {"/auth/providers": 200}},
@@ -112,4 +128,6 @@ def test_the_serve_proof_probes_the_routes_it_is_given():
 def test_the_pipeline_probes_the_connector_and_hands_the_proof_to_the_gate():
     src = inspect.getsource(g)
     assert "probe_paths=_connector_probe_paths(engine, run) or None" in src
-    assert src.count("serve=app_serves_record") == 2
+    # The first judgement, its re-run after QA's fixture repair, and its re-run after a warm
+    # fix round: every one carries the app-start proof.
+    assert src.count("_template_gates(") - 1 == src.count("serve=app_serves_record") == 3

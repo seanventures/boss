@@ -391,7 +391,8 @@ NO_TEST_SCRIPT = ("the app has no test script: add a `test` script to package.js
 #: script only to satisfy it (onboarding_path_builder's agent bolted a vite build onto a Node app).
 WEB_GATE_RULE = ("BOSS's gate runs, in the app directory, its install, then each of `npm run "
                  "build`, `npm run typecheck` and `npm run lint` that package.json defines, then "
-                 "`npm test` (the app's own tests; an app with no test script fails the gate). "
+                 "`npm test` (the app's own tests; with no `test` script, each `test:*` one that is not a "
+                 "browser suite; an app with neither fails the gate). "
                  "Never add a script only to satisfy the gate.")
 
 
@@ -420,7 +421,8 @@ def web_gate_for(app_dir: Path | str) -> tuple[list[str], str | None]:
     was gated on `npm run build && npm run typecheck && npm run lint`: npm said `Missing script:
     "build"`, the agent bolted a vite build onto it to please the gate, and its own 16 tests never
     ran. Now: install, then each of build, typecheck and lint the package.json defines, then
-    `npm test` whenever it defines one (the app's own oracle), then the browser suite where this
+    `npm test` whenever it defines one (the app's own oracle) — else each non-e2e `test:*`
+    script (sub_test_scripts) — then the browser suite where this
     build runs one (build_scope.gate_runs_e2e) and the app defines it or the pass asked for it.
     An app with no test script at all is a finding (NO_TEST_SCRIPT), not a crash. Without a
     package.json, the full target (web_test_commands)."""
@@ -430,12 +432,32 @@ def web_gate_for(app_dir: Path | str) -> tuple[list[str], str | None]:
     from .build_scope import current, gate_runs_e2e
 
     commands = [NPM_INSTALL_CMD] + [f"npm run {n}" for n in WEB_GATE_SCRIPTS if _defines(scripts, n)]
+    sub_tests = sub_test_scripts(scripts)
     if _defines(scripts, "test"):
         commands.append(TEST_STEP)
+    else:
+        # ONLY test:* SCRIPTS (`test:api`, `test:unit`): each one runs, or the app's tests never
+        # ran while has_tests said they existed (pre-mortem finding 6).
+        commands += [f"npm run {n}" for n in sub_tests]
     if gate_runs_e2e() and (_defines(scripts, "test:e2e") or bool((current() or {}).get("e2e"))):
         commands.append(E2E_STEP)
-    has_tests = any(n == "test" or n.startswith("test:") for n in scripts if _defines(scripts, n))
+    # TESTS THAT RUN, not tests that exist: a browser suite counts only where this gate runs it.
+    has_tests = _defines(scripts, "test") or bool(sub_tests) or E2E_STEP in commands
     return commands, (None if has_tests else NO_TEST_SCRIPT)
+
+
+#: A test:* script the gate never runs in place of `npm test`: the browser suite (its own step,
+#: E2E_STEP) and the ones that never exit or open a UI.
+_NOT_A_GATE_TEST = re.compile(r"(?i)e2e|playwright|cypress|browser|watch|(?:^|:)ui$|debug")
+_BROWSER_RUNNER = re.compile(r"(?i)\b(?:playwright|cypress)\b|--watch\b")
+
+
+def sub_test_scripts(scripts: dict[str, str]) -> list[str]:
+    """The non-e2e `test:*` scripts the app defines, in package.json order."""
+    return [n for n in scripts
+            if n.startswith("test:") and _defines(scripts, n)
+            and not _NOT_A_GATE_TEST.search(n)
+            and not _BROWSER_RUNNER.search(str(scripts.get(n) or ""))]
 
 
 def run_web_gate(run, plan: "GatePlan") -> list:
@@ -819,8 +841,34 @@ def resolve_verify_cwd(
     return base
 
 
+#: A package.json dependency that makes an app a bundled front end (vite and its frameworks).
+_BUNDLER_DEPS = re.compile(r"^(?:vite|@vitejs/.*|react|react-dom|vue|svelte|@sveltejs/.*|next|"
+                           r"nuxt|@angular/core|preact|solid-js)$")
+
+
+def boss_may_edit_package(payload: Any) -> bool:
+    """MAY BOSS WRITE ITS OWN HARDENING INTO THIS APP'S package.json? Only for a bundled front
+    end: the build's scope says so (build_scope "bundler"), or the app already declares one.
+
+    BOSS's hardening (REQUIRED_WEB_DEV_DEPS: React types, vite, Playwright, eslint-8 plugins, a
+    `preview` script) was written into every web build's tree, so it reached the pull request:
+    reviewers on #224, #225 and #227 flagged React types and vite in an Express app, with a stale
+    lockfile beside them. Outside a build (no scope) every caller keeps its old behaviour."""
+    from .build_scope import current
+
+    scope = current()
+    if scope is None or scope.get("bundler"):
+        return True
+    if not isinstance(payload, dict):
+        return False
+    declared = {**(payload.get("dependencies") if isinstance(payload.get("dependencies"), dict) else {}),
+                **(payload.get("devDependencies") if isinstance(payload.get("devDependencies"), dict) else {})}
+    return any(_BUNDLER_DEPS.match(str(name)) for name in declared)
+
+
 def ensure_verify_script(app_dir: Path | str) -> bool:
-    """Add a ``verify`` script that chains existing required scripts. Never overwrites."""
+    """Add a ``verify`` script that chains existing required scripts. Never overwrites, and
+    never in an app that is not a bundled front end (boss_may_edit_package)."""
     pkg_path = Path(app_dir) / "package.json"
     if not pkg_path.is_file():
         return False
@@ -828,7 +876,7 @@ def ensure_verify_script(app_dir: Path | str) -> bool:
         payload = json.loads(pkg_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return False
-    if not isinstance(payload, dict):
+    if not isinstance(payload, dict) or not boss_may_edit_package(payload):
         return False
     scripts = payload.get("scripts")
     if not isinstance(scripts, dict):
@@ -906,6 +954,10 @@ def harden_web_package(app_dir: Path | str) -> dict[str, Any]:
         return {"changed": changed, "path": str(pkg_path), "error": "unreadable"}
     if not isinstance(payload, dict):
         return {"changed": changed, "path": str(pkg_path), "error": "not_object"}
+    if not boss_may_edit_package(payload):
+        # THE PR'S package.json AND LOCKFILE ARE THE APP'S OWN (boss_may_edit_package).
+        return {"changed": changed, "path": str(pkg_path),
+                "skipped": "not a bundled front end: the app's package.json is left as written"}
 
     scripts = payload.get("scripts")
     if not isinstance(scripts, dict):
@@ -1236,3 +1288,55 @@ def evaluate_web_package_contract(app_dir: Path | str, *,
             "reason": "package.json not an object",
         }
     return evaluate_web_package_payload(payload, runners=runners)
+
+
+# ---- QA's own files against the app's typecheck and lint, before they are frozen --------------
+
+#: The checks of a default web plan that judge a test file's own text (pre-mortem finding 7).
+QA_STATIC_SCRIPTS = ("typecheck", "lint")
+#: Errors that only say the implementation does not exist yet: QA writes tests FIRST, so an
+#: import of a module the implementer has still to write is expected, never QA's to fix.
+_NOT_YET_IMPLEMENTED = re.compile(
+    r"TS2307|TS2305|TS2724|TS2614|TS2339|TS2551|TS2554|TS2345|TS2322|TS7016|"
+    r"Cannot find module|has no exported member|Unable to resolve path|"
+    r"import/no-unresolved|n/no-missing-import|node/no-missing-import|import/named", re.I)
+_ESLINT_ROW = re.compile(r"^\s+\d+:\d+\s+error\b")
+_FILE_HEADER = re.compile(r"^(?:/|\.{0,2}/)?[\w@.\-/]+\.(?:[cm]?[jt]sx?|vue|svelte)\s*$")
+
+
+def qa_static_findings(output: str, qa_files, *, app_rel: str = "") -> list[str]:
+    """The typecheck/lint error lines that are about QA's own test files and QA can fix now.
+
+    tsc names the file on the error line (`tests/a.test.ts(3,7): error TS1005: ...`); eslint's
+    stylish format prints the file once, then its rows. A row about an import of code that does
+    not exist yet (_NOT_YET_IMPLEMENTED) is left out: the implementer has not run yet."""
+    prefix = (str(app_rel or "").strip("/") + "/") if app_rel and app_rel != "." else ""
+    names: set[str] = set()
+    for f in qa_files or ():
+        f = str(f).replace("\\", "/").lstrip("./")
+        names.add(f)
+        if prefix and f.startswith(prefix):
+            names.add(f[len(prefix):])
+
+    def _about_qa(text: str) -> bool:
+        t = text.replace("\\", "/")
+        return any(n and (n in t) for n in names)
+
+    out: list[str] = []
+    current_is_qa, header = False, ""
+    for raw in str(output or "").splitlines():
+        line = raw.rstrip()
+        if not line.strip():
+            continue
+        if _FILE_HEADER.match(line.strip()) and not raw.startswith((" ", "\t")):
+            current_is_qa, header = _about_qa(line), line.strip()
+            continue
+        if _NOT_YET_IMPLEMENTED.search(line):
+            continue
+        if _ESLINT_ROW.match(raw):
+            if current_is_qa:
+                out.append(f"{header}: {line.strip()}")
+            continue
+        if re.search(r"\berror\b", line, re.I) and _about_qa(line):
+            out.append(line.strip())
+    return out[:60]

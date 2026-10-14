@@ -27,11 +27,12 @@ def test_security_is_convergeable_and_its_findings_reach_the_implementer():
 def test_the_failed_seats_re_review_side_by_side():
     src = inspect.getsource(g)
     block = src[src.index("_convergeable = _CONVERGEABLE"):src.index("rounds_used = max(0")]
-    assert "_reseat_pool.submit(contextvars.copy_context().run, fn)" in block
-    assert "_futures_wait(list(_reseat.values()))" in block
-    # Every READ-ONLY seat call lives in a pooled closure, none runs inline after the wait. The
+    # Side by side, under the same per-seat deadline as the first panel (review_seats.run_seats).
+    assert "_rs_run = _run_seats(" in block
+    assert "seat_deadline_s=_rs_deadline" in block
+    # Every READ-ONLY seat call lives in a seat closure, none runs inline after the wait. The
     # one exception is the weak-suite probe, which edits the tree and so runs after them, alone.
-    after = block[block.index("_futures_wait(list(_reseat.values()))"):]
+    after = block[block.index("_rs_run = _run_seats("):]
     inline = after[:after.index("if not failing:")]
     assert inline.count(".run_role(") == 1
     assert "a_mu.run_role(_mutate_prompt(" in inline

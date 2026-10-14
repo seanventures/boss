@@ -221,14 +221,37 @@ def probe_paths(manifest: Any) -> list[str]:
     return out
 
 
+#: A route segment that says the route serves a signed-in person (`/api/me`, `/api/admin`):
+#: refusing an anonymous probe with 401/403 is that route WORKING. Any other connector route is
+#: public (`/auth/providers` lists the sign-in options before anyone signs in) and must answer.
+_AUTH_SEGMENTS = frozenset({"me", "admin", "account", "profile", "session", "settings",
+                            "billing", "dashboard"})
+
+
+def route_needs_auth(path: str) -> bool:
+    """Does this connector route serve only a signed-in person (by its path's segments)?"""
+    return any(seg.lower() in _AUTH_SEGMENTS for seg in str(path or "").split("/") if seg)
+
+
+def route_answered(path: str, status: Any) -> bool:
+    """A probe's answer counts: 2xx/3xx for a public route; also 401/403 for one that needs auth
+    (route_needs_auth). A 401 from a public route is a route that does not work signed out."""
+    if not isinstance(status, int) or isinstance(status, bool):
+        return False
+    if 200 <= status < 400:
+        return True
+    return status in (401, 403) and route_needs_auth(path)
+
+
 def connector_smoke(manifest: Any, serve: Optional[Mapping[str, Any]], *,
                     tests_passed: bool) -> tuple[bool, dict[str, Any]]:
     """A CONNECTOR IS PRE-TESTED (operator, 2026-10-13). Login, Stripe, PayPal are each a fully
     tested path in their own test tier, so a build that adds one neither writes tests for it nor
     runs its suite as a gate. What the build CAN break is the wiring, so the gate is one smoke
     check: the app starts (the app_serves proof) and the connector's GET routes answer on it
-    (anything but no answer, 404 or a 5xx). An app BOSS cannot start (not a declared service)
-    is left to its own tests, and the record says so."""
+    (route_answered: 2xx/3xx, and 401/403 only from a route that needs sign-in; every PUBLIC route
+    probed must answer). An app BOSS cannot start (not a declared service) is left to its own
+    tests, and the record says so."""
     paths = probe_paths(manifest)
     tt: dict[str, Any] = {"kind": "connector", "check": "wiring smoke", "routes": paths,
                           "connector_tests": "run in the connector's own test tier, not in this build"}
@@ -242,11 +265,19 @@ def connector_smoke(manifest: Any, serve: Optional[Mapping[str, Any]], *,
         tt["probes"] = probes
         if not paths:
             return True, tt
-        answered = [p for p, status in probes.items()
-                    if isinstance(status, int) and status != 404 and status < 500]
-        if answered:
+        answered = [p for p, status in probes.items() if route_answered(p, status)]
+        public_down = [p for p, status in probes.items()
+                       if not route_needs_auth(p) and not route_answered(p, status)]
+        if answered and not public_down:
             tt["answered"] = answered
             return True, tt
+        if answered:
+            tt["answered"] = answered
+            tt["error"] = ("the connector's public route(s) did not answer a signed-out request: "
+                           + ", ".join(f"GET {p} -> {probes.get(p) or 'no answer'}"
+                                       for p in public_down)
+                           + " (a public route must answer 2xx/3xx without sign-in)")
+            return False, tt
         tt["error"] = ("the app started but none of the connector's routes answered: "
                        + ", ".join(f"GET {p} -> {probes.get(p) or 'no answer'}" for p in paths))
         return False, tt
