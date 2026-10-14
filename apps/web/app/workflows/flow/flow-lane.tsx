@@ -28,18 +28,27 @@
  * (lib/workflow-layout.ts), so it survives a save and a reload; Alt+Shift+arrows nudge it the
  * same way from the keyboard, and Tidy puts every step back. A flow with a moved step is drawn
  * with curved arrows, as a branched one is, since its connectors no longer sit in a row.
+ *
+ * ARROWS GO WHERE THEY ARE PUT TOO. An arrow's end has a handle (on hover, and on every arrow out
+ * of the selected step); dragged onto another step, End or Start, the lane asks `onRewire` for
+ * that link, and the editor makes it as one undoable edit or says why not
+ * (lib/workflow-rewire.ts). From the keyboard the handle is a button that opens the list of
+ * where the arrow can go. A straight flow draws no arrows to grab: any link but the one it has
+ * would leave a step behind or go round in a circle.
  */
 import React, { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import type {
-  FlowLayout, GraphEdge, Palette, PaletteItem, Problem, Spec, SpecStep, StepView,
+  FlowLayout, FlowLink, GraphEdge, Palette, PaletteItem, Problem, Spec, SpecStep, StepView,
 } from "../../../lib/workflow-editor-types";
 import {
-  afterGaps, canMove as modelCanMove, insertStep, layoutFlow, linearOrder,
+  afterGaps, canMove as modelCanMove, insertStep, layoutFlow, linearOrder, rewireLink, START_TARGET,
 } from "../../../lib/workflow-graph";
 import { pinTip, unpinTip, useTips } from "./tip-layer";
 import { layoutOffsets, type NodeOffset } from "../../../lib/workflow-layout";
-import { afterGapPoints, caretX, END_ID, gapPoints, planDrag, shiftsFor, type LanePlan } from "./drag-plan";
+import {
+  afterGapPoints, caretX, END_ID, gapPoints, planDrag, shiftsFor, type GapArrows, type LanePlan,
+} from "./drag-plan";
 import {
   BASE_REM, chooseDensity, clampBox, fitScale, offsetFromCanvas, overflows, placedGeometry, ROW_GAP,
   roomyGeometry,
@@ -49,7 +58,7 @@ import { Minimap } from "./minimap";
 import { nodeDetail, viewOf } from "./node-facts";
 import type { LaneAgent } from "../../agents/chain-model";
 import { StepNode, type RunPhase } from "./step-node";
-import { GAP_SNAP, useLaneDrag, type DragSource, type DropGap, type LaneTarget } from "./use-lane-drag";
+import { DRAG_THRESHOLD, GAP_SNAP, useLaneDrag, type DragSource, type DropGap, type LaneTarget } from "./use-lane-drag";
 
 export type LaneRunState = { phase: string; meta: string; tip?: string;
   /** Who ran it, once the work is recorded (Agent World: face, live ring, how-glyph). */
@@ -78,8 +87,32 @@ export function flowInto(previous: RunPhase | "start", next: RunPhase): "past" |
 
 /* ── Edges for a branched flow ─────────────────────────────────────────────────── */
 
+type Point = { x: number; y: number };
 type Drawn = { key: string; d: string; kind: GraphEdge["kind"] | "start" | "end" | "back";
-               label?: { x: number; y: number; text: string; anchor?: "start" | "middle" | "end" } };
+               label?: { x: number; y: number; text: string; anchor?: "start" | "middle" | "end" };
+               /** The arrow as the spec says it, when it is one the operator can point elsewhere:
+                *  `from` where it leaves, `grip` where its end handle sits (near its head). */
+               link?: FlowLink; from?: Point; grip?: Point };
+
+/** Arrows whose end can be dragged to another step. A Repeat's step and a path into its join
+ *  are their block's own (lib/workflow-graph.ts `rewireLink` says why if asked). */
+const RELINKABLE = new Set<Drawn["kind"]>(["next", "yes", "no", "branch", "end"]);
+/** The picker's value for End. */
+const END_VALUE = "__end__";
+
+/** A point on the cubic from `a` to `b` that `curve` draws, `t` of the way along. */
+function along(a: Point, b: Point, k: number, t: number): Point {
+  const u = 1 - t;
+  const c1 = { x: a.x + k, y: a.y };
+  const c2 = { x: b.x - k, y: b.y };
+  return {
+    x: u * u * u * a.x + 3 * u * u * t * c1.x + 3 * u * t * t * c2.x + t * t * t * b.x,
+    y: u * u * u * a.y + 3 * u * u * t * c1.y + 3 * u * t * t * c2.y + t * t * t * b.y,
+  };
+}
+/** How far along its arrow an end handle sits: off the arrowhead, so arrows that meet at one
+ *  step (or at End) keep handles of their own. */
+const GRIP_T = 0.8;
 
 function drawEdges(layout: FlowLayout, g: LaneGeometry, spec: Spec): Drawn[] {
   const col = new Map(layout.nodes.map((n) => [n.id, n.column]));
@@ -88,10 +121,13 @@ function drawEdges(layout: FlowLayout, g: LaneGeometry, spec: Spec): Drawn[] {
   const left = (id: string) => { const b = g.boxes.get(id)!; return { x: b.x, y: b.y + b.h / 2 }; };
   // A step moved left of the one it follows still gets an arrow that leaves to the right and
   // arrives from the left: the curve bows out rather than folding back over the steps.
-  const curve = (a: { x: number; y: number }, b: { x: number; y: number }) => {
-    const k = b.x >= a.x + 24 ? Math.max(12, (b.x - a.x) / 2) : Math.max(48, Math.abs(b.x - a.x) / 2);
+  const bend = (a: Point, b: Point) =>
+    (b.x >= a.x + 24 ? Math.max(12, (b.x - a.x) / 2) : Math.max(48, Math.abs(b.x - a.x) / 2));
+  const curve = (a: Point, b: Point) => {
+    const k = bend(a, b);
     return `M${a.x},${a.y} C${a.x + k},${a.y} ${b.x - k},${b.y} ${b.x},${b.y}`;
   };
+  const grip = (a: Point, b: Point) => along(a, b, bend(a, b), GRIP_T);
   const bottom = g.height - 8;
   const loopMax = new Map(spec.steps.filter((s) => s.kind === "bounded_loop")
     .map((s) => [s.id, Number(s.max_iterations) || 0]));
@@ -103,19 +139,21 @@ function drawEdges(layout: FlowLayout, g: LaneGeometry, spec: Spec): Drawn[] {
     out.push({ key: `start>${n.id}`, kind: "start",
                d: curve({ x: g.start.x + g.start.w, y: g.midY }, left(n.id)) });
   }
-  const back = (from: string, to: string, badge: number) => {
+  const back = (from: string, to: string, badge: number, link?: FlowLink) => {
     const a = g.boxes.get(from)!;
     const b = g.boxes.get(to)!;
     const ax = a.x + a.w / 2;
     const bx = b.x + b.w / 2;
     out.push({ key: `back:${from}>${to}`, kind: "back",
                d: `M${ax},${a.y + a.h} V${bottom} H${bx} V${b.y + b.h}`,
-               label: badge ? { x: (ax + bx) / 2, y: bottom - 4, text: `↻ ×${badge}` } : undefined });
+               label: badge ? { x: (ax + bx) / 2, y: bottom - 4, text: `↻ ×${badge}` } : undefined,
+               ...(link ? { link, from: { x: ax, y: a.y + a.h }, grip: { x: bx, y: (bottom + b.y + b.h) / 2 } } : {}) });
   };
   for (const e of layout.edges) {
     if (!g.boxes.has(e.from) || !g.boxes.has(e.to)) continue;
     if ((col.get(e.to) ?? 0) <= (col.get(e.from) ?? 0)) {
-      back(e.from, e.to, loopMax.get(e.to) ?? loopMax.get(e.from) ?? 0);
+      back(e.from, e.to, loopMax.get(e.to) ?? loopMax.get(e.from) ?? 0,
+           RELINKABLE.has(e.kind) ? { from: e.from, to: e.to, kind: e.kind } : undefined);
       continue;
     }
     const a = right(e.from);
@@ -131,13 +169,17 @@ function drawEdges(layout: FlowLayout, g: LaneGeometry, spec: Spec): Drawn[] {
       const box = g.boxes.get(e.from)!;
       label = { x: a.x, y: box.y + box.h + 14, text: "parallel", anchor: "end" };
     }
-    out.push({ key: `${e.kind}:${e.from}>${e.to}`, kind: e.kind, d: curve(a, b), label });
+    out.push({ key: `${e.kind}:${e.from}>${e.to}`, kind: e.kind, d: curve(a, b), label,
+               ...(RELINKABLE.has(e.kind) ? { link: { from: e.from, to: e.to, kind: e.kind }, from: a, grip: grip(a, b) } : {}) });
     // A loop's body returns to its controller; the spec only names the way in.
     if (e.kind === "loop" && !backs.has(`${e.to}>${e.from}`)) back(e.to, e.from, loopMax.get(e.from) ?? 0);
   }
   for (const id of layout.terminal) {
     if (!g.boxes.has(id)) continue;
-    out.push({ key: `${id}>end`, kind: "end", d: curve(right(id), { x: g.end.x, y: g.midY }) });
+    const a = right(id);
+    const b = { x: g.end.x, y: g.midY };
+    out.push({ key: `${id}>end`, kind: "end", d: curve(a, b),
+               link: { from: id, to: null, kind: "end" }, from: a, grip: grip(a, b) });
   }
   return out;
 }
@@ -148,6 +190,36 @@ function underNode(p: { x: number; y: number }, g: LaneGeometry): boolean {
     if (p.x > b.x + 4 && p.x < b.x + b.w - 4 && p.y > b.y + 4 && p.y < b.y + b.h - 4) return true;
   }
   return false;
+}
+
+/* ── Where an arrow goes, from a list ──────────────────────────────────────────── */
+
+/** The keyboard's way to re-link an arrow (and a pointer's, without dragging): every step it
+ *  could go to, and End. Opens focused on the list; Escape closes it. */
+function LinkPicker({ link, at, words, choices, onPick, onClose }: {
+  link: FlowLink; at: Point; words: string; choices: { id: string; title: string }[];
+  onPick(target: string | null): void; onClose(): void;
+}) {
+  const ref = useRef<HTMLSelectElement>(null);
+  useEffect(() => { ref.current?.focus(); }, []);
+  const label = `${words} goes to`;
+  return (
+    <div className="wf-link-picker" role="group" aria-label={label} data-testid="wf-link-picker"
+         style={{ left: at.x, top: at.y }}
+         onClick={(e) => e.stopPropagation()} onPointerDown={(e) => e.stopPropagation()}
+         onKeyDown={(e) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); onClose(); } }}>
+      <label className="wf-link-picker-label">
+        <span>Goes to</span>
+        <select ref={ref} className="wf-select wf-select-sm" aria-label={label} data-testid="wf-link-target"
+                value={link.to ?? END_VALUE}
+                onChange={(e) => onPick(e.target.value === END_VALUE ? null : e.target.value)}>
+          {choices.map((c) => <option key={c.id} value={c.id}>{c.title}</option>)}
+          <option value={END_VALUE}>End</option>
+        </select>
+      </label>
+      <button type="button" className="wf-link" onClick={onClose} data-testid="wf-link-picker-close">Close</button>
+    </div>
+  );
 }
 
 /* ── The lane ──────────────────────────────────────────────────────────────────── */
@@ -170,10 +242,13 @@ export function FlowLane(p: {
   onPlace?(id: string, offset: NodeOffset | null): void;
   /** Every step back on the grid. */
   onResetLayout?(): void;
+  /** An arrow's end let go on another step (`target`; null for End, START_TARGET for Start), or
+   *  a new target picked for it from the list. The editor decides (lib/workflow-rewire.ts). */
+  onRewire?(link: FlowLink, target: string | null): void;
 }): React.JSX.Element {
   useTips();
   const { spec, palette, mode, selection = null, problems, runState, onSelect, onInsert, onMove,
-          onPlace, onResetLayout, renderGapAction, readOnly } = p;
+          onPlace, onResetLayout, onRewire, renderGapAction, readOnly } = p;
   const design = mode === "design" && !readOnly;
   const steps = spec.steps;
 
@@ -296,6 +371,19 @@ export function FlowLane(p: {
     };
   }, [spec]);
 
+  // Which arrow a `+` of a branched flow sits on: the one into a path's head, the one out of a
+  // path's last step (drag-plan.ts `GapArrows`), so it is not drawn against a step's edge.
+  const arrows = useMemo<GapArrows>(() => {
+    const drawn = layout.edges.filter((e) => e.kind !== "loop");
+    const one = <T,>(xs: T[]) => (xs.length === 1 ? xs[0] : undefined);
+    return {
+      into: (id) => one(drawn.filter((e) => e.to === id))?.from,
+      out: (id) => {
+        const outs = drawn.filter((e) => e.from === id);
+        return outs.length ? one(outs)?.to : layout.terminal.includes(id) ? null : undefined;
+      },
+    };
+  }, [layout]);
   // After a path's last step, where the gap before the next step in the order cannot serve.
   // A flow with a moved step is drawn as a branched one is: curved arrows, gaps between steps.
   const linear = layout.linear && !offsets.size && !live;
@@ -303,8 +391,8 @@ export function FlowLane(p: {
     if (layout.linear) return [];
     const bodies = new Map(steps.filter((s) => s.kind === "bounded_loop" && s.body)
       .map((s) => [s.id, String(s.body)]));
-    return afterGapPoints(afterGaps(spec), order, geometry, (id) => bodies.get(id));
-  }, [layout.linear, spec, steps, order, geometry]);
+    return afterGapPoints(afterGaps(spec), order, geometry, (id) => bodies.get(id), arrows);
+  }, [layout.linear, spec, steps, order, geometry, arrows]);
 
   /* ── Announcements ── */
   const [announcement, setAnnouncement] = useState("");
@@ -488,13 +576,91 @@ export function FlowLane(p: {
   /* ── Drawing ── */
   const edges = useMemo(() => (linear ? [] : drawEdges(layout, geometry, spec)),
     [linear, layout, geometry, spec]);
+
+  /* ── Re-linking an arrow ── */
+  // An arrow's end can be grabbed (its handle shows on hover, on the arrows out of the selected
+  // step, and on the one picked) and let go on another step, End or Start; or, from the
+  // keyboard, its handle opens a list of where it can go. The lane only says which arrow and
+  // where: whether that is allowed is the editor's (the model, then the validator).
+  const relinkable = design && !!onRewire;
+  const [hovered, setHovered] = useState<string | null>(null);
+  const [picked, setPicked] = useState<string | null>(null);
+  const [relink, setRelink] = useState<{ key: string; x: number; y: number; over: string | null | undefined } | null>(null);
+  const handles = relinkable ? edges.filter((e) => e.link && e.grip) : [];
+  const pickedEdge = picked ? handles.find((e) => e.key === picked) : undefined;
+  const titleOf = (id: string | null) => (id === null ? "End" : views.get(id)?.title ?? id);
+  const linkWords = (l: FlowLink) => {
+    const what = l.kind === "yes" ? "The Yes path" : l.kind === "no" ? "The No path" : l.kind === "branch" ? "A branch" : "The arrow";
+    return `${what} from ${titleOf(l.from)} to ${titleOf(l.to)}`;
+  };
+  /** What is under a canvas point: a step, End (null), Start, or nothing (undefined). */
+  const targetAt = useCallback((x: number, y: number): string | null | undefined => {
+    const inside = (b: { x: number; y: number; w: number; h: number }, pad = 0) =>
+      x >= b.x - pad && x <= b.x + b.w + pad && y >= b.y - pad && y <= b.y + b.h + pad;
+    for (const [id, b] of geometry.boxes) if (inside(b)) return id;
+    if (inside(geometry.end, 8)) return null;
+    if (inside(geometry.start, 8)) return START_TARGET;
+    return undefined;
+  }, [geometry]);
+  const toCanvas = (clientX: number, clientY: number) => {
+    const r = canvasRef.current?.getBoundingClientRect();
+    const k = scaleRef.current || 1;
+    return { x: (clientX - (r?.left ?? 0)) / k, y: (clientY - (r?.top ?? 0)) / k };
+  };
+  const relinkTo = (link: FlowLink, target: string | null) => {
+    setPicked(null);
+    if (target === link.to) return;
+    setAnnouncement(`${linkWords(link)}: linking to ${target === START_TARGET ? "Start" : titleOf(target)}`);
+    onRewire?.(link, target);
+  };
+  const pressGrip = (edge: Drawn, e: React.PointerEvent<HTMLElement>) => {
+    if (e.button !== 0 || !edge.link) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const link = edge.link;
+    const start = { x: e.clientX, y: e.clientY };
+    let moved = false;
+    const move = (ev: PointerEvent) => {
+      if (!moved && Math.hypot(ev.clientX - start.x, ev.clientY - start.y) < DRAG_THRESHOLD) return;
+      moved = true;
+      const at = toCanvas(ev.clientX, ev.clientY);
+      setRelink({ key: edge.key, x: at.x, y: at.y, over: targetAt(at.x, at.y) });
+    };
+    const stop = (ev: PointerEvent) => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", stop);
+      window.removeEventListener("pointercancel", stop);
+      window.removeEventListener("keydown", esc);
+      setRelink(null);
+      if (!moved || ev.type !== "pointerup") return;
+      const at = toCanvas(ev.clientX, ev.clientY);
+      const target = targetAt(at.x, at.y);
+      if (target === undefined) { setAnnouncement(`${linkWords(link)} is unchanged`); return; }
+      relinkTo(link, target);
+    };
+    const esc = (ev: KeyboardEvent) => {
+      if (ev.key !== "Escape") return;
+      moved = false;
+      stop(new PointerEvent("pointercancel"));
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", stop);
+    window.addEventListener("pointercancel", stop);
+    window.addEventListener("keydown", esc);
+  };
+  const relinking = relink ? handles.find((e) => e.key === relink.key) : undefined;
+  /** Whether the step under a dragged arrow's end would take it, as far as the spec can say. */
+  const overState = (id: string): "ok" | "no" | undefined => {
+    if (!relink || !relinking?.link || relink.over !== id) return undefined;
+    return "refused" in rewireLink(spec, relinking.link, id) ? "no" : "ok";
+  };
   const phases = new Map(order.map((id) => [id, runPhase(runState?.[id]?.phase)]));
 
   // The `+` on each connector: every gap of a linear flow, and the allowed ones of a branched one.
   const gaps: { at: number; x: number; y: number }[] = !design || !renderGapAction ? []
     : linear
       ? geometry.gapX.map((x, b) => ({ at: b >= order.length ? -1 : b, x, y: geometry.midY }))
-      : [...gapPoints(order, geometry), ...afterPoints].filter((g) => canInsert(g.at) && !underNode(g, geometry));
+      : [...gapPoints(order, geometry, arrows), ...afterPoints].filter((g) => canInsert(g.at) && !underNode(g, geometry));
 
   const slotRef = (id: string) => (el: HTMLDivElement | null) => {
     if (el) slots.current.set(id, el); else slots.current.delete(id);
@@ -521,8 +687,10 @@ export function FlowLane(p: {
                style={{ width: geometry.width, height: geometry.height,
                         transform: scale === 1 ? undefined : `scale(${scale})` }}
                data-scale={scale} onKeyDown={onKeyDown}
-               onClick={design && onSelect ? (e) => {
-                 if (!(e.target as HTMLElement).closest(".wf-slot, .wf-gap, button")) onSelect(null);
+               onClick={design && (onSelect || onRewire) ? (e) => {
+                 if ((e.target as HTMLElement).closest(".wf-slot, .wf-gap, button, .wf-link-picker")) return;
+                 setPicked(null);
+                 onSelect?.(null);
                } : undefined}>
             {edges.length ? (
               <svg className="wf-edges" width={geometry.width} height={geometry.height} aria-hidden>
@@ -533,13 +701,26 @@ export function FlowLane(p: {
                   </marker>
                 </defs>
                 {edges.map((e) => (
-                  <g key={e.key} data-kind={e.kind}>
+                  <g key={e.key} data-kind={e.kind} data-edge={e.link ? e.key : undefined}
+                     data-picked={picked === e.key || hovered === e.key || undefined}
+                     data-relinking={relink?.key === e.key || undefined}>
                     <path d={e.d} className="wf-edge" data-kind={e.kind}
                           markerEnd={e.kind === "start" ? undefined : `url(#${viewportId}-arrow)`} />
+                    {relinkable && e.link ? (
+                      <path d={e.d} className="wf-edge-hit" data-testid={`wf-edge-hit-${e.key}`}
+                            onPointerEnter={() => setHovered(e.key)}
+                            onPointerLeave={() => setHovered((h) => (h === e.key ? null : h))}
+                            onClick={(ev) => { ev.stopPropagation(); setPicked(e.key); }} />
+                    ) : null}
                     {e.label ? <text x={e.label.x} y={e.label.y} className="wf-edge-label"
                                      textAnchor={e.label.anchor ?? (e.kind === "back" ? "middle" : "start")}>{e.label.text}</text> : null}
                   </g>
                 ))}
+                {relink && relinking?.from ? (
+                  <path className="wf-edge wf-edge-relink" data-testid="wf-relink-line"
+                        d={`M${relinking.from.x},${relinking.from.y} L${relink.x},${relink.y}`}
+                        markerEnd={`url(#${viewportId}-arrow)`} />
+                ) : null}
               </svg>
             ) : null}
 
@@ -560,6 +741,7 @@ export function FlowLane(p: {
               return (
                 <div key={id} className="wf-slot" ref={slotRef(id)} data-slot={id}
                      data-placed={offsets.has(id) || live?.id === id ? "true" : undefined}
+                     data-link-target={overState(id)}
                      style={{ left: box.x, top: box.y, width: box.w, height: box.h }}
                      onPointerDown={lane && onMove ? (e) => {
                        if ((e.target as HTMLElement).closest(".wf-node")) pressNode(id, e);
@@ -598,6 +780,39 @@ export function FlowLane(p: {
                 {renderGapAction!(g.at)}
               </div>
             ))}
+
+            {handles.map((e) => (
+              <button key={`grip:${e.key}`} type="button" className="wf-edge-end"
+                      data-testid={`wf-edge-end-${e.key}`} data-kind={e.kind}
+                      data-on={hovered === e.key || picked === e.key || relink?.key === e.key
+                               || (!!selection && e.link!.from === selection) || undefined}
+                      tabIndex={selection && e.link!.from === selection ? 0 : -1}
+                      aria-label={`${linkWords(e.link!)}. Drag to another step, or press Enter to choose where it goes`}
+                      data-tip="Drag onto another step to link it there"
+                      style={{ left: e.grip!.x, top: e.grip!.y }}
+                      onPointerEnter={() => setHovered(e.key)}
+                      onPointerLeave={() => setHovered((h) => (h === e.key ? null : h))}
+                      onPointerDown={(ev) => pressGrip(e, ev)}
+                      onClick={(ev) => { ev.stopPropagation(); setPicked(e.key); }} />
+            ))}
+            {pickedEdge?.link ? (
+              <LinkPicker key={pickedEdge.key} link={pickedEdge.link} at={pickedEdge.grip!}
+                          words={linkWords(pickedEdge.link)}
+                          choices={navOrder.filter((id) => id !== pickedEdge.link!.from).map((id) => ({ id, title: titleOf(id) }))}
+                          onPick={(target) => relinkTo(pickedEdge.link!, target)}
+                          onClose={() => {
+                            const key = pickedEdge.key;
+                            setPicked(null);
+                            [...(rootRef.current?.querySelectorAll<HTMLElement>(".wf-edge-end") ?? [])]
+                              .find((el) => el.dataset.testid === `wf-edge-end-${key}`)?.focus();
+                          }} />
+            ) : null}
+            {relink ? (
+              <div className="wf-relink-tip" data-testid="wf-relink-tip" data-ok={relink.over !== undefined || undefined}
+                   style={{ left: relink.x, top: relink.y }} aria-hidden>
+                {relink.over === undefined ? "Let go on a step" : relink.over === START_TARGET ? "Start" : titleOf(relink.over)}
+              </div>
+            ) : null}
 
             <div className="wf-drop-caret" ref={caretRef} hidden aria-hidden data-testid="wf-caret" />
           </div>

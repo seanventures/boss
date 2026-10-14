@@ -23,7 +23,8 @@
  * meets the others (a join's `wait_for` follows). Every path keeps at least one step of its own,
  * and a loop's body stays one step. Anything else is refused by returning the SAME spec object,
  * so callers can test `result === spec`. Whole branch blocks are placed and removed by
- * lib/workflow-blocks.ts; their wiring beyond that is edited in JSON.
+ * lib/workflow-blocks.ts. One arrow at a time can be pointed at another step (`rewireLink`):
+ * the one field that draws it is rewritten, and the validator judges the flow that results.
  *
  * INDEXES are positions in `linearOrder(spec)`. `insertStep(spec, at, …)` puts the new step at
  * index `at` (so `at` is the gap before the step now at `at`; -1 or `length` is the end).
@@ -33,7 +34,7 @@
  * because the gap before the next step in the order is the head of another path.
  */
 import type {
-  FlowLayout, GraphEdge, InputSource, LaidOutNode, Palette, Spec, SpecStep,
+  FlowLayout, FlowLink, GraphEdge, InputSource, LaidOutNode, Palette, Spec, SpecStep,
 } from "./workflow-editor-types";
 
 type Obj = Record<string, unknown>;
@@ -714,4 +715,83 @@ export function removeStep(spec: Spec, id: string): Spec {
   const detached = detach(spec, id)?.spec ?? detachFromPath(spec, id);
   if (!detached) return spec;
   return unsetReadsFrom(detached, new Set([id]));
+}
+
+/* ── Re-linking an arrow ─────────────────────────────────────────────────────────── */
+
+/** What the lane passes for a drop on the Start flag. Nothing can lead there. */
+export const START_TARGET = "__start__";
+
+/** Every arrow out of `id`: its edges, or its arrow to End when it has none (a loop's body
+ *  returns to its loop and draws none). */
+export function linksFrom(spec: Spec, id: string): FlowLink[] {
+  const edges = edgesOf(spec).filter((e) => e.from === id);
+  if (edges.length) return edges.map((e) => ({ from: e.from, to: e.to, kind: e.kind }));
+  if (!stepsOf(spec).some((s) => s.id === id) || loopBodies(spec).has(id)) return [];
+  return [{ from: id, to: null, kind: "end" }];
+}
+
+/**
+ * The arrow `link` pointed at `target` (a step id; null for End) instead: one rewrite of the field
+ * that drew it — a step's `next`, a condition's `on_true`/`on_false`, a parallel's `branches`.
+ * The SAME spec when nothing changes (`target` is where it already goes).
+ *
+ * Refused, with the words the canvas says, when the spec cannot say it the way the canvas would
+ * draw it: an arrow that is not there; Start; a target that is not a step; a path of a Branch or
+ * a branch of a Do at the same time with no step of its own (End, or straight into its join,
+ * as `detachFromPath` keeps them); Yes and No to one step, or two branches to one step (drawn as
+ * one arrow); a step that already leads there; an arrow into a join from outside what it waits
+ * for, and a waited-for path's arrow into its join (the join's `wait_for` names it); a Repeat's
+ * one step (the runtime returns the body to its loop, so it is the block's own). Whether the
+ * flow that results is a valid workflow — a cycle outside a Repeat, a step nothing reaches any
+ * more — is the engine validator's to say (lib/workflow-rewire.ts asks it), never decided here.
+ */
+export function rewireLink(spec: Spec, link: FlowLink, target: string | null):
+    { spec: Spec } | { refused: string } {
+  const steps = stepsOf(spec);
+  const byId = new Map(steps.map((s) => [s.id, s]));
+  const from = byId.get(link.from);
+  const current = linksFrom(spec, link.from)
+    .some((l) => l.kind === link.kind && l.to === link.to);
+  if (!from || !current) return { refused: "That arrow is not there any more" };
+  if (target === link.to) return { spec };
+  if (target === START_TARGET) return { refused: "Nothing can lead back to Start: it is where the flow begins" };
+  if (target !== null && !byId.has(target)) return { refused: "Link it to a step, or to End" };
+  const into = target === null ? undefined : byId.get(target)!;
+  if (link.kind === "loop") {
+    return { refused: "A Repeat keeps its one step: put a step in it instead" };
+  }
+  if (link.kind === "join") {
+    return { refused: "This path ends where its Do at the same time waits: remove the branch to change it" };
+  }
+  if (into?.kind === "join") {
+    return { refused: "Only the branches of its Do at the same time lead into a join" };
+  }
+  const swap = (step: SpecStep) => ({ ...spec, steps: steps.map((s) => (s.id === step.id ? step : s)) });
+
+  if (link.kind === "yes" || link.kind === "no") {
+    if (target === null) return { refused: "Each path of a Branch needs a step to go to" };
+    const key = link.kind === "yes" ? "on_true" : "on_false";
+    const other = link.kind === "yes" ? "on_false" : "on_true";
+    if (String(from[other] ?? "") === target) {
+      return { refused: `Yes and No would both go to the same step: link ${link.kind === "yes" ? "No" : "Yes"} elsewhere first` };
+    }
+    return { spec: swap({ ...from, [key]: target }) };
+  }
+  if (link.kind === "branch") {
+    if (target === null) return { refused: "Each branch needs a step of its own" };
+    const branches = Array.isArray(from.branches) ? from.branches.map(String) : [];
+    if (branches.includes(target)) return { refused: "That step is already one of its branches" };
+    return { spec: swap({ ...from, branches: branches.map((b) => (b === link.to ? target : b)) }) };
+  }
+  // A plain `next`, or a flow's end.
+  const next = nextOf(from);
+  if (target !== null && next.includes(target)) return { refused: "It already leads there" };
+  if (from.kind === "condition" || from.kind === "parallel") {
+    return { refused: "A Branch or a Do at the same time goes on through its paths" };
+  }
+  const targets = link.kind === "end" ? (target === null ? next : [...next, target])
+    : target === null ? next.filter((t) => t !== link.to)
+      : next.map((t) => (t === link.to ? target : t));
+  return { spec: swap(withNext(from, targets)) };
 }

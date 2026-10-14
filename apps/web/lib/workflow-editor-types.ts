@@ -86,6 +86,10 @@ export type PublishResult =
 
 export type EdgeKind = "next" | "yes" | "no" | "branch" | "join" | "loop";
 export type GraphEdge = { from: string; to: string; kind: EdgeKind };
+/** One arrow the canvas draws out of a step, as something that can be pointed elsewhere: an edge
+ *  (`to` its target), or a flow's end (`kind` "end", `to` null) — a step with no way out, whose
+ *  arrow runs to End. */
+export type FlowLink = { from: string; to: string | null; kind: EdgeKind | "end" };
 export type LaidOutNode = { id: string; column: number; row: number; rowsInColumn: number };
 export type FlowLayout = { nodes: LaidOutNode[]; edges: GraphEdge[]; columns: number; maxRows: number;
   linear: boolean; terminal: string[] };
@@ -143,6 +147,10 @@ export type EditorAction =
   | { type: "REMOVE"; id: string }
   | { type: "ADD_BRANCH"; id: string }
   | { type: "REMOVE_BRANCH"; id: string; branch: string }
+  /** An arrow pointed at another step (`target`; null for End): lib/workflow-graph.ts
+   *  `rewireLink`. Refused (no change) where that refuses; the editor asks the validator first
+   *  (lib/workflow-rewire.ts). */
+  | { type: "REWIRE"; link: FlowLink; target: string | null }
   | { type: "DUPLICATE"; id: string }
   | { type: "PATCH_STEP"; id: string; patch: StepPatch }
   | { type: "RENAME_ID"; from: string; to: string }

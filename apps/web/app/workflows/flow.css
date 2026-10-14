@@ -119,6 +119,41 @@
   paint-order: stroke; stroke: var(--surface); stroke-width: 4px; stroke-linejoin: round;
 }
 
+/* RE-LINKING AN ARROW. A wide invisible stroke over each arrow that can be pointed elsewhere
+   (hover shows its end handle; a click picks it), the handle itself (a button: drag it onto a
+   step, or Enter for the list), the line drawn to the pointer while it is dragged, and the list. */
+.wf-edge-hit { fill: none; stroke: transparent; stroke-width: 12; pointer-events: stroke; cursor: pointer; }
+.wf-edges g[data-picked] .wf-edge { stroke: var(--accent); stroke-width: 2; }
+.wf-edges g[data-relinking] .wf-edge { opacity: 0.3; }
+.wf-edge-relink { stroke: var(--accent); stroke-dasharray: 4 3; stroke-width: 2; }
+.wf-edge-end {
+  position: absolute; z-index: 3; width: 12px; height: 12px; margin: -6px 0 0 -6px; padding: 0;
+  border: 2px solid var(--accent); border-radius: 50%; background: var(--bg);
+  cursor: grab; opacity: 0; touch-action: none;
+  transition: opacity 120ms ease, transform 120ms ease;
+}
+.wf-edge-end[data-on], .wf-edge-end:focus-visible, .wf-edge-end:hover { opacity: 1; }
+.wf-edge-end:hover { transform: scale(1.25); }
+.wf-edge-end:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.wf-lane[data-dragging] .wf-edge-end { display: none; }
+@media (hover: none) { .wf-edge-end { opacity: 0.6; } }
+.wf-slot[data-link-target="ok"] .wf-node { outline: 2px solid var(--accent); outline-offset: 2px; }
+.wf-slot[data-link-target="no"] .wf-node { outline: 2px dashed var(--faint); outline-offset: 2px; cursor: not-allowed; }
+.wf-relink-tip {
+  position: absolute; z-index: 4; transform: translate(10px, 10px); pointer-events: none;
+  padding: 2px 6px; border-radius: 4px; white-space: nowrap;
+  background: var(--surface); border: 1px solid var(--border); color: var(--muted);
+  font: 600 0.75rem/1.4 var(--sans);
+}
+.wf-relink-tip[data-ok] { color: var(--ink); border-color: var(--accent); }
+.wf-link-picker {
+  position: absolute; z-index: 5; transform: translate(-50%, 12px);
+  display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px;
+  background: var(--surface); border: 1px solid var(--border); box-shadow: var(--shadow-lg);
+  font: 0.75rem/1.4 var(--sans); white-space: nowrap;
+}
+.wf-link-picker-label { display: flex; align-items: center; gap: 6px; color: var(--muted); }
+
 /* The `+` on a connector: there when you look for it, quiet otherwise. */
 .wf-gap {
   position: absolute; width: 0; height: 0;
@@ -332,6 +367,7 @@
 [data-density="compact"] .wf-flag-label { font-size: 0.875rem; }
 [data-density="compact"] .wf-edge-label { font-size: 0.875rem; }
 [data-density="compact"] .wf-gap-add { width: 18px; height: 18px; }
+[data-density="compact"] .wf-relink-tip, [data-density="compact"] .wf-link-picker { font-size: 0.875rem; }
 
 /* Run mode: the left edge says where the work has got to. */
 .wf-node[data-mode="run"] { border-left-width: 3px; cursor: pointer; }

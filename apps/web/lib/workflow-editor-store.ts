@@ -21,7 +21,7 @@ import type {
   EditorAction, EditorMeta, EditorState, Palette, Spec, SpecStep,
 } from "./workflow-editor-types";
 import {
-  duplicateStep, insertStep, moveStep, removeStep, renameStepId, wireInputs,
+  duplicateStep, insertStep, moveStep, removeStep, renameStepId, rewireLink, wireInputs,
 } from "./workflow-graph";
 import { freeStepId } from "./step-view";
 import { addBranch, blockOfHead, placeBlock, removeBlock, removeBranch } from "./workflow-blocks";
@@ -113,7 +113,7 @@ function travel(s: EditorState, spec: Spec, past: Spec[], future: Spec[]): Edito
 /** Actions that change the spec from the visual side: refused while the JSON is broken. */
 const VISUAL_EDITS = new Set<EditorAction["type"]>([
   "SET_SPEC", "INSERT", "MOVE", "PLACE", "RESET_LAYOUT", "REMOVE", "DUPLICATE", "PATCH_STEP", "RENAME_ID",
-  "PLACE_BLOCK", "ADD_BRANCH", "REMOVE_BRANCH",
+  "PLACE_BLOCK", "ADD_BRANCH", "REMOVE_BRANCH", "REWIRE",
   "SET_INPUT_SCHEMA", "WIRE",
 ]);
 
@@ -205,6 +205,11 @@ export function editorReducer(s: EditorState, a: EditorAction): EditorState {
 
     case "REMOVE_BRANCH":
       return commit(s, pruneLayout(removeBranch(s.spec, a.id, a.branch)));
+
+    case "REWIRE": {
+      const out = rewireLink(s.spec, a.link, a.target);
+      return "spec" in out ? commit(s, out.spec) : s;
+    }
 
     case "DUPLICATE": {
       const copyId = freeStepId(s.spec, a.id);

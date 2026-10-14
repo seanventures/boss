@@ -16,9 +16,10 @@
 import { Plus } from "@phosphor-icons/react";
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
-import type { CustomStepDef, PaletteItem, Spec, StepView } from "../../../lib/workflow-editor-types";
+import type { CustomStepDef, FlowLink, PaletteItem, Spec, StepView } from "../../../lib/workflow-editor-types";
 import { TOAST_EVENT } from "../../../lib/api-write";
-import { deleteWorkflow, draftFromDescription, fetchSpec } from "../../../lib/workflow-api";
+import { checkSpec, deleteWorkflow, draftFromDescription, fetchSpec } from "../../../lib/workflow-api";
+import { checkRewire } from "../../../lib/workflow-rewire";
 import { newMeta, useWorkflowEditor } from "../../../lib/workflow-editor-store";
 import { canRemove, insertStep, layoutFlow, linearOrder } from "../../../lib/workflow-graph";
 import { newStepFor } from "../../../lib/step-view";
@@ -281,6 +282,24 @@ export function WorkflowEditor({ projectId, workflowKey, onBack, onStart, actor,
     if (!readOnly) dispatch({ type: "MOVE", id, to });
   }, [dispatch, readOnly]);
 
+  /** An arrow pointed at another step: refused out loud when the spec cannot say it, or when the
+   *  validator finds a problem the link would add (lib/workflow-rewire.ts); made as one edit. */
+  const specRef = useRef(spec);
+  specRef.current = spec;
+  const rewire = useCallback(async (link: FlowLink, target: string | null) => {
+    if (readOnly) return;
+    const before = spec;
+    const definitionId = meta.is_catalogue ? (meta.copy?.definition_id ?? null) : meta.definition_id;
+    const answer = await checkRewire(before, link, target, (s) => checkSpec(projectId, s, definitionId),
+                                     state.checkedSpec === before ? state.problems : null);
+    if (!answer.ok) { show(answer.reason); return; }
+    if (answer.spec === before) return;
+    // Checked against the flow as it was: an edit since then means the answer is about another flow.
+    if (specRef.current !== before) { show("The flow changed while that link was checked: try again"); return; }
+    dispatch({ type: "REWIRE", link, target });
+    show("Link changed · Undo", true);
+  }, [readOnly, spec, meta, projectId, state.checkedSpec, state.problems, show, dispatch]);
+
   const openSettings = useCallback(() => { dispatch({ type: "SELECT", id: null }); setSettingsOpen(true); }, [dispatch]);
   const closeDrawer = useCallback(() => { dispatch({ type: "SELECT", id: null }); setSettingsOpen(false); }, [dispatch]);
 
@@ -519,6 +538,7 @@ export function WorkflowEditor({ projectId, workflowKey, onBack, onStart, actor,
                         onInsert={insert} onMove={move} renderGapAction={readOnly ? undefined : gapAction}
                         onPlace={(id, offset) => dispatch({ type: "PLACE", id, offset })}
                         onResetLayout={() => dispatch({ type: "RESET_LAYOUT" })}
+                        onRewire={(link, target) => void rewire(link, target)}
                         zoom={zoom} onZoomChange={setZoom} occludedRight={inspectorOpen ? occluded : 0} />
             </main>
           </>

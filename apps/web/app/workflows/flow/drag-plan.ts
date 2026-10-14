@@ -34,10 +34,33 @@ export type LanePlan = DragPlan & {
 /** The point between two steps of a branched flow where an insert at `at` would land. */
 export type GapPoint = { at: number; x: number; y: number };
 
+/** The arrows a branched flow draws, for putting a `+` on one: the one step an arrow comes into
+ *  `id` from, and where `id`'s one way out goes (null: End). Undefined when there is not one. */
+export type GapArrows = { into(id: string): string | undefined; out(id: string): string | null | undefined };
+
+/** How far a `+` on an arrow keeps from every step: about a `+` across. */
+const PLUS_CLEAR = 20;
+
+/** The middle of the arrow from `a` (a box's right edge) to `b`, when it is longer than a
+ *  connector and that middle is clear of every step: there a `+` sits away from both ends, where
+ *  a connector-wide gap would put it against a step's edge (the lane draws these arrows as
+ *  cubics symmetric about their middle). Null otherwise, and the gap stays where it was. */
+function onArrow(a: { x: number; y: number }, b: { x: number; y: number }, geometry: LaneGeometry) {
+  if (b.x - a.x <= geometry.conn + 1) return null;
+  const m = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+  for (const box of geometry.boxes.values()) {
+    if (m.x > box.x - PLUS_CLEAR && m.x < box.x + box.w + PLUS_CLEAR
+        && m.y > box.y - PLUS_CLEAR && m.y < box.y + box.h + PLUS_CLEAR) return null;
+  }
+  return m;
+}
+
 /** The after-gaps (`afterGaps` in the model): right of the step they follow — right of its
- *  loop's body too, for a loop, so "after the loop" is not drawn between it and its body. */
+ *  loop's body too, for a loop, so "after the loop" is not drawn between it and its body —
+ *  or, with `arrows`, on the middle of the arrow out of it when that is longer. */
 export function afterGapPoints(ats: number[], order: string[], geometry: LaneGeometry,
-                               bodyOf: (id: string) => string | undefined = () => undefined): GapPoint[] {
+                               bodyOf: (id: string) => string | undefined = () => undefined,
+                               arrows?: GapArrows): GapPoint[] {
   const out: GapPoint[] = [];
   for (const at of ats) {
     const id = order[-at - 2];
@@ -46,13 +69,19 @@ export function afterGapPoints(ats: number[], order: string[], geometry: LaneGeo
     const body = bodyOf(id);
     const bb = body ? geometry.boxes.get(body) : undefined;
     const right = Math.max(b.x + b.w, bb ? bb.x + bb.w : 0);
-    out.push({ at, x: right + geometry.conn / 2, y: b.y + b.h / 2 });
+    const to = arrows?.out(id);
+    const tb = to ? geometry.boxes.get(to) : undefined;
+    const head = to === null ? { x: geometry.end.x, y: geometry.midY } : tb ? { x: tb.x, y: tb.y + tb.h / 2 } : null;
+    const mid = head && !bb ? onArrow({ x: right, y: b.y + b.h / 2 }, head, geometry) : null;
+    out.push(mid ? { at, ...mid } : { at, x: right + geometry.conn / 2, y: b.y + b.h / 2 });
   }
   return out;
 }
 
-/** One gap before each step of the order, and one after the last (`at` -1). */
-export function gapPoints(order: string[], geometry: LaneGeometry): GapPoint[] {
+/** One gap before each step of the order, and one after the last (`at` -1). With `arrows`, the
+ *  head of a path (whose step before it in the order is on another path) gets its gap on the
+ *  middle of the arrow into it, when that arrow is longer than a connector. */
+export function gapPoints(order: string[], geometry: LaneGeometry, arrows?: GapArrows): GapPoint[] {
   const box = (id: string) => geometry.boxes.get(id);
   const mid = (id: string) => { const b = box(id)!; return b.y + b.h / 2; };
   const out: GapPoint[] = [];
@@ -63,7 +92,10 @@ export function gapPoints(order: string[], geometry: LaneGeometry): GapPoint[] {
     if (prev && prev.x + prev.w < next.x) {
       out.push({ at: k, x: (prev.x + prev.w + next.x) / 2, y: (mid(order[k - 1]) + mid(id)) / 2 });
     } else {
-      out.push({ at: k, x: next.x - geometry.conn / 2, y: mid(id) });
+      const from = arrows?.into(id);
+      const fb = from ? box(from) : undefined;
+      const on = fb ? onArrow({ x: fb.x + fb.w, y: fb.y + fb.h / 2 }, { x: next.x, y: mid(id) }, geometry) : null;
+      out.push(on ? { at: k, ...on } : { at: k, x: next.x - geometry.conn / 2, y: mid(id) });
     }
   });
   const last = order[order.length - 1];
