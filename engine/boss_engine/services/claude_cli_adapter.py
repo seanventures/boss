@@ -28,7 +28,7 @@ from typing import Any, Iterator, Optional, Tuple
 
 from ..config import Settings
 from . import owned_process
-from .included_spend import BILLING_METERED, BILLING_SUBSCRIPTION
+from .included_spend import BILLING_SUBSCRIPTION
 from .scheduling import low_priority
 
 _log = logging.getLogger(__name__)
@@ -124,14 +124,11 @@ class CliChatBrain:
         one interface a customer talks to was the one that could not reach the model.
         """
         from .agent_env import agent_environment
-        from .cli_harness import claude_login_token
+        from .claude_credential import resolve_claude_credential
 
-        token = claude_login_token(self.settings)
-        extra = {"CLAUDE_CODE_OAUTH_TOKEN": token} if token else {}
-        env = agent_environment(os.environ, extra)
-        if token:
-            env.pop("ANTHROPIC_API_KEY", None)
-        return env
+        cred = resolve_claude_credential(self.settings)
+        self._billing = cred.billing
+        return cred.apply(agent_environment(os.environ))
 
     def _usage(self, data: dict) -> dict:  # pragma: no cover - subclass responsibility
         raise NotImplementedError
@@ -705,19 +702,14 @@ class ClaudeCliAdapter(CliChatBrain):
         one interface a customer talks to was the one that could not reach the model.
         """
         from .agent_env import agent_environment
-        from .cli_harness import claude_login_token
+        from .claude_credential import resolve_claude_credential
 
-        token = claude_login_token(self.settings)
-        extra = {"CLAUDE_CODE_OAUTH_TOKEN": token} if token else {}
-        env = agent_environment(os.environ, extra)
-        if token:
-            env.pop("ANTHROPIC_API_KEY", None)
-        # WHO PAYS FOR THE CALL (included_spend.py): the subscription when the CLI runs on its
-        # login, money only when it runs on an ANTHROPIC_API_KEY with no login token.
-        self._billing = (BILLING_METERED
-                         if not env.get("CLAUDE_CODE_OAUTH_TOKEN") and env.get("ANTHROPIC_API_KEY")
-                         else BILLING_SUBSCRIPTION)
-        return env
+        # WHICH CREDENTIAL, AND WHO PAYS (claude_credential, included_spend.py): the
+        # subscription for its login, money for the console's Anthropic API key or an
+        # ANTHROPIC_API_KEY in the environment. Exactly one of them reaches the child.
+        cred = resolve_claude_credential(self.settings)
+        self._billing = cred.billing
+        return cred.apply(agent_environment(os.environ))
 
     def _usage(self, data: dict) -> dict:
         u = data.get("usage") or {}

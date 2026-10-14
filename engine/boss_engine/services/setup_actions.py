@@ -1208,6 +1208,12 @@ def remove_model(connection: Connection, settings: Any, project_id: str, source_
             text("UPDATE secret_refs SET status = 'revoked', revoked_at = now(), "
                  "revoked_by = :a WHERE id = :id"),
             {"a": actor, "id": row["credential_secret_ref_id"]})
+    if source_id == "anthropic_claude_code":
+        # Removing the subscription forgets its stored login: `claude` runs fall through to
+        # the Anthropic API key (claude_credential).
+        from .claude_credential import forget_subscription_login
+
+        forget_subscription_login(connection, settings, project_id, actor=actor)
     connection.execute(
         text("UPDATE entitlement_sources SET credential_secret_ref_id = NULL, "
              "connection_status = 'not_connected', status = 'declared', "

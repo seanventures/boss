@@ -226,6 +226,8 @@ def connected_engines(
                       for spec in load_specs(settings).values()
                       if spec.entitlement_source_id}
     by_entitlement.setdefault("anthropic_claude_code", "claude_code")
+    # The console's Anthropic API key runs the same `claude` CLI (claude_credential).
+    by_entitlement.setdefault("anthropic_api", "claude_code")
     # What the API-key route records, `setup-<provider>`, mapped to the lane that spends it.
     # openai and "anything OpenAI-compatible" are both the engine-owned native agent; a local
     # model connected in Repo and models is `setup-ollama` or `setup-vllm`.
@@ -251,6 +253,25 @@ def connected_engines(
              "ORDER BY updated_at DESC"),
         {"p": project_id},
     ).mappings().all()
+    # ONE ANTHROPIC CREDENTIAL IS ACTIVE (claude_credential): the claude_code lane is offered
+    # on the source its runs will actually use — the subscription, or the Anthropic API key
+    # when the operator put it first or disconnected the subscription — so the kind of money
+    # Auto and the reservations see is the kind that will be spent.
+    from .claude_credential import KIND_SUBSCRIPTION, describe
+
+    anthropic = [r for r in rows if (by_entitlement.get(r["source_id"] or "") == "claude_code"
+                                     or api_source_provider(r["source_id"] or "") == "anthropic")]
+    if anthropic:
+        on_key = describe(connection, settings, project_id)["active"] not in (
+            KIND_SUBSCRIPTION, "none")
+
+        def _later(r) -> bool:
+            sid = r["source_id"] or ""
+            if r not in anthropic:
+                return False
+            return (sid == "anthropic_claude_code") == on_key
+
+        rows = sorted(rows, key=_later)
     for row in rows:
         source_id = row["source_id"] or ""
         connected = row["connection_status"] == "connected"
@@ -619,6 +640,14 @@ def store_coding_agent_credential(
     from .model_failures import clear_login_state
 
     clear_login_state(connection, project_id, spec.entitlement_source_id)
+    if spec.entitlement_source_id:
+        # A login pasted after a Disconnect is a reconnect: `claude` runs use it again
+        # (claude_credential.subscription_disconnected reads 'revoked').
+        connection.execute(
+            text("UPDATE entitlement_sources SET connection_status = 'connected', "
+                 "updated_at = now() WHERE project_id = :p AND source_id = :s "
+                 "AND connection_status = 'revoked'"),
+            {"p": project_id, "s": spec.entitlement_source_id})
     return {"ok": True, "provider": provider, "key": key,
             "backend": stored["backend"], "ref_key": stored["ref_key"],
             "fingerprint": stored["fingerprint"], "raw_secret_stored": False,

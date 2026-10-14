@@ -73,6 +73,8 @@ def heartbeat_path(sandbox_task_id: str) -> str:
 # --- submit request ----------------------------------------------------------
 _ENGINE_ENV_MAP = (
     ("CLAUDE_CODE_OAUTH_TOKEN", "claude_oauth_token"),
+    # The console's Anthropic API key, when a claude_code guest runs on it (claude_credential).
+    ("ANTHROPIC_API_KEY", "anthropic_api_key"),
     ("OPENAI_API_KEY", "openai_api_key"),
     ("OPENAI_BASE_URL", "openai_base_url"),
     ("OPENAI_MODEL", "model"),

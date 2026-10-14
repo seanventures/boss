@@ -37,6 +37,8 @@ const list = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is st
 export type CapSource = {
   sourceId: string; provider: string; kind: string; effective: string; auth: string; connection: string;
   credentialPresent: boolean; credentialAbsent: boolean; capacity: string; models: string[]; modes: string[]; scopes: string[]; pooled: boolean;
+  /** Anthropic rows only: which Anthropic credential `claude` runs on (never a value). */
+  claudeActive?: string | null;
 };
 export type CapSession = {
   id: string; sourceId: string; mode: string; status: string; scopes: string[]; login: string | null; action: string | null; at: string;
@@ -54,6 +56,7 @@ export function parseSources(w: unknown): CapSource[] {
       capacity: s(cap.capacity_state, "unknown"), models: list(r.supported_models),
       modes: list(o(r.connection_metadata).supported_connection_modes), scopes: list(r.oauth_scopes),
       pooled: r.multi_tenant_allowed === true,
+      claudeActive: s(o(r.claude_credential).active) || null,
     };
   }).filter((x) => x.sourceId);
 }
@@ -80,6 +83,8 @@ const SOURCE_NAMES: Record<string, string> = {
 const sourceName = (id: string) => Object.hasOwn(SOURCE_NAMES, id) ? SOURCE_NAMES[id] : id;
 const KIND: Record<string, string> = { api_key: "key", gateway: "gateway", subscription: "plan", local_capacity: "local", local: "local" };
 export function stateOf(src: CapSource): { label: string; tone: "green" | "amber" | "red" | "grey" } {
+  // A stored key reads as what it is: connected. The key itself is never shown.
+  if (src.effective === "active" && takesKey(src) && src.connection === "connected") return { label: "Connected", tone: "green" };
   if (src.effective === "active") return { label: "Active", tone: "green" };
   if (src.effective === "blocked") return { label: "Blocked", tone: "red" };
   // A disconnected flag must not replace an unknown, unsupported or failed verdict.
@@ -98,7 +103,24 @@ export function stateOf(src: CapSource): { label: string; tone: "green" | "amber
 const SESSION_WORD: Record<string, string> = {
   operator_action_required: "Waiting on you", pending: "Starting", completed: "Connected", expired: "Expired", failed: "Failed",
 };
-const takesKey = (src: CapSource) => src.auth === "api_key" || src.auth === "gateway_token";
+function takesKey(src: CapSource) { return src.auth === "api_key" || src.auth === "gateway_token"; }
+
+/** Which Anthropic credential runs Claude (BOSSAPP-530), said on the two rows it concerns. */
+const ON_KEY = ["stored_key", "env_key"];
+export function claudeCopy(src: CapSource): { lines: string[]; tip: string } | null {
+  if (!src.claudeActive) return null;
+  const onKey = ON_KEY.includes(src.claudeActive);
+  if (src.sourceId === "anthropic_api") {
+    return onKey ? { lines: ["Used for: builds, agents, meetings", "Billed to your API account"],
+                     tip: "Claude runs on this key. Each call is metered on your Anthropic API account." } : null;
+  }
+  if (src.sourceId === "anthropic_claude_code") {
+    const now = onKey ? "Anthropic API key" : src.claudeActive === "subscription" ? "this subscription" : "nothing";
+    return { lines: [`Claude runs on: ${now}`],
+             tip: "Subscription first, then the Anthropic API key. Disconnect to use the key." };
+  }
+  return null;
+}
 const isLogin = (src: CapSource) => src.auth.includes("oauth");
 
 async function post(path: string, body: Obj, label: string, scope: string): Promise<string | null> {
@@ -347,6 +369,14 @@ export const CapacityRow = forwardRef<HTMLElement, { actor?: string; focused: bo
                   <Dot tone={st.tone} />{st.label}
                 </span>
                 {src.capacity !== "unknown" ? <Tip tip="The capacity this source last reported." className="su-faint">{words(src.capacity)}</Tip> : null}
+                {(() => {
+                  const said = claudeCopy(src);
+                  return said ? (
+                    <Tip tip={said.tip} className="su-faint">
+                      <span data-testid="setup-cap-claude">{said.lines.map((l, i) => <span key={l}>{i ? " · " : ""}{l}</span>)}</span>
+                    </Tip>
+                  ) : null;
+                })()}
                 <span className="su-spacer" />
                 {takesKey(src) && onBoard.has(src.sourceId) ? (
                   <a className="su-link" href={`?area=setup&source=${encodeURIComponent(src.sourceId)}`} data-testid="setup-cap-replace"

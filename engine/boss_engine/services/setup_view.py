@@ -473,6 +473,8 @@ def _by_entitlement(settings: Any) -> dict[str, str]:
     except Exception:  # noqa: BLE001
         found = {}
     found.setdefault("anthropic_claude_code", "claude_code")
+    # The console's Anthropic API key: an Anthropic key, run by the claude CLI (claude_credential).
+    found.setdefault("anthropic_api", "anthropic")
     return found
 
 

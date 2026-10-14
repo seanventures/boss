@@ -415,7 +415,10 @@ class EntitlementBrokerService:
                 ),
             )
         if source_id == "anthropic_api":
-            return False, bool(self.settings.anthropic_api_key)
+            # Runs `claude` on the operator's key (claude_credential, BOSSAPP-530). A key BOSS
+            # stored is a bound SecretRef, which _runtime_context counts by itself.
+            present = bool(self.settings.anthropic_api_key)
+            return present, present
         if source_id == "typesafe_jev":
             # Runs over HTTPS from the API and the worker; the key is the only prerequisite. A
             # key BOSS stored is a bound SecretRef, which _runtime_context counts by itself.
@@ -1013,6 +1016,19 @@ class EntitlementBrokerService:
             payload["created_at"] = payload["created_at"].isoformat()
             payload["updated_at"] = payload["updated_at"].isoformat()
             items.append(payload)
+        # WHICH ANTHROPIC CREDENTIAL IS IN USE (claude_credential, BOSSAPP-530), on the two
+        # rows it concerns, so the console can say it. Read from state only, never a value.
+        anthropic = [i for i in items
+                     if i["source_id"] in ("anthropic_claude_code", "anthropic_api")]
+        if anthropic:
+            from .claude_credential import describe
+
+            try:
+                said = describe(connection, self.settings, project_id)
+            except Exception:  # noqa: BLE001 — the list stands without the annotation
+                said = None
+            for item in anthropic:
+                item["claude_credential"] = said
         return items
 
     def list_model_adapters(self) -> list[dict[str, Any]]:
@@ -1722,6 +1738,12 @@ class EntitlementBrokerService:
             "official_oauth_connected": False,
             "capacity_state": "unknown",
         }
+        if source_id == "anthropic_claude_code":
+            # The stored login goes too, so every `claude` run falls through to the Anthropic
+            # API key (claude_credential) — including those that never read this row.
+            from .claude_credential import forget_subscription_login
+
+            forget_subscription_login(connection, self.settings, project_id, actor=actor)
         disconnected = self.upsert_source(
             connection,
             {

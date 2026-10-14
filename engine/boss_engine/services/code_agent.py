@@ -912,17 +912,18 @@ class ClaudeCodeAgent:
         happened to be started with.
         """
         env = agent_environment(os.environ, _shared_tool_caches())
-        # The lane binder runs only where a connection and project are in scope; a sandboxed
-        # agent process has neither, so the store is asked directly — through the one
-        # resolution every `claude` child uses (cli_harness.claude_login_token), which raises
-        # rather than start the CLI with no login when the store did not answer.
-        from .cli_harness import claude_login_token
+        # The lane binder runs only where a connection and project are in scope and binds its
+        # answer onto settings; a sandboxed agent process has neither, so the store is asked
+        # directly — through the one resolution every `claude` child uses
+        # (claude_credential.resolve_claude_credential): the subscription login or the console's
+        # Anthropic API key, in the operator's order, exactly one of them in the child's env.
+        # It raises rather than start the CLI with no login when the store did not answer.
+        from .claude_credential import resolve_claude_credential
 
-        token = claude_login_token(self.settings)
-        if token:
-            env["CLAUDE_CODE_OAUTH_TOKEN"] = token
-            # The wizard-connected subscription wins over an inherited API key.
-            env.pop("ANTHROPIC_API_KEY", None)
+        cred = resolve_claude_credential(self.settings)
+        cred.apply(env)
+        #: Who pays for this run's calls (included_spend.py), stamped on its usage.
+        self._billing = cred.billing
         # A BOUND ON SILENT THINKING. Left to decide for itself, the model thought for 7 and 12
         # minutes before its first action in a HelpDesk AI build (19 of the build's first 52
         # minutes were silence, with no tool call, no output and no error), and nobody watching
@@ -1291,6 +1292,8 @@ class ClaudeCodeAgent:
                     raise RuntimeError(
                         f"claude code agent returned non-JSON: {proc.stdout[:300]}"
                     )
+                if isinstance(parsed, dict):
+                    parsed["_billing"] = getattr(self, "_billing", "")
                 return parsed
             # Non-zero exit: the CLI still prints its result JSON on stdout; the
             # human-readable reason lives in `result` (e.g. "You've hit your monthly
@@ -1310,6 +1313,7 @@ class ClaudeCodeAgent:
                     # Its turns were written live too: the batch fallback re-wrote all 321 of a
                     # HelpDesk session's turns at its turn cap (crun_566f8767, 05:41).
                     _mark_live(data, live_written)
+                    data["_billing"] = getattr(self, "_billing", "")
                     return data
                 reason = str(data.get("result") or data.get("error") or "").strip()
                 subtype = str(data.get("subtype") or data.get("stop_reason") or "").strip()
@@ -1376,6 +1380,8 @@ class ClaudeCodeAgent:
         }
         if isinstance(data.get("_rate_limit"), dict):
             usage["rate_limit"] = data["_rate_limit"]
+        if data.get("_billing"):
+            usage["billing"] = data["_billing"]
         return usage, cost_micros
 
     @tidies_workspace
@@ -2102,14 +2108,13 @@ def _bind_lane_credentials(
     if lane == "echo":
         return settings
     if lane == "claude_code":
-        token = resolve_project_credential(
-            connection,
-            settings,
-            project_id=project_id,
-            provider=provider_of(lane),
-            env_fallback_attr="claude_code_oauth_token",
-        )
-        return settings.model_copy(update={"claude_code_oauth_token": token})
+        # The subscription login or the console's Anthropic API key, in the operator's order
+        # (claude_credential). NOT `resolve_project_credential(provider="anthropic")`: the login
+        # and a stored API key are both provider "anthropic", and the newest of them would be
+        # handed to the CLI as its OAuth token.
+        from .claude_credential import bind_claude_credential
+
+        return bind_claude_credential(settings, connection=connection, project_id=project_id)
     if lane == "azure":
         key = resolve_project_credential(
             connection,

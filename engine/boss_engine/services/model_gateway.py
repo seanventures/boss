@@ -259,14 +259,22 @@ class ModelGatewayService:
             raise ModelCredentialPolicyError(
                 "Subscription sources must be authenticated through an official connection session."
             )
+        # The console's Anthropic API key runs `claude` (claude_credential): it is kept under
+        # the same install-wide name scope as the subscription login, so a process with no
+        # database connection — the sandboxed agent, the chat adapter — finds it by name.
+        anthropic_key = source_id == "anthropic_api"
+        if anthropic_key:
+            from .cli_harness import SUBSCRIPTION_SECRET_SCOPE
+            from .claude_credential import STORED_KEY_NAME
         stored = put_secret(
             connection,
             self.settings,
             project_id=project_id,
-            name=f"model_{source_id}_credential",
+            name=STORED_KEY_NAME if anthropic_key else f"model_{source_id}_credential",
             value=value,
             secret_kind="api_token",
             backend=backend,
+            scope_id=SUBSCRIPTION_SECRET_SCOPE if anthropic_key else None,
             actor=actor,
         )
         connection.execute(

@@ -4101,6 +4101,9 @@ class EntitlementSourceSummary(BaseModel):
     runtime_supported: bool
     created_at: str
     updated_at: str
+    # Anthropic sources only: which Anthropic credential `claude` runs on for this project
+    # (claude_credential.describe — never a value): active, order, billing, source_id.
+    claude_credential: Optional[dict[str, Any]] = None
 
 
 class EntitlementSourceListResponse(BaseModel):

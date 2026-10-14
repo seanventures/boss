@@ -3655,6 +3655,7 @@ def entitlement_source_summary_from_service(
         runtime_supported=bool(payload["runtime_supported"]),
         created_at=payload["created_at"],
         updated_at=payload["updated_at"],
+        claude_credential=payload.get("claude_credential"),
     )
 
 

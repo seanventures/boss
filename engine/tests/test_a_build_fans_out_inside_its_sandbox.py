@@ -36,8 +36,10 @@ def _launch(monkeypatch, tmp_path: Path, **kwargs) -> dict:
 
     monkeypatch.setattr(code_agent.owned_process, "popen", fake_popen)
     monkeypatch.setenv("BOSS_CAPTURE_AGENT_TURNS", "0")
-    import boss_engine.services.cli_harness as cli_harness
-    monkeypatch.setattr(cli_harness, "claude_login_token", lambda settings: None)
+    # No Anthropic credential: the one resolution every `claude` child uses (claude_credential).
+    from boss_engine.services import claude_credential
+    monkeypatch.setattr(claude_credential, "resolve_claude_credential",
+                        lambda settings, **_k: claude_credential.ClaudeCredential("none"))
     agent = ClaudeCodeAgent(get_settings())
     with pytest.raises(_Spawned):
         agent._invoke("Build the thing.", tmp_path, **kwargs)

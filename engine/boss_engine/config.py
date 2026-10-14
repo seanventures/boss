@@ -559,6 +559,15 @@ class Settings(BaseSettings):
     codex_cli_timeout: int = Field(default=240, alias="BOSS_CODEX_CLI_TIMEOUT")
     # Headless Claude token for the claude_code guest engine (passed into the guest).
     claude_code_oauth_token: str = Field(default="", alias="CLAUDE_CODE_OAUTH_TOKEN")
+    # WHICH ANTHROPIC CREDENTIAL A `claude` RUN USES (claude_credential, BOSSAPP-530):
+    # "subscription_first" (the login, then the console's Anthropic API key, then
+    # ANTHROPIC_API_KEY) or "api_key_first". The project knob of the same name overrides it.
+    anthropic_credential_order: str = Field(
+        default="subscription_first", alias="BOSS_ANTHROPIC_CREDENTIAL_ORDER")
+    # Set only by claude_credential.ClaudeCredential.bind on a settings COPY: the resolution a
+    # lane binder made with a database connection, carried to where there is none.
+    claude_credential_kind: str = Field(default="", alias="BOSS_CLAUDE_CREDENTIAL_KIND")
+    claude_bound_api_key: str = Field(default="", alias="BOSS_CLAUDE_BOUND_API_KEY", repr=False)
     openai_codex_oauth_enabled: bool = Field(
         default=False, alias="BOSS_OPENAI_CODEX_OAUTH_ENABLED"
     )
