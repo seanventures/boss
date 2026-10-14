@@ -9,7 +9,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  canDuplicate, canMove, canRemove, duplicateStep, edgesOf, insertStep, isLinear, layoutFlow, linearOrder, moveStep,
+  afterGap, afterGaps, canDuplicate, canMove, canRemove, duplicateStep, edgesOf, insertStep, isLinear,
+  layoutFlow, linearOrder, moveStep,
   removeStep, renameStepId, upstreamOf, wireInputs,
 } from "../lib/workflow-graph";
 import type { Spec, SpecStep } from "../lib/workflow-editor-types";
@@ -238,14 +239,53 @@ describe("inserting", () => {
     expect(step(after, "ship").next).toEqual(["pause"]);
   });
 
-  it("refuses a gap that crosses a branch boundary", () => {
+  it("refuses a gap into a join, a merge point or a loop's body", () => {
     const order = linearOrder(PARALLEL);
-    for (const before of ["review_a", "review_b", "merge"]) {
-      expect(insertStep(PARALLEL, order.indexOf(before), fresh("x"))).toBe(PARALLEL);
-    }
-    // After the condition, into a merge point, and after a flow with two ends.
-    expect(insertStep(BRANCHES, linearOrder(BRANCHES).indexOf("hotfix"), fresh("x"))).toBe(BRANCHES);
+    expect(insertStep(PARALLEL, order.indexOf("merge"), fresh("x"))).toBe(PARALLEL);
+    // Into a merge point, and in front of a loop's one body step.
     expect(insertStep(BRANCHES, linearOrder(BRANCHES).indexOf("poll"), fresh("x"))).toBe(BRANCHES);
+    expect(insertStep(BRANCHES, linearOrder(BRANCHES).indexOf("probe"), fresh("x"))).toBe(BRANCHES);
+  });
+
+  it("puts a step at the head of a path: the branch or the yes/no now names it", () => {
+    const order = linearOrder(PARALLEL);
+    const front = insertStep(PARALLEL, order.indexOf("review_b"), fresh("x"));
+    expect(step(front, "fan").branches).toEqual(["review_a", "x"]);
+    expect(step(front, "x").next).toEqual(["review_b"]);
+    expect(step(front, "merge")).toBe(step(PARALLEL, "merge"));
+    const yes = insertStep(BRANCHES, linearOrder(BRANCHES).indexOf("hotfix"), fresh("x"));
+    expect(step(yes, "check").on_true).toBe("x");
+    expect(step(yes, "check").on_false).toBe("plan");
+    expect(step(yes, "x").next).toEqual(["hotfix"]);
+  });
+
+  it("puts a step after a path's last step, and the join waits for it instead", () => {
+    const order = linearOrder(PARALLEL);
+    const spec = insertStep(PARALLEL, afterGap(order.indexOf("review_b")), fresh("x"));
+    expect(step(spec, "review_b").next).toEqual(["x"]);
+    expect(step(spec, "x").next).toEqual(["merge"]);
+    expect(step(spec, "merge").wait_for).toEqual(["review_a2", "x"]);
+    // Before a merge point: the other path is untouched.
+    const merged = insertStep(BRANCHES, afterGap(linearOrder(BRANCHES).indexOf("plan")), fresh("x"));
+    expect(step(merged, "plan").next).toEqual(["x"]);
+    expect(step(merged, "x").next).toEqual(["poll"]);
+    expect(step(merged, "hotfix").next).toEqual(["poll"]);
+  });
+
+  it("never puts a step after a condition, a parallel or a loop's body", () => {
+    const order = linearOrder(BRANCHES);
+    for (const id of ["check", "probe"]) {
+      expect(insertStep(BRANCHES, afterGap(order.indexOf(id)), fresh("x"))).toBe(BRANCHES);
+    }
+    expect(insertStep(PARALLEL, afterGap(linearOrder(PARALLEL).indexOf("fan")), fresh("x")))
+      .toBe(PARALLEL);
+  });
+
+  it("offers an after-gap only where no other gap serves", () => {
+    const order = linearOrder(PARALLEL);
+    expect(afterGaps(PARALLEL)).toEqual([afterGap(order.indexOf("review_a2")),
+                                         afterGap(order.indexOf("review_b"))]);
+    expect(afterGaps(LINEAR)).toEqual([]);
   });
 
   it("refuses an id the spec already has", () => {
@@ -333,14 +373,27 @@ describe("removing", () => {
     expect(step(removed, "plan").next).toEqual(["poll"]);
   });
 
-  it("is refused for anything a branch names", () => {
-    for (const id of ["fan", "review_a", "review_a2", "review_b", "merge"]) {
+  it("is refused for a branch construct, a path's only step and a loop's body", () => {
+    for (const id of ["fan", "review_b", "merge"]) {
       expect(canRemove(PARALLEL, id)).toBe(false);
       expect(removeStep(PARALLEL, id)).toBe(PARALLEL);
     }
-    for (const id of ["check", "hotfix", "poll", "probe"]) {
+    // hotfix and plan are each a path's only step before the paths meet.
+    for (const id of ["check", "hotfix", "plan", "poll", "probe"]) {
+      expect(canRemove(BRANCHES, id)).toBe(false);
       expect(removeStep(BRANCHES, id)).toBe(BRANCHES);
     }
     expect(canRemove(PARALLEL, "tell")).toBe(true);
+  });
+
+  it("closes a path up behind a step it can spare", () => {
+    // The head of a two-step branch: the parallel now starts that branch at the second step.
+    const head = removeStep(PARALLEL, "review_a");
+    expect(step(head, "fan").branches).toEqual(["review_a2", "review_b"]);
+    // The last step before the join: the join waits for the step before it.
+    const tail = removeStep(PARALLEL, "review_a2");
+    expect(step(tail, "review_a").next).toEqual(["merge"]);
+    expect(step(tail, "merge").wait_for).toEqual(["review_a", "review_b"]);
+    expect(canRemove(PARALLEL, "review_a2")).toBe(true);
   });
 });

@@ -27,9 +27,11 @@ import React, { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef,
 import type {
   FlowLayout, GraphEdge, Palette, PaletteItem, Problem, Spec, SpecStep, StepView,
 } from "../../../lib/workflow-editor-types";
-import { canMove as modelCanMove, insertStep, layoutFlow, linearOrder } from "../../../lib/workflow-graph";
+import {
+  afterGaps, canMove as modelCanMove, insertStep, layoutFlow, linearOrder,
+} from "../../../lib/workflow-graph";
 import { pinTip, unpinTip, useTips } from "./tip-layer";
-import { caretX, END_ID, gapPoints, planDrag, shiftsFor, type LanePlan } from "./drag-plan";
+import { afterGapPoints, caretX, END_ID, gapPoints, planDrag, shiftsFor, type LanePlan } from "./drag-plan";
 import { chooseDensity, fitScale, overflows, roomyGeometry, type LaneGeometry } from "./geometry";
 import { Minimap } from "./minimap";
 import { nodeDetail, viewOf } from "./node-facts";
@@ -234,6 +236,14 @@ export function FlowLane(p: {
     };
   }, [spec]);
 
+  // After a path's last step, where the gap before the next step in the order cannot serve.
+  const afterPoints = useMemo(() => {
+    if (layout.linear) return [];
+    const bodies = new Map(steps.filter((s) => s.kind === "bounded_loop" && s.body)
+      .map((s) => [s.id, String(s.body)]));
+    return afterGapPoints(afterGaps(spec), order, geometry, (id) => bodies.get(id));
+  }, [layout.linear, spec, steps, order, geometry]);
+
   /* ── Announcements ── */
   const [announcement, setAnnouncement] = useState("");
   const announceMove = useCallback((id: string, to: number) => {
@@ -251,7 +261,7 @@ export function FlowLane(p: {
     plan: (source: DragSource) => {
       if (source.kind === "node" && !onMove) return null;
       if (source.kind === "item" && !onInsert) return null;
-      return planDrag({ layout, geometry, order, source, canMove, canInsert });
+      return planDrag({ layout, geometry, order, source, canMove, canInsert, after: afterPoints });
     },
     preview: (source, plan, gap) => {
       const lp = plan as LanePlan;
@@ -364,7 +374,7 @@ export function FlowLane(p: {
   const gaps: { at: number; x: number; y: number }[] = !design || !renderGapAction ? []
     : linear
       ? geometry.gapX.map((x, b) => ({ at: b >= order.length ? -1 : b, x, y: geometry.midY }))
-      : gapPoints(order, geometry).filter((g) => canInsert(g.at));
+      : [...gapPoints(order, geometry), ...afterPoints].filter((g) => canInsert(g.at));
 
   const slotRef = (id: string) => (el: HTMLDivElement | null) => {
     if (el) slots.current.set(id, el); else slots.current.delete(id);

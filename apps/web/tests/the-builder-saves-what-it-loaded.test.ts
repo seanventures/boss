@@ -137,9 +137,15 @@ describe.each(FLOWS)("%s", (_name, original) => {
 
   it("inserting in a straight stretch rewires only its two neighbours", () => {
     const order = linearOrder(original);
-    // The first gap the graph accepts: in every flow here that is a straight stretch.
+    // The first straight-stretch gap the graph accepts: a step whose one `next` is the step
+    // after it in the order (a gap at the head of a branch rewires the branch instead).
     const probe = { id: "inserted", kind: "timer", wait_seconds: 60, next: [] } as SpecStep;
-    const gaps = [...order.keys(), order.length].filter((i) => i > 0);
+    const straight = (i: number) => {
+      const next = step(original, order[i - 1]).next;
+      const list = Array.isArray(next) ? next : next ? [next] : [];
+      return i >= order.length ? !list.length : list.length === 1 && list[0] === order[i];
+    };
+    const gaps = [...order.keys(), order.length].filter((i) => i > 0 && straight(i));
     const at = gaps.find((i) => insertStep(original, i, probe) !== original) ?? -1;
     expect(at).toBeGreaterThan(0);
     const state = apply(load(original), { type: "INSERT", at, step: probe, palette: PALETTE });
