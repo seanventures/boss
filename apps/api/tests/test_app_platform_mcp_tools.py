@@ -167,6 +167,102 @@ def test_apply_cannot_build_onto_another_projects_app(reg, ctx, world, engine):
     assert out["ok"] is False and out["error"] == "not_found", out
 
 
+# ---- several connectors in one build (BOSSAPP-526) -----------------------------------------------
+
+def _compose(reg, ctx, world, person, **args):
+    """apply_template with `templates`; the project's missing readiness accepted as the operator."""
+    out = _call(reg, ctx, world, person, "apply_template", **args)
+    if out.get("missing"):
+        out = _call(reg, ctx, world, person, "apply_template", **args,
+                    start_anyway=[m["key"] for m in out["missing"]])
+    return out
+
+
+def test_apply_template_adds_several_connectors_in_one_build(reg, ctx, world, engine):
+    from boss_engine.templates import compose
+
+    with engine.begin() as c:
+        workflow_catalogue.seed(c, world.project_a)
+    op = _person(world, "operator", org=True)
+    name = f"Shop {uuid.uuid4().hex[:6]}"
+    out = _compose(reg, ctx, world, op, templates=["transactional-email", "login-oauth"], stack="node",
+                   new_app_name=name, accept_egress=True, note="one login for both")
+    assert out["ok"] is True and out["status"] == "building", out
+    assert out["order"] == ["transactional-email", "login-oauth"]
+    assert "accounts.google.com" in out["egress"] and "api.resend.com" in out["egress"]
+    wfr = out["workflow_run_id"]
+    with engine.begin() as c:
+        runs = c.execute(text("SELECT id, input FROM workflow_runs WHERE id = :r"), {"r": wfr}).mappings().all()
+        rows = c.execute(text("SELECT template_id, status FROM app_template_applications WHERE workflow_run_id = :w"),
+                         {"w": wfr}).all()
+        receipts = c.execute(text("SELECT count(*) FROM receipts WHERE effect_kind = :k AND dedupe_key LIKE :d"),
+                             {"k": compose.RECEIPT_KIND, "d": f"template.compose:{wfr}:%"}).scalar()
+    assert len(runs) == 1                                               # ONE build
+    tpl = runs[0]["input"]["template"]
+    assert tpl["key"].startswith("compose-") and [m["key"] for m in tpl["connectors"]] == out["order"]
+    assert "one login for both" in runs[0]["input"]["directive"]
+    assert len(rows) == 2 and {r[1] for r in rows} == {"building"} and receipts == 2
+    assert [c["template_key"] for c in out["connectors"]] == out["order"]
+    status = _call(reg, ctx, world, _person(world, "viewer", org=True), "template_status", app_key=out["app_key"])
+    assert sorted((t["template_key"], t["workflow_run_id"]) for t in status["templates"]) == [
+        ("login-oauth", wfr), ("transactional-email", wfr)]
+
+
+def test_several_connectors_that_conflict_are_refused_whole_and_nothing_is_written(reg, ctx, world, engine):
+    with engine.begin() as c:
+        workflow_catalogue.seed(c, world.project_a)
+        before = c.execute(text("SELECT count(*) FROM app_template_applications WHERE project_id = :p"),
+                           {"p": world.project_a}).scalar()
+    op = _person(world, "operator", org=True)
+    out = _call(reg, ctx, world, op, "apply_template", templates=["stripe-checkout", "paypal-checkout"], stack="node",
+                new_app_name=f"Pay {uuid.uuid4().hex[:6]}", accept_egress=True)
+    assert out["ok"] is False and out["error"] == "connector_conflict", out
+    whats = [c["what"] for c in out["conflicts"]]
+    assert any("/api/orders/" in w for w in whats) and any("payments/" in w for w in whats)
+    assert all(set(c["connectors"]) == {"stripe-checkout", "paypal-checkout"} for c in out["conflicts"])
+    with engine.begin() as c:
+        assert c.execute(text("SELECT count(*) FROM app_template_applications WHERE project_id = :p"),
+                         {"p": world.project_a}).scalar() == before
+
+
+def test_several_connectors_refusals_say_what_is_missing(reg, ctx, world, engine):
+    run_id = _node_app(engine, world.project_a)
+    op = _person(world, "operator", org=True)
+    both = _call(reg, ctx, world, op, "apply_template", template_id="hello", templates=["login-oauth", "stripe-checkout"],
+                 stack="node", extends_run_id=run_id)
+    assert both["ok"] is False and both["error"] == "template_ambiguous"
+    none = _call(reg, ctx, world, op, "apply_template", stack="node", extends_run_id=run_id)
+    assert none["ok"] is False and none["error"] == "template_required"
+    idea = _call(reg, ctx, world, op, "apply_template", templates=["login-oauth", "hello"], stack="node",
+                 extends_run_id=run_id)
+    assert idea["ok"] is False and idea["error"] == "compose_connectors_only", idea
+    twice = _call(reg, ctx, world, op, "apply_template", templates=["login-oauth", "login-oauth"], stack="node",
+                  extends_run_id=run_id)
+    assert twice["ok"] is False and twice["error"] == "compose_duplicate", twice
+    hosts = _call(reg, ctx, world, op, "apply_template", templates=["login-oauth", "transactional-email"],
+                  stack="node", extends_run_id=run_id)
+    assert hosts["ok"] is False and hosts["error"] == "egress_not_accepted" and "api.resend.com" in hosts["egress"]
+    # the same two keys as one template: a viewer cannot, and the identity gate says which key
+    viewer = _person(world, "viewer", org=True)
+    out = _call(reg, ctx, world, viewer, "apply_template", templates=["login-oauth", "transactional-email"],
+                stack="node", extends_run_id=run_id, accept_egress=True)
+    assert out["ok"] is False and out["permission"] == "workflow_run:start"
+
+
+def test_one_template_in_templates_is_the_single_apply(reg, ctx, world, engine):
+    with engine.begin() as c:
+        workflow_catalogue.seed(c, world.project_a)
+    run_id = _node_app(engine, world.project_a)
+    op = _person(world, "operator", org=True)
+    out = _compose(reg, ctx, world, op, templates=["hello"], stack="node", extends_run_id=run_id)
+    assert out["ok"] is True and out["status"] == "building", out
+    assert out["application_id"].startswith("tap_") and "order" not in out
+    with engine.begin() as c:
+        tpl = c.execute(text("SELECT input FROM workflow_runs WHERE id = :r"),
+                        {"r": out["workflow_run_id"]}).scalar()["template"]
+    assert tpl["key"] == "hello"
+
+
 # ---- security -----------------------------------------------------------------------------------
 
 def _scan(reg, ctx, world, engine, app_key, which):

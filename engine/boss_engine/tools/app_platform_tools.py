@@ -8,7 +8,9 @@ services/security_review_steps.py), so a tool cannot disagree with the route abo
 
 Permissions mirror the routes: the gallery is `template:read` (org); an app's templates and every
 security read are `project:read`; applying is `workflow_run:start` at the project AND
-`template:read` (`also_requires`, checked by the identity gate before the handler runs). Scanning
+`template:read` (`also_requires`, checked by the identity gate before the handler runs); applying
+SEVERAL connectors in one build (`templates`, BOSSAPP-526) is the same tool, the same two keys, and
+templates/compose.py's plan and record, as POST /v1/templates/compose. Scanning
 is the existing `run_security_scan` (`security_scan:run`); starting the full review loop is
 `start_workflow` with `workflow_key=security_review`. Import, approve, reject, trial and delete
 stay console/API only (§2.6): they are an Owner's judgment about third-party code.
@@ -146,11 +148,19 @@ def register_app_platform_tools(reg: ToolRegistry) -> None:  # noqa: C901 — on
         "as the console's Apply), whose spec is the template's brief and reference for the stack. "
         "The build must pass the template's own tests (template_tests) and a secret scan before "
         "its PR opens. Name the app by app_key or extends_run_id (a build of it), or new_app_name "
-        "for a new one. A refusal says what is missing: secrets_needed (set test values in the "
+        "for a new one. SEVERAL CONNECTORS in one build: name 2 to 6 in `templates` instead of "
+        "template_id (e.g. ['login-oauth', 'stripe-checkout', 'transactional-email']); they are "
+        "wired in that order, one another needs first, and checked whole before anything starts. "
+        "A refusal says what is missing: secrets_needed (set test values in the "
         "console), egress_not_accepted (repeat with accept_egress=true ONLY if the operator "
-        "agreed to those hosts), requires_unmet, stack_mismatch.",
+        "agreed to those hosts), requires_unmet, stack_mismatch, and for several connectors "
+        "connector_conflict (`conflicts` lists every clash: tell the operator which connectors "
+        "clash on what; leave one out or add them one at a time).",
         _obj({
-            "template_id": {"type": "string", "description": "the template's id or key"},
+            "template_id": {"type": "string", "description": "the template's id or key (one template)"},
+            "templates": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 6,
+                          "description": "2 to 6 CONNECTORS' ids or keys, added in ONE build "
+                                         "(instead of template_id)"},
             "stack": {"type": "string", "enum": ["node", "python", "java"]},
             "app_key": _APP,
             "extends_run_id": {"type": "string", "description": "a build of the app to build onto"},
@@ -165,10 +175,28 @@ def register_app_platform_tools(reg: ToolRegistry) -> None:  # noqa: C901 — on
                              "description": "readiness keys the operator said to start without; "
                                             "never fill this in on your own"},
             "project_id": {"type": "string"},
-        }, ["template_id", "stack"]),
+        }, ["stack"]),
         kind="write", reversibility="costs_money", permission="workflow_run:start",
         also_requires=("template:read",))
     def apply_template(ctx, *, project_id, actor, args) -> dict[str, Any]:
+        refs = args.get("templates")
+        single = str(args.get("template_id") or "").strip()
+        if refs is not None and not isinstance(refs, list):
+            return {"ok": False, "error": "templates_invalid", "message": "templates is a list of ids or keys"}
+        refs = [str(r).strip() for r in refs or [] if str(r or "").strip()]
+        if single and refs:
+            return {"ok": False, "error": "template_ambiguous",
+                    "message": "name either template_id (one template) or templates (several connectors), not both"}
+        if len(refs) > 1:
+            return _compose(ctx, project_id=project_id, actor=actor, args=args, refs=refs)
+        if refs:
+            single = refs[0]
+        if not single:
+            return {"ok": False, "error": "template_required",
+                    "message": "name the template (template_id) or 2 to 6 connectors (templates)"}
+        return _apply_one(ctx, project_id=project_id, actor=actor, args=args, template_ref=single)
+
+    def _apply_one(ctx, *, project_id, actor, args, template_ref: str) -> dict[str, Any]:
         from uuid import uuid4
 
         from .._compat import services_module
@@ -192,8 +220,7 @@ def register_app_platform_tools(reg: ToolRegistry) -> None:  # noqa: C901 — on
                 if not org:
                     return dict(_NO_ORG)
                 plan = apply_service.plan(c, org_id=org, project_id=pid,
-                                          template_ref=str(args.get("template_id") or "").strip(),
-                                          body=body, actor_id=actor_id)
+                                          template_ref=template_ref, body=body, actor_id=actor_id)
         except TemplateError as exc:
             return _refused(exc)
         run_input = dict(plan["run_input"])
@@ -231,6 +258,81 @@ def register_app_platform_tools(reg: ToolRegistry) -> None:  # noqa: C901 — on
                            "answer; a connector is pre-tested)"
                            if getattr(plan["manifest"], "item_kind", None) == "connector"
                            else "template's tests pass")}
+
+    def _compose(ctx, *, project_id, actor, args, refs: list[str]) -> dict[str, Any]:
+        """SEVERAL CONNECTORS IN ONE BUILD (BOSSAPP-526): the same engine plan and record as
+        POST /v1/templates/compose. Checked whole first, writing nothing (order, conflicts,
+        merged secrets and egress, readiness); then planned for real, started and recorded in
+        one transaction, so a refusal leaves no composite row and no application rows behind."""
+        from uuid import uuid4
+
+        from .._compat import services_module
+        from ..services import workflow_readiness as ready
+        from ..services.code_task_service import is_simulated_run, load_code_task_run
+        from ..templates import compose as compose_service
+        from ..templates import lab as lab_service
+        from ..templates.service import TemplateError
+
+        pid = args.get("project_id") or project_id
+        body: dict[str, Any] = {k: args[k] for k in (
+            "stack", "app_key", "extends_run_id", "framework", "options", "note", "workflow_key")
+            if args.get(k) not in (None, "")}
+        if args.get("new_app_name"):
+            body["new_app"] = {"name": str(args["new_app_name"])}
+        if args.get("accept_egress") is True:
+            body["accept_egress"] = True
+        actor_id = str(actor or "") or None
+        accepted = args.get("start_anyway")
+        start_anyway = [str(k) for k in accepted] if isinstance(accepted, list) else []
+        wf = services_module("workflows")
+        try:
+            with ctx.begin() as c:
+                org = _org_of(c, pid)
+                if not org:
+                    return dict(_NO_ORG)
+                if lab_service.lab_of(c, pid):
+                    return {"ok": False, "status": "refused", "error": "lab_project",
+                            "message": "this is a lab project for an insecure template; add connectors "
+                                       "to apps in your own projects"}
+                dry = compose_service.plan(c, org_id=org, project_id=pid, template_refs=refs, body=body,
+                                           actor_id=actor_id, write=False)
+                extends = str(dry["run_input"].get("extends_run_id") or "")
+                if extends and is_simulated_run(load_code_task_run(c, extends)):
+                    return {"ok": False, "error": "simulated_fixture",
+                            "message": "that build is a simulated fixture: there is no code to build onto"}
+                running = wf.running_version(c, pid, dry["workflow_key"])
+                if not running:
+                    return {"ok": False, "error": f"no workflow {dry['workflow_key']!r} in this project"}
+                try:
+                    readiness = ready.refuse_unless_ready(
+                        c, getattr(ctx, "settings", None), pid, version_id=str(running["version_id"]),
+                        input_data=dict(dry["run_input"]), start_anyway=start_anyway)
+                except ready.WorkflowNotReadyError as error:
+                    return {"ok": False, "error": str(error),
+                            "missing": [{"key": m["key"], "what": m["label"], "fix": m["fix"]}
+                                        for m in error.readiness.get("missing") or []],
+                            "next": "Tell the operator what is missing. Start again with "
+                                    "start_anyway=[keys] only if they say to start without them."}
+            with ctx.begin() as c:
+                plan = compose_service.plan(c, org_id=org, project_id=pid, template_refs=refs, body=body,
+                                            actor_id=actor_id)
+                run_input = dict(plan["run_input"])
+                run = wf.start_run(c, project_id=pid, actor=actor, input_data=run_input,
+                                   dedupe_key=f"template-compose:{run_input['template']['application_id']}:"
+                                              f"{uuid4().hex[:8]}",
+                                   workflow_version_id=running["version_id"])
+                ready.record_started_anyway(c, pid, actor, run.get("id") or "", readiness)
+                out = compose_service.record(c, plan, org_id=org, project_id=pid,
+                                             workflow_run_id=run.get("id"), actor_id=actor_id)
+        except TemplateError as exc:
+            return _refused(exc)
+        tpl = run_input["template"]
+        return {"status": "building", **_safe(out), "app_key": plan["app"]["app_key"],
+                "order": [c["key"] for c in plan["connectors"]], "egress": list(tpl["egress"]),
+                "workflow_key": plan["workflow_key"],
+                "next": "template_status shows each connector where it stands (one row each, all on "
+                        "this build); the PR opens once the wiring check passes for every connector "
+                        "(the app starts and each connector's routes answer)"}
 
     # ---- security scans, reports and reviews ----------------------------------------------------
     @reg.tool(

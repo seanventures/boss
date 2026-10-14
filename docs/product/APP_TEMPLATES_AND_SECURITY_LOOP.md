@@ -246,6 +246,26 @@ to one app, new or existing, in ONE governed build. A single connector still goe
   receipt `template.connector_composed` with dedupe key
   `template.compose:<workflow run>:<connector>`, and an event `app_template.connector_composed`.
   A replayed start that returns the same run writes none of them twice.
+- **In the console** (New app and Add a feature, §2.8). The connector cards are a multi-select
+  (up to six, in the order picked; each card says its place, "Added ✓ · 2 of 3"). ONE picked
+  opens that connector's own sheet and `POST /v1/templates/{id}/apply`, unchanged; TWO OR MORE
+  open the compose sheet (`components/v2/templates/compose-sheet.tsx`) and `POST
+  /v1/templates/compose`. A card the server would refuse is greyed with the reason: already in
+  the app, the limit reached, or no stack shared with the ones picked. The sheet shows the order,
+  the shared stacks, the merged secrets (a key asked for once, stored write-only under the
+  connector declaring it, then the same compose again on `secrets_needed`) and the merged hosts
+  (accepted as a whole). What the console can see before Start is said before Start and keeps it
+  off: two connectors serving the same route in their manifests (read as the server reads them),
+  or a connector another needs that is neither picked nor in the app. A 409 `connector_conflict`
+  lists every conflict in words ("Same file: stacks/node/payments/store.js (Stripe and PayPal)")
+  in an alert that takes focus; nothing starts.
+- **Through MCP** (§2.6). `apply_template` takes `templates: [2..6 ids or keys]` instead of
+  `template_id` and goes through the same `compose.plan` / `compose.record`: checked whole
+  without writing (order, conflicts, merged secrets and egress, readiness), then planned, started
+  and recorded in one transaction. A refusal is the route's (`connector_conflict` with
+  `conflicts`, `secrets_needed`, `egress_not_accepted`, `compose_connectors_only`,
+  `compose_duplicate`, ...); naming both `template_id` and `templates` is `template_ambiguous`.
+  One template, by `template_id` or as a one-item `templates`, is the single apply, unchanged.
 
 ### 2.4 Secrets and test mode
 
@@ -307,8 +327,9 @@ to one app, new or existing, in ONE governed build. A single connector still goe
 | `DELETE /v1/apps/{app_key}/secrets/{name}?env=` | `app_secret:write` | |
 | `GET /v1/apps/{app_key}/setup-guide` | `project:read` | guides of applied templates with placeholders filled (preview URL, webhook URL, redirect URIs) |
 
-MCP tools mirror the read routes and `apply` (`list_templates`, `describe_template`,
-`apply_template`); import and approve are console/API only.
+MCP tools mirror the read routes, `apply` and `compose` (`list_templates`, `describe_template`,
+`apply_template`, which takes `template_id` for one template or `templates` for 2 to 6
+connectors in one build); import and approve are console/API only.
 
 ### 2.7 Data model (appended to `db/schema.sql`, in the F2 block)
 
@@ -347,8 +368,9 @@ catalogue is not "templates". Each item declares its `kind` in `boss-template.ya
     the brief; a catalogue idea also offers *Build from its reference* (its sheet, its tests as a
     gate).
   - Both jobs → **Add a connector**: chips (Login, Stripe, PayPal) with what each adds and needs
-    and its stacks. In Add a feature, only those that fit the app's stack. One per build, since
-    each connector's tests are their own gate. With one chosen, Start opens its side sheet with
+    and its stacks. In Add a feature, only those that fit the app's stack. Up to six per build
+    (§2.3 "Several connectors in one build"): two or more open the compose sheet, one build for
+    all of them; each connector keeps its own tests as a gate. With one chosen, Start opens its side sheet with
     the app's name and brief already in: *What it adds* · *Secrets* (each row: name,
     `Test mode` / `Needs a key` / `Set`, an inline write-only field) · *Talks to* (egress hosts)
     · *Security note* (collapsed) · **Start**.

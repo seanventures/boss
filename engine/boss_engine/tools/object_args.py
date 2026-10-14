@@ -87,7 +87,8 @@ CONFINED: dict[str, dict[str, str | tuple[str, ...]]] = {
 UNCONFINED: dict[str, dict[str, str]] = {
     # Templates belong to the ORG, not a project: the handler reads them only in the org that
     # holds the call's project, so another org's template id names nothing.
-    "apply_template": {"template_id": "an org's template, read only in the call's project's org"},
+    "apply_template": {"template_id": "an org's template, read only in the call's project's org",
+                       "templates": "connectors' ids or keys, each read only in the call's project's org"},
     "describe_template": {"template_id": "an org's template, read only in the call's project's org"},
     "merge_apps": {"keep_app_id": "an app id is a finalize_ctx label, matched only within the "
                                   "call's project by the handler",
