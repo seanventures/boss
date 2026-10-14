@@ -363,8 +363,14 @@ def run_session(prompt: str, options: Any, *, timeout: float,
                 transport_factory: Optional[Callable[[], Any]] = None) -> Optional[dict]:
     """Run one SDK session to its result. Every message is converted (`message_to_event`) and
     handed to `on_event`; returns the result event (None if the session ended without one).
-    Raises SessionTimeout past `timeout` seconds, with the session's process tree ended."""
+    Raises SessionTimeout past `timeout` seconds, with the session's process tree ended.
+
+    `on_event` raising HarnessFailure ENDS the session there (its process tree with it) and is
+    raised: the engine said it cannot run (harness_failures). Anything else it raises is a
+    recorder's problem and is ignored."""
     import anyio
+
+    from .harness_failures import HarnessFailure
 
     holder: dict[str, Any] = {}
 
@@ -387,6 +393,8 @@ def run_session(prompt: str, options: Any, *, timeout: float,
                     if on_event is not None:
                         try:
                             on_event(event)
+                        except HarnessFailure:
+                            raise
                         except Exception:  # noqa: BLE001 — a recorder never fails a session
                             pass
             finally:
@@ -421,6 +429,7 @@ def _transient(detail: str) -> bool:
 def build_agent_class():
     """`ClaudeAgentSdkAgent`, defined against code_agent at call time (no import cycle)."""
     from . import code_agent as ca
+    from . import harness_failures
     from .agent_turns import StreamParser, capture_enabled
 
     class ClaudeAgentSdkAgent(ca.ClaudeCodeAgent):
@@ -484,10 +493,13 @@ def build_agent_class():
             seat: str = "agent", on_turn: Optional[Callable[[dict], None]] = None,
             parallel_agents: int = 0,
         ) -> dict:
+            # A run whose engine already could not run starts no new session.
+            harness_failures.raise_if_tripped()
             if not sdk_available():
-                raise RuntimeError(
-                    f"The {SDK_PACKAGE} package is not installed on this server "
-                    f"(pip install {SDK_PACKAGE}=={SDK_PIN}).")
+                missing = (f"The {SDK_PACKAGE} package is not installed on this server "
+                           f"(pip install {SDK_PACKAGE}=={SDK_PIN}).")
+                harness_failures.note_engine_error(missing, engine=self.engine)
+                raise RuntimeError(missing)
             s = self.settings
             # THE SAME BUDGETS AS claude_code (ClaudeCodeAgent._invoke), so the engines are
             # interchangeable on every stage.
@@ -540,19 +552,25 @@ def build_agent_class():
 
                 def on_event(event: dict, parser=parser, written=written) -> None:
                     produced = parser.feed(json.dumps(event, default=str))
-                    if not produced or not capturing:
+                    if not produced:
                         return
-                    try:
-                        written["rows"] += int(ca.record_agent_turns(
-                            produced, engine_name=self.engine, model=model_name) or 0)
-                    except Exception:  # noqa: BLE001
-                        pass
-                    for turn in produced:
+                    if capturing:
                         try:
-                            if on_turn:
-                                on_turn(turn)
+                            written["rows"] += int(ca.record_agent_turns(
+                                produced, engine_name=self.engine, model=model_name) or 0)
                         except Exception:  # noqa: BLE001
                             pass
+                        for turn in produced:
+                            try:
+                                if on_turn:
+                                    on_turn(turn)
+                            except Exception:  # noqa: BLE001
+                                pass
+                    # THE HARNESS ANSWERING IN THE COMMAND'S PLACE — crun_f103065e's "Sandbox is
+                    # required but failed to initialize … socat not installed" on 19 of 206
+                    # turns — ends the session at its first occurrence (run_session re-raises).
+                    for turn in produced:
+                        harness_failures.check_turn(turn, engine=self.engine)
 
                 try:
                     result = run_session(
@@ -561,7 +579,7 @@ def build_agent_class():
                             body, options, extra_argv=extra, seat=seat))
                 except SessionTimeout as exc:
                     raise RuntimeError(str(exc)) from exc
-                except NoAnthropicKey:
+                except (NoAnthropicKey, harness_failures.HarnessFailure):
                     raise
                 except Exception as exc:  # noqa: BLE001
                     from ..identity.redaction import redact_text
@@ -576,6 +594,7 @@ def build_agent_class():
                     if _transient(detail) and attempt < 2:
                         time.sleep(5 * (attempt + 1))
                         continue
+                    harness_failures.note_engine_error(last_error, engine=self.engine)
                     raise RuntimeError(last_error) from None
                 if result is None:
                     raise RuntimeError("claude agent sdk session ended without a result")
@@ -603,6 +622,7 @@ def build_agent_class():
                     if _transient(detail) and attempt < 2:
                         time.sleep(5 * (attempt + 1))
                         continue
+                    harness_failures.note_engine_error(last_error, engine=self.engine)
                     raise RuntimeError(last_error)
                 return data
             raise RuntimeError(last_error or "claude agent sdk session failed")

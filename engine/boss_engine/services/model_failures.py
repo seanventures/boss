@@ -280,6 +280,20 @@ def explain(error: object, *, source_id: Optional[str] = None) -> dict:
                        "the operator list the host in BOSS_CREDENTIAL_HOSTS."),
             "href": setup_href(source_id), "retry": False, "detail": said,
         }
+    # THE ENGINE ITSELF COULD NOT RUN (harness_failures): its sandbox, a runtime binary, its
+    # login or account, a crash. Before the login check below: the sentence carries the
+    # engine's own words, which may name a login, and its fix is already the right one.
+    from .harness_failures import parse_sentence
+
+    harness = parse_sentence(text)
+    if harness is not None:
+        return {
+            "kind": "harness_failure",
+            "headline": f"BOSS could not run {harness['engine']}: {harness['message']}.",
+            "action": f"Fix: {harness['fix'][0].upper()}{harness['fix'][1:]}.",
+            "href": setup_href(source_id), "retry": True,
+            "detail": text.strip()[:300],
+        }
     who = provider_name(source_id)
     #: "the Claude Code subscription", or "the model" when the source is not known.
     the_source = who if who.startswith("the ") else f"the {who}"
@@ -475,12 +489,13 @@ def settled_failure(error: object) -> Optional[str]:
     from .model_routing import ModelSpendRefused
 
     said = explain(text)
-    settled = (said["kind"] == "provider_requirement"
+    # An engine that could not run fails the same way on every retry until its fix is made.
+    settled = (said["kind"] in ("provider_requirement", "harness_failure")
                or (said["kind"] == "no_model" and any(m in lowered for m in _SETTLED_MARKERS))
                or ModelSpendRefused.MARKER in lowered)
     if not settled:
         return None
-    if text.startswith(said["headline"]):
+    if text.startswith(said["headline"]) or said["kind"] == "harness_failure":
         return text            # already explained once; do not wrap it twice
     return f"{said['headline']} {said['action']} ({text})"
 

@@ -2250,6 +2250,13 @@ def classify_pipeline_exception(reason: str) -> tuple[str, str]:
     rather than retrying forever into the DLQ (W2.5 / W-REL-03).
     """
     r = (reason or "").lower()
+    from .harness_failures import parse_sentence
+
+    if parse_sentence(reason) is not None:
+        # The ENGINE could not run (harness_failures): its sandbox, a runtime binary, its login
+        # or account. Not `infra` — an automatic retry meets the same broken engine — and not
+        # the code's fault: the operator makes the fix the verdict names, then retries.
+        return "needs_human", "harness_unavailable"
     if "build services unavailable" in r:
         # The run declared a database BOSS could not give it: an operator starts build-services
         # (or removes the declaration). Retrying without it would only fail the same way.

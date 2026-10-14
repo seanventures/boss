@@ -5240,8 +5240,20 @@ def _register_diagnosis_tools(reg: ToolRegistry) -> None:
                       "ORDER BY created_at DESC LIMIT 30"),
                 {"p": pid, "r": run_id}).scalars().all()
             durations = sorted(float(m) for m in peers if m is not None)
+            # THE ENGINE COULD NOT RUN (harness_failures): recorded when a session found its
+            # sandbox, a runtime binary, its login or account broken and the build stopped.
+            harness = c.execute(
+                _text("SELECT data FROM events WHERE project_id = :p AND entity_id = :r "
+                      "AND event_type = 'code_task.harness_failed' "
+                      "ORDER BY created_at DESC LIMIT 1"),
+                {"p": pid, "r": run_id}).scalar()
 
         minutes = float(run["minutes"] or 0)
+        if isinstance(harness, dict) and harness.get("sentence"):
+            # First: nothing else about the run matters until the engine can run.
+            findings.append(
+                f"THE ENGINE COULD NOT RUN — not the app's code: {harness['sentence']} "
+                "Make that fix, then retry; the run stopped as soon as it was seen.")
         baseline = None
         if durations:
             checked.append(f"{len(durations)} previous completed runs on this project")
