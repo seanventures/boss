@@ -1404,3 +1404,18 @@ The first new standard connector after login and payments, under the same contra
 | 5 | engine: `test_email_connector.py` (contract, stubs, egress, wiring smoke), the connector lists in the catalogue and policy suites | done |
 | 6 | console: the envelope mark on its card in New app and Add a feature; `every-connector-has-its-mark.test.ts` | done |
 | 7 | python and java stacks; SendGrid, Postmark; bounce webhooks; queue worker; custom SMTP egress | follow-up |
+
+## BOSSAPP-526: several connectors in one build (Login + Payments + Email)
+
+`POST /v1/templates/compose` (spec §2.3 "Several connectors in one build"), engine
+`templates/compose.py`. The single-connector apply path is unchanged.
+
+| # | Item | Status |
+|---|---|---|
+| 1 | order (given, `requires` first, cycles refused); merged secrets/env/egress/routes as one hidden composite manifest | done |
+| 2 | conflicts (route, webhook, own file, route already on the app, env default, secret pattern, secret vs env) as one 409 `connector_conflict`, nothing written | done |
+| 3 | one governed build; the existing gates read the composite (wiring smoke over every connector's routes, merged secret scan, app-start env) | done |
+| 4 | one application row, one receipt (`template.compose:<run>:<connector>`) and one event per connector; replay-safe | done |
+| 5 | tests: `engine/tests/templates/test_several_connectors_in_one_build.py`, `apps/api/tests/test_several_connectors_in_one_build.py`, `apps/web/tests/several-connectors-in-one-build.test.ts` | done |
+| 6 | console: `templatesApi.compose` + `composeConflicts`; a multi-select in New app / Add a feature | client done; picker follow-up |
+| 7 | the `apply_template` MCP tool taking several connectors | follow-up |

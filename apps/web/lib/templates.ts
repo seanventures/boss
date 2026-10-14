@@ -275,6 +275,38 @@ export function githubAsMeNotice(g: GithubAsMe | null): string {
 export type Applied201 = { workflow_run_id: string | null; application_id: string; app_key: string;
   project_id?: string; lab?: { project_id: string; name: string; why?: string } };
 
+/**
+ * SEVERAL CONNECTORS IN ONE BUILD (POST /v1/templates/compose): two to six connectors, wired in
+ * the order given unless one `requires` another. One build; one record, receipt and event per
+ * connector. A conflict (two connectors serving one route, owning one file) is a 409
+ * `connector_conflict` listing every one, never a silent overwrite.
+ */
+export type ComposeBody = ApplyBody & { templates: string[] };
+export type ComposedConnector = { templateKey: string; order: number; applicationId: string; receiptId: string };
+export type Composed201 = { workflowRunId: string | null; appKey: string; order: string[]; egress: string[];
+  connectors: ComposedConnector[] };
+export function parseComposed(raw: unknown): Composed201 {
+  const o = obj(raw);
+  return {
+    workflowRunId: str(o.workflow_run_id) || null, appKey: str(o.app_key),
+    order: arr(o.order).map(str), egress: arr(o.egress).map(str),
+    connectors: arr(o.connectors).map((c) => {
+      const x = obj(c);
+      return { templateKey: str(x.template_key), order: Number(x.order) || 0,
+               applicationId: str(x.application_id), receiptId: str(x.receipt_id) };
+    }),
+  };
+}
+export type ConnectorConflict = { kind: string; what: string; connectors: string[] };
+/** The conflicts a `connector_conflict` refusal lists ([] for any other refusal). */
+export function composeConflicts(e: unknown): ConnectorConflict[] {
+  if (!(e instanceof IdentityError) || e.body.error !== "connector_conflict") return [];
+  return arr(e.body.conflicts).map((c) => {
+    const x = obj(c);
+    return { kind: str(x.kind), what: str(x.what), connectors: arr(x.connectors).map(str) };
+  });
+}
+
 export const templatesApi = {
   list: async (filter: { stack?: string; status?: string } = {}) =>
     arr(obj(await idGet(`/v1/templates${filter.stack || filter.status ? `?${q(filter)}` : ""}`)).templates).map(parseCard),
@@ -288,6 +320,8 @@ export const templatesApi = {
   hide: (id: string) => idDelete<O>(`/v1/templates/${enc(id)}?hide=true`),
   remove: (id: string) => idDelete<O>(`/v1/templates/${enc(id)}`),
   apply: (id: string, body: ApplyBody) => idPost<Applied201>(`/v1/templates/${enc(id)}/apply`, body),
+  /** Several connectors in one build (see ComposeBody). */
+  compose: async (body: ComposeBody) => parseComposed(await idPost<O>("/v1/templates/compose", body)),
   /** The workflows a template can be applied through in this project; the default first. */
   workflows: async (projectId: string) =>
     parseBuildWorkflows(await idGet(`/v1/templates/workflows?${q({ project_id: projectId })}`)),

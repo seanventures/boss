@@ -209,6 +209,44 @@ scaffold's verify both run.
 **Re-apply / upgrade**: applying v1.1 over v1.0 is a build whose brief includes the template's
 `CHANGELOG` delta. No automatic migrations of the app's code.
 
+**Several connectors in one build** (BOSSAPP-526, `templates/compose.py`,
+`POST /v1/templates/compose`). Two to six CONNECTORS (never an idea or a training lab) are added
+to one app, new or existing, in ONE governed build. A single connector still goes through
+`POST /v1/templates/{id}/apply`, unchanged.
+
+- **Order.** The order given, except that a member another member `requires` is wired first (a
+  stable topological sort); a `requires` cycle is a 422 `compose_cycle`, and a `requires` outside
+  the set must already be applied to the app (409 `requires_unmet`).
+- **Merged declarations.** One composite manifest unions the members' secrets, env, egress,
+  webhooks and routes. A secret is required if any member requires it; an env default that is
+  empty yields to a member's real one. The merged egress is shown and must be accepted as a whole
+  (`accept_egress`); the merged secrets with no test default are asked for in ONE
+  `secrets_needed` refusal.
+- **Conflicts fail visibly.** Before anything is written, every conflict is listed in one 409
+  `connector_conflict` (`conflicts: [{kind, what, connectors}]`): two connectors serving the same
+  route (`:id` and `:order_id` are the same route), the same webhook path, the same file of their
+  own (anything below the stack's root, e.g. `payments/store.js`), a route a template already
+  applied to the app serves, an env name with two different non-empty defaults, a secret with two
+  different patterns, or a name that is a secret in one and plain env in another. The app's shell
+  at the stack root (`package.json`, the server entry, `schema.sql`, `requirements.txt`,
+  `pom.xml`) is a merge point every reference has; the brief says to merge it, never replace it.
+  Login + Payments + Email compose; Stripe + PayPal do not as they are (both serve
+  `GET /api/orders/:id` and both own `payments/`).
+- **One build, every gate.** The build's `input.template` names a hidden composite row
+  (`template_key` `compose-<hash of the members' digests, order and stack>`, label
+  `composition`, never in the catalogue) whose files hold each member's reference at
+  `stacks/<stack>/<connector id>/`. The run-time pipeline that reads one applied template therefore
+  covers every member: the pre-tested policy and wiring criteria, the wiring smoke check over
+  every connector's GET routes, the secret scan over every connector's patterns and the
+  app-start environment.
+- **One record, receipt and event per connector.** Each member gets its own
+  `app_template_applications` row sharing the build's workflow run (so `requires`, the app's
+  secrets, its setup guide and the one-build-at-a-time rule see each connector, and each row
+  follows the build: `building` → `pr_open` → `applied`, or `failed`/`blocked`), a succeeded
+  receipt `template.connector_composed` with dedupe key
+  `template.compose:<workflow run>:<connector>`, and an event `app_template.connector_composed`.
+  A replayed start that returns the same run writes none of them twice.
+
 ### 2.4 Secrets and test mode
 
 - New vault kind `app_secret` (`VaultItemKind`), AAD bound to (org, project, app_key, env, name).
@@ -262,6 +300,7 @@ scaffold's verify both run.
 | `POST /v1/templates/{id}/trial` | `template:approve` | throwaway build of the template's tests |
 | `DELETE /v1/templates/{id}` | `template:approve` | built-ins cannot be deleted, only hidden |
 | `POST /v1/templates/{id}/apply` | `workflow_run:start` (project scope) + `template:read` | body `{project_id, app_key?, new_app?: {name}, stack, framework?, options}`; returns `{workflow_run_id, application_id}` |
+| `POST /v1/templates/compose` | `workflow_run:start` (project scope) + `template:read` | several connectors in one build (§2.3): body as apply plus `templates: [2..6 ids or keys]`; returns `{workflow_run_id, order, egress, connectors: [{template_key, order, application_id, receipt_id, dedupe_key}]}`; 409 `connector_conflict` lists every conflict |
 | `GET /v1/apps/{app_key}/templates` | `project:read` | applied templates + versions |
 | `GET /v1/apps/{app_key}/secrets` | `app_secret:read_metadata` | presence/mode only |
 | `PUT /v1/apps/{app_key}/secrets/{name}` | `app_secret:write` (+ `app_secret:live` for live) | body `{env, value? , mode}`; write-only |

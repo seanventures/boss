@@ -65,6 +65,12 @@ class ApplyBody(_Body):
     allow_unsupported_stack: Optional[bool] = None
 
 
+class ComposeBody(ApplyBody):
+    #: Two or more CONNECTORS (ids or keys) applied to the app in ONE build (BOSSAPP-526), wired
+    #: in this order unless a member's `requires` names another (templates.compose)
+    templates: list[str] = Field(min_length=2, max_length=6)
+
+
 class SecretBody(_Body):
     project_id: str = Field(min_length=1, max_length=120)
     env: Optional[str] = Field(default=None, min_length=1, max_length=20)
@@ -379,6 +385,58 @@ def build_templates_router() -> APIRouter:
                                          "why": "an insecure-by-design template is applied only in "
                                                 "its own lab project, never beside real apps"}}
                                 if lab else {}),
+                             **({"extends": started["extends"]} if started.get("extends") else {})},
+                            status_code=201)
+
+    @router.post("/v1/templates/compose")
+    @permit(P.WORKFLOW_RUN_START, scope=Scope.project(body="project_id"))
+    def compose_templates(request: Request, body: ComposeBody) -> Any:
+        """SEVERAL CONNECTORS IN ONE BUILD (templates.compose): checked whole before anything is
+        written (order, merged secrets and egress, every route/file conflict as one 409), then
+        started through the same start path as one template, with one application row, one
+        receipt and one event per connector."""
+        from boss_engine.templates import compose as compose_service
+        from boss_engine.templates import lab as lab_service
+
+        from .routers.identity_access import require_permission
+
+        ctx = _ctx(request)
+        require_permission(request, P.TEMPLATE_READ, None, label="templates.compose")
+        org_id = ctx.principal.org_id
+        data = body.model_dump()
+        refs = list(data.pop("templates") or [])
+        try:
+            with begin() as db:
+                _project_in_org(db, body.project_id, org_id)
+                if lab_service.lab_of(db, body.project_id):
+                    raise TemplateError(409, "lab_project",
+                                        "this is a lab project for an insecure template; apply "
+                                        "connectors to apps in your own projects")
+                compose_service.plan(db, org_id=org_id, project_id=body.project_id, template_refs=refs,
+                                     body=data, actor_id=ctx.principal.id, write=False)
+        except TemplateError as exc:
+            return _refused(exc)
+        from . import identity_guard, main
+        from .request_bodies import WorkflowStartBody
+
+        try:
+            with begin() as db:
+                plan = compose_service.plan(db, org_id=org_id, project_id=body.project_id,
+                                            template_refs=refs, body=data, actor_id=ctx.principal.id)
+                started = main.start_delivery_workflow(WorkflowStartBody(
+                    project_id=body.project_id, actor=identity_guard.request_actor() or None,
+                    workflow_key=plan["workflow_key"], input=plan["run_input"],
+                    dedupe_key=body.dedupe_key or f"template-compose:{plan['run_input']['template']['application_id']}",
+                    start_anyway=body.start_anyway, allow_unsupported_stack=True), connection_in=db)
+                run = started.get("run") or {}
+                out = compose_service.record(db, plan, org_id=org_id, project_id=body.project_id,
+                                             workflow_run_id=run.get("id"), actor_id=ctx.principal.id)
+        except TemplateError as exc:
+            return _refused(exc)
+        tpl = plan["run_input"]["template"]
+        return JSONResponse({**out, "app_key": plan["app"]["app_key"], "project_id": body.project_id,
+                             "order": [c["key"] for c in plan["connectors"]],
+                             "egress": tpl["egress"], "template": tpl,
                              **({"extends": started["extends"]} if started.get("extends") else {})},
                             status_code=201)
 

@@ -179,6 +179,8 @@ def list_templates(c, org_id: str, *, stack: Optional[str] = None, status: Optio
             continue
         if not status and not include_hidden and card["status"] in ("hidden", "rejected"):
             continue
+        if "composition" in card["labels"]:
+            continue           # a build's merged connectors (templates.compose), never an item to pick
         if stack and stack not in card["stacks"]:
             continue
         if label and label not in card["labels"]:
