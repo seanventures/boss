@@ -365,6 +365,50 @@ def problems_sentence(problems: Iterable[dict[str, Any]]) -> str:
     return " ".join(p["detail"] for p in problems)
 
 
+#: The comparisons `evaluate_expression` knows. Kept beside it in meaning: a new one is added
+#: there and here together, or a spec the validator passes is refused by the runtime mid-run.
+EXPRESSION_OPS = ("exists", "truthy", "eq", "ne", "in", "not_in", "contains",
+                  "gt", "gte", "lt", "lte")
+_LIST_OPS = {"in", "not_in"}
+_VALUE_OPS = {"gt", "gte", "lt", "lte"}
+
+
+def expression_problems(expression: Any) -> list[str]:
+    """What `evaluate_expression` would refuse in this expression, said before a run hits it.
+
+    A CONDITION THAT CANNOT BE READ USED TO PUBLISH. The validator only asked for an object, so
+    `{}` — a Branch nobody had said anything about yet — saved cleanly and then stopped the run
+    the moment it was reached ("expression.path is required"). The rules here are the
+    evaluator's, read in the same order: `all`, then `any`, then `not`, then one comparison.
+    Keys it does not read are left alone, so nothing that runs today is refused.
+    """
+    if not isinstance(expression, dict):
+        return ["the condition must be an object."]
+    for group in ("all", "any"):
+        if group in expression:
+            items = expression[group]
+            if not isinstance(items, list) or not items:
+                return [f"'{group}' must list at least one comparison."]
+            found: list[str] = []
+            for item in items:
+                found.extend(expression_problems(item))
+            return found
+    if "not" in expression:
+        return expression_problems(expression["not"])
+    path = expression.get("path")
+    if not isinstance(path, str) or not path.strip():
+        return ["the condition does not say what to check: choose a value to compare."]
+    op = str(expression.get("op", "truthy")).lower()
+    if op not in EXPRESSION_OPS:
+        known = ", ".join(EXPRESSION_OPS)
+        return [f"'{op}' is not a comparison BOSS knows; use one of: {known}."]
+    if op in _LIST_OPS and not isinstance(expression.get("value"), list):
+        return [f"'{op}' compares against a list of values, and '{path}' has none."]
+    if op in _VALUE_OPS and expression.get("value") is None:
+        return [f"'{op}' needs a value to compare '{path}' against."]
+    return []
+
+
 def normalise_workflow_spec(
     spec: Any,
     roster: Optional[Iterable[str]] = None, *,
@@ -583,6 +627,9 @@ def normalise_workflow_spec(
             if not isinstance(step.get("expression"), dict):
                 bad("expression",
                     f"condition step '{step_id}' requires a declarative expression.")
+            else:
+                for detail in expression_problems(step["expression"]):
+                    bad("expression", f"condition step '{step_id}': {detail}")
             for branch in ("on_true", "on_false"):
                 if not str(step.get(branch) or "").strip():
                     bad(branch, f"condition step '{step_id}' {branch} is required.")
@@ -608,6 +655,9 @@ def normalise_workflow_spec(
             if not isinstance(step.get("expression"), dict):
                 bad("expression",
                     f"bounded_loop step '{step_id}' requires a declarative expression.")
+            else:
+                for detail in expression_problems(step["expression"]):
+                    bad("expression", f"bounded_loop step '{step_id}': {detail}")
             try:
                 maximum = int(step.get("max_iterations", 0))
             except (TypeError, ValueError):
@@ -715,6 +765,56 @@ def normalise_workflow_spec(
         problems.append(problem(step_id, None, (
             f"step '{step_id}' cannot be reached from the entry step: no step leads to it.")))
     return normalized, problems
+
+
+def condition_path_problems(spec: dict[str, Any]) -> list[dict[str, Any]]:
+    """A condition whose path not taken starts at a step the path taken also reaches.
+
+    THAT STEP WOULD NEVER RUN. A condition skips the first step of the path it does not take
+    (`_process_control_step` → `_mark_skipped`), and a skipped step is not started again when the
+    other path arrives at it (`_activate_step` starts only a pending one). So "if urgent, hotfix
+    then deploy; otherwise deploy" — `on_false: deploy` — skips the deploy on the urgent path and
+    the run completes without it. Each path needs a first step of its own; they may meet after.
+
+    The editor's rule, like a gate's question (`spec_problems` applies it to the operator's own
+    workflows): BOSS's shipped specs are governed where they are written.
+    """
+    steps = {str(s["id"]): s for s in spec.get("steps") or []
+             if isinstance(s, dict) and s.get("id")}
+
+    def reach(start: str) -> set[str]:
+        seen: set[str] = set()
+        stack = [start]
+        while stack:
+            current = stack.pop()
+            if current in seen or current not in steps:
+                continue
+            seen.add(current)
+            stack.extend(_targets(steps[current]))
+        return seen
+
+    found: list[dict[str, Any]] = []
+    for step_id, step in steps.items():
+        if step.get("kind") != "condition":
+            continue
+        yes, no = str(step.get("on_true") or ""), str(step.get("on_false") or "")
+        if not yes or not no:
+            continue
+        if yes == no:
+            found.append(problem(step_id, "on_false", (
+                f"condition step '{step_id}' takes both paths to '{yes}'. Give each path its own "
+                "first step.")))
+        elif no in reach(yes):
+            found.append(problem(step_id, "on_false", (
+                f"condition step '{step_id}': the 'no' path starts at '{no}', which the 'yes' "
+                "path also reaches. BOSS skips the first step of the path it does not take, so "
+                f"'{no}' would never run on 'yes'. Give the 'no' path its own first step.")))
+        elif yes in reach(no):
+            found.append(problem(step_id, "on_true", (
+                f"condition step '{step_id}': the 'yes' path starts at '{yes}', which the 'no' "
+                "path also reaches. BOSS skips the first step of the path it does not take, so "
+                f"'{yes}' would never run on 'no'. Give the 'yes' path its own first step.")))
+    return found
 
 
 def _runs_before(normalized: dict[str, Any]) -> dict[str, set[str]]:
@@ -905,6 +1005,10 @@ def spec_problems(
 
     shape = shape + [p for p in binding_order_problems(normalized, optional_for)
                      if (p["step_id"], p["field"]) not in said]
+    if product:
+        said = {(p["step_id"], p["field"]) for p in shape}
+        shape = shape + [p for p in condition_path_problems(normalized)
+                         if (p["step_id"], p["field"]) not in said]
     steps = [s for s in normalized.get("steps") or [] if isinstance(s, dict) and s.get("id")]
     flagged = {p["step_id"] for p in shape if p["step_id"]}
     binding: list[dict[str, Any]] = []

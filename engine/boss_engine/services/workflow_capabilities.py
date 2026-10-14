@@ -1151,8 +1151,10 @@ def custom_step_approval(skill: Mapping[str, Any], requested: Optional[str]) -> 
 # Only the three that mean something in a LINEAR canvas are offered. `condition`, `parallel`,
 # `join` and `bounded_loop` need somewhere to draw a branch, and a palette entry that produces
 # a spec the runtime rejects is worse than no palette entry: it is a promise the product
-# cannot keep. They are listed as `canvas_required` so the builder can say they exist and are
-# not yet placeable, rather than pretending they do not exist.
+# cannot keep. They are listed as `canvas_required`: only a builder that draws branches may
+# place them. The console's Workflow Studio does — it places a condition, a parallel with its
+# join, and a loop with its one body as whole blocks (apps/web/lib/workflow-blocks.ts), shaped
+# so `normalise_workflow_spec` accepts them. A `join` is never placed alone.
 
 CONTROL_BLOCKS: list[dict[str, Any]] = [
     {
