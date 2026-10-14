@@ -119,7 +119,7 @@ The engine registry has 123 tools: 71 read and 52 write. Examples:
 | Steer and inspect | `steer_code_task`, `send_feedback`, `retry_code_task`, `get_run_activity` |
 | Review gates | `list_decisions`, `propose_action`, `read_pull_request`, `list_review_comments` |
 | Inspect delivery | `list_previews`, `read_preview_log`, `list_deployments`, `preflight_deployment_target` |
-| Author workflows | `list_capabilities`, `list_skills`, `draft_workflow`, `describe_workflow` |
+| Author workflows | `list_capabilities`, `list_skills`, `draft_workflow`, `describe_workflow`, `precheck_workflow` (will this run work: each step's real infrastructure, before it spends) |
 | App templates | `list_templates`, `describe_template`, `apply_template`, `template_status` |
 | Security loop | `run_security_scan`, `security_scan_status`, `list_security_findings`, `security_report`, `security_review_status` (start a full review with `start_workflow`, `workflow_key=security_review`) |
 

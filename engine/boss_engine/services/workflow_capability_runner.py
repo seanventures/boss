@@ -2016,6 +2016,18 @@ def _execute_step(
 ) -> dict[str, Any]:
     binding = step.get("binding") or {}
 
+    # SKIPPED AT START, BY A PERSON, ON THE RECORD. The start door's pre-check let the operator
+    # skip a step it said would fail (workflow_precheck.gate_start refuses a skip of a gate that
+    # protects a deploy); the run's input carries who and why, written by the server only.
+    from .workflow_precheck import skipped_by_precheck
+
+    skip = skipped_by_precheck(context, str(step.get("id") or ""))
+    if skip:
+        return {"capability": str(binding.get("capability") or step.get("kind") or ""),
+                "tool": None, "status": "not_applicable", "skipped_by_precheck": skip,
+                "note": (f"skipped at start by {skip.get('by') or 'the operator'}: "
+                         f"{skip.get('reason') or 'no reason given'}")[:600]}
+
     # APPROVING SENDS EXACTLY WHAT WAS PREVIEWED. A step a gate released checks that its
     # inputs still hash to the content the approver saw; if an upstream step was re-run in
     # between, it refuses rather than send words nobody approved.

@@ -116,6 +116,9 @@ _EXPECTED_TOOLS: set[str] = {
     # step does, what it produces, and which agent captains it were all known and none of it
     # was shown. "I want to see the workflow and its definition, what it will do."
     "describe_workflow",
+    # WILL THIS RUN WORK — each step's real infrastructure checked before a run spends anything
+    # (services.workflow_precheck), the same answer as POST /v1/workflows/{id}/precheck.
+    "precheck_workflow",
     # The whole factory in one read, so an open question does not become six lookups.
     "factory_briefing",
     "create_discovery",
@@ -213,10 +216,10 @@ def test_default_registry_shape():
     read = {s.name for s in reg.specs(kind="read")}
     write = {s.name for s in reg.specs(kind="write")}
     assert read | write == set(reg.names())
-    assert len(reg.names()) == 126, (
+    assert len(reg.names()) == 127, (
         f"tool set changed: unexpected={sorted(set(reg.names()) - _EXPECTED_TOOLS)}, "
         f"missing={sorted(_EXPECTED_TOOLS - set(reg.names()))}")
-    assert len(read) == 72  # + read_app_logs, + my_recent_work, + system_health, + 7 template/security reads
+    assert len(read) == 73  # + read_app_logs, + my_recent_work, + system_health, + 7 template/security reads, + precheck_workflow
     assert len(write) == 54  # + remove_app, + system_doctor_act, + run_security_scan (F4), + apply_template (F2),
     #                         + review_pull_request_again
     # the capabilities the user explicitly asked the agent to cover
