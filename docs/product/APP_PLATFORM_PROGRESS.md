@@ -1389,3 +1389,18 @@ read, 52 write); MCP.md, the landing count and IDENTITY_PERMISSIONS.md §7 updat
 - Open: preview sign-in needs per-app preview origins (cookies); deploys do not read app secrets yet;
   the Node login stack's callback URL drops a base path; independent tester walks of App ▸ Sign-in,
   App ▸ Links, App ▸ Security, App sign-in and the composer's Talks to (UI stream `fix/fx-templateui`).
+
+## BOSSAPP-549: the `transactional-email` connector (child of BOSSAPP-527)
+
+The first new standard connector after login and payments, under the same contract
+(`templates/apps/transactional-email/`, spec §3.3a).
+
+| # | Item | Status |
+|---|---|---|
+| 1 | manifest: connector, node/express, `RESEND_API_KEY` + `SMTP_PASSWORD` optional stubs, egress `api.resend.com` + `smtp.resend.com`, `APP_BASE_URL` declared | done |
+| 2 | brief / guide / SECURITY / LICENSE, the pre-tested policy words | done |
+| 3 | node reference: config, templates, SMTP (nodemailer 10.0.16) + Resend (fetch) + mail catcher transports, outbox + token store, router, `server.mjs`, `schema.sql`, `ui/EmailForms.jsx` | done |
+| 4 | its own tier: 14 tests, fake SMTP server + fake Resend API (`npm run test:transactional-email`; `BOSS_TEMPLATE_TRIALS=1` runs it through the real gate) | done |
+| 5 | engine: `test_email_connector.py` (contract, stubs, egress, wiring smoke), the connector lists in the catalogue and policy suites | done |
+| 6 | console: the envelope mark on its card in New app and Add a feature; `every-connector-has-its-mark.test.ts` | done |
+| 7 | python and java stacks; SendGrid, Postmark; bounce webhooks; queue worker; custom SMTP egress | follow-up |

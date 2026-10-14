@@ -290,7 +290,7 @@ app_secret_bindings(...)   -- §2.4
 catalogue is not "templates". Each item declares its `kind` in `boss-template.yaml`:
 
 - **connector**: a capability ANY app adds, new or existing: `login-oauth`, `stripe-checkout`,
-  `paypal-checkout`. Its security core (sessions/state/PKCE; server-side prices, signed and
+  `paypal-checkout`, `transactional-email`. Its security core (sessions/state/PKCE; server-side prices, signed and
   idempotent webhooks) and its tests are fixed and placed by BOSS. Its screens are built WITH the
   app's own components, theme and layout, its routes are mounted in the app's router, and its
   data is mapped onto the app's own users and orders. The build directive says so.
@@ -463,6 +463,39 @@ React/Vite scaffold UI), Python = FastAPI, Java = Spring Boot for login/payments
 - **Tests (≥6):** amounts server-side; capture only of an order this app created; double capture
   idempotent; webhook verification failure → 400; sandbox enforced in preview; access-token
   caching and refresh (with a fake PayPal server in tests).
+
+### 3.3a `transactional-email` — Email through SMTP or Resend (BOSSAPP-549)
+
+The fourth connector, under the same contract as login and payments: pre-tested in its own tier,
+gated in a build by the wiring smoke check, declared secrets with test-mode stand-ins, declared
+egress, built in the app's own UI and data model. Node first (Express); Python and Java follow.
+
+- **Adds:** `GET /api/email/status` (which way mail goes; never a credential),
+  `POST /api/email/password-reset` (`202` for every address: no enumeration; at most 3 per address
+  per 15 min), `POST /api/email/password-reset/confirm`, `POST /api/email/invites` (`403` unless the
+  app's `canInvite(req)`), `POST /api/email/invites/accept`, and a `notify(to, {title, body, url})`
+  call for the app's own notifications. Three templates (`password_reset`, `invite`,
+  `notification`), restyled by the app, every variable escaped. Tables `email_messages` (the
+  outbox; UNIQUE `dedupe_key`) and `email_tokens` (SHA-256 of one-use, expiring tokens). Hooks into
+  the app: `findUserByEmail`, `setPassword`, `canInvite`, `onInviteAccepted`, `onFailure`.
+- **Providers:** SMTP (nodemailer, STARTTLS required by default) and Resend (HTTP API on fetch, its
+  `Idempotency-Key` = the outbox's dedupe key; the API host fixed in code). Try-later answers are
+  retried up to `EMAIL_MAX_ATTEMPTS`; every final failure is a `failed` outbox row with a fixed
+  code, logged and passed to `onFailure`.
+- **Test double / previews:** with no provider set, a build or preview keeps every message in the
+  app's local **mail catcher** (`GET /dev/mail`, `/dev/mail/messages[/:id]`), so a reviewer can
+  follow a reset or invite link from the preview. Production (`NODE_ENV`/`APP_ENV=production`)
+  never runs the catcher: with no provider, email is `off` and every send fails visibly.
+- **Secrets:** `RESEND_API_KEY` (`stub`, optional, pattern `^re_…`), `SMTP_PASSWORD` (`stub`,
+  optional). Test mode needs no pasted secret.
+- **Egress:** `api.resend.com`, `smtp.resend.com`. Another SMTP host is the operator's own.
+- **Links** are built from `APP_BASE_URL` (declared, so BOSS fills it), never the request's Host.
+- **Tests (≥12, 14 shipped):** fake SMTP server and fake Resend API in-process; catcher; reset
+  round trip, one use, expiry, replacement, rate limit; no enumeration; Host header ignored;
+  invites gated, one use, role allowlist, no CR/LF in subjects; dedupe; SMTP and Resend retry and
+  visible failure; production refuses the catcher; config errors never echo a value.
+- **Follow-ups:** Python and Java stacks; SendGrid and Postmark; bounce/complaint webhooks; a
+  queue worker for bulk notifications; per-app custom SMTP egress hosts.
 
 ### 3.4 `catalog-cart` — Product catalog + cart
 

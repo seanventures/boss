@@ -13,6 +13,7 @@ from boss_engine.templates.manifest import kind_of
 
 EXPECTED = {
     "login-oauth": "connector", "stripe-checkout": "connector", "paypal-checkout": "connector",
+    "transactional-email": "connector",
     "banking-starter": "idea", "catalog-cart": "idea", "hello": "idea",
     "banking-starter-insecure": "training",
 }
@@ -65,7 +66,8 @@ def test_a_card_carries_its_kind_and_training_is_listed_only_when_asked(monkeypa
     assert {c["kind"] for c in everything} == {"connector", "idea"}  # no training by default
     connectors = service.list_templates(_Conn(), "org", kind="connector")
     assert sorted(c["template_key"] for c in connectors) == ["login-oauth", "paypal-checkout",
-                                                             "stripe-checkout"]
+                                                             "stripe-checkout",
+                                                             "transactional-email"]
     ideas = service.list_templates(_Conn(), "org", kind="idea")
     assert sorted(c["template_key"] for c in ideas) == ["banking-starter", "catalog-cart", "hello"]
     training = service.list_templates(_Conn(), "org", kind="training")

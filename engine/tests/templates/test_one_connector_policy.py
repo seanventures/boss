@@ -21,7 +21,7 @@ from boss_engine.templates.validator import tree_from_dir, validate_tree
 
 from ._fixtures import REPO_ROOT
 
-CONNECTORS = ("login-oauth", "stripe-checkout", "paypal-checkout")
+CONNECTORS = ("login-oauth", "stripe-checkout", "paypal-checkout", "transactional-email")
 
 #: What the build that failed carried (crun_2d097414's stored acceptance_criteria).
 OLD_CRITERIA = [

@@ -1,0 +1,16 @@
+{
+  "name": "boss-template-transactional-email",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Reference implementation of the transactional-email connector (Express + nodemailer, Resend on fetch). Merge the dependencies into the app's package.json; the test:transactional-email scripts run the connector's own suite in its own test tier and stay here.",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "start": "node server.mjs",
+    "pretest:transactional-email": "npm install --no-audit --no-fund --loglevel=error",
+    "test:transactional-email": "node --test --test-reporter=junit --test-reporter-destination=boss-template-junit.xml --test-reporter=spec --test-reporter-destination=stdout tests/template_email/email.test.mjs"
+  },
+  "dependencies": {
+    "express": "5.2.1",
+    "nodemailer": "10.0.16"
+  }
+}

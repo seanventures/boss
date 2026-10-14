@@ -1,0 +1,59 @@
+schema: boss.template/v1
+id: transactional-email
+name: Email (SMTP or Resend)
+version: 1.0.0
+summary: Password reset, invite and notification emails through SMTP or Resend, with a local mail catcher for builds and previews
+adds: [routes, ui, db_tables, email]
+stacks:
+  node:   {frameworks: [express], min_toolchain: node20}
+requires: []
+works_with: [login-oauth]
+# Both secrets are optional: with neither set, a build or preview sends nothing and keeps every
+# message in the app's local mail catcher (/dev/mail). Production never runs the catcher.
+secrets:
+  - name: RESEND_API_KEY
+    required: false
+    purpose: A Resend API key with sending access (resend.com > API Keys); unset uses SMTP or the mail catcher
+    test_default: stub
+    pattern: '^re_[A-Za-z0-9_]{16,}$'
+  - name: SMTP_PASSWORD
+    required: false
+    purpose: The SMTP server's password for SMTP_USER; unset uses Resend or the mail catcher
+    test_default: stub
+env:
+  - {name: EMAIL_PROVIDER, default: ''}
+  - {name: EMAIL_FROM, default: ''}
+  - {name: EMAIL_REPLY_TO, default: ''}
+  - {name: SMTP_HOST, default: ''}
+  - {name: SMTP_PORT, default: 587}
+  - {name: SMTP_USER, default: ''}
+  - {name: SMTP_TLS, default: starttls}
+  - {name: APP_BASE_URL, default: 'http://localhost:3000'}
+  - {name: APP_NAME, default: 'the app'}
+  - {name: APP_ENV, default: development}
+  - {name: EMAIL_RESET_PATH, default: /reset-password}
+  - {name: EMAIL_INVITE_PATH, default: /accept-invite}
+  - {name: EMAIL_RESET_TTL_MINUTES, default: 30}
+  - {name: EMAIL_INVITE_TTL_HOURS, default: 168}
+  - {name: EMAIL_MAX_ATTEMPTS, default: 3}
+# Resend's API and its SMTP relay. Another SMTP server is the operator's: add its host to the
+# app's egress when you set SMTP_HOST.
+egress: [api.resend.com, smtp.resend.com]
+webhooks: []
+routes:
+  - GET /api/email/status
+  - POST /api/email/password-reset
+  - POST /api/email/password-reset/confirm
+  - POST /api/email/invites
+  - POST /api/email/invites/accept
+  - GET /dev/mail
+  - GET /dev/mail/messages
+  - GET /dev/mail/messages/:id
+  - DELETE /dev/mail/messages
+tests:
+  node:   {command: npm run test:transactional-email, report: junit, min_tests: 12}
+security_note: SECURITY.md
+guide: guide.md
+labels: [connector]
+license: Apache-2.0
+min_boss: 1.0.0
