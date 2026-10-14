@@ -767,56 +767,6 @@ def normalise_workflow_spec(
     return normalized, problems
 
 
-def condition_path_problems(spec: dict[str, Any]) -> list[dict[str, Any]]:
-    """A condition whose path not taken starts at a step the path taken also reaches.
-
-    THAT STEP WOULD NEVER RUN. A condition skips the first step of the path it does not take
-    (`_process_control_step` → `_mark_skipped`), and a skipped step is not started again when the
-    other path arrives at it (`_activate_step` starts only a pending one). So "if urgent, hotfix
-    then deploy; otherwise deploy" — `on_false: deploy` — skips the deploy on the urgent path and
-    the run completes without it. Each path needs a first step of its own; they may meet after.
-
-    The editor's rule, like a gate's question (`spec_problems` applies it to the operator's own
-    workflows): BOSS's shipped specs are governed where they are written.
-    """
-    steps = {str(s["id"]): s for s in spec.get("steps") or []
-             if isinstance(s, dict) and s.get("id")}
-
-    def reach(start: str) -> set[str]:
-        seen: set[str] = set()
-        stack = [start]
-        while stack:
-            current = stack.pop()
-            if current in seen or current not in steps:
-                continue
-            seen.add(current)
-            stack.extend(_targets(steps[current]))
-        return seen
-
-    found: list[dict[str, Any]] = []
-    for step_id, step in steps.items():
-        if step.get("kind") != "condition":
-            continue
-        yes, no = str(step.get("on_true") or ""), str(step.get("on_false") or "")
-        if not yes or not no:
-            continue
-        if yes == no:
-            found.append(problem(step_id, "on_false", (
-                f"condition step '{step_id}' takes both paths to '{yes}'. Give each path its own "
-                "first step.")))
-        elif no in reach(yes):
-            found.append(problem(step_id, "on_false", (
-                f"condition step '{step_id}': the 'no' path starts at '{no}', which the 'yes' "
-                "path also reaches. BOSS skips the first step of the path it does not take, so "
-                f"'{no}' would never run on 'yes'. Give the 'no' path its own first step.")))
-        elif yes in reach(no):
-            found.append(problem(step_id, "on_true", (
-                f"condition step '{step_id}': the 'yes' path starts at '{yes}', which the 'no' "
-                "path also reaches. BOSS skips the first step of the path it does not take, so "
-                f"'{yes}' would never run on 'no'. Give the 'yes' path its own first step.")))
-    return found
-
-
 def _runs_before(normalized: dict[str, Any]) -> dict[str, set[str]]:
     """For each reachable step, the steps that have certainly finished when it starts.
 
@@ -1005,10 +955,6 @@ def spec_problems(
 
     shape = shape + [p for p in binding_order_problems(normalized, optional_for)
                      if (p["step_id"], p["field"]) not in said]
-    if product:
-        said = {(p["step_id"], p["field"]) for p in shape}
-        shape = shape + [p for p in condition_path_problems(normalized)
-                         if (p["step_id"], p["field"]) not in said]
     steps = [s for s in normalized.get("steps") or [] if isinstance(s, dict) and s.get("id")]
     flagged = {p["step_id"] for p in shape if p["step_id"]}
     binding: list[dict[str, Any]] = []
@@ -3719,6 +3665,65 @@ def _drain_control_steps(connection: Connection, run_id: str) -> None:
     _maybe_finish_run(connection, run_id)
 
 
+def _reachable_from(spec: dict[str, Any], starts: list[str]) -> set[str]:
+    """Every step a path starting at any of `starts` can reach, `starts` included.
+
+    Follows every edge (`_targets`): both paths of a condition, every branch of a parallel and
+    a loop's body, because which way a later condition goes is not known yet.
+    """
+    steps = _step_map(spec)
+    seen: set[str] = set()
+    stack = [start for start in starts if start in steps]
+    while stack:
+        current = stack.pop()
+        if current in seen:
+            continue
+        seen.add(current)
+        stack.extend(t for t in _targets(steps[current]) if t in steps and t not in seen)
+    return seen
+
+
+def _skip_unless_reachable(
+    connection: Connection, run_id: str, condition_id: str, rejected: str, selected: str,
+    spec: dict[str, Any],
+) -> None:
+    """Skip the first step of the path a condition did not take — unless a live path reaches it.
+
+    A PATH NOT TAKEN MAY STILL BE ARRIVED AT. "If urgent, hotfix then deploy; otherwise deploy"
+    is `on_true: hotfix`, `on_false: deploy`, `hotfix → deploy`. Skipping `deploy` because it
+    heads the "no" path meant it never ran on "yes" (a skipped step is never started again,
+    `_activate_step`), and the run completed without deploying (#550). Four shipped specpack
+    workflows have that shape.
+
+    So the step is skipped only when no live path can reach it: not the path just taken, and
+    not any step still in flight (a parallel sibling, a loop waiting on its body). Otherwise it
+    stays pending, and the event says so: a live path starts it when it gets there, a later
+    condition that goes the other way skips it then, and a run that finishes without reaching
+    it records it `path_not_reached` (`_maybe_finish_run`). It is never silently dropped.
+    """
+    live = [selected] + [str(r) for r in connection.execute(
+        text(
+            """
+            SELECT step_id FROM workflow_step_runs
+            WHERE workflow_run_id=:run_id
+              AND status IN ('ready', 'leased', 'running', 'waiting')
+            """
+        ),
+        {"run_id": run_id},
+    ).scalars().all()]
+    if rejected not in _reachable_from(spec, live):
+        _mark_skipped(connection, run_id, rejected, "condition_not_selected")
+        return
+    row = _step_row(connection, run_id, rejected, 0)
+    if row is None or row["status"] != "pending":
+        return
+    _emit_step_event(
+        connection, _run_row(connection, run_id), "workflow.step_not_skipped", row,
+        {"reason": "reachable_from_live_path", "condition": condition_id,
+         "selected": selected},
+    )
+
+
 def _process_control_step(connection: Connection, run: Any, row: Any) -> None:
     spec = _run_spec(connection, run["id"])
     template = _step_map(spec)[row["step_id"]]
@@ -3736,7 +3741,8 @@ def _process_control_step(connection: Connection, run: Any, row: Any) -> None:
             iteration,
             {"result": passed, "selected": selected},
         )
-        _mark_skipped(connection, run["id"], rejected, "condition_not_selected")
+        _skip_unless_reachable(connection, run["id"], row["step_id"], rejected, selected,
+                               spec)
         _activate_step(connection, run["id"], selected, iteration)
         return
     if kind == "parallel":

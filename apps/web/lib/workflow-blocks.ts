@@ -6,10 +6,10 @@
  * placed as one edit, already shaped the way the engine's validator and runner read it
  * (engine/boss_engine/services/workflows.py `normalise_workflow_spec`, `_process_control_step`):
  *
- *   - Branch: a `condition` whose yes and no paths each START WITH A STEP OF THEIR OWN and meet
- *     again after it. A condition skips the first step of the path it does not take, and a
- *     skipped step is never started later — so a path pointed straight at where the two meet
- *     would skip that step on the other path. Each path gets an agent task to start with.
+ *   - Branch: a `condition` whose yes and no paths each start with a step of their own and meet
+ *     again after it. Each path gets an agent task to start with. (The runtime also runs a path
+ *     pointed straight at where the two meet: it skips the first step of the path not taken
+ *     only when no live path can still reach it — `_skip_unless_reachable`.)
  *   - Do at the same time: a `parallel` naming two branches and its `join`; each branch is an
  *     agent task whose `next` is the join, and the join `wait_for`s them (all, by default).
  *   - Repeat until: a `bounded_loop` around ONE step (its `body`; the runtime returns the body

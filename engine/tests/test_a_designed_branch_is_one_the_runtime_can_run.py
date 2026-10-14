@@ -10,10 +10,10 @@ It also pins the two rules the designer leans on:
 * A condition must say what it checks. `{}` — a Branch nobody described — used to publish and then
   stop the run when it was reached. `expression_problems` reads an expression the way
   `evaluate_expression` does, and refuses what it would refuse.
-* Each path of a condition starts with a step of its own. A condition skips the first step of the
-  path it does not take, and a skipped step is never started again, so a "no" path pointed at the
-  step the "yes" path also reaches would skip that step on "yes". Check says so for the operator's
-  own workflows (`condition_path_problems`).
+* A condition's path may start at a step the other path also reaches. The runtime skips the
+  first step of the path not taken only when no live path can still reach it (#550,
+  `_skip_unless_reachable`; run-time proof in test_a_condition_path_may_rejoin_the_other.py),
+  so Check no longer refuses "if urgent, hotfix then deploy; otherwise deploy".
 """
 from __future__ import annotations
 
@@ -25,7 +25,6 @@ from boss_engine.services.workflows import (
     EXPRESSION_OPS,
     WorkflowValidationError,
     binding_order_problems,
-    condition_path_problems,
     evaluate_expression,
     expression_problems,
     normalise_workflow_spec,
@@ -46,7 +45,6 @@ def test_every_designed_spec_passes_the_validator_check_and_save_use(name):
     normalized, problems = normalise_workflow_spec(spec, check_agents=False,
                                                    require_gate_question=True)
     problems += binding_order_problems(normalized, lambda step: frozenset())
-    problems += condition_path_problems(normalized)
     assert problems == [], problems
     assert validate_workflow_spec(spec, check_agents=False)["entry_step"] == spec["entry_step"]
 
@@ -121,21 +119,15 @@ def _condition(on_true: str, on_false: str, extra: list[dict]) -> dict:
          "on_true": on_true, "on_false": on_false}, *extra]}
 
 
-def test_a_path_starting_where_the_other_path_goes_is_named():
-    spec = _condition("hotfix", "deploy", [
-        {"id": "hotfix", "kind": "task", "next": ["deploy"]}, {"id": "deploy", "kind": "task"}])
-    found = condition_path_problems(spec)
-    assert [(p["step_id"], p["field"]) for p in found] == [("c", "on_false")]
-    assert "would never run" in found[0]["message"]
-    flipped = _condition("deploy", "hotfix", spec["steps"][1:])
-    assert [p["field"] for p in condition_path_problems(flipped)] == ["on_true"]
-    both = _condition("deploy", "deploy", spec["steps"][1:])
-    assert [p["field"] for p in condition_path_problems(both)] == ["on_false"]
-
-
-def test_paths_that_meet_after_their_own_first_steps_are_fine():
-    spec = _condition("hotfix", "plan", [
-        {"id": "hotfix", "kind": "task", "next": ["deploy"]},
-        {"id": "plan", "kind": "task", "next": ["deploy"]},
-        {"id": "deploy", "kind": "task"}])
-    assert condition_path_problems(spec) == []
+@pytest.mark.parametrize("on_true, on_false", [
+    ("hotfix", "deploy"), ("deploy", "hotfix"), ("deploy", "deploy")])
+def test_a_path_starting_where_the_other_path_goes_now_publishes(on_true, on_false):
+    """It used to be refused because the runtime skipped the shared step on the other path.
+    The runtime no longer does (#550), so the validator Check and Save use accepts it."""
+    extra = [{"id": "hotfix", "kind": "task", "next": ["deploy"]},
+             {"id": "deploy", "kind": "task"}]
+    spec = _condition(on_true, on_false, extra if on_true != on_false else extra[1:])
+    normalized, problems = normalise_workflow_spec(spec, check_agents=False,
+                                                   require_gate_question=True)
+    assert problems == [], problems
+    assert validate_workflow_spec(spec, check_agents=False)["entry_step"] == "c"
