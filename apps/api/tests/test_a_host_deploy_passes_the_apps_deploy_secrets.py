@@ -248,3 +248,71 @@ def test_a_proofs_generated_secret_is_throwaway_and_never_the_deploys(engine, ho
         deploy_values, _ = app_secrets.values_for_env(c, org_id=app["org"], project_id=HOME,
                                                       app_key=app["key"], env="deploy")
     assert deploy_values["SESS_KEY"] not in (*proofs, preview)
+
+
+# ---- a demo login password (crun_0d82ab62): generated once per env, shown only to its owner ----
+
+def test_the_first_deploy_generates_the_apps_demo_login_and_says_where_to_read_it(engine, hosted, app, monkeypatch):  # noqa: F811
+    """The app's own files declare DEMO_PASSWORD (its seed refuses to run without it): the first
+    deploy generates one, stores it as the deploy binding, and names where its owner reads it.
+    A value a person set is never generated over, and never shown."""
+    monkeypatch.setattr(app_secrets, "app_declared_env", lambda c, **k: {"DEMO_PASSWORD", "OTHER_URL"})
+    _bind(engine, app, mode="test", value=TEST_VALUE)
+    with engine.begin() as c:
+        made = app_secrets.ensure_deploy_generated(c, org_id=app["org"], project_id=HOME, app_key=app["key"])
+        assert made == ["DEMO_PASSWORD"]
+        assert app_secrets.ensure_deploy_generated(c, org_id=app["org"], project_id=HOME,
+                                                   app_key=app["key"]) == []
+        passed, missing = app_secrets.deploy_secrets(c, project_id=HOME, app_key=app["key"])
+        shown = app_secrets.demo_login_values(c, org_id=app["org"], project_id=HOME,
+                                              app_key=app["key"], env="deploy")
+    assert missing == []
+    demo = next(p for p in passed if p["name"] == "DEMO_PASSWORD")
+    assert demo["mode"] == "generated" and "Demo logins" in demo["demo_login"]
+    assert list(shown) == ["DEMO_PASSWORD"] and len(shown["DEMO_PASSWORD"]) >= 32
+    # A person's own value replaces it, and is never shown.
+    with engine.begin() as c:
+        app_secrets.put(c, org_id=app["org"], project_id=HOME, app_key=app["key"],
+                        name="DEMO_PASSWORD", env="deploy", mode="test", value="their-own-pw-123",
+                        actor_id="ceo", may_live=False,
+                        spec=app_secrets.deploy_value_spec("DEMO_PASSWORD", ["deploy"], "test"))
+        assert app_secrets.demo_login_values(c, org_id=app["org"], project_id=HOME,
+                                             app_key=app["key"], env="deploy") == {}
+
+
+def test_every_preview_of_the_app_signs_in_with_one_stored_demo_login(engine, hosted, app, monkeypatch, tmp_path):  # noqa: F811
+    from boss_engine.app_links import service as links
+    from boss_engine.oidc_provider.app_sign_in import preview_run_environment
+
+    (tmp_path / ".env.example").write_text("DEMO_PASSWORD=\nSUPPORT_WEBHOOK_URL=\n")
+    monkeypatch.setattr(links, "app_index", lambda db, project_id: ({"crun_demo": app["key"]}, {app["key"]: app["name"]}))
+    with engine.begin() as c:
+        first = preview_run_environment(c, project_id=HOME, run_id="crun_demo", preview_id="prev_d1",
+                                        app_dir=tmp_path)
+        second = preview_run_environment(c, project_id=HOME, run_id="crun_demo", preview_id="prev_d2",
+                                         app_dir=tmp_path)
+        stored = app_secrets.demo_login_values(c, org_id=app["org"], project_id=HOME,
+                                               app_key=app["key"], env="preview")
+    assert first.shown == ["DEMO_PASSWORD"] and second.shown == ["DEMO_PASSWORD"]
+    assert first.values["DEMO_PASSWORD"] == second.values["DEMO_PASSWORD"] == stored["DEMO_PASSWORD"]
+    # A listed setting stays unset; the template's PAY_KEY (no preview value) is still a need.
+    assert "SUPPORT_WEBHOOK_URL" in first.unset and [n.name for n in first.needs] == ["PAY_KEY"]
+
+
+def test_the_names_an_app_declares_are_read_from_its_app_start_checks(engine, hosted, app, monkeypatch):  # noqa: F811
+    from boss_engine.app_links import service as links
+
+    run_id = f"crun_decl{uuid.uuid4().hex[:8]}"
+    monkeypatch.setattr(links, "app_index", lambda db, project_id: ({run_id: app["key"]}, {}))
+    with engine.begin() as c:
+        c.execute(text("INSERT INTO events (id, project_id, event_type, actor, entity_type, entity_id, data) "
+                       "VALUES (:i, :p, 'code_task.app_serve_checked', 'boss', 'code_task_run', :r, "
+                       "CAST(:d AS JSONB))"),
+                  {"i": f"evt_{uuid.uuid4().hex[:12]}", "p": HOME, "r": run_id, "d": json.dumps(
+                      {"environment": {"declared": ["DEMO_PASSWORD", "PAY_HOOK"], "unset": ["PAY_HOOK"]}})})
+        names = app_secrets.app_declared_env(c, project_id=HOME, app_key=app["key"])
+        c.execute(text("DELETE FROM events WHERE entity_id = :r"), {"r": run_id})
+    assert {"DEMO_PASSWORD", "PAY_HOOK"} <= names
+    # The Secrets API's rule for such a name: every env a run reaches.
+    assert app_secrets.deploy_value_spec("PAY_HOOK", ["build", "preview"], "test",
+                                         app_declares="PAY_HOOK" in names).name == "PAY_HOOK"

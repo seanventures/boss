@@ -727,6 +727,9 @@ def sandbox_facts() -> str:
         # whose install runs node-gyp, which needs make: the sandbox has none.
         lines.append(NO_COMPILER_FACT)
     lines.append(CLEAN_INSTALL_FACT)
+    from ..templates.run_env import OPTIONAL_SETTINGS_RULE
+
+    lines.append("- " + OPTIONAL_SETTINGS_RULE)
     text = "\nSANDBOX (facts, no need to check them):\n" + "\n".join(lines) + "\n"
     _SANDBOX_FACTS["text"] = text
     return text

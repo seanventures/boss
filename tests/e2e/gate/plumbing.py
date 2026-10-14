@@ -12,7 +12,12 @@ way a build runs it, and fails on the class of bugs that broke HelpDesk builds o
   6. a blocked build that names the wrong gate;
   7. a web gate that runs scripts the app does not define and never runs the ones it does: a plain
      Node ESM app (tests/e2e/fixtures/plain-node) was gated on `npm run build` ("Missing script")
-     and its own `npm test` was never the gate (crun_decc93dbb0154e768871).
+     and its own `npm test` was never the gate (crun_decc93dbb0154e768871);
+  8. an optional setting (only LISTED in .env.example) treated as a secret only a person can set:
+     HelpDesk AI refused to start without DEMO_PASSWORD and was blocked for a person with no repair
+     round (crun_0d82ab62bb6443d4a576). The fixture now requires DATABASE_URL and DEMO_PASSWORD at
+     boot and keeps its boss.deploy.yaml beside the app, so the proof and the deploy must supply
+     both (the run's database, a generated demo login).
 
 WHERE IT RUNS. Inside a throwaway container of the installed worker image (scripts/e2e-gate.sh
 starts it; never the install's own containers), with the BOSS under test mounted at /boss and
@@ -122,6 +127,7 @@ class Gate:
         self.install_ok = False
         self.tests_ok = False
         self.serve: dict[str, Any] = {}
+        self.serve_kwargs: dict[str, Any] = {}
         self.template: Optional[dict] = None
         self.template_record: Optional[Any] = None
         self.retries: list[dict[str, Any]] = []
@@ -433,6 +439,7 @@ def check_serve(g: Gate) -> str:
                                     manifests=[manifest] if manifest else [])
         kwargs["bound"] = {}
     g.changed = _changed_files(g)
+    g.serve_kwargs = dict(kwargs)
     g.serve = preview_service.prove_app_serves(g.root, list(g.changed), **kwargs)
     if extra:
         raise CheckFailed("the pipeline now passes " + ", ".join(sorted(extra)) + " to the app-start "
@@ -447,6 +454,72 @@ def check_serve(g: Gate) -> str:
     return f"`{g.serve.get('command')}` served on :{g.serve.get('port')}; probes {answered}"
 
 
+#: An app refusing to start without a setting it only LISTS (crun_0d82ab62's shape, on a name
+#: that is not a demo login, so BOSS does not generate it).
+_OPTIONAL_NAME = "SUPPORT_WEBHOOK_URL"
+_REFUSES_WITHOUT_OPTIONAL = (
+    f'if (!process.env.{_OPTIONAL_NAME}) {{\n'
+    f'  console.error(JSON.stringify({{ event: "startup_failed", message: "{_OPTIONAL_NAME} must be '
+    'set (ticket notifications refuse to run without it)" }));\n'
+    '  process.exit(1);\n'
+    '}\n')
+
+
+@check("optional settings: generated, supplied, or the coder's", bug="8")
+def check_optional_setting(g: Gate) -> str:
+    """HelpDesk AI (crun_0d82ab62) was blocked for a person over DEMO_PASSWORD, a name its
+    .env.example only listed, with no repair round. On the known-good app, which requires
+    DATABASE_URL and DEMO_PASSWORD at boot: (a) its proof GENERATED DEMO_PASSWORD (a demo login,
+    shown to a preview's reviewer) and counted the run's build-services DATABASE_URL as SUPPLIED,
+    and listed provider ids stayed unset while it started; (b) the same app made to refuse to start
+    without a listed, non-demo setting fails the proof as the CODER's fault (WORK: a repair round
+    with a note naming it), never a person's "needs a secret"."""
+    if not g.serve_kwargs:
+        raise Skip("the app-start proof did not run")
+    from boss_engine.services import governed_code_task_service as gov
+    from boss_engine.services import preview_service
+
+    wrong: list[str] = []
+    env = g.serve.get("environment") or {}
+    if not (g.serve.get("ok") and g.serve.get("proven")):
+        wrong.append("the app did not start: " + str(g.serve.get("error"))[:200])
+    if "DEMO_PASSWORD" not in (env.get("generated") or []) or "DEMO_PASSWORD" not in (env.get("shown") or []):
+        wrong.append(f"DEMO_PASSWORD was not generated as a demo login (generated={env.get('generated')})")
+    if "DATABASE_URL" in (env.get("unset") or []) or "DATABASE_URL" not in (env.get("supplied") or []):
+        wrong.append("the run's build-services DATABASE_URL is recorded as unset, not supplied "
+                     f"(unset={env.get('unset')}, supplied={env.get('supplied')})")
+    if "GOOGLE_CLIENT_ID" not in (env.get("unset") or []):
+        wrong.append(f"a listed provider id was not left unset (unset={env.get('unset')})")
+
+    example = g.root / APP_DIR / ".env.example"
+    index = g.root / APP_DIR / "src" / "server" / "index.ts"
+    saved = {example: example.read_text(encoding="utf-8"), index: index.read_text(encoding="utf-8")}
+    error = ""
+    try:
+        example.write_text(saved[example] + f"\n# --- notifications (optional) ---\n{_OPTIONAL_NAME}=\n",
+                           encoding="utf-8")
+        index.write_text(_REFUSES_WITHOUT_OPTIONAL + saved[index], encoding="utf-8")
+        crashed = preview_service.prove_app_serves(g.root, list(g.changed), **g.serve_kwargs)
+        faults = gov.classify_gate_faults(failing=["app_serves"], evidence={"app_serves": crashed})
+        error = str(crashed.get("error") or "")
+        if crashed.get("ok"):
+            wrong.append(f"the app that refuses to start without {_OPTIONAL_NAME} passed the proof")
+        elif faults.get("app_serves") != "WORK":
+            wrong.append(f"a crash on the listed {_OPTIONAL_NAME} classed as {faults.get('app_serves')} "
+                         f"(the coder gets no repair round): {error[:200]!r}")
+        elif crashed.get("needs_secret") or "needs a secret" in error:
+            wrong.append(f"a crash on the listed {_OPTIONAL_NAME} is told as a secret: {error[:200]!r}")
+        elif f"must start without {_OPTIONAL_NAME}" not in error or f"{_OPTIONAL_NAME} must be set" not in error:
+            wrong.append(f"the coder's note does not name {_OPTIONAL_NAME} and the app's words: {error[:200]!r}")
+    finally:
+        for path, text in saved.items():
+            path.write_text(text, encoding="utf-8")
+    if wrong:
+        raise CheckFailed("; ".join(wrong))
+    return ("DEMO_PASSWORD generated + shown, DATABASE_URL supplied; a crash on a listed setting is "
+            "WORK: " + error.split(". ", 1)[0][:140])
+
+
 def _changed_files(g: Gate) -> dict[str, str]:
     """The build's change, as the pipeline holds it: the fixture's app (what an agent wrote) plus
     whatever BOSS's own preparation changed in the clone."""
@@ -456,8 +529,6 @@ def _changed_files(g: Gate) -> dict[str, str]:
         if path.is_file() and "node_modules/" not in rel and not path.name.endswith(".log"):
             with contextlib.suppress(UnicodeDecodeError):
                 out[rel] = path.read_text(encoding="utf-8")
-    deploy = g.root / "boss.deploy.yaml"
-    out["boss.deploy.yaml"] = deploy.read_text(encoding="utf-8")
     return out
 
 
@@ -642,7 +713,7 @@ def check_pull_request(g: Gate) -> str:
     g.hub.blip("api", 1, match=f"POST /api/repos/{OWNER}/{REPO}/pulls")
     try:
         adapter.ensure_branch(branch)
-        for rel in ("boss.deploy.yaml", f"{APP_DIR}/package.json", f"{APP_DIR}/package-lock.json"):
+        for rel in (f"{APP_DIR}/boss.deploy.yaml", f"{APP_DIR}/package.json", f"{APP_DIR}/package-lock.json"):
             if rel in g.changed:
                 adapter.upsert_file(branch, rel, g.changed[rel], f"BOSS proposal update: {rel}")
         pr = adapter.create_pull_request(branch, "HelpDesk mini: the plumbing gate", "gate")
@@ -650,7 +721,7 @@ def check_pull_request(g: Gate) -> str:
         g.hub.blip("api", 0)
         with contextlib.suppress(Exception):     # again without the blip, so the deploy still runs
             adapter.ensure_branch(branch)
-            for rel in ("boss.deploy.yaml", f"{APP_DIR}/package.json", f"{APP_DIR}/package-lock.json"):
+            for rel in (f"{APP_DIR}/boss.deploy.yaml", f"{APP_DIR}/package.json", f"{APP_DIR}/package-lock.json"):
                 if rel in g.changed:
                     adapter.upsert_file(branch, rel, g.changed[rel], f"BOSS proposal update: {rel}")
             g.pr_number = int(adapter.create_pull_request(branch, "HelpDesk mini: the plumbing gate", "gate").number)
@@ -735,7 +806,8 @@ def check_deploy(g: Gate) -> str:
     from boss_engine.services import app_deploy_manifest as adm
     from boss_engine.services import build_services, stack_deploy
 
-    manifest = adm.load_manifest(g.root / "boss.deploy.yaml")
+    manifest_path = f"{APP_DIR}/boss.deploy.yaml"            # beside the app, as HelpDesk AI's
+    manifest = adm.load_manifest(g.root / manifest_path)
     deploy_dir = str(g.work / "deploy" / manifest.name)
     manifest = dataclasses.replace(manifest, dir=deploy_dir)
     source = stack_deploy.GitHubSource("gate-local-token")
@@ -744,6 +816,8 @@ def check_deploy(g: Gate) -> str:
     ctx = {"commit": commit, "ref": f"pull/{g.pr_number}", "target.host": "127.0.0.1",
            "target.public_url": "http://127.0.0.1:3000", "target.user": "boss"}
     rendered = adm.render(manifest, ctx)
+    # Its commands run from its own directory, as the real deploy plans it (stack_deploy).
+    rendered["workdir"] = adm.manifest_workdir(manifest_path)
 
     class LocalHost:
         def stack_exec(self, *, command: str, timeout: int = 120, stdin_text=None, stdin_path=None, **_: Any):
@@ -769,6 +843,16 @@ def check_deploy(g: Gate) -> str:
         elif item.key == "DATABASE_URL":
             env_values[item.key] = lease.env()["DATABASE_URL"]
             hidden.append(env_values[item.key])
+    # The app's demo login password: generated for its deploy once (secrets.ensure_demo_logins)
+    # and passed as an app secret, as a real deploy does. A BOSS that cannot tell a demo login
+    # passes none, and the app refuses to start.
+    from boss_engine.templates import run_env as _run_env
+
+    if hasattr(_run_env, "is_demo_login_name"):
+        for name, need in _run_env.needs_from_app_dir(g.root / APP_DIR).items():
+            if need.kind == "demo" and name not in env_values:
+                env_values[name] = _run_env.generate_value()
+                hidden.append(env_values[name])
     steps_seen: list[str] = []
     applier = stack_deploy.StackApplier(
         access=access, rendered=rendered, commit=commit, ref=ctx["ref"], env_values=env_values,
@@ -886,6 +970,7 @@ def main() -> int:
             check_exec_bits(g)
             check_serve(g)
             check_connector(g)
+            check_optional_setting(g)
         check_blocked_words(g)
         if g.root is not None:
             check_pull_request(g)

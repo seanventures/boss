@@ -950,6 +950,9 @@ export type PreviewRec = {
   repo?: string | null;
   error?: string | null;
   expires_at?: string | null;
+  /** The app's demo logins this preview signs in with (names only, e.g. DEMO_PASSWORD): BOSS
+   *  generated the password; the reviewer reads it in the app's Setup › Demo logins. */
+  demo_logins?: string[] | null;
 };
 
 export type FeedbackProposal = {

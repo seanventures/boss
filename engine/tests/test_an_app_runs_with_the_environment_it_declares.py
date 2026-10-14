@@ -187,14 +187,17 @@ def test_a_bound_value_for_the_required_secret_is_given(tmp_path):
     assert record["ok"] is True, record
 
 
-def test_a_crash_on_a_listed_variable_is_told_as_the_secret_it_needs(tmp_path):
+def test_a_crash_on_a_listed_variable_is_named_and_is_the_coders_to_fix(tmp_path):
+    """A listed name is optional (crun_0d82ab62): named, never a person's "needs a secret"."""
     root, seen = tmp_path / "repo", tmp_path / "seen"
     seen.mkdir()
     _app(root, seen, extra_required="OPENAI_API_KEY")
     (root / "helpdesk" / ".env.example").write_text("SESSION_SECRET=\nOPENAI_API_KEY=\n")
     record = ps.prove_app_serves(root, BUILT, timeout=20)
-    assert record["ok"] is False and record["needs_secret"] == ["OPENAI_API_KEY"]
-    assert record["error"].startswith("the app needs a secret: OPENAI_API_KEY (declared by .env.example)")
+    assert record["ok"] is False and not record.get("needs_secret")
+    assert record["optional_unset"] == ["OPENAI_API_KEY"]
+    assert record["error"].startswith(
+        "the app must start without OPENAI_API_KEY: it is optional (listed in .env.example)")
 
 
 def test_the_connector_smoke_check_names_the_secret_instead_of_a_bare_did_not_start():
@@ -304,9 +307,9 @@ def test_the_blocked_build_names_the_secret_and_where_to_set_it():
     error, reason = gov.blocked_gate_messages("qg_1", ["app_serves"], NEEDS)
     assert error.startswith("Blocked: the app needs a secret: STRIPE_SECRET_KEY "
                             "(declared by template payments). Set STRIPE_SECRET_KEY for "
-                            "environment build in the app's Secrets, then press Retry")
+                            "environments build, preview and deploy in the app's Secrets, then press Retry")
     assert "STRIPE_SECRET_KEY" in reason
     held = gate.hold_outcome(["app_serves", "template_tests"], app_serves=NEEDS,
                              template_tests={"because": "app_serves"})
-    assert held["next_step"].startswith("Set STRIPE_SECRET_KEY for environment build in the "
+    assert held["next_step"].startswith("Set STRIPE_SECRET_KEY for environments build, preview and deploy in the "
                                         "app's Secrets, then press Retry")

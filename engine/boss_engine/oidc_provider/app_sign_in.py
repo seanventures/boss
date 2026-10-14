@@ -358,7 +358,7 @@ def preview_run_environment(db: Any, *, project_id: str, run_id: Optional[str], 
     from ..app_links.service import app_index, project_org
     from ..templates.base_url import BASE_URL_ENV
     from ..templates.run_env import app_needs, needs_from_app_dir, resolve
-    from ..templates.secrets import values_for_env
+    from ..templates.secrets import ensure_demo_logins, values_for_env
 
     app_dir = Path(app_dir) if app_dir is not None else None
     by_run, _ = app_index(db, project_id) if run_id else ({}, None)
@@ -367,18 +367,28 @@ def preview_run_environment(db: Any, *, project_id: str, run_id: Optional[str], 
     applied = bool(app_key and org_id and db.execute(text(
         "SELECT 1 FROM app_template_applications WHERE project_id = :p AND app_key = :k "
         "AND status NOT IN ('failed', 'abandoned') LIMIT 1"), {"p": project_id, "k": app_key}).first())
-    if not applied:
-        # No template: only what the app's own files declare (a session key in .env.example).
+    if not (app_key and org_id):
+        # No app known: only what the app's own files declare (a session key in .env.example);
+        # a demo login password is generated fresh and shown for this preview alone.
         return resolve(needs_from_app_dir(app_dir), purpose="preview")
+    declared = (app_needs(db, project_id=project_id, app_key=app_key, app_dir=app_dir) if applied
+                else needs_from_app_dir(app_dir))
+    # THE APP'S DEMO LOGIN (its seed refuses to run without DEMO_PASSWORD): ONE generated value,
+    # stored as the app's `preview` binding, so every preview of it signs in with the password its
+    # reviewer reads in the app's Secrets (secrets.demo_login_values).
+    ensure_demo_logins(db, org_id=org_id, project_id=project_id, app_key=app_key, env="preview",
+                       names=[n for n, need in declared.items() if need.kind == "demo"])
     bound, withheld = values_for_env(db, org_id=org_id, project_id=project_id, app_key=app_key, env="preview")
     for why in withheld:
         logger.warning("preview %s: %s", preview_id, why)
-    env = resolve(app_needs(db, project_id=project_id, app_key=app_key, app_dir=app_dir),
-                  purpose="preview", bound=bound)
+    env = resolve(declared, purpose="preview", bound=bound)
+    env.shown = [n for n, need in declared.items() if need.kind == "demo" and n in env.values]
     base = preview_base(db, org_id, preview_id)
-    if base:
-        env.values.setdefault(BASE_URL_ENV, base)
-    sync_redirect_uris(db, org_id=org_id, project_id=project_id, app_key=app_key, also=preview_id)
+    if base and BASE_URL_ENV not in env.values:
+        # BOSS-issued, so it wins over "listed/unset" (run_env.supply).
+        env.supply({BASE_URL_ENV: base})
+    if applied:
+        sync_redirect_uris(db, org_id=org_id, project_id=project_id, app_key=app_key, also=preview_id)
     if env.values:
         from ..identity import redaction
 
