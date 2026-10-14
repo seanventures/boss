@@ -57,6 +57,11 @@ PREVIEW_FAILED = 17
 # see it. A PRD meeting sat queued for two hours behind benchmark work and every check in the
 # system reported green.
 WORK_STARVED = 18
+# THE APP EXITED WHEN BOSS STARTED IT TO CHECK IT (the serve proof, a multi-service backend in
+# verify or the template gate). HelpDesk AI (crun_f246d330) ended "exited (code 1) before it
+# answered HTTP" and was filed UNKNOWN and escalated, although the app had said why on stderr.
+# The app's own error is the evidence (services.app_start), and the fix is the build's.
+APP_START_FAILED = 19
 
 CLASS_NAMES = {
     SPEND_CAP: "provider spend/rate cap",
@@ -77,6 +82,7 @@ CLASS_NAMES = {
     PROMOTION_BLOCKED: "promotion blocked",
     PREVIEW_FAILED: "preview failed to start",
     WORK_STARVED: "work queued but never claimed",
+    APP_START_FAILED: "app exited at start",
 }
 
 # Exact phrases the engine itself writes. Deliberately NOT loose tokens: a bare "timeout"
@@ -104,6 +110,10 @@ _SIGNATURES: list[tuple[int, tuple[str, ...]]] = [
                       # retry. Without these it fell through to the generic buckets below and
                       # would have been prescribed an infrastructure retry that cannot add a UI.
                       "no page at the site root", "no_page_at_root")),
+    # After the preview's own phrases, before INFRASTRUCTURE: an app BOSS started to check it
+    # that exited is a property of the build (its own stderr says why), never a platform retry.
+    (APP_START_FAILED, ("before it answered http", "before serving http",
+                        "the app did not start", "the app exited at start")),
     (SPEND_CAP, ("spend limit", "usage limit", "rate limit exceeded", "quota exceeded",
                  "too many requests")),
     (TURN_CAP, ("error_max_turns", "max_turns_exhausted", "ran out of turns")),
@@ -314,6 +324,15 @@ REMEDIES: dict[int, tuple[Remedy, ...]] = {
         ESCALATE,
     ),
     UNKNOWN: (ESCALATE,),
+    APP_START_FAILED: (
+        # The repair round reads the verify output, which now carries the app's own error lines
+        # and the variables BOSS set by name (app_start) — a retry is a fix with evidence, not a
+        # blind re-run.
+        Remedy("repair_with_app_output",
+               "retry the build: its repair round is handed the app's own start error and the "
+               "environment names BOSS set", 3.0, "retry_code_task"),
+        ESCALATE,
+    ),
     PR_STEP_FAILED: (
         # The engine already retries the PR call three times before giving up, so a fourth
         # attempt from here would be the retry loop this design exists to avoid.

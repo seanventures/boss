@@ -1534,12 +1534,16 @@ def _template_gates(engine, run: dict, sandbox, *, root, cwd, changed_files: dic
             if tests_passed and stack_plan.backend is not None:
                 from .stack_verify import BackendDidNotStart, backend_running
 
+                _needs, _bound = _app_run_declarations(engine, run)
                 try:
-                    session = held.enter_context(backend_running(stack_plan))
+                    session = held.enter_context(backend_running(
+                        stack_plan, needs=_needs, bound=_bound, path="template_gate"))
                     session_env = session.env()
-                    backend_note = {"backend_url": session.url, "backend_command": session.command}
+                    backend_note = {"backend_url": session.url, "backend_command": session.command,
+                                    "backend_start": (session.record.get("backend")
+                                                      or {}).get("start")}
                 except BackendDidNotStart as exc:
-                    backend_note = {"backend_error": str(exc)[:1500]}
+                    backend_note = {"backend_error": str(exc)[:1500], "backend_start": exc.record}
 
         def _run(command: str, where) -> object:
             if session_env:
@@ -4676,6 +4680,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
 
         _review_change = review_input.ChangeUnderReview()
         _hollow_seats: dict[str, str] = {}
+        _stack_declarations: list = []
 
         def _run_manifest_verify(plan, *, record: bool):
             """boss.verify.yaml: the affected suites, from the repo root, no scaffold repair."""
@@ -4685,8 +4690,14 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             if plan.source == "stack" and not plan.error:
                 from .stack_verify import run_stack_plan
 
+                # The backend starts with what the app DECLARES — the serve proof's own
+                # declarations (templates.run_env), read once per build.
+                if not _stack_declarations:
+                    _stack_declarations.append(_app_run_declarations(engine, run))
+                _sneeds, _sbound = _stack_declarations[0]
                 results, record_ = run_stack_plan(sandbox, plan.stack,
-                                                  timeout=plan.timeout_seconds)
+                                                  timeout=plan.timeout_seconds,
+                                                  needs=_sneeds, bound=_sbound)
                 _stack_record.clear()
                 _stack_record.update({**plan.stack.as_dict(root), **record_})
                 result = results[-1] if results else CommandResult(

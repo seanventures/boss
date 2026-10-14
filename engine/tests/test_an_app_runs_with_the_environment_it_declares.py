@@ -214,7 +214,8 @@ def test_the_proof_preview_and_deploy_all_resolve_through_run_env():
 
     assert "_app_run_declarations(engine, run)" in inspect.getsource(gov._run_governed_code_task)
     assert "needs=_run_needs, bound=_run_bound" in inspect.getsource(gov._run_governed_code_task)
-    assert "resolve(" in inspect.getsource(ps.prove_app_serves)
+    assert "app_start_environment(" in inspect.getsource(ps.prove_app_serves)
+    assert "resolve(" in inspect.getsource(ps.app_start_environment)
     assert "resolve(" in inspect.getsource(app_sign_in.preview_run_environment)
     for launcher in (ps.start_preview, ps._respawn_process_preview, ps.start_container_preview):
         assert "preview_app_environment(" in inspect.getsource(launcher), launcher.__name__
