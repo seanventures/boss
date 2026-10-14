@@ -693,6 +693,7 @@ def resolve_gate_plan(
     changed: list[str] | None = None,
     pinned: PinnedVerifyManifest | None = None,
     layout: Any = None,
+    lineage: list[str] | None = None,
 ) -> GatePlan:
     """The verify plan for a provisioned checkout.
 
@@ -705,16 +706,25 @@ def resolve_gate_plan(
     ``pinned`` is the manifest read before any agent ran (``pin_verify_manifest``). The gate
     always passes it; without it the manifest is read from ``root`` now, which is right only
     for a checkout no agent has touched.
+
+    THE APP'S DIRECTORY is app_root.app_dir, from the run's identity: ``app_id`` (a pinned
+    app), else the folder the brief names (app_scope), then ``changed``, then ``lineage`` (the
+    files the app's lineage wrote before). Never the shared repository root for an app that
+    lives in a subfolder: a pom.xml at boss-sandbox's root made HelpDesk (helpdesk-ai/) "need
+    Java" three times.
     """
-    from . import verify_manifest
+    from . import app_root, verify_manifest
 
     base = Path(root)
+    # The named app: the pinned benchmark app, else the one folder the brief names.
+    named = app_id or app_scope(spec, None)
 
     def _cwd(commands: list[str]) -> Path:
         # resolve_verify_cwd looks for a package.json ancestor of the changed files, which
         # only means something to npm. A Python command stays at the root it was written for.
         npm = bool(commands) and commands[0].split(" ", 1)[0] in ("npm", "npx", "pnpm", "yarn")
-        return resolve_verify_cwd(base, app_id=app_id, changed=changed if npm else None)
+        return resolve_verify_cwd(base, app_id=named, changed=changed if npm else None,
+                                  lineage=lineage if npm else None)
 
     raw = spec.get("test_commands")
     if (isinstance(raw, str) and raw.strip()) or (isinstance(raw, (list, tuple)) and raw):
@@ -746,7 +756,7 @@ def resolve_gate_plan(
     # app never matches and keeps everything below.
     from . import stacks
 
-    stack_root = stacks.find_stack_root(base, changed, app_id)
+    stack_root = stacks.find_stack_root(base, changed, named)
     if stack_root is not None:
         stack = stacks.stack_plan(stack_root)
         return GatePlan([c for c, _ in stack.steps + stack.e2e_steps], stack_root, "stack",
@@ -763,22 +773,23 @@ def resolve_gate_plan(
             "its own manifest (requirements.txt / pom.xml / package.json), and the change does "
             "not have both yet. Put each service in its own directory under the app directory.")
         return GatePlan([], base, "stack_missing", message, error=message)
-    # A JAVA BUILD at the root (pom.xml / build.gradle) and no Node app there: Maven or Gradle
-    # tests and builds it. Without the toolchain the gate says so in words, not "mvn: not found".
+    # A JAVA BUILD in THE APP'S directory (pom.xml / build.gradle) and no Node app there: Maven
+    # or Gradle tests and builds it. Without the toolchain the gate says so in words, not "mvn:
+    # not found". The app's directory, never the repository root: app_root.java_build.
     from . import toolchains
 
-    node_here = (base / "package.json").is_file() \
+    app_dir, java = app_root.java_build(base, app_id=named, changed=changed, lineage=lineage)
+    node_here = (app_dir / "package.json").is_file() \
         or str(spec.get("project_kind", "")).lower() in _WEB_KINDS
-    java = None if node_here else toolchains.detect_java(base)
-    if java:
+    if java and not node_here:
         if not toolchains.has("java"):
             message = toolchains.missing_message("java", toolchains.build_file(java))
-            return GatePlan([], base, "toolchain_missing", message, error=message)
+            return GatePlan([], app_dir, "toolchain_missing", message, error=message)
         commands = toolchains.java_gate_commands(java)
         # A first build downloads its dependencies through egress: give it the manifest's room.
-        return GatePlan(commands, base, "toolchain", " && ".join(commands),
+        return GatePlan(commands, app_dir, "toolchain", " && ".join(commands),
                         timeout_seconds=toolchains.GATE_TIMEOUT_SECONDS,
-                        steps=[(c, base) for c in commands])
+                        steps=[(c, app_dir) for c in commands])
     commands = default_test_commands(spec, title)
     cwd = _cwd(commands)
     if commands == [PYTHON_TEST_CMD] and is_pytest_project(cwd):
@@ -820,6 +831,7 @@ def resolve_verify_cwd(
     *,
     app_id: str | None = None,
     changed: list[str] | None = None,
+    lineage: list[str] | None = None,
 ) -> Path:
     """Directory where the authoritative test command must run.
 
@@ -832,12 +844,15 @@ def resolve_verify_cwd(
     aid = str(app_id or "").strip().strip("/")
     if aid and (base / aid / "package.json").is_file():
         return base / aid
-    for rel in changed or []:
-        parts = Path(str(rel)).parts
-        for depth in range(len(parts), 0, -1):
-            candidate = base.joinpath(*parts[:depth])
-            if candidate.is_dir() and (candidate / "package.json").is_file():
-                return candidate
+    # This run's files first, then the files the app's lineage wrote (a repair whose own diff
+    # is a README still builds the app its lineage built).
+    for paths in (changed, lineage):
+        for rel in paths or []:
+            parts = Path(str(rel)).parts
+            for depth in range(len(parts), 0, -1):
+                candidate = base.joinpath(*parts[:depth])
+                if candidate.is_dir() and (candidate / "package.json").is_file():
+                    return candidate
     return base
 
 
