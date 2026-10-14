@@ -307,6 +307,7 @@ services:
       BOSS_LLM_ENGINE: ${BOSS_LLM_ENGINE:-auto}
       BOSS_CHAT_LLM_ENGINE: ${BOSS_CHAT_LLM_ENGINE:-}
       BOSS_CLAUDE_CLI_MODEL: ${BOSS_CLAUDE_CLI_MODEL:-}
+      BOSS_AGENT_SDK_MODEL: ${BOSS_AGENT_SDK_MODEL:-}
       BOSS_CODE_AGENT_LOW_COST_MODEL: ${BOSS_CODE_AGENT_LOW_COST_MODEL:-}
       BOSS_CODE_AGENT_STRONG_MODEL: ${BOSS_CODE_AGENT_STRONG_MODEL:-}
       # Token prices per model, e.g. a local model at zero. Empty uses BOSS's built-in table.
@@ -482,6 +483,7 @@ services:
       BOSS_LLM_ENGINE: ${BOSS_LLM_ENGINE:-auto}
       BOSS_CHAT_LLM_ENGINE: ${BOSS_CHAT_LLM_ENGINE:-}
       BOSS_CLAUDE_CLI_MODEL: ${BOSS_CLAUDE_CLI_MODEL:-}
+      BOSS_AGENT_SDK_MODEL: ${BOSS_AGENT_SDK_MODEL:-}
       BOSS_CODE_AGENT_LOW_COST_MODEL: ${BOSS_CODE_AGENT_LOW_COST_MODEL:-}
       BOSS_CODE_AGENT_STRONG_MODEL: ${BOSS_CODE_AGENT_STRONG_MODEL:-}
       # Token prices per model, e.g. a local model at zero. Empty uses BOSS's built-in table.

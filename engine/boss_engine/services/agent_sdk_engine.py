@@ -422,7 +422,6 @@ def build_agent_class():
     """`ClaudeAgentSdkAgent`, defined against code_agent at call time (no import cycle)."""
     from . import code_agent as ca
     from .agent_turns import StreamParser, capture_enabled
-    from .llm_telemetry import record_agent_turns
 
     class ClaudeAgentSdkAgent(ca.ClaudeCodeAgent):
         """claude_code's agent, its sessions started through the Claude Agent SDK on the
@@ -534,7 +533,7 @@ def build_agent_class():
                 written = {"rows": 0}
                 if capturing:
                     try:
-                        record_agent_turns([], engine_name=self.engine, model=model_name,
+                        ca.record_agent_turns([], engine_name=self.engine, model=model_name,
                                            prompt=prompt)
                     except Exception:  # noqa: BLE001
                         pass
@@ -544,7 +543,7 @@ def build_agent_class():
                     if not produced or not capturing:
                         return
                     try:
-                        written["rows"] += int(record_agent_turns(
+                        written["rows"] += int(ca.record_agent_turns(
                             produced, engine_name=self.engine, model=model_name) or 0)
                     except Exception:  # noqa: BLE001
                         pass
@@ -638,3 +637,64 @@ def agent_class():
 def build_agent(settings: Any):
     """The harness builder (code_agent._register_builtin_harnesses)."""
     return agent_class()(settings)
+
+
+# ── Chat: the same SDK, no tools ──────────────────────────────────────────────────────────────
+
+def make_chat_adapter(settings: Any, *, model: Optional[str] = None):
+    """The chat/generation backend for a project whose Chat job is pinned to this engine
+    (model_routing.adapter_for): ClaudeCliAdapter's prompt rendering and JSON contract, each
+    call a tool-less SDK session on the Anthropic API key."""
+    from .agent_env import agent_environment
+    from .claude_cli_adapter import ClaudeCliAdapter
+
+    class AgentSdkChatAdapter(ClaudeCliAdapter):
+        _session_default = "agent-sdk"
+        _engine_name = ENGINE
+
+        def _child_env(self) -> dict:
+            env, cred = key_env(self.settings, agent_environment(os.environ))
+            self._billing = cred.billing
+            return env
+
+        def _invoke_once(self, prompt: str, *, system_prompt: Optional[str] = None) -> dict:
+            from claude_agent_sdk import ClaudeAgentOptions
+
+            timeout, _own = self._timeouts()
+            options = ClaudeAgentOptions(
+                cwd=self._scratch_dir(), tools=[], strict_mcp_config=True,
+                max_turns=2 if system_prompt is not None else None,
+                model=(self.model_override or getattr(self.settings, "agent_sdk_model", "")
+                       or DEFAULT_MODEL),
+                system_prompt=(system_prompt if system_prompt is not None
+                               else {"type": "preset", "preset": "claude_code"}),
+                env=self._child_env(),
+                cli_path=str(getattr(self.settings, "agent_sdk_cli_path", "") or "").strip()
+                or None)
+            result = run_session(
+                prompt, options, timeout=float(timeout),
+                transport_factory=lambda: make_owned_transport(prompt, options, seat="chat"))
+            if result is None:
+                raise RuntimeError("claude agent sdk session ended without a result")
+            if system_prompt is not None:
+                self._judge_generation(result)
+            if result.get("is_error"):
+                raise RuntimeError(
+                    f"claude agent sdk error: {result.get('result') or result.get('subtype')}")
+            return result
+
+        def stream_text_response(self, prompt: str, system_prompt: Optional[str] = None,
+                                 model: Optional[str] = None):
+            """One piece (the whole reply), then the usage dict: the shape a talk reads."""
+            try:
+                data = self._invoke(prompt, system_prompt=system_prompt or self.GENERATION_SYSTEM)
+            except Exception as exc:  # noqa: BLE001 — observed, then re-raised unchanged
+                self._observe_capacity(ok=False, error=str(exc))
+                raise
+            self._observe_capacity(ok=True, error=None)
+            text = str(data.get("result") or "")
+            if text:
+                yield text
+            yield self._usage(data)
+
+    return AgentSdkChatAdapter(settings, model=model)

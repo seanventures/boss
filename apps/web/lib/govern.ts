@@ -219,7 +219,7 @@ const PROVIDER: Record<string, string> = {
   vertex: "Vertex AI", azure: "Azure OpenAI", azure_openai: "Azure OpenAI", bedrock: "AWS Bedrock",
   mistral: "Mistral", groq: "Groq", deepseek: "DeepSeek", openrouter: "OpenRouter", ollama: "Ollama",
   together: "Together AI", fireworks: "Fireworks", xai: "xAI", cohere: "Cohere", custom: "Custom model",
-  claude_code: "Claude Code", codex: "Codex",
+  claude_code: "Claude Code", codex: "Codex", claude_agent_sdk: "Claude Agent SDK",
 };
 
 /** A model id as people say it: `claude-sonnet-4-5-20250929` → `Claude Sonnet 4.5`,
