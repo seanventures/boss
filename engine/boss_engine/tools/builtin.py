@@ -4480,8 +4480,10 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
         "WILL THIS RUN WORK, before it spends anything: checks each step's REAL infrastructure "
         "(the run's consent vs every call the step makes, GitHub access and CI, the sandbox, "
         "budget headroom, the app's variables per environment, the deploy's target, port and "
-        "manifest, smoke's contract) and answers per step ready / fixable / will_fail / unknown "
-        "with the evidence and the fix. checkpoint 'pre_run' before starting; 'pre_deploy' "
+        "manifest, smoke's contract), plus BOSS's recent BEHAVIOUR for this app (recurring "
+        "failures, the app's real start logs, review/restart/retry history, split app keys, "
+        "leaked leases), and answers per check ready / fixable / will_fail / unknown "
+        "with the evidence and the fix (and which fixes BOSS can make itself). checkpoint 'pre_run' before starting; 'pre_deploy' "
         "after the first build, against its saved workspace (give build_run_id). Read-only. Use "
         "it before offering to start a workflow and when asked 'why will this fail'.",
         _obj({"workflow": {"type": "string",

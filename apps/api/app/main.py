@@ -27091,7 +27091,10 @@ def precheck_workflow(workflow_id: str, payload: ProjectBody) -> dict:
 
     `workflow_id` is a workflow key, name, definition id or version id. Body: `project_id`,
     optional `checkpoint` (pre_run | pre_deploy), `input` (the run input it would start with),
-    `build_run_id` (pre_deploy: the pass-1 build, whose saved workspace is read), `offline`."""
+    `build_run_id` (pre_deploy: the pass-1 build, whose saved workspace is read), `offline`,
+    `families` (history, logs, data: BOSS's recent behaviour; default all), `history_days`.
+    The answer lists the auto-fixes BOSS could make (`fixes`, a dry run) and the shortest path
+    per will_fail (`explain`); applying them is /precheck/fix."""
     return _precheck_response(payload.payload(), workflow=workflow_id)
 
 
@@ -27103,16 +27106,40 @@ def precheck_workflow_run(run_id: str, payload: ProjectBody) -> dict:
     return _precheck_response(payload.payload(), run_id=run_id)
 
 
+@app.post("/v1/workflows/{workflow_id}/precheck/fix")
+@permit(P.WORKFLOW_RUN_CONTROL, scope=Scope.project(body="project_id"))
+def precheck_workflow_fix(workflow_id: str, payload: ProjectBody) -> dict:
+    """The pre-check, then the auto-fixes it lists as "fixable: BOSS can do this" (generated
+    keys, secrets re-filed from a split app key by copy, leases past expiry released, a
+    never-deployed target's port released, the browser cache warmed). `fix` (default false)
+    applies them; false returns the plan. Each fix is safe, reversible, idempotent and recorded
+    as `precheck.autofix_applied` by "boss precheck"; nothing is deleted."""
+    return _precheck_response(payload.payload(), workflow=workflow_id, may_fix=True)
+
+
+@app.post("/v1/workflow-runs/{run_id}/precheck/fix")
+@permit(P.WORKFLOW_RUN_CONTROL, scope=Scope.project(body="project_id"))
+def precheck_workflow_run_fix(run_id: str, payload: ProjectBody) -> dict:
+    """The run's pre-check, then its auto-fixes (see /v1/workflows/{id}/precheck/fix)."""
+    return _precheck_response(payload.payload(), run_id=run_id, may_fix=True)
+
+
 def _precheck_response(body: dict, *, workflow: Optional[str] = None,
-                       run_id: Optional[str] = None) -> dict:
+                       run_id: Optional[str] = None, may_fix: bool = False) -> dict:
     from boss_engine.services import workflow_precheck
 
     project_id = str(body.get("project_id") or "").strip()
     if not project_id:
         raise HTTPException(status_code=422, detail="project_id is required")
+    fix = body.get("fix") is True
+    if fix and not may_fix:
+        raise HTTPException(status_code=422, detail=(
+            "fix: true changes data; POST it to the …/precheck/fix route "
+            "(workflow_run:control). This route is read-only."))
     with begin(engine) as connection:
         require_project_reader(connection, project_id)
     supplied = body.get("input")
+    families = body.get("families")
     try:
         return workflow_precheck.precheck(
             engine, settings, project_id=project_id, actor=str(body.get("actor") or "ceo"),
@@ -27122,7 +27149,9 @@ def _precheck_response(body: dict, *, workflow: Optional[str] = None,
             # Never a server path from a caller: a pre_deploy reads the build's own saved
             # workspace (workflow_precheck.materialize_build).
             build_run_id=body.get("build_run_id") or None,
-            offline=bool(body.get("offline")))
+            offline=bool(body.get("offline")),
+            families=[str(f) for f in families] if isinstance(families, list) else None,
+            history_days=int(body.get("history_days") or 7), fix=fix)
     except workflow_precheck.PrecheckError as error:
         raise HTTPException(status_code=404 if "no " in str(error) else 422,
                             detail=str(error)) from error

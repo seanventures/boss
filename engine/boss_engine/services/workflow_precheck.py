@@ -121,7 +121,8 @@ CAPABILITY_PRECHECKS: dict[str, CapabilityPrecheck] = {
     "spec_review": NO_CHECKS("a person's (or the panel's) sign-off: nothing runs"),
     "architecture": CapabilityPrecheck(("sandbox.worker", "sandbox.model")),
     "build": CapabilityPrecheck(_BUILDS + ("app_env", "app.test_plan", "app.dependencies",
-                                           "app.secret_scan"),
+                                           "app.secret_scan", "code.lockfile",
+                                           "code.browser_cache"),
                                 # An `extend` build (Incremental Build) builds on the branch.
                                 invokes_tools=("extend_code_task@inputs.extend",),
                                 reserves=("code_task_budget_usd_micros", 1), app_env="build"),
@@ -150,7 +151,8 @@ CAPABILITY_PRECHECKS: dict[str, CapabilityPrecheck] = {
                                      reserves=("code_task_budget_usd_micros", 1)),
     "deploy": CapabilityPrecheck(("authority.consent", "github.access", "sandbox.worker",
                                   "app_env", "deploy.target", "deploy.manifest",
-                                  "deploy.database", "deploy.health"), app_env="deploy"),
+                                  "deploy.database", "deploy.health", "code.start_command",
+                                  "code.prod_refusal"), app_env="deploy"),
     "video_edit": CapabilityPrecheck(("sandbox.worker", "sandbox.disk")),
     "social_publish": NO_CHECKS("readiness checks the channel connection; nothing else to probe"),
     "monitor": CapabilityPrecheck(_INFRA),
@@ -210,6 +212,11 @@ class Context:
     build_run_id: str = ""
     #: No network, no subprocesses: the start door's subset.
     offline: bool = False
+    #: The run-level families read from BOSS's recent behaviour (workflow_precheck_behaviour):
+    #: history, logs, data. Empty at the start door (it stays DB-cheap and per-run).
+    families: tuple[str, ...] = ()
+    #: How far back the history family reads.
+    history_days: int = 7
     memo: dict[str, Any] = field(default_factory=dict)
 
     def once(self, key: str, compute: Callable[[], Any]) -> Any:
@@ -1505,6 +1512,263 @@ def check_health(ctx: Context, step: dict[str, Any]) -> dict[str, Any]:
     return result("deploy.health", "ready", f"health checks {', '.join(paths)}, served")
 
 
+# ── Code-aware checks on the app tree (PRE-DEPLOY) ────────────────────────────────────────────
+
+_BUILD_DIRS = ("dist/", "build/", "out/", ".output/", "lib/")
+_RUNS_FILE = re.compile(r"\b(?:node|tsx|ts-node|bun)\s+(?:--?[\w-]+(?:[= ][\w./-]+)?\s+)*"
+                        r"((?:\./)?[\w@./-]+\.(?:c?m?js|ts|tsx))\b")
+#: What can emit server JavaScript into a build directory. `vite build` alone emits the CLIENT
+#: bundle; with `--ssr` (or a server build script) it emits a server.
+_EMITS_SERVER = re.compile(r"\b(?:tsc\b|tsup|esbuild|rollup|webpack|ncc|swc|babel\b|"
+                           r"vite build[^&;|]*--ssr|nest build|next build|build:server|"
+                           r"build:api|build:backend)")
+
+
+@_check("code.start_command", "The start command runs a file the build produces", (PRE_DEPLOY,))
+def check_start_command(ctx: Context, step: dict[str, Any]) -> Optional[dict[str, Any]]:
+    missing = _needs_tree(ctx, "code.start_command")
+    if missing:
+        return missing
+    pkg = _package_json(ctx)
+    if pkg is None:
+        return None
+    scripts = pkg.get("scripts") or {}
+    start = str(scripts.get("start") or "")
+    if not start:
+        return result("code.start_command", "unknown", "no `start` script: the deploy needs "
+                      "its manifest (or the legacy guess) to know how the app runs",
+                      action="Add a `start` script (or declare the command in boss.deploy.yaml).")
+    build_chain = " && ".join(str(v) for k, v in scripts.items()
+                              if k == "build" or k.startswith("build:"))
+    problems, notes = [], []
+    for target in _RUNS_FILE.findall(start):
+        rel = target.removeprefix("./")
+        if (ctx.app_dir / rel).exists():
+            notes.append(f"{rel} is in the tree")
+            continue
+        if rel.startswith(_BUILD_DIRS):
+            if _EMITS_SERVER.search(build_chain):
+                notes.append(f"{rel} is built by `{build_chain[:80]}`")
+            else:
+                problems.append(f"`start` runs {rel}, which is not in the tree, and the build "
+                                f"(`{build_chain or 'no build script'}`) emits no server code "
+                                "into it" + (" — `vite build` alone emits the client bundle"
+                                             if "vite build" in build_chain else ""))
+        else:
+            problems.append(f"`start` runs {rel}, which is not in the tree and is not build "
+                            "output")
+    evidence = f"start: `{start[:120]}`" + (f"; {'; '.join(notes)}" if notes else "")
+    if problems:
+        return result("code.start_command", "will_fail", evidence + ". " + " ".join(problems),
+                      action="Make `build` emit the server (tsc/esbuild into that path) or point "
+                             "`start` at the source with tsx.")
+    return result("code.start_command", "ready", evidence)
+
+
+_PROD_GUARD = re.compile(r"NODE_ENV\s*[!=]==?\s*[\"']production[\"']|[\"']production[\"']\s*"
+                         r"[!=]==?\s*\w*NODE_ENV|\bis_?[Pp]rod(?:uction)?\b|\bIS_PROD\b|"
+                         r"\bisProduction\b|\bprod(?:uction)?Mode\b", re.S)
+
+
+def production_refusals(app_dir: Optional[Path]) -> dict[str, dict[str, list[str]]]:
+    """{NAME: {"required": [where], "forbidden": [where]}} for start-up errors the app raises
+    only under NODE_ENV=production (a production guard within the few lines before the throw)."""
+    out: dict[str, dict[str, list[str]]] = {}
+    if app_dir is None or not app_dir.is_dir():
+        return out
+    for path in _source_files(app_dir):
+        rel = str(path.relative_to(app_dir))
+        if "test" in rel.split("/")[0] or ".test." in path.name or ".spec." in path.name:
+            continue
+        try:
+            body = path.read_text(errors="ignore")
+        except OSError:
+            continue
+        if not _PROD_GUARD.search(body):
+            continue
+        for m in _THROW.finditer(body):
+            line = body.count("\n", 0, m.start()) + 1
+            window = "\n".join(body.splitlines()[max(0, line - 7):line])
+            if not _PROD_GUARD.search(window):
+                continue
+            message = m.group(1)
+            names = [n for n in _ENV_NAME.findall(message) if n not in ("BOSS", "HTTP", "JSON",
+                                                                        "NODE_ENV")]
+            if not names:
+                continue
+            kind = ("forbidden" if _FORBIDDEN_WORDS.search(message) else "required")
+            out.setdefault(names[0], {"required": [], "forbidden": []})[kind].append(
+                f"{rel}:{line}")
+    return out
+
+
+def _deploy_bindings(ctx: Context) -> dict[str, str]:
+    key = _app_key(ctx)
+    if not key:
+        return {}
+    rows = ctx.savepoint(lambda: ctx.connection.execute(text(
+        "SELECT name, mode FROM app_secret_bindings WHERE project_id = :p AND app_key = :a AND "
+        "env = 'deploy'"), {"p": ctx.project_id, "a": key}).mappings().all(), default=[]) or []
+    return {str(r["name"]): str(r["mode"]) for r in rows}
+
+
+@_check("code.prod_refusal", "The app does not refuse in production what BOSS gives it",
+        (PRE_DEPLOY,))
+def check_prod_refusal(ctx: Context, step: dict[str, Any]) -> Optional[dict[str, Any]]:
+    missing = _needs_tree(ctx, "code.prod_refusal")
+    if missing:
+        return missing
+    found = ctx.once("prod_refusals", lambda: production_refusals(ctx.app_dir))
+    if not found:
+        return result("code.prod_refusal", "ready", "no start-up error guarded by "
+                      "NODE_ENV=production")
+    bound = _deploy_bindings(ctx)
+    declared = dict(_declared_needs(ctx))
+    bites, risks = [], []
+    for name, where in sorted(found.items()):
+        mode = bound.get(name)
+        kind = getattr(declared.get(name), "kind", "") if name in declared else ""
+        if where["forbidden"] and mode:
+            bites.append(f"{name}: the app refuses it in production ({where['forbidden'][0]}) "
+                         f"and BOSS binds it for deploy ({mode})")
+        elif where["required"] and mode in ("stub", "test"):
+            bites.append(f"{name}: the app demands a real value in production "
+                         f"({where['required'][0]}) and BOSS gives deploy a {mode} value")
+        elif where["required"] and not mode and kind not in ("generated",):
+            risks.append(f"{name}: required in production ({where['required'][0]}), no deploy "
+                         "value bound")
+    evidence = f"production-only refusals: {', '.join(sorted(found))}"
+    if bites:
+        return result("code.prod_refusal", "will_fail", evidence + ". " + "; ".join(bites),
+                      action="Unbind the forbidden value for deploy (or set the real one), or "
+                             "relax the app's production guard.", details={"names": sorted(found)})
+    if risks:
+        return result("code.prod_refusal", "fixable", evidence + ". " + "; ".join(risks),
+                      action="Set the named values for env deploy in the app's Secrets.")
+    return result("code.prod_refusal", "ready", evidence + "; BOSS gives none of them a value "
+                  "the app refuses")
+
+
+def lockfile_drift(app_dir: Path) -> Optional[list[str]]:
+    """Dependencies package.json declares that package-lock.json does not record (or records at
+    another spec). None when there is no lockfile to compare."""
+    lock_path = app_dir / "package-lock.json"
+    pkg_path = app_dir / "package.json"
+    if not lock_path.is_file() or not pkg_path.is_file():
+        return None
+    try:
+        lock = json.loads(lock_path.read_text())
+        pkg = json.loads(pkg_path.read_text())
+    except (OSError, ValueError):
+        return ["package-lock.json does not parse"]
+    root = ((lock.get("packages") or {}).get("") or {}) if isinstance(lock, dict) else {}
+    drift = []
+    for section in ("dependencies", "devDependencies", "optionalDependencies"):
+        want = pkg.get(section) or {}
+        have = root.get(section)
+        if have is None and lock.get("lockfileVersion", 1) == 1:
+            have = {k: "*" for k in (lock.get("dependencies") or {})}
+        have = have or {}
+        for name, spec in want.items():
+            if name not in have:
+                drift.append(f"{name} missing")
+            elif have[name] not in ("*", spec):
+                drift.append(f"{name} {have[name]} → {spec}")
+        for name in have:
+            if name not in want and lock.get("lockfileVersion", 1) != 1:
+                drift.append(f"{name} no longer declared")
+    return drift
+
+
+def _regenerate_lock_dry_run(app_dir: Path) -> str:
+    """npm regenerates the lockfile in a throwaway copy; returns what changed, in words."""
+    if not shutil.which("npm"):
+        return "npm is not installed where the pre-check ran"
+    with tempfile.TemporaryDirectory() as tmp:
+        for name in ("package.json", "package-lock.json", ".npmrc"):
+            if (app_dir / name).is_file():
+                shutil.copy(app_dir / name, Path(tmp) / name)
+        try:
+            proc = subprocess.run(["npm", "install", "--package-lock-only", "--ignore-scripts",
+                                   "--no-audit", "--no-fund", "--loglevel=error"], cwd=tmp,
+                                  capture_output=True, text=True, timeout=90)
+        except subprocess.TimeoutExpired:
+            return "npm took over 90 s"
+        if proc.returncode != 0:
+            return f"npm exited {proc.returncode}: {(proc.stderr or proc.stdout)[-200:]}"
+        after = lockfile_drift(Path(tmp)) or []
+        return ("regenerated in a throwaway copy: in sync afterwards" if not after else
+                f"regenerated in a throwaway copy; still drifting: {', '.join(after[:4])}")
+
+
+@_check("code.lockfile", "The lockfile is in sync with package.json", (PRE_DEPLOY,), fast=False)
+def check_lockfile(ctx: Context, step: dict[str, Any]) -> Optional[dict[str, Any]]:
+    missing = _needs_tree(ctx, "code.lockfile")
+    if missing:
+        return missing
+    if not (ctx.app_dir / "package.json").is_file():
+        return None
+    drift = lockfile_drift(ctx.app_dir)
+    if drift is None:
+        return result("code.lockfile", "unknown", "no package-lock.json: every install resolves "
+                      "afresh, so two builds of one commit can differ")
+    if not drift:
+        return result("code.lockfile", "ready", "package-lock.json records every declared "
+                      "dependency at its declared spec")
+    report = "" if ctx.offline else _regenerate_lock_dry_run(ctx.app_dir)
+    return result("code.lockfile", "fixable", f"package-lock.json drifts from package.json: "
+                  f"{', '.join(drift[:6])}" + (f" (+{len(drift) - 6})" if len(drift) > 6 else "")
+                  + " — `npm ci` refuses it; `npm install` rewrites it into the PR"
+                  + (f". {report}" if report else ""),
+                  action="fixable: BOSS can do this (dry run only) — regenerate the lockfile in "
+                         "a throwaway copy and report; commit `npm install` in the app to fix",
+                  auto=True, details={"autofix": {"fix": "lockfile.regenerate",
+                                                  "args": {"report": report or None}}})
+
+
+def playwright_version(app_dir: Optional[Path]) -> Optional[str]:
+    """The Playwright the app's tests run: installed packages, else the lockfile."""
+    if app_dir is None:
+        return None
+    from . import playwright_cache
+
+    found = playwright_cache.project_version(app_dir)
+    if found:
+        return found
+    try:
+        lock = json.loads((app_dir / "package-lock.json").read_text())
+    except (OSError, ValueError):
+        return None
+    for name in ("node_modules/@playwright/test", "node_modules/playwright"):
+        version = ((lock.get("packages") or {}).get(name) or {}).get("version")
+        if isinstance(version, str) and re.match(r"^\d+\.\d+\.\d+$", version):
+            return version
+    return None
+
+
+@_check("code.browser_cache", "The browser the app's tests need is already cached",
+        (PRE_DEPLOY,))
+def check_browser_cache(ctx: Context, step: dict[str, Any]) -> Optional[dict[str, Any]]:
+    if ctx.app_dir is None:
+        return None
+    version = playwright_version(ctx.app_dir)
+    if not version:
+        return None
+    from . import playwright_cache
+
+    base = playwright_cache.browsers_dir(create=False)
+    if base is None:
+        return result("code.browser_cache", "unknown", f"the app's tests run Playwright "
+                      f"{version}; this process has no shared browser cache to check")
+    if playwright_cache.is_cached(version, base):
+        return result("code.browser_cache", "ready", f"Chromium for Playwright {version} is "
+                      f"cached in {base}")
+    return result("code.browser_cache", "fixable", f"Chromium for Playwright {version} is not "
+                  f"cached in {base}: the first test run downloads it inside the build's time",
+                  action="fixable: BOSS can do this — warm the browser cache now", auto=True,
+                  details={"autofix": {"fix": "cache.playwright", "args": {"version": version}}})
+
+
 # ── Deploy target, port, smoke ────────────────────────────────────────────────────────────────
 
 def _deploy_inputs(ctx: Context, step: Mapping[str, Any]) -> dict[str, Any]:
@@ -1718,6 +1982,17 @@ def _fail_step_consults_advisory() -> bool:
         return False
 
 
+#: Capabilities that commit to the run's branch, and those that ship whatever the branch holds.
+_PUSHES = frozenset({"more_tests", "plrr", "security_fix", "retry_build"})
+_SHIPS_BRANCH = frozenset({"deploy", "redeploy", "preview", "wait_for_ci"})
+
+
+def _pushes_to_branch(step: Mapping[str, Any]) -> bool:
+    key = _cap_key(step)
+    binding = step.get("binding") if isinstance(step.get("binding"), dict) else {}
+    return key in _PUSHES or (key == "build" and bool((binding.get("inputs") or {}).get("extend")))
+
+
 def lifecycle_checks(ctx: Context, step_results: Mapping[str, list[dict[str, Any]]]
                      ) -> list[dict[str, Any]]:
     """Static policy checks over the spec: what a failure in one branch does to the others."""
@@ -1754,6 +2029,25 @@ def lifecycle_checks(ctx: Context, step_results: Mapping[str, list[dict[str, Any
                               "here is known to fail, so this is a risk, not a verdict.",
                               action="BOSS change: end the grant only when no branch is live; "
                                      "let an advisory branch fail without stopping the run."))
+    for g in groups:
+        branch_steps = g["branches"]
+        pushers = {b: [s for s in steps if _pushes_to_branch(by_id.get(s) or {})]
+                   for b, steps in branch_steps.items()}
+        shippers = {b: [s for s in steps if _cap_key(by_id.get(s) or {}) in _SHIPS_BRANCH]
+                    for b, steps in branch_steps.items()}
+        pairs = [(p, s) for bp, ps in pushers.items() for bs, ss in shippers.items()
+                 if bp != bs for p in ps for s in ss]
+        if pairs:
+            out.append(result(
+                "lifecycle.concurrent_push", "unknown",
+                f"{g['id']} runs " + ", ".join(f"{p} (pushes to the branch)" for p in
+                                               sorted({p for p, _ in pairs}))
+                + " alongside " + ", ".join(f"{s} (ships the branch)" for s in
+                                            sorted({s for _, s in pairs}))
+                + ": a push landing while the deploy reads the branch ships a commit nobody "
+                  "reviewed in this run, or races the deploy's checkout",
+                action="BOSS change: the deploy pins the commit pass 1 built; pass 2 pushes to "
+                       "its own branch until the join."))
     advisory = sorted(getattr(runner, "_ADVISORY_CAPABILITIES", frozenset()))
     adv_steps = [sid for sid, s in by_id.items() if _cap_key(s) in advisory]
     if adv_steps and not _fail_step_consults_advisory():
@@ -1836,6 +2130,10 @@ def run_checks(ctx: Context, *, only_fast: bool = False) -> dict[str, Any]:
         c["skip_allowed"] = False
     if run_level:
         steps_out.insert(0, {"step_id": RUN_STEP, "capability": "workflow", "checks": run_level})
+    if ctx.families and not only_fast:
+        from .workflow_precheck_behaviour import run_families
+
+        steps_out += run_families(ctx, ctx.families)
     every = [c for s in steps_out for c in s["checks"]]
     counts = {v: sum(1 for c in every if c["verdict"] == v) for v in VERDICTS}
     blocking = [f"{s['step_id']}:{c['id']}" for s in steps_out for c in s["checks"]
@@ -1890,7 +2188,8 @@ def build_context(connection: Connection, settings: Any, *, project_id: str, act
                   run_id: Optional[str] = None, run_input: Optional[Mapping[str, Any]] = None,
                   checkpoint: str = PRE_RUN, app_dir: Optional[str] = None,
                   repo_root: Optional[str] = None, build_run_id: Optional[str] = None,
-                  offline: bool = False) -> Context:
+                  offline: bool = False, families: Iterable[str] = (),
+                  history_days: int = 7) -> Context:
     from . import workflows
 
     if checkpoint not in CHECKPOINTS:
@@ -1944,7 +2243,8 @@ def build_context(connection: Connection, settings: Any, *, project_id: str, act
                    spec=spec, run_input=data, checkpoint=checkpoint, version_id=str(version_id),
                    workflow_key=str(key), workflow_name=str(name), run_id=str(run_id or ""),
                    app_dir=app_path, repo_root=root, build_run_id=str(build_run_id or ""),
-                   offline=offline)
+                   offline=offline, families=tuple(families or ()),
+                   history_days=max(1, int(history_days or 7)))
 
 
 def precheck(engine: Any, settings: Any = None, *, project_id: str, actor: str = "ceo",
@@ -1952,12 +2252,23 @@ def precheck(engine: Any, settings: Any = None, *, project_id: str, actor: str =
              run_id: Optional[str] = None, run_input: Optional[Mapping[str, Any]] = None,
              checkpoint: str = PRE_RUN, app_dir: Optional[str] = None,
              repo_root: Optional[str] = None, build_run_id: Optional[str] = None,
-             offline: bool = False) -> dict[str, Any]:
+             offline: bool = False, families: Optional[Iterable[str]] = None,
+             history_days: int = 7, fix: bool = False) -> dict[str, Any]:
     """THE PRE-CHECK. Read-only: runs in a transaction that is always rolled back.
 
     PRE_DEPLOY with a build and no `app_dir` reads the build's own saved workspace (the files its
     lineage wrote, governed_code_task_service.layered_workspace_files) into a temporary
-    directory, removed afterwards."""
+    directory, removed afterwards.
+
+    `families` (default: all of history, logs, data) adds the run-level checks that read BOSS's
+    recent behaviour (workflow_precheck_behaviour). The report always lists the auto-fixes BOSS
+    could make (`fixes`, dry run) and the shortest path per will_fail (`explain`); `fix=True`
+    applies the auto-fixes AFTER the read-only pass, each in its own transaction, recorded as
+    `precheck.autofix_applied` by "boss precheck"."""
+    from . import workflow_precheck_behaviour as behaviour
+
+    if families is None:
+        families = behaviour.FAMILIES
     started = time.monotonic()
     scratch: Optional[tempfile.TemporaryDirectory] = None
     with engine.connect() as connection:
@@ -1966,7 +2277,8 @@ def precheck(engine: Any, settings: Any = None, *, project_id: str, actor: str =
             ctx = build_context(connection, settings, project_id=project_id, actor=actor,
                                 workflow=workflow, version_id=version_id, run_id=run_id,
                                 run_input=run_input, checkpoint=checkpoint, app_dir=app_dir,
-                                repo_root=repo_root, build_run_id=build_run_id, offline=offline)
+                                repo_root=repo_root, build_run_id=build_run_id, offline=offline,
+                                families=families, history_days=history_days)
             if ctx.checkpoint == PRE_DEPLOY and ctx.app_dir is None and ctx.build_run_id:
                 scratch = tempfile.TemporaryDirectory(prefix="boss-precheck-")
                 ctx.app_dir = materialize_build(connection, ctx.build_run_id, Path(scratch.name))
@@ -1975,6 +2287,9 @@ def precheck(engine: Any, settings: Any = None, *, project_id: str, actor: str =
             tx.rollback()
             if scratch is not None:
                 scratch.cleanup()
+    out["fixes"] = behaviour.apply_fixes(engine, ctx.settings, project_id, out, apply=bool(fix))
+    out["explain"] = behaviour.explain(out)
+    out["summary"]["fixable_by_boss"] = len(out["fixes"])
     out["summary"]["seconds"] = round(time.monotonic() - started, 2)
     return out
 
@@ -2158,10 +2473,80 @@ def skipped_by_precheck(context: Mapping[str, Any], step_id: str) -> Optional[di
     return None
 
 
+# ── What each check means (one line each; test_every_check_id_has_a_doc_line) ─────────────────
+
+CHECK_DOCS: dict[str, str] = {
+    "authority.consent": "the run's consent and the agent's Passport cover every tool the step "
+                         "calls, including the ones its runner calls itself",
+    "github.access": "the repository binding's last probes and a live GET: read, push, the "
+                     "default branch",
+    "github.ci": "the repository's CI covers the app's path and has the services it needs",
+    "sandbox.worker": "a worker is alive to lease the step's job",
+    "sandbox.toolchain": "node, npm, git and a C toolchain where builds run; the app's engines",
+    "sandbox.build_services": "the build-services database is up for a Postgres app's build",
+    "sandbox.disk": "free disk where sandboxes are written",
+    "sandbox.model": "a model route for the step, and its lane's queue",
+    "budget.headroom": "the period's cap holds the step's reservation beside other work",
+    "app_env.build": "every variable the app requires has a build value BOSS gives or may take",
+    "app_env.preview": "every variable the app requires has a preview value",
+    "app_env.deploy": "every variable the app requires has a deploy value",
+    "app.test_plan": "the gate's test plan runs the app's own tests and leaves package.json alone",
+    "app.dependencies": "npm resolves the dependency tree (dry run in a copy)",
+    "app.secret_scan": "the committed-secrets gate passes on the app's files",
+    "preview.serves_build": "the preview command builds the directory the server serves",
+    "deploy.manifest": "the app's own boss.deploy.yaml exists and parses",
+    "deploy.database": "a Postgres app gets a database where it is deployed",
+    "deploy.health": "the declared health path is a route the app serves (else the app's own "
+                     "health-like routes)",
+    "deploy.target": "the deploy's host, target, path and port; ports held by targets that "
+                     "never deployed",
+    "smoke.contract": "smoke can read every deployment kind the deploy step finishes with",
+    "code.start_command": "the `start` script runs a file in the tree or one the build emits",
+    "code.prod_refusal": "no start-up error under NODE_ENV=production refuses a value BOSS binds "
+                         "for deploy",
+    "code.lockfile": "package-lock.json records what package.json declares (regenerated in a "
+                     "throwaway copy to report the diff)",
+    "code.browser_cache": "the Playwright browser the app's tests need is in the shared cache",
+    "lifecycle.branch_failure": "a failing branch of an all-join stops the run and ends its grant",
+    "lifecycle.advisory_start": "an advisory step that fails to START stops the run",
+    "lifecycle.concurrent_push": "a branch that pushes to the run's branch runs beside one that "
+                                 "ships it (pass 2 vs pass 1's deploy)",
+    "history.recurring_failures": "failure fingerprints that recur per step/gate over recent runs "
+                                  "of this app, and whether they still occur on the running BOSS",
+    "history.review_panel": "review_degraded events, seats near the panel deadline, serial "
+                            "panels, re-reviews past the deadline",
+    "history.warm_rounds": "warm rounds that left the same gates failing; failed builds that get "
+                           "no warm round on the running BOSS",
+    "history.step_up": "calls refused step_up_required, approvals among them and how long the "
+                       "gate then waited",
+    "history.retry_refused": "automatic retries blocked \"No one's authority covers this build\"",
+    "history.noise": "per-day counts of shepherd/captain/duplicate events against a budget; "
+                     "repeated shepherd retries",
+    "history.restarts": "API/worker starts (app_logs) inside this app's failed builds; drains "
+                        "that interrupted builds; builds killed by the platform",
+    "history.grant_ended_live": "grants that ended while a job under them was still live",
+    "history.idle_in_transaction": "connections idle inside a transaction (pg_stat_activity, "
+                                   "sampled) and whether anything bounds them",
+    "logs.crash_blame": "the app's real start logs through BOSS's crash-to-variable matcher: "
+                        "does the explanation name what the app named",
+    "logs.app_start": "the last failed start's cause is still unaddressed (the named variable "
+                      "still unbound for build)",
+    "logs.swallowed_errors": "programming errors (KeyError, AttributeError, ...) a broad except "
+                             "caught and logged past, from BOSS's own log",
+    "data.split_app_keys": "the app's secrets are under the key the run uses, not an older key "
+                           "of the same app",
+    "data.generated_secrets": "throwaway keys BOSS generates exist for deploy",
+    "data.stale_targets": "targets that never deployed do not hold host ports",
+    "data.leaked_leases": "no budget reservation, model-gateway or branch lease is live past "
+                          "expiry",
+    "data.dead_run_decisions": "no pending decision belongs to a run that is over",
+}
+
+
 __all__ = [
     "CAPABILITY_PRECHECKS", "CHECKS", "CHECKPOINTS", "CapabilityPrecheck", "Context",
     "NO_CHECKS", "PrecheckError", "activity_line", "app_env_on_tree", "gate_mode", "PrecheckRefused", "RECORD_KEY", "SkipRefused",
-    "binding_refusal", "build_context", "code_env_requirements", "gate_start", "precheck",
+    "CHECK_DOCS", "binding_refusal", "build_context", "code_env_requirements", "gate_start", "precheck",
     "precheck_for", "record_on_run", "run_checks", "skip_refusal", "skipped_by_precheck",
     "step_permissions", "step_reservation",
 ]

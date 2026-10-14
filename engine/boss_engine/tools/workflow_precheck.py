@@ -2,10 +2,14 @@
 
     python -m boss_engine.tools.workflow_precheck --workflow 'HelpDesk Delivery (D1)' \\
         --project boss-dogfood [--app-dir <path>] [--checkpoint pre_run|pre_deploy] \\
-        [--build-run crun_...] [--run wfr_...] [--offline] [--json]
+        [--build-run crun_...] [--run wfr_...] [--offline] [--json] [--days 7]
+        [--families history,logs,data] [--explain] [--fix]
 
-Prints one row per check, per step: the verdict, what it saw, and the fix. Read-only: the
-pre-check runs in a transaction it rolls back (services.workflow_precheck).
+Prints one row per check, per step: the verdict, what it saw, and the fix. The (history), (logs)
+and (data) rows read BOSS's recent behaviour (services.workflow_precheck_behaviour). Read-only:
+the pre-check runs in a transaction it rolls back. `--fix` (off by default) then applies the
+auto-fixes the report lists as "fixable: BOSS can do this" — each safe, reversible, recorded.
+`--explain` prints, per will_fail, the shortest path to fix it.
 """
 from __future__ import annotations
 
@@ -23,9 +27,9 @@ def render(report: dict[str, Any], *, width: int = 120) -> str:
              f"{report['checkpoint']} · project {report['project_id']}"
              + (f" · app {report['app_dir']}" if report.get("app_dir") else "")
              + (f" · build {report['build_run_id']}" if report.get("build_run_id") else ""), ""]
-    head = f"{'STEP':<16} {'CHECK':<24} {'VERDICT':<7} EVIDENCE / FIX"
+    head = f"{'STEP':<16} {'CHECK':<28} {'VERDICT':<7} EVIDENCE / FIX"
     lines += [head, "-" * min(width, 140)]
-    wrap = max(40, width - 50)
+    wrap = max(40, width - 54)
     for step in report["steps"]:
         for check in step["checks"]:
             evidence = check["evidence"]
@@ -39,12 +43,38 @@ def render(report: dict[str, Any], *, width: int = 120) -> str:
             if not check.get("skip_allowed", True) and check["verdict"] == "will_fail" \
                     and check.get("skip_refused"):
                 body += textwrap.wrap(f"cannot skip: {check['skip_refused']}", wrap)
-            lines.append(f"{step['step_id']:<16} {check['id']:<24} "
+            lines.append(f"{step['step_id']:<16} {check['id']:<28} "
                          f"{MARK.get(check['verdict'], check['verdict']):<7} {body[0]}")
-            lines += [" " * 49 + b for b in body[1:]]
+            lines += [" " * 53 + b for b in body[1:]]
+    fixes = report.get("fixes") or []
+    if fixes:
+        lines += ["", "FIXABLE: BOSS CAN DO THIS" + (" (applied)" if any(f.get("applied")
+                                                                    for f in fixes) else
+                                                     " (dry run; --fix applies)")]
+        for f in fixes:
+            state = ("applied" if f.get("applied") else "error: " + f["error"] if f.get("error")
+                     else "dry run only" if f.get("dry_run") and f.get("result") else "planned")
+            lines.append(f"  {f['check']:<44} {f['fix']:<24} {state}")
+            if f.get("result"):
+                lines += ["      " + b for b in textwrap.wrap(json.dumps(f["result"], default=str),
+                                                             wrap + 40)[:3]]
     s = report["summary"]
     lines += ["", "COUNTS: " + ", ".join(f"{v} {s.get(v, 0)}" for v in MARK),
               f"SUMMARY: {s['sentence']} ({s.get('seconds', '?')}s)"]
+    return "\n".join(lines)
+
+
+def render_explain(report: dict[str, Any], *, width: int = 120) -> str:
+    """Per will_fail (then fixable): the shortest path to fix it."""
+    items = report.get("explain") or []
+    if not items:
+        return "EXPLAIN: nothing will fail and nothing needs fixing."
+    lines = ["EXPLAIN — the shortest path per will_fail, then per fixable:"]
+    for i in items:
+        head = f"  [{i['verdict']}] {i['step']}:{i['check']} → {i['kind']}: "
+        body = textwrap.wrap(i["path"], max(40, width - len(head))) or [""]
+        lines.append(head + body[0])
+        lines += [" " * len(head) + b for b in body[1:]]
     return "\n".join(lines)
 
 
@@ -62,6 +92,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                         "input (the brief, the template, the app)")
     parser.add_argument("--offline", action="store_true", help="no network, no subprocesses")
     parser.add_argument("--json", action="store_true")
+    parser.add_argument("--days", type=int, default=7, help="how far back the history reads")
+    parser.add_argument("--families", default="history,logs,data",
+                        help="run-level families to read (comma list; '' for none)")
+    parser.add_argument("--explain", action="store_true",
+                        help="print the shortest path to fix each will_fail")
+    parser.add_argument("--fix", action="store_true",
+                        help="apply the auto-fixes the report lists (safe, reversible, recorded)")
     args = parser.parse_args(argv)
     if not (args.workflow or args.run):
         parser.error("--workflow or --run is required")
@@ -91,11 +128,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             engine, settings, project_id=args.project, workflow=args.workflow,
             run_id=args.run, run_input=run_input or None,
             checkpoint=args.checkpoint, app_dir=args.app_dir, repo_root=args.repo_root,
-            build_run_id=args.build_run, offline=args.offline)
+            build_run_id=args.build_run, offline=args.offline,
+            families=[f.strip() for f in args.families.split(",") if f.strip()],
+            history_days=args.days, fix=args.fix)
     except wp.PrecheckError as error:
         print(f"precheck: {error}", file=sys.stderr)
         return 2
     print(json.dumps(report, indent=2, default=str) if args.json else render(report))
+    if args.explain and not args.json:
+        print()
+        print(render_explain(report))
     return 1 if report["summary"]["blocking"] else 0
 
 
