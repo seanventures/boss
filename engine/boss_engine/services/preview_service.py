@@ -564,7 +564,7 @@ def _app_dir_of_plan(workdir: Path, plan: Optional["AppRun"]) -> Path:
     if plan is not None:
         if plan.declared_in:
             rel = plan.declared_in
-        elif plan.entry and plan.entry[0] in ("node", "static") and plan.entry[1]:
+        elif plan.entry and plan.entry[0] in ("node", "static", "java") and plan.entry[1]:
             rel = plan.entry[1]
     return workdir if rel in ("", ".") else workdir / rel
 
@@ -1324,12 +1324,16 @@ def resolve_app_entry(workdir: Path, changed: Optional[list[str]] = None) -> tup
     # it produced a preview that could never serve.
     if not candidates and (workdir / "package.json").exists() and _node_dir_can_build("."):
         candidates.append(("node", "."))
-    # A Java service at the root (pom.xml / build.gradle): build the jar and run it.
+    # A Java service (pom.xml / build.gradle) in THE APP'S directory: build the jar and run it.
+    # The root only when the app lives there (app_root): a shared repository's root pom.xml is
+    # another app's, never the one this lineage built in its own folder.
     if not candidates:
-        from . import toolchains
+        from . import app_root
 
-        if toolchains.detect_java(workdir):
-            return ("java", ".")
+        where, build = app_root.java_build(workdir, changed=changed)
+        if build:
+            rel = where.relative_to(workdir).as_posix() if where != workdir else "."
+            return ("java", rel)
     if len(candidates) == 1:
         return candidates[0]
     if candidates:
@@ -1739,12 +1743,15 @@ def preview_health_path(workdir: Optional[Path]) -> str:
     return line if line.startswith("/") and "://" not in line and len(line) < 300 else "/"
 
 
-def preview_start_timeout(workdir: Optional[Path], default: float = 180.0) -> float:
-    """A Java service builds its jar (and downloads its dependencies) before it binds."""
-    from . import toolchains
+def preview_start_timeout(workdir: Optional[Path], default: float = 180.0, *,
+                          changed: Optional[list[str]] = None) -> float:
+    """A Java service builds its jar (and downloads its dependencies) before it binds. `workdir`
+    is the app's directory, or a checkout whose app app_root finds from `changed`."""
+    from . import app_root
 
     try:
-        return max(default, 600.0) if workdir and toolchains.detect_java(workdir) else default
+        return (max(default, 600.0) if workdir and app_root.java_build(workdir, changed=changed)[1]
+                else default)
     except OSError:
         return default
 
@@ -2347,7 +2354,8 @@ def prove_app_serves(workdir: Path, changed: Optional[list[str]], *,
         proc, port_hint = launch_app(tree, plan.command, log_path, extra_env=run_env.values)
         try:
             port = _discover_working_port(log_path, port_hint,
-                                          timeout=preview_start_timeout(tree, timeout), proc=proc,
+                                          timeout=preview_start_timeout(_app_dir_of_plan(tree, plan), timeout),
+                                          proc=proc,
                                           health_path=preview_health_path(tree))
             exit_code = proc.poll()
             if port is not None:

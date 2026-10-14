@@ -267,7 +267,7 @@ def test_governed_pipeline_writes_ui_ux_evidence_into_run_state():
     assert "bind_test_outcomes(" in src
     assert '"command": test_cmd' in src
     assert "def _run_verify(" in src
-    assert "resolve_verify_cwd(" in src
+    assert "app_root.gate_dir(" in src  # the app's directory, never the bare repo root
     assert 'guest_spec["app_root"] = _app_id' in src
 
 

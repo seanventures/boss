@@ -4524,8 +4524,20 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # PINNED HERE, BEFORE ANY AGENT RUNS: every later verify plans from this copy, never
         # from the tree the implementer edits (see verification_target.PinnedVerifyManifest).
         _pinned_manifest = verification_target.pin_verify_manifest(root)
+        # THE APP'S IDENTITY for every gate planner (app_root.app_dir): the named app (_app_id,
+        # else the brief's folder, resolved inside resolve_gate_plan), this run's changed paths,
+        # and the files the app's lineage wrote before. A repair whose own diff is two files
+        # still plans in the lineage's app folder, never at a shared repository root.
+        _lineage_paths: list[str] = []
+        try:
+            from .preview_service import lineage_impl_files as _lineage_files
+
+            _lineage_paths[:] = [str(p) for p in (_lineage_files(engine, run) or [])]
+        except Exception:  # noqa: BLE001 — the named app and the change list still decide
+            _log_caught(logger)
         _gate_plan0 = verification_target.resolve_gate_plan(
-            spec, title, root, app_id=_app_id, pinned=_pinned_manifest, layout=_stack_layout)
+            spec, title, root, app_id=_app_id, pinned=_pinned_manifest, layout=_stack_layout,
+            lineage=_lineage_paths)
         # CONTINUE FROM THE FAILED ATTEMPT'S WORKSPACE (saved_workspace_files). Seeded after the
         # verify manifest is pinned, exactly as the parent's agents wrote after it. A seeded run
         # skips the design chain, write_tests and the first implement: its first pass is the
@@ -4553,6 +4565,11 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                                "attempt runs the full pipeline"})})
             if _seeded:
                 _impl_ran[0] = True
+                # The seeded files are this lineage's app: plan from them, as every later
+                # verify will (_changed_paths), not from the base branch alone.
+                _gate_plan0 = verification_target.resolve_gate_plan(
+                    spec, title, root, app_id=_app_id, changed=list(_seeded_paths),
+                    pinned=_pinned_manifest, layout=_stack_layout, lineage=_lineage_paths)
         # BUILD SERVICES (build_services): the run's own throwaway Postgres when the repo
         # declares `services: [postgres]` or the project's setting asks for it. Provisioned
         # before any agent, so the agents and every verify command see DATABASE_URL; a run that
@@ -4601,6 +4618,17 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     _log_caught(logger)
                     pass
             return sorted(paths)
+
+        def _gate_app_dir(changed=None) -> Path:
+            """THE APP'S DIRECTORY for a gate that runs before (or without) a recorded verify
+            directory — the template gates, the web package check. The same identity every
+            plan uses (app_root.app_dir): the named app, this run's paths, the lineage's files.
+            Never the shared repository root for an app in a subfolder (crun_7768e91e)."""
+            from . import app_root
+
+            return app_root.gate_dir(root, app_id=_app_id or _app_scope,
+                                     changed=sorted(set(list(changed or []) + _changed_paths())),
+                                     lineage=_lineage_paths)
 
         def _review_change_now() -> review_input.ChangeUnderReview:
             """THE change every reviewer seat judges (review_input.build): the live diff, plus
@@ -4762,7 +4790,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             try:
                 plan = verification_target.resolve_gate_plan(
                     spec, title, root, app_id=_app_id, changed=_changed_paths(),
-                    pinned=_pinned_manifest, layout=_stack_layout)
+                    pinned=_pinned_manifest, layout=_stack_layout, lineage=_lineage_paths)
                 if plan.runs_steps or plan.source != "default" or plan.error:
                     return []
                 wanted = [c for c in plan.commands
@@ -4800,7 +4828,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 return None
             plan = verification_target.resolve_gate_plan(
                 spec, title, root, app_id=_app_id, changed=_changed_paths(),
-                pinned=_pinned_manifest, layout=_stack_layout)
+                pinned=_pinned_manifest, layout=_stack_layout, lineage=_lineage_paths)
             if plan.runs_steps:
                 return None
             app_cwd, prep, _note = _prepare_app(plan, plan.cwd)
@@ -4853,7 +4881,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                      timed_out=False, stdout="", stderr=tampered_manifest)
             plan = verification_target.resolve_gate_plan(
                 spec, title, root, app_id=_app_id, changed=_changed_paths(),
-                pinned=_pinned_manifest, layout=_stack_layout)
+                pinned=_pinned_manifest, layout=_stack_layout, lineage=_lineage_paths)
             _last_stack_plan[0] = plan.stack if plan.source == "stack" else None
             cwd = plan.cwd
             try:
@@ -6606,7 +6634,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
 
                 _web_contract = verification_target.evaluate_web_package_contract(
                     _ran_in if _ran_in is not None and _ran_in.is_dir()
-                    else verification_target.resolve_verify_cwd(root, app_id=_app_id),
+                    else _gate_app_dir(),
                     runners=web_runners(),
                 )
             except Exception:  # noqa: BLE001
@@ -6683,7 +6711,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         _template_record = _template_gates(
             engine, run, sandbox, root=root,
             cwd=(root / last_verify_cwd) if last_verify_cwd and not Path(str(last_verify_cwd)).is_absolute()
-            else verification_target.resolve_verify_cwd(root, app_id=_app_id, changed=list(changed_files)),
+            else _gate_app_dir(changed_files),
             changed_files=changed_files, tests_passed=bool(tests_passed), use_microvm=use_microvm,
             stack_plan=_last_stack_plan[0], serve=app_serves_record)
         if _template_record:
@@ -6737,7 +6765,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     _template_record = _template_gates(
                         engine, run, sandbox, root=root,
                         cwd=(root / last_verify_cwd) if last_verify_cwd and not Path(str(last_verify_cwd)).is_absolute()
-                        else verification_target.resolve_verify_cwd(root, app_id=_app_id, changed=list(changed_files)),
+                        else _gate_app_dir(changed_files),
                         changed_files=changed_files, tests_passed=bool(tests_passed),
                         use_microvm=use_microvm, stack_plan=_last_stack_plan[0],
                         serve=app_serves_record)
@@ -7169,7 +7197,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         _template_record = _template_gates(
                             engine, run, sandbox, root=root,
                             cwd=(root / last_verify_cwd) if last_verify_cwd and not Path(str(last_verify_cwd)).is_absolute()
-                            else verification_target.resolve_verify_cwd(root, app_id=_app_id, changed=list(_tpl_changed)),
+                            else _gate_app_dir(_tpl_changed),
                             changed_files=_tpl_changed, tests_passed=bool(tests_passed),
                             use_microvm=use_microvm, stack_plan=_last_stack_plan[0],
                             serve=app_serves_record) or _template_record
@@ -7448,7 +7476,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     _rec = _template_gates(
                         engine, run, sandbox, root=root,
                         cwd=(root / last_verify_cwd) if last_verify_cwd and not Path(str(last_verify_cwd)).is_absolute()
-                        else verification_target.resolve_verify_cwd(root, app_id=_app_id, changed=list(_changed)),
+                        else _gate_app_dir(_changed),
                         changed_files=_changed, tests_passed=bool(_post.ok),
                         use_microvm=use_microvm, stack_plan=_last_stack_plan[0], serve=_serve)
                     _rj["record"] = _rec
