@@ -61,7 +61,9 @@ def test_the_fixture_declares_how_it_runs_and_deploys():
     assert (FIXTURE / "helpdesk" / "package-lock.json").is_file()
     from boss_engine.services.app_deploy_manifest import load_manifest
 
-    manifest = load_manifest(FIXTURE / "boss.deploy.yaml")
+    # Beside the app, as HelpDesk AI keeps it (fix/listed-var-is-work).
+    manifest = load_manifest(FIXTURE / "helpdesk" / "boss.deploy.yaml")
+    assert not (FIXTURE / "boss.deploy.yaml").exists()
     assert {e.key for e in manifest.env} >= {"SESSION_SECRET"}
     # Its Postgres is DECLARED (a resource BOSS provisions), never a secret the gate wires by hand.
     assert "DATABASE_URL" not in {e.key for e in manifest.env}
