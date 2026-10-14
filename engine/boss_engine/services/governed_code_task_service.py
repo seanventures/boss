@@ -1752,6 +1752,8 @@ FIRST_PASS_CHECKLIST = (
     "- Every input is validated before use: required fields, types (a string is not an array or "
     "object), ids well-formed and in range. Bad input is a 4xx, never a 500.\n"
     "- No secret, password or key in code or committed config: read it from the environment.\n"
+    "- A demo/seed password BOSS provides (DEMO_PASSWORD) is allowed in production: never refuse "
+    "it. Gate demo seeding on an explicit opt-in flag (e.g. ALLOW_DEMO_SEED) instead.\n"
     "- Exactly what the criteria name: nothing unasked, no unused dependencies.\n"
     "- BOSS installs with a clean `npm install`; peer-dependency errors fail the build. Pick "
     "versions that agree (e.g. eslint 9 needs eslint-plugin-react-hooks >=5). Run BOSS's exact "

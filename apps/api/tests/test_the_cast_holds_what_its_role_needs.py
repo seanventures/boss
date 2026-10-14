@@ -128,7 +128,7 @@ def test_the_catalogue_on_this_project_names_its_agents(engine):
             "ORDER BY v.created_at DESC LIMIT 1"), {"p": PROJECT}).scalar()
     captains = {s["id"]: s.get("captain") for s in spec["steps"]}
     assert captains["meeting"] == "pm" and captains["build"] == "engineering_captain"
-    assert captains["preview"] == "qa" and captains["plrr"] == "sre"
+    assert captains["preview"] == "engineering_captain" and captains["plrr"] == "sre"
     assert captains["monitor"] == "sre"
     assert captains["deploy"] is None  # the gate names Pilot as its approver instead
     deploy = next(s for s in spec["steps"] if s["id"] == "deploy")

@@ -65,7 +65,9 @@ DEFAULT_STEP_AGENTS: dict[str, str] = {
     "meeting": "pm",
     "build": "engineering_captain",
     "retry_build": "engineering_captain",
-    "preview": "qa",
+    # The builder starts the app it built: preview:manage is on the Builder Passport, not on
+    # the QA agent's (Reviewer), whose every preview was refused and skipped (2026-10-13 pre-check).
+    "preview": "engineering_captain",
     "review": "adversarial_reviewer",
     "plrr": "sre",
     "more_tests": "qa",

@@ -204,8 +204,10 @@ def deploy_build(engine, settings: Settings, *, project_id: str, run_id: str,
         stack_target = stack_target_for_deploy(
             c, project_id, {"target_id": target_id, "run_id": run_id,
                             "environment": environment if target_id else "",
+                            "create_environment": environment,
                             "host_id": host_id or ""},
-            default_owner=str(getattr(settings, "target_github_owner", "") or ""))
+            default_owner=str(getattr(settings, "target_github_owner", "") or ""),
+            create=True)
     if stack_target is not None:
         planned = plan_for_workflow_step(engine, settings, project_id=project_id, actor=actor,
                                          target=stack_target, inputs={"run_id": run_id},
@@ -216,6 +218,12 @@ def deploy_build(engine, settings: Settings, *, project_id: str, run_id: str,
         return {"status": "planned", "stack_deployment_id": planned["stack_deployment_id"],
                 "decision_id": planned.get("decision_id"), "commit": planned.get("commit"),
                 "reason": planned.get("note")}
+    from .stack_deploy import undeclared_deploy_refusal
+
+    with begin(engine) as c:
+        undeclared = undeclared_deploy_refusal(c, run_id)
+    if undeclared:
+        return {"status": "failed", "reason": undeclared, "missing": "deploy_manifest"}
 
     auto_target: Optional[dict[str, Any]] = None
     with begin(engine) as c:

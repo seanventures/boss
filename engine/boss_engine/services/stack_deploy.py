@@ -1245,6 +1245,14 @@ def plan_stack_deploy(engine, settings: Settings, *, project_id: str, target_id:
         if secret_refusal:
             raise StackDeployError(secret_refusal, APP_SECRET_ACTION)
         app_secret_names = sorted({str(a["name"]) for a in app_secrets})
+        unfit = manifest_misfit(connection, manifest=manifest, rendered=rendered, path=path,
+                                target=target, host=host, run_id=run_id,
+                                read=lambda p: github.read_file(owner, repo, p, commit),
+                                provided=app_secret_names)
+    if unfit:
+        # BEFORE ANYONE IS ASKED TO APPROVE: a plan that cannot work is refused in words.
+        raise StackDeployError(unfit[0], unfit[1])
+    with engine.begin() as connection:
         missing = {key: name for key, name in rendered["env_secrets"].items()
                    if not operator_secret_ref(connection, project_id, target_id, name)}
     if missing:
@@ -2027,7 +2035,7 @@ def declared_manifest_for_run(connection: Connection, run_id: str) -> Optional[s
 
 def _declared_stack_target(connection: Connection, project_id: str,
                            inputs: dict[str, Any], target: Optional[dict],
-                           default_owner: str) -> Optional[dict]:
+                           default_owner: str, create: bool = False) -> Optional[dict]:
     """The app's own host target, deployed from the manifest its build declared — or None.
 
     AN APP THAT SAYS HOW IT RUNS IS DEPLOYED THE WAY IT SAYS. Its target was made for the
@@ -2043,13 +2051,14 @@ def _declared_stack_target(connection: Connection, project_id: str,
         from .delivery_pipeline import app_name_of_run, pick_deploy_target
 
         run = connection.execute(
-            text("SELECT spec, title, finalize_ctx FROM code_task_runs WHERE id = :i"),
+            text("SELECT id, spec, title, finalize_ctx FROM code_task_runs WHERE id = :i"),
             {"i": run_id}).mappings().first()
         if not run:
             return None
         repository = build_repository(run["spec"], default_owner) or ""
         repo_name = repository.rsplit("/", 1)[-1].lower()
-        environment = str(inputs.get("environment") or "staging").strip() or "staging"
+        environment = str(inputs.get("environment") or inputs.get("create_environment")
+                          or "staging").strip() or "staging"
         candidates = [dict(r) for r in connection.execute(
             text("SELECT * FROM deployment_targets WHERE project_id = :p AND status = 'active' "
                  "AND environment = :e AND host_id IS NOT NULL ORDER BY created_at"),
@@ -2059,7 +2068,21 @@ def _declared_stack_target(connection: Connection, project_id: str,
         host_id = str(inputs.get("host_id") or "").strip()
         if host_id:
             candidates = [t for t in candidates if t.get("host_id") == host_id]
-        target = pick_deploy_target(candidates, app_name_of_run(run))
+        app_name = app_name_of_run(run)
+        target = pick_deploy_target(candidates, app_name)
+        if target is None and app_name and not [
+                t for t in candidates if _same_app(t, app_name)]:
+            # THE FIRST DEPLOY OF AN APP THAT DECLARES HOW IT RUNS takes the manifest path too.
+            # With no target of its own this returned None, the deploy fell to the one-container
+            # deploy_app, which made a target and then had its apply refused by declared_refusal
+            # (deprun_22f9650e, wfr_9575c86a) — or, with no app-level manifest, shipped one
+            # container and no Postgres. The target is made here, on the step's host, by the
+            # same governed create_deployment_target deploy_app uses; asked before the step runs
+            # (the gate, the console) it is only named, never made.
+            target = _first_target(connection, project_id, run, app_name, repository,
+                                   environment, host_id, create=create)
+    if target is not None and target.get("pending_create"):
+        return {**target, "manifest_path": path}
     if not target or target.get("project_id") != project_id or not target.get("host_id") \
             or target.get("status") != "active":
         return None
@@ -2068,18 +2091,22 @@ def _declared_stack_target(connection: Connection, project_id: str,
 
 def stack_target_for_deploy(connection: Connection, project_id: str,
                             inputs: dict[str, Any], *,
-                            default_owner: str = "") -> Optional[dict]:
+                            default_owner: str = "", create: bool = False) -> Optional[dict]:
     """The stack target a workflow's deploy step is bound to, or None for the legacy path.
 
     A target is a stack when it was made as one, OR when the build's app declares a
     boss.deploy.yaml (`_declared_stack_target`): then its host target ships from that manifest.
+    An app that declares one and has no target yet gets it made on `inputs.host_id` when
+    `create` (the deploy itself); asked before it runs, the answer is a target to be made
+    (`pending_create`, no id), so the gate and the console say "a stack deploy" too.
     """
     target_id = str(inputs.get("target_id") or "").strip()
     if target_id:
         target = _target(connection, target_id)
         if is_stack_target(target):
             return target if target.get("project_id") == project_id else None
-        return _declared_stack_target(connection, project_id, inputs, target, default_owner)
+        return _declared_stack_target(connection, project_id, inputs, target, default_owner,
+                                      create=create)
     # Without a named target, only a build whose repository HAS a stack target goes this way:
     # a project's other apps keep the deploy path they have always had.
     run_id = str(inputs.get("run_id") or "").strip()
@@ -2100,7 +2127,259 @@ def stack_target_for_deploy(connection: Connection, project_id: str,
         return rows[0]
     if rows:
         return None
-    return _declared_stack_target(connection, project_id, inputs, None, default_owner)
+    return _declared_stack_target(connection, project_id, inputs, None, default_owner,
+                                  create=create)
+
+
+_POSTGRES_IMAGE = re.compile(r"""image:\s*["']?[\w./-]*(postgres|postgis)""", re.I)
+
+
+def lineage_of(connection: Connection, run_id: str) -> list[dict[str, Any]]:
+    """Every attempt of a build's lineage: (id, state), oldest first."""
+    rows = connection.execute(
+        text("""
+            SELECT id, state FROM code_task_runs
+            WHERE COALESCE(finalize_ctx->>'root_run_id', id) = (
+                SELECT COALESCE(finalize_ctx->>'root_run_id', id) FROM code_task_runs
+                WHERE id = :i)
+            ORDER BY created_at
+        """), {"i": str(run_id or "")}).mappings().all()
+    return [{"id": r["id"], "state": _json(r["state"]) or {}} for r in rows]
+
+
+def app_needs_postgres(connection: Connection, run_id: Optional[str]) -> bool:
+    """The build decided its app uses Postgres (state.build_database.postgres, on any attempt)."""
+    if not run_id:
+        return False
+    return any(bool(((a["state"] or {}).get("build_database") or {}).get("postgres"))
+               for a in lineage_of(connection, run_id))
+
+
+def manifest_declares_database(manifest: Any, read: Callable[[str], Optional[str]]) -> bool:
+    """The manifest brings the app's Postgres: a database.relational resource, a postgres
+    service in its compose file, or a DATABASE_URL it is given."""
+    for r in manifest.resources or ():
+        if str(getattr(r, "capability", "")) == "database.relational":
+            return True
+    if any(e.key == "DATABASE_URL" for e in manifest.env or ()):
+        return True
+    if manifest.kind == "compose" and manifest.compose_file:
+        compose = read(manifest.compose_file)
+        if compose and _POSTGRES_IMAGE.search(compose):
+            return True
+    return False
+
+
+def manifest_misfit(connection: Connection, *, manifest: Any, rendered: Mapping[str, Any],
+                    path: str, target: Mapping[str, Any], host: Mapping[str, Any],
+                    run_id: Optional[str],
+                    read: Callable[[str], Optional[str]],
+                    provided: Any = ()) -> Optional[tuple[str, str]]:
+    """(headline, action) when a manifest cannot run THIS app on THIS target, else None.
+
+    Asked at plan time, before an approval is raised, for what failed after it on real runs:
+      * the build's app uses Postgres and the manifest brings none (the one-container deploy
+        shipped HelpDesk with no database; the plumbing gate wired DATABASE_URL by hand);
+      * the manifest pins PORT, or health-checks a local port, other than the target's (a
+        target on :8001 behind OAuth callbacks registered for :8000);
+      * a health path no file the build wrote serves (the old target's /readyz);
+      * a production deploy that gives the app a demo password its code refuses in production
+        (HelpDesk's config.ts threw on DEMO_PASSWORD under NODE_ENV=production)."""
+    from urllib.parse import urlsplit
+
+    workdir = manifest_workdir(path)
+    if not workdir and run_id:
+        foreign = root_manifest_misfit(connection, manifest, run_id, read)
+        if foreign:
+            return foreign
+
+    def in_dir(p: str) -> str:
+        return f"{workdir}/{p}" if workdir and not p.startswith(workdir + "/") else p
+
+    if app_needs_postgres(connection, run_id) and not manifest_declares_database(
+            manifest, lambda p: read(in_dir(p))):
+        return (f"This app uses Postgres, and {path} declares no database for it.",
+                f"Declare it in {path}: `resources: {{db: {{capability: database.relational, "
+                "engine: postgres}}}}`, or a postgres service in its compose file, then deploy "
+                "again.")
+    port = ("" if is_stack_target(dict(target))
+            else (address_env(dict(target), dict(host)).get("PORT") or "").strip())
+    if port:
+        pinned = [e for e in manifest.env or () if e.key == "PORT" and e.source == "literal"]
+        said = str((rendered.get("env_literals") or {}).get("PORT") or "").strip()
+        if pinned and said and said != port:
+            return (f"{path} sets PORT={said}, but this target serves on port {port}.",
+                    f"Drop PORT from {path}'s env (BOSS passes the target's), or move the "
+                    "target to that port in Infra.")
+        for check in rendered.get("health") or []:
+            parts = urlsplit(str(check.get("url") or ""))
+            local = (parts.hostname or "") in ("127.0.0.1", "localhost", str(host.get("address")))
+            if local and parts.port and str(parts.port) != port:
+                return (f"{path} checks health on port {parts.port}, but this target serves "
+                        f"on port {port}.",
+                        "Health-check {target.public_url} (or $PORT) in the manifest.")
+    served = _served_text(connection, run_id, workdir, read)
+    given = {e.key for e in manifest.env or ()} | {str(n) for n in provided or ()}
+    if (served is not None and "DEMO_PASSWORD" in given
+            and str(target.get("environment") or "").lower() == "production"
+            and refuses_in_production(served, "DEMO_PASSWORD")):
+        return ("The app refuses DEMO_PASSWORD in production, and this production deploy "
+                "gives it one: it would not start.",
+                "Allow the demo/seed password BOSS provides in production, and make demo seeding "
+                "an explicit opt-in (e.g. ALLOW_DEMO_SEED) instead of refusing the password; "
+                "then deploy again.")
+    if served is not None:
+        for check in rendered.get("health") or []:
+            route = urlsplit(str(check.get("url") or "")).path.rstrip("/")
+            # Mounted routes (a router at /api serving /health) are judged by their last part.
+            if route and route not in served and "/" + route.rsplit("/", 1)[-1] not in served:
+                return (f"{path} health-checks {route}, and no file this build wrote serves "
+                        "that route.",
+                        f"Health-check a route the app serves (its / or a /health it "
+                        f"defines), or add {route} to the app, then deploy again.")
+    return None
+
+
+def root_manifest_misfit(connection: Connection, manifest: Any, run_id: str,
+                         read: Callable[[str], Optional[str]]) -> Optional[tuple[str, str]]:
+    """(headline, action) when the repository ROOT's manifest belongs to another app than the
+    one this build made, else None.
+
+    A repository holds several apps. boss-sandbox's root boss.deploy.yaml is stack-demo's; the
+    Onboarding build (crun_2d097414) wrote its app under onboarding-path-builder/, edited that
+    root manifest instead of writing its own, and the deploy took stack-demo's for it. A root
+    manifest is the app's when the app lives at the root, or when it names the app's folder (its
+    `name`, or steps / a compose file that run in that folder: `cd helpdesk && …`)."""
+    from .app_deploy_manifest import app_folder
+    from .naming import identity_key
+
+    files = [str(f) for a in lineage_of(connection, run_id)
+             for f in ((a["state"] or {}).get("impl_files") or [])]
+    folder = app_folder(files)
+    if not folder:
+        return None
+    if identity_key(manifest.name) == identity_key(folder):
+        return None
+    said = "\n".join(s.run for s in (*manifest.install, *manifest.update, *manifest.teardown))
+    if manifest.compose_file:
+        said += "\n" + manifest.compose_file + "\n" + (read(manifest.compose_file) or "")
+    if re.search(rf"(^|[\s/'\"=]){re.escape(folder)}(/|\s|$|['\"])", said):
+        return None
+    return (f"The repository root's {DEFAULT_MANIFEST_PATH} is {manifest.name!r}'s, not this "
+            f"app's: this build's app lives in {folder}/, and that manifest neither names it "
+            "nor runs anything there.",
+            f"Write {folder}/{DEFAULT_MANIFEST_PATH} for this app (and leave the root one to "
+            f"{manifest.name!r}), then deploy again.")
+
+
+def refuses_in_production(source: str, name: str) -> bool:
+    """The code throws (or exits) when `name` is set under production: `name`, `production`
+    and a throw/exit within a few lines of each other."""
+    lines = source.splitlines()
+    for i, line in enumerate(lines):
+        if name not in line:
+            continue
+        window = "\n".join(lines[max(0, i - 4):i + 5])
+        if re.search(r"production", window) and re.search(
+                r"\bthrow\b|process\.exit\(|\braise\b|sys\.exit\(|panic\(", window):
+            return True
+    return False
+
+
+_SERVED_SUFFIXES = (".js", ".mjs", ".cjs", ".ts", ".py", ".go", ".rb", ".java", ".kt", ".rs",
+                    ".php", ".conf", ".yml", ".yaml", ".json", ".toml")
+
+
+def _served_text(connection: Connection, run_id: Optional[str], workdir: str,
+                 read: Callable[[str], Optional[str]]) -> Optional[str]:
+    """The source the build wrote under the manifest's directory, joined (bounded), or None when
+    it cannot be told — then a route is not judged."""
+    if not run_id:
+        return None
+    files: list[str] = []
+    for attempt in lineage_of(connection, run_id):
+        for f in (attempt["state"] or {}).get("impl_files") or []:
+            f = str(f).strip().lstrip("./")
+            if f and f not in files and f.endswith(_SERVED_SUFFIXES) and (
+                    not workdir or f.startswith(workdir + "/")) \
+                    and f.rsplit("/", 1)[-1] != DEFAULT_MANIFEST_PATH:
+                files.append(f)
+    if not files:
+        return None
+    texts = [t for t in (read(f) for f in files[:40]) if t]
+    return "\n".join(texts) if texts else None
+
+
+def undeclared_deploy_refusal(connection: Connection, run_id: Optional[str]) -> Optional[str]:
+    """Why a build's app cannot take the one-container deploy, in words — or None.
+
+    The one-container path guesses how an app runs and ships no database. It stays for an app
+    that never said otherwise; it is refused for one that
+      * was ASKED for its own boss.deploy.yaml (the deploy brief) and wrote none (one that took
+        another app's root manifest instead is refused at plan: root_manifest_misfit); or
+      * uses Postgres (state.build_database.postgres) and declares no manifest to bring it.
+    Asked before the deploy's approval is raised (the runner's gate) and by the deploy itself."""
+    run_id = str(run_id or "").strip()
+    if not run_id or declared_manifest_for_run(connection, run_id):
+        return None
+    from .app_deploy_manifest import app_folder
+    from .workflow_capability_runner import DEPLOY_BRIEF_MARKER
+
+    attempts = lineage_of(connection, run_id)
+    if not attempts:
+        return None
+    files = [str(f) for a in attempts for f in ((a["state"] or {}).get("impl_files") or [])]
+    folder = app_folder(files)
+    where = f"{folder}/{DEFAULT_MANIFEST_PATH}" if folder else DEFAULT_MANIFEST_PATH
+    briefed = bool(connection.execute(
+        text("SELECT 1 FROM code_task_runs WHERE id = ANY(:ids) AND strpos(spec::text, :m) > 0 "
+             "LIMIT 1"), {"ids": [a["id"] for a in attempts], "m": DEPLOY_BRIEF_MARKER}).first())
+    if briefed:
+        return (f"The build was asked to declare how its app runs ({where}) and wrote none. "
+                "Nothing was deployed: BOSS would only be guessing how to run it. Retry "
+                f"the build with the note \"write {where}\", or add it to the pull request, "
+                "then deploy again.")
+    if app_needs_postgres(connection, run_id):
+        return (f"This app uses Postgres, and it declares no {where} to bring one; the "
+                "one-container deploy would ship it without a database. Add the manifest with "
+                "`resources: {db: {capability: database.relational, engine: postgres}}`, then "
+                "deploy again.")
+    return None
+
+
+def _same_app(target: Mapping[str, Any], app_name: str) -> bool:
+    from .naming import identity_key
+
+    return bool(identity_key(app_name)) and \
+        identity_key(str(target.get("app_name") or "")) == identity_key(app_name)
+
+
+def _first_target(connection: Connection, project_id: str, run: Mapping[str, Any],
+                  app_name: str, repository: str, environment: str, host_id: str, *,
+                  create: bool) -> Optional[dict]:
+    """The target the first deploy of a declared app ships to: made now (`create`), or named as
+    the one that will be (`pending_create`). None when the build has not passed or no host can
+    be chosen — the legacy path then says which question to answer."""
+    if not create:
+        return {"id": None, "pending_create": True, "project_id": project_id,
+                "app_name": app_name, "environment": environment, "repo": repository,
+                "host_id": host_id or None, "status": "active"}
+    from .deployment_fleet import create_deployment_target
+    from .run_fencing import build_not_passed
+
+    status = str(connection.execute(
+        text("SELECT status FROM code_task_runs WHERE id = :i"),
+        {"i": str(run.get("id") or "")}).scalar() or "") if run.get("id") else ""
+    if status and status not in ("completed", "succeeded", "passed"):
+        return None
+    if run.get("id") and build_not_passed(connection, str(run["id"])):
+        return None
+    made = create_deployment_target(
+        connection, project_id=project_id, app_name=app_name, environment=environment,
+        repo=repository or None, host_id=host_id or None, actor="workflow_runner")
+    if not made.get("ok"):
+        return None
+    return _target(connection, str(made["target_id"]))
 
 
 def plan_for_workflow_step(engine, settings: Settings, *, project_id: str, actor: str,
@@ -2108,8 +2387,12 @@ def plan_for_workflow_step(engine, settings: Settings, *, project_id: str, actor
                            workflow_run_id: Optional[str],
                            approver_role: Optional[str] = None,
                            step_id: Optional[str] = None,
-                           approval_decision_id: Optional[str] = None) -> dict[str, Any]:
+                           approval_decision_id: Optional[str] = None,
+                           commit: Optional[str] = None) -> dict[str, Any]:
     """Plan the build's pull-request head onto a stack target; the step waits on it.
+
+    `commit`: ship exactly this commit of the pull request instead of its head — pass 1's deploy
+    ships the head pass 1 left (pinned when pass 2 started), never what pass 2 pushed beside it.
 
     No preview is required: the manifest declares how the stack runs and the health checks
     prove it, and a platform like BOSS cannot be previewed as one container anyway.
@@ -2142,10 +2425,13 @@ def plan_for_workflow_step(engine, settings: Settings, *, project_id: str, actor
                 "error": (f"the build worked in {built or 'an unnamed repository'}, but target "
                           f"{target.get('app_name')!r} deploys {repository or 'nothing'}; "
                           "bind the deploy step to a stack target for the build's repository.")}
+    ref = f"pull/{int(run['pull_request_number'])}"
+    if commit and _SHA.match(str(commit)):
+        ref = str(commit)
     try:
         deployment = plan_stack_deploy(
             engine, settings, project_id=project_id, target_id=target["id"],
-            repository=repository, ref=f"pull/{int(run['pull_request_number'])}", actor=actor,
+            repository=repository, ref=ref, actor=actor,
             run_id=run_id, workflow_run_id=workflow_run_id, approver_role=approver_role,
             workflow_step_id=step_id,
             manifest_path=None if is_stack_target(target) else target.get("manifest_path"),

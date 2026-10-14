@@ -108,3 +108,45 @@ class TestTheLinksFollow:
 def test_the_comparison_itself(app, target, matches):
     """As data, because this is the line that decides whether a run sees its own app."""
     assert (identity_key(app) == identity_key(target)) is matches
+
+
+class TestTheDashboardCheckRuns:
+    """The Grafana check read `dashboard_uid(w["app"])` — the key is `app_name` — and the KeyError
+    was swallowed as "could not check dashboards", so the step never named a missing dashboard."""
+
+    def test_missing_dashboards_reads_the_app_name(self):
+        from boss_engine.services.observability_stack import dashboard_uid
+
+        watched = [{"app_name": "HelpDesk"}, {"app_name": "Onboarding"}]
+        assert runner.missing_dashboards(watched, {dashboard_uid("HelpDesk")}) == ["Onboarding"]
+        assert runner.missing_dashboards(watched, set()) == ["HelpDesk", "Onboarding"]
+
+    def test_the_step_names_the_apps_grafana_lacks(self, monkeypatch):
+        from boss_engine.services import observability_stack
+
+        class Rows:
+            def __init__(self, rows):
+                self.rows = rows
+
+            def mappings(self):
+                return self
+
+            def all(self):
+                return self.rows
+
+            def first(self):
+                return self.rows[0] if self.rows else None
+
+        class Db:
+            def execute(self, statement, params=None):
+                sql = str(statement)
+                if "FROM deployment_targets" in sql:
+                    return Rows([{"id": "deptgt_1", "app_name": "HelpDesk", "environment": "staging",
+                                  "domains": ["192.0.2.9:8000"], "health_checks": []}])
+                return Rows([])
+
+        monkeypatch.setattr(runner, "_monitoring_host", lambda c, p: "192.0.2.9")
+        monkeypatch.setattr(observability_stack, "provisioned_dashboards", lambda base: set())
+        out = runner._observed_monitoring(Db(), "p_x", {"steps": {}})
+        assert out["missing_dashboards"] == ["HelpDesk"], out
+        assert "no Grafana dashboard yet" in out["note"]
