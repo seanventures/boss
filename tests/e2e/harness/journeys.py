@@ -37,8 +37,10 @@ requirement, and the self-test fails when no journey labelled with it uses all o
                         Branch from the palette, each after the one before → every block drawn
                         in its own shape, no step's words over another's → the Branch's and the
                         Repeat's checks built from parts → Notify dragged off the grid, its
-                        arrows following → saved → reopened after a reload: the same shapes, the
-                        checks and where Notify was put all came back from the server
+                        arrows following → the No path's arrow to End dragged onto the Yes path's
+                        first step (the paths meet there), the Yes arrow dragged to End refused
+                        out loud → saved → reopened after a reload: the same shapes, the checks,
+                        where Notify was put and the new link all came back from the server
 
 Every selector a journey uses is listed in JOURNEY_SELECTORS, which the self-test checks against
 the console source — a renamed testid fails a fast test, not a forty-minute walk. Controls the
@@ -169,6 +171,8 @@ JOURNEY_SELECTORS: tuple[tuple[str, str, str], ...] = (
     ("designer_control_flow", "app/workflows/flow/step-node.tsx", "wf-node-shape"),
     ("designer_control_flow", "app/workflows/flow/flow-lane.tsx", "wf-lane"),
     ("designer_control_flow", "app/workflows/flow/flow-lane.tsx", "wf-announce"),
+    ("designer_control_flow", "app/workflows/flow/flow-lane.tsx", "wf-edge-end-${e.key}"),
+    ("designer_control_flow", "app/workflows/editor/workflow-editor.tsx", "wf-toast"),
     ("designer_control_flow", "app/workflows/editor/inspector/step-inspector.tsx", "wf-inspector-${step.id}"),
     ("designer_control_flow", "app/workflows/editor/inspector/input-source.tsx", "wf-input-source-${name}"),
     ("designer_control_flow", "app/workflows/editor/inspector/input-source.tsx", "wf-input-fixed-${name}"),
@@ -1194,6 +1198,39 @@ def _build_check(page, step_id: str, value: str) -> None:
         field.fill(value)
 
 
+def _drag_arrow_end(page, key: str, onto: str) -> None:
+    """Grab an arrow's end handle (`wf-edge-end-<key>`, shown on hover) and let go on `onto`."""
+    grip = page.locator(f'[data-testid="wf-edge-end-{key}"]').first
+    if not grip.count():
+        raise JourneyFailed(f"the arrow {key} has no end handle to drag")
+    # The lane scrolls inside itself: bring the handle into view, and show it by hovering.
+    grip.scroll_into_view_if_needed()
+    grip.hover(force=True)
+    a = grip.bounding_box()
+    b = page.locator(onto).first.bounding_box()
+    if not a or not b:
+        raise JourneyFailed(f"cannot see the arrow {key}'s end, or {onto}, to drag it there")
+    x, y = a["x"] + a["width"] / 2, a["y"] + a["height"] / 2
+    tx, ty = b["x"] + b["width"] / 2, b["y"] + b["height"] / 2
+    page.mouse.move(x, y)
+    page.mouse.down()
+    for i in range(1, 13):
+        page.mouse.move(x + (tx - x) * i / 12, y + (ty - y) * i / 12)
+        page.wait_for_timeout(25)
+    page.mouse.up()
+
+
+def _path_heads(page, branch: str) -> tuple[str, str]:
+    """The first step of a Branch's Yes path and of its No path, from the arrows drawn."""
+    def head(kind: str) -> str:
+        found = page.locator(f'[data-testid^="wf-edge-end-{kind}:{branch}>"]').first
+        testid = found.get_attribute("data-testid") if found.count() else None
+        if not testid:
+            raise JourneyFailed(f"the Branch {branch} draws no {kind} arrow with an end handle")
+        return testid.split(">", 1)[1]
+    return head("yes"), head("no")
+
+
 def designer_control_flow(page, ctx: Context, goto: Callable[[str], None]) -> str:
     """The designer's blocks (#512 Phase 1) and its canvas (#551), as an operator uses them."""
     name = f"E2E control flow {ctx.stamp}"
@@ -1240,6 +1277,17 @@ def designer_control_flow(page, ctx: Context, goto: Callable[[str], None]) -> st
     if not said.startswith("Placed") or not after or abs(after["y"] - before["y"]) < 20:
         raise JourneyFailed(f"dragged Notify down off the grid; the lane said {said!r} and it "
                             f"moved from {before} to {after}")
+    # Point arrows elsewhere (#551). The No path ends where the flow ends; its arrow's end,
+    # dragged onto the Yes path's first step, makes the paths meet there (the engine runs that
+    # shape since #550). The Yes arrow dragged to End is refused: a path needs a step.
+    yes_head, no_head = _path_heads(page, branch)
+    _drag_arrow_end(page, f"{no_head}>end", f'.wf-lane .wf-slot[data-slot="{yes_head}"]')
+    _wait_for_text(page, "wf-toast", r"Link changed", timeout_s=30)
+    if not page.locator(f'.wf-edges g[data-edge="next:{no_head}>{yes_head}"]').count():
+        raise JourneyFailed(f"dragged the No path's end onto {yes_head}; no arrow from {no_head} "
+                            f"to it is drawn")
+    _drag_arrow_end(page, f"yes:{branch}>{yes_head}", ".wf-lane .wf-slot-end")
+    _wait_for_text(page, "wf-toast", r"needs a step", timeout_s=30)
     key, meta = _save_and_reopen(page, goto, name, len(shapes))
     page.locator(f'.wf-lane [data-testid="wf-node"][data-step-id="{notify}"]').first.wait_for(
         state="visible", timeout=WAIT_MS)
@@ -1255,9 +1303,17 @@ def designer_control_flow(page, ctx: Context, goto: Callable[[str], None]) -> st
     empty = [sid for sid in (branch, repeat) if not (steps.get(sid) or {}).get("expression")]
     if empty:
         raise JourneyFailed(f"saved, but {empty} lost what they check")
+    linked = (steps.get(no_head) or {}).get("next")
+    if (linked if isinstance(linked, list) else [linked]) != [yes_head]:
+        raise JourneyFailed(f"saved, but the No path's {no_head} goes to {linked!r}, not "
+                            f"{yes_head}: the link was not kept")
+    if (steps.get(branch) or {}).get("on_true") != yes_head:
+        raise JourneyFailed(f"the refused link changed the Branch: on_true is "
+                            f"{(steps.get(branch) or {}).get('on_true')!r}")
     return (f"built {name!r}: {len(shapes)} steps, blocks drawn as "
             f"{sorted({s for _, s in shapes.values() if s})}; checks built from parts; Notify "
-            f"placed at {positions[notify]}; saved and reopened with all of it ({meta[:20]!r})")
+            f"placed at {positions[notify]}; No path linked on to {yes_head}, Yes to End "
+            f"refused; saved and reopened with all of it ({meta[:20]!r})")
 
 
 def advance_now(page, ctx: Context, goto: Callable[[str], None]) -> str:
