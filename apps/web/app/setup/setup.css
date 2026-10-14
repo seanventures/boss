@@ -633,3 +633,13 @@ svg.su-dot { background: none; width: 12px; height: 12px; color: var(--muted); }
   .su-cap-head > .su-spacer { display: none; }
   .su-cap-head > .su-faint, .su-cap-head > .su-btn, .su-cap-head > .su-link { grid-column: 1 / -1; justify-self: start; }
 }
+
+/* A held connection proof: why, in words, then Review → Release the hold. */
+.su-held { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; padding: 10px 12px;
+           border: 1px solid var(--line, rgba(127,127,127,.3)); border-radius: 8px; }
+.su-held-summary { line-height: 1.4; }
+.su-held > .su-btn { align-self: flex-start; }
+.su-held-review { display: flex; flex-direction: column; gap: 8px; }
+.su-held-review dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 0; }
+.su-held-review dt { color: var(--faint); }
+.su-held-review dd { margin: 0; overflow-wrap: anywhere; }

@@ -38,6 +38,8 @@ const OPS: Record<string, Op> = {
   models: { method: "POST", path: () => "/v1/setup/models" },
   model_catalogue: { method: "POST", path: (b) => `/v1/setup/models/${enc(b.provider)}/catalogue` },
   source_model: { method: "POST", path: (b) => `/v1/setup/models/${enc(b.source_id)}/model` },
+  // Review → "Release the hold" on a held connection proof (entitlement:manage).
+  release_hold: { method: "POST", path: (b) => `/v1/setup/holds/${enc(b.receipt_id)}/release` },
   model_remove: { method: "DELETE", path: (b) => `/v1/setup/models/${enc(b.source_id)}`,
                   query: ["project_id", "confirm"] },
   job: { method: "PUT", path: (b) => `/v1/setup/jobs/${enc(b.job)}` },

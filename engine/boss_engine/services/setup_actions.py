@@ -768,13 +768,16 @@ def _subscription_proof(connection: Connection, settings: Any, project_id: str, 
 
 
 def _failure(provider: str, state: str, model: Optional[str] = None,
-             host: Optional[str] = None) -> SetupActionError:
+             host: Optional[str] = None, summary: str = "") -> SetupActionError:
     from .setup_pills import LOGIN_FIX, DEFAULT_LOGIN_FIX, MODEL, pill
 
     state = state if state in MODEL else "failed"
     shown = pill("model", state, model=model or "That model", host=host or "the provider",
                  provider_fix=LOGIN_FIX.get(provider, DEFAULT_LOGIN_FIX), time="", age="")
-    return SetupActionError(422, state, shown["label"], shown["tip"])
+    # THE PROVIDER'S OWN REASON FIRST ("Anthropic refused: credit balance too low"), then ours.
+    fix = f"{summary} {shown['tip']}".strip() if summary else shown["tip"]
+    return SetupActionError(422, state, shown["label"], fix,
+                            {"summary": summary} if summary else None)
 
 
 def connect_model(connection: Connection, settings: Any, project_id: str, *, provider: str,
@@ -973,10 +976,11 @@ def _connect_key(connection: Connection, settings: Any, project_id: str, provide
         raise SetupActionError(422, "unreachable", "Can't reach", _first_sentence(str(exc))) \
             from None
     if proof.get("reconciliation_required"):
-        raise SetupActionError(409, "failed", "Proof needs reconciliation",
-            "The provider outcome or cost is unknown. Its financial hold remains; "
-            "review the receipt before authorizing another proof.",
-            {"receipt_id": proof.get("receipt_id"), "reconciliation_required": True})
+        summary = str(proof.get("summary") or "The provider's outcome is unknown.")
+        raise SetupActionError(409, "held", "Proof held",
+            f"{summary} Review it to release the hold, then Connect again.",
+            {"receipt_id": proof.get("receipt_id"), "reconciliation_required": True,
+             "summary": summary})
     if proof.get("intent_conflict"):
         raise SetupActionError(409, "failed", "Connection intent changed",
             "The credential, endpoint, model or target changed under an existing intent. "
@@ -1004,7 +1008,7 @@ def _connect_key(connection: Connection, settings: Any, project_id: str, provide
     keep = proof.get("ok") or proof.get("state") in ("rate_limited", "unreachable")
     if not keep:
         raise _failure(provider, str(proof.get("state") or "failed"), proof.get("model"),
-                       proof.get("host"))
+                       proof.get("host"), str(proof.get("summary") or ""))
     from .setup_service import api_source_provider, last_check_broken
 
     spec = PROVIDERS.get(provider) or {}

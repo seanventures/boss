@@ -344,6 +344,24 @@ def _retry_after(headers: dict[str, str], detail: str) -> Optional[str]:
         return None
 
 
+def provider_error(answer: HttpAnswer) -> tuple[str, str]:
+    """(error type, message) a model provider put in its refusal body.
+
+    Anthropic and OpenAI nest it: {"type": "error", "error": {"type": "not_found_error",
+    "message": "model: claude-x"}}; others answer {"message": ...}. Reading only the top-level
+    "message" saw nothing in an Anthropic refusal, so its reason was lost.
+    """
+    body = answer.body
+    if isinstance(body, dict):
+        nested = body.get("error")
+        if isinstance(nested, dict):
+            return (str(nested.get("type") or nested.get("code") or ""),
+                    str(nested.get("message") or ""))
+        return (str(body.get("type") or "") if body.get("type") != "error" else "",
+                str(body.get("message") or (nested if isinstance(nested, str) else "") or ""))
+    return "", str(body or answer.error or "")[:300]
+
+
 def complete_once(*, api: str, endpoint: str, api_key: str, model: str,
                   http: Optional[Http] = None, timeout: float = 30.0) -> dict[str, Any]:
     """One tiny completion. {ok, state, status, latency_ms, usage, retry_at, host}."""
@@ -375,11 +393,18 @@ def complete_once(*, api: str, endpoint: str, api_key: str, model: str,
             if key in usage_raw:
                 usage[key] = usage_raw[key]
         return {"ok": True, "state": "working", "status": answer.status,
-                "latency_ms": latency, "usage": usage, "host": host, "retry_at": None}
-    detail = _message(answer) or answer.error
+                "latency_ms": latency, "usage": usage, "host": host, "retry_at": None,
+                "model": model, "usage_present": bool(usage_raw)}
+    error_type, message = provider_error(answer)
+    detail = " ".join(part for part in (error_type, message) if part) or answer.error or ""
     state = classify_model_failure(answer.status, detail)
+    # WHY IT FAILED, KEPT: the provider's own error type and message travel with the proof (the
+    # proof redacts them and never keeps the body), so a refusal reads "model not found" or
+    # "credit balance too low" instead of a bare status.
     return {"ok": False, "state": state, "status": answer.status, "latency_ms": latency,
             "host": host, "error": f"HTTP {answer.status}" if answer.status else "unreachable",
+            "model": model, "provider_error_type": error_type,
+            "provider_error": (message or (answer.error or ""))[:300],
             "retry_at": _retry_after(answer.headers, detail) if state == "rate_limited" else None}
 
 

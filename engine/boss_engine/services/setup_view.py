@@ -51,7 +51,7 @@ CATALOGUE: tuple[dict[str, Any], ...] = (
      "billing_url": "https://platform.openai.com/settings/organization/billing"},
     {"provider": "anthropic", "label": "Anthropic", "kind": "api_key",
      "fields": ["api_key", "model"], "key_url": "https://console.anthropic.com/settings/keys",
-     "example_model": "claude-sonnet-4-5",
+     "example_model": "claude-sonnet-5",
      "billing_url": "https://console.anthropic.com/settings/billing"},
     {"provider": "gemini", "label": "Gemini", "kind": "api_key", "fields": ["api_key", "model"],
      "key_url": "https://aistudio.google.com/app/apikey", "example_model": "gemini-3.8-flash",
@@ -963,6 +963,8 @@ def _build(connection: Connection, settings: Any, project_id: str, *,
         "models": models,
         "detected": detected,
         "catalogue": [dict(entry) for entry in CATALOGUE],
+        # Connection proofs whose money is held until a person reviews them (Review → Release).
+        "held_proofs": _held_proofs(connection, project_id),
         "jobs": jobs,
         # Model routing (docs/product/MODEL_ROUTER.md): Smart / Fixed, tiers, floors, headroom,
         # the classifier and this week's mix. None when the router's tables are not there yet.
@@ -975,6 +977,16 @@ def _build(connection: Connection, settings: Any, project_id: str, *,
         "build_speed": build_speed(connection, settings, project_id),
         "generated_at": now.isoformat(),
     }
+
+
+def _held_proofs(connection: Connection, project_id: str) -> list[dict[str, Any]]:
+    from .connection_spend import held_proofs
+
+    try:
+        with connection.begin_nested():
+            return held_proofs(connection, project_id)
+    except Exception:  # noqa: BLE001 — the board still renders; the hold stays on its receipt
+        return []
 
 
 def _toolchains() -> list[dict[str, Any]]:

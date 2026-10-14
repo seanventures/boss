@@ -47,7 +47,7 @@ PROVIDERS: dict[str, dict[str, Any]] = {
         "label": "Anthropic",
         "base_url": "https://api.anthropic.com/v1",
         "api": "anthropic",
-        "example_model": "claude-sonnet-4-5",
+        "example_model": "claude-sonnet-5",
         "key_url": "https://console.anthropic.com/settings/keys",
         "kind": "api_key",
     },

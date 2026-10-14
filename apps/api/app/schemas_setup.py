@@ -166,6 +166,7 @@ class SetupView(_Open):
     models: list[ModelEntry]
     detected: list[Detected]
     catalogue: list[CatalogueEntry]
+    held_proofs: list[dict[str, Any]] = Field(default_factory=list)
     jobs: list[Job]
     budget: Budget
     # `try` is a Python keyword.
@@ -182,6 +183,11 @@ class _Body(BaseModel):
 
     project_id: str
     actor: Optional[str] = None
+
+
+class ReleaseHoldBody(_Body):
+    """Release a held connection proof. The reason is recorded with the actor."""
+    reason: str = Field(min_length=1, max_length=300)
 
 
 class ChecksBody(_Body):
