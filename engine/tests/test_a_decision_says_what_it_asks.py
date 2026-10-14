@@ -1,6 +1,6 @@
 """A decision's card says what it asks, in words, and where it came from — never a raw code.
 
-On shared-server the Command Center's one approval read "Missing active reservation for OpenAI
+On the shared server the Command Center's one approval read "Missing active reservation for OpenAI
 call" with `missing_reservation` as its detail: a producer's log line and its reason code.
 decision_words maps every producer once; anything unmapped is still humanized.
 """

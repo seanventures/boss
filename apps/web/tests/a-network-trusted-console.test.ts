@@ -1,5 +1,5 @@
 /**
- * A console built for a host whose network already decides who gets in (shared-server, behind Sean's
+ * A console built for a host whose network already decides who gets in (the shared server, behind the owner's
  * network): no sign-in of its own, but still never a cross-site write. Every other build keeps
  * the password, the session and the HTTPS check — the mode is a build arg baked into the image
  * (Dockerfile.community), not something a stray runtime variable turns on by default.

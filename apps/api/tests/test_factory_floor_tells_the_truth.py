@@ -224,7 +224,7 @@ def test_counts_always_equal_what_is_listed(client, engine):
 
 
 def test_apps_number_each_build_and_say_its_pr(client, engine):
-    """Apps on shared-server: every expanded build read "Attempt 1" — separate builds of one app
+    """Apps on the shared server: every expanded build read "Attempt 1" — separate builds of one app
     each have attempt 1 in their own lineage. Each build now carries its place in the app
     (`order`, 1 = first), its PR and that PR's state; the app says whether it ran on a plan."""
     dec = f"dec_{uuid.uuid4().hex[:12]}"

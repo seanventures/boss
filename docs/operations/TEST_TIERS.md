@@ -114,7 +114,7 @@ scripts/e2e-gate.sh agent --brief <name>     # another brief in tests/e2e/briefs
 ```
 
 - **The brief.** `tests/e2e/briefs/onboarding-path-builder.json`: the smallest of the reference
-  builds that passed on shared-server in September (Onboarding Path Builder, 13.7 min). Instructions
+  builds that passed on the shared server in September (Onboarding Path Builder, 13.7 min). Instructions
   and acceptance criteria only; no repository, owner or token. It starts on the direct code-task
   path (`POST /v1/code-tasks`), on the full-stack web scaffold that reference build had
   (`BOSS_E2E_BASE_BRANCH`, default the pinned `boss/code/crun_4b60c6ef0d7848f393fa`).

@@ -1,7 +1,7 @@
 /**
  * A failed agent turn shows a sentence; the technical line waits under a collapsed Details.
  *
- * shared-server: "Ask Program Manager" showed the operator "BOSS could not complete that turn:
+ * The shared server: "Ask Program Manager" showed the operator "BOSS could not complete that turn:
  * IntegrityError: (psycopg.errors.UniqueViolation) duplicate key value … [SQL: INSERT INTO
  * agent_threads (…" — fenced as code in the dock. The API now says the turn in one sentence
  * (`detail`) and keeps the technical line apart (`failure.technical`,

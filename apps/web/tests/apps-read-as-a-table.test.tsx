@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 /**
- * Factory › Apps on shared-server (26 real apps): names cut mid-word, rows misaligned (some had a
+ * Factory › Apps on the shared server (26 real apps): names cut mid-word, rows misaligned (some had a
  * chevron, some not), crews smudged, every build "Attempt 1", empty middles, a crammed foot.
  * Apps is now one aligned table, drawn here from a fixture with the REAL shape (sanitised from
  * the live /v1/factory/apps: 25 apps, 2–4 builds, crews of 4–5).

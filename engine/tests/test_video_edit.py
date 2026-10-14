@@ -15,7 +15,7 @@ from boss_engine.services import video_edit as v
 pytestmark = pytest.mark.skipif(
     not v.ffmpeg_available(), reason="ffmpeg is not installed in this environment")
 
-D = "/Users/me/Downloads"
+D = os.environ.get("BOSS_SAMPLE_CLIPS_DIR", os.path.expanduser("~/Downloads"))
 FIXTURES = pytest.mark.skipif(
     not os.path.exists(f"{D}/title-intro.mp4"),
     reason="the operator's sample clips are not present")

@@ -101,7 +101,7 @@ def test_network_bridge_claim_binds_the_browsers_origin(world, engine, monkeypat
     world.network_bridge = True
     make_network_operator(engine)
     monkeypatch.setattr(identity_guard, "_legacy_method", lambda: "network")
-    monkeypatch.setattr(get_settings(), "public_url", "")            # shared-server: no BOSS_PUBLIC_URL
+    monkeypatch.setattr(get_settings(), "public_url", "")            # the shared server: no BOSS_PUBLIC_URL
     client = fresh_client()
     status = client.get("/v1/auth/setup/status", headers={"Origin": ORIGIN})
     assert "network" in status.json()["paths"] and status.json()["origin"] == ORIGIN

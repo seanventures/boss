@@ -1,6 +1,6 @@
-"""Command Center v2: what shared-server's landing page got wrong, fixed in the engine and pinned here.
+"""Command Center v2: what the shared server's landing page got wrong, fixed in the engine and pinned here.
 
-Seen on shared-server (2026-10): "8 running" for runs nobody had touched in a month; "1 needs you"
+Seen on the shared server (2026-10): "8 running" for runs nobody had touched in a month; "1 needs you"
 while two builds sat at "Needs you · plan" in the Factory (their plan question had expired after
 24h); the one approval card read "Missing active reservation for OpenAI call" over a raw
 `missing_reservation`; and eleven Shepherd cards about builds stuck since August. Each test here

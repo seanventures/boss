@@ -1,10 +1,10 @@
 """An index declared in schema.sql is the index the database has.
 
-Seen on shared-server (an install whose database predates the Community repo): "Ask Program
+Seen on the shared server (an install whose database predates the Community repo): "Ask Program
 Manager" failed on every turn with a unique violation on `idx_agent_threads_surface_external`.
 schema.sql had widened that index from (project_id, surface, external_ref) to
 (…, agent_role) so each agent keeps its own thread on a shared subject — but
-`CREATE UNIQUE INDEX IF NOT EXISTS` never redefines an index that already exists, so shared-server
+`CREATE UNIQUE INDEX IF NOT EXISTS` never redefines an index that already exists, so the shared server
 kept the 3-column one and refused the second agent's thread forever. boss-1, created later,
 had the 4-column index and worked.
 
@@ -86,7 +86,7 @@ def test_the_old_three_column_index_becomes_the_declared_four_column_one(private
     engine = private_schema
     with engine.begin() as c:
         c.execute(text(AGENT_THREADS.split(";")[0]))
-        # shared-server's index: the definition schema.sql had before agent_role joined the key.
+        # The shared server's index: the definition schema.sql had before agent_role joined the key.
         c.execute(text(
             "CREATE UNIQUE INDEX idx_agent_threads_surface_external "
             "ON agent_threads(project_id, surface, external_ref) WHERE external_ref IS NOT NULL"))

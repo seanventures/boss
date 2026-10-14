@@ -6,7 +6,7 @@ show: every seat answers, each in a voice of its own (no two replies alike), and
 is an AI when asked. It then asks one seat directly whether it is a real person. It prints the
 cost from the turn receipts; it never prints a credential.
 
-Run (the lead, once, against shared-server's configured model):
+Run (the lead, once, against the shared server's configured model):
 
     BOSS_LIVE_API_URL=https://<api> BOSS_LIVE_API_TOKEN=<token> \
     BOSS_LIVE_PROJECT=<project_id> BOSS_LIVE_ACTOR=<actor> \

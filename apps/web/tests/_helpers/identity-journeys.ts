@@ -94,7 +94,7 @@ export const JOURNEYS: Journey[] = [
     { do: "Rotate key_7f3k2q with 1 h overlap", expect: "Old key shows grace; both visible during the overlap" },
   ] },
   { id: "J14", title: "Network mode (shared-server rehearsal)", persona: "network", stub: { boss_stub_claim: "network_bridge" }, needs: ["S1", "S5"], steps: [
-    { go: "/claim", do: "Read the origin", expect: "“This BOSS will be bound to https://shared-server…ts.net”; confirm required; passkey required" },
+    { go: "/claim", do: "Read the origin", expect: "“This BOSS will be bound to https://boss…ts.net”; confirm required; passkey required" },
     { do: "Claim; then Sign-in & SSO → Require sign-in (step-up)", expect: "Network principal disabled; its history keeps its name (API)" },
   ] },
   { id: "J15", title: "Audit: filter by grant, drawer, export, verify", persona: "auditor", needs: ["S5"], steps: [

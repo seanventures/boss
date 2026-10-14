@@ -204,7 +204,7 @@ def test_a_builds_app_name_drops_the_briefs_period():
     "Go/no-go on a US-equity rule-based screener for weekly rebalancing",
 ])
 def test_an_app_name_never_ends_mid_word(title):
-    """Apps on shared-server: "Re‐build of *Path Verification* (paramg/bo", "Go/no-go on a US-equity
+    """Apps on the shared server: "Re‐build of *Path Verification* (paramg/bo", "Go/no-go on a US-equity
     ru" — cut mid-word at 42 characters, with the brief's markdown in it."""
     name = fv.app_name({"id": "crun_x", "title": title, "finalize_ctx": {}, "spec": {}})
     assert "*" not in name and not name.endswith(("(", "/", "-"))

@@ -1,6 +1,6 @@
 """A panel shows what the person asked — never the prompt BOSS built around it.
 
-shared-server, 2026-10-04: 4 of 22 panels showed "--- RESEARCH ALREADY DONE FOR THIS --- BOSS
+The shared server, 2026-10-04: 4 of 22 panels showed "--- RESEARCH ALREADY DONE FOR THIS --- BOSS
 researched this before convening you … ## What was researched {" in the hero line, the cards
 and the drawer, and a dossier-promoted panel was titled "Produce a PRD for this
 evidence-backed opportunity …". The operator's words are stored apart from the scaffolding
@@ -15,7 +15,7 @@ from boss_engine.services.meeting_rooms import typed_result
 
 ASK = ("Build a lead triage inbox.\nWho it is for: a small team drowning in inbound that is mostly "
        "noise.\nNothing sends without a human pressing send.")
-# Exactly how shared-server's rows read: research clipped mid-JSON, findings as inline objects.
+# Exactly how the shared server's rows read: research clipped mid-JSON, findings as inline objects.
 RESEARCH = (
     "--- RESEARCH ALREADY DONE FOR THIS ---\n"
     "BOSS researched this before convening you. Argue from it: agree, disagree, or say what it "

@@ -1,7 +1,7 @@
 {
  "name": "onboarding-path-builder",
  "title": "Onboarding Path Builder",
- "about": "Tier B of the release gate (scripts/e2e-gate.sh agent). A real build of a brief that BOSS built on shared-server in September 2026 in 13.7 min (run crun_b6195190): the smallest of the three reference builds. Started on the direct code-task path (POST /v1/code-tasks), on top of the deterministic full-stack web scaffold that brief was built on.",
+ "about": "Tier B of the release gate (scripts/e2e-gate.sh agent). A real build of a brief that BOSS built on the shared server in September 2026 in 13.7 min (run crun_b6195190): the smallest of the three reference builds. Started on the direct code-task path (POST /v1/code-tasks), on top of the deterministic full-stack web scaffold that brief was built on.",
  "start": "code_task",
  "base": "web_scaffold",
  "budget_min": 25,

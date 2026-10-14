@@ -1,5 +1,5 @@
 /**
- * Another install's heartbeat reaches this collector through the console (shared-server's API host
+ * Another install's heartbeat reaches this collector through the console (the shared server's API host
  * may be fronted by it): a server-to-server POST with no Origin and no session passes the
  * middleware — on a network-trusted console AND on a password console — but only on the three
  * collector paths, only as POST, and never when it carries an Origin or a cookie (a browser). The

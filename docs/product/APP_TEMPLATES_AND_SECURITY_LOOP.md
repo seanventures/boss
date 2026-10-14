@@ -1073,7 +1073,7 @@ Identity rc6 ──► F6 OIDC provider ◄── F3 login-oauth (provider: boss
 | **P0** (in flight) | F1 toolchains on `feat/toolchains` | F1 proof (§1 AC1.8) |
 | **P1** (parallel, after P0's registry interface is frozen) | F2 engine + API; F4 scanners + findings + scan API; F5 links + gateway; F6 protocol core + pools | each stream's unit/API suites; F2 import e2e |
 | **P2** | F3 templates (5 + variant, × 3 stacks) in parallel; F2 console (gallery, Setup, Kit ▸ Templates); F4 workflow + Panel + report UI; F5 console; F6 console + hosted pages + conformance | per-feature e2e proofs (§2.12, §3.8, §4.9, §5.9, §6.8) |
-| **P3** | Integration: the one demo (§9), F3 `login-oauth` provider `boss` wired to F6, docs and README | §9 walked end to end by an independent tester on shared-server |
+| **P3** | Integration: the one demo (§9), F3 `login-oauth` provider `boss` wired to F6, docs and README | §9 walked end to end by an independent tester on the shared server |
 
 ### 8.2 Streams and file ownership (no two streams edit the same file)
 
@@ -1109,7 +1109,7 @@ landing by PR (memory: BOSS lands by PR in seanventures).
 Per the standing rule, every console screen is walked in a browser by a **separate tester
 agent** that did not build it, against a spec of the screen (this document's UX sections), on a
 real stack. Each stream's tester files findings; the builder fixes the class, adds an enforcing
-test, and the tester re-walks. The P3 tester runs the full §9 demo on shared-server after deploy
+test, and the tester re-walks. The P3 tester runs the full §9 demo on the shared server after deploy
 (memory: fixed on main is not fixed for the user).
 
 ### 8.4 Rough size (one builder-agent-week ≈ one stream-week)

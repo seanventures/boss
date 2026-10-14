@@ -2,7 +2,7 @@
 
 Two installs shaped like today's, upgraded with NO env change:
 
-  shared-server  network-trusted console (built with BOSS_CONSOLE_AUTH=network; the API is NOT told),
+  shared     a network-trusted console (built with BOSS_CONSOLE_AUTH=network; the API is NOT told),
              the console's BOSS_API_KEY bound to `ceo`, the worker key bound to `system`, the
              default members, agent roles. Ops go through the tailnet ops API; nobody reads logs.
   boss-1     a password install (BOSS_CONSOLE_PASSWORD), an extra MCP key bound to `cto`, an OIDC
@@ -77,7 +77,7 @@ def allowed(db, ctx, *perms, project=PROJECT, now=NOW):
     return {p: fake_check(db, ctx, p, project=project, now=now).allowed for p in perms}
 
 
-# ---- shared-server -----------------------------------------------------------------------------------
+# ---- shared ---------------------------------------------------------------------------------------
 
 def test_shared_server_upgrades_claims_by_passkey_and_the_network_bridge_ends(db):
     cfg = shared_server_settings()
@@ -123,10 +123,10 @@ def test_shared_server_upgrades_claims_by_passkey_and_the_network_bridge_ends(db
 
     # M1: claim through the network bridge — passkey, origin bound, no setup token, no env
     claim = fake_claim(db, name="Param", email="param@example.com", via="network_bridge",
-                       now=NOW, origin="https://shared-server.tail1234.ts.net", cfg=cfg)
+                       now=NOW, origin="https://boss.tail1234.ts.net", cfg=cfg)
     assert claim.cutoff == NOW + timedelta(days=30)
     from boss_engine.identity.policy import get_policy
-    assert get_policy(ORG, db=db).public_origin == "https://shared-server.tail1234.ts.net"
+    assert get_policy(ORG, db=db).public_origin == "https://boss.tail1234.ts.net"
     assert legacy.resolve_actor(ORG, "ceo", db=db)["label"] == "Param (was: ceo)"
     seats = db.execute(text("SELECT seat_key FROM identity_approval_seats WHERE principal_id = "
                             ":p"), {"p": claim.principal_id}).scalars().all()
@@ -377,7 +377,7 @@ def test_every_capability_maps_into_the_catalogue():
 
 
 def test_a_network_bridge_first_seen_after_the_claim_still_has_its_window(db):
-    """shared-server claimed by setup link before its console forwarded visitors (S4 landing later):
+    """The shared server claimed by setup link before its console forwarded visitors (S4 landing later):
     the first network request after the claim must map to Operator with the claim's clock, not
     to a pending principal (a lockout found while building the rehearsal)."""
     cfg = shared_server_settings()

@@ -9,7 +9,7 @@ import { fetchMeetingRoom } from "../lib/meeting-room-detail";
 /**
  * Research (dossiers) and Panels (meetings) say each thing once: the full pages, the cards and
  * the compact views inside a workflow run's step panel read titles, verdicts, stages and
- * outcomes through lib/research-panels.ts — shaped here on shared-server's real records.
+ * outcomes through lib/research-panels.ts — shaped here on the shared server's real records.
  */
 const SEED = "Build a lead triage inbox.\nWho it is for: a small team drowning in inbound that is mostly noise.\n"
   + "What it does: score each enquiry, draft a reply, one-click send.";

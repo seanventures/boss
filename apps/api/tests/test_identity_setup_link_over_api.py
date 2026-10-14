@@ -1,4 +1,4 @@
-"""POST /v1/identity/setup-link: `boss identity setup-link` for an install with no shell (shared-server:
+"""POST /v1/identity/setup-link: `boss identity setup-link` for an install with no shell (the shared server:
 a managed host reached only through an ops API — no SSH, no logs). The install's admin key
 (BOSS_API_KEY, the same trust as a shell on the box) gets a fresh one-hour claim link while there
 is no Owner; nobody else does, and nothing ever logs or records the token.

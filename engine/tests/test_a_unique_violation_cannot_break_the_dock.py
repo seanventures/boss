@@ -1,6 +1,6 @@
 """A thread the database says already exists is used, not a crash.
 
-shared-server: "Ask Program Manager" failed on every turn with
+The shared server: "Ask Program Manager" failed on every turn with
 `UniqueViolation … idx_agent_threads_surface_external … (boss-dogfood, chat, role:Program
 Manager) already exists`. Its database still had the old 3-column index, so the lookup keyed on
 the agent found nothing, the INSERT hit the stale index, and the turn died. ensure_schema now

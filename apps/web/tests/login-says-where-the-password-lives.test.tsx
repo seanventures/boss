@@ -20,7 +20,7 @@ async function render(path: NonNullable<AuthOptions["claim"]>["path"]) {
   const { ClaimFlow } = await import("../app/(auth)/claim/claim");
   const options: AuthOptions = {
     org_name: "Acme BOSS", host: "boss.acme.dev", providers: [], smtp: false, signup: false, legacy_password: path === "legacy_password",
-    claim: { path, origin: path === "network_bridge" ? "https://shared-server.example.ts.net" : null, expires_at: null, seats: ["ceo"] },
+    claim: { path, origin: path === "network_bridge" ? "https://boss.tail1234.ts.net" : null, expires_at: null, seats: ["ceo"] },
   };
   return renderToStaticMarkup(<ClaimFlow options={options} />);
 }

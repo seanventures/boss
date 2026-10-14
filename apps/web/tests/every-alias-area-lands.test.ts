@@ -1,6 +1,6 @@
 /**
  * EVERY ALIAS AND UNKNOWN AREA LANDS — the class behind `?area=govern` and `?area=workflows`
- * answering 500 on shared-server. Two doors had it:
+ * answering 500 on the shared server. Two doors had it:
  *
  *   1. the middleware's 307 carried a RELATIVE Location; Next's adapter parses it with
  *      `new NextURL(location)` and no base, which throws → 500 on every document load;

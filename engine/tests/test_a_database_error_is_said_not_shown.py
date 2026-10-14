@@ -1,6 +1,6 @@
 """A database error is said as a sentence; its SQL never reaches the operator.
 
-shared-server's dock: "BOSS could not complete that turn: IntegrityError:
+The shared server's dock: "BOSS could not complete that turn: IntegrityError:
 (psycopg.errors.UniqueViolation) duplicate key value violates unique constraint
 "idx_agent_threads_surface_external" DETAIL: Key (…) already exists. [SQL: INSERT INTO
 agent_threads (…". And model_failures.explain, the one explainer every model surface uses, read

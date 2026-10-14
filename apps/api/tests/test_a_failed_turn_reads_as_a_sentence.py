@@ -1,6 +1,6 @@
 """A turn that fails says so in one sentence — never the database's diagnostics.
 
-shared-server's dock showed the operator: "BOSS could not complete that turn: IntegrityError:
+The shared server's dock showed the operator: "BOSS could not complete that turn: IntegrityError:
 (psycopg.errors.UniqueViolation) duplicate key value violates unique constraint … [SQL: INSERT
 INTO agent_threads (…". Every agent-turn surface now goes through one explainer
 (model_failures.explain_turn_failure): the visible `detail` is a sentence, the technical line

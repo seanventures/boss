@@ -71,7 +71,7 @@ describe("with a session cookie", () => {
 describe("a network-trusted build", () => {
   it("passes without a cookie (the API's network bridge decides)", async () => {
     vi.stubEnv("BOSS_CONSOLE_AUTH", "network");
-    const r = await middleware(new NextRequest("http://shared-server.internal:3000/identity", { headers: { host: "shared-server.internal:3000" } }));
+    const r = await middleware(new NextRequest("http://boss-host.internal:3000/identity", { headers: { host: "boss-host.internal:3000" } }));
     expect(r.headers.get("x-middleware-next")).toBe("1");
   });
 });

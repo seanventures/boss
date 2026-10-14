@@ -7,7 +7,7 @@ import { prdDigest, prdParts } from "../lib/research-panels";
  * "Build it" from a panel hands the composer the agreed PRD — and the re-check of
  * rp/research-panels (2026-10-05) found it listing Non-Goals under "Goals:": a keyword match on
  * /goal/ caught "Non-Goals", and the real Goals, in a table, were skipped. Sections are read by
- * their ROLE and tables row by row. Checked against all 22 PRDs shared-server's panels wrote
+ * their ROLE and tables row by row. Checked against all 22 PRDs the shared server's panels wrote
  * (tests/_helpers/real-prds.json, cut after the requirements).
  */
 const PRDS: string[] = JSON.parse(readFileSync("tests/_helpers/real-prds.json", "utf8"));

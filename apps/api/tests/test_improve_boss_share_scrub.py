@@ -9,7 +9,7 @@ from sqlalchemy import text
 
 from apps.api.tests.improve_fixtures import project, reset_state, seed_build, seed_workflow_run
 
-LEAKS = ["db-prod-07", "acmewidgets", "build-07", "intranet", "buildbox07", "shared-server", "fe80",
+LEAKS = ["db-prod-07", "acmewidgets", "build-07", "intranet", "buildbox07", "kestrelbox", "fe80",
          "2001:db8", "8a2e", "0db8", "ledgerly", "acme-corp", "release-larkspur", "fix-ledger",
          "PayrollPilot", "payroll-pilot", "payroll_pilot", "Nightjar", "NIGHTJAR",
          "Larkspur Holdings", "QuokkaPay", "zephyrledger", "feat-quokka", "dogfood", "10.20.30.40",
@@ -20,7 +20,7 @@ BENIGN = ["self.settings.timeout", "os.path.join", "Response.json", "README.md",
           "localhost:3000", "async/await", "package.json", "useEffect", "Array.prototype.map",
           "user.name", "config.yaml", "api.v1"]
 TEXT = ("connect to db-prod-07.internal.acmewidgets.io:5432 failed; also build-07.intranet; ssh buildbox07: Connection refused; "
-        "deploy to shared-server failed; peer fe80::1ff:fe23:4567:890a and 2001:db8:85a3::8a2e:370:7334 and [2001:db8::1]:8443 "
+        "deploy to kestrelbox failed; peer fe80::1ff:fe23:4567:890a and 2001:db8:85a3::8a2e:370:7334 and [2001:db8::1]:8443 "
         "and 2001:0db8:0000:0000:0000:ff00:0042:8329 and ::1; repo acme-corp/ledgerly (ledgerly, acme-corp, ledgerly_core); "
         "branch release-larkspur, boss/fix-ledger; app PayrollPilot aka payroll-pilot / payroll_pilot; codename Nightjar "
         "NIGHTJAR nightjar-sso for Larkspur Holdings; target app QuokkaPay; project dogfood; ip 10.20.30.40; mail admin@acmewidgets.io.\n"
@@ -46,7 +46,7 @@ def _seed(engine, client):
                          finalize={"app_name": "PayrollPilot", "branch": "boss/fix-ledger"})
         c.execute(text("UPDATE code_task_runs SET error = :e WHERE id = :i"), {"e": TEXT, "i": rid})
         c.execute(text("""INSERT INTO deployment_hosts (id, project_id, name, address, ssh_user, created_by)
-                          VALUES ('dh_mask3', :p, 'shared-server', '10.20.30.40', 'boss', 'ceo')
+                          VALUES ('dh_mask3', :p, 'kestrelbox', '10.20.30.40', 'boss', 'ceo')
                           ON CONFLICT DO NOTHING"""), {"p": project()})
         c.execute(text("""INSERT INTO deployment_targets (id, project_id, app_name, repo, environment,
                                                           target_kind, target_ref, created_by)
@@ -59,7 +59,7 @@ def _seed(engine, client):
                                              "app_name": "QuokkaPay"}),
                    "e": "push to zephyrledger branch feat-quokka for QuokkaPay failed"})
         c.execute(text("UPDATE workflow_step_runs SET last_error = :e, status = 'failed' WHERE id = :s"),
-                  {"s": steps[0], "e": "clone acme-corp/zephyrledger: zephyrledger not found on shared-server"})
+                  {"s": steps[0], "e": "clone acme-corp/zephyrledger: zephyrledger not found on kestrelbox"})
     return rid, wf
 
 
