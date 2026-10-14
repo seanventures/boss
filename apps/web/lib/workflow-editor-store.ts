@@ -24,6 +24,7 @@ import {
   duplicateStep, insertStep, moveStep, removeStep, renameStepId, wireInputs,
 } from "./workflow-graph";
 import { freeStepId } from "./step-view";
+import { addBranch, blockOfHead, placeBlock, removeBlock, removeBranch } from "./workflow-blocks";
 import { applyStepPatch, deepEqual, inputsReadBy, mergeInputSchema } from "./workflow-spec";
 
 const HISTORY = 100;
@@ -111,6 +112,7 @@ function travel(s: EditorState, spec: Spec, past: Spec[], future: Spec[]): Edito
 /** Actions that change the spec from the visual side: refused while the JSON is broken. */
 const VISUAL_EDITS = new Set<EditorAction["type"]>([
   "SET_SPEC", "INSERT", "MOVE", "REMOVE", "DUPLICATE", "PATCH_STEP", "RENAME_ID",
+  "PLACE_BLOCK", "ADD_BRANCH", "REMOVE_BRANCH",
   "SET_INPUT_SCHEMA", "WIRE",
 ]);
 
@@ -173,9 +175,26 @@ export function editorReducer(s: EditorState, a: EditorAction): EditorState {
     case "MOVE":
       return commit(s, moveStep(s.spec, a.id, a.to));
 
-    case "REMOVE":
-      return commit(s, removeStep(s.spec, a.id),
-                    s.selection === a.id ? { selection: null } : {});
+    case "REMOVE": {
+      const removed = removeStep(s.spec, a.id);
+      const spec = removed === s.spec && blockOfHead(s.spec.steps.find((x) => x.id === a.id))
+        ? removeBlock(s.spec, a.id) : removed;
+      return commit(s, spec, s.selection === a.id ? { selection: null } : {});
+    }
+
+    case "PLACE_BLOCK": {
+      const placed = placeBlock(s.spec, a.at, a.block);
+      if (!placed.head) return s;
+      return commit(s, declareNewReads(s.spec, placed.spec), { selection: placed.head });
+    }
+
+    case "ADD_BRANCH": {
+      const { spec, added } = addBranch(s.spec, a.id);
+      return added ? commit(s, declareNewReads(s.spec, spec), { selection: added }) : s;
+    }
+
+    case "REMOVE_BRANCH":
+      return commit(s, removeBranch(s.spec, a.id, a.branch));
 
     case "DUPLICATE": {
       const copyId = freeStepId(s.spec, a.id);

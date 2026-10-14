@@ -6,7 +6,10 @@ import { fetchLibrary } from "../../../../lib/workflow-editor-types";
 import type {
   BlockDef, Palette, Problem, SpecStep, StepView, WorkflowSummary,
 } from "../../../../lib/workflow-editor-types";
-import { asObj, bindingOf, strings } from "./step-facts";
+import { asObj, bindingOf } from "./step-facts";
+import {
+  ConditionSettings, JoinSettings, LoopSettings, ParallelSettings, type StructureProps,
+} from "./structure-settings";
 
 const libraryCache = new Map<string, Promise<WorkflowSummary[]>>();
 
@@ -58,8 +61,10 @@ export function FieldError({ problems, field }: { problems: Problem[]; field: st
 
 /** The step fields BlockSettings draws a control for — and so where a problem on one shows. */
 export function blockFieldKeys(view: StepView, block: BlockDef | undefined): string[] {
-  if (view.type === "condition") return ["expression"];
-  if (view.type === "parallel" || view.type === "join" || view.type === "loop") return [];
+  if (view.type === "condition") return ["expression", "on_true", "on_false"];
+  if (view.type === "parallel") return ["branches", "join"];
+  if (view.type === "join") return ["wait_for", "success_policy"];
+  if (view.type === "loop") return ["body", "expression", "max_iterations"];
   return block?.configure.length ? block.configure.map((c) => c.key)
     : view.type === "gate" ? ["question", "guidance", "approver_role"]
     : view.type === "wait" ? ["wait_seconds"]
@@ -67,11 +72,13 @@ export function blockFieldKeys(view: StepView, block: BlockDef | undefined): str
 }
 
 /**
- * The settings of a Flow block — Approval gate, Wait, Run another workflow — and the one setting
- * of a loaded If / else. Rendered from the block's own `configure` list, so a field the server
- * requires is a field the inspector offers; the labels are the copy guide's, not the server's.
+ * The settings of a Flow block — Approval gate, Wait, Run another workflow — rendered from the
+ * block's own `configure` list, so a field the server requires is a field the inspector offers;
+ * the labels are the copy guide's, not the server's. A branch block (If / else, Parallel, Join,
+ * Repeat) draws its own settings (structure-settings.tsx).
  */
-export function BlockSettings({ step, view, block, palette, projectId, workflowKey, problems, onConfig }: {
+export function BlockSettings({ step, view, block, palette, projectId, workflowKey, problems, onConfig,
+                                structure }: {
   step: SpecStep;
   view: StepView;
   block: BlockDef | undefined;
@@ -81,22 +88,17 @@ export function BlockSettings({ step, view, block, palette, projectId, workflowK
   workflowKey: string | null;
   problems: Problem[];
   onConfig(config: Record<string, unknown>): void;
+  /** The workflow and the moves a branch block's settings make. */
+  structure?: Omit<StructureProps, "step" | "palette" | "problems" | "onConfig">;
 }) {
   const library = useLibrary(projectId, view.type === "subworkflow");
 
-  if (view.type === "condition") return <ConditionField step={step} problems={problems} onConfig={onConfig} />;
-  if (view.type === "parallel" || view.type === "join" || view.type === "loop") {
-    const branches = [...strings(step.branches), ...strings(step.body)];
-    return (
-      <div className="wf-field">
-        <span className="wf-label" title="Edit branches in JSON">Branches</span>
-        <div className="wf-chips">
-          {branches.length ? branches.map((b) => <span key={b} className="wf-chip wf-mono">{b}</span>)
-            : <span className="wf-faint">—</span>}
-        </div>
-        <span className="wf-faint wf-hint" title="Edit branches in JSON">Edit in JSON</span>
-      </div>
-    );
+  if (structure && ["condition", "parallel", "join", "loop"].includes(view.type)) {
+    const props: StructureProps = { ...structure, step, palette, problems, onConfig };
+    if (view.type === "condition") return <ConditionSettings {...props} />;
+    if (view.type === "parallel") return <ParallelSettings {...props} />;
+    if (view.type === "join") return <JoinSettings {...props} />;
+    return <LoopSettings {...props} />;
   }
 
   const fields = blockFieldKeys(view, block);
@@ -242,30 +244,5 @@ function WaitField({ seconds, problems, onChange }: {
       </span>
       <FieldError problems={problems} field="wait_seconds" />
     </div>
-  );
-}
-
-function ConditionField({ step, problems, onConfig }: {
-  step: SpecStep; problems: Problem[]; onConfig(c: Record<string, unknown>): void;
-}) {
-  const stored = JSON.stringify(step.expression ?? {});
-  const [text, setText] = useState(stored);
-  const [bad, setBad] = useState(false);
-  useEffect(() => { setText(stored); setBad(false); }, [stored]);
-  return (
-    <label className="wf-field">
-      <span className="wf-label">Condition</span>
-      <textarea className="wf-text wf-mono" rows={3} value={text} aria-invalid={bad || undefined}
-                onChange={(e) => {
-                  setText(e.target.value);
-                  try {
-                    const parsed = JSON.parse(e.target.value);
-                    setBad(false);
-                    onConfig({ expression: parsed });
-                  } catch { setBad(true); }
-                }} />
-      {bad ? <span className="wf-field-error" role="alert">Not valid JSON</span> : null}
-      <FieldError problems={problems} field="expression" />
-    </label>
   );
 }

@@ -372,3 +372,22 @@
 @media (prefers-reduced-motion: reduce) {
   .wf-switch-knob { transition: none; }
 }
+
+/* ── branch blocks: what a condition checks, its paths, a parallel's branches ─────── */
+
+.wf-expr { gap: 6px; }
+.wf-expr-lead { flex-wrap: wrap; }
+.wf-expr-rules { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.wf-expr-rule {
+  display: flex; flex-direction: column; gap: 6px; padding: 8px;
+  border: 1px solid var(--border); border-radius: var(--r); background: var(--surface);
+}
+.wf-expr-rule .wf-select-sm { flex: none; }
+.wf-path-tag {
+  flex: none; min-width: 2.5em; font-size: 0.75rem; font-weight: 700; color: var(--muted);
+  text-transform: uppercase; letter-spacing: 0.04em;
+}
+.wf-branch-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.wf-seg button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.wf-seg button:disabled { opacity: 0.5; cursor: not-allowed; }
+.wf-link-icon { display: inline-flex; align-items: center; gap: 4px; }

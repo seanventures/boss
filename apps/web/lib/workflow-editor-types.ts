@@ -42,7 +42,12 @@ export type BlockDef = { kind: "decision" | "timer" | "subworkflow"; label: stri
   defaults: Record<string, unknown>;
   configure: { key: string; label: string; type: string; required?: boolean; max?: number }[] };
 export type RosterAgent = { role_key: string; name: string; skills: string[]; mcp: string[] };
+/** A branch block the server says the runtime runs (`canvas_required` blocks of view=capabilities):
+ *  placed whole by lib/workflow-blocks.ts `placeBlock`, never configured from a `configure` list. */
+export type ControlDef = { kind: "condition" | "parallel" | "bounded_loop"; label: string; summary: string };
 export type Palette = { capabilities: Capability[]; customSteps: CustomStepDef[]; blocks: BlockDef[];
+  /** Absent from palettes built before branch blocks could be placed: none are offered then. */
+  controls?: ControlDef[];
   agents: RosterAgent[]; humanRole: string; riskFloor: number;
   bindable: { skills: { id: string; name: string }[];
               mcp_servers: { id: string; name: string; tools: { name: string }[] }[] } };
@@ -127,7 +132,12 @@ export type EditorAction =
   | { type: "MOVE"; id: string; to: number }
   /** Auto-wire: unset required inputs of `ids` (default every step), by the server's rule. */
   | { type: "WIRE"; palette: Palette; ids?: string[] }
+  /** A whole branch block placed at gap `at` (any gap INSERT takes); its head is selected. */
+  | { type: "PLACE_BLOCK"; at: number; block: ControlDef["kind"] }
+  /** REMOVE on a block's head (a condition, parallel or loop) removes the whole block. */
   | { type: "REMOVE"; id: string }
+  | { type: "ADD_BRANCH"; id: string }
+  | { type: "REMOVE_BRANCH"; id: string; branch: string }
   | { type: "DUPLICATE"; id: string }
   | { type: "PATCH_STEP"; id: string; patch: StepPatch }
   | { type: "RENAME_ID"; from: string; to: string }
@@ -150,7 +160,8 @@ export type InputSource = { from_input: string } | { from_step: string; field: s
 
 /* ── Canvas (S2) ──────────────────────────────────────────────────────────────────── */
 
-export type PaletteItem = { capability?: string; customStep?: string; agentTask?: true; block?: BlockDef["kind"] };
+export type PaletteItem = { capability?: string; customStep?: string; agentTask?: true; block?: BlockDef["kind"];
+  control?: ControlDef["kind"] };
 
 /* ── Implementations ────────────────────────────────────────────────────────────────────────── */
 
