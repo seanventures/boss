@@ -24,6 +24,8 @@ import { StartRefusal, asReadiness, type PendingRefusal } from "./workflow-readi
 import { RunReportPanel } from "./run-report-ui";
 import { plannedDeploymentFrom } from "./deploy-ui";
 import { WriteInFlightError, apiWrite, runPress } from "../lib/api-write";
+import { withAnsweredGates } from "../lib/decided-gates";
+import { useAnsweredGates } from "../lib/use-answered-gates";
 import { stepAgentChip } from "./step-agents-ui";
 // Agent World (S-runs): who did each step, the chain, the Act card and Credits.
 import { approvalOf, laneAgentOf, stepActOf } from "./agents/chain-model";
@@ -675,7 +677,11 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
   const [catalogue, setCatalogue] = useState<CatalogueEntry[]>([]);
   const [installed, setInstalled] = useState<Installed[]>([]);
   const [customSteps, setCustomSteps] = useState<CustomStep[]>([]);
-  const [runs, setRuns] = useState<Run[]>([]);
+  const [loadedRuns, setRuns] = useState<Run[]>([]);
+  // A GATE JUST ANSWERED READS AS ANSWERED NOW (BOSSAPP-511): the overlay is applied to the runs
+  // every view below reads, and the answer's "changed" note refetches the truth.
+  const answeredVersion = useAnsweredGates();
+  const runs = useMemo(() => withAnsweredGates(loadedRuns), [loadedRuns, answeredVersion]);
   // WHERE THIS PROJECT CAN SHIP. Fetched once for the release gate: choosing a target is part
   // of the deploy decision, and a gate that only says yes/no cannot express "yes, to staging".
   const [targets, setTargets] = useState<DeployTarget[]>([]);

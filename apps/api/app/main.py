@@ -27100,6 +27100,30 @@ def run_delivery_capabilities(payload: open_bodies.DeliveryCapabilitiesRunBody) 
     # EVERY PROJECT WITH LIVE WORK, not only the one the worker is configured for: a template's
     # lab project is a project of its own, and its build sat `ready` for ever. Each project in
     # its own transaction, so one that cannot advance never stops the rest.
+    #
+    # KNOWN HAZARD — ONE TRANSACTION PER PROJECT, NOT PER STEP (pre-mortem 2026-10-13).
+    # `tick` claims and EXECUTES up to MAX_STEPS_PER_TICK (10) steps inline, each in a SAVEPOINT
+    # of this one transaction, and nothing commits until the project's last step and
+    # sweep_gate_timeouts are done. Consequences, precisely:
+    #   1. A step that spends longer than BOSS_API_DB_IDLE_IN_TRANSACTION_SECONDS (300) between
+    #      two statements — a model call, an HTTP probe, a subprocess — gets this session ended
+    #      by Postgres. The WHOLE project's tick rolls back: every step it claimed, ran and
+    #      recorded goes back to `ready`.
+    #   2. What those steps did OUTSIDE this transaction stays done. A build or panel is created
+    #      by its tool in its own transaction; a message, a PR, a model call happened. The next
+    #      tick claims the same steps and does it again — a duplicate wherever the effect is not
+    #      keyed (start_code_task dedupes builds by its same-work rule; typed decisions carry a
+    #      dedupe key; anything else does not).
+    #   3. While it runs, the run rows it locked are held to the end, so every writer to those
+    #      runs (an approval, a retry, the console) waits behind the slowest step, and the worker's
+    #      request is blocked for the whole sweep.
+    # The guard (apps/api/tests/test_the_tick_stays_inside_its_transaction_limit.py) pins what
+    # keeps this rare: every per-call wall the tick runs inline is under the idle limit with
+    # margin, and each project has its own transaction. NOT CHANGED HERE: commit-per-step means
+    # `tick` takes the engine and, per step, commits the claim, runs the step with no
+    # transaction open, and records the outcome in a fresh transaction keyed by the claim (a
+    # stale claim is reclaimed by its lease). That lives in workflow_capability_runner.tick,
+    # which another change is rewriting; it is the follow-up, not a one-line change.
     for pid in projects:
         try:
             with begin(engine) as connection:

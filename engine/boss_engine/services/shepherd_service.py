@@ -354,23 +354,51 @@ def propose(engine, settings: Settings, run_id: str, *,
     }
 
 
+#: Runs the sweep proposes for: ended without a PR, no open escalation, and NOT ALREADY
+#: PROPOSED FOR SINCE THE RUN LAST CHANGED. The run's class, signals and remedy are a function
+#: of its row, so a reasoning step written after `updated_at` already said everything a new one
+#: would. Without that clause every sweep re-proposed every dead run: 3,330 shepherd.proposed on
+#: 2026-10-13 (≈10 per sweep over 332 sweeps), 2,402 of them the same "stop" with no remedy,
+#: crun_a3a733ed alone 704 reasoning steps for a run untouched since the day before.
+_SWEEP_BASE = (
+    "SELECT r.id FROM code_task_runs r "
+    "WHERE r.project_id = :p AND r.status IN ('failed','blocked') "
+    "  AND r.pull_request_url IS NULL "
+    "  AND NOT EXISTS (SELECT 1 FROM shepherd_escalations e "
+    "                  WHERE e.task_ref = r.id AND e.status = 'open') ")
+SWEEP_CANDIDATES_SQL = (
+    _SWEEP_BASE
+    + "  AND NOT EXISTS (SELECT 1 FROM shepherd_reasoning s "
+      "                  WHERE s.task_ref = r.id AND s.created_at >= r.updated_at) "
+      "ORDER BY r.updated_at DESC LIMIT :l")
+#: Runs ALREADY proposed for in their current state whose proposal carried a remedy: the
+#: autopilot still considers them (a deep queue or the tick cap only deferred the remedy), but
+#: nothing re-proposes them. A "stop" with no remedy is never among them.
+STILL_ACTIONABLE_SQL = (
+    _SWEEP_BASE
+    + "  AND EXISTS (SELECT 1 FROM shepherd_reasoning s "
+      "              WHERE s.task_ref = r.id AND s.created_at >= r.updated_at "
+      "                AND s.step_no = (SELECT max(s2.step_no) FROM shepherd_reasoning s2 "
+      "                                 WHERE s2.task_ref = r.id) "
+      "                AND s.remedy_chosen IS NOT NULL "
+      "                AND s.failure_class IS DISTINCT FROM :naf) "
+      "ORDER BY r.updated_at DESC LIMIT :l")
+
+
 def sweep(engine, settings: Settings, project_id: str, *, limit: int = 20) -> list[dict]:
     """Propose for every run that ended without a PR and has no open escalation.
 
-    Deliberately excludes NOT_A_FAILURE and anything already escalated — a shepherd that
+    Deliberately excludes NOT_A_FAILURE, anything already escalated, anything superseded, and
+    anything already proposed for in its current state (SWEEP_CANDIDATES_SQL) — a shepherd that
     re-raises the same question is noise, and an operator who learns to ignore it is worse
     than no shepherd at all.
     """
     from ..db import begin
+    from . import run_liveness
     with begin(engine) as c:
-        rows = c.execute(
-            sql("SELECT r.id FROM code_task_runs r "
-                "WHERE r.project_id = :p AND r.status IN ('failed','blocked') "
-                "  AND r.pull_request_url IS NULL "
-                "  AND NOT EXISTS (SELECT 1 FROM shepherd_escalations e "
-                "                  WHERE e.task_ref = r.id AND e.status = 'open') "
-                "ORDER BY r.updated_at DESC LIMIT :l"),
-            {"p": project_id, "l": limit}).mappings().all()
+        rows = c.execute(sql(SWEEP_CANDIDATES_SQL), {"p": project_id, "l": limit}).mappings().all()
+        # A run another attempt has taken over is history: proposing a remedy for it is noise.
+        rows = [r for r in rows if not run_liveness.superseded_by(c, r["id"])]
     out = []
     for row in rows:
         res = propose(engine, settings, row["id"])
@@ -881,6 +909,14 @@ def autopilot(engine, settings: Settings, jobs, project_id: str, *,
 
     candidates: list[str] = [p["run_id"] for p in sweep(engine, settings, project_id, limit=limit)
                              if p.get("run_id")]
+    # Proposed on an earlier tick and not acted on yet (deferred, not refused): still candidates,
+    # without being proposed again (SWEEP_CANDIDATES_SQL).
+    from . import run_liveness
+    with begin(engine) as c:
+        for r in c.execute(sql(STILL_ACTIONABLE_SQL),
+                           {"p": project_id, "l": limit, "naf": NOT_A_FAILURE}).mappings():
+            if r["id"] not in candidates and not run_liveness.superseded_by(c, r["id"]):
+                candidates.append(r["id"])
 
     # Runs whose PREVIEW failed are invisible to `sweep`, which only looks at runs that are
     # themselves failed/blocked with no PR. A preview failure happens on a run that SUCCEEDED —
@@ -1563,7 +1599,11 @@ def _inflight_snapshots(connection, project_id: str, limit: int = 50, *,
                                         if row["secs_since_activity"] is not None else None),
                 horizon_seconds=horizon_seconds,
                 executing=run_liveness.executing_here(row["id"])),
-            superseded_by=row["superseded_by"],
+            # The same "same work" rule as start_code_task's dedupe, for a dead run the lineage
+            # SQL above did not cover (run_liveness.superseded_by).
+            superseded_by=row["superseded_by"] or (
+                run_liveness.same_work_in_flight(connection, row["id"])
+                if row["status"] == "failed" else None),
         ))
     return snaps
 
@@ -1725,6 +1765,13 @@ def _retry_run(engine, settings, jobs, run_id: str, reason: str) -> int:
         return 0
     except Exception as error:  # noqa: BLE001
         logger.warning("shepherd: retry of %s failed: %s", run_id, error)
+        return 0
+    if (result or {}).get("created") is False:
+        # DEDUPED, NOT RETRIED: the same work was already in flight and start_code_task returned
+        # THAT run. Counting it as a new attempt is what retried crun_37f4ccef 17 times in half
+        # an hour (each one a code_task.duplicate_suppressed). It is superseded; say so once.
+        logger.info("shepherd: not retrying %s — the same work is already running as %s",
+                    run_id, result.get("run_id"))
         return 0
     return 1 if (result or {}).get("run_id") else 0
 

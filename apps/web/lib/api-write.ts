@@ -40,6 +40,7 @@
  * one press legitimately makes never collide. With no intent to derive from, nothing is added and
  * the request behaves exactly as before.
  */
+import { noteDecisionWrite } from "./decided-gates";
 import { currentMirror } from "./identity/mirror";
 
 export const IDEMPOTENCY_HEADER = "Idempotency-Key";
@@ -183,6 +184,20 @@ export async function apiWrite(
   const url = String(input);
   const has = new Headers(init.headers).has(IDEMPOTENCY_HEADER);
   if (isBrowser()) {
+    const answer = await stepUpOnce(url, init, options, has);
+    // An accepted answer to a decision shows on every gate at once (lib/decided-gates.ts).
+    noteDecisionWrite(url, answer.ok);
+    return answer;
+  }
+  if (has) return sendKeyed(url, init, options.press?.label);
+  const intent = options.key ?? (await serverIntent());
+  if (!intent) return fetch(url, init);
+  const key = await deriveKey(intent, init.method, url, init.body);
+  return sendKeyed(url, { ...init, headers: withKey(init.headers, key) }, options.press?.label);
+}
+
+async function stepUpOnce(url: string, init: WriteInit, options: WriteOptions, has: boolean): Promise<Response> {
+  {
     const first = await pressed(url, init, options, has);
     // EVERY WRITE GETS THE STEP-UP SHEET, not a raw "step_up_required": a write the API refuses
     // for a stale second factor (401 step_up_required) opens "Confirm it's you" and is sent once
@@ -196,11 +211,6 @@ export async function apiWrite(
     }
     return first;
   }
-  if (has) return sendKeyed(url, init, options.press?.label);
-  const intent = options.key ?? (await serverIntent());
-  if (!intent) return fetch(url, init);
-  const key = await deriveKey(intent, init.method, url, init.body);
-  return sendKeyed(url, { ...init, headers: withKey(init.headers, key) }, options.press?.label);
 }
 
 /** Whether a refusal is the API asking for a fresh second factor, in any proxy's wrapping. */
