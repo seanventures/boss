@@ -1,8 +1,10 @@
 """The workflow pre-check at the API (services.workflow_precheck).
 
 * POST /v1/workflows/{id}/precheck answers per step, read-only;
-* a start whose pre-check says a step will fail is refused 409 `precheck_failed` with the whole
-  pre-check, and goes ahead when the operator accepts the check or skips its step;
+* by default (`report` mode) a start whose pre-check says a step will fail goes ahead, with the
+  pre-check in the response, on the run, and as the run's activity line;
+* in `enforce` mode it is refused 409 `precheck_failed` with the whole pre-check, and goes ahead
+  when the operator accepts the check or skips its step;
 * what was accepted or skipped is recorded on the run (its input's `_precheck`, written by the
   server only, and a `workflow.precheck_accepted` event) with who and why;
 * a skip of a step that protects a deploy is refused 422 `skip_refused`.
@@ -48,7 +50,7 @@ def failing(monkeypatch):
         report["summary"]["blocking"] = ["note:sandbox.disk"]
         return report
     monkeypatch.setattr(workflow_precheck, "run_checks", run_checks)
-    monkeypatch.delenv(workflow_precheck.GATE_ENV, raising=False)
+    monkeypatch.setenv(workflow_precheck.GATE_ENV, "enforce")
 
 
 def _start(client, key, **extra):
@@ -93,6 +95,7 @@ def test_accepting_starts_and_records_who_and_why(client, engine, key, failing):
                           {"r": run_id}).scalar()
     # The caller's own `_precheck` (a skip of `review`) was dropped; the server's was kept.
     assert stored["skip_steps"] == [] and stored["accepted"] == ["note:sandbox.disk"]
+    assert stored["mode"] == "enforce"
     assert stored["by"] == "ceo" and stored["reason"] == "disk is fine"
     assert event["accepted"] == ["note:sandbox.disk"]
 
@@ -112,3 +115,22 @@ def test_a_skip_of_a_step_that_protects_a_deploy_is_refused(client, key, monkeyp
     r = _start(client, key, skip_steps=["review"])
     assert r.status_code == 422, r.text
     assert "unverified" in r.text
+
+
+def test_report_mode_starts_and_puts_the_precheck_on_the_run(client, engine, key, failing,
+                                                             monkeypatch):
+    monkeypatch.delenv(workflow_precheck.GATE_ENV)          # the default: report
+    r = _start(client, key)
+    assert r.status_code == 200, r.text
+    run_id = r.json()["run"]["id"]
+    shown = r.json()["precheck"]
+    assert shown["mode"] == "report" and shown["unaccepted"] == ["note:sandbox.disk"]
+    assert shown["message"].startswith("Pre-check: 1 will_fail")
+    with engine.begin() as c:
+        stored = c.execute(text("SELECT input->'_precheck' FROM workflow_runs WHERE id = :r"),
+                           {"r": run_id}).scalar()
+        event = c.execute(text("SELECT data FROM events WHERE entity_id = :r AND "
+                               "event_type = 'workflow.precheck_reported'"),
+                          {"r": run_id}).scalar()
+    assert stored["will_fail"] == ["note:sandbox.disk"] and stored["report"]["steps"] is not None
+    assert "note:sandbox.disk" in event["message"]

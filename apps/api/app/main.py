@@ -26977,10 +26977,11 @@ def start_delivery_workflow(payload: WorkflowStartBody, connection_in: Any = Non
         from boss_engine.services.workflow_readiness import record_started_anyway
 
         if not run.get("duplicate"):
-            record_started_anyway(connection, project_id, actor, run.get("id") or "", readiness)
             from boss_engine.services.workflow_precheck import record_on_run
 
+            # The pre-check first: it is the run's first activity entry.
             record_on_run(connection, project_id, actor, run.get("id") or "", precheck)
+            record_started_anyway(connection, project_id, actor, run.get("id") or "", readiness)
             if requested_links:
                 from boss_engine.app_links import service as _links
 
@@ -27047,10 +27048,11 @@ def _precheck_or_409(
     connection, project_id: str, *, version_id: Optional[str], work_class: str,
     run_input: dict, actor: str, accept: Any, skip_steps: Any, reason: Any, start_anyway: Any,
 ) -> Optional[dict]:
-    """The start door's pre-check (workflow_precheck.gate_start): 409 `precheck_failed` with the
-    whole pre-check when a check says the run will fail and the caller neither accepted it nor
-    skipped its step; 422 `skip_refused` for a skip that would bypass a gate. Returns the record
-    to keep on the run (None when nothing was accepted or skipped)."""
+    """The start door's pre-check (workflow_precheck.gate_start). In `enforce` mode
+    (BOSS_WORKFLOW_PRECHECK_GATE) 409 `precheck_failed` with the whole pre-check when a check
+    says the run will fail and the caller neither accepted it nor skipped its step; in `report`
+    mode (the default) never refused. 422 `skip_refused` for a skip that would bypass a gate.
+    Returns the record to keep on the run and return in the response (None when clean)."""
     from boss_engine.services import workflow_precheck
 
     if not version_id and work_class:
@@ -27473,10 +27475,11 @@ def start_workflow_run(payload: WorkflowRunStartRequest) -> WorkflowRunSummary:
         from boss_engine.services.workflow_readiness import record_started_anyway
 
         if not run.get("duplicate"):
-            record_started_anyway(connection, payload.project_id, payload.actor,
-                                  run.get("id") or "", readiness)
+            # The pre-check first: it is the run's first activity entry.
             record_on_run(connection, payload.project_id, payload.actor, run.get("id") or "",
                           precheck)
+            record_started_anyway(connection, payload.project_id, payload.actor,
+                                  run.get("id") or "", readiness)
         return WorkflowRunSummary(**run)
 
 

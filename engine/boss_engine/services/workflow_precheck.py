@@ -70,8 +70,11 @@ RUN_STEP = "(run)"
 #: value is always dropped (workflows.start_run), so a skip cannot be asserted, only recorded.
 RECORD_KEY = "_precheck"
 MIN_FREE_DISK_GB = 20
-#: Turn the start-door gate off for an install (`off`); default on.
+#: The start door's mode: `report` (default until the console's readiness card ships: run,
+#: record the report on the run and return it, never refuse), `enforce` (an unaccepted
+#: will_fail refuses 409), `off`.
 GATE_ENV = "BOSS_WORKFLOW_PRECHECK_GATE"
+GATE_MODES = ("enforce", "report", "off")
 
 
 # ── The registry ──────────────────────────────────────────────────────────────────────────────
@@ -2021,8 +2024,13 @@ class SkipRefused(ValueError):
     pass
 
 
-def gate_enabled() -> bool:
-    return str(os.environ.get(GATE_ENV, "on")).strip().lower() not in ("off", "0", "false", "no")
+def gate_mode() -> str:
+    value = str(os.environ.get(GATE_ENV, "report") or "report").strip().lower()
+    if value in ("off", "0", "false", "no"):
+        return "off"
+    if value in ("enforce", "on", "1", "true", "yes"):
+        return "enforce"
+    return "report"
 
 
 #: A readiness need the operator chose to start without (start_anyway) also accepts the
@@ -2035,12 +2043,15 @@ def gate_start(connection: Connection, settings: Any, *, project_id: str, versio
                run_input: Mapping[str, Any], actor: str, accept: Iterable[str] = (),
                skip_steps: Iterable[Any] = (), reason: str = "",
                start_anyway: Iterable[str] = ()) -> Optional[dict[str, Any]]:
-    """The fast pre-run checks at a start door. Returns the record to keep on the run (accepted
-    checks, skipped steps, who and why) or None when there is nothing to record; raises
-    PrecheckRefused for an unaccepted will_fail, SkipRefused for a skip that would bypass a gate.
+    """The fast pre-run checks at a start door. Returns the record to keep on the run (the mode,
+    the counts and check ids, the full report, accepted checks, skipped steps, who and why) or
+    None when there is nothing to record. In `enforce` mode raises PrecheckRefused for an
+    unaccepted will_fail; in `report` mode never refuses. In both, SkipRefused for a skip that
+    would bypass a gate.
 
     Product workflows only, like readiness: BOSS's own system workflows are not checked."""
-    if not gate_enabled() or not version_id:
+    mode = gate_mode()
+    if mode == "off" or not version_id:
         return None
     namespace = connection.execute(text(
         "SELECT COALESCE(d.namespace, 'system') FROM workflow_versions v JOIN "
@@ -2074,25 +2085,67 @@ def gate_start(connection: Connection, settings: Any, *, project_id: str, versio
     unaccepted = [b for b in report["summary"]["blocking"]
                   if b.split(":", 1)[0] not in skipped and b not in accepted
                   and b.split(":", 1)[1] not in accepted]
-    if unaccepted:
+    if unaccepted and mode == "enforce":
         raise PrecheckRefused(report, unaccepted)
     taken = [b for b in report["summary"]["blocking"] if b not in unaccepted]
-    if not skips and not taken:
+    fixable = [f"{st['step_id']}:{c['id']}" for st in report.get("steps") or []
+               for c in st["checks"] if c["verdict"] == "fixable"]
+    if not skips and not taken and not report["summary"]["blocking"] and not fixable:
         return None
-    return {"accepted": sorted(b for b in taken if b.split(":", 1)[0] not in skipped),
-            "skip_steps": skips, "by": actor, "reason": reason[:300],
-            "checkpoint": PRE_RUN}
+    blocking = list(report["summary"]["blocking"])
+    return {"mode": mode, "checkpoint": PRE_RUN,
+            "message": activity_line(blocking, fixable),
+            "will_fail": blocking, "fixable": fixable, "unaccepted": unaccepted,
+            "accepted": sorted(b for b in taken if b.split(":", 1)[0] not in skipped),
+            "skip_steps": skips, "by": actor, "reason": reason[:300], "report": report}
+
+
+def activity_line(will_fail: Sequence[str], fixable: Sequence[str]) -> str:
+    """The run's first activity entry: "Pre-check: 2 will_fail, 1 fixable — a:x, b:y; c:z"."""
+    head = f"Pre-check: {len(will_fail)} will_fail, {len(fixable)} fixable"
+    parts = [", ".join(will_fail), ", ".join(fixable)]
+    tail = "; ".join(p for p in parts if p)
+    return (head + (f" — {tail}" if tail else ""))[:1000]
 
 
 def record_on_run(connection: Connection, project_id: str, actor: str, run_id: str,
                   record: Optional[Mapping[str, Any]]) -> None:
-    """Say on the run's history what the operator accepted or skipped, and by whom."""
+    """Put the pre-check on the run's history: `workflow.precheck_reported` (the activity line,
+    the counts, the full report) and, when the operator accepted or skipped anything,
+    `workflow.precheck_accepted` with who and why."""
     if not record or not run_id:
         return
     from .core import emit_event
 
-    emit_event(connection, project_id, "workflow.precheck_accepted", actor, "workflow_run",
-               run_id, dict(record))
+    emit_event(connection, project_id, "workflow.precheck_reported", actor, "workflow_run",
+               run_id, {k: record.get(k) for k in ("message", "mode", "checkpoint", "will_fail",
+                                                   "fixable", "unaccepted", "report")})
+    if record.get("accepted") or record.get("skip_steps"):
+        emit_event(connection, project_id, "workflow.precheck_accepted", actor, "workflow_run",
+                   run_id, {k: record.get(k) for k in ("accepted", "skip_steps", "by", "reason",
+                                                       "mode")})
+
+
+def app_env_on_tree(connection: Connection, settings: Any, *, project_id: str,
+                    app_key: Optional[str], app_dir: Path) -> dict[str, Any]:
+    """The pre-check's app_env checks on a build's tree (build, preview, deploy), run INSIDE the
+    build right after implement and before the app-start proof, so the run learns what the app
+    requires and whether anyone may give it before the proof fails on it."""
+    ctx = Context(connection=connection, settings=settings, project_id=project_id,
+                  actor="boss", spec={"steps": []},
+                  run_input={"app_key": app_key} if app_key else {}, checkpoint=PRE_DEPLOY,
+                  app_dir=Path(app_dir), offline=True)
+    checks = []
+    for capability in ("build", "preview", "deploy"):
+        found = check_app_env(ctx, {"id": capability, "kind": "capability",
+                                    "binding": {"capability": capability}})
+        if found:
+            checks.append(found)
+    will_fail = [c["id"] for c in checks if c["verdict"] == "will_fail"]
+    fixable = [c["id"] for c in checks if c["verdict"] == "fixable"]
+    return {"checkpoint": "in_build", "app_dir": Path(app_dir).name,
+            "message": activity_line(will_fail, fixable), "will_fail": will_fail,
+            "fixable": fixable, "checks": checks}
 
 
 def skipped_by_precheck(context: Mapping[str, Any], step_id: str) -> Optional[dict[str, Any]]:
@@ -2107,7 +2160,7 @@ def skipped_by_precheck(context: Mapping[str, Any], step_id: str) -> Optional[di
 
 __all__ = [
     "CAPABILITY_PRECHECKS", "CHECKS", "CHECKPOINTS", "CapabilityPrecheck", "Context",
-    "NO_CHECKS", "PrecheckError", "PrecheckRefused", "RECORD_KEY", "SkipRefused",
+    "NO_CHECKS", "PrecheckError", "activity_line", "app_env_on_tree", "gate_mode", "PrecheckRefused", "RECORD_KEY", "SkipRefused",
     "binding_refusal", "build_context", "code_env_requirements", "gate_start", "precheck",
     "precheck_for", "record_on_run", "run_checks", "skip_refusal", "skipped_by_precheck",
     "step_permissions", "step_reservation",

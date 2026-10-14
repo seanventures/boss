@@ -373,7 +373,7 @@ def door(monkeypatch):
                                        "sentence": "2 will fail"}}
     monkeypatch.setattr(wp, "build_context", lambda *a, **k: _ctx(spec))
     monkeypatch.setattr(wp, "run_checks", lambda ctx, only_fast=False: report)
-    monkeypatch.delenv(wp.GATE_ENV, raising=False)
+    monkeypatch.setenv(wp.GATE_ENV, "enforce")
     return lambda **kw: wp.gate_start(_DoorConnection(), None, project_id="p1", version_id="v1",
                                       run_input={}, actor="alice", **kw)
 
@@ -410,6 +410,34 @@ def test_the_door_refuses_a_skip_of_a_step_that_protects_the_deploy(door):
 def test_the_gate_can_be_turned_off(door, monkeypatch):
     monkeypatch.setenv(wp.GATE_ENV, "off")
     assert door() is None
+
+
+def test_report_is_the_default_and_never_refuses(door, monkeypatch):
+    monkeypatch.delenv(wp.GATE_ENV)
+    assert wp.gate_mode() == "report"
+    record = door()
+    assert record["mode"] == "report"
+    assert record["unaccepted"] == ["more_tests:authority.consent", "build:budget.headroom"]
+    assert record["message"].startswith("Pre-check: 2 will_fail, 0 fixable")
+    assert "more_tests:authority.consent" in record["message"]
+    assert record["report"]["summary"]["sentence"] == "2 will fail"
+
+
+def test_report_mode_still_records_skips_and_refuses_a_gate_skip(door, monkeypatch):
+    monkeypatch.setenv(wp.GATE_ENV, "report")
+    record = door(skip_steps=[{"step_id": "more_tests", "reason": "later"}])
+    assert record["skip_steps"] == [{"step_id": "more_tests", "reason": "later"}]
+    with pytest.raises(wp.SkipRefused):
+        door(skip_steps=["review"])
+
+
+def test_the_app_env_checks_run_on_a_builds_tree(tmp_path):
+    app = _write(tmp_path / "hd", HELPDESK_LIKE)
+    found = wp.app_env_on_tree(None, None, project_id="p1", app_key=None, app_dir=app)
+    verdicts = {c["id"]: c["verdict"] for c in found["checks"]}
+    assert verdicts == {"app_env.build": "will_fail", "app_env.preview": "will_fail",
+                        "app_env.deploy": "fixable"}
+    assert found["message"].startswith("Pre-check: 2 will_fail, 1 fixable")
 
 
 def test_the_runner_honours_a_recorded_skip():
