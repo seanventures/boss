@@ -52,6 +52,28 @@ KNOBS: dict[str, dict[str, Any]] = {
                 "shows gaps. Each one spends model budget. Off: it only proposes them.",
         "kind": "int", "min": 0, "max": 1,
     },
+    # THE MODEL PRE-CHECK at the start door (workflow_precheck_agent.py). OFF unless turned on:
+    # it is a model call, so it costs money and time on every start it runs at.
+    "workflow_precheck_agent": {
+        "attr": "workflow_precheck_agent",
+        "label": "Model pre-check at start",
+        "help": "When a workflow starts, an agent also reads the pre-check's evidence and "
+                "predicts failures the coded checks miss. Spends a little model budget per "
+                "start. 1 to run it, 0 to leave it to the CLI's --agent.",
+        "kind": "int", "min": 0, "max": 1,
+    },
+    "workflow_precheck_agent_max_cents": {
+        "attr": "workflow_precheck_agent_max_cents",
+        "label": "Model pre-check cost cap (cents)",
+        "help": "The most one model pre-check may spend; it stops when it reaches this.",
+        "kind": "int", "min": 1, "max": 500,
+    },
+    "workflow_precheck_agent_max_turns": {
+        "attr": "workflow_precheck_agent_max_turns",
+        "label": "Model pre-check turns",
+        "help": "The most model turns one model pre-check may take.",
+        "kind": "int", "min": 1, "max": 30,
+    },
     "code_review_inrun_max_rounds": {
         "attr": "code_review_inrun_max_rounds",
         "label": "Review rounds",

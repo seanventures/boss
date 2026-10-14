@@ -4,12 +4,16 @@
         --project boss-dogfood [--app-dir <path>] [--checkpoint pre_run|pre_deploy] \\
         [--build-run crun_...] [--run wfr_...] [--offline] [--json] [--days 7]
         [--families history,logs,data] [--explain] [--fix]
+        [--agent [--agent-max-usd 0.50] [--agent-max-turns 8]]
 
 Prints one row per check, per step: the verdict, what it saw, and the fix. The (history), (logs)
 and (data) rows read BOSS's recent behaviour (services.workflow_precheck_behaviour). Read-only:
 the pre-check runs in a transaction it rolls back. `--fix` (off by default) then applies the
 auto-fixes the report lists as "fixable: BOSS can do this" — each safe, reversible, recorded.
-`--explain` prints, per will_fail, the shortest path to fix it.
+`--explain` prints, per will_fail, the shortest path to fix it. `--agent` adds the MODEL
+pre-check (services.workflow_precheck_agent): predicted problems as `(model)` lines with their
+evidence, counted on their own (`model: will_fail N, risk M`), and the engine/model/source and
+cost it ran on. They are advisory: the exit code follows the coded checks.
 """
 from __future__ import annotations
 
@@ -20,6 +24,9 @@ import textwrap
 from typing import Any, Optional, Sequence
 
 MARK = {"ready": "ok", "fixable": "FIX", "will_fail": "FAIL", "unknown": "?"}
+#: The model pre-check's verdicts (services.workflow_precheck_agent), on their own lines.
+MODEL_MARK = {"will_fail": "FAIL", "risk": "RISK"}
+SOURCE = "(model)"
 
 
 def render(report: dict[str, Any], *, width: int = 120) -> str:
@@ -58,9 +65,29 @@ def render(report: dict[str, Any], *, width: int = 120) -> str:
             if f.get("result"):
                 lines += ["      " + b for b in textwrap.wrap(json.dumps(f["result"], default=str),
                                                              wrap + 40)[:3]]
+    model = report.get("model")
+    if model:
+        lines += ["", f"MODEL PRE-CHECK {SOURCE}: {model.get('line', '')}"]
+        for f in model.get("findings") or []:
+            body = textwrap.wrap(f["title"] + ("" if f.get("grounded", True)
+                                               else " [evidence not found in what it read]"),
+                                 wrap) or [""]
+            body += [b for e in f.get("evidence") or []
+                     for b in textwrap.wrap("evidence: " + e, wrap)]
+            if f.get("fix"):
+                body += textwrap.wrap(f"FIX ({f.get('who', 'person')}): {f['fix']}", wrap)
+            lines.append(f"{f['step']:<16} {SOURCE:<28} {MODEL_MARK.get(f['verdict'], '?'):<7} "
+                         f"{body[0]}")
+            lines += [" " * 53 + b for b in body[1:]]
+        if model.get("dropped"):
+            lines.append(f"  ({len(model['dropped'])} prediction(s) dropped: no evidence or "
+                         "malformed)")
     s = report["summary"]
-    lines += ["", "COUNTS: " + ", ".join(f"{v} {s.get(v, 0)}" for v in MARK),
-              f"SUMMARY: {s['sentence']} ({s.get('seconds', '?')}s)"]
+    counts = "COUNTS: " + ", ".join(f"{v} {s.get(v, 0)}" for v in MARK)
+    if model:
+        m = s.get("model") or {}
+        counts += f"; model: will_fail {m.get('will_fail', 0)}, risk {m.get('risk', 0)}"
+    lines += ["", counts, f"SUMMARY: {s['sentence']} ({s.get('seconds', '?')}s)"]
     return "\n".join(lines)
 
 
@@ -75,6 +102,8 @@ def render_explain(report: dict[str, Any], *, width: int = 120) -> str:
         body = textwrap.wrap(i["path"], max(40, width - len(head))) or [""]
         lines.append(head + body[0])
         lines += [" " * len(head) + b for b in body[1:]]
+        for e in i.get("evidence") or []:
+            lines.append(" " * len(head) + "evidence: " + e[:width])
     return "\n".join(lines)
 
 
@@ -99,6 +128,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                         help="print the shortest path to fix each will_fail")
     parser.add_argument("--fix", action="store_true",
                         help="apply the auto-fixes the report lists (safe, reversible, recorded)")
+    parser.add_argument("--agent", action="store_true",
+                        help="also run the MODEL pre-check: an agent on this project's routed "
+                        "model predicts failures the coded checks miss ((model) lines)")
+    parser.add_argument("--agent-max-usd", type=float, default=None,
+                        help="cost cap for --agent (default: the project's setting, $0.50)")
+    parser.add_argument("--agent-max-turns", type=int, default=None,
+                        help="turn cap for --agent (default: the project's setting, 8)")
     args = parser.parse_args(argv)
     if not (args.workflow or args.run):
         parser.error("--workflow or --run is required")
@@ -130,7 +166,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             checkpoint=args.checkpoint, app_dir=args.app_dir, repo_root=args.repo_root,
             build_run_id=args.build_run, offline=args.offline,
             families=[f.strip() for f in args.families.split(",") if f.strip()],
-            history_days=args.days, fix=args.fix)
+            history_days=args.days, fix=args.fix, agent=args.agent,
+            agent_max_usd=args.agent_max_usd, agent_max_turns=args.agent_max_turns)
     except wp.PrecheckError as error:
         print(f"precheck: {error}", file=sys.stderr)
         return 2

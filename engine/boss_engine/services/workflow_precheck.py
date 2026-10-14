@@ -2256,7 +2256,9 @@ def precheck(engine: Any, settings: Any = None, *, project_id: str, actor: str =
              checkpoint: str = PRE_RUN, app_dir: Optional[str] = None,
              repo_root: Optional[str] = None, build_run_id: Optional[str] = None,
              offline: bool = False, families: Optional[Iterable[str]] = None,
-             history_days: int = 7, fix: bool = False) -> dict[str, Any]:
+             history_days: int = 7, fix: bool = False, agent: bool = False,
+             agent_max_usd: Optional[float] = None,
+             agent_max_turns: Optional[int] = None) -> dict[str, Any]:
     """THE PRE-CHECK. Read-only: runs in a transaction that is always rolled back.
 
     PRE_DEPLOY with a build and no `app_dir` reads the build's own saved workspace (the files its
@@ -2267,7 +2269,12 @@ def precheck(engine: Any, settings: Any = None, *, project_id: str, actor: str =
     recent behaviour (workflow_precheck_behaviour). The report always lists the auto-fixes BOSS
     could make (`fixes`, dry run) and the shortest path per will_fail (`explain`); `fix=True`
     applies the auto-fixes AFTER the read-only pass, each in its own transaction, recorded as
-    `precheck.autofix_applied` by "boss precheck"."""
+    `precheck.autofix_applied` by "boss precheck".
+
+    `agent=True` then runs the MODEL PRE-CHECK (workflow_precheck_agent) over this report: its
+    predictions land in `report["model"]`, counted in `summary["model"]`, explained after the
+    coded items, never in `blocking`. Capped by `agent_max_usd` / `agent_max_turns` (else the
+    project's settings)."""
     from . import workflow_precheck_behaviour as behaviour
 
     if families is None:
@@ -2293,6 +2300,12 @@ def precheck(engine: Any, settings: Any = None, *, project_id: str, actor: str =
     out["fixes"] = behaviour.apply_fixes(engine, ctx.settings, project_id, out, apply=bool(fix))
     out["explain"] = behaviour.explain(out)
     out["summary"]["fixable_by_boss"] = len(out["fixes"])
+    if agent:
+        from . import workflow_precheck_agent
+
+        workflow_precheck_agent.precheck_with_model(
+            engine, ctx.settings, project_id=project_id, report=out, spec=ctx.spec,
+            run_input=ctx.run_input, max_usd=agent_max_usd, max_turns=agent_max_turns)
     out["summary"]["seconds"] = round(time.monotonic() - started, 2)
     return out
 
@@ -2405,22 +2418,38 @@ def gate_start(connection: Connection, settings: Any, *, project_id: str, versio
                   and b.split(":", 1)[1] not in accepted]
     if unaccepted and mode == "enforce":
         raise PrecheckRefused(report, unaccepted)
+    # THE MODEL PRE-CHECK, only when the project or the workflow asked for it (a model call
+    # costs money and time on every start). Advisory: its (model) lines are recorded on the run
+    # and never refuse a start. Run after the refusal, so a refused start spends nothing.
+    from . import workflow_precheck_agent as agent
+
+    if agent.wanted_at_the_door(connection, settings, project_id, ctx.spec):
+        agent.precheck_with_model(getattr(connection, "engine", None), ctx.settings,
+                                  project_id=project_id, report=report, spec=ctx.spec,
+                                  run_input=ctx.run_input, connection=connection)
+    model_found = bool((report.get("model") or {}).get("findings"))
     taken = [b for b in report["summary"]["blocking"] if b not in unaccepted]
     fixable = [f"{st['step_id']}:{c['id']}" for st in report.get("steps") or []
                for c in st["checks"] if c["verdict"] == "fixable"]
-    if not skips and not taken and not report["summary"]["blocking"] and not fixable:
+    if not skips and not taken and not report["summary"]["blocking"] and not fixable \
+            and not model_found:
         return None
     blocking = list(report["summary"]["blocking"])
+    model = report["summary"].get("model")
     return {"mode": mode, "checkpoint": PRE_RUN,
-            "message": activity_line(blocking, fixable),
+            "message": activity_line(blocking, fixable, model),
             "will_fail": blocking, "fixable": fixable, "unaccepted": unaccepted,
             "accepted": sorted(b for b in taken if b.split(":", 1)[0] not in skipped),
             "skip_steps": skips, "by": actor, "reason": reason[:300], "report": report}
 
 
-def activity_line(will_fail: Sequence[str], fixable: Sequence[str]) -> str:
-    """The run's first activity entry: "Pre-check: 2 will_fail, 1 fixable — a:x, b:y; c:z"."""
+def activity_line(will_fail: Sequence[str], fixable: Sequence[str],
+                  model: Optional[Mapping[str, int]] = None) -> str:
+    """The run's first activity entry: "Pre-check: 2 will_fail, 1 fixable — a:x, b:y; c:z".
+    With the model pre-check's counts: "...; model: will_fail 1, risk 2"."""
     head = f"Pre-check: {len(will_fail)} will_fail, {len(fixable)} fixable"
+    if model:
+        head += f" (model: will_fail {model.get('will_fail', 0)}, risk {model.get('risk', 0)})"
     parts = [", ".join(will_fail), ", ".join(fixable)]
     tail = "; ".join(p for p in parts if p)
     return (head + (f" — {tail}" if tail else ""))[:1000]
