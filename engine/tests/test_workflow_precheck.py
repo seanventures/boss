@@ -60,7 +60,7 @@ HELPDESK_LIKE = {
                                                     "@playwright/test": "1",
                                                     "@types/react": "18",
                                                     "@types/react-dom": "18"}}),
-    ".env.example": "DATABASE_URL=\nSESSION_SECRET=\nDEMO_PASSWORD=\n",
+    ".env.example": "DATABASE_URL=\nSESSION_SECRET=\nDEMO_PASSWORD=\nSUPPORT_API_KEY=\n",
     "boss.preview.command": "npx tsx src/server/index.ts\n",
     "src/server/config.ts": (
         'const s = get("SESSION_SECRET");\n'
@@ -68,6 +68,9 @@ HELPDESK_LIKE = {
         'if (!get("DEMO_PASSWORD")) {\n'
         '  throw new Error("DEMO_PASSWORD must be set (the seed refuses to run without it)");\n'
         '}\n'),
+    "src/server/support.ts": ('if (!get("SUPPORT_API_KEY")) {\n'
+                              '  throw new Error("SUPPORT_API_KEY must be set");\n'
+                              '}\n'),
     "src/server/app.ts": ('const clientDist = path.resolve(process.cwd(), "dist/client");\n'
                           'app.use(express.static(clientDist));\n'
                           'app.get("/api/tickets", list);\n'),
@@ -97,11 +100,22 @@ def test_every_tool_the_runner_calls_itself_is_declared():
     capability runner calls by name must be some capability's tool or declared invoked."""
     source = Path(wp.__file__).with_name("workflow_capability_runner.py").read_text()
     called = set(re.findall(r"_invoke_tool\(\s*ctx,\s*\"([a-z_]+)\"", source))
+    # In-process starts on the build's branch name their tool once (_start_on_the_branch).
+    called |= set(re.findall(r"^\s+tool = \"([a-z_]+)\"", source, re.M))
     assert called, "the scan found no tool calls — the pattern has drifted"
     declared = {c.tool for c in caps.CAPABILITIES.values() if c.tool}
     for entry in wp.CAPABILITY_PRECHECKS.values():
         declared |= {t.partition("@")[0] for t in entry.invokes_tools}
     assert called <= declared, f"undeclared: {sorted(called - declared)}"
+
+
+def test_the_precheck_and_the_consent_agree_on_in_process_calls():
+    """Capability.calls is what the consent asks for (identity.consent.capability_tools); the
+    pre-check's invokes_tools is what it checks. A tool in one and not the other is a step the
+    pre-check calls ready and the runner refuses, or the reverse."""
+    for key, cap in caps.CAPABILITIES.items():
+        checked = {t.partition("@")[0] for t in wp.precheck_for(key).invokes_tools}
+        assert set(getattr(cap, "calls", ()) or ()) == checked, key
 
 
 def test_every_check_has_a_label_and_a_checkpoint():
@@ -142,10 +156,11 @@ def test_an_extend_build_also_needs_what_extend_code_task_needs():
 
 def test_a_passport_ceiling_gap_is_fixable_and_a_tolerated_refusal_never_fails():
     step = _step("preview", "preview")
-    ctx = _ctx(_spec(step), memo=_consent_memo(["preview:manage"], {"qa": ["preview:read"]}))
+    role = caps.CAPABILITIES["preview"].captain
+    ctx = _ctx(_spec(step), memo=_consent_memo(["preview:manage"], {role: ["preview:read"]}))
     found = wp.check_consent(ctx, step)
     assert found["verdict"] == "fixable"
-    assert "qa's Passport" in found["fix"]["action"]
+    assert f"{role}'s Passport" in found["fix"]["action"]
 
 
 def test_without_passports_the_gap_is_reported_but_not_a_failure():
@@ -183,9 +198,11 @@ def test_a_variable_the_app_requires_and_nobody_may_bind_for_a_build_will_fail(t
     step = _step("build", "build")
     found = wp.check_app_env(_env_ctx(app, step), step)
     assert found["id"] == "app_env.build" and found["verdict"] == "will_fail"
-    assert "DEMO_PASSWORD" in found["evidence"] and "secret_not_declared" in found["evidence"]
-    # SESSION_SECRET is a key BOSS mints for a throwaway run: never a problem.
-    assert not any("SESSION_SECRET" in p for p in found["details"]["problems"])
+    assert "SUPPORT_API_KEY" in found["evidence"] and "secret_not_declared" in found["evidence"]
+    # SESSION_SECRET is a key BOSS mints for a throwaway run, and DEMO_PASSWORD a demo login
+    # BOSS generates for it (run_env.decide): never a problem.
+    assert not any("SESSION_SECRET" in p or "DEMO_PASSWORD" in p
+                   for p in found["details"]["problems"])
 
 
 def test_the_same_variable_at_deploy_is_fixable_by_a_person(tmp_path):
@@ -193,8 +210,10 @@ def test_the_same_variable_at_deploy_is_fixable_by_a_person(tmp_path):
     step = _step("deploy", "deploy")
     found = wp.check_app_env(_env_ctx(app, step), step)
     assert found["id"] == "app_env.deploy" and found["verdict"] == "fixable"
-    assert "DEMO_PASSWORD" in found["evidence"]
+    assert "SUPPORT_API_KEY" in found["evidence"]
+    # A deploy mints its session key and its demo login once (secrets.ensure_deploy_generated).
     assert "SESSION_SECRET" not in " ".join(found["details"]["fixable"])
+    assert "DEMO_PASSWORD" not in " ".join(found["details"]["fixable"])
 
 
 def test_an_app_that_declares_nothing_it_requires_is_ready(tmp_path):

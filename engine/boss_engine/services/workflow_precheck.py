@@ -1107,8 +1107,9 @@ def check_app_env(ctx: Context, step: dict[str, Any]) -> Optional[dict[str, Any]
     plan = run_env.resolve(declared, purpose=purpose,
                            bound={n: v for n, v in bound.items() if n in declared})
     for need in plan.needs:
-        if env == "deploy" and need.kind == "generated":
-            # A deploy mints its own once (secrets.ensure_deploy_generated), before it plans.
+        if env == "deploy" and need.kind in ("generated", "demo"):
+            # A deploy mints its own once (secrets.ensure_deploy_generated, which also makes a
+            # demo login's password: secrets.ensure_demo_logins), before it plans.
             autos.append(need.name)
             continue
         refused = binding_refusal(need.name, env, template)
@@ -1126,7 +1127,9 @@ def check_app_env(ctx: Context, step: dict[str, Any]) -> Optional[dict[str, Any]
     for name, found in sorted(code.items()):
         if not found["required"] or name in bound or name in given:
             continue
-        if env == "deploy" and name in declared and declared[name].kind == "generated":
+        if env == "deploy" and name in declared and declared[name].kind in ("generated", "demo"):
+            if name not in autos:
+                autos.append(name)
             continue
         verdict = run_env.decide(declared[name], has_value=False, purpose=purpose) \
             if name in declared else "unset"

@@ -417,7 +417,7 @@ ORDINARY_APP_FILES = {
 }
 
 
-@check("secret scan: ordinary app files are not secrets, a real token still is", bug="8")
+@check("secret scan: ordinary app files are not secrets, a real token still is", bug="9")
 def check_secret_scan(g: Gate) -> str:
     """BOSS's secret scan (templates.secret_scan.scan_files, what no_committed_secrets runs) over
     the cloned app as it stands plus the four ordinary files HelpDesk builds were blocked for.
