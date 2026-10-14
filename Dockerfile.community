@@ -141,15 +141,16 @@ COPY --from=node:22-bookworm-slim@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e3395
 COPY --from=node:22-bookworm-slim@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392 /usr/local/lib/node_modules /usr/local/lib/node_modules
 # Keep the Node distribution's license alongside its binary in the API/worker image.
 COPY --from=node:22-bookworm-slim@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392 /usr/local/LICENSE /usr/local/LICENSE
-# bubblewrap, socat: the Claude CLI's Linux sandbox needs bwrap AND socat (claude_agent_sdk runs
-# with it required). Engines declare what they exec (harness_registry.RuntimeBinary);
-# test_every_engine_binary_is_in_the_image holds this stage to it.
+# No bubblewrap/socat: no engine starts the Claude CLI's own Linux sandbox (it cannot create a
+# namespace in this container). An agent session holds a model-proxy run token, never the key
+# (engine/boss_engine/services/model_proxy.py). Engines declare what they exec
+# (harness_registry.RuntimeBinary); test_every_engine_binary_is_in_the_image holds this stage to it.
 RUN ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
     && ln -s /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
     && apt-get update \
     && apt-get install -y --no-install-recommends \
        ca-certificates git openssh-client ffmpeg libavfilter-extra fonts-dejavu-core \
-       iptables libcap2-bin curl bubblewrap socat \
+       iptables libcap2-bin curl \
     && addgroup --system boss \
     && adduser --system --ingroup boss --home /home/boss boss \
     && mkdir -p /home/boss/.codex /home/boss/.claude /var/lib/boss/artifacts /var/lib/boss/identity \

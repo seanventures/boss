@@ -39,6 +39,7 @@ import time
 import tomllib
 from typing import Optional
 
+from . import model_proxy as _model_proxy
 from . import owned_process
 from .harness_registry import FailurePattern, RuntimeBinary
 from .workspace_perms import tidies_workspace
@@ -55,13 +56,6 @@ NODE_RUNTIME = RuntimeBinary("node", "/usr/local/bin/node", "image",
 #: per-platform optional dependency), which embeds ripgrep and needs no Node.
 CLAUDE_CLI_RUNTIME = (
     RuntimeBinary("claude", "@anthropic-ai/claude-code", "npm", "the Claude Code CLI"),
-)
-#: THE CLAUDE CLI'S LINUX SANDBOX. With CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 (agent_sdk_engine) the
-#: CLI refuses to run a command without it, and it checks exactly these two at start-up:
-#: "Sandbox dependencies not available: bubblewrap (bwrap) not installed / socat not installed".
-CLAUDE_SANDBOX_RUNTIME = (
-    RuntimeBinary("bwrap", "bubblewrap", "apt", "the Claude CLI's Linux sandbox"),
-    RuntimeBinary("socat", "socat", "apt", "the Claude CLI's sandbox network proxy"),
 )
 #: How the Claude CLI says its sandbox did not start (harness_failures). It answers EVERY Bash
 #: call with this in place of the command's output, so the agent works blind until it gives up:
@@ -1155,6 +1149,10 @@ class CliHarnessUnavailable(RuntimeError):
     """The binary is not installed, or the step needs something the CLI cannot do."""
 
 
+#: A CLI run's model-proxy tokens (`_env`) are revoked when `run_role` ends (model_proxy).
+_proxy_scoped = _model_proxy.scoped()
+
+
 class GenericCliCodeAgent:
     """Drive any coding CLI that edits files in the working directory."""
 
@@ -1197,14 +1195,17 @@ class GenericCliCodeAgent:
             from .claude_credential import resolve_claude_credential
 
             try:
-                return resolve_claude_credential(self.settings).apply(env)
+                resolve_claude_credential(self.settings).apply(env)
             except CredentialStoreUnavailable:
-                return env     # as before: what the environment holds, logged by the lookup
-        if _uses_env_route(self.spec) and not env.get(self.spec.token_env):
+                pass           # as before: what the environment holds, logged by the lookup
+        elif _uses_env_route(self.spec) and not env.get(self.spec.token_env):
             token = self._resolve_secret(self.spec.token_env)
             if token:
                 env[self.spec.token_env] = token
-        return env
+        # A PROVIDER API KEY NEVER REACHES THE CLI (model_proxy): an Anthropic, OpenAI or
+        # OpenRouter key passed through above becomes a run token for the loopback proxy, with
+        # the base URL the CLI reads. A CLI's own login (a token, an auth file) is untouched.
+        return _model_proxy.shield_env(env, settings=self.settings)
 
     def _argv(self, prompt: str, *, read_only: bool, model: Optional[str]) -> list[str]:
         argv = [self._resolve_binary(), *self.spec.args]
@@ -1439,6 +1440,7 @@ class GenericCliCodeAgent:
         return self._resolve_secret(self.spec.token_env)
 
     @tidies_workspace
+    @_proxy_scoped
     def run_role(self, prompt: str, cwd: Path, *, read_only: bool = False,
                  model: Optional[str] = None, resume_session_id: Optional[str] = None,
                  **_ignored) -> dict:

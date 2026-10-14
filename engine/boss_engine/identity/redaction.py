@@ -85,8 +85,9 @@ _SHAPES: list[tuple[re.Pattern[str], str]] = [
     # body. An unterminated block is cut to the end of the text.
     (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)",
                 re.S), REDACTED),
-    # BOSS credentials (IDENTITY.md §5.1; egress §7.10; sessions §4.3). No prefix survives either.
-    (re.compile(r"boss_(?:pat|sak|scim|egr)_[A-Za-z0-9]{6,}"), REDACTED),
+    # BOSS credentials (IDENTITY.md §5.1; egress §7.10; sessions §4.3; a session's model-proxy
+    # token, services/model_proxy.py). No prefix survives either.
+    (re.compile(r"boss_(?:pat|sak|scim|egr|mdl)_[A-Za-z0-9]{6,}"), REDACTED),
     (re.compile(r"\bbss_[A-Za-z0-9_\-]{16,}"), REDACTED),
     # JWT / JWS / id_token shape.
     (re.compile(r"eyJ[A-Za-z0-9_\-]{4,}\.[A-Za-z0-9_\-]{2,}\.[A-Za-z0-9_\-]*"), REDACTED),
