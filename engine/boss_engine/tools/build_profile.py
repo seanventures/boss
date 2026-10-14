@@ -44,7 +44,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"no run or turns found for {args.run_id}", file=sys.stderr)
         return 1
     profile = profile_from_rows(rows.get("turns") or [], rows.get("llm_calls") or [],
-                                rows.get("run"), run_id=args.run_id)
+                                rows.get("run"), run_id=args.run_id,
+                                swallowed=rows.get("swallowed") or [])
     print(json.dumps(profile, indent=2, default=str) if args.json else format_profile(profile))
     return 0
 

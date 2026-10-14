@@ -9,7 +9,15 @@ class BudgetPort(Protocol):
 
     The connection argument is intentionally opaque. Enterprise adapters use a
     SQL transaction while the OSS default ignores it and remains in-memory.
+
+    Every method a holder of `ports.budget` calls must be declared here and implemented by
+    every adapter: test_budget_port_contract.py checks the call sites against this list.
     """
+
+    def status_for_project(self, connection: Any, project_id: str) -> dict[str, Any]:
+        """The project's budget snapshot. Callers read at least `budget_state`
+        (green/yellow/orange/red) to decide how much to spend."""
+        ...
 
     def reserve(
         self,

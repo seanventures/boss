@@ -11,6 +11,9 @@ class PostgresBudgetPort:
     def __init__(self, settings: Any) -> None:
         self.governor = BudgetGovernor(settings)
 
+    def status_for_project(self, connection: Any, project_id: str) -> dict[str, Any]:
+        return self.governor.status_for_project(connection, project_id)
+
     def reserve(
         self,
         connection: Any,
