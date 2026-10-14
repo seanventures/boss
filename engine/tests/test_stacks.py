@@ -275,7 +275,7 @@ def test_the_backend_is_up_before_the_e2e_runs_and_the_e2e_is_told_where(tmp_pat
     import contextlib
 
     @contextlib.contextmanager
-    def fake_backend(p, timeout=None):
+    def fake_backend(p, timeout=None, **_declared):
         events.append(("backend_up", p.backend_command[-1]))
         s = stack_verify.Session("http://127.0.0.1:5555", 5555, p.backend_command[-1])
         yield s
@@ -306,7 +306,7 @@ def test_a_backend_that_does_not_start_fails_with_its_words(tmp_path, monkeypatc
     import contextlib
 
     @contextlib.contextmanager
-    def dead(p, timeout=None):
+    def dead(p, timeout=None, **_declared):
         raise stack_verify.BackendDidNotStart("The backend exited (code 1): ModuleNotFoundError")
         yield  # pragma: no cover
 

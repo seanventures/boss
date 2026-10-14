@@ -1910,7 +1910,13 @@ def _why_it_failed(log_path: str, limit: int = 900) -> str:
         text = Path(log_path).read_text(errors="ignore")
     except Exception:  # noqa: BLE001
         return "log unavailable."
-    lines = [ln.rstrip() for ln in text.splitlines() if ln.strip()]
+    return why_it_failed_text(text, limit)
+
+
+def why_it_failed_text(text: str, limit: int = 900) -> str:
+    """_why_it_failed over text in hand — the APP's own section of a start's log
+    (app_start.split_output), so an install step's lines are never read as the app's error."""
+    lines = [ln.rstrip() for ln in (text or "").splitlines() if ln.strip()]
     if not lines:
         return "log was empty."
     culprits = [ln for ln in lines
@@ -2019,6 +2025,11 @@ def launch_app(workdir: Path, command: list[str], log_path: str, *,
     """
     port_hint = port or _free_port()
     env = app_environment(workdir, port_hint, extra_env)
+    # THE APP'S OWN OUTPUT, TOLD APART (app_start.marked): an install chained in front of the
+    # start prints a marker first, so a failure quotes the app, never npm install's last line.
+    from . import app_start as _app_start
+
+    command = _app_start.marked(list(command))
     logf = os.fdopen(os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0),
                              0o600), "w")
     try:
@@ -2237,6 +2248,39 @@ def _build_services_env(owner) -> dict[str, str]:
         return {}
 
 
+def app_start_environment(app_dir: Optional[Path], *, needs: Optional[dict] = None,
+                          bound: Optional[dict[str, str]] = None, purpose: str = "proof"):
+    """THE ONE RESOLVER for an app BOSS starts to check it (templates.run_env): what its templates
+    declare (`needs`), what its own boss.deploy.yaml and .env.example declare (names only — a
+    value in .env.example is never passed), the values a person bound, and the run's build
+    services (DATABASE_URL, PG*), which win over "listed/unset". The serve proof and a
+    multi-service backend (stack_verify: the verify stage and the template gate) both call it;
+    the backend was started with HOME alone, so HelpDesk AI's SESSION_SECRET and DEMO_PASSWORD
+    were never minted there (crun_f246d330)."""
+    from ..templates.run_env import merge, needs_from_app_dir, resolve
+
+    return resolve(merge(needs or {}, needs_from_app_dir(app_dir)), purpose=purpose, bound=bound,
+                   supplied=_build_services_env(owned_process.current_owner()))
+
+
+def start_record(*, path: str, command, cwd, run_env, log_path: str, exit_code: Optional[int],
+                 ok: bool, error: Optional[str] = None, extra: Optional[dict] = None,
+                 label: Optional[str] = None) -> dict:
+    """app_start.record for a launch_app start: the variables by name and source, the app's own
+    output (redacted, every value BOSS gave the launch included)."""
+    from . import app_start
+
+    services = _build_services_env(owned_process.current_owner())
+    # Every value the app was GIVEN from its declarations and BOSS's services; `extra` holds
+    # BOSS's own URLs for this launch (BACKEND_URL), which the output may name.
+    secrets = [*(getattr(run_env, "values", {}) or {}).values(), *services.values()]
+    return app_start.record(
+        path=path, label=label, command=command, cwd=cwd,
+        env=app_start.env_sources(run_env=run_env, build_services=services, extra=extra),
+        log_text=app_start.read_log(log_path), exit_code=exit_code, ok=ok, error=error,
+        secrets=secrets)
+
+
 def prove_app_serves(workdir: Path, changed: Optional[list[str]], *,
                      lineage: Optional[list[str]] = None, known_service: bool = False,
                      timeout: float = 180.0, probe_paths: Optional[list[str]] = None,
@@ -2339,11 +2383,8 @@ def prove_app_serves(workdir: Path, changed: Optional[list[str]], *,
 
         record["source"] = plan.source
         record["command"] = plan.shell()
-        from ..templates.run_env import merge, needs_from_app_dir, resolve
-
-        run_env = resolve(merge(needs or {}, needs_from_app_dir(_app_dir_of_plan(tree, plan))),
-                          purpose="proof", bound=bound,
-                          supplied=_build_services_env(owned_process.current_owner()))
+        app_dir = _app_dir_of_plan(tree, plan)
+        run_env = app_start_environment(app_dir, needs=needs, bound=bound, purpose="proof")
         record["environment"] = run_env.evidence()
         if run_env.needs:
             record.update(ok=False, needs_secret=[n.name for n in run_env.needs], error=(
@@ -2352,6 +2393,11 @@ def prove_app_serves(workdir: Path, changed: Optional[list[str]], *,
             return record
         log_path = str(tree / ".boss-serve-proof.log")
         proc, port_hint = launch_app(tree, plan.command, log_path, extra_env=run_env.values)
+        from . import app_start as _app_start
+
+        def _app_text() -> str:
+            return _app_start.split_output(_read_log(log_path))[1]
+
         try:
             port = _discover_working_port(log_path, port_hint,
                                           timeout=preview_start_timeout(_app_dir_of_plan(tree, plan), timeout),
@@ -2369,8 +2415,8 @@ def prove_app_serves(workdir: Path, changed: Optional[list[str]], *,
                 # process that died at 0.8s sent the reader looking for a slow start.
                 record.update(ok=False, exit_code=exit_code, error=(
                     f"the app exited (code {exit_code}) before serving HTTP: "
-                    + _why_it_failed(log_path)))
-                log_text = _read_log(log_path)
+                    + why_it_failed_text(_app_text())))
+                log_text = _app_text()
                 named = run_env.unset_named_in(log_text)
                 if named:
                     # A person's act ONLY for a secret only a person can supply; a crash on a
@@ -2385,9 +2431,29 @@ def prove_app_serves(workdir: Path, changed: Optional[list[str]], *,
                 record.update(ok=False, error=(
                     f"the app started and kept running but did not answer HTTP within "
                     f"{timeout:g}s. " + (listening + " " if listening else "")
-                    + _why_it_failed(log_path)))
+                    + why_it_failed_text(_app_text())))
         finally:
             _kill(proc.pid)
+            # THE START'S RECORD, on every outcome (app_start): command, cwd, the variables by
+            # name and source, the exit code and the app's own output — on the serve record, in
+            # app_logs and as a code_task.app_start event.
+            try:
+                if record.get("error"):
+                    # The error quotes the app's log, and an app may print what it was given: no
+                    # value BOSS handed it (a generated key, the run's database password) is kept
+                    # on the record, the app_serve_checked event or the repair prompt.
+                    record["error"] = _app_start.redactor(
+                        [*run_env.values.values(),
+                         *_build_services_env(owned_process.current_owner()).values()]
+                    )(record["error"])
+                record["start"] = start_record(
+                    path="serve_proof", label="serve proof", command=record["command"],
+                    cwd=app_dir.relative_to(tree).as_posix() if app_dir != tree else ".",
+                    run_env=run_env, log_path=log_path, exit_code=record.get("exit_code"),
+                    ok=bool(record.get("proven")), error=record.get("error"))
+                _app_start.publish(record["start"])
+            except Exception:  # noqa: BLE001 — bookkeeping never fails the proof
+                logger.debug("serve proof: start record not kept", exc_info=True)
         return record
     except Exception as exc:  # noqa: BLE001 — the check reports, it never crashes the build
         record.update(ok=False, harness=True,
@@ -2668,14 +2734,26 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
         # NAME WHICH FAILURE THIS IS before killing the process — once it is dead, the
         # difference between "never bound" and "bound and served the wrong thing" is gone.
         exit_code = proc.poll()
+        from . import app_start as _app_start
+
+        _own = _app_start.split_output(_read_log(log_path))[1]
         why = (
-            f"the app exited (code {exit_code}) before serving HTTP: " + _why_it_failed(log_path)
+            f"the app exited (code {exit_code}) before serving HTTP: " + why_it_failed_text(_own)
             if exit_code is not None else _serve_failure(log_path, port_hint)
         )
-        needed = app_env.explain_crash(_read_log(log_path))
+        needed = app_env.explain_crash(_own)
         if needed:
             why = f"the app {needed}. {why}"
+        # No value the preview was given survives into its failure (an app may print its env).
+        why = _app_start.redactor(list(app_env.values.values()))(why)
         _kill(proc.pid)
+        try:
+            _app_start.publish(start_record(
+                path="preview", label=f"preview {preview_id}", command=command, cwd=".",
+                run_env=app_env, log_path=log_path, exit_code=exit_code, ok=False, error=why),
+                engine=engine, project_id=project_id, run_id=run_id)
+        except Exception:  # noqa: BLE001 — bookkeeping never hides the preview's own failure
+            logger.debug("preview %s: start record not kept", preview_id, exc_info=True)
         return _fail(why, command=" ".join(command), exited=exit_code is not None)
 
     url = f"http://127.0.0.1:{port}"

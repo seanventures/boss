@@ -34,7 +34,12 @@ BACKEND_START_SECONDS = 180.0
 
 
 class BackendDidNotStart(RuntimeError):
-    pass
+    """`record` is the start's app_start record (command, env names and sources, the app's own
+    output), when the process was started at all."""
+
+    def __init__(self, message: str, record: Optional[dict] = None) -> None:
+        super().__init__(message)
+        self.record = dict(record or {})
 
 
 @dataclass
@@ -63,47 +68,81 @@ def answers(port: int, path: str = "/", timeout: float = 2.0) -> bool:
         return False
 
 
-def _tail(path: str, limit: int = 1500) -> str:
-    try:
-        return Path(path).read_text(encoding="utf-8", errors="replace")[-limit:]
-    except OSError:
-        return ""
+#: How many of the app's own last lines a failure message carries (the record keeps 200).
+MESSAGE_LINES = 30
 
 
 def _launch(workdir: Path, command: list[str], label: str, *, port: Optional[int] = None,
             extra_env: Optional[dict[str, str]] = None, health: str = "/",
-            timeout: float = BACKEND_START_SECONDS):
-    """Start one process the preview's way and wait for it to answer. (proc, port, log path)."""
-    from .preview_service import _free_port, _kill, launch_app
+            timeout: float = BACKEND_START_SECONDS, needs: Optional[dict] = None,
+            bound: Optional[dict[str, str]] = None, path: str = "stack"):
+    """Start one process the preview's way and wait for it to answer. (proc, port, log path,
+    start record).
 
+    WITH THE ENVIRONMENT THE APP DECLARES — preview_service.app_start_environment, the resolver
+    the serve proof uses. This launched the backend with HOME alone, so a session key BOSS
+    generates and a demo password it mints were never given and HelpDesk AI's backend exited 1
+    in verify (crun_f246d330) while the agent's own boot test, which set them, passed.
+
+    A failure says the app's OWN last error lines (app_start), never the install step's tail."""
+    from . import app_start
+    from .preview_service import _free_port, _kill, app_start_environment, launch_app, start_record
+
+    run_env = app_start_environment(workdir, needs=needs, bound=bound, purpose="proof")
+    shown = " ".join(command[-1:])
+    if run_env.needs:
+        raise BackendDidNotStart(f"The {label} ({shown}) was not started: it "
+                                 f"{run_env.verdict()} (environment build).")
     fd, log_path = tempfile.mkstemp(prefix=f"boss-stack-{label}-", suffix=".log")
     os.close(fd)
     os.unlink(log_path)  # launch_app creates it O_NOFOLLOW
     env = {"HOME": os.environ.get("HOME", str(workdir))}
+    env.update(run_env.values)
     env.update(extra_env or {})
     proc, port = launch_app(workdir, command, log_path, port=port or _free_port(), extra_env=env)
     deadline = time.monotonic() + timeout
+    up = False
     while time.monotonic() < deadline:
         if answers(port, health):
-            return proc, port, log_path
+            up = True
+            break
         if proc.poll() is not None:
             break
         time.sleep(0.5)
-    code = proc.poll()
-    _kill(proc.pid)
-    why = (f"exited (code {code}) before it answered HTTP" if code is not None
-           else f"did not answer HTTP on port {port} within {timeout:g}s")
-    tail = _tail(log_path)
+    code = None if up else proc.poll()
+    if not up:
+        _kill(proc.pid)
+    why = None if up else (f"exited (code {code}) before it answered HTTP" if code is not None
+                           else f"did not answer HTTP on port {port} within {timeout:g}s")
+    rec = start_record(path=path, label=label, command=command, cwd=str(workdir), run_env=run_env,
+                       log_path=log_path, exit_code=code, ok=up, extra=extra_env)
+    if up:
+        app_start.publish(rec)
+        return proc, port, log_path, rec
+    said = app_start.quote(rec)
+    crash = run_env.explain_crash("\n".join(rec.get("output_tail") or []))
+    tail = rec.get("output_tail") or []
+    # The app's own words FIRST on the first line: the blocked build's one-line headline
+    # (verification_target.failed_check) is that line, cut at 300 characters.
+    message = (f"The {label} {why}" + (f": {said}" if said else "") + f". BOSS ran `{shown}`."
+               + (f" The app {crash}." if crash else "")
+               + f"\nEnvironment BOSS set (names and sources): {app_start.env_line(rec)}"
+               + ("\nThe app's own output ended:\n" + "\n".join(tail[-MESSAGE_LINES:])
+                  if tail else "\nThe app printed nothing."))
+    rec["error"] = message[:1500]
+    app_start.publish(rec)
     with contextlib.suppress(OSError):
         os.unlink(log_path)
-    raise BackendDidNotStart(f"The {label} ({' '.join(command[-1:])}) {why}."
-                             + (f" Its output ended:\n{tail}" if tail.strip() else ""))
+    raise BackendDidNotStart(message, rec)
 
 
 @contextlib.contextmanager
-def backend_running(plan: StackPlan, *, timeout: Optional[float] = None) -> Iterator[Session]:
-    """The plan's backend (and, when its Playwright starts none, its front end), up for the body.
-    Raises BackendDidNotStart with the process's own output."""
+def backend_running(plan: StackPlan, *, timeout: Optional[float] = None,
+                    needs: Optional[dict] = None, bound: Optional[dict[str, str]] = None,
+                    path: str = "stack") -> Iterator[Session]:
+    """The plan's backend (and, when its Playwright starts none, its front end), up for the body,
+    each with the environment it declares (`needs`/`bound`: what its templates declare and a
+    person bound; _launch). Raises BackendDidNotStart with the process's own output."""
     from .preview_service import _kill, preview_start_timeout
 
     if plan.backend is None or not plan.backend_command:
@@ -113,19 +152,21 @@ def backend_running(plan: StackPlan, *, timeout: Optional[float] = None) -> Iter
     procs: list[Any] = []
     logs: list[str] = []
     try:
-        proc, port, log_path = _launch(back_dir, plan.backend_command, "backend",
-                                       health=plan.backend_health, timeout=limit)
+        proc, port, log_path, start = _launch(back_dir, plan.backend_command, "backend",
+                                              health=plan.backend_health, timeout=limit,
+                                              needs=needs, bound=bound, path=path)
         procs.append(proc)
         logs.append(log_path)
         session = Session(f"http://127.0.0.1:{port}", port, plan.backend_command[-1])
         session.record = {"backend": {"dir": plan.backend.rel, "command": session.command,
-                                      "url": session.url, "ok": True}}
+                                      "url": session.url, "ok": True, "start": start}}
         if plan.serve_frontend and plan.frontend is not None:
             from .stacks import VITE_SERVE
 
             front_cmd = plan.frontend_command or ["sh", "-lc", VITE_SERVE]
-            fproc, fport, flog = _launch(plan.dir_of(plan.frontend), front_cmd, "frontend",
-                                         extra_env=session.env(), timeout=120.0)
+            fproc, fport, flog, _fstart = _launch(plan.dir_of(plan.frontend), front_cmd,
+                                                  "frontend", extra_env=session.env(),
+                                                  timeout=120.0, path=path)
             procs.append(fproc)
             logs.append(flog)
             session.frontend_url = f"http://127.0.0.1:{fport}"
@@ -179,8 +220,10 @@ def _ensure_browsers(plan: Any, record: dict) -> set:
 
 
 def run_stack_plan(sandbox, plan: StackPlan, *, timeout: Optional[int] = None,
-                   start_timeout: Optional[float] = None) -> tuple[list[Any], dict[str, Any]]:
-    """Run the plan, stopping at the first failure. (results, record)."""
+                   start_timeout: Optional[float] = None, needs: Optional[dict] = None,
+                   bound: Optional[dict[str, str]] = None) -> tuple[list[Any], dict[str, Any]]:
+    """Run the plan, stopping at the first failure. (results, record). `needs`/`bound` are what
+    the app's templates declare and a person bound (the serve proof's), for its backend's start."""
     from .verification_target import harden_web_package
 
     record: dict[str, Any] = {"services": [s.as_dict() for s in plan.services]}
@@ -206,7 +249,8 @@ def run_stack_plan(sandbox, plan: StackPlan, *, timeout: Optional[int] = None,
     # start timeout. A step it covered is not run in the sandbox at all.
     cached_steps = _ensure_browsers(plan, record)
     try:
-        with backend_running(plan, timeout=start_timeout) as session:
+        with backend_running(plan, timeout=start_timeout, needs=needs, bound=bound,
+                             path="verify") as session:
             record.update(session.record)
             for command, cwd in plan.e2e_steps:
                 if (command, str(cwd)) in cached_steps:
@@ -217,6 +261,7 @@ def run_stack_plan(sandbox, plan: StackPlan, *, timeout: Optional[int] = None,
                     break
     except BackendDidNotStart as exc:
         record["backend"] = {"dir": plan.backend.rel, "command": (plan.backend_command or [""])[-1],
-                             "ok": False, "error": str(exc)[:2000]}
+                             "ok": False, "error": str(exc)[:2000],
+                             **({"start": exc.record} if exc.record else {})}
         results.append(_failed(str(exc)))
     return results, record

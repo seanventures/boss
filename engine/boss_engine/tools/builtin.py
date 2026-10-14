@@ -5247,6 +5247,13 @@ def _register_diagnosis_tools(reg: ToolRegistry) -> None:
                       "AND event_type = 'code_task.harness_failed' "
                       "ORDER BY created_at DESC LIMIT 1"),
                 {"p": pid, "r": run_id}).scalar()
+            # THE APP'S OWN START (app_start): command, the variables BOSS set by name and
+            # source, the exit code and the app's own last lines — for "why did it not start".
+            from ..services import app_start as _app_start
+
+            app_start_rec = _app_start.latest(c, project_id=pid, run_id=run_id)
+            if app_start_rec is not None:
+                checked.append("the app's last start record")
 
         minutes = float(run["minutes"] or 0)
         if isinstance(harness, dict) and harness.get("sentence"):
@@ -5287,6 +5294,9 @@ def _register_diagnosis_tools(reg: ToolRegistry) -> None:
             findings.append(
                 f"{calls - results} tool call(s) never produced a result. The last one is where "
                 "it stopped.")
+        start_finding = _app_start.finding(app_start_rec)
+        if start_finding:
+            findings.append(start_finding)
         if run["error"]:
             findings.append(f"the run records an error: {str(run['error'])[:200]}")
 
@@ -5328,6 +5338,10 @@ def _register_diagnosis_tools(reg: ToolRegistry) -> None:
                 {**dict(last_call), "created_at": last_call["created_at"].isoformat()}
                 if last_call else None),
             "findings": findings,
+            "app_start": ({k: app_start_rec.get(k) for k in (
+                "path", "label", "ok", "command", "cwd", "env", "exit_code", "error_lines")}
+                | {"output_tail": list(app_start_rec.get("output_tail") or [])[-40:]}
+                if app_start_rec else None),
             "checked": checked,
             "could_not_check": could_not_check,
             "next": (

@@ -801,7 +801,25 @@ def _start_logs(ctx: wp.Context) -> list[dict[str, Any]]:
         out.append({"run": e["entity_id"], "at": e["created_at"], "error": str(data["error"]),
                     "environment": data.get("environment") or None,
                     "needs_secret": data.get("needs_secret") or []})
-    return out
+    # EVERY OTHER START (services.app_start): a multi-service backend in verify or the template
+    # gate wrote no app_serve_checked (crun_f246d330), only its code_task.app_start record. The
+    # serve proof writes both, so its app_start copy is skipped here.
+    for e in _events(ctx, ["code_task.app_start"], entity_ids=sc["build_ids"]):
+        data = e.get("data") or {}
+        if data.get("ok") is not False or data.get("path") == "serve_proof":
+            continue
+        env = data.get("env") or {}
+        code = data.get("exit_code")
+        said = "\n".join(str(x) for x in (data.get("output_tail") or [])[-40:])
+        out.append({"run": e["entity_id"], "at": e["created_at"],
+                    "error": (f"the app exited (code {code}) before serving HTTP: {said}"
+                              if code is not None else str(data.get("error") or said)),
+                    "environment": {
+                        "unset": [k for k, v in env.items() if str(v).startswith("unset")],
+                        "generated": [k for k, v in env.items() if str(v).startswith("generated")]},
+                    "needs_secret": [k for k, v in env.items()
+                                     if str(v).startswith("needs a secret")]})
+    return sorted(out, key=lambda item: str(item.get("at") or ""))
 
 
 def _current_environment(ctx: wp.Context) -> dict[str, Any]:

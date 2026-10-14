@@ -104,6 +104,15 @@ def signals(connection, run_id: str) -> dict[str, Any]:
         except Exception:  # noqa: BLE001
             fctx = {}
 
+    # THE APP'S OWN START RECORD (app_start): when BOSS started the app and it exited, its own
+    # error lines are the evidence the classification and the hypothesis cite.
+    try:
+        from . import app_start as _app_start
+
+        start = _app_start.latest(connection, project_id=run["project_id"], run_id=run_id)
+    except Exception:  # noqa: BLE001 — a missing record is no evidence, never a failure
+        start = None
+
     repeated = {s["stage"]: int(s["calls"]) for s in stages if int(s["calls"]) > 1}
     spent = round(sum(float(s["usd"] or 0) for s in stages), 2)
 
@@ -132,6 +141,7 @@ def signals(connection, run_id: str) -> dict[str, Any]:
         "recorded_failure_class": fctx.get("shepherd_class"),
         "failing_gates": list(fctx.get("advisory_failing_gates")
                               or fctx.get("failing_gates") or []),
+        "app_start": start if start and not start.get("ok") else None,
     }
 
 
@@ -243,6 +253,11 @@ def propose(engine, settings: Settings, run_id: str, *,
         cls = classify(sig["error"], gates_failed=sig["failing_gates"],
                        has_pr=sig["has_pr"],
                        recorded_class=sig.get("recorded_failure_class"))
+        from . import app_start as _app_start
+        from .task_shepherd import APP_START_FAILED, UNKNOWN
+
+        if cls == UNKNOWN and sig.get("app_start"):
+            cls = APP_START_FAILED
         confirmed, check_note = check_hypothesis(sig, cls)
 
         budget = task_budget(c, project_id)
@@ -279,6 +294,10 @@ def propose(engine, settings: Settings, run_id: str, *,
                    f"${sig['spent_usd']} spent, attempt {sig['attempt']}"
                    f"{', PR open' if sig['has_pr'] else ', no PR'}")
         hypothesis = f"{CLASS_NAMES.get(cls, 'unknown')} ({sig['error'][:110]})"
+        if cls == APP_START_FAILED and _app_start.quote(sig.get("app_start")):
+            # The app's own words, not the run's summary of them.
+            hypothesis = (f"{CLASS_NAMES[cls]}: {_app_start.quote(sig['app_start'])[:300]} "
+                          f"(BOSS set {_app_start.env_line(sig['app_start'])[:300]})")
         rationale = verdict.reason
         if model_narrator is not None:
             # The model explains; it does not decide. It is handed the evidence and the
