@@ -64,10 +64,11 @@ import {
   youApproveWord, type ComposeMode, type CostHistory, type TimelineStep,
 } from "./compose-plan";
 import type { CatalogueEntry, Installed } from "../delivery-workflows-ui";
-import { ConnectorCards, effectiveConnector, useCatalogue, useIdeas, type IdeaItem }
+import { ConnectorCards, effectiveConnectors, useCatalogue, useIdeas, type IdeaItem }
   from "../../components/v2/templates/catalogue";
 import { IdeasDialog } from "../../components/v2/templates/ideas-dialog";
 import { TemplateSheet, type ApplyTarget } from "../../components/v2/templates/template-sheet";
+import { ComposeSheet } from "../../components/v2/templates/compose-sheet";
 import { stackLabel, templatesApi, type Applied, type TemplateCard } from "../../lib/templates";
 import { useIdentityVersion } from "../../lib/use-agent-identities";
 import { useGuardedCall } from "../../components/identity/identity-provider";
@@ -559,23 +560,27 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
   /** "Talks to": the project's other apps this one should call (§5.5). */
   const [talks, setTalks] = useState<TalksToRow[]>([]);
   const linkGate = useGate("app_link:manage");
-  // ── Connectors and ideas (operator, 2026-10-13). `connector`: the one chosen in "Add a
-  //    connector" (either mode); Start then opens its sheet (stack, test secrets, what it talks
-  //    to, the security note) with the name and brief already written. `tplCard`: that sheet, or
-  //    an idea's "Build from its reference".
+  // ── Connectors and ideas (operator, 2026-10-13). `connectors`: the ones chosen in "Add a
+  //    connector" (either mode), in the order picked. ONE: Start opens its sheet (stack, test
+  //    secrets, what it talks to, the security note) with the name and brief already written.
+  //    TWO TO SIX (BOSSAPP-526): Start opens the compose sheet, one build for all of them.
+  //    `tplCard`: the one connector's sheet, or an idea's "Build from its reference";
+  //    `composeSet`: the compose sheet.
   const connectorCards = useCatalogue();
   const ideas = useIdeas();
-  const [pickedConnector, setConnector] = useState<TemplateCard | null>(null);
+  const [pickedConnectors, setConnectors] = useState<TemplateCard[]>([]);
   const [ideaCard, setIdeaCard] = useState<TemplateCard | null>(null);
   const [tplCard, setTplCard] = useState<{ card: TemplateCard; target: ApplyTarget;
                                            name?: string; note?: string; stack?: string } | null>(null);
+  const [composeSet, setComposeSet] = useState<{ cards: TemplateCard[]; target: ApplyTarget;
+                                                 name?: string; note?: string; stack?: string } | null>(null);
   const [appStack, setAppStack] = useState<string | null>(null);
   /** What the app already carries (connectors, its starter): "Already in the app" on their cards. */
   const [appTemplates, setAppTemplates] = useState<Applied[]>([]);
   // A CONNECTOR CHOICE BELONGS TO ONE JOB AND ONE APP: switching mode or app forgets it, and
   // the one counted is only ever new to this build (shown on its card, fit for the app's stack).
-  useEffect(() => { setConnector(null); }, [mode, app?.key]);
-  const connector = effectiveConnector(pickedConnector, connectorCards, mode === "add"
+  useEffect(() => { setConnectors([]); }, [mode, app?.key]);
+  const connectors = effectiveConnectors(pickedConnectors, connectorCards, mode === "add"
     ? { inApp: appTemplates.map((t) => t.key), stack: appStack } : { inApp: [], stack: null });
   /** Add a feature: the app picker, reopened by "Change app" once an app is chosen. */
   const [pickApp, setPickApp] = useState(false);
@@ -976,14 +981,18 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
     if (busy || (blocked && !(adding && proposal?.proposal))) return;
     // A CONNECTOR CHOSEN: Start opens its sheet (stack, test secrets, what it talks to, the
     // security note), with the app's name and the brief already in it. Its own Start applies it.
-    if (connector && !formOnly) {
+    // Two or more: the same, in the compose sheet, as ONE build.
+    if (connectors.length && !formOnly) {
+      const open = (o: { target: ApplyTarget; name?: string; note?: string; stack?: string }) => {
+        if (connectors.length === 1) setTplCard({ card: connectors[0], ...o });
+        else setComposeSet({ cards: connectors, ...o });
+      };
       if (adding && app) {
-        setTplCard({ card: connector, note: gain,
-                     target: { kind: "add", runId: baseRun, appKey: app.appKey ?? null, name: app.app, stack: appStack } });
+        open({ note: gain, target: { kind: "add", runId: baseRun, appKey: app.appKey ?? null, name: app.app, stack: appStack } });
       } else if (!adding) {
-        setTplCard({ card: connector, target: { kind: "new" }, name: draft.title,
-                     stack: stackAdapter ? adapterLanguage(stackAdapter) : undefined,
-                     note: [directiveOut, draft.audience ? `Who it is for: ${draft.audience}` : ""].filter(Boolean).join("\n\n") });
+        open({ target: { kind: "new" }, name: draft.title,
+               stack: stackAdapter ? adapterLanguage(stackAdapter) : undefined,
+               note: [directiveOut, draft.audience ? `Who it is for: ${draft.audience}` : ""].filter(Boolean).join("\n\n") });
       }
       return;
     }
@@ -1239,7 +1248,7 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
           <StackSelect id="np-stack" adapters={adapters} value={stackId} onChange={setStackId} />
         </div>
       </div>
-      <ConnectorCards cards={connectorCards} selected={connector?.key ?? null} onSelect={setConnector}
+      <ConnectorCards cards={connectorCards} selected={connectors} onSelect={setConnectors}
                       sub="Built into your app's own style" />
       {more(
         <>
@@ -1371,10 +1380,10 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
       {proposalView}
       {/* ADD A CONNECTOR to this app: only the ones that fit its stack, built in its own look. */}
       {app ? (
-        <ConnectorCards cards={connectorCards} stack={appStack} selected={connector?.key ?? null}
+        <ConnectorCards cards={connectorCards} stack={appStack} selected={connectors}
                         inApp={appTemplates.map((t) => t.key)} appName={app.app}
                         heading="Add connectors" sub="Built into its screens and style"
-                        onSelect={setConnector} testId="np-add-connectors" />
+                        onSelect={setConnectors} testId="np-add-connectors" />
       ) : null}
       {more(
         <>
@@ -1717,6 +1726,19 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
                          showToast("success", `${tplCard.card.name} started`);
                          onStarted(runId);
                        }} />
+      ) : null}
+      {composeSet ? (
+        <ComposeSheet projectId={projectId} cards={composeSet.cards} target={composeSet.target}
+                      inApp={adding ? appTemplates.map((t) => t.key) : []}
+                      initialName={composeSet.name} initialNote={composeSet.note} initialWorkflow={flowKey}
+                      initialStack={composeSet.stack}
+                      onClose={() => setComposeSet(null)}
+                      onStarted={(runId) => {
+                        setComposeSet(null);
+                        notifyChanged("code-tasks");
+                        showToast("success", `${composeSet.cards.map((c) => c.name).join(" + ")} started`);
+                        onStarted(runId);
+                      }} />
       ) : null}
       {full ? (
         <FullEditor label={full === "brief" ? "What should it do?" : "What should change?"}

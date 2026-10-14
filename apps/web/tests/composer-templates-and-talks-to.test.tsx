@@ -219,17 +219,42 @@ describe("Connectors and ideas (operator, 2026-10-13: there is no Template tab)"
     expect((sheet.querySelector('[data-testid="tpl-note"]') as HTMLTextAreaElement).value).toContain("A support desk");
   });
 
-  it("one connector per build: once one is added, the others say why they wait", async () => {
+  it("several connectors: each card toggles, says its place, and Start opens ONE build for them all (BOSSAPP-526)", async () => {
     await mount();
-    await click($('[data-testid="np-connector-login-oauth"]'));
+    const login = $('[data-testid="np-connector-login-oauth"]')!;
     const stripe = $('[data-testid="np-connector-stripe-checkout"]')!;
-    expect(stripe.getAttribute("aria-disabled")).toBe("true");
-    expect(stripe.getAttribute("title")).toContain("One connector per build");
+    expect($('[data-testid="np-connectors-note"]')!.textContent).toBe("Up to 6 in one build");
+    await click(login);
     await click(stripe);
-    expect(stripe.getAttribute("aria-pressed")).toBe("false");
-    expect($('[data-testid="np-connector-login-oauth"]')!.getAttribute("aria-pressed")).toBe("true");
-    await click($('[data-testid="np-connector-login-oauth"]'));   // removing it frees the others
     expect(stripe.getAttribute("aria-disabled")).toBeNull();
+    expect(stripe.getAttribute("aria-pressed")).toBe("true");
+    expect(login.textContent).toContain("Added ✓ · 1 of 2");
+    expect(stripe.textContent).toContain("Added ✓ · 2 of 2");
+    expect($('[data-testid="np-connectors-note"]')!.textContent).toBe("2 added · one build");
+    await click(login);                                             // unpicking one keeps the other
+    expect(login.getAttribute("aria-pressed")).toBe("false");
+    expect(stripe.textContent).toContain("Added ✓");
+    await click(login);                                             // picked again: now second
+    await type($('[data-testid="dw-new-title"]'), "Shop");
+    await type($('[data-testid="dw-new-directive"]'), "A shop with sign-in and card payments.");
+    await click($('[data-testid="dw-new-start"]'));
+    expect(posts).toEqual([]);
+    expect($('[data-testid="tpl-sheet"]')).toBeNull();              // not the single connector's sheet
+    const sheet = $('[data-testid="cmp-sheet"]')!;
+    expect([...sheet.querySelectorAll('[data-testid^="cmp-connector-"]')].map((e) => e.getAttribute("data-testid")))
+      .toEqual(["cmp-connector-stripe-checkout", "cmp-connector-login-oauth"]);
+    expect((sheet.querySelector('[data-testid="cmp-app-name"]') as HTMLInputElement).value).toBe("Shop");
+    expect((sheet.querySelector('[data-testid="cmp-note"]') as HTMLTextAreaElement).value).toContain("sign-in and card payments");
+  });
+
+  it("several connectors in Add a feature: the app already carries one, which never counts", async () => {
+    await mount({ mode: "add", appKey: "crun_lead2" });
+    await click($('[data-testid="np-connector-stripe-checkout"]'));
+    await type($('[data-testid="np-gain"]'), "Take card payments");
+    await click($('[data-testid="dw-new-start"]'));
+    // ONE new connector (Login is in the app): its own sheet, the unchanged single path.
+    expect($('[data-testid="tpl-sheet"]')?.textContent).toContain("Stripe Checkout");
+    expect($('[data-testid="cmp-sheet"]')).toBeNull();
   });
 
   it("the stack chosen travels: in the brief the builder reads, and into the connector sheet", async () => {

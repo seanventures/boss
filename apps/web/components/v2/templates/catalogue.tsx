@@ -82,47 +82,69 @@ const ICONS: Record<string, React.ComponentType<{ size?: number; "aria-hidden"?:
 /** The built-in connectors with a mark of their own (an imported one shows the puzzle piece). */
 export const MARKED_CONNECTORS: readonly string[] = Object.keys(ICONS);
 
-/** THE connector this build adds: the one picked, only while it is on offer here (fits the app's
+/** Most connectors one build takes (POST /v1/templates/compose takes 2 to 6; one goes alone). */
+export const MAX_CONNECTORS = 6;
+
+/** THE connectors this build adds, in the order picked: only those on offer here (fit the app's
  *  stack) and new to the app. A connector the app already carries is never "selected", so it
- *  never counts against one-per-build and Start never opens its sheet. */
-export function effectiveConnector(picked: TemplateCard | null, cards: TemplateCard[] | null,
-                                   where: { inApp: string[]; stack: string | null }): TemplateCard | null {
-  if (!picked || where.inApp.includes(picked.key)) return null;
-  return connectorsFrom(cards, where.stack).some((c) => c.key === picked.key) ? picked : null;
+ *  never counts against the limit and Start never opens its sheet. One left: the single
+ *  connector's sheet and POST /v1/templates/{id}/apply, as before; two or more: one build
+ *  through POST /v1/templates/compose (BOSSAPP-526). */
+export function effectiveConnectors(picked: TemplateCard[], cards: TemplateCard[] | null,
+                                    where: { inApp: string[]; stack: string | null }): TemplateCard[] {
+  const offered = new Set(connectorsFrom(cards, where.stack).map((c) => c.key));
+  return picked.filter((p) => offered.has(p.key) && !where.inApp.includes(p.key));
 }
 
-/** Why a card cannot be added now ("" when it can). `selected` counts only a connector new to
- *  this build: one the app already has is not a choice. */
-export function connectorBlock(card: TemplateCard, selected: string | null, inApp: string[], appName = "the app"): string {
+/** The stacks every one of `cards` supports, in the first card's order ([] when none is shared). */
+export function sharedStacks(cards: Pick<TemplateCard, "stacks">[]): string[] {
+  if (!cards.length) return [];
+  return cards[0].stacks.filter((s) => cards.every((c) => c.stacks.includes(s)));
+}
+
+/** Why a card cannot be added now ("" when it can), as far as the console can know before the
+ *  server checks the whole set: already in the app, the limit reached, or no stack shared with
+ *  the ones already added. Conflicts the server finds (two connectors serving one route, owning
+ *  one file) are listed by the sheet, before and after Start. */
+export function connectorBlock(card: TemplateCard, selected: TemplateCard[], inApp: string[], appName = "the app"): string {
   if (inApp.includes(card.key)) return `Already in ${appName}: added in an earlier build.`;
-  if (selected && !inApp.includes(selected) && selected !== card.key) {
-    return "One connector per build for now. Add the next one with Add a feature once this build is done.";
+  if (selected.some((s) => s.key === card.key)) return "";
+  if (selected.length >= MAX_CONNECTORS) {
+    return `Up to ${MAX_CONNECTORS} connectors in one build. Remove one, or add this one with Add a feature after this build.`;
+  }
+  if (selected.length && !sharedStacks([...selected, card]).length) {
+    return `No stack fits ${card.name} and ${selected.map((s) => s.name).join(", ")} together. Add it in a build of its own.`;
   }
   return "";
 }
 
 /**
  * CONNECTORS AS CARDS, in New app and Add a feature (approved mockup, 2026-10-13): icon, name,
- * one line, "+ Add" / "Added ✓". The cards read as a multi-select, but a build takes ONE
- * connector (each brings its own security tests as a gate): once one is added the others are
- * greyed with the reason, and the next one is added with Add a feature after this build.
- * In Add a feature, a connector the app already carries shows "Already in the app", disabled.
+ * one line, "+ Add" / "Added ✓". A MULTI-SELECT (BOSSAPP-526): one connector goes through its own
+ * sheet, two to six through one build (the compose sheet). A card the server would refuse is
+ * greyed with the reason (already in the app, the limit, no shared stack); conflicts between
+ * the ones added are the sheet's to list. Each card is a toggle button (aria-pressed), so Tab
+ * and Space/Enter pick and unpick; its state says its place in the build ("Added ✓ · 2 of 3")
+ * and the live note says how many are added.
  */
 export function ConnectorCards({ cards, stack, selected, inApp = [], appName, onSelect, testId = "np-connectors", heading = "Connectors",
                                  sub = "Ready-made, secure building blocks, built into your app's own screens and style" }: {
   cards: TemplateCard[] | null;
   /** The app's stack in Add a feature (only connectors that fit it), null for a new app. */
   stack?: string | null;
-  selected: string | null;
+  /** The connectors added so far, in the order added. */
+  selected: TemplateCard[];
   /** Template keys the app already carries (Add a feature). */
   inApp?: string[];
   appName?: string;
-  onSelect: (card: TemplateCard | null) => void;
+  /** The new selection, in the order added. */
+  onSelect: (cards: TemplateCard[]) => void;
   testId?: string;
   heading?: string;
   sub?: string;
 }) {
   const shown = connectorsFrom(cards, stack);
+  const chosen = selected.filter((s) => !inApp.includes(s.key));
   if (cards !== null && !shown.length) return null;
   return (
     <section className="np-conn" aria-labelledby={`${testId}-h`} data-testid={testId}>
@@ -134,17 +156,18 @@ export function ConnectorCards({ cards, stack, selected, inApp = [], appName, on
       <div className="np-conn-grid">
         {shown.map((c) => {
           const there = inApp.includes(c.key);
-          const on = selected === c.key && !there;
+          const on = !there && selected.some((s) => s.key === c.key);
           const why = connectorBlock(c, selected, inApp, appName);
+          const at = on ? chosen.findIndex((s) => s.key === c.key) + 1 : 0;
           const Icon = ICONS[c.key] ?? PuzzlePiece;
           return (
             <button key={c.key} type="button" className="np-conn-card" aria-pressed={on}
                     aria-disabled={why ? true : undefined} data-in-app={there || undefined}
                     data-testid={`np-connector-${c.key}`} title={why || connectorTip(c)}
-                    onClick={() => { if (!why) onSelect(on ? null : c); }}>
+                    onClick={() => { if (!why) onSelect(on ? selected.filter((s) => s.key !== c.key) : [...selected, c]); }}>
               <span className="np-conn-top">
                 <span className="np-conn-icon"><Icon size={22} aria-hidden /></span>
-                <span className="np-conn-state">{there ? "Already in the app" : on ? "Added ✓" : "+ Add"}</span>
+                <span className="np-conn-state">{there ? "Already in the app" : on ? (chosen.length > 1 ? `Added ✓ · ${at} of ${chosen.length}` : "Added ✓") : "+ Add"}</span>
               </span>
               <b>{c.name}</b>
               <span className="np-conn-line">{there ? "Added in an earlier build." : c.summary}</span>
@@ -152,9 +175,9 @@ export function ConnectorCards({ cards, stack, selected, inApp = [], appName, on
           );
         })}
       </div>
-      <span className="np-conn-note" data-testid={`${testId}-note`}
-            title="Each connector brings its own tests, a gate of its own. Add the next one with Add a feature once this build is done.">
-        One per build for now
+      <span className="np-conn-note" data-testid={`${testId}-note`} role="status" aria-live="polite"
+            title={`Pick up to ${MAX_CONNECTORS}. Two or more are added in one build, wired in the order picked; a connector another needs goes first. Each keeps its own tests as a gate.`}>
+        {chosen.length > 1 ? `${chosen.length} added · one build` : `Up to ${MAX_CONNECTORS} in one build`}
       </span>
     </section>
   );
