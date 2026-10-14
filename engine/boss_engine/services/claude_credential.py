@@ -276,6 +276,57 @@ def bind_claude_credential(settings: Any, *, connection: Any = None,
     return cred.bind(settings)
 
 
+def resolve_anthropic_api_key(settings: Any, *, connection: Any = None,
+                              project_id: Optional[str] = None) -> ClaudeCredential:
+    """THE ANTHROPIC API KEY ONLY — for an engine that must never run on the subscription login
+    (claude_agent_sdk: Agent SDK usage is billed to the operator's API account, which is what
+    the operator's API credits cover; the subscription does not).
+
+    The console's stored key, else ANTHROPIC_API_KEY from this install's environment. The
+    operator's order and a disconnected subscription do not matter here: the login is never an
+    answer. Settings bound by `bind_anthropic_api_key` (or by `bind_claude_credential` to a key)
+    are answered from the binding. Returns KIND_NONE when no key is held; raises
+    CredentialStoreUnavailable when the store did not answer and the environment has no key.
+    """
+    from .cli_harness import CredentialStoreUnavailable
+
+    bound = str(getattr(settings, "claude_credential_kind", "") or "").strip()
+    if bound in (KIND_STORED_KEY, KIND_ENV_KEY):
+        value = str(getattr(settings, "claude_bound_api_key", "") or "").strip()
+        if value:
+            _register(value)
+            return ClaudeCredential(bound, value)
+    try:
+        value = (_stored_key(settings, connection, project_id) or "").strip()
+    except CredentialStoreUnavailable:
+        value = ""
+        if not _env_key(settings):
+            raise
+    if value:
+        _register(value)
+        return ClaudeCredential(KIND_STORED_KEY, value)
+    env = _env_key(settings)
+    if env:
+        _register(env)
+        return ClaudeCredential(KIND_ENV_KEY, env)
+    return ClaudeCredential(KIND_NONE)
+
+
+def bind_anthropic_api_key(settings: Any, *, connection: Any = None,
+                           project_id: Optional[str] = None) -> Any:
+    """`settings` with the Anthropic API key bound (never the login); unbound when the store
+    did not answer, so the engine resolves again — and fails closed — when it starts."""
+    from .cli_harness import CredentialStoreUnavailable
+
+    try:
+        cred = resolve_anthropic_api_key(settings, connection=connection, project_id=project_id)
+    except CredentialStoreUnavailable:
+        return settings
+    if not cred.is_key:
+        return settings
+    return cred.bind(settings)
+
+
 def describe(connection: Any, settings: Any, project_id: str) -> dict[str, Any]:
     """Which credential is active for this project, WITHOUT reading any secret value — for the
     console (entitlement source rows). Same order as `resolve_claude_credential`."""

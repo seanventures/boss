@@ -205,6 +205,9 @@ def source_ids_for_engine(settings, engine_name: str) -> tuple[str, ...]:
         pass
     if engine_name == "claude_code":
         ids.append("anthropic_claude_code")
+    if engine_name == "claude_agent_sdk":
+        # Runs only on the Anthropic API key (agent_sdk_engine): its outcomes are that source's.
+        ids.append("anthropic_api")
     ids.append(f"setup-{engine_name}")
     return tuple(dict.fromkeys(ids))
 

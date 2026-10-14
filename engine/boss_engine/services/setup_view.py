@@ -73,6 +73,7 @@ ENGINE_LABELS = {
     "native": "OpenAI", "openrouter": "OpenRouter", "gemini": "Gemini", "xai": "xAI",
     "ollama": "Ollama", "vllm": "Local model", "azure": "Azure OpenAI", "groq": "Groq",
     "deepseek": "DeepSeek", "typesafe": "TypeSafe Jev", "aider": "Aider",
+    "claude_agent_sdk": "Claude Agent SDK",
 }
 
 #: The provider a `setup-<x>` source or an env lane is listed under.
@@ -703,6 +704,7 @@ def _jobs(connection: Connection, settings: Any, project_id: str,
     for entry in models:
         if model_working(entry):
             by_engine.setdefault(engine_for_provider(entry["provider"]), entry)
+    _offer_agent_sdk(settings, models, by_engine)
     try:
         from .typed_decisions import _typesafe_key
         from .project_settings import applied
@@ -754,6 +756,20 @@ def _jobs(connection: Connection, settings: Any, project_id: str,
         entry["used_for"] = [j["label"] for j in out if j["resolved"]
                              and _resolves_to(j["resolved"], entry)]
     return out
+
+
+def _offer_agent_sdk(settings: Any, models: list[dict[str, Any]],
+                     by_engine: dict[str, dict[str, Any]]) -> None:
+    """The Claude Agent SDK engine, as an option beside the Anthropic API key it runs on: a
+    working key entry (metered) and the package importable (agent_sdk_engine.readiness)."""
+    from .agent_sdk_engine import DEFAULT_MODEL, ENGINE, sdk_available
+
+    key = next((e for e in models if e["provider"] == "anthropic" and e["kind"] == "metered"
+                and model_working(e)), None)
+    if key is None or ENGINE in by_engine or not sdk_available():
+        return
+    by_engine[ENGINE] = {**key, "label": ENGINE_LABELS[ENGINE],
+                         "model": getattr(settings, "agent_sdk_model", "") or DEFAULT_MODEL}
 
 
 def _source_label(engine: str, source_id: Optional[str], models: list[dict[str, Any]]) -> str:

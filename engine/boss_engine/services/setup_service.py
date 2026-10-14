@@ -333,7 +333,42 @@ def connected_engines(
     for engine, entry in environment_engines(settings).items():
         if engine in known and engine not in found:
             found[engine] = entry
+    _offer_agent_sdk(rows, settings, known, found)
     return found
+
+
+def _offer_agent_sdk(rows: list, settings: Settings, known: set,
+                     found: dict[str, dict[str, Any]]) -> None:
+    """THE CLAUDE AGENT SDK ENGINE runs on the Anthropic API key (agent_sdk_engine), so it is
+    offered wherever that key is held — stored in the console, or in the install's settings —
+    and the package is importable here. Always metered: it never runs on the subscription."""
+    from .agent_sdk_engine import ENGINE, sdk_available
+
+    if ENGINE not in known or ENGINE in found or not sdk_available():
+        return
+    for row in rows:
+        sid = row["source_id"] or ""
+        if not row["credential_secret_ref_id"] or not (
+                sid == "anthropic_api" or api_source_provider(sid) == "anthropic"):
+            continue
+        capacity = _json_object(row["observed_capacity"])
+        broken = last_check_broken(_json_object(row["connection_metadata"]), capacity)
+        from .provider_limits import is_available
+
+        found[ENGINE] = {
+            "engine": ENGINE, "why": "api key", "source_id": sid, "kind": "metered",
+            "working": not broken, "plan": {"cost_mode": row["cost_mode"] or "", "limits": {}},
+            "capacity": {"available": is_available(capacity),
+                         "exhausted": bool(capacity.get("exhausted")),
+                         "retry_at": capacity.get("retry_at"),
+                         "detail": capacity.get("detail") or "", "observed": capacity},
+            "saved_at": (row["updated_at"].isoformat() if hasattr(row["updated_at"], "isoformat")
+                         else str(row["updated_at"] or "")) or None}
+        return
+    if _set_deliberately(settings, "anthropic_api_key"):
+        found[ENGINE] = {"engine": ENGINE, "why": "this install's environment",
+                         "source_id": None, "saved_at": None, "kind": "env",
+                         "working": True, "env_attr": "anthropic_api_key"}
 
 
 def environment_engines(settings: Settings) -> dict[str, dict[str, Any]]:

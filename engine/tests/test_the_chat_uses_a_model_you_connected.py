@@ -265,7 +265,10 @@ def test_and_the_code_agent_gets_it_too():
     # The allowlist still decides what is inherited — this adds one value, it does not widen.
     assert "agent_environment(os.environ, _shared_tool_caches())" in env
     # The one resolution every `claude` child uses (claude_credential.resolve_claude_credential).
-    assert "resolve_claude_credential(self.settings)" in env
+    # (through the one hook an engine may override: claude_agent_sdk asks for the key only).
+    assert "self._resolve_credential()" in env
+    assert "resolve_claude_credential(self.settings)" in inspect.getsource(
+        ClaudeCodeAgent._resolve_credential)
     from boss_engine.services import claude_credential
 
     resolve = inspect.getsource(claude_credential._subscription_token)

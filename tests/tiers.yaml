@@ -92,6 +92,8 @@ P1:
     - engine/tests/test_pipeline_view_knows_deployments.py
     - engine/tests/test_a_stack_deploy_writes_to_the_host_only_under_its_changeset.py
     - engine/tests/test_deploy_does_not_raise_a_key_error.py
+    # Engines: the Claude Agent SDK engine on the Anthropic API key
+    - engine/tests/test_the_agent_sdk_engine_runs_on_the_api_key.py
   api:
     # Approvals
     - apps/api/tests/test_an_approval_shows_what_it_will_send.py

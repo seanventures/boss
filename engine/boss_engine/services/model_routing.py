@@ -66,6 +66,8 @@ from .github_adapter import IntegrationConfigurationError
 CHAT_ROUTABLE: tuple[str, ...] = (
     "claude_code", "codex", "native", "azure",
     "openrouter", "gemini", "xai", "groq", "deepseek", "vllm", "ollama",
+    # Last: on an Anthropic API key, chosen by the operator (agent_sdk_engine).
+    "claude_agent_sdk",
 )
 
 _ALIASES = {"claude_cli": "claude_code", "claude": "claude_code", "anthropic": "claude_code",
@@ -384,6 +386,10 @@ def adapter_for(choice: ModelChoice, connection: Any, settings: Any,
     model = model or (getattr(settings, "chat_model", "") or "").strip() or None
     if engine == "claude_code":
         return ClaudeCliAdapter(bound, model=model)
+    if engine == "claude_agent_sdk":
+        from .agent_sdk_engine import make_chat_adapter
+
+        return make_chat_adapter(bound, model=model)
     if engine == "codex":
         from .codex_cli_adapter import CodexCliAdapter
 
