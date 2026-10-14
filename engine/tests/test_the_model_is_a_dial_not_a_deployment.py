@@ -79,8 +79,12 @@ def test_the_pipeline_layers_the_project_choices_over_the_deployment() -> None:
     import inspect
 
     from boss_engine.services import governed_code_task_service as gcts
+    from boss_engine.services.model_router import stages
 
-    source = inspect.getsource(gcts)
+    # The pipeline takes its settings and lane engines from `lane_engines` (shared with the
+    # pre-check's `sandbox.engine`), which is where the layering lives.
+    assert "settings, build_engine, review_engine = lane_engines(" in inspect.getsource(gcts)
+    source = inspect.getsource(stages.lane_engines)
     build_at = source.find("build_engine = (")
     assert build_at != -1
 

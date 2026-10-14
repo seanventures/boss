@@ -109,24 +109,26 @@ def NO_CHECKS(why: str) -> CapabilityPrecheck:  # noqa: N802 — reads as a decl
 
 
 _INFRA = ("sandbox.worker",)
+#: A step that runs an agent: the model its route reaches, and whether that engine can start.
+_AGENT = ("sandbox.model", "sandbox.engine")
 _BUILDS = ("authority.consent", "github.access", "sandbox.worker", "sandbox.toolchain",
-           "sandbox.build_services", "sandbox.disk", "sandbox.model", "budget.headroom")
+           "sandbox.build_services", "sandbox.disk") + _AGENT + ("budget.headroom",)
 
 #: EVERY capability has an entry (test_every_capability_declares_its_prechecks).
 CAPABILITY_PRECHECKS: dict[str, CapabilityPrecheck] = {
-    "research": CapabilityPrecheck(("authority.consent", "sandbox.worker", "sandbox.model",
-                                    "budget.headroom")),
-    "meeting": CapabilityPrecheck(("authority.consent", "sandbox.worker", "sandbox.model",
-                                   "budget.headroom"), reserves=("plan_budget_usd_micros", 4)),
+    "research": CapabilityPrecheck(("authority.consent", "sandbox.worker") + _AGENT
+                                   + ("budget.headroom",)),
+    "meeting": CapabilityPrecheck(("authority.consent", "sandbox.worker") + _AGENT
+                                  + ("budget.headroom",), reserves=("plan_budget_usd_micros", 4)),
     "spec_review": NO_CHECKS("a person's (or the panel's) sign-off: nothing runs"),
-    "architecture": CapabilityPrecheck(("sandbox.worker", "sandbox.model")),
+    "architecture": CapabilityPrecheck(("sandbox.worker",) + _AGENT),
     "build": CapabilityPrecheck(_BUILDS + ("app_env", "app.test_plan", "app.dependencies",
                                            "app.secret_scan", "code.lockfile",
                                            "code.browser_cache"),
                                 # An `extend` build (Incremental Build) builds on the branch.
                                 invokes_tools=("extend_code_task@inputs.extend",),
                                 reserves=("code_task_budget_usd_micros", 1), app_env="build"),
-    "review": CapabilityPrecheck(("sandbox.worker", "sandbox.model")),
+    "review": CapabilityPrecheck(("sandbox.worker",) + _AGENT),
     "test": NO_CHECKS("reads the build's own test results"),
     "report": NO_CHECKS("writes the run's report from what the steps recorded"),
     "preview": CapabilityPrecheck(("authority.consent", "github.access", "sandbox.worker",
@@ -137,12 +139,11 @@ CAPABILITY_PRECHECKS: dict[str, CapabilityPrecheck] = {
     "security_review": NO_CHECKS("a person's sign-off"),
     "security_scan": CapabilityPrecheck(("authority.consent", "github.access", "sandbox.worker",
                                          "sandbox.disk")),
-    "security_panel": CapabilityPrecheck(("authority.consent", "sandbox.model",
-                                          "budget.headroom"),
+    "security_panel": CapabilityPrecheck(("authority.consent",) + _AGENT + ("budget.headroom",),
                                          reserves=("plan_budget_usd_micros", 4)),
     "security_decide": NO_CHECKS("a person's decision"),
     "security_fix": CapabilityPrecheck(_BUILDS, reserves=("code_task_budget_usd_micros", 1)),
-    "security_rereview": CapabilityPrecheck(("sandbox.model",)),
+    "security_rereview": CapabilityPrecheck(_AGENT),
     "security_report": NO_CHECKS("writes a report from recorded findings"),
     "plrr": CapabilityPrecheck(_BUILDS, invokes_tools=("extend_code_task",),
                                reserves=("code_task_budget_usd_micros", 1)),
@@ -164,7 +165,17 @@ CAPABILITY_PRECHECKS: dict[str, CapabilityPrecheck] = {
     "retry_build": CapabilityPrecheck(_BUILDS, reserves=("code_task_budget_usd_micros", 1)),
     "teardown_preview": CapabilityPrecheck(("authority.consent",)),
     "cost_check": CapabilityPrecheck(("authority.consent",)),
-    "document": CapabilityPrecheck(("sandbox.model",)),
+    "document": CapabilityPrecheck(_AGENT),
+}
+
+#: Which route a capability's agent takes (engine_startup): the build pipeline's stages, the
+#: review panel's stages, or the chat job (meetings, panels, documents, research). Every
+#: capability that declares `sandbox.engine` is here (test_every_agent_step_names_its_route).
+AGENT_ROUTE = {
+    "build": "build", "more_tests": "build", "plrr": "build", "security_fix": "build",
+    "retry_build": "build", "review": "review",
+    "research": "chat", "meeting": "chat", "architecture": "chat", "security_panel": "chat",
+    "security_rereview": "chat", "document": "chat",
 }
 
 #: Capabilities that VERIFY work. Skipping one with a deploy after it would ship unverified work,
@@ -887,26 +898,158 @@ def check_disk(ctx: Context, step: dict[str, Any]) -> dict[str, Any]:
     return result("sandbox.disk", "ready", evidence)
 
 
-@_check("sandbox.model", "A model is connected and a lane is free", shared=True)
-def check_model(ctx: Context, step: dict[str, Any]) -> dict[str, Any]:
-    from . import workflow_readiness
+def _task_spec(step: Mapping[str, Any]) -> dict[str, Any]:
+    """The routing a build step hands its code task: the literal `model_config` / `profile`
+    the step binds (a run-input reference is resolved only at run time)."""
+    binding = step.get("binding") if isinstance(step.get("binding"), dict) else {}
+    inputs = binding.get("inputs") if isinstance(binding.get("inputs"), dict) else {}
+    out: dict[str, Any] = {}
+    if isinstance(inputs.get("model_config"), dict):
+        out["model_config"] = inputs["model_config"]
+    if isinstance(inputs.get("profile"), str) and "{{" not in inputs["profile"]:
+        out["profile"] = inputs["profile"]
+    return out
 
-    ok, detail = ctx.once("model_need", lambda: ctx.savepoint(
-        lambda: workflow_readiness.check(ctx.connection, ctx.settings, ctx.project_id, "model"),
-        default=(None, "could not check")))
+
+def _step_routes(ctx: Context, step: Mapping[str, Any]) -> Optional[list]:
+    """The routes (engine_startup.EngineRoute) the step's agent will take, resolved by the
+    worker's own routing; [] for a step that runs no agent, None when routing could not be
+    read."""
+    from . import engine_startup
+
+    kind = AGENT_ROUTE.get(_cap_key(step))
+    if not kind:
+        return []
+    task = _task_spec(step) if kind != "chat" else {}
+
+    def resolve() -> list:
+        if kind == "chat":
+            return [engine_startup.chat_route(ctx.connection, ctx.settings, ctx.project_id)]
+        stages = (engine_startup.REVIEW_STAGES if kind == "review"
+                  else engine_startup.BUILD_STAGES)
+        return engine_startup.build_routes(ctx.connection, ctx.settings, ctx.project_id,
+                                           task, stages)
+    return ctx.once(f"routes:{kind}:{json.dumps(task, sort_keys=True, default=str)}",
+                    lambda: ctx.savepoint(resolve, default=None))
+
+
+def _route_lines(step_id: str, routes: Sequence[Any]) -> list[str]:
+    """`<step>: implement, write_tests → claude_agent_sdk / claude-sonnet-5 via setup-anthropic
+    (pinned in Repo and models)` — stages that share a route on one line."""
+    grouped: dict[tuple, list[str]] = {}
+    for r in routes:
+        grouped.setdefault((r.engine, r.model, r.source_id, r.why), []).append(r.stage)
+    out = []
+    for (engine, model, source, why), stages in grouped.items():
+        head = ", ".join(stages)
+        out.append(f"{step_id}: " + (f"{head} → no engine ({why})" if not engine else
+                   f"{head} → {engine} / {model or 'its default model'} via "
+                   f"{source or 'the install environment'} ({why})"))
+    return out
+
+
+@_check("sandbox.model", "The model each step routes to is connected, and a lane is free",
+        shared=True)
+def check_model(ctx: Context, step: dict[str, Any]) -> dict[str, Any]:
+    """WHAT ROUTING WILL USE, not the first connected-looking source. It reported "a model is
+    connected: claude_code (subscription)" — the chat job's answer, on a disconnected
+    subscription — for a run whose Build job was pinned to claude_agent_sdk on the API key."""
+    from . import engine_startup
+
+    per_step = [(str(s["id"]), _step_routes(ctx, s)) for s in _ordered(ctx.spec)
+                if "sandbox.model" in precheck_for(_cap_key(s)).checks]
     running = ctx.savepoint(lambda: ctx.connection.execute(text(
         "SELECT count(*) FROM code_task_runs WHERE project_id = :p AND status IN "
         "('running','queued','in_progress')"), {"p": ctx.project_id}).scalar(), default=None)
     lanes = int(getattr(ctx.settings, "code_agent_max_concurrency", 1) or 1)
-    evidence = f"model: {detail}; code tasks in flight {running}/{lanes} lane(s)"
-    if ok is False:
-        return result("sandbox.model", "will_fail", evidence,
-                      action="Connect a model in Repo and models.")
+    tail = f"; code tasks in flight {running}/{lanes} lane(s)"
+    if any(routes is None for _sid, routes in per_step):
+        return result("sandbox.model", "unknown", "could not resolve which model routing will "
+                      "use" + tail, action="Check Repo and models.")
+    lines, nothing, dead, seen = [], [], [], {}
+    for sid, routes in per_step:
+        lines += _route_lines(sid, routes)
+        for r in routes:
+            if not r.engine:
+                nothing.append(f"{sid}:{r.stage}")
+                continue
+            if r.source_id not in seen:
+                seen[r.source_id] = ctx.savepoint(lambda r=r: engine_startup.source_state(
+                    ctx.connection, ctx.project_id, r.source_id), default=(None, "unreadable"))
+            usable, said = seen[r.source_id]
+            if usable is False:
+                dead.append((f"{sid}:{r.stage}", r, said))
+    states = "; ".join(f"{said}" for _src, (_ok, said) in seen.items())
+    evidence = "; ".join(lines) + (f". Sources: {states}" if states else "") + tail
+    if nothing:
+        return result("sandbox.model", "will_fail", evidence + f" — nothing can answer "
+                      f"{', '.join(nothing[:4])}", action="Connect a model in Repo and models.")
+    if dead:
+        where, r, said = dead[0]
+        return result("sandbox.model", "will_fail", evidence + f" — {where} routes to "
+                      f"{r.engine} on {said}", action=f"Reconnect {r.source_id} in Repo and "
+                      "models, or pick a connected source for that job.")
     if running is not None and int(running) >= lanes:
         return result("sandbox.model", "unknown", evidence + " — this run's builds will queue "
                       "behind work already in the lanes", action="Wait, or raise "
                       "BOSS_CODE_AGENT_MAX_CONCURRENCY.")
-    return result("sandbox.model", "ready" if ok else "unknown", evidence)
+    return result("sandbox.model", "ready" if lines else "unknown", evidence)
+
+
+_ORDER = {"will_fail": 0, "unknown": 1, "fixable": 2, "ready": 3}
+
+
+@_check("sandbox.engine", "The engine each step will use can start here: its binaries, its "
+        "sandbox, its credential")
+def check_engine(ctx: Context, step: dict[str, Any]) -> Optional[dict[str, Any]]:
+    """THE ENGINE ROUTING WILL USE, STARTED. Deterministic and free: the engine's declared
+    runtime binaries (harness_registry.RuntimeBinary) on this process's PATH. Live (not
+    --offline, like github.access): one tiny session per distinct engine/source/model, run the
+    way a build starts it, that must run one harmless command through its shell tool
+    (engine_startup.probe; metered by the engine's own path)."""
+    from . import engine_startup
+    from .harness_registry import missing_runtime
+
+    routes = _step_routes(ctx, step)
+    if routes == []:
+        return None
+    sid = str(step["id"])
+    if routes is None:
+        return result("sandbox.engine", "unknown", f"{sid}: could not resolve which engine "
+                      "routing will use", action="Check Repo and models.")
+    lines = _route_lines(sid, routes)
+    if any(not r.engine for r in routes):
+        return result("sandbox.engine", "will_fail", "; ".join(lines),
+                      action="Connect a model in Repo and models.")
+    distinct: dict[tuple, Any] = {}
+    for r in routes:
+        distinct.setdefault(r.key(), r)
+    verdict, notes, actions = "ready", [], []
+    for r in distinct.values():
+        missing = ctx.once(f"engine_bins:{r.engine}", lambda r=r: missing_runtime(r.engine))
+        if missing:
+            verdict = "will_fail"
+            notes.append(f"{r.engine} needs {', '.join(m.binary for m in missing)} on PATH and "
+                         "this BOSS has none (" + ", ".join(
+                             f"{m.binary}: {m.why or 'runtime'}" for m in missing) + ")")
+            actions.append("Install " + ", ".join(m.install_hint() for m in missing)
+                           + " in the image (Dockerfile.community runtime stage) and rebuild.")
+            continue
+        notes.append(f"{r.engine}: runtime binaries on PATH")
+        if ctx.offline:
+            continue
+        probe = ctx.once(f"engine_probe:{'|'.join(r.key())}", lambda r=r: engine_startup.probe(
+            r, ctx.settings, ctx.connection, ctx.project_id))
+        notes[-1] = f"{r.engine} / {r.model or 'default'} live: {probe.detail}"
+        if _ORDER[probe.verdict] < _ORDER[verdict]:
+            verdict = probe.verdict
+        if probe.verdict == "will_fail":
+            actions.append(f"Fix what {r.engine} reports (its sandbox, its credential, the "
+                           "account's credit), or pin the job to another engine in Repo and "
+                           "models.")
+    return result("sandbox.engine", verdict, "; ".join(lines) + ". " + "; ".join(notes)
+                  + (" (offline: not started)" if ctx.offline else ""),
+                  action=" ".join(dict.fromkeys(actions)))
 
 
 # ── Budget ────────────────────────────────────────────────────────────────────────────────────
@@ -2488,7 +2631,10 @@ CHECK_DOCS: dict[str, str] = {
     "sandbox.toolchain": "node, npm, git and a C toolchain where builds run; the app's engines",
     "sandbox.build_services": "the build-services database is up for a Postgres app's build",
     "sandbox.disk": "free disk where sandboxes are written",
-    "sandbox.model": "a model route for the step, and its lane's queue",
+    "sandbox.model": "the engine/model/source each step routes to (job pins, the router), that "
+                     "source's connection state, and its lane's queue",
+    "sandbox.engine": "the routed engine's declared runtime binaries on PATH; live, one tiny "
+                      "sandboxed session per engine that must run one command",
     "budget.headroom": "the period's cap holds the step's reservation beside other work",
     "app_env.build": "every variable the app requires has a build value BOSS gives or may take",
     "app_env.preview": "every variable the app requires has a preview value",

@@ -40,9 +40,29 @@ import tomllib
 from typing import Optional
 
 from . import owned_process
+from .harness_registry import RuntimeBinary
 from .workspace_perms import tidies_workspace
 
 _log = logging.getLogger(__name__)
+
+# ── What the shipped CLIs exec at runtime (harness_registry.RuntimeBinary) ────────────────────
+
+#: Node, copied into the runtime stage from the official image: a CLI whose npm `bin` is a
+#: script (codex.js) runs on it.
+NODE_RUNTIME = RuntimeBinary("node", "/usr/local/bin/node", "image",
+                             "a script-based npm CLI runs on Node")
+#: The `claude` CLI. Its npm package installs the native binary (bin/claude.exe, from a
+#: per-platform optional dependency), which embeds ripgrep and needs no Node.
+CLAUDE_CLI_RUNTIME = (
+    RuntimeBinary("claude", "@anthropic-ai/claude-code", "npm", "the Claude Code CLI"),
+)
+#: THE CLAUDE CLI'S LINUX SANDBOX. With CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 (agent_sdk_engine) the
+#: CLI refuses to run a command without it, and it checks exactly these two at start-up:
+#: "Sandbox dependencies not available: bubblewrap (bwrap) not installed / socat not installed".
+CLAUDE_SANDBOX_RUNTIME = (
+    RuntimeBinary("bwrap", "bubblewrap", "apt", "the Claude CLI's Linux sandbox"),
+    RuntimeBinary("socat", "socat", "apt", "the Claude CLI's sandbox network proxy"),
+)
 
 #: Scope under which BOSS's own API stores a subscription credential. One constant so the
 #: endpoint that writes it and the harness that reads it cannot disagree about the key.
@@ -247,6 +267,9 @@ class CliHarnessSpec:
     #: which the harness registry provides and all of which an operator needs before they can
     #: choose the harness at all.
     registers_harness: bool = True
+    #: What the CLI needs on PATH at runtime (harness_registry.RuntimeBinary), registered with
+    #: the harness. A CLI the image ships says how ("npm"); one it does not says "operator".
+    runtime: tuple = ()
 
     def supports_read_only(self) -> bool:
         return bool(self.read_only_args)
@@ -316,6 +339,7 @@ BUILTIN_CLI_HARNESSES: dict[str, CliHarnessSpec] = {
         docs_url="https://docs.claude.com/en/docs/claude-code/setup",
         entitlement_source_id="anthropic_claude_code",
         entitlement_provider="anthropic",
+        runtime=CLAUDE_CLI_RUNTIME,
     ),
     # VERIFIED AGAINST codex-cli 0.154.0, not taken from documentation. `codex exec` is the
     # non-interactive mode; `--sandbox` is a real flag with a real read-only value, which is
@@ -375,6 +399,7 @@ BUILTIN_CLI_HARNESSES: dict[str, CliHarnessSpec] = {
         docs_url="https://developers.openai.com/codex/cli",
         entitlement_source_id="openai_codex_chatgpt",
         entitlement_provider="openai",
+        runtime=(RuntimeBinary("codex", "@openai/codex", "npm", "the Codex CLI"), NODE_RUNTIME),
     ),
     "grok": CliHarnessSpec(
         name="grok",
@@ -414,6 +439,7 @@ BUILTIN_CLI_HARNESSES: dict[str, CliHarnessSpec] = {
         docs_url="https://docs.x.ai/build/cli/headless-scripting",
         entitlement_source_id="xai_grok_build",
         entitlement_provider="xai",
+        runtime=(RuntimeBinary("grok", "@xai-official/grok", "npm", "the Grok Build CLI"),),
     ),
     "cursor": CliHarnessSpec(
         name="cursor",
@@ -436,6 +462,8 @@ BUILTIN_CLI_HARNESSES: dict[str, CliHarnessSpec] = {
         docs_url="https://docs.cursor.com/en/cli/overview",
         entitlement_source_id="cursor_subscription",
         entitlement_provider="cursor",
+        runtime=(RuntimeBinary("cursor-agent", "curl https://cursor.com/install -fsS | bash",
+                               "operator", "the Cursor CLI (bring your own)"),),
     ),
     "aider": CliHarnessSpec(
         name="aider",
@@ -455,6 +483,8 @@ BUILTIN_CLI_HARNESSES: dict[str, CliHarnessSpec] = {
         signin_hint="set OPENAI_API_KEY or ANTHROPIC_API_KEY in the environment",
         install_hint="python -m pip install aider-install && aider-install",
         docs_url="https://aider.chat/docs/install.html",
+        runtime=(RuntimeBinary("aider", "python -m pip install aider-install && aider-install",
+                               "operator", "Aider (bring your own)"),),
     ),
 }
 
