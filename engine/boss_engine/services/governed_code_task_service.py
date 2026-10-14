@@ -4079,7 +4079,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     "UPDATE code_task_runs SET finalize_ctx="
                     "COALESCE(finalize_ctx,'{}'::jsonb) || jsonb_build_object("
                     "  'completed_stages', "
-                    "  COALESCE(finalize_ctx->'completed_stages','[]'::jsonb) || to_jsonb(:s::text)"
+                    "  COALESCE(finalize_ctx->'completed_stages','[]'::jsonb) || to_jsonb(CAST(:s AS text))"
                     "), updated_at=now() WHERE id=:id"),
                     {"s": stage, "id": run_id})
         except Exception:  # noqa: BLE001 — bookkeeping must never fail a run

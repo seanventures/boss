@@ -1116,6 +1116,15 @@ class GenericCliCodeAgent:
         self.spec = spec
         self.engine = spec.name
 
+    @property
+    def capabilities(self):
+        """What a generic CLI gives BOSS (engine_contract): a read-only mode where the spec has
+        one, nothing else BOSS can rely on. Sessions, a turn transcript and cost are supplied
+        by BOSS's fallbacks; a reviewer on a CLI without read-only mode judges a copy."""
+        from .engine_contract import EngineCapabilities
+
+        return EngineCapabilities(read_only=self.spec.supports_read_only())
+
     # -- process ------------------------------------------------------
     def _resolve_binary(self) -> str:
         found = shutil.which(self.spec.binary)
@@ -1389,7 +1398,8 @@ class GenericCliCodeAgent:
         from .llm_telemetry import record_llm_call
         from .scheduling import low_priority
 
-        if read_only and not self.spec.supports_read_only():
+        if read_only and not self.spec.supports_read_only() and not _ignored.get(
+                "_contract_read_only_copy"):
             # "The reviewer cannot edit" is an invariant of the governed pipeline. A CLI with
             # no read-only mode cannot hold it, so it is refused for the step rather than
             # trusted to behave.
@@ -1425,6 +1435,10 @@ class GenericCliCodeAgent:
             insert_at = len(argv) - 1 if self.spec.prompt_via == "argv" else len(argv)
             argv[insert_at:insert_at] = [self.spec.final_message_flag, final_path]
         timeout = self.spec.review_timeout if read_only else self.spec.timeout
+        # THE STAGE'S WALL-TIME DEADLINE bounds this session as it bounds every engine's.
+        from .code_agent import _cap_to_deadline
+
+        timeout = _cap_to_deadline(int(timeout), read_only=read_only)
         started = time.monotonic()
         try:
             proc = owned_process.run(
@@ -1497,6 +1511,16 @@ class GenericCliCodeAgent:
             cost_usd_micros=0, latency_ms=ms, turns=1, ok=ok,
             error=None if ok else (proc.stderr or "")[:400],
         )
+        # A TRANSCRIPT IN THE COMMON SCHEMA even from a CLI that streams nothing BOSS can read:
+        # what it was asked and what it said, so every stage of every engine has one.
+        try:
+            from .llm_telemetry import record_agent_turns
+
+            record_agent_turns([{"direction": "completion", "turn_index": 0,
+                                 "content": summary[:8000], "ok": ok}],
+                               engine_name=self.engine, model=model or "", prompt=prompt)
+        except Exception:  # noqa: BLE001 — a transcript never fails a build
+            pass
         if not ok:
             _log.warning("%s exited %s: %s", self.spec.name, proc.returncode,
                          (proc.stderr or "")[:300])
@@ -1509,8 +1533,11 @@ class GenericCliCodeAgent:
             "cost_usd_micros": 0,
             "cost_unreported": True,
             "turns": 1,
-            "model": model or self.spec.name,
+            # The MODEL, never the harness's name: a caller passes this back as `model=` on a
+            # follow-up turn, and `--model codex` is not a model (crun QA static fix).
+            "model": model or "",
             "exit_code": proc.returncode,
+            "stop_reason": "done" if ok else "error",
         }
 
     def run(self, spec, repo, sandbox):

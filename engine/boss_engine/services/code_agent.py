@@ -34,6 +34,7 @@ from .verification_target import run_until_failure
 from .repo_files import MAX_SCAN_BYTES, RepoFileRefused, RepoFiles
 from .agent_turns import StreamParser, capture_enabled, parse_stream
 from .llm_telemetry import record_agent_turns, record_llm_call
+from .engine_contract import EngineCapabilities
 
 
 _log = logging.getLogger(__name__)
@@ -888,6 +889,10 @@ class ClaudeCodeAgent:
     """
 
     engine = "claude_code"
+    capabilities = EngineCapabilities(resume=True, read_only=True, effort=True, sub_agents=True,
+                                      turn_limit=True, reports_cost=True, streams_turns=True)
+    #: `_invoke` appends the working rules and sandbox facts itself (engine_contract).
+    adds_working_rules = True
 
     def __init__(self, settings: Settings):
         self.settings = settings
@@ -1428,6 +1433,7 @@ class ClaudeCodeAgent:
             "turns": turns,
             "model": model or usage.get("model"),
             "session_id": data.get("session_id"),
+            "stop_reason": ("turn_cap" if data.get("subtype") == "error_max_turns" else "done"),
         }
 
     def run_research(self, prompt: str, *, model: Optional[str] = None) -> dict:
@@ -1542,6 +1548,10 @@ class NativeCodeAgent:
     """
 
     engine = "native"
+    #: No session store (BOSS seeds a new session instead), no effort or sub-agents; a real
+    #: read-only toolset, a turn budget, an estimated cost and a per-turn transcript.
+    capabilities = EngineCapabilities(read_only=True, turn_limit=True, reports_cost=True,
+                                      streams_turns=True)
 
     _EDIT_SYS = (
         "You are an expert engineer working in a checked-out git repository (files shown below). "
@@ -1656,6 +1666,7 @@ class NativeCodeAgent:
 
     def _run_tool_loop(
         self, prompt: str, cwd: Path, *, read_only: bool, model: Optional[str],
+        max_turns: Optional[int] = None,
     ) -> dict:
         """Drive a real multi-turn tool-calling conversation against the sandbox.
 
@@ -1694,10 +1705,36 @@ class NativeCodeAgent:
         turns = 0
         summary = ""
         tool_calls_made = 0
-        max_turns = self._max_turns(read_only)
+        # THE CALLER'S TURN BUDGET when it gives one (a continuation, an escalated reviewer),
+        # as every engine honours it; the lane's own default otherwise.
+        max_turns = int(max_turns) if max_turns else self._max_turns(read_only)
         capped = True
+        stop_reason = "turn_cap"
+        # THE STAGE'S WALL-TIME DEADLINE bounds this session as it bounds a CLI session
+        # (_cap_to_deadline): checked before every model turn.
+        deadline = None if read_only else _stage_deadline()
+        # THE TRANSCRIPT, in the common schema (agent_turns): the prompt row first, then one row
+        # per completion, tool call and tool result, so the profile and the live view read a
+        # native session exactly as they read a CLI one.
+        transcript_index = [0]
+
+        def _turn(row: dict) -> None:
+            row["turn_index"] = transcript_index[0]
+            transcript_index[0] += 1
+            try:
+                record_agent_turns([row], engine_name=self.engine, model=model or "")
+            except Exception:  # noqa: BLE001 — a transcript never fails a build
+                pass
+
+        try:
+            record_agent_turns([], engine_name=self.engine, model=model or "", prompt=prompt)
+        except Exception:  # noqa: BLE001
+            pass
 
         for _ in range(max_turns):
+            if deadline is not None and time.time() >= deadline:
+                stop_reason = "deadline"
+                break
             turns += 1
             started = time.monotonic()
             try:
@@ -1729,9 +1766,14 @@ class NativeCodeAgent:
                             latency_ms=int((time.monotonic() - started) * 1000), turns=1)
 
             calls = msg.get("tool_calls") or []
+            said = _as_text(msg.get("content")).strip()
+            if said:
+                _turn({"direction": "completion", "content": said,
+                       "tokens": int((usage or {}).get("completion_tokens") or 0)})
             if not calls:
-                summary = _as_text(msg.get("content")).strip() or summary
+                summary = said or summary
                 capped = False
+                stop_reason = "done"
                 break
 
             messages.append(msg.get("raw") or {
@@ -1751,7 +1793,13 @@ class NativeCodeAgent:
                         args = {}
                 except Exception:
                     args = {}
+                _turn({"direction": "tool_call", "tool_name": call.get("name") or "",
+                       "content": args})
+                _t0 = time.monotonic()
                 outcome = toolset.call(call.get("name") or "", args)
+                _turn({"direction": "tool_result", "tool_name": call.get("name") or "",
+                       "content": outcome.text, "ok": not bool(getattr(outcome, "is_error", False)),
+                       "latency_ms": int((time.monotonic() - _t0) * 1000)})
                 messages.append({
                     "role": "tool",
                     "tool_call_id": call.get("id"),
@@ -1761,10 +1809,13 @@ class NativeCodeAgent:
         if capped:
             # The turn cap is a real outcome, not a crash: BOSS re-runs the tests itself
             # and the gate decides. Say so in the summary so the evidence trail shows WHY
-            # the step stopped where it did.
+            # the step stopped where it did — in the ONE phrase the pipeline reads as a partial
+            # attempt on every engine (engine_contract.PARTIAL_MARKER).
+            from .engine_contract import PARTIAL_MARKER
+
             summary = (summary + " ") if summary else ""
             summary += (f"[boss] stopped at the {max_turns}-turn cap for the native lane; "
-                        "the work done so far is in the diff.")
+                        "the work done so far is in the diff. " + PARTIAL_MARKER)
             _log.warning("native agent hit the %s-turn cap (read_only=%s)", max_turns, read_only)
 
         if not summary:
@@ -1777,17 +1828,20 @@ class NativeCodeAgent:
             "model": usage_last.get("model") or model,
             "tool_calls": tool_calls_made,
             "files_touched": sorted(set(toolset.written_paths)),
+            "stop_reason": stop_reason,
         }
 
     @tidies_workspace
     def run_role(
         self, prompt: str, cwd: Path, *, read_only: bool = False, model: Optional[str] = None,
-        resume_session_id: Optional[str] = None,  # accepted for interface parity; native has no session store
-        **_ignored,  # parallel_agents, max_turns: a Claude CLI capability the native loop has no use for
+        resume_session_id: Optional[str] = None,  # no session store: engine_contract seeds one
+        max_turns: Optional[int] = None,
+        **_ignored,  # parallel_agents: sub-agents are a Claude CLI capability
     ) -> dict:
         if self._tools_enabled():
             try:
-                return self._run_tool_loop(prompt, cwd, read_only=read_only, model=model)
+                return self._run_tool_loop(prompt, cwd, read_only=read_only, model=model,
+                                           max_turns=max_turns)
             except _ToolsUnsupported:
                 pass  # fall through to the legacy path; already logged at WARNING
         return self._run_single_shot(prompt, cwd, read_only=read_only, model=model)
@@ -1822,14 +1876,27 @@ class NativeCodeAgent:
         record_llm_call(engine_name=self.engine, usage=usage, cost_usd_micros=cost_micros,
                         latency_ms=int((time.monotonic() - started) * 1000), turns=1)
         data = self._safe_json(msg.get("content") or "")
+        written: list[str] = []
         if not read_only:
-            self._apply_files(cwd, data.get("files", []))
+            written = self._apply_files(cwd, data.get("files", []))
+        summary = _as_text(data.get("summary")).strip() or "(no summary)"
+        # The same transcript shape as every engine: the prompt, then what it said and wrote.
+        try:
+            record_agent_turns(
+                [{"direction": "completion", "content": summary, "turn_index": 0}]
+                + [{"direction": "tool_call", "tool_name": "Write", "turn_index": i + 1,
+                    "content": {"file_path": path}} for i, path in enumerate(written)],
+                engine_name=self.engine, model=model or usage.get("model") or "", prompt=prompt)
+        except Exception:  # noqa: BLE001 — a transcript never fails a build
+            pass
         return {
-            "summary": _as_text(data.get("summary")).strip() or "(no summary)",
+            "summary": summary,
             "usage": usage,
             "cost_usd_micros": cost_micros,
             "turns": 1,
+            "tool_calls": len(written),
             "model": usage.get("model"),
+            "stop_reason": "done",
         }
 
     def run(
@@ -1945,6 +2012,8 @@ class PacedCodeAgent:
     bounded concurrency + pacing + adaptive backoff, keyed by the agent's provider. Delegates
     every other attribute to the wrapped agent, so it's a transparent stand-in."""
 
+    _OWN = frozenset({"_inner", "_limiter", "engine", "_provider"})
+
     def __init__(self, inner: "CodeAgent", limiter):
         self._inner = inner
         self._limiter = limiter
@@ -1953,6 +2022,16 @@ class PacedCodeAgent:
 
     def __getattr__(self, name):  # delegate anything not overridden (called only on miss)
         return getattr(self._inner, name)
+
+    def __setattr__(self, name, value):
+        # WRITES REACH THE AGENT TOO. The pipeline sets `redact` (data boundary) and
+        # `command_runner` (the native lane's bash) on the agent it holds — this wrapper — and
+        # the agent reads them off itself. Kept here, they never arrived: a restricted task's
+        # prompts went out unredacted and native `bash` ran outside the sandbox runner.
+        if name in self._OWN:
+            object.__setattr__(self, name, value)
+        else:
+            setattr(self._inner, name, value)
 
     def _paced(self, fn, *args, **kwargs):
         # QUEUEING IS NOT WORKING, AND THIS IS THE PATH THAT RUNS.
@@ -2083,7 +2162,12 @@ def make_code_agent(
     if mcp is not None and hasattr(agent, "mcp_harness"):
         # `mcp` (code_task_mcp.HarnessMcp): the servers the agent this task runs as holds.
         agent.mcp_harness = mcp
-    return _wrap_paced(agent, bound)
+    # THE ENGINE CONTRACT (engine_contract): every engine, whatever it is, returns the common
+    # result schema, gets a session id the warm paths can continue, a read-only review and a
+    # turn-cap marker the pipeline recognises. No caller ever holds a raw adapter.
+    from .engine_contract import contracted
+
+    return _wrap_paced(contracted(agent), bound)
 
 
 def _bind_lane_credentials(
@@ -2312,6 +2396,12 @@ def _register_builtin_harnesses() -> None:
             spec = load_specs(settings).get(harness_name)
             if spec is None:  # pragma: no cover - only if an override deletes a built-in
                 raise RuntimeError(f"no CLI harness spec for {harness_name!r}")
+            if harness_name == "codex":
+                # A purpose-written driver held to the engine contract: sessions, a transcript,
+                # usage and effort from Codex's own interfaces (codex_code_agent).
+                from .codex_code_agent import CodexCodeAgent
+
+                return CodexCodeAgent(settings, spec)
             return GenericCliCodeAgent(settings, spec)
         return build
 
@@ -2327,6 +2417,16 @@ def _register_builtin_harnesses() -> None:
             requires=(f"{cli_spec.binary} on PATH", "signed in to that CLI"),
             description=cli_spec.description,
         )
+    # THE CONFORMANCE ENGINE: the contract with no model behind it (scripted_engine). Hidden from
+    # operators and refused unless the conformance gate enabled it.
+    from .scripted_engine import ENGINE as _SCRIPTED, build as _build_scripted
+
+    register_harness(
+        _SCRIPTED, _build_scripted, kind="conformance", verified=False,
+        requires=("BOSS_SCRIPTED_ENGINE=1 (conformance gate only)",),
+        description="BOSS's scripted conformance engine: a deterministic script per stage, "
+                    "no model, no cost.",
+    )
     for lane, (key_field, url_field) in _PROVIDER_LANES.items():
         local = lane in ("ollama", "vllm")
         register_harness(
