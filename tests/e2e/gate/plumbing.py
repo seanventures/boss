@@ -12,7 +12,11 @@ way a build runs it, and fails on the class of bugs that broke HelpDesk builds o
   6. a blocked build that names the wrong gate;
   7. a web gate that runs scripts the app does not define and never runs the ones it does: a plain
      Node ESM app (tests/e2e/fixtures/plain-node) was gated on `npm run build` ("Missing script")
-     and its own `npm test` was never the gate (crun_decc93dbb0154e768871).
+     and its own `npm test` was never the gate (crun_decc93dbb0154e768871); and an app defining
+     only `test:*` scripts had its tests counted but never run (the plain-node variant with only
+     `test:api`);
+  8. a secret scan that blocks ordinary app files: a localhost DATABASE_URL in .env.example, the
+     compose default `postgres://postgres:postgres@db`, a seed's demo password, a README's.
 
 WHERE IT RUNS. Inside a throwaway container of the installed worker image (scripts/e2e-gate.sh
 starts it; never the install's own containers), with the BOSS under test mounted at /boss and
@@ -53,6 +57,9 @@ APP_DIR = "helpdesk"
 OWNER, REPO = "gate", "helpdesk-mini"
 PLAIN_FIXTURE = HERE.parent / "fixtures" / "plain-node"
 PLAIN_DIR, PLAIN_REPO = "plain", "plain-node"
+#: The plain-node fixture as an app that defines ONLY `test:api` (no `test` script).
+TEST_API_REPO = "plain-node-test-api"
+TEST_API_SCRIPTS = {"start": "node src/server.js", "test:api": "node --test"}
 RESULTS: list[dict[str, Any]] = []
 
 
@@ -137,11 +144,16 @@ class Gate:
         from remote import LocalGitHub  # tests/e2e/gate/remote.py
 
         self.hub = LocalGitHub(self.work / "github").start()
-        for fixture, repo in ((FIXTURE, REPO), (PLAIN_FIXTURE, PLAIN_REPO)):
+        for fixture, repo in ((FIXTURE, REPO), (PLAIN_FIXTURE, PLAIN_REPO),
+                              (PLAIN_FIXTURE, TEST_API_REPO)):
             files = {}
             for path in sorted(fixture.rglob("*")):
                 if path.is_file() and "node_modules" not in path.parts:
                     files[path.relative_to(fixture).as_posix()] = path.read_text(encoding="utf-8")
+            if repo == TEST_API_REPO:
+                pkg = json.loads(files[f"{PLAIN_DIR}/package.json"])
+                pkg["scripts"] = dict(TEST_API_SCRIPTS)
+                files[f"{PLAIN_DIR}/package.json"] = json.dumps(pkg, indent=2) + "\n"
             self.hub.seed(OWNER, repo, files)
         # The build's own scope, as run_governed_code_task opens it: everything started below is
         # this run's, and runs as this run's uid.
@@ -349,6 +361,79 @@ def check_plain_node(g: Gate) -> str:
     finally:
         with contextlib.suppress(Exception):
             box.teardown()
+
+
+@check("web gate: an app with only test:* scripts runs them", bug="7")
+def check_test_colon_only(g: Gate) -> str:
+    """The plain-node fixture with only `test:api` (TEST_API_SCRIPTS). has_tests counted test:*
+    while the gate ran only `npm test`, so this app passed with its tests never run. BOSS's web
+    gate must run `npm run test:api` (and its node --test output must show the tests passing)."""
+    from boss_engine.services import verification_target as vt
+    from boss_engine.services.sandbox import EphemeralSandbox
+
+    box = EphemeralSandbox(g.settings, task_id=f"{g.run_id}-testapi")
+    try:
+        access = SimpleNamespace(clone_url=g.hub.git_url(OWNER, TEST_API_REPO), git_config=[],
+                                 own_git=None)
+        root = box.provision(OWNER, TEST_API_REPO, base_branch="main", egress=access)
+        app = root / PLAIN_DIR
+        with _first_pass("Plain Node", "a Node ESM module with node --test tests"):
+            plan = vt.resolve_gate_plan({"project_kind": "web"}, "Plain Node", root,
+                                        changed=[f"{PLAIN_DIR}/package.json", f"{PLAIN_DIR}/src/slug.js"])
+            vt.prepare_web_verify_env(app, scenarios=None, app_id=None)
+        if "npm run test:api" not in plan.commands:
+            raise CheckFailed("BOSS's web gate never runs the app's only tests (`npm run test:api`): "
+                              f"it ran {' -> '.join(plan.commands)}"
+                              + (f"; finding: {plan.finding}" if getattr(plan, "finding", None) else ""))
+        results = _web_gate(vt, plan, lambda c: box.run(c, cwd=str(app), timeout=600))
+        for result in results:
+            if not result.ok:
+                raise CheckFailed(f"BOSS's web gate failed a known-good app: `{result.command}`: "
+                                  f"{_tail(_result_text(result), 4)}")
+        ran = next((r for r in results if r.command == "npm run test:api"), None)
+        out = _result_text(ran) if ran is not None else ""
+        if "# pass 2" not in out:
+            raise CheckFailed(f"`npm run test:api` ran but its 2 tests did not: {_tail(out, 4)}")
+        return " -> ".join(c for c in plan.commands if c != vt.NPM_INSTALL_CMD) + " (2 tests passed)"
+    finally:
+        with contextlib.suppress(Exception):
+            box.teardown()
+
+
+#: Ordinary files a HelpDesk build writes (pre-mortem finding 4): none of them is a secret.
+ORDINARY_APP_FILES = {
+    f"{APP_DIR}/.env.example": "DATABASE_URL=postgres://helpdesk:helpdesk@localhost:5432/helpdesk\n",
+    "docker-compose.yml": ("services:\n  app:\n    environment:\n"
+                           "      DATABASE_URL: postgres://postgres:postgres@db:5432/postgres\n"),
+    f"{APP_DIR}/scripts/seed.ts": ('export const agents = [\n'
+                                   '  { email: "agent@helpdesk.local", password: "Agent#Demo2024" },\n];\n'),
+    "README.md": 'Sign in as agent@helpdesk.local with `password: "Agent#Demo2024"`.\n',
+}
+
+
+@check("secret scan: ordinary app files are not secrets, a real token still is", bug="8")
+def check_secret_scan(g: Gate) -> str:
+    """BOSS's secret scan (templates.secret_scan.scan_files, what no_committed_secrets runs) over
+    the cloned app as it stands plus the four ordinary files HelpDesk builds were blocked for.
+    None may be a finding; a credential-shaped token planted beside them must be."""
+    from boss_engine.templates.secret_scan import scan_files
+
+    tree: dict[str, str] = {}
+    for path in sorted(g.root.rglob("*")):
+        rel = path.relative_to(g.root).as_posix()
+        if (path.is_file() and "node_modules" not in path.parts and ".git" not in path.parts
+                and path.stat().st_size < 512_000 and not rel.endswith("package-lock.json")):
+            with contextlib.suppress(UnicodeDecodeError, OSError):
+                tree[rel] = path.read_text(encoding="utf-8")
+    tree.update(ORDINARY_APP_FILES)
+    found = scan_files(tree)
+    if found:
+        raise CheckFailed("the secret scan flags ordinary app files: "
+                          + "; ".join(f.reason() for f in found[:6]))
+    canary = {f"{APP_DIR}/src/server/leak.ts": 'const t = "ghp_' + "A1b2C3d4" * 5 + '";\n'}
+    if not any(f.rule == "github_token" for f in scan_files(canary)):
+        raise CheckFailed("a GitHub token planted in app code was not found")
+    return f"{len(tree)} files clean (the four HelpDesk false positives included); a planted token fires"
 
 
 @check("the app's programs stay runnable for the run's uid", bug="2")
@@ -883,9 +968,11 @@ def main() -> int:
             check_install(g)
             check_verify(g)
             check_plain_node(g)
+            check_test_colon_only(g)
             check_exec_bits(g)
             check_serve(g)
             check_connector(g)
+            check_secret_scan(g)
         check_blocked_words(g)
         if g.root is not None:
             check_pull_request(g)

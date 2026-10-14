@@ -104,6 +104,26 @@ def test_no_test_script_is_a_finding_the_gate_fails_on(tmp_path):
         assert vt.checks_headline(vt.failed_check(results[-1])).endswith(vt.NO_TEST_SCRIPT)
 
 
+def test_an_app_with_only_test_colon_scripts_runs_each_of_them(tmp_path):
+    """Pre-mortem finding 6: `has_tests` counted test:* while only `test` was ever run, so an app
+    defining only `test:api` passed the gate with its tests never run."""
+    root = _app(tmp_path, {"start": "node src/server.js", "test:api": "node --test tests/api",
+                           "test:unit": "node --test tests/unit", "test:watch": "node --test --watch",
+                           "test:e2e": "playwright test"})
+    plan = _plan(root, scope=build_scope.decide("App", "a plain node app"))
+    assert plan.commands == [INSTALL, "npm run test:api", "npm run test:unit"]
+    assert plan.finding is None
+    # A `test` script wins: it is the app's own entry point, so test:* are not run besides it.
+    both = _app(tmp_path / "both", {"test": "node --test", "test:api": "node --test tests/api"})
+    assert _plan(both).commands == [INSTALL, "npm test"]
+
+
+def test_a_browser_suite_this_pass_does_not_run_is_no_tests(tmp_path):
+    root = _app(tmp_path, {"build": "vite build", "test:e2e": "playwright test"})
+    plan = _plan(root, scope=build_scope.decide("App", "a plain node app"))
+    assert vt.E2E_STEP not in plan.commands and plan.finding == vt.NO_TEST_SCRIPT
+
+
 def test_an_app_with_only_a_browser_suite_has_tests(tmp_path):
     assert _plan(_app(tmp_path, {"build": "vite build", "test:e2e": "playwright test"})).finding is None
 

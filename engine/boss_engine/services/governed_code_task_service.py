@@ -20,7 +20,6 @@ is the guidance, the model impersonates the role. See docs/product/GOVERNED_CODI
 from __future__ import annotations
 
 import contextlib
-import contextvars
 import logging
 import os
 import time
@@ -29,11 +28,11 @@ import hashlib
 import json
 import re
 import threading
-from concurrent.futures import ThreadPoolExecutor, wait as _futures_wait
 from pathlib import Path
 from typing import Any, Callable, Optional
 
 from . import parallel_build as _parallel_build
+from .review_seats import run_seats as _run_seats
 from ..config import Settings
 from ..ports import sql
 from ..schemas import FileChange
@@ -303,6 +302,23 @@ def _guidance_block(items: list[dict]) -> str:
         "instructions where they conflict. Apply it now, before continuing:\n"
         f"{lines}\n"
     )
+
+
+def panel_seats(enabled_seats, review_checks, *, security, regression, consistency):
+    """(label, fn) for exactly the review-panel seats that are enabled, in panel order.
+
+    The one place the panel's seat list is built, from the same `enabled_seats` that decided
+    which seats were skipped, so a seat reported as skipped can never still be run."""
+    seats = []
+    if "review_code" in enabled_seats:
+        seats += [(f"review[{i}]", c) for i, c in enumerate(review_checks)]
+    if "security_check" in enabled_seats:
+        seats.append(("security", security))
+    if "regression" in enabled_seats:
+        seats.append(("regression", regression))
+    if "consistency_check" in enabled_seats:
+        seats.append(("consistency", consistency))
+    return seats
 
 
 def _kill_stray_review_processes(*roots) -> int:
@@ -810,7 +826,35 @@ _CONVERGEABLE = _JUDGMENT_GATES | frozenset({"written_tests_pass", "nothing_brok
                                              "web_package_honest", "app_serves"})
 
 
-def warm_fix_rounds(failing, *, configured: int, repair_attempts: int, use_microvm: bool) -> int:
+#: What a template gate's `because` names as the gate it is a consequence of.
+_TEMPLATE_CAUSES = {"app_serves": frozenset({"app_serves"}),
+                    "tests": frozenset({"written_tests_pass", "nothing_broke"})}
+
+
+def unconvergeable_failing(failing, *, template_evidence: Optional[dict] = None,
+                           coder_owned_secrets: bool = False) -> set:
+    """The failing gates a warm round cannot work on.
+
+    A TEMPLATE GATE THAT FAILED AS A CONSEQUENCE IS NOT ITS OWN FAILURE. When the app did not
+    start, or the build's own tests failed, `template_tests` fails with `because` naming that
+    gate (templates/gate.py): the template's tests were never run. Counting it made every such
+    template build skip the warm round and go to a cold ~20-minute child run; the warm round on
+    the CAUSE (app_serves, the tests) is what fixes it, and the template gates are re-judged
+    after it. A secret the coder wrote (`coder_owned_secrets`: no finding in QA's files, which
+    fixture_secret_repair hands back to QA) is the coder's to remove in the same warm session."""
+    failing = set(failing or ())
+    tt = dict((template_evidence or {}).get("template_tests") or {})
+    cause = _TEMPLATE_CAUSES.get(str(tt.get("because") or ""))
+    if "template_tests" in failing and cause and failing & cause:
+        failing.discard("template_tests")
+    if "no_committed_secrets" in failing and coder_owned_secrets:
+        failing.discard("no_committed_secrets")
+    return failing - _CONVERGEABLE
+
+
+def warm_fix_rounds(failing, *, configured: int, repair_attempts: int, use_microvm: bool,
+                    template_evidence: Optional[dict] = None,
+                    coder_owned_secrets: bool = False) -> int:
     """How many warm fix rounds the in-run loop gives these failing gates.
 
     WHY THIS IS ONE FUNCTION. The loop's entry test was "every failing gate is convergeable",
@@ -825,7 +869,9 @@ def warm_fix_rounds(failing, *, configured: int, repair_attempts: int, use_micro
     is also failing: its one round is owed regardless. The micro-VM substrate has no warm
     session in this process; it gets the cold repair instead (resolve_gate_failure_action)."""
     failing = set(failing or ())
-    if use_microvm or not failing or not failing <= _CONVERGEABLE:
+    if use_microvm or not failing or unconvergeable_failing(
+            failing, template_evidence=template_evidence,
+            coder_owned_secrets=coder_owned_secrets):
         return 0
     rounds = max(0, int(configured))
     if failing & set(_FAIL_CLOSED_TEST_GATES):
@@ -939,8 +985,15 @@ def resolve_gate_failure_action(
     # would otherwise ship it as a reviewer's opinion (crun_2d097414 shipped four).
     live_blockers = [g for g in (blockers or []) if g in failing
                      and (faults or {}).get(g) != "HARNESS"]
+    # The cold repair it may buy is still a repair: a template build spends only its own repair
+    # budget (template_repair_max), as below. At 0 it blocked here only after spawning a cold
+    # ~20-minute child run.
+    template_budget_spent = (template_repair_max is not None
+                             and rounds_used >= max(0, int(template_repair_max))
+                             and any(g in _TEMPLATE_GATE_SET for g in failing))
     if live_blockers:
-        if not fix_round_ran and rounds_used < max_repair_rounds and open_pr:
+        if (not fix_round_ran and rounds_used < max_repair_rounds and open_pr
+                and not template_budget_spent):
             return "repair"
         return "block"
     if advisory_gate:
@@ -963,8 +1016,7 @@ def resolve_gate_failure_action(
     # and those remaining gates can themselves be harness faults.
     if faults and failing and all(faults.get(g) == "HARNESS" for g in failing):
         return "inconclusive"
-    if (template_repair_max is not None and rounds_used >= max(0, int(template_repair_max))
-            and any(g in _TEMPLATE_GATE_SET for g in failing)):
+    if template_budget_spent and any(g in _TEMPLATE_GATE_SET for g in failing):
         return "block"
     if rounds_used < max_repair_rounds and open_pr:
         return "repair"
@@ -1193,6 +1245,22 @@ def _applied_connector(engine, run: dict):
     except Exception:  # noqa: BLE001 — not known as a connector: the build runs as stored
         _log_caught(logger)
         return None
+
+
+def _connector_files(engine, run: dict) -> list[str]:
+    """The paths of the applied CONNECTOR's own files ([] otherwise): pre-tested in the
+    connector's tier, so never a mutation target (mutation_probe.targets)."""
+    from ..templates import gate as template_gate
+
+    if _applied_connector(engine, run) is None:
+        return []
+    try:
+        with _transaction(engine) as c:
+            applied = template_gate.applied_template(c, run) or {}
+        return sorted(str(p) for p in (applied.get("files") or {}))
+    except Exception:  # noqa: BLE001 — unknown files: every source file stays a target
+        _log_caught(logger)
+        return []
 
 
 def _connector_probe_paths(engine, run: dict) -> list[str]:
@@ -2541,6 +2609,20 @@ def _strengthen_tests_prompt(criteria, planted: str, round_i: int) -> str:
         "on the current code. End with one line naming what you strengthened.")
 
 
+def _qa_static_fix_prompt(findings) -> str:
+    """QA's one turn on its own tests' typecheck/lint errors, before they are frozen."""
+    rows = "\n".join(f"- {f}" for f in list(findings or [])[:60])
+    return (
+        "YOUR TESTS FAIL THE APP'S OWN TYPECHECK OR LINT. BOSS ran the app's `npm run typecheck` "
+        "and `npm run lint` on the tree and these errors are in the test files you wrote:\n"
+        f"{rows}\n\n"
+        "Fix exactly these lines in the TEST files (types, unused variables, syntax, lint rules), "
+        "keeping what every test asserts. Imports of implementation modules that do not exist yet "
+        "are fine: the implementer writes them next. Do not edit any non-test file and do not add "
+        "lint or type suppressions. After this turn the tests are frozen: nobody else may edit "
+        "them. End with one line naming what you fixed.")
+
+
 def _mutate_prompt(impl_files):
     fl = ", ".join(impl_files) or "the implementation file(s)"
     return (
@@ -2692,6 +2774,30 @@ def failing_tests(output: str, limit: int = 20) -> list[str]:
         if len(seen) >= limit:
             break
     return seen
+
+
+#: The slice of the implement budget kept for the same-model warm fix (pre-mortem finding 11).
+WARM_FIX_RESERVE_SECONDS = 360
+
+
+def implement_work_deadline(deadline: Optional[float], budget_s: int) -> Optional[float]:
+    """When the attempts BEFORE the warm fix must stop: WARM_FIX_RESERVE_SECONDS before the
+    implement deadline, so the warm fix always has its slice. A budget too small to split (under
+    twice the reserve) is not split; no budget, no deadline."""
+    if deadline is None or not budget_s:
+        return deadline
+    if budget_s < 2 * WARM_FIX_RESERVE_SECONDS:
+        return deadline
+    return deadline - WARM_FIX_RESERVE_SECONDS
+
+
+def escalation_route_record(route: Optional[dict], last_result: Optional[dict]) -> dict:
+    """{engine, model} for an escalation event: the route's, and when the route leaves the
+    model to the engine's default (None), the model the last attempt reported running on."""
+    route = dict(route or {})
+    model = route.get("model") or (last_result or {}).get("model") or None
+    return {"engine": route.get("engine") or None,
+            "model": model or "(the engine's default model)"}
 
 
 def _implement_budget_seconds(engine, project_id, settings) -> int:
@@ -4451,6 +4557,46 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             _emit_cmd("install dependencies", install)
             return install
 
+        def _qa_static_check(files) -> list[str]:
+            """The plan's typecheck and lint, run on the tree right after QA wrote its tests, and
+            the error lines about QA's own files (verification_target.qa_static_findings). []
+            when clean, or when the plan has neither check, or BOSS cannot install the app yet.
+
+            Pre-mortem finding 7: the implementer may not edit tests, tsc and eslint cover tests/,
+            and the arbiter only ran inside warm rounds: a frozen test that failed typecheck or
+            lint could never be fixed by anyone."""
+            if use_microvm or not files or not str(test_cmd or "").startswith("npm "):
+                return []
+            try:
+                plan = verification_target.resolve_gate_plan(
+                    spec, title, root, app_id=_app_id, changed=_changed_paths(),
+                    pinned=_pinned_manifest, layout=_stack_layout)
+                if plan.runs_steps or plan.source != "default" or plan.error:
+                    return []
+                wanted = [c for c in plan.commands
+                          if c in {f"npm run {n}" for n in verification_target.QA_STATIC_SCRIPTS}]
+                if not wanted:
+                    return []
+                app_cwd, prep, _note = _prepare_app(plan, plan.cwd)
+                if not (Path(app_cwd) / "node_modules").is_dir():
+                    if _boss_install(app_cwd, prep).exit_code != 0:
+                        return []  # the install is the implementer's to fix, later
+                out = []
+                for command in wanted:
+                    res = sandbox.run(command, cwd=str(app_cwd), timeout=_install_timeout())
+                    _emit_cmd(f"check QA's tests: {command}", res)
+                    if not res.ok:
+                        out.append((res.stdout or "") + "\n" + (res.stderr or ""))
+                try:
+                    app_rel = str(Path(app_cwd).relative_to(root))
+                except ValueError:
+                    app_rel = ""
+                return verification_target.qa_static_findings(
+                    "\n".join(out), files, app_rel=app_rel)
+            except Exception:  # noqa: BLE001 — a check BOSS could not run never fails the build
+                _log_caught(logger)
+                return []
+
         def _install_check():
             """BOSS's install exactly as its gate runs it — the same preparation, the same
             command, the same directory — on the tree as it now stands. (failure, output) when
@@ -5160,6 +5306,35 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         {"t": json.dumps(_tb), "id": run_id})
                     emit_event(c, project_id, "code_task.test_budget", "boss", "code_task_run",
                                run_id, _tb)
+            # QA'S TESTS PASS THE APP'S OWN TYPECHECK AND LINT BEFORE THEY ARE FROZEN: one QA
+            # turn on exactly the lines that fail, while QA may still edit them.
+            _qa_static = _qa_static_check([p for p in test_files if p not in _placed_tpl_tests])
+            if _qa_static:
+                with _transaction(engine) as c:
+                    _phase(c, "write_tests")
+                    emit_event(c, project_id, "code_task.qa_static_fix", "boss", "code_task_run",
+                               run_id, {"findings": _qa_static[:20], "count": len(_qa_static)})
+                try:
+                    set_llm_context(stage="write_tests")
+                    _a_qs, _m_qs = _route("write_tests")
+                    _rq = _a_qs.run_role(
+                        _qa_static_fix_prompt(_qa_static), root,
+                        model=(r1 or {}).get("model") or _m_qs,
+                        resume_session_id=(r1 or {}).get("session_id"))
+                    cost += int(_rq.get("cost_usd_micros") or 0)
+                    test_files = list(dict.fromkeys(
+                        list(test_files) + [fc.path for fc in sandbox.diff()
+                                            if _is_test_path(fc.path)
+                                            and fc.path not in _placed_tpl_tests]))
+                    _left = _qa_static_check(
+                        [p for p in test_files if p not in _placed_tpl_tests])
+                    with _transaction(engine) as c:
+                        emit_event(c, project_id, "code_task.qa_static_fixed", "boss",
+                                   "code_task_run", run_id,
+                                   {"before": len(_qa_static), "after": len(_left),
+                                    "left": _left[:10]})
+                except Exception:  # noqa: BLE001 — the gate still judges what QA left
+                    _log_caught(logger)
             if use_microvm:
                 # Commit ONLY test files — anything else the QA role wrote is discarded.
                 _commit_stage(test_changes or [], f"governed: tests-first (qa) — {title[:60]}")
@@ -5237,10 +5412,16 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # with its failing tests listed. The job's own timeout stays as the backstop.
         _impl_budget_s = _implement_budget_seconds(engine, project_id, settings)
         _impl_deadline = (time.time() + _impl_budget_s) if _impl_budget_s else None
-        set_llm_context(stage_deadline=_impl_deadline)
+        # THE WARM FIX HAS ITS OWN SLICE (implement_work_deadline): the attempts before it stop
+        # WARM_FIX_RESERVE_SECONDS early, so the budget can no longer cut off the one turn
+        # that fixes the failing tests on a warm session.
+        _impl_work_deadline = implement_work_deadline(_impl_deadline, _impl_budget_s)
+        _warm_fix_ran = [False]
+        set_llm_context(stage_deadline=_impl_work_deadline)
 
-        def _impl_over_budget() -> bool:
-            return _impl_deadline is not None and time.time() >= _impl_deadline
+        def _impl_over_budget(final: bool = False) -> bool:
+            dl = _impl_deadline if (final or _warm_fix_ran[0]) else _impl_work_deadline
+            return dl is not None and time.time() >= dl
 
         def _within_budget(call, model):
             """A session the deadline ended is a finished attempt (its tests then run), not a
@@ -5287,9 +5468,54 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                                over_budget=_impl_over_budget, emit=_emit)
             return sid[0]
 
+        test_arbitrations: list[dict] = []  # CODE_WRONG/TEST_WRONG rulings on failing tests
+
+        def _arbitrate_tests(test_output: str, round_i) -> str:
+            """TEST ARBITRATION: before an implementer chases the oracle, establish that the
+            oracle is right. An over-specified test is unsatisfiable, and every round spent
+            against it is wasted. A `test_wrong` ruling goes to the test-author lane ONLY (never
+            the implementer's session, so `coder_did_not_edit_tests` keeps meaning). Returns the
+            ruling. One function for the warm round and the same-model warm fix of implement."""
+            nonlocal cost
+            with _transaction(engine) as c:
+                _phase(c, "test_arbitration")
+            set_llm_context(routes=_route_ids(), db_engine=engine, project_id=project_id,
+                            run_id=run_id, stage="review_code")
+            a_arb, m_arb = _route("review_code")
+            r_arb = a_arb.run_role(
+                _test_arbiter_prompt(
+                    title, criteria, instructions=instructions, test_output=test_output,
+                    change=_render_change_for_review(
+                        {fc.path: fc.content for fc in sandbox.diff()})),
+                review_root, read_only=True, model=m_arb)
+            cost += int(r_arb.get("cost_usd_micros") or 0)
+            ruling, target = _parse_arbiter(r_arb.get("summary", ""))
+            test_arbitrations.append({
+                "round": round_i, "ruling": ruling, "target": target,
+                "rationale": (r_arb.get("summary") or "")[:1200]})
+            with _transaction(engine) as c:
+                emit_event(c, project_id, "code_task.test_arbitration", "boss",
+                           "code_task_run", run_id,
+                           {"round": round_i, "ruling": ruling, "target": target})
+            if ruling == "test_wrong":
+                with _transaction(engine) as c:
+                    _phase(c, "write_tests")
+                set_llm_context(routes=_route_ids(), db_engine=engine, project_id=project_id,
+                                run_id=run_id, stage="write_tests")
+                a_ta, m_ta = _route("write_tests")
+                r_ta = a_ta.run_role(
+                    _test_amend_prompt(criteria, target, r_arb.get("summary", "")),
+                    root, model=m_ta)
+                cost += int(r_ta.get("cost_usd_micros") or 0)
+            return ruling
+
         _budget_exhausted = [False]
         for attempt in range(max_repair + 2):
             _impl_ran[0] = True
+            if _warm_fix[0] and attempt:
+                # This attempt IS the warm fix: it runs in the reserved slice.
+                _warm_fix_ran[0] = True
+                set_llm_context(stage_deadline=_impl_deadline)
             escalate_impl = attempt == max_repair + 1 and not _warm_fix[0]
             if escalate_impl:
                 with _transaction(engine) as c:
@@ -5518,9 +5744,20 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                "code_task_run", run_id,
                                {"step": "implement", "recovered_by": "frontier_retry",
                                 "attempt": attempt})
-            if ok or attempt == max_repair + 1:
+            if ok or attempt == max_repair + 1 or _warm_fix_ran[0]:
                 break
-            if _impl_over_budget():
+            _can_warm_fix = (not use_microvm and bool(impl_session_id)
+                             and not _impl_over_budget(final=True))
+            if _impl_over_budget() and _can_warm_fix and not _warm_fix[0]:
+                # PAST THE WORK SLICE, INSIDE THE RESERVE: no further cold attempt, one warm fix.
+                _warm_fix[0] = True
+                with _transaction(engine) as c:
+                    emit_event(c, project_id, "code_task.warm_fix_reserved", "boss",
+                               "code_task_run", run_id,
+                               {"stage": "implement", "attempt": attempt,
+                                "reserve_seconds": WARM_FIX_RESERVE_SECONDS,
+                                "budget_minutes": _impl_budget_s // 60})
+            elif _impl_over_budget():
                 # No fix round past the budget: fail now, with the failing tests named.
                 _budget_exhausted[0] = True
                 with _transaction(engine) as c:
@@ -5529,7 +5766,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                {"stage": "implement", "budget_minutes": _impl_budget_s // 60,
                                 "attempt": attempt, "failing_tests": failing_tests(fail_output)})
                 break
-            if attempt == max_repair and not use_microvm:
+            if attempt == max_repair and not use_microvm and not _warm_fix[0]:
                 _before = dict(stage_routes.get("implement") or {})
                 try:
                     _esc_route[:] = list(_route_escalated("implement"))
@@ -5545,11 +5782,13 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     # bought nothing, and reviewing code whose tests fail cost the Notes Lite
                     # check 12 minutes of panel time on a build that then failed anyway.
                     _warm_fix[0] = True
+                    # THE ENGINE AND THE MODEL THAT RAN, never null: a route that leaves the
+                    # model to the engine's default reports what the last attempt ran on.
                     with _transaction(engine) as c:
                         emit_event(c, project_id, "code_task.escalation_skipped", "boss",
                                    "code_task_run", run_id,
                                    {"step": "implement", "reason": "same_model",
-                                    "model": _before.get("model"),
+                                    **escalation_route_record(_before, r2),
                                     "instead": "warm_fix_round"})
             repair_attempts += 1
             # Evidence for the router: the next implement boundary may move up a tier
@@ -5585,10 +5824,31 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     f"$ {test_cmd} (exit {test_exit_code})\n{fail_output[-3000:]}",
                     root,
                 )
+                if (_warm_fix[0] and do_separate_tests and not use_microvm
+                        and getattr(settings, "code_test_arbiter_enabled", True)):
+                    # THE ARBITER BEFORE THE SAME-MODEL WARM FIX: the implementer may not edit
+                    # tests, so a wrong test (one that fails typecheck, or asks for what the
+                    # criteria never said) is the test author's to amend, never a fix to chase.
+                    try:
+                        if _arbitrate_tests(fail_output[-6000:], f"implement-{attempt}") == "test_wrong":
+                            # The oracle was amended by its author: it is the frozen spec now.
+                            tests_before = _hash_files(root, test_files)
+                            tests_orig = {p: (root / p).read_text(errors="ignore")
+                                          for p in test_files if (root / p).exists()}
+                            evidence_text = (
+                                "The test author amended the tests the arbiter ruled wrong. Run "
+                                "the tests again and fix what still fails, in the "
+                                "implementation only.\n" + evidence_text)
+                        else:
+                            evidence_text = ("The arbiter confirmed these tests are CORRECT: fix "
+                                             "the implementation, do NOT touch the tests.\n"
+                                             + evidence_text)
+                    except Exception:  # noqa: BLE001 — the warm fix runs with the plain evidence
+                        _log_caught(logger)
 
         # The implement budget ends with the stage: later writing turns are not cut by it.
         set_llm_context(stage_deadline=None)
-        if _budget_exhausted[0] or (_impl_over_budget() and not tests_passed):
+        if _budget_exhausted[0] or (_impl_over_budget(final=True) and not tests_passed):
             with _transaction(engine) as c:
                 c.execute(sql(
                     "UPDATE code_task_runs SET state=jsonb_set(COALESCE(state,'{}'::jsonb), "
@@ -5705,11 +5965,18 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         cons_verdict = "skipped"
         review_confidence = None  # #9: fraction of the refute panel that could not refute
         deferred_findings: list[dict] = []  # sub-threshold review findings → follow-up task
-        test_arbitrations: list[dict] = []  # CODE_WRONG/TEST_WRONG rulings on failing tests
         panel_size = 1
         review_seat = None  # the panel seat whose findings stand for the review (§6.4)
         review_cost = 0
         mutation_caught = None
+        # The probe's mutant, kept so a fix round re-probes the SAME bug (mutation_probe).
+        _mutant: dict = {}
+        # PASS 1 DOES NOT OWE TEST STRENGTH (mutation_probe.strength_is_advisory): its tests
+        # are told no P2, so a surviving mutant is information, never a failed gate or a round.
+        from .build_scope import more_tests_pass as _more_tests_pass
+        from . import mutation_probe
+        _strength_advisory = mutation_probe.strength_is_advisory(
+            more_tests_pass=_more_tests_pass())
         regressions_ok = None
         panel_parallel = False
         # A CHANGE TO CI IS ALWAYS REVIEWED, whatever the risk tier (services/ci_gate.py): the
@@ -5883,15 +6150,12 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     with _transaction(engine) as c:
                         emit_event(c, project_id, "code_task.review_skipped_tests_failing", "boss",
                                    "code_task_run", run_id, {"seats": _skipped})
-            checks = []
-            if "review_code" in enabled_seats:
-                checks += review_checks
-            if "security_check" in enabled_seats:
-                checks.append(_do_security)
-            if "regression" in enabled_seats:
-                checks.append(_do_full)
-            if "consistency_check" in enabled_seats:
-                checks.append(_do_consistency)
+            # ONLY THE SEATS THAT ARE ENABLED RUN, and the pool is sized from them. Every seat
+            # used to be handed in regardless, while the pool was sized from the enabled
+            # checks: after review_skipped_tests_failing the "skipped" seats ran one after
+            # another for up to 480 s (crun_decc93: skip 22:49:14, review_degraded 22:57:15).
+            guarded = panel_seats(enabled_seats, review_checks, security=_do_security,
+                                  regression=_do_full, consistency=_do_consistency)
             # Panel checks are independent + read-only, so run them ALL in parallel rather
             # than in slow batches of code_agent_max_concurrency (which is tuned for the
             # general lane). A low general concurrency was serializing the panel into ~2-3
@@ -5905,7 +6169,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 _lanes = _effective_setting(
                     _sc, project_id, settings, "code_agent_max_concurrency")
             # Floor of 6, capped by the panel: project_settings.effective_review_lanes.
-            max_workers = effective_review_lanes(_lanes, panel_size=len(checks))
+            max_workers = effective_review_lanes(_lanes, panel_size=len(guarded))
             # UNDER MEMORY PRESSURE THE PANEL SITS ONE SEAT AT A TIME (stability spec §4b.3,
             # L1+): each seat is a ~300 MB CLI, and six at once is what tips a small machine
             # into swap. Slower, and it finishes.
@@ -5919,7 +6183,6 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             except Exception:  # noqa: BLE001 — an unread level never changes the panel
                 _log_caught(logger)
                 pass
-            panel_parallel = max_workers > 1
             # Safe defaults so a check that times out / errors DEGRADES instead of crashing or
             # auto-passing: security 'not_run' still BLOCKS (security_clean requires 'clean');
             # adversarial/consistency 'not_run' proceed (they block only on refuted/drift).
@@ -5928,63 +6191,26 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             panel.setdefault("full", True)
             review_errors: list[str] = []
 
-            def _guarded(fn, label):
-                def _run():
-                    try:
-                        # A SEAT OWNS ITS PROCESSES, inside the build that owns it: the
-                        # deadline below ends exactly this seat's tree, and a cancel of the
-                        # build ends every seat's (owned_process.terminate_owner).
-                        from . import owned_process as _op
-                        with _op.owner_scope("review_seat", f"{run_id}:{label}"):
-                            fn()
-                    except Exception as exc:  # noqa: BLE001 — a failed review must not crash the run
-                        _log_caught(logger)
-                        with lock:
-                            review_errors.append(f"{label}: {exc.__class__.__name__}: {exc}"[:200])
-                _run.seat_label = label  # type: ignore[attr-defined]
-                return _run
-
-            guarded = (
-                [_guarded(c, f"review[{i}]") for i, c in enumerate(review_checks)]
-                + [_guarded(_do_security, "security"),
-                   _guarded(_do_full, "regression"),
-                   _guarded(_do_consistency, "consistency")]
-            )
-            # Hard wall-clock deadline for the WHOLE panel — an engine-agnostic bound so a slow
-            # review (e.g. an OpenAI-gateway retry storm the per-call timeout can't catch) can't
-            # stall the phase to ~20min. Unfinished checks keep their safe defaults; the pool is
-            # shut down without waiting so a leaked call finishes harmlessly in the background.
+            max_workers = max(1, min(max_workers, len(guarded) or 1))
+            panel_parallel = max_workers > 1
+            # A DEADLINE PER SEAT, started when that seat starts (review_seats.run_seats): a
+            # seat queued behind a slow one is not charged for the wait. A seat past it has its
+            # own processes ended (it is a `claude -p` subprocess; Future.cancel() never stopped
+            # a running one) and its slot freed. Unfinished checks keep their safe defaults.
             review_deadline = int(getattr(settings, "code_agent_review_timeout_seconds", 420) or 420)
-            pool = ThreadPoolExecutor(max_workers=max_workers)
-            try:
-                # A thread starts with an EMPTY context: copied here, each seat runs inside the
-                # build's owner scope (and its LLM context) instead of belonging to nobody.
-                futs = [pool.submit(contextvars.copy_context().run, g) for g in guarded]
-                seat_of_future = {f: g.seat_label for f, g in zip(futs, guarded)}
-                _done, not_done = _futures_wait(futs, timeout=review_deadline + 60)
-                if not_done:
-                    with lock:
-                        review_errors.append(
-                            f"{len(not_done)} review check(s) exceeded {review_deadline}s — degraded")
-                    # Future.cancel() returns False for an ALREADY-RUNNING future — verified. So
-                    # this loop logged "degraded" while the hung check kept running, the job kept
-                    # renewing its lease, and the run stalled for over two hours before a reclaim.
-                    # A review seat is a `claude -p` SUBPROCESS: to actually stop it we must kill
-                    # the process, not cancel the future.
-                    from . import owned_process as _op
-                    owned_killed = 0
-                    for f in not_done:
-                        f.cancel()
-                        owned_killed += _op.terminate_owner(
-                            f"{run_id}:{seat_of_future.get(f)}", reason="deadline")["ended"]
-                    killed = owned_killed + _kill_stray_review_processes(root, review_root)
-                    with lock:
-                        review_errors.append(
-                            f"terminated {killed} stuck review process(es) past the deadline"
-                            if killed else
-                            "no stuck review process found to terminate (already exited)")
-            finally:
-                pool.shutdown(wait=False)
+            _seat_run = _run_seats(
+                guarded, max_workers=max_workers, seat_deadline_s=review_deadline,
+                owner_id=lambda label: f"{run_id}:{label}",
+                kill_strays=lambda: _kill_stray_review_processes(root, review_root))
+            review_errors.extend(_seat_run.errors.values())
+            if _seat_run.timed_out:
+                review_errors.append(
+                    f"{len(_seat_run.timed_out)} review check(s) exceeded {review_deadline}s "
+                    f"({', '.join(_seat_run.timed_out)}) — degraded")
+                review_errors.append(
+                    f"terminated {_seat_run.killed} stuck review process(es) past the deadline"
+                    if _seat_run.killed else
+                    "no stuck review process found to terminate (already exited)")
             if review_errors:
                 with _transaction(engine) as c:
                     emit_event(c, project_id, "code_task.review_degraded", "boss",
@@ -6033,10 +6259,15 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             else:
                 with _transaction(engine) as c:
                     _phase(c, "check_tests")
+                # ONLY FILES THE CRITERIA COVER, NEVER A CONNECTOR'S (mutation_probe.targets).
+                _mu_targets = mutation_probe.targets(
+                    impl_files, criteria, connector_files=_connector_files(engine, run),
+                    read=lambda p: (root / p).read_text(errors="ignore")
+                    if (root / p).exists() else None)
                 if use_microvm:
-                    if impl_files:
+                    if _mu_targets:
                         res5 = _guest_stage("check_tests", "check_tests",
-                                            _mutate_prompt(impl_files), test_cmds=list(verify_commands),
+                                            _mutate_prompt(_mu_targets), test_cmds=list(verify_commands),
                                             stage_title=f"Mutation probe — {title}")
                         r5 = {"cost_usd_micros": res5.cost_usd_micros,
                               "summary": res5.summary, "model": stage_routes["check_tests"]["model"]}
@@ -6047,13 +6278,18 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 else:
                     # serial: it edits the workdir, then restores it so the PR diff is
                     # unchanged. snapshot impl, plant one bug, restore after.
+                    # Every implementation file is snapshotted (and restored); only the
+                    # targets are offered to the mutator.
                     orig = {p: (root / p).read_text(errors="ignore")
                             for p in impl_files if (root / p).exists()}
-                    if orig:
+                    if orig and _mu_targets:
                         set_llm_context(stage="check_tests")
                         a, m = _route("check_tests")
-                        r5 = a.run_role(_mutate_prompt(list(orig.keys())), root, model=m)
+                        r5 = a.run_role(_mutate_prompt(_mu_targets), root, model=m)
                         cost += int(r5.get("cost_usd_micros") or 0)
+                        _mutant = mutation_probe.capture(
+                            orig, {p: (root / p).read_text(errors="ignore")
+                                   for p in orig if (root / p).exists()})
                         mut = _run_verify(record=False)
                         mutation_caught = not bool(mut.ok)
                         for p, content in orig.items():
@@ -6353,7 +6589,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     # skips a seat — i.e. on every lean run.
                     skipped_seats[_seat] = (
                         f"not convened: profile '{profile.get('name')}' does not include this seat")
-            if mutation_caught is not None:
+            if mutation_caught is not None and not _strength_advisory:
                 gates["tests_strong_enough"] = mutation_caught
             if regressions_ok is not None:
                 gates["nothing_broke"] = regressions_ok
@@ -6417,6 +6653,11 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # applied to the qa/impl/solo prompts; routing recorded in finalize_ctx).
             "iac_task": iac_task,
             "mutation_caught": mutation_caught,
+            # Pass 1: the probe's verdict is information; the More tests pass owns strength.
+            "tests_strength": ({"advisory": True, "mutation_caught": mutation_caught,
+                                "why": "pass 1 tests cover the critical paths only (no P2); "
+                                       "the More tests pass owns test strength"}
+                               if _strength_advisory and mutation_caught is not None else None),
             "regressions_ok": regressions_ok,
             # Sub-threshold review findings ship WITH the change and become their own task —
             # recorded here so the receipt shows what was knowingly deferred, not hidden.
@@ -6543,8 +6784,21 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # the round for every seat on crun_2d097414 ("Round 1 of 1"). With no warm session
             # (a streamed implement), the round starts a fresh one with the same findings.
             _convergeable = _CONVERGEABLE
+
+            def _tpl_evidence() -> dict:
+                return dict((_template_record or {}).get("evidence") or {})
+
+            def _coder_owned_secrets() -> bool:
+                # Every remaining secret finding is in a file the coder wrote (QA's go back to
+                # QA first, fixture_secret_repair): the implementer's warm session removes it.
+                _fs = (_tpl_evidence().get("secret_scan") or {}).get("findings") or []
+                return bool(_fs) and not any(
+                    _qa_authors_tests and _is_test_path(str(f.get("path") or "")) for f in _fs)
+
             inrun_max = warm_fix_rounds(failing, configured=inrun_max,
-                                        repair_attempts=repair_attempts, use_microvm=use_microvm)
+                                        repair_attempts=repair_attempts, use_microvm=use_microvm,
+                                        template_evidence=_tpl_evidence(),
+                                        coder_owned_secrets=_coder_owned_secrets())
             _fix_rounds_run = 0
             if inrun_max:
               try:  # a convergence failure must DEGRADE to the legacy paths, never kill the run
@@ -6563,41 +6817,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                             finding_bits.append(verification_target.install_repair_evidence(
                                 _install_fail[0], (_tr.stdout or "") + (_tr.stderr or "")))
                         elif not _tr.ok:
-                            with _transaction(engine) as c:
-                                _phase(c, "test_arbitration")
-                            set_llm_context(routes=_route_ids(), db_engine=engine, project_id=project_id,
-                                            run_id=run_id, stage="review_code")
-                            a_arb, m_arb = _route("review_code")
-                            r_arb = a_arb.run_role(
-                                _test_arbiter_prompt(
-                                    title, criteria, instructions=instructions,
-                                    test_output=_tr.stdout,
-                                    change=_render_change_for_review(
-                                        {fc.path: fc.content for fc in sandbox.diff()})),
-                                review_root, read_only=True, model=m_arb)
-                            cost += int(r_arb.get("cost_usd_micros") or 0)
-                            ruling, target = _parse_arbiter(r_arb.get("summary", ""))
-                            test_arbitrations.append({
-                                "round": round_i, "ruling": ruling, "target": target,
-                                "rationale": (r_arb.get("summary") or "")[:1200]})
-                            with _transaction(engine) as c:
-                                emit_event(c, project_id, "code_task.test_arbitration", "boss",
-                                           "code_task_run", run_id,
-                                           {"round": round_i, "ruling": ruling, "target": target})
-                            if ruling == "test_wrong":
-                                # ONLY the test-author lane may touch the oracle — never the
-                                # implementer's session, so `coder_did_not_edit_tests` keeps meaning.
-                                with _transaction(engine) as c:
-                                    _phase(c, "write_tests")
-                                set_llm_context(routes=_route_ids(), db_engine=engine, project_id=project_id,
-                                                run_id=run_id, stage="write_tests")
-                                a_ta, m_ta = _route("write_tests")
-                                r_ta = a_ta.run_role(
-                                    _test_amend_prompt(criteria, target,
-                                                       r_arb.get("summary", "")),
-                                    root, model=m_ta)
-                                cost += int(r_ta.get("cost_usd_micros") or 0)
-                            else:
+                            # A test_wrong ruling amends only the oracle (_arbitrate_tests).
+                            if _arbitrate_tests(_tr.stdout, round_i) != "test_wrong":
                                 finding_bits.append(
                                     "FAILING TESTS (the arbiter confirmed these tests are "
                                     "CORRECT — fix the implementation, do NOT touch the "
@@ -6633,6 +6854,15 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                             + _app_serves_sentence(app_serves_record)[:2600]
                             + "\nFix the app (or its boss.preview.command) so that command "
                             "serves HTTP on $PORT.")
+                    if "no_committed_secrets" in failing and _coder_owned_secrets():
+                        # Path, line and rule only: the scan's report never repeats the value.
+                        _sf = (_tpl_evidence().get("secret_scan") or {}).get("findings") or []
+                        finding_bits.append(
+                            "COMMITTED SECRET LITERALS (the secret scan; remove each one — read "
+                            "the value from the environment (process.env / os.environ) and put "
+                            "a placeholder such as ${NAME} or <your value> in examples and docs):\n"
+                            + "\n".join(f"- {f.get('path')}:{f.get('line')} ({f.get('rule')})"
+                                        for f in _sf[:30]))
                     with _transaction(engine) as c:
                         emit_event(c, project_id, "code_task.inrun_convergence_round", "boss",
                                    "code_task_run", run_id,
@@ -6714,12 +6944,27 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                             {fc.path: fc.content for fc in sandbox.diff()})
                         gates["app_serves"] = bool(app_serves_record.get("ok"))
                         evidence["app_serves"] = app_serves_record
+                    if _template_record and set(failing) & _TEMPLATE_GATE_SET:
+                        # THE TEMPLATE GATES ARE RE-JUDGED on the code as it now stands, exactly
+                        # as strict: a consequence failure clears only if its cause did.
+                        _tpl_changed = {fc.path: fc.content for fc in sandbox.diff()}
+                        _template_record = _template_gates(
+                            engine, run, sandbox, root=root,
+                            cwd=(root / last_verify_cwd) if last_verify_cwd and not Path(str(last_verify_cwd)).is_absolute()
+                            else verification_target.resolve_verify_cwd(root, app_id=_app_id, changed=list(_tpl_changed)),
+                            changed_files=_tpl_changed, tests_passed=bool(tests_passed),
+                            use_microvm=use_microvm, stack_plan=_last_stack_plan[0],
+                            serve=app_serves_record) or _template_record
+                        gates.update(_template_record["gates"])
+                        _tpl_gates = dict(gates)
                     if not tests_passed:
                         # Still red is no longer a dead end: re-arbitrate next round (the fix may
                         # be partial, or an amended test still over-specified). Only exhausting
                         # the rounds drops through to the legacy repair/block paths.
                         failing = [k for k, v in gates.items() if not v]
-                        if round_i >= inrun_max or (set(failing) - _convergeable):
+                        if round_i >= inrun_max or unconvergeable_failing(
+                                failing, template_evidence=_tpl_evidence(),
+                                coder_owned_secrets=_coder_owned_secrets()):
                             break
                         continue
                     _review_change = _review_change_now()
@@ -6778,17 +7023,36 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     if _wanted:
                         with _transaction(engine) as c:
                             _phase(c, _wanted[0][0] if len(_wanted) == 1 else "review_panel")
-                    _reseat_pool = ThreadPoolExecutor(max_workers=max(1, len(_wanted)))
-                    try:
-                        # Each thread runs in a copy of this context: the owner scope (Stop ends
-                        # it), the template env and the build scope travel with it.
-                        _reseat = {stage_key: _reseat_pool.submit(contextvars.copy_context().run, fn)
-                                   for stage_key, fn in _wanted}
-                        _futures_wait(list(_reseat.values()))
-                    finally:
-                        _reseat_pool.shutdown(wait=False)
+                    # THE SAME DEADLINE AND OWNED-PROCESS KILL AS THE FIRST PANEL
+                    # (review_seats.run_seats). A re-review used to wait with no timeout at all.
+                    # A seat that did not finish (deadline or error) counts as HOLLOW: recorded
+                    # as not having reviewed, never as a pass.
+                    _rs_deadline = int(getattr(settings, "code_agent_review_timeout_seconds", 420)
+                                       or 420)
+                    _rs_run = _run_seats(
+                        list(_wanted), max_workers=max(1, len(_wanted)),
+                        seat_deadline_s=_rs_deadline,
+                        owner_id=lambda label: f"{run_id}:reseat{round_i}:{label}",
+                        kill_strays=lambda: _kill_stray_review_processes(root, review_root))
+                    _reseat = {}
+                    for stage_key, _fn in _wanted:
+                        if _rs_run.finished(stage_key) and stage_key not in _rs_run.errors:
+                            _reseat[stage_key] = _rs_run.results[stage_key]
+                        else:
+                            _why = (f"the re-review did not finish within {_rs_deadline}s"
+                                    if stage_key in _rs_run.timed_out
+                                    else _rs_run.errors.get(stage_key) or "the re-review failed")
+                            _reseat[stage_key] = ({"summary": "", "cost_usd_micros": 0}, _why)
+                    if _rs_run.timed_out or _rs_run.errors:
+                        with _transaction(engine) as c:
+                            emit_event(c, project_id, "code_task.review_degraded", "boss",
+                                       "code_task_run", run_id,
+                                       {"round": round_i, "deadline_s": _rs_deadline,
+                                        "timed_out": list(_rs_run.timed_out),
+                                        "errors": list(_rs_run.errors.values())[:8],
+                                        "killed": _rs_run.killed})
                     if "code_review_passed" in failing:
-                        rr, _hollow = _reseat["review_code"].result()
+                        rr, _hollow = _reseat["review_code"]
                         cost += int(rr.get("cost_usd_micros") or 0)
                         rr = _with_ci_static(rr, accumulated if use_microvm else sandbox.diff())
                         if _hollow:
@@ -6817,7 +7081,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                             "hollow": _hollow}})
                         gates["code_review_passed"] = _rev_pass
                     if "consistent" in failing:
-                        rc2, _hollow = _reseat["consistency_check"].result()
+                        rc2, _hollow = _reseat["consistency_check"]
                         cost += int(rc2.get("cost_usd_micros") or 0)
                         if _hollow:
                             _hollow_seats["consistency_check"] = _hollow
@@ -6828,7 +7092,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         r6 = rc2
                         gates["consistent"] = cons_verdict not in ("drift", "hollow")
                     if "security_clean" in failing:
-                        rs2, _hollow = _reseat["security_check"].result()
+                        rs2, _hollow = _reseat["security_check"]
                         cost += int(rs2.get("cost_usd_micros") or 0)
                         if _hollow:
                             _hollow_seats["security_check"] = _hollow
@@ -6852,14 +7116,29 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         _orig = {p: (root / p).read_text(errors="ignore")
                                  for p in impl_files if (root / p).exists()}
                         _caught = None
+                        # THE SAME MUTANT the suite was strengthened against, planted again
+                        # without a model call; a new one only when the code moved under it.
+                        _replant = ({p: mutation_probe.reapply(_orig[p], b)
+                                     for p, b in _mutant.items() if p in _orig}
+                                    if _mutant and set(_mutant) <= set(_orig) else {})
+                        _same_mutant = bool(_replant) and all(_replant.values())
                         if _orig:
                             set_llm_context(routes=_route_ids(), db_engine=engine,
                                             project_id=project_id, run_id=run_id,
                                             stage="check_tests")
                             a_mu, m_mu = _route("check_tests")
                             try:
-                                r5 = a_mu.run_role(_mutate_prompt(list(_orig)), root, model=m_mu)
-                                cost += int(r5.get("cost_usd_micros") or 0)
+                                if _same_mutant:
+                                    for _mp, _mc in _replant.items():
+                                        _ws_write(root / _mp, _mc)
+                                else:
+                                    r5 = a_mu.run_role(_mutate_prompt(
+                                        mutation_probe.targets(
+                                            list(_orig), criteria,
+                                            connector_files=_connector_files(engine, run),
+                                            read=_orig.get) or list(_orig)),
+                                        root, model=m_mu)
+                                    cost += int(r5.get("cost_usd_micros") or 0)
                                 _caught = not bool(_run_verify(record=False).ok)
                             finally:
                                 for _mp, _mc in _orig.items():
@@ -6872,6 +7151,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                             "check_tests": {"verdict": ("caught" if _caught else
                                                         "survived" if _caught is False
                                                         else "not_run"),
+                                            "same_mutant": _same_mutant,
                                             "summary": (r5 or {}).get("summary", ""),
                                             "hollow": None}})
                     failing = [k for k, v in gates.items() if not v]

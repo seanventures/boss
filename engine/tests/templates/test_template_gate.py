@@ -153,6 +153,34 @@ def test_placeholders_and_plain_code_are_not_findings(line):
     assert scan_text("f", line) == []
 
 
+# THE FOUR HELPDESK FALSE POSITIVES (pre-mortem finding 4): ordinary app files a build writes.
+@pytest.mark.parametrize("path,line", [
+    (".env.example", "DATABASE_URL=postgres://helpdesk:helpdesk@localhost:5432/helpdesk"),
+    ("docker-compose.yml", "      DATABASE_URL: postgres://postgres:postgres@db:5432/postgres"),
+    ("prisma/seed.ts", '  { email: "agent@helpdesk.local", password: "Agent#Demo2024" },'),
+    ("README.md", 'Sign in as agent@helpdesk.local with `password: "Agent#Demo2024"`.'),
+])
+def test_development_defaults_in_ordinary_app_files_are_not_findings(path, line):
+    assert scan_text(path, line) == []
+
+
+@pytest.mark.parametrize("path,line,rule", [
+    # A real host with a real-looking password still fires, in code and in an example.
+    ("src/db.ts", 'const u = "postgres://app:Xk93hfp2Lq@prod-db.company.com/app"',
+     "url_with_password"),
+    (".env.example", "DATABASE_URL=postgres://app:Xk93hfp2Lq@prod-db.company.com/app",
+     "url_with_password"),
+    # Credential FORMATS fire everywhere, examples and docs included.
+    (".env.example", "GITHUB_TOKEN=ghp_" + "a" * 20 + "B" * 16, "github_token"),
+    ("README.md", "STRIPE=sk_live_" + "4eC39HqLyjWDarjtT1zdp7dc", "stripe_key"),
+    ("docker-compose.yml", "AWS_ACCESS_KEY_ID: AKIAIOSFODNN7REALKEY", "aws_access_key_id"),
+    # A plain literal in app code that does not say it is a demo value is still a finding.
+    ("src/config.ts", 'password: "correct-horse-battery"', "assigned_secret"),
+])
+def test_real_credentials_still_fire_in_the_same_files(path, line, rule):
+    assert rule in {f.rule for f in scan_text(path, line)}
+
+
 # ---- the real hello tests through the real gate (no fixtures for the report) ---------------------
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
