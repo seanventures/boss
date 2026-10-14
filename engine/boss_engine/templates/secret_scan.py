@@ -250,3 +250,65 @@ def scan_files(files: Mapping[str, bytes | str], *, declared: Iterable[tuple[str
             text = content
         out.extend(scan_text(path, text, declared=declared, values=values))
     return out
+
+
+# ---- keeping a blocked build's work without its secret ----------------------------------------
+
+#: What a redacted value becomes. It reads as a placeholder (`_PLACEHOLDER`: "redacted"), so the
+#: redacted line never trips the scan again, and a quoted literal stays a quoted literal.
+REDACTED = "REDACTED_BY_BOSS"
+
+#: The rules whose match is a value on ONE line that can be replaced in place. A private key spans
+#: lines (only its header matches), and a bound or declared value is not re-derivable here: a file
+#: with one of those findings is dropped whole, never kept.
+_REDACTABLE = frozenset(rule for rule, _ in COMMON_RULES) - {"private_key"}
+
+
+def _redact_line(line: str) -> str:
+    """Every common-rule match on the line, its value replaced by REDACTED (right to left, so the
+    spans stay valid). A rule with a capture group replaces only the value it captured."""
+    spans: set[tuple[int, int]] = set()
+    for _rule, rx in COMMON_RULES:
+        for m in rx.finditer(line):
+            spans.add(m.span(m.lastindex or 0))
+    for start, end in sorted(spans, reverse=True):
+        line = line[:start] + REDACTED + line[end:]
+    return line
+
+
+def without_secrets(files: Mapping[str, str], findings: Iterable[Mapping]) -> tuple[dict, list, list]:
+    """A blocked build's tree with no committed secret in it: (kept, redacted_paths, dropped_paths).
+
+    THE WORK IS KEPT, THE SECRET IS NOT. A build the secret scan blocked used to keep nothing at
+    all (crun_ced396a4: 26 minutes and $11 of a working HelpDesk app, gone for one literal at
+    auth/demo.mjs:58), so its Retry "repaired" an empty tree. Now each flagged line has its value
+    replaced in place (REDACTED), the file is re-scanned, and a file still flagged — or flagged by
+    a rule that cannot be redacted on its line — is dropped whole. `findings` are the scan's own
+    (path, line, rule); no value is read from them or returned."""
+    flagged: dict[str, dict[int, set[str]]] = {}
+    for f in findings or ():
+        path, line, rule = str(f.get("path") or ""), f.get("line"), str(f.get("rule") or "")
+        if path and isinstance(line, int):
+            flagged.setdefault(path, {}).setdefault(line, set()).add(rule)
+    kept: dict[str, str] = {}
+    redacted: list[str] = []
+    dropped: list[str] = []
+    for path, text in files.items():
+        hits = flagged.get(path)
+        if not hits:
+            kept[path] = text
+            continue
+        if any(rule not in _REDACTABLE for rules in hits.values() for rule in rules):
+            dropped.append(path)
+            continue
+        lines = text.splitlines(keepends=True)
+        for n in hits:
+            if 1 <= n <= len(lines):
+                lines[n - 1] = _redact_line(lines[n - 1])
+        clean = "".join(lines)
+        if scan_text(path, clean):
+            dropped.append(path)
+            continue
+        kept[path] = clean
+        redacted.append(path)
+    return kept, redacted, dropped

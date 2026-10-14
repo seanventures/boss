@@ -38,7 +38,10 @@ def _failed_code_task(c) -> str:
                              "test_commands": [], "owner": "o", "repo": "r",
                              "base_branch": "main"}),
          "state": json.dumps({"last_verify_output": verify}),
-         "fc": json.dumps({"attempt": 1, "root_run_id": run_id})})
+         # Its work was pushed to its branch: a retry repairs only work a build KEPT
+         # (code_task_service.lineage_kept_work; engine test_a_retry_builds_onto_the_kept_work).
+         "fc": json.dumps({"attempt": 1, "root_run_id": run_id,
+                           "work_branch": f"boss/code/{run_id}"})})
     c.execute(text(
         "INSERT INTO quality_gates (id, project_id, code_task_run_id, status, gates_failed) "
         "VALUES (:id, :p, :r, 'fail', CAST(:gf AS JSONB))"),

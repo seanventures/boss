@@ -82,7 +82,9 @@ def test_saving_is_local_only_and_keeps_no_secret():
     assert not calls & {"upsert_file", "ensure_branch", "propose_pull_request",
                         "create_pull_request"}, "saving the workspace must never push"
     assert "'saved_workspace'" in save
-    assert '.get("no_committed_secrets") is False' in save
+    # A failed secret gate keeps the tree with each flagged value redacted, never the secret
+    # (and never nothing: test_a_retry_builds_onto_the_kept_work).
+    assert '.get("no_committed_secrets") is False' in save and "without_secrets(" in save
     assert "if not _impl_ran[0]" in save, "nothing is saved before implement ran"
 
 

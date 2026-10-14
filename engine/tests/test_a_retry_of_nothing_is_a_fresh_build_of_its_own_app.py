@@ -118,9 +118,22 @@ def test_a_retry_of_a_build_that_died_at_the_clone_is_a_fresh_build(env, staffed
     assert not fctx.get("inherited_design") and not fctx.get("seed_workspace_from")
 
 
-def test_a_retry_of_a_build_that_did_work_is_still_a_repair(env, staffed):  # noqa: F811
+def test_a_retry_of_a_build_that_kept_work_is_still_a_repair(env, staffed):  # noqa: F811
+    """KEPT work, not reached milestones: finished stages alone said "did work" here, and a
+    template build that checkpoints nothing (crun_ced396a4) was then repaired on an empty tree
+    (test_a_retry_builds_onto_the_kept_work). The work is on the branch (a recorded push)."""
     _, crun, _ = _workflow_build(env, error="tests failed")
-    _with_brief(env, crun, completed_stages=["design", "write_tests", "implement"])
+    _with_brief(env, crun, completed_stages=["design", "write_tests", "implement"],
+                work_branch=f"boss/code/{crun}")
     spec, fctx = _retry(env, crun, note="fix the login redirect")
     assert not fctx.get("fresh_build")
     assert "ALREADY PRESENT" in spec["instructions"]
+
+
+def test_a_retry_of_a_build_that_reached_stages_but_kept_no_file_is_a_fresh_build(
+        env, staffed):  # noqa: F811
+    _, crun, _ = _workflow_build(env, error="tests failed")
+    _with_brief(env, crun, completed_stages=["design", "write_tests", "implement"])
+    spec, fctx = _retry(env, crun, note="fix the login redirect")
+    assert fctx.get("fresh_build") is True
+    assert "ALREADY PRESENT" not in spec["instructions"]

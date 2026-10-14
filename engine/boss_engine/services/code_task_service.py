@@ -1546,26 +1546,46 @@ def previous_failure_block(prev: dict, gates_failed: Optional[list] = None) -> s
     return "\n".join(parts)
 
 
-def _lineage_produced_nothing(engine, prev: dict, run_id: str) -> bool:
-    """True when no attempt of this lineage (back to its root, or to a completed attempt) left any
-    work behind: no completed stage (so nothing checkpointed to the branch), no approved design,
-    no saved workspace, no PR. Then a retry has nothing to repair."""
+def attempt_kept_work(run: Optional[dict]) -> bool:
+    """Whether this attempt left CODE a retry can build onto: files saved on the run (its saved
+    workspace, a gate-blocked diff, a held delivery), a push recorded to the lineage branch
+    (`work_branch`), a pull request, or a completed build.
+
+    WORK IS FILES, NOT MILESTONES. A completed stage or an approved design used to count, and a
+    template build checkpoints nothing (its pushes wait for its gates): crun_ced396a4 had a
+    design and four completed stages, kept no file, and its Retry (crun_3933d79d) was told "the
+    previous attempt's code is ALREADY PRESENT" on a tree holding none of it."""
+    from .governed_code_task_service import saved_workspace_files
+
+    if run is None:
+        return False
+    fc = run.get("finalize_ctx") or {}
+    return bool(run.get("status") == "completed" or run.get("pull_request_url")
+                or fc.get("work_branch") or saved_workspace_files(run)
+                # A finished build whose push failed holds its files for redelivery.
+                or fc.get("pending_delivery")
+                # Before stage commits were recorded: a micro-VM build commits each stage to the
+                # branch, unless a template held its pushes.
+                or (fc.get("execution_substrate") == "microvm" and fc.get("completed_stages")
+                    and not fc.get("template_hold")))
+
+
+def lineage_kept_work(engine, prev: Optional[dict], run_id: str) -> bool:
+    """Whether any attempt of this lineage (back to its root, or to a completed attempt) kept work
+    a retry can build onto (`attempt_kept_work`). False: a retry has nothing to repair, and is a
+    full build of the same brief."""
     node, node_id = prev, run_id
     for _ in range(12):
         if node is None:
-            return True
-        fc = node.get("finalize_ctx") or {}
-        st = node.get("state") or {}
-        if (node.get("status") == "completed" or node.get("pull_request_url")
-                or fc.get("completed_stages") or fc.get("saved_workspace") or fc.get("pending_diff")
-                or (isinstance(st.get("design"), dict) and st["design"])):
             return False
-        node_id = str(fc.get("parent_run_id") or "")
-        if not node_id:
+        if attempt_kept_work(node):
             return True
+        node_id = str((node.get("finalize_ctx") or {}).get("parent_run_id") or "")
+        if not node_id:
+            return False
         with _transaction(engine) as c:
             node = load_code_task_run(c, node_id)
-    return False
+    return True
 
 
 #: How many times BOSS itself retries a held delivery before it is a person's to retry.
@@ -1850,14 +1870,17 @@ def retry_code_task(
     # same app folder, the same criteria — not a repair: telling it "the previous attempt's code
     # is ALREADY PRESENT" and holding it to "the app's existing tests" sent crun_37f4ccef to treat
     # other apps' suites at the repo root as its own.
+    # NEVER REPAIR AN EMPTY TREE: a lineage that kept no FILES (lineage_kept_work) is rebuilt in
+    # full, whatever stages or design it reached — nothing of its code exists to repair.
     fresh = (prev.get("status") != "completed" and not seed_files and not pr_url
-             and _lineage_produced_nothing(engine, prev, run_id))
+             and not lineage_kept_work(engine, prev, run_id))
     if fresh:
         why = str(prev.get("error") or "it stopped before producing anything").strip()
         augmented = (f"{base_instr}\n\n=== ITERATION FEEDBACK (attempt {attempt}) ===\n"
-                     "This is a FRESH build of the brief above: the previous attempt stopped "
-                     f"before producing any work ({why[:300]}), so nothing of it exists to "
-                     "continue from. Build it as the brief says, in the place the brief names."
+                     "This is a FRESH build of the brief above: the previous attempt kept no "
+                     f"work to continue from (its outcome: {why[:300]}), so none of its code "
+                     "exists in your tree. Build it as the brief says, in the place the brief "
+                     "names, and avoid what stopped the previous attempt."
                      + (f"\n\n## Note from the operator\n{fix_note}" if fix_note else ""))
     history = list(fctx_prev.get("feedback_history") or [])
     history.append({
@@ -1909,7 +1932,7 @@ def retry_code_task(
                           # behind; carrying those forward would re-litigate decisions the
                           # last attempt already made.
                           **({"review_comments": _carry_open_comments(fctx_prev)}
-                             if _carry_open_comments(fctx_prev) else {}),
+                             if _carry_open_comments(fctx_prev) and not fresh else {}),
                           # Carried across every attempt: a retry is the same outcome, and a
                           # console that loses that shows one app as several.
                           **({"origin": fctx_prev["origin"]} if fctx_prev.get("origin") else {}),
@@ -1933,8 +1956,10 @@ def retry_code_task(
                           # for a task that has not changed. Guarded on a real plan EXISTING,
                           # not on `plan_ok` — that flag is a "REVISE" substring check and is
                           # false even on runs that shipped clean, so it would disable resume.
+                          # A FRESH build carries none of a repair's shortcuts (the design, the
+                          # failed gates, the finished stages): it builds the brief in full.
                           **({"inherited_design": state["design"]}
-                             if isinstance(state.get("design"), dict)
+                             if not fresh and isinstance(state.get("design"), dict)
                              and (state["design"].get("plan") or "").strip() else {}),
                           # RESUME FROM WHERE IT FAILED. Which gates failed says which stages
                           # are actually stale: a run rejected for `code_review_passed` has a
@@ -1943,7 +1968,7 @@ def retry_code_task(
                           # at the same tests. Carried as data so the child can skip stages
                           # instead of replaying the pipeline from the top.
                           **({"prior_failing_gates": _prior_failing_gates(fctx_prev, state)}
-                             if _prior_failing_gates(fctx_prev, state) else {}),
+                             if _prior_failing_gates(fctx_prev, state) and not fresh else {}),
                           # THE ROUTER'S EVIDENCE FOLLOWS THE LINEAGE (model_router.escalation):
                           # tests that failed and gates that blocked in the parent count toward
                           # the child's escalation, so a repair round can move up a tier.
@@ -1961,7 +1986,7 @@ def retry_code_task(
                           # output is what was judged wanting.
                           **({"resume_completed_stages":
                               list((fctx_prev.get("completed_stages") or []))}
-                             if (fctx_prev.get("completed_stages")
+                             if (fctx_prev.get("completed_stages") and not fresh
                                  and _is_system_failure(prev.get("error"))) else {})},
             jobs=jobs, profile=profile or spec.get("profile"), risk_tier=spec.get("risk_tier"),
             model_config=spec.get("model_config"), open_pr=spec.get("open_pr"),
@@ -1991,10 +2016,14 @@ def retry_code_task(
             "created": bool(started.get("created", True)),
             "parent_run_id": run_id, "root_run_id": root,
             "continues_from_workspace": seed_files,
+            **({"fresh_build": True} if fresh else {}),
             "resume": (f"repairs the previous attempt's saved workspace ({seed_files} files): "
                        "no re-planning, no re-written tests"
                        if seed_files else
-                       "full pipeline: the previous attempt saved no workspace to continue from")}
+                       "a fresh, full build: no attempt of this build kept work to build onto"
+                       if fresh else
+                       "full pipeline onto the build's branch: the previous attempt saved no "
+                       "workspace, its work is on the branch")}
 
 
 def override_code_task(engine, settings: Settings, jobs, run_id: str, *,
