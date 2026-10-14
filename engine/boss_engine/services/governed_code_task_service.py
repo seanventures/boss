@@ -1408,8 +1408,13 @@ def _render_ctx_block(title, instructions, criteria, *, service: bool = False) -
     from .platform_standards import reference_material
 
     references = reference_material()
+    # HOW BOSS WORKS, for a build stage (agent_baseline.BUILD_PRIMER): static, and first after
+    # the header, so it is the same bytes for every task's stages as well as one task's.
+    from .agent_baseline import BUILD_PRIMER
+
     return (
         "=== TASK CONTEXT (shared verbatim across all pipeline stages) ===\n"
+        f"{BUILD_PRIMER}"
         f"TASK: {title}\n\n{instructions}\n\nACCEPTANCE CRITERIA:\n{crit}\n"
         f"{standards}{references}\n"
         "=== END TASK CONTEXT ===\n\n"

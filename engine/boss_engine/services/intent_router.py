@@ -1410,6 +1410,12 @@ def _agent_voice(role: str, connection: Any, project_id: Optional[str]) -> str:
     return "\n\n=== WHO YOU ARE ===\n" + voice
 
 
+def _baseline_primer() -> str:
+    from .agent_baseline import PRIMER
+
+    return PRIMER
+
+
 def _no_button_was_promised(reply: str, proposed: list) -> str:
     """Strip a promise of buttons when no button was actually produced.
 
@@ -2135,6 +2141,10 @@ class IntentRouter:
             "or the same offer again is not caution, it is a refusal wearing caution's clothes. "
             "If something genuinely blocks the action, name that ONE thing and what would "
             "unblock it — do not re-derive the design around it."
+            # HOW BOSS WORKS — the primer every agent gets (agent_baseline.PRIMER). Static, and
+            # before the first thing that varies (who is answering), so it stays in the cached
+            # prefix every chat turn shares.
+            + "\n\n" + _baseline_primer()
             + _role_identity(role, connection, project_id)
             # WHAT THIS PROJECT ALREADY KNOWS, AND WHERE THIS SESSION HAD GOT TO.
             #

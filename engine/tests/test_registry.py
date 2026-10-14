@@ -136,6 +136,7 @@ _EXPECTED_TOOLS: set[str] = {
     "inspect_self",
     "link_run_origin",
     "read_app_logs",
+    "query_project_data",
     "list_code_tasks",
     "list_decisions",
     "list_discovery",
@@ -213,10 +214,11 @@ def test_default_registry_shape():
     read = {s.name for s in reg.specs(kind="read")}
     write = {s.name for s in reg.specs(kind="write")}
     assert read | write == set(reg.names())
-    assert len(reg.names()) == 126, (
+    assert len(reg.names()) == 127, (
         f"tool set changed: unexpected={sorted(set(reg.names()) - _EXPECTED_TOOLS)}, "
         f"missing={sorted(_EXPECTED_TOOLS - set(reg.names()))}")
-    assert len(read) == 72  # + read_app_logs, + my_recent_work, + system_health, + 7 template/security reads
+    assert len(read) == 73  # + read_app_logs, + my_recent_work, + system_health, + 7 template/security reads,
+    #                        + query_project_data (the agent baseline's fenced row read)
     assert len(write) == 54  # + remove_app, + system_doctor_act, + run_security_scan (F4), + apply_template (F2),
     #                         + review_pull_request_again
     # the capabilities the user explicitly asked the agent to cover

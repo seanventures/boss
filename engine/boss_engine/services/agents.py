@@ -1137,7 +1137,14 @@ def create_agent(
         agent_identity.birth(connection, project_id, key, born_by=actor, born_from=origin,
                              sponsor=actor if agent_identity.is_person(actor) else None,
                              actor=actor)
-        _grant_skills(connection, project_id, key, skill_ids, actor)
+        # EVERY AGENT IS BORN KNOWING BOSS (agent_baseline.BASELINE_SKILLS): the baseline is
+        # granted with whatever the operator chose, not left for the next boot's sync.
+        from .agent_baseline import BASELINE_SKILLS
+
+        _grant_skills(connection, project_id, key,
+                      list(skill_ids) + [s for s in BASELINE_SKILLS if s not in skill_ids
+                                         and _baseline_available(connection, project_id, s)],
+                      actor)
         for server in servers:
             grant_mcp(connection, project_id, actor=actor, role_key=key,
                       mcp_server_id=server["id"], tools=server["tools"])
@@ -1145,6 +1152,17 @@ def create_agent(
                {"skills": skill_ids, "mcp_servers": [s["id"] for s in servers],
                 "reports_to": parent, "born_from": origin})
     return {**get_agent(connection, project_id, key), "warnings": warnings}
+
+
+def _baseline_available(connection: Connection, project_id: str, skill_id: str) -> bool:
+    """Whether this project has the baseline skill at all (a pack without the kit bundle does
+    not): a missing one is left for sync_role_skills to report, not raised at creation."""
+    from .skill_definitions import _skill_exists
+
+    try:
+        return _skill_exists(connection, project_id, skill_id) is not None
+    except Exception:  # noqa: BLE001 — creation must not fail on a catalogue read
+        return False
 
 
 def _team_value(team: Any) -> Optional[str]:

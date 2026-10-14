@@ -541,10 +541,14 @@ def _register_read_tools(reg: ToolRegistry) -> None:
             return {"ok": False, "error": f"{type(error).__name__}: {str(error)[:400]}",
                     **_schema_hint_for(ctx, sql)}
         capped = rows[:max_rows]
+        # REDACTED like every other read an agent or a person sees here: credential columns
+        # dropped, secret-shaped values scrubbed (agent_baseline.redact_for_agent).
+        from ..services.agent_baseline import redact_for_agent
+
         return {
             "row_count": len(capped),
             "truncated": len(rows) > max_rows,
-            "rows": [_json_safe(dict(r)) for r in capped],
+            "rows": redact_for_agent([_json_safe(dict(r)) for r in capped]),
         }
 
     # -----------------------------------------------------------------------
@@ -4010,6 +4014,76 @@ def _schema_hint_for(ctx, sql: str) -> dict[str, Any]:
     return hint
 
 
+#: The most rows query_project_data returns. A model reads them, so a page, not a dump.
+PROJECT_DATA_ROW_CAP = 50
+#: Tables query_project_data never reads, whatever the project: credential stores, identity
+#: secrets, sessions and keys. Matched as a word anywhere in the table name.
+_PROJECT_DATA_DENY = re.compile(
+    r"(secret|credential|token|session|password|passkey|webauthn|totp|recovery|signing|"
+    r"api_key|apikey|_keys?$|^identity_|oauth|vault|cookie|otp)", re.IGNORECASE)
+_IDENT = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
+
+
+def _query_project_data(ctx: Any, project_id: str, args: dict) -> dict:
+    """query_project_data: one table, this project's rows only, SELECT-only by construction.
+
+    WHY NOT query_db. Raw SQL has no tenant fence (a prompt-supplied WHERE is not one), so it is
+    refused to every project-scoped agent and in Community. An agent diagnosing a failure still
+    needs to read the data, so this builds the statement itself: the table and every column are
+    checked against information_schema and quoted, the project filter is not optional, the
+    values are bound parameters, the transaction is READ ONLY, rows are capped and the result
+    goes through the one redaction layer."""
+    from ..services.agent_baseline import redact_for_agent
+
+    table = str(args.get("table") or "").strip().lower()
+    if not _IDENT.match(table):
+        return {"ok": False, "error": "table must be a plain table name (describe_schema lists them)"}
+    if _PROJECT_DATA_DENY.search(table):
+        return {"ok": False, "error": f"{table} holds credentials or identity secrets and is "
+                "never readable here"}
+    limit = max(1, min(int(args.get("limit") or 20), PROJECT_DATA_ROW_CAP))
+    with ctx.begin() as c:
+        if c.dialect.name == "postgresql":
+            # FIRST statement of the transaction, or Postgres refuses it.
+            c.execute(_text("SET TRANSACTION READ ONLY"))
+        cols = [str(r[0]) for r in c.execute(_text(
+            "SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' "
+            "AND table_name = :t ORDER BY ordinal_position"), {"t": table}).all()]
+        if not cols:
+            return {"ok": False, "error": f"no table {table!r}; describe_schema lists them"}
+        if "project_id" not in cols:
+            return {"ok": False, "error": f"{table} has no project_id column, so it cannot be "
+                    "fenced to this project; use the dedicated read tools"}
+        wanted = [str(x).strip().lower() for x in (args.get("columns") or [])] or cols
+        unknown = [x for x in wanted if x not in cols]
+        where = args.get("where") if isinstance(args.get("where"), dict) else {}
+        unknown += [str(k) for k in where if str(k).lower() not in cols]
+        order = str(args.get("order_by") or ("created_at" if "created_at" in cols else "")).lower()
+        if order and order not in cols:
+            unknown.append(order)
+        if unknown:
+            return {"ok": False, "error": f"unknown column(s) {sorted(set(unknown))}",
+                    "columns": cols}
+        sql = (f'SELECT {", ".join(chr(34) + x + chr(34) for x in wanted)} FROM "{table}" '
+               "WHERE project_id = :__p")
+        params: dict = {"__p": project_id, "__l": limit}
+        for i, (key, value) in enumerate(where.items()):
+            if str(key).lower() == "project_id":
+                continue                          # the fence is not the caller's to move
+            if value is None:
+                sql += f' AND "{str(key).lower()}" IS NULL'
+                continue
+            sql += f' AND CAST("{str(key).lower()}" AS TEXT) = :__w{i}'
+            params[f"__w{i}"] = str(value)
+        if order:
+            sql += f' ORDER BY "{order}" DESC NULLS LAST'
+        sql += " LIMIT :__l"
+        _bound_statement(c)
+        rows = c.execute(_text(sql), params).mappings().all()
+    return {"table": table, "row_count": len(rows), "capped_at": limit,
+            "rows": redact_for_agent([_json_safe(dict(r)) for r in rows])}
+
+
 def _is_read_only(sql: str) -> tuple[bool, str]:
     if not sql:
         return False, "empty query"
@@ -6676,6 +6750,28 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
         return {"tables": [f"{r['table_name']} ({r['cols']} cols)" for r in rows],
                 "count": len(rows),
                 "hint": "call describe_schema with table=<name> for columns; use project-scoped read tools for data"}
+
+    @reg.tool(
+        "query_project_data",
+        "Read rows of ONE table for THIS project: read-only, fenced to this project's rows, "
+        "capped, and redacted (credential columns and secret-shaped values are removed). Name "
+        "the table (describe_schema lists them), optional equality filters on its columns, "
+        "the columns you want and a column to sort newest-first by. Use it when no dedicated "
+        "tool answers: 'which deployment target has no host', 'the last 5 events of type X'. "
+        "Not raw SQL; a table without a project_id column cannot be read here.",
+        _obj({"table": {"type": "string", "description": "a public table with a project_id column"},
+              "where": {"type": "object",
+                        "description": "optional {column: value} equality filters"},
+              "columns": {"type": "array", "items": {"type": "string"},
+                          "description": "optional; default all (credential columns removed)"},
+              "order_by": {"type": "string",
+                           "description": "optional column, newest first (default created_at "
+                                          "when the table has it)"},
+              "limit": {"type": "integer", "minimum": 1, "maximum": PROJECT_DATA_ROW_CAP,
+                        "default": 20}},
+             ["table"]), permission="system:read")
+    def query_project_data(ctx, *, project_id, actor, args):
+        return _query_project_data(ctx, project_id, args)
 
     @reg.tool(
         "inspect_host",
