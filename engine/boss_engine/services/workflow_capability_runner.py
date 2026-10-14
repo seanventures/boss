@@ -3263,7 +3263,9 @@ def _retried_build(
     — `code_task_service.retry_code_task`, the same operation as the code task's own Retry, so
     the new attempt keeps the branch and the design (code_task.design_resumed) and is told the
     previous findings, the gates that failed and the verify output's tail, with the note as the
-    operator's feedback. Otherwise None, and `inputs` carry the note into a fresh build.
+    operator's feedback. Otherwise None, and `inputs` carry the note into a fresh build — always
+    so when no attempt of the build kept work (code_task_service.lineage_kept_work): a resume
+    of nothing is the step's own build again, never a repair of an empty tree.
     """
     run_id = str(context.get("run_id") or "")
     step_id = str(step.get("id") or "")
@@ -3290,6 +3292,18 @@ def _retried_build(
     from . import code_task_service as cts
 
     prev = cts.load_code_task_run(connection, previous) if previous else None
+    if (prev is not None and str(prev.get("project_id")) == str(project_id)
+            and not cts.lineage_kept_work(ctx.engine, prev, previous)):
+        # NOTHING TO RESUME: no attempt of this build kept any work (crun_ced396a4 was blocked
+        # by the secret scan and kept no file; its resume, crun_3933d79d, "repaired" an empty
+        # tree). The step runs its OWN build again, from its original inputs, with the note as
+        # the operator's guidance: never a repair of an empty diff.
+        emit_event(connection, project_id, "workflow.build_restarted", "boss", "workflow_run",
+                   run_id, {"step_id": step_id, "from_code_task_run_id": previous,
+                            "with_note": bool(note),
+                            "why": "the previous attempt kept no work to build onto, so the "
+                                   "step's build runs in full from its original inputs"})
+        prev = None
     if prev is not None and str(prev.get("project_id")) == str(project_id) and (
             str(prev.get("status") or "") in _RESUMABLE_BUILD or note):
         if ran_as is None:
