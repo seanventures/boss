@@ -40,7 +40,7 @@ import tomllib
 from typing import Optional
 
 from . import owned_process
-from .harness_registry import RuntimeBinary
+from .harness_registry import FailurePattern, RuntimeBinary
 from .workspace_perms import tidies_workspace
 
 _log = logging.getLogger(__name__)
@@ -62,6 +62,25 @@ CLAUDE_CLI_RUNTIME = (
 CLAUDE_SANDBOX_RUNTIME = (
     RuntimeBinary("bwrap", "bubblewrap", "apt", "the Claude CLI's Linux sandbox"),
     RuntimeBinary("socat", "socat", "apt", "the Claude CLI's sandbox network proxy"),
+)
+#: How the Claude CLI says its sandbox did not start (harness_failures). It answers EVERY Bash
+#: call with this in place of the command's output, so the agent works blind until it gives up:
+#: crun_f103065e carried it on 19 of 206 turns over fifteen minutes of design, implement and
+#: repair. The missing binary itself ("… socat not installed") is read generically.
+CLAUDE_FAILURE_PATTERNS = (
+    FailurePattern("sandbox_unavailable",
+                   r"sandbox is required but failed to initiali[sz]e",
+                   "install what the Claude CLI's sandbox needs (bubblewrap and socat) on the "
+                   "BOSS host or image, then retry"),
+)
+#: How the Codex CLI says its Linux sandbox (Landlock + seccomp) could not be applied.
+CODEX_FAILURE_PATTERNS = (
+    FailurePattern("sandbox_unavailable",
+                   r"codex-linux-sandbox\b.{0,80}(?:not found|failed|error)"
+                   r"|landlock\w*.{0,60}(?:not supported|not enabled|unavailable|failed)"
+                   r"|sandbox\((?:landlockrestrict|seccompinstall|seccompbackend)\)",
+                   "run Codex on a kernel with Landlock and seccomp enabled (or give it a host "
+                   "that has them), then retry"),
 )
 
 #: Scope under which BOSS's own API stores a subscription credential. One constant so the
@@ -270,6 +289,9 @@ class CliHarnessSpec:
     #: What the CLI needs on PATH at runtime (harness_registry.RuntimeBinary), registered with
     #: the harness. A CLI the image ships says how ("npm"); one it does not says "operator".
     runtime: tuple = ()
+    #: How this CLI says it could not run (harness_registry.FailurePattern), registered with
+    #: the harness; harness_failures reads its output against them.
+    failure_patterns: tuple = ()
 
     def supports_read_only(self) -> bool:
         return bool(self.read_only_args)
@@ -340,6 +362,7 @@ BUILTIN_CLI_HARNESSES: dict[str, CliHarnessSpec] = {
         entitlement_source_id="anthropic_claude_code",
         entitlement_provider="anthropic",
         runtime=CLAUDE_CLI_RUNTIME,
+        failure_patterns=CLAUDE_FAILURE_PATTERNS,
     ),
     # VERIFIED AGAINST codex-cli 0.154.0, not taken from documentation. `codex exec` is the
     # non-interactive mode; `--sandbox` is a real flag with a real read-only value, which is
@@ -400,6 +423,7 @@ BUILTIN_CLI_HARNESSES: dict[str, CliHarnessSpec] = {
         entitlement_source_id="openai_codex_chatgpt",
         entitlement_provider="openai",
         runtime=(RuntimeBinary("codex", "@openai/codex", "npm", "the Codex CLI"), NODE_RUNTIME),
+        failure_patterns=CODEX_FAILURE_PATTERNS,
     ),
     "grok": CliHarnessSpec(
         name="grok",
@@ -1418,9 +1442,12 @@ class GenericCliCodeAgent:
     def run_role(self, prompt: str, cwd: Path, *, read_only: bool = False,
                  model: Optional[str] = None, resume_session_id: Optional[str] = None,
                  **_ignored) -> dict:
+        from . import harness_failures
         from .llm_telemetry import record_llm_call
         from .scheduling import low_priority
 
+        # A run whose engine already could not run starts no new session (harness_failures).
+        harness_failures.raise_if_tripped()
         if read_only and not self.spec.supports_read_only():
             # "The reviewer cannot edit" is an invariant of the governed pipeline. A CLI with
             # no read-only mode cannot hold it, so it is refused for the step rather than
@@ -1529,6 +1556,16 @@ class GenericCliCodeAgent:
             cost_usd_micros=0, latency_ms=ms, turns=1, ok=ok,
             error=None if ok else (proc.stderr or "")[:400],
         )
+        # THE CLI COULD NOT RUN, IN ITS OWN WORDS (harness_failures: its sandbox, a runtime
+        # binary; on a failed exit also its login, its account, a crash). Not the agent's work:
+        # the stage stops with the harness verdict instead of handing on what it wrote blind.
+        stream = f"{proc.stderr or ''}\n{proc.stdout or ''}"
+        verdict = harness_failures.classify(stream, engine=self.engine, where="stream")
+        if verdict is None and not ok:
+            verdict = harness_failures.classify(f"{summary}\n{proc.stderr or ''}",
+                                                engine=self.engine, where="engine")
+        if verdict is not None:
+            raise harness_failures.trip(verdict)
         if not ok:
             _log.warning("%s exited %s: %s", self.spec.name, proc.returncode,
                          (proc.stderr or "")[:300])

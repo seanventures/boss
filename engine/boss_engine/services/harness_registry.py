@@ -66,6 +66,37 @@ class RuntimeBinary:
                 "npm": f"npm install -g {self.package}"}.get(self.via, self.package)
 
 
+#: What kind of harness failure a pattern names (harness_failures.KINDS).
+FAILURE_KINDS = ("sandbox_unavailable", "missing_runtime", "auth_refused", "credit_refused",
+                 "cli_crashed")
+
+
+@dataclass(frozen=True)
+class FailurePattern:
+    """One way an engine says IT could not run — not that the agent's work failed.
+
+    A HelpDesk build on claude_agent_sdk wrote code blind for fifteen minutes: every command the
+    agent ran came back "Sandbox is required but failed to initialize: … socat not installed",
+    and nothing in BOSS read that as the engine being broken. An engine DECLARES the words its
+    harness uses for that (`register_harness(failure_patterns=…)`), and harness_failures.classify
+    reads every session's tool results and CLI output against them, beside the generic ones.
+
+    `pattern`: a case-insensitive regex. `in_tool_results`: whether it may be believed inside a
+    failed tool result (the harness answering in the command's place); False means only the
+    engine's own output — its stderr, its session error. `fix`: what the operator does, which
+    may name `{engine}`."""
+
+    kind: str
+    pattern: str
+    fix: str
+    in_tool_results: bool = True
+
+    def __post_init__(self) -> None:
+        if self.kind not in FAILURE_KINDS:
+            raise ValueError(f"failure pattern {self.pattern!r}: kind must be one of "
+                             f"{FAILURE_KINDS}")
+
+
 @dataclass(frozen=True)
 class HarnessSpec:
     name: str
@@ -82,6 +113,9 @@ class HarnessSpec:
     #: The executables the engine runs at runtime (RuntimeBinary): its CLI, and what that CLI's
     #: own sandbox needs. Enforced against the image by a test, checked on PATH by the pre-check.
     runtime: tuple[RuntimeBinary, ...] = ()
+    #: How this engine's harness says it could not run (FailurePattern), beyond the generic
+    #: words harness_failures knows for every engine.
+    failure_patterns: tuple[FailurePattern, ...] = ()
 
 
 _REGISTRY: dict[str, HarnessSpec] = {}
@@ -107,6 +141,7 @@ def register_harness(
     aliases: tuple[str, ...] = (),
     replace: bool = False,
     runtime: tuple[RuntimeBinary, ...] = (),
+    failure_patterns: tuple[FailurePattern, ...] = (),
 ) -> HarnessSpec:
     key = (name or "").strip().lower()
     if not key:
@@ -118,7 +153,8 @@ def register_harness(
         )
     spec = HarnessSpec(name=key, build=build, kind=kind, description=description,
                        requires=tuple(requires), verified=verified,
-                       aliases=tuple(a.lower() for a in aliases), runtime=tuple(runtime))
+                       aliases=tuple(a.lower() for a in aliases), runtime=tuple(runtime),
+                       failure_patterns=tuple(failure_patterns))
     _REGISTRY[key] = spec
     for alias in spec.aliases:
         _ALIASES[alias] = key
@@ -180,6 +216,14 @@ def runtime_requirements(name: Optional[str]) -> tuple[RuntimeBinary, ...]:
     """What engine `name` execs at runtime, as it declared. An unknown engine declares ()."""
     try:
         return get_harness(name).runtime
+    except UnknownHarness:
+        return ()
+
+
+def failure_patterns(name: Optional[str]) -> tuple[FailurePattern, ...]:
+    """The words engine `name` declared for "my harness could not run". Unknown engine: ()."""
+    try:
+        return get_harness(name).failure_patterns
     except UnknownHarness:
         return ()
 

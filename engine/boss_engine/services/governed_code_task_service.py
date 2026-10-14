@@ -1129,6 +1129,17 @@ def hold_delivery(connection, run_id: str, project_id: str, *, files: list[dict]
                     reason_code="delivery_failed"), "delivery_held": True}
 
 
+def _current_phase_name(engine, run_id: str) -> Optional[str]:
+    """The phase a run is in (the stage a harness failure stopped). Never raises."""
+    try:
+        with _transaction(engine) as c:
+            return c.execute(sql("SELECT phase FROM code_task_runs WHERE id=:id"),
+                             {"id": run_id}).scalar()
+    except Exception:  # noqa: BLE001
+        _log_caught(logger)
+        return None
+
+
 def _retry_after_infra_failure(engine, settings, jobs, run_id: str, project_id: str,
                                fctx: dict, result: dict) -> dict:
     """ONE AUTOMATIC RETRY FOR A BUILD THAT DIED OF BOSS, NOT OF ITS CODE.
@@ -3309,9 +3320,13 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         from .sandbox_identity import bind as _sandbox_bind
         from ..app_links.run_env import for_run as _link_env
         from ..templates.run_ref import for_run as _template_files
+        from .harness_failures import run_scope as _harness_scope
 
+        # AND ITS ENGINE IS WATCHED AS ONE (harness_failures): a session that finds the engine
+        # cannot run stops the whole build with that verdict, not just its own stage.
         with owned_process.owner_scope("code_run", run_id,
                                        project_id=(run or {}).get("project_id"), fresh=True), \
+                _harness_scope(run_id), \
                 _sandbox_bind(run_id, project_id=(run or {}).get("project_id")) as _sbx, \
                 _link_env(engine, run_id, (run or {}).get("project_id")), \
                 _template_files(engine, run, _sbx):
@@ -4101,6 +4116,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         cancelled run kept executing for 40 minutes and $6.73 afterwards, and cancelled runs
         later overwrote their own status. Checked at stage boundaries so it costs one cheap
         query per stage and never interrupts an agent mid-call."""
+        # THE ENGINE COULD NOT RUN (harness_failures): a stage that swallowed the failure does
+        # not get to start the next one — the build ends here with the harness verdict.
+        _stop_on_harness_failure(where)
         try:
             with _transaction(engine) as c:
                 st = c.execute(sql("SELECT status FROM code_task_runs WHERE id=:id"),
@@ -4142,6 +4160,16 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 assert_owner(c, run_id, _fence, where)
         except RunFenced as exc:
             raise CodeTaskCancelled(str(exc)) from exc
+
+    def _stop_on_harness_failure(where: str) -> None:
+        """Raise the run's harness failure, if a session of this run found its engine cannot
+        run. Every agent call after it already refuses (no spend); this stops the pipeline at
+        the next boundary — before review, repair or a quality gate judges code written blind."""
+        from .harness_failures import HarnessFailure, tripped
+
+        verdict = tripped(run_id)
+        if verdict is not None:
+            raise HarnessFailure(verdict)
 
     def _save_workspace(where: str) -> int:
         """Keep this attempt's changed files on the run so a retry continues from them
@@ -6776,6 +6804,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # read as "a reviewer approved this" — the PR has to say plainly that none looked.
             evidence.update({f"{k}_skipped": v for k, v in skipped_seats.items()})
 
+        # No gate judges a build whose engine could not run: its verdict is the harness's.
+        _stop_on_harness_failure("quality gate")
         with _transaction(engine) as c:
             c.execute(sql("UPDATE code_task_runs SET state=CAST(:s AS JSONB), "
                            "usage=jsonb_build_object('cost_usd_micros', CAST(:cost AS bigint), "
@@ -7940,13 +7970,30 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         if _owned.was_cancelled(run_id) or isinstance(exc, _owned.OwnerCancelled):
             return _honour_cancel(CodeTaskCancelled(f"stopped while running: {exc}"[:300]))
         _finish_vms(success=False)  # retain stage VMs for root-causing via the console
+        # THE ENGINE COULD NOT RUN (harness_failures) — whatever exception carried the run here
+        # (a stage may have swallowed the HarnessFailure and died of what followed), the verdict
+        # is the harness's: "BOSS could not run <engine>: <message>; fix: <fix>.", needs_human,
+        # Retry after the fix. No automatic retry (it meets the same engine), no failover.
+        from .harness_failures import failure_of as _harness_failure_of
+        harness = _harness_failure_of(exc, run_id)
         # A blank reason makes every retry blind — always record at least the exception type
         # and the substrate the run was on (that's the first question when root-causing).
-        reason = (str(exc).strip() or f"{type(exc).__name__} with no message")
+        reason = (harness.sentence() if harness is not None
+                  else (str(exc).strip() or f"{type(exc).__name__} with no message"))
         reason = f"{reason} [substrate={execution_substrate}]"
         from .code_task_service import classify_pipeline_exception
         from .spend_cap_failover import apply_spend_cap_failover
         fclass, rcode = classify_pipeline_exception(reason)
+        if harness is not None:
+            fclass, rcode = "needs_human", "harness_unavailable"
+            try:
+                with _transaction(engine) as c:
+                    emit_event(c, project_id, "code_task.harness_failed", "boss",
+                               "code_task_run", run_id,
+                               {**harness.as_dict(), "phase": _current_phase_name(engine, run_id),
+                                "retryable_after_fix": True})
+            except Exception:  # noqa: BLE001 — the record must never mask the failure itself
+                _log_caught(logger)
         if isinstance(exc, StackUnsupportedError):
             # A stack refusal is a decision about the design, not a platform fault: it must not
             # read as `infra`, which starts an automatic retry that is refused all over again.
@@ -7967,7 +8014,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # Claude org monthly spend limit: hop this SAME run onto a configured
             # alternate engine once. No invented pass, no Decision auto-apply.
             # If no alternate is configured, fall through to today's escalate path.
-            failover = apply_spend_cap_failover(
+            failover = None if harness is not None else apply_spend_cap_failover(
                 c,
                 jobs=jobs,
                 project_id=project_id,
