@@ -109,8 +109,9 @@ def NO_CHECKS(why: str) -> CapabilityPrecheck:  # noqa: N802 — reads as a decl
 
 
 _INFRA = ("sandbox.worker",)
-#: A step that runs an agent: the model its route reaches, and whether that engine can start.
-_AGENT = ("sandbox.model", "sandbox.engine")
+#: A step that runs an agent: the model its route reaches, whether that engine can start, and
+#: (once per run) whether the run's estimated cost fits the caps.
+_AGENT = ("sandbox.model", "sandbox.engine", "budget.run_cost")
 _BUILDS = ("authority.consent", "github.access", "sandbox.worker", "sandbox.toolchain",
            "sandbox.build_services", "sandbox.disk") + _AGENT + ("budget.headroom",)
 
@@ -1079,17 +1080,20 @@ def _parallel_groups(spec: Mapping[str, Any]) -> list[dict[str, Any]]:
     return out
 
 
+def _budget_snapshot(ctx: Context) -> Optional[dict[str, Any]]:
+    def snap() -> Optional[dict[str, Any]]:
+        from .budget import BudgetGovernor
+
+        return BudgetGovernor(ctx.settings).status_for_project(ctx.connection, ctx.project_id)
+    return ctx.once("budget", lambda: ctx.savepoint(snap, default=None))
+
+
 @_check("budget.headroom", "The day's cap holds this step's reservation alongside other work")
 def check_budget(ctx: Context, step: dict[str, Any]) -> Optional[dict[str, Any]]:
     amount = step_reservation(ctx.settings, step)
     if not amount:
         return None
-
-    def snap() -> Optional[dict[str, Any]]:
-        from .budget import BudgetGovernor
-
-        return BudgetGovernor(ctx.settings).status_for_project(ctx.connection, ctx.project_id)
-    snapshot = ctx.once("budget", lambda: ctx.savepoint(snap, default=None))
+    snapshot = _budget_snapshot(ctx)
     if not snapshot:
         return result("budget.headroom", "unknown", "could not read the budget")
     others = ctx.once("active_runs", lambda: ctx.savepoint(lambda: int(ctx.connection.execute(
@@ -1128,6 +1132,48 @@ def check_budget(ctx: Context, step: dict[str, Any]) -> Optional[dict[str, Any]]
                   "this size do not fit what is left of the cap, so a concurrent run (or a "
                   "retry of this step) is refused 'headroom' while this one holds it",
                   action="Do not overlap runs, or raise the cap above twice this reservation.")
+
+
+def _pace(ctx: Context) -> dict[str, int]:
+    """The project's burst cap ($/min, micros) and max concurrent jobs (budget_policies)."""
+    def read() -> dict[str, int]:
+        row = ctx.connection.execute(text(
+            "SELECT burst_cap_usd_micros_per_min AS burst, max_concurrent_jobs AS lanes FROM "
+            "budget_policies WHERE scope_type = 'project' AND scope_id = :p ORDER BY "
+            "created_at DESC LIMIT 1"), {"p": ctx.project_id}).mappings().first()
+        return {"burst": int((row or {}).get("burst") or 0),
+                "lanes": int((row or {}).get("lanes") or 0)}
+    return ctx.once("budget_pace", lambda: ctx.savepoint(read, default={}))
+
+
+@_check("budget.run_cost", "The run's estimated cost fits what the caps leave, at a pace the "
+        "burst cap allows", (PRE_RUN,), shared=True)
+def check_run_cost(ctx: Context, step: dict[str, Any]) -> dict[str, Any]:
+    """WHAT THE WHOLE RUN WILL COST, not whether one reservation fits: past runs' recorded
+    token usage priced at today's routes, against the day's and month's caps and the burst cap
+    (run_cost_estimate)."""
+    from . import run_cost_estimate as rc
+
+    found = ctx.once("run_cost_history", lambda: ctx.savepoint(lambda: rc.history(
+        ctx.connection, ctx.project_id, ctx.workflow_key), default=None))
+    if found is None:
+        return result("budget.run_cost", "unknown", "could not read past runs' model usage")
+    stages = sorted({str(c.get("stage") or "model_call") for r in found.get("runs") or []
+                     for c in r.get("calls") or []})
+    routes = ctx.once("run_cost_routes", lambda: ctx.savepoint(lambda: rc.routes_now(
+        ctx.connection, ctx.settings, ctx.project_id, stages), default=None)) if stages else {}
+    if routes is None:
+        return result("budget.run_cost", "unknown", "could not resolve which models the run's "
+                      "steps route to today", action="Check Repo and models.")
+    estimate = rc.estimate(found, routes)
+    pace = _pace(ctx)
+    verdict, evidence, action = rc.judge(
+        estimate, _budget_snapshot(ctx), int(pace.get("burst") or 0),
+        int(pace.get("lanes") or 0), {s: routes[s] for s in stages if s in routes})
+    details = {k: estimate[k] for k in ("money", "value", "low", "high", "n", "basis",
+                                        "active_min", "span_min", "peak_parallel",
+                                        "typical_turn", "by_stage")} if estimate else None
+    return result("budget.run_cost", verdict, evidence, action=action, details=details)
 
 
 # ── App environment ───────────────────────────────────────────────────────────────────────────
@@ -2509,8 +2555,9 @@ def gate_mode() -> str:
 
 #: A readiness need the operator chose to start without (start_anyway) also accepts the
 #: pre-check that says the same thing, so one choice is never asked for twice.
-READINESS_ACCEPTS = {"budget": "budget.headroom", "repository": "github.access",
-                     "deployment_target": "deploy.target", "model": "sandbox.model"}
+READINESS_ACCEPTS = {"budget": ("budget.headroom", "budget.run_cost"),
+                     "repository": ("github.access",), "deployment_target": ("deploy.target",),
+                     "model": ("sandbox.model",)}
 
 
 def gate_start(connection: Connection, settings: Any, *, project_id: str, version_id: str,
@@ -2555,7 +2602,7 @@ def gate_start(connection: Connection, settings: Any, *, project_id: str, versio
         skips.append({"step_id": sid, "reason": why[:300]})
     skipped = {s["step_id"] for s in skips}
     accepted = {str(a).strip() for a in (accept or ()) if str(a).strip()}
-    accepted |= {READINESS_ACCEPTS[k] for k in (start_anyway or ()) if k in READINESS_ACCEPTS}
+    accepted |= {c for k in (start_anyway or ()) for c in READINESS_ACCEPTS.get(k, ())}
     unaccepted = [b for b in report["summary"]["blocking"]
                   if b.split(":", 1)[0] not in skipped and b not in accepted
                   and b.split(":", 1)[1] not in accepted]
@@ -2665,6 +2712,9 @@ CHECK_DOCS: dict[str, str] = {
     "sandbox.engine": "the routed engine's declared runtime binaries on PATH; live, one tiny "
                       "sandboxed session per engine that must run one command",
     "budget.headroom": "the period's cap holds the step's reservation beside other work",
+    "budget.run_cost": "the whole run's cost, estimated from past runs' recorded tokens priced "
+                       "at today's routes (subscriptions $0), against what is left of the day's "
+                       "and month's caps, and its spend rate against the burst cap",
     "app_env.build": "every variable the app requires has a build value BOSS gives or may take",
     "app_env.preview": "every variable the app requires has a preview value",
     "app_env.deploy": "every variable the app requires has a deploy value",

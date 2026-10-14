@@ -74,6 +74,11 @@ class RouteRequest:
     extra_floors: tuple = ()
     #: A SOFT pin for this step (a profile's explicit step model): tried first within the tier.
     preferred: Optional[Target] = None
+    #: The tier the CALLER asks for, as a need, never a model name (a cheap analysis call asks
+    #: for Fast). Smart: it replaces the classifier's answer; floors and sensitive work still
+    #: raise it. Fixed: the legacy engine's model at that tier when the policy or the engine
+    #: names one, else the legacy model as it was.
+    tier: Optional[str] = None
 
     def signal(self) -> TaskSignal:
         return TaskSignal(kind=self.kind, step=self.step, text=self.text,
@@ -213,18 +218,30 @@ class Router:
     # ── Fixed: the legacy answer, recorded ─────────────────────────────────────────────────
     def _fixed(self, request: RouteRequest, snapshot: Snapshot) -> RouteDecision:
         legacy = request.legacy() if request.legacy else LegacyRoute("", None, "no resolver")
-        tier = model_tier(legacy.engine, legacy.model) \
+        model = legacy.model
+        why = [f"Fixed: {legacy.why}"]
+        rules: tuple[str, ...] = ("fixed",)
+        if request.tier in TIERS and legacy.engine:
+            from .selection import _model_on
+
+            # THE CALLER ASKED FOR A TIER: the same engine and source, that tier's model.
+            asked = _model_on(snapshot.policy, legacy.engine, request.tier)
+            if asked and asked != model:
+                model = asked
+                why.append(f"Asked for {TIER_LABELS[request.tier]}: "
+                           f"{engine_label(legacy.engine)} · {asked}")
+                rules += ("asked_tier",)
+        tier = model_tier(legacy.engine, model) \
             or LEGACY_CLASS.get(legacy.model_class or "", None) or BALANCED
         state = snapshot.sources.get(legacy.engine)
-        why = [f"Fixed: {legacy.why}"]
         if legacy.flags.get("budget_lite"):
             why.append("Budget pressure: strong → low-cost lane")
         if legacy.flags.get("escalated"):
             why.append("Escalated to the hard-problems lane")
         return RouteDecision(
             id=_new_id(), mode="fixed", kind=request.kind, step=request.step, tier=tier,
-            engine=legacy.engine, model=legacy.model, reason=why[0], why=tuple(why),
-            rules=("fixed",), source_id=state.source_id if state else None,
+            engine=legacy.engine, model=model, reason=why[0], why=tuple(why),
+            rules=rules, source_id=state.source_id if state else None,
             source_kind=state.kind if state else "", role=request.role,
             unit_id=request.unit_id, project_id=request.project_id or snapshot.project_id,
             budget_lite=bool(legacy.flags.get("budget_lite")),
@@ -257,6 +274,10 @@ class Router:
             tier = down(tier)
             why.append(f"{step_label(request.step)} is mechanical → {TIER_LABELS[tier]}")
             rules.append("mechanical")
+        if request.tier in TIERS and request.tier != tier:
+            tier = request.tier
+            why.append(f"Asked for {TIER_LABELS[tier]} by the caller")
+            rules.append("asked_tier")
 
         # (b) floors
         floor, floors = policy.floor_for(kind=request.kind, step=request.step, role=request.role,

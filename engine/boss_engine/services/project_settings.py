@@ -74,6 +74,13 @@ KNOBS: dict[str, dict[str, Any]] = {
         "help": "The most model turns one model pre-check may take.",
         "kind": "int", "min": 1, "max": 30,
     },
+    "workflow_precheck_agent_max_wait_seconds": {
+        "attr": "workflow_precheck_agent_max_wait_seconds",
+        "label": "Model pre-check wait (seconds)",
+        "help": "How long, in all, one model pre-check waits for the per-minute budget to "
+                "free before it gives up. 0 never waits.",
+        "kind": "int", "min": 0, "max": 900,
+    },
     "code_review_inrun_max_rounds": {
         "attr": "code_review_inrun_max_rounds",
         "label": "Review rounds",

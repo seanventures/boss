@@ -1129,6 +1129,9 @@ class Settings(BaseSettings):
         default=50, alias="BOSS_WORKFLOW_PRECHECK_AGENT_MAX_CENTS", ge=1)
     workflow_precheck_agent_max_turns: int = Field(
         default=8, alias="BOSS_WORKFLOW_PRECHECK_AGENT_MAX_TURNS", ge=1)
+    # How long, in all, it waits for the per-minute (burst) budget to free before giving up.
+    workflow_precheck_agent_max_wait_seconds: int = Field(
+        default=180, alias="BOSS_WORKFLOW_PRECHECK_AGENT_MAX_WAIT_SECONDS", ge=0)
     # Turn cap for the MICRO-VM GUEST agent (a separate limit from the host cap above). BOSS sends
     # this in the sandbox submit contract; the sandbox-service must honor it to take effect (else it
     # falls back to the service's own ~40 default). Higher lets app-scale tasks finish.

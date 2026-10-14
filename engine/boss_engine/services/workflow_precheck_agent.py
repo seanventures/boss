@@ -23,9 +23,13 @@ HOW IT IS CALLED
 
 MODEL-AGNOSTIC. The model is the one BOSS's router picks for this project
 (`model_routing.project_chat_adapter`, purpose `RouteRequest(kind="agent",
-step="workflow_precheck")`), every turn governed by `model_routing.governed` (reserved against
-the budget, receipted, settled). No vendor SDK is imported here; an Anthropic key, a Codex
-subscription or OpenRouter answer through the same adapter interface
+step="workflow_precheck", tier=FAST)`), every turn governed by `model_routing.governed`
+(reserved against the budget, receipted, settled). It asks for the FAST tier — a need, not a
+model name: reading evidence and naming what will break is analysis, not a frontier build. On
+2026-10-14 it asked for nothing, so Fixed routing handed it the chat job's model; with no chat
+model set that was the CLI's own default, Opus with a 1M context, $0.26 for one turn.
+No vendor SDK is imported here; an Anthropic key, a Codex subscription or OpenRouter answer
+through the same adapter interface
 (`create_chat_completion` / `create_text_response`), and the plumbing behaves identically.
 
 READ-ONLY. Its tools are the BOSS-fundamentals READS every agent holds (logs, run history and
@@ -38,9 +42,19 @@ event or run id, file:line, a query result). A prediction with no evidence is dr
 whose citations appear nowhere in what the agent was shown or read is downgraded to `risk`.
 Malformed output is asked for again once, then dropped item by item.
 
+COMPACT. Up front it gets only what is NOT ready in the coded report (with its evidence), the
+ready checks by id, the steps (not the whole spec), the engine per step and the recent errors
+clipped. Everything else it pulls through its read tools when it needs it — one up-front
+payload of the whole report cost more than a careful investigation should.
+
 CAPPED. A cost cap (`workflow_precheck_agent_max_cents`, default 50 cents) and a turn cap
 (`workflow_precheck_agent_max_turns`, default 8): no turn starts once the cap is spent, and
 the turn before a cap answers with no tools so the run ends with an answer.
+
+WAITS, BOUNDED. A turn the per-minute (burst) budget defers (`ModelSpendDeferred`) is not a
+failure: it frees itself. The loop waits the budget's own retry-after and asks again, for at
+most `workflow_precheck_agent_max_wait_seconds` (default 180) of waiting in all, and the output
+line says how long it waited.
 """
 from __future__ import annotations
 
@@ -57,12 +71,17 @@ VERDICTS = ("will_fail", "risk")
 WHO = ("auto", "person")
 SKILL_ID = "model.precheck_agent"
 ACTOR = "boss precheck agent"
-#: The router's purpose: an agent step's kind, named for "Why this model". Risk 2 of 3 routes
-#: it Balanced — judgement over evidence, not a frontier build.
+#: The router's purpose: an agent step's kind, named for "Why this model", and the TIER it asks
+#: for — Fast: reading evidence is analysis. A tier, never a model name (model-agnostic).
 ROUTE_KIND = "agent"
 ROUTE_STEP = "workflow_precheck"
+ROUTE_TIER = "fast"
 MAX_FINDINGS = 12
-MAX_PACK_CHARS = 60_000
+#: The up-front payload's ceiling: a compact summary, the rest is read with the tools.
+MAX_PACK_CHARS = 16_000
+#: Per-item clip inside the payload (a check's evidence, a failure's error).
+MAX_ITEM_CHARS = 600
+DEFAULT_MAX_WAIT_SECONDS = 180
 MAX_TOOL_RESULT_CHARS = 12_000
 #: One more ask when the answer was not the JSON asked for.
 FORMAT_RETRIES = 1
@@ -92,9 +111,11 @@ _JOB_OF = {
 }
 
 SYSTEM_PROMPT = """You are BOSS's pre-check engineer. A workflow is about to run. BOSS's coded \
-pre-check has already checked what it was written to check; its report is below with every \
-check's evidence. Your job is what the coded checks do NOT cover: read the evidence the way a \
-senior engineer would and predict what will make a step fail.
+pre-check has already checked what it was written to check. Below is a COMPACT summary: every \
+check that is not ready, with its evidence; the ready ones by id only; the steps and the engine \
+each uses; recent errors, clipped. Read anything else with your tools. Your job is what the \
+coded checks do NOT cover: read the evidence the way a senior engineer would and predict what \
+will make a step fail.
 
 Look especially at: what each step's engine/harness needs at run time that nothing checked \
 (binaries in the image, sandbox prerequisites, network, credentials actually working rather \
@@ -144,26 +165,36 @@ def wanted_at_the_door(connection: Any, settings: Any, project_id: str,
         return False
 
 
+def _knob(connection: Any, settings: Any, project_id: str, key: str, default: int) -> int:
+    from . import project_settings
+
+    value = _savepoint(connection, lambda: project_settings.effective(
+        connection, project_id, settings, key), None) \
+        if connection is not None else getattr(settings, key, None)
+    try:
+        return int(value) if value not in (None, "") else default
+    except Exception:  # noqa: BLE001
+        return default
+
+
 def caps_for(connection: Any, settings: Any, project_id: str, *,
              max_usd: Optional[float] = None, max_turns: Optional[int] = None
              ) -> tuple[int, int]:
     """(cost cap in micros, turn cap): the caller's, else the project's, else the install's."""
-    from . import project_settings
-
     def knob(key: str, default: int) -> int:
-        value = _savepoint(connection, lambda: project_settings.effective(
-            connection, project_id, settings, key), None) \
-            if connection is not None else getattr(settings, key, None)
-        try:
-            return int(value) if value not in (None, "") else default
-        except Exception:  # noqa: BLE001
-            return default
+        return _knob(connection, settings, project_id, key, default)
 
     cap = int(round(max_usd * 1_000_000)) if max_usd is not None else \
         knob("workflow_precheck_agent_max_cents", 50) * 10_000
     turns = int(max_turns) if max_turns is not None else \
         knob("workflow_precheck_agent_max_turns", 8)
     return max(1, cap), max(1, turns)
+
+
+def wait_limit_for(connection: Any, settings: Any, project_id: str) -> int:
+    """Seconds, in all, the loop may wait for the per-minute budget (0 = never waits)."""
+    return max(0, _knob(connection, settings, project_id,
+                        "workflow_precheck_agent_max_wait_seconds", DEFAULT_MAX_WAIT_SECONDS))
 
 
 # ── The evidence it gets up front ─────────────────────────────────────────────────────────────
@@ -248,25 +279,70 @@ def installed_version() -> str:
         return "unknown"
 
 
+def _clip(value: Any, limit: int = MAX_ITEM_CHARS) -> Any:
+    if isinstance(value, str) and len(value) > limit:
+        return value[:limit] + "…"
+    return value
+
+
+def compact_report(report: Mapping[str, Any]) -> dict[str, Any]:
+    """The coded report as the agent needs it up front: the counts, every check that is NOT
+    ready with its evidence and fix (clipped), and the ready ones by `step:check` id only."""
+    summary = dict(report.get("summary") or {})
+    not_ready: list[dict[str, Any]] = []
+    ready: list[str] = []
+    for step in report.get("steps") or []:
+        sid = str(step.get("step_id") or "")
+        for check in step.get("checks") or []:
+            name = f"{sid}:{check.get('id')}"
+            if check.get("verdict") == "ready":
+                ready.append(name)
+                continue
+            item: dict[str, Any] = {"check": name, "verdict": check.get("verdict"),
+                                    "evidence": _clip(str(check.get("evidence") or ""))}
+            action = str((check.get("fix") or {}).get("action") or "")
+            if action:
+                item["fix"] = _clip(action, 300)
+            if check.get("also_needed_by"):
+                item["also_needed_by"] = list(check["also_needed_by"])
+            not_ready.append(item)
+    return {"checkpoint": report.get("checkpoint"),
+            "counts": {k: summary.get(k) for k in ("ready", "fixable", "will_fail", "unknown")
+                       if k in summary},
+            "sentence": summary.get("sentence"), "not_ready": not_ready, "ready": ready}
+
+
+def _compact_failures(found: Mapping[str, Any], per_kind: int = 5) -> dict[str, Any]:
+    return {kind: [{k: _clip(v, 300) if k in ("error", "last_error") else v
+                    for k, v in dict(r).items()} for r in list(rows or [])[:per_kind]]
+            for kind, rows in dict(found or {}).items()}
+
+
 def evidence_pack(connection: Any, settings: Any, *, project_id: str,
                   report: Mapping[str, Any], spec: Mapping[str, Any],
                   run_input: Mapping[str, Any]) -> dict[str, Any]:
-    """Everything the agent is told before it looks for itself: the workflow and its input, the
-    coded report with every check's evidence, which engine/model/source each step uses, recent
-    failures and the installed version."""
+    """What the agent is told before it looks for itself — COMPACT: the workflow's steps (not
+    its whole spec), the run input's keys, the coded report's non-ready checks with their
+    evidence (ready ones by id), which engine/model/source each step uses, recent failures
+    clipped, and the installed version. Details are a read tool away."""
     workflow_key = str(report.get("workflow_key") or "")
     return {
         "workflow": {"key": workflow_key, "name": report.get("workflow_name"),
-                     "version_id": report.get("version_id"), "spec": spec},
-        "run_input": {k: v for k, v in dict(run_input or {}).items()
-                      if not str(k).startswith("_")},
-        "coded_precheck": {"checkpoint": report.get("checkpoint"),
-                           "summary": report.get("summary"), "steps": report.get("steps")},
+                     "version_id": report.get("version_id"),
+                     "steps": [{"id": str(s.get("id")), "kind": s.get("kind"),
+                                "capability": (s.get("binding") or {}).get("capability")}
+                               for s in spec.get("steps") or []]},
+        "run_input_keys": sorted(str(k) for k in dict(run_input or {})
+                                 if not str(k).startswith("_")),
+        "coded_precheck": compact_report(report),
         "step_models": step_models(connection, settings, project_id, spec)
         if connection is not None else [],
-        "recent_failures": recent_failures(connection, project_id, workflow_key)
+        "recent_failures": _compact_failures(recent_failures(connection, project_id,
+                                                             workflow_key))
         if connection is not None else {},
         "boss_version": installed_version(),
+        "read_more_with": ["describe_workflow", "describe_workflow_run", "diagnose_run",
+                           "read_logs", "read_run_turns", "get_config"],
     }
 
 
@@ -447,7 +523,7 @@ def routed_adapter(connection: Any, settings: Any, project_id: str, *, ref: str)
     from .model_router.router import RouteRequest
 
     purpose = RouteRequest(kind=ROUTE_KIND, step=ROUTE_STEP, project_id=project_id,
-                           ref=ref, risk_tier=2,
+                           ref=ref, tier=ROUTE_TIER,
                            text="Predict which steps of a workflow run will fail, from the "
                                 "pre-check's evidence, logs and run history.")
     raw = model_routing.project_chat_adapter(connection, settings, project_id, purpose=purpose)
@@ -482,17 +558,35 @@ def _money(micros: int) -> str:
     return f"${micros / 1_000_000:.2f}" if micros >= 10_000 else f"${micros / 1_000_000:.4f}"
 
 
+def deferred_wait(exc: BaseException) -> Optional[int]:
+    """Seconds to wait when `exc` is the per-minute budget deferring a turn (transient: it frees
+    itself), from the budget's own retry-after; None for any other error."""
+    from .budget import burst_retry_after_seconds
+    from .model_routing import ModelSpendDeferred
+
+    if not isinstance(exc, ModelSpendDeferred):
+        return None
+    return burst_retry_after_seconds(getattr(exc, "retry_after_seconds", None))
+
+
 def run_agent(*, adapter: Any, raw_adapter: Any = None, evidence: Mapping[str, Any],
               tools: Optional[list[dict[str, Any]]] = None,
               call_tool: Optional[Callable[[str, dict], dict]] = None,
               max_usd_micros: int = 500_000, max_turns: int = 8,
-              step_ids: Iterable[str] = ()) -> dict[str, Any]:
-    """THE LOOP. Pure over its seams (the adapter and the tool runner), so the tests drive it
-    with a stub model and the CLI/door with the routed one. Never raises: a broken model call
-    is reported in the result, never as a failed pre-check."""
+              step_ids: Iterable[str] = (),
+              max_wait_seconds: float = DEFAULT_MAX_WAIT_SECONDS,
+              sleep: Callable[[float], Any] = time.sleep,
+              clock: Callable[[], float] = time.monotonic) -> dict[str, Any]:
+    """THE LOOP. Pure over its seams (the adapter, the tool runner, the clock), so the tests
+    drive it with a stub model and the CLI/door with the routed one. Never raises: a broken
+    model call is reported in the result, never as a failed pre-check. A turn the per-minute
+    budget defers is waited for (its retry-after) and asked again, up to `max_wait_seconds`
+    of waiting in all."""
     from .redaction import redact_secrets
 
     started = time.monotonic()
+    waits = 0
+    waited = 0.0
     who = _who_answered(raw_adapter if raw_adapter is not None else adapter)
     pack = redact_secrets(json.dumps(evidence, default=str, indent=1))
     if len(pack) > MAX_PACK_CHARS:
@@ -528,8 +622,18 @@ def run_agent(*, adapter: Any, raw_adapter: Any = None, evidence: Mapping[str, A
             message, usage = adapter.create_chat_completion(
                 messages, tools=(tools if (can_tool and not final) else None))
         except Exception as exc:  # noqa: BLE001 — the model failing is a result, not a crash
+            wait = deferred_wait(exc)
+            left = max_wait_seconds - waited
+            if wait is not None and left > 0:
+                # THE PER-MINUTE BUDGET FREES ITSELF: wait what it said, then ask again.
+                pause = min(float(wait), left)
+                t0 = clock()
+                sleep(pause)
+                waited += max(pause, clock() - t0)
+                waits += 1
+                continue
             error = f"{type(exc).__name__}: {exc}"[:400]
-            stopped = "error"
+            stopped = "budget_wait_limit" if wait is not None else "error"
             break
         turns += 1
         last_cost = _turn_cost(usage)
@@ -570,13 +674,18 @@ def run_agent(*, adapter: Any, raw_adapter: Any = None, evidence: Mapping[str, A
     model = model_seen or who["model"] or "default"
     line = (f"model pre-check ran on {who['engine']}/{model} via {who['source']}, "
             f"{_money(spent)} ({turns} turn(s), {tool_calls} tool call(s))")
+    if waits:
+        line += (f", waited {waited:.0f}s for the per-minute budget ({waits} time(s)"
+                 + (f", limit {max_wait_seconds:.0f}s" if stopped == "budget_wait_limit"
+                    else "") + ")")
     if stopped:
         line += f" — stopped: {stopped.replace('_', ' ')}" + (f" ({error})" if error else "")
     return {"ran": True, "engine": who["engine"], "model": model, "source": who["source"],
             "cost_usd_micros": spent, "max_usd_micros": max_usd_micros, "turns": turns,
             "max_turns": max_turns, "tool_calls": tool_calls, "stopped": stopped,
             "error": error, "findings": findings, "dropped": dropped, "counts": counts,
-            "line": line, "seconds": round(time.monotonic() - started, 2)}
+            "waits": waits, "waited_seconds": round(waited, 1), "line": line,
+            "seconds": round(time.monotonic() - started, 2)}
 
 
 def not_run(reason: str) -> dict[str, Any]:
@@ -595,6 +704,7 @@ def precheck_with_model(engine: Any, settings: Any, *, project_id: str,
     back with the start; without one (the CLI) on a transaction of their own."""
     def go(c: Any) -> dict[str, Any]:
         cap, turns = caps_for(c, settings, project_id, max_usd=max_usd, max_turns=max_turns)
+        wait_limit = wait_limit_for(c, settings, project_id)
         evidence = evidence_pack(c, settings, project_id=project_id, report=report, spec=spec,
                                  run_input=run_input)
         ref = f"precheck:{report.get('workflow_key') or ''}:{report.get('run_id') or 'pre_run'}"
@@ -606,7 +716,7 @@ def precheck_with_model(engine: Any, settings: Any, *, project_id: str,
                             else getattr(c, "engine", None))
         return run_agent(adapter=adapter, raw_adapter=raw, evidence=evidence, tools=schemas,
                          call_tool=lambda name, args: run(ctx, project_id, name, args),
-                         max_usd_micros=cap, max_turns=turns,
+                         max_usd_micros=cap, max_turns=turns, max_wait_seconds=wait_limit,
                          step_ids=[str(s.get("id")) for s in spec.get("steps") or []])
 
     try:
@@ -641,7 +751,8 @@ def merge(report: dict[str, Any], result: Mapping[str, Any]) -> dict[str, Any]:
     return report
 
 
-__all__ = ["ACTOR", "READ_TOOLS", "SOURCE", "VERDICTS", "caps_for", "evidence_pack",
-           "grounded", "installed_binaries", "merge", "not_run", "parse_answer",
+__all__ = ["ACTOR", "READ_TOOLS", "ROUTE_TIER", "SOURCE", "VERDICTS", "caps_for",
+           "compact_report", "deferred_wait", "evidence_pack", "grounded", "installed_binaries",
+           "merge", "not_run", "parse_answer",
            "precheck_with_model", "read_tools", "recent_failures", "routed_adapter",
-           "run_agent", "step_models", "validate", "wanted_at_the_door"]
+           "run_agent", "step_models", "validate", "wait_limit_for", "wanted_at_the_door"]
