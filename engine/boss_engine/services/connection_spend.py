@@ -708,10 +708,13 @@ def _legacy_outcome(c, project_id, receipt_id, provider, model):
                "model": model, "usage_present": None, "tokens": {}, "recorded": False}
     if _LEGACY_UNPRICED in message:
         outcome.update(kind="replied_ok", cost_basis="unpriced")
-    else:
-        from .redaction import redact_secrets
+        outcome["summary"] = (f"{provider} replied OK, but BOSS had no price for {model} at the "
+                              "time, so the proof was held. Releasing it charges a conservative "
+                              "unpriced estimate.")
+        return outcome
+    from .redaction import redact_secrets
 
-        outcome.update(kind="unknown", provider_error=redact_secrets(message)[:300])
+    outcome.update(kind="unknown", provider_error=redact_secrets(message)[:300])
     outcome["summary"] = describe_outcome(outcome, provider)
     return outcome
 

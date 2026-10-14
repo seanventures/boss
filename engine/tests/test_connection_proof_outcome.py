@@ -210,7 +210,7 @@ def test_a_legacy_hold_without_an_outcome_reads_its_own_event(scope):  # noqa: F
                        "AND event_type='connection.reconciliation_required'"), {"p": p})
         fact = review_hold(c, p, held["receipt_id"])
         assert fact["summary"].startswith(
-            "Anthropic replied OK, but BOSS has no price for claude-sonnet-4-5")
+            "Anthropic replied OK, but BOSS had no price for claude-sonnet-4-5 at the time")
         done = release_hold(c, s, p, held["receipt_id"], actor=ACTOR, reason="legacy repair")
     assert done["status"] == "succeeded" and 0 < done["released"]["cost_usd_micros"] < 50_000
 
