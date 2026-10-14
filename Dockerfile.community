@@ -146,7 +146,7 @@ RUN ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
     && apt-get update \
     && apt-get install -y --no-install-recommends \
        ca-certificates git openssh-client ffmpeg libavfilter-extra fonts-dejavu-core \
-       iptables libcap2-bin curl \
+       iptables libcap2-bin curl bubblewrap \
     && addgroup --system boss \
     && adduser --system --ingroup boss --home /home/boss boss \
     && mkdir -p /home/boss/.codex /home/boss/.claude /var/lib/boss/artifacts /var/lib/boss/identity \

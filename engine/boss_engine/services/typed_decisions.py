@@ -297,6 +297,15 @@ def make_decider(settings: Settings) -> "Decider":
     return jev
 
 
+def _claude_source(settings: Settings) -> str:
+    from .claude_credential import SUBSCRIPTION_SOURCE_ID, resolve_claude_credential, source_for_kind
+
+    try:
+        return source_for_kind(resolve_claude_credential(settings).kind)
+    except Exception:  # noqa: BLE001 — an unreadable store books on the subscription, as before
+        return SUBSCRIPTION_SOURCE_ID
+
+
 class ClaudeDecider:
     """Typed decisions on the Claude subscription, through the same CLI the chat uses.
 
@@ -320,7 +329,9 @@ class ClaudeDecider:
         # not answer.
         if shutil.which(cli._claude_bin()):
             self._adapter, self.backend = cli, "claude_code"
-            self.source_id = "anthropic_claude_code"
+            # The subscription, or the Anthropic API source when the CLI runs on the
+            # console's key (claude_credential) — the capacity actually spent.
+            self.source_id = _claude_source(settings)
             self.model = model or getattr(settings, "claude_cli_model", None) or ""
         elif openai_fallback_usable(settings):
             from .openai_adapter import OpenAIAdapter

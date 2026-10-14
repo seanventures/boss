@@ -16,7 +16,7 @@ from fastapi import APIRouter, HTTPException, Request
 from boss_engine.db import begin
 
 from ..schemas_setup import (
-    BudgetBody, ChecksBody, JobBody, ModelConnectBody, RepositoryAppBody, RepositorySelectBody, RepositorySigninBody,
+    BudgetBody, ChecksBody, JobBody, ModelConnectBody, ReleaseHoldBody, RepositoryAppBody, RepositorySelectBody, RepositorySigninBody,
     RepositoryTokenBody, RoutingBody, SetupView, SourceModelBody, TryBody, dump,
 )
 
@@ -207,6 +207,41 @@ def build_setup_router(
             except setup_actions.SetupActionError as error:
                 fail(error)
         return fresh_view(body.project_id)
+
+    @router.post("/v1/setup/holds/{receipt_id}/release", response_model=SetupView,
+                 response_model_by_alias=True)
+    @permit(P.ENTITLEMENT_MANAGE, scope=Scope.project(body="project_id"))
+    def post_release_hold(receipt_id: str, body: ReleaseHoldBody) -> dict[str, Any]:
+        """A person releases a held connection proof: settled (0 if the provider refused, else
+        the shown estimate), its card closed, recorded with who and why."""
+        from boss_engine.services.connection_spend import HoldRefused, release_hold
+
+        actor = actor_for(body.actor)
+        with begin(engine) as connection:
+            require_actor(connection, body.project_id, actor, "entitlement_manage")
+            try:
+                release_hold(connection, get_settings(), body.project_id, receipt_id,
+                             actor=actor, reason=body.reason)
+            except HoldRefused as error:
+                raise HTTPException(status_code=error.status, detail={
+                    "state": "failed", "headline": "Hold not released", "fix": str(error),
+                }) from error
+        return fresh_view(body.project_id)
+
+    @router.get("/v1/setup/holds/{receipt_id}")
+    @permit(P.SETUP_READ, scope=Scope.project(query="project_id"))
+    def get_hold(receipt_id: str, project_id: str) -> dict[str, Any]:
+        """Review: the facts of one connection proof's receipt and what releasing it would do."""
+        from boss_engine.services.connection_spend import HoldRefused, review_hold
+
+        with begin(engine) as connection:
+            require_actor(connection, project_id, actor_for(None), "entitlement_manage")
+            try:
+                return review_hold(connection, project_id, receipt_id)
+            except HoldRefused as error:
+                raise HTTPException(status_code=error.status, detail={
+                    "state": "failed", "headline": "No such proof", "fix": str(error),
+                }) from error
 
     @router.post("/v1/setup/models/{source_id}/model", response_model=SetupView,
                  response_model_by_alias=True)

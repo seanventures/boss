@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from contextvars import ContextVar
 import random
+import re
 import time
 from typing import Any, Iterator, Optional, Tuple
 
@@ -189,8 +190,46 @@ PRICE_PER_MTOK: dict[str, tuple[float, float]] = {
     "qwen-2.5-coder-32b-instruct": (0.90, 0.90),  # OpenRouter's spelling (qwen/qwen-2.5-…)
     "deepseek-chat:free": (0.0, 0.0),  # OpenRouter free variant — genuinely $0
     "qwen3-32b": (0.29, 0.59),  # Groq serving (groq:qwen/qwen3-32b)
+    # Anthropic first-party API rates (the same on Foundry). A dated snapshot id
+    # ("claude-sonnet-4-5-20250929") and the "anthropic:"/"anthropic/" spellings resolve here.
+    "claude-fable-5-1": (10.00, 50.00),
+    "claude-fable-5": (10.00, 50.00),
+    "claude-opus-5-5": (4.00, 20.00),
+    "claude-opus-5": (5.00, 25.00),
+    "claude-opus-4-8": (5.00, 25.00),
+    "claude-opus-4-7": (5.00, 25.00),
+    "claude-opus-4-6": (5.00, 25.00),
+    "claude-opus-4-5": (5.00, 25.00),
+    "claude-opus-4-1": (15.00, 75.00),
+    "claude-opus-4-0": (15.00, 75.00),
+    "claude-opus-4": (15.00, 75.00),
+    "claude-sonnet-5": (2.00, 10.00),
+    "claude-sonnet-4-6": (3.00, 15.00),
+    "claude-sonnet-4-5": (3.00, 15.00),
+    "claude-sonnet-4-0": (3.00, 15.00),
+    "claude-sonnet-4": (3.00, 15.00),
+    "claude-3-7-sonnet": (3.00, 15.00),
+    "claude-haiku-4-5": (1.00, 5.00),
+    "claude-3-5-haiku": (0.80, 4.00),
+    "claude-3-haiku": (0.25, 1.25),
 }
 DEFAULT_PRICE = (2.50, 10.00)
+#: What a reply BOSS has no price for is charged at, labelled "unpriced": the dearest per-token
+#: rate in the table above, so an estimate never under-counts a known-good but unpriced reply.
+UNPRICED_ESTIMATE_PRICE = (15.00, 75.00)
+
+_DATED_SNAPSHOT = re.compile(r"[-@]\d{8}$")
+
+
+def _anthropic_name(model: str) -> str:
+    """"claude-sonnet-4-5-20250929", "claude-sonnet-4-5@20250929", "anthropic/claude-sonnet-4.5"
+    and "claude-sonnet-4-5-latest" all name the priced "claude-sonnet-4-5"."""
+    name = model.strip().lower().rsplit("/", 1)[-1]
+    if not name.startswith("claude-"):
+        return ""
+    name = _DATED_SNAPSHOT.sub("", name)
+    name = name.removesuffix("-latest").replace(".", "-")
+    return name
 
 
 def _price_overrides() -> dict[str, tuple[float, float]]:
@@ -239,6 +278,9 @@ def price_for_model(model: str, provider: str = "", endpoint: str = "") -> tuple
     if provider:
         keys.append(f"{provider.strip().lower()}:{model}")
     keys += [model, model.rsplit("/", 1)[-1]]
+    anthropic = _anthropic_name(model)
+    if anthropic:
+        keys += ([f"{provider.strip().lower()}:{anthropic}"] if provider else []) + [anthropic]
     for key in keys:
         if key in table:
             return (*table[key], True)

@@ -2790,7 +2790,6 @@ def _run_code_task(engine, settings: Settings, jobs, run_id: str,
                 "openai_api_key": settings.openai_api_key, "model": settings.openai_model,
                 # provider-agnostic: base_url selects OpenAI/Grok/Together/etc.; claude token for claude_code
                 "openai_base_url": settings.openai_base_url,
-                "claude_oauth_token": settings.claude_code_oauth_token,
                 "azure_endpoint": settings.azure_openai_endpoint,
                 "azure_deployment": settings.azure_openai_deployment,
                 "azure_api_version": settings.azure_openai_api_version,
@@ -2798,6 +2797,13 @@ def _run_code_task(engine, settings: Settings, jobs, run_id: str,
                 "token": token, "timeout": settings.code_agent_timeout_seconds,
                 "repo_host": repo_host_kind,
             }
+            if guest_spec["engine"] == "claude_code":
+                # The login or the console's Anthropic API key (claude_credential).
+                from .claude_credential import resolve_claude_credential
+
+                with _transaction(engine) as c:
+                    guest_spec.update(resolve_claude_credential(
+                        settings, connection=c, project_id=project_id).guest_fields())
             if identity_run is not None:
                 # The guest's shim holds the per-run egress credential; git inside the VM goes
                 # through egress (guest support: git_config + shim). No GitHub token is sent.
@@ -2810,8 +2816,10 @@ def _run_code_task(engine, settings: Settings, jobs, run_id: str,
             # as a single llm_calls row so micro-VM runs still count toward $/verified-outcome
             # (VAG Phase 0). Per-call detail inside the guest needs guest support (later).
             set_llm_context(db_engine=engine, project_id=project_id, run_id=run_id)
+            from .governed_code_task_service import _guest_billed
+
             record_llm_call(engine_name=f"guest:{settings.sandbox_guest_engine}",
-                            usage=result.usage,
+                            usage=_guest_billed(result.usage, guest_spec),
                             cost_usd_micros=int(result.cost_usd_micros or 0),
                             turns=int(result.turns or 0), stage="guest",
                             ok=bool(result.diff))

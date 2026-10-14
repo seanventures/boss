@@ -562,7 +562,8 @@ def _lookup_once(settings, name: str) -> tuple[Optional[str], list[tuple[str, bo
     return None, trouble
 
 
-def stored_credential(settings, name: str, *, strict: bool = False) -> Optional[str]:
+def stored_credential(settings, name: str, *, strict: bool = False,
+                      include_env: bool = True) -> Optional[str]:
     """A CLI credential: the environment first, then this install's secret store.
 
     Module-level and shared, because two different things shell out to these CLIs. The coding
@@ -587,7 +588,7 @@ def stored_credential(settings, name: str, *, strict: bool = False) -> Optional[
     `strict` a store that still does not answer raises `CredentialStoreUnavailable` instead of
     pretending nothing is stored. Without `strict` the answer stays None, logged as a warning.
     """
-    direct = os.environ.get(name)
+    direct = os.environ.get(name) if include_env else None
     if direct and direct.strip():
         return direct.strip()
     trouble: list[tuple[str, bool]] = []
@@ -612,23 +613,15 @@ def stored_credential(settings, name: str, *, strict: bool = False) -> Optional[
 
 
 def claude_login_token(settings) -> str:
-    """THE ONE RESOLUTION of the login a `claude` child process runs on, or "" for none.
-
-    Three places spawned `claude` and each resolved the token with its own copy of the same
-    four lines (the chat adapter twice, the coding/research agent once). One function, so a
-    lookup the store did not answer is never handed to the CLI as "no login" by any of them:
-    it raises `CredentialStoreUnavailable`, which every surface explains as a wait.
-
-    Strict only when nothing else could log the CLI in: an install that runs the CLI on an
-    ANTHROPIC_API_KEY keeps working while its secret store is down.
+    """The subscription login a `claude` child runs on, or "" when it runs on an API key or on
+    nothing. A view of THE ONE RESOLUTION (claude_credential.resolve_claude_credential), kept
+    for callers that only ask "is there a login"; a store that did not answer still raises
+    `CredentialStoreUnavailable` rather than read as "no login".
     """
-    # What the lane binder resolved, then what an operator exported, then the store.
-    token = (str(getattr(settings, "claude_code_oauth_token", "") or "").strip()
-             or (os.environ.get("CLAUDE_CODE_OAUTH_TOKEN") or "").strip())
-    if token:
-        return token
-    strict = not (os.environ.get("ANTHROPIC_API_KEY") or "").strip()
-    return stored_credential(settings, "CLAUDE_CODE_OAUTH_TOKEN", strict=strict) or ""
+    from .claude_credential import KIND_SUBSCRIPTION, resolve_claude_credential
+
+    cred = resolve_claude_credential(settings)
+    return cred.value if cred.kind == KIND_SUBSCRIPTION else ""
 
 
 def _uses_env_route(spec: CliHarnessSpec) -> bool:
@@ -1144,6 +1137,15 @@ class GenericCliCodeAgent:
         # THE VARIABLE IS THE LOGIN, so it has to be here on every run. `env_passthrough`
         # copies it when the operator set it in this process's environment; this also covers
         # the credential BOSS itself stored, which is not in the environment at all.
+        if self.spec.name == "claude_code":
+            # Claude's login OR the console's Anthropic API key: one resolution for every
+            # `claude` BOSS starts (claude_credential), never a second lookup order here.
+            from .claude_credential import resolve_claude_credential
+
+            try:
+                return resolve_claude_credential(self.settings).apply(env)
+            except CredentialStoreUnavailable:
+                return env     # as before: what the environment holds, logged by the lookup
         if _uses_env_route(self.spec) and not env.get(self.spec.token_env):
             token = self._resolve_secret(self.spec.token_env)
             if token:

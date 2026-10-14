@@ -52,7 +52,7 @@ CREATE_PROJECT_SETTINGS = (
 #: The router binds a lane's stored credential through it, so every routed test reaches it.
 CREATE_SECRET_REFS = (
     "CREATE TABLE secret_refs (id TEXT, project_id TEXT, provider TEXT, status TEXT,"
-    " updated_at TIMESTAMP)"
+    " updated_at TIMESTAMP, ref_key TEXT)"
 )
 
 

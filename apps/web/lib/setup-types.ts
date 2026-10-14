@@ -173,6 +173,22 @@ export type Toolchain = {
   enable?: string | null;
 };
 
+/** A connection proof whose money is held until a person reviews it (GET /v1/setup held_proofs). */
+export type HeldProof = {
+  receipt_id: string;
+  created_at: string | null;
+  provider: string;
+  provider_label: string;
+  model: string;
+  actor?: string | null;
+  held_usd_micros: number;
+  summary: string;
+  outcome: { kind: "replied_ok" | "refused" | "unknown"; http_status?: number | null;
+             provider_error_type?: string; provider_error?: string; usage_present?: boolean | null };
+  /** What "Release the hold" settles it at: 0 if the provider refused, else this estimate. */
+  release: { cost_usd_micros: number; basis: "refused" | "priced" | "unpriced"; succeeded: boolean };
+};
+
 export type SetupView = {
   project_id: string;
   ready: boolean;
@@ -184,6 +200,8 @@ export type SetupView = {
   models: ModelEntry[];
   detected: Detected[];
   catalogue: CatalogueEntry[];
+  /** Held connection proofs (Review → Release the hold). Absent on an older API. */
+  held_proofs?: HeldProof[];
   jobs: Job[];
   /** Null when the server has no router tables yet (an older API): the row shows the jobs. */
   routing?: Routing | null;
@@ -206,6 +224,11 @@ export type SetupRefusal = {
   state: string;
   headline: string;
   fix: string;
+  /** What the provider actually said, in words ("Anthropic refused: model not found"). */
+  summary?: string;
+  /** A held proof's receipt: Review it to release the hold. */
+  receipt_id?: string;
+  reconciliation_required?: boolean;
   jobs?: string[];
   resend_with?: Record<string, unknown>;
 };

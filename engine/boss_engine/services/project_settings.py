@@ -194,6 +194,17 @@ KNOBS: dict[str, dict[str, Any]] = {
                 "again when Jev is unsure. Each call is budgeted and receipted.",
         "kind": "choice", "choices": ("claude", "typesafe"),
     },
+    # WHICH ANTHROPIC CREDENTIAL PAYS (claude_credential, BOSSAPP-530). Builds, agents and
+    # meetings run `claude` on the subscription's login or on the Anthropic API key stored in
+    # Repo and models; disconnecting the subscription falls through to the key either way.
+    "anthropic_credential_order": {
+        "attr": "anthropic_credential_order",
+        "label": "Anthropic credential",
+        "help": "Which Anthropic credential runs Claude: the subscription first (the API key "
+                "when it is disconnected), or the API key first. The key is billed to your "
+                "Anthropic API account.",
+        "kind": "choice", "choices": ("subscription_first", "api_key_first"),
+    },
     # A THROWAWAY DATABASE PER BUILD (build_services). The same opt-in a repo makes with
     # `services: [postgres]` in boss.verify.yaml, for a project whose repo does not declare it.
     "build_services": {

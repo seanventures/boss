@@ -3058,6 +3058,16 @@ def _lane_api_key(
     return getattr(settings, attr, None)
 
 
+def _guest_billed(usage, guest_spec: dict):
+    """A guest run's usage with who paid stamped on it: a claude_code guest on an Anthropic API
+    key is money (included_spend.py), whatever its engine name would suggest."""
+    if guest_spec.get("engine") == "claude_code" and guest_spec.get("anthropic_api_key"):
+        from .included_spend import BILLING_METERED
+
+        return {**(usage or {}), "billing": BILLING_METERED}
+    return usage
+
+
 def _guest_engine_fields(
     settings: Settings,
     engine_name: str,
@@ -3082,8 +3092,12 @@ def _guest_engine_fields(
     if engine_name == "echo":
         return {"engine": "echo"}
     if engine_name == "claude_code":
-        return {"engine": "claude_code",
-                "claude_oauth_token": key("claude_code_oauth_token")}
+        # The login or the console's Anthropic API key — one resolution (claude_credential),
+        # never `provider="anthropic"`, which cannot tell the two apart.
+        from .claude_credential import resolve_claude_credential
+
+        cred = resolve_claude_credential(settings, connection=connection, project_id=project_id)
+        return {"engine": "claude_code", **cred.guest_fields()}
     if engine_name == "openrouter":
         return {"engine": "openai", "openai_api_key": key("openrouter_api_key"),
                 "openai_base_url": settings.openrouter_base_url, "model": model}
@@ -3874,7 +3888,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     {"sid": mv.last_sandbox_task_id, "ids": json.dumps(guest_vm_ids), "id": run_id},
                 )
         cost += int(res.cost_usd_micros or 0)
-        record_llm_call(engine_name=f"guest:{eng_name}", usage=res.usage,
+        record_llm_call(engine_name=f"guest:{eng_name}",
+                        usage=_guest_billed(res.usage, guest_spec),
                         cost_usd_micros=int(res.cost_usd_micros or 0),
                         turns=int(res.turns or 0))
         return res

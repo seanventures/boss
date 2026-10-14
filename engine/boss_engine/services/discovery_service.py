@@ -67,8 +67,12 @@ def research_unavailable(connection, settings: Settings, project_id: str,
     """
     if not _research_runs_as_a_job(settings):
         return None
-    from .discovery_spend import JOB_KIND, RESEARCH_SOURCE_ID, SKILL_ID
+    from .discovery_spend import JOB_KIND, SKILL_ID, research_source_id
     from .entitlements import EntitlementBrokerService
+
+    # The Claude CLI researches on the subscription or on the console's Anthropic API key
+    # (claude_credential); the lease is booked on whichever of them it will run on.
+    RESEARCH_SOURCE_ID = research_source_id(connection, settings, project_id)
 
     def preview() -> dict:
         return EntitlementBrokerService(settings).simulate_model_route_decision(
@@ -265,7 +269,12 @@ def execute_discovery_job(settings: Settings, *, run_id: str, job_id: str, worke
     def fail(error):
         return _fail_run(engine, row["project_id"], run_id, error, guard=spend.check_active)
 
-    agent = make_code_agent(settings, engine="claude_code")
+    # Bound with a connection: the project's credential order and a disconnected subscription
+    # decide which Anthropic credential researches, and the lease below books on that one.
+    with engine.begin() as _c:
+        agent = make_code_agent(settings, engine="claude_code", connection=_c,
+                                project_id=row["project_id"])
+        research_source = discovery_spend.research_source_id(_c, settings, row["project_id"])
     if not hasattr(agent, "run_research"):
         raise RuntimeError("Discovery requires the claude_code engine (web research).")
     # THE MODEL ROUTER picks the model (docs/product/MODEL_ROUTER.md): web research needs the
@@ -275,7 +284,7 @@ def execute_discovery_job(settings: Settings, *, run_id: str, job_id: str, worke
 
     def research(stage: str, prompt: str) -> dict:
         return spend.run(stage, lambda: agent.run_research(prompt, model=research_model),
-                         source_id=discovery_spend.RESEARCH_SOURCE_ID)
+                         source_id=research_source)
 
     last_attempt = int(row["attempt"] or 1) >= int(row["max_attempts"] or 1)
     try:
