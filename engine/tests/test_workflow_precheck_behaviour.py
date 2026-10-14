@@ -485,6 +485,61 @@ def test_the_last_start_failure_repeats_until_its_variable_is_bound(store, monke
         "current_env": {"unset": [], "generated": []}}))["verdict"] == "unknown"
 
 
+def _unbound_start(store, monkeypatch) -> wp.Context:
+    _start_failure(store, "crun_p", "Error: DEMO_PASSWORD must be set", None)   # at ago(5)
+    monkeypatch.setattr(wp, "_has_binding", lambda ctx, n, env: False)
+    monkeypatch.delenv("BOSS_BUILT_AT", raising=False)
+    return _ctx(run_input={"app_key": "helpdesk ai"}, memo={"current_env": {"unset": [
+        "DEMO_PASSWORD"], "generated": []}})
+
+
+def test_a_start_failure_from_before_this_version_is_a_question_not_a_verdict(store, monkeypatch):
+    # D1: a 10-13 23:51 failure, fixed by the upgrade after it, was called will_fail.
+    ctx = _unbound_start(store, monkeypatch)
+    store.starts = [{"service": "api", "created_at": ago(2)}]
+    found = bh.check_app_start(ctx)
+    assert found["verdict"] == "unknown"
+    assert "seen before this version; may be fixed" in found["evidence"]
+    assert found["details"]["before_version"] is True
+
+
+def test_the_same_failure_after_this_version_started_still_will_fail(store, monkeypatch):
+    ctx = _unbound_start(store, monkeypatch)
+    store.starts = [{"service": "api", "created_at": ago(10)}]
+    assert bh.check_app_start(ctx)["verdict"] == "will_fail"
+
+
+def test_a_restart_of_the_same_image_does_not_hide_a_failure(store, monkeypatch):
+    """The version's start is its image's FIRST start (at/after BOSS_BUILT_AT), not the last
+    restart: a restart after the failure fixes nothing."""
+    ctx = _unbound_start(store, monkeypatch)
+    monkeypatch.setenv("BOSS_BUILT_AT", ago(30).isoformat().replace("+00:00", "Z"))
+    store.starts = [{"service": "api", "created_at": ago(60)},     # the previous image
+                    {"service": "api", "created_at": ago(20)},     # this image, first start
+                    {"service": "api", "created_at": ago(1)}]      # a restart
+    assert bh.version_started(ctx) == ago(20)
+    assert bh.check_app_start(ctx)["verdict"] == "will_fail"
+
+
+def test_without_a_start_record_the_verdict_stands(store, monkeypatch):
+    ctx = _unbound_start(store, monkeypatch)
+    assert bh.version_started(ctx) is None
+    assert bh.check_app_start(ctx)["verdict"] == "will_fail"
+
+
+def test_what_boss_said_before_this_version_is_history_not_a_verdict(store, monkeypatch):
+    log = "Error: DEMO_PASSWORD must be set\nthe app needs a secret: APP_BASE_URL"
+    _start_failure(store, "crun_s", log, {"unset": ["APP_BASE_URL", "DEMO_PASSWORD"],
+                                          "generated": []})
+    monkeypatch.delenv("BOSS_BUILT_AT", raising=False)
+    store.starts = [{"service": "api", "created_at": ago(10)}]
+    assert [f["verdict"] for f in bh.check_crash_blame(_ctx())] == ["will_fail"]
+    store.starts = [{"service": "api", "created_at": ago(2)}]
+    found = bh.check_crash_blame(_ctx())
+    assert found[0]["verdict"] == "unknown"
+    assert "seen before this version; may be fixed" in found[0]["evidence"]
+
+
 def test_swallowed_programming_errors_group_across_line_numbers(store):
     tb = ('caught AttributeError:\nTraceback (most recent call last):\n  File '
           '"/app/engine/boss_engine/services/governed_code_task_service.py", line {n}, in '

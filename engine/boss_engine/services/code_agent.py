@@ -2304,13 +2304,17 @@ def _register_builtin_harnesses() -> None:
     `verified` is reserved for harnesses a governed code task has actually completed on.
     Everything registered here has; new adapters start at False and say so.
     """
+    from .cli_harness import CLAUDE_CLI_RUNTIME, CLAUDE_SANDBOX_RUNTIME
     from .harness_registry import register_harness
 
+    # `runtime`: what each engine execs (harness_registry.RuntimeBinary) — held to the image by
+    # test_every_engine_binary_is_in_the_image, looked for on PATH by the `sandbox.engine` check.
     register_harness(
         "claude_code", ClaudeCodeAgent, kind="cli", verified=True,
         requires=("CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY", "claude CLI on PATH"),
         description="Claude Code headless (`claude -p`) with its own file/bash tools, "
                     "scoped to the sandbox working tree.",
+        runtime=CLAUDE_CLI_RUNTIME,
     )
     from .agent_sdk_engine import ENGINE as _SDK_ENGINE, SDK_PACKAGE, build_agent
 
@@ -2321,6 +2325,9 @@ def _register_builtin_harnesses() -> None:
                   f"the {SDK_PACKAGE} Python package"),
         description="Claude Agent SDK on an Anthropic API key (metered Agent SDK usage): "
                     "Claude Code's tools and sessions, scoped to the sandbox working tree.",
+        # The SDK runs its bundled CLI with CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1: the CLI's own
+        # sandbox is required, and it needs bubblewrap and socat on PATH.
+        runtime=CLAUDE_SANDBOX_RUNTIME,
     )
     register_harness(
         "native", NativeCodeAgent, kind="native", verified=True, aliases=("openai",),
@@ -2354,7 +2361,7 @@ def _register_builtin_harnesses() -> None:
         register_harness(
             cli_name, _cli_builder(cli_name), kind="cli", verified=cli_spec.verified,
             requires=(f"{cli_spec.binary} on PATH", "signed in to that CLI"),
-            description=cli_spec.description,
+            description=cli_spec.description, runtime=tuple(cli_spec.runtime),
         )
     for lane, (key_field, url_field) in _PROVIDER_LANES.items():
         local = lane in ("ollama", "vllm")

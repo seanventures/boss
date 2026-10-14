@@ -202,20 +202,64 @@ def running_since(ctx: wp.Context) -> Optional[datetime]:
     return api[-1] if api else None
 
 
+def _built_at() -> Optional[datetime]:
+    """The image's build time, as the build stamped it (BOSS_BUILT_AT; self_observability's
+    `build` stamp reads the same variable). None when the image carries no stamp."""
+    import os
+
+    raw = (os.environ.get("BOSS_BUILT_AT") or "").strip()
+    if not raw:
+        return None
+    try:
+        value = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+
+def version_started(ctx: wp.Context) -> Optional[datetime]:
+    """When the BOSS VERSION now running started: its image's first API start (the first start
+    at or after BOSS_BUILT_AT — an image cannot have run before it was built), else the last
+    API start. A failure before it happened on an earlier version, which may have been fixed:
+    D1's pre-check called a 10-13 23:51 app-start failure `will_fail` after the upgrade that
+    fixed it."""
+    def compute() -> Optional[datetime]:
+        api = _starts(ctx).get("api") or []
+        if not api:
+            return None
+        built = _built_at()
+        if built is not None:
+            after = [t for t in api if isinstance(t, datetime) and t >= built]
+            if after:
+                return after[0]
+        return api[-1]
+    return ctx.once("version_started", compute)
+
+
 def _version_line(ctx: wp.Context) -> str:
     import os
 
     sha = (os.environ.get("BOSS_SOURCE_SHA") or "").strip()
-    since = running_since(ctx)
+    since = version_started(ctx)
     return ((f"BOSS {sha[:8]}" if sha and sha != "unknown" else "the running BOSS")
-            + (f" (API up since {_when(since)})" if since else ""))
+            + (f" (up since {_when(since)})" if since else ""))
 
 
 def _since_current(ctx: wp.Context, when: Any) -> Optional[bool]:
-    since = running_since(ctx)
+    since = version_started(ctx)
     if since is None or not isinstance(when, datetime):
         return None
     return when >= since
+
+
+#: What a past failure from before the running version says instead of `will_fail`.
+BEFORE_THIS_VERSION = "seen before this version; may be fixed"
+
+
+def _before_this_version(ctx: wp.Context, when: Any) -> bool:
+    """A failure that happened before the running version started (and so cannot, alone, say
+    this version fails the same way). Unknown start time → False: the verdict stands."""
+    return _since_current(ctx, when) is False
 
 
 def scope(ctx: wp.Context) -> dict[str, Any]:
@@ -792,8 +836,12 @@ def check_crash_blame(ctx: wp.Context) -> list[dict[str, Any]]:
         if named and reads and named not in reads:
             wrong.append((item, named, ", ".join(sorted(reads)), "the code at the throw site "
                           "reads"))
-        elif named and ((blamed and blamed != named) or (said and said != named)):
-            wrong.append((item, named, blamed or said, source))
+        elif named and blamed and blamed != named:
+            wrong.append((item, named, blamed, source))
+        elif named and said and said != named:
+            # Only what BOSS SAID at the time disagrees; the running matcher reads it right.
+            # From before this version, that is history, not this version's verdict.
+            wrong.append((item, named, said, "BOSS's explanation at the time"))
         elif named and named in (env.get("generated") or []):
             refused_generated.append((item, named))
         elif named and named not in (env.get("unset") or []) and not blamed:
@@ -802,8 +850,12 @@ def check_crash_blame(ctx: wp.Context) -> list[dict[str, Any]]:
     evidence = f"{len(logs)} failed start(s) read: " + "; ".join(rows[-5:])
     if wrong:
         item, named, blamed, source = wrong[-1]
+        historical = (source == "BOSS's explanation at the time"
+                      and _before_this_version(ctx, item["at"]))
         out.append(wp.result(
-            "logs.crash_blame", "will_fail", evidence + f". WRONG BLAME on {item['run']}: the app "
+            "logs.crash_blame", "unknown" if historical else "will_fail",
+            evidence + (f". {BEFORE_THIS_VERSION} ({_version_line(ctx)})" if historical else "")
+            + f". WRONG BLAME on {item['run']}: the app "
             f"says \"{_clip(named_by_app_context(item['error'], named), 90)}\" and the "
             f"explanation names {blamed} ({source}): the person is sent to set the wrong secret",
             action="BOSS bug: explain_crash must prefer the name in the app's error line over "
@@ -885,6 +937,16 @@ def check_app_start(ctx: wp.Context) -> dict[str, Any]:
     if later_ok:
         return wp.result("logs.app_start", "ready", evidence + f"; started fine since "
                          f"({later_ok[-1]['entity_id']})")
+    if _before_this_version(ctx, last["at"]):
+        # `last` is the LATEST failed start: nothing failed this way on the running version.
+        return wp.result("logs.app_start", "unknown", evidence + f" — {BEFORE_THIS_VERSION} "
+                         f"({_version_line(ctx)})" + (
+                             f"; {named} still has no build value under '{key or '?'}'"
+                             if named and not bound and not generated else ""),
+                         action=(f"If the app still needs {named}, set it for env build in "
+                                 "the app's Secrets." if named and not bound and not generated
+                                 else ""),
+                         details={"named": named, "app_key": key, "before_version": True})
     if named and not bound and not generated:
         return wp.result("logs.app_start", "will_fail", evidence + f" — {named} still has no "
                          f"build value under '{key or '?'}', so the app-start proof fails the "

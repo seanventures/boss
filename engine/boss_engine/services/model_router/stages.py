@@ -32,6 +32,63 @@ def task_pin(spec: dict, step: str) -> Optional[Target]:
     return None
 
 
+def pinned_engine(spec: dict) -> str:
+    """The engine the task's `model_config.default` pins the run to, or "".
+
+    Per-run model_config default (official POST engine=… or spend-cap failover) wins over the
+    process default so route_for_step / _route_escalated stay on the pinned engine instead of
+    silently falling back to claude_code."""
+    mc = spec.get("model_config") if isinstance(spec.get("model_config"), dict) else {}
+    default = mc.get("default")
+    _pinned_engine = ""
+    if isinstance(default, dict):
+        _pinned_engine = str(default.get("engine") or "").strip().lower()
+    elif isinstance(default, str) and default.strip():
+        _pinned_engine = default.split(":", 1)[0].strip().lower()
+        # ASK THE REGISTRY, not a list of three. This allow-list predates the harness seam and
+        # silently dropped every engine added since — a run pinned to "codex:gpt-5-codex" or
+        # "openrouter:…" in string form fell back to the process default and ran somewhere
+        # else, with nothing saying so.
+        try:
+            from ..harness_registry import get_harness
+
+            get_harness(_pinned_engine)
+        except Exception:  # noqa: BLE001 — an unknown engine is not a pin
+            _pinned_engine = ""
+    return _pinned_engine
+
+
+def lane_engines(connection: Any, settings: Any, project_id: str, spec: dict
+                 ) -> tuple[Any, str, str]:
+    """(settings with the project's choices applied, build engine, review engine): the lane
+    defaults every build stage routes from. The governed pipeline asks this, and so does the
+    pre-check (`sandbox.engine`), so "which engine will this build start" has one answer.
+
+    Lane defaults: builder engine for design/tests/implement, adversary engine for
+    review/security/consistency/mutation — the model that wrote the code isn't the one judging
+    it (removes self-review bias). VAG B2 layers per-STEP (engine, model) routing on top
+    (route_for_step)."""
+    from ..project_settings import applied as _applied_settings
+    from ..setup_service import build_engine_for as _build_engine_for
+
+    _pinned_engine = pinned_engine(spec)
+    # The project's choices, layered over the deployment's, ONCE — every `settings.*_engine`
+    # read below and in the functions this calls then sees them. Credentials for several
+    # providers can be connected at once, so which model fills which role is a decision
+    # somebody makes in the console, not one frozen into the container at deploy time.
+    settings = _applied_settings(connection, project_id, settings)
+    # AND A DEFAULT THAT MATCHES THIS INSTALLATION. The chain used to end at the literal
+    # "claude_code", so an install that had connected only an OpenRouter key shelled out to a
+    # `claude` binary it does not have. This only speaks when the configured engine cannot run
+    # here — see build_engine_for.
+    _resolved_engine = _build_engine_for(connection, settings, project_id)
+    build_engine = (
+        _pinned_engine or _resolved_engine or settings.code_agent_engine or "claude_code"
+    ).lower()
+    review_engine = (settings.code_review_engine or "").lower() or build_engine
+    return settings, build_engine, review_engine
+
+
 class StageRouter:
     """One per governed run. Holds the run's ledger; every stage boundary asks `route`."""
 
