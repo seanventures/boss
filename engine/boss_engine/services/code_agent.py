@@ -496,6 +496,7 @@ from .sandbox import (
     CommandResult, DiffSummary, EphemeralSandbox, _shared_tool_caches,
 )
 from .agent_env import agent_environment
+from . import model_proxy as _model_proxy
 from .workspace_perms import tidies_workspace
 from . import owned_process
 
@@ -897,6 +898,11 @@ class CodeAgent(Protocol):
         ...
 
 
+# Every model-proxy token a session was given is revoked when `_invoke` returns or raises, and
+# what crossed the proxy rides back on the result as `_proxy_usage` (model_proxy).
+_model_proxy_scoped = _model_proxy.scoped(attach_usage=True)
+
+
 # --------------------------------------------------------------------------- #
 #  Claude Code headless implementation                                        #
 # --------------------------------------------------------------------------- #
@@ -940,6 +946,15 @@ class ClaudeCodeAgent:
         # It raises rather than start the CLI with no login when the store did not answer.
         cred = self._resolve_credential()
         cred.apply(env)
+        if cred.is_key:
+            # AN API KEY NEVER REACHES THE SESSION (model_proxy). The CLI gets a run token and the
+            # loopback proxy's base URL; the proxy injects the key. The agent's own commands
+            # inherit this environment, so what they could read is a token that only works on
+            # the model API paths, for this session, and dies when it ends. A subscription login
+            # is not an API key and is not proxied (MODEL_CONNECTIONS.md).
+            from . import model_proxy
+
+            model_proxy.shield(env, "anthropic", cred.value, settings=self.settings)
         #: Who pays for this run's calls (included_spend.py), stamped on its usage.
         self._billing = cred.billing
         # A BOUND ON SILENT THINKING. Left to decide for itself, the model thought for 7 and 12
@@ -1028,6 +1043,7 @@ class ClaudeCodeAgent:
             "- When done, end with a concise summary of WHAT you changed and WHY.\n"
         )
 
+    @_model_proxy_scoped
     def _invoke(
         self, prompt: str, cwd: Path, *, read_only: bool = False, model: Optional[str] = None,
         allowed_tools: Optional[str] = None, resume_session_id: Optional[str] = None,
@@ -2334,7 +2350,7 @@ def _register_builtin_harnesses() -> None:
     `verified` is reserved for harnesses a governed code task has actually completed on.
     Everything registered here has; new adapters start at False and say so.
     """
-    from .cli_harness import CLAUDE_CLI_RUNTIME, CLAUDE_FAILURE_PATTERNS, CLAUDE_SANDBOX_RUNTIME
+    from .cli_harness import CLAUDE_CLI_RUNTIME, CLAUDE_FAILURE_PATTERNS
     from .harness_registry import register_harness
 
     # `runtime`: what each engine execs (harness_registry.RuntimeBinary) — held to the image by
@@ -2355,9 +2371,10 @@ def _register_builtin_harnesses() -> None:
                   f"the {SDK_PACKAGE} Python package"),
         description="Claude Agent SDK on an Anthropic API key (metered Agent SDK usage): "
                     "Claude Code's tools and sessions, scoped to the sandbox working tree.",
-        # The SDK runs its bundled CLI with CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1: the CLI's own
-        # sandbox is required, and it needs bubblewrap and socat on PATH.
-        runtime=CLAUDE_SANDBOX_RUNTIME, failure_patterns=CLAUDE_FAILURE_PATTERNS,
+        # The SDK runs the CLI bundled in its own package (checked by `sdk_available`). No
+        # bubblewrap/socat: the session holds a model-proxy run token, not the key, so the CLI's
+        # own sandbox (CLAUDE_CODE_SUBPROCESS_ENV_SCRUB) is not needed and is not started.
+        runtime=(), failure_patterns=CLAUDE_FAILURE_PATTERNS,
     )
     register_harness(
         "native", NativeCodeAgent, kind="native", verified=True, aliases=("openai",),

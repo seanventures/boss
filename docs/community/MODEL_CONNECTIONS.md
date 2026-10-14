@@ -71,6 +71,26 @@ Credentials are stored on the install machine. A hosted provider receives authen
 
 For a dedicated local secret store, choose `--secret-store infisical` during installation. With the default database backend, storing a subscription credential in Postgres requires the explicit flag `--accept-database-fallback`.
 
+### Agents never hold your API key
+
+A coding agent runs commands, and those commands can read the agent's environment. So when an agent session runs on an API key, BOSS keeps the key and gives the session something else:
+
+- **A run token and a local address.** The process that starts the session runs a small model proxy on `127.0.0.1`. The session gets `ANTHROPIC_BASE_URL` pointing at it and `ANTHROPIC_API_KEY` set to a `boss_mdl_…` run token. The proxy adds your real key to each request on its way to the provider and streams the answer back.
+- **Model calls only.** The proxy forwards only the provider's model API (for Anthropic: `/v1/messages`, `/v1/messages/count_tokens` and `/v1/models`) to a fixed upstream. It refuses any other path, a token issued for another provider, and an unknown, expired or revoked token, before anything leaves BOSS.
+- **Short-lived.** A token belongs to one session and its run. It is revoked when that session ends and expires on its own after the longest session BOSS can start. Run tokens are removed from logs like every other BOSS credential.
+- **Metered once.** Spend is still recorded from the session's own result in the usual per-run records. The proxy only counts what crossed it, so the two can be compared; it never adds a second charge.
+
+| Engine and credential | Covered |
+| --- | --- |
+| `claude_code` on an Anthropic API key (stored in the console or `ANTHROPIC_API_KEY`) | Yes |
+| `claude_agent_sdk` (always an Anthropic API key) | Yes. It no longer needs the Claude CLI's own Linux sandbox (bubblewrap), which cannot start inside BOSS's containers |
+| Aider, with `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` or `OPENROUTER_API_KEY` | Yes: each key becomes a token for its own provider, with that provider's base-URL variable set |
+| Native, OpenAI and provider-lane engines | Not needed: these call the model from BOSS's own process, and the commands they run never receive a provider key |
+| A subscription login: Claude Code, Codex ChatGPT, Grok Build | No. These are the CLIs' own sign-ins, not API keys. They stay in the session as before |
+| A micro-VM build | No. The guest gets its credential through its own launch spec and shares no loopback with BOSS |
+
+No setting turns the proxy off. If it cannot start, the session does not start, and the engine pre-check reports the proxy's own error. It never falls back to handing over the key.
+
 ## Verification and live checks
 
 The connection method determines when BOSS calls the model:

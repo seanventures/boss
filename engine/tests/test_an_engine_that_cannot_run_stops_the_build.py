@@ -50,7 +50,9 @@ def test_the_socat_message_is_the_harness_and_names_the_install():
     assert said is not None and said.kind == "missing_runtime"
     assert said.engine == "claude_agent_sdk"
     assert "socat not installed" in said.message and "Restart to retry" not in said.message
-    assert "apt-get install socat" in said.fix          # the engine's declared RuntimeBinary
+    # No engine declares socat any more (the SDK engine no longer starts the CLI's sandbox:
+    # model_proxy), so the fix names the binary without a package hint.
+    assert "install socat where BOSS runs claude_agent_sdk" in said.fix
     assert said.sentence().startswith("BOSS could not run claude_agent_sdk: Sandbox is required")
     assert "; fix: install socat" in said.sentence()
 
@@ -124,7 +126,7 @@ def test_the_verdict_is_needs_human_retryable_and_settled_not_infra():
     said = explain(reason)
     assert said["kind"] == "harness_failure" and said["retry"] is True
     assert said["headline"].startswith("BOSS could not run claude_agent_sdk:")
-    assert "apt-get install socat" in said["action"]
+    assert "install socat" in said["action"].lower()
     assert settled_failure(reason) == reason          # the sentence is not wrapped twice
 
 
@@ -279,7 +281,7 @@ def test_the_sdk_session_stops_at_the_first_socat_result(monkeypatch, tmp_path, 
             agent.run_role("Implement the HelpDesk app.", tmp_path)
         verdict = stopped.value.verdict
         assert verdict.engine == "claude_agent_sdk" and verdict.kind == "missing_runtime"
-        assert "apt-get install socat" in verdict.fix
+        assert "install socat" in verdict.fix
         # Stopped at the first occurrence: the tool_use and its result, nothing after.
         assert sdk_stub["messages"] == 2
         assert [t["direction"] for t in sdk_stub["turns"]] == ["tool_call", "tool_result"]
