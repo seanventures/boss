@@ -33,6 +33,7 @@ CONFINED: dict[str, dict[str, str | tuple[str, ...]]] = {
                    "approval_decision_id": "decision"},
     "describe_deployment_target": {"target_id": "deployment_target"},
     "describe_workflow_run": {"run_id": "workflow_run"},
+    "precheck_workflow": {"run_id": "workflow_run", "build_run_id": CODE_TASK},
     "diagnose_run": {"run_id": CODE_TASK},
     "explain_run": {"run_id": CODE_TASK},
     "extend_code_task": {"run_id": CODE_TASK},

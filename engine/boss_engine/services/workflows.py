@@ -2700,6 +2700,8 @@ def _validate_bindings(
 
 #: Run inputs that claim work already happened. Only the server sets them — see `start_run`.
 ADOPT_PREFIX = "adopt_"
+#: The run-input key the start door's pre-check writes (workflow_precheck.RECORD_KEY).
+PRECHECK_KEY = "_precheck"
 
 
 def start_run(
@@ -2715,8 +2717,14 @@ def start_run(
     policy_snapshot: Optional[dict[str, Any]] = None,
     parent_run_id: Optional[str] = None,
     adopted: Optional[dict[str, Any]] = None,
+    precheck_record: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """Start a run.
+
+    `precheck_record` is what the start door's pre-check recorded (workflow_precheck.gate_start:
+    the will_fail checks started anyway, the steps skipped, who and why). It is written under
+    `_precheck` in the run's input; a caller's own `_precheck` is dropped, like `adopt_*`, so a
+    skip can be recorded by the server and never asserted by a client.
 
     ADOPTION IS DECIDED BY THE SERVER, HERE, FOR EVERY ENTRY POINT. An `adopt_*` input tells the
     runtime "this work already happened — watch it rather than do it". The HTTP start endpoint
@@ -2731,7 +2739,10 @@ def start_run(
     dedupe_key = _clean_text(dedupe_key, "dedupe_key")
     # Identity is never a caller's to set (IDENTITY.md §2): `_identity*` keys are dropped here.
     input_data = {k: v for k, v in (input_data or {}).items()
-                  if not str(k).startswith(ADOPT_PREFIX) and not str(k).startswith("_identity")}
+                  if not str(k).startswith(ADOPT_PREFIX) and not str(k).startswith("_identity")
+                  and str(k) != PRECHECK_KEY}
+    if precheck_record:
+        input_data[PRECHECK_KEY] = dict(precheck_record)
     for key, value in (adopted or {}).items():
         if not str(key).startswith(ADOPT_PREFIX):
             raise WorkflowValidationError(f"{key!r} is not an adoption key")

@@ -4476,6 +4476,42 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
             return {"ok": False, "error": str(error)}
 
     @reg.tool(
+        "precheck_workflow",
+        "WILL THIS RUN WORK, before it spends anything: checks each step's REAL infrastructure "
+        "(the run's consent vs every call the step makes, GitHub access and CI, the sandbox, "
+        "budget headroom, the app's variables per environment, the deploy's target, port and "
+        "manifest, smoke's contract) and answers per step ready / fixable / will_fail / unknown "
+        "with the evidence and the fix. checkpoint 'pre_run' before starting; 'pre_deploy' "
+        "after the first build, against its saved workspace (give build_run_id). Read-only. Use "
+        "it before offering to start a workflow and when asked 'why will this fail'.",
+        _obj({"workflow": {"type": "string",
+                           "description": "workflow key or name (or omit and give run_id)"},
+              "run_id": {"type": "string", "description": "an existing workflow run (wfr_)"},
+              "checkpoint": {"type": "string", "enum": ["pre_run", "pre_deploy"]},
+              "build_run_id": {"type": "string",
+                               "description": "pre_deploy: the pass-1 build (crun_)"},
+              "input": {"type": "object", "description": "the run input it would start with"},
+              "project_id": {"type": "string"}}),
+        kind="read", permission="workflow:read")
+    def precheck_workflow(ctx, *, project_id, actor, args):
+        from ..services import workflow_precheck
+
+        workflow = str(args.get("workflow") or "").strip() or None
+        run_id = str(args.get("run_id") or "").strip() or None
+        if not (workflow or run_id):
+            return {"ok": False, "error": "name a workflow, or give run_id"}
+        try:
+            report = workflow_precheck.precheck(
+                ctx.engine, ctx.settings, project_id=args.get("project_id") or project_id,
+                actor=actor, workflow=workflow, run_id=run_id,
+                run_input=args.get("input") if isinstance(args.get("input"), dict) else None,
+                checkpoint=str(args.get("checkpoint") or "pre_run"),
+                build_run_id=str(args.get("build_run_id") or "").strip() or None)
+        except workflow_precheck.PrecheckError as error:
+            return {"ok": False, "error": str(error)}
+        return {"ok": True, **report}
+
+    @reg.tool(
         "watch",
         "Keep THIS conversation checking something on an interval until a condition is met — "
         "a pull request, a CI run, a deployment. Use it when the operator says 'keep an eye "

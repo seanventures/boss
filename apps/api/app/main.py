@@ -26937,6 +26937,12 @@ def start_delivery_workflow(payload: WorkflowStartBody, connection_in: Any = Non
         readiness = _delivery_readiness_or_409(
             connection, project_id, version_id=version_id, work_class=work_class,
             run_input=run_input, start_anyway=accepted)
+        # THE PRE-CHECK: what will fail on this run, before anything is spent or STOPPED.
+        precheck = _precheck_or_409(
+            connection, project_id, version_id=version_id, work_class=work_class,
+            run_input=run_input, actor=actor, accept=payload.get("accept"),
+            skip_steps=payload.get("skip_steps"), reason=payload.get("precheck_reason"),
+            start_anyway=accepted)
         if replaces:
             # STOP, THEN START, IN THIS TRANSACTION. The preflight above has passed, so the
             # stop is no longer a gamble; and a start that fails below rolls the stop back
@@ -26961,6 +26967,7 @@ def start_delivery_workflow(payload: WorkflowStartBody, connection_in: Any = Non
                 # The adoption the server resolved above — `start_run` drops any `adopt_*` key
                 # a caller put in `input`.
                 adopted=adopted,
+                precheck_record=precheck,
             )
         except workflow_runtime.WorkflowMappingNotFoundError as error:
             # The honest failure: nobody chose a workflow for this class of work. Picking one
@@ -26976,6 +26983,10 @@ def start_delivery_workflow(payload: WorkflowStartBody, connection_in: Any = Non
         from boss_engine.services.workflow_readiness import record_started_anyway
 
         if not run.get("duplicate"):
+            from boss_engine.services.workflow_precheck import record_on_run
+
+            # The pre-check first: it is the run's first activity entry.
+            record_on_run(connection, project_id, actor, run.get("id") or "", precheck)
             record_started_anyway(connection, project_id, actor, run.get("id") or "", readiness)
             if requested_links:
                 from boss_engine.app_links import service as _links
@@ -26990,6 +27001,7 @@ def start_delivery_workflow(payload: WorkflowStartBody, connection_in: Any = Non
         # behaved differently from the one it copied.
         return {"run": run, **({"ignored_input": dropped} if dropped else {}),
                 **({"readiness": readiness} if readiness.get("missing") else {}),
+                **({"precheck": precheck} if precheck else {}),
                 **({"extends": extends} if extends else {}),
                 **({"app_links": requested_links} if requested_links else {})}
 
@@ -27036,6 +27048,90 @@ def _delivery_readiness_or_409(
     except workflow_readiness.WorkflowNotReadyError as error:
         raise HTTPException(status_code=409, detail={
             "message": str(error), "readiness": error.readiness}) from error
+
+
+def _precheck_or_409(
+    connection, project_id: str, *, version_id: Optional[str], work_class: str,
+    run_input: dict, actor: str, accept: Any, skip_steps: Any, reason: Any, start_anyway: Any,
+) -> Optional[dict]:
+    """The start door's pre-check (workflow_precheck.gate_start). In `enforce` mode
+    (BOSS_WORKFLOW_PRECHECK_GATE) 409 `precheck_failed` with the whole pre-check when a check
+    says the run will fail and the caller neither accepted it nor skipped its step; in `report`
+    mode (the default) never refused. 422 `skip_refused` for a skip that would bypass a gate.
+    Returns the record to keep on the run and return in the response (None when clean)."""
+    from boss_engine.services import workflow_precheck
+
+    if not version_id and work_class:
+        try:
+            resolution = workflow_runtime.resolve_mapping(
+                connection, project_id=project_id, selector_kind="work_class",
+                selector_value=work_class)
+        except workflow_runtime.WorkflowError:
+            resolution = {}
+        if resolution.get("status") == "selected":
+            version_id = resolution["selected"]["workflow_version_id"]
+    if not version_id:
+        return None
+
+    def _list(value: Any) -> list:
+        return list(value) if isinstance(value, (list, tuple)) else []
+
+    try:
+        return workflow_precheck.gate_start(
+            connection, settings, project_id=project_id, version_id=str(version_id),
+            run_input=run_input, actor=str(actor or ""), accept=[str(a) for a in _list(accept)],
+            skip_steps=_list(skip_steps), reason=str(reason or ""),
+            start_anyway=[str(k) for k in _list(start_anyway)])
+    except workflow_precheck.PrecheckRefused as error:
+        raise HTTPException(status_code=409, detail=error.detail()) from error
+    except workflow_precheck.SkipRefused as error:
+        raise HTTPException(status_code=422, detail={"error": "skip_refused",
+                                                     "message": str(error)}) from error
+
+
+@app.post("/v1/workflows/{workflow_id}/precheck")
+@permit(P.WORKFLOW_READ, scope=Scope.project(body="project_id"), readonly_post=True)
+def precheck_workflow(workflow_id: str, payload: ProjectBody) -> dict:
+    """THE WORKFLOW PRE-CHECK, before a run: each step's real infrastructure, with a verdict
+    (ready / fixable / will_fail / unknown), the evidence, and the fix. Read-only.
+
+    `workflow_id` is a workflow key, name, definition id or version id. Body: `project_id`,
+    optional `checkpoint` (pre_run | pre_deploy), `input` (the run input it would start with),
+    `build_run_id` (pre_deploy: the pass-1 build, whose saved workspace is read), `offline`."""
+    return _precheck_response(payload.payload(), workflow=workflow_id)
+
+
+@app.post("/v1/workflow-runs/{run_id}/precheck")
+@permit(P.WORKFLOW_RUN_READ, scope=Scope.project(body="project_id"), readonly_post=True)
+def precheck_workflow_run(run_id: str, payload: ProjectBody) -> dict:
+    """The pre-check of a run that exists — its own shape, input and build (pre_deploy reads the
+    build's saved workspace). Read-only."""
+    return _precheck_response(payload.payload(), run_id=run_id)
+
+
+def _precheck_response(body: dict, *, workflow: Optional[str] = None,
+                       run_id: Optional[str] = None) -> dict:
+    from boss_engine.services import workflow_precheck
+
+    project_id = str(body.get("project_id") or "").strip()
+    if not project_id:
+        raise HTTPException(status_code=422, detail="project_id is required")
+    with begin(engine) as connection:
+        require_project_reader(connection, project_id)
+    supplied = body.get("input")
+    try:
+        return workflow_precheck.precheck(
+            engine, settings, project_id=project_id, actor=str(body.get("actor") or "ceo"),
+            workflow=workflow, run_id=run_id,
+            run_input=supplied if isinstance(supplied, dict) else None,
+            checkpoint=str(body.get("checkpoint") or workflow_precheck.PRE_RUN),
+            # Never a server path from a caller: a pre_deploy reads the build's own saved
+            # workspace (workflow_precheck.materialize_build).
+            build_run_id=body.get("build_run_id") or None,
+            offline=bool(body.get("offline")))
+    except workflow_precheck.PrecheckError as error:
+        raise HTTPException(status_code=404 if "no " in str(error) else 422,
+                            detail=str(error)) from error
 
 
 @app.get("/v1/delivery-workflows/{workflow_key}/readiness")
@@ -27381,6 +27477,14 @@ def start_workflow_run(payload: WorkflowRunStartRequest) -> WorkflowRunSummary:
             work_class=(payload.selector_value
                         if payload.selector_kind == "work_class" else ""),
             run_input=dict(payload.input or {}), start_anyway=payload.start_anyway)
+        # THE PRE-CHECK: what will fail on this run, before it spends (workflow_precheck).
+        precheck = _precheck_or_409(
+            connection, payload.project_id, version_id=payload.workflow_version_id,
+            work_class=(payload.selector_value
+                        if payload.selector_kind == "work_class" else ""),
+            run_input=dict(payload.input or {}), actor=payload.actor, accept=payload.accept,
+            skip_steps=payload.skip_steps, reason=payload.precheck_reason,
+            start_anyway=payload.start_anyway)
         try:
             run = workflow_runtime.start_run(
                 connection,
@@ -27393,12 +27497,17 @@ def start_workflow_run(payload: WorkflowRunStartRequest) -> WorkflowRunSummary:
                 selector_value=payload.selector_value,
                 policy_snapshot=payload.policy_snapshot,
                 parent_run_id=payload.parent_run_id,
+                precheck_record=precheck,
             )
         except workflow_runtime.WorkflowError as error:
             raise_workflow_error(error)
+        from boss_engine.services.workflow_precheck import record_on_run
         from boss_engine.services.workflow_readiness import record_started_anyway
 
         if not run.get("duplicate"):
+            # The pre-check first: it is the run's first activity entry.
+            record_on_run(connection, payload.project_id, payload.actor, run.get("id") or "",
+                          precheck)
             record_started_anyway(connection, payload.project_id, payload.actor,
                                   run.get("id") or "", readiness)
         return WorkflowRunSummary(**run)

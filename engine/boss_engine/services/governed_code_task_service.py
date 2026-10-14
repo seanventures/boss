@@ -1321,6 +1321,37 @@ def _app_run_declarations(engine, run: dict) -> tuple[dict, dict]:
         return {}, {}
 
 
+def _precheck_app_env(engine, run: dict, root, changed: list) -> Optional[dict]:
+    """Run the pre-check's app_env checks on the build's tree and record them as
+    `code_task.precheck_app_env` (services.workflow_precheck). Never raises."""
+    from pathlib import Path as _Path
+
+    from ..templates import gate as template_gate
+    from . import workflow_precheck
+    from .preview_service import find_run_declaration
+
+    try:
+        base = _Path(str(root))
+        declared = find_run_declaration(base, [str(c) for c in changed or []])
+        if declared:
+            app_dir = base if declared[0] in ("", ".") else base / declared[0]
+        else:
+            pkgs = sorted(str(c) for c in changed or [] if str(c).endswith("package.json"))
+            app_dir = (base / pkgs[0]).parent if pkgs else base
+        with _transaction(engine) as c:
+            applied = template_gate.applied_template(c, run) or {}
+            found = workflow_precheck.app_env_on_tree(
+                c, None, project_id=run["project_id"],
+                app_key=(applied.get("app_key") if not applied.get("error") else None),
+                app_dir=app_dir)
+            emit_event(c, run["project_id"], "code_task.precheck_app_env", "boss",
+                       "code_task_run", run["id"], found)
+        return found
+    except Exception:  # noqa: BLE001 — a check that cannot run says nothing; the proof still runs
+        _log_caught(logger)
+        return None
+
+
 def _template_gates(engine, run: dict, sandbox, *, root, cwd, changed_files: dict,
                     tests_passed: bool, use_microvm: bool, stack_plan=None,
                     serve: Optional[dict] = None) -> Optional[dict]:
@@ -6448,6 +6479,11 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 # of b63717c), never `web_app_build`, which every build-on-existing/extend
                 # carries, CLIs and libraries included.
                 _run_needs, _run_bound = _app_run_declarations(engine, run)
+                # THE PRE-CHECK'S APP-ENVIRONMENT HALF, ON THIS TREE, BEFORE THE PROOF: what the
+                # app requires in build / preview / deploy and whether anyone may give it, so
+                # the run learns "DEMO_PASSWORD cannot be bound for a build" before the proof
+                # dies on it (workflow_precheck.app_env_on_tree). Recorded, never a gate here.
+                _precheck_app_env(engine, run, root, list(files.keys()) + list(lineage or []))
                 record = prove_app_serves(
                     root, list(files.keys()), lineage=lineage,
                     known_service=serve_proof_known_service(spec, fctx),
