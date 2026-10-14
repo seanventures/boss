@@ -285,10 +285,18 @@ export function PreviewControls({ runId, livePreviews = [] }: { runId: string; l
               <ArrowsClockwise size={15} weight="bold" aria-hidden /> Building preview…
             </span>
           ) : href ? (
-            <a className="cap-btn primary" href={browserHref(href)} target="_blank" rel="noreferrer">
-              <ArrowSquareOut size={15} weight="bold" aria-hidden />
-              {p.status === "verified" ? "View verified preview" : "Open preview"}
-            </a>
+            <>
+              <a className="cap-btn primary" href={browserHref(href)} target="_blank" rel="noreferrer">
+                <ArrowSquareOut size={15} weight="bold" aria-hidden />
+                {p.status === "verified" ? "View verified preview" : "Open preview"}
+              </a>
+              {p.demo_logins?.length ? (
+                <span className="detail" data-testid="preview-demo-logins"
+                      title="BOSS generated this password for the app's demo users; read it in the app's Setup › Demo logins">
+                  Demo login: {p.demo_logins.join(", ")} (Setup › Demo logins)
+                </span>
+              ) : null}
+            </>
           ) : (
             <span className="detail" data-preview-view="missing-url">
               {p.status === "verified"

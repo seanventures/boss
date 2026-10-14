@@ -3828,6 +3828,9 @@ CREATE INDEX IF NOT EXISTS idx_app_previews_run ON app_previews (run_id);
 -- When the preview last served a proxied request: a preview nobody has looked at for N minutes
 -- is stopped (stability spec §4a.6 idle-stop), not left running to its TTL.
 ALTER TABLE app_previews ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ;
+-- The app's demo logins this preview signs in with (names only: DEMO_PASSWORD…). BOSS generated
+-- the password; its reviewer reads it in the app's Setup › Demo logins (templates.secrets).
+ALTER TABLE app_previews ADD COLUMN IF NOT EXISTS demo_logins JSONB NOT NULL DEFAULT '[]'::jsonb;
 
 -- EVERYTHING A BUILD MAKES IS OWNED AND REAPED (stability spec §4a.1). One row per resource BOSS
 -- creates — a process tree, a container, an image, a directory — written BEFORE it is created

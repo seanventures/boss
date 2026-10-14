@@ -4,6 +4,10 @@ The value lives in the vault (kind `app_secret`, AAD bound to org/project/app/en
 in `app_secret_bindings` holds presence, mode and a shape verdict. Nothing here ever returns a
 value, a hash, a prefix or a length to a caller outside this module: `values_for_env` is the one
 reader, for the engine (the build gate's scan, a preview or a deploy resolving its environment).
+ONE NARROW EXCEPTION: `demo_login_values` shows the app's owner a DEMO LOGIN password BOSS itself
+generated (run_env.is_demo_login_name, mode `generated`) — the password the app's demo users sign
+in with on a preview or deploy, which nobody could otherwise know. A value a person set is never
+shown.
 
 Modes:  test       pasted by the operator; must match the template's `pattern`, must NOT match
                    its `live_pattern`; never accepted for `deploy`-only live use
@@ -53,7 +57,7 @@ def declared_secret(manifests: list[TemplateManifest], name: str) -> Optional[Se
 _RESERVED_PREFIXES = ("BOSS_",)
 
 
-def deploy_value_spec(name: str, envs: list[str], mode: str) -> SecretSpec:
+def deploy_value_spec(name: str, envs: list[str], mode: str, *, app_declares: bool = False) -> SecretSpec:
     """The spec for a value a person sets for the app's DEPLOY that no template declares.
 
     An app reads settings no template knows about — HelpDesk seeds its demo logins only when
@@ -73,10 +77,15 @@ def deploy_value_spec(name: str, envs: list[str], mode: str) -> SecretSpec:
                                              "(capitals, digits and _; starting with a letter)")
     if name.startswith(_RESERVED_PREFIXES):
         raise TemplateError(422, "reserved_name", f"{name} is BOSS's own deploy variable")
-    if not envs or set(envs) != {"deploy"}:
+    # A name the app ITSELF declares (its .env.example or boss.deploy.yaml, as its app-start
+    # checks recorded: app_declared_env) may be set for every environment a run reaches — a
+    # "needs a secret" verdict names build, preview and deploy, and this must accept what it says.
+    allowed = set(ENVS) if app_declares else {"deploy"}
+    if not envs or not set(envs) <= allowed:
         raise TemplateError(404, "secret_not_declared",
-                            f"no template of this app declares {name}; a value no template "
-                            "declares is set for deploy only")
+                            f"neither a template of this app nor the app's own .env.example or "
+                            f"boss.deploy.yaml declares {name}; a value nothing declares is set "
+                            "for deploy only")
     if mode != "test":
         raise TemplateError(422, "bad_mode", f"{name} is the app's own setting: set it as a "
                                              "value (mode test), not a live provider key")
@@ -391,6 +400,76 @@ def declared_specs(c, *, project_id: str, app_key: str) -> dict[str, dict]:
     return out
 
 
+def app_declared_env(c, *, project_id: str, app_key: str, limit: int = 20) -> set[str]:
+    """The variable names the app's OWN files declare (.env.example, boss.deploy.yaml), as its
+    latest app-start checks recorded them (code_task.app_serve_checked: environment). Names only.
+    Read through app_links.app_index, so every run filed under the app's canonical key counts."""
+    from ..app_links.service import app_index
+
+    try:
+        by_run, _ = app_index(c, project_id)
+    except Exception:  # noqa: BLE001 — no index, nothing known
+        return set()
+    runs = [r for r, k in by_run.items() if k == app_key]
+    if not runs:
+        return set()
+    rows = c.execute(text(
+        "SELECT data -> 'environment' AS env FROM events WHERE project_id = :p "
+        "AND event_type = 'code_task.app_serve_checked' AND entity_id = ANY(:r) "
+        "ORDER BY created_at DESC LIMIT :n"), {"p": project_id, "r": runs, "n": limit}).mappings().all()
+    names: set[str] = set()
+    for r in rows:
+        env = r["env"]
+        if isinstance(env, str):
+            try:
+                env = json.loads(env)
+            except ValueError:
+                env = None
+        if not isinstance(env, dict):
+            continue
+        for key in ("declared", "generated", "unset", "supplied", "needs_secret"):
+            names.update(str(n) for n in (env.get(key) or []) if isinstance(n, str))
+    return names
+
+
+def ensure_demo_logins(c, *, org_id: str, project_id: str, app_key: str, env: str,
+                       names, actor_id: Optional[str] = None) -> list[str]:
+    """A demo/seed login password the app declares (run_env.is_demo_login_name) gets a value BOSS
+    generates for `env` (preview, deploy) when nobody set one: stored as the app's binding (the
+    vault; redacted), so every preview — and the deploy — signs its demo users in with ONE
+    password its owner can read (demo_login_values). Returns the names it generated."""
+    from .run_env import is_demo_login_name
+
+    made: list[str] = []
+    for name in sorted({n for n in names or () if is_demo_login_name(n)}):
+        if has_binding(c, project_id=project_id, app_key=app_key, name=name, env=env):
+            continue
+        put(c, org_id=org_id, project_id=project_id, app_key=app_key, name=name, env=env,
+            mode="generated", value=None, actor_id=actor_id,
+            spec=SecretSpec(name=name, purpose="The app's demo login password, generated by BOSS"),
+            may_live=False)
+        made.append(name)
+    return made
+
+
+def demo_login_values(c, *, org_id: str, project_id: str, app_key: str, env: str) -> dict[str, str]:
+    """{name: value} of the demo login passwords BOSS GENERATED for this app's `env` — the one
+    place a value leaves this module for a person (see the module docstring). A value a person
+    set, or any other name, is never returned."""
+    from ..identity import vault
+    from .run_env import is_demo_login_name
+
+    if env not in ENVS:
+        raise ValueError(env)
+    rows = c.execute(text(
+        "SELECT name, vault_item_id FROM app_secret_bindings WHERE project_id = :p AND app_key = :a "
+        "AND env = :e AND mode = 'generated' AND vault_item_id IS NOT NULL ORDER BY name"),
+        {"p": project_id, "a": app_key, "e": env}).mappings().all()
+    return {r["name"]: vault.read_app_secret(r["vault_item_id"], org_id=org_id, project_id=project_id,
+                                             app_key=app_key, env=env, name=r["name"], db=c)
+            for r in rows if is_demo_login_name(r["name"])}
+
+
 def ensure_deploy_generated(c, *, org_id: str, project_id: str, app_key: str,
                             actor_id: Optional[str] = None) -> list[str]:
     """A secret BOSS generates for build and preview (test_default=generated, e.g. a session
@@ -406,6 +485,11 @@ def ensure_deploy_generated(c, *, org_id: str, project_id: str, app_key: str,
             mode="generated", value=None, actor_id=actor_id,
             spec=SecretSpec.model_validate(d["spec"]), may_live=False)
         made.append(name)
+    # The app's demo login password (its seed refuses to run without one): generated for the
+    # deploy once, like a session key; its owner reads it in the app's Secrets (Demo logins).
+    made += ensure_demo_logins(c, org_id=org_id, project_id=project_id, app_key=app_key,
+                               env="deploy", actor_id=actor_id,
+                               names=app_declared_env(c, project_id=project_id, app_key=app_key))
     return made
 
 
@@ -421,7 +505,7 @@ def deploy_secrets(c, *, project_id: str, app_key: str) -> tuple[list[dict], lis
         "SELECT name, mode, vault_item_id, live_decision_id FROM app_secret_bindings "
         "WHERE project_id = :p AND app_key = :a AND env = 'deploy' ORDER BY name"),
         {"p": project_id, "a": app_key}).mappings().all()
-    from .run_env import decide, needs_from_declared_specs
+    from .run_env import decide, is_demo_login_name, needs_from_declared_specs
 
     bound = {r["name"]: r for r in rows}
     passed: list[dict] = []
@@ -442,8 +526,16 @@ def deploy_secrets(c, *, project_id: str, app_key: str) -> tuple[list[dict], lis
             missing.append(f"{name} is a live key a person has not approved yet"
                            + (f" (decision {r['live_decision_id']})" if r["live_decision_id"] else ""))
             continue
-        passed.append({"name": name, "mode": r["mode"], "source": "app_secret", "env": "deploy"})
+        item = {"name": name, "mode": r["mode"], "source": "app_secret", "env": "deploy"}
+        if r["mode"] == "generated" and is_demo_login_name(name):
+            item["demo_login"] = DEMO_LOGIN_WHERE
+        passed.append(item)
     return passed, missing
+
+
+#: Where the owner reads a demo login password BOSS generated (the receipt and preview say this).
+DEMO_LOGIN_WHERE = ("demo login password, generated by BOSS: read it in the app's Secrets, "
+                    "Demo logins (never printed in a log)")
 
 
 def ensure_test_defaults(c, *, org_id: str, project_id: str, app_key: str, manifest: TemplateManifest,

@@ -37,6 +37,7 @@ from . import parallel_build as _parallel_build
 from ..config import Settings
 from ..ports import sql
 from ..schemas import FileChange
+from ..templates import run_env as _run_env
 from . import agent_acts, ci_gate, design_prompts, plane_sync, review_comments, verification_target
 from . import review_input
 from .bakeoff import (
@@ -1228,11 +1229,18 @@ def _app_run_declarations(engine, run: dict) -> tuple[dict, dict]:
     try:
         with _transaction(engine) as c:
             applied = template_gate.applied_template(c, run)
-            if not applied or applied.get("error"):
-                return {}, {}
-            app_key = applied.get("app_key")
-            needs = app_needs(c, project_id=run["project_id"], app_key=app_key,
-                              manifests=[applied.get("manifest") or {}])
+            if applied and not applied.get("error"):
+                app_key = applied.get("app_key")
+                needs = app_needs(c, project_id=run["project_id"], app_key=app_key,
+                                  manifests=[applied.get("manifest") or {}])
+            else:
+                # No template: the app's own files declare its names (the proof reads them), and
+                # a value a person set for one of them (secrets.deploy_value_spec allows build
+                # for an app-declared name) is still this build's.
+                from ..app_links.service import app_index
+
+                app_key = app_index(c, run["project_id"])[0].get(str(run.get("id")))
+                needs = {}
             org = c.execute(sql("SELECT w.org_id FROM projects p JOIN workspaces w ON w.id = p.workspace_id "
                                 "WHERE p.id = :p"), {"p": run.get("project_id")}).scalar()
             bound: dict = {}
@@ -1681,6 +1689,7 @@ FIRST_PASS_CHECKLIST = (
     "versions that agree (e.g. eslint 9 needs eslint-plugin-react-hooks >=5). Run BOSS's exact "
     f"install once to prove it: `{verification_target.NPM_INSTALL_CMD}`.\n"
     + "- " + verification_target.WEB_GATE_RULE + "\n"
+    + "- " + _run_env.OPTIONAL_SETTINGS_RULE + "\n"
 )
 
 

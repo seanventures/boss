@@ -485,7 +485,10 @@ def plan_host_deployment(rp, connection: Connection, *, project_id: str, target:
         "address": address, "commit_ref": commit_ref, "repo": target.get("repo"),
         "app_port": app_port, "url": url,
         "secret_refs": [{"name": r["name"], "ref": r["ref"]} for r in refs],
-        "app_secrets": [{"name": a["name"], "mode": a["mode"]} for a in app_secrets],
+        # A demo login password BOSS generated says where its owner reads it (never the value).
+        "app_secrets": [{"name": a["name"], "mode": a["mode"],
+                         **({"demo_login": a["demo_login"]} if a.get("demo_login") else {})}
+                        for a in app_secrets],
         "steps": ["Preflight the host (read-only)", "Build the app at the commit",
                   "Transfer and start it", "Health check"],
         "rollback": rollback_plan,

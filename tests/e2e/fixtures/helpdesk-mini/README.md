@@ -7,7 +7,8 @@ build applies it (`helpdesk/auth/*.mjs` byte-for-byte from `templates/apps/login
 a connector is pre-tested, so the app carries none of its tests or `test:login-oauth` scripts:
 the gate runs that suite in the connector's own tier, from the template), a
 `SESSION_SECRET` of at least 32 characters required at start (the connector refuses otherwise),
-`boss.deploy.yaml` at the repository root and `helpdesk/boss.preview.command`, and a few P0/P1
+`helpdesk/boss.deploy.yaml` beside the app and `helpdesk/boss.preview.command`, `DATABASE_URL`
+and `DEMO_PASSWORD` required at boot (HelpDesk AI's, crun_0d82ab62), and a few P0/P1
 vitest tests.
 
 It is a known-good app: every failure the gate reports on it is BOSS's, not the app's.

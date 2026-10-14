@@ -1,5 +1,6 @@
 # Deployed by BOSS Infra -> stack target -> Deploy a repository (the HelpDesk AI shape: the app
-# lives in a folder of a shared repository, and the manifest names it).
+# lives in a folder of a shared repository, and its manifest sits beside it; its commands run
+# from that folder).
 version: 1
 name: helpdesk-mini
 kind: commands
@@ -8,10 +9,10 @@ env:
   SESSION_SECRET: {generate: hex32}
   DATABASE_URL: {secret: DATABASE_URL}
 install:
-  - "cd helpdesk && npm install --include=dev --no-audit --no-fund --loglevel=error"
-  - "cd helpdesk && npm run build"
-  - "cd helpdesk && npm run migrate"
-  - "cd helpdesk && (nohup npx tsx src/server/index.ts > /tmp/helpdesk-mini.log 2>&1 & disown)"
+  - "npm install --include=dev --no-audit --no-fund --loglevel=error"
+  - "npm run build"
+  - "npm run migrate"
+  - "(nohup npx tsx src/server/index.ts > /tmp/helpdesk-mini.log 2>&1 & disown)"
 health:
   - {url: "{target.public_url}/healthz", expect: 200}
 open: {url: "{target.public_url}"}
