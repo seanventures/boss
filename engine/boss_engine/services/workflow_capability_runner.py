@@ -956,18 +956,21 @@ def _observed_monitoring(
     # It REPORTS the gap, so the step stops claiming a setup it never did and names the one
     # action that closes it.
     dashboard: dict[str, Any] = {}
-    try:
-        from .observability_stack import DEFAULT_PORTS, dashboard_uid, provisioned_dashboards
-        host = _monitoring_host(connection, project_id)
-        if host:
-            base = f"http://{host}:{DEFAULT_PORTS['grafana']}"
+    from .observability_stack import DEFAULT_PORTS, provisioned_dashboards
+
+    host = _monitoring_host(connection, project_id)
+    have = None
+    if host:
+        base = f"http://{host}:{DEFAULT_PORTS['grafana']}"
+        try:
+            # ONLY the call to Grafana is allowed to fail quietly. The whole block sat in this
+            # try, so `dashboard_uid(w["app"])` — the key is `app_name` — raised KeyError on
+            # every run and was logged as "could not check dashboards": the check never ran.
             have = provisioned_dashboards(base)
-            if have is not None:
-                missing = sorted({w["app_name"] for w in watched
-                                  if dashboard_uid(w["app"]) not in have})
-                dashboard = {"grafana": base, "missing_dashboards": missing}
-    except Exception as error:  # noqa: BLE001 — an unreachable Grafana must not fail the step
-        log.warning("could not check dashboards for %s: %s", project_id, error)
+        except Exception as error:  # noqa: BLE001 — an unreachable Grafana must not fail the step
+            log.warning("could not check dashboards for %s: %s", project_id, error)
+        if have is not None:
+            dashboard = {"grafana": base, "missing_dashboards": missing_dashboards(watched, have)}
 
     missing = dashboard.get("missing_dashboards") or []
     return {
@@ -985,6 +988,13 @@ def _observed_monitoring(
                f"Infra and Models to create them." if missing else "")
         ),
     }
+
+
+def missing_dashboards(watched: list[dict[str, Any]], have: set[str]) -> list[str]:
+    """The watched apps Grafana has no dashboard for, by app name."""
+    from .observability_stack import dashboard_uid
+
+    return sorted({w["app_name"] for w in watched if dashboard_uid(w["app_name"]) not in have})
 
 
 def _monitoring_host(connection: Connection, project_id: str) -> str:
@@ -1628,6 +1638,12 @@ def _more_tests_started(ctx, connection: Connection, *, project_id: str, actor: 
     retried three times, and the `all` join before the done step (two_pass) stopped the whole
     run on a pass that only adds tests (wfr_9575c86ab4a74defa0d2). A wait (a budget window, a
     busy model) still waits: that is not a failure."""
+    base_now = _latest_code_run(connection, str(context.get("run_id") or ""))
+    # PASS 1'S DEPLOY SHIPS PASS 1. Pass 2 pushes beside the deploy (two_pass), and a deploy
+    # planned from `pull/N` after pass 2's first push would ship commits pass 1's review never
+    # saw. The head pass 1 left is read before pass 2 starts and kept on this step's output.
+    pinned = pass_one_head(connection, getattr(ctx, "settings", None), project_id,
+                           base_now) if base_now else None
     try:
         started = _more_tests_step(ctx, connection, project_id, actor, context, inputs, step)
         if started.get("status") == "not_applicable":
@@ -1641,9 +1657,66 @@ def _more_tests_started(ctx, connection: Connection, *, project_id: str, actor: 
             raise
         failed, why, base = True, str(error), ""
     if not failed:
-        return settled
+        return {**settled, PASS_ONE_HEAD: pinned} if pinned else settled
     base = base or _latest_code_run(connection, str(context.get("run_id") or ""))
     return advisory_start_failure(why, base)
+
+
+PASS_ONE_HEAD = "pass_one_head_sha"
+
+
+def pass_one_head(connection: Connection, settings: Any, project_id: str, base_run: str, *,
+                  resolve: Any = None) -> Optional[str]:
+    """The pull request's head as pass 1 (`base_run`) left it, or None when it cannot be told
+    (no pull request, GitHub unreachable) — the deploy then plans the pull request's head."""
+    try:
+        row = connection.execute(
+            text("SELECT spec, pull_request_number FROM code_task_runs "
+                 "WHERE id = :i AND project_id = :p"),
+            {"i": base_run, "p": project_id}).mappings().first()
+        if not row or not row["pull_request_number"]:
+            return None
+        from .stack_deploy import build_repository, github_source_for, split_repository
+
+        repository = build_repository(row["spec"], str(getattr(settings, "target_github_owner", "")
+                                                       or ""))
+        if not repository:
+            return None
+        owner, repo = split_repository(repository)
+        ref = f"pull/{int(row['pull_request_number'])}"
+        return (resolve(owner, repo, ref) if resolve is not None else
+                github_source_for(connection, settings, project_id, owner, repo)
+                .resolve_commit(owner, repo, ref))
+    except Exception as error:  # noqa: BLE001 — unpinned: the deploy plans the PR's head
+        log.warning("could not read pass 1's head for %s: %s", base_run, error)
+        return None
+
+
+def pinned_pass_one_commit(connection: Connection, run_id: str) -> Optional[str]:
+    """The commit this run's first deploy ships: the head pass 1 left, read when this run's
+    More tests started — only while that pass 1 is still the newest (a later build or repair
+    makes the pin stale, and the pull request's head is right again)."""
+    if not run_id:
+        return None
+    row = connection.execute(
+        text("SELECT output->>:k AS sha, output->>'base_run_id' AS base FROM workflow_step_runs "
+             "WHERE workflow_run_id = :r AND COALESCE(output->>:k, '') <> '' "
+             "AND COALESCE(binding_snapshot->>'capability', "
+             "             binding_snapshot->'binding'->>'capability', '') = 'more_tests' "
+             "ORDER BY created_at DESC LIMIT 1"),
+        {"r": run_id, "k": PASS_ONE_HEAD}).mappings().first()
+    if not row:
+        return None
+    newest_pass_one = str(connection.execute(
+        text("SELECT output->>'code_task_run_id' FROM workflow_step_runs "
+             "WHERE workflow_run_id = :r AND status = 'succeeded' "
+             "AND COALESCE(binding_snapshot->>'capability', "
+             "             binding_snapshot->'binding'->>'capability', '') IN "
+             "    ('build', 'plrr', 'retry_build') "
+             "AND COALESCE(output->>'code_task_run_id', '') <> '' "
+             "ORDER BY completed_at DESC NULLS LAST, updated_at DESC LIMIT 1"),
+        {"r": run_id}).scalar() or "")
+    return str(row["sha"]) if row["base"] and row["base"] == newest_pass_one else None
 
 
 def advisory_start_failure(why: str, base: str) -> dict[str, Any]:
@@ -2939,7 +3012,10 @@ def _perform_capability(
                 or None,
                 step_id=str(step.get("id") or "") or None,
                 # ONE APPROVAL PER DEPLOY: the gate a person already answered, passed on.
-                approval_decision_id=str(context.get("approval_decision_id") or "") or None)
+                approval_decision_id=str(context.get("approval_decision_id") or "") or None,
+                # Pass 1's deploy ships the head pass 1 left; "Deploy again" ships pass 2's.
+                commit=(None if pass_2_of else
+                        pinned_pass_one_commit(connection, str(context.get("run_id") or ""))))
     if key == "deploy" and not pass_2_of:
         from .stack_deploy import undeclared_deploy_refusal
 

@@ -2329,8 +2329,12 @@ def plan_for_workflow_step(engine, settings: Settings, *, project_id: str, actor
                            workflow_run_id: Optional[str],
                            approver_role: Optional[str] = None,
                            step_id: Optional[str] = None,
-                           approval_decision_id: Optional[str] = None) -> dict[str, Any]:
+                           approval_decision_id: Optional[str] = None,
+                           commit: Optional[str] = None) -> dict[str, Any]:
     """Plan the build's pull-request head onto a stack target; the step waits on it.
+
+    `commit`: ship exactly this commit of the pull request instead of its head — pass 1's deploy
+    ships the head pass 1 left (pinned when pass 2 started), never what pass 2 pushed beside it.
 
     No preview is required: the manifest declares how the stack runs and the health checks
     prove it, and a platform like BOSS cannot be previewed as one container anyway.
@@ -2363,10 +2367,13 @@ def plan_for_workflow_step(engine, settings: Settings, *, project_id: str, actor
                 "error": (f"the build worked in {built or 'an unnamed repository'}, but target "
                           f"{target.get('app_name')!r} deploys {repository or 'nothing'}; "
                           "bind the deploy step to a stack target for the build's repository.")}
+    ref = f"pull/{int(run['pull_request_number'])}"
+    if commit and _SHA.match(str(commit)):
+        ref = str(commit)
     try:
         deployment = plan_stack_deploy(
             engine, settings, project_id=project_id, target_id=target["id"],
-            repository=repository, ref=f"pull/{int(run['pull_request_number'])}", actor=actor,
+            repository=repository, ref=ref, actor=actor,
             run_id=run_id, workflow_run_id=workflow_run_id, approver_role=approver_role,
             workflow_step_id=step_id,
             manifest_path=None if is_stack_target(target) else target.get("manifest_path"),
