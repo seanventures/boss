@@ -98,6 +98,14 @@ class Capability:
     #: architecture document). Not a gate before the step — the step runs, then waits for the
     #: answer — but a stop an operator plans around all the same, and no agent may give it.
     reviewed_by_a_person: bool = False
+    #: THE TOOLS THE STEP CALLS IN-PROCESS, beyond `tool`. A capability with `tool=None` that
+    #: starts work through a tool anyway (PLRR's and More tests' extend_code_task, a build with
+    #: `extend`) declares it here: the consent a workflow asks for is derived from `tool` AND
+    #: these (identity.consent.workflow_needs), and the runner refuses an in-process call to a
+    #: tool its capability does not declare (workflow_capability_runner._start_on_the_branch).
+    #: Undeclared, the consent never asked for code_task:retry and every More tests pass was
+    #: refused under enforce (wfr_9575c86ab4a74defa0d2).
+    calls: tuple[str, ...] = ()
 
 
 def _cap(**kwargs: Any) -> Capability:
@@ -198,6 +206,8 @@ CAPABILITIES: dict[str, Capability] = {
             summary="The whole inner pipeline: implement, adversarial review, security check, "
                     "run the tests, open a gated pull request. Succeeds when a PR exists.",
             tool="create_code_task",
+            # `extend` (Incremental Build) builds on the run's branch: extend_code_task.
+            calls=("extend_code_task",),
             risk_tier=1,
             required_inputs=("title", "instructions"),
             # spec_markdown is the PRD the panel wrote. Optional, because a build reached
@@ -401,6 +411,7 @@ CAPABILITIES: dict[str, Capability] = {
             summary="Review the built app against the operability the spec promised, and "
                     "close the gaps before it ships.",
             tool=None,
+            calls=("extend_code_task",),
             risk_tier=1,
             required_inputs=("run_id",),
             optional_inputs=("directive",),
@@ -425,6 +436,7 @@ CAPABILITIES: dict[str, Capability] = {
                     "(edge cases, error paths, API contracts, browser tests) on the same PR, and "
                     "fix any bug they find. Never holds up the build, its PR or its preview.",
             tool=None,
+            calls=("extend_code_task",),
             risk_tier=1,
             required_inputs=("run_id",),
             # "light" (two_pass.LIGHT): a hotfix's pass 2, regression tests around the change.

@@ -19,6 +19,8 @@ Three rules shape the whole file:
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import json
 import logging
 from datetime import timedelta
@@ -35,7 +37,7 @@ from .core import emit_event, now_utc
 # string literal repeated wherever the question is asked.
 from .decisions import SYSTEM_ACTOR as DECISION_SYSTEM_ACTOR
 from .run_decisions import open_step_decision
-from . import security_review_steps, workflow_outcomes
+from . import security_review_steps, workflow_capabilities, workflow_outcomes
 from .workflow_capabilities import CAPABILITY_KEYS, get as get_capability
 
 log = logging.getLogger(__name__)
@@ -344,8 +346,26 @@ def _tool_registry():
     return build_default_registry()
 
 
+#: True inside `_step_authority`: `_invoke_tool` refuses a step's tool call made outside it.
+_IN_STEP_AUTHORITY: "contextvars.ContextVar[bool]" = contextvars.ContextVar(
+    "boss_in_step_authority", default=False)
+
+
+@contextlib.contextmanager
 def _step_authority(ctx: Any, connection: Connection, project_id: str, context: Optional[dict[str, Any]],
                     step: Optional[dict[str, Any]], role_key: Optional[str], scope: Optional[frozenset[str]] = None):
+    """Enter the run's recorded authority for a step's work (`_run_authority`), and mark that
+    the work is under it: `_invoke_tool` refuses a step's tool call made anywhere else."""
+    with _run_authority(ctx, connection, project_id, context, step, role_key, scope) as decided:
+        marker = _IN_STEP_AUTHORITY.set(True)
+        try:
+            yield decided
+        finally:
+            _IN_STEP_AUTHORITY.reset(marker)
+
+
+def _run_authority(ctx: Any, connection: Connection, project_id: str, context: Optional[dict[str, Any]],
+                   step: Optional[dict[str, Any]], role_key: Optional[str], scope: Optional[frozenset[str]] = None):
     """In-process step work under the workflow run's RECORDED authority (IDENTITY.md §7.14), not
     under whoever called in to advance the run (the worker). With an agent Passport for the step,
     a delegated run token (`run_wf:<run>/step:<step>`: person ∩ ceilings ∩ grant ∩ task); with
@@ -396,6 +416,12 @@ def _invoke_tool(
         raise CapabilityExecutionError(
             "raw SQL is unavailable in project-scoped workflow steps"
         )
+    if not _IN_STEP_AUTHORITY.get():
+        # A step's tool call made bare runs as whoever advanced the run (the worker) and is
+        # refused under enforce. Every dispatch enters `_step_authority`; one that does not is
+        # a bug in BOSS, said once, not retried.
+        raise SettledCapabilityError(
+            f"'{tool_name}' was called outside this run's authority; BOSS refused to run it.")
     spec, refused = _authorize_step_tool(ctx, tool_name, project_id, args)
     if refused is not None:
         return refused
@@ -435,7 +461,9 @@ def _authorize_step_tool(
             try:
                 _identity_runs.authorize_tool(getattr(spec, "permission", None), project_id, db=_db)
             except _identity_runs.ToolRefused as refused:
-                raise CapabilityExecutionError(
+                # SETTLED: an identity refusal is the same on every retry; only a person's
+                # grant changes it.
+                raise SettledCapabilityError(
                     f"'{tool_name}' was refused for this agent: {refused.permission} ({refused.reason})"
                 ) from refused
     return spec, None
@@ -1436,7 +1464,7 @@ def _plrr_brief(connection: Connection, project_id: str, context: dict[str, Any]
 
 
 def _plrr_step(ctx, connection: Connection, project_id: str, actor: str,
-               context: dict[str, Any]) -> dict[str, Any]:
+               context: dict[str, Any], step: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     """Review readiness, and start the work that closes what is missing.
 
     Sits between preview and deploy on purpose. Preview answers "does it do the thing"; this
@@ -1466,7 +1494,9 @@ def _plrr_step(ctx, connection: Connection, project_id: str, actor: str,
         return {"capability": "plrr", "status": "not_applicable",
                 "note": "no build in this run, so there is nothing to review for readiness."}
 
-    started = _invoke_tool(ctx, "extend_code_task", project_id, actor, {
+    started = _start_on_the_branch(ctx, connection, project_id=project_id, actor=actor,
+                                   context=context, step=step, capability_key="plrr",
+                                   base_run=build_run, args={
         "run_id": build_run,
         "instructions": _plrr_brief(connection, project_id, context),
         "title": "Production launch readiness",
@@ -1516,7 +1546,8 @@ def _more_tests_brief(light: bool = False) -> str:
 
 def _more_tests_step(ctx, connection: Connection, project_id: str, actor: str,
                      context: dict[str, Any],
-                     inputs: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+                     inputs: Optional[dict[str, Any]] = None,
+                     step: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     """PASS 2 OF A BUILD: more tests on the same branch and PR, after the preview.
 
     Pass 1 ships a working app with a lean suite, so the user sees it early; this pass adds the
@@ -1538,12 +1569,102 @@ def _more_tests_step(ctx, connection: Connection, project_id: str, actor: str,
         return {"capability": "more_tests", "status": "not_applicable",
                 "note": "no build in this run, so there is nothing to add tests to."}
     light = str((inputs or {}).get("depth") or "") == LIGHT_PASS
-    started = _invoke_tool(ctx, "extend_code_task", project_id, actor, {
+    started = _start_on_the_branch(ctx, connection, project_id=project_id, actor=actor,
+                                   context=context, step=step, capability_key="more_tests",
+                                   base_run=build_run, args={
         "run_id": build_run, "instructions": _more_tests_brief(light),
         "title": "More tests (light)" if light else "More tests",
     })
     return {"capability": "more_tests", "tool": "extend_code_task", "base_run_id": build_run,
             **started}
+
+
+def _more_tests_started(ctx, connection: Connection, *, project_id: str, actor: str,
+                        context: dict[str, Any], step: dict[str, Any], capability: Any,
+                        inputs: dict[str, Any]) -> dict[str, Any]:
+    """More tests, started — or, when it cannot even start, completed with the failure said.
+
+    PASS 2 NEVER STOPS THE RUN, AT START EITHER. _ADVISORY_CAPABILITIES covered a pass that
+    failed while it ran (resume_awaited). One refused or broken at START failed its step, was
+    retried three times, and the `all` join before the done step (two_pass) stopped the whole
+    run on a pass that only adds tests (wfr_9575c86ab4a74defa0d2). A wait (a budget window, a
+    busy model) still waits: that is not a failure."""
+    try:
+        started = _more_tests_step(ctx, connection, project_id, actor, context, inputs, step)
+        if started.get("status") == "not_applicable":
+            return started
+        settled = _settle_started_work(capability, "more_tests", started)
+        why = str(settled.get("message") or settled.get("error") or "")
+        failed = str(settled.get("status") or "") == "failed"
+        base = str(settled.get("base_run_id") or "")
+    except CapabilityExecutionError as error:
+        if _as_wait(error) is not None:
+            raise
+        failed, why, base = True, str(error), ""
+    if not failed:
+        return settled
+    base = base or _latest_code_run(connection, str(context.get("run_id") or ""))
+    return advisory_start_failure(why, base)
+
+
+def advisory_start_failure(why: str, base: str) -> dict[str, Any]:
+    """The output of a More tests pass that could not start: completed, saying so."""
+    return {"capability": "more_tests", "tool": "extend_code_task", "status": "not_applicable",
+            "advisory": True, "advisory_failed": True, "base_run_id": base,
+            "code_task_run_id": base or None,
+            "note": (f"the More tests pass could not start ({why.strip() or 'no reason given'})"
+                     "; the run carries on with the first pass's build.")[:600]}
+
+
+#: The tools a step may start work on the build's branch with (in-process, by capability).
+_BRANCH_TOOLS = frozenset({"extend_code_task"})
+
+
+def _start_on_the_branch(ctx, connection: Connection, *, project_id: str, actor: str,
+                         context: dict[str, Any], step: Optional[dict[str, Any]],
+                         capability_key: str, base_run: str,
+                         args: dict[str, Any]) -> dict[str, Any]:
+    """Start work on the build's branch (PLRR, More tests, an `extend` build) the way every
+    other step calls its tool: under the run's recorded authority (`_step_authority`), as the
+    BUILDER the branch's task runs as (runs.resolved_builder of the base run — the agent the
+    consent named for the build and whose Passport holds code_task:retry), past the same tool
+    checks (`_invoke_tool`), for a tool the capability declares (`Capability.calls`, which is
+    what the consent asked for). An identity refusal is SETTLED: retrying it three times
+    cannot grant anything."""
+    from boss_engine.identity import consent as _consent
+    from boss_engine.identity import runs as _runs
+
+    tool = "extend_code_task"
+    cap = workflow_capabilities.CAPABILITIES.get(capability_key)
+    if cap is None or tool not in _consent.capability_tools(cap):
+        raise SettledCapabilityError(
+            f"'{capability_key}' calls {tool} without declaring it (Capability.calls), so the "
+            "consent for this run never asked for it.")
+    builder = ""
+    try:
+        row = connection.execute(
+            text("SELECT spec, finalize_ctx FROM code_task_runs WHERE id = :i"),
+            {"i": base_run}).mappings().first()
+        if row is not None:
+            builder = _runs.resolved_builder(_as_dict(row["spec"]), _as_dict(row["finalize_ctx"]))
+    except Exception:  # noqa: BLE001 — unknown builder: the default builder, as consent assumes
+        log.exception("could not read the builder of %s", base_run)
+    builder = builder or _runs.resolved_builder()
+    with _step_authority(ctx, connection, project_id, context, step, builder):
+        started = _invoke_tool(ctx, tool, project_id, actor, args)
+    if started.get("ok") is False and started.get("permission"):
+        raise SettledCapabilityError(str(started.get("message") or started.get("error")
+                                         or f"{tool} was refused for this run's authority."))
+    return started
+
+
+def _as_dict(value: Any) -> dict[str, Any]:
+    if isinstance(value, str):
+        try:
+            value = json.loads(value or "{}")
+        except ValueError:
+            return {}
+    return value if isinstance(value, dict) else {}
 
 
 # ── THE APP NEVER WAITS FOR PASS 2 (two_pass) ─────────────────────────────────────────────────
@@ -1647,7 +1768,7 @@ def _latest_code_run(connection: Connection, run_id: str) -> str:
 
 
 def _build_on_the_branch(connection: Connection, ctx: Any, *, project_id: str, actor: str,
-                         context: dict[str, Any], capability: Any,
+                         context: dict[str, Any], capability: Any, step: dict[str, Any],
                          inputs: dict[str, Any]) -> dict[str, Any]:
     """A build with `extend` (Incremental Build's later increments): it builds on THIS run's
     branch, from the newest finished pass, as more commits on the same pull request."""
@@ -1656,7 +1777,9 @@ def _build_on_the_branch(connection: Connection, ctx: Any, *, project_id: str, a
         raise SettledCapabilityError(
             "this build adds to the app an earlier step of this run built, and no earlier "
             "build in the run finished, so there is nothing to build on.")
-    started = _invoke_tool(ctx, "extend_code_task", project_id, actor, {
+    started = _start_on_the_branch(ctx, connection, project_id=project_id, actor=actor,
+                                   context=context, step=step, capability_key="build",
+                                   base_run=base, args={
         "run_id": base, "instructions": str(inputs.get("instructions") or ""),
         "title": str(inputs.get("title") or "Next increment"),
     })
@@ -2471,6 +2594,106 @@ def _existing_app_note(connection: Connection, project_id: str, run_id: str) -> 
             "existing tests must keep passing.")
 
 
+#: Tool-less capabilities that start work on the build's branch (extend_code_task): they take
+#: the builder's authority themselves, in _start_on_the_branch.
+_ON_THE_BRANCH = frozenset({"plrr", "more_tests"})
+
+
+def _perform_toolless(
+    connection: Connection,
+    ctx: Any,
+    *,
+    project_id: str,
+    actor: str,
+    step: dict[str, Any],
+    context: dict[str, Any],
+    key: str,
+    capability: Any,
+    inputs: dict[str, Any],
+    extend: bool = False,
+) -> dict[str, Any]:
+    """A capability with no tool of its own (or a build with `extend`), dispatched in-process.
+    Called by `_perform_capability` under the run's authority, never bare."""
+    if extend:
+        return _build_on_the_branch(connection, ctx, project_id=project_id, actor=actor,
+                                    step=step, context=context, capability=capability,
+                                    inputs=inputs)
+    # `document` has no tool because it commissions nothing — it WRITES, from what the run
+    # already produced. Falling through to the no-op below made the one step whose entire
+    # job is to leave an artefact behind the only step that left nothing.
+    # PRODUCTION LAUNCH READINESS, WHICH HAS NEVER RUN.
+    #
+    # `plrr` declares `tool=None` -- it has no single tool, because it reads the run's own
+    # spec and then starts the repair that closes what the app is missing. Its dispatch sat
+    # AFTER this branch, which returns unconditionally, so it was unreachable from the day
+    # it was written. Every run recorded the step as:
+    #
+    #     "'Production launch readiness' is recorded from the work it accompanies."
+    #
+    # started and completed in the same second, green, having done nothing. It is declared
+    # to produce `findings`, `gaps_closed` and `code_task_run_id` and produced none of
+    # them, so the one step that exists to ask whether anyone can operate the thing at 3am
+    # was the step that never ran.
+    if key == "plrr":
+        # NOT a bare return. This branch exits before the shared "started is not finished"
+        # path below, and plrr's tool result is `status: extending` with the new run id
+        # nested under `result`. Completing the step there lets preview and deploy run
+        # while the repair is still writing the same branch.
+        started = _plrr_step(ctx, connection, project_id, actor, context, step)
+        if started.get("status") == "not_applicable":
+            return started
+        return _settle_started_work(capability, key, started)
+    if key == "more_tests":
+        return _more_tests_started(ctx, connection, project_id=project_id, actor=actor,
+                                   context=context, step=step, capability=capability,
+                                   inputs=inputs)
+    if key == "document":
+        return _write_the_record(connection, project_id, context, inputs)
+    if key == "architecture":
+        # THE ARCHITECT DESIGNS FROM THE APPROVED PRD, THEN A PERSON SIGNS IT OFF. The step
+        # waits on its review (services/architecture_docs.py) like a build waits on its task.
+        return _settle_started_work(
+            capability, key,
+            _architecture_step(connection, ctx, project_id, step, context, inputs))
+    if key == "notify":
+        return _notify(connection, ctx, project_id, step, context, inputs)
+    if key == "wait_for_ci":
+        return _settle_started_work(
+            capability, key, _start_ci_wait(connection, project_id, context, inputs))
+    # Same shape as `document`: no tool because it commissions nothing — it READS what the
+    # run has already recorded and leaves a document behind.
+    # THE RE-REVIEW AND THE SECURITY REPORT (services/security_review_steps.py).
+    if key == "security_rereview":
+        return _security_rereview(connection, ctx, project_id, context, inputs)
+    if key == "security_report":
+        return _security_report(connection, ctx, project_id, context, inputs)
+    if key == "report":
+        # A REPORT THAT WAS NOT WRITTEN IS A STEP THAT FAILED.
+        #
+        # This caught every exception and returned `status: recorded`, so the step went
+        # green with no report behind it — the same shape as research recorded succeeded
+        # after it died (boss-1, 2026-10-02). The reasoning was that a missing report is no
+        # reason to stop a build that succeeded; that is a fair call, and it is the
+        # OPERATOR'S call, made with "Skip and proceed", not one the runner makes by
+        # pretending the report exists.
+        return _write_the_run_report(connection, project_id, context)
+    # OBSERVED, NOT STARTED. `review` and `test` do not commission anything — the governed
+    # pipeline already reviewed and tested the build, and recorded the verdicts. Reporting
+    # "recorded from the work it accompanies" left three of the nine steps saying nothing
+    # about work that had definitely happened and was definitely written down.
+    observed = _observed_from_the_build(connection, key, project_id, context)
+    if observed is not None:
+        return observed
+    # Capabilities with no tool yet are honest no-ops that say so, rather than silently
+    # succeeding as though the work had happened.
+    return {
+        "capability": key,
+        "status": "recorded",
+        "note": f"'{capability.label}' is recorded from the work it accompanies.",
+        "inputs": inputs,
+    }
+
+
 def _perform_capability(
     connection: Connection,
     ctx: Any,
@@ -2508,85 +2731,26 @@ def _perform_capability(
         if why_not:
             return {"capability": key, "tool": None, "status": "not_applicable",
                     "pass_2_of": pass_2_of, "note": why_not}
-    if extend:
-        return _build_on_the_branch(connection, ctx, project_id=project_id, actor=actor,
-                                    context=context, capability=capability, inputs=inputs)
-    if capability.tool is None:
-        # `document` has no tool because it commissions nothing — it WRITES, from what the run
-        # already produced. Falling through to the no-op below made the one step whose entire
-        # job is to leave an artefact behind the only step that left nothing.
-        # PRODUCTION LAUNCH READINESS, WHICH HAS NEVER RUN.
-        #
-        # `plrr` declares `tool=None` -- it has no single tool, because it reads the run's own
-        # spec and then starts the repair that closes what the app is missing. Its dispatch sat
-        # AFTER this branch, which returns unconditionally, so it was unreachable from the day
-        # it was written. Every run recorded the step as:
-        #
-        #     "'Production launch readiness' is recorded from the work it accompanies."
-        #
-        # started and completed in the same second, green, having done nothing. It is declared
-        # to produce `findings`, `gaps_closed` and `code_task_run_id` and produced none of
-        # them, so the one step that exists to ask whether anyone can operate the thing at 3am
-        # was the step that never ran.
-        if key == "plrr":
-            # NOT a bare return. This branch exits before the shared "started is not finished"
-            # path below, and plrr's tool result is `status: extending` with the new run id
-            # nested under `result`. Completing the step there lets preview and deploy run
-            # while the repair is still writing the same branch.
-            started = _plrr_step(ctx, connection, project_id, actor, context)
-            if started.get("status") == "not_applicable":
-                return started
-            return _settle_started_work(capability, key, started)
-        if key == "more_tests":
-            started = _more_tests_step(ctx, connection, project_id, actor, context, inputs)
-            if started.get("status") == "not_applicable":
-                return started
-            return _settle_started_work(capability, key, started)
-        if key == "document":
-            return _write_the_record(connection, project_id, context, inputs)
-        if key == "architecture":
-            # THE ARCHITECT DESIGNS FROM THE APPROVED PRD, THEN A PERSON SIGNS IT OFF. The step
-            # waits on its review (services/architecture_docs.py) like a build waits on its task.
-            return _settle_started_work(
-                capability, key,
-                _architecture_step(connection, ctx, project_id, step, context, inputs))
-        if key == "notify":
-            return _notify(connection, ctx, project_id, step, context, inputs)
-        if key == "wait_for_ci":
-            return _settle_started_work(
-                capability, key, _start_ci_wait(connection, project_id, context, inputs))
-        # Same shape as `document`: no tool because it commissions nothing — it READS what the
-        # run has already recorded and leaves a document behind.
-        # THE RE-REVIEW AND THE SECURITY REPORT (services/security_review_steps.py).
-        if key == "security_rereview":
-            return _security_rereview(connection, ctx, project_id, context, inputs)
-        if key == "security_report":
-            return _security_report(connection, ctx, project_id, context, inputs)
-        if key == "report":
-            # A REPORT THAT WAS NOT WRITTEN IS A STEP THAT FAILED.
-            #
-            # This caught every exception and returned `status: recorded`, so the step went
-            # green with no report behind it — the same shape as research recorded succeeded
-            # after it died (boss-1, 2026-10-02). The reasoning was that a missing report is no
-            # reason to stop a build that succeeded; that is a fair call, and it is the
-            # OPERATOR'S call, made with "Skip and proceed", not one the runner makes by
-            # pretending the report exists.
-            return _write_the_run_report(connection, project_id, context)
-        # OBSERVED, NOT STARTED. `review` and `test` do not commission anything — the governed
-        # pipeline already reviewed and tested the build, and recorded the verdicts. Reporting
-        # "recorded from the work it accompanies" left three of the nine steps saying nothing
-        # about work that had definitely happened and was definitely written down.
-        observed = _observed_from_the_build(connection, key, project_id, context)
-        if observed is not None:
-            return observed
-        # Capabilities with no tool yet are honest no-ops that say so, rather than silently
-        # succeeding as though the work had happened.
-        return {
-            "capability": key,
-            "status": "recorded",
-            "note": f"'{capability.label}' is recorded from the work it accompanies.",
-            "inputs": inputs,
-        }
+    if extend or capability.tool is None:
+        # EVERY IN-PROCESS DISPATCH RUNS UNDER THE RUN'S RECORDED AUTHORITY, like a tool step.
+        # These returned from here bare, as whoever advanced the run (the worker), so under
+        # enforce More tests was refused "needs code_task:retry" and shown as "returned no id
+        # to wait on" (wfr_9575c86ab4a74defa0d2). Work started on the build's branch (PLRR,
+        # More tests, an `extend` build) runs as the builder that branch's task runs as
+        # (_start_on_the_branch); every other tool-less step as its own agent. `_invoke_tool`
+        # refuses a call made outside either, so a new dispatch cannot forget.
+        if extend or key in _ON_THE_BRANCH:
+            return _perform_toolless(connection, ctx, project_id=project_id, actor=actor,
+                                     step=step, context=context, key=key,
+                                     capability=capability, inputs=inputs, extend=extend)
+        from .step_agents import resolve as who_runs_it
+
+        agent = who_runs_it(connection, getattr(ctx, "settings", None), project_id, step,
+                            actor=actor)["agent"]
+        with _step_authority(ctx, connection, project_id, context, step, agent):
+            return _perform_toolless(connection, ctx, project_id=project_id, actor=actor,
+                                     step=step, context=context, key=key,
+                                     capability=capability, inputs=inputs, extend=extend)
 
     # ADOPT, DO NOT DUPLICATE.
     #
@@ -2911,6 +3075,10 @@ def _perform_capability(
     skipped = _preview_not_permitted(key, result, step_actor)
     if skipped:
         return skipped
+    if output.get("ok") is False and output.get("permission"):
+        # AN IDENTITY REFUSAL IS SETTLED: the same grant refuses the same call on every retry.
+        raise SettledCapabilityError(str(output.get("message") or output.get("error")
+                                         or f"'{capability.tool}' was refused."))
     failed = _tool_failed_to_start(key, result)
     if failed:
         raise CapabilityExecutionError(failed)
