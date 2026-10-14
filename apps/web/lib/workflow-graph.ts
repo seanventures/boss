@@ -16,15 +16,21 @@
  *   - `loop`    a bounded loop into its `body` (the body returns to the loop by itself).
  * A parallel step's `join` field is a reference, not an edge: the runtime never follows it.
  *
- * EDITING IS LIMITED TO LINEAR STRETCHES. Inserting, moving and removing rewrite `next` only
- * where one step hands to exactly one other through a plain `next`. Anything that would touch a
- * branch, a join's `wait_for`, a loop body or a condition is refused by returning the SAME spec
- * object, so callers can test `result === spec`. Branch structure is edited in JSON.
+ * EDITS KEEP EVERY BRANCH WHOLE. Moving and duplicating rewrite `next` only where one step hands
+ * to exactly one other through a plain `next`. Inserting and removing may also work INSIDE a
+ * branch: a step placed at the head of a path (a condition's yes/no, a parallel's branch) takes
+ * that reference over; one placed after a path's last step goes between it and where the path
+ * meets the others (a join's `wait_for` follows). Every path keeps at least one step of its own,
+ * and a loop's body stays one step. Anything else is refused by returning the SAME spec object,
+ * so callers can test `result === spec`. Whole branch blocks are placed and removed by
+ * lib/workflow-blocks.ts; their wiring beyond that is edited in JSON.
  *
  * INDEXES are positions in `linearOrder(spec)`. `insertStep(spec, at, …)` puts the new step at
  * index `at` (so `at` is the gap before the step now at `at`; -1 or `length` is the end).
  * `moveStep(spec, id, to)` leaves the step at index `to` — array-move semantics, so Alt+→ is
  * `to = index + 1`, and a drop on gap `g` of the unmoved order is `to = g > index ? g - 1 : g`.
+ * In a branched flow a path's last step has a gap AFTER it too (`afterGap(index)`, -2, -3, …),
+ * because the gap before the next step in the order is the head of another path.
  */
 import type {
   FlowLayout, GraphEdge, InputSource, LaidOutNode, Palette, Spec, SpecStep,
@@ -48,6 +54,31 @@ function withNext(step: SpecStep, targets: string[]): SpecStep {
     return { ...step, next: targets[0] ?? "" };
   }
   return { ...step, next: targets };
+}
+
+/** `step` with every reference to `from` (its `next`, a condition's paths, a parallel's
+ *  branches, a loop's body) pointed at `to` — or, for `next`, dropped when `to` is null. */
+function retarget(step: SpecStep, from: string, to: string | null): SpecStep {
+  let out: SpecStep = step;
+  const next = nextOf(step);
+  if (next.includes(from)) {
+    const targets = to === null ? next.filter((t) => t !== from)
+      : [...new Set(next.map((t) => (t === from ? to : t)))];
+    out = withNext(out, targets);
+  }
+  for (const key of ["on_true", "on_false", "body"]) {
+    if (step[key] === from && to !== null) out = { ...out, [key]: to };
+  }
+  if (Array.isArray(step.branches) && step.branches.map(String).includes(from) && to !== null) {
+    out = { ...out, branches: step.branches.map((b) => (String(b) === from ? to : b)) };
+  }
+  return out;
+}
+
+/** Every step some bounded loop repeats. Its `next` is never followed: it returns to its loop. */
+export function loopBodies(spec: Spec): Set<string> {
+  return new Set(stepsOf(spec).filter((s) => s.kind === "bounded_loop" && s.body)
+    .map((s) => String(s.body)));
 }
 
 const BRANCH_KINDS = new Set(["parallel", "condition", "join", "bounded_loop"]);
@@ -442,6 +473,101 @@ export function insertStep(spec: Spec, at: number, step: SpecStep): Spec {
   const steps = stepsOf(spec);
   if (!step?.id || steps.some((s) => s.id === step.id) || isBranchStructure(step)) return spec;
   const order = linearOrder(spec);
+  const after = afterIndex(at);
+  if (after !== null) return after < order.length ? insertAfter(spec, order[after], step) : spec;
+  const linear = insertLinear(spec, at, step);
+  if (linear !== spec) return linear;
+  // Inside a branch: at the head of a path, or after the flow's one end.
+  if (at >= 0 && at < order.length) return insertBefore(spec, order[at], step);
+  const end = soleEnd(spec);
+  return end ? insertAfter(spec, end, step) : spec;
+}
+
+/** The gap code for "after the step at `index` of linearOrder": -2, -3, … (-1 is the end). */
+export const afterGap = (index: number): number => -(index + 2);
+/** The index an after-gap follows, or null when `at` is any other gap. */
+export const afterIndex = (at: number): number | null => (at <= -2 ? -at - 2 : null);
+
+/** The one step the flow ends at (no way out but a loop's own body), when there is exactly one. */
+function soleEnd(spec: Spec): string | null {
+  const edges = edgesOf(spec);
+  const bodies = loopBodies(spec);
+  const ends = stepsOf(spec).filter((s) => !bodies.has(s.id)
+    && !edges.some((e) => e.from === s.id && e.kind !== "loop"));
+  return ends.length === 1 ? ends[0].id : null;
+}
+
+/** `placed` put into the step list just before `beforeId` (or at the end). */
+function spliceBefore(steps: SpecStep[], beforeId: string | null, placed: SpecStep): SpecStep[] {
+  const at = beforeId ? steps.findIndex((s) => s.id === beforeId) : -1;
+  return at < 0 ? [...steps, placed] : [...steps.slice(0, at), placed, ...steps.slice(at)];
+}
+
+/** `step` on the one edge into `succId` — the head of a path, or any step with one way in. */
+function insertBefore(spec: Spec, succId: string, step: SpecStep): Spec {
+  const into = edgesOf(spec).filter((e) => e.to === succId);
+  if (into.length !== 1 || into[0].kind === "loop" || into[0].kind === "join") return spec;
+  const from = stepsOf(spec).find((s) => s.id === into[0].from)!;
+  // A condition, a parallel and a loop body never follow their own `next`.
+  if (into[0].kind === "next"
+      && (from.kind === "condition" || from.kind === "parallel" || loopBodies(spec).has(from.id))) {
+    return spec;
+  }
+  const placed = withNext({ ...step }, [succId]);
+  const steps = stepsOf(spec).map((s) => (s.id === from.id ? retarget(s, succId, step.id) : s));
+  return { ...spec, steps: spliceBefore(steps, succId, placed) };
+}
+
+/** `step` after `id`: between it and where its path goes next (a join's `wait_for` follows),
+ *  or after it when it is an end. Never after a condition, a parallel or a loop body. */
+function insertAfter(spec: Spec, id: string, step: SpecStep): Spec {
+  const steps = stepsOf(spec);
+  const x = steps.find((s) => s.id === id);
+  if (!x || x.kind === "condition" || x.kind === "parallel" || loopBodies(spec).has(id)) return spec;
+  const outs = edgesOf(spec).filter((e) => e.from === id && e.kind !== "loop");
+  if (outs.length > 1 || nextOf(x).length > outs.length) return spec;
+  const out = outs[0];
+  if (out && !nextOf(x).includes(out.to)) return spec;
+  const placed = withNext({ ...step }, out ? [out.to] : []);
+  const rewired = steps.map((s) => {
+    if (s.id === id) return out ? retarget(s, out.to, step.id) : withNext(s, [step.id]);
+    if (out?.kind === "join" && s.id === out.to && Array.isArray(s.wait_for)) {
+      return { ...s, wait_for: s.wait_for.map((w) => (String(w) === id ? step.id : w)) };
+    }
+    return s;
+  });
+  const index = rewired.findIndex((s) => s.id === id);
+  return { ...spec, steps: [...rewired.slice(0, index + 1), placed, ...rewired.slice(index + 1)] };
+}
+
+/**
+ * The after-gaps a branched flow draws: after each step whose next place is not already a gap of
+ * its own — a path's last step before the paths meet or join, and each end of a flow with
+ * several. The flow's one end is the end gap (-1), never an after-gap.
+ */
+export function afterGaps(spec: Spec): number[] {
+  if (isLinear(spec)) return [];
+  const order = linearOrder(spec);
+  const edges = edgesOf(spec);
+  const end = insertStep(spec, -1, PROBE_STEP) !== spec ? soleEnd(spec) : null;
+  const out: number[] = [];
+  order.forEach((id, index) => {
+    if (id === end) return;
+    const outs = edges.filter((e) => e.from === id && e.kind !== "loop");
+    if (outs.length > 1) return;
+    if (outs.length === 1 && outs[0].kind === "next"
+        && edges.filter((e) => e.to === outs[0].to).length === 1) return;
+    if (insertAfter(spec, id, PROBE_STEP) !== spec) out.push(afterGap(index));
+  });
+  return out;
+}
+
+const PROBE_STEP: SpecStep = { id: "__wf_gap_probe__", kind: "capability", binding: {} };
+
+/** The old rule, kept for moves and copies: a gap in a straight stretch only. */
+function insertLinear(spec: Spec, at: number, step: SpecStep): Spec {
+  const steps = stepsOf(spec);
+  const order = linearOrder(spec);
   const index = at < 0 || at > order.length ? order.length : at;
   const byId = new Map(steps.map((s) => [s.id, s]));
   const edges = edgesOf(spec);
@@ -493,7 +619,8 @@ export function duplicateStep(spec: Spec, id: string, copyId: string): Spec {
   const original = stepsOf(spec).find((s) => s.id === id);
   if (!original) return spec;
   const copy = { ...structuredClone(original), id: copyId } as SpecStep;
-  return insertStep(spec, linearOrder(spec).indexOf(id) + 1, copy);
+  if (stepsOf(spec).some((s) => s.id === copyId) || isBranchStructure(copy)) return spec;
+  return insertLinear(spec, linearOrder(spec).indexOf(id) + 1, copy);
 }
 
 /** Whether `duplicateStep` would copy it, so Duplicate can be disabled where it would not. */
@@ -511,7 +638,7 @@ export function moveStep(spec: Spec, id: string, to: number): Spec {
   if (from < 0 || to < 0 || to >= order.length || to === from) return spec;
   const detached = detach(spec, id);
   if (!detached) return spec;
-  const moved = insertStep(detached.spec, to, detached.step);
+  const moved = insertLinear(detached.spec, to, detached.step);
   return moved === detached.spec ? spec : moved;
 }
 
@@ -519,27 +646,70 @@ export function canMove(spec: Spec, id: string, to: number): boolean {
   return moveStep(spec, id, to) !== spec;
 }
 
-/** Whether `removeStep` would remove it (a step in a linear stretch). */
+/** Whether `removeStep` would remove it: a step in a linear stretch, or one a path can spare. */
 export function canRemove(spec: Spec, id: string): boolean {
-  return detachable(spec, id);
+  return detachable(spec, id) || detachFromPath(spec, id) !== null;
 }
 
 /**
- * The spec without `id`, its predecessor pointed at its successor. An input another step read
- * from it is unset rather than left dangling, so it shows as unwired instead of failing a run.
- * Refused (same spec) for a step that is part of a branch structure.
+ * A step inside a path taken out, the path closed up behind it: what pointed at it points at
+ * its successor, and when it was a path's last step before a join, the join waits for the step
+ * before it instead. Null — refused — when that would leave a path with no step of its own
+ * (a condition's yes/no or a parallel's branch pointed straight at where the paths meet), for a
+ * loop's body, for the entry, and for the branch constructs themselves.
  */
-export function removeStep(spec: Spec, id: string): Spec {
-  const detached = detach(spec, id);
-  if (!detached) return spec;
-  const steps = detached.spec.steps.map((s) => {
+function detachFromPath(spec: Spec, id: string): Spec | null {
+  const steps = stepsOf(spec);
+  const x = steps.find((s) => s.id === id);
+  if (!x || BRANCH_KINDS.has(x.kind) || id === (spec.entry_step ?? steps[0]?.id)) return null;
+  const edges = edgesOf(spec);
+  const into = edges.filter((e) => e.to === id);
+  const outs = edges.filter((e) => e.from === id);
+  if (!into.length || into.some((e) => e.kind === "loop" || e.kind === "join")) return null;
+  if (outs.length > 1 || nextOf(x).length > outs.length) return null;
+  const out = outs[0];
+  if (out && (!["next", "join"].includes(out.kind) || !nextOf(x).includes(out.to))) return null;
+  const successor = out?.to ?? null;
+  for (const e of into) {
+    if (e.kind !== "yes" && e.kind !== "no" && e.kind !== "branch") continue;
+    // The path's head moves on to the successor: only when that is still the path's own step.
+    if (!successor || out.kind === "join") return null;
+    if (edges.some((f) => f.to === successor && f.from !== id)) return null;
+  }
+  // A path's last step before a join: the step before it becomes the last, and is waited for.
+  if (out?.kind === "join" && (into.length !== 1 || into[0].kind !== "next")) return null;
+  const preds = new Set(into.map((e) => e.from));
+  const rest = steps.filter((s) => s.id !== id).map((s) => {
+    let next = preds.has(s.id) ? retarget(s, id, successor) : s;
+    if (out?.kind === "join" && s.id === successor && Array.isArray(s.wait_for)) {
+      next = { ...next, wait_for: s.wait_for.map((w) => (String(w) === id ? into[0].from : w)) };
+    }
+    return next;
+  });
+  return { ...spec, steps: rest };
+}
+
+/** Inputs that read from steps no longer in `spec` are unset, so they show as unwired. */
+export function unsetReadsFrom(spec: Spec, gone: Set<string>): Spec {
+  const steps = stepsOf(spec).map((s) => {
     const binding = asObj(s.binding);
     const inputs = asObj(binding.inputs);
-    const dangling = Object.keys(inputs).filter((k) => asObj(inputs[k]).from_step === id);
+    const dangling = Object.keys(inputs).filter((k) => gone.has(String(asObj(inputs[k]).from_step)));
     if (!dangling.length) return s;
     const kept = { ...inputs };
     for (const name of dangling) delete kept[name];
     return { ...s, binding: { ...binding, inputs: kept } };
   });
-  return { ...detached.spec, steps };
+  return { ...spec, steps };
+}
+
+/**
+ * The spec without `id`, its predecessor pointed at its successor. An input another step read
+ * from it is unset rather than left dangling, so it shows as unwired instead of failing a run.
+ * Refused (same spec) for a branch construct, and for a step its path cannot spare.
+ */
+export function removeStep(spec: Spec, id: string): Spec {
+  const detached = detach(spec, id)?.spec ?? detachFromPath(spec, id);
+  if (!detached) return spec;
+  return unsetReadsFrom(detached, new Set([id]));
 }

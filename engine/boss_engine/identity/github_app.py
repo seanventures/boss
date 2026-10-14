@@ -348,20 +348,29 @@ def install_cascade_hook() -> None:
 
 # ---- the user's own GitHub identity -----------------------------------------------------------------
 
-def user_has_repo_access(person_id: str, repo: str, need: str, *, db: Any) -> bool:
-    """`need` is "pull" or "push". Checked with the person's own token; no token means no."""
+def user_repo_access(person_id: str, repo: str, need: str, *, db: Any) -> Optional[bool]:
+    """`need` is "pull" or "push". Checked with the person's own token (one read-only GET); no
+    token means no. True / False, or None when GitHub did not answer the question (a 5xx, a rate
+    limit): the consent refuses that all the same; the pre-check reports it as unknown."""
     from . import vault
 
     token = vault.token_for_access_check(person_id, provider="github", db=db)
     if not token:
         return False
     resp = _call("GET", f"/repos/{repo}", token=token)
-    if resp.status != 200:
+    if resp.status in (401, 403, 404):
         return False
+    if resp.status != 200:
+        return None
     perms = (resp.json() or {}).get("permissions") or {}
     if need == "push":
         return bool(perms.get("push") or perms.get("maintain") or perms.get("admin"))
     return bool(perms.get("pull") or perms.get("push") or perms.get("admin"))
+
+
+def user_has_repo_access(person_id: str, repo: str, need: str, *, db: Any) -> bool:
+    """user_repo_access, where anything but a yes is a no."""
+    return user_repo_access(person_id, repo, need, db=db) is True
 
 
 def _oauth_refresh(refresh_token: str) -> tuple[str, Optional[str], int]:

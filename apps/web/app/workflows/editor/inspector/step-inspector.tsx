@@ -10,7 +10,8 @@ import {
 
 import { HelpTip } from "../../../help-tip";
 import { StepIcon, hasStepIcon } from "../../../step-icons";
-import { TITLE_MAX, stepView, upstreamOf, wireInputs } from "../../../../lib/workflow-editor-types";
+import { TITLE_MAX, canRemove, stepView, upstreamOf, wireInputs } from "../../../../lib/workflow-editor-types";
+import { blockOfHead, canRemoveBlock, removeRefusal } from "../../../../lib/workflow-blocks";
 import type {
   EditorAction, EditorState, Palette, Problem, SpecStep, StepPatch, StepView,
 } from "../../../../lib/workflow-editor-types";
@@ -193,7 +194,13 @@ export function StepInspector({ state, step, palette, dispatch, projectId, actor
         <Section label="Settings" testId="wf-sec-settings">
           <BlockSettings step={step} view={view} block={blockOf(step, palette)} palette={palette}
                          projectId={projectId} workflowKey={state.meta.workflow_key}
-                         problems={problems} onConfig={(config) => patch({ config })} />
+                         problems={problems} onConfig={(config) => patch({ config })}
+                         structure={{
+                           spec: state.spec,
+                           onSelect: (id) => dispatch({ type: "SELECT", id }),
+                           onAddBranch: () => dispatch({ type: "ADD_BRANCH", id: step.id }),
+                           onRemoveBranch: (branch) => dispatch({ type: "REMOVE_BRANCH", id: step.id, branch }),
+                         }} />
         </Section>
       ) : null}
 
@@ -367,8 +374,18 @@ function StepHeader({ step, view, state, dispatch, problems, onClose }: {
                width={180} role="menu">
         <button type="button" role="menuitem" className="wf-menu-item"
                 onClick={() => { setMenu(false); dispatch({ type: "DUPLICATE", id: step.id }); }}>Duplicate</button>
-        <button type="button" role="menuitem" className="wf-menu-item wf-red" data-testid="wf-step-remove"
-                onClick={() => { setMenu(false); dispatch({ type: "REMOVE", id: step.id }); }}>Remove</button>
+        {(() => {
+          const spec = state.spec;
+          const removable = canRemove(spec, step.id) || canRemoveBlock(spec, step.id);
+          return (
+            <button type="button" role="menuitem" className="wf-menu-item wf-red" data-testid="wf-step-remove"
+                    aria-disabled={!removable || undefined}
+                    title={removable ? undefined : removeRefusal(spec, step.id)}
+                    onClick={() => { if (!removable) return; setMenu(false); dispatch({ type: "REMOVE", id: step.id }); }}>
+              {blockOfHead(step) && !canRemove(spec, step.id) ? "Remove with its paths" : "Remove"}
+            </button>
+          );
+        })()}
       </Popover>
     </header>
   );

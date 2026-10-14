@@ -1,0 +1,527 @@
+{
+  "generated_by": "apps/web/tests/workflow-blocks.test.ts",
+  "specs": {
+    "branch": {
+      "entry_step": "draft",
+      "input_schema": {
+        "instructions": "string"
+      },
+      "steps": [
+        {
+          "id": "draft",
+          "kind": "capability",
+          "next": [
+            "branch"
+          ],
+          "binding": {
+            "agent_work": true,
+            "inputs": {
+              "instructions": {
+                "from_input": "instructions"
+              }
+            },
+            "produces": [
+              "risk"
+            ]
+          }
+        },
+        {
+          "id": "branch",
+          "kind": "condition",
+          "expression": {
+            "any": [
+              {
+                "path": "input.instructions",
+                "op": "contains",
+                "value": "urgent"
+              },
+              {
+                "path": "steps.draft.output.risk",
+                "op": "gte",
+                "value": 3
+              }
+            ]
+          },
+          "on_true": "if_yes",
+          "on_false": "if_no",
+          "next": []
+        },
+        {
+          "id": "if_yes",
+          "kind": "capability",
+          "title": "If yes",
+          "next": [],
+          "binding": {
+            "agent_work": true,
+            "inputs": {
+              "instructions": {
+                "from_input": "instructions"
+              }
+            }
+          }
+        },
+        {
+          "id": "if_no",
+          "kind": "capability",
+          "title": "If no",
+          "next": [],
+          "binding": {
+            "agent_work": true,
+            "inputs": {
+              "instructions": {
+                "from_input": "instructions"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "parallel": {
+      "entry_step": "draft",
+      "input_schema": {
+        "instructions": "string"
+      },
+      "steps": [
+        {
+          "id": "draft",
+          "kind": "capability",
+          "next": [
+            "at_the_same_time"
+          ],
+          "binding": {
+            "agent_work": true,
+            "inputs": {
+              "instructions": {
+                "from_input": "instructions"
+              }
+            },
+            "produces": [
+              "risk"
+            ]
+          }
+        },
+        {
+          "id": "at_the_same_time",
+          "kind": "parallel",
+          "branches": [
+            "branch_1",
+            "branch_2",
+            "branch_3"
+          ],
+          "join": "wait_for_branches",
+          "next": []
+        },
+        {
+          "id": "branch_1",
+          "kind": "capability",
+          "title": "Branch 1",
+          "next": [
+            "wait_for_branches"
+          ],
+          "binding": {
+            "agent_work": true,
+            "inputs": {
+              "instructions": {
+                "from_input": "instructions"
+              }
+            }
+          }
+        },
+        {
+          "id": "branch_2",
+          "kind": "capability",
+          "title": "Branch 2",
+          "next": [
+            "wait_for_branches"
+          ],
+          "binding": {
+            "agent_work": true,
+            "inputs": {
+              "instructions": {
+                "from_input": "instructions"
+              }
+            }
+          }
+        },
+        {
+          "id": "branch_3",
+          "kind": "capability",
+          "title": "Branch 3",
+          "next": [
+            "wait_for_branches"
+          ],
+          "binding": {
+            "agent_work": true,
+            "inputs": {
+              "instructions": {
+                "from_input": "instructions"
+              }
+            }
+          }
+        },
+        {
+          "id": "wait_for_branches",
+          "kind": "join",
+          "wait_for": [
+            "branch_1",
+            "branch_2",
+            "branch_3"
+          ],
+          "success_policy": "any",
+          "next": []
+        }
+      ]
+    },
+    "loop": {
+      "entry_step": "draft",
+      "input_schema": {
+        "instructions": "string"
+      },
+      "steps": [
+        {
+          "id": "draft",
+          "kind": "capability",
+          "next": [
+            "repeat"
+          ],
+          "binding": {
+            "agent_work": true,
+            "inputs": {
+              "instructions": {
+                "from_input": "instructions"
+              }
+            },
+            "produces": [
+              "risk"
+            ]
+          }
+        },
+        {
+          "id": "repeat",
+          "kind": "bounded_loop",
+          "body": "repeat_step",
+          "expression": {
+            "not": {
+              "path": "context.approved",
+              "op": "eq",
+              "value": true
+            }
+          },
+          "max_iterations": 5,
+          "next": []
+        },
+        {
+          "id": "repeat_step",
+          "kind": "capability",
+          "title": "Repeat this",
+          "next": [],
+          "binding": {
+            "agent_work": true,
+            "inputs": {
+              "instructions": {
+                "from_input": "instructions"
+              }
+            },
+            "produces": [
+              "approved"
+            ]
+          }
+        }
+      ]
+    },
+    "nested": {
+      "entry_step": "draft",
+      "input_schema": {
+        "instructions": "string",
+        "team": "string"
+      },
+      "steps": [
+        {
+          "id": "draft",
+          "kind": "capability",
+          "next": [
+            "branch"
+          ],
+          "binding": {
+            "agent_work": true,
+            "inputs": {
+              "instructions": {
+                "from_input": "instructions"
+              }
+            },
+            "produces": [
+              "risk"
+            ]
+          }
+        },
+        {
+          "id": "branch",
+          "kind": "condition",
+          "expression": {
+            "all": [
+              {
+                "path": "input.team",
+                "op": "in",
+                "value": [
+                  "billing",
+                  "support"
+                ]
+              },
+              {
+                "path": "steps.draft.output.risk",
+                "op": "exists"
+              }
+            ]
+          },
+          "on_true": "repeat",
+          "on_false": "if_no",
+          "next": []
+        },
+        {
+          "id": "repeat",
+          "kind": "bounded_loop",
+          "body": "repeat_step",
+          "expression": {
+            "not": {
+              "path": "context.approved",
+              "op": "eq",
+              "value": true
+            }
+          },
+          "max_iterations": 3,
+          "next": [
+            "if_yes"
+          ]
+        },
+        {
+          "id": "repeat_step",
+          "kind": "capability",
+          "title": "Repeat this",
+          "next": [],
+          "binding": {
+            "agent_work": true,
+            "inputs": {
+              "instructions": {
+                "from_input": "instructions"
+              }
+            }
+          }
+        },
+        {
+          "id": "if_yes",
+          "kind": "capability",
+          "title": "If yes",
+          "next": [],
+          "binding": {
+            "agent_work": true,
+            "inputs": {
+              "instructions": {
+                "from_input": "instructions"
+              }
+            }
+          }
+        },
+        {
+          "id": "if_no",
+          "kind": "capability",
+          "title": "If no",
+          "next": [
+            "at_the_same_time"
+          ],
+          "binding": {
+            "agent_work": true,
+            "inputs": {
+              "instructions": {
+                "from_input": "instructions"
+              }
+            }
+          }
+        },
+        {
+          "id": "at_the_same_time",
+          "kind": "parallel",
+          "branches": [
+            "branch_1",
+            "branch_2"
+          ],
+          "join": "wait_for_branches",
+          "next": []
+        },
+        {
+          "id": "branch_1",
+          "kind": "capability",
+          "title": "Branch 1",
+          "next": [
+            "wait_for_branches"
+          ],
+          "binding": {
+            "agent_work": true,
+            "inputs": {
+              "instructions": {
+                "from_input": "instructions"
+              }
+            }
+          }
+        },
+        {
+          "id": "branch_2",
+          "kind": "capability",
+          "title": "Branch 2",
+          "next": [
+            "wait_for_branches"
+          ],
+          "binding": {
+            "agent_work": true,
+            "inputs": {
+              "instructions": {
+                "from_input": "instructions"
+              }
+            }
+          }
+        },
+        {
+          "id": "wait_for_branches",
+          "kind": "join",
+          "wait_for": [
+            "branch_1",
+            "branch_2"
+          ],
+          "success_policy": "all",
+          "next": []
+        }
+      ]
+    },
+    "nested_then_removed": {
+      "entry_step": "draft",
+      "input_schema": {
+        "instructions": "string",
+        "team": "string"
+      },
+      "steps": [
+        {
+          "id": "draft",
+          "kind": "capability",
+          "next": [
+            "branch"
+          ],
+          "binding": {
+            "agent_work": true,
+            "inputs": {
+              "instructions": {
+                "from_input": "instructions"
+              }
+            },
+            "produces": [
+              "risk"
+            ]
+          }
+        },
+        {
+          "id": "branch",
+          "kind": "condition",
+          "expression": {
+            "all": [
+              {
+                "path": "input.team",
+                "op": "in",
+                "value": [
+                  "billing",
+                  "support"
+                ]
+              },
+              {
+                "path": "steps.draft.output.risk",
+                "op": "exists"
+              }
+            ]
+          },
+          "on_true": "if_yes",
+          "on_false": "if_no",
+          "next": []
+        },
+        {
+          "id": "if_yes",
+          "kind": "capability",
+          "title": "If yes",
+          "next": [],
+          "binding": {
+            "agent_work": true,
+            "inputs": {
+              "instructions": {
+                "from_input": "instructions"
+              }
+            }
+          }
+        },
+        {
+          "id": "if_no",
+          "kind": "capability",
+          "title": "If no",
+          "next": [
+            "at_the_same_time"
+          ],
+          "binding": {
+            "agent_work": true,
+            "inputs": {
+              "instructions": {
+                "from_input": "instructions"
+              }
+            }
+          }
+        },
+        {
+          "id": "at_the_same_time",
+          "kind": "parallel",
+          "branches": [
+            "branch_1",
+            "branch_2"
+          ],
+          "join": "wait_for_branches",
+          "next": []
+        },
+        {
+          "id": "branch_1",
+          "kind": "capability",
+          "title": "Branch 1",
+          "next": [
+            "wait_for_branches"
+          ],
+          "binding": {
+            "agent_work": true,
+            "inputs": {
+              "instructions": {
+                "from_input": "instructions"
+              }
+            }
+          }
+        },
+        {
+          "id": "branch_2",
+          "kind": "capability",
+          "title": "Branch 2",
+          "next": [
+            "wait_for_branches"
+          ],
+          "binding": {
+            "agent_work": true,
+            "inputs": {
+              "instructions": {
+                "from_input": "instructions"
+              }
+            }
+          }
+        },
+        {
+          "id": "wait_for_branches",
+          "kind": "join",
+          "wait_for": [
+            "branch_1",
+            "branch_2"
+          ],
+          "success_policy": "all",
+          "next": []
+        }
+      ]
+    }
+  }
+}

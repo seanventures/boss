@@ -34,6 +34,23 @@ export type LanePlan = DragPlan & {
 /** The point between two steps of a branched flow where an insert at `at` would land. */
 export type GapPoint = { at: number; x: number; y: number };
 
+/** The after-gaps (`afterGaps` in the model): right of the step they follow — right of its
+ *  loop's body too, for a loop, so "after the loop" is not drawn between it and its body. */
+export function afterGapPoints(ats: number[], order: string[], geometry: LaneGeometry,
+                               bodyOf: (id: string) => string | undefined = () => undefined): GapPoint[] {
+  const out: GapPoint[] = [];
+  for (const at of ats) {
+    const id = order[-at - 2];
+    const b = id ? geometry.boxes.get(id) : undefined;
+    if (!b) continue;
+    const body = bodyOf(id);
+    const bb = body ? geometry.boxes.get(body) : undefined;
+    const right = Math.max(b.x + b.w, bb ? bb.x + bb.w : 0);
+    out.push({ at, x: right + geometry.conn / 2, y: b.y + b.h / 2 });
+  }
+  return out;
+}
+
 /** One gap before each step of the order, and one after the last (`at` -1). */
 export function gapPoints(order: string[], geometry: LaneGeometry): GapPoint[] {
   const box = (id: string) => geometry.boxes.get(id);
@@ -64,6 +81,8 @@ export function planDrag(input: {
   source: DragSource;
   canMove(id: string, to: number): boolean;
   canInsert(at: number): boolean;
+  /** After-gaps of a branched flow: palette drops only (a move never lands in one). */
+  after?: GapPoint[];
 }): LanePlan {
   const { layout, geometry, order, source } = input;
   const base = new Map<string, number>();
@@ -94,7 +113,9 @@ export function planDrag(input: {
     return { gaps, origin: null, base, ids: order, linear: true };
   }
 
-  const gaps: DropGap[] = gapPoints(order, geometry).map((p) => {
+  const points = source.kind === "item" ? [...gapPoints(order, geometry), ...(input.after ?? [])]
+    : gapPoints(order, geometry);
+  const gaps: DropGap[] = points.map((p) => {
     if (source.kind === "item") return { x: p.x, y: p.y, to: p.at, allowed: input.canInsert(p.at) };
     const index = order.indexOf(source.id);
     const k = p.at < 0 ? order.length : p.at;

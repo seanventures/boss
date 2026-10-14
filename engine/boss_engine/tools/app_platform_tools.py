@@ -65,7 +65,8 @@ def register_app_platform_tools(reg: ToolRegistry) -> None:  # noqa: C901 — on
     @reg.tool(
         "list_templates",
         "The app templates this org can apply (the gallery): built-ins such as login-oauth, "
-        "catalog-cart, stripe-checkout, paypal-checkout, banking-starter, plus approved imports. "
+        "catalog-cart, stripe-checkout, paypal-checkout, transactional-email, banking-starter, plus "
+        "approved imports. "
         "Each card names its stacks, labels (insecure_by_design = training only, never deployed), "
         "the secrets it needs and the hosts its app talks to. Filter by stack, status or label.",
         _obj({

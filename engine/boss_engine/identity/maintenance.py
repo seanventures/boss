@@ -40,7 +40,8 @@ SETTLED_STACK_DEPLOY_STATUSES = ("healthy", "failed", "rejected")
 
 def live_child_work_sql(run: str = "w.id") -> str:
     """SQL true while the workflow run `run` still has child work going: a code task it started
-    (by finalize_ctx or by a step's output) or a stack deployment it planned, not yet settled."""
+    (by finalize_ctx or by a step's output) or a stack deployment it planned, not yet settled,
+    or a step a worker is still executing (`live_branch_sql`)."""
     tasks = "','".join(SETTLED_CODE_TASK_STATUSES)
     stacks = "','".join(SETTLED_STACK_DEPLOY_STATUSES)
     return (
@@ -49,7 +50,26 @@ def live_child_work_sql(run: str = "w.id") -> str:
         f"     SELECT s.output->>'code_task_run_id' FROM workflow_step_runs s"
         f"     WHERE s.workflow_run_id = {run})))"
         f" OR EXISTS (SELECT 1 FROM stack_deployments d WHERE d.workflow_run_id = {run}"
-        f"   AND d.status NOT IN ('{stacks}')))")
+        f"   AND d.status NOT IN ('{stacks}'))"
+        f" OR {live_branch_sql(run)})")
+
+
+#: A step a worker is executing right now: leased or running, its lease not yet expired.
+LIVE_BRANCH_STEP_STATES = ("leased", "running")
+
+
+def live_branch_sql(run: str = "w.id") -> str:
+    """SQL true while a step of the workflow run `run` is still being executed by a worker.
+
+    A BRANCH IS LIVE BEFORE IT HAS CHILD WORK. Pass 2 runs More tests beside deploy, monitor,
+    report and smoke_test on an `all` join; a failure in one branch stops the run, and the deploy
+    beside it may still be inside its step (planning, approving, checking health) with no stack
+    deployment row yet, or a step after it may be calling its tools. Ending the grant then took
+    that in-flight step's authority away mid-call (BOSSAPP-540). Bounded by the LEASE: a worker
+    that died stops counting when its lease expires, so a grant never outlives its run for ever."""
+    states = "','".join(LIVE_BRANCH_STEP_STATES)
+    return (f"EXISTS (SELECT 1 FROM workflow_step_runs b WHERE b.workflow_run_id = {run}"
+            f"   AND b.status IN ('{states}') AND b.lease_expires_at > now())")
 
 
 def end_finished_workflow_grants(*, db: Any) -> list[str]:
@@ -59,7 +79,8 @@ def end_finished_workflow_grants(*, db: Any) -> list[str]:
     A run goes terminal on one branch while another still works: a deploy failed while More tests
     was still writing tests on the branch. Ending the grant 30 s later killed that live code task
     (its run token died with the grant), and every Retry after re-asked consent. The grant now
-    ends with the last child: a code task or stack deployment the run started, once settled."""
+    ends with the last child: a code task or stack deployment the run started, once settled, and
+    no step of the run still held by a worker (`live_branch_sql`)."""
     from sqlalchemy import text
 
     from . import grants

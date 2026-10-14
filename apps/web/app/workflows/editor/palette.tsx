@@ -5,8 +5,8 @@
  *
  * Rows are a glyph and a name. What a step does, needs and makes is a three-line tooltip, never
  * a paragraph in the column. A row is clicked (insert after the selection, or at the end) or
- * dragged onto a gap in the lane. Branch blocks are not offered: their structure is edited in
- * JSON in this release.
+ * dragged onto a gap in the lane. Branch blocks — Branch, Do at the same time, Repeat until — are
+ * offered when the server lists them, and land whole (lib/workflow-blocks.ts `placeBlock`).
  */
 import { CaretLeft, CaretRight, LockSimple, MagnifyingGlass, PencilSimple, Plus, Warning } from "@phosphor-icons/react";
 import React, { useMemo, useState } from "react";
@@ -81,8 +81,18 @@ export function paletteEntries(palette: Palette | null): PaletteEntry[] {
       type: BLOCK_TYPE[b.kind], tip: b.summary, summary: b.summary,
     });
   }
+  for (const c of palette.controls ?? []) {
+    out.push({
+      key: `control:${c.kind}`, item: { control: c.kind }, label: c.label, group: "flow",
+      type: CONTROL_TYPE[c.kind], tip: c.summary, summary: c.summary,
+    });
+  }
   return out;
 }
+
+const CONTROL_TYPE: Record<NonNullable<PaletteItem["control"]>, StepView["type"]> = {
+  condition: "condition", parallel: "parallel", bounded_loop: "loop",
+};
 
 export function matches(entry: PaletteEntry, query: string): boolean {
   const q = query.trim().toLowerCase();

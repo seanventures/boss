@@ -12,7 +12,7 @@
  */
 import { apiWrite } from "./api-write";
 import type {
-  BlockDef, Capability, CheckResult, CustomStepDef, EditorMeta, Palette, Problem,
+  BlockDef, Capability, ControlDef, CheckResult, CustomStepDef, EditorMeta, Palette, Problem,
   PublishRequest, PublishResult, RosterAgent, Spec, WorkflowSummary,
 } from "./workflow-editor-types";
 
@@ -161,6 +161,21 @@ function toBlock(raw: unknown): BlockDef | null {
   };
 }
 
+const CONTROL_KINDS: ControlDef["kind"][] = ["condition", "parallel", "bounded_loop"];
+const CONTROL_LABELS: Record<ControlDef["kind"], string> = {
+  condition: "Branch", parallel: "Do at the same time", bounded_loop: "Repeat until",
+};
+
+/** A branch block the runtime runs. The server marks these `canvas_required` — they need a canvas
+ *  that draws branches — and the Studio's lane is one. A join is never offered alone: it comes
+ *  with its parallel. */
+function toControl(raw: unknown): ControlDef | null {
+  const b = asObj(raw);
+  const kind = str(b.kind) as ControlDef["kind"];
+  if (!CONTROL_KINDS.includes(kind)) return null;
+  return { kind, label: str(b.label) || CONTROL_LABELS[kind], summary: str(b.summary) };
+}
+
 /**
  * What a step can be and who can run it: capabilities, the project's own steps, the flow
  * blocks a canvas can place, and the roster with what each agent holds.
@@ -182,6 +197,7 @@ export async function fetchPalette(projectId: string): Promise<Palette> {
     capabilities: list(capabilities.capabilities).map(toCapability).filter((c) => c.key),
     customSteps: customSteps.map(toCustomStep).filter((c) => c.step_key),
     blocks: list(capabilities.blocks).map(toBlock).filter((b): b is BlockDef => b !== null),
+    controls: list(capabilities.blocks).map(toControl).filter((c): c is ControlDef => c !== null),
     agents: list(capabilities.agents).map((a): RosterAgent => {
       const agent = asObj(a);
       return { role_key: str(agent.role_key), name: str(agent.name) || str(agent.role_key),

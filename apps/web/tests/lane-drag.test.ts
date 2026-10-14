@@ -6,6 +6,7 @@ import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { BRANCHED, linear, PALETTE, STRETCH } from "./_helpers/canvas-fixtures";
+import { afterGap } from "../lib/workflow-graph";
 
 /**
  * Drag and drop on the flow lane, and the keyboard alternative.
@@ -305,8 +306,12 @@ describe("inside a branch", () => {
                     renderGapAction: (at: number) => h("button", { "data-at": at }, "+") })));
     const gap = view.querySelector<HTMLElement>(`.wf-gap[data-at="${between}"]`)!;
     expect(gap).not.toBeNull();
-    // Not between a fan-out and its branches: that is branch structure.
-    expect(view.querySelector(`.wf-gap[data-at="${order.indexOf("a1")}"]`)).toBeNull();
+    // At the head of a branch (the step takes the branch over), but never into the join.
+    expect(view.querySelector(`.wf-gap[data-at="${order.indexOf("a1")}"]`)).not.toBeNull();
+    expect(view.querySelector(`.wf-gap[data-at="${order.indexOf("gather")}"]`)).toBeNull();
+    // After each branch's last step, where the gap before the join cannot serve.
+    expect(view.querySelector(`.wf-gap[data-at="${afterGap(order.indexOf("a2"))}"]`)).not.toBeNull();
+    expect(view.querySelector(`.wf-gap[data-at="${afterGap(order.indexOf("b1"))}"]`)).not.toBeNull();
     const x = parseFloat(gap.style.left);
     const y = parseFloat(gap.style.top);
     pointer("pointerdown", view.querySelector<HTMLElement>('[data-testid="wf-pal-cap:build"]')!, 10, 10);

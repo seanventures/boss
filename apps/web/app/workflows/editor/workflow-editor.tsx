@@ -22,6 +22,9 @@ import { deleteWorkflow, draftFromDescription, fetchSpec } from "../../../lib/wo
 import { newMeta, useWorkflowEditor } from "../../../lib/workflow-editor-store";
 import { canRemove, insertStep, layoutFlow, linearOrder } from "../../../lib/workflow-graph";
 import { newStepFor } from "../../../lib/step-view";
+import {
+  blockOfHead, canRemoveBlock, placeBlock, removeRefusal, type ControlBlock,
+} from "../../../lib/workflow-blocks";
 import { FlowLane, type LaneZoom } from "../flow/flow-lane";
 import { laneGeometry, minScale } from "../flow/geometry";
 import { viewOf } from "../flow/node-facts";
@@ -39,6 +42,9 @@ import { SummaryChips } from "./summary-chips";
 import { NO_DELETE_TIP, TopBar } from "./top-bar";
 import { useCan } from "../../../components/identity/identity-provider";
 
+const BLOCK_REMOVED: Record<ControlBlock, string> = {
+  condition: "Branch removed", parallel: "Parallel steps removed", bounded_loop: "Repeat removed",
+};
 const PALETTE_W = 240;
 /** What the lane loses to its column beyond the palette: the grid gap and the lane's border. */
 const LANE_CHROME = 12 + 2;
@@ -230,6 +236,13 @@ export function WorkflowEditor({ projectId, workflowKey, onBack, onStart, actor,
   /** Places a palette item at `at`; the store wires its inputs there and selects it. */
   const insert = useCallback((at: number, item: PaletteItem) => {
     if (!palette || readOnly) return;
+    if (item.control) {
+      // A branch block lands whole: its head, its paths, its join.
+      if (!placeBlock(spec, at, item.control).head) { show("Can't place that here"); return; }
+      dispatch({ type: "PLACE_BLOCK", at, block: item.control });
+      setSettingsOpen(false);
+      return;
+    }
     const step = newStepFor(item, spec, palette);
     if (insertStep(spec, at, step) === spec) { show("Edit branches in JSON"); return; }
     dispatch({ type: "INSERT", at, step });
@@ -245,10 +258,19 @@ export function WorkflowEditor({ projectId, workflowKey, onBack, onStart, actor,
 
   const remove = useCallback((id: string) => {
     if (readOnly) return;
-    // A step that holds a branch together is not removed here; say why rather than nothing.
-    if (!canRemove(spec, id)) { show("Edit branches in JSON"); return; }
-    dispatch({ type: "REMOVE", id });
-    show("Step removed · Undo", true);
+    // A block's head takes its whole block with it; anything else refused says why.
+    if (canRemove(spec, id)) {
+      dispatch({ type: "REMOVE", id });
+      show("Step removed · Undo", true);
+      return;
+    }
+    const block = blockOfHead(spec.steps.find((s) => s.id === id));
+    if (block && canRemoveBlock(spec, id)) {
+      dispatch({ type: "REMOVE", id });
+      show(`${BLOCK_REMOVED[block]} · Undo`, true);
+      return;
+    }
+    show(removeRefusal(spec, id));
   }, [dispatch, readOnly, show, spec]);
 
   const move = useCallback((id: string, to: number) => {

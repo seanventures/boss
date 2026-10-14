@@ -340,11 +340,21 @@ def _parallel_spec(policy: str = "all") -> dict[str, Any]:
 def test_a_failing_branch_with_a_live_sibling_is_named():
     ctx = _ctx(_parallel_spec(), checkpoint=wp.PRE_RUN)
     out = {c["id"]: c for c in wp.lifecycle_checks(
-        ctx, {"more_tests": [{"verdict": "will_fail"}]})}
+        ctx, {"deploy": [{"verdict": "will_fail"}]})}
     assert out["lifecycle.branch_failure"]["verdict"] == "will_fail"
-    assert out["lifecycle.advisory_start"]["verdict"] == "will_fail"
-    calm = {c["id"]: c for c in wp.lifecycle_checks(ctx, {})}
-    assert calm["lifecycle.branch_failure"]["verdict"] == "unknown"
+    # The grant now waits for the live branch (BOSSAPP-540), so the action no longer asks for it.
+    assert "grant" not in out["lifecycle.branch_failure"]["fix"]["action"]
+
+
+def test_a_failing_advisory_branch_is_not_flagged_once_it_cannot_stop_the_run():
+    """BOSSAPP-540: More tests failing (at start too) completes its step and the run goes on,
+    and a run's grant waits for its live branches, so neither lifecycle rule has a risk left."""
+    ctx = _ctx(_parallel_spec(), checkpoint=wp.PRE_RUN)
+    ids = {c["id"] for c in wp.lifecycle_checks(ctx, {"more_tests": [{"verdict": "will_fail"}]})}
+    assert "lifecycle.branch_failure" not in ids
+    assert "lifecycle.advisory_start" not in ids
+    calm = {c["id"] for c in wp.lifecycle_checks(ctx, {})}
+    assert "lifecycle.branch_failure" not in calm
 
 
 def test_an_any_join_tolerates_a_failed_branch():

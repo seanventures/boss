@@ -365,6 +365,50 @@ def problems_sentence(problems: Iterable[dict[str, Any]]) -> str:
     return " ".join(p["detail"] for p in problems)
 
 
+#: The comparisons `evaluate_expression` knows. Kept beside it in meaning: a new one is added
+#: there and here together, or a spec the validator passes is refused by the runtime mid-run.
+EXPRESSION_OPS = ("exists", "truthy", "eq", "ne", "in", "not_in", "contains",
+                  "gt", "gte", "lt", "lte")
+_LIST_OPS = {"in", "not_in"}
+_VALUE_OPS = {"gt", "gte", "lt", "lte"}
+
+
+def expression_problems(expression: Any) -> list[str]:
+    """What `evaluate_expression` would refuse in this expression, said before a run hits it.
+
+    A CONDITION THAT CANNOT BE READ USED TO PUBLISH. The validator only asked for an object, so
+    `{}` — a Branch nobody had said anything about yet — saved cleanly and then stopped the run
+    the moment it was reached ("expression.path is required"). The rules here are the
+    evaluator's, read in the same order: `all`, then `any`, then `not`, then one comparison.
+    Keys it does not read are left alone, so nothing that runs today is refused.
+    """
+    if not isinstance(expression, dict):
+        return ["the condition must be an object."]
+    for group in ("all", "any"):
+        if group in expression:
+            items = expression[group]
+            if not isinstance(items, list) or not items:
+                return [f"'{group}' must list at least one comparison."]
+            found: list[str] = []
+            for item in items:
+                found.extend(expression_problems(item))
+            return found
+    if "not" in expression:
+        return expression_problems(expression["not"])
+    path = expression.get("path")
+    if not isinstance(path, str) or not path.strip():
+        return ["the condition does not say what to check: choose a value to compare."]
+    op = str(expression.get("op", "truthy")).lower()
+    if op not in EXPRESSION_OPS:
+        known = ", ".join(EXPRESSION_OPS)
+        return [f"'{op}' is not a comparison BOSS knows; use one of: {known}."]
+    if op in _LIST_OPS and not isinstance(expression.get("value"), list):
+        return [f"'{op}' compares against a list of values, and '{path}' has none."]
+    if op in _VALUE_OPS and expression.get("value") is None:
+        return [f"'{op}' needs a value to compare '{path}' against."]
+    return []
+
+
 def normalise_workflow_spec(
     spec: Any,
     roster: Optional[Iterable[str]] = None, *,
@@ -583,6 +627,9 @@ def normalise_workflow_spec(
             if not isinstance(step.get("expression"), dict):
                 bad("expression",
                     f"condition step '{step_id}' requires a declarative expression.")
+            else:
+                for detail in expression_problems(step["expression"]):
+                    bad("expression", f"condition step '{step_id}': {detail}")
             for branch in ("on_true", "on_false"):
                 if not str(step.get(branch) or "").strip():
                     bad(branch, f"condition step '{step_id}' {branch} is required.")
@@ -608,6 +655,9 @@ def normalise_workflow_spec(
             if not isinstance(step.get("expression"), dict):
                 bad("expression",
                     f"bounded_loop step '{step_id}' requires a declarative expression.")
+            else:
+                for detail in expression_problems(step["expression"]):
+                    bad("expression", f"bounded_loop step '{step_id}': {detail}")
             try:
                 maximum = int(step.get("max_iterations", 0))
             except (TypeError, ValueError):
@@ -715,6 +765,56 @@ def normalise_workflow_spec(
         problems.append(problem(step_id, None, (
             f"step '{step_id}' cannot be reached from the entry step: no step leads to it.")))
     return normalized, problems
+
+
+def condition_path_problems(spec: dict[str, Any]) -> list[dict[str, Any]]:
+    """A condition whose path not taken starts at a step the path taken also reaches.
+
+    THAT STEP WOULD NEVER RUN. A condition skips the first step of the path it does not take
+    (`_process_control_step` → `_mark_skipped`), and a skipped step is not started again when the
+    other path arrives at it (`_activate_step` starts only a pending one). So "if urgent, hotfix
+    then deploy; otherwise deploy" — `on_false: deploy` — skips the deploy on the urgent path and
+    the run completes without it. Each path needs a first step of its own; they may meet after.
+
+    The editor's rule, like a gate's question (`spec_problems` applies it to the operator's own
+    workflows): BOSS's shipped specs are governed where they are written.
+    """
+    steps = {str(s["id"]): s for s in spec.get("steps") or []
+             if isinstance(s, dict) and s.get("id")}
+
+    def reach(start: str) -> set[str]:
+        seen: set[str] = set()
+        stack = [start]
+        while stack:
+            current = stack.pop()
+            if current in seen or current not in steps:
+                continue
+            seen.add(current)
+            stack.extend(_targets(steps[current]))
+        return seen
+
+    found: list[dict[str, Any]] = []
+    for step_id, step in steps.items():
+        if step.get("kind") != "condition":
+            continue
+        yes, no = str(step.get("on_true") or ""), str(step.get("on_false") or "")
+        if not yes or not no:
+            continue
+        if yes == no:
+            found.append(problem(step_id, "on_false", (
+                f"condition step '{step_id}' takes both paths to '{yes}'. Give each path its own "
+                "first step.")))
+        elif no in reach(yes):
+            found.append(problem(step_id, "on_false", (
+                f"condition step '{step_id}': the 'no' path starts at '{no}', which the 'yes' "
+                "path also reaches. BOSS skips the first step of the path it does not take, so "
+                f"'{no}' would never run on 'yes'. Give the 'no' path its own first step.")))
+        elif yes in reach(no):
+            found.append(problem(step_id, "on_true", (
+                f"condition step '{step_id}': the 'yes' path starts at '{yes}', which the 'no' "
+                "path also reaches. BOSS skips the first step of the path it does not take, so "
+                f"'{yes}' would never run on 'no'. Give the 'yes' path its own first step.")))
+    return found
 
 
 def _runs_before(normalized: dict[str, Any]) -> dict[str, set[str]]:
@@ -905,6 +1005,10 @@ def spec_problems(
 
     shape = shape + [p for p in binding_order_problems(normalized, optional_for)
                      if (p["step_id"], p["field"]) not in said]
+    if product:
+        said = {(p["step_id"], p["field"]) for p in shape}
+        shape = shape + [p for p in condition_path_problems(normalized)
+                         if (p["step_id"], p["field"]) not in said]
     steps = [s for s in normalized.get("steps") or [] if isinstance(s, dict) and s.get("id")]
     flagged = {p["step_id"] for p in shape if p["step_id"]}
     binding: list[dict[str, Any]] = []
@@ -5434,6 +5538,9 @@ def fail_step(
         output = {**(output or {}), "error_detail": said["detail"]}
         error = f"{said['headline']} {said['action']}"
     can_retry = retryable and int(row["attempt"]) < int(row["max_attempts"])
+    if not can_retry and _is_advisory_step(row):
+        # AN ADVISORY STEP NEVER STOPS THE RUN, AT START EITHER — see `ADVISORY_CAPABILITIES`.
+        return _complete_advisory_failure(connection, row, error, output)
     status = "ready" if can_retry else "deadlettered"
     run_after = now_utc() + timedelta(seconds=max(0, int(retry_delay_seconds)))
     updated = connection.execute(
@@ -5493,6 +5600,64 @@ def fail_step(
             # Gone on without: the run may now have nothing left to do but finish.
             _maybe_finish_run(connection, row["workflow_run_id"])
     _refresh_frontier(connection, row["workflow_run_id"])
+    return _serialize_step(updated)
+
+
+#: Steps whose failure never stops the run (operator, 2026-10-13: "pass 2 never blocks pass 1").
+#: The runner's `_ADVISORY_CAPABILITIES` is the same set (a test holds them equal); it covers an
+#: advisory step whose WORK failed. This covers one that failed to START (refused, broken, or out
+#: of attempts before its work existed). That failure came through `fail_step`, which did not
+#: ask, so a More tests pass that could not start stopped the whole run, and the `all` join of
+#: two_pass's pass 2 took the deploy running beside it down too (BOSSAPP-540).
+ADVISORY_CAPABILITIES = frozenset({"more_tests"})
+
+
+def _is_advisory_step(row: Any) -> bool:
+    """A step bound to an advisory capability, or marked `inputs.advisory` (two_pass's
+    automatic preview): the two the runner completes rather than fails."""
+    binding = _json(dict(row).get("binding_snapshot"), {}) or {}
+    inner = binding.get("binding") if isinstance(binding.get("binding"), dict) else {}
+    capability = str(binding.get("capability") or inner.get("capability") or "")
+    inputs = binding.get("inputs") or inner.get("inputs") or {}
+    marked = isinstance(inputs, dict) and str(inputs.get("advisory")).lower() == "true"
+    return capability in ADVISORY_CAPABILITIES or marked
+
+
+def _complete_advisory_failure(
+    connection: Connection, row: Any, error: str, output: Optional[dict[str, Any]],
+) -> dict[str, Any]:
+    """An advisory step out of attempts completes WITH THE FAILURE SAID, and the run goes on.
+
+    Never silent: `last_error` keeps the cause, the output says `advisory_failed` with a
+    sentence, and `workflow.step_advisory_failed` is recorded before the step's success is.
+    Nothing is dead-lettered: the run did not stop, so there is nothing for an operator to
+    decide. The output does not enter the run context: nothing downstream reads a step that
+    did not do its work.
+    """
+    note = (f"this step could not start ({str(error).strip() or 'no reason given'}); it is "
+            "advisory, so the run carries on without it.")[:600]
+    said = {**(output or {}), "status": "not_applicable", "advisory": True,
+            "advisory_failed": True, "note": note}
+    updated = connection.execute(
+        text(
+            """
+            UPDATE workflow_step_runs
+            SET status='succeeded', last_error=:error,
+                lease_owner=NULL, lease_expires_at=NULL, heartbeat_at=NULL,
+                completed_at=clock_timestamp(),
+                output = COALESCE(output, '{}'::jsonb) || CAST(:output AS JSONB),
+                updated_at=now()
+            WHERE id=:id RETURNING *
+            """
+        ),
+        {"id": row["id"], "error": _clean_text(error, "error"), "output": json.dumps(said)},
+    ).mappings().one()
+    run = _run_row(connection, row["workflow_run_id"])
+    _emit_step_event(connection, run, "workflow.step_advisory_failed", updated,
+                     {"error": error, "note": note})
+    _emit_step_event(connection, run, "workflow.step_succeeded", updated,
+                     {"advisory_failed": True})
+    _after_success(connection, row["workflow_run_id"], row["step_id"], int(row["iteration"]))
     return _serialize_step(updated)
 
 
