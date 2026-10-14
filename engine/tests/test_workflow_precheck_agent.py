@@ -243,6 +243,8 @@ def test_behaviour_is_identical_whichever_engine_the_router_returns(monkeypatch,
     adapter, raw = agent.routed_adapter(object(), object(), "p1", ref="precheck:d1:pre_run")
     out = _run(adapter, max_usd_micros=500_000)
     assert seen["purpose"].kind == "agent" and seen["purpose"].step == "workflow_precheck"
+    # It asks for a TIER (Fast), never a model name.
+    assert seen["purpose"].tier == "fast" and seen["purpose"].risk_tier is None
     assert seen["governed"] == ("model.precheck_agent", "precheck:d1:pre_run")
     assert [(f["step"], f["verdict"], f["title"]) for f in out["findings"]] == [
         ("build", "will_fail", SOCAT_FINDING["findings"][0]["title"])]
@@ -329,3 +331,150 @@ def test_the_cli_passes_agent_through(monkeypatch):
     cli.main(["--workflow", "D1", "--project", "p1", "--agent", "--agent-max-usd", "0.2",
               "--agent-max-turns", "3"])
     assert seen["agent"] is True and seen["agent_max_usd"] == 0.2 and seen["agent_max_turns"] == 3
+
+
+# ── the tier it asks for: Fast, whatever the routing mode ─────────────────────────────────────
+
+def _legacy_claude_default():
+    from boss_engine.services.model_router.router import LegacyRoute
+
+    # Fixed mode's answer on 2026-10-14: the chat job on claude_code with NO chat model set, so
+    # the CLI ran its own default (Opus, 1M context).
+    return LegacyRoute("claude_code", None, "Chat → claude_code (setup-anthropic)")
+
+
+def _request(**kw: Any):
+    from boss_engine.services.model_router.router import RouteRequest
+
+    kw.setdefault("text", "Predict which steps of a workflow run will fail.")
+    return RouteRequest(kind=agent.ROUTE_KIND, step=agent.ROUTE_STEP, project_id="p1",
+                        legacy=_legacy_claude_default, **kw)
+
+
+@pytest.mark.parametrize("mode", ["fixed", "smart"])
+def test_the_precheck_asks_for_the_fast_tier_and_gets_it(mode):
+    from tests._router_fixtures import metered, snap
+
+    from boss_engine.services.model_router.router import Router
+    from boss_engine.services.model_router.tiers import FAST
+
+    sources = {"claude_code": metered("claude_code")}
+    asked = Router().route(_request(tier=agent.ROUTE_TIER), snap(mode=mode, sources=sources))
+    assert asked.tier == FAST and asked.engine == "claude_code" and asked.model == "haiku"
+    assert "asked_tier" in asked.rules and not asked.refused
+    if mode == "fixed":
+        # Unasked, Fixed mode is the legacy answer untouched: no model, the engine's default.
+        plain = Router().route(_request(), snap(mode=mode, sources=sources))
+        assert plain.model is None and "asked_tier" not in plain.rules
+
+
+def test_a_floor_still_raises_an_asked_tier():
+    from tests._router_fixtures import metered, snap
+
+    from boss_engine.services.model_router.router import Router
+    from boss_engine.services.model_router.tiers import FAST
+
+    sensitive = Router().route(_request(tier=agent.ROUTE_TIER, text="rotate the OAuth secrets"),
+                               snap(sources={"claude_code": metered("claude_code")}))
+    assert sensitive.tier != FAST
+
+
+def test_a_fixed_route_with_an_asked_tier_builds_that_model(monkeypatch):
+    """project_chat_adapter used to ignore a Fixed decision and build the chat model knob's
+    adapter — so the asked tier would have been recorded and not used."""
+    from types import SimpleNamespace
+
+    built: dict[str, Any] = {}
+    decision = SimpleNamespace(refused=False, engine="claude_code", model="haiku",
+                               mode="fixed", binding=False, rules=("fixed", "asked_tier"),
+                               reason="Fixed", source_id="setup-anthropic")
+    monkeypatch.setattr(model_routing, "routed_settings", lambda c, s, p: s)
+    monkeypatch.setattr(model_routing, "route_call", lambda c, s, p, purpose: decision)
+    monkeypatch.setattr(model_routing, "adapter_for",
+                        lambda choice, c, s, p, model=None: built.update(
+                            engine=choice.engine, model=model) or SimpleNamespace())
+    monkeypatch.setattr(model_routing, "_failover", lambda a, d, s, p, purpose: a)
+    model_routing.project_chat_adapter(None, object(), "p1", purpose=_request(tier="fast"))
+    assert built == {"engine": "claude_code", "model": "haiku"}
+
+
+# ── the up-front payload is compact ───────────────────────────────────────────────────────────
+
+def test_the_evidence_pack_sends_only_what_is_not_ready():
+    huge = "x" * 20_000
+    report = {"workflow_key": "d1", "workflow_name": "D1", "checkpoint": "pre_run",
+              "summary": {"ready": 30, "fixable": 0, "will_fail": 1, "unknown": 1,
+                          "blocking": ["build:sandbox.engine"], "sentence": "1 will fail"},
+              "steps": [{"step_id": "build", "checks": [
+                  {"id": f"ready.{i}", "verdict": "ready", "evidence": huge} for i in range(30)]
+                  + [{"id": "sandbox.engine", "verdict": "will_fail", "evidence": SANDBOX_ERROR,
+                      "fix": {"auto": False, "action": "Install socat"}},
+                     {"id": "budget.run_cost", "verdict": "unknown", "evidence": huge}]}]}
+    spec = {"steps": [{"id": "build", "kind": "capability", "binding": {
+        "capability": "build", "inputs": {"brief": huge}}}]}
+    pack = agent.evidence_pack(None, None, project_id="p1", report=report, spec=spec,
+                               run_input={"brief": huge, "_precheck": {}})
+    coded = pack["coded_precheck"]
+    assert [c["check"] for c in coded["not_ready"]] == ["build:sandbox.engine",
+                                                        "build:budget.run_cost"]
+    assert coded["not_ready"][0]["evidence"] == SANDBOX_ERROR
+    assert coded["not_ready"][0]["fix"] == "Install socat"
+    assert len(coded["not_ready"][1]["evidence"]) <= agent.MAX_ITEM_CHARS + 1
+    assert coded["ready"][:2] == ["build:ready.0", "build:ready.1"]
+    assert pack["workflow"]["steps"] == [{"id": "build", "kind": "capability",
+                                          "capability": "build"}]
+    assert pack["run_input_keys"] == ["brief"]
+    assert len(json.dumps(pack)) < 6_000      # 30 ready checks of 20k each are ids only
+
+
+# ── the per-minute budget: wait, then ask again — bounded ─────────────────────────────────────
+
+class _Deferring(StubModel):
+    def __init__(self, defer: int, *a: Any, **k: Any):
+        super().__init__(*a, **k)
+        self.defer = defer
+
+    def create_chat_completion(self, messages, tools=None, **kw: Any):
+        if self.defer:
+            self.defer -= 1
+            raise model_routing.ModelSpendDeferred(
+                "waiting for the per-minute budget: Burst cap exceeded ($/min). Retry shortly. "
+                "(burst cap)", retry_after_seconds=11)
+        return super().create_chat_completion(messages, tools=tools, **kw)
+
+
+def test_a_deferred_turn_waits_the_retry_after_and_goes_on():
+    slept: list[float] = []
+    out = _run(_Deferring(2, _socat_script()), sleep=slept.append, clock=lambda: 0.0,
+               max_wait_seconds=180)
+    # budget.burst_retry_after_seconds: the window's seconds plus one.
+    assert slept == [12, 12]
+    assert out["stopped"] is None and out["error"] is None and len(out["findings"]) == 1
+    assert out["waits"] == 2 and out["waited_seconds"] == 24
+    assert "waited 24s for the per-minute budget (2 time(s))" in out["line"]
+
+
+def test_waiting_stops_at_the_wall_clock_limit():
+    slept: list[float] = []
+    out = _run(_Deferring(99, []), sleep=slept.append, clock=lambda: 0.0, max_wait_seconds=30)
+    assert slept == [12, 12, 6] and out["stopped"] == "budget_wait_limit"
+    assert out["turns"] == 0 and "ModelSpendDeferred" in out["error"]
+    assert "waited 30s for the per-minute budget (3 time(s), limit 30s)" in out["line"]
+    assert "stopped: budget wait limit" in out["line"]
+
+
+def test_other_errors_are_not_waited_for():
+    slept: list[float] = []
+
+    class Broken(StubModel):
+        def create_chat_completion(self, messages, tools=None, **_: Any):
+            raise model_routing.ModelSpendRefused("the budget refused this model turn: cap")
+    out = _run(Broken([]), sleep=slept.append)
+    assert slept == [] and out["stopped"] == "error"
+
+
+def test_the_wait_limit_is_a_setting():
+    class S:
+        workflow_precheck_agent_max_wait_seconds = 45
+    assert agent.wait_limit_for(None, S(), "p1") == 45
+    assert agent.wait_limit_for(None, object(), "p1") == agent.DEFAULT_MAX_WAIT_SECONDS

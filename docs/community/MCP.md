@@ -129,18 +129,21 @@ The engine registry has 123 tools: 71 read and 52 write. Examples:
 
 Add `--agent` to the CLI to also run the model pre-check. An agent reads the coded report and predicts failures that the coded checks do not look for. Before it starts, it receives:
 
-- the workflow and its input
-- the full coded report
+- the workflow's steps and the names of its inputs
+- a compact coded report: every check that is not ready, with its evidence; the ready checks by id only
 - the engine, model and source each step will use
-- recent failures of this workflow and project
+- recent failures of this workflow and project, clipped
 - the installed BOSS version
+
+Anything else it reads with its tools, so the first turn stays small.
 
 It can then call the read tools every agent holds: logs, run turns, diagnoses, configuration, code, git history, the machine's state and `installed_binaries`. It never fixes anything.
 
-- **Model-agnostic.** The agent uses this project's routed model (`model_routing.project_chat_adapter`, purpose `kind=agent`, `step=workflow_precheck`). It works with any connected source: an Anthropic key, Codex or OpenRouter. Every model turn is reserved against the budget and receipted (`model.precheck_agent`).
+- **Model-agnostic.** The agent uses this project's routed model (`model_routing.project_chat_adapter`, purpose `kind=agent`, `step=workflow_precheck`, `tier=fast`). It asks for the Fast tier, never a model name: in Smart routing the tier replaces the classifier's answer (a floor or sensitive work still raises it); in Fixed routing it gets the same engine's Fast-tier model (`haiku` on Claude Code) instead of the chat model. It works with any connected source: an Anthropic key, Codex or OpenRouter. Every model turn is reserved against the budget and receipted (`model.precheck_agent`).
 - **Evidence required.** Each prediction lists `{step, title, verdict: will_fail|risk, evidence, fix, who: auto|person}`. A prediction without evidence is dropped. If its citations appear nowhere in what the agent saw or read, it is downgraded to `risk`. If the output is malformed, the agent is asked once more. After that, malformed items are dropped.
 - **Separate from the coded checks.** Predictions print as `(model)` lines and are counted on their own (`COUNTS: …; model: will_fail N, risk M`). They also appear in `--explain` and `--json` as `report.model`. They never enter `blocking` and never change the exit code.
 - **Capped.** The default cost cap is `$0.50` (`workflow_precheck_agent_max_cents`) and the default turn cap is 8 (`workflow_precheck_agent_max_turns`). No turn starts once the cost cap is reached. You can override both caps for one run with `--agent-max-usd` and `--agent-max-turns`. The report gives the engine, model and source the agent ran on, and what it cost: `model pre-check ran on <engine>/<model> via <source>, $0.0x`.
+- **Waits for the per-minute budget.** A turn the burst cap defers is not a failure. The agent waits the budget's retry-after and asks again, for at most `workflow_precheck_agent_max_wait_seconds` (default 180) in all. The line then says `waited Ns for the per-minute budget`.
 - **At the start door: off by default.** The model pre-check runs when a workflow starts only if the project setting `workflow_precheck_agent` is `1`, or the workflow spec sets `precheck_agent: true`. Its lines are recorded on the run and are advisory: they never refuse a start.
 
 ### Tools paused or scoped in Community
