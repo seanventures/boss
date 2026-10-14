@@ -72,6 +72,28 @@ def test_the_precheck_endpoint_answers_per_step(client, key):
                        json={"project_id": PROJECT}).status_code == 404
 
 
+def test_the_precheck_reads_behaviour_and_lists_fixes_without_applying_them(client, key):
+    r = client.post(f"/v1/workflows/{key}/precheck",
+                    json={"project_id": PROJECT, "offline": True, "history_days": 2})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert {"(history)", "(logs)", "(data)"} <= {s["step_id"] for s in body["steps"]}
+    assert all(not f["applied"] for f in body["fixes"]) and isinstance(body["explain"], list)
+    only = client.post(f"/v1/workflows/{key}/precheck",
+                       json={"project_id": PROJECT, "offline": True, "families": ["data"]})
+    assert {s["step_id"] for s in only.json()["steps"]} & {"(history)", "(logs)"} == set()
+
+
+def test_fix_true_is_refused_on_the_read_route_and_taken_on_the_fix_route(client, key):
+    r = client.post(f"/v1/workflows/{key}/precheck",
+                    json={"project_id": PROJECT, "offline": True, "fix": True})
+    assert r.status_code == 422 and "precheck/fix" in r.text
+    planned = client.post(f"/v1/workflows/{key}/precheck/fix",
+                          json={"project_id": PROJECT, "offline": True, "families": []})
+    assert planned.status_code == 200, planned.text
+    assert all(not f["applied"] for f in planned.json()["fixes"])   # fix defaults to false
+
+
 def test_a_start_that_will_fail_is_refused_with_the_precheck(client, key, failing):
     r = _start(client, key)
     assert r.status_code == 409, r.text
