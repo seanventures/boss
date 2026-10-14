@@ -81,7 +81,7 @@ def test_the_first_deploy_creates_the_target_on_a_free_port_and_the_plan_shows_i
     assert plan["app"] == "Shift Swap Board" and plan["environment"] == "staging"
     assert plan["port"] == 8001 and plan["url"] == "http://203.0.113.77:8001/"
     assert plan["health"] == "http://203.0.113.77:8001/ expecting 200"
-    assert plan["database"] == "Postgres" and plan["edit_href"].endswith(out["target_id"])
+    assert plan["database"] is None and plan["edit_href"].endswith(out["target_id"])
     assert plan["host"] == host["name"]                      # the machine's name, never its id
     with engine.begin() as c:
         row = c.execute(text("SELECT app_name, host_id, domains, required_resources FROM deployment_targets "
@@ -94,6 +94,20 @@ def test_the_first_deploy_creates_the_target_on_a_free_port_and_the_plan_shows_i
     again = delivery_pipeline.deploy_build(api_main.engine, api_main.settings, project_id=HOME, run_id=run_id,
                                            environment="staging", actor="ceo")
     assert again["target_id"] == out["target_id"] and again["target_created"] is False
+
+
+def test_a_postgres_app_with_no_manifest_is_refused_before_it_is_planned(client, engine):
+    """The one-container deploy brings no database: a Postgres build that declares none is
+    refused in words, never planned with a card that says "Database: Postgres"."""
+    _verified_host(client, engine, "203.0.113.80")
+    run_id = _built(engine, "Pg Without Manifest")
+    with engine.begin() as c:
+        c.execute(text("UPDATE code_task_runs SET state = CAST(:s AS jsonb) WHERE id = :i"),
+                  {"i": run_id, "s": json.dumps({"build_database": {"postgres": True, "mode": "auto"}})})
+    out = delivery_pipeline.deploy_build(api_main.engine, api_main.settings, project_id=HOME, run_id=run_id,
+                                         environment="staging", actor="ceo")
+    assert out["status"] == "failed" and out["missing"] == "deploy_manifest", out
+    assert "Postgres" in out["reason"] and "database.relational" in out["reason"]
 
 
 def test_with_two_machines_and_no_choice_it_asks_where(client, engine):
