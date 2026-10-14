@@ -149,6 +149,10 @@ REJECTED_BY_APPROVER = "rejected_by_approver"
 #: because that stack deployment's own decision is the approval. Execution may ship there and
 #: nowhere else without an approval.
 STACK_GATE_TARGET = "stack_gate_target_id"
+#: The waiver's target when it is a declared app's FIRST deploy: the target is made by the step
+#: (stack_deploy._first_target), so the gate names no id — but execution must still ship
+#: through a stack deployment, never fall to the ungated per-app path.
+FIRST_STACK_TARGET = "first-stack-target"
 
 
 def _resolve_inputs(
@@ -327,13 +331,25 @@ def _run_context(connection: Connection, run_id: str) -> dict[str, Any]:
 
 #: Said to a build whose workflow deploys it. The app's own manifest is how BOSS deploys it
 #: without anybody filling a "manifest path" or a start command in by hand.
+#: The words that open DEPLOY_MANIFEST_BRIEF: a build whose brief holds them was asked for its
+#: own manifest (stack_deploy.undeclared_deploy_refusal).
+DEPLOY_BRIEF_MARKER = "THIS APP WILL BE DEPLOYED"
+
 DEPLOY_MANIFEST_BRIEF = (
-    "THIS APP WILL BE DEPLOYED by BOSS after review. If the repository has no boss.deploy.yaml "
-    "at its root, write one, so the app says how it runs instead of anyone filling it in:\n"
+    f"{DEPLOY_BRIEF_MARKER} by BOSS after review. Write a boss.deploy.yaml IN THE APP'S OWN "
+    "FOLDER — next to its boss.preview.command; the repository root only for an app that lives "
+    "at the root. A boss.deploy.yaml already at the repository root belongs to another app: "
+    "never edit it, and do not count it as this app's. It says how the app runs, so nobody fills "
+    "it in by hand:\n"
     "  version: 1\n  name: <the app's short name, lower-case-with-dashes>\n  kind: commands\n"
     "  install: [<the commands that install dependencies and start the app in the background on "
     "port $PORT>]\n  health: [{url: \"{target.public_url}\", expect: 200}]\n"
     "  open: {url: \"{target.public_url}\"}\n"
+    "Never set PORT in it: BOSS passes the target's. Health-check a route the app really serves. "
+    "IF THE APP USES POSTGRES, the manifest brings it: `resources: {db: {capability: "
+    "database.relational, engine: postgres}}` (BOSS provisions it and passes DATABASE_URL), or "
+    "kind: compose with a postgres service in its compose file. A deploy of a Postgres app whose "
+    "manifest declares no database is refused before anyone is asked to approve it. "
     "Use compose (kind: compose, compose: {file: docker-compose.yml}) when the app already runs "
     "with docker compose. Keep it in the same pull request.")
 
@@ -621,6 +637,27 @@ def _fill_optional_from_run_input(
     return filled
 
 
+def deploy_step_inputs(connection: Connection, spec_step: dict[str, Any],
+                       context: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
+    """A deploy step's inputs as it will run with them, resolved before it runs; None when they
+    cannot be told yet."""
+    binding = spec_step.get("binding") or {}
+    if str(binding.get("capability") or "") != "deploy" or context is None:
+        return None
+    point = connection.begin_nested()
+    try:
+        capability = get_capability("deploy")
+        scratch = dict(context)
+        inputs = _resolve_inputs(binding.get("inputs") or {}, scratch,
+                                 optional=frozenset(capability.optional_inputs or ()))
+        inputs = _fill_optional_from_run_input(capability, inputs, scratch)
+    except Exception:  # noqa: BLE001 — unresolvable now
+        point.rollback()
+        return None
+    point.commit()
+    return inputs
+
+
 def stack_target_for_step(
     connection: Connection,
     project_id: str,
@@ -687,6 +724,7 @@ def stack_deploy_for_step(
         or reached.get("stack_deployment_id") or "")
     deployment = None
     target_id = ""
+    target: Optional[dict[str, Any]] = None
     if deployment_id:
         point = connection.begin_nested()
         try:
@@ -718,8 +756,9 @@ def stack_deploy_for_step(
     return {
         "stack_deployment_id": (deployment or {}).get("id"),
         "target_id": target_id or None,
-        "target_name": (row or {}).get("app_name"),
-        "environment": (row or {}).get("environment"),
+        # A first deploy's target is named before it is made (stack_deploy._first_target).
+        "target_name": (row or {}).get("app_name") or (target or {}).get("app_name"),
+        "environment": (row or {}).get("environment") or (target or {}).get("environment"),
         "host": (row or {}).get("host_name"),
         "host_address": (row or {}).get("host_address"),
         "deployment": deployment,
@@ -2862,11 +2901,14 @@ def _perform_capability(
         stack_target = stack_target_for_deploy(
             connection, project_id, inputs,
             default_owner=str(getattr(getattr(ctx, "settings", None), "target_github_owner", "")
-                              or ""))
+                              or ""),
+            # THE DEPLOY ITSELF: a declared app's first deploy makes its target here.
+            create=True)
         approved = bool(context.get("approval_decision_id"))
         waived_for = str(context.get(STACK_GATE_TARGET) or "")
         if waived_for and not approved and (
-                stack_target is None or str(stack_target.get("id")) != waived_for):
+                stack_target is None or (waived_for != FIRST_STACK_TARGET
+                                         and str(stack_target.get("id")) != waived_for)):
             # THE GATE WAS WAIVED FOR ONE STACK TARGET; EXECUTION MUST SHIP THERE OR NOWHERE.
             # Between the waiver and this call the target can be deactivated, a second stack
             # target added for the repository, or its host changed — and falling through would
@@ -2899,6 +2941,12 @@ def _perform_capability(
                 # ONE APPROVAL PER DEPLOY: the gate a person already answered, passed on.
                 approval_decision_id=str(context.get("approval_decision_id") or "") or None)
     if key == "deploy" and not pass_2_of:
+        from .stack_deploy import undeclared_deploy_refusal
+
+        undeclared = undeclared_deploy_refusal(connection, str(inputs.get("run_id") or ""))
+        if undeclared:
+            # Settled, in words, before anything is planned (see `_gate_subject`).
+            raise SettledCapabilityError(undeclared)
         missing = _preview_missing_for_run(connection, context)
         if missing:
             return {"capability": key, "tool": None, "status": "failed",
@@ -4552,7 +4600,7 @@ def _gate_subject(
                      if key == "deploy" else None)
     if stack_target:
         if waived is not None:
-            waived[STACK_GATE_TARGET] = stack_target.get("id")
+            waived[STACK_GATE_TARGET] = stack_target.get("id") or FIRST_STACK_TARGET
         # ONE APPROVAL FOR A STACK DEPLOY: THE DEPLOYMENT'S OWN.
         #
         # Observed on boss-1 (wfr_79c63a78b34546a3b927): the deploy step of a repository with
@@ -4568,6 +4616,24 @@ def _gate_subject(
         # rejecting it rejects the step. Every other deploy keeps its gate exactly as before.
         return None
     if key == "deploy" and context is not None:
+        # A DEPLOY THAT WILL BE REFUSED ASKS NOBODY: an app that was told to declare how it
+        # runs and did not, or a Postgres app with no manifest to bring its database, is refused
+        # by the step in words (stack_deploy.undeclared_deploy_refusal) — never after a person
+        # approved a deploy that could not work.
+        from .stack_deploy import undeclared_deploy_refusal
+
+        ready = deploy_step_inputs(connection, spec_step, context) or {}
+        if not ((binding.get("inputs") or {}).get("pass_2_of")) and ready.get("run_id"):
+            point = connection.begin_nested()
+            try:
+                undeclared = undeclared_deploy_refusal(connection, str(ready["run_id"]))
+            except Exception:  # noqa: BLE001 — unknown: the gate opens as it always did
+                point.rollback()
+                undeclared = None
+            else:
+                point.commit()
+            if undeclared:
+                return None
         # "DEPLOY AGAIN" THAT WILL SHIP NOTHING ASKS NOBODY: it runs, and says why (two_pass).
         pass_2_of = str(((binding.get("inputs") or {}).get("pass_2_of")) or "")
         if pass_2_of and pass_two_redeploy_refusal(

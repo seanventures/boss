@@ -11137,7 +11137,8 @@ def assign_app_slot(target_id: str, host: dict, *, wanted_port: Any = None) -> d
     promised ports, plus a probe of the machine), so it is done here, and the answer is words.
     """
     from boss_engine.services.deployment_connectors import _app_port, domain_with_port
-    from boss_engine.services.deployment_fleet import _first_free_port, _ports_assigned_on
+    from boss_engine.services.deployment_fleet import (
+        _first_free_port, _port_the_app_had, _ports_assigned_on)
 
     address = str(host.get("address") or "").strip()
     name = str(host.get("name") or address or "the host")
@@ -11146,7 +11147,7 @@ def assign_app_slot(target_id: str, host: dict, *, wanted_port: Any = None) -> d
                 "next": "Set the host's address in Infra, then press Set target again."}
     with begin(engine) as connection:
         target = connection.execute(
-            text("SELECT app_name, required_resources, domains FROM deployment_targets "
+            text("SELECT project_id, app_name, required_resources, domains FROM deployment_targets "
                  "WHERE id = :i FOR UPDATE"), {"i": target_id}).mappings().first()
         if not target:
             return {"ok": False, "message": "The target was not found after it was created.",
@@ -11165,6 +11166,11 @@ def assign_app_slot(target_id: str, host: dict, *, wanted_port: Any = None) -> d
             return {"ok": False,
                     "message": f"Port {port} on {name} is already promised to {taken[port]!r}.",
                     "next": "Leave the port empty and BOSS will choose a free one."}
+        if not port:
+            # The port this app already had on the host (its OAuth callbacks name it), if free.
+            had = _port_the_app_had(connection, str(target.get("project_id") or ""),
+                                    str(target.get("app_name") or ""), address)
+            port = had if had and had not in taken else None
         if not port:
             port = _first_free_port(connection, address)
         if not port:

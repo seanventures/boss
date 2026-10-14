@@ -952,7 +952,8 @@ def _ports_assigned_on(connection, address: str) -> dict[int, str]:
     the machine does not care whose row reserved the socket.
     """
     rows = connection.execute(
-        sql("SELECT app_name, domains FROM deployment_targets WHERE status <> 'retired'")
+        sql("SELECT t.app_name, t.domains FROM deployment_targets t WHERE t.status <> 'retired' "
+            + _NEVER_RAN_SQL)
     ).mappings().all()
     taken: dict[int, str] = {}
     for row in rows:
@@ -961,6 +962,42 @@ def _ports_assigned_on(connection, address: str) -> dict[int, str]:
             if tail.isdigit() and head == address:
                 taken[int(tail)] = str(row["app_name"] or "")
     return taken
+
+
+#: A target whose every deploy FAILED holds no port. Onboarding (deptgt_35ba82e8) was given
+#: HelpDesk's :8000 after HelpDesk's target was retired, its only deploy failed, and it kept the
+#: port: HelpDesk's next target went to :8001, and every OAuth callback registered for :8000
+#: broke. A target with no attempt yet still holds its port (it was just made for a deploy), and
+#: so does one with a deploy in flight or one that ever succeeded.
+_DEPLOY_WORKED = ("succeeded", "superseded", "healthy")
+_DEPLOY_FAILED = ("failed", "blocked", "rejected", "cancelled", "rolled_back", "expired")
+_NEVER_RAN_SQL = (
+    "AND NOT ("
+    " (EXISTS (SELECT 1 FROM deployment_runs r WHERE r.deployment_target_id = t.id)"
+    "  OR EXISTS (SELECT 1 FROM stack_deployments d WHERE d.target_id = t.id))"
+    " AND NOT EXISTS (SELECT 1 FROM deployment_runs r WHERE r.deployment_target_id = t.id"
+    "                 AND r.status NOT IN ('" + "','".join(_DEPLOY_FAILED) + "'))"
+    " AND NOT EXISTS (SELECT 1 FROM stack_deployments d WHERE d.target_id = t.id"
+    "                 AND d.status NOT IN ('" + "','".join(_DEPLOY_FAILED) + "')))")
+
+
+def _port_the_app_had(connection, project_id: str, app: str, address: str) -> Optional[int]:
+    """The port this app was last given on this host (any of its targets, retired too), so its
+    next target keeps the address people, bookmarks and OAuth callbacks already use."""
+    from .naming import identity_key
+
+    wanted = identity_key(app)
+    for row in connection.execute(
+            sql("SELECT app_name, domains FROM deployment_targets WHERE project_id = :p "
+                "ORDER BY updated_at DESC NULLS LAST, created_at DESC"),
+            {"p": project_id}).mappings().all():
+        if identity_key(str(row["app_name"] or "")) != wanted:
+            continue
+        for domain in (row["domains"] or []):
+            head, _, tail = str(domain).rpartition(":")
+            if tail.isdigit() and head == address:
+                return int(tail)
+    return None
 
 
 def _first_free_port(connection, address: str, *, start: int = 3000,
@@ -1104,6 +1141,11 @@ def create_deployment_target(
                              f"{taken[port]!r}. Leave port unset and one will be chosen.",
                     "assigned": [{"port": k, "app": v} for k, v in sorted(taken.items())]}
     else:
+        # THE APP'S OWN PORT FIRST: the one it had on this host, when no other app holds it now.
+        port = _port_the_app_had(connection, project_id, app, address)
+        if port is not None and port in taken:
+            port = None
+    if not port:
         # IN THE HOST'S OWN RANGE (port_min..port_max, "Ports 8000-8999" in Infra): the range is
         # what the operator said apps may use on this machine.
         low = int(host.get("port_min") or 3000)

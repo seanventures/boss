@@ -63,6 +63,20 @@ def run_deployment(connection: Connection, run_id: str) -> Optional[dict[str, An
     for row in rows:
         output = _json(row["output"]) or {}
         awaited = output.get("await") or {}
+        # A DEPLOY FROM THE APP'S OWN MANIFEST is a stack deployment: the smoke test fell
+        # through to a free http_probe (refused in Community) after every one of them.
+        stack_id = (awaited.get("id") if awaited.get("kind") == "stack_deployment" else None) \
+            or output.get("stack_deployment_id")
+        if stack_id:
+            sdep = connection.execute(
+                text("SELECT id, status, target_id, host_id, manifest_text, open_url, "
+                     "code_task_run_id FROM stack_deployments WHERE id = :d"),
+                {"d": stack_id}).mappings().first()
+            if sdep:
+                return {"id": sdep["id"], "status": sdep["status"], "stack": True,
+                        "deployment_target_id": sdep["target_id"], "host_id": sdep["host_id"],
+                        "manifest_text": sdep["manifest_text"], "open_url": sdep["open_url"],
+                        "release_packet": {"code_task_run_id": sdep["code_task_run_id"]}}
         dep_id = (awaited.get("id") if awaited.get("kind") == "deployment" else None) \
             or output.get("deployment_id")
         if not dep_id:
@@ -180,6 +194,9 @@ def smoke_deployment(connection: Connection, settings: Any, engine: Any, *,
     target = _target(connection, project_id, str(dep["deployment_target_id"] or ""))
     if target is None:
         return {"ok": False, "error": f"deployment {dep['id']} has no target in this project"}
+    if dep.get("stack"):
+        return _smoke_stack(connection, dep, target,
+                            manifest_text if manifest_text is not None else dep.get("manifest_text"))
     domains = target.get("domains") or []
     if not domains:
         return {"ok": False, "error": f"{target.get('app_name')} has no address to test: its "
@@ -245,3 +262,47 @@ def smoke_deployment(connection: Connection, settings: Any, engine: Any, *,
     status = next((c.get("status") for c in health.get("checks") or []
                    if isinstance(c.get("status"), int)), code)
     return {**base, "status": status if isinstance(status, int) else 200}
+
+
+def _smoke_stack(connection: Connection, dep: dict[str, Any], target: dict[str, Any],
+                 manifest_text: Optional[str]) -> dict[str, Any]:
+    """A stack deployment, smoked through its target: the health the deployed manifest declares
+    (the very manifest_text it shipped with), asked at the target's own address — the one
+    destination this run put the app at — plus the unbuilt-source check on its page."""
+    from .deployment_fleet import get_host
+    from .stack_deploy import target_address
+
+    host = get_host(connection, str(dep.get("host_id") or target.get("host_id") or "")) or {}
+    if not host.get("address") and not target.get("public_url") and not target.get("domains"):
+        return {"ok": False, "error": f"{target.get('app_name')} has no address to test: its "
+                                      "target has no host, domain or public URL"}
+    base = target_address(target, host).rstrip("/")
+    declared = declared_health(manifest_text) if manifest_text else []
+    checks = declared or [{"path": "/", "expect_status": 200, "declared_by": "default"}]
+    started = time.time()
+    ran: list[dict[str, Any]] = []
+    for check in checks:
+        url = base + (check["path"] if check["path"].startswith("/") else "/" + check["path"])
+        code, _body = _root_body(url)
+        ran.append({"url": url, "status": code, "expected": check["expect_status"],
+                    "ok": code == check["expect_status"]})
+    ms = round((time.time() - started) * 1000)
+    out = {"url": base + "/", "ms": ms, "checks": ran,
+           "declared_health": [c["path"] for c in declared],
+           "declared_from": "the deployed boss.deploy.yaml" if declared else "",
+           "deployment_id": dep["id"], "stack_deployment_id": dep["id"],
+           "deployment_target_id": target["id"],
+           "probed_by": "the stack target's declared health"}
+    failing = [c for c in ran if not c["ok"]]
+    if failing:
+        said = "; ".join(f"{c['url']} " + (f"answered {c['status']}, expected {c['expected']}"
+                                           if c["status"] is not None else "did not answer")
+                         for c in failing)
+        return {**out, "ok": False, "status": None,
+                "error": f"{target.get('app_name')} is not healthy: {said}"}
+    code, body = _root_body(base + "/")
+    if body and _UNBUILT.search(body):
+        return {**out, "ok": False, "status": code,
+                "error": f"{base}/ serves the app's unbuilt source (its page loads "
+                         f"{_UNBUILT.search(body).group(0)[:80]}…): no browser can run it."}
+    return {**out, "status": next((c["status"] for c in ran if isinstance(c["status"], int)), 200)}

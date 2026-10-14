@@ -69,6 +69,13 @@ def declared_manifest(files: Any) -> Optional[str]:
         return None
     nested = [m for m in manifests if "/" in m]
     if not nested:
+        home = app_folder(paths)
+        if home:
+            # THE ROOT MANIFEST IS ANOTHER APP'S when everything this build wrote lives in one
+            # folder of its own: Onboarding (crun_2d097414) edited boss-sandbox's root
+            # boss.deploy.yaml — stack-demo's — and wrote its app under
+            # onboarding-path-builder/, so it declared nothing of its own.
+            return None
         return DEFAULT_MANIFEST_PATH
 
     def held(manifest: str) -> tuple[int, int]:
@@ -76,6 +83,27 @@ def declared_manifest(files: Any) -> Optional[str]:
         return (sum(1 for p in paths if p.startswith(directory)), manifest.count("/"))
 
     return max(nested, key=held)
+
+
+#: Folders that hold part of a root app, never an app of their own.
+_SOURCE_DIRS = frozenset({"src", "lib", "app", "apps", "server", "client", "web", "public", "static",
+                          "test", "tests", "spec", "scripts", "migrations", "db", "config",
+                          "docs", "assets", "components", "pages", "routes", "api", ".github"})
+
+
+def app_folder(files: Any) -> Optional[str]:
+    """The one top-level folder every non-manifest file a build wrote lives in — the app's own
+    folder in a repository of several apps — or None (the app is at the root, or spread out)."""
+    paths = [str(f).strip().removeprefix("./").lstrip("/") for f in (files or [])
+             if str(f or "").strip()]
+    others = [p for p in paths if p != DEFAULT_MANIFEST_PATH]
+    if not others or any("/" not in p for p in others):
+        return None
+    tops = {p.split("/", 1)[0] for p in others}
+    if len(tops) != 1:
+        return None
+    top = next(iter(tops))
+    return None if top.lower() in _SOURCE_DIRS else top
 
 
 def manifest_workdir(manifest_path: Optional[str]) -> str:

@@ -34,7 +34,10 @@ def _built(engine, app="Shift Swap Board"):
         c.execute(text("INSERT INTO code_task_runs (id, project_id, status, phase, title, spec, state, finalize_ctx) "
                        "VALUES (:i, :p, 'completed', 'done', :t, CAST(:s AS jsonb), CAST(:st AS jsonb), CAST(:f AS jsonb))"),
                   {"i": run_id, "p": HOME, "t": f"Build {app}", "s": json.dumps({"repo": "paramg/boss-sandbox"}),
-                   "st": json.dumps({"build_database": {"postgres": True, "mode": "auto", "why": ["the brief names PostgreSQL"]}}),
+                   # No database: a Postgres app with no manifest to bring one is refused before
+                   # it is planned (stack_deploy.undeclared_deploy_refusal); this is the one-container
+                   # path's own first deploy.
+                   "st": json.dumps({"build_database": {"postgres": False, "mode": "auto", "why": []}}),
                    "f": json.dumps({"app_name": app})})
     return run_id
 
