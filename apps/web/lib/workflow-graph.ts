@@ -234,8 +234,11 @@ export function layoutFlow(spec: Spec): FlowLayout {
   let last = Math.max(-1, ...column.values());
   for (const id of order) if (!column.has(id) || (pending.get(id) ?? 0) > 0) column.set(id, ++last);
 
+  // A loop's body goes to the BOTTOM of its column: its way back to the loop runs along the
+  // bottom of the lane, and from any higher row it would cross the step under it.
+  const bodies = new Set(edges.filter((e) => e.kind === "loop").map((e) => e.to));
   const byColumn = new Map<number, string[]>();
-  for (const id of order) {
+  for (const id of [...order.filter((x) => !bodies.has(x)), ...order.filter((x) => bodies.has(x))]) {
     const c = column.get(id)!;
     if (!byColumn.has(c)) byColumn.set(c, []);
     byColumn.get(c)!.push(id);
@@ -248,7 +251,6 @@ export function layoutFlow(spec: Spec): FlowLayout {
   }
   nodes.sort((a, b) => a.column - b.column || a.row - b.row
     || (position.get(a.id)! - position.get(b.id)!));
-  const loopBodies = new Set(edges.filter((e) => e.kind === "loop").map((e) => e.to));
   return {
     nodes,
     edges,
@@ -256,7 +258,7 @@ export function layoutFlow(spec: Spec): FlowLayout {
     maxRows: Math.max(0, ...[...byColumn.values()].map((ids) => ids.length)),
     linear: isLinear(spec),
     // A loop body has no edge out, but it returns to its loop: it is not where the flow ends.
-    terminal: order.filter((id) => !(out.get(id) ?? []).length && !loopBodies.has(id)),
+    terminal: order.filter((id) => !(out.get(id) ?? []).length && !bodies.has(id)),
   };
 }
 

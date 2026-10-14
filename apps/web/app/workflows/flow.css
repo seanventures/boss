@@ -38,6 +38,8 @@
 .wf-slot > .wf-node { flex: 1; min-width: 0; }
 .wf-lane[data-dragging] .wf-slot { transition: transform 150ms ease; }
 .wf-slot[data-origin] { opacity: 0; pointer-events: none; }
+/* A step put somewhere by hand is drawn over the grid's steps it may overlap. */
+.wf-slot[data-placed] { z-index: 1; }
 .wf-slot-end { align-items: center; }
 
 /* Start and End: a small bubble on each end of the line, its word under it. The start bubble
@@ -231,6 +233,69 @@
   box-shadow: 3px 3px 0 -1px var(--bg), 3px 3px 0 0 var(--border);
 }
 .wf-node[data-type="wait"] { align-items: center; text-align: center; }
+/* Shaped steps (step-node.tsx nodeShape): the outline is an SVG behind the content, so the card's
+   own border steps aside and every state (hover, selected, a problem, a run's phase) colours the
+   outline instead. The content sits inside the shape's widest band. */
+.wf-node[data-shape] {
+  isolation: isolate;
+  border-color: transparent; background: transparent; box-shadow: none;
+}
+.wf-node-shape {
+  position: absolute; inset: 0; z-index: -1;
+  width: 100%; height: 100%; overflow: visible; pointer-events: none;
+}
+.wf-node-outline {
+  fill: var(--bg);
+  stroke: var(--border); stroke-width: 1.5; stroke-linejoin: round;
+  transition: stroke 120ms ease;
+}
+.wf-node-bar { fill: none; stroke: var(--accent); stroke-width: 4; stroke-linecap: round; }
+.wf-node[data-shape="diamond"] .wf-node-outline { fill: color-mix(in srgb, var(--amber) 7%, var(--bg)); stroke: color-mix(in srgb, var(--amber) 55%, var(--border)); }
+.wf-node[data-shape="fork"] .wf-node-outline,
+.wf-node[data-shape="join"] .wf-node-outline { fill: color-mix(in srgb, var(--accent) 6%, var(--bg)); }
+.wf-node[data-shape="hexagon"] .wf-node-outline { fill: color-mix(in srgb, var(--green) 6%, var(--bg)); stroke: color-mix(in srgb, var(--green) 50%, var(--border)); }
+.wf-node[data-shape="send"] .wf-node-outline { fill: color-mix(in srgb, var(--accent) 5%, var(--bg)); }
+.wf-node[data-shape]:hover { border-color: transparent; }
+.wf-node[data-shape]:hover .wf-node-outline { stroke: color-mix(in srgb, var(--accent) 55%, var(--border)); }
+.wf-node[data-shape][data-selected="true"],
+.wf-node[data-shape][data-problem="true"] { border-color: transparent; box-shadow: none; }
+.wf-node[data-shape][data-selected="true"] .wf-node-outline { stroke: var(--accent); stroke-width: 3; }
+.wf-node[data-shape][data-problem="true"] .wf-node-outline { stroke: var(--red); stroke-width: 3; }
+.wf-node[data-shape][data-phase="done"] .wf-node-outline { stroke: var(--green); stroke-width: 2.5; }
+.wf-node[data-shape][data-phase="moving"] .wf-node-outline { stroke: var(--accent); stroke-width: 2.5; }
+.wf-node[data-shape][data-phase="needs_you"] .wf-node-outline { stroke: var(--amber); stroke-width: 2.5; }
+.wf-node[data-shape][data-phase="failed"] .wf-node-outline { stroke: var(--red); stroke-width: 2.5; }
+.wf-node[data-shape][data-phase="skipped"] .wf-node-outline { stroke-dasharray: 4 3; }
+/* The diamond and the hexagon are read from the middle out: icon over title, centred, inside the
+   band the slanted edges leave free. The fork and the join keep clear of their bar. */
+.wf-node[data-shape="diamond"], .wf-node[data-shape="hexagon"] {
+  justify-content: center; align-items: center; text-align: center;
+}
+.wf-node[data-shape="diamond"] { padding: 8px 24%; }
+.wf-node[data-shape="hexagon"] { padding: 8px 14%; }
+.wf-node[data-shape="diamond"] .wf-node-head,
+.wf-node[data-shape="hexagon"] .wf-node-head { flex-direction: column; align-items: center; gap: 4px; }
+.wf-node[data-shape="fork"] { padding-right: 18px; }
+.wf-node[data-shape="join"] { padding-left: 22px; }
+.wf-node[data-shape="send"] { padding-right: 22px; }
+[data-density="compact"] .wf-node[data-shape="diamond"],
+[data-density="compact"] .wf-node[data-shape="hexagon"] {
+  display: flex; flex-direction: column; justify-content: center; align-items: center;
+}
+[data-density="compact"] .wf-node[data-shape="diamond"] .wf-node-head,
+[data-density="compact"] .wf-node[data-shape="hexagon"] .wf-node-head {
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+}
+[data-density="compact"] .wf-node[data-shape="diamond"] { padding: 6px 18%; }
+/* A problem dot and a run's outcome mark sit on the shape's own corner, not on the empty corner
+   of the box around it. */
+.wf-node[data-shape="diamond"] .wf-node-problem { top: -6px; right: calc(50% - 6px); }
+.wf-node[data-shape="hexagon"] .wf-node-problem { right: calc(13% - 6px); }
+.wf-node[data-shape="send"] .wf-node-problem { right: calc(15% - 6px); }
+.wf-node[data-shape="diamond"] .wf-node-mark { bottom: -6px; right: calc(50% - 7px); }
+.wf-node[data-shape="hexagon"] .wf-node-mark { right: calc(13% - 7px); }
+.wf-node[data-shape="send"] .wf-node-mark { right: calc(15% - 7px); }
+
 .wf-node[data-type="wait"] .wf-node-head { flex-direction: column; align-items: center; gap: 4px; }
 
 /* Compact fits the flow by geometry, never by smaller text (geometry.ts, MIN_FONT_REM). It keeps

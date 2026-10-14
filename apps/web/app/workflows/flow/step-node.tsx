@@ -83,6 +83,57 @@ const PHASE_MARK: Partial<Record<RunPhase, React.ComponentType<{ size?: number; 
 /** Flow blocks the runtime steps through itself: no agent runs them, so no agent row. */
 const BLOCK_TYPES = new Set<StepView["type"]>(["parallel", "condition", "join", "loop"]);
 
+/**
+ * THE SHAPE SAYS WHAT KIND OF STEP IT IS, before a word is read: the flowchart shapes people
+ * already know, so a Branch is never mistaken for a step that does work.
+ *
+ *   - Branch (if / else)        a diamond, the decision shape;
+ *   - Do at the same time       a box with a heavy bar on its right edge, where the branches fork;
+ *   - Wait for branches (join)  a heavy bar on its left edge, where they meet again;
+ *   - Repeat until              a hexagon, the loop-limit shape;
+ *   - Notify                    a box pointing right, the send-a-message shape.
+ *
+ * The shape is drawn (an SVG behind the content), never clipped, so the border, the selection
+ * and a run's phase still show on its edge. Its name is said to a screen reader too, so the
+ * shape is never the only way to know.
+ */
+export type NodeShape = "diamond" | "fork" | "join" | "hexagon" | "send";
+
+const SHAPE_OF: Partial<Record<StepView["type"], { shape: NodeShape; words: string }>> = {
+  condition: { shape: "diamond", words: "Branch" },
+  parallel: { shape: "fork", words: "Do at the same time" },
+  join: { shape: "join", words: "Wait for branches" },
+  loop: { shape: "hexagon", words: "Repeat until" },
+};
+
+/** The shape a node is drawn as, and what it is called, or null for a plain card. */
+export function nodeShape(view: Pick<StepView, "type" | "icon">): { shape: NodeShape; words: string } | null {
+  if (SHAPE_OF[view.type]) return SHAPE_OF[view.type]!;
+  if (view.type === "builtin" && view.icon === "notify") return { shape: "send", words: "Notify" };
+  return null;
+}
+
+/** The outline of each shape on a 100×100 box stretched to the node (non-scaling stroke). */
+const SHAPE_PATH: Record<NodeShape, string> = {
+  diamond: "M50,1 L99,50 L50,99 L1,50 Z",
+  fork: "M1,1 H90 V99 H1 Z",
+  join: "M10,1 H99 V99 H10 Z",
+  hexagon: "M13,1 H87 L99,50 L87,99 H13 L1,50 Z",
+  send: "M1,1 H85 L99,50 L85,99 H1 Z",
+};
+/** The heavy bar a fork or a join carries on the edge where the branches leave or meet. */
+const SHAPE_BAR: Partial<Record<NodeShape, string>> = { fork: "M96,1 V99", join: "M4,1 V99" };
+
+function ShapeOutline({ shape }: { shape: NodeShape }) {
+  return (
+    <svg className="wf-node-shape" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden
+         focusable="false" data-testid="wf-node-shape">
+      <path className="wf-node-outline" d={SHAPE_PATH[shape]} vectorEffect="non-scaling-stroke" />
+      {SHAPE_BAR[shape] ? <path className="wf-node-bar" d={SHAPE_BAR[shape]} vectorEffect="non-scaling-stroke" /> : null}
+    </svg>
+  );
+}
+
 /** Who runs it, then why: the name leads, because a narrow node may only have room for the face. */
 export function agentTip(agent: StepView["agent"]): string {
   return agent.tip ? `${agent.label}\n${agent.tip}` : agent.label;
@@ -124,8 +175,10 @@ export function StepNode(p: {
   const shown = callsign && callsign.name !== view.agent.label
     ? { ...view.agent, label: callsign.name, tip: [view.agent.label, view.agent.tip].filter(Boolean).join(" · ") }
     : view.agent;
+  const shape = nodeShape(view);
   return (
     <button type="button" className="wf-node" data-mode={mode} data-type={view.type}
+            data-shape={shape?.shape}
             data-phase={mode === "run" ? phase : undefined}
             data-selected={selected ? "true" : undefined}
             data-problem={problem ? "true" : undefined}
@@ -133,6 +186,7 @@ export function StepNode(p: {
             aria-pressed={mode === "design" ? !!selected : undefined}
             aria-current={mode === "run" && run?.phase === "moving" ? "step" : undefined}
             onClick={onSelect}>
+      {shape ? <ShapeOutline shape={shape.shape} /> : null}
       <span className="wf-node-head">
         <span className="wf-node-icon" data-type={view.type}>
           <NodeIcon icon={view.icon} type={view.type} />
@@ -140,6 +194,7 @@ export function StepNode(p: {
               from a colour alone, or from a glyph that only says what kind of step it is. */}
           {Mark ? <span className="wf-node-mark" data-phase={phase} data-testid="wf-node-mark"><Mark size={9} weight="bold" /></span> : null}
         </span>
+        {shape && shape.words !== view.title ? <span className="wf-sr">{shape.words}: </span> : null}
         <span className="wf-node-title" data-tip={view.title} data-tip-when="cut">{view.title}</span>
         {mode === "run" ? <span className="wf-sr">{PHASE_WORDS[phase]}</span> : null}
       </span>

@@ -130,6 +130,11 @@ export type EditorAction =
   /** `to` is the index the step is left at in `linearOrder` (array-move): Alt+→ is index + 1;
    *  a drop on gap g of the order as drawn is `g > index ? g - 1 : g`. */
   | { type: "MOVE"; id: string; to: number }
+  /** A step put down off the lane's grid, by `offset` from its place on it (null: back on it).
+   *  Drawing only: kept in the spec's optional `layout` (lib/workflow-layout.ts). */
+  | { type: "PLACE"; id: string; offset: { dx: number; dy: number } | null }
+  /** Every step back on the grid (the spec's `layout` goes). */
+  | { type: "RESET_LAYOUT" }
   /** Auto-wire: unset required inputs of `ids` (default every step), by the server's rule. */
   | { type: "WIRE"; palette: Palette; ids?: string[] }
   /** A whole branch block placed at gap `at` (any gap INSERT takes); its head is selected. */

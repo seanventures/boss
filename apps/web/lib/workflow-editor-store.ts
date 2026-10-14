@@ -26,6 +26,7 @@ import {
 import { freeStepId } from "./step-view";
 import { addBranch, blockOfHead, placeBlock, removeBlock, removeBranch } from "./workflow-blocks";
 import { applyStepPatch, deepEqual, inputsReadBy, mergeInputSchema } from "./workflow-spec";
+import { clearLayout, placeStep, pruneLayout, renameInLayout } from "./workflow-layout";
 
 const HISTORY = 100;
 const STEP_ID = /^[A-Za-z0-9._-]+$/;
@@ -111,7 +112,7 @@ function travel(s: EditorState, spec: Spec, past: Spec[], future: Spec[]): Edito
 
 /** Actions that change the spec from the visual side: refused while the JSON is broken. */
 const VISUAL_EDITS = new Set<EditorAction["type"]>([
-  "SET_SPEC", "INSERT", "MOVE", "REMOVE", "DUPLICATE", "PATCH_STEP", "RENAME_ID",
+  "SET_SPEC", "INSERT", "MOVE", "PLACE", "RESET_LAYOUT", "REMOVE", "DUPLICATE", "PATCH_STEP", "RENAME_ID",
   "PLACE_BLOCK", "ADD_BRANCH", "REMOVE_BRANCH",
   "SET_INPUT_SCHEMA", "WIRE",
 ]);
@@ -172,14 +173,23 @@ export function editorReducer(s: EditorState, a: EditorAction): EditorState {
       return commit(s, declareNewReads(s.spec, result.spec), { wired });
     }
 
-    case "MOVE":
-      return commit(s, moveStep(s.spec, a.id, a.to));
+    case "MOVE": {
+      // A step reordered goes to its new place on the grid, not to where it was put by hand.
+      const moved = moveStep(s.spec, a.id, a.to);
+      return moved === s.spec ? s : commit(s, placeStep(moved, a.id, null));
+    }
+
+    case "PLACE":
+      return commit(s, placeStep(s.spec, a.id, a.offset));
+
+    case "RESET_LAYOUT":
+      return commit(s, clearLayout(s.spec));
 
     case "REMOVE": {
       const removed = removeStep(s.spec, a.id);
       const spec = removed === s.spec && blockOfHead(s.spec.steps.find((x) => x.id === a.id))
         ? removeBlock(s.spec, a.id) : removed;
-      return commit(s, spec, s.selection === a.id ? { selection: null } : {});
+      return commit(s, pruneLayout(spec), s.selection === a.id ? { selection: null } : {});
     }
 
     case "PLACE_BLOCK": {
@@ -194,7 +204,7 @@ export function editorReducer(s: EditorState, a: EditorAction): EditorState {
     }
 
     case "REMOVE_BRANCH":
-      return commit(s, removeBranch(s.spec, a.id, a.branch));
+      return commit(s, pruneLayout(removeBranch(s.spec, a.id, a.branch)));
 
     case "DUPLICATE": {
       const copyId = freeStepId(s.spec, a.id);
@@ -219,8 +229,9 @@ export function editorReducer(s: EditorState, a: EditorAction): EditorState {
 
     case "RENAME_ID": {
       if (!STEP_ID.test(a.to)) return s;
-      const spec = renameStepId(s.spec, a.from, a.to);
-      if (spec === s.spec) return s;
+      const renamed = renameStepId(s.spec, a.from, a.to);
+      if (renamed === s.spec) return s;
+      const spec = renameInLayout(renamed, a.from, a.to);
       const wired = { ...(s.wired ?? {}) };
       if (wired[a.from]) { wired[a.to] = wired[a.from]; delete wired[a.from]; }
       return commit(s, spec, {

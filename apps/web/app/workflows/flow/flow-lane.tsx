@@ -21,6 +21,13 @@
  * In design mode it is also the drop target for drags (`use-lane-drag.ts`) and handles the
  * flow's own keys: arrows move focus along the flow and between siblings, Alt+arrows move the
  * step. Moves are announced in a live region.
+ *
+ * STEPS GO WHERE THEY ARE PUT. A step let go on a connector is reordered (above); let go
+ * anywhere else it stays where it was put, and its arrows follow it, live while it is dragged.
+ * Where it was put is kept in the spec as an offset from its place on the grid
+ * (lib/workflow-layout.ts), so it survives a save and a reload; Alt+Shift+arrows nudge it the
+ * same way from the keyboard, and Tidy puts every step back. A flow with a moved step is drawn
+ * with curved arrows, as a branched one is, since its connectors no longer sit in a row.
  */
 import React, { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 
@@ -31,13 +38,18 @@ import {
   afterGaps, canMove as modelCanMove, insertStep, layoutFlow, linearOrder,
 } from "../../../lib/workflow-graph";
 import { pinTip, unpinTip, useTips } from "./tip-layer";
+import { layoutOffsets, type NodeOffset } from "../../../lib/workflow-layout";
 import { afterGapPoints, caretX, END_ID, gapPoints, planDrag, shiftsFor, type LanePlan } from "./drag-plan";
-import { chooseDensity, fitScale, overflows, roomyGeometry, type LaneGeometry } from "./geometry";
+import {
+  BASE_REM, chooseDensity, clampBox, fitScale, offsetFromCanvas, overflows, placedGeometry, ROW_GAP,
+  roomyGeometry,
+  type LaneGeometry,
+} from "./geometry";
 import { Minimap } from "./minimap";
 import { nodeDetail, viewOf } from "./node-facts";
 import type { LaneAgent } from "../../agents/chain-model";
 import { StepNode, type RunPhase } from "./step-node";
-import { useLaneDrag, type DragSource, type DropGap, type LaneTarget } from "./use-lane-drag";
+import { GAP_SNAP, useLaneDrag, type DragSource, type DropGap, type LaneTarget } from "./use-lane-drag";
 
 export type LaneRunState = { phase: string; meta: string; tip?: string;
   /** Who ran it, once the work is recorded (Agent World: face, live ring, how-glyph). */
@@ -47,6 +59,10 @@ export type LaneZoom = "fit" | "full";
 const RUN_PHASES = new Set<RunPhase>(["done", "moving", "needs_you", "failed", "future", "skipped"]);
 const PROBE: SpecStep = { id: "__wf_probe__", kind: "capability", binding: {} };
 const BRANCH_TIP = "Edit branches in JSON";
+/** A step put down this close (canvas units) to its place on the grid goes back to it. */
+const HOME_SNAP = 8;
+/** How far one Alt+Shift+arrow nudges a step (Comfortable canvas units). */
+const NUDGE = 16;
 
 function runPhase(value: string | undefined): RunPhase {
   return value && RUN_PHASES.has(value as RunPhase) ? (value as RunPhase) : "future";
@@ -63,15 +79,17 @@ export function flowInto(previous: RunPhase | "start", next: RunPhase): "past" |
 /* ── Edges for a branched flow ─────────────────────────────────────────────────── */
 
 type Drawn = { key: string; d: string; kind: GraphEdge["kind"] | "start" | "end" | "back";
-               label?: { x: number; y: number; text: string } };
+               label?: { x: number; y: number; text: string; anchor?: "start" | "middle" | "end" } };
 
 function drawEdges(layout: FlowLayout, g: LaneGeometry, spec: Spec): Drawn[] {
   const col = new Map(layout.nodes.map((n) => [n.id, n.column]));
   const out: Drawn[] = [];
   const right = (id: string) => { const b = g.boxes.get(id)!; return { x: b.x + b.w, y: b.y + b.h / 2 }; };
   const left = (id: string) => { const b = g.boxes.get(id)!; return { x: b.x, y: b.y + b.h / 2 }; };
+  // A step moved left of the one it follows still gets an arrow that leaves to the right and
+  // arrives from the left: the curve bows out rather than folding back over the steps.
   const curve = (a: { x: number; y: number }, b: { x: number; y: number }) => {
-    const k = Math.max(12, (b.x - a.x) / 2);
+    const k = b.x >= a.x + 24 ? Math.max(12, (b.x - a.x) / 2) : Math.max(48, Math.abs(b.x - a.x) / 2);
     return `M${a.x},${a.y} C${a.x + k},${a.y} ${b.x - k},${b.y} ${b.x},${b.y}`;
   };
   const bottom = g.height - 8;
@@ -107,8 +125,11 @@ function drawEdges(layout: FlowLayout, g: LaneGeometry, spec: Spec): Drawn[] {
     if (e.kind === "yes" || e.kind === "no") {
       label = { x: a.x + 6, y: e.kind === "yes" ? Math.min(a.y, b.y) - 4 : Math.max(a.y, b.y) + 12, text: e.kind };
     } else if (e.kind === "branch" && !labelled.has(e.from)) {
+      // Under the fork, ending at its bar: every branch's arrow leaves the bar's middle and
+      // fans out to the right, so a word beside the bar was always crossed by one of them.
       labelled.add(e.from);
-      label = { x: a.x + 6, y: a.y - 8, text: "parallel" };
+      const box = g.boxes.get(e.from)!;
+      label = { x: a.x, y: box.y + box.h + 14, text: "parallel", anchor: "end" };
     }
     out.push({ key: `${e.kind}:${e.from}>${e.to}`, kind: e.kind, d: curve(a, b), label });
     // A loop's body returns to its controller; the spec only names the way in.
@@ -119,6 +140,14 @@ function drawEdges(layout: FlowLayout, g: LaneGeometry, spec: Spec): Drawn[] {
     out.push({ key: `${id}>end`, kind: "end", d: curve(right(id), { x: g.end.x, y: g.midY }) });
   }
   return out;
+}
+
+/** Whether a point is inside a step: a `+` there would sit on the step's words. */
+function underNode(p: { x: number; y: number }, g: LaneGeometry): boolean {
+  for (const b of g.boxes.values()) {
+    if (p.x > b.x + 4 && p.x < b.x + b.w - 4 && p.y > b.y + 4 && p.y < b.y + b.h - 4) return true;
+  }
+  return false;
 }
 
 /* ── The lane ──────────────────────────────────────────────────────────────────── */
@@ -137,10 +166,14 @@ export function FlowLane(p: {
   label?: string;
   /** How much of the lane's right edge something floats over (the inspector drawer), in px. */
   occludedRight?: number;
+  /** A step put down off the grid (its offset from its grid place), or back on it (null). */
+  onPlace?(id: string, offset: NodeOffset | null): void;
+  /** Every step back on the grid. */
+  onResetLayout?(): void;
 }): React.JSX.Element {
   useTips();
   const { spec, palette, mode, selection = null, problems, runState, onSelect, onInsert, onMove,
-          renderGapAction, readOnly } = p;
+          onPlace, onResetLayout, renderGapAction, readOnly } = p;
   const design = mode === "design" && !readOnly;
   const steps = spec.steps;
 
@@ -188,10 +221,37 @@ export function FlowLane(p: {
   // Shrinking eleven steps into one screen made them unreadable. The editor keeps Fit as its
   // default, for seeing and dragging the whole flow, and 100% is the same roomy lane.
   const roomy = p.density !== "compact" && (mode === "run" || zoom === "full");
-  const geometry = useMemo(() => (roomy ? roomyGeometry(layout, types, available)
-    : chooseDensity(layout, types, available, p.density === "compact" ? "compact" : undefined)),
-  [roomy, layout, types, available, p.density]);
-  const scale = roomy ? 1 : fitScale(geometry.width, available, geometry.density);
+  // The root font the node's words are set in (it grows with the screen): nodes are as tall as
+  // their rows at that size, so a title never runs into the row under it (geometry nodeHeight).
+  const [rem, setRem] = useState(BASE_REM);
+  useLayoutEffect(() => {
+    const read = () => {
+      const px = parseFloat(getComputedStyle(document.documentElement).fontSize);
+      setRem(Number.isFinite(px) && px > 0 ? px : BASE_REM);
+    };
+    read();
+    window.addEventListener("resize", read);
+    return () => window.removeEventListener("resize", read);
+  }, []);
+  const grid = useMemo(() => (roomy ? roomyGeometry(layout, types, available, rem)
+    : chooseDensity(layout, types, available, p.density === "compact" ? "compact" : undefined, rem)),
+  [roomy, layout, types, available, p.density, rem]);
+  // Where the operator has put steps, and (while one is being dragged off the grid) where it is.
+  const offsets = useMemo(() => layoutOffsets(spec), [spec]);
+  const settled = useMemo(() => placedGeometry(grid, offsets), [grid, offsets]);
+  const [live, setLive] = useState<{ id: string; x: number; y: number } | null>(null);
+  const liveRef = useRef(live);
+  liveRef.current = live;
+  const geometry = useMemo(() => {
+    const home = live ? grid.boxes.get(live.id) : undefined;
+    if (!live || !home) return settled;
+    const moved = new Map(offsets);
+    moved.set(live.id, offsetFromCanvas({ dx: live.x - home.x, dy: live.y - home.y }, grid.density));
+    return placedGeometry(grid, moved);
+  }, [grid, settled, offsets, live]);
+  // The scale is the settled drawing's: a step dragged past the edge must not rescale the lane
+  // under the pointer.
+  const scale = roomy ? 1 : fitScale(settled.width, available, settled.density);
   const scrolls = overflows(geometry.width, scale, available);
   // Under a drawer: when the drawing reaches under it, give the lane that much more to scroll,
   // so the last steps can be brought clear of it. Density and scale are untouched.
@@ -237,6 +297,8 @@ export function FlowLane(p: {
   }, [spec]);
 
   // After a path's last step, where the gap before the next step in the order cannot serve.
+  // A flow with a moved step is drawn as a branched one is: curved arrows, gaps between steps.
+  const linear = layout.linear && !offsets.size && !live;
   const afterPoints = useMemo(() => {
     if (layout.linear) return [];
     const bodies = new Map(steps.filter((s) => s.kind === "bounded_loop" && s.body)
@@ -251,21 +313,60 @@ export function FlowLane(p: {
     setAnnouncement(`Moved ${title} to ${to + 1} of ${order.length}`);
   }, [views, order.length]);
 
+  const announcePlace = useCallback((id: string, home: boolean) => {
+    const title = views.get(id)?.title ?? id;
+    setAnnouncement(home ? `${title} is back in its place` : `Placed ${title}`);
+  }, [views]);
+
+  /** Put `id`'s box at canvas point `at` (this density's units), as an offset from its grid place. */
+  const placeAt = useCallback((id: string, at: { x: number; y: number }) => {
+    const home = grid.boxes.get(id);
+    if (!home || !onPlace) return;
+    const to = clampBox(at.x, at.y);
+    const dx = to.x - home.x;
+    const dy = to.y - home.y;
+    const back = Math.abs(dx) < HOME_SNAP && Math.abs(dy) < HOME_SNAP;
+    onPlace(id, back ? null : offsetFromCanvas({ dx, dy }, grid.density));
+    announcePlace(id, back);
+  }, [grid, onPlace, announcePlace]);
+
   /* ── Drag target ── */
   // A node moved by drag or keyboard keeps focus after the re-render that moves it.
   const focusAfterRender = useRef<string | null>(null);
-  const lane: LaneTarget | null = design && (onMove || onInsert) ? {
+  const clearLive = () => { if (liveRef.current) setLive(null); };
+  const lane: LaneTarget | null = design && (onMove || onInsert || onPlace) ? {
     viewport: () => viewportRef.current,
     canvas: () => canvasRef.current,
     scale: () => scaleRef.current,
     plan: (source: DragSource) => {
-      if (source.kind === "node" && !onMove) return null;
+      if (source.kind === "node" && !onMove && !onPlace) return null;
       if (source.kind === "item" && !onInsert) return null;
-      return planDrag({ layout, geometry, order, source, canMove, canInsert, after: afterPoints });
+      const drawn = linear === layout.linear ? layout : { ...layout, linear };
+      const plan = planDrag({ layout: drawn, geometry, order, source,
+                              canMove: onMove ? canMove : () => false, canInsert, after: afterPoints });
+      // Off the row of a straight flow, or away from a branched one's gaps, a step is placed.
+      const snap = drawn.linear ? { x: Infinity, y: geometry.node.h / 2 + ROW_GAP } : { x: GAP_SNAP, y: GAP_SNAP };
+      return source.kind === "node" && onPlace ? { ...plan, place: true, snap } : plan;
     },
-    preview: (source, plan, gap) => {
+    preview: (source, plan, gap, place) => {
       const lp = plan as LanePlan;
       rootRef.current?.setAttribute("data-dragging", source.kind);
+      if (place && source.kind === "node") {
+        // Being put down off the grid: nothing slides apart; the step and its arrows are drawn
+        // where it would land (the ghost under the pointer is the step itself).
+        for (const [id, el] of slots.current) {
+          el.style.transform = "";
+          el.toggleAttribute("data-origin", id === source.id);
+        }
+        if (caretRef.current) caretRef.current.hidden = true;
+        unpinTip();
+        const cur = liveRef.current;
+        if (!cur || cur.id !== source.id || Math.abs(cur.x - place.x) >= 1 || Math.abs(cur.y - place.y) >= 1) {
+          setLive({ id: source.id, x: place.x, y: place.y });
+        }
+        return;
+      }
+      clearLive();
       const shifts = shiftsFor(lp, gap);
       for (const [id, el] of slots.current) {
         const dx = shifts.get(id) ?? 0;
@@ -285,6 +386,12 @@ export function FlowLane(p: {
       // page, so the lane's edge can never clip it, and shown although the pointer is mid-drag.
       if (allowed) { caret.removeAttribute("data-tip"); unpinTip(); } else { caret.dataset.tip = BRANCH_TIP; pinTip(caret); }
     },
+    place: (source, at) => {
+      if (source.kind !== "node") return;
+      setLive(null);
+      placeAt(source.id, at);
+      focusAfterRender.current = source.id;
+    },
     drop: (source, gap: DropGap) => {
       if (source.kind === "node") {
         onMove?.(source.id, gap.to);
@@ -295,6 +402,7 @@ export function FlowLane(p: {
       }
     },
     reset: () => {
+      clearLive();
       rootRef.current?.removeAttribute("data-dragging");
       for (const el of slots.current.values()) {
         el.style.transform = "";
@@ -323,6 +431,19 @@ export function FlowLane(p: {
     const id = el?.dataset.stepId;
     if (!id) return;
     const horizontal = e.key === "ArrowLeft" || e.key === "ArrowRight";
+    const arrow = horizontal || e.key === "ArrowUp" || e.key === "ArrowDown";
+    if (arrow && e.altKey && e.shiftKey) {
+      // Nudge the step off (or along) the grid: the keyboard's way to put it somewhere.
+      e.preventDefault();
+      const box = geometry.boxes.get(id);
+      if (!design || !onPlace || !box) return;
+      const by = NUDGE * (grid.node.w / 188);
+      const dx = e.key === "ArrowLeft" ? -by : e.key === "ArrowRight" ? by : 0;
+      const dy = e.key === "ArrowUp" ? -by : e.key === "ArrowDown" ? by : 0;
+      placeAt(id, { x: box.x + dx, y: box.y + dy });
+      focusAfterRender.current = id;
+      return;
+    }
     if (horizontal && e.altKey) {
       e.preventDefault();
       if (!design || !onMove) return;
@@ -365,7 +486,6 @@ export function FlowLane(p: {
   }, [selection, geometry, scale, scrolls, spare, cover, available, sizerW]);
 
   /* ── Drawing ── */
-  const linear = layout.linear;
   const edges = useMemo(() => (linear ? [] : drawEdges(layout, geometry, spec)),
     [linear, layout, geometry, spec]);
   const phases = new Map(order.map((id) => [id, runPhase(runState?.[id]?.phase)]));
@@ -374,7 +494,7 @@ export function FlowLane(p: {
   const gaps: { at: number; x: number; y: number }[] = !design || !renderGapAction ? []
     : linear
       ? geometry.gapX.map((x, b) => ({ at: b >= order.length ? -1 : b, x, y: geometry.midY }))
-      : [...gapPoints(order, geometry), ...afterPoints].filter((g) => canInsert(g.at));
+      : [...gapPoints(order, geometry), ...afterPoints].filter((g) => canInsert(g.at) && !underNode(g, geometry));
 
   const slotRef = (id: string) => (el: HTMLDivElement | null) => {
     if (el) slots.current.set(id, el); else slots.current.delete(id);
@@ -417,7 +537,7 @@ export function FlowLane(p: {
                     <path d={e.d} className="wf-edge" data-kind={e.kind}
                           markerEnd={e.kind === "start" ? undefined : `url(#${viewportId}-arrow)`} />
                     {e.label ? <text x={e.label.x} y={e.label.y} className="wf-edge-label"
-                                     textAnchor={e.kind === "back" ? "middle" : "start"}>{e.label.text}</text> : null}
+                                     textAnchor={e.label.anchor ?? (e.kind === "back" ? "middle" : "start")}>{e.label.text}</text> : null}
                   </g>
                 ))}
               </svg>
@@ -439,6 +559,7 @@ export function FlowLane(p: {
               const phase = phases.get(id) ?? "future";
               return (
                 <div key={id} className="wf-slot" ref={slotRef(id)} data-slot={id}
+                     data-placed={offsets.has(id) || live?.id === id ? "true" : undefined}
                      style={{ left: box.x, top: box.y, width: box.w, height: box.h }}
                      onPointerDown={lane && onMove ? (e) => {
                        if ((e.target as HTMLElement).closest(".wf-node")) pressNode(id, e);
@@ -509,6 +630,10 @@ export function FlowLane(p: {
 
       {mode === "design" && steps.length ? (
         <div className="wf-zoom" role="group" aria-label="Zoom">
+          {design && onResetLayout && offsets.size ? (
+            <button type="button" className="wf-zoom-btn" data-testid="wf-tidy" onClick={onResetLayout}
+                    data-tip="Put every step back in its place">Tidy</button>
+          ) : null}
           <button type="button" className="wf-zoom-btn" aria-pressed={zoom === "fit"} onClick={() => setZoom("fit")}
                   data-tip="Fit the whole flow (F)">Fit</button>
           <button type="button" className="wf-zoom-btn" aria-pressed={zoom === "full"} onClick={() => setZoom("full")}>

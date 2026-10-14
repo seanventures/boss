@@ -21,7 +21,9 @@
  */
 import type { Spec, SpecStep } from "./workflow-editor-types";
 import { freeStepId } from "./step-view";
-import { edgesOf, insertStep, linearOrder, nextOf, unsetReadsFrom } from "./workflow-graph";
+import {
+  afterGap, afterGaps, edgesOf, insertStep, linearOrder, nextOf, unsetReadsFrom,
+} from "./workflow-graph";
 
 export type ControlBlock = "condition" | "parallel" | "bounded_loop";
 export const CONTROL_BLOCKS: ControlBlock[] = ["condition", "parallel", "bounded_loop"];
@@ -204,6 +206,38 @@ export function removeBlock(spec: Spec, headId: string): Spec {
     else delete result.entry_step;
   }
   return unsetReadsFrom(result, inside);
+}
+
+/**
+ * Where a step picked from the palette goes while `selection` is selected: right after it — and
+ * after a selected block's head, after the WHOLE block (where its paths have met again), so a
+ * step picked with a Repeat or a Do at the same time selected follows it instead of being pushed
+ * into its first path (or, for a Repeat, refused: its body stays one step). A Branch whose paths
+ * meet again keeps the step at the head of its first path: the model cannot place a step where
+ * two paths meet. The last step of a path is followed by its own after-gap, not by the head of
+ * the next path in the order. An index of `linearOrder(spec)` (or an after-gap), -1 for the end.
+ */
+export function gapAfterSelection(spec: Spec, selection: string | null): number {
+  const order = linearOrder(spec);
+  const at = selection ? order.indexOf(selection) : -1;
+  const plain = at >= 0 && at + 1 < order.length ? at + 1 : -1;
+  const probe: SpecStep = { id: "__wf_probe__", kind: "capability", binding: {} };
+  const fits = (gap: number) => insertStep(spec, gap, probe) !== spec;
+  const gaps = afterGaps(spec);
+  // Nothing selected: the end (refused when the flow ends in more than one place; the caller
+  // says to pick the step to add after).
+  if (at < 0) return -1;
+  const region = blockRegion(spec, selection!);
+  if (region) {
+    const exitAt = region.exit ? order.indexOf(region.exit) : -1;
+    return fits(exitAt) ? exitAt : plain;
+  }
+  // The next step in the order is only "after" this one when this one hands to it. The last
+  // step of a path hands to where the paths meet (or ends): its own after-gap.
+  const step = stepsOf(spec).find((s) => s.id === selection);
+  const next = step ? nextOf(step) : [];
+  if (plain >= 0 && next.length === 1 && next[0] === order[plain]) return plain;
+  return gaps.includes(afterGap(at)) ? afterGap(at) : plain;
 }
 
 export function canRemoveBlock(spec: Spec, headId: string): boolean {

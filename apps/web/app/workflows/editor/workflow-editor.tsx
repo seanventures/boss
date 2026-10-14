@@ -23,7 +23,7 @@ import { newMeta, useWorkflowEditor } from "../../../lib/workflow-editor-store";
 import { canRemove, insertStep, layoutFlow, linearOrder } from "../../../lib/workflow-graph";
 import { newStepFor } from "../../../lib/step-view";
 import {
-  blockOfHead, canRemoveBlock, placeBlock, removeRefusal, type ControlBlock,
+  blockOfHead, canRemoveBlock, gapAfterSelection, placeBlock, removeRefusal, type ControlBlock,
 } from "../../../lib/workflow-blocks";
 import { FlowLane, type LaneZoom } from "../flow/flow-lane";
 import { laneGeometry, minScale } from "../flow/geometry";
@@ -45,6 +45,8 @@ import { useCan } from "../../../components/identity/identity-provider";
 const BLOCK_REMOVED: Record<ControlBlock, string> = {
   condition: "Branch removed", parallel: "Parallel steps removed", bounded_loop: "Repeat removed",
 };
+/** A palette pick with nothing selected, in a flow that ends in more than one place. */
+const SEVERAL_ENDS = "This flow ends in more than one place: select the step to add after";
 const PALETTE_W = 240;
 /** What the lane loses to its column beyond the palette: the grid gap and the lane's border. */
 const LANE_CHROME = 12 + 2;
@@ -236,25 +238,27 @@ export function WorkflowEditor({ projectId, workflowKey, onBack, onStart, actor,
   /** Places a palette item at `at`; the store wires its inputs there and selects it. */
   const insert = useCallback((at: number, item: PaletteItem) => {
     if (!palette || readOnly) return;
+    // The flow ends in more than one place (a Branch's paths, never met again): "the end" is
+    // not one place, so say how to choose, rather than a refusal that sends you to JSON.
+    const ends = at === -1 && layoutFlow(spec).terminal.length > 1;
     if (item.control) {
       // A branch block lands whole: its head, its paths, its join.
-      if (!placeBlock(spec, at, item.control).head) { show("Can't place that here"); return; }
+      if (!placeBlock(spec, at, item.control).head) { show(ends ? SEVERAL_ENDS : "Can't place that here"); return; }
       dispatch({ type: "PLACE_BLOCK", at, block: item.control });
       setSettingsOpen(false);
       return;
     }
     const step = newStepFor(item, spec, palette);
-    if (insertStep(spec, at, step) === spec) { show("Edit branches in JSON"); return; }
+    if (insertStep(spec, at, step) === spec) { show(ends ? SEVERAL_ENDS : "Edit branches in JSON"); return; }
     dispatch({ type: "INSERT", at, step });
     setSettingsOpen(false);
   }, [palette, readOnly, spec, dispatch, show]);
 
   /** A palette click: after the selection, else at the end. */
   const pick = useCallback((item: PaletteItem) => {
-    const after = state.selection ? order.indexOf(state.selection) : -1;
-    insert(after >= 0 && after + 1 < order.length ? after + 1 : -1, item);
+    insert(gapAfterSelection(spec, state.selection), item);
     setSheet(false);
-  }, [state.selection, order, insert]);
+  }, [state.selection, spec, insert]);
 
   const remove = useCallback((id: string) => {
     if (readOnly) return;
@@ -513,6 +517,8 @@ export function WorkflowEditor({ projectId, workflowKey, onBack, onStart, actor,
                         selection={state.selection} problems={state.problems}
                         onSelect={(id) => { dispatch({ type: "SELECT", id }); if (id) setSettingsOpen(false); }}
                         onInsert={insert} onMove={move} renderGapAction={readOnly ? undefined : gapAction}
+                        onPlace={(id, offset) => dispatch({ type: "PLACE", id, offset })}
+                        onResetLayout={() => dispatch({ type: "RESET_LAYOUT" })}
                         zoom={zoom} onZoomChange={setZoom} occludedRight={inspectorOpen ? occluded : 0} />
             </main>
           </>

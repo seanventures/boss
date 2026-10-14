@@ -17,6 +17,11 @@
  *  - AUTO-SCROLL within EDGE_SCROLL px of either end of the lane.
  *  - END. One `drop` on release over an allowed gap. Esc, a release away from the lane, or a
  *    cancelled pointer drops nothing.
+ *  - PLACE. A step dragged within its own lane and let go AWAY from every gap (outside the
+ *    plan's `snap` box around each: on a straight flow, anywhere off the row; on a branched one,
+ *    further than GAP_SNAP) is put down where it was let go: one `place` with the canvas point
+ *    of its top-left corner. Letting go on a connector still reorders, as above. While a step is
+ *    being placed, the lane draws it (and its arrows) where it would land.
  *
  * A drag can start on a node (a move within its own lane) or on a palette row (an insert into
  * whichever registered lane is under the pointer), which is why lanes register here instead of
@@ -31,12 +36,20 @@ export const DRAG_THRESHOLD = 4;
 export const EDGE_SCROLL = 60;
 export const SNAP = 40;
 export const TOUCH_HOLD_MS = 350;
+/** How near a gap (canvas units, each way) a dragged step must be let go to reorder rather than
+ *  be placed, when its plan does not say. */
+export const GAP_SNAP = 40;
 
 export type DragSource = { kind: "node"; id: string } | { kind: "item"; item: PaletteItem };
 /** `to` is the index the dragged or new step ends up at (an INSERT at the end uses -1).
  *  `x`/`y` are canvas units; `y` matters only where steps stack (a branched flow). */
 export type DropGap = { x: number; y?: number; to: number; allowed: boolean; noop?: boolean };
-export type DragPlan = { gaps: DropGap[] };
+/** `place`: a step may also be put down anywhere on the canvas (`LaneTarget.place`), and is
+ *  when it is let go outside `snap` (half-width and half-height, canvas units) of every gap. */
+export type Snap = { x: number; y: number };
+export type DragPlan = { gaps: DropGap[]; place?: boolean; snap?: Snap };
+/** The canvas point a placed step's top-left corner lands on. */
+export type PlacePoint = { x: number; y: number };
 
 export type LaneTarget = {
   /** The lane's visible box; the pointer must be over it (or within SNAP) to target a gap. */
@@ -46,9 +59,11 @@ export type LaneTarget = {
   scale(): number;
   /** Where this lane would take `source`, or null if it does not take it at all. */
   plan(source: DragSource): DragPlan | null;
-  /** Draw the gap (or nothing, when `gap` is null). */
-  preview(source: DragSource, plan: DragPlan, gap: number | null): void;
+  /** Draw the gap (or nothing, when `gap` is null), or the step where it would be placed. */
+  preview(source: DragSource, plan: DragPlan, gap: number | null, place?: PlacePoint | null): void;
   drop(source: DragSource, gap: DropGap): void;
+  /** Put a step down at a point on the canvas (only offered when its plan says `place`). */
+  place?(source: DragSource, at: PlacePoint): void;
   /** Undo every preview. */
   reset(): void;
 };
@@ -60,12 +75,18 @@ export function registerLane(lane: LaneTarget): () => void {
   return () => { lanes.delete(lane); };
 }
 
-/** The gap nearest to a canvas point, or null when there are none. */
-export function nearestGap(x: number, gaps: DropGap[], y?: number): number | null {
+function gapDistance(gap: DropGap, x: number, y?: number): number {
+  return y === undefined || gap.y === undefined ? Math.abs(gap.x - x) : Math.hypot(gap.x - x, gap.y - y);
+}
+
+/** The gap nearest to a canvas point, or null when there are none (or none within `snap`). */
+export function nearestGap(x: number, gaps: DropGap[], y?: number, snap?: Snap): number | null {
   let best: number | null = null;
   let bestDistance = Infinity;
   gaps.forEach((gap, index) => {
-    const d = y === undefined || gap.y === undefined ? Math.abs(gap.x - x) : Math.hypot(gap.x - x, gap.y - y);
+    if (snap && (Math.abs(gap.x - x) > snap.x
+                 || (y !== undefined && gap.y !== undefined && Math.abs(gap.y - y) > snap.y))) return;
+    const d = gapDistance(gap, x, y);
     if (d < bestDistance) { bestDistance = d; best = index; }
   });
   return best;
@@ -91,6 +112,8 @@ type Session = {
   lane: LaneTarget | null;
   plans: Map<LaneTarget, DragPlan | null>;
   gap: number | null;
+  /** Where a step being placed would land (canvas units), when it is not over a gap. */
+  place: PlacePoint | null;
   frame: number | null;
   onEnd?: (dropped: boolean) => void;
 };
@@ -176,10 +199,15 @@ function frame() {
     }
     const origin = canvas?.getBoundingClientRect();
     const scale = lane.scale() || 1;
-    s.gap = nearestGap((s.x - (origin?.left ?? 0)) / scale, plan.gaps, (s.y - (origin?.top ?? 0)) / scale);
-    lane.preview(s.source, plan, s.gap);
+    const cx = (s.x - (origin?.left ?? 0)) / scale;
+    const cy = (s.y - (origin?.top ?? 0)) / scale;
+    const placing = !!plan.place && s.source.kind === "node" && lane === s.home && !!lane.place;
+    s.gap = nearestGap(cx, plan.gaps, cy, placing ? plan.snap ?? { x: GAP_SNAP, y: GAP_SNAP } : undefined);
+    s.place = placing && s.gap === null ? { x: cx - s.grabX / scale, y: cy - s.grabY / scale } : null;
+    lane.preview(s.source, plan, s.gap, s.place);
   } else {
     s.gap = null;
+    s.place = null;
   }
   if (scrolling) schedule();
 }
@@ -251,8 +279,10 @@ function onUp(e: PointerEvent) {
   const plan = lane ? planFor(s, lane) : null;
   const gap = plan && s.gap !== null ? plan.gaps[s.gap] : null;
   const source = s.source;
-  finish(!!(lane && gap && gap.allowed && !gap.noop));
+  const place = lane && !gap ? s.place : null;
+  finish(!!(lane && ((gap && gap.allowed && !gap.noop) || place)));
   if (lane && gap && gap.allowed && !gap.noop) lane.drop(source, gap);
+  else if (lane && place) lane.place?.(source, place);
 }
 
 function onCancel(e: PointerEvent) {
@@ -280,7 +310,7 @@ export function beginDrag(source: DragSource, e: { pointerId: number; pointerTyp
   const s: Session = {
     source, pointerId: e.pointerId, startX: e.clientX, startY: e.clientY, x: e.clientX, y: e.clientY,
     from, home, touch, armed: !touch, holdTimer: null, active: false, ghost: null, grabX: 0, grabY: 0,
-    lane: null, plans: new Map(), gap: null, frame: null, onEnd,
+    lane: null, plans: new Map(), gap: null, place: null, frame: null, onEnd,
   };
   session = s;
   if (touch) {
@@ -317,8 +347,9 @@ export function useLaneDrag(target: LaneTarget | null): {
       canvas: () => ref.current?.canvas() ?? null,
       scale: () => ref.current?.scale() ?? 1,
       plan: (source) => ref.current?.plan(source) ?? null,
-      preview: (source, plan, gap) => ref.current?.preview(source, plan, gap),
+      preview: (source, plan, gap, place) => ref.current?.preview(source, plan, gap, place),
       drop: (source, gap) => ref.current?.drop(source, gap),
+      place: (source, at) => ref.current?.place?.(source, at),
       reset: () => ref.current?.reset(),
     };
     proxyRef.current = proxy;
