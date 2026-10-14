@@ -9,8 +9,10 @@ import { GatedButton } from "../../components/gated";
 import React, { useEffect, useRef, useState } from "react";
 import { Copy } from "@phosphor-icons/react";
 
-import { SetupFailure, setupWrite } from "../../lib/setup-client";
-import type { CatalogueEntry, Detected, Found, SetupRefusal, SetupView } from "../../lib/setup-types";
+import { SetupFailure, fetchSetup, setupWrite } from "../../lib/setup-client";
+import type {
+  CatalogueEntry, Detected, Found, HeldProof, SetupRefusal, SetupView,
+} from "../../lib/setup-types";
 import { Consent, toast, useBoard } from "./parts";
 import { Out, Refusal, Tip } from "./pill";
 
@@ -30,6 +32,75 @@ const FOUND_LABEL: Record<Found, string> = {
 function refusalOf(error: unknown): SetupRefusal {
   if (error instanceof SetupFailure && error.refusal) return error.refusal;
   return { state: "failed", headline: "Check failed", fix: String((error as Error)?.message ?? error) };
+}
+
+const usd = (micros: number) => `$${(micros / 1_000_000).toFixed(micros < 10_000 ? 4 : 2)}`;
+
+/**
+ * A held proof, in words, with Review → "Release the hold". The hold is money BOSS kept because
+ * it could not tell what the provider did; a person who can manage entitlements looks at the
+ * receipt's facts and releases it (recorded with their name and reason). Connect waits for it.
+ */
+export function HeldProofNotice({ hold, onReleased }: {
+  hold: HeldProof; onReleased: (next: SetupView) => void;
+}) {
+  const { projectId } = useBoard();
+  const [open, setOpen] = useState(false);
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [refusal, setRefusal] = useState<SetupRefusal | null>(null);
+  const release = async () => {
+    setBusy(true);
+    setRefusal(null);
+    try {
+      const next = await setupWrite<SetupView>(projectId, "release_hold", {
+        receipt_id: hold.receipt_id, reason: reason.trim(),
+      }, { label: "Release the hold" });
+      toast("Hold released · Connect again", "success");
+      onReleased(next);
+    } catch (error) {
+      setRefusal(refusalOf(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const charge = hold.release.basis === "refused" ? "$0 (the provider refused)"
+    : `${usd(hold.release.cost_usd_micros)}${hold.release.basis === "unpriced" ? " (unpriced estimate)" : ""}`;
+  return (
+    <div className="su-held" role="status" data-testid="su-held-proof">
+      <span className="su-held-summary" data-testid="su-held-summary">Proof held: {hold.summary}</span>
+      {!open ? (
+        <button type="button" className="su-btn" data-testid="su-held-review"
+                title="See the receipt and release the hold." onClick={() => setOpen(true)}>
+          Review
+        </button>
+      ) : (
+        <div className="su-held-review" data-testid="su-held-facts">
+          <dl>
+            <dt>Receipt</dt><dd><code>{hold.receipt_id}</code></dd>
+            <dt>Model</dt><dd><code>{hold.model}</code></dd>
+            {hold.outcome.http_status ? <><dt>Reply</dt><dd>HTTP {hold.outcome.http_status}
+              {hold.outcome.provider_error_type ? ` · ${hold.outcome.provider_error_type}` : ""}</dd></> : null}
+            <dt>Held</dt><dd>{usd(hold.held_usd_micros)}</dd>
+            <dt>Release charges</dt><dd data-testid="su-held-charge">{charge}</dd>
+          </dl>
+          <label className="su-field">
+            <span className="su-field-label">Reason</span>
+            <input value={reason} maxLength={300} data-testid="su-held-reason" aria-label="Reason"
+                   placeholder="Why it is safe to release"
+                   onChange={(e) => setReason(e.target.value)} />
+          </label>
+          <GatedButton permission="entitlement:manage" type="button" className="su-btn su-btn-primary"
+                       disabled={busy || !reason.trim()} data-testid="su-held-release"
+                       title="Settle this receipt and free the hold. Recorded with your name and reason."
+                       onClick={release}>
+            {busy ? "Releasing…" : "Release the hold"}
+          </GatedButton>
+          {refusal ? <Refusal headline={refusal.headline} fix={refusal.fix} /> : null}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function CopyChip({ text, tip }: { text: string; tip: string }) {
@@ -99,15 +170,19 @@ export function AddModelPanel({ initialTile, initialProvider, onDone, replaceSou
   };
   useEffect(() => () => { if (listTimer.current) clearTimeout(listTimer.current); }, []);
 
+  // A HELD PROOF BLOCKS CONNECT for its provider until a person reviews and releases it.
+  const held = (view.held_proofs ?? []).filter((h) => h.provider === provider);
   const needsConsent = view.secrets.needs_consent && (tile !== "local" || !!secret);
   const fields = entry?.fields ?? [];
-  let ready = !busy && (!needsConsent || consent);
+  let ready = !busy && held.length === 0 && (!needsConsent || consent);
   if (tile === "subscription") {
     if (onServerOnly || notOnServer) ready = ready && signedIn;
     else if (!signedIn) ready = ready && (provider === "codex" ? !!file : !!secret.trim());
   } else if (tile === "api_key") {
+    // THE PROOF ASKS EXACTLY THE MODEL TYPED: an empty field is not quietly the example.
     ready = ready && (provider === "custom" ? !!baseUrl.trim() && !!model.trim()
-                                            : !!secret.trim());
+                                            : !!secret.trim()
+                                              && (!fields.includes("model") || !!model.trim()));
   } else {
     ready = ready && !!model.trim() && (provider === "ollama" || !!baseUrl.trim());
   }
@@ -123,7 +198,7 @@ export function AddModelPanel({ initialTile, initialProvider, onDone, replaceSou
         api_key: tile !== "subscription" ? sent.secret || undefined : undefined,
         credential: tile === "subscription" && sent.secret ? sent.secret : undefined,
         credential_file: tile === "subscription" && sent.file ? sent.file : undefined,
-        base_url: baseUrl || undefined, model: model || undefined,
+        base_url: baseUrl || undefined, model: model.trim() || undefined,
         accept_database_fallback: needsConsent ? consent : undefined,
         source_id: replaceSourceId,
       }, { label: "Connect" });
@@ -137,7 +212,10 @@ export function AddModelPanel({ initialTile, initialProvider, onDone, replaceSou
       toast(`Connected · ${label}`, row && row.pill.tone !== "green" ? "error" : "success");
       onDone?.();
     } catch (error) {
-      setRefusal(refusalOf(error));
+      const refused = refusalOf(error);
+      setRefusal(refused);
+      // A held proof shows up on the board at once, with its Review.
+      if (refused.receipt_id) void fetchSetup(projectId).then(apply).catch(() => undefined);
     } finally {
       setBusy(false);
     }
@@ -263,6 +341,13 @@ export function AddModelPanel({ initialTile, initialProvider, onDone, replaceSou
           </GatedButton>
           {refusal ? <Refusal headline={refusal.headline} fix={refusal.fix} /> : null}
         </div>
+        {refusal?.summary && !held.length ? (
+          <span className="su-faint" data-testid="su-refusal-summary">{refusal.summary}</span>
+        ) : null}
+        {held.map((h) => (
+          <HeldProofNotice key={h.receipt_id} hold={h}
+                           onReleased={(next) => { apply(next); setRefusal(null); }} />
+        ))}
       </div>
     </div>
   );

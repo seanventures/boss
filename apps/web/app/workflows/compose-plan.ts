@@ -177,7 +177,7 @@ export function routeTimeline(key: string, app: string, asks?: readonly Ask[] | 
       { id: "scope", name: "Scope it", line: "An agent proposes the change", who: { kind: "agent", role: "pm" } },
       { id: "confirm", name: "Confirm it", line: "Nothing runs until you say so", who: { kind: "you" } },
       build, KEEP_STEP, merge,
-      { id: "preview", name: "Preview", line: "The app with the change, running", who: { kind: "agent", role: "qa" } },
+      { id: "preview", name: "Preview", line: "The app with the change, running", who: { kind: "agent", role: "engineering_captain" } },
     ];
   }
   const spec = asks?.find((a) => a.kind === "spec");
@@ -188,7 +188,7 @@ export function routeTimeline(key: string, app: string, asks?: readonly Ask[] | 
     yours ? { id: "spec_review", name: "Approve the spec", line: "You read it before any code", who: { kind: "you" } }
       : { id: "spec_review", name: "Spec sign-off", line: "The panel's decision approves it", who: { kind: "boss" } },
     build, KEEP_STEP, merge,
-    { id: "preview", name: "Preview", line: "The app with the feature, running", who: { kind: "agent", role: "qa" } },
+    { id: "preview", name: "Preview", line: "The app with the feature, running", who: { kind: "agent", role: "engineering_captain" } },
   ];
 }
 

@@ -1,7 +1,8 @@
 """Claiming the first Owner (IDENTITY.md §4.11, §4.12; D25, D27). Three paths, one outcome:
 
   setup token       fresh install: 32 random bytes, SHA-256 at rest, 1 hour; printed to the logs and
-                    by `boss identity setup-link`; the claim URL carries it in the FRAGMENT
+                    by `boss identity setup-link`, or answered to the install's admin key by
+                    POST /v1/identity/setup-link (no shell); the claim URL carries it in the FRAGMENT
   legacy password   an install with BOSS_CONSOLE_PASSWORD: the shared password proves "operator"
   network bridge    a BOSS_CONSOLE_AUTH=network install: the request is bridged to
                     usr_network_operator by S5's legacy.bridge; the claim binds the browser's
@@ -315,7 +316,8 @@ def _bind_public_origin(db: Any, org_id: str, origin: str, *, by: str) -> None:
 
 def setup_link_command(db: Any) -> tuple[int, str]:
     """Mint a NEW setup link (voiding any earlier one) while the install has no Owner. Host shell
-    only: no HTTP route or MCP tool reaches this. Returns (exit code, text to print)."""
+    only: the one HTTP twin is `setup_link_over_api`, for the install's admin key alone. Returns
+    (exit code, text to print)."""
     if is_claimed(db):
         return 1, "This BOSS already has an Owner: there is nothing to claim. (Locked out? Use recover-owner.)"
     token = issue_setup_token(db, force=True)
@@ -323,6 +325,60 @@ def setup_link_command(db: Any) -> tuple[int, str]:
         return 1, "No setup link could be made."
     return 0, (f"Claim this BOSS within 1 hour (single use):\n\n  {setup_url(db, token)}\n\n"
                "Open it in the browser you will sign in with.")
+
+
+# ---- POST /v1/identity/setup-link (the install's admin key) -------------------------------------------
+
+#: Links the admin key may issue an hour. Each one voids the last, so this only bounds churn.
+LINKS_PER_HOUR = 10
+
+
+class SetupLinkRefused(Exception):
+    def __init__(self, code: str, status: int, retry_after: Optional[int] = None):
+        super().__init__(code)
+        self.code = code
+        self.status = status
+        self.retry_after = retry_after
+
+
+def is_install_admin_key(ctx: Optional[AuthContext]) -> bool:
+    """The install's ADMIN credential: BOSS_API_KEY (the key the compose sets), bridged to
+    sys_legacy_console. The same trust as a shell on the box: it already controls the whole API.
+    Never a person, a service account's key, a BOSS_API_KEYS entry or the network bridge."""
+    from .legacy import LEGACY_CONSOLE_PRINCIPAL
+
+    return bool(ctx and ctx.method == AuthMethod.LEGACY_API_KEY
+                and ctx.principal.id == LEGACY_CONSOLE_PRINCIPAL)
+
+
+def setup_link_over_api(db: Any, ctx: AuthContext) -> dict[str, str]:
+    """`boss identity setup-link` for an install with no shell (a managed host reached only by an
+    ops API): the same semantics — a NEW link that voids any earlier one — answered to the admin
+    key only. Returns {url, expires_at}. Audited as identity.setup_link_issued (never the token).
+    Raises SetupLinkRefused: 404 once claimed (for good, like the claim), 403 for any other
+    credential, 429 past LINKS_PER_HOUR."""
+    org_id = default_org_id(db)
+    if not org_id or is_claimed(db, org_id):
+        raise SetupLinkRefused("not_found", 404)
+    if not is_install_admin_key(ctx):
+        raise SetupLinkRefused("admin_key_only", 403)
+    rate = ratelimit.hit("setup_link.key", ctx.principal.id, limit=LINKS_PER_HOUR,
+                         window_seconds=3600, db=db)
+    if not rate.allowed:
+        raise SetupLinkRefused("rate_limited", 429, rate.retry_after_seconds or 3600)
+    token = issue_setup_token(db, force=True)
+    if not token:
+        raise SetupLinkRefused("not_found", 404)
+    emit(db, org_id=org_id, event_type="identity.setup_link_issued", outcome=Outcome.SUCCESS,
+         ctx=ctx, details={"ttl_seconds": SETUP_TTL_SECONDS})
+    return {"url": setup_url(db, token), "expires_at": setup_expires_at(db) or ""}
+
+
+def links_over_api() -> bool:
+    """Whether this install has an admin key that can issue a claim link over the API."""
+    from ..config import get_settings
+
+    return bool(str(getattr(get_settings(), "legacy_console_api_key", "") or "").strip())
 
 
 def main(argv: Optional[list[str]] = None) -> int:

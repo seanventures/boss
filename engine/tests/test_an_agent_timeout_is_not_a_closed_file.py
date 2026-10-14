@@ -104,7 +104,8 @@ def test_every_handler_in_the_governed_pipeline_logs_its_traceback():
     for i, line in enumerate(lines):
         if re.match(r"^\s*except Exception( as \w+)?:", line):
             nxt = next(l for l in lines[i + 1:] if l.strip() and not l.strip().startswith("#"))
-            if "_log_caught(" not in nxt:
+            # _record_swallowed logs the traceback too (at ERROR, with the run id) and counts it.
+            if "_log_caught(" not in nxt and "_record_swallowed(" not in nxt:
                 missing.append(i + 1)
     assert not missing, f"handlers that swallow a traceback: lines {missing}"
     assert "'crash_frames'" in Path(g.__file__).read_text(encoding="utf-8")

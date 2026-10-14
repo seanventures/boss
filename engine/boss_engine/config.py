@@ -113,6 +113,10 @@ class Settings(BaseSettings):
     llm_engine: str = Field(default="auto", alias="BOSS_LLM_ENGINE")
     claude_cli_path: str = Field(default="claude", alias="BOSS_CLAUDE_CLI_PATH")
     claude_cli_model: Optional[str] = Field(default=None, alias="BOSS_CLAUDE_CLI_MODEL")
+    # The claude_agent_sdk engine (services/agent_sdk_engine.py): its default model, and an
+    # optional Claude Code binary for the SDK to drive (empty: the one the package bundles).
+    agent_sdk_model: str = Field(default="claude-sonnet-5", alias="BOSS_AGENT_SDK_MODEL")
+    agent_sdk_cli_path: str = Field(default="", alias="BOSS_AGENT_SDK_CLI_PATH")
     # THE BRAIN BEHIND THE CHAT AGENT, CHOSEN SEPARATELY FROM EVERYTHING ELSE.
     #
     # `llm_engine` is global, and flipping it to claude_cli would take the WORKER with it —
@@ -559,6 +563,15 @@ class Settings(BaseSettings):
     codex_cli_timeout: int = Field(default=240, alias="BOSS_CODEX_CLI_TIMEOUT")
     # Headless Claude token for the claude_code guest engine (passed into the guest).
     claude_code_oauth_token: str = Field(default="", alias="CLAUDE_CODE_OAUTH_TOKEN")
+    # WHICH ANTHROPIC CREDENTIAL A `claude` RUN USES (claude_credential, BOSSAPP-530):
+    # "subscription_first" (the login, then the console's Anthropic API key, then
+    # ANTHROPIC_API_KEY) or "api_key_first". The project knob of the same name overrides it.
+    anthropic_credential_order: str = Field(
+        default="subscription_first", alias="BOSS_ANTHROPIC_CREDENTIAL_ORDER")
+    # Set only by claude_credential.ClaudeCredential.bind on a settings COPY: the resolution a
+    # lane binder made with a database connection, carried to where there is none.
+    claude_credential_kind: str = Field(default="", alias="BOSS_CLAUDE_CREDENTIAL_KIND")
+    claude_bound_api_key: str = Field(default="", alias="BOSS_CLAUDE_BOUND_API_KEY", repr=False)
     openai_codex_oauth_enabled: bool = Field(
         default=False, alias="BOSS_OPENAI_CODEX_OAUTH_ENABLED"
     )
@@ -1107,6 +1120,18 @@ class Settings(BaseSettings):
     # one real model spend. 0 = the Captain proposes, never starts one; Govern turns it on per
     # project (project_settings `captain_auto_improve`). Installs that predate this keep theirs on.
     captain_auto_improve: int = Field(default=0, alias="BOSS_CAPTAIN_AUTO_IMPROVE")
+    # THE MODEL PRE-CHECK (services/workflow_precheck_agent.py): an agent that reads the coded
+    # pre-check's evidence and predicts what the coded checks do not cover. Off at the start
+    # door by default, so starting a workflow is neither slower nor costs money unasked; the
+    # CLI's `--agent` runs it on demand. Capped per run in cents and in model turns.
+    workflow_precheck_agent: int = Field(default=0, alias="BOSS_WORKFLOW_PRECHECK_AGENT")
+    workflow_precheck_agent_max_cents: int = Field(
+        default=50, alias="BOSS_WORKFLOW_PRECHECK_AGENT_MAX_CENTS", ge=1)
+    workflow_precheck_agent_max_turns: int = Field(
+        default=8, alias="BOSS_WORKFLOW_PRECHECK_AGENT_MAX_TURNS", ge=1)
+    # How long, in all, it waits for the per-minute (burst) budget to free before giving up.
+    workflow_precheck_agent_max_wait_seconds: int = Field(
+        default=180, alias="BOSS_WORKFLOW_PRECHECK_AGENT_MAX_WAIT_SECONDS", ge=0)
     # Turn cap for the MICRO-VM GUEST agent (a separate limit from the host cap above). BOSS sends
     # this in the sandbox submit contract; the sandbox-service must honor it to take effect (else it
     # falls back to the service's own ~40 default). Higher lets app-scale tasks finish.

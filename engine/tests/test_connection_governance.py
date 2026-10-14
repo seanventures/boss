@@ -274,7 +274,7 @@ def test_explicit_provider_rejection_settles_no_completion_and_replays(scope, st
         )
 
 
-@pytest.mark.parametrize("failure", ["timeout", "5xx", "missing-cost", "boolean-cost", "bad-cost"])
+@pytest.mark.parametrize("failure", ["timeout", "5xx", "boolean-cost", "bad-cost"])
 def test_unknown_acceptance_keeps_positive_hold_and_does_not_retry(scope, failure):
     e, p, _ = scope
 
@@ -811,10 +811,24 @@ def test_environment_proof_uses_only_canonical_env_reference(scope, monkeypatch)
     )["ok"]
 
 
-@pytest.mark.parametrize("invalid", [None, False, True, -1, "1000"])
-def test_paid_cost_typing_refuses_unpriced_missing_or_invalid_evidence(invalid):
+@pytest.mark.parametrize("invalid", [False, True, -1, "1000"])
+def test_paid_cost_typing_refuses_malformed_evidence(invalid):
     with pytest.raises(RuntimeError):
         _actual_cost({"cost_usd_micros": invalid}, included=False)
+
+
+def test_an_ok_reply_without_price_or_usage_is_a_labelled_unpriced_estimate():
+    from boss_engine.services.connection_spend import cost_evidence
+
+    cost, basis = cost_evidence({"ok": True, "cost_usd_micros": None}, included=False)
+    assert basis == "unpriced" and 0 < cost < 50_000
+    cost, basis = cost_evidence(
+        {"usage": {"model": "claude-not-a-real-model", "prompt_tokens": 9,
+                   "completion_tokens": 1}}, included=False)
+    assert basis == "unpriced" and cost == 9 * 15 + 1 * 75
+    assert cost_evidence(
+        {"usage": {"model": "claude-sonnet-5", "provider": "anthropic", "prompt_tokens": 9,
+                   "completion_tokens": 1}}, included=False) == (9 * 2 + 1 * 10, "priced")
 
 
 def test_valid_zero_and_priced_tokens_have_distinct_known_evidence():

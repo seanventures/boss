@@ -221,36 +221,73 @@ def probe_paths(manifest: Any) -> list[str]:
     return out
 
 
+#: A route segment that says the route serves a signed-in person (`/api/me`, `/api/admin`):
+#: refusing an anonymous probe with 401/403 is that route WORKING. Any other connector route is
+#: public (`/auth/providers` lists the sign-in options before anyone signs in) and must answer.
+_AUTH_SEGMENTS = frozenset({"me", "admin", "account", "profile", "session", "settings",
+                            "billing", "dashboard"})
+
+
+def route_needs_auth(path: str) -> bool:
+    """Does this connector route serve only a signed-in person (by its path's segments)?"""
+    return any(seg.lower() in _AUTH_SEGMENTS for seg in str(path or "").split("/") if seg)
+
+
+def route_answered(path: str, status: Any) -> bool:
+    """A probe's answer counts: 2xx/3xx for a public route; also 401/403 for one that needs auth
+    (route_needs_auth). A 401 from a public route is a route that does not work signed out."""
+    if not isinstance(status, int) or isinstance(status, bool):
+        return False
+    if 200 <= status < 400:
+        return True
+    return status in (401, 403) and route_needs_auth(path)
+
+
 def connector_smoke(manifest: Any, serve: Optional[Mapping[str, Any]], *,
                     tests_passed: bool) -> tuple[bool, dict[str, Any]]:
     """A CONNECTOR IS PRE-TESTED (operator, 2026-10-13). Login, Stripe, PayPal are each a fully
     tested path in their own test tier, so a build that adds one neither writes tests for it nor
     runs its suite as a gate. What the build CAN break is the wiring, so the gate is one smoke
     check: the app starts (the app_serves proof) and the connector's GET routes answer on it
-    (anything but no answer, 404 or a 5xx). An app BOSS cannot start (not a declared service)
-    is left to its own tests, and the record says so."""
+    (route_answered: 2xx/3xx, and 401/403 only from a route that needs sign-in; every PUBLIC route
+    probed must answer). An app BOSS cannot start (not a declared service) is left to its own
+    tests, and the record says so."""
     paths = probe_paths(manifest)
     tt: dict[str, Any] = {"kind": "connector", "check": "wiring smoke", "routes": paths,
                           "connector_tests": "run in the connector's own test tier, not in this build"}
     serve = dict(serve or {})
     if not tests_passed:
         tt["error"] = "the build's own tests did not pass, so the connector's wiring was not checked"
+        tt["because"] = "tests"  # a consequence: the gate that failed is the build's own checks
         return False, tt
     if serve.get("proven"):
         probes = dict(serve.get("route_probes") or {})
         tt["probes"] = probes
         if not paths:
             return True, tt
-        answered = [p for p, status in probes.items()
-                    if isinstance(status, int) and status != 404 and status < 500]
-        if answered:
+        answered = [p for p, status in probes.items() if route_answered(p, status)]
+        public_down = [p for p, status in probes.items()
+                       if not route_needs_auth(p) and not route_answered(p, status)]
+        if answered and not public_down:
             tt["answered"] = answered
             return True, tt
+        if answered:
+            tt["answered"] = answered
+            tt["error"] = ("the connector's public route(s) did not answer a signed-out request: "
+                           + ", ".join(f"GET {p} -> {probes.get(p) or 'no answer'}"
+                                       for p in public_down)
+                           + " (a public route must answer 2xx/3xx without sign-in)")
+            return False, tt
         tt["error"] = ("the app started but none of the connector's routes answered: "
                        + ", ".join(f"GET {p} -> {probes.get(p) or 'no answer'}" for p in paths))
         return False, tt
     if serve.get("ok") is False and not serve.get("harness"):
         tt["error"] = "the app did not start, so the connector's wiring was not checked"
+        if serve.get("needs_secret"):
+            # Started with the environment the app declares (templates.run_env): what was
+            # missing is a secret only a person can set, named.
+            tt["error"] = ("the app did not start: it needs " + ", ".join(serve["needs_secret"])
+                           + ", so the connector's wiring was not checked")
         tt["because"] = "app_serves"  # a consequence: the gate that failed is app_serves
         return False, tt
     tt["not_run"] = str(serve.get("skipped") or serve.get("not_a_service") or serve.get("source")
@@ -317,6 +354,7 @@ def evaluate(*, template: Mapping[str, Any], files: Mapping[str, bytes], changed
             tt["error"] = "the template's tests are not in the change: " + ", ".join(missing[:10])
         elif not tests_passed:
             tt["error"] = "the build's own tests did not pass, so the template's were not run"
+            tt["because"] = "tests"
         elif cwd is None or run_command is None:
             tt["error"] = "the template's tests cannot run here: the build has no app directory to run them in"
         elif (install := install_dependencies(stack, cwd, run_command)).get("error"):
@@ -452,8 +490,35 @@ def _derived_from_app_serves(template_tests: Any) -> bool:
             or str(template_tests.get("error") or "").startswith("the app did not start"))
 
 
+#: What to do when the build's own checks failed, so the template's gate never ran.
+CHECKS_NEXT = ("Open the build's Checks to read the failing check's output, fix it, then retry "
+               "the build.")
+
+
+def _derived_from_tests(template_tests: Any) -> bool:
+    """The template_tests failure is only the consequence of the build's own checks failing
+    (the template's tests, or a connector's wiring check, were never run), not one of its own."""
+    if not isinstance(template_tests, Mapping):
+        return False
+    return (template_tests.get("because") == "tests"
+            or str(template_tests.get("error") or "").startswith("the build's own tests did not pass"))
+
+
+def secret_scan_where(secret_scan: Any, limit: int = 3) -> str:
+    """" (helpdesk-ai/vitest.config.ts:14 assigned_secret, ...)" — WHERE the scan matched: file,
+    line and rule, never the matched text. Empty when the scan recorded no finding."""
+    findings = (secret_scan or {}).get("findings") if isinstance(secret_scan, Mapping) else None
+    if not findings:
+        return ""
+    shown = [f"{f.get('path')}:{f.get('line')} {f.get('rule')}" for f in findings[:limit]
+             if isinstance(f, Mapping)]
+    more = int((secret_scan or {}).get("count") or len(findings)) - len(shown)
+    return " (" + ", ".join(shown) + (f", and {more} more" if more > 0 else "") + ")"
+
+
 def hold_outcome(failing: Any, install_failure: Any = None, *, app_serves: Any = None,
-                 template_tests: Any = None) -> Optional[dict]:
+                 template_tests: Any = None, secret_scan: Any = None,
+                 tests: Any = None) -> Optional[dict]:
     """{gates, reason, next_step, error} for a build whose failing gates include a template gate,
     else None. `error` is the one line a blocked build shows: why, then what to do.
 
@@ -464,17 +529,30 @@ def hold_outcome(failing: Any, install_failure: Any = None, *, app_serves: Any =
     * the app did not start (`app_serves` failing, its record given): a connector's smoke check
       had nothing to probe — "the app did not start: tsx: Permission denied", never "the
       template's tests did not pass" (HelpDesk AI crun_247435e17c00478483b2, whose template
-      tests had passed)."""
+      tests had passed);
+    * the build's own checks failed (`template_tests` says so; `tests` is the run's tests
+      record, verification_target.failed_check in it): the check that failed and its first
+      line — "the app's checks failed: npm run build — Missing script: \"build\"", never "the
+      template's tests did not pass" (crun_decc93dbb0154e768871, whose template never ran)."""
     failing_set = set(failing or ())
     gates = [g for g in TEMPLATE_GATES if g in failing_set]
     if not gates:
         return None
     whys = {g: _WHY[g] for g in gates}
+    if "no_committed_secrets" in whys:
+        # The blocked line says WHERE, so nobody has to open the Checks to learn which file.
+        whys["no_committed_secrets"] += secret_scan_where(secret_scan)
     next_step = _NEXT[gates[0]]
     install = install_reason(install_failure)
     if install and "template_tests" in whys:
         whys["template_tests"] = install
         next_step = INSTALL_NEXT if gates[0] == "template_tests" else next_step
+    if not install and "template_tests" in whys and _derived_from_tests(template_tests):
+        from ..services.verification_target import checks_headline
+
+        whys["template_tests"] = checks_headline(tests)
+        if gates[0] == "template_tests":
+            next_step = CHECKS_NEXT
     lead: list[str] = []
     if "app_serves" in failing_set and not install:
         from ..services.preview_service import app_serves_headline
@@ -484,6 +562,11 @@ def hold_outcome(failing: Any, install_failure: Any = None, *, app_serves: Any =
             whys.pop("template_tests")
         if gates[0] == "template_tests":
             next_step = APP_SERVES_NEXT
+        needs = list((app_serves or {}).get("needs_secret") or []) if isinstance(app_serves, Mapping) else []
+        if needs and gates[0] == "template_tests":
+            from .run_env import needs_secret_action
+
+            next_step = needs_secret_action(needs)
     reason = "; ".join([*lead, *whys.values()])
     return {"gates": gates, "reason": reason[:1].upper() + reason[1:], "next_step": next_step,
             "error": f"Blocked: {reason}. {next_step}"}
@@ -497,7 +580,8 @@ def held_run(connection: Any, run_id: str) -> Optional[dict]:
     row = connection.execute(text(
         "SELECT q.gates_failed, r.finalize_ctx->'failing_gates' AS fctx_failing, "
         "r.finalize_ctx->'install_failure' AS install_failure, "
-        "q.evidence->'app_serves' AS app_serves, q.evidence->'template'->'template_tests' AS template_tests "
+        "q.evidence->'app_serves' AS app_serves, q.evidence->'template'->'template_tests' AS template_tests, "
+        "q.evidence->'template'->'secret_scan' AS secret_scan, q.evidence->'tests' AS tests "
         "FROM code_task_runs r LEFT JOIN quality_gates q ON q.code_task_run_id = r.id "
         "WHERE r.id = :i ORDER BY q.created_at DESC NULLS LAST LIMIT 1"),
         {"i": run_id}).mappings().first()
@@ -508,4 +592,5 @@ def held_run(connection: Any, run_id: str) -> Optional[dict]:
         if isinstance(value, list):
             failing |= {str(g) for g in value}
     return hold_outcome(failing, row["install_failure"], app_serves=row.get("app_serves"),
-                        template_tests=row.get("template_tests"))
+                        template_tests=row.get("template_tests"), secret_scan=row.get("secret_scan"),
+                        tests=row.get("tests"))

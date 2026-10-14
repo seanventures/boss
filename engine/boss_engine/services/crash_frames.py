@@ -78,3 +78,53 @@ def log_caught(logger: logging.Logger, where: str = "",
                    stacklevel=2)  # the record names the handler's line, not this one
     except Exception:  # noqa: BLE001
         pass
+
+
+#: The event a build records each time it swallows an exception on purpose (bookkeeping that
+#: must never fail the run). build_profile counts them, so a swallowed error that repeats on
+#: every build shows up in the profile instead of only in a warning nobody reads.
+SWALLOWED_EVENT = "code_task.swallowed_error"
+
+
+def record_swallowed(logger: logging.Logger, where: str, *, project_id: Optional[str],
+                     run_id: Optional[str], transaction: Any = None, connection: Any = None,
+                     exc: Optional[BaseException] = None) -> None:
+    """A caught exception the build deliberately carries on past: log it at ERROR with the run
+    id, and record a SWALLOWED_EVENT on the run. Call it first in the `except` block.
+
+    `transaction` (a zero-argument callable returning a transaction context, e.g.
+    `lambda: _transaction(engine)`) records the event in a transaction of its own; `connection` (a caller's open
+    transaction) records it under a savepoint, so a failed record cannot doom the caller's
+    work. With neither, it is logged only. Never raises.
+
+    WHY. Two real errors (an AttributeError reading the budget state, a SQL syntax error
+    marking a stage done) were each swallowed dozens of times at WARNING, so nothing noticed
+    that every build routed blind and every resume re-ran finished stages."""
+    try:
+        exc = exc if exc is not None else sys.exc_info()[1]
+        if exc is None:
+            return
+        logger.log(logging.ERROR, "caught %s (%s run=%s):\n%s", type(exc).__name__, where,
+                   run_id, formatted(exc).rstrip(), stacklevel=2)
+    except Exception:  # noqa: BLE001
+        return
+    if not (project_id and run_id) or (transaction is None and connection is None):
+        return
+    try:
+        from .core import emit_event
+        from .redaction import redact_secrets
+
+        first = (str(exc).splitlines() or [""])[0]
+        data = {"where": where, "error": type(exc).__name__,
+                "message": redact_secrets(first)[:200], "frames": frames(exc, limit=3)}
+
+        if connection is not None:
+            with connection.begin_nested():
+                emit_event(connection, project_id, SWALLOWED_EVENT, "boss", "code_task_run",
+                           run_id, data)
+        else:
+            with transaction() as c:
+                emit_event(c, project_id, SWALLOWED_EVENT, "boss", "code_task_run", run_id, data)
+    except Exception:  # noqa: BLE001 — the log line above already carries it
+        logger.error("could not record %s for run %s (%s)", SWALLOWED_EVENT, run_id, where,
+                     exc_info=True)

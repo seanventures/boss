@@ -100,9 +100,11 @@ def test_the_pipeline_actually_asks(connection):
     import inspect
 
     from boss_engine.services import governed_code_task_service as g
+    from boss_engine.services.model_router import stages
 
-    source = inspect.getsource(g)
-    assert "_build_engine_for(_c, settings, project_id)" in source
+    assert "lane_engines(_c, settings, project_id, spec)" in inspect.getsource(g)
+    source = inspect.getsource(stages.lane_engines)
+    assert "_build_engine_for(connection, settings, project_id)" in source
     assert "_pinned_engine or _resolved_engine or settings.code_agent_engine" in source
 
 
@@ -113,8 +115,10 @@ def test_a_pinned_engine_is_checked_against_the_registry_not_a_list_of_three():
     import inspect
 
     from boss_engine.services import governed_code_task_service as g
+    from boss_engine.services.model_router import stages
 
-    source = inspect.getsource(g)
+    assert '("claude_code", "openai", "native")' not in inspect.getsource(g)
+    source = inspect.getsource(stages.pinned_engine)
     assert '("claude_code", "openai", "native")' not in source
     assert "get_harness(_pinned_engine)" in source
 

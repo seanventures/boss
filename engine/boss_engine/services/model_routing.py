@@ -66,6 +66,8 @@ from .github_adapter import IntegrationConfigurationError
 CHAT_ROUTABLE: tuple[str, ...] = (
     "claude_code", "codex", "native", "azure",
     "openrouter", "gemini", "xai", "groq", "deepseek", "vllm", "ollama",
+    # Last: on an Anthropic API key, chosen by the operator (agent_sdk_engine).
+    "claude_agent_sdk",
 )
 
 _ALIASES = {"claude_cli": "claude_code", "claude": "claude_code", "anthropic": "claude_code",
@@ -384,6 +386,10 @@ def adapter_for(choice: ModelChoice, connection: Any, settings: Any,
     model = model or (getattr(settings, "chat_model", "") or "").strip() or None
     if engine == "claude_code":
         return ClaudeCliAdapter(bound, model=model)
+    if engine == "claude_agent_sdk":
+        from .agent_sdk_engine import make_chat_adapter
+
+        return make_chat_adapter(bound, model=model)
     if engine == "codex":
         from .codex_cli_adapter import CodexCliAdapter
 
@@ -451,7 +457,10 @@ def project_chat_adapter(connection: Any, settings: Any, project_id: Optional[st
 
         raise RouteRefused(decision.refusal)
     if decision is not None and decision.engine and (decision.mode == "smart"
-                                                     or decision.binding):
+                                                     or decision.binding
+                                                     or "asked_tier" in decision.rules):
+        # A Smart route, a binding agent policy, or a Fixed route the caller asked a tier of
+        # (RouteRequest.tier): the decision's own engine and model.
         choice = ModelChoice(decision.engine, decision.reason, decision.source_id)
         adapter = adapter_for(choice, connection, resolved, project_id, model=decision.model)
         adapter = _failover(adapter, decision, settings, project_id, purpose)
@@ -543,7 +552,12 @@ class ModelSpendRefused(IntegrationConfigurationError):
 
 class ModelSpendDeferred(RuntimeError):
     """The per-minute (burst) budget is full. NOT settled: it frees itself within a minute, so
-    the step retries — model_failures explains it as "waiting for the per-minute budget"."""
+    the step retries — model_failures explains it as "waiting for the per-minute budget".
+    `retry_after_seconds` is the budget's own answer to "how long until there is room"."""
+
+    def __init__(self, message: str = "", retry_after_seconds: Optional[float] = None):
+        super().__init__(message)
+        self.retry_after_seconds = retry_after_seconds
 
 
 #: Engines whose turns are not metered per token: subscriptions and local models. Their turns
@@ -672,7 +686,8 @@ class GovernedChatAdapter:
             message = str(reservation.get("message") or "")
             if "burst" in message.lower():
                 raise ModelSpendDeferred(
-                    f"waiting for the per-minute budget: {message} (burst cap)")
+                    f"waiting for the per-minute budget: {message} (burst cap)",
+                    retry_after_seconds=reservation.get("retry_after_seconds"))
             raise ModelSpendRefused(
                 f"{ModelSpendRefused.MARKER}: "
                 f"{reservation.get('message') or 'Budget reservation denied.'} "

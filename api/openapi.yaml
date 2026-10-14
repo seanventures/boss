@@ -41036,6 +41036,12 @@ components:
         updated_at:
           type: string
           title: Updated At
+        claude_credential:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Claude Credential
       type: object
       required:
       - id

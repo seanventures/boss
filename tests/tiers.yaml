@@ -53,11 +53,17 @@ P0:
     - apps/web/tests/a-press-is-sent-once.test.ts
     - apps/web/tests/a-workflow-is-started-once-per-press.test.ts
     - apps/web/tests/a-deploy-is-approved-once-and-opens-its-app.test.tsx
+  # Release steps: commands, not test files (scripts/test-tier.sh does not run them). Before a
+  # release: test-tier major + e2e-gate plumbing + e2e-gate agent (docs/operations/TEST_TIERS.md).
+  release:
+    - scripts/e2e-gate.sh plumbing
 
 P1:
   engine:
     # Operator-reported: tsx Permission denied in the serve proof (crun_247435e1)
     - engine/tests/test_an_installed_executable_stays_executable.py
+    # Operator-reported: SESSION_SECRET missing in the serve proof; vitest.config secret false positive (crun_db538dff)
+    - engine/tests/test_an_app_runs_with_the_environment_it_declares.py
     # Workflows
     - engine/tests/test_workflow_capability_runner.py
     - engine/tests/test_a_failed_step_stops_the_run.py
@@ -86,6 +92,8 @@ P1:
     - engine/tests/test_pipeline_view_knows_deployments.py
     - engine/tests/test_a_stack_deploy_writes_to_the_host_only_under_its_changeset.py
     - engine/tests/test_deploy_does_not_raise_a_key_error.py
+    # Engines: the Claude Agent SDK engine on the Anthropic API key
+    - engine/tests/test_the_agent_sdk_engine_runs_on_the_api_key.py
   api:
     # Approvals
     - apps/api/tests/test_an_approval_shows_what_it_will_send.py

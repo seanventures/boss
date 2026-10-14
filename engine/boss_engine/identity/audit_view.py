@@ -24,7 +24,8 @@ OUTCOME_IN = {**{v: k for k, v in OUTCOME_OUT.items()}, **{k: k for k in OUTCOME
 HEADLINES = {
     "auth.login.succeeded": "signed in", "auth.login.failed": "A sign-in failed",
     "auth.step_up": "confirmed it was them", "auth.logout": "signed out",
-    "bootstrap.claimed": "claimed this BOSS", "owner.recovered_by_host":
+    "bootstrap.claimed": "claimed this BOSS",
+    "identity.setup_link_issued": "issued a claim link with the admin key", "owner.recovered_by_host":
     "An Owner was recovered from the host shell", "banner.acknowledged": "acknowledged a security notice", "policy.changed": "changed the security policy",
     "user.invited": "invited people", "role_binding.added": "granted an access role",
     "role_binding.removed": "removed an access role", "api_key.created": "created a key",

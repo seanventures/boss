@@ -51,7 +51,7 @@ CATALOGUE: tuple[dict[str, Any], ...] = (
      "billing_url": "https://platform.openai.com/settings/organization/billing"},
     {"provider": "anthropic", "label": "Anthropic", "kind": "api_key",
      "fields": ["api_key", "model"], "key_url": "https://console.anthropic.com/settings/keys",
-     "example_model": "claude-sonnet-4-5",
+     "example_model": "claude-sonnet-5",
      "billing_url": "https://console.anthropic.com/settings/billing"},
     {"provider": "gemini", "label": "Gemini", "kind": "api_key", "fields": ["api_key", "model"],
      "key_url": "https://aistudio.google.com/app/apikey", "example_model": "gemini-3.8-flash",
@@ -73,6 +73,7 @@ ENGINE_LABELS = {
     "native": "OpenAI", "openrouter": "OpenRouter", "gemini": "Gemini", "xai": "xAI",
     "ollama": "Ollama", "vllm": "Local model", "azure": "Azure OpenAI", "groq": "Groq",
     "deepseek": "DeepSeek", "typesafe": "TypeSafe Jev", "aider": "Aider",
+    "claude_agent_sdk": "Claude Agent SDK",
 }
 
 #: The provider a `setup-<x>` source or an env lane is listed under.
@@ -473,6 +474,8 @@ def _by_entitlement(settings: Any) -> dict[str, str]:
     except Exception:  # noqa: BLE001
         found = {}
     found.setdefault("anthropic_claude_code", "claude_code")
+    # The console's Anthropic API key: an Anthropic key, run by the claude CLI (claude_credential).
+    found.setdefault("anthropic_api", "anthropic")
     return found
 
 
@@ -701,6 +704,7 @@ def _jobs(connection: Connection, settings: Any, project_id: str,
     for entry in models:
         if model_working(entry):
             by_engine.setdefault(engine_for_provider(entry["provider"]), entry)
+    _offer_agent_sdk(settings, models, by_engine)
     try:
         from .typed_decisions import _typesafe_key
         from .project_settings import applied
@@ -752,6 +756,20 @@ def _jobs(connection: Connection, settings: Any, project_id: str,
         entry["used_for"] = [j["label"] for j in out if j["resolved"]
                              and _resolves_to(j["resolved"], entry)]
     return out
+
+
+def _offer_agent_sdk(settings: Any, models: list[dict[str, Any]],
+                     by_engine: dict[str, dict[str, Any]]) -> None:
+    """The Claude Agent SDK engine, as an option beside the Anthropic API key it runs on: a
+    working key entry (metered) and the package importable (agent_sdk_engine.readiness)."""
+    from .agent_sdk_engine import DEFAULT_MODEL, ENGINE, sdk_available
+
+    key = next((e for e in models if e["provider"] == "anthropic" and e["kind"] == "metered"
+                and model_working(e)), None)
+    if key is None or ENGINE in by_engine or not sdk_available():
+        return
+    by_engine[ENGINE] = {**key, "label": ENGINE_LABELS[ENGINE],
+                         "model": getattr(settings, "agent_sdk_model", "") or DEFAULT_MODEL}
 
 
 def _source_label(engine: str, source_id: Optional[str], models: list[dict[str, Any]]) -> str:
@@ -961,6 +979,8 @@ def _build(connection: Connection, settings: Any, project_id: str, *,
         "models": models,
         "detected": detected,
         "catalogue": [dict(entry) for entry in CATALOGUE],
+        # Connection proofs whose money is held until a person reviews them (Review → Release).
+        "held_proofs": _held_proofs(connection, project_id),
         "jobs": jobs,
         # Model routing (docs/product/MODEL_ROUTER.md): Smart / Fixed, tiers, floors, headroom,
         # the classifier and this week's mix. None when the router's tables are not there yet.
@@ -973,6 +993,16 @@ def _build(connection: Connection, settings: Any, project_id: str, *,
         "build_speed": build_speed(connection, settings, project_id),
         "generated_at": now.isoformat(),
     }
+
+
+def _held_proofs(connection: Connection, project_id: str) -> list[dict[str, Any]]:
+    from .connection_spend import held_proofs
+
+    try:
+        with connection.begin_nested():
+            return held_proofs(connection, project_id)
+    except Exception:  # noqa: BLE001 — the board still renders; the hold stays on its receipt
+        return []
 
 
 def _toolchains() -> list[dict[str, Any]]:

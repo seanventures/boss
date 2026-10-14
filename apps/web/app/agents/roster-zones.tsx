@@ -22,6 +22,9 @@ import { AgFace, AgState } from "./agent-face";
 import { TEAM_ORDER, teamOfAgent } from "../../lib/agents-live-board";
 
 /** The feed's status, as presence, for when the live endpoint has nothing to say. */
+/** The workforce wire's word for a failed step: `<action> — failed`. */
+const FAILED_TASK = /\s+—\s+failed$/;
+
 export function presenceFromStatus(a: V2Agent): LivePresence {
   const last = a.last_touched
     || (a.task === "No work in this window." ? "No recent work" : (a.task || "").replace(/^last: /, "Last: "));
@@ -30,6 +33,11 @@ export function presenceFromStatus(a: V2Agent): LivePresence {
   // `Last: <verb> · <label> · 2h` replaces it, and until then the card says it has none.
   if (a.status === "IDLE" && /\bcalls? in \d+d\b/i.test(last)) return { state: "idle", line: "No work yet" };
   if (a.status === "AT GATE") return { state: "needs_you", line: a.task || "Waiting on you" };
+  // STUCK covers two things on this wire (console_v2_workforce._status_of): a step that FAILED
+  // ("<action> — failed") and one running with no progress. Only the second is stuck.
+  if (a.status === "STUCK" && FAILED_TASK.test(a.task || "")) {
+    return { state: "failed", line: (a.task || "").replace(FAILED_TASK, "") || "Failed" };
+  }
   if (a.status === "STUCK") return { state: "stuck", line: a.task || "Stuck" };
   if (a.status === "WORKING") return { state: "working", line: a.task || "" };
   return { state: "idle", line: last };
@@ -38,9 +46,11 @@ export function presenceFromStatus(a: V2Agent): LivePresence {
 /** The one line under a card. Built from data, prefixed by what it means. */
 export function presenceLine(p: LivePresence): string {
   const line = (p.line || "").trim();
-  if (/^(Now|Waiting on you|Last|In panel|In a panel|Stuck|No work yet)\b/i.test(line)) return line;
+  if (/^(Now|Waiting on you|Last|In panel|In a panel|Stuck|Failed|Stopped|No work yet)\b/i.test(line)) return line;
   if (p.state === "needs_you") return line ? `Waiting on you: ${line}` : "Waiting on you";
   if (p.state === "stuck") return line ? `Stuck: ${line}` : "Stuck";
+  if (p.state === "failed") return line ? `Failed: ${line}` : "Failed";
+  if (p.state === "stopped") return line ? `Stopped: ${line}` : "Stopped";
   if (p.inPanel) return line ? `In panel: ${line}` : "In a panel";
   if (p.state === "working" || p.state === "thinking" || p.state === "speaking") return line ? `Now: ${line}` : "Working";
   return line || "No recent work";

@@ -22,10 +22,9 @@ import {
 
 import { callAction } from "../lib/call-action";
 import type { Permission } from "../lib/identity/permissions.gen";
-import { useCan, useIdentity } from "../components/identity/identity-provider";
+import { useCan } from "../components/identity/identity-provider";
 import { FormPermission } from "../components/identity/form-permission";
 import { useGate } from "../components/gated";
-import { permissionName } from "../lib/identity/words";
 export type ToastType = 'success' | 'error';
 
 interface Toast {
@@ -149,7 +148,6 @@ export function ActionForm({
 }: ActionFormProps): React.ReactElement {
   const [result, setResult] = useState<ActionResult | null>(null);
   const access = useCan(permission ?? "directory:read");
-  const { stepUp, refresh } = useIdentity();
 
   // An async form action: React holds the form's pending state until it settles, which is
   // what SubmitButton and ActionFormPending read.
@@ -164,19 +162,15 @@ export function ActionForm({
       try {
         // Through callAction, so the press reaches the server and the action's API writes are
         // keyed by it: these forms submit with a plain button, not a SubmitButton.
-        const returned = await callAction(action)(formData);
+        // callAction answers `step_up_required` itself: the sheet opens and the same submit is
+        // re-sent once as a new press (BOSSAPP-510). No second replay here.
+        const returned = await callAction(action, undefined, permission)(formData);
         return isActionResult(returned) ? returned : { ok: true };
       } catch (err: unknown) {
         return { ok: false, error: describeActionError(err) };
       }
     };
-    let outcome = await submit();
-    const identity = (outcome.data as { identity?: { error?: string } } | undefined)?.identity;
-    if (!outcome.ok && identity?.error === 'step_up_required') {
-      if (await stepUp(permission ? `This needs “${permissionName(permission)}”.` : 'This needs a fresh check.')) outcome = await submit();
-    } else if (!outcome.ok && identity?.error === 'forbidden') {
-      refresh().catch(() => undefined);
-    }
+    const outcome = await submit();
     setResult(outcome);
     onResult?.(outcome);
     if (outcome.ok) {

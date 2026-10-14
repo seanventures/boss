@@ -3655,6 +3655,7 @@ def entitlement_source_summary_from_service(
         runtime_supported=bool(payload["runtime_supported"]),
         created_at=payload["created_at"],
         updated_at=payload["updated_at"],
+        claude_credential=payload.get("claude_credential"),
     )
 
 
@@ -8435,7 +8436,7 @@ def code_task_redelivered_endpoint(run_id: str, payload: open_bodies.CodeTaskRed
                 SET finalize_ctx = COALESCE(finalize_ctx, '{}'::jsonb)
                                    || jsonb_build_object('redelivered_attempts',
                                         COALESCE(finalize_ctx->'redelivered_attempts', '[]'::jsonb)
-                                        || to_jsonb(:attempt::int)),
+                                        || to_jsonb(CAST(:attempt AS int))),
                     updated_at = now()
                 WHERE id = :run_id
                 """
@@ -11137,7 +11138,8 @@ def assign_app_slot(target_id: str, host: dict, *, wanted_port: Any = None) -> d
     promised ports, plus a probe of the machine), so it is done here, and the answer is words.
     """
     from boss_engine.services.deployment_connectors import _app_port, domain_with_port
-    from boss_engine.services.deployment_fleet import _first_free_port, _ports_assigned_on
+    from boss_engine.services.deployment_fleet import (
+        _first_free_port, _port_the_app_had, _ports_assigned_on)
 
     address = str(host.get("address") or "").strip()
     name = str(host.get("name") or address or "the host")
@@ -11146,7 +11148,7 @@ def assign_app_slot(target_id: str, host: dict, *, wanted_port: Any = None) -> d
                 "next": "Set the host's address in Infra, then press Set target again."}
     with begin(engine) as connection:
         target = connection.execute(
-            text("SELECT app_name, required_resources, domains FROM deployment_targets "
+            text("SELECT project_id, app_name, required_resources, domains FROM deployment_targets "
                  "WHERE id = :i FOR UPDATE"), {"i": target_id}).mappings().first()
         if not target:
             return {"ok": False, "message": "The target was not found after it was created.",
@@ -11165,6 +11167,11 @@ def assign_app_slot(target_id: str, host: dict, *, wanted_port: Any = None) -> d
             return {"ok": False,
                     "message": f"Port {port} on {name} is already promised to {taken[port]!r}.",
                     "next": "Leave the port empty and BOSS will choose a free one."}
+        if not port:
+            # The port this app already had on the host (its OAuth callbacks name it), if free.
+            had = _port_the_app_had(connection, str(target.get("project_id") or ""),
+                                    str(target.get("app_name") or ""), address)
+            port = had if had and had not in taken else None
         if not port:
             port = _first_free_port(connection, address)
         if not port:
@@ -26931,6 +26938,12 @@ def start_delivery_workflow(payload: WorkflowStartBody, connection_in: Any = Non
         readiness = _delivery_readiness_or_409(
             connection, project_id, version_id=version_id, work_class=work_class,
             run_input=run_input, start_anyway=accepted)
+        # THE PRE-CHECK: what will fail on this run, before anything is spent or STOPPED.
+        precheck = _precheck_or_409(
+            connection, project_id, version_id=version_id, work_class=work_class,
+            run_input=run_input, actor=actor, accept=payload.get("accept"),
+            skip_steps=payload.get("skip_steps"), reason=payload.get("precheck_reason"),
+            start_anyway=accepted)
         if replaces:
             # STOP, THEN START, IN THIS TRANSACTION. The preflight above has passed, so the
             # stop is no longer a gamble; and a start that fails below rolls the stop back
@@ -26955,6 +26968,7 @@ def start_delivery_workflow(payload: WorkflowStartBody, connection_in: Any = Non
                 # The adoption the server resolved above — `start_run` drops any `adopt_*` key
                 # a caller put in `input`.
                 adopted=adopted,
+                precheck_record=precheck,
             )
         except workflow_runtime.WorkflowMappingNotFoundError as error:
             # The honest failure: nobody chose a workflow for this class of work. Picking one
@@ -26970,6 +26984,10 @@ def start_delivery_workflow(payload: WorkflowStartBody, connection_in: Any = Non
         from boss_engine.services.workflow_readiness import record_started_anyway
 
         if not run.get("duplicate"):
+            from boss_engine.services.workflow_precheck import record_on_run
+
+            # The pre-check first: it is the run's first activity entry.
+            record_on_run(connection, project_id, actor, run.get("id") or "", precheck)
             record_started_anyway(connection, project_id, actor, run.get("id") or "", readiness)
             if requested_links:
                 from boss_engine.app_links import service as _links
@@ -26984,6 +27002,7 @@ def start_delivery_workflow(payload: WorkflowStartBody, connection_in: Any = Non
         # behaved differently from the one it copied.
         return {"run": run, **({"ignored_input": dropped} if dropped else {}),
                 **({"readiness": readiness} if readiness.get("missing") else {}),
+                **({"precheck": precheck} if precheck else {}),
                 **({"extends": extends} if extends else {}),
                 **({"app_links": requested_links} if requested_links else {})}
 
@@ -27030,6 +27049,119 @@ def _delivery_readiness_or_409(
     except workflow_readiness.WorkflowNotReadyError as error:
         raise HTTPException(status_code=409, detail={
             "message": str(error), "readiness": error.readiness}) from error
+
+
+def _precheck_or_409(
+    connection, project_id: str, *, version_id: Optional[str], work_class: str,
+    run_input: dict, actor: str, accept: Any, skip_steps: Any, reason: Any, start_anyway: Any,
+) -> Optional[dict]:
+    """The start door's pre-check (workflow_precheck.gate_start). In `enforce` mode
+    (BOSS_WORKFLOW_PRECHECK_GATE) 409 `precheck_failed` with the whole pre-check when a check
+    says the run will fail and the caller neither accepted it nor skipped its step; in `report`
+    mode (the default) never refused. 422 `skip_refused` for a skip that would bypass a gate.
+    Returns the record to keep on the run and return in the response (None when clean)."""
+    from boss_engine.services import workflow_precheck
+
+    if not version_id and work_class:
+        try:
+            resolution = workflow_runtime.resolve_mapping(
+                connection, project_id=project_id, selector_kind="work_class",
+                selector_value=work_class)
+        except workflow_runtime.WorkflowError:
+            resolution = {}
+        if resolution.get("status") == "selected":
+            version_id = resolution["selected"]["workflow_version_id"]
+    if not version_id:
+        return None
+
+    def _list(value: Any) -> list:
+        return list(value) if isinstance(value, (list, tuple)) else []
+
+    try:
+        return workflow_precheck.gate_start(
+            connection, settings, project_id=project_id, version_id=str(version_id),
+            run_input=run_input, actor=str(actor or ""), accept=[str(a) for a in _list(accept)],
+            skip_steps=_list(skip_steps), reason=str(reason or ""),
+            start_anyway=[str(k) for k in _list(start_anyway)])
+    except workflow_precheck.PrecheckRefused as error:
+        raise HTTPException(status_code=409, detail=error.detail()) from error
+    except workflow_precheck.SkipRefused as error:
+        raise HTTPException(status_code=422, detail={"error": "skip_refused",
+                                                     "message": str(error)}) from error
+
+
+@app.post("/v1/workflows/{workflow_id}/precheck")
+@permit(P.WORKFLOW_READ, scope=Scope.project(body="project_id"), readonly_post=True)
+def precheck_workflow(workflow_id: str, payload: ProjectBody) -> dict:
+    """THE WORKFLOW PRE-CHECK, before a run: each step's real infrastructure, with a verdict
+    (ready / fixable / will_fail / unknown), the evidence, and the fix. Read-only.
+
+    `workflow_id` is a workflow key, name, definition id or version id. Body: `project_id`,
+    optional `checkpoint` (pre_run | pre_deploy), `input` (the run input it would start with),
+    `build_run_id` (pre_deploy: the pass-1 build, whose saved workspace is read), `offline`,
+    `families` (history, logs, data: BOSS's recent behaviour; default all), `history_days`.
+    The answer lists the auto-fixes BOSS could make (`fixes`, a dry run) and the shortest path
+    per will_fail (`explain`); applying them is /precheck/fix."""
+    return _precheck_response(payload.payload(), workflow=workflow_id)
+
+
+@app.post("/v1/workflow-runs/{run_id}/precheck")
+@permit(P.WORKFLOW_RUN_READ, scope=Scope.project(body="project_id"), readonly_post=True)
+def precheck_workflow_run(run_id: str, payload: ProjectBody) -> dict:
+    """The pre-check of a run that exists — its own shape, input and build (pre_deploy reads the
+    build's saved workspace). Read-only."""
+    return _precheck_response(payload.payload(), run_id=run_id)
+
+
+@app.post("/v1/workflows/{workflow_id}/precheck/fix")
+@permit(P.WORKFLOW_RUN_CONTROL, scope=Scope.project(body="project_id"))
+def precheck_workflow_fix(workflow_id: str, payload: ProjectBody) -> dict:
+    """The pre-check, then the auto-fixes it lists as "fixable: BOSS can do this" (generated
+    keys, secrets re-filed from a split app key by copy, leases past expiry released, a
+    never-deployed target's port released, the browser cache warmed). `fix` (default false)
+    applies them; false returns the plan. Each fix is safe, reversible, idempotent and recorded
+    as `precheck.autofix_applied` by "boss precheck"; nothing is deleted."""
+    return _precheck_response(payload.payload(), workflow=workflow_id, may_fix=True)
+
+
+@app.post("/v1/workflow-runs/{run_id}/precheck/fix")
+@permit(P.WORKFLOW_RUN_CONTROL, scope=Scope.project(body="project_id"))
+def precheck_workflow_run_fix(run_id: str, payload: ProjectBody) -> dict:
+    """The run's pre-check, then its auto-fixes (see /v1/workflows/{id}/precheck/fix)."""
+    return _precheck_response(payload.payload(), run_id=run_id, may_fix=True)
+
+
+def _precheck_response(body: dict, *, workflow: Optional[str] = None,
+                       run_id: Optional[str] = None, may_fix: bool = False) -> dict:
+    from boss_engine.services import workflow_precheck
+
+    project_id = str(body.get("project_id") or "").strip()
+    if not project_id:
+        raise HTTPException(status_code=422, detail="project_id is required")
+    fix = body.get("fix") is True
+    if fix and not may_fix:
+        raise HTTPException(status_code=422, detail=(
+            "fix: true changes data; POST it to the …/precheck/fix route "
+            "(workflow_run:control). This route is read-only."))
+    with begin(engine) as connection:
+        require_project_reader(connection, project_id)
+    supplied = body.get("input")
+    families = body.get("families")
+    try:
+        return workflow_precheck.precheck(
+            engine, settings, project_id=project_id, actor=str(body.get("actor") or "ceo"),
+            workflow=workflow, run_id=run_id,
+            run_input=supplied if isinstance(supplied, dict) else None,
+            checkpoint=str(body.get("checkpoint") or workflow_precheck.PRE_RUN),
+            # Never a server path from a caller: a pre_deploy reads the build's own saved
+            # workspace (workflow_precheck.materialize_build).
+            build_run_id=body.get("build_run_id") or None,
+            offline=bool(body.get("offline")),
+            families=[str(f) for f in families] if isinstance(families, list) else None,
+            history_days=int(body.get("history_days") or 7), fix=fix)
+    except workflow_precheck.PrecheckError as error:
+        raise HTTPException(status_code=404 if "no " in str(error) else 422,
+                            detail=str(error)) from error
 
 
 @app.get("/v1/delivery-workflows/{workflow_key}/readiness")
@@ -27100,6 +27232,30 @@ def run_delivery_capabilities(payload: open_bodies.DeliveryCapabilitiesRunBody) 
     # EVERY PROJECT WITH LIVE WORK, not only the one the worker is configured for: a template's
     # lab project is a project of its own, and its build sat `ready` for ever. Each project in
     # its own transaction, so one that cannot advance never stops the rest.
+    #
+    # KNOWN HAZARD — ONE TRANSACTION PER PROJECT, NOT PER STEP (pre-mortem 2026-10-13).
+    # `tick` claims and EXECUTES up to MAX_STEPS_PER_TICK (10) steps inline, each in a SAVEPOINT
+    # of this one transaction, and nothing commits until the project's last step and
+    # sweep_gate_timeouts are done. Consequences, precisely:
+    #   1. A step that spends longer than BOSS_API_DB_IDLE_IN_TRANSACTION_SECONDS (300) between
+    #      two statements — a model call, an HTTP probe, a subprocess — gets this session ended
+    #      by Postgres. The WHOLE project's tick rolls back: every step it claimed, ran and
+    #      recorded goes back to `ready`.
+    #   2. What those steps did OUTSIDE this transaction stays done. A build or panel is created
+    #      by its tool in its own transaction; a message, a PR, a model call happened. The next
+    #      tick claims the same steps and does it again — a duplicate wherever the effect is not
+    #      keyed (start_code_task dedupes builds by its same-work rule; typed decisions carry a
+    #      dedupe key; anything else does not).
+    #   3. While it runs, the run rows it locked are held to the end, so every writer to those
+    #      runs (an approval, a retry, the console) waits behind the slowest step, and the worker's
+    #      request is blocked for the whole sweep.
+    # The guard (apps/api/tests/test_the_tick_stays_inside_its_transaction_limit.py) pins what
+    # keeps this rare: every per-call wall the tick runs inline is under the idle limit with
+    # margin, and each project has its own transaction. NOT CHANGED HERE: commit-per-step means
+    # `tick` takes the engine and, per step, commits the claim, runs the step with no
+    # transaction open, and records the outcome in a fresh transaction keyed by the claim (a
+    # stale claim is reclaimed by its lease). That lives in workflow_capability_runner.tick,
+    # which another change is rewriting; it is the follow-up, not a one-line change.
     for pid in projects:
         try:
             with begin(engine) as connection:
@@ -27351,6 +27507,14 @@ def start_workflow_run(payload: WorkflowRunStartRequest) -> WorkflowRunSummary:
             work_class=(payload.selector_value
                         if payload.selector_kind == "work_class" else ""),
             run_input=dict(payload.input or {}), start_anyway=payload.start_anyway)
+        # THE PRE-CHECK: what will fail on this run, before it spends (workflow_precheck).
+        precheck = _precheck_or_409(
+            connection, payload.project_id, version_id=payload.workflow_version_id,
+            work_class=(payload.selector_value
+                        if payload.selector_kind == "work_class" else ""),
+            run_input=dict(payload.input or {}), actor=payload.actor, accept=payload.accept,
+            skip_steps=payload.skip_steps, reason=payload.precheck_reason,
+            start_anyway=payload.start_anyway)
         try:
             run = workflow_runtime.start_run(
                 connection,
@@ -27363,12 +27527,17 @@ def start_workflow_run(payload: WorkflowRunStartRequest) -> WorkflowRunSummary:
                 selector_value=payload.selector_value,
                 policy_snapshot=payload.policy_snapshot,
                 parent_run_id=payload.parent_run_id,
+                precheck_record=precheck,
             )
         except workflow_runtime.WorkflowError as error:
             raise_workflow_error(error)
+        from boss_engine.services.workflow_precheck import record_on_run
         from boss_engine.services.workflow_readiness import record_started_anyway
 
         if not run.get("duplicate"):
+            # The pre-check first: it is the run's first activity entry.
+            record_on_run(connection, payload.project_id, payload.actor, run.get("id") or "",
+                          precheck)
             record_started_anyway(connection, payload.project_id, payload.actor,
                                   run.get("id") or "", readiness)
         return WorkflowRunSummary(**run)

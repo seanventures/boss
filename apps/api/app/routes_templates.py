@@ -438,9 +438,13 @@ def build_templates_router() -> APIRouter:
                 if not envs:
                     raise TemplateError(422, "env_required", "name the env (or envs) this value is for")
                 if spec is None:
-                    # The app's own deploy setting (DEMO_PASSWORD, ALLOW_DEMO_SEED…): deploy
-                    # only, a plain value — secrets.deploy_value_spec says when it fits.
-                    spec = secrets_service.deploy_value_spec(name, envs, body.mode)
+                    # The app's own setting (DEMO_PASSWORD, ALLOW_DEMO_SEED…), a plain value: for
+                    # deploy, or for every env when the app's own files declare it (its
+                    # app-start checks recorded them) — secrets.deploy_value_spec says when.
+                    spec = secrets_service.deploy_value_spec(
+                        name, envs, body.mode,
+                        app_declares=name in secrets_service.app_declared_env(
+                            db, project_id=body.project_id, app_key=app_key))
                 # One request, one transaction, every env: a test key typed once is written once
                 # (it was two PUTs, build then preview, each its own write and step-up).
                 results = [secrets_service.put(
@@ -454,6 +458,28 @@ def build_templates_router() -> APIRouter:
                         **({"live_decision_id": decision} if decision else {})}
         except TemplateError as exc:
             return _refused(exc)
+
+    # The demo login passwords BOSS generated for this app (secrets.demo_login_values): shown to
+    # whoever may set the app's secrets, so a preview's reviewer and a deploy's owner can sign
+    # in as the demo users. A value a person set is never returned.
+    @router.get("/v1/apps/{app_key}/demo-logins")
+    @permit(P.APP_SECRET_WRITE, scope=Scope.project(query="project_id"))
+    def app_demo_logins(request: Request, app_key: str, project_id: str, env: str = "preview") -> Any:
+        ctx = _ctx(request)
+        if env not in secrets_service.ENVS:
+            return JSONResponse({"error": "bad_env", "message": "env is build, preview or deploy"},
+                                status_code=422)
+        try:
+            with begin() as db:
+                _project_in_org(db, project_id, ctx.principal.org_id)
+                app_key = _app(db, project_id, app_key)
+                values = secrets_service.demo_login_values(
+                    db, org_id=ctx.principal.org_id, project_id=project_id, app_key=app_key, env=env)
+        except TemplateError as exc:
+            return _refused(exc)
+        return JSONResponse({"app_key": app_key, "env": env,
+                             "demo_logins": [{"name": k, "value": v} for k, v in values.items()]},
+                            headers={"Cache-Control": "no-store"})
 
     @router.delete("/v1/apps/{app_key}/secrets/{name}")
     @permit(P.APP_SECRET_WRITE, scope=Scope.project(query="project_id"))

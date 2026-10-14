@@ -3,7 +3,7 @@
  * What the independent walk of Agents home (2026-10-04) found on Organization, Directory and
  * Activity, each pinned as a class:
  *   D4  a gate is the operator's: "You approved …", "Waiting on you: …", never "<captain> working
- *       Gate"; a run that ended badly is Stopped, never Stuck;
+ *       Gate"; a run that ended badly is Stopped, a step that errored Failed, never Stuck;
  *   D8  a team's "needs you" counts ITEMS waiting on you (one agent, three gates = 3), and says
  *       "1 needs you" / "2 need you";
  *   D13 arrow keys move in two dimensions (nextInGrid, which Organization › Teams uses);
@@ -122,7 +122,9 @@ describe("D4 a gate is the operator's in Activity", () => {
     const state = riverState("error", run);
     expect(state).not.toBe("stuck");
     expect(riverStatusWord(state, run)).toBe("Stopped");
-    expect(riverState("error", act1({ kind: "step", verb: "Stuck" }))).toBe("stuck");
+    // A step that errored FAILED; one left open when its run stopped STOPPED. Never stuck.
+    expect(riverState("error", act1({ kind: "step", verb: "Failed" }))).toBe("failed");
+    expect(riverState("stale", act1({ kind: "step", verb: "Stopped" }))).toBe("stopped");
   });
 });
 

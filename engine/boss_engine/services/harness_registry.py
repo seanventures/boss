@@ -25,11 +25,76 @@ is listed. A registry that presents an untested adapter as ready is worse than n
 """
 from __future__ import annotations
 
+import shutil
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
 #: Builder signature: (settings) -> CodeAgent
 HarnessBuilder = Callable[[object], object]
+
+#: How a runtime binary gets into the API/worker image (Dockerfile.community's runtime stage).
+RUNTIME_VIA = ("apt", "npm", "image", "operator")
+
+
+@dataclass(frozen=True)
+class RuntimeBinary:
+    """One executable an engine needs at RUNTIME, and what puts it there.
+
+    A HelpDesk build pinned to claude_agent_sdk failed every stage that ran a command with
+    "Sandbox dependencies not available: socat not installed": the Claude CLI's Linux sandbox
+    needs bubblewrap AND socat, the image had only the first, and nothing said so until a build
+    was hours in. So an engine DECLARES what it execs, `test_every_engine_binary_is_in_the_image`
+    holds Dockerfile.community to the declaration, and the pre-check (`sandbox.engine`) looks for
+    each one on PATH before a run starts.
+
+    `via`: "apt" (a Debian package in the runtime stage's apt-get install), "npm" (a global npm
+    package), "image" (copied into the stage by the Dockerfile), or "operator" (a bring-your-own
+    CLI the image does not ship; the operator installs it, and the pre-check still looks for it).
+    """
+
+    binary: str
+    package: str
+    via: str = "apt"
+    why: str = ""
+
+    def __post_init__(self) -> None:
+        if self.via not in RUNTIME_VIA:
+            raise ValueError(f"runtime binary {self.binary!r}: via must be one of {RUNTIME_VIA}")
+
+    def install_hint(self) -> str:
+        return {"apt": f"apt-get install {self.package}",
+                "npm": f"npm install -g {self.package}"}.get(self.via, self.package)
+
+
+#: What kind of harness failure a pattern names (harness_failures.KINDS).
+FAILURE_KINDS = ("sandbox_unavailable", "missing_runtime", "auth_refused", "credit_refused",
+                 "cli_crashed")
+
+
+@dataclass(frozen=True)
+class FailurePattern:
+    """One way an engine says IT could not run — not that the agent's work failed.
+
+    A HelpDesk build on claude_agent_sdk wrote code blind for fifteen minutes: every command the
+    agent ran came back "Sandbox is required but failed to initialize: … socat not installed",
+    and nothing in BOSS read that as the engine being broken. An engine DECLARES the words its
+    harness uses for that (`register_harness(failure_patterns=…)`), and harness_failures.classify
+    reads every session's tool results and CLI output against them, beside the generic ones.
+
+    `pattern`: a case-insensitive regex. `in_tool_results`: whether it may be believed inside a
+    failed tool result (the harness answering in the command's place); False means only the
+    engine's own output — its stderr, its session error. `fix`: what the operator does, which
+    may name `{engine}`."""
+
+    kind: str
+    pattern: str
+    fix: str
+    in_tool_results: bool = True
+
+    def __post_init__(self) -> None:
+        if self.kind not in FAILURE_KINDS:
+            raise ValueError(f"failure pattern {self.pattern!r}: kind must be one of "
+                             f"{FAILURE_KINDS}")
 
 
 @dataclass(frozen=True)
@@ -45,6 +110,12 @@ class HarnessSpec:
     #: Has a governed code task actually completed on this harness?
     verified: bool = False
     aliases: tuple[str, ...] = ()
+    #: The executables the engine runs at runtime (RuntimeBinary): its CLI, and what that CLI's
+    #: own sandbox needs. Enforced against the image by a test, checked on PATH by the pre-check.
+    runtime: tuple[RuntimeBinary, ...] = ()
+    #: How this engine's harness says it could not run (FailurePattern), beyond the generic
+    #: words harness_failures knows for every engine.
+    failure_patterns: tuple[FailurePattern, ...] = ()
 
 
 _REGISTRY: dict[str, HarnessSpec] = {}
@@ -69,6 +140,8 @@ def register_harness(
     verified: bool = False,
     aliases: tuple[str, ...] = (),
     replace: bool = False,
+    runtime: tuple[RuntimeBinary, ...] = (),
+    failure_patterns: tuple[FailurePattern, ...] = (),
 ) -> HarnessSpec:
     key = (name or "").strip().lower()
     if not key:
@@ -80,7 +153,8 @@ def register_harness(
         )
     spec = HarnessSpec(name=key, build=build, kind=kind, description=description,
                        requires=tuple(requires), verified=verified,
-                       aliases=tuple(a.lower() for a in aliases))
+                       aliases=tuple(a.lower() for a in aliases), runtime=tuple(runtime),
+                       failure_patterns=tuple(failure_patterns))
     _REGISTRY[key] = spec
     for alias in spec.aliases:
         _ALIASES[alias] = key
@@ -132,9 +206,38 @@ def available_harnesses() -> list[dict]:
             "requires": list(s.requires),
             "verified": s.verified,
             "aliases": list(s.aliases),
+            "runtime": [r.binary for r in s.runtime],
         }
         for s in sorted(_REGISTRY.values(), key=lambda x: x.name)
     ]
+
+
+def runtime_requirements(name: Optional[str]) -> tuple[RuntimeBinary, ...]:
+    """What engine `name` execs at runtime, as it declared. An unknown engine declares ()."""
+    try:
+        return get_harness(name).runtime
+    except UnknownHarness:
+        return ()
+
+
+def failure_patterns(name: Optional[str]) -> tuple[FailurePattern, ...]:
+    """The words engine `name` declared for "my harness could not run". Unknown engine: ()."""
+    try:
+        return get_harness(name).failure_patterns
+    except UnknownHarness:
+        return ()
+
+
+def all_runtime_requirements() -> dict[str, tuple[RuntimeBinary, ...]]:
+    """Every registered engine's declared runtime binaries, by engine name."""
+    _ensure_builtins()
+    return {name: spec.runtime for name, spec in sorted(_REGISTRY.items())}
+
+
+def missing_runtime(name: Optional[str], which: Callable[[str], Optional[str]] = shutil.which
+                    ) -> list[RuntimeBinary]:
+    """The declared binaries of engine `name` that are not on this process's PATH."""
+    return [r for r in runtime_requirements(name) if not which(r.binary)]
 
 
 def clear_registry_for_tests() -> None:

@@ -40,9 +40,48 @@ import tomllib
 from typing import Optional
 
 from . import owned_process
+from .harness_registry import FailurePattern, RuntimeBinary
 from .workspace_perms import tidies_workspace
 
 _log = logging.getLogger(__name__)
+
+# ── What the shipped CLIs exec at runtime (harness_registry.RuntimeBinary) ────────────────────
+
+#: Node, copied into the runtime stage from the official image: a CLI whose npm `bin` is a
+#: script (codex.js) runs on it.
+NODE_RUNTIME = RuntimeBinary("node", "/usr/local/bin/node", "image",
+                             "a script-based npm CLI runs on Node")
+#: The `claude` CLI. Its npm package installs the native binary (bin/claude.exe, from a
+#: per-platform optional dependency), which embeds ripgrep and needs no Node.
+CLAUDE_CLI_RUNTIME = (
+    RuntimeBinary("claude", "@anthropic-ai/claude-code", "npm", "the Claude Code CLI"),
+)
+#: THE CLAUDE CLI'S LINUX SANDBOX. With CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 (agent_sdk_engine) the
+#: CLI refuses to run a command without it, and it checks exactly these two at start-up:
+#: "Sandbox dependencies not available: bubblewrap (bwrap) not installed / socat not installed".
+CLAUDE_SANDBOX_RUNTIME = (
+    RuntimeBinary("bwrap", "bubblewrap", "apt", "the Claude CLI's Linux sandbox"),
+    RuntimeBinary("socat", "socat", "apt", "the Claude CLI's sandbox network proxy"),
+)
+#: How the Claude CLI says its sandbox did not start (harness_failures). It answers EVERY Bash
+#: call with this in place of the command's output, so the agent works blind until it gives up:
+#: crun_f103065e carried it on 19 of 206 turns over fifteen minutes of design, implement and
+#: repair. The missing binary itself ("… socat not installed") is read generically.
+CLAUDE_FAILURE_PATTERNS = (
+    FailurePattern("sandbox_unavailable",
+                   r"sandbox is required but failed to initiali[sz]e",
+                   "install what the Claude CLI's sandbox needs (bubblewrap and socat) on the "
+                   "BOSS host or image, then retry"),
+)
+#: How the Codex CLI says its Linux sandbox (Landlock + seccomp) could not be applied.
+CODEX_FAILURE_PATTERNS = (
+    FailurePattern("sandbox_unavailable",
+                   r"codex-linux-sandbox\b.{0,80}(?:not found|failed|error)"
+                   r"|landlock\w*.{0,60}(?:not supported|not enabled|unavailable|failed)"
+                   r"|sandbox\((?:landlockrestrict|seccompinstall|seccompbackend)\)",
+                   "run Codex on a kernel with Landlock and seccomp enabled (or give it a host "
+                   "that has them), then retry"),
+)
 
 #: Scope under which BOSS's own API stores a subscription credential. One constant so the
 #: endpoint that writes it and the harness that reads it cannot disagree about the key.
@@ -247,6 +286,12 @@ class CliHarnessSpec:
     #: which the harness registry provides and all of which an operator needs before they can
     #: choose the harness at all.
     registers_harness: bool = True
+    #: What the CLI needs on PATH at runtime (harness_registry.RuntimeBinary), registered with
+    #: the harness. A CLI the image ships says how ("npm"); one it does not says "operator".
+    runtime: tuple = ()
+    #: How this CLI says it could not run (harness_registry.FailurePattern), registered with
+    #: the harness; harness_failures reads its output against them.
+    failure_patterns: tuple = ()
 
     def supports_read_only(self) -> bool:
         return bool(self.read_only_args)
@@ -316,6 +361,8 @@ BUILTIN_CLI_HARNESSES: dict[str, CliHarnessSpec] = {
         docs_url="https://docs.claude.com/en/docs/claude-code/setup",
         entitlement_source_id="anthropic_claude_code",
         entitlement_provider="anthropic",
+        runtime=CLAUDE_CLI_RUNTIME,
+        failure_patterns=CLAUDE_FAILURE_PATTERNS,
     ),
     # VERIFIED AGAINST codex-cli 0.154.0, not taken from documentation. `codex exec` is the
     # non-interactive mode; `--sandbox` is a real flag with a real read-only value, which is
@@ -375,6 +422,8 @@ BUILTIN_CLI_HARNESSES: dict[str, CliHarnessSpec] = {
         docs_url="https://developers.openai.com/codex/cli",
         entitlement_source_id="openai_codex_chatgpt",
         entitlement_provider="openai",
+        runtime=(RuntimeBinary("codex", "@openai/codex", "npm", "the Codex CLI"), NODE_RUNTIME),
+        failure_patterns=CODEX_FAILURE_PATTERNS,
     ),
     "grok": CliHarnessSpec(
         name="grok",
@@ -414,6 +463,7 @@ BUILTIN_CLI_HARNESSES: dict[str, CliHarnessSpec] = {
         docs_url="https://docs.x.ai/build/cli/headless-scripting",
         entitlement_source_id="xai_grok_build",
         entitlement_provider="xai",
+        runtime=(RuntimeBinary("grok", "@xai-official/grok", "npm", "the Grok Build CLI"),),
     ),
     "cursor": CliHarnessSpec(
         name="cursor",
@@ -436,6 +486,8 @@ BUILTIN_CLI_HARNESSES: dict[str, CliHarnessSpec] = {
         docs_url="https://docs.cursor.com/en/cli/overview",
         entitlement_source_id="cursor_subscription",
         entitlement_provider="cursor",
+        runtime=(RuntimeBinary("cursor-agent", "curl https://cursor.com/install -fsS | bash",
+                               "operator", "the Cursor CLI (bring your own)"),),
     ),
     "aider": CliHarnessSpec(
         name="aider",
@@ -455,6 +507,8 @@ BUILTIN_CLI_HARNESSES: dict[str, CliHarnessSpec] = {
         signin_hint="set OPENAI_API_KEY or ANTHROPIC_API_KEY in the environment",
         install_hint="python -m pip install aider-install && aider-install",
         docs_url="https://aider.chat/docs/install.html",
+        runtime=(RuntimeBinary("aider", "python -m pip install aider-install && aider-install",
+                               "operator", "Aider (bring your own)"),),
     ),
 }
 
@@ -562,7 +616,8 @@ def _lookup_once(settings, name: str) -> tuple[Optional[str], list[tuple[str, bo
     return None, trouble
 
 
-def stored_credential(settings, name: str, *, strict: bool = False) -> Optional[str]:
+def stored_credential(settings, name: str, *, strict: bool = False,
+                      include_env: bool = True) -> Optional[str]:
     """A CLI credential: the environment first, then this install's secret store.
 
     Module-level and shared, because two different things shell out to these CLIs. The coding
@@ -587,7 +642,7 @@ def stored_credential(settings, name: str, *, strict: bool = False) -> Optional[
     `strict` a store that still does not answer raises `CredentialStoreUnavailable` instead of
     pretending nothing is stored. Without `strict` the answer stays None, logged as a warning.
     """
-    direct = os.environ.get(name)
+    direct = os.environ.get(name) if include_env else None
     if direct and direct.strip():
         return direct.strip()
     trouble: list[tuple[str, bool]] = []
@@ -612,23 +667,15 @@ def stored_credential(settings, name: str, *, strict: bool = False) -> Optional[
 
 
 def claude_login_token(settings) -> str:
-    """THE ONE RESOLUTION of the login a `claude` child process runs on, or "" for none.
-
-    Three places spawned `claude` and each resolved the token with its own copy of the same
-    four lines (the chat adapter twice, the coding/research agent once). One function, so a
-    lookup the store did not answer is never handed to the CLI as "no login" by any of them:
-    it raises `CredentialStoreUnavailable`, which every surface explains as a wait.
-
-    Strict only when nothing else could log the CLI in: an install that runs the CLI on an
-    ANTHROPIC_API_KEY keeps working while its secret store is down.
+    """The subscription login a `claude` child runs on, or "" when it runs on an API key or on
+    nothing. A view of THE ONE RESOLUTION (claude_credential.resolve_claude_credential), kept
+    for callers that only ask "is there a login"; a store that did not answer still raises
+    `CredentialStoreUnavailable` rather than read as "no login".
     """
-    # What the lane binder resolved, then what an operator exported, then the store.
-    token = (str(getattr(settings, "claude_code_oauth_token", "") or "").strip()
-             or (os.environ.get("CLAUDE_CODE_OAUTH_TOKEN") or "").strip())
-    if token:
-        return token
-    strict = not (os.environ.get("ANTHROPIC_API_KEY") or "").strip()
-    return stored_credential(settings, "CLAUDE_CODE_OAUTH_TOKEN", strict=strict) or ""
+    from .claude_credential import KIND_SUBSCRIPTION, resolve_claude_credential
+
+    cred = resolve_claude_credential(settings)
+    return cred.value if cred.kind == KIND_SUBSCRIPTION else ""
 
 
 def _uses_env_route(spec: CliHarnessSpec) -> bool:
@@ -1144,6 +1191,15 @@ class GenericCliCodeAgent:
         # THE VARIABLE IS THE LOGIN, so it has to be here on every run. `env_passthrough`
         # copies it when the operator set it in this process's environment; this also covers
         # the credential BOSS itself stored, which is not in the environment at all.
+        if self.spec.name == "claude_code":
+            # Claude's login OR the console's Anthropic API key: one resolution for every
+            # `claude` BOSS starts (claude_credential), never a second lookup order here.
+            from .claude_credential import resolve_claude_credential
+
+            try:
+                return resolve_claude_credential(self.settings).apply(env)
+            except CredentialStoreUnavailable:
+                return env     # as before: what the environment holds, logged by the lookup
         if _uses_env_route(self.spec) and not env.get(self.spec.token_env):
             token = self._resolve_secret(self.spec.token_env)
             if token:
@@ -1386,9 +1442,12 @@ class GenericCliCodeAgent:
     def run_role(self, prompt: str, cwd: Path, *, read_only: bool = False,
                  model: Optional[str] = None, resume_session_id: Optional[str] = None,
                  **_ignored) -> dict:
+        from . import harness_failures
         from .llm_telemetry import record_llm_call
         from .scheduling import low_priority
 
+        # A run whose engine already could not run starts no new session (harness_failures).
+        harness_failures.raise_if_tripped()
         if read_only and not self.spec.supports_read_only():
             # "The reviewer cannot edit" is an invariant of the governed pipeline. A CLI with
             # no read-only mode cannot hold it, so it is refused for the step rather than
@@ -1497,6 +1556,16 @@ class GenericCliCodeAgent:
             cost_usd_micros=0, latency_ms=ms, turns=1, ok=ok,
             error=None if ok else (proc.stderr or "")[:400],
         )
+        # THE CLI COULD NOT RUN, IN ITS OWN WORDS (harness_failures: its sandbox, a runtime
+        # binary; on a failed exit also its login, its account, a crash). Not the agent's work:
+        # the stage stops with the harness verdict instead of handing on what it wrote blind.
+        stream = f"{proc.stderr or ''}\n{proc.stdout or ''}"
+        verdict = harness_failures.classify(stream, engine=self.engine, where="stream")
+        if verdict is None and not ok:
+            verdict = harness_failures.classify(f"{summary}\n{proc.stderr or ''}",
+                                                engine=self.engine, where="engine")
+        if verdict is not None:
+            raise harness_failures.trip(verdict)
         if not ok:
             _log.warning("%s exited %s: %s", self.spec.name, proc.returncode,
                          (proc.stderr or "")[:300])

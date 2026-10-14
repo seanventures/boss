@@ -14,6 +14,7 @@
  * word, `k of n`, each station's word, each output's word. Elapsed ticks here from `started_at`;
  * there is no percent and no ETA anywhere.
  */
+import { AVATAR_STATES } from "../../lib/avatar-kit/states";
 import { logHref } from "../../lib/log-url";
 import { DotsThree, SpinnerGap } from "@phosphor-icons/react";
 import React, { useCallback, useEffect, useId, useRef, useState } from "react";
@@ -46,7 +47,7 @@ import { ShareRunSheet } from "../improve/share-run";
 import { ActPopover, StationFaceView, areaHref, money, secondsWord, spanOf } from "./cockpit-util";
 import { LogsDrawer, type LogTab } from "./logs-drawer";
 import { Outputs, defaultOpen, type OutputKey } from "./outputs";
-import { StationLine } from "./station-line";
+import { StationLine, bayWord } from "./station-line";
 import { NowBand } from "./now-band";
 import { useToolLog } from "./tool-log";
 import { Story, bayLabel } from "./story";
@@ -66,7 +67,7 @@ export type CockpitProps = {
   onOpenBuild: (runId: string) => void;
 };
 
-const AGENT_STATES = new Set(["idle", "thinking", "speaking", "working", "needs_you", "done", "stuck", "paused", "retired"]);
+const AGENT_STATES = new Set<string>(AVATAR_STATES);
 const quietish = (s: string) => s === "quiet" || s === "budget_wait" || s === "blocked";
 
 function originHref(kind: string, id: string): string {
@@ -502,7 +503,8 @@ function CockpitView({ c, projectId, runId, actor, onClose, onOpenBuild, refresh
             <button type="button" className="fx-vstation-btn" onClick={() => setFilter((f) => (f === st.key ? null : st.key))}>
               <span className="fx-vstation-label">{st.label}</span>
               <StationFaceView station={st} size={24} still={still} />
-              <span className="fx-vstation-word">{[st.word, spanOf(st.startedAt, st.endedAt)].filter(Boolean).join(" · ")}</span>
+              {/* The same word, clock rule and reason as the header line (bayWord). */}
+              <span className="fx-vstation-word" title={bayWord(st, now).tip}>{bayWord(st, now).text}</span>
             </button>
           </li>
         ))}

@@ -519,7 +519,7 @@ export function meetingFromUrl(search: string, hash: string, meetings: Array<Pic
  */
 export function composerHref(search: string, o: { title?: string; brief: string }): string {
   return consoleHref(search, {
-    area: "delivery_workflows", tab: "runs", compose: "new", new: "1",
+    area: "delivery_workflows", tab: "new", compose: "new", new: "1",
     title: o.title?.trim() || undefined, brief: o.brief.trim().slice(0, 4000),
   });
 }

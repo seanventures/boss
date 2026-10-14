@@ -34,6 +34,7 @@ from .verification_target import run_until_failure
 from .repo_files import MAX_SCAN_BYTES, RepoFileRefused, RepoFiles
 from .agent_turns import StreamParser, capture_enabled, parse_stream
 from .llm_telemetry import record_agent_turns, record_llm_call
+from . import harness_failures
 
 
 _log = logging.getLogger(__name__)
@@ -328,11 +329,17 @@ class LivePulse:
                 "content": f"{phase.capitalize()}… {took} so far"}
 
 
-def _drain(child, *, timeout: Optional[float], on_line=None) -> tuple[str, str]:
+def _drain(child, *, timeout: Optional[float], on_line=None,
+           on_err_line=None) -> tuple[str, str]:
     """Read a child's stdout/stderr as they arrive, returning the full text of each.
 
     Same contract as ``communicate(timeout=...)`` — including raising ``TimeoutExpired`` — with
-    one addition: every stdout line is handed to ``on_line`` the moment it is read.
+    one addition: every stdout line is handed to ``on_line`` (every stderr line to
+    ``on_err_line``) the moment it is read.
+
+    A consumer that raises HarnessFailure STOPS the child: the engine said it cannot run (its
+    sandbox did not start — harness_failures), so the session is ended at that line and the
+    failure is raised here, instead of the agent working on blind until it gives up.
 
     BOTH pipes are drained concurrently. Reading one to completion while the other fills is the
     classic subprocess deadlock: the child blocks writing to a full stderr buffer, we block
@@ -345,8 +352,10 @@ def _drain(child, *, timeout: Optional[float], on_line=None) -> tuple[str, str]:
     #: When the child last said anything. A stalled agent is ALIVE and SILENT, which the
     #: overall timeout cannot distinguish from slow work — see the wait loop below.
     last_output_at = [time.monotonic()]
+    #: The harness failure a consumer saw, if any (the child is ended at once).
+    stopped: list[BaseException] = []
 
-    def _pump(stream, sink, live: bool) -> None:
+    def _pump(stream, sink, consumer) -> None:
         try:
             for line in iter(stream.readline, ""):
                 last_output_at[0] = time.monotonic()
@@ -355,9 +364,15 @@ def _drain(child, *, timeout: Optional[float], on_line=None) -> tuple[str, str]:
                 # stored stdout a hundredfold and change nothing the final parse reads.
                 if not is_partial_line(line):
                     sink.append(line)
-                if live and on_line is not None:
+                if consumer is not None and not stopped:
                     try:
-                        on_line(line)
+                        consumer(line)
+                    except harness_failures.HarnessFailure as failure:
+                        stopped.append(failure)
+                        try:
+                            child.kill()   # the whole owned tree; the wait below returns
+                        except Exception:  # noqa: BLE001 — already gone
+                            pass
                     except Exception:  # noqa: BLE001 — a consumer must never kill the build
                         pass
         except Exception:  # noqa: BLE001 — a broken pipe ends this reader, nothing more
@@ -381,10 +396,10 @@ def _drain(child, *, timeout: Optional[float], on_line=None) -> tuple[str, str]:
     # context exists.
     ctx = contextvars.copy_context()
     threads = [
-        threading.Thread(target=ctx.run, args=(_pump, child.stdout, out_lines, True),
+        threading.Thread(target=ctx.run, args=(_pump, child.stdout, out_lines, on_line),
                          name="claude-stdout", daemon=True),
         threading.Thread(target=contextvars.copy_context().run,
-                         args=(_pump, child.stderr, err_chunks, False),
+                         args=(_pump, child.stderr, err_chunks, on_err_line),
                          name="claude-stderr", daemon=True),
     ]
     for t in threads:
@@ -439,6 +454,8 @@ def _drain(child, *, timeout: Optional[float], on_line=None) -> tuple[str, str]:
     # anyway — a wedged reader must not become a new way for a build to hang forever.
     for t in threads:
         t.join(timeout=30)
+    if stopped:
+        raise stopped[0]
     return "".join(out_lines), "".join(err_chunks)
 
 
@@ -689,6 +706,12 @@ CLEAN_INSTALL_FACT = (
     "versions that agree (e.g. eslint 9 needs eslint-plugin-react-hooks >=5).")
 
 
+#: Said when the sandbox has no C/C++ toolchain (read from this process, like every fact).
+NO_COMPILER_FACT = (
+    "- The build sandbox has no C/C++ compiler: avoid packages with native builds "
+    "(better-sqlite3, bcrypt, sharp…); use pure-JS alternatives (pg, node:sqlite, bcryptjs).")
+
+
 def sandbox_facts() -> str:
     """WHAT THE BUILD SANDBOX HAS, read from this process's own environment (the agent runs
     here), said up front. A HelpDesk build spent steps discovering each of these: curl missing
@@ -716,7 +739,14 @@ def sandbox_facts() -> str:
     arch = {"aarch64": "arm64", "x86_64": "x64"}.get(platform.machine(), platform.machine())
     lines.append(f"- {platform.system().lower()}-{arch}: a native npm module with no prebuilt binary for it fails to "
                  "build here (argon2 does). Use pure-JS packages: bcryptjs for password hashing.")
+    if not any(_shutil.which(tool) for tool in ("make", "cc", "gcc", "g++")):
+        # onboarding_path_builder's agent (crun_decc93dbb0154e768871) picked better-sqlite3,
+        # whose install runs node-gyp, which needs make: the sandbox has none.
+        lines.append(NO_COMPILER_FACT)
     lines.append(CLEAN_INSTALL_FACT)
+    from ..templates.run_env import OPTIONAL_SETTINGS_RULE
+
+    lines.append("- " + OPTIONAL_SETTINGS_RULE)
     text = "\nSANDBOX (facts, no need to check them):\n" + "\n".join(lines) + "\n"
     _SANDBOX_FACTS["text"] = text
     return text
@@ -902,17 +932,16 @@ class ClaudeCodeAgent:
         happened to be started with.
         """
         env = agent_environment(os.environ, _shared_tool_caches())
-        # The lane binder runs only where a connection and project are in scope; a sandboxed
-        # agent process has neither, so the store is asked directly — through the one
-        # resolution every `claude` child uses (cli_harness.claude_login_token), which raises
-        # rather than start the CLI with no login when the store did not answer.
-        from .cli_harness import claude_login_token
-
-        token = claude_login_token(self.settings)
-        if token:
-            env["CLAUDE_CODE_OAUTH_TOKEN"] = token
-            # The wizard-connected subscription wins over an inherited API key.
-            env.pop("ANTHROPIC_API_KEY", None)
+        # The lane binder runs only where a connection and project are in scope and binds its
+        # answer onto settings; a sandboxed agent process has neither, so the store is asked
+        # directly — through the one resolution every `claude` child uses
+        # (claude_credential.resolve_claude_credential): the subscription login or the console's
+        # Anthropic API key, in the operator's order, exactly one of them in the child's env.
+        # It raises rather than start the CLI with no login when the store did not answer.
+        cred = self._resolve_credential()
+        cred.apply(env)
+        #: Who pays for this run's calls (included_spend.py), stamped on its usage.
+        self._billing = cred.billing
         # A BOUND ON SILENT THINKING. Left to decide for itself, the model thought for 7 and 12
         # minutes before its first action in a HelpDesk AI build (19 of the build's first 52
         # minutes were silence, with no tool call, no output and no error), and nobody watching
@@ -930,6 +959,13 @@ class ClaudeCodeAgent:
                 cap = min(cap, stage_cap)
             env["MAX_THINKING_TOKENS"] = str(cap)
         return env
+
+    def _resolve_credential(self):
+        """Which Anthropic credential this engine's child runs on (claude_credential). The
+        claude_agent_sdk engine overrides this: the API key only, never the login."""
+        from .claude_credential import resolve_claude_credential
+
+        return resolve_claude_credential(self.settings)
 
     def _build_prompt(self, spec: CodeTaskSpec, repo: RepoContext,
                       cwd: Optional[Path] = None) -> str:
@@ -998,6 +1034,8 @@ class ClaudeCodeAgent:
         max_turns: Optional[int] = None, seat: str = "agent",
         on_turn: Optional[Callable[[dict], None]] = None, parallel_agents: int = 0,
     ) -> dict:
+        # A run whose engine already could not run starts no new session (harness_failures).
+        harness_failures.raise_if_tripped()
         timeout = int(self.settings.code_agent_timeout_seconds or 900)
         # A full web build (in-container / local_subprocess) needs well beyond the legacy 900s that
         # the prod env still pins (BOSS_CODE_AGENT_TIMEOUT_SECONDS=900) — a big single-page site was
@@ -1168,6 +1206,10 @@ class ClaudeCodeAgent:
                             on_turn(turn)
                     except Exception:  # noqa: BLE001
                         pass
+                # THE HARNESS ANSWERING IN THE COMMAND'S PLACE (a sandbox that did not start)
+                # stops the session here — raised through _drain, which ends the child.
+                for turn in produced:
+                    harness_failures.check_turn(turn, engine=self.engine)
 
             return _on_line, parser, written
 
@@ -1254,7 +1296,9 @@ class ClaudeCodeAgent:
                     # turn happens — and then discarding the only property that makes it a
                     # stream. "What is it doing right now" had no answer for the operator, and
                     # none for BOSS either.
-                    out, err = _drain(child, timeout=timeout, on_line=on_line)
+                    out, err = _drain(child, timeout=timeout, on_line=on_line,
+                                      on_err_line=lambda line: harness_failures.check_stream(
+                                          line, engine=self.engine))
                 except subprocess.TimeoutExpired:
                     # _drain has killed and reaped it; its readers own (and closed) the pipes.
                     _end_child(child, reap_seconds=2.0)
@@ -1263,9 +1307,10 @@ class ClaudeCodeAgent:
                     release_seat(child.pid)
                 proc = subprocess.CompletedProcess(cmd, child.returncode, out, err)
             except FileNotFoundError as exc:
-                raise RuntimeError(
-                    "claude CLI not found. Install Claude Code and ensure `claude` is on PATH."
-                ) from exc
+                missing = ("claude CLI not found. Install Claude Code and ensure `claude` is on "
+                           "PATH.")
+                harness_failures.note_engine_error(missing, engine=self.engine)
+                raise RuntimeError(missing) from exc
             except subprocess.TimeoutExpired as exc:
                 raise RuntimeError(f"claude code agent timed out after {timeout}s") from exc
             if proc.returncode == 0:
@@ -1281,6 +1326,8 @@ class ClaudeCodeAgent:
                     raise RuntimeError(
                         f"claude code agent returned non-JSON: {proc.stdout[:300]}"
                     )
+                if isinstance(parsed, dict):
+                    parsed["_billing"] = getattr(self, "_billing", "")
                 return parsed
             # Non-zero exit: the CLI still prints its result JSON on stdout; the
             # human-readable reason lives in `result` (e.g. "You've hit your monthly
@@ -1300,6 +1347,7 @@ class ClaudeCodeAgent:
                     # Its turns were written live too: the batch fallback re-wrote all 321 of a
                     # HelpDesk session's turns at its turn cap (crun_566f8767, 05:41).
                     _mark_live(data, live_written)
+                    data["_billing"] = getattr(self, "_billing", "")
                     return data
                 reason = str(data.get("result") or data.get("error") or "").strip()
                 subtype = str(data.get("subtype") or data.get("stop_reason") or "").strip()
@@ -1337,6 +1385,10 @@ class ClaudeCodeAgent:
             if transient and attempt < 2:
                 time.sleep(5 * (attempt + 1))
                 continue
+            # The engine's own words, read before they are raised: a harness failure (a refused
+            # login, an account with no credit, a crash) ends the run with its verdict.
+            harness_failures.note_engine_error(
+                f"{last_error}\n{(proc.stderr or '')[-2000:]}", engine=self.engine)
             raise RuntimeError(last_error)
         raise RuntimeError(last_error or "claude code agent failed")
 
@@ -1366,6 +1418,8 @@ class ClaudeCodeAgent:
         }
         if isinstance(data.get("_rate_limit"), dict):
             usage["rate_limit"] = data["_rate_limit"]
+        if data.get("_billing"):
+            usage["billing"] = data["_billing"]
         return usage, cost_micros
 
     @tidies_workspace
@@ -2092,14 +2146,19 @@ def _bind_lane_credentials(
     if lane == "echo":
         return settings
     if lane == "claude_code":
-        token = resolve_project_credential(
-            connection,
-            settings,
-            project_id=project_id,
-            provider=provider_of(lane),
-            env_fallback_attr="claude_code_oauth_token",
-        )
-        return settings.model_copy(update={"claude_code_oauth_token": token})
+        # The subscription login or the console's Anthropic API key, in the operator's order
+        # (claude_credential). NOT `resolve_project_credential(provider="anthropic")`: the login
+        # and a stored API key are both provider "anthropic", and the newest of them would be
+        # handed to the CLI as its OAuth token.
+        from .claude_credential import bind_claude_credential
+
+        return bind_claude_credential(settings, connection=connection, project_id=project_id)
+    if lane == "claude_agent_sdk":
+        # The Anthropic API key ONLY (never the subscription login): Agent SDK usage is metered
+        # on the operator's API account (agent_sdk_engine).
+        from .claude_credential import bind_anthropic_api_key
+
+        return bind_anthropic_api_key(settings, connection=connection, project_id=project_id)
     if lane == "azure":
         key = resolve_project_credential(
             connection,
@@ -2275,13 +2334,30 @@ def _register_builtin_harnesses() -> None:
     `verified` is reserved for harnesses a governed code task has actually completed on.
     Everything registered here has; new adapters start at False and say so.
     """
+    from .cli_harness import CLAUDE_CLI_RUNTIME, CLAUDE_FAILURE_PATTERNS, CLAUDE_SANDBOX_RUNTIME
     from .harness_registry import register_harness
 
+    # `runtime`: what each engine execs (harness_registry.RuntimeBinary) — held to the image by
+    # test_every_engine_binary_is_in_the_image, looked for on PATH by the `sandbox.engine` check.
     register_harness(
         "claude_code", ClaudeCodeAgent, kind="cli", verified=True,
         requires=("CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY", "claude CLI on PATH"),
         description="Claude Code headless (`claude -p`) with its own file/bash tools, "
                     "scoped to the sandbox working tree.",
+        runtime=CLAUDE_CLI_RUNTIME, failure_patterns=CLAUDE_FAILURE_PATTERNS,
+    )
+    from .agent_sdk_engine import ENGINE as _SDK_ENGINE, SDK_PACKAGE, build_agent
+
+    # Unverified until a governed task completes on it: Auto never picks it, an operator does.
+    register_harness(
+        _SDK_ENGINE, build_agent, kind="sdk", verified=False,
+        requires=("an Anthropic API key (Repo and models -> Anthropic API, or ANTHROPIC_API_KEY)",
+                  f"the {SDK_PACKAGE} Python package"),
+        description="Claude Agent SDK on an Anthropic API key (metered Agent SDK usage): "
+                    "Claude Code's tools and sessions, scoped to the sandbox working tree.",
+        # The SDK runs its bundled CLI with CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1: the CLI's own
+        # sandbox is required, and it needs bubblewrap and socat on PATH.
+        runtime=CLAUDE_SANDBOX_RUNTIME, failure_patterns=CLAUDE_FAILURE_PATTERNS,
     )
     register_harness(
         "native", NativeCodeAgent, kind="native", verified=True, aliases=("openai",),
@@ -2315,7 +2391,8 @@ def _register_builtin_harnesses() -> None:
         register_harness(
             cli_name, _cli_builder(cli_name), kind="cli", verified=cli_spec.verified,
             requires=(f"{cli_spec.binary} on PATH", "signed in to that CLI"),
-            description=cli_spec.description,
+            description=cli_spec.description, runtime=tuple(cli_spec.runtime),
+            failure_patterns=tuple(cli_spec.failure_patterns or ()),
         )
     for lane, (key_field, url_field) in _PROVIDER_LANES.items():
         local = lane in ("ollama", "vllm")

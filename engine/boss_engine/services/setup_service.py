@@ -47,7 +47,7 @@ PROVIDERS: dict[str, dict[str, Any]] = {
         "label": "Anthropic",
         "base_url": "https://api.anthropic.com/v1",
         "api": "anthropic",
-        "example_model": "claude-sonnet-4-5",
+        "example_model": "claude-sonnet-5",
         "key_url": "https://console.anthropic.com/settings/keys",
         "kind": "api_key",
     },
@@ -226,6 +226,8 @@ def connected_engines(
                       for spec in load_specs(settings).values()
                       if spec.entitlement_source_id}
     by_entitlement.setdefault("anthropic_claude_code", "claude_code")
+    # The console's Anthropic API key runs the same `claude` CLI (claude_credential).
+    by_entitlement.setdefault("anthropic_api", "claude_code")
     # What the API-key route records, `setup-<provider>`, mapped to the lane that spends it.
     # openai and "anything OpenAI-compatible" are both the engine-owned native agent; a local
     # model connected in Repo and models is `setup-ollama` or `setup-vllm`.
@@ -251,6 +253,25 @@ def connected_engines(
              "ORDER BY updated_at DESC"),
         {"p": project_id},
     ).mappings().all()
+    # ONE ANTHROPIC CREDENTIAL IS ACTIVE (claude_credential): the claude_code lane is offered
+    # on the source its runs will actually use — the subscription, or the Anthropic API key
+    # when the operator put it first or disconnected the subscription — so the kind of money
+    # Auto and the reservations see is the kind that will be spent.
+    from .claude_credential import KIND_SUBSCRIPTION, describe
+
+    anthropic = [r for r in rows if (by_entitlement.get(r["source_id"] or "") == "claude_code"
+                                     or api_source_provider(r["source_id"] or "") == "anthropic")]
+    if anthropic:
+        on_key = describe(connection, settings, project_id)["active"] not in (
+            KIND_SUBSCRIPTION, "none")
+
+        def _later(r) -> bool:
+            sid = r["source_id"] or ""
+            if r not in anthropic:
+                return False
+            return (sid == "anthropic_claude_code") == on_key
+
+        rows = sorted(rows, key=_later)
     for row in rows:
         source_id = row["source_id"] or ""
         connected = row["connection_status"] == "connected"
@@ -312,7 +333,42 @@ def connected_engines(
     for engine, entry in environment_engines(settings).items():
         if engine in known and engine not in found:
             found[engine] = entry
+    _offer_agent_sdk(rows, settings, known, found)
     return found
+
+
+def _offer_agent_sdk(rows: list, settings: Settings, known: set,
+                     found: dict[str, dict[str, Any]]) -> None:
+    """THE CLAUDE AGENT SDK ENGINE runs on the Anthropic API key (agent_sdk_engine), so it is
+    offered wherever that key is held — stored in the console, or in the install's settings —
+    and the package is importable here. Always metered: it never runs on the subscription."""
+    from .agent_sdk_engine import ENGINE, sdk_available
+
+    if ENGINE not in known or ENGINE in found or not sdk_available():
+        return
+    for row in rows:
+        sid = row["source_id"] or ""
+        if not row["credential_secret_ref_id"] or not (
+                sid == "anthropic_api" or api_source_provider(sid) == "anthropic"):
+            continue
+        capacity = _json_object(row["observed_capacity"])
+        broken = last_check_broken(_json_object(row["connection_metadata"]), capacity)
+        from .provider_limits import is_available
+
+        found[ENGINE] = {
+            "engine": ENGINE, "why": "api key", "source_id": sid, "kind": "metered",
+            "working": not broken, "plan": {"cost_mode": row["cost_mode"] or "", "limits": {}},
+            "capacity": {"available": is_available(capacity),
+                         "exhausted": bool(capacity.get("exhausted")),
+                         "retry_at": capacity.get("retry_at"),
+                         "detail": capacity.get("detail") or "", "observed": capacity},
+            "saved_at": (row["updated_at"].isoformat() if hasattr(row["updated_at"], "isoformat")
+                         else str(row["updated_at"] or "")) or None}
+        return
+    if _set_deliberately(settings, "anthropic_api_key"):
+        found[ENGINE] = {"engine": ENGINE, "why": "this install's environment",
+                         "source_id": None, "saved_at": None, "kind": "env",
+                         "working": True, "env_attr": "anthropic_api_key"}
 
 
 def environment_engines(settings: Settings) -> dict[str, dict[str, Any]]:
@@ -619,6 +675,14 @@ def store_coding_agent_credential(
     from .model_failures import clear_login_state
 
     clear_login_state(connection, project_id, spec.entitlement_source_id)
+    if spec.entitlement_source_id:
+        # A login pasted after a Disconnect is a reconnect: `claude` runs use it again
+        # (claude_credential.subscription_disconnected reads 'revoked').
+        connection.execute(
+            text("UPDATE entitlement_sources SET connection_status = 'connected', "
+                 "updated_at = now() WHERE project_id = :p AND source_id = :s "
+                 "AND connection_status = 'revoked'"),
+            {"p": project_id, "s": spec.entitlement_source_id})
     return {"ok": True, "provider": provider, "key": key,
             "backend": stored["backend"], "ref_key": stored["ref_key"],
             "fingerprint": stored["fingerprint"], "raw_secret_stored": False,

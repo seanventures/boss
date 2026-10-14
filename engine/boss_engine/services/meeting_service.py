@@ -1012,9 +1012,14 @@ def convene_prd_meeting_core(
                 data_boundary=str(constraints.get("data_boundary") or "internal"),
             )
             task_id = task["task_id"]
+    # MARGINAL COST, NOT LIST PRICE: on subscription capacity a meeting costs $0 of money, and a
+    # $6 hold for two hours turned a $10 day red with two meetings (included_spend).
+    from .included_spend import routed_reservation_estimate
+
     reservation = budget.reserve(
         connection, project_id, "model",
-        settings.plan_budget_usd_micros * 4,
+        routed_reservation_estimate(connection, settings, project_id,
+                                    settings.plan_budget_usd_micros * 4),
         "Multi-agent PRD meeting.", 120,
     )
     reservation_id = (

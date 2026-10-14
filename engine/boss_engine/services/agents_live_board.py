@@ -452,8 +452,8 @@ def act_state(act: Mapping[str, Any]) -> str:
     if act.get("kind") == "approval":
         return "done"
     return {"active": "speaking" if act.get("kind") == "seat" else "working",
-            "awaiting_input": "needs_you", "complete": "done", "error": "stuck",
-            "stale": "stuck"}.get(status, "idle")
+            "awaiting_input": "needs_you", "complete": "done", "error": "failed",
+            "stale": "stopped"}.get(status, "idle")
 
 
 def _short(label: Any) -> str:
@@ -793,7 +793,8 @@ def _mission_verb(m: Mapping[str, Any], acts: list[dict[str, Any]], verbs: Mappi
     if state == "done":
         return "Finished"
     if state == "stopped":
-        return "Stuck"
+        # A run that stopped at a failed step FAILED (the row says `Failed · step N`).
+        return "Failed"
     if state == "blocked":
         return "Blocked"
     if state == "stalled":
@@ -895,7 +896,7 @@ def outcomes(connection: Any, project_id: str, read: Mapping[str, Any], *,
 def force(connection: Any, project_id: str, attention: list[AttentionItem]
           ) -> tuple[list[Team], list[BoardAgent]]:
     """Every non-retired agent in its team, with its state: presence (open work) first, then a
-    failed step it is attributed (Stuck), then its lifecycle (Paused), else Idle."""
+    failed step it is attributed (Failed), then its lifecycle (Paused), else Idle."""
     from . import agent_acts
     from .agent_identity import TEAMS, team_of
     from .agent_persona import persona_of
@@ -983,8 +984,9 @@ def _agent(key: str, name: str, callsign: Any, team: str, here: Optional[Mapping
     line = str((here or {}).get("line") or "")
     since = (here or {}).get("since")
     if state == "idle" and stuck is not None:
-        state = "stuck"
-        line = f"Stuck: {stuck.get('title') or ''}".rstrip(": ")
+        # A failed step attributed to this agent: it FAILED, it is not stuck.
+        state = "failed"
+        line = f"Failed: {stuck.get('title') or ''}".rstrip(": ")
         since = stuck.get("at")
     elif state == "idle" and lifecycle == "paused":
         state = "paused"

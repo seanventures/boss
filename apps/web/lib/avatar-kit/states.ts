@@ -9,12 +9,12 @@
 import type { ActKind, ActStatus, AvatarState, Lifecycle, Presence } from "../agent-world-types";
 
 export const AVATAR_STATES: readonly AvatarState[] =
-  ["idle", "thinking", "speaking", "working", "needs_you", "done", "stuck", "paused", "retired"];
+  ["idle", "thinking", "speaking", "working", "needs_you", "done", "stuck", "paused", "retired", "failed", "stopped"];
 
 /** The word for each state (copy guide §9). */
 export const STATE_WORDS: Record<AvatarState, string> = {
   idle: "Idle", thinking: "Thinking", speaking: "Speaking", working: "Working", needs_you: "Needs you",
-  done: "Done", stuck: "Stuck", paused: "Paused", retired: "Retired",
+  done: "Done", stuck: "Stuck", paused: "Paused", retired: "Retired", failed: "Failed", stopped: "Stopped",
 };
 
 /** States that loop. Everything else is still or plays once. Idle loops only on the Passport hero. */
@@ -30,7 +30,10 @@ export function stateFromAct(status: ActStatus | string, o: { kind?: ActKind | s
       if (o.kind === "chat" && !o.tokens) return "thinking";
       return "working";
     case "complete": return "done";
-    case "error": case "stale": return "stuck";
+    // An act that errored FAILED; one closed stale was left open when its run stopped. Neither
+    // is "stuck", which is live work that has gone quiet.
+    case "error": return "failed";
+    case "stale": return "stopped";
     default: return "idle"; // pending, skipped
   }
 }
@@ -48,7 +51,7 @@ export function stateFromRunPhase(phase: string | undefined): AvatarState {
     case "moving": return "working";
     case "needs_you": return "needs_you";
     case "done": return "done";
-    case "failed": return "stuck";
+    case "failed": return "failed";
     default: return "idle"; // future, skipped
   }
 }
@@ -59,13 +62,15 @@ export function stateFromStatus(status: string | null | undefined): AvatarState 
   if (/^(awaiting|waiting|needs|gated|pending_approval|blocked_on_human)/.test(s) || s === "at_gate") return "needs_you";
   if (/^(running|in_progress|active|started|building|reviewing|executing)$/.test(s)) return "working";
   if (/^(completed?|succeeded|success|done|passed|approved|merged)$/.test(s)) return "done";
-  if (/^(failed|failure|error|errored|stale|stuck|blocked|timed_out|rejected)$/.test(s)) return "stuck";
+  if (/^(failed|failure|error|errored|timed_out|rejected)$/.test(s)) return "failed";
+  if (/^(stale|stopped|cancelled|canceled)$/.test(s)) return "stopped";
+  if (/^(stuck|blocked)$/.test(s)) return "stuck";
   return "idle";
 }
 
 /** A dock / room turn: thinking while in flight, speaking while text arrives. */
 export function stateFromTurn(t: { inFlight: boolean; streaming: boolean; error?: boolean }): AvatarState {
-  if (t.error) return "stuck";
+  if (t.error) return "failed";
   if (t.streaming) return "speaking";
   return t.inFlight ? "thinking" : "idle";
 }

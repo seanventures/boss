@@ -52,6 +52,35 @@ KNOBS: dict[str, dict[str, Any]] = {
                 "shows gaps. Each one spends model budget. Off: it only proposes them.",
         "kind": "int", "min": 0, "max": 1,
     },
+    # THE MODEL PRE-CHECK at the start door (workflow_precheck_agent.py). OFF unless turned on:
+    # it is a model call, so it costs money and time on every start it runs at.
+    "workflow_precheck_agent": {
+        "attr": "workflow_precheck_agent",
+        "label": "Model pre-check at start",
+        "help": "When a workflow starts, an agent also reads the pre-check's evidence and "
+                "predicts failures the coded checks miss. Spends a little model budget per "
+                "start. 1 to run it, 0 to leave it to the CLI's --agent.",
+        "kind": "int", "min": 0, "max": 1,
+    },
+    "workflow_precheck_agent_max_cents": {
+        "attr": "workflow_precheck_agent_max_cents",
+        "label": "Model pre-check cost cap (cents)",
+        "help": "The most one model pre-check may spend; it stops when it reaches this.",
+        "kind": "int", "min": 1, "max": 500,
+    },
+    "workflow_precheck_agent_max_turns": {
+        "attr": "workflow_precheck_agent_max_turns",
+        "label": "Model pre-check turns",
+        "help": "The most model turns one model pre-check may take.",
+        "kind": "int", "min": 1, "max": 30,
+    },
+    "workflow_precheck_agent_max_wait_seconds": {
+        "attr": "workflow_precheck_agent_max_wait_seconds",
+        "label": "Model pre-check wait (seconds)",
+        "help": "How long, in all, one model pre-check waits for the per-minute budget to "
+                "free before it gives up. 0 never waits.",
+        "kind": "int", "min": 0, "max": 900,
+    },
     "code_review_inrun_max_rounds": {
         "attr": "code_review_inrun_max_rounds",
         "label": "Review rounds",
@@ -193,6 +222,17 @@ KNOBS: dict[str, dict[str, Any]] = {
                 "subscription; typesafe uses TypeSafe's Jev on your own key and asks Claude "
                 "again when Jev is unsure. Each call is budgeted and receipted.",
         "kind": "choice", "choices": ("claude", "typesafe"),
+    },
+    # WHICH ANTHROPIC CREDENTIAL PAYS (claude_credential, BOSSAPP-530). Builds, agents and
+    # meetings run `claude` on the subscription's login or on the Anthropic API key stored in
+    # Repo and models; disconnecting the subscription falls through to the key either way.
+    "anthropic_credential_order": {
+        "attr": "anthropic_credential_order",
+        "label": "Anthropic credential",
+        "help": "Which Anthropic credential runs Claude: the subscription first (the API key "
+                "when it is disconnected), or the API key first. The key is billed to your "
+                "Anthropic API account.",
+        "kind": "choice", "choices": ("subscription_first", "api_key_first"),
     },
     # A THROWAWAY DATABASE PER BUILD (build_services). The same opt-in a repo makes with
     # `services: [postgres]` in boss.verify.yaml, for a project whose repo does not declare it.

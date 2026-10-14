@@ -64,6 +64,7 @@ export function mentionHandle(seat: SeatInfo): string {
 export const STATE_WORD: Record<AvatarState, string> = {
   idle: "Idle", thinking: "Thinking", speaking: "Speaking", working: "Working",
   needs_you: "Needs you", done: "Done", stuck: "Stuck", paused: "Paused", retired: "Retired",
+  failed: "Failed", stopped: "Stopped",
 };
 const STATE_GLYPH: Partial<Record<AvatarState, string>> = {
   thinking: "…", speaking: "≋", working: "⚙", needs_you: "!", done: "✓", stuck: "!",
@@ -307,7 +308,7 @@ export function TurnItem({ turn, onStart, onDismiss, replyTo, live }: {
     <div className="ag-turn ag-turn-agent" data-testid="ag-turn-agent" data-role={turn.roleKey ?? ""}
          data-status={turn.status}>
       <ConverseFace roleKey={turn.roleKey ?? "boss"} size={24}
-                    state={live ? (text ? "speaking" : "thinking") : turn.status === "error" ? "stuck" : "idle"} />
+                    state={live ? (text ? "speaking" : "thinking") : turn.status === "error" ? "failed" : "idle"} />
       <div className="ag-turn-body">
         <div className="ag-turn-who">
           <strong>{who.name}</strong>

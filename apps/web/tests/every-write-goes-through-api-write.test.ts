@@ -272,7 +272,9 @@ describe("every server action carries its press", () => {
       const start = src.search(new RegExp(`function ${component}\\b`));
       expect(start, `${component} in ${file}`).toBeGreaterThan(-1);
       const body = src.slice(start, src.indexOf("\nexport function", start + 1));
-      expect(body, component).toMatch(/callAction\(action\)\(/);
+      // With or without the permission it names (ActionForm passes its own, so the one step-up
+      // replay in lib/call-action.ts serves it).
+      expect(body, component).toMatch(/callAction\(action(, [^()]*)?\)\(/);
       expect(body, `${component} must not also call the action directly`)
         .not.toMatch(/(?<![\w.(])action\(/);
     }

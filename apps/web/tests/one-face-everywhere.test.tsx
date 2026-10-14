@@ -76,7 +76,7 @@ describe("one agent, one face, on every surface", () => {
     expect(node(named)).toContain('data-state="idle"');
     expect(node(named, "run", "moving")).toContain('data-state="working"');
     expect(node(named, "run", "needs_you")).toContain('data-state="needs_you"');
-    expect(node(named, "run", "failed")).toContain('data-state="stuck"');
+    expect(node(named, "run", "failed")).toContain('data-state="failed"');
     expect(node(named, "run", "done")).toContain('data-state="done"');
   });
 

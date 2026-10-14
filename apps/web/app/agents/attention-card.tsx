@@ -106,7 +106,10 @@ type Busy = null | string;
 
 /** The cockpit of a build, as a console link (`?area=code_tasks&build=`). */
 export const buildPatch = (runId: string) => ({ area: "code_tasks", build: runId, run: null, view: null, role: null });
-const STUCK_KINDS = new Set(["failed_step", "gate_override", "budget_refused"]);
+/** Cards for work that stopped, and the face each wears: a failed step or failed checks FAILED,
+ *  a budget refusal STOPPED the build. None is "stuck" (live work gone quiet). */
+const STUCK_KINDS = new Map<string, "failed" | "stopped">([
+  ["failed_step", "failed"], ["gate_override", "failed"], ["budget_refused", "stopped"]]);
 
 /** Where a system-health option's "open" answer goes: a guide in a new tab, an area in place. */
 function openTarget(target: string) {
@@ -337,7 +340,7 @@ export function AttentionCard({ item, projectId, actor, density = "card", focusK
   const runHref = run?.id ? linkTo(runPatch(run.id), orgId) : "";
   const build = item.build;
   const buildHref = build ? linkTo(buildPatch(build.runId), orgId) : "";
-  const stuck = STUCK_KINDS.has(item.kind);
+  const stuck = STUCK_KINDS.get(item.kind) ?? null;
   const planHref = build?.planUrl && /^https?:/i.test(build.planUrl) ? build.planUrl : buildHref;
 
   return (
@@ -350,9 +353,9 @@ export function AttentionCard({ item, projectId, actor, density = "card", focusK
         <span className="ag-att-face" title={named} data-dim={dim ? "true" : undefined}>
           {who.roleKey
             ? <AgFace roleKey={who.roleKey} size={density === "row" ? 24 : 32}
-                      state={stuck ? "stuck" : "needs_you"} />
+                      state={stuck ?? "needs_you"} />
             : <RunFace roleKey={null} variant={who.variant} size={density === "row" ? 24 : 32}
-                       state={stuck ? "stuck" : "needs_you"} standalone />}
+                       state={stuck ?? "needs_you"} standalone />}
         </span>
         <span id={titleId} className="ag-att-title" title={item.title} data-user-text>{item.title}</span>
         {age ? <span className="ag-att-age" title={`Waiting since ${localTime(item.at)}`}>{age}</span> : null}

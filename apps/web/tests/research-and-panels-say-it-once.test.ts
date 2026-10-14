@@ -122,6 +122,8 @@ describe("Build it opens the New project composer with the brief written in", ()
     expect(q.get("area")).toBe("delivery_workflows");
     expect(q.get("compose")).toBe("new");
     expect(q.get("new")).toBe("1");
+    // The Workflows area's New project tab (not Runs, where the composer used to stack).
+    expect(q.get("tab")).toBe("new");
     expect(q.get("run")).toBeNull();
     expect(readComposerPrefill(href.slice(href.indexOf("?")))).toEqual({ title: "Lead triage inbox", directive: "Score it.\nWho it is for: agencies" });
     expect(readComposerPrefill("?area=delivery_workflows&new=1")).toBeNull();

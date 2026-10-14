@@ -19,6 +19,8 @@ Three rules shape the whole file:
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import json
 import logging
 from datetime import timedelta
@@ -35,7 +37,7 @@ from .core import emit_event, now_utc
 # string literal repeated wherever the question is asked.
 from .decisions import SYSTEM_ACTOR as DECISION_SYSTEM_ACTOR
 from .run_decisions import open_step_decision
-from . import security_review_steps, workflow_outcomes
+from . import security_review_steps, workflow_capabilities, workflow_outcomes
 from .workflow_capabilities import CAPABILITY_KEYS, get as get_capability
 
 log = logging.getLogger(__name__)
@@ -147,6 +149,10 @@ REJECTED_BY_APPROVER = "rejected_by_approver"
 #: because that stack deployment's own decision is the approval. Execution may ship there and
 #: nowhere else without an approval.
 STACK_GATE_TARGET = "stack_gate_target_id"
+#: The waiver's target when it is a declared app's FIRST deploy: the target is made by the step
+#: (stack_deploy._first_target), so the gate names no id — but execution must still ship
+#: through a stack deployment, never fall to the ungated per-app path.
+FIRST_STACK_TARGET = "first-stack-target"
 
 
 def _resolve_inputs(
@@ -325,13 +331,27 @@ def _run_context(connection: Connection, run_id: str) -> dict[str, Any]:
 
 #: Said to a build whose workflow deploys it. The app's own manifest is how BOSS deploys it
 #: without anybody filling a "manifest path" or a start command in by hand.
+#: The words that open DEPLOY_MANIFEST_BRIEF: a build whose brief holds them was asked for its
+#: own manifest (stack_deploy.undeclared_deploy_refusal).
+DEPLOY_BRIEF_MARKER = "THIS APP WILL BE DEPLOYED"
+
 DEPLOY_MANIFEST_BRIEF = (
-    "THIS APP WILL BE DEPLOYED by BOSS after review. If the repository has no boss.deploy.yaml "
-    "at its root, write one, so the app says how it runs instead of anyone filling it in:\n"
+    f"{DEPLOY_BRIEF_MARKER} by BOSS after review. Write a boss.deploy.yaml IN THE APP'S OWN "
+    "FOLDER — next to its boss.preview.command; the repository root only for an app that lives "
+    "at the root. A boss.deploy.yaml already at the repository root belongs to another app: "
+    "never edit it, and do not count it as this app's. It says how the app runs, so nobody fills "
+    "it in by hand:\n"
     "  version: 1\n  name: <the app's short name, lower-case-with-dashes>\n  kind: commands\n"
     "  install: [<the commands that install dependencies and start the app in the background on "
     "port $PORT>]\n  health: [{url: \"{target.public_url}\", expect: 200}]\n"
     "  open: {url: \"{target.public_url}\"}\n"
+    "Never set PORT in it: BOSS passes the target's. Health-check a route the app really serves. "
+    "IF THE APP USES POSTGRES, the manifest brings it: `resources: {db: {capability: "
+    "database.relational, engine: postgres}}` (BOSS provisions it and passes DATABASE_URL), or "
+    "kind: compose with a postgres service in its compose file. A deploy of a Postgres app whose "
+    "manifest declares no database is refused before anyone is asked to approve it. "
+    "A demo/seed password BOSS provides (DEMO_PASSWORD) is allowed in production: do not refuse "
+    "it; make demo seeding an explicit opt-in flag (e.g. ALLOW_DEMO_SEED) instead. "
     "Use compose (kind: compose, compose: {file: docker-compose.yml}) when the app already runs "
     "with docker compose. Keep it in the same pull request.")
 
@@ -344,8 +364,26 @@ def _tool_registry():
     return build_default_registry()
 
 
+#: True inside `_step_authority`: `_invoke_tool` refuses a step's tool call made outside it.
+_IN_STEP_AUTHORITY: "contextvars.ContextVar[bool]" = contextvars.ContextVar(
+    "boss_in_step_authority", default=False)
+
+
+@contextlib.contextmanager
 def _step_authority(ctx: Any, connection: Connection, project_id: str, context: Optional[dict[str, Any]],
                     step: Optional[dict[str, Any]], role_key: Optional[str], scope: Optional[frozenset[str]] = None):
+    """Enter the run's recorded authority for a step's work (`_run_authority`), and mark that
+    the work is under it: `_invoke_tool` refuses a step's tool call made anywhere else."""
+    with _run_authority(ctx, connection, project_id, context, step, role_key, scope) as decided:
+        marker = _IN_STEP_AUTHORITY.set(True)
+        try:
+            yield decided
+        finally:
+            _IN_STEP_AUTHORITY.reset(marker)
+
+
+def _run_authority(ctx: Any, connection: Connection, project_id: str, context: Optional[dict[str, Any]],
+                   step: Optional[dict[str, Any]], role_key: Optional[str], scope: Optional[frozenset[str]] = None):
     """In-process step work under the workflow run's RECORDED authority (IDENTITY.md §7.14), not
     under whoever called in to advance the run (the worker). With an agent Passport for the step,
     a delegated run token (`run_wf:<run>/step:<step>`: person ∩ ceilings ∩ grant ∩ task); with
@@ -396,6 +434,12 @@ def _invoke_tool(
         raise CapabilityExecutionError(
             "raw SQL is unavailable in project-scoped workflow steps"
         )
+    if not _IN_STEP_AUTHORITY.get():
+        # A step's tool call made bare runs as whoever advanced the run (the worker) and is
+        # refused under enforce. Every dispatch enters `_step_authority`; one that does not is
+        # a bug in BOSS, said once, not retried.
+        raise SettledCapabilityError(
+            f"'{tool_name}' was called outside this run's authority; BOSS refused to run it.")
     spec, refused = _authorize_step_tool(ctx, tool_name, project_id, args)
     if refused is not None:
         return refused
@@ -435,7 +479,9 @@ def _authorize_step_tool(
             try:
                 _identity_runs.authorize_tool(getattr(spec, "permission", None), project_id, db=_db)
             except _identity_runs.ToolRefused as refused:
-                raise CapabilityExecutionError(
+                # SETTLED: an identity refusal is the same on every retry; only a person's
+                # grant changes it.
+                raise SettledCapabilityError(
                     f"'{tool_name}' was refused for this agent: {refused.permission} ({refused.reason})"
                 ) from refused
     return spec, None
@@ -593,6 +639,27 @@ def _fill_optional_from_run_input(
     return filled
 
 
+def deploy_step_inputs(connection: Connection, spec_step: dict[str, Any],
+                       context: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
+    """A deploy step's inputs as it will run with them, resolved before it runs; None when they
+    cannot be told yet."""
+    binding = spec_step.get("binding") or {}
+    if str(binding.get("capability") or "") != "deploy" or context is None:
+        return None
+    point = connection.begin_nested()
+    try:
+        capability = get_capability("deploy")
+        scratch = dict(context)
+        inputs = _resolve_inputs(binding.get("inputs") or {}, scratch,
+                                 optional=frozenset(capability.optional_inputs or ()))
+        inputs = _fill_optional_from_run_input(capability, inputs, scratch)
+    except Exception:  # noqa: BLE001 — unresolvable now
+        point.rollback()
+        return None
+    point.commit()
+    return inputs
+
+
 def stack_target_for_step(
     connection: Connection,
     project_id: str,
@@ -659,6 +726,7 @@ def stack_deploy_for_step(
         or reached.get("stack_deployment_id") or "")
     deployment = None
     target_id = ""
+    target: Optional[dict[str, Any]] = None
     if deployment_id:
         point = connection.begin_nested()
         try:
@@ -690,8 +758,9 @@ def stack_deploy_for_step(
     return {
         "stack_deployment_id": (deployment or {}).get("id"),
         "target_id": target_id or None,
-        "target_name": (row or {}).get("app_name"),
-        "environment": (row or {}).get("environment"),
+        # A first deploy's target is named before it is made (stack_deploy._first_target).
+        "target_name": (row or {}).get("app_name") or (target or {}).get("app_name"),
+        "environment": (row or {}).get("environment") or (target or {}).get("environment"),
         "host": (row or {}).get("host_name"),
         "host_address": (row or {}).get("host_address"),
         "deployment": deployment,
@@ -889,18 +958,21 @@ def _observed_monitoring(
     # It REPORTS the gap, so the step stops claiming a setup it never did and names the one
     # action that closes it.
     dashboard: dict[str, Any] = {}
-    try:
-        from .observability_stack import DEFAULT_PORTS, dashboard_uid, provisioned_dashboards
-        host = _monitoring_host(connection, project_id)
-        if host:
-            base = f"http://{host}:{DEFAULT_PORTS['grafana']}"
+    from .observability_stack import DEFAULT_PORTS, provisioned_dashboards
+
+    host = _monitoring_host(connection, project_id)
+    have = None
+    if host:
+        base = f"http://{host}:{DEFAULT_PORTS['grafana']}"
+        try:
+            # ONLY the call to Grafana is allowed to fail quietly. The whole block sat in this
+            # try, so `dashboard_uid(w["app"])` — the key is `app_name` — raised KeyError on
+            # every run and was logged as "could not check dashboards": the check never ran.
             have = provisioned_dashboards(base)
-            if have is not None:
-                missing = sorted({w["app_name"] for w in watched
-                                  if dashboard_uid(w["app"]) not in have})
-                dashboard = {"grafana": base, "missing_dashboards": missing}
-    except Exception as error:  # noqa: BLE001 — an unreachable Grafana must not fail the step
-        log.warning("could not check dashboards for %s: %s", project_id, error)
+        except Exception as error:  # noqa: BLE001 — an unreachable Grafana must not fail the step
+            log.warning("could not check dashboards for %s: %s", project_id, error)
+        if have is not None:
+            dashboard = {"grafana": base, "missing_dashboards": missing_dashboards(watched, have)}
 
     missing = dashboard.get("missing_dashboards") or []
     return {
@@ -918,6 +990,13 @@ def _observed_monitoring(
                f"Infra and Models to create them." if missing else "")
         ),
     }
+
+
+def missing_dashboards(watched: list[dict[str, Any]], have: set[str]) -> list[str]:
+    """The watched apps Grafana has no dashboard for, by app name."""
+    from .observability_stack import dashboard_uid
+
+    return sorted({w["app_name"] for w in watched if dashboard_uid(w["app_name"]) not in have})
 
 
 def _monitoring_host(connection: Connection, project_id: str) -> str:
@@ -1436,7 +1515,7 @@ def _plrr_brief(connection: Connection, project_id: str, context: dict[str, Any]
 
 
 def _plrr_step(ctx, connection: Connection, project_id: str, actor: str,
-               context: dict[str, Any]) -> dict[str, Any]:
+               context: dict[str, Any], step: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     """Review readiness, and start the work that closes what is missing.
 
     Sits between preview and deploy on purpose. Preview answers "does it do the thing"; this
@@ -1466,7 +1545,9 @@ def _plrr_step(ctx, connection: Connection, project_id: str, actor: str,
         return {"capability": "plrr", "status": "not_applicable",
                 "note": "no build in this run, so there is nothing to review for readiness."}
 
-    started = _invoke_tool(ctx, "extend_code_task", project_id, actor, {
+    started = _start_on_the_branch(ctx, connection, project_id=project_id, actor=actor,
+                                   context=context, step=step, capability_key="plrr",
+                                   base_run=build_run, args={
         "run_id": build_run,
         "instructions": _plrr_brief(connection, project_id, context),
         "title": "Production launch readiness",
@@ -1516,7 +1597,8 @@ def _more_tests_brief(light: bool = False) -> str:
 
 def _more_tests_step(ctx, connection: Connection, project_id: str, actor: str,
                      context: dict[str, Any],
-                     inputs: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+                     inputs: Optional[dict[str, Any]] = None,
+                     step: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     """PASS 2 OF A BUILD: more tests on the same branch and PR, after the preview.
 
     Pass 1 ships a working app with a lean suite, so the user sees it early; this pass adds the
@@ -1538,12 +1620,165 @@ def _more_tests_step(ctx, connection: Connection, project_id: str, actor: str,
         return {"capability": "more_tests", "status": "not_applicable",
                 "note": "no build in this run, so there is nothing to add tests to."}
     light = str((inputs or {}).get("depth") or "") == LIGHT_PASS
-    started = _invoke_tool(ctx, "extend_code_task", project_id, actor, {
+    started = _start_on_the_branch(ctx, connection, project_id=project_id, actor=actor,
+                                   context=context, step=step, capability_key="more_tests",
+                                   base_run=build_run, args={
         "run_id": build_run, "instructions": _more_tests_brief(light),
         "title": "More tests (light)" if light else "More tests",
     })
     return {"capability": "more_tests", "tool": "extend_code_task", "base_run_id": build_run,
             **started}
+
+
+def _more_tests_started(ctx, connection: Connection, *, project_id: str, actor: str,
+                        context: dict[str, Any], step: dict[str, Any], capability: Any,
+                        inputs: dict[str, Any]) -> dict[str, Any]:
+    """More tests, started — or, when it cannot even start, completed with the failure said.
+
+    PASS 2 NEVER STOPS THE RUN, AT START EITHER. _ADVISORY_CAPABILITIES covered a pass that
+    failed while it ran (resume_awaited). One refused or broken at START failed its step, was
+    retried three times, and the `all` join before the done step (two_pass) stopped the whole
+    run on a pass that only adds tests (wfr_9575c86ab4a74defa0d2). A wait (a budget window, a
+    busy model) still waits: that is not a failure."""
+    base_now = _latest_code_run(connection, str(context.get("run_id") or ""))
+    # PASS 1'S DEPLOY SHIPS PASS 1. Pass 2 pushes beside the deploy (two_pass), and a deploy
+    # planned from `pull/N` after pass 2's first push would ship commits pass 1's review never
+    # saw. The head pass 1 left is read before pass 2 starts and kept on this step's output.
+    pinned = pass_one_head(connection, getattr(ctx, "settings", None), project_id,
+                           base_now) if base_now else None
+    try:
+        started = _more_tests_step(ctx, connection, project_id, actor, context, inputs, step)
+        if started.get("status") == "not_applicable":
+            return started
+        settled = _settle_started_work(capability, "more_tests", started)
+        why = str(settled.get("message") or settled.get("error") or "")
+        failed = str(settled.get("status") or "") == "failed"
+        base = str(settled.get("base_run_id") or "")
+    except CapabilityExecutionError as error:
+        if _as_wait(error) is not None:
+            raise
+        failed, why, base = True, str(error), ""
+    if not failed:
+        return {**settled, PASS_ONE_HEAD: pinned} if pinned else settled
+    base = base or _latest_code_run(connection, str(context.get("run_id") or ""))
+    return advisory_start_failure(why, base)
+
+
+PASS_ONE_HEAD = "pass_one_head_sha"
+
+
+def pass_one_head(connection: Connection, settings: Any, project_id: str, base_run: str, *,
+                  resolve: Any = None) -> Optional[str]:
+    """The pull request's head as pass 1 (`base_run`) left it, or None when it cannot be told
+    (no pull request, GitHub unreachable) — the deploy then plans the pull request's head."""
+    try:
+        row = connection.execute(
+            text("SELECT spec, pull_request_number FROM code_task_runs "
+                 "WHERE id = :i AND project_id = :p"),
+            {"i": base_run, "p": project_id}).mappings().first()
+        if not row or not row["pull_request_number"]:
+            return None
+        from .stack_deploy import build_repository, github_source_for, split_repository
+
+        repository = build_repository(row["spec"], str(getattr(settings, "target_github_owner", "")
+                                                       or ""))
+        if not repository:
+            return None
+        owner, repo = split_repository(repository)
+        ref = f"pull/{int(row['pull_request_number'])}"
+        return (resolve(owner, repo, ref) if resolve is not None else
+                github_source_for(connection, settings, project_id, owner, repo)
+                .resolve_commit(owner, repo, ref))
+    except Exception as error:  # noqa: BLE001 — unpinned: the deploy plans the PR's head
+        log.warning("could not read pass 1's head for %s: %s", base_run, error)
+        return None
+
+
+def pinned_pass_one_commit(connection: Connection, run_id: str) -> Optional[str]:
+    """The commit this run's first deploy ships: the head pass 1 left, read when this run's
+    More tests started — only while that pass 1 is still the newest (a later build or repair
+    makes the pin stale, and the pull request's head is right again)."""
+    if not run_id:
+        return None
+    row = connection.execute(
+        text("SELECT output->>:k AS sha, output->>'base_run_id' AS base FROM workflow_step_runs "
+             "WHERE workflow_run_id = :r AND COALESCE(output->>:k, '') <> '' "
+             "AND COALESCE(binding_snapshot->>'capability', "
+             "             binding_snapshot->'binding'->>'capability', '') = 'more_tests' "
+             "ORDER BY created_at DESC LIMIT 1"),
+        {"r": run_id, "k": PASS_ONE_HEAD}).mappings().first()
+    if not row:
+        return None
+    newest_pass_one = str(connection.execute(
+        text("SELECT output->>'code_task_run_id' FROM workflow_step_runs "
+             "WHERE workflow_run_id = :r AND status = 'succeeded' "
+             "AND COALESCE(binding_snapshot->>'capability', "
+             "             binding_snapshot->'binding'->>'capability', '') IN "
+             "    ('build', 'plrr', 'retry_build') "
+             "AND COALESCE(output->>'code_task_run_id', '') <> '' "
+             "ORDER BY completed_at DESC NULLS LAST, updated_at DESC LIMIT 1"),
+        {"r": run_id}).scalar() or "")
+    return str(row["sha"]) if row["base"] and row["base"] == newest_pass_one else None
+
+
+def advisory_start_failure(why: str, base: str) -> dict[str, Any]:
+    """The output of a More tests pass that could not start: completed, saying so."""
+    return {"capability": "more_tests", "tool": "extend_code_task", "status": "not_applicable",
+            "advisory": True, "advisory_failed": True, "base_run_id": base,
+            "code_task_run_id": base or None,
+            "note": (f"the More tests pass could not start ({why.strip() or 'no reason given'})"
+                     "; the run carries on with the first pass's build.")[:600]}
+
+
+#: The tools a step may start work on the build's branch with (in-process, by capability).
+_BRANCH_TOOLS = frozenset({"extend_code_task"})
+
+
+def _start_on_the_branch(ctx, connection: Connection, *, project_id: str, actor: str,
+                         context: dict[str, Any], step: Optional[dict[str, Any]],
+                         capability_key: str, base_run: str,
+                         args: dict[str, Any]) -> dict[str, Any]:
+    """Start work on the build's branch (PLRR, More tests, an `extend` build) the way every
+    other step calls its tool: under the run's recorded authority (`_step_authority`), as the
+    BUILDER the branch's task runs as (runs.resolved_builder of the base run — the agent the
+    consent named for the build and whose Passport holds code_task:retry), past the same tool
+    checks (`_invoke_tool`), for a tool the capability declares (`Capability.calls`, which is
+    what the consent asked for). An identity refusal is SETTLED: retrying it three times
+    cannot grant anything."""
+    from boss_engine.identity import consent as _consent
+    from boss_engine.identity import runs as _runs
+
+    tool = "extend_code_task"
+    cap = workflow_capabilities.CAPABILITIES.get(capability_key)
+    if cap is None or tool not in _consent.capability_tools(cap):
+        raise SettledCapabilityError(
+            f"'{capability_key}' calls {tool} without declaring it (Capability.calls), so the "
+            "consent for this run never asked for it.")
+    builder = ""
+    try:
+        row = connection.execute(
+            text("SELECT spec, finalize_ctx FROM code_task_runs WHERE id = :i"),
+            {"i": base_run}).mappings().first()
+        if row is not None:
+            builder = _runs.resolved_builder(_as_dict(row["spec"]), _as_dict(row["finalize_ctx"]))
+    except Exception:  # noqa: BLE001 — unknown builder: the default builder, as consent assumes
+        log.exception("could not read the builder of %s", base_run)
+    builder = builder or _runs.resolved_builder()
+    with _step_authority(ctx, connection, project_id, context, step, builder):
+        started = _invoke_tool(ctx, tool, project_id, actor, args)
+    if started.get("ok") is False and started.get("permission"):
+        raise SettledCapabilityError(str(started.get("message") or started.get("error")
+                                         or f"{tool} was refused for this run's authority."))
+    return started
+
+
+def _as_dict(value: Any) -> dict[str, Any]:
+    if isinstance(value, str):
+        try:
+            value = json.loads(value or "{}")
+        except ValueError:
+            return {}
+    return value if isinstance(value, dict) else {}
 
 
 # ── THE APP NEVER WAITS FOR PASS 2 (two_pass) ─────────────────────────────────────────────────
@@ -1647,7 +1882,7 @@ def _latest_code_run(connection: Connection, run_id: str) -> str:
 
 
 def _build_on_the_branch(connection: Connection, ctx: Any, *, project_id: str, actor: str,
-                         context: dict[str, Any], capability: Any,
+                         context: dict[str, Any], capability: Any, step: dict[str, Any],
                          inputs: dict[str, Any]) -> dict[str, Any]:
     """A build with `extend` (Incremental Build's later increments): it builds on THIS run's
     branch, from the newest finished pass, as more commits on the same pull request."""
@@ -1656,7 +1891,9 @@ def _build_on_the_branch(connection: Connection, ctx: Any, *, project_id: str, a
         raise SettledCapabilityError(
             "this build adds to the app an earlier step of this run built, and no earlier "
             "build in the run finished, so there is nothing to build on.")
-    started = _invoke_tool(ctx, "extend_code_task", project_id, actor, {
+    started = _start_on_the_branch(ctx, connection, project_id=project_id, actor=actor,
+                                   context=context, step=step, capability_key="build",
+                                   base_run=base, args={
         "run_id": base, "instructions": str(inputs.get("instructions") or ""),
         "title": str(inputs.get("title") or "Next increment"),
     })
@@ -2015,6 +2252,18 @@ def _execute_step(
     context: dict[str, Any],
 ) -> dict[str, Any]:
     binding = step.get("binding") or {}
+
+    # SKIPPED AT START, BY A PERSON, ON THE RECORD. The start door's pre-check let the operator
+    # skip a step it said would fail (workflow_precheck.gate_start refuses a skip of a gate that
+    # protects a deploy); the run's input carries who and why, written by the server only.
+    from .workflow_precheck import skipped_by_precheck
+
+    skip = skipped_by_precheck(context, str(step.get("id") or ""))
+    if skip:
+        return {"capability": str(binding.get("capability") or step.get("kind") or ""),
+                "tool": None, "status": "not_applicable", "skipped_by_precheck": skip,
+                "note": (f"skipped at start by {skip.get('by') or 'the operator'}: "
+                         f"{skip.get('reason') or 'no reason given'}")[:600]}
 
     # APPROVING SENDS EXACTLY WHAT WAS PREVIEWED. A step a gate released checks that its
     # inputs still hash to the content the approver saw; if an upstream step was re-run in
@@ -2471,6 +2720,106 @@ def _existing_app_note(connection: Connection, project_id: str, run_id: str) -> 
             "existing tests must keep passing.")
 
 
+#: Tool-less capabilities that start work on the build's branch (extend_code_task): they take
+#: the builder's authority themselves, in _start_on_the_branch.
+_ON_THE_BRANCH = frozenset({"plrr", "more_tests"})
+
+
+def _perform_toolless(
+    connection: Connection,
+    ctx: Any,
+    *,
+    project_id: str,
+    actor: str,
+    step: dict[str, Any],
+    context: dict[str, Any],
+    key: str,
+    capability: Any,
+    inputs: dict[str, Any],
+    extend: bool = False,
+) -> dict[str, Any]:
+    """A capability with no tool of its own (or a build with `extend`), dispatched in-process.
+    Called by `_perform_capability` under the run's authority, never bare."""
+    if extend:
+        return _build_on_the_branch(connection, ctx, project_id=project_id, actor=actor,
+                                    step=step, context=context, capability=capability,
+                                    inputs=inputs)
+    # `document` has no tool because it commissions nothing — it WRITES, from what the run
+    # already produced. Falling through to the no-op below made the one step whose entire
+    # job is to leave an artefact behind the only step that left nothing.
+    # PRODUCTION LAUNCH READINESS, WHICH HAS NEVER RUN.
+    #
+    # `plrr` declares `tool=None` -- it has no single tool, because it reads the run's own
+    # spec and then starts the repair that closes what the app is missing. Its dispatch sat
+    # AFTER this branch, which returns unconditionally, so it was unreachable from the day
+    # it was written. Every run recorded the step as:
+    #
+    #     "'Production launch readiness' is recorded from the work it accompanies."
+    #
+    # started and completed in the same second, green, having done nothing. It is declared
+    # to produce `findings`, `gaps_closed` and `code_task_run_id` and produced none of
+    # them, so the one step that exists to ask whether anyone can operate the thing at 3am
+    # was the step that never ran.
+    if key == "plrr":
+        # NOT a bare return. This branch exits before the shared "started is not finished"
+        # path below, and plrr's tool result is `status: extending` with the new run id
+        # nested under `result`. Completing the step there lets preview and deploy run
+        # while the repair is still writing the same branch.
+        started = _plrr_step(ctx, connection, project_id, actor, context, step)
+        if started.get("status") == "not_applicable":
+            return started
+        return _settle_started_work(capability, key, started)
+    if key == "more_tests":
+        return _more_tests_started(ctx, connection, project_id=project_id, actor=actor,
+                                   context=context, step=step, capability=capability,
+                                   inputs=inputs)
+    if key == "document":
+        return _write_the_record(connection, project_id, context, inputs)
+    if key == "architecture":
+        # THE ARCHITECT DESIGNS FROM THE APPROVED PRD, THEN A PERSON SIGNS IT OFF. The step
+        # waits on its review (services/architecture_docs.py) like a build waits on its task.
+        return _settle_started_work(
+            capability, key,
+            _architecture_step(connection, ctx, project_id, step, context, inputs))
+    if key == "notify":
+        return _notify(connection, ctx, project_id, step, context, inputs)
+    if key == "wait_for_ci":
+        return _settle_started_work(
+            capability, key, _start_ci_wait(connection, project_id, context, inputs))
+    # Same shape as `document`: no tool because it commissions nothing — it READS what the
+    # run has already recorded and leaves a document behind.
+    # THE RE-REVIEW AND THE SECURITY REPORT (services/security_review_steps.py).
+    if key == "security_rereview":
+        return _security_rereview(connection, ctx, project_id, context, inputs)
+    if key == "security_report":
+        return _security_report(connection, ctx, project_id, context, inputs)
+    if key == "report":
+        # A REPORT THAT WAS NOT WRITTEN IS A STEP THAT FAILED.
+        #
+        # This caught every exception and returned `status: recorded`, so the step went
+        # green with no report behind it — the same shape as research recorded succeeded
+        # after it died (boss-1, 2026-10-02). The reasoning was that a missing report is no
+        # reason to stop a build that succeeded; that is a fair call, and it is the
+        # OPERATOR'S call, made with "Skip and proceed", not one the runner makes by
+        # pretending the report exists.
+        return _write_the_run_report(connection, project_id, context)
+    # OBSERVED, NOT STARTED. `review` and `test` do not commission anything — the governed
+    # pipeline already reviewed and tested the build, and recorded the verdicts. Reporting
+    # "recorded from the work it accompanies" left three of the nine steps saying nothing
+    # about work that had definitely happened and was definitely written down.
+    observed = _observed_from_the_build(connection, key, project_id, context)
+    if observed is not None:
+        return observed
+    # Capabilities with no tool yet are honest no-ops that say so, rather than silently
+    # succeeding as though the work had happened.
+    return {
+        "capability": key,
+        "status": "recorded",
+        "note": f"'{capability.label}' is recorded from the work it accompanies.",
+        "inputs": inputs,
+    }
+
+
 def _perform_capability(
     connection: Connection,
     ctx: Any,
@@ -2508,85 +2857,31 @@ def _perform_capability(
         if why_not:
             return {"capability": key, "tool": None, "status": "not_applicable",
                     "pass_2_of": pass_2_of, "note": why_not}
-    if extend:
-        return _build_on_the_branch(connection, ctx, project_id=project_id, actor=actor,
-                                    context=context, capability=capability, inputs=inputs)
-    if capability.tool is None:
-        # `document` has no tool because it commissions nothing — it WRITES, from what the run
-        # already produced. Falling through to the no-op below made the one step whose entire
-        # job is to leave an artefact behind the only step that left nothing.
-        # PRODUCTION LAUNCH READINESS, WHICH HAS NEVER RUN.
-        #
-        # `plrr` declares `tool=None` -- it has no single tool, because it reads the run's own
-        # spec and then starts the repair that closes what the app is missing. Its dispatch sat
-        # AFTER this branch, which returns unconditionally, so it was unreachable from the day
-        # it was written. Every run recorded the step as:
-        #
-        #     "'Production launch readiness' is recorded from the work it accompanies."
-        #
-        # started and completed in the same second, green, having done nothing. It is declared
-        # to produce `findings`, `gaps_closed` and `code_task_run_id` and produced none of
-        # them, so the one step that exists to ask whether anyone can operate the thing at 3am
-        # was the step that never ran.
-        if key == "plrr":
-            # NOT a bare return. This branch exits before the shared "started is not finished"
-            # path below, and plrr's tool result is `status: extending` with the new run id
-            # nested under `result`. Completing the step there lets preview and deploy run
-            # while the repair is still writing the same branch.
-            started = _plrr_step(ctx, connection, project_id, actor, context)
-            if started.get("status") == "not_applicable":
-                return started
-            return _settle_started_work(capability, key, started)
-        if key == "more_tests":
-            started = _more_tests_step(ctx, connection, project_id, actor, context, inputs)
-            if started.get("status") == "not_applicable":
-                return started
-            return _settle_started_work(capability, key, started)
-        if key == "document":
-            return _write_the_record(connection, project_id, context, inputs)
-        if key == "architecture":
-            # THE ARCHITECT DESIGNS FROM THE APPROVED PRD, THEN A PERSON SIGNS IT OFF. The step
-            # waits on its review (services/architecture_docs.py) like a build waits on its task.
-            return _settle_started_work(
-                capability, key,
-                _architecture_step(connection, ctx, project_id, step, context, inputs))
-        if key == "notify":
-            return _notify(connection, ctx, project_id, step, context, inputs)
-        if key == "wait_for_ci":
-            return _settle_started_work(
-                capability, key, _start_ci_wait(connection, project_id, context, inputs))
-        # Same shape as `document`: no tool because it commissions nothing — it READS what the
-        # run has already recorded and leaves a document behind.
-        # THE RE-REVIEW AND THE SECURITY REPORT (services/security_review_steps.py).
-        if key == "security_rereview":
-            return _security_rereview(connection, ctx, project_id, context, inputs)
-        if key == "security_report":
-            return _security_report(connection, ctx, project_id, context, inputs)
-        if key == "report":
-            # A REPORT THAT WAS NOT WRITTEN IS A STEP THAT FAILED.
-            #
-            # This caught every exception and returned `status: recorded`, so the step went
-            # green with no report behind it — the same shape as research recorded succeeded
-            # after it died (boss-1, 2026-10-02). The reasoning was that a missing report is no
-            # reason to stop a build that succeeded; that is a fair call, and it is the
-            # OPERATOR'S call, made with "Skip and proceed", not one the runner makes by
-            # pretending the report exists.
-            return _write_the_run_report(connection, project_id, context)
-        # OBSERVED, NOT STARTED. `review` and `test` do not commission anything — the governed
-        # pipeline already reviewed and tested the build, and recorded the verdicts. Reporting
-        # "recorded from the work it accompanies" left three of the nine steps saying nothing
-        # about work that had definitely happened and was definitely written down.
-        observed = _observed_from_the_build(connection, key, project_id, context)
-        if observed is not None:
-            return observed
-        # Capabilities with no tool yet are honest no-ops that say so, rather than silently
-        # succeeding as though the work had happened.
-        return {
-            "capability": key,
-            "status": "recorded",
-            "note": f"'{capability.label}' is recorded from the work it accompanies.",
-            "inputs": inputs,
-        }
+    if extend or capability.tool is None:
+        # EVERY IN-PROCESS DISPATCH RUNS UNDER THE RUN'S RECORDED AUTHORITY, like a tool step.
+        # These returned from here bare, as whoever advanced the run (the worker), so under
+        # enforce More tests was refused "needs code_task:retry" and shown as "returned no id
+        # to wait on" (wfr_9575c86ab4a74defa0d2). Work started on the build's branch (PLRR,
+        # More tests, an `extend` build) runs as the builder that branch's task runs as
+        # (_start_on_the_branch); every other tool-less step as its own agent. `_invoke_tool`
+        # refuses a call made outside either, so a new dispatch cannot forget.
+        if extend or key in _ON_THE_BRANCH:
+            return _perform_toolless(connection, ctx, project_id=project_id, actor=actor,
+                                     step=step, context=context, key=key,
+                                     capability=capability, inputs=inputs, extend=extend)
+        from .step_agents import StepAgentError
+        from .step_agents import resolve as who_runs_it
+
+        try:
+            agent: Optional[str] = who_runs_it(connection, getattr(ctx, "settings", None),
+                                               project_id, step, actor=actor)["agent"]
+        except StepAgentError:
+            # A tool-less step never needed an agent on duty to run: the person's own authority.
+            agent = None
+        with _step_authority(ctx, connection, project_id, context, step, agent):
+            return _perform_toolless(connection, ctx, project_id=project_id, actor=actor,
+                                     step=step, context=context, key=key,
+                                     capability=capability, inputs=inputs, extend=extend)
 
     # ADOPT, DO NOT DUPLICATE.
     #
@@ -2698,11 +2993,14 @@ def _perform_capability(
         stack_target = stack_target_for_deploy(
             connection, project_id, inputs,
             default_owner=str(getattr(getattr(ctx, "settings", None), "target_github_owner", "")
-                              or ""))
+                              or ""),
+            # THE DEPLOY ITSELF: a declared app's first deploy makes its target here.
+            create=True)
         approved = bool(context.get("approval_decision_id"))
         waived_for = str(context.get(STACK_GATE_TARGET) or "")
         if waived_for and not approved and (
-                stack_target is None or str(stack_target.get("id")) != waived_for):
+                stack_target is None or (waived_for != FIRST_STACK_TARGET
+                                         and str(stack_target.get("id")) != waived_for)):
             # THE GATE WAS WAIVED FOR ONE STACK TARGET; EXECUTION MUST SHIP THERE OR NOWHERE.
             # Between the waiver and this call the target can be deactivated, a second stack
             # target added for the repository, or its host changed — and falling through would
@@ -2733,8 +3031,17 @@ def _perform_capability(
                 or None,
                 step_id=str(step.get("id") or "") or None,
                 # ONE APPROVAL PER DEPLOY: the gate a person already answered, passed on.
-                approval_decision_id=str(context.get("approval_decision_id") or "") or None)
+                approval_decision_id=str(context.get("approval_decision_id") or "") or None,
+                # Pass 1's deploy ships the head pass 1 left; "Deploy again" ships pass 2's.
+                commit=(None if pass_2_of else
+                        pinned_pass_one_commit(connection, str(context.get("run_id") or ""))))
     if key == "deploy" and not pass_2_of:
+        from .stack_deploy import undeclared_deploy_refusal
+
+        undeclared = undeclared_deploy_refusal(connection, str(inputs.get("run_id") or ""))
+        if undeclared:
+            # Settled, in words, before anything is planned (see `_gate_subject`).
+            raise SettledCapabilityError(undeclared)
         missing = _preview_missing_for_run(connection, context)
         if missing:
             return {"capability": key, "tool": None, "status": "failed",
@@ -2910,7 +3217,17 @@ def _perform_capability(
               **({"retry_note": retry_note} if retry_note else {})}
     skipped = _preview_not_permitted(key, result, step_actor)
     if skipped:
+        # NEVER A SILENT SKIP: the run's history records that a whole step did not run, and why.
+        emit_event(connection, project_id, "workflow.step_skipped", step_actor or actor,
+                   "workflow_run", str(context.get("run_id") or ""),
+                   {"step_id": step.get("id"), "capability": key,
+                    "reason": f"skipped: {skipped['reason']}"[:500],
+                    "permission": result.get("permission")})
         return skipped
+    if output.get("ok") is False and output.get("permission"):
+        # AN IDENTITY REFUSAL IS SETTLED: the same grant refuses the same call on every retry.
+        raise SettledCapabilityError(str(output.get("message") or output.get("error")
+                                         or f"'{capability.tool}' was refused."))
     failed = _tool_failed_to_start(key, result)
     if failed:
         raise CapabilityExecutionError(failed)
@@ -3243,7 +3560,9 @@ def _preview_not_permitted(key: str, output: dict[str, Any],
               "Grant it on that agent's Passport to get a preview here, or start one from the "
               "build's card.")
     return {**output, "ok": True, "status": "skipped", "skipped": True, "error": None,
-            "reason": reason, "message": reason, "summary": reason}
+            "reason": reason, "message": reason, "summary": reason,
+            # Said on the step as what it is: a whole step that did not run.
+            "note": f"skipped: {reason}"}
 
 
 def _tool_failed_to_start(key: str, output: dict[str, Any]) -> Optional[str]:
@@ -4384,7 +4703,7 @@ def _gate_subject(
                      if key == "deploy" else None)
     if stack_target:
         if waived is not None:
-            waived[STACK_GATE_TARGET] = stack_target.get("id")
+            waived[STACK_GATE_TARGET] = stack_target.get("id") or FIRST_STACK_TARGET
         # ONE APPROVAL FOR A STACK DEPLOY: THE DEPLOYMENT'S OWN.
         #
         # Observed on boss-1 (wfr_79c63a78b34546a3b927): the deploy step of a repository with
@@ -4400,6 +4719,24 @@ def _gate_subject(
         # rejecting it rejects the step. Every other deploy keeps its gate exactly as before.
         return None
     if key == "deploy" and context is not None:
+        # A DEPLOY THAT WILL BE REFUSED ASKS NOBODY: an app that was told to declare how it
+        # runs and did not, or a Postgres app with no manifest to bring its database, is refused
+        # by the step in words (stack_deploy.undeclared_deploy_refusal) — never after a person
+        # approved a deploy that could not work.
+        from .stack_deploy import undeclared_deploy_refusal
+
+        ready = deploy_step_inputs(connection, spec_step, context) or {}
+        if not ((binding.get("inputs") or {}).get("pass_2_of")) and ready.get("run_id"):
+            point = connection.begin_nested()
+            try:
+                undeclared = undeclared_deploy_refusal(connection, str(ready["run_id"]))
+            except Exception:  # noqa: BLE001 — unknown: the gate opens as it always did
+                point.rollback()
+                undeclared = None
+            else:
+                point.commit()
+            if undeclared:
+                return None
         # "DEPLOY AGAIN" THAT WILL SHIP NOTHING ASKS NOBODY: it runs, and says why (two_pass).
         pass_2_of = str(((binding.get("inputs") or {}).get("pass_2_of")) or "")
         if pass_2_of and pass_two_redeploy_refusal(

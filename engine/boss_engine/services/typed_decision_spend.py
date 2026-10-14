@@ -35,6 +35,15 @@ from .typed_decisions import (
 # Same wall as workflow_capability_runner.LEASE_SECONDS. A decision call is one
 # round trip; the lease still heartbeats and expires like any other worker lease.
 LEASE_TTL_SECONDS = 120
+
+#: The token ceiling a typed decision's model lease declares. MEASURED, not guessed: it was
+#: 20,000 and every architecture decision overran it (model_gateway.usage_limit_exceeded, 8 on
+#: 2026-10-13 alone). The ten measured calls (model_gateway_invocations on 20k leases,
+#: 2026-10-11..13) used 21,023–30,009 total tokens, p50 22,990, p95 28,255 — the prompt is the
+#: whole architecture brief and the answer ~10–20k tokens. Over twice the largest seen, so
+#: the limit would hold if it were enforced, and still catches a runaway.
+TYPED_DECISION_MAX_TOTAL_TOKENS = 64_000
+
 MAX_COST_USD_MICROS = 10_000
 JOB_KIND = "typed_decision.execute"
 AGENT_ID = "typed_decision"
@@ -505,7 +514,7 @@ class TypedDecisionSpend:
                     connection, self.project_id, source_id, self.actor)
                     if hasattr(self.gateway, "consumer_for") else self.actor),
                 estimated_cost_usd_micros=estimate,
-                max_usage={"total_tokens": 20_000},
+                max_usage={"total_tokens": TYPED_DECISION_MAX_TOTAL_TOKENS},
                 dedupe_key=dedupe,
                 ttl_seconds=self.ttl_seconds,
                 existing_reservation_id=reservation_id,

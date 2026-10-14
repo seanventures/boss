@@ -33,17 +33,47 @@ _LOCK_KEY = 0x6964_6D61_696E      # "idmain"
 TERMINAL_WORKFLOW_STATUSES = ("completed", "failed", "deadlettered", "cancelled", "compensated")
 
 
+#: A run's child work that has settled: a code task, a stack deployment.
+SETTLED_CODE_TASK_STATUSES = ("completed", "failed", "blocked", "cancelled", "error", "rejected")
+SETTLED_STACK_DEPLOY_STATUSES = ("healthy", "failed", "rejected")
+
+
+def live_child_work_sql(run: str = "w.id") -> str:
+    """SQL true while the workflow run `run` still has child work going: a code task it started
+    (by finalize_ctx or by a step's output) or a stack deployment it planned, not yet settled."""
+    tasks = "','".join(SETTLED_CODE_TASK_STATUSES)
+    stacks = "','".join(SETTLED_STACK_DEPLOY_STATUSES)
+    return (
+        f"(EXISTS (SELECT 1 FROM code_task_runs c WHERE c.status NOT IN ('{tasks}') AND ("
+        f"   c.finalize_ctx->>'workflow_run_id' = {run} OR c.id IN ("
+        f"     SELECT s.output->>'code_task_run_id' FROM workflow_step_runs s"
+        f"     WHERE s.workflow_run_id = {run})))"
+        f" OR EXISTS (SELECT 1 FROM stack_deployments d WHERE d.workflow_run_id = {run}"
+        f"   AND d.status NOT IN ('{stacks}')))")
+
+
 def end_finished_workflow_grants(*, db: Any) -> list[str]:
-    """Task grants bound to a workflow run (`run_wf:<id>`) whose run has ended."""
+    """Task grants bound to a workflow run (`run_wf:<id>`) whose run has ended AND whose child work
+    has all settled.
+
+    A run goes terminal on one branch while another still works: a deploy failed while More tests
+    was still writing tests on the branch. Ending the grant 30 s later killed that live code task
+    (its run token died with the grant), and every Retry after re-asked consent. The grant now
+    ends with the last child: a code task or stack deployment the run started, once settled."""
     from sqlalchemy import text
 
     from . import grants
 
     if not db.execute(text("SELECT to_regclass('workflow_runs') IS NOT NULL")).scalar():
         return []
+    children = db.execute(text(
+        "SELECT to_regclass('code_task_runs') IS NOT NULL "
+        "AND to_regclass('stack_deployments') IS NOT NULL "
+        "AND to_regclass('workflow_step_runs') IS NOT NULL")).scalar()
     rows = db.execute(text(
         "SELECT g.task_run_id, g.org_id FROM identity_delegation_grants g JOIN workflow_runs w "
-        "ON g.task_run_id = 'run_wf:' || w.id WHERE g.status = 'active' AND w.status = ANY(:t)"),
+        "ON g.task_run_id = 'run_wf:' || w.id WHERE g.status = 'active' AND w.status = ANY(:t)"
+        + (f" AND NOT {live_child_work_sql()}" if children else "")),
         {"t": list(TERMINAL_WORKFLOW_STATUSES)}).all()
     ended: list[str] = []
     for run_id, org in {(r[0], r[1]) for r in rows}:

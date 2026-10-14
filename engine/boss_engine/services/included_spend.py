@@ -108,3 +108,37 @@ def reservation_estimate(connection: Any, project_id: str, source_id: Optional[s
     if source_is_included(source_by_id(connection, project_id, source_id)):
         return 0
     return int(estimate_usd_micros)
+
+
+def routed_reservation_estimate(connection: Any, settings: Any, project_id: str,
+                                estimate_usd_micros: int) -> int:
+    """What model work on this project's ROUTED model reserves: its marginal cost.
+
+    Each PRD meeting reserved $6.00 for up to two hours, and active reservations count toward
+    the daily cap (budget.period_spend) — so on a $10 cap two meetings, or a meeting and a build,
+    turned the budget red and held work, while every call they made ran on a Claude subscription
+    and settled at $0 (`included_in_subscription`). Sized at the marginal cost, included capacity
+    reserves $0: the reservation is a GATE (still refused once the cap's real money is spent),
+    exactly as `reservation_estimate` and `model_routing.turn_estimate_usd_micros` already do.
+    A metered provider keeps the full estimate, so the caps stay meaningful where money is.
+
+    Decided by the same rule the meeting's calls SETTLE by (model_routing.call_is_included), so a
+    reservation can never call free what the receipt will call money. Unknown is money.
+    """
+    from .model_routing import call_is_included
+
+    nested = None
+    try:
+        if hasattr(connection, "begin_nested"):
+            nested = connection.begin_nested()
+        included = call_is_included(connection, settings, project_id, None)
+        if nested is not None:
+            nested.commit()  # raises if a lookup inside failed: rolled back below
+    except Exception:  # noqa: BLE001 — a lookup failure reserves the full estimate
+        included = False
+        try:
+            if nested is not None and nested.is_active:
+                nested.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+    return 0 if included else int(estimate_usd_micros)

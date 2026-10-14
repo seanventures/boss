@@ -4476,6 +4476,44 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
             return {"ok": False, "error": str(error)}
 
     @reg.tool(
+        "precheck_workflow",
+        "WILL THIS RUN WORK, before it spends anything: checks each step's REAL infrastructure "
+        "(the run's consent vs every call the step makes, GitHub access and CI, the sandbox, "
+        "budget headroom, the app's variables per environment, the deploy's target, port and "
+        "manifest, smoke's contract), plus BOSS's recent BEHAVIOUR for this app (recurring "
+        "failures, the app's real start logs, review/restart/retry history, split app keys, "
+        "leaked leases), and answers per check ready / fixable / will_fail / unknown "
+        "with the evidence and the fix (and which fixes BOSS can make itself). checkpoint 'pre_run' before starting; 'pre_deploy' "
+        "after the first build, against its saved workspace (give build_run_id). Read-only. Use "
+        "it before offering to start a workflow and when asked 'why will this fail'.",
+        _obj({"workflow": {"type": "string",
+                           "description": "workflow key or name (or omit and give run_id)"},
+              "run_id": {"type": "string", "description": "an existing workflow run (wfr_)"},
+              "checkpoint": {"type": "string", "enum": ["pre_run", "pre_deploy"]},
+              "build_run_id": {"type": "string",
+                               "description": "pre_deploy: the pass-1 build (crun_)"},
+              "input": {"type": "object", "description": "the run input it would start with"},
+              "project_id": {"type": "string"}}),
+        kind="read", permission="workflow:read")
+    def precheck_workflow(ctx, *, project_id, actor, args):
+        from ..services import workflow_precheck
+
+        workflow = str(args.get("workflow") or "").strip() or None
+        run_id = str(args.get("run_id") or "").strip() or None
+        if not (workflow or run_id):
+            return {"ok": False, "error": "name a workflow, or give run_id"}
+        try:
+            report = workflow_precheck.precheck(
+                ctx.engine, ctx.settings, project_id=args.get("project_id") or project_id,
+                actor=actor, workflow=workflow, run_id=run_id,
+                run_input=args.get("input") if isinstance(args.get("input"), dict) else None,
+                checkpoint=str(args.get("checkpoint") or "pre_run"),
+                build_run_id=str(args.get("build_run_id") or "").strip() or None)
+        except workflow_precheck.PrecheckError as error:
+            return {"ok": False, "error": str(error)}
+        return {"ok": True, **report}
+
+    @reg.tool(
         "watch",
         "Keep THIS conversation checking something on an interval until a condition is met — "
         "a pull request, a CI run, a deployment. Use it when the operator says 'keep an eye "
@@ -5202,8 +5240,20 @@ def _register_diagnosis_tools(reg: ToolRegistry) -> None:
                       "ORDER BY created_at DESC LIMIT 30"),
                 {"p": pid, "r": run_id}).scalars().all()
             durations = sorted(float(m) for m in peers if m is not None)
+            # THE ENGINE COULD NOT RUN (harness_failures): recorded when a session found its
+            # sandbox, a runtime binary, its login or account broken and the build stopped.
+            harness = c.execute(
+                _text("SELECT data FROM events WHERE project_id = :p AND entity_id = :r "
+                      "AND event_type = 'code_task.harness_failed' "
+                      "ORDER BY created_at DESC LIMIT 1"),
+                {"p": pid, "r": run_id}).scalar()
 
         minutes = float(run["minutes"] or 0)
+        if isinstance(harness, dict) and harness.get("sentence"):
+            # First: nothing else about the run matters until the engine can run.
+            findings.append(
+                f"THE ENGINE COULD NOT RUN — not the app's code: {harness['sentence']} "
+                "Make that fix, then retry; the run stopped as soon as it was seen.")
         baseline = None
         if durations:
             checked.append(f"{len(durations)} previous completed runs on this project")

@@ -347,6 +347,7 @@ docker compose -f scripts/install/community-compose.yml --env-file .env \
 
 - The installer does not copy or parse `~/.grok/auth.json`, and `--connect-grok-local` does not call the model. If the login is missing, setup stops and records nothing.
 - Once the Grok harness is available and its BOSS readiness proof passes, set `BOSS_CODE_AGENT_ENGINE=grok` in `.env` and recreate the API and worker. This selects Grok for governed coding work, not the console's chat model.
+- To run governed coding work on an Anthropic API key as Agent SDK usage (metered on your Anthropic account, never the Claude subscription), store the key in Repo and models -> Anthropic API, then pick **Claude Agent SDK** for Build, Review or Chat there, or set `BOSS_CODE_AGENT_ENGINE=claude_agent_sdk` in `.env` for the whole install and recreate the API and worker. `BOSS_AGENT_SDK_MODEL` sets its model (default `claude-sonnet-5`).
 
 > [!NOTE]
 > A CLI installed on the host does not by itself mean the BOSS containers are connected.

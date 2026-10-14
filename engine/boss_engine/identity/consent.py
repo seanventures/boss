@@ -297,9 +297,9 @@ def workflow_needs(db: Any, project_id: str, spec: Any, input_data: Any) -> tupl
             if isinstance(seats, list):
                 candidates.extend(s.get("role_key") if isinstance(s, dict) else s for s in seats)
         cap_key = str(binding.get("capability") or "")
-        tool_perm, cap_captain = _capability_needs(cap_key)
-        if tool_perm:
-            perms.add(tool_perm)            # what the step's own tool call will be checked against
+        tool_perms, cap_captain = _capability_needs(cap_key)
+        # What the step's own tool call AND every tool it calls in-process will be checked against.
+        perms.update(tool_perms)
         if cap_captain and not any(candidates) and db is not None:
             # The step runs as its capability's captain (workflow runner "ran_as"), so that agent
             # must be in the grant — when this project has it.
@@ -388,28 +388,37 @@ def _capability_builds(cap_key: str) -> bool:
             or "code_task_run_id" in tuple(getattr(cap, "produces", ()) or ()))
 
 
-def _capability_needs(cap_key: str) -> tuple[Optional[str], Optional[str]]:
-    """(the permission the capability's tool declares, if delegable; its default captain). The
-    consent must ask for exactly what the step's tool call is checked against (identity_gate), or
-    the run starts and then fails at that step under enforce."""
+def _capability_needs(cap_key: str) -> tuple[tuple[str, ...], Optional[str]]:
+    """(the delegable permissions of every tool the capability calls, its default captain): its
+    `tool` and the tools it calls in-process (`Capability.calls`: More tests' and PLRR's
+    extend_code_task). The consent must ask for exactly what those calls are checked against
+    (identity_gate), or the run starts and then fails at that step under enforce — More tests
+    was refused `code_task:retry` on every run because its tool is None (wfr_9575c86a)."""
     if not cap_key:
-        return None, None
+        return (), None
     try:
         from ..services import workflow_capabilities
         from ..tools.builtin import build_default_registry
 
         cap = workflow_capabilities.CAPABILITIES.get(cap_key)
         if cap is None:
-            return None, None
-        perm = None
-        if cap.tool:
-            spec = {t.name: t for t in _registry(build_default_registry).specs()}.get(cap.tool)
-            key = str(getattr(spec, "permission", "") or "")
-            if key and catalogue.is_known(key) and catalogue.meta(key).delegable:
-                perm = key
-        return perm, (getattr(cap, "captain", None) or None)
+            return (), None
+        specs = {t.name: t for t in _registry(build_default_registry).specs()}
+        perms: list[str] = []
+        for tool in capability_tools(cap):
+            key = str(getattr(specs.get(tool), "permission", "") or "")
+            if key and catalogue.is_known(key) and catalogue.meta(key).delegable and key not in perms:
+                perms.append(key)
+        return tuple(perms), (getattr(cap, "captain", None) or None)
     except Exception:  # noqa: BLE001 — unknown here; the step's own check still decides
-        return None, None
+        return (), None
+
+
+def capability_tools(cap: Any) -> tuple[str, ...]:
+    """Every tool a capability's step calls: its `tool` and its declared in-process `calls`."""
+    tools = [str(cap.tool)] if getattr(cap, "tool", None) else []
+    tools += [str(t) for t in (getattr(cap, "calls", ()) or ()) if t and str(t) not in tools]
+    return tuple(tools)
 
 
 class AgentWithoutPassport(Exception):

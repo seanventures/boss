@@ -99,6 +99,43 @@ def test_14_a_workflow_runs_this_run_grant_ends_with_the_run(env):
         assert grants.load(g.id, db=c).status.value == "expired"
 
 
+def test_14_a_finished_runs_grant_waits_for_its_live_child_work(env):
+    """A run that went terminal on one branch while another still works (a deploy failed while
+    More tests was writing tests) keeps its grant until the last child settles: ending it killed
+    that live code task, and every Retry re-asked consent."""
+    g = env.grant(agents=(env.forge,), children=(), task_run_id="run_wf:wfr_kids")
+    with env.db() as c:
+        # What a full install has and this throwaway schema leaves out.
+        c.execute(text("ALTER TABLE code_task_runs ADD COLUMN IF NOT EXISTS finalize_ctx JSONB "
+                       "NOT NULL DEFAULT '{}'::jsonb"))
+        c.execute(text("CREATE TABLE IF NOT EXISTS workflow_step_runs (id TEXT PRIMARY KEY, "
+                       "workflow_run_id TEXT, output JSONB)"))
+        c.execute(text("CREATE TABLE IF NOT EXISTS stack_deployments (id TEXT PRIMARY KEY, "
+                       "project_id TEXT, target_id TEXT, repository TEXT, ref TEXT, commit_sha TEXT, "
+                       "created_by TEXT, status TEXT, workflow_run_id TEXT)"))
+        c.execute(text("INSERT INTO workflow_runs (id, status) VALUES ('wfr_kids', 'failed')"))
+        c.execute(text("INSERT INTO code_task_runs (id, project_id, status, spec, finalize_ctx) VALUES "
+                       "('crun_kid', :p, 'running', '{}', '{\"workflow_run_id\": \"wfr_kids\"}')"),
+                  {"p": env.project})
+    with env.db() as c:
+        assert maintenance.end_finished_workflow_grants(db=c) == [], "ended under a live code task"
+    with env.db() as c:
+        c.execute(text("UPDATE code_task_runs SET status = 'completed' WHERE id = 'crun_kid'"))
+        c.execute(text("INSERT INTO stack_deployments (id, project_id, target_id, repository, ref, "
+                       "commit_sha, created_by, status, workflow_run_id) VALUES ('sdep_kid', :p, "
+                       "'deptgt_x', 'acme/web', 'pull/1', 'c', 'test', 'applying', 'wfr_kids')"),
+                  {"p": env.project})
+    with env.db() as c:
+        assert maintenance.end_finished_workflow_grants(db=c) == [], "ended under a live deploy"
+    with env.db() as c:
+        c.execute(text("UPDATE stack_deployments SET status = 'failed' WHERE id = 'sdep_kid'"))
+    with env.db() as c:
+        assert maintenance.end_finished_workflow_grants(db=c) == [g.id]
+    with env.db() as c:
+        c.execute(text("DELETE FROM stack_deployments WHERE id = 'sdep_kid'"))
+        c.execute(text("DELETE FROM code_task_runs WHERE id = 'crun_kid'"))
+
+
 # ---- #15 ---------------------------------------------------------------------------------------------------
 
 def test_15_suspending_a_passport_halts_its_legacy_path_builds_and_queued_work(env):

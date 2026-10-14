@@ -13,7 +13,7 @@ from typing import Any, Optional
 BUCKETS = frozenset({
     "signin.ip", "signin.account", "mfa.user", "reset.account", "reset.ip", "email_signin.account",
     "email_signin.ip", "signup.account", "signup.ip", "api_key_failure.ip", "token_exchange.run",
-    "setup_claim.ip",
+    "setup_claim.ip", "setup_link.key",
     # F3/L2: the password soft lock counts failures per (account, device) and (account, IP), so
     # an attacker's failures lock only the attacker's own device and address, never the victim's.
     "signin.account_device", "signin.account_ip",

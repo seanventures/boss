@@ -372,3 +372,78 @@ def test_incremental_build_ships_the_basics_first_then_improves_in_steps():
     assert "inc1_deploy" not in _reach(spec, "inc1_more_tests")
     assert "inc2_build" in _reach(spec, "inc1_pass_2_joined")
     assert workflows.validate_workflow_spec(spec)
+
+
+# ── Pass 1's deploy ships pass 1 ───────────────────────────────────────────────────────────────
+
+PASS_ONE = "a" * 40
+
+
+def test_more_tests_keeps_the_head_pass_one_left_for_the_deploy(eng, project, monkeypatch):  # noqa: F811
+    """Pass 2 pushes beside the deploy: the first deploy plans the head pass 1 left (read when
+    pass 2 started), never `pull/N`, which by then may hold pass 2's commits."""
+    from boss_engine.services.workflow_capabilities import CAPABILITIES
+
+    monkeypatch.setattr(runner, "_invoke_tool", lambda ctx, name, pid, actor, args: {
+        "status": "extending", "result": {"run_id": "crun_p2"}})
+    monkeypatch.setattr(runner, "pass_one_head", lambda c, settings, pid, base: PASS_ONE)
+    with eng.begin() as c:
+        run = _run(c, project)
+        c.execute(text("UPDATE workflow_step_runs SET status='succeeded', completed_at=now(), "
+                       "output=CAST(:o AS JSONB) WHERE workflow_run_id=:r AND step_id='build'"),
+                  {"r": run["id"], "o": '{"code_task_run_id": "crun_p1"}'})
+        out = runner._perform_capability(
+            c, None, project_id=project, actor="test", step={"id": "more_tests"},
+            context={"run_id": run["id"]}, key="more_tests",
+            capability=CAPABILITIES["more_tests"], inputs={})
+        assert out["status"] == "awaiting" and out[runner.PASS_ONE_HEAD] == PASS_ONE, out
+        c.execute(text("UPDATE workflow_step_runs SET status='waiting', output=CAST(:o AS JSONB) "
+                       "WHERE workflow_run_id=:r AND step_id='more_tests'"),
+                  {"r": run["id"], "o": __import__("json").dumps(out)})
+        assert runner.pinned_pass_one_commit(c, run["id"]) == PASS_ONE
+        # A newer pass 1 (a retried build) than the pin: the pull request's head is right again.
+        c.execute(text("UPDATE workflow_step_runs SET output=CAST(:o AS JSONB), "
+                       "completed_at=now() + interval '1 minute' "
+                       "WHERE workflow_run_id=:r AND step_id='build'"),
+                  {"r": run["id"], "o": '{"code_task_run_id": "crun_p1_retry"}'})
+        assert runner.pinned_pass_one_commit(c, run["id"]) is None
+
+
+def test_a_stack_deploy_plans_the_pinned_commit_not_the_pull_request(monkeypatch):
+    from boss_engine.services import stack_deploy
+
+    seen = {}
+
+    class Engine:
+        def begin(self):
+            class Tx:
+                def __enter__(self_inner):
+                    return self_inner
+
+                def __exit__(self_inner, *a):
+                    return False
+
+                def execute(self_inner, *a, **k):
+                    class R:
+                        def mappings(self):
+                            return self
+
+                        def first(self):
+                            return {"spec": {"owner": "acme", "repo": "web"},
+                                    "pull_request_number": 7, "status": "completed"}
+                    return R()
+            return Tx()
+
+    def plan(engine, settings, **kw):
+        seen.update(kw)
+        return {"id": "sdep_1", "commit": kw["ref"], "repository": "acme/web"}
+
+    monkeypatch.setattr(stack_deploy, "plan_stack_deploy", plan)
+    target = {"id": "deptgt_1", "repo": "acme/web", "app_name": "Notes", "target_kind": "ssh"}
+    stack_deploy.plan_for_workflow_step(Engine(), None, project_id="p", actor="a", target=target,
+                                        inputs={"run_id": "crun_p1"}, workflow_run_id="wfr",
+                                        commit=PASS_ONE)
+    assert seen["ref"] == PASS_ONE
+    stack_deploy.plan_for_workflow_step(Engine(), None, project_id="p", actor="a", target=target,
+                                        inputs={"run_id": "crun_p1"}, workflow_run_id="wfr")
+    assert seen["ref"] == "pull/7"

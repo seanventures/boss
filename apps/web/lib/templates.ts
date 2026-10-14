@@ -315,7 +315,13 @@ export const templatesApi = {
     idPut<O>(`/v1/apps/${enc(appKey)}/secrets/${enc(name)}`, { project_id: projectId, ...b }),
   deleteSecret: (projectId: string, appKey: string, name: string, env: string) =>
     idDelete<O>(`/v1/apps/${enc(appKey)}/secrets/${enc(name)}?${q({ project_id: projectId, env })}`),
+  /** The demo login passwords BOSS generated for this app's `env` (never a value a person set). */
+  demoLogins: async (projectId: string, appKey: string, env: string): Promise<DemoLogin[]> =>
+    arr(obj(await idGet(`/v1/apps/${enc(appKey)}/demo-logins?${q({ project_id: projectId, env })}`)).demo_logins)
+      .map((d) => { const o = obj(d); return { name: String(o.name ?? ""), value: String(o.value ?? ""), env }; })
+      .filter((d) => d.name && d.value),
 };
+export type DemoLogin = { name: string; value: string; env: string };
 
 /** An app's key from any of its handles (a run id, its name), for an API older than the factory
  *  rows' `app_key`: the links route resolves the same way the engine files apps. */

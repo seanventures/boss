@@ -109,6 +109,7 @@ export function openAgent(roleKey: string): void {
 export const STATE_WORD: Record<AvatarState, string> = {
   idle: "Idle", thinking: "Thinking", speaking: "Speaking", working: "Working",
   needs_you: "Needs you", done: "Done", stuck: "Stuck", paused: "Paused", retired: "Retired",
+  failed: "Failed", stopped: "Stopped",
 };
 
 /** Roster zones, in screen order. Stuck sits with Needs you: both wait on a person. */
@@ -124,14 +125,15 @@ export const ZONES: { key: Zone; label: string }[] = [
  *  state word, which AvatarState draws as speaking. */
 export function zoneOf(p: Presence | undefined, inPanel = false): Zone {
   if (!p) return "idle";
-  if (p.state === "needs_you" || p.state === "stuck") return "needs_you";
+  if (p.state === "needs_you" || p.state === "stuck" || p.state === "failed") return "needs_you";
   if (inPanel) return "in_panel";
   if (p.state === "working" || p.state === "thinking" || p.state === "speaking") return "working";
   return "idle";
 }
 
 export function isLive(p: Presence | undefined): boolean {
-  return !!p && p.state !== "idle" && p.state !== "done" && p.state !== "paused" && p.state !== "retired";
+  return !!p && p.state !== "idle" && p.state !== "done" && p.state !== "paused" && p.state !== "retired"
+    && p.state !== "failed" && p.state !== "stopped";
 }
 
 // ── Wire → web mapping ──────────────────────────────────────────────────────────────────────
@@ -147,13 +149,14 @@ const arr = <T = unknown>(v: unknown): T[] => (Array.isArray(v) ? (v as T[]) : [
 const obj = (v: unknown): Wire => (v && typeof v === "object" && !Array.isArray(v) ? (v as Wire) : {});
 
 const AVATAR_STATES = new Set<AvatarState>(["idle", "thinking", "speaking", "working", "needs_you",
-                                            "done", "stuck", "paused", "retired"]);
+                                            "done", "stuck", "paused", "retired", "failed", "stopped"]);
 /** The API's presence words onto the face's states. `in_panel` is a live seat: speaking. */
 export function toAvatarState(s: unknown): AvatarState {
   const v = str(s);
   if (v === "in_panel") return "speaking";
   if (v === "awaiting_input") return "needs_you";
-  if (v === "error" || v === "stale") return "stuck";
+  if (v === "error") return "failed";
+  if (v === "stale") return "stopped";
   return AVATAR_STATES.has(v as AvatarState) ? (v as AvatarState) : "idle";
 }
 

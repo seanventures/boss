@@ -26,11 +26,11 @@ import { span, type Band } from "../agents/live-util";
 
 const AVATAR: Record<StationStatus, AvatarState> = {
   working: "working", needs_you: "needs_you", done: "done", stuck: "stuck",
-  waiting: "paused", pending: "idle", skipped: "idle",
+  waiting: "paused", pending: "idle", skipped: "idle", failed: "failed", stopped: "stopped",
 };
 const ACT_STATUS: Record<StationStatus, ActStatus> = {
-  working: "active", needs_you: "awaiting_input", done: "complete", stuck: "error",
-  waiting: "pending", pending: "pending", skipped: "pending",
+  working: "active", needs_you: "awaiting_input", done: "complete", stuck: "active",
+  waiting: "pending", pending: "pending", skipped: "pending", failed: "error", stopped: "stale",
 };
 
 /** The station as the Act card reads it: the server's words, nothing made up. */
@@ -58,9 +58,10 @@ export function stationMoves(s: Station): boolean {
   return (s.status === "working" || s.status === "needs_you") && (s.face === "agent" || s.face === "you");
 }
 
-/** The station being worked: needs-you first, then stuck, working, waiting. */
+/** The station being worked, or where the build ended: needs-you first, then failed, stuck,
+ *  stopped, working, waiting. */
 export function activeStation(stations: Station[]): Station | null {
-  for (const st of ["needs_you", "stuck", "working", "waiting"] as StationStatus[]) {
+  for (const st of ["needs_you", "failed", "stuck", "stopped", "working", "waiting"] as StationStatus[]) {
     const hit = stations.find((s) => s.status === st);
     if (hit) return hit;
   }
@@ -73,6 +74,21 @@ function seconds(s: Station, now: number | null): number | null {
   const end = s.endedAt ? Date.parse(s.endedAt) : now;
   if (end === null || !Number.isFinite(end)) return null;
   return Math.max(0, (end - start) / 1000);
+}
+
+/** Whether a bay shows a clock. Only for work that happened or is happening: never for a
+ *  station not started, skipped, not reached, or STOPPED (its act was left open, so its clock
+ *  would only time how long ago the build stopped). */
+export function bayHasClock(s: Station): boolean {
+  return s.status !== "pending" && s.status !== "skipped" && s.status !== "stopped" && !s.notReached;
+}
+
+/** THE WORD UNDER A BAY, everywhere a station is listed (the header line and the cockpit's
+ *  vertical list at phone width): the server's word, then how long, by the one clock rule. The
+ *  tooltip is the station's tip — a Failed station's reason. */
+export function bayWord(s: Station, now: number | null): { text: string; tip?: string } {
+  const secs = bayHasClock(s) ? seconds(s, now) : null;
+  return { text: secs !== null ? `${s.word} · ${span(secs)}` : s.word, tip: s.tip || undefined };
 }
 
 /** BOSS waiting on a worker or on budget: an hourglass, never a face that claims work (walk D22). */
@@ -108,7 +124,9 @@ function Face({ s, size, still, viewer }: { s: Station; size: 16 | 24 | 32; stil
   }
   if (s.face === "agent" && s.roleKey) {
     if (s.actId && size !== 16) {
-      return <ActFace act={actOf(s)} viewer={viewer} size={size === 32 ? 32 : 24} state={still ? state : undefined} />;
+      // A stuck station's act is still open (active): the face says stuck, not the act's working.
+      return <ActFace act={actOf(s)} viewer={viewer} size={size === 32 ? 32 : 24}
+                      state={still || s.status === "stuck" ? state : undefined} />;
     }
     return <RunFace roleKey={s.roleKey} size={size} state={state} standalone />;
   }
@@ -187,8 +205,8 @@ export function StationLine({ stations, density = "row", band = "wide", still = 
     <ol className="fx-line" data-density={density} aria-label={label} data-still={still || undefined}>
       {stations.map((s, i) => {
         const who = whoAt(s);
-        const secs = header ? seconds(s, now) : null;
-        const time = secs !== null && s.status !== "pending" && s.status !== "skipped" ? span(secs) : "";
+        const secs = header && bayHasClock(s) ? seconds(s, now) : null;
+        const time = secs !== null ? span(secs) : "";
         const isActive = s === active;
         // Row density: every face 24px, so the storm reads at a glance (walk D22).
         const size: 16 | 24 | 32 = header ? 32 : 24;
@@ -199,6 +217,7 @@ export function StationLine({ stations, density = "row", band = "wide", still = 
               data-key={s.key} data-status={s.status} data-face={s.face} data-active={isActive || undefined}
               data-role={s.face === "agent" ? s.roleKey ?? undefined : undefined}
               data-selected={selected === s.key || undefined} aria-label={ariaLabel}
+              data-not-reached={s.notReached || undefined}
               title={!header ? [`${s.label} · ${s.word}`, who, s.tip].filter(Boolean).join(" · ") : undefined}>
             {i > 0 ? (
               <span className="ag-chain-edge fx-edge" data-new={fresh.has(s.key) ? "true" : undefined}
@@ -222,8 +241,8 @@ export function StationLine({ stations, density = "row", band = "wide", still = 
                   ) : <Face s={s} size={32} still={still} viewer={viewer} />}
                   {s.status === "waiting" ? <Hourglass size={12} weight="bold" className="fx-wait" aria-hidden /> : null}
                 </span>
-                <span className="fx-bay-word" title={s.tip || undefined}>
-                  {s.word}{time ? ` · ${time}` : ""}
+                <span className="fx-bay-word" title={bayWord(s, now).tip}>
+                  {bayWord(s, now).text}
                 </span>
                 {s.links.map((l) => (
                   l.url ? <a key={l.label} className="fx-bay-link" href={l.url} target="_blank" rel="noreferrer">{l.label}</a>

@@ -295,3 +295,67 @@ def test_failed_replacement_keeps_the_working_connection_and_unknown_hold(
                 ).scalar_one()
                 == 1
             )
+
+
+def test_a_held_proof_says_why_and_a_person_with_entitlement_manage_releases_it(
+    client, engine, owner, monkeypatch
+):
+    """Connect → held (no reply) → the refusal says why in words → the board lists the hold →
+    a viewer may not release it → the owner releases it with a reason → Connect works again."""
+    world, person = owner
+    monkeypatch.setattr(
+        setup_checks, "default_http",
+        lambda *a, **k: setup_checks.HttpAnswer(0, {}, None, "owned timeout"))
+    with world.acting_as(world.ctx(person)):
+        held = client.post("/v1/setup/models", json=request(world))
+    assert held.status_code == 409, held.text
+    detail = held.json()["detail"]
+    assert detail["headline"] == "Proof held" and detail["reconciliation_required"]
+    assert detail["summary"].startswith("No reply from OpenRouter (owned timeout).")
+    receipt_id = detail["receipt_id"]
+    from boss_engine.services.connection_spend import held_proofs
+
+    with engine.begin() as c:
+        [hold] = held_proofs(c, world.project_a)
+    assert hold["receipt_id"] == receipt_id and hold["model"] == "stub/small"
+    assert hold["summary"] == detail["summary"]
+    with world.acting_as(world.ctx(person)):
+        assert client.post(f"/v1/setup/holds/{receipt_id}/release",
+                           json={"project_id": world.project_a, "actor": person.id,
+                                 "reason": ""}).status_code == 422
+    viewer = world.person("connection viewer")
+    world.bind(viewer, "viewer", project=world.project_a)
+    with world.acting_as(world.ctx(viewer)):
+        refused = client.post(f"/v1/setup/holds/{receipt_id}/release",
+                              json={"project_id": world.project_a, "actor": viewer.id,
+                                    "reason": "not mine"})
+    assert refused.status_code == 403, refused.text
+    with world.acting_as(world.ctx(person)):
+        released = client.post(f"/v1/setup/holds/{receipt_id}/release",
+                               json={"project_id": world.project_a, "actor": person.id,
+                                     "reason": "Timed out; checked the provider's usage page."})
+        assert released.status_code == 200, released.text
+        assert released.json()["held_proofs"] == []
+        fakes(monkeypatch)
+        again = client.post("/v1/setup/models", json=request(world))
+        assert again.status_code == 200, again.text
+    with engine.begin() as c:
+        event = c.execute(text(
+            "SELECT actor, data FROM events WHERE project_id=:p "
+            "AND event_type='connection.hold_released'"), {"p": world.project_a}).mappings().one()
+    assert event["actor"] == person.id and "checked" in event["data"]["reason"]
+
+
+def test_a_provider_refusal_names_its_reason(client, owner, monkeypatch):
+    world, person = owner
+    monkeypatch.setattr(
+        setup_checks, "default_http",
+        lambda *a, **k: setup_checks.HttpAnswer(400, {}, {"type": "error", "error": {
+            "type": "invalid_request_error",
+            "message": "Your credit balance is too low to access the Anthropic API."}}))
+    with world.acting_as(world.ctx(person)):
+        refused = client.post("/v1/setup/models", json=request(
+            world, provider="anthropic", model="claude-sonnet-5"))
+    assert refused.status_code == 422, refused.text
+    assert refused.json()["detail"]["fix"].startswith(
+        "Anthropic refused: credit balance too low.")

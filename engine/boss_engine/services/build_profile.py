@@ -69,8 +69,15 @@ def load_rows(connection: Any, run_id: str) -> dict[str, Any]:
     run = connection.execute(text(
         "SELECT id, project_id, status, phase, created_at, updated_at FROM code_task_runs "
         "WHERE id = :r"), {"r": run_id}).mappings().first()
+    from .crash_frames import SWALLOWED_EVENT
+
+    swallowed = connection.execute(text(
+        "SELECT data FROM events WHERE entity_id = :r AND event_type = :k ORDER BY created_at"),
+        {"r": run_id, "k": SWALLOWED_EVENT}).scalars().all()
     return {"turns": [dict(t) for t in turns], "llm_calls": [dict(c) for c in calls],
-            "run": dict(run) if run else None}
+            "run": dict(run) if run else None,
+            "swallowed": [json.loads(d) if isinstance(d, str) else dict(d or {})
+                          for d in swallowed]}
 
 
 def compute_profile(run_id: str, connection: Any = None) -> dict[str, Any]:
@@ -82,7 +89,8 @@ def compute_profile(run_id: str, connection: Any = None) -> dict[str, Any]:
             rows = load_rows(c, run_id)
     else:
         rows = load_rows(connection, run_id)
-    return profile_from_rows(rows["turns"], rows["llm_calls"], rows["run"], run_id=run_id)
+    return profile_from_rows(rows["turns"], rows["llm_calls"], rows["run"], run_id=run_id,
+                             swallowed=rows["swallowed"])
 
 
 # ── Arithmetic ────────────────────────────────────────────────────────────────────────────────
@@ -293,8 +301,12 @@ _SUMMED = ("model_min", "tool_min", "sessions", "duplicate_rows", "steps", "llm_
 
 def profile_from_rows(turns: Iterable[Mapping[str, Any]], llm_calls: Iterable[Mapping[str, Any]],
                       run: Optional[Mapping[str, Any]] = None, *,
-                      run_id: Optional[str] = None) -> dict[str, Any]:
-    """The pure part: rows in, profile out. Rows are dicts shaped like the table columns."""
+                      run_id: Optional[str] = None,
+                      swallowed: Iterable[Mapping[str, Any]] = ()) -> dict[str, Any]:
+    """The pure part: rows in, profile out. Rows are dicts shaped like the table columns.
+
+    `swallowed` is the run's code_task.swallowed_error event data: errors the build carried on
+    past on purpose, counted per place so a repeat offender is visible in every profile."""
     turns = [t for t in turns if not _is_pulse(t)]
     turns.sort(key=lambda t: (_ts(t.get("created_at")) or datetime.min, int(t.get("turn_index") or 0)))
     calls = list(llm_calls)
@@ -351,7 +363,15 @@ def profile_from_rows(turns: Iterable[Mapping[str, Any]], llm_calls: Iterable[Ma
         "stages": stages,
         "totals": totals,
         "serial_gaps": gaps,
+        "swallowed_errors": _swallowed_summary(swallowed),
     }
+
+
+def _swallowed_summary(events: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
+    by_where: Counter = Counter()
+    for e in events:
+        by_where[f"{e.get('where') or '?'}: {e.get('error') or '?'}"] += 1
+    return {"count": sum(by_where.values()), "by_where": dict(by_where.most_common())}
 
 
 # ── Emission ──────────────────────────────────────────────────────────────────────────────────
@@ -373,7 +393,8 @@ def emit_build_profile(engine: Any, run_id: str) -> Optional[dict[str, Any]]:
             run = rows["run"]
             if not run or run.get("status") not in TERMINAL_STATUSES:
                 return None
-            profile = profile_from_rows(rows["turns"], rows["llm_calls"], run, run_id=run_id)
+            profile = profile_from_rows(rows["turns"], rows["llm_calls"], run, run_id=run_id,
+                                        swallowed=rows["swallowed"])
             last = c.execute(text(
                 "SELECT data FROM events WHERE entity_id = :r AND event_type = :k "
                 "ORDER BY created_at DESC LIMIT 1"), {"r": run_id, "k": EVENT_TYPE}).scalar()
@@ -439,4 +460,8 @@ def format_profile(profile: Mapping[str, Any]) -> str:
             lines.append(f"  slow {t['seconds']:>7.1f}s  {t['tool']}")
         for e in s.get("top_errors") or []:
             lines.append(f"  err  x{e['count']:<3} {e['error']}")
+    swallowed = profile.get("swallowed_errors") or {}
+    if swallowed.get("count"):
+        lines += ["", f"Swallowed errors (the build carried on past them): {swallowed['count']}"]
+        lines += [f"  x{n:<3} {where}" for where, n in (swallowed.get("by_where") or {}).items()]
     return "\n".join(lines)

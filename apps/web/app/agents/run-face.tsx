@@ -24,7 +24,7 @@ export { AiBadge } from "./agent-face";
 /** The word for every state: a state is never colour alone (spec §7). */
 export const STATE_WORD: Record<AvatarState, string> = {
   idle: "Idle", thinking: "Thinking", speaking: "Speaking", working: "Working", needs_you: "Needs you",
-  done: "Done", stuck: "Stuck", paused: "Paused", retired: "Retired",
+  done: "Done", stuck: "Stuck", paused: "Paused", retired: "Retired", failed: "Failed", stopped: "Stopped",
 };
 
 export { roleWords };

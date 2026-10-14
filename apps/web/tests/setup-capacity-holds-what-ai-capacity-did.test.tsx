@@ -177,6 +177,35 @@ describe("Capacity on Repo and models", () => {
     expect(calls.filter((c) => c.method === "POST").at(-1)?.url).toBe("/v1/entitlements/sources/chatgpt_pro/disconnect");
   });
 
+  it("says which Anthropic credential runs Claude, and who pays (BOSSAPP-530)", async () => {
+    const onKey = { active: "stored_key", order: "subscription_first", billing: "metered", source_id: "anthropic_api", subscription_disconnected: true };
+    const sources = entitlementSourcesWire();
+    // After Store credential: the key source is connected; the subscription was disconnected.
+    Object.assign(sources.items[0], { connection_status: "connected", claude_credential: onKey });
+    sources.items.push({ ...sources.items[2], id: "es_5", source_id: "anthropic_claude_code", auth_method: "official_cli_oauth",
+      effective_status: "missing_oauth_connection", connection_status: "revoked", claude_credential: onKey } as never);
+    api(board(), sources, { items: [] });
+    mounted = await mountBoard(board());
+    const key = src("anthropic_api");
+    expect(key.querySelector('[role="status"]')?.textContent).toBe("Connected");
+    expect(q(key, "setup-cap-claude")?.textContent).toBe("Used for: builds, agents, meetings · Billed to your API account");
+    expect(q(src("anthropic_claude_code"), "setup-cap-claude")?.textContent).toBe("Claude runs on: Anthropic API key");
+    expect(src("openai_gateway").querySelector('[data-testid="setup-cap-claude"]')).toBeNull();
+    expect(overBudget(q(document.body, "setup-entitlements") as HTMLElement)).toEqual([]);
+    mounted.unmount(); mounted = null;
+
+    // On the subscription the key row says nothing it is not doing; the plan row says so.
+    const onPlan = { ...onKey, active: "subscription", billing: "subscription", source_id: "anthropic_claude_code", subscription_disconnected: false };
+    const again = entitlementSourcesWire();
+    Object.assign(again.items[0], { connection_status: "connected", claude_credential: onPlan });
+    again.items.push({ ...again.items[2], id: "es_5", source_id: "anthropic_claude_code", auth_method: "official_cli_oauth",
+      effective_status: "active", connection_status: "connected", claude_credential: onPlan } as never);
+    api(board(), again, { items: [] });
+    mounted = await mountBoard(board());
+    expect(src("anthropic_api").querySelector('[data-testid="setup-cap-claude"]')).toBeNull();
+    expect(q(src("anthropic_claude_code"), "setup-cap-claude")?.textContent).toBe("Claude runs on: this subscription");
+  });
+
   it("Complete session refuses what is not a reference or a real time", () => {
     expect(completeBody({ ref: " ", scopes: "", state: "available", resetAt: "" })).toBeNull();
     expect(completeBody({ ref: "r", scopes: "", state: "plenty", resetAt: "" })).toBeNull();
@@ -381,7 +410,10 @@ describe("source verdict precedence", () => {
     [{ connection: "failed" }, "Failed"],
     [{ connection: "expired", auth: "official_cli_oauth" }, "Expired"],
     [{ connection: "revoked", auth: "official_cli_oauth" }, "Revoked"],
-    [{ effective: "active", connection: "connected", credentialPresent: true, credentialAbsent: false }, "Active"],
+    // A stored key reads Connected (BOSSAPP-530); a connected plan login stays Active.
+    [{ effective: "active", connection: "connected", credentialPresent: true, credentialAbsent: false }, "Connected"],
+    [{ effective: "active", connection: "connected", auth: "official_cli_oauth" }, "Active"],
+    [{ effective: "active", connection: "configured", credentialPresent: true, credentialAbsent: false }, "Active"],
   ];
   for (const [patch, label] of cases) {
     it(`${JSON.stringify(patch)} retains ${label}`, () => {

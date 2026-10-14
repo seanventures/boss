@@ -7,3 +7,6 @@ ruff==0.12.0
 sqlalchemy==2.0.41
 redis==5.2.1
 pypdf==5.9.0
+# The claude_agent_sdk engine (services/agent_sdk_engine.py): Anthropic's Agent SDK, which
+# bundles the Claude Code CLI it drives. Keep in step with agent_sdk_engine.SDK_PIN.
+claude-agent-sdk==0.2.166

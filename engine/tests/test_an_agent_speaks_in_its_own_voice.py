@@ -387,8 +387,8 @@ def test_a_project_without_an_agent_gets_auto_on_that_step_only():
     entry = next(e for e in wc.CATALOGUE if e["key"] == "standard_product_delivery")
     staffed = wc._staffed_for(entry, frozenset({"pm", "qa"}))
     captains = {s["id"]: s.get("captain") for s in staffed["steps"]}
-    assert captains["meeting"] == "pm" and captains["preview"] == "qa"
-    assert captains["build"] is None and captains["plrr"] is None
+    assert captains["meeting"] == "pm" and captains["more_tests"] == "qa"
+    assert captains["build"] is None and captains["plrr"] is None and captains["preview"] is None
     # The catalogue itself is untouched.
     assert next(s for s in entry["steps"] if s["id"] == "build")["captain"] == "engineering_captain"
 

@@ -3454,6 +3454,11 @@ class WorkflowRunStartRequest(BaseModel):
     #: preflights like the delivery door, and without the field a refusal here (Agent Studio's
     #: Run) had no way to be overridden at all.
     start_anyway: Optional[list[str]] = None
+    #: The pre-check's choices (services.workflow_precheck.gate_start): will_fail checks started
+    #: anyway, steps skipped (never a gate that protects a deploy), and why. Recorded on the run.
+    accept: Optional[list[str]] = None
+    skip_steps: Optional[list[Any]] = None
+    precheck_reason: Optional[str] = None
 
     @model_validator(mode="after")
     def validate_fields(self) -> "WorkflowRunStartRequest":
@@ -4101,6 +4106,9 @@ class EntitlementSourceSummary(BaseModel):
     runtime_supported: bool
     created_at: str
     updated_at: str
+    # Anthropic sources only: which Anthropic credential `claude` runs on for this project
+    # (claude_credential.describe — never a value): active, order, billing, source_id.
+    claude_credential: Optional[dict[str, Any]] = None
 
 
 class EntitlementSourceListResponse(BaseModel):

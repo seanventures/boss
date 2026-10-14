@@ -26,7 +26,7 @@ from sqlalchemy.engine import Connection
 
 from ..config import Settings
 from .agent_service import AgentService
-from .core import emit_event, make_id
+from .core import emit_event, emit_if_changed, make_id
 from .health import HealthSnapshotService
 from .metatron import MetatronService
 from .receipts import ReceiptService
@@ -1330,8 +1330,13 @@ class MetatronCaptain:
             kind="watch", source="watch", salience=0.6,
             refs=[{"object_type": "metatron_watch_tick", "object_id": row["id"]}],
         )
-        emit_event(connection, project_id, "metatron.watch.ticked", actor, "metatron_watch_tick",
-                   row["id"], {"finding_count": len(findings), "receipt_id": receipt.get("id")})
+        # ON CHANGE ONLY (core.emit_if_changed): the same findings every two minutes are one
+        # piece of news, not 943.
+        emit_if_changed(connection, project_id, "metatron.watch.ticked", actor, "metatron_watch_tick",
+                        row["id"], {"finding_count": len(findings), "receipt_id": receipt.get("id"),
+                                    "findings": sorted(str(f.get("id") or f.get("title") or "")
+                                                       for f in findings)},
+                        compare=("finding_count", "findings"))
         return self._row(row)
 
     def latest_watch(self, connection: Connection, project_id: str) -> Optional[dict[str, Any]]:
@@ -1434,7 +1439,7 @@ class MetatronCaptain:
             salience=0.7,
             refs=[{"object_type": "metatron_watch_tick", "object_id": watch.get("id")}],
         )
-        emit_event(
+        emit_if_changed(
             connection, project_id, "metatron.overwatch.completed", actor,
             "metatron_watch_tick", watch.get("id") or "none",
             {
@@ -1443,6 +1448,7 @@ class MetatronCaptain:
                 "verify_ok": bool(verify.get("ok")),
                 "receipt_id": receipt.get("id"),
             },
+            compare=("applied", "rejected", "verify_ok"),
         )
         status = "verified" if verify.get("ok") else "needs_attention"
         if applied:
@@ -1602,13 +1608,14 @@ class MetatronCaptain:
             else:
                 rejected.append(move)
         human = [m for m in moves if m.get("status") == "needs_human" or m.get("requires_human")]
-        emit_event(
+        emit_if_changed(
             connection, project_id, "metatron.drive.completed", actor, "metatron_watch_tick",
             watch.get("id") or "none",
             {
                 "auto": bool(auto), "applied": len(applied), "rejected": len(rejected),
                 "human_required": len(human),
             },
+            compare=("auto", "applied", "rejected", "human_required"),
         )
         status = "applied" if applied else "proposed"
         return {

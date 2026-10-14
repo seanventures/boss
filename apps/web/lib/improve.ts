@@ -121,7 +121,7 @@ export type CollectorView = {
 export const HARNESS_NAMES: Record<string, string> = {
   claude_code: "Claude Code", codex: "Codex", native: "BOSS native", openai: "OpenAI API", azure: "Azure OpenAI",
   openrouter: "OpenRouter", groq: "Groq", deepseek: "DeepSeek", ollama: "Ollama", vllm: "vLLM", grok: "Grok",
-  cursor: "Cursor", gemini: "Gemini", echo: "Echo",
+  cursor: "Cursor", gemini: "Gemini", echo: "Echo", claude_agent_sdk: "Claude Agent SDK",
 };
 
 /** A time and date in the reader's locale: "Mon 5 Oct, 18:20". */

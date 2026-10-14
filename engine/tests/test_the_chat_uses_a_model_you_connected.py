@@ -200,9 +200,15 @@ def test_the_chat_cli_is_given_the_credential_this_install_holds():
     assert "env=self._child_env()" in invoke
 
     env = inspect.getsource(claude_cli_adapter.ClaudeCliAdapter._child_env)
-    assert "claude_login_token(self.settings)" in env
-    assert "stored_credential(settings, \"CLAUDE_CODE_OAUTH_TOKEN\"" in inspect.getsource(
-        cli_harness.claude_login_token)
+    # The one resolution every `claude` child uses: the login, or the console's Anthropic API
+    # key (claude_credential, BOSSAPP-530) — and it asks the install's store.
+    assert "resolve_claude_credential(self.settings)" in env
+    from boss_engine.services import claude_credential
+
+    assert "_store_lookup(settings, TOKEN_NAME)" in inspect.getsource(
+        claude_credential._subscription_token)
+    assert "stored_credential(" in inspect.getsource(claude_credential._store_lookup)
+    assert cli_harness.claude_login_token  # kept as a view of the same resolution
 
     # Codex travels as a FILE, so the fix is to place it, not to pass a token.
     codex = inspect.getsource(codex_cli_adapter.CodexCliAdapter._child_env)
@@ -258,13 +264,16 @@ def test_and_the_code_agent_gets_it_too():
     env = inspect.getsource(ClaudeCodeAgent._child_env)
     # The allowlist still decides what is inherited — this adds one value, it does not widen.
     assert "agent_environment(os.environ, _shared_tool_caches())" in env
-    # The one resolution every `claude` child uses (cli_harness.claude_login_token).
-    assert "claude_login_token(self.settings)" in env
-    from boss_engine.services import cli_harness
+    # The one resolution every `claude` child uses (claude_credential.resolve_claude_credential).
+    # (through the one hook an engine may override: claude_agent_sdk asks for the key only).
+    assert "self._resolve_credential()" in env
+    assert "resolve_claude_credential(self.settings)" in inspect.getsource(
+        ClaudeCodeAgent._resolve_credential)
+    from boss_engine.services import claude_credential
 
-    resolve = inspect.getsource(cli_harness.claude_login_token)
+    resolve = inspect.getsource(claude_credential._subscription_token)
     # And what the lane binder already resolved is preferred over asking the store again.
-    assert resolve.index("claude_code_oauth_token") < resolve.index("stored_credential(")
+    assert resolve.index("claude_code_oauth_token") < resolve.index("_store_lookup(")
 
 
 def test_and_an_operator_set_token_still_wins(monkeypatch):

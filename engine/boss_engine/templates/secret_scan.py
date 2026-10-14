@@ -9,9 +9,27 @@ What it looks for:
   * the template's own `pattern` and `live_pattern` for each secret it declares;
   * the exact values an app's secret bindings hold (passed in by the gate; never logged).
 
+A DEVELOPMENT DEFAULT IS NOT A SECRET EITHER. A HelpDesk build was flagged for
+`postgres://helpdesk:helpdesk@localhost:5432/helpdesk` in .env.example,
+`postgres://postgres:postgres@db` in docker-compose.yml, `password: "Agent#Demo2024"` in its seed
+and a demo password in its README. A connection URL to loopback or a compose service, or whose
+password is the user or database name, is a placeholder; so is a generic literal that says it is
+a demo value, and, in an example file or a document, one that says it is a password/secret/dev
+value. These excuse only the GENERIC literal rules (TEST_LITERAL_RULES): a credential FORMAT
+(ghp_, AKIA, sk_live_, a private key, a JWT) and a bound value always fire, in every file.
+
 A placeholder is not a secret (except the rules in NEVER_A_PLACEHOLDER): `sk_test_...`, `<your key>`, `${STRIPE_SECRET_KEY}`, `changeme`
 and values made of one repeated character are skipped, so a guide or an `.env.example` can say
 what goes where.
+
+A TEST'S OWN LITERAL IS NOT A COMMITTED SECRET. HelpDesk AI (crun_db538dff872549bf9359) was
+blocked for "something that looks like a committed secret": helpdesk-ai/vitest.config.ts lines
+14-15, `DEMO_PASSWORD` and `SESSION_SECRET` set for the test workers to values that say they are
+test values. A file only a test run reads (is_test_only_path: test sources, fixtures and the test
+runner's config) may assign a value that names itself a test value; the GENERIC literal rules
+(TEST_LITERAL_RULES) skip it there. Every credential FORMAT rule (a ghp_ token, an AKIA key, a
+private key) and every exact bound value still fire in a test file, and a literal that does not
+say it is a test value is still a finding — fixture_secret_repair hands that one back to QA.
 """
 from __future__ import annotations
 
@@ -55,6 +73,49 @@ _PLACEHOLDER = re.compile(
     r".*(?:\.\.\.|xxxx|your[_\- ]|example|changeme|placeholder|replace[_\- ]?me|dummy|redacted|"
     r"not[_\- ]a[_\- ]real|fake|sample).*)$")
 
+#: A word that marks a value as a seed or demo value, not a credential: `Agent#Demo2024` in a seed
+#: file, a demo password in the README. Never consulted for a credential FORMAT rule.
+_DEMO_WORD = re.compile(r"(?i)demo")
+
+#: In an example or a document a generic literal illustrates: these words say the value is one
+#: (`password: "admin123"`, `SECRET=dev-secret-please-change`).
+_DOC_PLACEHOLDER_WORD = re.compile(r"(?i)demo|password|passw0rd|secret|admin|local|dev|test")
+
+#: Hosts that are this machine, or a compose service (one label, no dots: `db`, `postgres`).
+_LOOPBACK_HOSTS = frozenset({"localhost", "0.0.0.0", "::1", "[::1]", "host.docker.internal"})
+_URL_PARTS = re.compile(
+    r"^[a-z][a-z0-9+.\-]*://(?P<user>[^/\s:@'\"]{1,64}):(?P<pw>[^/\s@'\"]+)@"
+    r"(?P<host>\[[^\]]+\]|[^/\s:'\"?#]+)(?::\d+)?(?:/(?P<db>[^/\s?#'\"]*))?")
+
+
+def _local_url_placeholder(url: str) -> bool:
+    """A connection URL to this machine or to a compose service, or whose password is just the
+    user or database name (`postgres://helpdesk:helpdesk@localhost:5432/helpdesk`,
+    `postgres://postgres:postgres@db`): a development default, not a committed credential."""
+    m = _URL_PARTS.match(url or "")
+    if not m:
+        return False
+    host = m.group("host").lower()
+    pw = m.group("pw")
+    if pw in {m.group("user"), m.group("db") or None}:
+        return True
+    return (host in _LOOPBACK_HOSTS or host.startswith("127.")
+            or ("." not in host and not host.startswith("[")))
+
+
+_DOC_SUFFIXES = (".md", ".mdx", ".markdown", ".rst", ".adoc", ".txt")
+_EXAMPLE_NAME = re.compile(r"(?i)(?:^|\.)(?:example|sample|template|dist)(?:\.|$)")
+
+
+def is_doc_or_example_path(path: str) -> bool:
+    """A document or an example file: what a value there says is illustration, never config the
+    app reads (`.env.example`, `config.sample.json`, README.md, docs/...)."""
+    p = "/" + str(path).replace("\\", "/").lower().lstrip("/")
+    base = p.rsplit("/", 1)[-1]
+    return (base.endswith(_DOC_SUFFIXES) or "/docs/" in p or base.startswith("readme")
+            or bool(_EXAMPLE_NAME.search(base)))
+
+
 #: Rules whose every match is a finding, whatever words the match contains.
 NEVER_A_PLACEHOLDER = frozenset({"private_key", "aws_documented_example_key"})
 
@@ -74,6 +135,37 @@ class Finding:
 
     def reason(self) -> str:
         return f"{self.path}:{self.line}: looks like a committed secret ({self.rule})"
+
+
+#: The generic "a secret-named thing was assigned a literal" rules: the ones a test's own fixture
+#: value trips. Credential formats are never in this set.
+TEST_LITERAL_RULES = frozenset({"assigned_secret", "url_with_password"})
+
+#: A value that says it exists for tests.
+_TEST_VALUE = re.compile(r"(?i)test|fixture|mock|stub|vitest|jest|e2e")
+
+_TEST_DIRS = ("/tests/", "/test/", "/spec/", "/__tests__/", "/e2e/", "/fixtures/", "/__fixtures__/",
+              "/__mocks__/", "/testdata/")
+_TEST_SUFFIXES = (
+    "_test.py", "_test.go", "_test.rs", "_test.rb", "_spec.rb",
+    ".test.js", ".test.jsx", ".test.ts", ".test.tsx", ".test.mjs", ".test.cjs",
+    ".spec.js", ".spec.jsx", ".spec.ts", ".spec.tsx", ".spec.mjs", ".spec.cjs",
+    "test.java", "tests.java", "test.kt", "test.cs", "tests.cs")
+#: A test runner's own configuration and setup: read by the test run, never by the app.
+_TEST_RUNNER_FILE = re.compile(
+    r"^(?:vitest|jest|playwright|cypress|karma|mocha)\.(?:config|setup|workspace)(?:\.[\w-]+)?\.(?:[cm]?[jt]s)$"
+    r"|^\.mocharc\.\w+$|^setuptests\.[cm]?[jt]sx?$|^conftest\.py$|^pytest\.ini$|^\.env\.test(?:\.local)?$")
+
+
+def is_test_only_path(path: str) -> bool:
+    """A file only a test run reads: a test source, a fixture, or the test runner's config."""
+    p = "/" + str(path).replace("\\", "/").lower().lstrip("/")
+    base = p.rsplit("/", 1)[-1]
+    if any(seg in p for seg in _TEST_DIRS):
+        return True
+    if base.startswith("test_") or base.endswith(_TEST_SUFFIXES):
+        return True
+    return bool(_TEST_RUNNER_FILE.match(base))
 
 
 def _is_placeholder(value: str) -> bool:
@@ -114,6 +206,8 @@ def scan_text(path: str, text: str, *, declared: Iterable[tuple[str, str]] = (),
     secrets); a value shorter than 8 characters is not searched for (it would match noise)."""
     findings: list[Finding] = []
     rules = list(COMMON_RULES) + _declared_rules(declared)
+    test_only = is_test_only_path(path)
+    doc_or_example = is_doc_or_example_path(path)
     exact = {name: v for name, v in (values or {}).items() if isinstance(v, str) and len(v) >= 8}
     for lineno, line in enumerate(text.splitlines(), start=1):
         if len(line) > 20000:
@@ -124,6 +218,15 @@ def scan_text(path: str, text: str, *, declared: Iterable[tuple[str, str]] = (),
                 value = m.group(m.lastindex) if m.lastindex else m.group(0)
                 if rule in seen or (rule not in NEVER_A_PLACEHOLDER and _is_placeholder(value)):
                     continue
+                if test_only and rule in TEST_LITERAL_RULES and _TEST_VALUE.search(value):
+                    continue  # a test's own, self-declared test value (see the module doc)
+                if rule == "url_with_password" and _local_url_placeholder(m.group(0)):
+                    continue  # a local / compose development default (_local_url_placeholder)
+                if rule in TEST_LITERAL_RULES and _DEMO_WORD.search(value):
+                    continue  # a seed or demo value that says it is one
+                if (doc_or_example and rule in TEST_LITERAL_RULES
+                        and _DOC_PLACEHOLDER_WORD.search(value)):
+                    continue  # an example's or a document's illustrative value
                 seen.add(rule)
                 findings.append(Finding(path, lineno, rule))
         for name, value in exact.items():

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from importlib import import_module
 from pathlib import Path
 from typing import Any, Optional
@@ -40,6 +41,9 @@ class EntitlementConnectionSessionStateError(Exception):
 
 #: Who owns a subscription connected to this workspace: its operator, whoever pressed Connect.
 WORKSPACE_OPERATOR_ID = "founder"
+
+#: A key or local model connected in Setup → Add a model: `setup-<provider>[-<n>]`.
+CONNECTED_KEY_SOURCE = re.compile(r"^setup-([a-z_]+?)(?:-\d+)?$")
 
 
 class EntitlementBrokerService:
@@ -415,7 +419,10 @@ class EntitlementBrokerService:
                 ),
             )
         if source_id == "anthropic_api":
-            return False, bool(self.settings.anthropic_api_key)
+            # Runs `claude` on the operator's key (claude_credential, BOSSAPP-530). A key BOSS
+            # stored is a bound SecretRef, which _runtime_context counts by itself.
+            present = bool(self.settings.anthropic_api_key)
+            return present, present
         if source_id == "typesafe_jev":
             # Runs over HTTPS from the API and the worker; the key is the only prerequisite. A
             # key BOSS stored is a bound SecretRef, which _runtime_context counts by itself.
@@ -959,6 +966,7 @@ class EntitlementBrokerService:
                 emit_events=False,
                 keep_connection=True,
             )
+        self.repair_connected_key_sources(connection, project_id)
 
     def list_sources(self, connection: Connection, project_id: str) -> list[dict[str, Any]]:
         declared_boss_sources = {
@@ -1013,6 +1021,19 @@ class EntitlementBrokerService:
             payload["created_at"] = payload["created_at"].isoformat()
             payload["updated_at"] = payload["updated_at"].isoformat()
             items.append(payload)
+        # WHICH ANTHROPIC CREDENTIAL IS IN USE (claude_credential, BOSSAPP-530), on the two
+        # rows it concerns, so the console can say it. Read from state only, never a value.
+        anthropic = [i for i in items
+                     if i["source_id"] in ("anthropic_claude_code", "anthropic_api")]
+        if anthropic:
+            from .claude_credential import describe
+
+            try:
+                said = describe(connection, self.settings, project_id)
+            except Exception:  # noqa: BLE001 — the list stands without the annotation
+                said = None
+            for item in anthropic:
+                item["claude_credential"] = said
         return items
 
     def list_model_adapters(self) -> list[dict[str, Any]]:
@@ -1214,6 +1235,37 @@ class EntitlementBrokerService:
             "duplicate": False,
         }
 
+    def connected_key_workload_classes(self, provider: str) -> list[str]:
+        """The work a Setup-connected key may carry: what the provider's official API source
+        allows, else the owner's own sandbox."""
+        for source_defaults in self._source_record_defaults().values():
+            if (source_defaults.get("provider") == provider
+                    and source_defaults.get("source_kind") == "official_api"):
+                allowed = list(source_defaults.get("workload_classes_allowed") or [])
+                if allowed:
+                    return allowed
+        return ["owner_sandbox"]
+
+    def repair_connected_key_sources(self, connection: Connection, project_id: str) -> list[str]:
+        """Idempotent: give every connected key saved before keys carried workload classes the
+        same classes a new connection gets. Returns the source ids it repaired."""
+        rows = connection.execute(
+            text("SELECT source_id, provider FROM entitlement_sources WHERE project_id = :p "
+                 "AND source_id LIKE 'setup-%' "
+                 "AND COALESCE(jsonb_array_length(workload_classes_allowed), 0) = 0"),
+            {"p": project_id}).mappings().all()
+        repaired = []
+        for row in rows:
+            if not CONNECTED_KEY_SOURCE.match(row["source_id"]):
+                continue
+            connection.execute(
+                text("UPDATE entitlement_sources SET workload_classes_allowed = CAST(:w AS JSONB), "
+                     "updated_at = now() WHERE project_id = :p AND source_id = :s"),
+                {"w": json.dumps(self.connected_key_workload_classes(row["provider"])),
+                 "p": project_id, "s": row["source_id"]})
+            repaired.append(row["source_id"])
+        return repaired
+
     def upsert_source(
         self,
         connection: Connection,
@@ -1235,6 +1287,12 @@ class EntitlementBrokerService:
         if payload.get("provider") == "boss" and not defaults:
             raise ValueError("BOSS-owned model source is unavailable in this edition")
         record = {**defaults, **payload}
+        if (not defaults and CONNECTED_KEY_SOURCE.match(record["source_id"])
+                and not record.get("workload_classes_allowed")):
+            # A CONNECTED KEY ROUTES LIKE ITS PROVIDER'S API. Setup never says which work a key
+            # may carry; left empty, the router refused every skill on the only working key.
+            record["workload_classes_allowed"] = self.connected_key_workload_classes(
+                record.get("provider", ""))
         computed_runtime_supported, computed_credential_present = self._runtime_flags(
             record["source_id"]
         )
@@ -1722,6 +1780,12 @@ class EntitlementBrokerService:
             "official_oauth_connected": False,
             "capacity_state": "unknown",
         }
+        if source_id == "anthropic_claude_code":
+            # The stored login goes too, so every `claude` run falls through to the Anthropic
+            # API key (claude_credential) — including those that never read this row.
+            from .claude_credential import forget_subscription_login
+
+            forget_subscription_login(connection, self.settings, project_id, actor=actor)
         disconnected = self.upsert_source(
             connection,
             {
@@ -1759,10 +1823,33 @@ class EntitlementBrokerService:
     def _model_registry(self) -> list[dict[str, Any]]:
         return self._provider_registry().get("models", [])
 
+    def _registry_families(self, provider: str, supported_models: list[str]) -> set[str]:
+        """The registry entries a source's models stand for. A concrete id (`claude-sonnet-5`,
+        `claude-sonnet-4-5`) is its family (`claude-sonnet`): the registry lists families, a
+        connection names the dated model it was proved with. An exact entry wins over a family."""
+        known = {
+            str(model["id"]).split(":", 1)[-1]
+            for model in self._model_registry()
+            if isinstance(model.get("id"), str) and model.get("provider") == provider
+        }
+        families: set[str] = set()
+        for name in supported_models:
+            if not isinstance(name, str):
+                continue
+            name = name[len(provider) + 1:] if name.startswith(provider + ":") else name
+            if name in known:
+                families.add(name)
+                continue
+            parents = [family for family in known if name.startswith(family + "-")]
+            if parents:
+                families.add(max(parents, key=len))
+        return families
+
     def _models_for_source(
         self, provider: str, supported_models: list[str], allowed_tiers: list[str]
     ) -> list[dict[str, Any]]:
         candidates: list[dict[str, Any]] = []
+        families = self._registry_families(provider, supported_models)
         for model in self._model_registry():
             model_id = model.get("id")
             if not isinstance(model_id, str):
@@ -1770,7 +1857,7 @@ class EntitlementBrokerService:
             if model.get("provider") != provider:
                 continue
             suffix = model_id.split(":", 1)[-1]
-            if supported_models and suffix not in supported_models and model_id not in supported_models:
+            if supported_models and suffix not in families:
                 continue
             if allowed_tiers and model.get("tier") not in allowed_tiers:
                 continue

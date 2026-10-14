@@ -34,7 +34,7 @@ def test_governed_verify_does_not_take_only_the_first_default_command():
     src = GOVERNED.read_text(encoding="utf-8")
     assert "default_test_commands(spec, title))[0]" not in src
     assert "resolve_authoritative_test_commands" in src
-    assert "run_until_failure" in src
+    assert "run_web_gate" in src  # stops at the first failure, like run_until_failure
     # Guest stages must receive the list. Passing the joined display string
     # would reintroduce the sandbox-refuses-&& failure.
     assert "test_cmds=[test_cmd]" not in src

@@ -22,6 +22,7 @@ from apps.api.app.main import app  # noqa: E402
 # here is a design decision about that route; write the reason into idempotency.EXCLUSIONS.
 EXPECTED_EXCLUDED = {
     ("POST", "/v1/delivery-workflows/agreement"),  # authenticated read; no replay DB write
+    ("POST", "/v1/identity/setup-link"),  # a live claim link is never stored for replay
     ("POST", "/v1/worker/poll"), ("POST", "/v1/worker/heartbeat"),
     ("POST", "/v1/worker/complete"), ("POST", "/v1/worker/fail"),
     *{(m, p) for m in ("POST", "PUT", "PATCH", "DELETE")
@@ -112,6 +113,14 @@ def test_what_a_key_remembers():
     assert idempotency.remembers(404) and idempotency.remembers(422)
     for transient in (408, 409, 425, 429, 500, 502, 503):
         assert not idempotency.remembers(transient), transient
+
+
+def test_an_identity_refusal_is_not_remembered():
+    """BOSSAPP-510: `401 step_up_required` was stored against the press's key, so the console's
+    re-send after the person entered their code got the same refusal back and the approval
+    never landed. 401/403 describe the session at that moment; the key stays free."""
+    assert not idempotency.remembers(401)
+    assert not idempotency.remembers(403)
 
 
 def test_every_covered_route_really_reaches_the_claim_and_every_excluded_one_does_not(

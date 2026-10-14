@@ -20,7 +20,8 @@ exactly one execution per key.
   that never heard of the header are untouched.
 
 WHAT IS REMEMBERED, AND WHAT IS NOT. A 2xx and a deterministic 4xx are remembered: repeating
-them would only repeat the same outcome. A 5xx, a 408/409/425/429, and a handler that raised
+them would only repeat the same outcome. A 5xx, a 401/403 (the session's state, lifted by a
+step-up or a grant), a 408/409/425/429, and a handler that raised
 are NOT — the key is released so the same press can be retried. The product owner's fear about
 idempotency was exactly this: "you'll never trigger a run". A first attempt that died on a
 transient error must not pin that failure to the key for a day.
@@ -49,7 +50,12 @@ IN_PROGRESS_TAKEOVER = "10 minutes"
 MAX_STORED_BODY_BYTES = 1_048_576
 
 # Statuses that describe the request rather than the moment. Everything else releases the key.
-_TRANSIENT_4XX = frozenset({408, 409, 425, 429})
+# 401 and 403 describe the CALLER'S SESSION, not the request: a `401 step_up_required` is lifted
+# by the person entering their code, and the console then re-sends the same press. Remembered,
+# the replay got the stored refusal back and the approval never landed (BOSSAPP-510: three
+# `decision:approve step_up_required` denials in one day, each followed by nothing). The handler
+# never ran behind an identity refusal, so freeing the key cannot double an effect.
+_TRANSIENT_4XX = frozenset({401, 403, 408, 409, 425, 429})
 
 # Bodies that are a stream rather than a document. They cannot be buffered to be remembered.
 _STREAMING_CONTENT_TYPES = ("text/event-stream", "application/x-ndjson")
@@ -70,6 +76,9 @@ EXCLUSIONS: tuple[tuple[re.Pattern[str], str], ...] = (
      "The worker lease protocol carries its own fencing: a lease id and attempt number make a "
      "heartbeat or completion idempotent already, and replaying a STORED heartbeat would tell a "
      "worker it still holds a lease the server has since taken back."),
+    (re.compile(r"^/v1/identity/setup-link$"),
+     "The answer is a live, single-use claim link: storing it for replay would keep the setup "
+     "token in plain text for a day, and asking again already just mints a new one that voids the last."),
     (re.compile(r"^/v1/previews/[^/]+/web(/|$)"),
      "The preview capability proxy forwards the previewed APP's own traffic. An Idempotency-Key "
      "on those requests belongs to that app's API, not to BOSS, and must reach it untouched."),

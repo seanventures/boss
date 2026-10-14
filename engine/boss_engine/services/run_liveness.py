@@ -166,8 +166,41 @@ SUPERSEDES_SQL = """
 
 
 def superseded_by(connection, run_id: str) -> Optional[str]:
-    """The newest later attempt of this run's work, or None."""
+    """The newest later attempt of this run's work, or None.
+
+    Two questions, one answer. A later attempt in the run's lineage (SUPERSEDES_SQL), OR an
+    in-flight run doing the SAME WORK by the rule start_code_task dedupes on
+    (code_task_service.in_flight_same_work: the work fingerprint, then the same app in the same
+    repo). With only the first, a failed build of an older workflow run (crun_37f4ccef) was not
+    "superseded" by the live crun_247435e1 — different fingerprint, same app — so the shepherd
+    retried it every two minutes and every retry was deduped onto the live run (2026-10-13).
+    A run still in flight is superseded only by NEWER same work, never by an older keeper.
+    """
     row = connection.execute(sql(f"""
         SELECT n.id FROM code_task_runs r JOIN code_task_runs n ON {SUPERSEDES_SQL}
         WHERE r.id = :r ORDER BY n.created_at DESC LIMIT 1"""), {"r": str(run_id)}).first()
-    return str(row[0]) if row is not None else None
+    if row is not None:
+        return str(row[0])
+    return same_work_in_flight(connection, run_id)
+
+
+def same_work_in_flight(connection, run_id: str) -> Optional[str]:
+    """The in-flight run start_code_task would dedupe this run's work onto, other than itself."""
+    from .code_task_service import in_flight_same_work
+
+    me = connection.execute(sql(
+        "SELECT project_id, status, title, created_at, spec->>'work_fingerprint' AS fp, "
+        "spec->>'repo' AS repo FROM code_task_runs WHERE id = :r"), {"r": str(run_id)}).mappings().first()
+    if me is None:
+        return None
+    other = in_flight_same_work(connection, me["project_id"], fingerprint=me["fp"],
+                                repo=me["repo"], title=me["title"], exclude=str(run_id))
+    if not other:
+        return None
+    if str(me["status"] or "") in IN_FLIGHT:
+        newer = connection.execute(sql(
+            "SELECT 1 FROM code_task_runs WHERE id = :o AND created_at > :t"),
+            {"o": other, "t": me["created_at"]}).first()
+        if newer is None:
+            return None
+    return str(other)

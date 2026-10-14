@@ -24,7 +24,7 @@ import { IdentityError } from "../../../lib/identity/api";
 import { Markdown } from "../../../app/markdown";
 import {
   APPLIED_WORD, DEPLOY_VALUE_NAME, ENVS, ENV_WORD, refusalWords, resolveAppKey, secretWord, stackLabel, templatesApi,
-  type AppSecrets, type Applied, type Guide, type SecretBinding,
+  type AppSecrets, type Applied, type DemoLogin, type Guide, type SecretBinding,
 } from "../../../lib/templates";
 import { CopyValue, SideSheet } from "./side-sheet";
 
@@ -301,6 +301,7 @@ export function AppSetup({ projectId, appKey }: { projectId: string; appKey: str
             </form>
           </div>
         ) : null}
+        {secrets ? <DemoLogins projectId={projectId} appKey={appKey} /> : null}
         {note ? <span className="tpl-muted" role="status" data-testid="tpl-setup-note">{note}</span> : null}
       </section>
 
@@ -331,6 +332,49 @@ export function AppSetup({ projectId, appKey }: { projectId: string; appKey: str
           );
         })}
       </section>
+    </div>
+  );
+}
+
+/** DEMO LOGINS: the password the app's demo users sign in with, which BOSS generated for its
+ *  previews and its deploy (its seed refuses to run without one). Hidden until asked for, behind
+ *  the same check as setting a secret; a value a person set is never shown here. */
+export function DemoLogins({ projectId, appKey }: { projectId: string; appKey: string }) {
+  const [shown, setShown] = useState<DemoLogin[] | null>(null);
+  const [why, setWhy] = useState("");
+  const guarded = useGuardedCall();
+  async function show() {
+    setWhy("");
+    try {
+      const all = await guarded("Show the demo login passwords.", async () => [
+        ...(await templatesApi.demoLogins(projectId, appKey, "preview")),
+        ...(await templatesApi.demoLogins(projectId, appKey, "deploy"))]);
+      setShown(all);
+    } catch (e) {
+      setWhy(e instanceof IdentityError && e.code === "step_up_cancelled" ? "Not shown: you cancelled the check." : refusalWords(e));
+    }
+  }
+  return (
+    <div className="tpl-deploy-values" data-testid="tpl-demo-logins">
+      <h4 title="The password BOSS generated for the app's demo users, for its previews and its deploy">Demo logins</h4>
+      {shown === null ? (
+        <GatedButton permission="app_secret:write" projectId={projectId} type="button" className="ag-link"
+                     data-testid="tpl-demo-logins-show" onClick={() => void show()}
+                     title="Show the demo login passwords BOSS generated (asks you to confirm it is you)">
+          Show demo login passwords
+        </GatedButton>
+      ) : shown.length ? (
+        <ul className="tpl-rows">
+          {shown.map((d) => (
+            <li key={`${d.env}-${d.name}`} className="tpl-row" data-testid={`tpl-demo-login-${d.env}-${d.name}`}>
+              <span className="tpl-row-name tpl-mono">{d.name}</span>
+              <span className="tpl-chip">{ENV_WORD[d.env] ?? d.env}</span>
+              <CopyValue value={d.value} label={`${d.name} (${ENV_WORD[d.env] ?? d.env})`} testId={`tpl-demo-login-copy-${d.env}-${d.name}`} />
+            </li>
+          ))}
+        </ul>
+      ) : <span className="tpl-muted" data-testid="tpl-demo-logins-none">BOSS has generated no demo login password for this app.</span>}
+      {why ? <span className="tpl-err" role="alert" data-user-text>{why}</span> : null}
     </div>
   );
 }

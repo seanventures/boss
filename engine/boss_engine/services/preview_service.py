@@ -529,11 +529,14 @@ def app_preview_port() -> int:
 
 
 def preview_link_environment(engine, *, project_id: str, run_id: Optional[str], preview_id: str,
-                             expires_at, rotate: bool) -> dict[str, str]:
+                             expires_at, rotate: bool, app_env=None) -> dict[str, str]:
     """What cross-app links add to a preview (F5 §5.3): as a consumer, BOSS_LINK_<ALIAS>_* and
     this preview's link pass; as a provider, BOSS_TEST_USERS (rotated on a NEW preview). Never
     fails the preview: a link that cannot be resolved is logged by name and left out. Also the
-    app's own template environment (preview_app_environment); links win on a name clash."""
+    app's own environment (`app_env`, a preview_app_environment; links win on a name clash)."""
+    if app_env is None:
+        app_env = preview_app_environment(engine, project_id=project_id, run_id=run_id,
+                                          preview_id=preview_id)
     try:
         from ..app_links import service as _links
 
@@ -543,27 +546,77 @@ def preview_link_environment(engine, *, project_id: str, run_id: Optional[str], 
                                               expires_at=expires_at, rotate=rotate)
     except Exception as exc:  # noqa: BLE001
         logger.warning("preview %s starts without its link environment (%s)", preview_id, type(exc).__name__)
-        return preview_app_environment(engine, project_id=project_id, run_id=run_id, preview_id=preview_id)
+        return dict(app_env.values)
     if env:
         logger.info("preview %s gets %s", preview_id, ", ".join(sorted(env)))
-    return {**preview_app_environment(engine, project_id=project_id, run_id=run_id, preview_id=preview_id),
-            **env}
+    return {**app_env.values, **env}
 
 
-def preview_app_environment(engine, *, project_id: str, run_id: Optional[str], preview_id: str) -> dict[str, str]:
-    """What the app's templates give a preview (F2 §2.4, F6): its `preview` secrets (never live),
-    APP_BASE_URL, and its Sign in with BOSS redirect URI registered for this preview. Never fails the
-    preview: logged by kind and left out."""
+def _read_log(log_path: str) -> str:
     try:
-        from ..oidc_provider.app_sign_in import preview_environment
+        return Path(log_path).read_text(errors="ignore")
+    except OSError:
+        return ""
+
+
+def _app_dir_of_plan(workdir: Path, plan: Optional["AppRun"]) -> Path:
+    rel = "."
+    if plan is not None:
+        if plan.declared_in:
+            rel = plan.declared_in
+        elif plan.entry and plan.entry[0] in ("node", "static") and plan.entry[1]:
+            rel = plan.entry[1]
+    return workdir if rel in ("", ".") else workdir / rel
+
+
+def app_dir_of(workdir: Path, changed: Optional[list[str]] = None) -> Path:
+    """The directory of the app a runner starts (where its .env.example and boss.deploy.yaml
+    live): the declared command's directory, a resolved Node/static app's, else the root."""
+    try:
+        plan = how_app_runs(workdir, changed)
+    except Exception:  # noqa: BLE001 — an ambiguous repo is the launcher's to report
+        plan = None
+    return _app_dir_of_plan(workdir, plan)
+
+
+def record_demo_logins(engine, preview_id: str, app_env) -> list[str]:
+    """Name, on the preview's row, the demo logins it signs in with (run_env.RunEnvironment.shown:
+    a demo/seed password BOSS generated), so its card can say where the reviewer reads the
+    password (the app's Setup › Demo logins). Names only. Never fails the preview."""
+    names = list(getattr(app_env, "shown", None) or [])
+    if not names:
+        return []
+    try:
+        with begin(engine) as c:
+            c.execute(text("UPDATE app_previews SET demo_logins = CAST(:d AS JSONB) WHERE id = :id"),
+                      {"id": preview_id, "d": json.dumps(names)})
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("preview %s: demo logins not recorded (%s)", preview_id, type(exc).__name__)
+    return names
+
+
+def preview_app_environment(engine, *, project_id: str, run_id: Optional[str], preview_id: str,
+                            app_dir: Optional[Path] = None):
+    """What the app declares, resolved for a preview (oidc_provider.app_sign_in.
+    preview_run_environment, run_env's rule): its `preview` secrets (never live), a FRESH value
+    for each secret BOSS generates, APP_BASE_URL, and its Sign in with BOSS redirect URI. Never
+    fails the preview: an error is logged by kind and the app's own files still count."""
+    from ..templates.run_env import needs_from_app_dir, resolve
+
+    try:
+        from ..oidc_provider.app_sign_in import preview_run_environment
 
         with begin(engine) as c:
-            env = preview_environment(c, project_id=project_id, run_id=run_id, preview_id=preview_id)
+            env = preview_run_environment(c, project_id=project_id, run_id=run_id,
+                                          preview_id=preview_id, app_dir=app_dir)
     except Exception as exc:  # noqa: BLE001
         logger.warning("preview %s starts without its app secrets (%s)", preview_id, type(exc).__name__)
-        return {}
-    if env:
-        logger.info("preview %s gets %s", preview_id, ", ".join(sorted(env)))
+        env = resolve(needs_from_app_dir(app_dir), purpose="preview")
+    # The preview's own database (provision_preview_database, keyed by the preview id) wins over
+    # "listed/unset", as the build's does in its proof.
+    env.supply(_build_services_env(owned_process.Owner("preview", preview_id)))
+    if env.values:
+        logger.info("preview %s gets %s", preview_id, ", ".join(sorted(env.values)))
     return env
 
 
@@ -2127,6 +2180,11 @@ def app_serves_headline(record: Optional[dict]) -> str:
     the error named the consequence instead of the gate (app_serves) that failed."""
     rec = record or {}
     error = str(rec.get("error") or "").strip()
+    if ((rec.get("needs_secret") and error.startswith("the app needs a secret"))
+            or (rec.get("optional_unset") and error.startswith("the app must start without"))):
+        # THE VARIABLE, by name (templates.run_env): a secret the app needs, or an optional one
+        # it crashed without — never only the crash.
+        return error.split(". ", 1)[0][:300]
     verb = ("the app did not start" if rec.get("exit_code") is not None or "exited" in error
             else "the app did not serve HTTP")
     line = ""
@@ -2159,10 +2217,32 @@ def probe_route(port: int, path: str, *, timeout: float = 5.0) -> Optional[int]:
         return None
 
 
+def _build_services_env(owner) -> dict[str, str]:
+    """The run's (or preview's) own build-services variables (DATABASE_URL, PG*), which BOSS
+    supplies to the app it starts and which therefore win over "listed/unset" (run_env.supply).
+    owned_process injects the same values into a workload's processes; naming them here keeps
+    the record honest and a crash that names them from being blamed on a missing setting."""
+    try:
+        from . import build_services
+
+        return dict(build_services.env_for_owner(owner) or {})
+    except Exception:  # noqa: BLE001 — no lease is no services
+        return {}
+
+
 def prove_app_serves(workdir: Path, changed: Optional[list[str]], *,
                      lineage: Optional[list[str]] = None, known_service: bool = False,
-                     timeout: float = 180.0, probe_paths: Optional[list[str]] = None) -> dict:
+                     timeout: float = 180.0, probe_paths: Optional[list[str]] = None,
+                     needs: Optional[dict] = None, bound: Optional[dict[str, str]] = None) -> dict:
     """START what the build built and require it to answer HTTP — before the build may pass.
+
+    WITH THE ENVIRONMENT THE APP DECLARES (templates.run_env). `needs` is what its templates
+    declare (run_env.app_needs), `bound` the values a person bound for its `build` environment;
+    the app directory's boss.deploy.yaml and .env.example are read here. A secret BOSS generates
+    (a session key) gets a fresh throwaway value for this proof only — HelpDesk AI
+    (crun_db538dff) was blocked for "SESSION_SECRET must be set", a value BOSS makes for every
+    deploy but never gave the proof. A required secret only a person can set, and nobody has, is
+    a "needs a secret" verdict naming it, and the app is not started to crash on it.
 
     WHY. The Lead Triage Inbox build (crun_3e370c114b95425d8a7c, PR paramg/boss-sandbox#218)
     passed every gate and completed. Its preview then failed twice with "app did not serve HTTP
@@ -2252,8 +2332,19 @@ def prove_app_serves(workdir: Path, changed: Optional[list[str]], *,
 
         record["source"] = plan.source
         record["command"] = plan.shell()
+        from ..templates.run_env import merge, needs_from_app_dir, resolve
+
+        run_env = resolve(merge(needs or {}, needs_from_app_dir(_app_dir_of_plan(tree, plan))),
+                          purpose="proof", bound=bound,
+                          supplied=_build_services_env(owned_process.current_owner()))
+        record["environment"] = run_env.evidence()
+        if run_env.needs:
+            record.update(ok=False, needs_secret=[n.name for n in run_env.needs], error=(
+                f"the app {run_env.verdict()} (environment build), then retry the build. "
+                "BOSS did not start it."))
+            return record
         log_path = str(tree / ".boss-serve-proof.log")
-        proc, port_hint = launch_app(tree, plan.command, log_path)
+        proc, port_hint = launch_app(tree, plan.command, log_path, extra_env=run_env.values)
         try:
             port = _discover_working_port(log_path, port_hint,
                                           timeout=preview_start_timeout(tree, timeout), proc=proc,
@@ -2271,6 +2362,16 @@ def prove_app_serves(workdir: Path, changed: Optional[list[str]], *,
                 record.update(ok=False, exit_code=exit_code, error=(
                     f"the app exited (code {exit_code}) before serving HTTP: "
                     + _why_it_failed(log_path)))
+                log_text = _read_log(log_path)
+                named = run_env.unset_named_in(log_text)
+                if named:
+                    # A person's act ONLY for a secret only a person can supply; a crash on a
+                    # listed/optional variable is the code's (WORK: the coder's repair round).
+                    if run_env.crash_needs_person(log_text):
+                        record["needs_secret"] = [named]
+                    else:
+                        record["optional_unset"] = [named]
+                    record["error"] = f"the app {run_env.explain_crash(log_text)}. {record['error']}"
             else:
                 listening = _diagnose_listening_port(log_path, port_hint)
                 record.update(ok=False, error=(
@@ -2531,12 +2632,21 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
     if database_refused:
         return _fail(database_refused, command=" ".join(command))
     _expires = datetime.now(timezone.utc) + timedelta(minutes=ttl_minutes)
+    # WHAT THE APP DECLARES, resolved by the rule the build's proof and the deploy use
+    # (templates.run_env): a session key BOSS generates is fresh for this preview; a secret only a
+    # person can set, and nobody has, is named here instead of crashing the app.
+    app_env = preview_app_environment(engine, project_id=project_id, run_id=run_id,
+                                      preview_id=preview_id, app_dir=app_dir_of(workdir, _changed))
+    if app_env.needs:
+        return _fail(f"the app {app_env.verdict()} (environment preview), then start the preview again",
+                     command=" ".join(command))
     proc, port_hint = launch_app(
         workdir, command, log_path,
         owner=owned_process.Owner("preview", preview_id, project_id),
         expires_at=_expires, port=_sandboxed_preview_port(ident),
         extra_env=preview_link_environment(engine, project_id=project_id, run_id=run_id,
-                                           preview_id=preview_id, expires_at=_expires, rotate=True))
+                                           preview_id=preview_id, expires_at=_expires, rotate=True,
+                                           app_env=app_env))
 
     # Web builds do `npm install` + `vite build` before the static server binds — well past the
     # default 20s window — so give discovery generous headroom (it returns as soon as the port
@@ -2554,6 +2664,9 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
             f"the app exited (code {exit_code}) before serving HTTP: " + _why_it_failed(log_path)
             if exit_code is not None else _serve_failure(log_path, port_hint)
         )
+        needed = app_env.explain_crash(_read_log(log_path))
+        if needed:
+            why = f"the app {needed}. {why}"
         _kill(proc.pid)
         return _fail(why, command=" ".join(command), exited=exit_code is not None)
 
@@ -2570,8 +2683,9 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
              "lg": log_path, "exp": expires})
         emit_event(c, project_id, "app_preview.started", "operator", "app_preview", preview_id,
                    {"run_id": run_id, "url": url, "repo": f"{owner}/{repo}", "branch": branch})
+    demo_logins = record_demo_logins(engine, preview_id, app_env)
     return publicize_preview({
-        "id": preview_id, "status": "running", "url": url, "port": port,
+        "id": preview_id, "status": "running", "url": url, "port": port, "demo_logins": demo_logins,
         "pid": proc.pid, "expires_at": expires.isoformat(), "run_id": run_id,
         "repo": f"{owner}/{repo}", "branch": branch,
         "substrate": ExecutionSubstrate.PREVIEW_HOST.value,
@@ -2746,12 +2860,32 @@ def start_container_preview(engine, settings: Settings, run_id: str, *, ttl_minu
         _docker_rmi(tag)
         return _fail(f"docker build failed: {(build.stderr or build.stdout or '')[-400:]}")
 
+    # THE SAME ENVIRONMENT the host preview and the build's proof give the app (templates.run_env),
+    # through a mode-600 env file — never `-e NAME=value` in argv, where `ps` would show it.
+    app_env = preview_app_environment(engine, project_id=project_id, run_id=run_id,
+                                      preview_id=preview_id, app_dir=app_dir_of(workdir, _changed_ep))
+    if app_env.needs:
+        _docker_rmi(tag)
+        return _fail(f"the app {app_env.verdict()} (environment preview), then start the preview again")
+    env_file_args: list[str] = []
+    env_file_path: Optional[str] = None
+    if app_env.values:
+        fd, env_file_path = tempfile.mkstemp(prefix="boss-preview-env-")
+        with os.fdopen(fd, "w") as fh:
+            fh.write("".join(f"{k}={v}\n" for k, v in sorted(app_env.values.items())
+                             if "\n" not in v and "\r" not in v))
+        env_file_args = ["--env-file", env_file_path]
     host_port = _free_port()
     docker_argv = ["docker", "run", "-d", "--init", *container_limits("preview_node"), *labels,
                    "--name", tag, "-p", f"{host_port}:{container_port}",
-                   "-e", f"PORT={container_port}", "-e", "HOST=0.0.0.0", tag]
+                   "-e", f"PORT={container_port}", "-e", "HOST=0.0.0.0", *env_file_args, tag]
     docker_command = " ".join(docker_argv)
-    run_cmd = owned_process.boss_run(docker_argv, capture_output=True, text=True, timeout=60)
+    try:
+        run_cmd = owned_process.boss_run(docker_argv, capture_output=True, text=True, timeout=60)
+    finally:
+        if env_file_path:
+            with contextlib.suppress(OSError):
+                os.unlink(env_file_path)
     if run_cmd.returncode != 0:
         _docker_rm(tag)
         _docker_rmi(tag)
@@ -2784,8 +2918,10 @@ def start_container_preview(engine, settings: Settings, run_id: str, *, ttl_minu
              "exp": expires})
         emit_event(c, project_id, "app_preview.started", "operator", "app_preview", preview_id,
                    {"run_id": run_id, "url": url, "mode": "docker", "image": tag})
+    demo_logins = record_demo_logins(engine, preview_id, app_env)
     return publicize_preview({
         "id": preview_id, "status": "running", "url": url, "port": host_port, "mode": "docker",
+        "demo_logins": demo_logins,
         "container_id": container_id, "image": tag, "expires_at": expires.isoformat(),
         "run_id": run_id, "repo": f"{owner}/{repo}", "branch": branch,
         "substrate": ExecutionSubstrate.PREVIEW_DOCKER.value,
@@ -2935,13 +3071,19 @@ def _respawn_process_preview(engine, settings: Settings, preview_id: str) -> Non
             return
         # The one launcher, so a respawned preview gets the same filtered environment as the
         # first start (app_environment) instead of the worker's own.
+        app_env = preview_app_environment(engine, project_id=project_id, run_id=row.get("run_id"),
+                                          preview_id=preview_id, app_dir=app_dir_of(workdir, _changed))
+        if app_env.needs:
+            _release_preview_sandbox(preview_id)
+            return
+        record_demo_logins(engine, preview_id, app_env)
         proc, port_hint = launch_app(
             workdir, command, log_path,
             owner=owned_process.Owner("preview", preview_id, row.get("project_id")),
             port=_sandboxed_preview_port(ident),
             extra_env=preview_link_environment(engine, project_id=project_id, run_id=row.get("run_id"),
                                                preview_id=preview_id, expires_at=row.get("expires_at"),
-                                               rotate=False))
+                                               rotate=False, app_env=app_env))
         port = _discover_working_port(log_path, port_hint, timeout=preview_start_timeout(workdir),
                                       health_path=preview_health_path(workdir),
                                       listener_uid=ident.uid if ident is not None else None)
@@ -3871,7 +4013,7 @@ def list_previews(
 
         rows = c.execute(text(
             "SELECT id,run_id,repo,branch,url,port,mode,substrate,build_substrate,sandbox_task_id,"
-            "status,error,failure_kind,expires_at,created_at,steps "
+            "status,error,failure_kind,expires_at,created_at,steps,demo_logins "
             "FROM app_previews WHERE project_id=:p ORDER BY created_at DESC LIMIT :l"),
             {"p": project_id, "l": int(limit)}).mappings().all()
     # Publicize at the boundary: DB keeps loopback for the proxy; callers get open_url.

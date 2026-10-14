@@ -168,6 +168,13 @@ class WorkflowStartBody(ProjectBody):
     #: Start a building workflow whose brief asks for a stack BOSS cannot build (services.stacks)
     #: anyway: the refusal `stack_unsupported` was shown and the person chose to go on.
     allow_unsupported_stack: bool | None = None
+    #: THE PRE-CHECK'S CHOICES (services.workflow_precheck.gate_start). `accept`: will_fail
+    #: checks the operator was shown and starts anyway (`<step>:<check>` or a check id);
+    #: `skip_steps`: steps to skip, each `{step_id, reason}` or a step id — never a gate that
+    #: protects a deploy. Both are recorded on the run with the actor and `precheck_reason`.
+    accept: list[str] | None = None
+    skip_steps: list[Any] | None = None
+    precheck_reason: str | None = None
 
 
 class WorkflowScheduleBody(ProjectBody):
