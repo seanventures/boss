@@ -968,7 +968,16 @@ class EntitlementBrokerService:
             )
         self.repair_connected_key_sources(connection, project_id)
 
-    def list_sources(self, connection: Connection, project_id: str) -> list[dict[str, Any]]:
+    def list_sources(
+        self, connection: Connection, project_id: str, *, include_retired_proofs: bool = False
+    ) -> list[dict[str, Any]]:
+        """Every source of this project an operator or the router can use.
+
+        A connection proof's temporary proof-<hash> source is retired (inactive) once its one
+        paid call is done (connection_spend._retire_candidate). It is kept for the audit trail
+        but is not a source anybody connected: it is left out unless a caller looks one up by
+        id (get_source), so Repo and models never offers Replace key or Disconnect on it.
+        """
         declared_boss_sources = {
             source_id
             for source_id, defaults in self._source_record_defaults().items()
@@ -994,6 +1003,12 @@ class EntitlementBrokerService:
         items: list[dict[str, Any]] = []
         for row in rows:
             payload = dict(row)
+            if (
+                not include_retired_proofs
+                and payload["status"] != "active"
+                and self._connection_metadata(payload).get("proof_only")
+            ):
+                continue
             # A previously paid database can be started as Community. Never
             # route a BOSS-owned source absent from this edition's catalog.
             if (
@@ -1084,17 +1099,22 @@ class EntitlementBrokerService:
         return sorted(adapters, key=lambda item: (item["provider"], item["source_id"]))
 
     def list_entitlement_pools(
-        self, connection: Connection, project_id: str
+        self, connection: Connection, project_id: str, *, include_retired_proofs: bool = False
     ) -> list[dict[str, Any]]:
         return [
             self._entitlement_pool_from_source(source)
-            for source in self.list_sources(connection, project_id)
+            for source in self.list_sources(
+                connection, project_id, include_retired_proofs=include_retired_proofs
+            )
         ]
 
     def get_entitlement_pool(
         self, connection: Connection, project_id: str, pool_id: str
     ) -> dict[str, Any]:
-        for pool in self.list_entitlement_pools(connection, project_id):
+        # By id, so a retired proof's pool is still found: settling its held receipt needs it.
+        for pool in self.list_entitlement_pools(
+            connection, project_id, include_retired_proofs=True
+        ):
             if pool["id"] == pool_id or pool["source_id"] == pool_id:
                 return pool
         raise EntitlementPoolNotFoundError(
@@ -1425,7 +1445,9 @@ class EntitlementBrokerService:
         )
         source = next(
             item
-            for item in self.list_sources(connection, record["project_id"])
+            for item in self.list_sources(
+                connection, record["project_id"], include_retired_proofs=True
+            )
             if item["source_id"] == record["source_id"]
         )
         return source
@@ -1433,7 +1455,7 @@ class EntitlementBrokerService:
     def get_source(
         self, connection: Connection, project_id: str, source_id: str
     ) -> dict[str, Any]:
-        for source in self.list_sources(connection, project_id):
+        for source in self.list_sources(connection, project_id, include_retired_proofs=True):
             if source["source_id"] == source_id:
                 return source
         raise EntitlementSourceNotFoundError(
@@ -2119,7 +2141,10 @@ class EntitlementBrokerService:
 
         candidates: list[tuple[int, dict[str, Any], Optional[dict[str, Any]]]] = []
         rejected_sources: list[dict[str, Any]] = []
-        for source in self.list_sources(connection, project_id):
+        # Pinned to one source, a retired proof is still seen, so it is refused by its status.
+        for source in self.list_sources(
+            connection, project_id, include_retired_proofs=bool(only_source_id)
+        ):
             # PINNED: the caller already knows which provider will answer (a typed decision on
             # TypeSafe, or on the Claude CLI), so the lease must be booked against that source
             # and no other. Every policy check below still applies to it.

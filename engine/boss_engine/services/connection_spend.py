@@ -265,7 +265,9 @@ class ConnectionSpend(TypedDecisionSpend):
             return authority.output or {}
         if authority.outcome != "ready":
             if self.staged:
-                self.commit(lambda c: _retire_candidate(c, self.project_id, source_id, self.actor))
+                self.commit(lambda c: _retire_candidate(
+                    c, self.project_id, source_id, self.actor, provider=provider,
+                    receipt_id=authority.receipt_id, not_sent=authority.message))
             return {
                 "ok": False,
                 "state": "failed",
@@ -310,7 +312,9 @@ class ConnectionSpend(TypedDecisionSpend):
                     "error": "Unused connection authority changed; reconcile its receipt.",
                     "reconciliation_required": True,
                 }
-            self.commit(lambda c: _retire_candidate(c, self.project_id, source_id, self.actor))
+            self.commit(lambda c: _retire_candidate(
+                c, self.project_id, source_id, self.actor, provider=provider,
+                receipt_id=authority.receipt_id, not_sent=str(reason)))
             return {
                 "ok": False,
                 "state": "failed",
@@ -445,7 +449,9 @@ class ConnectionSpend(TypedDecisionSpend):
             }
         finally:
             # Preserve receipt/hold lineage, not a routable candidate credential.
-            self.commit(lambda c: _retire_candidate(c, self.project_id, source_id, self.actor))
+            self.commit(lambda c: _retire_candidate(
+                c, self.project_id, source_id, self.actor, provider=provider,
+                receipt_id=authority.receipt_id, outcome=self.outcome))
 
 
 def _proof_fields(proof, *, credential=""):
@@ -655,7 +661,14 @@ def describe_outcome(outcome, provider="The provider"):
             "so its hold remains.")
 
 
-def _retire_candidate(c, project_id, source_id, actor):
+def _retire_candidate(c, project_id, source_id, actor, *, provider="", receipt_id=None,
+                      outcome=None, not_sent=None):
+    """Retire a proof's temporary source: never routable again, never deleted.
+
+    The row stays for the audit trail (receipts and leases point at it), but Repo and models
+    no longer lists it (EntitlementBrokerService.list_sources). Its history names it by what it
+    proved — provider, outcome, and the event's own time — never by its proof-<hash> id.
+    """
     c.execute(
         text(
             "UPDATE secret_refs SET status='revoked', revoked_at=now(), revoked_by=:a "
@@ -666,15 +679,38 @@ def _retire_candidate(c, project_id, source_id, actor):
         ),
         {"p": project_id, "s": source_id, "a": actor},
     )
-    c.execute(
+    retired = c.execute(
         text(
             "UPDATE entitlement_sources SET status='inactive', connection_status='revoked' "
             "WHERE project_id=:p AND source_id=:s AND "
             "connection_metadata->>'proof_actor'=:a "
-            "AND connection_metadata->>'proof_only'='true'"
+            "AND connection_metadata->>'proof_only'='true' AND status<>'inactive' "
+            "RETURNING id, supported_models"
         ),
         {"p": project_id, "s": source_id, "a": actor},
-    )
+    ).mappings().first()
+    if retired is None:
+        return
+    from .core import emit_event
+    from .redaction import redact_secrets
+
+    label = provider_label(provider)
+    models = retired["supported_models"] if isinstance(retired["supported_models"], list) else []
+    if outcome:
+        kind, summary = outcome.get("kind") or "unknown", outcome.get("summary") or ""
+    else:
+        kind = "not_sent"
+        summary = f"{label} was not asked: {redact_secrets(str(not_sent or 'stopped before the call'))}"
+    emit_event(c, project_id, "connection.proof_retired", actor, "entitlement_source",
+               retired["id"], {
+                   "source_id": source_id,
+                   "name": f"{label} connection proof",
+                   "provider": str(provider or "").removeprefix("setup-"),
+                   "model": str(models[0]) if models else None,
+                   "outcome": kind,
+                   "summary": summary[:300],
+                   "receipt_id": receipt_id,
+               })
 
 
 # ── A held proof, reviewed and released by a person ──────────────────────────────────────────
