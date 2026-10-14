@@ -1120,6 +1120,15 @@ class Settings(BaseSettings):
     # one real model spend. 0 = the Captain proposes, never starts one; Govern turns it on per
     # project (project_settings `captain_auto_improve`). Installs that predate this keep theirs on.
     captain_auto_improve: int = Field(default=0, alias="BOSS_CAPTAIN_AUTO_IMPROVE")
+    # THE MODEL PRE-CHECK (services/workflow_precheck_agent.py): an agent that reads the coded
+    # pre-check's evidence and predicts what the coded checks do not cover. Off at the start
+    # door by default, so starting a workflow is neither slower nor costs money unasked; the
+    # CLI's `--agent` runs it on demand. Capped per run in cents and in model turns.
+    workflow_precheck_agent: int = Field(default=0, alias="BOSS_WORKFLOW_PRECHECK_AGENT")
+    workflow_precheck_agent_max_cents: int = Field(
+        default=50, alias="BOSS_WORKFLOW_PRECHECK_AGENT_MAX_CENTS", ge=1)
+    workflow_precheck_agent_max_turns: int = Field(
+        default=8, alias="BOSS_WORKFLOW_PRECHECK_AGENT_MAX_TURNS", ge=1)
     # Turn cap for the MICRO-VM GUEST agent (a separate limit from the host cap above). BOSS sends
     # this in the sandbox submit contract; the sandbox-service must honor it to take effect (else it
     # falls back to the service's own ~40 default). Higher lets app-scale tasks finish.
