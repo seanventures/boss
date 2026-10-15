@@ -25,7 +25,7 @@ one implementation and one module identity while they migrate their imports.
 """
 from __future__ import annotations
 
-__version__ = "1.0.0rc9"
+__version__ = "1.0.0rc10.post5"
 
 # Inside BOSS's image, BOSS code never runs as root (an exec as root became `boss` here first).
 from ._runtime_user import become_runtime_user as _become_runtime_user  # noqa: E402

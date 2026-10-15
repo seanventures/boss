@@ -4,7 +4,7 @@ Install BOSS Community on a machine you administer. This page is the installer r
 
 ## Install
 
-For the RC8 candidate, use the [commit-pinned GitHub checkout](#straight-from-github). You need Git and repository access; use an account with access if GitHub asks you to sign in. The website installer and hosted manual are deployed separately, so source publication alone does not verify their version.
+For the RC10.5 candidate, use the [commit-pinned GitHub checkout](#straight-from-github). You need Git and repository access; use an account with access if GitHub asks you to sign in. The website installer and hosted manual are deployed separately, so source publication alone does not verify their version.
 
 ### One command
 
@@ -24,7 +24,7 @@ Pass installer flags after `bash -s --`:
 
 ```bash
 curl -fsSL https://boss.sean.network/install.sh | bash -s -- --yes
-curl -fsSL https://boss.sean.network/install.sh | bash -s -- --ref v1.0-rc8 --console-origin https://boss.example.com
+curl -fsSL https://boss.sean.network/install.sh | bash -s -- --ref v1.0-rc10.5 --console-origin https://boss.example.com
 ```
 
 `BOSS_REF=main` (or `--ref main`) installs the development branch instead of a release.
@@ -139,29 +139,29 @@ This is the same command as [Install](#install): it installs the newest release 
 
 ### Straight from GitHub
 
-Install the reviewed RC8 source without the website. This uses Git authentication if the repository requires access, checks out the verified published commit, and installs that same commit:
+Install the reviewed RC10.5 source without the website. This uses Git authentication if the repository requires access, checks out the verified published commit, and installs that same commit:
 
 ```bash
 (
   set -e
   BOSS_RELEASE_COMMIT=cb278010b4cef68c55a9684c3e9bd74b14c8b520
-  git clone --branch v1.0-rc8 https://github.com/seanventures/boss.git boss-rc8
-  cd boss-rc8
+  git clone --branch v1.0-rc10.5 https://github.com/seanventures/boss.git boss-rc10.5
+  cd boss-rc10.5
   git checkout --detach "$BOSS_RELEASE_COMMIT"
   ./install.sh --dir "$PWD" --ref "$BOSS_RELEASE_COMMIT"
 )
 ```
 
-The `boss-rc8` directory must not already exist. Read the script in that checkout before running it if you want to inspect it. This records a pinned commit; a later upgrade needs `boss upgrade --to REF`. Add installer flags to the `./install.sh` line, for example `--console-origin https://boss.example.com`.
+The `boss-rc10.5` directory must not already exist. Read the script in that checkout before running it if you want to inspect it. This records a pinned commit; a later upgrade needs `boss upgrade --to REF`. Add installer flags to the `./install.sh` line, for example `--console-origin https://boss.example.com`.
 
 ### From a local checkout
 
 Clone the release and install it in place:
 
 ```bash
-git clone --branch v1.0-rc8 https://github.com/seanventures/boss.git
+git clone --branch v1.0-rc10.5 https://github.com/seanventures/boss.git
 cd boss
-./install.sh --dir "$PWD" --ref v1.0-rc8
+./install.sh --dir "$PWD" --ref v1.0-rc10.5
 ```
 
 A checkout at a release tag stays on that release. A checkout on a branch follows `main` unless you pass `--ref`, and the ref is then [recorded](#which-release-and-staying-on-it). From a checkout you already have on the branch you want:

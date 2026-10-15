@@ -8,7 +8,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/seanventures/boss/releases/tag/v1.0-rc8"><img alt="Release v1.0-rc8" src="https://img.shields.io/badge/release-v1.0--rc8-1aa89a?style=flat-square"></a>
+  <a href="https://github.com/seanventures/boss/releases/tag/v1.0-rc10.5"><img alt="Release v1.0-rc10.5" src="https://img.shields.io/badge/release-v1.0--rc10.5-1aa89a?style=flat-square"></a>
   <a href="LICENSE"><img alt="License: Apache 2.0" src="https://img.shields.io/badge/license-Apache%202.0-101820?style=flat-square"></a>
   <img alt="Self-hosted" src="https://img.shields.io/badge/deploy-self--hosted-101820?style=flat-square">
   <img alt="Interfaces: web, terminal, CLI, MCP" src="https://img.shields.io/badge/interfaces-web%20%C2%B7%20terminal%20%C2%B7%20CLI%20%C2%B7%20MCP-101820?style=flat-square">
@@ -28,7 +28,7 @@
 
 AI agents can write code, open pull requests, call paid APIs, and touch infrastructure. BOSS is the layer that decides whether they should, and keeps the proof when they do.
 
-Governed workflows turn a goal into a plan you can read, budget reservations, leased jobs, required decisions and effect receipts. Drive them from the web console, the Metatron terminal, or your coding agents over MCP. It runs on hardware you control. Credentials are stored locally; connecting or using a hosted model sends authentication and the selected task data to that provider. This candidate's qualified paths and remaining limits are recorded in the [release notes](docs/community/RELEASE_NOTES_v1.0-rc8.md).
+Governed workflows turn a goal into a plan you can read, budget reservations, leased jobs, required decisions and effect receipts. Drive them from the web console, the Metatron terminal, or your coding agents over MCP. It runs on hardware you control. Credentials are stored locally; connecting or using a hosted model sends authentication and the selected task data to that provider. This candidate's qualified paths and remaining limits are recorded in the [release notes](docs/community/RELEASE_NOTES_v1.0-rc10.5.md).
 
 ```text
 Goal  →  Plan  →  Budget  →  Work  →  Evidence  →  Decision  →  Receipt
@@ -67,23 +67,23 @@ BOSS runs on a server you control, and your team reaches Mission Control over HT
 
 **1. Pick an address.** Use a domain such as `boss.example.com` with a DNS record pointing at the server, or the server's private IP on your network, such as `192.168.1.50`.
 
-**2. Install RC8** from its release checkout. You need Git and repository access; if GitHub asks you to sign in, use an account with access. On Ubuntu or Debian without Git, first run `sudo apt-get update && sudo apt-get install -y git`.
+**2. Install RC10.5** from its release checkout. You need Git and repository access; if GitHub asks you to sign in, use an account with access. On Ubuntu or Debian without Git, first run `sudo apt-get update && sudo apt-get install -y git`.
 
 ```sh
 (
   set -e
-  git clone --branch v1.0-rc8 https://github.com/seanventures/boss.git boss-rc8
-  cd boss-rc8
+  git clone --branch v1.0-rc10.5 https://github.com/seanventures/boss.git boss-rc10.5
+  cd boss-rc10.5
   BOSS_RELEASE_COMMIT="$(git rev-parse HEAD)"
   ./install.sh --dir "$PWD" --ref "$BOSS_RELEASE_COMMIT" --console-origin https://boss.example.com
 )
 ```
 
-Use a new directory named `boss-rc8`. The command stops if cloning fails, and pins the install to the exact release commit. Continue from `cd boss-rc8` afterward. `boss upgrade --to REF` selects a later release deliberately.
+Use a new directory named `boss-rc10.5`. The command stops if cloning fails, and pins the install to the exact release commit. Continue from `cd boss-rc10.5` afterward. `boss upgrade --to REF` selects a later release deliberately.
 
 Use `--console-origin https://192.168.1.50` for a private IP, and add `--yes` to skip the optional model-key question. The installer writes that address to `.env` as `BOSS_CONSOLE_PUBLIC_ORIGIN`, and BOSS uses it as its public address (a `BOSS_PUBLIC_URL` you set yourself takes precedence). Email links, passkeys and SSO redirects use that configured address. Setup shows the URL BOSS uses.
 
-The [website installer](https://boss.sean.network/install.sh) and hosted manual are deployed separately. The Git checkout above selects RC8 directly; website parity remains part of release qualification.
+The [website installer](https://boss.sean.network/install.sh) and hosted manual are deployed separately. The Git checkout above selects RC10.5 directly; website parity remains part of release qualification.
 
 **3. Put HTTPS in front.** BOSS services listen only on the server itself, so nothing is exposed until your proxy is in place. [Caddy](https://caddyserver.com) handles certificates for you. On Ubuntu or Debian, `sudo apt install -y caddy`, replace the contents of `/etc/caddy/Caddyfile` with this block, then `sudo systemctl reload caddy`:
 
@@ -190,7 +190,7 @@ Remote MCP over HTTP requires a bearer token in `BOSS_MCP_HTTP_TOKEN`. The [MCP 
 The complete, status-tagged list is in [Features](docs/community/FEATURES.md).
 
 > [!NOTE]
-> **About this release candidate.** `v1.0-rc8` prepares BOSS for friends-and-family testing with clearer first-run guides, a home screen led by the next useful action, safer recovery, stronger repository isolation and corrected budget admission. See the [release notes](docs/community/RELEASE_NOTES_v1.0-rc8.md) for validation and remaining qualification. Named Owner accounts and the governed approval path remain in place; upgrading from rc5 still requires [claiming the install](docs/community/IDENTITY_UPGRADE.md).
+> **About this release candidate.** `v1.0-rc10.5` brings BOSS's engine contract (the same pipeline, gates and failure messages on every engine), Java apps, the For each / webhook / back-off workflow steps, one approval per deploy, and a startup that no longer locks the whole database. It follows rc10.4 and carries the untagged rc10.6 work. See the [release notes](docs/community/RELEASE_NOTES_v1.0-rc10.5.md) for what changed and what is still unverified. Named Owner accounts and the governed approval path remain in place; upgrading from rc5 still requires [claiming the install](docs/community/IDENTITY_UPGRADE.md).
 
 ## Documentation
 

@@ -85,6 +85,19 @@ def test_release_picker_orders_versions_not_text() -> None:
     assert _pick(["main", "feature"], 1) == ""
 
 
+def test_release_candidate_numbers_compare_as_numbers() -> None:
+    """The label was compared as text, so rc9 outranked rc10.4: a fresh install asking for the
+    newest candidate got rc9 for as long as rc10.x was published."""
+    published = ["v1.0-rc8", "v1.0-rc9", "v1.0-rc9-reconciled", "v1.0-rc10", "v1.0-rc10.1",
+                 "v1.0-rc10.4"]
+    assert _pick(published, 1) == "v1.0-rc10.4"
+    assert _pick(["v1.0-rc10.9", "v1.0-rc10.10"], 1) == "v1.0-rc10.10"
+    assert _pick(["v1.0-rc2", "v1.0-rc10"], 1) == "v1.0-rc10"
+    assert _pick(["v1.0-rc9-reconciled"], 1) == ""   # a second hyphen is not a release ref
+    assert _pick(published + ["v1.0"], 1) == "v1.0"
+    assert _pick(published, 0) == ""          # stable only: no candidate is offered
+
+
 # ---- fixture: a published repository with release tags ------------------------------------
 
 def _publish(upstream: Path) -> None:

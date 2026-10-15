@@ -837,6 +837,13 @@ pick_release() {
       if (label != "" && pre != 1) next
       n = split(core, part, ".")
       if (n > 3) next
+      # Numbers inside the label compare as numbers (rc10.4 after rc9, rc10.10 after rc10.9).
+      key = ""
+      while (match(label, /[0-9]+/)) {
+        key = key substr(label, 1, RSTART - 1) sprintf("%09d", substr(label, RSTART, RLENGTH))
+        label = substr(label, RSTART + RLENGTH)
+      }
+      label = key label
       printf "%09d.%09d.%09d.%s\t%s\n", part[1], (n >= 2 ? part[2] : 0), (n >= 3 ? part[3] : 0), (label == "" ? "~" : label), $0
     }' | LC_ALL=C sort | tail -n 1 | cut -f 2
   # <<< boss_pick_release
