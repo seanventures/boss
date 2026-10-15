@@ -142,7 +142,9 @@ class TestReferenceMaterialReachesTheBuilder:
     def test_the_run_loads_them_from_its_own_spec(self):
         from boss_engine.services import governed_code_task_service as svc
 
-        body = inspect.getsource(svc.run_governed_code_task)
+        # The attempt's body lives in _run_governed_code_task; the public entry wraps it.
+        assert "_run_governed_code_task(" in inspect.getsource(svc.run_governed_code_task)
+        body = inspect.getsource(svc._run_governed_code_task)  # noqa: SLF001
         assert "load_reference_links" in body
         assert 'spec or {}).get("reference_links")' in body
 
