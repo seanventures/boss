@@ -162,15 +162,14 @@ class ArchitectureSpend(TypedDecisionSpend):
         from .redaction import redact_secrets
         message = f"{type(error).__name__}: {redact_secrets(str(error))}"[:500]
         # Approving this card settles the receipt and retries the step
-        # (typed_decision_spend.on_reconciliation_approved).
-        from .core import create_blocking_decision
-
-        create_blocking_decision(
-            connection, self.project_id, None,
-            f"Reconcile architecture draft {self.run_id}/{self.step_id}",
-            {"action": "architecture_reconciliation"},
+        # (typed_decision_spend.on_reconciliation_approved). Through self._decision, so the card
+        # names what the call was: "Reconcile architecture draft …" / architecture_reconciliation
+        # here, and a voice call's or a conversation turn's own card in those subclasses.
+        self._decision(
+            connection,
+            f"Reconcile typed decision {self.run_id}/{self.step_id}",
+            "typed_decision_reconciliation",
             {"attempt": self.attempt, "receipt_id": authority.receipt_id, "message": message},
-            "architecture_reconciliation",
         )
         self._emit(connection, "architecture.reconciliation_required", authority.invocation_dedupe, {
             "run_id": self.run_id, "step_id": self.step_id, "attempt": self.attempt,
