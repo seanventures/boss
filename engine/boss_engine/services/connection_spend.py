@@ -900,6 +900,21 @@ def release_hold(c, settings, project_id, receipt_id, *, actor, reason):
     return fact
 
 
+def _require_principal_holds(c, project_id: str, principal_id: str) -> None:
+    """The CLI's gate under enforce: does `principal_id` (an active identity principal) hold
+    entitlement:manage at `project_id`? Refuses (exit, nothing changed) when it does not."""
+    from ..identity import authz, users
+    from ..identity.permissions_gen import P
+    from ..identity.scope import ResolvedScope
+
+    principal = users.load_principal(c, principal_id)
+    held = frozenset() if principal is None else authz.effective_permissions(
+        principal, ResolvedScope.in_project(principal.org_id, project_id), db=c).permissions
+    if P.ENTITLEMENT_MANAGE not in held:
+        raise SystemExit(f"{principal_id!r} does not hold {P.ENTITLEMENT_MANAGE} at project "
+                         f"{project_id!r}; nothing was released.")
+
+
 def main(argv=None):
     """One-shot repair for a held proof, through the same path as the console's Release.
 
@@ -926,12 +941,18 @@ def main(argv=None):
             print(json.dumps(review_hold(c, args.project_id, args.receipt_id), indent=2,
                              default=str))
         return 0
+    from ..identity import lineage
     from .members import MemberDirectoryService
 
     with engine.begin() as c:
-        # The same permission the console's Release asks for.
-        MemberDirectoryService(settings).require_member(
-            c, args.project_id, args.actor, permission="entitlement_manage")
+        # The same permission the console's Release asks for. Under enforce that is the PDP's
+        # entitlement:manage at the project, held by the named principal: the legacy members
+        # table names none of the identity people, so it is never asked.
+        if lineage._enforced():  # noqa: SLF001
+            _require_principal_holds(c, args.project_id, args.actor)
+        else:
+            MemberDirectoryService(settings).require_member(
+                c, args.project_id, args.actor, permission="entitlement_manage")
         print(json.dumps(release_hold(c, settings, args.project_id, args.receipt_id,
                                       actor=args.actor, reason=args.reason),
                          indent=2, default=str))
