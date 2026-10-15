@@ -497,3 +497,33 @@ def test_project_data_runs_in_a_read_only_transaction_on_postgres():
         with engine.begin() as c:
             c.execute(text(f"DROP TABLE {table}"))
         engine.dispose()
+
+
+@needs_db
+def test_project_data_checks_the_columns_of_the_table_it_queries_in_any_schema():
+    """The column check reads the schema the statement runs in (current_schema()), never a
+    fixed `public`: a same-named table elsewhere must not lend the query its columns, and a
+    table in the connection's own schema must be found."""
+    from boss_engine.tools.builtin import _query_project_data
+
+    url = DATABASE_URL.replace("postgresql://", "postgresql+psycopg://")
+    schema, table = f"qpd_s_{uuid.uuid4().hex[:8]}", f"qpd_{uuid.uuid4().hex[:8]}"
+    admin = create_engine(url)
+    with admin.begin() as c:
+        c.execute(text(f"CREATE SCHEMA {schema}"))
+        c.execute(text(f"CREATE TABLE {schema}.{table} (id TEXT, project_id TEXT)"))
+        c.execute(text(f"INSERT INTO {schema}.{table} VALUES ('mine', 'p1'), ('theirs', 'p2')"))
+        # A decoy in public with the same name and no project fence.
+        c.execute(text(f"CREATE TABLE public.{table} (id TEXT, secret TEXT)"))
+    scoped = create_engine(url, connect_args={"options": f"-c search_path={schema}"})
+    try:
+        out = _query_project_data(_Ctx(scoped), "p1", {"table": table})
+        assert out.get("ok") is not False, out
+        assert [r["id"] for r in out["rows"]] == ["mine"]
+        assert "secret" not in out["rows"][0]
+    finally:
+        scoped.dispose()
+        with admin.begin() as c:
+            c.execute(text(f"DROP SCHEMA {schema} CASCADE"))
+            c.execute(text(f"DROP TABLE public.{table}"))
+        admin.dispose()

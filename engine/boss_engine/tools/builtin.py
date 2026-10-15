@@ -4050,7 +4050,10 @@ def _query_project_data(ctx: Any, project_id: str, args: dict) -> dict:
             # FIRST statement of the transaction, or Postgres refuses it.
             c.execute(_text("SET TRANSACTION READ ONLY"))
         cols = [str(r[0]) for r in c.execute(_text(
-            "SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' "
+            # current_schema(), as describe_schema reads it: the columns checked are the columns
+            # of the very table the statement below resolves to, whatever the search_path.
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_schema = current_schema() "
             "AND table_name = :t ORDER BY ordinal_position"), {"t": table}).all()]
         if not cols:
             return {"ok": False, "error": f"no table {table!r}; describe_schema lists them"}
