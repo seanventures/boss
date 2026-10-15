@@ -526,6 +526,14 @@ def _published_git_checkout_command():
     return section.split("```bash\n", 1)[1].split("```", 1)[0]
 
 
+def _published_tag_and_directory() -> tuple[str, str]:
+    """The release tag and checkout directory the guide's clone names, so the fixture publishes
+    exactly what the documented command will ask for, whatever release it names."""
+    found = re.search(r"git clone --branch (\S+) \S+ (\S+)", _published_git_checkout_command())
+    assert found, "the guide's checkout command no longer clones a named release"
+    return found.group(1), found.group(2)
+
+
 @pytest.mark.parametrize("clone_fails", [False, True])
 def test_published_git_checkout_pins_its_commit_and_stops_on_clone_failure(
     install_pair, clone_fails,
@@ -533,9 +541,10 @@ def test_published_git_checkout_pins_its_commit_and_stops_on_clone_failure(
     _, _, new, env, tmp = install_pair
     source = tmp / "source"
     origin = tmp / "origin.git"
-    _git("tag", "v1.0-rc8", new, cwd=source)
-    _git("push", "origin", "refs/tags/v1.0-rc8", cwd=source)
-    checkout = tmp / "boss-rc8"
+    tag, directory = _published_tag_and_directory()
+    _git("tag", tag, new, cwd=source)
+    _git("push", "origin", f"refs/tags/{tag}", cwd=source)
+    checkout = tmp / directory
     remote = tmp / "missing-origin.git" if clone_fails else origin
     command = _published_git_checkout_command().replace(
         "https://github.com/seanventures/boss.git", shlex.quote(str(remote)))
@@ -565,9 +574,10 @@ def test_published_git_checkout_pins_its_commit_and_stops_on_clone_failure(
 def test_published_git_checkout_never_runs_an_existing_directory(install_pair):
     _, _, new, env, tmp = install_pair
     source = tmp / "source"
-    _git("tag", "v1.0-rc8", new, cwd=source)
-    _git("push", "origin", "refs/tags/v1.0-rc8", cwd=source)
-    checkout = tmp / "boss-rc8"
+    tag, directory = _published_tag_and_directory()
+    _git("tag", tag, new, cwd=source)
+    _git("push", "origin", f"refs/tags/{tag}", cwd=source)
+    checkout = tmp / directory
     checkout.mkdir()
     marker = tmp / "unexpected-install"
     stale = checkout / "install.sh"
