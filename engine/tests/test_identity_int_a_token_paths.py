@@ -85,6 +85,17 @@ def test_a_code_task_sandbox_clone_holds_no_token(fake_github, monkeypatch):
 
     settings = get_settings()
     monkeypatch.setattr(settings, "sandbox_root_path", str(fake_github / "sandboxes"))
+    # The sandbox's own git deliberately ignores ambient config (GIT_CONFIG_GLOBAL=/dev/null in
+    # EphemeralSandbox._git_once), so the fixture's global insteadOf cannot reach it. Route the
+    # clone to the local hub through the one channel the sandbox does honour — the env that
+    # `git_access` builds — riding alongside the REAL token header it still emits.
+    real_config_env = repo_host.git_config_env
+    hub = [(f"url.file://{fake_github}/hub/.insteadOf", "https://github.com/"),
+           ("protocol.file.allow", "always")]
+    monkeypatch.setattr(repo_host, "git_config_env",
+                        lambda pairs: real_config_env([*pairs, *hub]))
+    assert repo_host.git_access("github", "acme", "web", TOKEN).env["GIT_CONFIG_KEY_0"] == \
+        "http.https://github.com/.extraheader"
     with EphemeralSandbox(settings, task_id="tsk_tok") as sbx:
         path = sbx.provision("acme", "web", base_branch="main", work_branch="boss/code/x", token=TOKEN)
         assert (path / "app.js").exists()
