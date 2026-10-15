@@ -134,8 +134,8 @@
             "next": [
               "plrr"
             ],
-            "captain": "qa",
-            "default_captain": "qa",
+            "captain": "engineering_captain",
+            "default_captain": "engineering_captain",
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -480,8 +480,8 @@
             "next": [
               "pass_2"
             ],
-            "captain": "qa",
-            "default_captain": "qa",
+            "captain": "engineering_captain",
+            "default_captain": "engineering_captain",
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -828,8 +828,8 @@
             "next": [
               "pass_2"
             ],
-            "captain": "qa",
-            "default_captain": "qa",
+            "captain": "engineering_captain",
+            "default_captain": "engineering_captain",
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -1105,8 +1105,8 @@
                 "advisory": true
               }
             },
-            "captain": "qa",
-            "default_captain": "qa",
+            "captain": "engineering_captain",
+            "default_captain": "engineering_captain",
             "next": [
               "pass_2"
             ],
@@ -1560,8 +1560,8 @@
                 "advisory": true
               }
             },
-            "captain": "qa",
-            "default_captain": "qa",
+            "captain": "engineering_captain",
+            "default_captain": "engineering_captain",
             "next": [
               "pass_2"
             ],
@@ -1875,8 +1875,8 @@
             "next": [
               "pass_2"
             ],
-            "captain": "qa",
-            "default_captain": "qa",
+            "captain": "engineering_captain",
+            "default_captain": "engineering_captain",
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -2180,8 +2180,8 @@
                 "advisory": true
               }
             },
-            "captain": "qa",
-            "default_captain": "qa",
+            "captain": "engineering_captain",
+            "default_captain": "engineering_captain",
             "next": [
               "pass_2"
             ],
@@ -2829,8 +2829,8 @@
                 "advisory": true
               }
             },
-            "captain": "qa",
-            "default_captain": "qa",
+            "captain": "engineering_captain",
+            "default_captain": "engineering_captain",
             "next": [
               "pass_2"
             ],
@@ -3210,8 +3210,8 @@
             "next": [
               "pass_2"
             ],
-            "captain": "qa",
-            "default_captain": "qa",
+            "captain": "engineering_captain",
+            "default_captain": "engineering_captain",
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -3567,8 +3567,8 @@
                 "advisory": true
               }
             },
-            "captain": "qa",
-            "default_captain": "qa",
+            "captain": "engineering_captain",
+            "default_captain": "engineering_captain",
             "next": [
               "pass_2"
             ],
@@ -3891,8 +3891,8 @@
                 "advisory": true
               }
             },
-            "captain": "qa",
-            "default_captain": "qa",
+            "captain": "engineering_captain",
+            "default_captain": "engineering_captain",
             "next": [
               "pass_2"
             ],
@@ -4217,8 +4217,8 @@
                 "advisory": true
               }
             },
-            "captain": "qa",
-            "default_captain": "qa",
+            "captain": "engineering_captain",
+            "default_captain": "engineering_captain",
             "next": [
               "inc1_pass_2"
             ],
@@ -4418,8 +4418,8 @@
                 "advisory": true
               }
             },
-            "captain": "qa",
-            "default_captain": "qa",
+            "captain": "engineering_captain",
+            "default_captain": "engineering_captain",
             "next": [
               "inc2_pass_2"
             ],
@@ -4619,8 +4619,8 @@
                 "advisory": true
               }
             },
-            "captain": "qa",
-            "default_captain": "qa",
+            "captain": "engineering_captain",
+            "default_captain": "engineering_captain",
             "next": [
               "inc3_pass_2"
             ],
@@ -4820,8 +4820,8 @@
                 "advisory": true
               }
             },
-            "captain": "qa",
-            "default_captain": "qa",
+            "captain": "engineering_captain",
+            "default_captain": "engineering_captain",
             "next": [
               "inc4_pass_2"
             ],

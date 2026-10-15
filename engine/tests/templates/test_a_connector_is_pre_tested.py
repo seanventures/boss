@@ -128,6 +128,14 @@ def test_the_serve_proof_probes_the_routes_it_is_given():
 def test_the_pipeline_probes_the_connector_and_hands_the_proof_to_the_gate():
     src = inspect.getsource(g)
     assert "probe_paths=_connector_probe_paths(engine, run) or None" in src
-    # The first judgement, its re-run after QA's fixture repair, and its re-run after a warm
-    # fix round: every one carries the app-start proof.
-    assert src.count("_template_gates(") - 1 == src.count("serve=app_serves_record") == 3
+    # The first judgement, its re-run after QA's fixture repair, its re-run after a warm fix
+    # round, and the secret scan's re-judge (BOSSAPP-548, which re-proves the app when green):
+    # EVERY call carries the app-start proof. Read from the AST, not counted as text, so a call
+    # that names its proof differently is still checked and one that drops it still fails.
+    import ast
+
+    calls = [n for n in ast.walk(ast.parse(src)) if isinstance(n, ast.Call)
+             and getattr(n.func, "id", None) == "_template_gates"]
+    assert len(calls) >= 4
+    assert all(any(k.arg == "serve" for k in c.keywords) for c in calls), \
+        [c.lineno for c in calls if not any(k.arg == "serve" for k in c.keywords)]
