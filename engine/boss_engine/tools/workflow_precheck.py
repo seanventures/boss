@@ -59,7 +59,8 @@ def render(report: dict[str, Any], *, width: int = 120) -> str:
                                                                     for f in fixes) else
                                                      " (dry run; --fix applies)")]
         for f in fixes:
-            state = ("applied" if f.get("applied") else "error: " + f["error"] if f.get("error")
+            state = (("applied" if (f.get("result") or {}).get("changed") else
+                      "applied: nothing to change") if f.get("applied") else "error: " + f["error"] if f.get("error")
                      else "dry run only" if f.get("dry_run") and f.get("result") else "planned")
             lines.append(f"  {f['check']:<44} {f['fix']:<24} {state}")
             if f.get("result"):
