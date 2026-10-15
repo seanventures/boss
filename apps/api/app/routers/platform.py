@@ -329,3 +329,9 @@ def mount_platform_routers(app: FastAPI) -> None:
         app.include_router(factory_flow_router)
     except ImportError:
         pass
+
+    # Webhook triggers for workflows (#512): owner routes and the signed public door.
+    # Imported unguarded: a broken import must fail the boot, not quietly drop the door.
+    from .workflow_webhooks import router as workflow_webhooks_router
+
+    app.include_router(workflow_webhooks_router)

@@ -181,6 +181,8 @@ export const READ_ROUTES: ReadonlyArray<readonly [string, Permission]> = [
   ["delivery-workflows/custom-steps", "workflow:read"],
   ["delivery-workflows/runs", "workflow:read"],
   ["delivery-workflows/schedules", "workflow:read"],
+  ["delivery-workflows/webhooks", "workflow:read"],
+  ["delivery-workflows/webhooks/{}/deliveries", "workflow:read"],
   ["delivery-workflows/{}/plan", "workflow:read"],
   ["delivery-workflows/{}/readiness", "workflow:read"],
   ["delivery-workflows/{}/spec", "workflow:read"],

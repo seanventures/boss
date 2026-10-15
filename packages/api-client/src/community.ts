@@ -5260,6 +5260,52 @@ export type HardwareProviderPlaceRequest = {
   secret_ref: string;
 };
 
+/** A workflow's webhook trigger (#512). Never carries the signing secret. */
+export type WorkflowWebhookTrigger = {
+  id: string;
+  project_id: string;
+  workflow_key: string;
+  name: string;
+  /** POST signed JSON here (relative to the API base). */
+  path: string;
+  enabled: boolean;
+  secret_last4?: string | null;
+  secret_rotated_at?: string | null;
+  /** Refusals past the per-minute recording limit: counted, not itemised. */
+  refused_unrecorded: number;
+  last_delivery_at?: string | null;
+  created_at?: string | null;
+  actor: string;
+};
+
+/** Returned by create and rotate ONLY: the one time the signing secret is shown. */
+export type WorkflowWebhookTriggerWithSecret = WorkflowWebhookTrigger & { secret: string };
+
+export type WorkflowWebhookTriggerCreateRequest = {
+  project_id: string;
+  workflow_key: string;
+  name?: string;
+  actor?: string;
+};
+
+export type WorkflowWebhookDeliveryStatus = "started" | "duplicate" | "refused";
+
+export type WorkflowWebhookDelivery = {
+  id: string;
+  delivery_id?: string | null;
+  status: WorkflowWebhookDeliveryStatus;
+  /** Why a refused delivery was refused: bad_signature, stale_timestamp, too_large, disabled… */
+  reason?: string | null;
+  run_id?: string | null;
+  body_bytes?: number | null;
+  received_at: string;
+};
+
+export type WorkflowWebhookDeliveryList = {
+  trigger: WorkflowWebhookTrigger;
+  deliveries: WorkflowWebhookDelivery[];
+};
+
 export class BossApiError extends Error {
   status: number;
   body?: unknown;
@@ -8448,6 +8494,41 @@ export function createBossApiClient(config: BossApiClientConfig) {
       return request<HardwarePlace>("POST", "/v1/hardware/resolve/load", {
         query: { project_id: projectId, place_id: placeId },
       });
+    },
+    listWorkflowWebhooks(projectId: string, workflowKey?: string) {
+      return request<{ webhooks: WorkflowWebhookTrigger[] }>(
+        "GET",
+        "/v1/delivery-workflows/webhooks",
+        { query: { project_id: projectId, workflow_key: workflowKey } },
+      );
+    },
+    createWorkflowWebhook(payload: WorkflowWebhookTriggerCreateRequest) {
+      return request<WorkflowWebhookTriggerWithSecret>(
+        "POST",
+        "/v1/delivery-workflows/webhooks",
+        { body: payload },
+      );
+    },
+    rotateWorkflowWebhookSecret(projectId: string, triggerId: string, actor?: string) {
+      return request<WorkflowWebhookTriggerWithSecret>(
+        "POST",
+        `/v1/delivery-workflows/webhooks/${encodeURIComponent(triggerId)}/rotate`,
+        { body: { project_id: projectId, ...(actor ? { actor } : {}) } },
+      );
+    },
+    setWorkflowWebhookEnabled(projectId: string, triggerId: string, enabled: boolean, actor?: string) {
+      return request<WorkflowWebhookTrigger>(
+        "POST",
+        `/v1/delivery-workflows/webhooks/${encodeURIComponent(triggerId)}/enabled`,
+        { body: { project_id: projectId, enabled, ...(actor ? { actor } : {}) } },
+      );
+    },
+    listWorkflowWebhookDeliveries(projectId: string, triggerId: string, limit = 50) {
+      return request<WorkflowWebhookDeliveryList>(
+        "GET",
+        `/v1/delivery-workflows/webhooks/${encodeURIComponent(triggerId)}/deliveries`,
+        { query: { project_id: projectId, limit } },
+      );
     },
   };
 }

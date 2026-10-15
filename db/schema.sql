@@ -4191,6 +4191,54 @@ ALTER TABLE workflow_schedules ADD COLUMN IF NOT EXISTS last_missing JSONB;
 CREATE INDEX IF NOT EXISTS idx_workflow_schedules_due
   ON workflow_schedules(next_run_at) WHERE enabled;
 
+-- WEBHOOK TRIGGERS (#512): another system starts a workflow by POSTing signed JSON to an
+-- unguessable URL. The signing secret is NOT here: it lives in the secret backend and this row
+-- holds only the secret_refs id and its last four characters (services/workflow_webhooks.py).
+CREATE TABLE IF NOT EXISTS workflow_webhook_triggers (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  -- By KEY, like a schedule: a delivery runs whatever version is current when it arrives.
+  workflow_key TEXT NOT NULL,
+  name TEXT NOT NULL,
+  -- The URL's capability part. Random, never derived from the id or the name.
+  path_token TEXT NOT NULL UNIQUE,
+  secret_ref_id TEXT NOT NULL,
+  secret_last4 TEXT,
+  secret_rotated_at TIMESTAMPTZ,
+  actor TEXT NOT NULL,
+  enabled BOOLEAN NOT NULL DEFAULT TRUE,
+  -- Refused deliveries past the per-minute recording limit, counted rather than itemised so a
+  -- flood of bad signatures cannot fill the table and still shows up on the owner's screen.
+  refused_unrecorded INTEGER NOT NULL DEFAULT 0,
+  last_delivery_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, name)
+);
+CREATE INDEX IF NOT EXISTS idx_workflow_webhook_triggers_workflow
+  ON workflow_webhook_triggers(project_id, workflow_key);
+
+-- One row per delivery that reached a trigger: started, duplicate, or refused with its reason.
+-- The body is never stored, only its size and hash.
+CREATE TABLE IF NOT EXISTS workflow_webhook_deliveries (
+  id TEXT PRIMARY KEY,
+  trigger_id TEXT NOT NULL REFERENCES workflow_webhook_triggers(id) ON DELETE CASCADE,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  delivery_id TEXT,
+  dedupe_key TEXT,
+  status TEXT NOT NULL CHECK (status IN ('started', 'duplicate', 'refused')),
+  reason TEXT,
+  run_id TEXT,
+  body_bytes INTEGER,
+  body_sha256 TEXT,
+  received_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+-- THE RECEIPT: one started delivery per dedupe key per trigger, whoever retries it.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_workflow_webhook_deliveries_started
+  ON workflow_webhook_deliveries(trigger_id, dedupe_key) WHERE status = 'started';
+CREATE INDEX IF NOT EXISTS idx_workflow_webhook_deliveries_recent
+  ON workflow_webhook_deliveries(trigger_id, received_at DESC);
+
 CREATE TABLE IF NOT EXISTS workflow_runs (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id),

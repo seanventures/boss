@@ -14,7 +14,9 @@ describe("Community client", () => {
     // +1: updateMcpServer — a registered MCP server can be edited in place (URL, tiers,
     // review) instead of deleted and re-registered, which unbound every step using it.
     expect(client).toHaveProperty("updateMcpServer");
-    expect(Object.keys(client)).toHaveLength(375);
+    // 376 on main (one more than this line said), +5: workflow webhook triggers (#512) — list,
+    // create, rotate, enable/disable, deliveries.
+    expect(Object.keys(client)).toHaveLength(381);
     await client.listProjects();
     await client.getCloudCatalog("p1");
     expect(fetchImpl).toHaveBeenCalledWith("https://boss.test/v1/cloud/catalog?project_id=p1", expect.objectContaining({ method: "GET" }));
@@ -73,5 +75,24 @@ describe("Community client", () => {
       "https://boss.test/v1/hardware/resolve/load?project_id=p1",
       expect.objectContaining({ method: "POST" }),
     );
+  });
+
+  it("manages workflow webhook triggers on their project-scoped routes", async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ webhooks: [] }), {
+      headers: { "content-type": "application/json" },
+    }));
+    const client = createBossApiClient({ baseUrl: "https://boss.test", fetchImpl });
+    await client.listWorkflowWebhooks("p1", "orders");
+    await client.rotateWorkflowWebhookSecret("p1", "wht_1");
+    await client.listWorkflowWebhookDeliveries("p1", "wht_1");
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "https://boss.test/v1/delivery-workflows/webhooks?project_id=p1&workflow_key=orders",
+      expect.objectContaining({ method: "GET" }));
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "https://boss.test/v1/delivery-workflows/webhooks/wht_1/rotate",
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ project_id: "p1" }) }));
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "https://boss.test/v1/delivery-workflows/webhooks/wht_1/deliveries?project_id=p1&limit=50",
+      expect.objectContaining({ method: "GET" }));
   });
 });
