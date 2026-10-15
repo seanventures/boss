@@ -148,7 +148,7 @@ export function drawEdges(layout: FlowLayout, g: LaneGeometry, spec: Spec): Draw
     }
     const a = right(e.from);
     const b = left(e.to);
-    const route = forwardRoute(g, a, b, [e.from, e.to]);
+    const route = forwardRoute(g, a, b, [e.from, e.to], e.kind === "no" ? "below" : "above");
     let label: Drawn["label"];
     // Labels sit at the start of the edge, in the room geometry leaves after a fan-out.
     if (e.kind === "yes" || e.kind === "no") {
@@ -191,7 +191,9 @@ function errorEdge(e: GraphEdge, g: LaneGeometry, col: Map<string, number>): Dra
   const link: FlowLink = { from: e.from, to: e.to, kind: "error" };
   const ends = [e.from, e.to];
   const start = { x: a.x + a.w * 0.7, y: a.y + a.h };
-  const label = { x: start.x + 6, y: start.y + 12, text: "if it fails" };
+  // Hung from its top (flow.css), just under the step: its words grow with the root font, and a
+  // baseline 12px down put their top under the step's own edge at 1920.
+  const label = { x: start.x + 6, y: start.y + 3, text: "if it fails" };
   const bottom = g.height - 8;
   const forward = (col.get(e.to) ?? 0) > (col.get(e.from) ?? 0) && b.x > start.x + 24;
   if (forward) {

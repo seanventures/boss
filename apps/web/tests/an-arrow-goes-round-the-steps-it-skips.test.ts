@@ -121,3 +121,56 @@ describe("the route round", () => {
     for (const e of drawEdges(layout, g, SKIP)) expect(geometry.stepsCrossed(e.route, g.boxes, e.ends)).toEqual([]);
   });
 });
+
+describe("a Branch's paths keep to their labels", () => {
+  it("a No path that goes round runs below, where its label is; a Yes path above", () => {
+    const { edges } = lane(REJOIN, "comfortable");
+    const no = edges.find((e) => e.key === "no:ok>ship")!;
+    const lanes = no.route.segs.filter((s) => "line" in s).map((s) => ("line" in s ? s.line.y : 0));
+    expect(lanes.length).toBe(1);
+    expect(lanes[0]).toBeGreaterThan(no.route.from.y);
+    expect(no.label!.y).toBeGreaterThan(no.route.from.y);
+    const flipped: Spec = { ...REJOIN, steps: REJOIN.steps.map((s) => (s.id === "ok"
+      ? { ...s, on_true: "ship", on_false: "fix" } : s)) };
+    const yes = lane(flipped, "comfortable").edges.find((e) => e.key === "yes:ok>ship")!;
+    const above = yes.route.segs.filter((s) => "line" in s).map((s) => ("line" in s ? s.line.y : 0));
+    expect(above[0]).toBeLessThan(yes.route.from.y);
+    expect(yes.label!.y).toBeLessThan(yes.route.from.y);
+  });
+});
+
+describe("a step put down close under the one before it", () => {
+  it("is reached by a tighter curve, not one that bows through the step beside it", () => {
+    // The walk's case: Repeat → Notify, with Notify put down under Repeat's own step, a few px
+    // to the right of Repeat. The plain curve bows out through that step.
+    const boxes = new Map([
+      ["repeat", { x: 900, y: 228, w: 103, h: 88 }],
+      ["body", { x: 1010, y: 276, w: 96, h: 40 }],
+      ["notify", { x: 1020, y: 320, w: 104, h: 86 }],
+    ]);
+    const g = { boxes, conn: 56, height: 500 };
+    const a = { x: 1003, y: 272 };
+    const b = { x: 1020, y: 363 };
+    expect(geometry.stepsCrossed(geometry.curveRoute(a, b), boxes, ["repeat", "notify"])).toEqual(["body"]);
+    const r = geometry.forwardRoute(g, a, b, ["repeat", "notify"]);
+    expect(geometry.stepsCrossed(r, boxes, ["repeat", "notify"])).toEqual([]);
+  });
+});
+
+describe("a step put down over another", () => {
+  it("is still reached: the step lying over where its arrow arrives is not counted as crossed", () => {
+    // The walk's shape: Notify put down over Repeat's own step, its left edge inside that step.
+    const boxes = new Map([
+      ["repeat", { x: 608, y: 76, w: 104, h: 107 }],
+      ["body", { x: 728, y: 137, w: 104, h: 107 }],
+      ["notify", { x: 756, y: 182, w: 104, h: 107 }],
+    ]);
+    const a = { x: 712, y: 129 };
+    const b = { x: 756, y: 235 };
+    const r = geometry.forwardRoute({ boxes, conn: 56, height: 400 }, a, b, ["repeat", "notify"]);
+    expect(geometry.stepsCrossed(r, boxes, ["repeat", "notify"])).toEqual([]);
+    // A step it could have gone round still counts.
+    const blocker = new Map([...boxes, ["other", { x: 300, y: 76, w: 104, h: 107 }]]);
+    expect(geometry.stepsCrossed(geometry.curveRoute({ x: 200, y: 129 }, { x: 500, y: 129 }), blocker, [])).toEqual(["other"]);
+  });
+});

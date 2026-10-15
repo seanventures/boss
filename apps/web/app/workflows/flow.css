@@ -118,7 +118,7 @@
    label says so in words, so it is never colour alone. Taken on a run, it is drawn solid. */
 .wf-edge[data-kind="error"] { stroke: color-mix(in srgb, var(--red) 75%, transparent); stroke-dasharray: 6 4; }
 .wf-edge-head[data-kind="error"] { fill: color-mix(in srgb, var(--red) 75%, transparent); }
-.wf-edges g[data-kind="error"] .wf-edge-label { fill: var(--red); }
+.wf-edges g[data-kind="error"] .wf-edge-label { fill: var(--red); dominant-baseline: hanging; }
 .wf-edges g[data-taken] .wf-edge { stroke: var(--red); stroke-dasharray: none; stroke-width: 2; }
 .wf-edge-end[data-kind="error"] { border-color: var(--red); }
 .wf-slot[data-error-path] .wf-node { outline: 2px dashed var(--red); outline-offset: 2px; }

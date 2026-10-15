@@ -304,11 +304,17 @@ export function insideBox(p: Point, b: Box, margin = 1): boolean {
   return p.x > b.x + margin && p.x < b.x + b.w - margin && p.y > b.y + margin && p.y < b.y + b.h - margin;
 }
 
-/** The steps an arrow runs through, other than the ones it joins (`ends`). */
+/** The steps an arrow runs through, other than the ones it joins (`ends`). A step put down over
+ *  one of those is not counted: a point inside the arrow's own step is it leaving or arriving,
+ *  and a step lying over where the arrow starts or ends cannot be kept out of. */
 export function stepsCrossed(r: Route, boxes: Map<string, Box>, ends: Iterable<string>): string[] {
   const skip = new Set(ends);
+  const own = [...skip].map((id) => boxes.get(id)).filter((b): b is Box => !!b);
   const pts = routeSamples(r);
-  return [...boxes].filter(([id, b]) => !skip.has(id) && pts.some((p) => insideBox(p, b))).map(([id]) => id);
+  const tips = [pts[0], pts[pts.length - 1]];
+  const along = pts.filter((p) => !own.some((b) => insideBox(p, b, -1)));
+  return [...boxes].filter(([id, b]) => !skip.has(id) && !tips.some((p) => insideBox(p, b))
+    && along.some((p) => insideBox(p, b))).map(([id]) => id);
 }
 
 /** Where an arrow's end handle sits: `t` of the way along a single curve, and otherwise on its
@@ -340,35 +346,45 @@ export function curveRoute(a: Point, b: Point): Route {
  * ending at End past a longer one), it leaves its step, turns into a clear lane above or below
  * the steps between, runs along it and turns down (or up) into its target. The lane is the
  * nearest clear one: in the gap between two rows when there is one, else over the top row or
- * under the bottom one. `ends` are the steps the arrow joins (they may be under its ends).
+ * under the bottom one; of two as near, the side `prefer` names (a Branch's No path goes below,
+ * where its label is). A target put down close beside or under its step, where there is no
+ * room for a lane, gets a tighter curve instead. `ends` are the steps the arrow joins.
  */
 export function forwardRoute(g: Pick<LaneGeometry, "boxes" | "conn" | "height">, a: Point, b: Point,
-                             ends: string[]): Route {
+                             ends: string[], prefer: "above" | "below" = "above"): Route {
   const plain = curveRoute(a, b);
-  if (b.x <= a.x + 24 || !stepsCrossed(plain, g.boxes, ends).length) return plain;
-  // The turn out of the step and into the target fits the connector beside each.
-  const s = Math.max(4, Math.min(16, g.conn / 2));
+  if (!stepsCrossed(plain, g.boxes, ends).length) return plain;
   const skip = new Set(ends);
-  const between = [...g.boxes].filter(([id, box]) => !skip.has(id) && box.x < b.x && box.x + box.w > a.x)
-    .map(([, box]) => box);
-  const lanes = new Set<number>();
-  for (const box of between) {
-    lanes.add(box.y - ROW_GAP / 2);
-    lanes.add(box.y + box.h + ROW_GAP / 2);
+  const candidates: Route[] = [];
+  if (b.x > a.x + 24) {
+    // The turn out of the step and into the target fits the connector beside each.
+    const s = Math.max(4, Math.min(16, g.conn / 2));
+    const between = [...g.boxes].filter(([id, box]) => !skip.has(id) && box.x < b.x && box.x + box.w > a.x)
+      .map(([, box]) => box);
+    const lanes = new Set<number>();
+    for (const box of between) {
+      lanes.add(box.y - ROW_GAP / 2);
+      lanes.add(box.y + box.h + ROW_GAP / 2);
+    }
+    const top = 4;
+    const floor = g.height - 4;
+    const around = (lane: number): Route => ({ from: a, segs: [
+      { c1: { x: a.x + s, y: a.y }, c2: { x: a.x + s, y: lane }, to: { x: a.x + 2 * s, y: lane } },
+      { line: { x: b.x - 2 * s, y: lane } },
+      { c1: { x: b.x - s, y: lane }, c2: { x: b.x - s, y: b.y }, to: b },
+    ] });
+    candidates.push(...[...lanes].map((y) => Math.min(floor, Math.max(top, y)))
+      .sort((p, q) => (Math.abs(p - a.y) + Math.abs(p - b.y)) - (Math.abs(q - a.y) + Math.abs(q - b.y))
+        || (prefer === "above" ? p - q : q - p))
+      .map(around));
   }
-  const top = 4;
-  const floor = g.height - 4;
-  const around = (lane: number): Route => ({ from: a, segs: [
-    { c1: { x: a.x + s, y: a.y }, c2: { x: a.x + s, y: lane }, to: { x: a.x + 2 * s, y: lane } },
-    { line: { x: b.x - 2 * s, y: lane } },
-    { c1: { x: b.x - s, y: lane }, c2: { x: b.x - s, y: b.y }, to: b },
-  ] });
-  const tried = [...lanes].map((y) => Math.min(floor, Math.max(top, y)))
-    .sort((p, q) => (Math.abs(p - a.y) + Math.abs(p - b.y)) - (Math.abs(q - a.y) + Math.abs(q - b.y)) || p - q);
+  // A target put down close beside or under its step: a tighter curve, which bows out less.
+  for (const k of [24, 12, 6]) {
+    candidates.push({ from: a, segs: [{ c1: { x: a.x + k, y: a.y }, c2: { x: b.x - k, y: b.y }, to: b }] });
+  }
   let best = plain;
   let fewest = stepsCrossed(plain, g.boxes, ends).length;
-  for (const lane of tried) {
-    const r = around(lane);
+  for (const r of candidates) {
     const hits = stepsCrossed(r, g.boxes, ends).length;
     if (!hits) return r;
     if (hits < fewest) { best = r; fewest = hits; }
