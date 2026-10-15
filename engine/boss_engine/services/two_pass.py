@@ -154,7 +154,8 @@ _PASS_ONE_TAIL = frozenset({"preview", "plrr"})
 _WRITES_BRANCH = frozenset({BUILD_CAPABILITY, "retry_build", "plrr", "security_fix",
                             MORE_TESTS_CAPABILITY})
 _SHIPS_NOW = frozenset({"deploy", "redeploy"})
-_CONTROL = frozenset({"parallel", "join", "condition", "bounded_loop", "subworkflow"})
+_CONTROL = frozenset({"parallel", "join", "condition", "bounded_loop", "for_each",
+                      "subworkflow"})
 
 
 def _free(taken: set[str], *candidates: str) -> str:

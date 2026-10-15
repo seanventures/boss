@@ -345,7 +345,7 @@ def skip_refusal(spec: Mapping[str, Any], step: Mapping[str, Any]) -> Optional[s
                     "ships; skipping it would deploy unverified work")
     if approval.get("forced_manual") and key not in _DEPLOYS:
         return f"{step.get('id')} needs a person's approval, which a skip cannot stand in for"
-    if step.get("kind") in ("parallel", "join", "condition", "bounded_loop"):
+    if step.get("kind") in ("parallel", "join", "condition", "bounded_loop", "for_each"):
         return f"{step.get('id')} is control flow, not work"
     return None
 

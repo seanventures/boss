@@ -1230,6 +1230,13 @@ CONTROL_BLOCKS: list[dict[str, Any]] = [
         "summary": "Repeat a step until a condition holds, with a hard ceiling on attempts.",
         "canvas_required": True,
     },
+    {
+        "kind": "for_each",
+        "label": "For each",
+        "summary": "Run a step once for every item of a list an earlier step made, a few at a "
+                   "time, and collect what each one produced in order.",
+        "canvas_required": True,
+    },
 ]
 
 

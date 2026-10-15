@@ -155,6 +155,19 @@ STACK_GATE_TARGET = "stack_gate_target_id"
 FIRST_STACK_TARGET = "first-stack-target"
 
 
+def item_context(claimed: dict[str, Any]) -> dict[str, Any]:
+    """The item a for_each handed this step run, as `_resolve_inputs` reads it — or nothing.
+
+    A for_each starts its body once per item and writes the item on that step run's `input`
+    (`workflows._activate_for_each_item`); a step that is not a for_each's body gets {}.
+    """
+    given = claimed.get("input") if isinstance(claimed, dict) else None
+    if not isinstance(given, dict) or "for_each" not in given:
+        return {}
+    return {"item": given.get("item"), "item_index": given.get("item_index"),
+            "item_count": given.get("item_count"), "for_each": given.get("for_each")}
+
+
 def _resolve_inputs(
     inputs: dict[str, Any], context: dict[str, Any],
     optional: frozenset[str] = frozenset(),
@@ -168,7 +181,25 @@ def _resolve_inputs(
     """
     resolved: dict[str, Any] = {}
     for name, value in (inputs or {}).items():
-        if isinstance(value, dict) and "from_input" in value:
+        if isinstance(value, dict) and ("from_item" in value or "from_item_index" in value):
+            # THE ITEM A FOR_EACH IS ON. `{"from_item": ""}` is the whole item, a path reads into
+            # it (`"url"`, `"tags.0"`), and `{"from_item_index": true}` is its 0-based index.
+            if "for_each" not in context:
+                raise CapabilityExecutionError(
+                    f"'{name}' reads a for_each item, and this step was not started by one.")
+            if "from_item_index" in value:
+                resolved[name] = context.get("item_index")
+                continue
+            found, item = workflows._lookup_path(context.get("item"),
+                                                 str(value.get("from_item") or ""))
+            if not found:
+                if name in optional:
+                    continue
+                raise CapabilityExecutionError(
+                    f"item {int(context.get('item_index') or 0) + 1} has no "
+                    f"'{value.get('from_item')}', which this step needs as '{name}'.")
+            resolved[name] = item
+        elif isinstance(value, dict) and "from_input" in value:
             # What the run was STARTED with. A catalogue workflow cannot hard-code the thing
             # being built — "Standard Product Delivery" has to work for any directive — so its
             # first steps read from the run's input instead of a literal.
@@ -5528,6 +5559,8 @@ def tick(
                             spec_steps=spec_steps,
                             context={
                                 **_run_context(connection, run_id),
+                                # The item, when a for_each started this step run.
+                                **item_context(claimed),
                                 "step_attempt": int(claimed.get("attempt") or 1),
                                 "worker_id": worker_id,
                                 # Set only on a step a gate released (_resume_answered_gates
