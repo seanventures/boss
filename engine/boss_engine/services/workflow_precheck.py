@@ -865,8 +865,44 @@ def _version_ok(have: str, want: str) -> Optional[bool]:
     return int(m.group(1)) >= int(w.group(1))
 
 
+def _java_app(ctx: Context) -> Optional[str]:
+    """"maven" | "gradle" when the pre-check's app (ctx.app_dir, the app's own directory) is a
+    Java build; a Node app beside a pom.xml is still a Node app."""
+    if ctx.app_dir is None or (ctx.app_dir / "package.json").is_file():
+        return None
+    from . import toolchains
+
+    return toolchains.detect_java(ctx.app_dir)
+
+
+def _check_java_toolchain(ctx: Context, build: str) -> dict[str, Any]:
+    from . import toolchains
+
+    tool = "mvn" if build == "maven" else "gradle"
+    tools = {t: shutil.which(t) for t in ("git", "java", tool)}
+    have = toolchains.installed().get("java") or {}
+    evidence = (f"the app is a {build} build ({toolchains.build_file(build)}); in this process "
+                f"({os.uname().nodename}): "
+                + ", ".join(f"{t} {'ok' if p else 'MISSING'}" for t, p in tools.items())
+                + ("; the image's Java toolchain: "
+                   + ", ".join(f"{k} {v}" for k, v in sorted(have.items())) if have else
+                   "; this install has no Java toolchain"))
+    if not have:
+        # The build's own gate refuses with these words; say them before the run spends.
+        return result("sandbox.toolchain", "will_fail", evidence,
+                      action=toolchains.missing_message("java", toolchains.build_file(build)))
+    if any(not p for p in tools.values()):
+        return result("sandbox.toolchain", "unknown", evidence + " — checked where the pre-check "
+                      "runs; the build runs in the worker", action="Run the CLI in the worker "
+                      "container to check the build's own toolchain.")
+    return result("sandbox.toolchain", "ready", evidence)
+
+
 @_check("sandbox.toolchain", "Node, git and compilers present in the sandbox", shared=True)
 def check_toolchain(ctx: Context, step: dict[str, Any]) -> dict[str, Any]:
+    java = _java_app(ctx)
+    if java:
+        return _check_java_toolchain(ctx, java)
     tools = {t: shutil.which(t) for t in ("git", "node", "npm", "npx", "python3", "cc", "make")}
     missing = [t for t, p in tools.items() if not p]
     node = ""
@@ -1266,7 +1302,7 @@ _REQUIRED_WORDS = re.compile(r"must be set|is required|are required|required\b|m
 _FORBIDDEN_WORDS = re.compile(r"must not be set|must be unset|not allowed", re.I)
 _SOURCE_SUFFIXES = (".ts", ".tsx", ".js", ".mjs", ".cjs", ".py", ".go", ".rb", ".java")
 _SKIP_DIRS = {"node_modules", ".git", "dist", "build", ".next", "coverage", "__pycache__",
-              ".venv", "venv"}
+              ".venv", "venv", "target"}   # target: Maven's output (generated sources too)
 
 
 def _source_files(app_dir: Path, limit: int = 400) -> Iterable[Path]:
@@ -1704,7 +1740,9 @@ def _server_entry(ctx: Context) -> list[str]:
         except OSError:
             continue
         if re.search(r"\.listen\(\s*(?:port|PORT|Number\(process\.env\.PORT)|uvicorn\.run|"
-                     r"app\.run\(", body):
+                     r"app\.run\(|"
+                     # Java: Spring Boot's main, a Dropwizard Application subclass.
+                     r"SpringApplication\.run\(|extends\s+Application<", body):
             hits.append(str(path.relative_to(ctx.app_dir)))
     return hits
 
@@ -1753,7 +1791,36 @@ def _routes(ctx: Context) -> set[str]:
             continue
         found.update(re.findall(r"\.(?:get|all|use|route)\(\s*[\"'`](/[\w/.:-]*)[\"'`]", body))
         found.update(re.findall(r"@\w+\.(?:get|route|api_route)\(\s*[\"'](/[\w/.:-]*)[\"']", body))
+        if path.suffix == ".java":
+            found.update(_java_routes(body))
+    if _spring_actuator(ctx.app_dir):
+        # Spring Boot Actuator serves its health endpoint with no route in the app's own code.
+        found.add("/actuator/health")
     return found
+
+
+#: Spring MVC mappings (@GetMapping("/x"), @RequestMapping(value = "/x"), path = {"/x"}) and
+#: JAX-RS (@Path("/x"), Dropwizard). A class-level prefix is not joined to its methods: the
+#: health check asks whether a path is served at all, and a health route is rarely prefixed.
+_JAVA_ROUTE = re.compile(
+    r'@(?:Get|Post|Put|Delete|Patch|Request)Mapping\(\s*(?:(?:value|path)\s*=\s*)?\{?\s*'
+    r'"(/[\w/.:{}-]*)"|@Path\(\s*"(/[\w/.:{}-]*)"')
+
+
+def _java_routes(body: str) -> set[str]:
+    return {a or b for a, b in _JAVA_ROUTE.findall(body)}
+
+
+def _spring_actuator(app_dir: Optional[Path]) -> bool:
+    if app_dir is None:
+        return False
+    for name in ("pom.xml", "build.gradle", "build.gradle.kts"):
+        try:
+            if "spring-boot-starter-actuator" in (app_dir / name).read_text(errors="ignore"):
+                return True
+        except OSError:
+            continue
+    return False
 
 
 @_check("deploy.health", "The health path the deploy checks is one the app serves", (PRE_DEPLOY,))

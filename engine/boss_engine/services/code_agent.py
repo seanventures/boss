@@ -714,6 +714,24 @@ NO_COMPILER_FACT = (
     "(better-sqlite3, bcrypt, sharp…); use pure-JS alternatives (pg, node:sqlite, bcryptjs).")
 
 
+def java_fact() -> str:
+    """The Java line of the sandbox facts, when this install turned Java on (toolchains), else
+    "". An agent writing a Spring app otherwise guesses a JDK and reaches for ./gradlew."""
+    from . import toolchains
+
+    have = toolchains.installed().get("java")
+    if have is None:
+        return ""
+    versions = ", ".join(f"{label} {have[key]}" for key, label in
+                         (("jdk", "JDK"), ("maven", "Maven"), ("gradle", "Gradle")) if have.get(key))
+    return (f"- Java is installed ({versions or 'JDK 21, Maven, Gradle'}). Build with the image's "
+            "`mvn` or `gradle`, never ./gradlew: the wrapper downloads Gradle from "
+            "services.gradle.org, which this sandbox cannot reach. Dependencies resolve from "
+            "Maven Central and the Gradle plugin portal only. BOSS runs `mvn -B -ntp verify` or "
+            "`gradle build` as the gate, and serves the app on $PORT (Spring Boot: "
+            "-Dserver.port).")
+
+
 def sandbox_facts() -> str:
     """WHAT THE BUILD SANDBOX HAS, read from this process's own environment (the agent runs
     here), said up front. A HelpDesk build spent steps discovering each of these: curl missing
@@ -732,6 +750,9 @@ def sandbox_facts() -> str:
         node = ""
     if node:
         lines.append(f"- Node {node} with npm.")
+    java = java_fact()
+    if java:
+        lines.append(java)
     lines.append("- curl is available." if _shutil.which("curl")
                  else "- curl is NOT installed: probe HTTP with node (fetch) instead.")
     browsers = os.environ.get("PLAYWRIGHT_BROWSERS_PATH") or ""

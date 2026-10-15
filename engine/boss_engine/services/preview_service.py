@@ -2779,6 +2779,17 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
     }, settings=settings)
 
 
+def _java_build_of(app_dir: Path) -> Optional[str]:
+    """"maven" | "gradle" | None for a directory the app resolver already chose (how_app_runs:
+    the declaring directory, or resolve_app_entry's java entry) — never a repository root asked
+    on its own (app_root's rule)."""
+    from . import toolchains
+
+    if (Path(app_dir) / "package.json").is_file():
+        return None                      # a Node app beside a pom.xml is still a Node app
+    return toolchains.detect_java(app_dir)
+
+
 def _generate_dockerfile(workdir: Path, changed: Optional[list[str]] = None) -> int:
     """Ensure the app has a Dockerfile; return the container port the app listens on.
     Generated images set HOST=0.0.0.0 + PORT so deploy-ready apps bind correctly for -p mapping."""
@@ -2801,10 +2812,20 @@ def _generate_dockerfile(workdir: Path, changed: Optional[list[str]] = None) -> 
         rel = plan.declared_in or "."
         app_dir = "/app" if rel == "." else f"/app/{rel}"
         command = json.dumps(plan.declared_command)
+        java = _java_build_of(workdir / rel)
         if (workdir / rel / "package.json").is_file():
             port = 3000
             setup = f"RUN {NPM_INSTALL_CMD}\n"
             base = "node:20-slim"
+        elif java:
+            # A JAVA APP'S OWN RUN COMMAND (`mvn spring-boot:run`, `java -jar …`): it needs
+            # the JDK and its build tool, which a python image does not have — this branch used
+            # to give every non-Node declaration python:3.11-slim.
+            from . import toolchains
+
+            port = toolchains.JAVA_PORT
+            setup = ""
+            base = toolchains.JAVA_BUILD_IMAGES[java]
         else:
             port = 8000
             setup = ("RUN pip install --no-cache-dir -r requirements.txt\n"
@@ -2842,6 +2863,17 @@ def _generate_dockerfile(workdir: Path, changed: Optional[list[str]] = None) -> 
             f"ENV HOST=0.0.0.0 PORT={port} PYTHONUNBUFFERED=1\nEXPOSE {port}\n"
             f'CMD [{cmd}]\n')
         return port
+    if kind == "java":
+        # The resolver chose a Java app (pom.xml / build.gradle): build its jar with the build
+        # tool's image, run it on a JRE. It used to fall through to "could not infer a stack".
+        from . import toolchains
+
+        app_root = workdir if value in (".", "") else workdir / value
+        build = _java_build_of(app_root)
+        if build:
+            existing.write_text(toolchains.java_dockerfile(
+                build, value or ".", config=toolchains.java_config_file(app_root)))
+            return toolchains.JAVA_PORT
     if kind == "node":
         port = 3000
         app_workdir = "/app" if value in (".", "") else f"/app/{value}"
