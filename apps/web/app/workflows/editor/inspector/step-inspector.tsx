@@ -4,8 +4,8 @@ import React, {
   useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type ReactNode,
 } from "react";
 import {
-  Clock, DotsThree, GitBranch, GitFork, GitMerge, Lock, PencilSimple, PuzzlePiece, Repeat, Robot,
-  SealCheck, Stack, X,
+  Clock, DotsThree, GitBranch, GitFork, GitMerge, ListBullets, Lock, PencilSimple, PuzzlePiece, Repeat,
+  Robot, SealCheck, Stack, X,
 } from "@phosphor-icons/react";
 
 import { HelpTip } from "../../../help-tip";
@@ -42,12 +42,12 @@ import {
 const TYPE_LABEL: Record<StepView["type"], string> = {
   builtin: "Built-in", agent: "Agent task", custom: "Your step", gate: "Approval gate", wait: "Wait",
   subworkflow: "Run a workflow", parallel: "Parallel", condition: "If / else", join: "Join",
-  loop: "Loop", other: "Step",
+  loop: "Loop", foreach: "For each", other: "Step",
 };
 
 const TYPE_ICON: Partial<Record<StepView["type"], typeof Robot>> = {
   agent: Robot, custom: PuzzlePiece, gate: SealCheck, wait: Clock, subworkflow: Stack,
-  parallel: GitFork, condition: GitBranch, join: GitMerge, loop: Repeat,
+  parallel: GitFork, condition: GitBranch, join: GitMerge, loop: Repeat, foreach: ListBullets,
 };
 
 export function TypeIcon({ view, size = 20 }: { view: StepView; size?: number }) {
@@ -76,7 +76,8 @@ export function Section({ label, tip, action, children, testId }: {
   );
 }
 
-const BLOCK_TYPES: StepView["type"][] = ["gate", "wait", "subworkflow", "condition", "parallel", "join", "loop"];
+const BLOCK_TYPES: StepView["type"][] = ["gate", "wait", "subworkflow", "condition", "parallel", "join", "loop",
+  "foreach"];
 
 /**
  * One step's properties. Every control dispatches exactly one action — `PATCH_STEP`,

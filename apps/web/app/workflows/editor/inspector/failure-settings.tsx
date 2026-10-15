@@ -26,7 +26,7 @@ import { Section } from "./step-inspector";
 
 /** Step kinds the runtime steps through itself: nothing to retry or time out. The engine's
  *  CONTROL_KINDS (workflows.py) refuses failure settings on exactly these. */
-const CONTROL_KINDS = new Set(["condition", "parallel", "join", "bounded_loop", "decision", "timer",
+const CONTROL_KINDS = new Set(["condition", "parallel", "join", "bounded_loop", "for_each", "decision", "timer",
                                "subworkflow"]);
 
 /** Whether a step has failure settings at all (a Branch, Do at the same time, its join, a Repeat,

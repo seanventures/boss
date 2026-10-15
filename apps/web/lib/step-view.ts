@@ -50,6 +50,7 @@ export function stepType(step: SpecStep): StepView["type"] {
     case "condition": return "condition";
     case "join": return "join";
     case "bounded_loop": return "loop";
+    case "for_each": return "foreach";
     default: return "other";
   }
 }
@@ -58,13 +59,14 @@ export function stepType(step: SpecStep): StepView["type"] {
 const TYPE_LABELS: Partial<Record<StepView["type"], string>> = {
   gate: "Approval gate", wait: "Wait", subworkflow: "Run another workflow",
   parallel: "Parallel", condition: "If / else", join: "Wait for branches", loop: "Repeat",
+  foreach: "For each",
 };
 
 /** The type chip's words (spec 2.6). */
 export const TYPE_CHIPS: Record<StepView["type"], string> = {
   builtin: "Built-in", agent: "Agent task", custom: "Your step", gate: "Approval gate",
   wait: "Wait", subworkflow: "Run a workflow", parallel: "Parallel", condition: "If / else",
-  join: "Join", loop: "Loop", other: "Step",
+  join: "Join", loop: "Loop", foreach: "For each", other: "Step",
 };
 
 /**

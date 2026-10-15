@@ -76,13 +76,18 @@ function retarget(step: SpecStep, from: string, to: string | null): SpecStep {
   return out;
 }
 
-/** Every step some bounded loop repeats. Its `next` is never followed: it returns to its loop. */
+/** The kinds that repeat ONE step (their `body`) and take it back when it is done: a Repeat
+ *  (`bounded_loop`) and a For each (`for_each`, once per item). Drawn, laid out and edited alike. */
+export const REPEATS = new Set(["bounded_loop", "for_each"]);
+
+/** Every step some Repeat or For each repeats. Its `next` is never followed: it returns to the
+ *  step that repeats it. */
 export function loopBodies(spec: Spec): Set<string> {
-  return new Set(stepsOf(spec).filter((s) => s.kind === "bounded_loop" && s.body)
+  return new Set(stepsOf(spec).filter((s) => REPEATS.has(s.kind) && s.body)
     .map((s) => String(s.body)));
 }
 
-const BRANCH_KINDS = new Set(["parallel", "condition", "join", "bounded_loop"]);
+const BRANCH_KINDS = new Set(["parallel", "condition", "join", "bounded_loop", "for_each"]);
 const BRANCH_KEYS = ["branches", "wait_for", "on_true", "on_false", "body"];
 
 /** A step that is (or carries) branch structure: only JSON may add or copy one. */
@@ -124,7 +129,7 @@ export function edgesOf(spec: Spec): GraphEdge[] {
     if (step.kind === "parallel" && Array.isArray(step.branches)) {
       for (const branch of step.branches) add(id, String(branch), "branch");
     }
-    if (step.kind === "bounded_loop" && step.body) add(id, String(step.body), "loop");
+    if (REPEATS.has(step.kind) && step.body) add(id, String(step.body), "loop");
     for (const target of nextOf(step)) {
       add(id, target, waitedBy.get(id)?.has(target) ? "join" : "next");
     }
@@ -314,7 +319,7 @@ function forwardErrorEdges(spec: Spec, structural: GraphEdge[], errors: GraphEdg
   structural.forEach(link);
   // A loop body returns to its loop: a way back the edges do not name.
   for (const step of stepsOf(spec)) {
-    if (step.kind === "bounded_loop" && step.body) link({ from: String(step.body), to: step.id, kind: "next" });
+    if (REPEATS.has(step.kind) && step.body) link({ from: String(step.body), to: step.id, kind: "next" });
   }
   const reaches = (from: string, to: string) => {
     const seen = new Set([from]);
@@ -868,6 +873,14 @@ export function rewireLink(spec: Spec, link: FlowLink, target: string | null):
   if (target === START_TARGET) return { refused: "Nothing can lead back to Start: it is where the flow begins" };
   if (target !== null && !byId.has(target)) return { refused: "Link it to a step, or to End" };
   const into = target === null ? undefined : byId.get(target)!;
+  if (link.kind === "loop" && from.kind === "for_each") {
+    // A FOR EACH'S ARROW CAN BE POINTED AT ANOTHER STEP: the one it runs for each item. Only its
+    // `body` is rewritten; whether that step can be one (no next of its own, nothing else leading
+    // to it) is the validator's to say, like every other arrow.
+    if (target === null) return { refused: "A For each needs a step to run for each item" };
+    if (target === link.from) return { refused: "A For each cannot run itself for each item" };
+    return { spec: { ...spec, steps: steps.map((s) => (s.id === from.id ? { ...s, body: target } : s)) } };
+  }
   if (link.kind === "loop") {
     return { refused: "A Repeat keeps its one step: put a step in it instead" };
   }

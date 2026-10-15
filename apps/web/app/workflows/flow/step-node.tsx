@@ -86,7 +86,7 @@ const PHASE_MARK: Partial<Record<RunPhase, React.ComponentType<{ size?: number; 
 };
 
 /** Flow blocks the runtime steps through itself: no agent runs them, so no agent row. */
-const BLOCK_TYPES = new Set<StepView["type"]>(["parallel", "condition", "join", "loop"]);
+const BLOCK_TYPES = new Set<StepView["type"]>(["parallel", "condition", "join", "loop", "foreach"]);
 
 /**
  * THE SHAPE SAYS WHAT KIND OF STEP IT IS, before a word is read: the flowchart shapes people
@@ -96,19 +96,21 @@ const BLOCK_TYPES = new Set<StepView["type"]>(["parallel", "condition", "join", 
  *   - Do at the same time       a box with a heavy bar on its right edge, where the branches fork;
  *   - Wait for branches (join)  a heavy bar on its left edge, where they meet again;
  *   - Repeat until              a hexagon, the loop-limit shape;
+ *   - For each                  a stack of cards, the many-documents shape: one step, many items;
  *   - Notify                    a box pointing right, the send-a-message shape.
  *
  * The shape is drawn (an SVG behind the content), never clipped, so the border, the selection
  * and a run's phase still show on its edge. Its name is said to a screen reader too, so the
  * shape is never the only way to know.
  */
-export type NodeShape = "diamond" | "fork" | "join" | "hexagon" | "send";
+export type NodeShape = "diamond" | "fork" | "join" | "hexagon" | "stack" | "send";
 
 const SHAPE_OF: Partial<Record<StepView["type"], { shape: NodeShape; words: string }>> = {
   condition: { shape: "diamond", words: "Branch" },
   parallel: { shape: "fork", words: "Do at the same time" },
   join: { shape: "join", words: "Wait for branches" },
   loop: { shape: "hexagon", words: "Repeat until" },
+  foreach: { shape: "stack", words: "For each" },
 };
 
 /** The shape a node is drawn as, and what it is called, or null for a plain card. */
@@ -124,10 +126,13 @@ const SHAPE_PATH: Record<NodeShape, string> = {
   fork: "M1,1 H90 V99 H1 Z",
   join: "M10,1 H99 V99 H10 Z",
   hexagon: "M13,1 H87 L99,50 L87,99 H13 L1,50 Z",
+  stack: "M1,13 H87 V99 H1 Z",
   send: "M1,1 H85 L99,50 L85,99 H1 Z",
 };
 /** The heavy bar a fork or a join carries on the edge where the branches leave or meet. */
-const SHAPE_BAR: Partial<Record<NodeShape, string>> = { fork: "M96,1 V99", join: "M4,1 V99" };
+/** The cards behind a For each: the edges of two more, offset up and to the right. */
+const SHAPE_BAR: Partial<Record<NodeShape, string>> = { fork: "M96,1 V99", join: "M4,1 V99",
+  stack: "M7,13 V7 H93 V93 H87 M13,7 V1 H99 V87 H93" };
 
 function ShapeOutline({ shape }: { shape: NodeShape }) {
   return (

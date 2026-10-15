@@ -59,6 +59,7 @@ import {
   FlowLane, WorkflowEditor, runLaneSpec, runPalette, useRunDefinition,
 } from "./workflows/studio-parts";
 import { useOnScreen } from "../lib/area-shown";
+import { forEachProgress } from "../lib/workflow-for-each";
 
 // Moved to app/workflows/ (Workflow Studio, phase 0); re-exported so existing imports hold.
 export { CaptainCanRunIt, DefineStepForm };
@@ -1921,7 +1922,8 @@ export function laneStateOf(step: RunStep): { phase: string; meta: string; tip?:
                                tip: "It failed, and the run went on without it" };
     case "findings": return { phase: "done", meta: railMeta(step) || "findings", tip: "Finished with findings" };
     case "done": return { phase: "done", meta: railMeta(step) };
-    case "now": return { phase: "moving", meta: railMeta(step) };
+    // A For each going through its list says how far it is: "3 of 10 done".
+    case "now": return { phase: "moving", meta: forEachProgress(step) ?? railMeta(step) };
     default: return { phase: "future", meta: railMeta(step) || "pending" };
   }
 }

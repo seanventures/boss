@@ -166,9 +166,10 @@ function toBlock(raw: unknown): BlockDef | null {
   };
 }
 
-const CONTROL_KINDS: ControlDef["kind"][] = ["condition", "parallel", "bounded_loop"];
+const CONTROL_KINDS: ControlDef["kind"][] = ["condition", "parallel", "bounded_loop", "for_each"];
 const CONTROL_LABELS: Record<ControlDef["kind"], string> = {
   condition: "Branch", parallel: "Do at the same time", bounded_loop: "Repeat until",
+  for_each: "For each",
 };
 
 /** A branch block the runtime runs. The server marks these `canvas_required` — they need a canvas
@@ -236,7 +237,7 @@ function outlineIcon(step: Obj): string {
   const kind = str(step.kind);
   const byKind: Record<string, string> = {
     decision: "gate", timer: "wait", subworkflow: "subworkflow", parallel: "parallel",
-    condition: "condition", join: "join", bounded_loop: "loop",
+    condition: "condition", join: "join", bounded_loop: "loop", for_each: "foreach",
   };
   if (byKind[kind]) return byKind[kind];
   // An API that predates `capability` on the outline labels a built-in step with its key.

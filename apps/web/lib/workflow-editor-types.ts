@@ -44,7 +44,8 @@ export type BlockDef = { kind: "decision" | "timer" | "subworkflow"; label: stri
 export type RosterAgent = { role_key: string; name: string; skills: string[]; mcp: string[] };
 /** A branch block the server says the runtime runs (`canvas_required` blocks of view=capabilities):
  *  placed whole by lib/workflow-blocks.ts `placeBlock`, never configured from a `configure` list. */
-export type ControlDef = { kind: "condition" | "parallel" | "bounded_loop"; label: string; summary: string };
+export type ControlDef = { kind: "condition" | "parallel" | "bounded_loop" | "for_each"; label: string;
+  summary: string };
 export type Palette = { capabilities: Capability[]; customSteps: CustomStepDef[]; blocks: BlockDef[];
   /** Absent from palettes built before branch blocks could be placed: none are offered then. */
   controls?: ControlDef[];
@@ -101,7 +102,7 @@ export type FlowLayout = { nodes: LaidOutNode[]; edges: GraphEdge[]; columns: nu
 
 export type StepView = { id: string; title: string;
   type: "builtin" | "agent" | "custom" | "gate" | "wait" | "subworkflow" | "parallel" | "condition"
-        | "join" | "loop" | "other";
+        | "join" | "loop" | "foreach" | "other";
   /** A capability key, or the type fallback. */
   icon: string;
   agent: { kind: "named" | "auto" | "you" | "person"; role_key?: string; label: string; tip: string };

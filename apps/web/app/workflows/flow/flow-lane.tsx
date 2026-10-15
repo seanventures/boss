@@ -42,7 +42,7 @@ import type {
   FlowLayout, FlowLink, GraphEdge, Palette, PaletteItem, Problem, Spec, SpecStep, StepView,
 } from "../../../lib/workflow-editor-types";
 import {
-  afterGaps, canMove as modelCanMove, insertStep, layoutFlow, linearOrder, rewireLink, START_TARGET,
+  afterGaps, canMove as modelCanMove, insertStep, layoutFlow, linearOrder, REPEATS, rewireLink, START_TARGET,
 } from "../../../lib/workflow-graph";
 import { pinTip, unpinTip, useTips } from "./tip-layer";
 import { layoutOffsets, type NodeOffset } from "../../../lib/workflow-layout";
@@ -117,9 +117,16 @@ export function drawEdges(layout: FlowLayout, g: LaneGeometry, spec: Spec): Draw
   const right = (id: string) => { const b = g.boxes.get(id)!; return { x: b.x + b.w, y: b.y + b.h / 2 }; };
   const left = (id: string) => { const b = g.boxes.get(id)!; return { x: b.x, y: b.y + b.h / 2 }; };
   const bottom = g.height - 8;
-  const loopMax = new Map(spec.steps.filter((s) => s.kind === "bounded_loop")
-    .map((s) => [s.id, Number(s.max_iterations) || 0]));
+  // What a body's way back says: how many times a Repeat may go round; that a For each goes
+  // round once per item.
+  const loopBadge = new Map<string, string>(spec.steps.flatMap((s): [string, string][] => {
+    if (s.kind === "bounded_loop") return Number(s.max_iterations) ? [[s.id, `↻ ×${Number(s.max_iterations)}`]] : [];
+    return s.kind === "for_each" ? [[s.id, "↻ each item"]] : [];
+  }));
   const labelled = new Set<string>();
+  // A For each's arrow into the step it runs can be pointed at another step; a Repeat's cannot.
+  const forEach = new Set(spec.steps.filter((s) => s.kind === "for_each").map((s) => s.id));
+  const relinkable = (e: GraphEdge) => RELINKABLE.has(e.kind) || (e.kind === "loop" && forEach.has(e.from));
   const backs = new Set(layout.edges.filter((e) => e.kind !== "error" && (col.get(e.to) ?? 0) <= (col.get(e.from) ?? 0))
     .map((e) => `${e.from}>${e.to}`));
 
@@ -127,7 +134,7 @@ export function drawEdges(layout: FlowLayout, g: LaneGeometry, spec: Spec): Draw
     out.push({ key: `start>${n.id}`, kind: "start", ends: [n.id],
                ...drawn(forwardRoute(g, { x: g.start.x + g.start.w, y: g.midY }, left(n.id), [n.id])) });
   }
-  const back = (from: string, to: string, badge: number, link?: FlowLink) => {
+  const back = (from: string, to: string, badge: string, link?: FlowLink) => {
     const a = g.boxes.get(from)!;
     const b = g.boxes.get(to)!;
     const ax = a.x + a.w / 2;
@@ -135,15 +142,15 @@ export function drawEdges(layout: FlowLayout, g: LaneGeometry, spec: Spec): Draw
     const route: Route = { from: { x: ax, y: a.y + a.h },
                            segs: [{ line: { x: ax, y: bottom } }, { line: { x: bx, y: bottom } }, { line: { x: bx, y: b.y + b.h } }] };
     out.push({ key: `back:${from}>${to}`, kind: "back", ends: [from, to], ...drawn(route),
-               label: badge ? { x: (ax + bx) / 2, y: bottom - 4, text: `↻ ×${badge}` } : undefined,
+               label: badge ? { x: (ax + bx) / 2, y: bottom - 4, text: badge } : undefined,
                ...(link ? { link, from: { x: ax, y: a.y + a.h }, grip: { x: bx, y: (bottom + b.y + b.h) / 2 } } : {}) });
   };
   for (const e of layout.edges) {
     if (!g.boxes.has(e.from) || !g.boxes.has(e.to)) continue;
     if (e.kind === "error") { out.push(errorEdge(e, g, col)); continue; }
     if ((col.get(e.to) ?? 0) <= (col.get(e.from) ?? 0)) {
-      back(e.from, e.to, loopMax.get(e.to) ?? loopMax.get(e.from) ?? 0,
-           RELINKABLE.has(e.kind) ? { from: e.from, to: e.to, kind: e.kind } : undefined);
+      back(e.from, e.to, loopBadge.get(e.to) ?? loopBadge.get(e.from) ?? "",
+           relinkable(e) ? { from: e.from, to: e.to, kind: e.kind } : undefined);
       continue;
     }
     const a = right(e.from);
@@ -164,9 +171,9 @@ export function drawEdges(layout: FlowLayout, g: LaneGeometry, spec: Spec): Draw
       label = { x: a.x, y: box.y + box.h + 14, text: "parallel", anchor: "end" };
     }
     out.push({ key: `${e.kind}:${e.from}>${e.to}`, kind: e.kind, ends: [e.from, e.to], ...drawn(route), label,
-               ...(RELINKABLE.has(e.kind) ? { link: { from: e.from, to: e.to, kind: e.kind }, from: a, grip: routeGrip(route, GRIP_T) } : {}) });
+               ...(relinkable(e) ? { link: { from: e.from, to: e.to, kind: e.kind }, from: a, grip: routeGrip(route, GRIP_T) } : {}) });
     // A loop's body returns to its controller; the spec only names the way in.
-    if (e.kind === "loop" && !backs.has(`${e.to}>${e.from}`)) back(e.to, e.from, loopMax.get(e.from) ?? 0);
+    if (e.kind === "loop" && !backs.has(`${e.to}>${e.from}`)) back(e.to, e.from, loopBadge.get(e.from) ?? "");
   }
   for (const id of layout.terminal) {
     if (!g.boxes.has(id)) continue;
@@ -422,7 +429,7 @@ export function FlowLane(p: {
   const linear = layout.linear && !offsets.size && !live && !errorPaths.length;
   const afterPoints = useMemo(() => {
     if (layout.linear) return [];
-    const bodies = new Map(steps.filter((s) => s.kind === "bounded_loop" && s.body)
+    const bodies = new Map(steps.filter((s) => REPEATS.has(s.kind) && s.body)
       .map((s) => [s.id, String(s.body)]));
     return afterGapPoints(afterGaps(spec), order, geometry, (id) => bodies.get(id), arrows);
   }, [layout.linear, spec, steps, order, geometry, arrows]);
@@ -624,7 +631,8 @@ export function FlowLane(p: {
   const titleOf = (id: string | null) => (id === null ? "End" : views.get(id)?.title ?? id);
   const linkWords = (l: FlowLink) => {
     if (l.kind === "error") return `If ${titleOf(l.from)} fails, it goes to ${l.to === null ? "nothing" : titleOf(l.to)}`;
-    const what = l.kind === "yes" ? "The Yes path" : l.kind === "no" ? "The No path" : l.kind === "branch" ? "A branch" : "The arrow";
+    const what = l.kind === "yes" ? "The Yes path" : l.kind === "no" ? "The No path" : l.kind === "branch" ? "A branch"
+      : l.kind === "loop" ? "What it runs for each item" : "The arrow";
     return `${what} from ${titleOf(l.from)} to ${titleOf(l.to)}`;
   };
   /** What is under a canvas point: a step, End (null), Start, or nothing (undefined). */

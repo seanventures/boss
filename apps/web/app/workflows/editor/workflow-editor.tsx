@@ -46,6 +46,7 @@ import { useCan } from "../../../components/identity/identity-provider";
 
 const BLOCK_REMOVED: Record<ControlBlock, string> = {
   condition: "Branch removed", parallel: "Parallel steps removed", bounded_loop: "Repeat removed",
+  for_each: "For each removed",
 };
 /** A palette pick with nothing selected, in a flow that ends in more than one place. */
 const SEVERAL_ENDS = "This flow ends in more than one place: select the step to add after";

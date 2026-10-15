@@ -91,7 +91,7 @@ export function paletteEntries(palette: Palette | null): PaletteEntry[] {
 }
 
 const CONTROL_TYPE: Record<NonNullable<PaletteItem["control"]>, StepView["type"]> = {
-  condition: "condition", parallel: "parallel", bounded_loop: "loop",
+  condition: "condition", parallel: "parallel", bounded_loop: "loop", for_each: "foreach",
 };
 
 export function matches(entry: PaletteEntry, query: string): boolean {
