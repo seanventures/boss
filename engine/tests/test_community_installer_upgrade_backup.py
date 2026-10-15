@@ -301,7 +301,7 @@ def _stopped_database_backend(tmp: Path, env: dict[str, str]) -> None:
         "    echo stopped > \"$BOSS_TEST_WORKER_STATE\"; echo stop-worker >> \"$BOSS_TEST_DOCKER_TRACE\" ;;\n"
         "  *' start worker')\n"
         "    echo running > \"$BOSS_TEST_WORKER_STATE\"; echo start-worker >> \"$BOSS_TEST_DOCKER_TRACE\" ;;\n"
-        "  *' build api') echo build >> \"$BOSS_TEST_DOCKER_TRACE\"; exit 86 ;;\n"
+        "  *' build '*' api') echo build >> \"$BOSS_TEST_DOCKER_TRACE\"; exit 86 ;;\n"
         "  *) echo \"unexpected Docker command: $args\" >&2; exit 90 ;;\n"
         "esac\n"
     )
