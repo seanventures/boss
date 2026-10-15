@@ -107,7 +107,8 @@ export function laneGeometry(layout: FlowLayout, types: Map<string, StepView["ty
   const rows = Math.max(1, layout.maxRows);
   const pitch = node.h + ROW_GAP;
   const bodyH = rows * node.h + (rows - 1) * ROW_GAP;
-  const hasLoop = layout.edges.some((e) => e.kind === "loop");
+  // Error paths may run along the bottom too (back to an earlier step, or under the steps between).
+  const hasLoop = layout.edges.some((e) => e.kind === "loop" || e.kind === "error");
   const height = PAD_Y * 2 + bodyH + (hasLoop ? LOOP_ROOM : 0);
   const midY = PAD_Y + bodyH / 2;
 
@@ -248,4 +249,145 @@ export function placedGeometry(g: LaneGeometry, offsets: Map<string, { dx: numbe
   // Room under the lowest step for back-edges (they run along the bottom), as the lane leaves.
   const height = Math.max(g.height, bottom + PAD_Y + LOOP_ROOM);
   return { ...g, boxes, width, height, end: { ...g.end, x: endX } };
+}
+
+/* ── Arrows that keep off the steps ───────────────────────────────────────────────── */
+
+export type Point = { x: number; y: number };
+/** One piece of an arrow: a straight line or a cubic, each from where the last one ended. */
+export type Seg = { line: Point } | { c1: Point; c2: Point; to: Point };
+/** An arrow as it is drawn: where it starts and its pieces. Its path (`routePath`), the points
+ *  it passes through (`routeSamples`) and where its end handle sits (`routeGrip`) all come from it,
+ *  so what is tested is what is drawn. */
+export type Route = { from: Point; segs: Seg[] };
+
+/** A point `t` of the way along the cubic a → c1 → c2 → b. */
+export function cubicAt(a: Point, c1: Point, c2: Point, b: Point, t: number): Point {
+  const u = 1 - t;
+  return {
+    x: u * u * u * a.x + 3 * u * u * t * c1.x + 3 * u * t * t * c2.x + t * t * t * b.x,
+    y: u * u * u * a.y + 3 * u * u * t * c1.y + 3 * u * t * t * c2.y + t * t * t * b.y,
+  };
+}
+
+const endOf = (s: Seg): Point => ("line" in s ? s.line : s.to);
+
+export function routePath(r: Route): string {
+  let d = `M${r.from.x},${r.from.y}`;
+  for (const s of r.segs) {
+    d += "line" in s ? ` L${s.line.x},${s.line.y}` : ` C${s.c1.x},${s.c1.y} ${s.c2.x},${s.c2.y} ${s.to.x},${s.to.y}`;
+  }
+  return d;
+}
+
+/** Points along the arrow no more than about `step` apart, from its start to its end. */
+export function routeSamples(r: Route, step = 4): Point[] {
+  const out: Point[] = [r.from];
+  let at = r.from;
+  for (const s of r.segs) {
+    const to = endOf(s);
+    const reach = "line" in s ? Math.hypot(to.x - at.x, to.y - at.y)
+      : Math.hypot(s.c1.x - at.x, s.c1.y - at.y) + Math.hypot(s.c2.x - s.c1.x, s.c2.y - s.c1.y)
+        + Math.hypot(to.x - s.c2.x, to.y - s.c2.y);
+    const n = Math.max(1, Math.ceil(reach / step));
+    for (let i = 1; i <= n; i += 1) {
+      const t = i / n;
+      out.push("line" in s ? { x: at.x + (to.x - at.x) * t, y: at.y + (to.y - at.y) * t } : cubicAt(at, s.c1, s.c2, to, t));
+    }
+    at = to;
+  }
+  return out;
+}
+
+/** Whether a point is inside a box (not on its edge: an arrow starts and ends on one). */
+export function insideBox(p: Point, b: Box, margin = 1): boolean {
+  return p.x > b.x + margin && p.x < b.x + b.w - margin && p.y > b.y + margin && p.y < b.y + b.h - margin;
+}
+
+/** The steps an arrow runs through, other than the ones it joins (`ends`). A step put down over
+ *  one of those is not counted: a point inside the arrow's own step is it leaving or arriving,
+ *  and a step lying over where the arrow starts or ends cannot be kept out of. */
+export function stepsCrossed(r: Route, boxes: Map<string, Box>, ends: Iterable<string>): string[] {
+  const skip = new Set(ends);
+  const own = [...skip].map((id) => boxes.get(id)).filter((b): b is Box => !!b);
+  const pts = routeSamples(r);
+  const tips = [pts[0], pts[pts.length - 1]];
+  const along = pts.filter((p) => !own.some((b) => insideBox(p, b, -1)));
+  return [...boxes].filter(([id, b]) => !skip.has(id) && !tips.some((p) => insideBox(p, b))
+    && along.some((p) => insideBox(p, b))).map(([id]) => id);
+}
+
+/** Where an arrow's end handle sits: `t` of the way along a single curve, and otherwise on its
+ *  last piece, the one that comes into its target, so arrows meeting at one step keep handles
+ *  of their own. */
+export function routeGrip(r: Route, t: number): Point {
+  const last = r.segs[r.segs.length - 1];
+  const at = r.segs.length > 1 ? endOf(r.segs[r.segs.length - 2]) : r.from;
+  if (!last) return r.from;
+  if ("line" in last) return { x: at.x + (last.line.x - at.x) * 0.5, y: at.y + (last.line.y - at.y) * 0.5 };
+  return cubicAt(at, last.c1, last.c2, last.to, r.segs.length > 1 ? 0.5 : t);
+}
+
+/** How far a forward arrow curves out of its step before it heads for its target. */
+export function bendOf(a: Point, b: Point): number {
+  return b.x >= a.x + 24 ? Math.max(12, (b.x - a.x) / 2) : Math.max(48, Math.abs(b.x - a.x) / 2);
+}
+
+/** The plain curve from the right of one step to the left of another. */
+export function curveRoute(a: Point, b: Point): Route {
+  const k = bendOf(a, b);
+  return { from: a, segs: [{ c1: { x: a.x + k, y: a.y }, c2: { x: b.x - k, y: b.y }, to: b }] };
+}
+
+/**
+ * AN ARROW GOES ROUND THE STEPS IT WOULD CROSS. A forward arrow is a plain curve from the right of
+ * its step to the left of its target. When that curve would run through a step on the way (an
+ * arrow that skips a column: a Branch path rejoining the other path further on, a short path
+ * ending at End past a longer one), it leaves its step, turns into a clear lane above or below
+ * the steps between, runs along it and turns down (or up) into its target. The lane is the
+ * nearest clear one: in the gap between two rows when there is one, else over the top row or
+ * under the bottom one; of two as near, the side `prefer` names (a Branch's No path goes below,
+ * where its label is). A target put down close beside or under its step, where there is no
+ * room for a lane, gets a tighter curve instead. `ends` are the steps the arrow joins.
+ */
+export function forwardRoute(g: Pick<LaneGeometry, "boxes" | "conn" | "height">, a: Point, b: Point,
+                             ends: string[], prefer: "above" | "below" = "above"): Route {
+  const plain = curveRoute(a, b);
+  if (!stepsCrossed(plain, g.boxes, ends).length) return plain;
+  const skip = new Set(ends);
+  const candidates: Route[] = [];
+  if (b.x > a.x + 24) {
+    // The turn out of the step and into the target fits the connector beside each.
+    const s = Math.max(4, Math.min(16, g.conn / 2));
+    const between = [...g.boxes].filter(([id, box]) => !skip.has(id) && box.x < b.x && box.x + box.w > a.x)
+      .map(([, box]) => box);
+    const lanes = new Set<number>();
+    for (const box of between) {
+      lanes.add(box.y - ROW_GAP / 2);
+      lanes.add(box.y + box.h + ROW_GAP / 2);
+    }
+    const top = 4;
+    const floor = g.height - 4;
+    const around = (lane: number): Route => ({ from: a, segs: [
+      { c1: { x: a.x + s, y: a.y }, c2: { x: a.x + s, y: lane }, to: { x: a.x + 2 * s, y: lane } },
+      { line: { x: b.x - 2 * s, y: lane } },
+      { c1: { x: b.x - s, y: lane }, c2: { x: b.x - s, y: b.y }, to: b },
+    ] });
+    candidates.push(...[...lanes].map((y) => Math.min(floor, Math.max(top, y)))
+      .sort((p, q) => (Math.abs(p - a.y) + Math.abs(p - b.y)) - (Math.abs(q - a.y) + Math.abs(q - b.y))
+        || (prefer === "above" ? p - q : q - p))
+      .map(around));
+  }
+  // A target put down close beside or under its step: a tighter curve, which bows out less.
+  for (const k of [24, 12, 6]) {
+    candidates.push({ from: a, segs: [{ c1: { x: a.x + k, y: a.y }, c2: { x: b.x - k, y: b.y }, to: b }] });
+  }
+  let best = plain;
+  let fewest = stepsCrossed(plain, g.boxes, ends).length;
+  for (const r of candidates) {
+    const hits = stepsCrossed(r, g.boxes, ends).length;
+    if (!hits) return r;
+    if (hits < fewest) { best = r; fewest = hits; }
+  }
+  return best;
 }

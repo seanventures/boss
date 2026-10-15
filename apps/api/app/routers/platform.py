@@ -10,6 +10,12 @@ from fastapi import FastAPI
 
 def mount_platform_routers(app: FastAPI) -> None:
     """Include optional platform domain routers when present."""
+    # Workflow test runs with pinned data, and re-running a run from a step (#512). Imported
+    # unguarded: a test run's safety rules live behind it, and a route that silently vanished
+    # on an ImportError would leave the designer's Test run button pointing at nothing.
+    from .workflow_test_runs import router as workflow_test_runs_router
+
+    app.include_router(workflow_test_runs_router)
     # System health: deploy readiness, the system doctor's findings and actions (stability).
     try:
         from .system_health import router as system_health_router
@@ -329,3 +335,9 @@ def mount_platform_routers(app: FastAPI) -> None:
         app.include_router(factory_flow_router)
     except ImportError:
         pass
+
+    # Webhook triggers for workflows (#512): owner routes and the signed public door.
+    # Imported unguarded: a broken import must fail the boot, not quietly drop the door.
+    from .workflow_webhooks import router as workflow_webhooks_router
+
+    app.include_router(workflow_webhooks_router)

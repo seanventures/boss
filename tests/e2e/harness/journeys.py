@@ -39,8 +39,12 @@ requirement, and the self-test fails when no journey labelled with it uses all o
                         Repeat's checks built from parts → Notify dragged off the grid, its
                         arrows following → the No path's arrow to End dragged onto the Yes path's
                         first step (the paths meet there), the Yes arrow dragged to End refused
-                        out loud → saved → reopened after a reload: the same shapes, the checks,
-                        where Notify was put and the new link all came back from the server
+                        out loud → the first step told what to do when it fails (3 tries, waits
+                        5s growing ×2 up to 60s, a 10 minute limit, then go to Notify) → its
+                        dashed error arrow drawn, dragged to another step, and Undo puts it back
+                        → no arrow runs through a step it does not join → saved → reopened after a
+                        reload: the same shapes, the checks, where Notify was put, the new link,
+                        the failure settings and the error arrow all came back from the server
 
 Every selector a journey uses is listed in JOURNEY_SELECTORS, which the self-test checks against
 the console source — a renamed testid fails a fast test, not a forty-minute walk. Controls the
@@ -184,6 +188,17 @@ JOURNEY_SELECTORS: tuple[tuple[str, str, str], ...] = (
     ("designer_control_flow", "app/workflows/library.tsx", "wf-lib-search"),
     ("designer_control_flow", "app/workflows/library.tsx", "wf-card-open-${w.workflow_key}"),
     ("designer_control_flow", "app/workflows/editor/summary-chips.tsx", "wf-chip-steps"),
+    # When it fails (#512 phase 2): tries, the wait between them, a time limit, an error path.
+    ("designer_control_flow", "app/workflows/editor/inspector/failure-settings.tsx", "wf-sec-failure"),
+    ("designer_control_flow", "app/workflows/editor/inspector/failure-settings.tsx", "wf-fail-attempts"),
+    ("designer_control_flow", "app/workflows/editor/inspector/failure-settings.tsx", "wf-fail-initial"),
+    ("designer_control_flow", "app/workflows/editor/inspector/failure-settings.tsx", "wf-fail-multiplier"),
+    ("designer_control_flow", "app/workflows/editor/inspector/failure-settings.tsx", "wf-fail-max"),
+    ("designer_control_flow", "app/workflows/editor/inspector/failure-settings.tsx", "wf-fail-preview"),
+    ("designer_control_flow", "app/workflows/editor/inspector/failure-settings.tsx", "wf-fail-timeout"),
+    ("designer_control_flow", "app/workflows/editor/inspector/failure-settings.tsx", "wf-fail-timeout-unit"),
+    ("designer_control_flow", "app/workflows/editor/inspector/failure-settings.tsx", "wf-fail-on-error"),
+    ("designer_control_flow", "app/workflows/editor/workflow-editor.tsx", "wf-toast-undo"),
     ("advance_now", "app/delivery-workflows-ui.tsx", "dw-tab-runs"),
     ("advance_now", "app/delivery-workflows-ui.tsx", "dw-advance"),
     ("advance_now", "app/delivery-workflows-ui.tsx", "dw-notice"),
@@ -1231,6 +1246,70 @@ def _path_heads(page, branch: str) -> tuple[str, str]:
     return head("yes"), head("no")
 
 
+def _arrows_through_steps(page) -> list[str]:
+    """Arrows drawn through a step they do not join (#551): each arrow with an end handle,
+    walked along its drawn path every few pixels, against every other step's box on the screen."""
+    return page.evaluate("""() => {
+      const svg = document.querySelector('.wf-lane svg.wf-edges');
+      if (!svg) return [];
+      const nodes = [...document.querySelectorAll('.wf-lane [data-testid="wf-node"]')]
+        .map((n) => [n.dataset.stepId, n.getBoundingClientRect()]);
+      const m = svg.getScreenCTM();
+      const out = [];
+      for (const g of svg.querySelectorAll('g[data-edge]')) {
+        const key = g.dataset.edge;
+        const ends = key.replace(/^[a-z]+:/, '').split('>');
+        const path = g.querySelector('path.wf-edge');
+        if (!path || !m) continue;
+        const len = path.getTotalLength();
+        const inside = (p, r) => p.x > r.left + 2 && p.x < r.right - 2 && p.y > r.top + 2 && p.y < r.bottom - 2;
+        // A step put down over where the arrow starts or ends cannot be kept out of.
+        const tips = [0, len].map((at) => path.getPointAtLength(at).matrixTransform(m));
+        const under = nodes.filter(([, r]) => tips.some((p) => inside(p, r))).map(([id]) => id);
+        for (let at = 0; at <= len; at += 3) {
+          const p = path.getPointAtLength(at).matrixTransform(m);
+          // Inside one of its own steps it is arriving or leaving, even where a step was put
+          // down over another one.
+          if (nodes.some(([id, r]) => ends.includes(id) && inside(p, r))) continue;
+          const hit = nodes.find(([id, r]) => !ends.includes(id) && !under.includes(id)
+            && p.x > r.left + 2 && p.x < r.right - 2 && p.y > r.top + 2 && p.y < r.bottom - 2);
+          if (hit) { out.push(key + ' crosses ' + hit[0]); break; }
+        }
+      }
+      return out;
+    }""")
+
+
+def _set_failure(page, step_id: str, target: str) -> str:
+    """When it fails, on one step: 3 tries, waits of 5s growing ×2 up to 60s, a 10 minute time
+    limit, then go to `target`. Returns what the preview says the waits are."""
+    _select_step(page, step_id)
+    _visible(page, "wf-sec-failure").scroll_into_view_if_needed()
+    _visible(page, "wf-fail-attempts").fill("3")
+    _visible(page, "wf-fail-initial").fill("5")
+    _visible(page, "wf-fail-multiplier").fill("2")
+    _visible(page, "wf-fail-max").fill("60")
+    page.locator('[data-testid="wf-fail-timeout-unit"] >> visible=true').first.select_option("m")
+    _visible(page, "wf-fail-timeout").fill("10")
+    preview = _wait_for_text(page, "wf-fail-preview", r"5s", timeout_s=15)
+    page.locator('[data-testid="wf-fail-on-error"] >> visible=true').first.select_option(target)
+    _wait_for_text(page, "wf-toast", r"Link changed", timeout_s=30)
+    return preview
+
+
+def _error_arrow(page, key: str) -> Any:
+    arrow = page.locator(f'.wf-edges g[data-edge="{key}"]')
+    if not arrow.count():
+        drawn = page.locator('.wf-edges g[data-kind="error"]').evaluate_all(
+            "els => els.map(e => e.dataset.edge)")
+        raise JourneyFailed(f"no error arrow {key} is drawn; error arrows: {drawn}")
+    dashed = arrow.first.locator("path.wf-edge").evaluate(
+        "e => getComputedStyle(e).strokeDasharray")
+    if not dashed or dashed == "none":
+        raise JourneyFailed(f"the error arrow {key} is drawn solid, not dashed")
+    return arrow
+
+
 def designer_control_flow(page, ctx: Context, goto: Callable[[str], None]) -> str:
     """The designer's blocks (#512 Phase 1) and its canvas (#551), as an operator uses them."""
     name = f"E2E control flow {ctx.stamp}"
@@ -1288,6 +1367,37 @@ def designer_control_flow(page, ctx: Context, goto: Callable[[str], None]) -> st
                             f"to it is drawn")
     _drag_arrow_end(page, f"yes:{branch}>{yes_head}", ".wf-lane .wf-slot-end")
     _wait_for_text(page, "wf-toast", r"needs a step", timeout_s=30)
+    # WHEN IT FAILS (#512 phase 2): the first step tries 3 times, waits between tries, has a time
+    # limit, and then goes to Notify — drawn as a dashed error arrow, whose end is a handle like
+    # any arrow's: dragged to another step it goes there, and one Undo puts it back.
+    first = page.locator('.wf-lane [data-testid="wf-node"]').first.get_attribute("data-step-id") or ""
+    preview = _set_failure(page, first, notify)
+    error_key = f"error:{first}>{notify}"
+    _error_arrow(page, error_key)
+    # Close the step's settings first: with them open the lane is narrower and scrolls, and the
+    # step to drag onto may be out of its view.
+    page.locator(".wf-lane-canvas").first.click(position={"x": 4, "y": 4})
+    page.wait_for_timeout(600)
+    _drag_arrow_end(page, error_key, f'.wf-lane .wf-slot[data-slot="{yes_head}"]')
+    moved = f'.wf-edges g[data-edge="error:{first}>{yes_head}"]'
+    deadline = time.time() + 30
+    while time.time() < deadline and not page.locator(moved).count():
+        page.wait_for_timeout(300)
+    if not page.locator(moved).count():
+        raise JourneyFailed(f"dragged the error arrow's end onto {yes_head}; the lane said "
+                            f"{_text(page, 'wf-toast')!r} and still draws "
+                            f"{page.locator('.wf-edges g[data-kind=error]').evaluate_all('els => els.map(e => e.dataset.edge)')}")
+    _error_arrow(page, f"error:{first}>{yes_head}")
+    _visible(page, "wf-toast-undo").click()
+    page.wait_for_timeout(600)
+    _error_arrow(page, error_key)
+    if page.locator(f'.wf-edges g[data-edge="error:{first}>{yes_head}"]').count():
+        raise JourneyFailed("Undo after moving the error arrow left it on the step it was moved to")
+    page.locator(".wf-lane-canvas").first.click(position={"x": 4, "y": 4})
+    page.wait_for_timeout(400)
+    through = _arrows_through_steps(page)
+    if through:
+        raise JourneyFailed(f"arrows are drawn through steps they do not join: {through[:4]}")
     key, meta = _save_and_reopen(page, goto, name, len(shapes))
     page.locator(f'.wf-lane [data-testid="wf-node"][data-step-id="{notify}"]').first.wait_for(
         state="visible", timeout=WAIT_MS)
@@ -1310,10 +1420,22 @@ def designer_control_flow(page, ctx: Context, goto: Callable[[str], None]) -> st
     if (steps.get(branch) or {}).get("on_true") != yes_head:
         raise JourneyFailed(f"the refused link changed the Branch: on_true is "
                             f"{(steps.get(branch) or {}).get('on_true')!r}")
+    failing = steps.get(first) or {}
+    kept = {k: failing.get(k) for k in ("max_attempts", "retry_backoff", "timeout_seconds", "on_error")}
+    want = {"max_attempts": 3, "retry_backoff": {"initial_seconds": 5, "multiplier": 2, "max_seconds": 60},
+            "timeout_seconds": 600, "on_error": notify}
+    if kept != want:
+        raise JourneyFailed(f"saved, but {first}'s failure settings came back as {kept}, not {want}")
+    _error_arrow(page, error_key)
+    through = _arrows_through_steps(page)
+    if through:
+        raise JourneyFailed(f"reopened, arrows are drawn through steps they do not join: {through[:4]}")
     return (f"built {name!r}: {len(shapes)} steps, blocks drawn as "
             f"{sorted({s for _, s in shapes.values() if s})}; checks built from parts; Notify "
             f"placed at {positions[notify]}; No path linked on to {yes_head}, Yes to End "
-            f"refused; saved and reopened with all of it ({meta[:20]!r})")
+            f"refused; {first} fails after 3 tries ({preview[:40]!r}), 10m limit, then {notify}: "
+            f"dashed error arrow moved and undone; no arrow through a step; saved and reopened "
+            f"with all of it ({meta[:20]!r})")
 
 
 def advance_now(page, ctx: Context, goto: Callable[[str], None]) -> str:

@@ -61,7 +61,7 @@ const OWNED_STEP_KEYS = ["id", "kind", "binding", "approval", "next", "captain",
  *  expression, …). */
 const STRUCTURAL_STEP_KEYS = new Set([
   ...OWNED_STEP_KEYS, "branches", "join", "wait_for", "on_true", "on_false", "body",
-  "max_attempts",
+  "max_attempts", "retry_backoff", "timeout_seconds", "on_error",
 ]);
 
 /** Turn one stored step into a canvas step. */
@@ -409,7 +409,17 @@ export function applyStepPatch(step: SpecStep, patch: StepPatch): SpecStep {
     }
   }
   if (patch.max_attempts !== undefined) {
-    out.max_attempts = Math.min(25, Math.max(1, Math.round(patch.max_attempts)));
+    out = setOrDrop(out, "max_attempts", patch.max_attempts === null ? undefined
+      : Math.min(25, Math.max(1, Math.round(patch.max_attempts))));
+  }
+  if (patch.retry_backoff !== undefined) {
+    const backoff = Object.fromEntries(Object.entries(patch.retry_backoff ?? {})
+      .filter(([, v]) => typeof v === "number" && Number.isFinite(v)));
+    out = setOrDrop(out, "retry_backoff", Object.keys(backoff).length ? backoff : undefined);
+  }
+  if (patch.timeout_seconds !== undefined) {
+    out = setOrDrop(out, "timeout_seconds", patch.timeout_seconds === null ? undefined
+      : Math.min(86400, Math.max(1, Math.round(patch.timeout_seconds))));
   }
   if (bindingTouched && !sameJson(binding, asObj(step.binding))) out.binding = binding;
   return sameJson(out, step) ? step : (out as SpecStep);

@@ -49,6 +49,7 @@ import { DossierCompact } from "./discoveries-ui";
 import { MeetingCompact } from "./meeting-room-ui";
 import { ArchitecturePanel } from "./architecture-ui";
 import { readComposerPrefill } from "../lib/research-panels";
+import { isTestRun, pinnedOutput, rerunNote } from "../lib/workflow-test-run";
 // The Runs composer moved to app/workflows/; its helpers are re-exported so imports hold.
 export {
   blockingReason, briefFrom, composerFields, criteriaFrom, linksFrom, repositoryHint,
@@ -58,6 +59,7 @@ import {
   FlowLane, WorkflowEditor, runLaneSpec, runPalette, useRunDefinition,
 } from "./workflows/studio-parts";
 import { useOnScreen } from "../lib/area-shown";
+import { forEachProgress } from "../lib/workflow-for-each";
 
 // Moved to app/workflows/ (Workflow Studio, phase 0); re-exported so existing imports hold.
 export { CaptainCanRunIt, DefineStepForm };
@@ -225,6 +227,11 @@ export type RunStep = {
 type Run = {
   id: string;
   status: string;
+  /** "test" for a test run (#512): pinned steps did not run; it is left out of the list unless
+   *  "Show test runs" is on. */
+  mode?: string | null;
+  /** Set when this run was started from a step of another (`Run again from here`). */
+  rerun_of?: { run_id: string; from_step: string } | null;
   workflow_key: string;
   workflow_name: string;
   version: number;
@@ -410,6 +417,8 @@ export function stoppedForYou(step: RunStep): boolean {
   if (step.kind === "decision") return false;
   // A fan-out branch an `any` join went on without: a visible partial failure, not a stop.
   if ((step.output as { tolerated_by_join?: unknown } | undefined)?.tolerated_by_join) return false;
+  // A step that failed into its error path (#512): the run went on where the workflow said to.
+  if (errorPathTaken(step)) return false;
   return !step.decision_id;
 }
 
@@ -790,6 +799,8 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
     setTab("new");
   }, [setTab]);
   const [schedules, setSchedules] = useState<Schedule[]>([]);
+  // TEST RUNS ARE LEFT OUT OF THE LIST unless asked for (#512): a test is not production work.
+  const [showTests, setShowTests] = useState(false);
 
   const load = useCallback(async () => {
     const [caps, cat, inst, live, mine, sched] = await Promise.all([
@@ -797,7 +808,7 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
         "capabilities", projectId),
       get<{ items: CatalogueEntry[] }>("catalogue", projectId),
       get<{ items: Installed[] }>("installed", projectId),
-      get<{ runs: Run[] }>("runs", projectId),
+      get<{ runs: Run[] }>(showTests ? "runs_with_tests" : "runs", projectId),
       get<{ steps: CustomStep[] }>("custom_steps", projectId),
       get<{ schedules: Schedule[] }>("schedules", projectId),
     ]);
@@ -820,7 +831,7 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
     setCustomSteps((mine as { steps?: CustomStep[] }).steps ?? []);
     setState("ready");
     setError(null);
-  }, [projectId]);
+  }, [projectId, showTests]);
 
   useEffect(() => { void load(); }, [load]);
   // A target set on a Factory card, or an action BOSS ran in the dock, changes what this screen
@@ -1273,6 +1284,11 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
             })}
             onRetryStep={(runId, stepId, note) =>
               act("Retry", "retry_step", { run_id: runId, step_id: stepId, ...(note ? { note } : {}) })}
+            // RUN AGAIN FROM HERE (#512): a NEW run from this step; every earlier step keeps what
+            // this run produced, as pins that say where they came from. One run per press.
+            onRerunFrom={(run, stepId) => act("Run again from here", "rerun_from",
+              { run_id: run.id, from_step: stepId }, `rerun:${run.id}:${stepId}`)}
+            showTests={showTests} onShowTests={setShowTests}
             // SKIP AND PROCEED. Going on without a failed step is a decision, so the step asks
             // why and the reason is kept on the step and in the run's history.
             onSkipStep={(runId, stepId, reason) =>
@@ -1549,8 +1565,14 @@ export function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilit
                    onRunPreview,
                    onBound, projectId, actor, roles,
                    previewStarting, onOpenWorkflow,
-                   targets, hosts, highlightRun, onNewProject }: {
+                   targets, hosts, highlightRun, onNewProject,
+                   onRerunFrom, showTests, onShowTests }: {
   projectId: string;
+  /** Start a NEW run from one step of a finished run, earlier steps pinned to this run's. */
+  onRerunFrom?: (run: Run, stepId: string) => void;
+  /** Whether test runs are listed; absent = the toggle is not offered. */
+  showTests?: boolean;
+  onShowTests?: (on: boolean) => void;
   /** The run Start just made: highlighted, and scrolled into view once it is in the list. */
   highlightRun?: string | null;
   /** The empty list's way out: the New project tab. */
@@ -1661,6 +1683,12 @@ export function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilit
                 title="Re-test what stopped each live run and put back what can now move. A failed run is re-checked from its own page.">
           {busy === "Advance" ? "Checking…" : "Check every run again"}
         </GatedButton>
+        {onShowTests ? (
+          <label className="detail dw-show-tests" data-testid="dw-show-tests">
+            <input type="checkbox" checked={!!showTests}
+                   onChange={(e) => onShowTests(e.target.checked)} /> Show test runs
+          </label>
+        ) : null}
       </div>
       {shown.length === 0 ? (
         <p className="dw-empty detail" data-testid="dw-none-in-bucket">
@@ -1690,6 +1718,12 @@ export function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilit
             <button type="button" className="dw-run-head" aria-expanded={open}
                     onClick={() => setOpenRun(open ? null : run.id)}>
               <span className="dw-badge" data-tone={tone(run.status)}>{run.status}</span>
+              {isTestRun(run) ? (
+                <span className="dw-badge" data-tone="test" data-testid="dw-run-test"
+                      title="A test run: pinned steps returned their pinned output and did not run">
+                  Test run
+                </span>
+              ) : null}
               <span className="dw-run-name">
                 {runSubject(run) ?? run.workflow_name}
                 {runSubject(run) ? (
@@ -1770,6 +1804,7 @@ export function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilit
                         onDelete={() => onDelete(run)}
                         onStopAndRerun={() => onStopAndRerun(run)}
                         onBuildOnThis={() => onBuildOnThis(run)}
+                        onRerunFrom={onRerunFrom ? (stepId) => onRerunFrom(run, stepId) : undefined}
                         busy={busy}
                         onSetTarget={(targetId) => onSetTarget(run.id, targetId)}
                         onPrepareTarget={(hostId) => onPrepareTarget(run.id, hostId)}
@@ -1860,7 +1895,14 @@ export function railMeta(step: RunStep): string {
  *  The states that are NOT plain progress keep their own words, because "this one failed" or
  *  "this did nothing" must never be something you infer from a colour: a step that did nothing
  *  is never drawn as done, and an operator's skip says who and why. */
-export function laneStateOf(step: RunStep): { phase: string; meta: string; tip?: string } {
+/** The step the engine sent the run to after this one failed for good (#512), or null. The engine
+ *  records it as `output.error_path_taken` (and a `workflow.error_path_taken` event). */
+export function errorPathTaken(step: RunStep): string | null {
+  const to = (step.output as { error_path_taken?: unknown } | undefined)?.error_path_taken;
+  return typeof to === "string" && to ? to : null;
+}
+
+export function laneStateOf(step: RunStep): { phase: string; meta: string; tip?: string; errorPath?: boolean } {
   if (needsYou(step)) return { phase: "needs_you", meta: "needs you" };
   switch (phaseOf(step)) {
     case "nothing": return { phase: "skipped", meta: "nothing done", tip: DID_NOTHING };
@@ -1869,14 +1911,28 @@ export function laneStateOf(step: RunStep): { phase: string; meta: string; tip?:
       if (by) return { phase: "skipped", meta: by, tip: by };
       return { phase: "skipped", meta: "skipped", tip: skipReason(step) || "this step did not apply to this run" };
     }
-    case "failed": return { phase: "failed", meta: railMeta(step) || "failed" };
+    case "failed": if (errorPathTaken(step)) {
+      return { phase: "failed", meta: timedOut(step) ? "timed out — took its error path" : "failed — took its error path",
+               tip: "It failed, and the run went on at its error path", errorPath: true };
+    }
+    return timedOut(step)
+      ? { phase: "failed", meta: "timed out", tip: "A try ran longer than the step's time limit" }
+      : { phase: "failed", meta: railMeta(step) || "failed" };
     case "failed_on": return { phase: "failed", meta: "failed — went on",
                                tip: "It failed, and the run went on without it" };
     case "findings": return { phase: "done", meta: railMeta(step) || "findings", tip: "Finished with findings" };
     case "done": return { phase: "done", meta: railMeta(step) };
-    case "now": return { phase: "moving", meta: railMeta(step) };
+    // A For each going through its list says how far it is: "3 of 10 done".
+    case "now": return { phase: "moving", meta: forEachProgress(step) ?? railMeta(step) };
     default: return { phase: "future", meta: railMeta(step) || "pending" };
   }
+}
+
+/** A step whose last try ran past its time limit (#512): the engine fails it with `step_timeout`,
+ *  as its error or as the reason it records. */
+export function timedOut(step: RunStep): boolean {
+  const out = (step.output ?? {}) as { reason?: unknown; error?: unknown };
+  return [step.error, out.reason, out.error].some((v) => typeof v === "string" && /\bstep_timeout\b/.test(v));
 }
 
 export function needsYou(step: RunStep): boolean {
@@ -1916,7 +1972,7 @@ export function decidedButNotMoved(step: RunStep): string {
  * doors to the pages where it can be debugged.
  */
 function StepPath({ run, capabilities, targets, hosts, onRetryStep, onSkipStep, onRerun, onStop,
-                   onDelete,
+                   onDelete, onRerunFrom,
                    onStopAndRerun, onBuildOnThis, onRecheck,
                    onSetTarget,
                    onPrepareTarget, onRunPreview, onBound, projectId,
@@ -1929,6 +1985,8 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onSkipStep, 
   onOpenWorkflow?: (workflowKey: string) => void;
   onRetryStep: (stepId: string, note?: string) => void; onRerun: () => void; onRecheck: () => void;
   onSkipStep: (stepId: string, reason: string) => void;
+  /** Run again from one step (#512): offered on a finished run, for the step picked. */
+  onRerunFrom?: (stepId: string) => void;
   /** Stop a live run — the work it started, not only its bookkeeping. */
   onStop: () => void;
   onDelete: () => void;
@@ -2105,6 +2163,15 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onSkipStep, 
             Open workflow
           </button>
         ) : null}
+        {isTestRun(run) ? (
+          <span className="wf-tag" data-testid="dw-run-is-test"
+                title="Pinned steps returned their pinned output; steps that could spend were refused unless allowed">
+            Test run
+          </span>
+        ) : null}
+        {rerunNote(run) ? (
+          <span className="detail" data-testid="dw-run-rerun-of">{rerunNote(run)}</span>
+        ) : null}
       </div>
       <RunChain chain={chain} viewer={actor} />
       <div className="wf-run-lane" ref={laneRef} data-testid="dw-run-lane">
@@ -2157,6 +2224,19 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onSkipStep, 
           busy={busy}
           panelBuild={buildStageOf(steps)}
         />
+        {pinnedOutput(current.output) ? (
+          <p className="detail" data-testid="dw-step-pinned">
+            Pinned: this step did not run; it returned the output it was given.
+          </p>
+        ) : null}
+        {terminal && onRerunFrom ? (
+          <button type="button" className="wf-link" data-testid="dw-rerun-from"
+                  disabled={!!busy}
+                  title="Start a new run from this step. Every step before it keeps what this run produced."
+                  onClick={() => onRerunFrom(current.step_id)}>
+            Run again from here
+          </button>
+        ) : null}
         </div>
       ) : null}
       {/* THE REPORT, ONCE THERE IS SOMETHING TO REPORT.

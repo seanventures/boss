@@ -5122,6 +5122,7 @@ export type WorkflowStepRunSummary = {
   run_after: string;
   lease_owner?: string;
   lease_expires_at?: string;
+  attempt_timeout_at?: string;
   heartbeat_at?: string;
   decision_id?: string;
   child_workflow_run_id?: string;
@@ -5158,6 +5159,37 @@ export type WorkflowRunSummary = {
   workflow_name: string;
   version: number;
   duplicate?: boolean;
+  /** "test" for a test run: pinned steps did not execute, and a step that could spend or reach
+   *  outside BOSS was refused unless named in `allow_live`. Left out of run lists by default. */
+  mode?: WorkflowRunMode;
+  /** What each pinned step was settled with, and where the output came from. */
+  pins?: Record<string, WorkflowStepPin>;
+  allow_live?: string[];
+  /** Set when this run was started from a step of an earlier run. */
+  rerun_of?: { run_id: string; from_step: string } | null;
+};
+
+export type WorkflowRunMode = "normal" | "test";
+
+export type WorkflowStepPin = {
+  output: Record<string, unknown>;
+  source:
+    | { kind: "person"; actor: string }
+    | { kind: "rerun"; run_id: string; step_run_id: string; iteration: number };
+};
+
+export type WorkflowTestRunRequest = {
+  project_id: string;
+  workflow_version_id?: string;
+  workflow_key?: string;
+  version?: number;
+  input?: Record<string, unknown>;
+  /** step id -> the output that step returns instead of running. */
+  pins?: Record<string, Record<string, unknown>>;
+  /** Steps that run for real, under every approval and budget rule a normal run has. */
+  allow_live?: string[];
+  dedupe_key?: string;
+  actor?: string;
 };
 
 export type WorkflowRunDetail = WorkflowRunSummary & {
@@ -5257,6 +5289,55 @@ export type HardwareProviderPlaceRequest = {
   name: string;
   provider: string;
   secret_ref: string;
+};
+
+/** A workflow's webhook trigger (#512). Never carries the signing secret. */
+export type WorkflowWebhookTrigger = {
+  id: string;
+  project_id: string;
+  workflow_key: string;
+  name: string;
+  /** POST signed JSON here (relative to the API base). */
+  path: string;
+  enabled: boolean;
+  secret_last4?: string | null;
+  secret_rotated_at?: string | null;
+  /** Refusals past the per-minute recording limit: counted, not itemised. */
+  refused_unrecorded: number;
+  /** Why BOSS turned it off ("Renew authority: …"), cleared when it is turned back on. */
+  last_error?: string | null;
+  on_behalf_of?: string | null;
+  last_delivery_at?: string | null;
+  created_at?: string | null;
+  actor: string;
+};
+
+/** Returned by create and rotate ONLY: the one time the signing secret is shown. */
+export type WorkflowWebhookTriggerWithSecret = WorkflowWebhookTrigger & { secret: string };
+
+export type WorkflowWebhookTriggerCreateRequest = {
+  project_id: string;
+  workflow_key: string;
+  name?: string;
+  actor?: string;
+};
+
+export type WorkflowWebhookDeliveryStatus = "started" | "duplicate" | "refused";
+
+export type WorkflowWebhookDelivery = {
+  id: string;
+  delivery_id?: string | null;
+  status: WorkflowWebhookDeliveryStatus;
+  /** Why a refused delivery was refused: bad_signature, stale_timestamp, too_large, disabled… */
+  reason?: string | null;
+  run_id?: string | null;
+  body_bytes?: number | null;
+  received_at: string;
+};
+
+export type WorkflowWebhookDeliveryList = {
+  trigger: WorkflowWebhookTrigger;
+  deliveries: WorkflowWebhookDelivery[];
 };
 
 export class BossApiError extends Error {
@@ -5687,6 +5768,29 @@ export function createBossApiClient(config: BossApiClientConfig) {
       return request<WorkflowRunSummary>("POST", "/v1/workflow-runs", {
         body: payload,
       });
+    },
+    /** Run a saved workflow as a test with pinned step outputs. */
+    startWorkflowTestRun(payload: WorkflowTestRunRequest) {
+      return request<WorkflowRunSummary>("POST", "/v1/delivery-workflows/test-runs", {
+        body: payload,
+      });
+    },
+    getWorkflowTestRuns(projectId: string, limit = 25) {
+      return request<{ project_id: string; items: WorkflowRunSummary[] }>(
+        "GET", "/v1/delivery-workflows/test-runs", { query: { project_id: projectId, limit } },
+      );
+    },
+    /** Start a new run from `from_step` of a finished or failed run; earlier steps are pinned
+     *  to what that run produced. */
+    rerunWorkflowFromStep(
+      runId: string,
+      payload: { project_id: string; from_step: string; dedupe_key?: string; actor?: string },
+    ) {
+      return request<WorkflowRunSummary>(
+        "POST",
+        `/v1/delivery-workflows/runs/${encodeURIComponent(runId)}/rerun`,
+        { body: payload },
+      );
     },
     advanceWorkflowRun(runId: string, projectId: string, actor = "ceo") {
       return request<WorkflowRunDetail>(
@@ -8447,6 +8551,41 @@ export function createBossApiClient(config: BossApiClientConfig) {
       return request<HardwarePlace>("POST", "/v1/hardware/resolve/load", {
         query: { project_id: projectId, place_id: placeId },
       });
+    },
+    listWorkflowWebhooks(projectId: string, workflowKey?: string) {
+      return request<{ webhooks: WorkflowWebhookTrigger[] }>(
+        "GET",
+        "/v1/delivery-workflows/webhooks",
+        { query: { project_id: projectId, workflow_key: workflowKey } },
+      );
+    },
+    createWorkflowWebhook(payload: WorkflowWebhookTriggerCreateRequest) {
+      return request<WorkflowWebhookTriggerWithSecret>(
+        "POST",
+        "/v1/delivery-workflows/webhooks",
+        { body: payload },
+      );
+    },
+    rotateWorkflowWebhookSecret(projectId: string, triggerId: string, actor?: string) {
+      return request<WorkflowWebhookTriggerWithSecret>(
+        "POST",
+        `/v1/delivery-workflows/webhooks/${encodeURIComponent(triggerId)}/rotate`,
+        { body: { project_id: projectId, ...(actor ? { actor } : {}) } },
+      );
+    },
+    setWorkflowWebhookEnabled(projectId: string, triggerId: string, enabled: boolean, actor?: string) {
+      return request<WorkflowWebhookTrigger>(
+        "POST",
+        `/v1/delivery-workflows/webhooks/${encodeURIComponent(triggerId)}/enabled`,
+        { body: { project_id: projectId, enabled, ...(actor ? { actor } : {}) } },
+      );
+    },
+    listWorkflowWebhookDeliveries(projectId: string, triggerId: string, limit = 50) {
+      return request<WorkflowWebhookDeliveryList>(
+        "GET",
+        `/v1/delivery-workflows/webhooks/${encodeURIComponent(triggerId)}/deliveries`,
+        { query: { project_id: projectId, limit } },
+      );
     },
   };
 }

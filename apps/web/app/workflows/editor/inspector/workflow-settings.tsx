@@ -9,6 +9,7 @@ import { NameInUseError, isDirty, renameWorkflow } from "../../../../lib/workflo
 import type { EditorAction, EditorState } from "../../../../lib/workflow-editor-types";
 import { Editable } from "./editable";
 import { Section } from "./step-inspector";
+import { WebhookTriggers } from "./webhook-triggers";
 import {
   STEP_ID, formCanRequire, formFields, humanise, withFormFields, type FieldType, type FormField,
 } from "./step-facts";
@@ -32,7 +33,8 @@ function toast(type: "success" | "error", message: string) {
 }
 
 /**
- * The workflow's own settings: Name, Description, Start form, Used for, Schedule, Based on.
+ * The workflow's own settings: Name, Description, Start form, Used for, Schedule, Webhooks,
+ * Based on.
  *
  * NAME AND DESCRIPTION DO NOT MAKE A VERSION. On a published workflow with nothing else changed
  * they are PATCHed when the field is left, and the draft's baseline moves with them, so Save
@@ -117,6 +119,12 @@ export function WorkflowSettings({ state, dispatch, projectId, actor, usedFor, o
         <Section label="Schedule">
           <button type="button" className="wf-btn" onClick={() => onSchedule(meta.workflow_key!)}>Schedule…</button>
         </Section>
+      ) : null}
+
+      {/* WEBHOOKS (#512): another system starts this workflow. Only on a saved workflow of the
+          operator's own — a trigger names the workflow by key, and a standard is not theirs. */}
+      {meta.workflow_key && meta.definition_id && !standard ? (
+        <WebhookTriggers projectId={projectId} workflowKey={meta.workflow_key} actor={actor} />
       ) : null}
 
       {meta.from_workflow_key ? (

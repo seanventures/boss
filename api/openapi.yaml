@@ -20354,6 +20354,111 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /v1/delivery-workflows/test-runs:
+    get:
+      tags:
+      - workflows
+      summary: List Test Runs
+      description: The project's test runs, newest first — the ordinary lists leave them out.
+      operationId: get_v1_delivery_workflows_test_runs_f5bc4e06
+      parameters:
+      - name: project_id
+        in: query
+        required: true
+        schema:
+          type: string
+          title: Project Id
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          default: 25
+          title: Limit
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response List Test Runs V1 Delivery Workflows Test Runs Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    post:
+      tags:
+      - workflows
+      summary: Start Test Run
+      description: 'Run a saved workflow as a TEST: pinned steps return their pinned output, and a step
+        that
+
+        could spend or reach outside BOSS is refused unless named in `allow_live`.'
+      operationId: post_v1_delivery_workflows_test_runs_6c8eea39
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TestRunBody'
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Start Test Run V1 Delivery Workflows Test Runs Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/delivery-workflows/runs/{run_id}/rerun:
+    post:
+      tags:
+      - workflows
+      summary: Rerun From Step
+      description: 'Run again from one step: a new run, every earlier step pinned to what this run produced
+
+        (with provenance), recorded with `rerun_of`. Refused when the step depends on one that did
+
+        not complete here.'
+      operationId: post_v1_delivery_workflows_runs_run_id_rerun_7a68ff1d
+      parameters:
+      - name: run_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Run Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RerunBody'
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Rerun From Step V1 Delivery Workflows Runs  Run Id  Rerun Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
   /v1/delivery-workflows/runs/{run_id}/recheck:
     post:
       summary: Recheck Delivery Run
@@ -30393,6 +30498,217 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /v1/delivery-workflows/webhooks:
+    get:
+      tags:
+      - workflow-webhooks
+      summary: List Workflow Webhooks
+      operationId: get_v1_delivery_workflows_webhooks_16782a72
+      parameters:
+      - name: project_id
+        in: query
+        required: true
+        schema:
+          type: string
+          title: Project Id
+      - name: workflow_key
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Workflow Key
+      - name: actor
+        in: query
+        required: false
+        schema:
+          type: string
+          default: executive_console
+          title: Actor
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookTriggerList'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    post:
+      tags:
+      - workflow-webhooks
+      summary: Create Workflow Webhook
+      description: A new trigger. The response is the only time the signing secret is shown (besides rotate).
+      operationId: post_v1_delivery_workflows_webhooks_ee457cc4
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WebhookTriggerCreateBody'
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookTriggerWithSecret'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/delivery-workflows/webhooks/{trigger_id}/rotate:
+    post:
+      tags:
+      - workflow-webhooks
+      summary: Rotate Workflow Webhook Secret
+      description: A new signing secret, shown once. The old one stops verifying immediately.
+      operationId: post_v1_delivery_workflows_webhooks_trigger_id_rotate_2dc844d6
+      parameters:
+      - name: trigger_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Trigger Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WebhookTriggerActionBody'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookTriggerWithSecret'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/delivery-workflows/webhooks/{trigger_id}/enabled:
+    post:
+      tags:
+      - workflow-webhooks
+      summary: Set Workflow Webhook Enabled
+      operationId: post_v1_delivery_workflows_webhooks_trigger_id_enabled_f6643db5
+      parameters:
+      - name: trigger_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Trigger Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WebhookTriggerEnabledBody'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookTrigger'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/delivery-workflows/webhooks/{trigger_id}/deliveries:
+    get:
+      tags:
+      - workflow-webhooks
+      summary: List Workflow Webhook Deliveries
+      operationId: get_v1_delivery_workflows_webhooks_trigger_id_deliveries_f989c072
+      parameters:
+      - name: trigger_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Trigger Id
+      - name: project_id
+        in: query
+        required: true
+        schema:
+          type: string
+          title: Project Id
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          default: 50
+          title: Limit
+      - name: actor
+        in: query
+        required: false
+        schema:
+          type: string
+          default: executive_console
+          title: Actor
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookDeliveryList'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/webhooks/inbound/workflow/{path_token}:
+    post:
+      tags:
+      - workflow-webhooks
+      summary: Receive Workflow Webhook
+      description: 'Start the trigger''s workflow with this JSON body as the run''s input.
+
+
+        Signed: ``X-BOSS-Signature: v1=<hex HMAC-SHA256(secret, "<timestamp>.<raw body>")>`` and
+
+        ``X-BOSS-Timestamp: <unix seconds>``. ``X-BOSS-Delivery`` (optional) is the dedupe key.
+
+        202 started, 200 duplicate, 404 unknown URL; every refusal is recorded on the trigger.'
+      operationId: post_v1_webhooks_inbound_workflow_path_token_12faadfc
+      parameters:
+      - name: path_token
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Path Token
+      responses:
+        '202':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookInboundResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
   /v1/delivery/first-deploy:
     post:
       summary: Create Deployment Endpoint
@@ -30968,6 +31284,281 @@ paths:
                 $ref: '#/components/schemas/HTTPValidationError'
 components:
   schemas:
+    WebhookDelivery:
+      properties:
+        id:
+          type: string
+          title: Id
+        delivery_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Delivery Id
+        status:
+          type: string
+          title: Status
+        reason:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Reason
+        run_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Run Id
+        body_bytes:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Body Bytes
+        received_at:
+          title: Received At
+      type: object
+      required:
+      - id
+      - status
+      - received_at
+      title: WebhookDelivery
+    WebhookDeliveryList:
+      properties:
+        trigger:
+          $ref: '#/components/schemas/WebhookTrigger'
+        deliveries:
+          items:
+            $ref: '#/components/schemas/WebhookDelivery'
+          type: array
+          title: Deliveries
+      type: object
+      required:
+      - trigger
+      - deliveries
+      title: WebhookDeliveryList
+    WebhookInboundResponse:
+      properties:
+        status:
+          type: string
+          title: Status
+        run_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Run Id
+        delivery_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Delivery Id
+      type: object
+      required:
+      - status
+      title: WebhookInboundResponse
+    WebhookTrigger:
+      properties:
+        id:
+          type: string
+          title: Id
+        project_id:
+          type: string
+          title: Project Id
+        workflow_key:
+          type: string
+          title: Workflow Key
+        name:
+          type: string
+          title: Name
+        path:
+          type: string
+          title: Path
+          description: POST signed JSON here. The token in it finds the trigger.
+        enabled:
+          type: boolean
+          title: Enabled
+        secret_last4:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Secret Last4
+        secret_rotated_at:
+          anyOf:
+          - {}
+          - type: 'null'
+          title: Secret Rotated At
+        refused_unrecorded:
+          type: integer
+          title: Refused Unrecorded
+          default: 0
+        last_error:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Last Error
+          description: Why BOSS turned it off, e.g. Renew authority.
+        on_behalf_of:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: On Behalf Of
+        last_delivery_at:
+          anyOf:
+          - {}
+          - type: 'null'
+          title: Last Delivery At
+        created_at:
+          anyOf:
+          - {}
+          - type: 'null'
+          title: Created At
+        actor:
+          type: string
+          title: Actor
+      type: object
+      required:
+      - id
+      - project_id
+      - workflow_key
+      - name
+      - path
+      - enabled
+      - actor
+      title: WebhookTrigger
+    WebhookTriggerActionBody:
+      properties:
+        project_id:
+          type: string
+          title: Project Id
+        actor:
+          type: string
+          title: Actor
+          default: executive_console
+      type: object
+      required:
+      - project_id
+      title: WebhookTriggerActionBody
+    WebhookTriggerCreateBody:
+      properties:
+        project_id:
+          type: string
+          title: Project Id
+        workflow_key:
+          type: string
+          title: Workflow Key
+        name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Name
+        actor:
+          type: string
+          title: Actor
+          default: executive_console
+      type: object
+      required:
+      - project_id
+      - workflow_key
+      title: WebhookTriggerCreateBody
+    WebhookTriggerEnabledBody:
+      properties:
+        project_id:
+          type: string
+          title: Project Id
+        enabled:
+          type: boolean
+          title: Enabled
+          default: true
+        actor:
+          type: string
+          title: Actor
+          default: executive_console
+      type: object
+      required:
+      - project_id
+      title: WebhookTriggerEnabledBody
+    WebhookTriggerList:
+      properties:
+        webhooks:
+          items:
+            $ref: '#/components/schemas/WebhookTrigger'
+          type: array
+          title: Webhooks
+      type: object
+      required:
+      - webhooks
+      title: WebhookTriggerList
+    WebhookTriggerWithSecret:
+      properties:
+        id:
+          type: string
+          title: Id
+        project_id:
+          type: string
+          title: Project Id
+        workflow_key:
+          type: string
+          title: Workflow Key
+        name:
+          type: string
+          title: Name
+        path:
+          type: string
+          title: Path
+          description: POST signed JSON here. The token in it finds the trigger.
+        enabled:
+          type: boolean
+          title: Enabled
+        secret_last4:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Secret Last4
+        secret_rotated_at:
+          anyOf:
+          - {}
+          - type: 'null'
+          title: Secret Rotated At
+        refused_unrecorded:
+          type: integer
+          title: Refused Unrecorded
+          default: 0
+        last_error:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Last Error
+          description: Why BOSS turned it off, e.g. Renew authority.
+        on_behalf_of:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: On Behalf Of
+        last_delivery_at:
+          anyOf:
+          - {}
+          - type: 'null'
+          title: Last Delivery At
+        created_at:
+          anyOf:
+          - {}
+          - type: 'null'
+          title: Created At
+        actor:
+          type: string
+          title: Actor
+        secret:
+          type: string
+          title: Secret
+          description: The signing secret. Returned only here, once.
+      type: object
+      required:
+      - id
+      - project_id
+      - workflow_key
+      - name
+      - path
+      - enabled
+      - actor
+      - secret
+      title: WebhookTriggerWithSecret
     A2AAcknowledgeRequest:
       properties:
         project_id:
@@ -62707,6 +63298,100 @@ components:
       required:
       - project_id
       title: WorkflowRecheckBody
+    TestRunBody:
+      properties:
+        project_id:
+          type: string
+          title: Project Id
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        workflow_version_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Workflow Version Id
+        workflow_key:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Workflow Key
+        version:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Version
+        input:
+          additionalProperties: true
+          type: object
+          title: Input
+        pins:
+          additionalProperties: true
+          type: object
+          title: Pins
+        allow_live:
+          items:
+            type: string
+          type: array
+          title: Allow Live
+        dedupe_key:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Dedupe Key
+      type: object
+      required:
+      - project_id
+      title: TestRunBody
+    RerunBody:
+      properties:
+        project_id:
+          type: string
+          title: Project Id
+        from_step:
+          type: string
+          title: From Step
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        dedupe_key:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Dedupe Key
+        start_anyway:
+          items:
+            type: string
+          type: array
+          title: Start Anyway
+        accept:
+          items:
+            type: string
+          type: array
+          title: Accept
+        skip_steps:
+          items: {}
+          type: array
+          title: Skip Steps
+        precheck_reason:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Precheck Reason
+        allow_unsupported_stack:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Allow Unsupported Stack
+      type: object
+      required:
+      - project_id
+      - from_step
+      title: RerunBody
     WorkflowRetryStepBody:
       properties:
         project_id:
@@ -63141,6 +63826,25 @@ components:
           - type: boolean
           - type: 'null'
           title: Duplicate
+        mode:
+          type: string
+          title: Mode
+          default: normal
+        pins:
+          additionalProperties: true
+          type: object
+          title: Pins
+        allow_live:
+          items:
+            type: string
+          type: array
+          title: Allow Live
+        rerun_of:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Rerun Of
       type: object
       required:
       - id
@@ -63501,6 +64205,11 @@ components:
           - type: string
           - type: 'null'
           title: Lease Expires At
+        attempt_timeout_at:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Attempt Timeout At
         heartbeat_at:
           anyOf:
           - type: string

@@ -279,11 +279,14 @@
 .wf-input-extra:focus { outline: none; border-color: var(--accent); }
 .wf-makes { margin-top: 6px; }
 
-.wf-more { padding: 12px 0; }
-.wf-more > summary {
-  cursor: pointer; font-size: 0.75rem; font-weight: 700; letter-spacing: 0.06em;
-  text-transform: uppercase; color: var(--faint); margin-bottom: 8px;
-}
+/* When it fails (#512): tries, the wait between them as three small boxes in a row, a time limit
+   and its unit, and where the run goes. */
+.wf-fail-grid { display: flex; flex-wrap: wrap; gap: 8px 12px; }
+.wf-fail-num { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.wf-fail-box { display: inline-flex; align-items: center; gap: 6px; }
+.wf-fail-row { display: inline-flex; align-items: center; gap: 6px; }
+.wf-fail-unit { font-size: 0.8rem; color: var(--muted); }
+.wf-fail-preview { font-size: 0.8rem; color: var(--muted); }
 
 .wf-form-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; min-width: 0; flex-wrap: wrap; }
 .wf-form-name { flex: 1 1 100px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -391,3 +394,13 @@
 .wf-seg button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .wf-seg button:disabled { opacity: 0.5; cursor: not-allowed; }
 .wf-link-icon { display: inline-flex; align-items: center; gap: 4px; }
+/* Webhook triggers (#512): one block per trigger, its secret shown once, its recent deliveries. */
+.wf-hook { display: flex; flex-direction: column; gap: 6px; padding: 6px 0; border-bottom: 1px solid var(--border); }
+.wf-hook-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+.wf-hook-on { color: var(--green, var(--accent)); font-size: 0.75rem; font-weight: 600; }
+.wf-hook-actions { flex-wrap: wrap; gap: 4px; }
+.wf-hook-secret { display: flex; flex-direction: column; gap: 4px; padding: 6px; border: 1px solid var(--accent); border-radius: 6px; }
+.wf-hook-curl { font-size: 0.72rem; white-space: pre; }
+.wf-hook-deliveries { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.wf-hook-deliveries [data-tone="bad"] .wf-hook-status { color: var(--red); }
+.wf-hook-deliveries [data-tone="ok"] .wf-hook-status { color: var(--green, var(--accent)); }

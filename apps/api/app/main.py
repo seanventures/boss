@@ -25474,8 +25474,11 @@ def get_delivery_workflow_asks(project_id: str) -> dict:
 
 @app.get("/v1/delivery-workflows/runs")
 @permit(P.WORKFLOW_READ, scope=Scope.project(query="project_id"))
-def list_delivery_runs(project_id: str, limit: int = 25) -> dict:
+def list_delivery_runs(project_id: str, limit: int = 25, include_test: bool = False) -> dict:
     """Live and recent delivery runs, each with where it has got to.
+
+    TEST RUNS (workflow_test_runs) are left out unless `include_test`; each run says its `mode`
+    and, for a run started from a step of another, `rerun_of`.
 
     One query for the list and one for the steps, rather than a call per run: a project with
     twenty workflows in flight should cost two round trips to render, not twenty-one.
@@ -25485,18 +25488,20 @@ def list_delivery_runs(project_id: str, limit: int = 25) -> dict:
             text(
                 """
                 SELECT r.id, r.project_id, r.dedupe_key, r.status, r.actor, r.input, r.blocked_reason, r.error,
-                       r.created_at, r.updated_at, r.completed_at,
+                       r.created_at, r.updated_at, r.completed_at, r.mode, r.rerun_of,
                        d.workflow_key, d.name AS workflow_name, v.version, v.spec
                 FROM workflow_runs r
                 JOIN workflow_definitions d ON d.id = r.workflow_definition_id
                 JOIN workflow_versions v ON v.id = r.workflow_version_id
                 WHERE r.project_id = :project_id
                   AND COALESCE(d.namespace, 'system') = 'product'
+                  AND (CAST(:include_test AS BOOLEAN) OR r.mode <> 'test')
                 ORDER BY r.updated_at DESC
                 LIMIT :limit
                 """
             ),
-            {"project_id": project_id, "limit": max(1, min(100, limit))},
+            {"project_id": project_id, "limit": max(1, min(100, limit)),
+             "include_test": bool(include_test)},
         ).mappings().all()
         if not runs:
             return {"project_id": project_id, "runs": []}
@@ -25773,6 +25778,9 @@ def list_delivery_runs(project_id: str, limit: int = 25) -> dict:
             "project_id": run["project_id"],
             "dedupe_key": run["dedupe_key"],
             "status": run["status"],
+            # A TEST RUN says so, and a re-run says where it came from (workflow_test_runs).
+            "mode": run["mode"] or "normal",
+            "rerun_of": run["rerun_of"],
             "workflow_key": run["workflow_key"],
             "workflow_name": run["workflow_name"],
             "version": run["version"],

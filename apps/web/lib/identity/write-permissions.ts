@@ -74,11 +74,17 @@ export const WRITE_HELPERS: Readonly<Record<string, WriteGate | readonly Permiss
   "lib/kit-api.ts#mcpApi.roleTools": "agent_ability:assign",      // POST /v1/role-mcp-servers
   "lib/kit-api.ts#mcpApi.addFromCatalogue": "mcp_server:review",  // POST /v1/mcp/catalogue/{key}
 
+  // lib/workflow-webhooks.ts — a workflow's webhook triggers (#512, through /api/delivery-workflows)
+  "lib/workflow-webhooks.ts#createWebhook": "workflow_schedule:manage",      // POST /v1/delivery-workflows/webhooks
+  "lib/workflow-webhooks.ts#rotateWebhook": "workflow_schedule:manage",      // POST …/webhooks/{id}/rotate
+  "lib/workflow-webhooks.ts#setWebhookEnabled": "workflow_schedule:manage",  // POST …/webhooks/{id}/enabled
+
   // lib/workflow-api.ts — the Workflow Studio editor (through /api/delivery-workflows)
   "lib/workflow-api.ts#publishSpec": "workflow:publish",          // POST /v1/delivery-workflows/publish
   "lib/workflow-api.ts#renameWorkflow": "workflow:create",        // PATCH /v1/delivery-workflows/{id}
   "lib/workflow-api.ts#deleteWorkflow": "workflow:delete",        // DELETE /v1/delivery-workflows/{id}
   "lib/workflow-api.ts#draftFromDescription": "workflow:create",  // POST /v1/delivery-workflows/draft
+  "lib/workflow-api.ts#startTestRun": "workflow_run:start",       // POST /v1/delivery-workflows/test-runs
 
   // lib/hardware.ts — Infra › hardware places
   "lib/hardware.ts#registerLocalPlace": "host:manage",            // POST /v1/hardware/places/local
@@ -113,6 +119,8 @@ export const WRITE_OPS: Readonly<Record<string, Readonly<Record<string, WriteGat
     retry_step: "workflow_run:control", skip_step: "workflow_run:control", recheck: "workflow_run:control",
     set_input: "workflow_run:control", prepare_target: "deployment_target:manage",
     start_preview: "preview:manage", stop: "workflow_run:control",
+    // A NEW run from one step of a finished one (#512): a start, not a control of the old run.
+    rerun_from: "workflow_run:start",
   },
   // lib/govern.ts `governWrite(op, …)` → /api/govern → lib/govern-ops.ts (the two previews only read)
   "lib/govern.ts#governWrite": {

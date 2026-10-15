@@ -561,6 +561,9 @@ def stopped_for_operator(
             continue
         if _output(step).get("tolerated_by_join"):
             continue
+        # A step that failed into its own `on_error` path: handled, and the run went on.
+        if _output(step).get("error_path_taken"):
+            continue
         # A REFUSED GATE IS STOPPED FOR ITS OPERATOR TOO (agents-home D3): somebody said no,
         # the step failed, and Retry (ask again) or Skip (carry on without it) is the choice.
         step_id = str(step.get("step_id") or "")

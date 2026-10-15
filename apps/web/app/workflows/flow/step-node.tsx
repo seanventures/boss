@@ -15,7 +15,9 @@
  * The title is never the raw step id when a label exists: `stepView` resolves the step's own
  * title, then its custom-step or built-in label.
  */
-import { Check, HandPalm, HardDrives, Lock, LockSimple, Minus, Plug, Sparkle, Warning, X } from "@phosphor-icons/react";
+import {
+  ArrowsClockwise, Check, HandPalm, HardDrives, Lock, LockSimple, Minus, Plug, Sparkle, Timer, Warning, X,
+} from "@phosphor-icons/react";
 import React from "react";
 
 import type { StepView } from "../../../lib/workflow-editor-types";
@@ -31,7 +33,10 @@ import { useIdentityVersion } from "../../../lib/use-agent-identities";
 export type RunPhase = "done" | "moving" | "needs_you" | "failed" | "future" | "skipped";
 
 /** The names behind the badge counts, when the caller knows them. Only feeds tooltips. */
-export type NodeDetail = { risk?: number; skills?: string[]; mcp?: string[]; duration?: string };
+export type NodeDetail = { risk?: number; skills?: string[]; mcp?: string[]; duration?: string;
+  /** What it does when it fails, when that is not the default (lib/workflow-failure.ts
+   *  `failureBadge`): more tries, or a time limit. */
+  failure?: string; timeLimit?: boolean };
 
 /** An agent's face: its kit character for a named agent, the system glyph for Auto, You and A
  *  person. Sized by CSS where it sits (a node, a summary chip), or by `size` when a caller needs
@@ -81,7 +86,7 @@ const PHASE_MARK: Partial<Record<RunPhase, React.ComponentType<{ size?: number; 
 };
 
 /** Flow blocks the runtime steps through itself: no agent runs them, so no agent row. */
-const BLOCK_TYPES = new Set<StepView["type"]>(["parallel", "condition", "join", "loop"]);
+const BLOCK_TYPES = new Set<StepView["type"]>(["parallel", "condition", "join", "loop", "foreach"]);
 
 /**
  * THE SHAPE SAYS WHAT KIND OF STEP IT IS, before a word is read: the flowchart shapes people
@@ -91,19 +96,21 @@ const BLOCK_TYPES = new Set<StepView["type"]>(["parallel", "condition", "join", 
  *   - Do at the same time       a box with a heavy bar on its right edge, where the branches fork;
  *   - Wait for branches (join)  a heavy bar on its left edge, where they meet again;
  *   - Repeat until              a hexagon, the loop-limit shape;
+ *   - For each                  a stack of cards, the many-documents shape: one step, many items;
  *   - Notify                    a box pointing right, the send-a-message shape.
  *
  * The shape is drawn (an SVG behind the content), never clipped, so the border, the selection
  * and a run's phase still show on its edge. Its name is said to a screen reader too, so the
  * shape is never the only way to know.
  */
-export type NodeShape = "diamond" | "fork" | "join" | "hexagon" | "send";
+export type NodeShape = "diamond" | "fork" | "join" | "hexagon" | "stack" | "send";
 
 const SHAPE_OF: Partial<Record<StepView["type"], { shape: NodeShape; words: string }>> = {
   condition: { shape: "diamond", words: "Branch" },
   parallel: { shape: "fork", words: "Do at the same time" },
   join: { shape: "join", words: "Wait for branches" },
   loop: { shape: "hexagon", words: "Repeat until" },
+  foreach: { shape: "stack", words: "For each" },
 };
 
 /** The shape a node is drawn as, and what it is called, or null for a plain card. */
@@ -119,10 +126,13 @@ const SHAPE_PATH: Record<NodeShape, string> = {
   fork: "M1,1 H90 V99 H1 Z",
   join: "M10,1 H99 V99 H10 Z",
   hexagon: "M13,1 H87 L99,50 L87,99 H13 L1,50 Z",
+  stack: "M1,13 H87 V99 H1 Z",
   send: "M1,1 H85 L99,50 L85,99 H1 Z",
 };
 /** The heavy bar a fork or a join carries on the edge where the branches leave or meet. */
-const SHAPE_BAR: Partial<Record<NodeShape, string>> = { fork: "M96,1 V99", join: "M4,1 V99" };
+/** The cards behind a For each: the edges of two more, offset up and to the right. */
+const SHAPE_BAR: Partial<Record<NodeShape, string>> = { fork: "M96,1 V99", join: "M4,1 V99",
+  stack: "M7,13 V7 H93 V93 H87 M13,7 V1 H99 V87 H93" };
 
 function ShapeOutline({ shape }: { shape: NodeShape }) {
   return (
@@ -149,8 +159,10 @@ export function StepNode(p: {
   onSelect?(): void;
   /** Optional names for the badge tooltips. */
   detail?: NodeDetail;
+  /** On a run: it failed, and the run went on at its error path (`on_error`). */
+  errorPath?: boolean;
 }): React.JSX.Element {
-  const { view, mode, selected, problem, run, onSelect, detail } = p;
+  const { view, mode, selected, problem, run, onSelect, detail, errorPath } = p;
   // A run names a named agent by callsign (below), resolved at render: repaint when identities load.
   useIdentityVersion();
 
@@ -180,6 +192,7 @@ export function StepNode(p: {
     <button type="button" className="wf-node" data-mode={mode} data-type={view.type}
             data-shape={shape?.shape}
             data-phase={mode === "run" ? phase : undefined}
+            data-error-path={mode === "run" && errorPath ? "true" : undefined}
             data-selected={selected ? "true" : undefined}
             data-problem={problem ? "true" : undefined}
             data-step-id={view.id} data-testid="wf-node"
@@ -196,7 +209,7 @@ export function StepNode(p: {
         </span>
         {shape && shape.words !== view.title ? <span className="wf-sr">{shape.words}: </span> : null}
         <span className="wf-node-title" data-tip={view.title} data-tip-when="cut">{view.title}</span>
-        {mode === "run" ? <span className="wf-sr">{PHASE_WORDS[phase]}</span> : null}
+        {mode === "run" ? <span className="wf-sr">{PHASE_WORDS[phase]}{errorPath ? ", went to its error path" : ""}</span> : null}
       </span>
       {BLOCK_TYPES.has(view.type) ? null : view.type === "wait" ? (
         <span className="wf-node-agent wf-node-wait" data-testid="wf-node-wait">{detail?.duration ?? ""}</span>
@@ -241,6 +254,12 @@ export function StepNode(p: {
                   data-tip={detail?.mcp?.length ? detail.mcp.join(", ") : plural(b.mcp, "MCP server")}
                   aria-label={`${b.mcp} MCP`}>
               <HardDrives size={12} weight="bold" aria-hidden /><span className="wf-badge-n">{b.mcp}</span>
+            </span>
+          ) : null}
+          {detail?.failure ? (
+            <span className="wf-badge" data-kind="failure" data-testid="wf-badge-failure"
+                  data-tip={detail.failure} aria-label={detail.failure}>
+              {detail.timeLimit ? <Timer size={12} weight="bold" aria-hidden /> : <ArrowsClockwise size={12} weight="bold" aria-hidden />}
             </span>
           ) : null}
           {b.lacks.length ? (

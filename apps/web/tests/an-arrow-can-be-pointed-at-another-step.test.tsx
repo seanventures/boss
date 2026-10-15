@@ -28,7 +28,8 @@ import { BRANCHED, PALETTE } from "./_helpers/canvas-fixtures";
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const h = React.createElement;
 const { edgesOf, linksFrom, rewireLink, START_TARGET } = await import("../lib/workflow-graph");
-const { addedProblems, checkRewire, CHECK_FAILED } = await import("../lib/workflow-rewire");
+const { addedProblems, checkRewire, CHECK_FAILED, sayProblem } = await import("../lib/workflow-rewire");
+const { checkSpec } = await import("../lib/workflow-api");
 const { editorReducer, emptyEditorState, newMeta } = await import("../lib/workflow-editor-store");
 const { FlowLane } = await import("../app/workflows/flow/flow-lane");
 const { WorkflowEditor } = await import("../app/workflows/editor/workflow-editor");
@@ -196,6 +197,34 @@ describe("the validator is asked before a link is made", () => {
     expect(!answer.ok && answer.reason).toMatch(/^Step 'hot' cannot be reached/);
     const end = await checkRewire(PATHS, { from: "hot", to: "deploy", kind: "next" }, null, check);
     expect(!end.ok && end.reason).toMatch(/^Step 'deploy' cannot be reached/);
+  });
+
+  it("names the steps a refusal mentions by their titles, never the engine's ids", async () => {
+    const titles = (id: string) => ({ triage: "Triage the report", hot: "Hot fix" } as Record<string, string>)[id];
+    const answer = await checkRewire(PATHS, { from: "hot", to: "deploy", kind: "next" }, "triage", check, null, titles);
+    expect(answer).toEqual({ ok: false, reason: "Unbounded cycle detected at step \u201cTriage the report\u201d; use bounded_loop" });
+    // A quoted word that is not a step is left as the engine wrote it.
+    expect(sayProblem({ step_id: null, field: null, message: "kind 'bogus' is not known." }, titles))
+      .toBe("Kind 'bogus' is not known");
+    expect(sayProblem({ step_id: "hot", field: null, message: "step 'hot' cannot be reached." }, titles))
+      .toBe("Step \u201cHot fix\u201d cannot be reached");
+  });
+
+  it("the check keeps each problem's severity and its fix, so a warning blocks nothing", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ ok: true, problems: [
+      { step_id: "hot", field: "ability", message: "Needs Deploy set up", severity: "warning",
+        fix_label: "Set up where it deploys", fix_href: "/?area=infra" },
+      { step_id: "cold", field: null, message: "step 'cold' is bad.", severity: "error" },
+      { step_id: "ok", field: null, message: "no severity" }] })));
+    try {
+      const r = await checkSpec("prj_1", PATHS);
+      expect(r.problems).toEqual([
+        { step_id: "hot", field: "ability", message: "Needs Deploy set up", severity: "warning",
+          fix_label: "Set up where it deploys", fix_href: "/?area=infra" },
+        { step_id: "cold", field: null, message: "step 'cold' is bad.", severity: "error" },
+        { step_id: "ok", field: null, message: "no severity" }]);
+      expect(addedProblems([], r.problems).map((p) => p.step_id)).toEqual(["cold", "ok"]);
+    } finally { vi.unstubAllGlobals(); }
   });
 
   it("only problems the link would ADD refuse it; the draft's own do not, nor do warnings", () => {
@@ -479,7 +508,8 @@ describe("in the editor", () => {
     const before = edgeKeys();
     dragEnd(lane, "next:hot>deploy", centreOf(lane, '.wf-slot[data-slot="triage"]'));
     await settle();
-    expect(toast()).toMatch(/cycle detected at step 'triage'/);
+    // Said with the step's title (triage is a Research step), not the engine's id.
+    expect(toast()).toMatch(/cycle detected at step \u201cResearch\u201d/);
     expect(edgeKeys()).toEqual(before);
     expect(byTest(document, "wf-toast-undo")).toBeNull();
   });

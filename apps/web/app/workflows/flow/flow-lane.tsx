@@ -42,7 +42,7 @@ import type {
   FlowLayout, FlowLink, GraphEdge, Palette, PaletteItem, Problem, Spec, SpecStep, StepView,
 } from "../../../lib/workflow-editor-types";
 import {
-  afterGaps, canMove as modelCanMove, insertStep, layoutFlow, linearOrder, rewireLink, START_TARGET,
+  afterGaps, canMove as modelCanMove, insertStep, layoutFlow, linearOrder, REPEATS, rewireLink, START_TARGET,
 } from "../../../lib/workflow-graph";
 import { pinTip, unpinTip, useTips } from "./tip-layer";
 import { layoutOffsets, type NodeOffset } from "../../../lib/workflow-layout";
@@ -50,9 +50,9 @@ import {
   afterGapPoints, caretX, END_ID, gapPoints, planDrag, shiftsFor, type GapArrows, type LanePlan,
 } from "./drag-plan";
 import {
-  BASE_REM, chooseDensity, clampBox, fitScale, offsetFromCanvas, overflows, placedGeometry, ROW_GAP,
-  roomyGeometry,
-  type LaneGeometry,
+  BASE_REM, chooseDensity, clampBox, cubicAt, fitScale, forwardRoute, offsetFromCanvas, overflows, placedGeometry,
+  ROW_GAP, roomyGeometry, routeGrip, routePath, routeSamples, stepsCrossed,
+  type LaneGeometry, type Point, type Route,
 } from "./geometry";
 import { Minimap } from "./minimap";
 import { nodeDetail, viewOf } from "./node-facts";
@@ -61,6 +61,8 @@ import { StepNode, type RunPhase } from "./step-node";
 import { DRAG_THRESHOLD, GAP_SNAP, useLaneDrag, type DragSource, type DropGap, type LaneTarget } from "./use-lane-drag";
 
 export type LaneRunState = { phase: string; meta: string; tip?: string;
+  /** The engine recorded that this step failed into its error path (`output.error_path_taken`). */
+  errorPath?: boolean;
   /** Who ran it, once the work is recorded (Agent World: face, live ring, how-glyph). */
   agent?: LaneAgent };
 export type LaneZoom = "fit" | "full";
@@ -87,81 +89,80 @@ export function flowInto(previous: RunPhase | "start", next: RunPhase): "past" |
 
 /* ── Edges for a branched flow ─────────────────────────────────────────────────── */
 
-type Point = { x: number; y: number };
 type Drawn = { key: string; d: string; kind: GraphEdge["kind"] | "start" | "end" | "back";
                label?: { x: number; y: number; text: string; anchor?: "start" | "middle" | "end" };
                /** The arrow as the spec says it, when it is one the operator can point elsewhere:
                 *  `from` where it leaves, `grip` where its end handle sits (near its head). */
-               link?: FlowLink; from?: Point; grip?: Point };
+               link?: FlowLink; from?: Point; grip?: Point;
+               /** What `d` draws (geometry.ts), so where it runs can be checked against the steps. */
+               route: Route; ends: string[] };
 
 /** Arrows whose end can be dragged to another step. A Repeat's step and a path into its join
  *  are their block's own (lib/workflow-graph.ts `rewireLink` says why if asked). */
-const RELINKABLE = new Set<Drawn["kind"]>(["next", "yes", "no", "branch", "end"]);
-/** The picker's value for End. */
+const RELINKABLE = new Set<Drawn["kind"]>(["next", "yes", "no", "branch", "end", "error"]);
+/** The picker's value for End (for an error path: Stop the run). */
 const END_VALUE = "__end__";
 
-/** A point on the cubic from `a` to `b` that `curve` draws, `t` of the way along. */
-function along(a: Point, b: Point, k: number, t: number): Point {
-  const u = 1 - t;
-  const c1 = { x: a.x + k, y: a.y };
-  const c2 = { x: b.x - k, y: b.y };
-  return {
-    x: u * u * u * a.x + 3 * u * u * t * c1.x + 3 * u * t * t * c2.x + t * t * t * b.x,
-    y: u * u * u * a.y + 3 * u * u * t * c1.y + 3 * u * t * t * c2.y + t * t * t * b.y,
-  };
-}
 /** How far along its arrow an end handle sits: off the arrowhead, so arrows that meet at one
  *  step (or at End) keep handles of their own. */
 const GRIP_T = 0.8;
 
-function drawEdges(layout: FlowLayout, g: LaneGeometry, spec: Spec): Drawn[] {
+const drawn = (r: Route) => ({ route: r, d: routePath(r) });
+
+/** Every arrow of a branched flow, each as the route it is drawn along (geometry.ts): forward
+ *  arrows go round any step between their ends (`forwardRoute`), ways back run along the bottom. */
+export function drawEdges(layout: FlowLayout, g: LaneGeometry, spec: Spec): Drawn[] {
   const col = new Map(layout.nodes.map((n) => [n.id, n.column]));
   const out: Drawn[] = [];
   const right = (id: string) => { const b = g.boxes.get(id)!; return { x: b.x + b.w, y: b.y + b.h / 2 }; };
   const left = (id: string) => { const b = g.boxes.get(id)!; return { x: b.x, y: b.y + b.h / 2 }; };
-  // A step moved left of the one it follows still gets an arrow that leaves to the right and
-  // arrives from the left: the curve bows out rather than folding back over the steps.
-  const bend = (a: Point, b: Point) =>
-    (b.x >= a.x + 24 ? Math.max(12, (b.x - a.x) / 2) : Math.max(48, Math.abs(b.x - a.x) / 2));
-  const curve = (a: Point, b: Point) => {
-    const k = bend(a, b);
-    return `M${a.x},${a.y} C${a.x + k},${a.y} ${b.x - k},${b.y} ${b.x},${b.y}`;
-  };
-  const grip = (a: Point, b: Point) => along(a, b, bend(a, b), GRIP_T);
   const bottom = g.height - 8;
-  const loopMax = new Map(spec.steps.filter((s) => s.kind === "bounded_loop")
-    .map((s) => [s.id, Number(s.max_iterations) || 0]));
+  // What a body's way back says: how many times a Repeat may go round; that a For each goes
+  // round once per item.
+  const loopBadge = new Map<string, string>(spec.steps.flatMap((s): [string, string][] => {
+    if (s.kind === "bounded_loop") return Number(s.max_iterations) ? [[s.id, `↻ ×${Number(s.max_iterations)}`]] : [];
+    return s.kind === "for_each" ? [[s.id, "↻ each item"]] : [];
+  }));
   const labelled = new Set<string>();
-  const backs = new Set(layout.edges.filter((e) => (col.get(e.to) ?? 0) <= (col.get(e.from) ?? 0))
+  // A For each's arrow into the step it runs can be pointed at another step; a Repeat's cannot.
+  const forEach = new Set(spec.steps.filter((s) => s.kind === "for_each").map((s) => s.id));
+  const relinkable = (e: GraphEdge) => RELINKABLE.has(e.kind) || (e.kind === "loop" && forEach.has(e.from));
+  const backs = new Set(layout.edges.filter((e) => e.kind !== "error" && (col.get(e.to) ?? 0) <= (col.get(e.from) ?? 0))
     .map((e) => `${e.from}>${e.to}`));
 
   for (const n of layout.nodes.filter((x) => x.column === 0)) {
-    out.push({ key: `start>${n.id}`, kind: "start",
-               d: curve({ x: g.start.x + g.start.w, y: g.midY }, left(n.id)) });
+    out.push({ key: `start>${n.id}`, kind: "start", ends: [n.id],
+               ...drawn(forwardRoute(g, { x: g.start.x + g.start.w, y: g.midY }, left(n.id), [n.id])) });
   }
-  const back = (from: string, to: string, badge: number, link?: FlowLink) => {
+  const back = (from: string, to: string, badge: string, link?: FlowLink) => {
     const a = g.boxes.get(from)!;
     const b = g.boxes.get(to)!;
     const ax = a.x + a.w / 2;
     const bx = b.x + b.w / 2;
-    out.push({ key: `back:${from}>${to}`, kind: "back",
-               d: `M${ax},${a.y + a.h} V${bottom} H${bx} V${b.y + b.h}`,
-               label: badge ? { x: (ax + bx) / 2, y: bottom - 4, text: `↻ ×${badge}` } : undefined,
+    const route: Route = { from: { x: ax, y: a.y + a.h },
+                           segs: [{ line: { x: ax, y: bottom } }, { line: { x: bx, y: bottom } }, { line: { x: bx, y: b.y + b.h } }] };
+    out.push({ key: `back:${from}>${to}`, kind: "back", ends: [from, to], ...drawn(route),
+               label: badge ? { x: (ax + bx) / 2, y: bottom - 4, text: badge } : undefined,
                ...(link ? { link, from: { x: ax, y: a.y + a.h }, grip: { x: bx, y: (bottom + b.y + b.h) / 2 } } : {}) });
   };
   for (const e of layout.edges) {
     if (!g.boxes.has(e.from) || !g.boxes.has(e.to)) continue;
+    if (e.kind === "error") { out.push(errorEdge(e, g, col)); continue; }
     if ((col.get(e.to) ?? 0) <= (col.get(e.from) ?? 0)) {
-      back(e.from, e.to, loopMax.get(e.to) ?? loopMax.get(e.from) ?? 0,
-           RELINKABLE.has(e.kind) ? { from: e.from, to: e.to, kind: e.kind } : undefined);
+      back(e.from, e.to, loopBadge.get(e.to) ?? loopBadge.get(e.from) ?? "",
+           relinkable(e) ? { from: e.from, to: e.to, kind: e.kind } : undefined);
       continue;
     }
     const a = right(e.from);
     const b = left(e.to);
+    const route = forwardRoute(g, a, b, [e.from, e.to], e.kind === "no" ? "below" : "above");
     let label: Drawn["label"];
     // Labels sit at the start of the edge, in the room geometry leaves after a fan-out.
     if (e.kind === "yes" || e.kind === "no") {
-      label = { x: a.x + 6, y: e.kind === "yes" ? Math.min(a.y, b.y) - 4 : Math.max(a.y, b.y) + 12, text: e.kind };
+      // A path that goes round the steps between is labelled on the side it turns to.
+      const pts = route.segs.length > 1 ? routeSamples(route) : [];
+      const turns = pts.length ? pts[pts.length >> 1].y : b.y;
+      label = { x: a.x + 6, y: e.kind === "yes" ? Math.min(a.y, turns) - 4 : Math.max(a.y, turns) + 12, text: e.kind };
     } else if (e.kind === "branch" && !labelled.has(e.from)) {
       // Under the fork, ending at its bar: every branch's arrow leaves the bar's middle and
       // fans out to the right, so a word beside the bar was always crossed by one of them.
@@ -169,19 +170,55 @@ function drawEdges(layout: FlowLayout, g: LaneGeometry, spec: Spec): Drawn[] {
       const box = g.boxes.get(e.from)!;
       label = { x: a.x, y: box.y + box.h + 14, text: "parallel", anchor: "end" };
     }
-    out.push({ key: `${e.kind}:${e.from}>${e.to}`, kind: e.kind, d: curve(a, b), label,
-               ...(RELINKABLE.has(e.kind) ? { link: { from: e.from, to: e.to, kind: e.kind }, from: a, grip: grip(a, b) } : {}) });
+    out.push({ key: `${e.kind}:${e.from}>${e.to}`, kind: e.kind, ends: [e.from, e.to], ...drawn(route), label,
+               ...(relinkable(e) ? { link: { from: e.from, to: e.to, kind: e.kind }, from: a, grip: routeGrip(route, GRIP_T) } : {}) });
     // A loop's body returns to its controller; the spec only names the way in.
-    if (e.kind === "loop" && !backs.has(`${e.to}>${e.from}`)) back(e.to, e.from, loopMax.get(e.from) ?? 0);
+    if (e.kind === "loop" && !backs.has(`${e.to}>${e.from}`)) back(e.to, e.from, loopBadge.get(e.from) ?? "");
   }
   for (const id of layout.terminal) {
     if (!g.boxes.has(id)) continue;
     const a = right(id);
-    const b = { x: g.end.x, y: g.midY };
-    out.push({ key: `${id}>end`, kind: "end", d: curve(a, b),
-               link: { from: id, to: null, kind: "end" }, from: a, grip: grip(a, b) });
+    const route = forwardRoute(g, a, { x: g.end.x, y: g.midY }, [id]);
+    out.push({ key: `${id}>end`, kind: "end", ends: [id], ...drawn(route),
+               link: { from: id, to: null, kind: "end" }, from: a, grip: routeGrip(route, GRIP_T) });
   }
   return out;
+}
+
+/**
+ * AN ERROR PATH IS ITS OWN KIND OF ARROW: dashed, in the error colour, leaving from the BOTTOM of
+ * the step (its other arrows leave from its right), and labelled "if it fails", so it is never
+ * read as where the step goes when it works. On to a later step it curves there when nothing is
+ * in its way, and otherwise runs under the steps between and comes up into its target; back to
+ * an earlier step (a retry from further back) it runs along the bottom, as a way back does.
+ */
+function errorEdge(e: GraphEdge, g: LaneGeometry, col: Map<string, number>): Drawn {
+  const a = g.boxes.get(e.from)!;
+  const b = g.boxes.get(e.to)!;
+  const link: FlowLink = { from: e.from, to: e.to, kind: "error" };
+  const ends = [e.from, e.to];
+  const start = { x: a.x + a.w * 0.7, y: a.y + a.h };
+  // Hung from its top (flow.css), just under the step: its words grow with the root font, and a
+  // baseline 12px down put their top under the step's own edge at 1920.
+  const label = { x: start.x + 6, y: start.y + 3, text: "if it fails" };
+  const bottom = g.height - 8;
+  const forward = (col.get(e.to) ?? 0) > (col.get(e.from) ?? 0) && b.x > start.x + 24;
+  if (forward) {
+    const end = { x: b.x, y: b.y + b.h / 2 };
+    const c1 = { x: start.x, y: start.y + Math.max(24, (end.y - start.y) / 2) };
+    const c2 = { x: end.x - Math.max(24, (end.x - start.x) / 3), y: end.y };
+    const route: Route = { from: start, segs: [{ c1, c2, to: end }] };
+    if (!stepsCrossed(route, g.boxes, ends).length) {
+      return { key: `error:${e.from}>${e.to}`, kind: "error", label, link, from: start, ends, ...drawn(route),
+               grip: cubicAt(start, c1, c2, end, GRIP_T) };
+    }
+  }
+  // Under the steps: down from the step, along the bottom, up into the target's underside.
+  const bx = b.x + b.w * 0.3;
+  const route: Route = { from: start, segs: [{ line: { x: start.x, y: bottom } }, { line: { x: bx, y: bottom } },
+                                             { line: { x: bx, y: b.y + b.h } }] };
+  return { key: `error:${e.from}>${e.to}`, kind: "error", label, link, from: start, ends, ...drawn(route),
+           grip: { x: bx, y: (bottom + b.y + b.h) / 2 } };
 }
 
 /** Whether a point is inside a step: a `+` there would sit on the step's words. */
@@ -202,19 +239,20 @@ function LinkPicker({ link, at, words, choices, onPick, onClose }: {
 }) {
   const ref = useRef<HTMLSelectElement>(null);
   useEffect(() => { ref.current?.focus(); }, []);
-  const label = `${words} goes to`;
+  const error = link.kind === "error";
+  const label = error ? `${words}: if it fails, go to` : `${words} goes to`;
   return (
     <div className="wf-link-picker" role="group" aria-label={label} data-testid="wf-link-picker"
          style={{ left: at.x, top: at.y }}
          onClick={(e) => e.stopPropagation()} onPointerDown={(e) => e.stopPropagation()}
          onKeyDown={(e) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); onClose(); } }}>
       <label className="wf-link-picker-label">
-        <span>Goes to</span>
+        <span>{error ? "If it fails, go to" : "Goes to"}</span>
         <select ref={ref} className="wf-select wf-select-sm" aria-label={label} data-testid="wf-link-target"
                 value={link.to ?? END_VALUE}
                 onChange={(e) => onPick(e.target.value === END_VALUE ? null : e.target.value)}>
           {choices.map((c) => <option key={c.id} value={c.id}>{c.title}</option>)}
-          <option value={END_VALUE}>End</option>
+          <option value={END_VALUE}>{error ? "Stop the run" : "End"}</option>
         </select>
       </label>
       <button type="button" className="wf-link" onClick={onClose} data-testid="wf-link-picker-close">Close</button>
@@ -374,7 +412,7 @@ export function FlowLane(p: {
   // Which arrow a `+` of a branched flow sits on: the one into a path's head, the one out of a
   // path's last step (drag-plan.ts `GapArrows`), so it is not drawn against a step's edge.
   const arrows = useMemo<GapArrows>(() => {
-    const drawn = layout.edges.filter((e) => e.kind !== "loop");
+    const drawn = layout.edges.filter((e) => e.kind !== "loop" && e.kind !== "error");
     const one = <T,>(xs: T[]) => (xs.length === 1 ? xs[0] : undefined);
     return {
       into: (id) => one(drawn.filter((e) => e.to === id))?.from,
@@ -386,10 +424,12 @@ export function FlowLane(p: {
   }, [layout]);
   // After a path's last step, where the gap before the next step in the order cannot serve.
   // A flow with a moved step is drawn as a branched one is: curved arrows, gaps between steps.
-  const linear = layout.linear && !offsets.size && !live;
+  // An error path is drawn as an arrow of its own, so a flow with one is drawn as a branched one.
+  const errorPaths = useMemo(() => layout.edges.filter((e) => e.kind === "error"), [layout]);
+  const linear = layout.linear && !offsets.size && !live && !errorPaths.length;
   const afterPoints = useMemo(() => {
     if (layout.linear) return [];
-    const bodies = new Map(steps.filter((s) => s.kind === "bounded_loop" && s.body)
+    const bodies = new Map(steps.filter((s) => REPEATS.has(s.kind) && s.body)
       .map((s) => [s.id, String(s.body)]));
     return afterGapPoints(afterGaps(spec), order, geometry, (id) => bodies.get(id), arrows);
   }, [layout.linear, spec, steps, order, geometry, arrows]);
@@ -590,7 +630,9 @@ export function FlowLane(p: {
   const pickedEdge = picked ? handles.find((e) => e.key === picked) : undefined;
   const titleOf = (id: string | null) => (id === null ? "End" : views.get(id)?.title ?? id);
   const linkWords = (l: FlowLink) => {
-    const what = l.kind === "yes" ? "The Yes path" : l.kind === "no" ? "The No path" : l.kind === "branch" ? "A branch" : "The arrow";
+    if (l.kind === "error") return `If ${titleOf(l.from)} fails, it goes to ${l.to === null ? "nothing" : titleOf(l.to)}`;
+    const what = l.kind === "yes" ? "The Yes path" : l.kind === "no" ? "The No path" : l.kind === "branch" ? "A branch"
+      : l.kind === "loop" ? "What it runs for each item" : "The arrow";
     return `${what} from ${titleOf(l.from)} to ${titleOf(l.to)}`;
   };
   /** What is under a canvas point: a step, End (null), Start, or nothing (undefined). */
@@ -610,7 +652,8 @@ export function FlowLane(p: {
   const relinkTo = (link: FlowLink, target: string | null) => {
     setPicked(null);
     if (target === link.to) return;
-    setAnnouncement(`${linkWords(link)}: linking to ${target === START_TARGET ? "Start" : titleOf(target)}`);
+    const where = target === START_TARGET ? "Start" : target === null && link.kind === "error" ? "Stop the run" : titleOf(target);
+    setAnnouncement(`${linkWords(link)}: linking to ${where}`);
     onRewire?.(link, target);
   };
   const pressGrip = (edge: Drawn, e: React.PointerEvent<HTMLElement>) => {
@@ -655,6 +698,12 @@ export function FlowLane(p: {
     return "refused" in rewireLink(spec, relinking.link, id) ? "no" : "ok";
   };
   const phases = new Map(order.map((id) => [id, runPhase(runState?.[id]?.phase)]));
+  /** On a run, the steps that took their error path: what the engine recorded on the step
+   *  (`output.error_path_taken`), or else a failed step whose `on_error` step has started. */
+  const tookError = new Set(mode === "run" ? errorPaths
+    .filter((e) => runState?.[e.from]?.errorPath
+      || (phases.get(e.from) === "failed" && (phases.get(e.to) ?? "future") !== "future"))
+    .map((e) => e.from) : []);
 
   // The `+` on each connector: every gap of a linear flow, and the allowed ones of a branched one.
   const gaps: { at: number; x: number; y: number }[] = !design || !renderGapAction ? []
@@ -699,13 +748,21 @@ export function FlowLane(p: {
                           markerHeight="7" orient="auto-start-reverse">
                     <path d="M0,0 L8,4 L0,8 z" className="wf-edge-head" />
                   </marker>
+                  {errorPaths.length ? (
+                    <marker id={`${viewportId}-arrow-error`} viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7"
+                            markerHeight="7" orient="auto-start-reverse">
+                      <path d="M0,0 L8,4 L0,8 z" className="wf-edge-head" data-kind="error" />
+                    </marker>
+                  ) : null}
                 </defs>
                 {edges.map((e) => (
                   <g key={e.key} data-kind={e.kind} data-edge={e.link ? e.key : undefined}
+                     data-taken={(e.kind === "error" && !!e.link && tookError.has(e.link.from)) || undefined}
                      data-picked={picked === e.key || hovered === e.key || undefined}
                      data-relinking={relink?.key === e.key || undefined}>
                     <path d={e.d} className="wf-edge" data-kind={e.kind}
-                          markerEnd={e.kind === "start" ? undefined : `url(#${viewportId}-arrow)`} />
+                          markerEnd={e.kind === "start" ? undefined
+                            : `url(#${viewportId}-arrow${e.kind === "error" ? "-error" : ""})`} />
                     {relinkable && e.link ? (
                       <path d={e.d} className="wf-edge-hit" data-testid={`wf-edge-hit-${e.key}`}
                             onPointerEnter={() => setHovered(e.key)}
@@ -740,6 +797,7 @@ export function FlowLane(p: {
               const phase = phases.get(id) ?? "future";
               return (
                 <div key={id} className="wf-slot" ref={slotRef(id)} data-slot={id}
+                     data-error-path={tookError.has(id) || undefined}
                      data-placed={offsets.has(id) || live?.id === id ? "true" : undefined}
                      data-link-target={overState(id)}
                      style={{ left: box.x, top: box.y, width: box.w, height: box.h }}
@@ -752,7 +810,7 @@ export function FlowLane(p: {
                   ) : null}
                   <StepNode view={view} mode={mode === "run" ? "run" : "design"}
                             selected={selection === id} problem={problemOf.get(id)}
-                            detail={details.get(id)}
+                            detail={details.get(id)} errorPath={tookError.has(id)}
                             run={mode === "run" ? { phase, meta: runState?.[id]?.meta ?? "",
                                                     tip: runState?.[id]?.tip,
                                                     agent: runState?.[id]?.agent } : undefined}
@@ -857,6 +915,16 @@ export function FlowLane(p: {
         </div>
       ) : null}
 
+      {errorPaths.length ? (
+        <ul className="wf-sr" data-testid="wf-error-paths" aria-label="If a step fails">
+          {errorPaths.map((e) => (
+            <li key={`${e.from}>${e.to}`} data-testid={`wf-error-path-${e.from}`}>
+              {`If ${titleOf(e.from)} fails, go to ${titleOf(e.to)}`}
+              {tookError.has(e.from) ? ": it failed, and the run went there" : ""}
+            </li>
+          ))}
+        </ul>
+      ) : null}
       <div className="wf-sr" aria-live="polite" data-testid="wf-announce">{announcement}</div>
     </div>
   );

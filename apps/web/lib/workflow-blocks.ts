@@ -14,9 +14,11 @@
  *     agent task whose `next` is the join, and the join `wait_for`s them (all, by default).
  *   - Repeat until: a `bounded_loop` around ONE step (its `body`; the runtime returns the body
  *     to its loop and never follows the body's own `next`), at most 3 times by default.
+ *   - For each: a `for_each` around ONE step, run once per item of a list (`items`), at most
+ *     100 items and one at a time by default. Its step is an agent task handed the item.
  *
- * A condition's and a loop's expression start empty (`{}`): the validator refuses that until
- * the operator says what to check, which is the point — a branch nobody described must not
+ * A condition's and a loop's expression start empty (`{}`), as a For each's list does (`""`):
+ * the validator refuses that until the operator says what to check, which is the point — a branch nobody described must not
  * publish. Like workflow-graph.ts, every function returns the SAME spec when it refuses.
  */
 import type { Spec, SpecStep } from "./workflow-editor-types";
@@ -25,8 +27,8 @@ import {
   afterGap, afterGaps, edgesOf, insertStep, linearOrder, nextOf, unsetReadsFrom,
 } from "./workflow-graph";
 
-export type ControlBlock = "condition" | "parallel" | "bounded_loop";
-export const CONTROL_BLOCKS: ControlBlock[] = ["condition", "parallel", "bounded_loop"];
+export type ControlBlock = "condition" | "parallel" | "bounded_loop" | "for_each";
+export const CONTROL_BLOCKS: ControlBlock[] = ["condition", "parallel", "bounded_loop", "for_each"];
 
 /** The block a step heads, if any: the step a canvas removes the whole block by. */
 export function blockOfHead(step: SpecStep | undefined): ControlBlock | null {
@@ -37,8 +39,14 @@ export function blockOfHead(step: SpecStep | undefined): ControlBlock | null {
 export const DEFAULT_MAX_ITERATIONS = 3;
 
 const HEAD_ID: Record<ControlBlock, string> = {
-  condition: "branch", parallel: "at_the_same_time", bounded_loop: "repeat",
+  condition: "branch", parallel: "at_the_same_time", bounded_loop: "repeat", for_each: "for_each",
 };
+
+/** How many items a new For each may go through, and how many it runs at once. The engine's
+ *  defaults (`FOR_EACH_DEFAULT_MAX_ITEMS`, concurrency 1) and its limits. */
+export const DEFAULT_MAX_ITEMS = 100;
+export const MAX_ITEMS_LIMIT = 1000;
+export const MAX_CONCURRENCY = 20;
 
 const stepsOf = (spec: Spec): SpecStep[] => (Array.isArray(spec?.steps) ? spec.steps : []);
 
@@ -76,6 +84,18 @@ function buildBlock(spec: Spec, block: ControlBlock, headId: string, after: stri
       agentTask(a, "Branch 1", [join]),
       agentTask(b, "Branch 2", [join]),
       { id: join, kind: "join", wait_for: [a, b], success_policy: "all", next: then },
+    ];
+  }
+  if (block === "for_each") {
+    const [body] = freeIds(spec, ["each_item"]);
+    const task = agentTask(body, "For each item", []);
+    const binding = task.binding as Record<string, unknown>;
+    // The item it is on, handed to the agent beside its instructions.
+    const inputs = { ...(binding.inputs as Record<string, unknown>), item: { from_item: "" } };
+    return [
+      { id: headId, kind: "for_each", items: "", body, max_items: DEFAULT_MAX_ITEMS, concurrency: 1,
+        next: then },
+      { ...task, binding: { ...binding, inputs } },
     ];
   }
   const [body] = freeIds(spec, ["repeat_step"]);
@@ -134,7 +154,7 @@ export function blockRegion(spec: Spec, headId: string): { inside: Set<string>; 
   const byId = new Map(steps.map((s) => [s.id, s]));
   let inside: Set<string>;
   let exits: string[];
-  if (kind === "bounded_loop") {
+  if (kind === "bounded_loop" || kind === "for_each") {
     const body = String(head.body ?? "");
     if (!byId.has(body)) return null;
     inside = new Set([headId, body]);
@@ -318,6 +338,9 @@ export function removeRefusal(spec: Spec, id: string): string {
   if (blockOfHead(step)) return "Its paths reach steps outside it: edit in JSON";
   if (steps.some((s) => s.kind === "bounded_loop" && s.body === id)) {
     return "A Repeat needs its one step: remove the Repeat instead";
+  }
+  if (steps.some((s) => s.kind === "for_each" && s.body === id)) {
+    return "A For each needs its one step: remove the For each instead";
   }
   const into = edgesOf(spec).filter((e) => e.to === id);
   if (into.some((e) => e.kind === "yes" || e.kind === "no" || e.kind === "branch")) {

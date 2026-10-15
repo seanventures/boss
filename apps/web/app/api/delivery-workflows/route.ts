@@ -25,6 +25,9 @@ const VIEWS: Record<string, (project: string) => string> = {
   // which also uses the fields the list gained for it (copies, run count, last run).
   library: (p) => `/v1/delivery-workflows?project_id=${encodeURIComponent(p)}`,
   runs: (p) => `/v1/delivery-workflows/runs?project_id=${encodeURIComponent(p)}`,
+  // The same list WITH test runs, which the ordinary one leaves out (#512).
+  runs_with_tests: (p) =>
+    `/v1/delivery-workflows/runs?project_id=${encodeURIComponent(p)}&include_test=true`,
   schedules: (p) =>
     `/v1/delivery-workflows/schedules?project_id=${encodeURIComponent(p)}`,
   // Where a build can go. The registry has always existed and nothing over HTTP could read it,
@@ -71,6 +74,31 @@ export async function GET(req: Request) {
   const params = rawRequestUrl(req).searchParams;
   const view = params.get("view") ?? "runs";
   const project = params.get("project_id")?.trim() ?? "";
+  // A workflow's webhook triggers, and one trigger's recent deliveries (#512). Never a secret:
+  // the API returns it only from create and rotate.
+  if (view === "webhooks" || view === "webhook_deliveries") {
+    const key = params.get("key")?.trim() ?? "";
+    const webhookId = params.get("webhook_id")?.trim() ?? "";
+    if (!project || (view === "webhook_deliveries" && !webhookId)) {
+      return NextResponse.json({ error: `${view} needs project_id${view === "webhooks" ? "" : " and webhook_id"}` },
+                               { status: 400 });
+    }
+    const path = view === "webhooks"
+      ? `/v1/delivery-workflows/webhooks?project_id=${encodeURIComponent(project)}`
+        + (key ? `&workflow_key=${encodeURIComponent(key)}` : "")
+      : `/v1/delivery-workflows/webhooks/${encodeURIComponent(webhookId)}/deliveries`
+        + `?project_id=${encodeURIComponent(project)}`;
+    try {
+      const r = await fetch(`${API_URL}${path}`, { headers: authHeaders({}), cache: "no-store" });
+      const raw = await r.text();
+      let parsed: unknown;
+      try { parsed = JSON.parse(raw); } catch { parsed = { detail: raw }; }
+      return r.ok ? NextResponse.json(parsed)
+        : NextResponse.json(refusal(r.status, parsed), { status: r.status });
+    } catch (e) {
+      return NextResponse.json({ error: String((e as Error)?.message ?? e) }, { status: 502 });
+    }
+  }
   if (view === "spec" || view === "plan" || view === "readiness") {
     const key = params.get("key")?.trim() ?? "";
     if (!project || !key) {
@@ -136,9 +164,14 @@ const ACTIONS: Record<string, string> = {
   fork: "/v1/delivery-workflows/fork",
   save: "/v1/delivery-workflows/save",
   start: "/v1/delivery-workflows/start",
+  // A TEST RUN (#512): pinned steps do not run; anything that could spend is refused unless
+  // allowed live. Its own endpoint, so a test can never be a normal start with a flag lost.
+  test_run: "/v1/delivery-workflows/test-runs",
   advance: "/v1/delivery-workflows/run-capabilities",
   define_step: "/v1/delivery-workflows/custom-steps",
   schedule: "/v1/delivery-workflows/schedules",
+  // A new webhook trigger: the reply is the one time its signing secret is shown (#512).
+  webhook_create: "/v1/delivery-workflows/webhooks",
   // The Workflow Studio editor (lib/workflow-api.ts). `check` and `publish` run the same
   // collector, so a check that passes is a publish that passes; `draft` and `wire` write
   // nothing. A refusal keeps its `problems` and `suggested_name` (lib/start-refusal.ts).
@@ -205,6 +238,12 @@ const SCHEDULE_ACTIONS: Record<string, (id: string) => string> = {
     `/v1/delivery-workflows/schedules/${encodeURIComponent(id)}/enabled`,
 };
 
+/** Actions addressed to ONE webhook trigger (#512). Its id lives in the path. */
+const WEBHOOK_ACTIONS: Record<string, (id: string) => string> = {
+  webhook_rotate: (id) => `/v1/delivery-workflows/webhooks/${encodeURIComponent(id)}/rotate`,
+  webhook_enabled: (id) => `/v1/delivery-workflows/webhooks/${encodeURIComponent(id)}/enabled`,
+};
+
 const RUN_ACTIONS: Record<string, (runId: string) => string> = {
   retry_step: (id) => `/v1/delivery-workflows/runs/${encodeURIComponent(id)}/retry-step`,
   // The other way past a failed step: go on without it. A failed step STOPS its run, for every
@@ -214,6 +253,8 @@ const RUN_ACTIONS: Record<string, (runId: string) => string> = {
   // not to a step: an operator arriving at a stalled workflow is asking "is this still true?"
   // of the whole thing, and does not know which step to point at.
   recheck: (id) => `/v1/delivery-workflows/runs/${encodeURIComponent(id)}/recheck`,
+  // RUN AGAIN FROM HERE (#512): a NEW run from one step, earlier steps pinned to this run's.
+  rerun_from: (id) => `/v1/delivery-workflows/runs/${encodeURIComponent(id)}/rerun`,
   set_input: (id) => `/v1/delivery-workflows/runs/${encodeURIComponent(id)}/input`,
   prepare_target: (id) =>
     `/v1/delivery-workflows/runs/${encodeURIComponent(id)}/deploy-target`,
@@ -243,6 +284,15 @@ export async function POST(req: Request) {
     }
     const { action: _a, schedule_id: _s, ...rest } = body;
     return proxyPost(scheduleAction(id), rest);
+  }
+  const webhookAction = WEBHOOK_ACTIONS[action];
+  if (webhookAction) {
+    const id = String((body as { webhook_id?: string }).webhook_id ?? "");
+    if (!id) {
+      return NextResponse.json({ error: `'${action}' needs a webhook_id` }, { status: 400 });
+    }
+    const { action: _a, webhook_id: _w, ...rest } = body;
+    return proxyPost(webhookAction(id), rest);
   }
   const runAction = RUN_ACTIONS[action];
   const runId = String((body as { run_id?: string }).run_id ?? "");

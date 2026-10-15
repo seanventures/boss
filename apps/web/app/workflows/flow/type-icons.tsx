@@ -9,7 +9,8 @@
  * shape always means the same thing on every screen.
  */
 import {
-  ArrowsClockwise, Circle, Clock, GitBranch, GitFork, GitMerge, PuzzlePiece, Robot, SealCheck, Stack,
+  ArrowsClockwise, Circle, Clock, GitBranch, GitFork, GitMerge, ListBullets, PuzzlePiece, Robot, SealCheck,
+  Stack,
 } from "@phosphor-icons/react";
 import React from "react";
 
@@ -30,6 +31,7 @@ const TYPE_ICONS: Record<StepView["type"], IconType> = {
   condition: GitBranch,
   join: GitMerge,
   loop: ArrowsClockwise,
+  foreach: ListBullets,
   other: Circle,
 };
 

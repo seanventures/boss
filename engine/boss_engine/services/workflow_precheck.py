@@ -290,9 +290,10 @@ def _steps(spec: Mapping[str, Any]) -> list[dict[str, Any]]:
 
 
 def _targets(step: Mapping[str, Any]) -> list[str]:
-    from . import two_pass
+    """Every step this one can lead to, its error path included: the runtime's own edges."""
+    from . import workflows
 
-    return two_pass._targets(dict(step))  # noqa: SLF001 — the runtime's own edges
+    return workflows._targets(dict(step))  # noqa: SLF001 — the runtime's own edges
 
 
 def _reachable(by_id: Mapping[str, dict], start: str, stop: Optional[str] = None) -> set[str]:
@@ -345,7 +346,7 @@ def skip_refusal(spec: Mapping[str, Any], step: Mapping[str, Any]) -> Optional[s
                     "ships; skipping it would deploy unverified work")
     if approval.get("forced_manual") and key not in _DEPLOYS:
         return f"{step.get('id')} needs a person's approval, which a skip cannot stand in for"
-    if step.get("kind") in ("parallel", "join", "condition", "bounded_loop"):
+    if step.get("kind") in ("parallel", "join", "condition", "bounded_loop", "for_each"):
         return f"{step.get('id')} is control flow, not work"
     return None
 
@@ -2315,8 +2316,12 @@ def check_smoke(ctx: Context, step: dict[str, Any]) -> Optional[dict[str, Any]]:
 def _fail_step_consults_advisory() -> bool:
     from . import workflows
 
+    # `fail_step` hands every failed attempt to `_fail_attempt` (which a timed-out attempt
+    # reaches too), so the advisory rule may live in either.
     try:
-        return "ADVISORY" in inspect.getsource(workflows.fail_step).upper()
+        return any("ADVISORY" in inspect.getsource(fn).upper()
+                   for fn in (workflows.fail_step,
+                              getattr(workflows, "_fail_attempt", workflows.fail_step)))
     except (OSError, TypeError):
         return False
 

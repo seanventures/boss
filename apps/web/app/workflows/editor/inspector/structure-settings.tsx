@@ -2,7 +2,7 @@
 
 /**
  * The settings of a branch block: Branch (if / else), Do at the same time (and its Wait for
- * branches), Repeat until.
+ * branches), Repeat until, For each.
  *
  * Every control is one action on the store — PATCH_STEP for a setting, ADD_BRANCH and
  * REMOVE_BRANCH for a parallel's branches, SELECT to go to a step — so undo, the lane and the
@@ -13,7 +13,9 @@ import { Plus, X } from "@phosphor-icons/react";
 import React, { useEffect, useId, useMemo, useState } from "react";
 
 import type { Palette, Problem, Spec, SpecStep } from "../../../../lib/workflow-editor-types";
-import { branchChain } from "../../../../lib/workflow-blocks";
+import {
+  branchChain, DEFAULT_MAX_ITEMS, MAX_CONCURRENCY, MAX_ITEMS_LIMIT,
+} from "../../../../lib/workflow-blocks";
 import {
   OPS, expressionSources, fromExpression, kindOf, parseList, parseValue, pathLabel, takesOf,
   toExpression, valueText, type Condition, type ExprOp, type Rule, type Source, type ValueKind,
@@ -396,6 +398,101 @@ export function LoopSettings(p: StructureProps) {
         Checked before each round. Still going after the last one: the run stops and asks you.
       </span>
       <FieldError problems={problems} field="max_iterations" />
+    </>
+  );
+}
+
+/* ── For each ───────────────────────────────────────────────────────────────────── */
+
+/**
+ * A For each: which list it goes through (`items`, picked from what the start form and earlier
+ * steps make — the condition builder's sources — or typed as a path), the step it runs for each
+ * item, at most how many items, and how many at a time. A list longer than the limit is refused
+ * when the run gets there, never cut short.
+ */
+export function ForEachSettings(p: StructureProps) {
+  const { step, spec, palette, problems, onConfig, onSelect } = p;
+  const sources = useMemo(() => expressionSources(spec, step.id, palette), [spec, step.id, palette]);
+  const items = typeof step.items === "string" ? step.items : "";
+  const literal = Array.isArray(step.items);
+  const known = sources.some((s) => s.path === items);
+  const [custom, setCustom] = useState(!known && items !== "");
+  const max = Number(step.max_items ?? DEFAULT_MAX_ITEMS);
+  const atOnce = Number(step.concurrency ?? 1);
+  const whole = (raw: string, low: number, high: number) => {
+    const n = Math.round(Number(raw));
+    return Number.isFinite(n) ? Math.min(high, Math.max(low, n)) : null;
+  };
+  return (
+    <>
+      <div className="wf-field">
+        <span className="wf-label">For each item in</span>
+        {literal ? (
+          <span className="wf-faint" data-testid="wf-foreach-literal">
+            {`A fixed list of ${(step.items as unknown[]).length} — edit it in JSON`}
+          </span>
+        ) : (
+          <>
+            <select className="wf-select" aria-label="The list to go through" data-testid="wf-foreach-items"
+                    value={custom ? OTHER : items}
+                    onChange={(e) => {
+                      if (e.target.value === OTHER) { setCustom(true); return; }
+                      setCustom(false);
+                      onConfig({ items: e.target.value });
+                    }}>
+              <option value="" disabled>Choose a list…</option>
+              {(["Start form", "Steps"] as const).map((group) => {
+                const rows = sources.filter((s) => s.group === group);
+                return rows.length ? (
+                  <optgroup key={group} label={group}>
+                    {rows.map((s) => <option key={s.path} value={s.path}>{s.label}</option>)}
+                  </optgroup>
+                ) : null;
+              })}
+              <option value={OTHER}>Other…</option>
+            </select>
+            {custom ? (
+              <input className="wf-input wf-mono" aria-label="The list's path" value={items}
+                     placeholder="steps.research.output.urls" data-testid="wf-foreach-items-path"
+                     title={items ? pathLabel(items) : undefined}
+                     onChange={(e) => onConfig({ items: e.target.value })} />
+            ) : null}
+          </>
+        )}
+        <FieldError problems={problems} field="items" />
+      </div>
+      <div className="wf-field">
+        <span className="wf-label">Run</span>
+        <StepLink id={String(step.body ?? "")} spec={spec} palette={palette} onSelect={onSelect}
+                  testId="wf-foreach-body" />
+        <span className="wf-faint">once per item. It reads the item as its input <code>item</code>.</span>
+        <FieldError problems={problems} field="body" />
+      </div>
+      <label className="wf-field wf-field-inline">
+        <span className="wf-label">At most</span>
+        <input className="wf-input wf-num" type="number" min={1} max={MAX_ITEMS_LIMIT} value={max}
+               data-testid="wf-foreach-max"
+               onChange={(e) => {
+                 const n = whole(e.target.value, 1, MAX_ITEMS_LIMIT);
+                 if (n !== null) onConfig({ max_items: n });
+               }} />
+        <span className="wf-faint">items</span>
+      </label>
+      <FieldError problems={problems} field="max_items" />
+      <label className="wf-field wf-field-inline">
+        <span className="wf-label">At a time</span>
+        <input className="wf-input wf-num" type="number" min={1} max={MAX_CONCURRENCY} value={atOnce}
+               data-testid="wf-foreach-at-once"
+               onChange={(e) => {
+                 const n = whole(e.target.value, 1, MAX_CONCURRENCY);
+                 if (n !== null) onConfig({ concurrency: n });
+               }} />
+      </label>
+      <FieldError problems={problems} field="concurrency" />
+      <span className="wf-faint">
+        A longer list stops the run and says so; it is never cut short. If an item fails, the For
+        each fails, and Retry runs the failed items again.
+      </span>
     </>
   );
 }

@@ -57,10 +57,15 @@ function problemsIn(body: Obj): Problem[] | null {
 
 function toProblem(raw: unknown): Problem {
   const p = asObj(raw);
+  // Severity is kept: a warning ("Needs Deploy set up") is shown but blocks neither Save nor a
+  // link (use-save-flow, lib/workflow-rewire.ts). So is where its gap is fixed.
   return {
     step_id: p.step_id == null || p.step_id === "" ? null : String(p.step_id),
     field: p.field == null || p.field === "" ? null : String(p.field),
     message: str(p.message) || String(raw ?? ""),
+    ...(p.severity === "warning" || p.severity === "error" ? { severity: p.severity } : {}),
+    ...(str(p.fix_label) ? { fix_label: str(p.fix_label) } : {}),
+    ...(str(p.fix_href) ? { fix_href: str(p.fix_href) } : {}),
   };
 }
 
@@ -161,9 +166,10 @@ function toBlock(raw: unknown): BlockDef | null {
   };
 }
 
-const CONTROL_KINDS: ControlDef["kind"][] = ["condition", "parallel", "bounded_loop"];
+const CONTROL_KINDS: ControlDef["kind"][] = ["condition", "parallel", "bounded_loop", "for_each"];
 const CONTROL_LABELS: Record<ControlDef["kind"], string> = {
   condition: "Branch", parallel: "Do at the same time", bounded_loop: "Repeat until",
+  for_each: "For each",
 };
 
 /** A branch block the runtime runs. The server marks these `canvas_required` — they need a canvas
@@ -231,7 +237,7 @@ function outlineIcon(step: Obj): string {
   const kind = str(step.kind);
   const byKind: Record<string, string> = {
     decision: "gate", timer: "wait", subworkflow: "subworkflow", parallel: "parallel",
-    condition: "condition", join: "join", bounded_loop: "loop",
+    condition: "condition", join: "join", bounded_loop: "loop", for_each: "foreach",
   };
   if (byKind[kind]) return byKind[kind];
   // An API that predates `capability` on the outline labels a built-in step with its key.
@@ -383,6 +389,23 @@ export async function publishSpec(projectId: string, req: PublishRequest): Promi
     version: typeof version === "number" ? version : Number(asObj(version).version ?? 0),
     created: Boolean(body.created),
   };
+}
+
+/**
+ * Run the SAVED workflow as a test (#512): pinned steps return their pinned output instead of
+ * running, steps in `allow_live` run for real under every approval and budget rule, and any
+ * other step that could spend is refused by the server. Returns the new run's id.
+ */
+export async function startTestRun(projectId: string, req: {
+  workflow_key: string; version?: number | null; input?: Record<string, unknown>;
+  pins: Record<string, Record<string, unknown>>; allow_live: string[];
+}): Promise<{ id: string; status: string }> {
+  const body = await send("POST", {
+    action: "test_run", project_id: projectId, workflow_key: req.workflow_key,
+    ...(req.version ? { version: req.version } : {}),
+    input: req.input ?? {}, pins: req.pins, allow_live: req.allow_live,
+  });
+  return { id: str(body.id), status: str(body.status) };
 }
 
 /** Name and description change in place: no new version. */

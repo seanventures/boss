@@ -41,10 +41,12 @@ import { useSaveFlow } from "./save/use-save-flow";
 import { StartsWith } from "./starts-with";
 import { SummaryChips } from "./summary-chips";
 import { NO_DELETE_TIP, TopBar } from "./top-bar";
+import { TestRunPanel } from "./test-run-panel";
 import { useCan } from "../../../components/identity/identity-provider";
 
 const BLOCK_REMOVED: Record<ControlBlock, string> = {
   condition: "Branch removed", parallel: "Parallel steps removed", bounded_loop: "Repeat removed",
+  for_each: "For each removed",
 };
 /** A palette pick with nothing selected, in a flow that ends in more than one place. */
 const SEVERAL_ENDS = "This flow ends in more than one place: select the step to add after";
@@ -120,6 +122,8 @@ export function WorkflowEditor({ projectId, workflowKey, onBack, onStart, actor,
   const [sheet, setSheet] = useState(false);
   const [note, setNote] = useState<Note | null>(null);
   const [describeBlocked, setDescribeBlocked] = useState<string | null>(null);
+  // The Test run panel (#512): pins and live steps for a test of the saved version.
+  const [testing, setTesting] = useState(false);
 
   /* ── Save, check, start (the save flow's) ── */
   const keyRef = useRef(key);
@@ -290,15 +294,20 @@ export function WorkflowEditor({ projectId, workflowKey, onBack, onStart, actor,
     if (readOnly) return;
     const before = spec;
     const definitionId = meta.is_catalogue ? (meta.copy?.definition_id ?? null) : meta.definition_id;
+    // A refusal names steps as the canvas does, by title, not by the engine's ids.
+    const titles = (id: string) => {
+      const step = before.steps.find((s) => s.id === id);
+      return step ? viewOf(step, palette).title : undefined;
+    };
     const answer = await checkRewire(before, link, target, (s) => checkSpec(projectId, s, definitionId),
-                                     state.checkedSpec === before ? state.problems : null);
+                                     state.checkedSpec === before ? state.problems : null, titles);
     if (!answer.ok) { show(answer.reason); return; }
     if (answer.spec === before) return;
     // Checked against the flow as it was: an edit since then means the answer is about another flow.
     if (specRef.current !== before) { show("The flow changed while that link was checked: try again"); return; }
     dispatch({ type: "REWIRE", link, target });
     show("Link changed · Undo", true);
-  }, [readOnly, spec, meta, projectId, state.checkedSpec, state.problems, show, dispatch]);
+  }, [readOnly, spec, meta, projectId, palette, state.checkedSpec, state.problems, show, dispatch]);
 
   const openSettings = useCallback(() => { dispatch({ type: "SELECT", id: null }); setSettingsOpen(true); }, [dispatch]);
   const closeDrawer = useCallback(() => { dispatch({ type: "SELECT", id: null }); setSettingsOpen(false); }, [dispatch]);
@@ -482,6 +491,9 @@ export function WorkflowEditor({ projectId, workflowKey, onBack, onStart, actor,
               onCheck={() => void saveFlow.check()} checking={saveFlow.checking}
               checkBlocked={noSteps ? "Add a step first" : null}
               onStart={saveFlow.start} startRef={saveFlow.startRef}
+              onTestRun={() => setTesting(true)}
+              testRunBlocked={!meta.workflow_key || !meta.definition_id ? "Save the workflow first"
+                : noSteps ? "Add a step first" : null}
               startBlocked={readOnly ? `Viewing v${meta.readOnlyVersion}` : noSteps ? "Add a step first" : null}
               onSave={() => void saveFlow.save()} saveLabel={saveFlow.label} saveRef={saveFlow.saveRef}
               saveBlocked={!publishGate.allowed ? publishGate.reason : saveFlow.canSave ? null : saveFlow.saving ? "Saving…" : saveFlow.saveTip}
@@ -492,6 +504,16 @@ export function WorkflowEditor({ projectId, workflowKey, onBack, onStart, actor,
               onDelete={() => void deleteThis()}
               deleteBlocked={!deleteGate.allowed ? deleteGate.reason : meta.is_catalogue ? NO_DELETE_TIP : !meta.definition_id ? "Not saved yet" : null} />
       {saveFlow.popover}
+      {testing && meta.workflow_key ? (
+        <TestRunPanel projectId={projectId} workflowKey={meta.workflow_key}
+                      version={meta.readOnlyVersion ?? meta.version ?? null}
+                      steps={(state.loaded ?? spec).steps} capabilities={palette?.capabilities ?? []}
+                      dirty={dirty} onClose={() => setTesting(false)}
+                      onStarted={(runId) => {
+                        setTesting(false);
+                        toast("success", `Test run ${runId} started. It is listed under test runs.`);
+                      }} />
+      ) : null}
 
       {restore ? (
         <div className="wf-notice" role="status" data-testid="wf-restore-offer">
@@ -552,7 +574,8 @@ export function WorkflowEditor({ projectId, workflowKey, onBack, onStart, actor,
           <div className="wf-drawer" data-testid="wf-drawer">
             <Inspector state={state} palette={palette} dispatch={dispatch} projectId={projectId} actor={actor}
                        refreshPalette={refreshPalette}
-                       usedFor={usedFor} onSchedule={onSchedule} onClose={closeDrawer} />
+                       usedFor={usedFor} onSchedule={onSchedule} onClose={closeDrawer}
+                       onRewire={(link, target) => void rewire(link, target)} />
           </div>
         ) : null}
       </div>

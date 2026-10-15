@@ -8,7 +8,7 @@ import type {
 } from "../../../../lib/workflow-editor-types";
 import { asObj, bindingOf } from "./step-facts";
 import {
-  ConditionSettings, JoinSettings, LoopSettings, ParallelSettings, type StructureProps,
+  ConditionSettings, ForEachSettings, JoinSettings, LoopSettings, ParallelSettings, type StructureProps,
 } from "./structure-settings";
 
 const libraryCache = new Map<string, Promise<WorkflowSummary[]>>();
@@ -65,6 +65,7 @@ export function blockFieldKeys(view: StepView, block: BlockDef | undefined): str
   if (view.type === "parallel") return ["branches", "join"];
   if (view.type === "join") return ["wait_for", "success_policy"];
   if (view.type === "loop") return ["body", "expression", "max_iterations"];
+  if (view.type === "foreach") return ["items", "body", "max_items", "concurrency"];
   return block?.configure.length ? block.configure.map((c) => c.key)
     : view.type === "gate" ? ["question", "guidance", "approver_role"]
     : view.type === "wait" ? ["wait_seconds"]
@@ -93,11 +94,12 @@ export function BlockSettings({ step, view, block, palette, projectId, workflowK
 }) {
   const library = useLibrary(projectId, view.type === "subworkflow");
 
-  if (structure && ["condition", "parallel", "join", "loop"].includes(view.type)) {
+  if (structure && ["condition", "parallel", "join", "loop", "foreach"].includes(view.type)) {
     const props: StructureProps = { ...structure, step, palette, problems, onConfig };
     if (view.type === "condition") return <ConditionSettings {...props} />;
     if (view.type === "parallel") return <ParallelSettings {...props} />;
     if (view.type === "join") return <JoinSettings {...props} />;
+    if (view.type === "foreach") return <ForEachSettings {...props} />;
     return <LoopSettings {...props} />;
   }
 

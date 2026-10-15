@@ -92,7 +92,7 @@ def _workflow_runs(connection: Any, project_id: str) -> list[tuple[str, int, boo
             SELECT r.id, d.workflow_key AS key
             FROM workflow_runs r
             JOIN workflow_definitions d ON d.id = r.workflow_definition_id
-            WHERE r.project_id = :p AND r.status = 'completed'
+            WHERE r.project_id = :p AND r.status = 'completed' AND r.mode <> 'test'
         ),
         -- Whatever a step started and waited on, by the id its output names.
         step_ids AS (

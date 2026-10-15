@@ -21,7 +21,7 @@ import type {
   EditorAction, EditorMeta, EditorState, Palette, Spec, SpecStep,
 } from "./workflow-editor-types";
 import {
-  duplicateStep, insertStep, moveStep, removeStep, renameStepId, rewireLink, wireInputs,
+  duplicateStep, insertStep, moveStep, pruneErrorPaths, removeStep, renameStepId, rewireLink, wireInputs,
 } from "./workflow-graph";
 import { freeStepId } from "./step-view";
 import { addBranch, blockOfHead, placeBlock, removeBlock, removeBranch } from "./workflow-blocks";
@@ -189,7 +189,7 @@ export function editorReducer(s: EditorState, a: EditorAction): EditorState {
       const removed = removeStep(s.spec, a.id);
       const spec = removed === s.spec && blockOfHead(s.spec.steps.find((x) => x.id === a.id))
         ? removeBlock(s.spec, a.id) : removed;
-      return commit(s, pruneLayout(spec), s.selection === a.id ? { selection: null } : {});
+      return commit(s, pruneErrorPaths(pruneLayout(spec)), s.selection === a.id ? { selection: null } : {});
     }
 
     case "PLACE_BLOCK": {
@@ -204,7 +204,7 @@ export function editorReducer(s: EditorState, a: EditorAction): EditorState {
     }
 
     case "REMOVE_BRANCH":
-      return commit(s, pruneLayout(removeBranch(s.spec, a.id, a.branch)));
+      return commit(s, pruneErrorPaths(pruneLayout(removeBranch(s.spec, a.id, a.branch))));
 
     case "REWIRE": {
       const out = rewireLink(s.spec, a.link, a.target);
