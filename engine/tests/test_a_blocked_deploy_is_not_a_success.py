@@ -133,9 +133,13 @@ class TestTheSentenceThatExplainedNothing:
         engineer — to read afterwards."""
         import inspect
 
-        body = inspect.getsource(runner)
+        # In the tick that fails the step: the reason is worked out BEFORE the output is handed
+        # to fail_step. (Read in `tick` alone: `output=output,` also appears in other functions
+        # of the module, earlier in the file.)
+        body = inspect.getsource(runner.tick)
         assert "reason = _reason_of_last_resort(output, claimed)" in body
-        assert body.index("_reason_of_last_resort(output, claimed)") < body.index("output=output,")
+        reason_at = body.index("_reason_of_last_resort(output, claimed)")
+        assert reason_at < body.index("output=output,", reason_at)
 
     def test_fail_step_merges_rather_than_overwrites(self):
         """A capability's output and the runner's own bookkeeping both belong on the step."""
