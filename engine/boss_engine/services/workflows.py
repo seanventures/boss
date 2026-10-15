@@ -191,7 +191,83 @@ def _targets(step: dict[str, Any]) -> list[str]:
             targets.append(str(step["join"]))
     elif kind == "bounded_loop" and step.get("body"):
         targets.append(str(step["body"]))
+    # An error path is an edge too: a step that fails terminally goes on to it. Counted here so
+    # an error-only step is reachable, an error path back into the graph is a cycle, and a step
+    # an in-flight step may still fail into is not skipped (`_skip_unless_reachable`).
+    if isinstance(step.get("on_error"), str) and step["on_error"].strip():
+        targets.append(step["on_error"].strip())
     return [target for target in targets if target]
+
+
+def _success_targets(step: dict[str, Any]) -> list[str]:
+    """The edges a step is followed along when it does NOT fail: `_targets` without its
+    `on_error` edge (a step that is both its next step and its error step stays, as a next)."""
+    return _targets({**step, "on_error": None})
+
+
+#: Retry backoff, between automatic attempts of one step (`retry_backoff` on a step).
+RETRY_BACKOFF_DEFAULTS: dict[str, Any] = {"initial_seconds": 0, "multiplier": 2,
+                                          "max_seconds": 3600}
+#: How long one attempt of a step may run (`timeout_seconds` on a step), at most a day.
+STEP_TIMEOUT_MAX_SECONDS = 86_400
+#: The reason a timed-out attempt is failed with: in the step's output and on its events.
+STEP_TIMEOUT_REASON = "step_timeout"
+#: Stamped on a step that failed terminally and whose run went on along its `on_error` path.
+#: It stays `failed`; this is what says nobody has to decide about it (`_first_stopped_step`).
+ERROR_PATH_TAKEN = "error_path_taken"
+
+
+def _backoff_problems(step_id: str, raw: Any) -> tuple[Optional[dict[str, Any]], list[str]]:
+    """`retry_backoff` normalised with its defaults, and every problem with it."""
+    if not isinstance(raw, dict):
+        return None, [f"step '{step_id}' retry_backoff must be an object with initial_seconds, "
+                      "multiplier and max_seconds."]
+    out: dict[str, Any] = {}
+    problems: list[str] = []
+    for key, low, high, whole in (("initial_seconds", 0, 3600, True),
+                                  ("multiplier", 1, 10, False),
+                                  ("max_seconds", 0, 86_400, True)):
+        value = raw.get(key, RETRY_BACKOFF_DEFAULTS[key])
+        number: Optional[float]
+        try:
+            if isinstance(value, bool):
+                raise TypeError
+            number = float(value)
+            if whole and number != int(number):
+                raise ValueError
+        except (TypeError, ValueError, OverflowError):
+            number = None
+        if number is None or number < low or number > high:
+            what = "a whole number of seconds" if whole else "a number"
+            problems.append(f"step '{step_id}' retry_backoff {key} must be {what} between "
+                            f"{low} and {high}.")
+            continue
+        out[key] = int(number) if number == int(number) else number
+    unknown = sorted(str(k) for k in set(raw) - set(RETRY_BACKOFF_DEFAULTS))
+    if unknown:
+        problems.append(f"step '{step_id}' retry_backoff has unknown field(s): "
+                        f"{', '.join(unknown)}.")
+    return (out if not problems else None), problems
+
+
+def retry_backoff_seconds(step: Optional[dict[str, Any]], attempt: int) -> int:
+    """How long a step waits before its next automatic attempt, after attempt `attempt` (1 is
+    the first) failed: min(initial * multiplier^(attempt-1), max). Zero with no backoff."""
+    backoff = (step or {}).get("retry_backoff")
+    if not isinstance(backoff, dict):
+        return 0
+    initial = float(backoff.get("initial_seconds", RETRY_BACKOFF_DEFAULTS["initial_seconds"]))
+    multiplier = float(backoff.get("multiplier", RETRY_BACKOFF_DEFAULTS["multiplier"]))
+    ceiling = float(backoff.get("max_seconds", RETRY_BACKOFF_DEFAULTS["max_seconds"]))
+    if initial <= 0:
+        return 0
+    delay = initial
+    # Multiplied up to the cap, never past it, so a long chain of attempts cannot overflow.
+    for _ in range(max(0, int(attempt) - 1)):
+        if delay >= ceiling:
+            break
+        delay *= multiplier
+    return int(min(delay, ceiling))
 
 
 #: The shapes an input_schema is written in. BOTH already exist in real databases and a third
@@ -499,6 +575,53 @@ def normalise_workflow_spec(
             bad("max_attempts", f"step '{step_id}' max_attempts must be between 1 and 25.")
         else:
             step["max_attempts"] = attempts
+        # ERROR HANDLING (#512): how long between automatic attempts, how long one attempt may
+        # run, and where the run goes when the step fails for good. All optional, and a step
+        # without them behaves exactly as before. An unset value (null, or an empty on_error) is
+        # the field left out, so an editor can clear one by sending it empty.
+        for field in ("retry_backoff", "timeout_seconds", "on_error"):
+            if field in step and (step[field] is None or (
+                    isinstance(step[field], str) and not step[field].strip())):
+                step.pop(field)
+        handled = [field for field in ("retry_backoff", "timeout_seconds", "on_error")
+                   if field in step]
+        if handled and kind in CONTROL_KINDS:
+            # Only a step a worker runs has attempts: a condition, a gate or a timer never fails
+            # through `fail_step`, so these would be promises nothing keeps.
+            for field in handled:
+                bad(field, f"step '{step_id}' is a {kind} step, which has no attempts of its "
+                           f"own, so it cannot have {field}. Put it on a step that does work.")
+                # Said once; not walked as an edge, so it is not refused twice over.
+                step.pop(field)
+        else:
+            if "retry_backoff" in step:
+                backoff, details = _backoff_problems(step_id, step["retry_backoff"])
+                for detail in details:
+                    bad("retry_backoff", detail)
+                if backoff is not None:
+                    step["retry_backoff"] = backoff
+            if "timeout_seconds" in step:
+                raw_timeout = step["timeout_seconds"]
+                try:
+                    if isinstance(raw_timeout, bool):
+                        raise TypeError
+                    as_number = float(raw_timeout)
+                    timeout = int(as_number) if as_number == int(as_number) else 0
+                except (TypeError, ValueError, OverflowError):
+                    timeout = 0
+                if timeout < 1 or timeout > STEP_TIMEOUT_MAX_SECONDS:
+                    bad("timeout_seconds", f"step '{step_id}' timeout_seconds must be a whole "
+                                           "number of seconds between 1 and "
+                                           f"{STEP_TIMEOUT_MAX_SECONDS}.")
+                else:
+                    step["timeout_seconds"] = timeout
+            if "on_error" in step:
+                if not isinstance(step["on_error"], str):
+                    bad("on_error", f"step '{step_id}' on_error must name the step to go on to "
+                                    "when it fails.")
+                    step.pop("on_error")
+                else:
+                    step["on_error"] = step["on_error"].strip()
         if "next" in step and isinstance(step["next"], str):
             step["next"] = [step["next"]]
         elif "next" not in step:
@@ -722,7 +845,7 @@ def normalise_workflow_spec(
     steps = _step_map(normalized)
     dangling = False
     for step in normalized_steps:
-        for target in _targets(step):
+        for target in _success_targets(step):
             if target not in steps:
                 dangling = True
                 problems.append(problem(step["id"], "next", (
@@ -733,8 +856,40 @@ def normalise_workflow_spec(
                     dangling = True
                     problems.append(problem(step["id"], "wait_for", (
                         f"join step '{step['id']}' waits for missing step '{dependency}'.")))
+    loop_bodies = {str(s.get("body")): str(s["id"]) for s in normalized_steps
+                   if s["kind"] == "bounded_loop" and s.get("body")}
+    for step in normalized_steps:
+        if not step.get("on_error") or step["kind"] in CONTROL_KINDS:
+            continue
+        sid, target = str(step["id"]), str(step["on_error"])
+        refusal = None
+        if target not in steps:
+            refusal = (f"step '{sid}' on_error goes to step '{target}', which does not exist. "
+                       "Pick a step in this workflow.")
+        elif target == sid:
+            refusal = (f"step '{sid}' on_error goes to itself. A step retries itself with "
+                       "max_attempts; on_error must name another step.")
+        elif entry is not None and target == entry:
+            refusal = (f"step '{sid}' on_error goes back to the start step '{target}', which "
+                       "would run the whole workflow again. Pick a step after the start.")
+        elif steps[target]["kind"] == "join":
+            refusal = (f"step '{sid}' on_error goes to join step '{target}'. A join waits for "
+                       "its branches; send the error path to a step that does work.")
+        elif target in loop_bodies:
+            refusal = (f"step '{sid}' on_error goes to step '{target}', the body of loop "
+                       f"'{loop_bodies[target]}'. Only its loop may start it.")
+        elif sid in loop_bodies:
+            refusal = (f"step '{sid}' is the body of loop '{loop_bodies[sid]}', and a loop "
+                       "body cannot have an error path yet. Let it fail, or drop on_error.")
+        if refusal:
+            dangling = True
+            problems.append(problem(sid, "on_error", refusal))
     if dangling or entry is None:
         return normalized, problems
+
+    # Reachable along every edge, error paths included: a step only an error path leads to is
+    # part of the workflow.
+    reachable = _reachable_from(normalized, [entry])
 
     # Declared edges must be acyclic.  Repetition is represented only by a
     # bounded_loop controller, never by an arbitrary graph cycle.
@@ -751,17 +906,31 @@ def normalise_workflow_spec(
         if step_id in visited:
             return
         visiting.add(step_id)
-        for target in _targets(steps[step_id]):
+        for target in _success_targets(steps[step_id]):
             visit(target)
         visiting.remove(step_id)
         visited.add(step_id)
 
-    visit(entry)
+    for start in [entry] + sorted(reachable - {entry}):
+        visit(start)
     if cycle:
         problems.append(problem(cycle[0], "next", (
             f"unbounded cycle detected at step '{cycle[0]}'; use bounded_loop.")))
         return normalized, problems
-    for step_id in sorted(ids - visited):
+    # An error path back to a step that leads to the failing one is a cycle as well: every
+    # failure would run that stretch again, with nothing bounding how often.
+    looped = False
+    for step in normalized_steps:
+        sid, target = str(step["id"]), str(step.get("on_error") or "")
+        if target and sid in reachable and sid in _reachable_from(normalized, [target]):
+            looped = True
+            problems.append(problem(sid, "on_error", (
+                f"step '{sid}' on_error goes to step '{target}', which leads back to "
+                f"'{sid}': an error path cannot loop. Use max_attempts to retry, or "
+                "bounded_loop to repeat.")))
+    if looped:
+        return normalized, problems
+    for step_id in sorted(ids - reachable):
         problems.append(problem(step_id, None, (
             f"step '{step_id}' cannot be reached from the entry step: no step leads to it.")))
     return normalized, problems
@@ -807,7 +976,10 @@ def _runs_before(normalized: dict[str, Any]) -> dict[str, set[str]]:
             incoming = [p for p in preds[sid] if p in reachable]
             if not incoming or any(p not in before for p in incoming):
                 continue
-            sets = [before[p] | {p} for p in incoming]
+            # Reached only by p's error path, p did not finish: it failed. What came before
+            # p is certain; p's own output is not.
+            sets = [before[p] | ({p} if sid in _success_targets(steps[p]) else set())
+                    for p in incoming]
             step = steps[sid]
             if step.get("kind") == "join" and step.get("success_policy", "all") == "all":
                 before[sid] = set().union(*sets)
@@ -3163,6 +3335,8 @@ def _serialize_step(row: Any) -> dict[str, Any]:
         "run_after": _iso(row["run_after"]),
         "lease_owner": row.get("lease_owner"),
         "lease_expires_at": _iso(row.get("lease_expires_at")),
+        # When the current attempt runs out of time (`timeout_seconds`); null with no timeout.
+        "attempt_timeout_at": _iso(row.get("attempt_timeout_at")),
         "heartbeat_at": _iso(row.get("heartbeat_at")),
         "decision_id": row.get("decision_id"),
         "child_workflow_run_id": row.get("child_workflow_run_id"),
@@ -3594,6 +3768,12 @@ def _after_success(
 
     for target in template.get("next", []):
         _maybe_activate(connection, run_id, str(target), iteration)
+    # IT DID NOT FAIL, so its error path was not taken. The error step is skipped unless a live
+    # path still reaches it — the same rule as the path a condition did not take (#550).
+    error_step = str(template.get("on_error") or "").strip()
+    if error_step in steps:
+        _skip_unless_reachable(connection, run_id, step_id, error_step, None, spec,
+                               reason="error_path_not_taken")
     _drain_control_steps(connection, run_id)
     _maybe_finish_run(connection, run_id)
 
@@ -3684,8 +3864,8 @@ def _reachable_from(spec: dict[str, Any], starts: list[str]) -> set[str]:
 
 
 def _skip_unless_reachable(
-    connection: Connection, run_id: str, condition_id: str, rejected: str, selected: str,
-    spec: dict[str, Any],
+    connection: Connection, run_id: str, condition_id: str, rejected: str,
+    selected: Optional[str], spec: dict[str, Any], *, reason: str = "condition_not_selected",
 ) -> None:
     """Skip the first step of the path a condition did not take — unless a live path reaches it.
 
@@ -3700,8 +3880,12 @@ def _skip_unless_reachable(
     stays pending, and the event says so: a live path starts it when it gets there, a later
     condition that goes the other way skips it then, and a run that finishes without reaching
     it records it `path_not_reached` (`_maybe_finish_run`). It is never silently dropped.
+
+    An error path not taken is the same question (`reason="error_path_not_taken"`): the step
+    that succeeded is `condition_id`, its `on_error` step is `rejected`, and nothing is
+    `selected` beyond what is already live.
     """
-    live = [selected] + [str(r) for r in connection.execute(
+    live = ([selected] if selected else []) + [str(r) for r in connection.execute(
         text(
             """
             SELECT step_id FROM workflow_step_runs
@@ -3712,7 +3896,7 @@ def _skip_unless_reachable(
         {"run_id": run_id},
     ).scalars().all()]
     if rejected not in _reachable_from(spec, live):
-        _mark_skipped(connection, run_id, rejected, "condition_not_selected")
+        _mark_skipped(connection, run_id, rejected, reason)
         return
     row = _step_row(connection, run_id, rejected, 0)
     if row is None or row["status"] != "pending":
@@ -3720,7 +3904,10 @@ def _skip_unless_reachable(
     _emit_step_event(
         connection, _run_row(connection, run_id), "workflow.step_not_skipped", row,
         {"reason": "reachable_from_live_path", "condition": condition_id,
-         "selected": selected},
+         "selected": selected}
+        if reason == "condition_not_selected" else
+        {"reason": "reachable_from_live_path", "error_path_of": condition_id,
+         "not_taken_because": reason},
     )
 
 
@@ -4257,13 +4444,15 @@ def _an_any_join_may_go_on_without(connection: Connection, run_id: str, row: Any
 
 def _first_stopped_step(connection: Connection, run_id: str) -> Any:
     """The earliest step of this run that failed and has not been retried or skipped — and that
-    no `any` join has gone on without (`TOLERATED_BY_JOIN`)."""
+    no `any` join has gone on without (`TOLERATED_BY_JOIN`), nor the run gone on from along its
+    own `on_error` path (`ERROR_PATH_TAKEN`)."""
     return connection.execute(
         text(
             """
             SELECT * FROM workflow_step_runs
             WHERE workflow_run_id=:run_id AND status IN :states
               AND output->>'tolerated_by_join' IS NULL
+              AND output->>'error_path_taken' IS NULL
             ORDER BY created_at, iteration, step_id LIMIT 1
             """
         ).bindparams(bindparam("states", expanding=True)),
@@ -4340,13 +4529,20 @@ def _follow_edges_left_behind(connection: Connection, run_id: str) -> None:
         text(
             """
             SELECT step_id, iteration, status, output FROM workflow_step_runs
-            WHERE workflow_run_id=:run_id AND status IN ('succeeded', 'skipped')
+            WHERE workflow_run_id=:run_id AND (status IN ('succeeded', 'skipped')
+                  OR (status='failed' AND output->>'error_path_taken' IS NOT NULL))
             ORDER BY created_at, iteration
             """
         ),
         {"run_id": run_id},
     ).mappings().all()
     for row in rows:
+        taken = (_json(row["output"], {}) or {}).get(ERROR_PATH_TAKEN)
+        if row["status"] == "failed" and taken:
+            # A step that failed into its error path while the run was paused: the error step.
+            if str(taken) in steps:
+                _maybe_activate(connection, run_id, str(taken), int(row["iteration"]))
+            continue
         if not _settled_for_downstream(row):
             continue
         template = steps.get(str(row["step_id"])) or {}
@@ -4630,6 +4826,11 @@ def claim_step(
         raise WorkflowNotFoundError("Workflow run not found.")
     if run["status"] not in {"running", "waiting"}:
         return None
+    # Attempts past their step's timeout end first, so one is failed (and maybe retried, or
+    # sent down its error path) rather than reclaimed below as a mere lapsed lease.
+    if _time_out_overdue_steps(connection, run_id):
+        if _run_row(connection, run_id)["status"] not in {"running", "waiting"}:
+            return None
     _drain_control_steps(connection, run_id)
     row = connection.execute(
         text(
@@ -4662,6 +4863,10 @@ def claim_step(
             {"previous_owner": row.get("lease_owner")},
         )
     expires_at = now_utc() + timedelta(seconds=lease_seconds)
+    # THE ATTEMPT'S CLOCK STARTS NOW, when it is leased: `timeout_seconds` bounds this attempt,
+    # not the step's whole life, and not the time it sat waiting for a backoff.
+    timeout = (_step_map(_run_spec(connection, run_id)).get(str(row["step_id"])) or {}).get(
+        "timeout_seconds")
     updated = connection.execute(
         text(
             """
@@ -4674,12 +4879,15 @@ def claim_step(
             UPDATE workflow_step_runs
             SET status='leased', attempt=attempt+1, lease_owner=:worker_id,
                 lease_expires_at=:expires_at, heartbeat_at=now(),
+                attempt_timeout_at=CASE WHEN CAST(:timeout AS INTEGER) IS NULL THEN NULL
+                    ELSE now() + make_interval(secs => CAST(:timeout AS INTEGER)) END,
                 started_at=COALESCE(started_at, clock_timestamp()), updated_at=now()
             WHERE id=:id
             RETURNING *
             """
         ),
-        {"id": row["id"], "worker_id": worker_id, "expires_at": expires_at},
+        {"id": row["id"], "worker_id": worker_id, "expires_at": expires_at,
+         "timeout": int(timeout) if timeout else None},
     ).mappings().one()
     connection.execute(
         text("UPDATE workflow_runs SET status='running', updated_at=now() "
@@ -4701,7 +4909,9 @@ def claim_step(
         run,
         "workflow.step_leased",
         updated,
-        {"worker_id": worker_id, "lease_expires_at": expires_at.isoformat()},
+        {"worker_id": worker_id, "lease_expires_at": expires_at.isoformat(),
+         **({"timeout_seconds": int(timeout),
+             "attempt_timeout_at": _iso(updated["attempt_timeout_at"])} if timeout else {})},
     )
     _refresh_frontier(connection, run_id)
     return _serialize_step(updated)
@@ -4724,6 +4934,8 @@ def heartbeat_step(
                 updated_at=now()
             WHERE id=:id AND project_id=:project_id AND lease_owner=:worker_id
               AND status IN ('leased','running') AND lease_expires_at >= now()
+              -- An attempt past its timeout is not kept alive: the reaper ends it.
+              AND (attempt_timeout_at IS NULL OR attempt_timeout_at >= now())
             RETURNING *
             """
         ),
@@ -5324,6 +5536,12 @@ def complete_step(
         raise WorkflowLeaseError("Workflow step is not leased by this worker.")
     if row["lease_expires_at"] and row["lease_expires_at"] < now_utc():
         raise WorkflowLeaseError("Workflow step lease has expired.")
+    if row.get("attempt_timeout_at") and row["attempt_timeout_at"] < now_utc():
+        # FINISHED TOO LATE. The attempt ran past its step's `timeout_seconds`, so its result
+        # does not count: it is ended as timed out, as the reaper would have, and retries or
+        # takes its error path from there. Said, not raised, so the caller's transaction keeps
+        # the record.
+        return _time_out_attempt(connection, row)
     updated = connection.execute(
         text(
             """
@@ -5543,18 +5761,60 @@ def fail_step(
         logger.warning("workflow step %s failed on the database: %s", step_run_id, error)
         output = {**(output or {}), "error_detail": said["detail"]}
         error = f"{said['headline']} {said['action']}"
-    can_retry = retryable and int(row["attempt"]) < int(row["max_attempts"])
+    return _fail_attempt(connection, project_id=project_id, row=row, error=error,
+                         retryable=retryable, retry_delay_seconds=retry_delay_seconds,
+                         output=output)
+
+
+def _fail_attempt(
+    connection: Connection,
+    *,
+    project_id: str,
+    row: Any,
+    error: str,
+    retryable: bool,
+    retry_delay_seconds: int = 0,
+    output: Optional[dict[str, Any]] = None,
+    reason: Optional[str] = None,
+) -> dict[str, Any]:
+    """End one attempt of a leased step as failed: try again, take its error path, or stop.
+
+    THE ONE PLACE AN ATTEMPT FAILS — a worker's `fail_step` and a timed-out attempt
+    (`_time_out_overdue_steps`) both end here, so they retry, back off and stop the same way.
+
+    * Attempts left and the failure retryable: the step goes back to `ready`, not to be leased
+      before its `retry_backoff` (or the caller's `retry_delay_seconds`, whichever is later).
+    * Out of attempts, or not retryable, with an `on_error` step: the step is recorded `failed`
+      and stamped `error_path_taken`, `workflow.error_path_taken` is written, and the run goes
+      on at the error step instead of stopping.
+    * Otherwise it is dead-lettered and the run stops at it, as every failure always has.
+    """
+    attempts = int(row["attempt"])
+    can_retry = retryable and attempts < int(row["max_attempts"])
     if not can_retry and _is_advisory_step(row):
         # AN ADVISORY STEP NEVER STOPS THE RUN, AT START EITHER — see `ADVISORY_CAPABILITIES`.
         return _complete_advisory_failure(connection, row, error, output)
-    status = "ready" if can_retry else "deadlettered"
-    run_after = now_utc() + timedelta(seconds=max(0, int(retry_delay_seconds)))
+    spec_steps = _step_map(_run_spec(connection, row["workflow_run_id"]))
+    template = spec_steps.get(str(row["step_id"])) or {}
+    why = reason or ("attempts_exhausted" if retryable else "not_retryable")
+    if reason:
+        output = {**(output or {}), "failure_reason": reason}
+    error_step = str(template.get("on_error") or "").strip() if not can_retry else ""
+    if error_step not in spec_steps:
+        error_step = ""
+    backoff = retry_backoff_seconds(template, attempts) if can_retry else 0
+    delay = max(0, int(retry_delay_seconds), backoff)
+    status = "ready" if can_retry else ("failed" if error_step else "deadlettered")
+    run_after = now_utc() + timedelta(seconds=delay)
+    if error_step:
+        output = {**(output or {}), ERROR_PATH_TAKEN: error_step}
     updated = connection.execute(
         text(
             """
             UPDATE workflow_step_runs
             SET status=:status, last_error=:error, run_after=:run_after,
                 lease_owner=NULL, lease_expires_at=NULL, heartbeat_at=NULL,
+                attempt_timeout_at=NULL,
                 completed_at=CASE WHEN :terminal THEN now() ELSE NULL END,
                 -- MERGED, not replaced: a step that parked and then failed keeps the await
                 -- handle it was waiting on, which is how anything can be reconstructed later.
@@ -5573,12 +5833,31 @@ def fail_step(
         },
     ).mappings().one()
     run = _run_row(connection, row["workflow_run_id"])
+    if error_step:
+        # HANDLED, NOT HIDDEN. The step keeps its failure and its error; the run history says
+        # the failure happened and where the run went because of it.
+        _emit_step_event(connection, run, "workflow.step_failed", updated,
+                         {"error": error, "retryable": False, "reason": why,
+                          "attempts": attempts})
+        _emit_step_event(connection, run, "workflow.error_path_taken", updated,
+                         {"error_step_id": error_step, "reason": why, "attempts": attempts,
+                          "error": error})
+        if run["status"] in {"running", "waiting"}:
+            _maybe_activate(connection, row["workflow_run_id"], error_step,
+                            int(row["iteration"]))
+            _drain_control_steps(connection, row["workflow_run_id"])
+            _maybe_finish_run(connection, row["workflow_run_id"])
+        # A paused run starts the error step when it is resumed (`_follow_edges_left_behind`).
+        _refresh_frontier(connection, row["workflow_run_id"])
+        return _serialize_step(updated)
     _emit_step_event(
         connection,
         run,
         "workflow.step_retry_scheduled" if can_retry else "workflow.step_deadlettered",
         updated,
-        {"error": error, "retryable": can_retry, "run_after": run_after.isoformat()},
+        {"error": error, "retryable": can_retry, "run_after": run_after.isoformat(),
+         "attempt": attempts, "backoff_seconds": backoff,
+         **({"reason": reason} if reason else {})},
     )
     if not can_retry:
         connection.execute(
@@ -5607,6 +5886,49 @@ def fail_step(
             _maybe_finish_run(connection, row["workflow_run_id"])
     _refresh_frontier(connection, row["workflow_run_id"])
     return _serialize_step(updated)
+
+
+def _time_out_overdue_steps(connection: Connection, run_id: str) -> int:
+    """End every attempt of this run that has run past its step's `timeout_seconds`.
+
+    THE TIMEOUT REAPER, beside the lease reaper (`claim_step` reclaims an expired lease): an
+    attempt whose clock ran out is failed with reason `step_timeout`, after a
+    `workflow.step_timed_out` event, and then retries, backs off, takes its error path or stops
+    exactly as any failed attempt does (`_fail_attempt`). It counts as an attempt. The lease is
+    taken from the worker, so its late heartbeat or completion is refused.
+    """
+    rows = connection.execute(
+        text(
+            """
+            SELECT * FROM workflow_step_runs
+            WHERE workflow_run_id=:run_id AND status IN ('leased','running')
+              AND attempt_timeout_at IS NOT NULL AND attempt_timeout_at < now()
+            ORDER BY attempt_timeout_at, created_at
+            FOR UPDATE
+            """
+        ),
+        {"run_id": run_id},
+    ).mappings().all()
+    for row in rows:
+        _time_out_attempt(connection, row)
+    return len(rows)
+
+
+def _time_out_attempt(connection: Connection, row: Any) -> dict[str, Any]:
+    template = _step_map(_run_spec(connection, row["workflow_run_id"])).get(
+        str(row["step_id"])) or {}
+    seconds = template.get("timeout_seconds")
+    run = _run_row(connection, row["workflow_run_id"])
+    _emit_step_event(connection, run, "workflow.step_timed_out", row, {
+        "reason": STEP_TIMEOUT_REASON, "timeout_seconds": seconds,
+        "attempt": int(row["attempt"]), "max_attempts": int(row["max_attempts"]),
+        "worker_id": row["lease_owner"],
+    })
+    error = (f"Timed out: attempt {int(row['attempt'])} ran longer than its "
+             f"{seconds} second limit." if seconds else
+             f"Timed out: attempt {int(row['attempt'])} ran past its time limit.")
+    return _fail_attempt(connection, project_id=row["project_id"], row=row, error=error,
+                         retryable=True, reason=STEP_TIMEOUT_REASON)
 
 
 #: Steps whose failure never stops the run (operator, 2026-10-13: "pass 2 never blocks pass 1").

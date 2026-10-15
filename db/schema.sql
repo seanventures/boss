@@ -4260,6 +4260,11 @@ CREATE INDEX IF NOT EXISTS idx_workflow_steps_claim
   ON workflow_step_runs(project_id, status, run_after, lease_expires_at);
 CREATE INDEX IF NOT EXISTS idx_workflow_steps_run
   ON workflow_step_runs(workflow_run_id, iteration, created_at);
+-- WHEN THE CURRENT ATTEMPT RUNS OUT OF TIME (#512). Set when a step with `timeout_seconds` is
+-- leased (the attempt's clock starts then) and read only while the step is leased or running:
+-- past it, the attempt is ended as failed with reason `step_timeout` and counts as an attempt.
+-- NULL for a step with no timeout, which is every step written before this column existed.
+ALTER TABLE workflow_step_runs ADD COLUMN IF NOT EXISTS attempt_timeout_at TIMESTAMPTZ;
 
 -- A STEP WHOSE WORK FAILED WAS NEVER SUCCEEDED. Until 2026-10-02 the runner recorded research
 -- that died as status 'succeeded' with output.status 'failed_continued' (boss-1: research failed,

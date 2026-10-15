@@ -3559,6 +3559,7 @@ class WorkflowStepRunSummary(BaseModel):
     run_after: str
     lease_owner: Optional[str] = None
     lease_expires_at: Optional[str] = None
+    attempt_timeout_at: Optional[str] = None
     heartbeat_at: Optional[str] = None
     decision_id: Optional[str] = None
     child_workflow_run_id: Optional[str] = None

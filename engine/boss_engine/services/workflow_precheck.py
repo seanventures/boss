@@ -2247,8 +2247,12 @@ def check_smoke(ctx: Context, step: dict[str, Any]) -> Optional[dict[str, Any]]:
 def _fail_step_consults_advisory() -> bool:
     from . import workflows
 
+    # `fail_step` hands every failed attempt to `_fail_attempt` (which a timed-out attempt
+    # reaches too), so the advisory rule may live in either.
     try:
-        return "ADVISORY" in inspect.getsource(workflows.fail_step).upper()
+        return any("ADVISORY" in inspect.getsource(fn).upper()
+                   for fn in (workflows.fail_step,
+                              getattr(workflows, "_fail_attempt", workflows.fail_step)))
     except (OSError, TypeError):
         return False
 

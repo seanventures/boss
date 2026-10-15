@@ -5122,6 +5122,7 @@ export type WorkflowStepRunSummary = {
   run_after: string;
   lease_owner?: string;
   lease_expires_at?: string;
+  attempt_timeout_at?: string;
   heartbeat_at?: string;
   decision_id?: string;
   child_workflow_run_id?: string;

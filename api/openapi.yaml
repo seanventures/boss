@@ -63501,6 +63501,11 @@ components:
           - type: string
           - type: 'null'
           title: Lease Expires At
+        attempt_timeout_at:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Attempt Timeout At
         heartbeat_at:
           anyOf:
           - type: string
