@@ -69,8 +69,10 @@ SCENARIOS: dict[str, dict[str, Any]] = {
                      "stages": ["write_tests", "implement", "review_code"]},
     "blocker": {"faults": "blocker", "final": "completed", "pr": True, "fix_round": True,
                 "stages": ["write_tests", "implement", "review_code"]},
+    # The server written first exits on start; a later writing pass (the quality pass, or a fix
+    # round after the start-up proof fails) must repair it, and the proof must see it serve.
     "crash_on_start": {"faults": "crash_on_start", "final": "completed", "pr": True,
-                       "fix_round": True,
+                       "fix_round": True, "serves": True,
                        "stages": ["write_tests", "implement"]},
     "engine_crash": {"faults": "crash", "final": "failed", "pr": False, "fix_round": False,
                      "stages": [], "words": "engine crashed"},
@@ -297,7 +299,10 @@ def observed(b: dict[str, Any]) -> dict[str, Any]:
         "pr": bool(run.get("pull_request_url")),
         "stages": stages,
         "fix_round": any(k in kinds for k in FIX_EVENTS) or sum(
-            1 for r in b["script"] if r["stage"] in ("implement", "repair", "solo")) > 1,
+            1 for r in b["script"] if r["stage"] in ("implement", "repair", "solo", "quality")
+            and not r["read_only"]) > 1,
+        "serves": any(e["event_type"] == "code_task.app_serve_checked"
+                      and (e.get("data") or {}).get("ok") for e in b["events"]),
         "gates": gates,
         "events": kinds,
         "failure": str(run.get("error") or run.get("failure_reason") or ""),
@@ -318,6 +323,8 @@ def meets(name: str, obs: dict[str, Any]) -> list[str]:
         bad.append(f"stages never ran: {missing} (ran: {obs['stages']})")
     if exp["fix_round"] and not obs["fix_round"]:
         bad.append("no fix round ran")
+    if exp.get("serves") and not obs["serves"]:
+        bad.append("the start-up proof never saw the app serve")
     if exp.get("words") and exp["words"] not in obs["failure"].lower():
         bad.append(f"failure words {obs['failure'][:200]!r} do not say {exp['words']!r}")
     stray = [n for n in obs["tool_names"] if n.islower()]
