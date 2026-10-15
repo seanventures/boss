@@ -44,7 +44,13 @@ def test_a_person_signs_in_and_me_answers_the_frozen_contract(world, engine):
     body = me.json()
     assert body["email"] == "ann@example.test" and body["access_roles"] == ["operator"]
     assert body["csrf_token"] and body["session_id"].startswith("ses_")
-    assert [e.event_type for e in world.events][-2:] == ["auth.login.succeeded", "auth.new_device"]
+    # A first-ever sign-in is not news (signin.finish): no "new device" on the very first page.
+    assert [e.event_type for e in world.events][-2:] == ["session.created", "auth.login.succeeded"]
+    # The next sign-in from a device it has never seen is.
+    again = sign_in(fresh_client(), "ann@example.test")
+    assert again.status_code == 200, again.text
+    assert [e.event_type for e in world.events][-3:] == ["session.created", "auth.login.succeeded",
+                                                         "auth.new_device"]
 
 
 def test_a19_cookies_are_host_prefixed_secure_httponly_lax(world, engine):
