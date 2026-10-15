@@ -89,6 +89,7 @@ nav:
       - Use cases: use-cases.md
       - Walkthroughs: walkthroughs.md
       - Workflow retries, timeouts and error paths: WORKFLOW_STEP_ERRORS.md
+      - Starting a workflow from a webhook: WORKFLOW_WEBHOOKS.md
   - Interfaces:
       - Overview: interfaces.md
       - Metatron terminal: terminal.md
