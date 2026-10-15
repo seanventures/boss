@@ -2499,3 +2499,24 @@ def _routed(context: Any, step: str, text: Any):
     from .model_routing import routing_purpose
 
     return routing_purpose(_route_purpose(context, step, text))
+
+
+# --------------------------------------------------------------------------- #
+# The baseline every agent holds (services/agent_baseline.py).                #
+# --------------------------------------------------------------------------- #
+
+@register_executor("boss.fundamentals")
+def execute_boss_fundamentals(context: "SkillExecutorContext", inputs: dict[str, Any]) -> dict[str, Any]:
+    """BOSS's own read tools — logs, runs, infra, schema, catalogue, memory — read-only and
+    redacted. See agent_baseline.FUNDAMENTALS_TOOLS for the list and why every agent holds it."""
+    from .agent_baseline import run_bundled_tool
+
+    return run_bundled_tool(context, "boss.fundamentals", inputs)
+
+
+@register_executor("boss.propose_fix")
+def execute_boss_propose_fix(context: "SkillExecutorContext", inputs: dict[str, Any]) -> dict[str, Any]:
+    """Propose a governed fix: a hold-default decision a person approves. Runs nothing."""
+    from .agent_baseline import propose
+
+    return propose(context, dict(inputs))

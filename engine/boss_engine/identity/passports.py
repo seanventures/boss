@@ -122,6 +122,10 @@ def _external_widening(before: Mapping[str, Any], after: Mapping[str, Any]) -> l
     return widened
 
 
+#: The preset of an agent whose role names no other (catalogue.yaml `baseline`).
+BASELINE_PRESET = "baseline"
+
+
 def preset_for_role(role_key: str) -> Optional[str]:
     from .permissions_gen import PASSPORT_PRESETS
 
@@ -528,7 +532,11 @@ def upgrade_from_roles(*, org_id: str, db: Any, default_sponsor: Optional[str] =
     for r in rows:
         # The presets name agents by their persona callsign (Forge, Helm, Juno...), not by the
         # role key (software_engineer, engineering_captain): match either, callsign first.
-        preset = preset_for_role(r["callsign"] or "") or preset_for_role(r["role_key"])
+        preset = (preset_for_role(r["callsign"] or "") or preset_for_role(r["role_key"])
+                  # AN AGENT WHOSE ROLE NAMES NO PRESET (made in the console, a panel voice)
+                  # still reads BOSS's fundamentals: the baseline reads, nothing else. A ceiling
+                  # a person set is `custom` and is never touched here.
+                  or BASELINE_PRESET)
         existing = get(r["agent_id"], db=db)
         if existing is not None:
             if not existing.ceiling and not existing.ceiling_preset and preset:

@@ -395,9 +395,13 @@ def agent_brief(connection: Connection, project_id: str, role_key: str) -> str:
     # AI disclosure and voice the agent has in chat and on a panel. The rules below stay the
     # authority on what it may do; the outcome it must declare is asked for in the user turn
     # (OUTCOME_ASK). A persona that cannot compile falls back to the plain name line.
+    from .agent_baseline import PRIMER
     from .agent_instructions import for_prompt
 
-    lines = [_agent_voice(dict(row) if row else {"role_key": role, "spec": spec},
+    # HOW BOSS WORKS FIRST: the same bytes for every agent, so it is the cached prefix every
+    # agent step shares (agent_baseline.PRIMER); who the agent is follows it.
+    lines = [PRIMER,
+             _agent_voice(dict(row) if row else {"role_key": role, "spec": spec},
                           for_prompt(connection, project_id, role, "work"))
              or f"You are {name}, an AI agent in BOSS."]
     if spec.get("mission"):
@@ -419,10 +423,12 @@ def agent_brief(connection: Connection, project_id: str, role_key: str) -> str:
 
     lines.append(
         "\nHOW YOU WORK\n"
-        "  The tools you have are the skills this project gave you, and they are the whole of\n"
-        "  what you can do. There are no others — no shell, no database, no file system. If the\n"
-        "  instruction needs something you have not been given, say so plainly and stop; do not\n"
-        "  approximate it with a tool meant for something else.\n"
+        "  The tools you have are the skills this project gave you — your role's own, plus the\n"
+        "  BOSS fundamentals every agent holds (logs, runs, infra, schema and this project's\n"
+        "  rows, the repo, proposing a fix) — and they are the whole of what you can do. There\n"
+        "  is no shell, no raw SQL and no file system. If the instruction needs something you\n"
+        "  have not been given, say so plainly and stop; do not approximate it with a tool meant\n"
+        "  for something else. A fix you cannot make yourself, propose (propose_action).\n"
         "  Work in the order the result requires, not the order the instruction was written in.\n"
         "  When you are done, say what you did and what you produced. If you could not finish,\n"
         "  say what is missing. Never report work you did not verify."
