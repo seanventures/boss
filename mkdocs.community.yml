@@ -88,6 +88,7 @@ nav:
       - Connect models: MODEL_CONNECTIONS.md
       - Use cases: use-cases.md
       - Walkthroughs: walkthroughs.md
+      - Workflow retries, timeouts and error paths: WORKFLOW_STEP_ERRORS.md
   - Interfaces:
       - Overview: interfaces.md
       - Metatron terminal: terminal.md
