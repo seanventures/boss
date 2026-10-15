@@ -5159,6 +5159,37 @@ export type WorkflowRunSummary = {
   workflow_name: string;
   version: number;
   duplicate?: boolean;
+  /** "test" for a test run: pinned steps did not execute, and a step that could spend or reach
+   *  outside BOSS was refused unless named in `allow_live`. Left out of run lists by default. */
+  mode?: WorkflowRunMode;
+  /** What each pinned step was settled with, and where the output came from. */
+  pins?: Record<string, WorkflowStepPin>;
+  allow_live?: string[];
+  /** Set when this run was started from a step of an earlier run. */
+  rerun_of?: { run_id: string; from_step: string } | null;
+};
+
+export type WorkflowRunMode = "normal" | "test";
+
+export type WorkflowStepPin = {
+  output: Record<string, unknown>;
+  source:
+    | { kind: "person"; actor: string }
+    | { kind: "rerun"; run_id: string; step_run_id: string; iteration: number };
+};
+
+export type WorkflowTestRunRequest = {
+  project_id: string;
+  workflow_version_id?: string;
+  workflow_key?: string;
+  version?: number;
+  input?: Record<string, unknown>;
+  /** step id -> the output that step returns instead of running. */
+  pins?: Record<string, Record<string, unknown>>;
+  /** Steps that run for real, under every approval and budget rule a normal run has. */
+  allow_live?: string[];
+  dedupe_key?: string;
+  actor?: string;
 };
 
 export type WorkflowRunDetail = WorkflowRunSummary & {
@@ -5737,6 +5768,29 @@ export function createBossApiClient(config: BossApiClientConfig) {
       return request<WorkflowRunSummary>("POST", "/v1/workflow-runs", {
         body: payload,
       });
+    },
+    /** Run a saved workflow as a test with pinned step outputs. */
+    startWorkflowTestRun(payload: WorkflowTestRunRequest) {
+      return request<WorkflowRunSummary>("POST", "/v1/delivery-workflows/test-runs", {
+        body: payload,
+      });
+    },
+    getWorkflowTestRuns(projectId: string, limit = 25) {
+      return request<{ project_id: string; items: WorkflowRunSummary[] }>(
+        "GET", "/v1/delivery-workflows/test-runs", { query: { project_id: projectId, limit } },
+      );
+    },
+    /** Start a new run from `from_step` of a finished or failed run; earlier steps are pinned
+     *  to what that run produced. */
+    rerunWorkflowFromStep(
+      runId: string,
+      payload: { project_id: string; from_step: string; dedupe_key?: string; actor?: string },
+    ) {
+      return request<WorkflowRunSummary>(
+        "POST",
+        `/v1/delivery-workflows/runs/${encodeURIComponent(runId)}/rerun`,
+        { body: payload },
+      );
     },
     advanceWorkflowRun(runId: string, projectId: string, actor = "ceo") {
       return request<WorkflowRunDetail>(

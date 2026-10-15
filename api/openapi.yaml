@@ -20354,6 +20354,111 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /v1/delivery-workflows/test-runs:
+    get:
+      tags:
+      - workflows
+      summary: List Test Runs
+      description: The project's test runs, newest first — the ordinary lists leave them out.
+      operationId: get_v1_delivery_workflows_test_runs_f5bc4e06
+      parameters:
+      - name: project_id
+        in: query
+        required: true
+        schema:
+          type: string
+          title: Project Id
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          default: 25
+          title: Limit
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response List Test Runs V1 Delivery Workflows Test Runs Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    post:
+      tags:
+      - workflows
+      summary: Start Test Run
+      description: 'Run a saved workflow as a TEST: pinned steps return their pinned output, and a step
+        that
+
+        could spend or reach outside BOSS is refused unless named in `allow_live`.'
+      operationId: post_v1_delivery_workflows_test_runs_6c8eea39
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TestRunBody'
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Start Test Run V1 Delivery Workflows Test Runs Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/delivery-workflows/runs/{run_id}/rerun:
+    post:
+      tags:
+      - workflows
+      summary: Rerun From Step
+      description: 'Run again from one step: a new run, every earlier step pinned to what this run produced
+
+        (with provenance), recorded with `rerun_of`. Refused when the step depends on one that did
+
+        not complete here.'
+      operationId: post_v1_delivery_workflows_runs_run_id_rerun_7a68ff1d
+      parameters:
+      - name: run_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Run Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RerunBody'
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Rerun From Step V1 Delivery Workflows Runs  Run Id  Rerun Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
   /v1/delivery-workflows/runs/{run_id}/recheck:
     post:
       summary: Recheck Delivery Run
@@ -63193,6 +63298,76 @@ components:
       required:
       - project_id
       title: WorkflowRecheckBody
+    TestRunBody:
+      properties:
+        project_id:
+          type: string
+          title: Project Id
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        workflow_version_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Workflow Version Id
+        workflow_key:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Workflow Key
+        version:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Version
+        input:
+          additionalProperties: true
+          type: object
+          title: Input
+        pins:
+          additionalProperties: true
+          type: object
+          title: Pins
+        allow_live:
+          items:
+            type: string
+          type: array
+          title: Allow Live
+        dedupe_key:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Dedupe Key
+      type: object
+      required:
+      - project_id
+      title: TestRunBody
+    RerunBody:
+      properties:
+        project_id:
+          type: string
+          title: Project Id
+        from_step:
+          type: string
+          title: From Step
+        actor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor
+        dedupe_key:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Dedupe Key
+      type: object
+      required:
+      - project_id
+      - from_step
+      title: RerunBody
     WorkflowRetryStepBody:
       properties:
         project_id:
@@ -63627,6 +63802,25 @@ components:
           - type: boolean
           - type: 'null'
           title: Duplicate
+        mode:
+          type: string
+          title: Mode
+          default: normal
+        pins:
+          additionalProperties: true
+          type: object
+          title: Pins
+        allow_live:
+          items:
+            type: string
+          type: array
+          title: Allow Live
+        rerun_of:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Rerun Of
       type: object
       required:
       - id

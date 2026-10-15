@@ -15,12 +15,35 @@ describe("Community client", () => {
     // review) instead of deleted and re-registered, which unbound every step using it.
     expect(client).toHaveProperty("updateMcpServer");
     // 376 on main (one more than this line said), +5: workflow webhook triggers (#512) — list,
-    // create, rotate, enable/disable, deliveries.
-    expect(Object.keys(client)).toHaveLength(381);
+    // create, rotate, enable/disable, deliveries. +3: startWorkflowTestRun, getWorkflowTestRuns,
+    // rerunWorkflowFromStep (#512).
+    expect(Object.keys(client)).toHaveLength(384);
     await client.listProjects();
     await client.getCloudCatalog("p1");
     expect(fetchImpl).toHaveBeenCalledWith("https://boss.test/v1/cloud/catalog?project_id=p1", expect.objectContaining({ method: "GET" }));
     expect(fetchImpl).toHaveBeenCalledWith("https://boss.test/v1/projects", expect.objectContaining({ method: "GET" }));
+  });
+
+  it("starts a test run with pins and re-runs a run from a step", async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ id: "wfr_1" }), {
+      headers: { "content-type": "application/json" },
+    }));
+    const client = createBossApiClient({ baseUrl: "https://boss.test", fetchImpl });
+    await client.startWorkflowTestRun({
+      project_id: "p1", workflow_key: "wf", pins: { a: { answer: 42 } }, allow_live: ["c"],
+    });
+    await client.getWorkflowTestRuns("p1");
+    await client.rerunWorkflowFromStep("wfr_0", { project_id: "p1", from_step: "c" });
+    const calls = fetchImpl.mock.calls.map((call) => [String(call[0]),
+      (call[1] as RequestInit | undefined)?.method,
+      (call[1] as RequestInit | undefined)?.body ? JSON.parse(String((call[1] as RequestInit).body)) : null]);
+    expect(calls).toEqual([
+      ["https://boss.test/v1/delivery-workflows/test-runs", "POST",
+        { project_id: "p1", workflow_key: "wf", pins: { a: { answer: 42 } }, allow_live: ["c"] }],
+      ["https://boss.test/v1/delivery-workflows/test-runs?project_id=p1&limit=25", "GET", null],
+      ["https://boss.test/v1/delivery-workflows/runs/wfr_0/rerun", "POST",
+        { project_id: "p1", from_step: "c" }],
+    ]);
   });
 
   it("calls the hardware place contract without a raw secret field", async () => {
