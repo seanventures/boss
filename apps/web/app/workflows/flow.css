@@ -114,6 +114,14 @@
 .wf-edge[data-kind="yes"] { stroke: color-mix(in srgb, var(--green) 70%, transparent); }
 .wf-edge[data-kind="no"] { stroke: color-mix(in srgb, var(--red) 60%, transparent); }
 .wf-edge-head { fill: color-mix(in srgb, var(--faint) 70%, transparent); }
+/* AN ERROR PATH (#512): dashed, in the error colour, from the bottom of the step that fails; its
+   label says so in words, so it is never colour alone. Taken on a run, it is drawn solid. */
+.wf-edge[data-kind="error"] { stroke: color-mix(in srgb, var(--red) 75%, transparent); stroke-dasharray: 6 4; }
+.wf-edge-head[data-kind="error"] { fill: color-mix(in srgb, var(--red) 75%, transparent); }
+.wf-edges g[data-kind="error"] .wf-edge-label { fill: var(--red); }
+.wf-edges g[data-taken] .wf-edge { stroke: var(--red); stroke-dasharray: none; stroke-width: 2; }
+.wf-edge-end[data-kind="error"] { border-color: var(--red); }
+.wf-slot[data-error-path] .wf-node { outline: 2px dashed var(--red); outline-offset: 2px; }
 .wf-edge-label {
   fill: var(--muted); font: 600 0.75rem/1 var(--sans);
   paint-order: stroke; stroke: var(--surface); stroke-width: 4px; stroke-linejoin: round;
@@ -254,6 +262,7 @@
 .wf-badge { display: inline-flex; align-items: center; gap: 2px; font: 600 0.75rem/1 var(--sans); }
 .wf-badge[data-kind="forced"], .wf-badge[data-kind="approval"] { color: var(--amber); }
 .wf-badge[data-kind="unwired"] { color: var(--amber); }
+.wf-badge[data-kind="failure"] { color: var(--muted); }
 .wf-badge[data-kind="lacks"] { color: var(--amber); margin-left: auto; }
 
 .wf-node-problem {

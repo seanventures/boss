@@ -2,7 +2,7 @@
 
 import React, { type Dispatch } from "react";
 
-import type { EditorAction, EditorState, Palette } from "../../../../lib/workflow-editor-types";
+import type { EditorAction, EditorState, FlowLink, Palette } from "../../../../lib/workflow-editor-types";
 import { jsonGate } from "../json/json-view";
 import { LockProvider } from "./editable";
 import { StepInspector } from "./step-inspector";
@@ -24,7 +24,7 @@ export function lockReason(state: EditorState): string | null {
  * picker and the Grant row read one source and cannot disagree.
  */
 export function Inspector({ state, palette, dispatch, projectId, onClose, refreshPalette, actor, usedFor,
-                            onSchedule }: {
+                            onSchedule, onRewire }: {
   state: EditorState;
   palette: Palette;
   dispatch: Dispatch<EditorAction>;
@@ -39,6 +39,8 @@ export function Inspector({ state, palette, dispatch, projectId, onClose, refres
   usedFor?: string[];
   /** Opens the host's schedule popover for this workflow. The row is hidden without it. */
   onSchedule?(workflowKey: string): void;
+  /** An arrow pointed elsewhere through the editor's check (a step's error path, from its settings). */
+  onRewire?(link: FlowLink, target: string | null): void;
 }) {
   const step = state.selection ? state.spec.steps.find((s) => s.id === state.selection) : undefined;
   const locked = lockReason(state);
@@ -58,7 +60,7 @@ export function Inspector({ state, palette, dispatch, projectId, onClose, refres
           {step ? (
             <StepInspector key={step.id} state={state} step={step} palette={palette} dispatch={dispatch}
                            projectId={projectId} actor={actor} refreshPalette={refreshPalette}
-                           onClose={onClose} />
+                           onClose={onClose} onRewire={onRewire} />
           ) : (
             <WorkflowSettings state={state} dispatch={dispatch} projectId={projectId} actor={actor}
                               usedFor={usedFor} onSchedule={onSchedule} onClose={onClose} />

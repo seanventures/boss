@@ -552,7 +552,8 @@ export function WorkflowEditor({ projectId, workflowKey, onBack, onStart, actor,
           <div className="wf-drawer" data-testid="wf-drawer">
             <Inspector state={state} palette={palette} dispatch={dispatch} projectId={projectId} actor={actor}
                        refreshPalette={refreshPalette}
-                       usedFor={usedFor} onSchedule={onSchedule} onClose={closeDrawer} />
+                       usedFor={usedFor} onSchedule={onSchedule} onClose={closeDrawer}
+                       onRewire={(link, target) => void rewire(link, target)} />
           </div>
         ) : null}
       </div>

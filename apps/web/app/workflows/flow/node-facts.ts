@@ -9,6 +9,7 @@
 import type { Palette, SpecStep, StepView } from "../../../lib/workflow-editor-types";
 import { stepView } from "../../../lib/step-view";
 import type { NodeDetail } from "./step-node";
+import { failureBadge, failureOf } from "../../../lib/workflow-failure";
 
 const asObj = (v: unknown): Record<string, unknown> =>
   v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
@@ -47,5 +48,7 @@ export function nodeDetail(step: SpecStep, palette: Palette | null): NodeDetail 
     skills: strings(binding.skills).map((s) => skillName.get(s) ?? s),
     mcp: strings(binding.mcp ?? binding.mcp_servers).map((s) => serverName.get(s) ?? s),
     duration: step.kind === "timer" ? formatWait(step.wait_seconds) : undefined,
+    failure: failureBadge(step) ?? undefined,
+    timeLimit: failureOf(step).timeoutSeconds !== null || undefined,
   };
 }

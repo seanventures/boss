@@ -133,6 +133,40 @@ export function edgesOf(spec: Spec): GraphEdge[] {
   return edges;
 }
 
+/** The step a step's `on_error` names, when it names another step of the spec (not itself). */
+export function errorTargetOf(spec: Spec, step: SpecStep): string | null {
+  const to = typeof step.on_error === "string" ? step.on_error : "";
+  return to && to !== step.id && stepsOf(spec).some((s) => s.id === to) ? to : null;
+}
+
+/**
+ * Every step's error path (`on_error`): where the run goes when that step fails for good. Not
+ * part of `edgesOf`, because nothing the canvas edits by order (insert, move, remove, the `+`
+ * gaps) may follow it: a step with an error path still sits in its straight stretch. It is laid
+ * out and drawn (`layoutFlow`), and pointed elsewhere like any arrow (`rewireLink`).
+ */
+export function errorEdgesOf(spec: Spec): GraphEdge[] {
+  const out: GraphEdge[] = [];
+  for (const step of stepsOf(spec)) {
+    const to = errorTargetOf(spec, step);
+    if (to) out.push({ from: step.id, to, kind: "error" });
+  }
+  return out;
+}
+
+/** The spec with every `on_error` that names a step it no longer has unset ("Stop the run"). */
+export function pruneErrorPaths(spec: Spec): Spec {
+  const ids = new Set(stepsOf(spec).map((s) => s.id));
+  if (!stepsOf(spec).some((s) => typeof s.on_error === "string" && s.on_error && !ids.has(s.on_error))) {
+    return spec;
+  }
+  return { ...spec, steps: stepsOf(spec).map((s) => {
+    if (!(typeof s.on_error === "string" && s.on_error && !ids.has(s.on_error))) return s;
+    const { on_error: _gone, ...rest } = s;
+    return rest as SpecStep;
+  }) };
+}
+
 /** Every step has at most one `next`, nothing branches, and following `next` from the entry
  *  visits every step exactly once. Only then may `next` be rewritten from order alone. */
 export function isLinear(spec: Spec): boolean {
@@ -213,10 +247,17 @@ export function linearOrder(spec: Spec): string[] {
 /** Columns by longest path from the entry over every edge; siblings stacked in flow order. */
 export function layoutFlow(spec: Spec): FlowLayout {
   const steps = stepsOf(spec);
-  const edges = edgesOf(spec);
+  const structural = edgesOf(spec);
   const order = linearOrder(spec);
   const position = new Map(order.map((id, i) => [id, i]));
-  const { out, into } = adjacency(spec, edges);
+  // An error path places the step it leads to after the step that fails, as a branch's path is
+  // placed after its Branch — unless it leads back (a retry from an earlier step), when it is
+  // drawn as a way back and does not move anything.
+  const errors = errorEdgesOf(spec);
+  const forward = forwardErrorEdges(spec, structural, errors);
+  const edges = [...structural, ...errors];
+  const { out, into } = adjacency(spec, [...structural, ...forward]);
+  const ends = adjacency(spec, structural).out;
 
   // Kahn over the edges; whatever a cycle leaves behind goes after everything else.
   const column = new Map<string, number>();
@@ -259,8 +300,39 @@ export function layoutFlow(spec: Spec): FlowLayout {
     maxRows: Math.max(0, ...[...byColumn.values()].map((ids) => ids.length)),
     linear: isLinear(spec),
     // A loop body has no edge out, but it returns to its loop: it is not where the flow ends.
-    terminal: order.filter((id) => !(out.get(id) ?? []).length && !bodies.has(id)),
+    // A step whose only way out is its error path still ends the flow when it succeeds.
+    terminal: order.filter((id) => !(ends.get(id) ?? []).length && !bodies.has(id)),
   };
+}
+
+/** The error edges that lead on, never back: each one kept only when its target cannot already
+ *  reach the step it leaves (over the structure and the error edges kept before it). */
+function forwardErrorEdges(spec: Spec, structural: GraphEdge[], errors: GraphEdge[]): GraphEdge[] {
+  if (!errors.length) return [];
+  const next = new Map<string, string[]>();
+  const link = (e: GraphEdge) => { if (!next.has(e.from)) next.set(e.from, []); next.get(e.from)!.push(e.to); };
+  structural.forEach(link);
+  // A loop body returns to its loop: a way back the edges do not name.
+  for (const step of stepsOf(spec)) {
+    if (step.kind === "bounded_loop" && step.body) link({ from: String(step.body), to: step.id, kind: "next" });
+  }
+  const reaches = (from: string, to: string) => {
+    const seen = new Set([from]);
+    const stack = [from];
+    while (stack.length) {
+      const id = stack.pop()!;
+      if (id === to) return true;
+      for (const t of next.get(id) ?? []) if (!seen.has(t)) { seen.add(t); stack.push(t); }
+    }
+    return false;
+  };
+  const kept: GraphEdge[] = [];
+  for (const e of errors) {
+    if (reaches(e.to, e.from)) continue;
+    kept.push(e);
+    link(e);
+  }
+  return kept;
 }
 
 /** Every step that runs before `id` on some path into it, in flow order. */
@@ -322,7 +394,7 @@ export function renameStepId(spec: Spec, from: string, to: string): Spec {
     const step: SpecStep = { ...raw, id: swap(raw.id) as string };
     if (typeof step.next === "string") step.next = swap(step.next) as string;
     else if (Array.isArray(step.next)) step.next = swapList(step.next) as string[];
-    for (const key of ["on_true", "on_false", "join", "body"]) {
+    for (const key of ["on_true", "on_false", "join", "body", "on_error"]) {
       if (key in step) step[key] = swap(step[key]);
     }
     for (const key of ["branches", "wait_for"]) {
@@ -714,7 +786,8 @@ export function unsetReadsFrom(spec: Spec, gone: Set<string>): Spec {
 export function removeStep(spec: Spec, id: string): Spec {
   const detached = detach(spec, id)?.spec ?? detachFromPath(spec, id);
   if (!detached) return spec;
-  return unsetReadsFrom(detached, new Set([id]));
+  // A step whose error path led to it stops the run instead when it fails.
+  return pruneErrorPaths(unsetReadsFrom(detached, new Set([id])));
 }
 
 /* ── Re-linking an arrow ─────────────────────────────────────────────────────────── */
@@ -726,9 +799,40 @@ export const START_TARGET = "__start__";
  *  returns to its loop and draws none). */
 export function linksFrom(spec: Spec, id: string): FlowLink[] {
   const edges = edgesOf(spec).filter((e) => e.from === id);
-  if (edges.length) return edges.map((e) => ({ from: e.from, to: e.to, kind: e.kind }));
-  if (!stepsOf(spec).some((s) => s.id === id) || loopBodies(spec).has(id)) return [];
-  return [{ from: id, to: null, kind: "end" }];
+  const errors: FlowLink[] = errorEdgesOf(spec).filter((e) => e.from === id)
+    .map((e) => ({ from: e.from, to: e.to, kind: e.kind }));
+  if (edges.length) return [...edges.map((e) => ({ from: e.from, to: e.to, kind: e.kind })), ...errors];
+  if (!stepsOf(spec).some((s) => s.id === id) || loopBodies(spec).has(id)) return errors;
+  return [{ from: id, to: null, kind: "end" }, ...errors];
+}
+
+/** A step's error path as a link: `to` null when it has none (it stops the run when it fails),
+ *  so the step settings' "If it still fails, go to…" can set one through `rewireLink` too. */
+export function errorLinkOf(spec: Spec, id: string): FlowLink {
+  const step = stepsOf(spec).find((s) => s.id === id);
+  return { from: id, to: step ? errorTargetOf(spec, step) : null, kind: "error" };
+}
+
+/** Refusals of an error path, in the canvas's words. */
+export const ERROR_PATH_SELF = "A step cannot go to itself when it fails: pick another step, or Stop the run";
+export const ERROR_PATH_START = "Nothing can lead back to Start: it is where the flow begins";
+
+/** `on_error` pointed at `target` (null unsets it: the run stops when the step fails). */
+function rewireError(spec: Spec, link: FlowLink, target: string | null): { spec: Spec } | { refused: string } {
+  const steps = stepsOf(spec);
+  const from = steps.find((s) => s.id === link.from);
+  if (!from || errorLinkOf(spec, link.from).to !== link.to) return { refused: "That arrow is not there any more" };
+  if (target === link.to) return { spec };
+  if (target === START_TARGET) return { refused: ERROR_PATH_START };
+  if (target === link.from) return { refused: ERROR_PATH_SELF };
+  if (target !== null && !steps.some((s) => s.id === target)) return { refused: "Link it to a step, or Stop the run" };
+  if (target !== null && steps.find((s) => s.id === target)!.kind === "join") {
+    return { refused: "Only the branches of its Do at the same time lead into a join" };
+  }
+  const next: SpecStep = { ...from };
+  if (target === null) delete next.on_error;
+  else next.on_error = target;
+  return { spec: { ...spec, steps: steps.map((s) => (s.id === from.id ? next : s)) } };
 }
 
 /**
@@ -745,9 +849,15 @@ export function linksFrom(spec: Spec, id: string): FlowLink[] {
  * one step (the runtime returns the body to its loop, so it is the block's own). Whether the
  * flow that results is a valid workflow — a cycle outside a Repeat, a step nothing reaches any
  * more — is the engine validator's to say (lib/workflow-rewire.ts asks it), never decided here.
+ *
+ * An error path (`kind` "error") is the step's `on_error`: pointed at another step, or unset with
+ * `target` null (the run stops when the step fails). Its link may have `to` null — a step with no
+ * error path yet (`errorLinkOf`). Start and the step itself are refused; whether it makes a cycle
+ * is the validator's, like every other arrow.
  */
 export function rewireLink(spec: Spec, link: FlowLink, target: string | null):
     { spec: Spec } | { refused: string } {
+  if (link.kind === "error") return rewireError(spec, link, target);
   const steps = stepsOf(spec);
   const byId = new Map(steps.map((s) => [s.id, s]));
   const from = byId.get(link.from);

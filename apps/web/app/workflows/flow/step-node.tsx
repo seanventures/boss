@@ -15,7 +15,9 @@
  * The title is never the raw step id when a label exists: `stepView` resolves the step's own
  * title, then its custom-step or built-in label.
  */
-import { Check, HandPalm, HardDrives, Lock, LockSimple, Minus, Plug, Sparkle, Warning, X } from "@phosphor-icons/react";
+import {
+  ArrowsClockwise, Check, HandPalm, HardDrives, Lock, LockSimple, Minus, Plug, Sparkle, Timer, Warning, X,
+} from "@phosphor-icons/react";
 import React from "react";
 
 import type { StepView } from "../../../lib/workflow-editor-types";
@@ -31,7 +33,10 @@ import { useIdentityVersion } from "../../../lib/use-agent-identities";
 export type RunPhase = "done" | "moving" | "needs_you" | "failed" | "future" | "skipped";
 
 /** The names behind the badge counts, when the caller knows them. Only feeds tooltips. */
-export type NodeDetail = { risk?: number; skills?: string[]; mcp?: string[]; duration?: string };
+export type NodeDetail = { risk?: number; skills?: string[]; mcp?: string[]; duration?: string;
+  /** What it does when it fails, when that is not the default (lib/workflow-failure.ts
+   *  `failureBadge`): more tries, or a time limit. */
+  failure?: string; timeLimit?: boolean };
 
 /** An agent's face: its kit character for a named agent, the system glyph for Auto, You and A
  *  person. Sized by CSS where it sits (a node, a summary chip), or by `size` when a caller needs
@@ -149,8 +154,10 @@ export function StepNode(p: {
   onSelect?(): void;
   /** Optional names for the badge tooltips. */
   detail?: NodeDetail;
+  /** On a run: it failed, and the run went on at its error path (`on_error`). */
+  errorPath?: boolean;
 }): React.JSX.Element {
-  const { view, mode, selected, problem, run, onSelect, detail } = p;
+  const { view, mode, selected, problem, run, onSelect, detail, errorPath } = p;
   // A run names a named agent by callsign (below), resolved at render: repaint when identities load.
   useIdentityVersion();
 
@@ -180,6 +187,7 @@ export function StepNode(p: {
     <button type="button" className="wf-node" data-mode={mode} data-type={view.type}
             data-shape={shape?.shape}
             data-phase={mode === "run" ? phase : undefined}
+            data-error-path={mode === "run" && errorPath ? "true" : undefined}
             data-selected={selected ? "true" : undefined}
             data-problem={problem ? "true" : undefined}
             data-step-id={view.id} data-testid="wf-node"
@@ -196,7 +204,7 @@ export function StepNode(p: {
         </span>
         {shape && shape.words !== view.title ? <span className="wf-sr">{shape.words}: </span> : null}
         <span className="wf-node-title" data-tip={view.title} data-tip-when="cut">{view.title}</span>
-        {mode === "run" ? <span className="wf-sr">{PHASE_WORDS[phase]}</span> : null}
+        {mode === "run" ? <span className="wf-sr">{PHASE_WORDS[phase]}{errorPath ? ", went to its error path" : ""}</span> : null}
       </span>
       {BLOCK_TYPES.has(view.type) ? null : view.type === "wait" ? (
         <span className="wf-node-agent wf-node-wait" data-testid="wf-node-wait">{detail?.duration ?? ""}</span>
@@ -241,6 +249,12 @@ export function StepNode(p: {
                   data-tip={detail?.mcp?.length ? detail.mcp.join(", ") : plural(b.mcp, "MCP server")}
                   aria-label={`${b.mcp} MCP`}>
               <HardDrives size={12} weight="bold" aria-hidden /><span className="wf-badge-n">{b.mcp}</span>
+            </span>
+          ) : null}
+          {detail?.failure ? (
+            <span className="wf-badge" data-kind="failure" data-testid="wf-badge-failure"
+                  data-tip={detail.failure} aria-label={detail.failure}>
+              {detail.timeLimit ? <Timer size={12} weight="bold" aria-hidden /> : <ArrowsClockwise size={12} weight="bold" aria-hidden />}
             </span>
           ) : null}
           {b.lacks.length ? (

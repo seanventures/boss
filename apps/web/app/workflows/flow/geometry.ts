@@ -107,7 +107,8 @@ export function laneGeometry(layout: FlowLayout, types: Map<string, StepView["ty
   const rows = Math.max(1, layout.maxRows);
   const pitch = node.h + ROW_GAP;
   const bodyH = rows * node.h + (rows - 1) * ROW_GAP;
-  const hasLoop = layout.edges.some((e) => e.kind === "loop");
+  // Error paths may run along the bottom too (back to an earlier step, or under the steps between).
+  const hasLoop = layout.edges.some((e) => e.kind === "loop" || e.kind === "error");
   const height = PAD_Y * 2 + bodyH + (hasLoop ? LOOP_ROOM : 0);
   const midY = PAD_Y + bodyH / 2;
 

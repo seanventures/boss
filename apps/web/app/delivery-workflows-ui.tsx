@@ -1869,7 +1869,9 @@ export function laneStateOf(step: RunStep): { phase: string; meta: string; tip?:
       if (by) return { phase: "skipped", meta: by, tip: by };
       return { phase: "skipped", meta: "skipped", tip: skipReason(step) || "this step did not apply to this run" };
     }
-    case "failed": return { phase: "failed", meta: railMeta(step) || "failed" };
+    case "failed": return timedOut(step)
+      ? { phase: "failed", meta: "timed out", tip: "A try ran longer than the step's time limit" }
+      : { phase: "failed", meta: railMeta(step) || "failed" };
     case "failed_on": return { phase: "failed", meta: "failed — went on",
                                tip: "It failed, and the run went on without it" };
     case "findings": return { phase: "done", meta: railMeta(step) || "findings", tip: "Finished with findings" };
@@ -1877,6 +1879,13 @@ export function laneStateOf(step: RunStep): { phase: string; meta: string; tip?:
     case "now": return { phase: "moving", meta: railMeta(step) };
     default: return { phase: "future", meta: railMeta(step) || "pending" };
   }
+}
+
+/** A step whose last try ran past its time limit (#512): the engine fails it with `step_timeout`,
+ *  as its error or as the reason it records. */
+export function timedOut(step: RunStep): boolean {
+  const out = (step.output ?? {}) as { reason?: unknown; error?: unknown };
+  return [step.error, out.reason, out.error].some((v) => typeof v === "string" && /\bstep_timeout\b/.test(v));
 }
 
 export function needsYou(step: RunStep): boolean {

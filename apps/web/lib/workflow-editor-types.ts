@@ -84,7 +84,10 @@ export type PublishResult =
 
 /* ── Graph (S1 implements; S2 renders) ────────────────────────────────────────────── */
 
-export type EdgeKind = "next" | "yes" | "no" | "branch" | "join" | "loop";
+/** `error` is a step's `on_error`: where the run goes when the step fails for good. It is not one
+ *  of `edgesOf` (the order and the structural edits never follow it); `errorEdgesOf` lists them,
+ *  and `layoutFlow` lays them out and draws them. */
+export type EdgeKind = "next" | "yes" | "no" | "branch" | "join" | "loop" | "error";
 export type GraphEdge = { from: string; to: string; kind: EdgeKind };
 /** One arrow the canvas draws out of a step, as something that can be pointed elsewhere: an edge
  *  (`to` its target), or a flow's end (`kind` "end", `to` null) — a step with no way out, whose
@@ -168,7 +171,12 @@ export type StepPatch = { title?: string; captain?: string | null;
   instructions?: { mode: "ask" | "fixed"; text?: string };
   skills?: string[]; mcp?: string[]; approval?: "auto" | "manual"; approvalMore?: Record<string, unknown>;
   input?: { name: string; source: InputSource | null }; produces?: string[];
-  config?: Record<string, unknown>; max_attempts?: number };
+  config?: Record<string, unknown>;
+  /** When it fails (lib/workflow-failure.ts). null unsets the field: a default is never written.
+   *  `on_error` is not a patch: it is an arrow, made by REWIRE (kind "error") after the check. */
+  max_attempts?: number | null;
+  retry_backoff?: { initial_seconds?: number; multiplier?: number; max_seconds?: number } | null;
+  timeout_seconds?: number | null };
 export type InputSource = { from_input: string } | { from_step: string; field: string } | { value: unknown };
 
 /* ── Canvas (S2) ──────────────────────────────────────────────────────────────────── */

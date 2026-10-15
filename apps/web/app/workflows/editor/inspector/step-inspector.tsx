@@ -13,8 +13,10 @@ import { StepIcon, hasStepIcon } from "../../../step-icons";
 import { TITLE_MAX, canRemove, stepView, upstreamOf, wireInputs } from "../../../../lib/workflow-editor-types";
 import { blockOfHead, canRemoveBlock, removeRefusal } from "../../../../lib/workflow-blocks";
 import type {
-  EditorAction, EditorState, Palette, Problem, SpecStep, StepPatch, StepView,
+  EditorAction, EditorState, FlowLink, Palette, Problem, SpecStep, StepPatch, StepView,
 } from "../../../../lib/workflow-editor-types";
+import { errorLinkOf } from "../../../../lib/workflow-graph";
+import { FAILURE_FIELDS, FailureSettings, hasFailureSettings } from "./failure-settings";
 import { AgentCombobox } from "./agent-combobox";
 import { ApproverSelect, BlockSettings, FieldError, blockFieldKeys } from "./block-settings";
 import { ChipInput } from "./chip-input";
@@ -80,7 +82,7 @@ const BLOCK_TYPES: StepView["type"][] = ["gate", "wait", "subworkflow", "conditi
  * One step's properties. Every control dispatches exactly one action — `PATCH_STEP`,
  * `RENAME_ID`, `WIRE` (Auto-wire) — so undo, the node and the JSON follow on their own.
  */
-export function StepInspector({ state, step, palette, dispatch, projectId, actor, refreshPalette, onClose }: {
+export function StepInspector({ state, step, palette, dispatch, projectId, actor, refreshPalette, onClose, onRewire }: {
   state: EditorState;
   step: SpecStep;
   palette: Palette;
@@ -89,6 +91,9 @@ export function StepInspector({ state, step, palette, dispatch, projectId, actor
   actor?: string;
   refreshPalette(): Promise<void>;
   onClose(): void;
+  /** An arrow pointed elsewhere, through the editor's check (its error path, here). Without it,
+   *  REWIRE is dispatched as is. */
+  onRewire?(link: FlowLink, target: string | null): void;
 }) {
   const view = stepView(step, palette);
   const kitAbilities = useKitAbilities(projectId);
@@ -113,7 +118,7 @@ export function StepInspector({ state, step, palette, dispatch, projectId, actor
     makes: makes.length > 0 || agentTask,
     settings: BLOCK_TYPES.includes(view.type),
   };
-  const inline = new Set<string>(["title", "id", "max_attempts"]);
+  const inline = new Set<string>(["title", "id", ...(hasFailureSettings(step) ? FAILURE_FIELDS : [])]);
   if (shows.agent) inline.add("captain");
   if (shows.scope) ["instructions", "skills", "mcp"].forEach((f) => inline.add(f));
   if (shows.approval) inline.add("approval");
@@ -204,22 +209,14 @@ export function StepInspector({ state, step, palette, dispatch, projectId, actor
         </Section>
       ) : null}
 
-      <details className="wf-more" data-testid="wf-sec-more">
-        <summary>More</summary>
-        <div className="wf-field wf-field-inline">
-          <label className="wf-label" htmlFor={`wf-retries-${step.id}`}>Retries</label>
-          <HelpTip label="Retries" text="Attempts before the step fails" />
-          <Editable inline>
-            <input id={`wf-retries-${step.id}`} className="wf-input wf-num" type="number" min={1} max={25}
-                   value={Number(step.max_attempts ?? 3)} data-testid="wf-retries"
-                   onChange={(e) => {
-                     const n = Math.round(Number(e.target.value));
-                     if (Number.isFinite(n)) patch({ max_attempts: Math.min(25, Math.max(1, n)) });
-                   }} />
-          </Editable>
-        </div>
-        <FieldError problems={problems} field="max_attempts" />
-      </details>
+      {hasFailureSettings(step) ? (
+        <FailureSettings step={step} spec={state.spec} palette={palette} problems={problems} onPatch={patch}
+                         onErrorPath={(target) => {
+                           const link = errorLinkOf(state.spec, step.id);
+                           if (onRewire) onRewire(link, target);
+                           else dispatch({ type: "REWIRE", link, target });
+                         }} />
+      ) : null}
     </div>
   );
 }

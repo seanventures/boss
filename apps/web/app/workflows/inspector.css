@@ -279,11 +279,14 @@
 .wf-input-extra:focus { outline: none; border-color: var(--accent); }
 .wf-makes { margin-top: 6px; }
 
-.wf-more { padding: 12px 0; }
-.wf-more > summary {
-  cursor: pointer; font-size: 0.75rem; font-weight: 700; letter-spacing: 0.06em;
-  text-transform: uppercase; color: var(--faint); margin-bottom: 8px;
-}
+/* When it fails (#512): tries, the wait between them as three small boxes in a row, a time limit
+   and its unit, and where the run goes. */
+.wf-fail-grid { display: flex; flex-wrap: wrap; gap: 8px 12px; }
+.wf-fail-num { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.wf-fail-box { display: inline-flex; align-items: center; gap: 6px; }
+.wf-fail-row { display: inline-flex; align-items: center; gap: 6px; }
+.wf-fail-unit { font-size: 0.8rem; color: var(--muted); }
+.wf-fail-preview { font-size: 0.8rem; color: var(--muted); }
 
 .wf-form-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; min-width: 0; flex-wrap: wrap; }
 .wf-form-name { flex: 1 1 100px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
