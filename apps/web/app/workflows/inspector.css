@@ -394,3 +394,13 @@
 .wf-seg button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .wf-seg button:disabled { opacity: 0.5; cursor: not-allowed; }
 .wf-link-icon { display: inline-flex; align-items: center; gap: 4px; }
+/* Webhook triggers (#512): one block per trigger, its secret shown once, its recent deliveries. */
+.wf-hook { display: flex; flex-direction: column; gap: 6px; padding: 6px 0; border-bottom: 1px solid var(--border); }
+.wf-hook-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+.wf-hook-on { color: var(--green, var(--accent)); font-size: 0.75rem; font-weight: 600; }
+.wf-hook-actions { flex-wrap: wrap; gap: 4px; }
+.wf-hook-secret { display: flex; flex-direction: column; gap: 4px; padding: 6px; border: 1px solid var(--accent); border-radius: 6px; }
+.wf-hook-curl { font-size: 0.72rem; white-space: pre; }
+.wf-hook-deliveries { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.wf-hook-deliveries [data-tone="bad"] .wf-hook-status { color: var(--red); }
+.wf-hook-deliveries [data-tone="ok"] .wf-hook-status { color: var(--green, var(--accent)); }

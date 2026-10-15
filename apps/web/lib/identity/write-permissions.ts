@@ -74,6 +74,11 @@ export const WRITE_HELPERS: Readonly<Record<string, WriteGate | readonly Permiss
   "lib/kit-api.ts#mcpApi.roleTools": "agent_ability:assign",      // POST /v1/role-mcp-servers
   "lib/kit-api.ts#mcpApi.addFromCatalogue": "mcp_server:review",  // POST /v1/mcp/catalogue/{key}
 
+  // lib/workflow-webhooks.ts — a workflow's webhook triggers (#512, through /api/delivery-workflows)
+  "lib/workflow-webhooks.ts#createWebhook": "workflow_schedule:manage",      // POST /v1/delivery-workflows/webhooks
+  "lib/workflow-webhooks.ts#rotateWebhook": "workflow_schedule:manage",      // POST …/webhooks/{id}/rotate
+  "lib/workflow-webhooks.ts#setWebhookEnabled": "workflow_schedule:manage",  // POST …/webhooks/{id}/enabled
+
   // lib/workflow-api.ts — the Workflow Studio editor (through /api/delivery-workflows)
   "lib/workflow-api.ts#publishSpec": "workflow:publish",          // POST /v1/delivery-workflows/publish
   "lib/workflow-api.ts#renameWorkflow": "workflow:create",        // PATCH /v1/delivery-workflows/{id}
