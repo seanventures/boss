@@ -110,6 +110,9 @@ def test_a_run_is_one_connected_chain_with_truthful_edges_and_cost_on_the_right_
 
     spec = {
         "entry_step": "review",
+        # Single-pass (two_pass's documented opt-out): this test signs the chain of one build;
+        # the More tests pass every build otherwise gets has its own tests.
+        "more_tests": False,
         "input_schema": {"type": "object", "required": ["instructions", "title"],
                          "properties": {"instructions": {"type": "string"},
                                         "title": {"type": "string"}}},

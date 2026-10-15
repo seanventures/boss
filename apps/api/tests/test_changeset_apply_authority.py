@@ -101,6 +101,11 @@ def test_actual_session_csrf_is_required_before_apply(client, owned, engine, mon
     from boss_engine.identity import authn_support, sessions
     from boss_engine.config import get_settings
     monkeypatch.setattr(get_settings(), 'identity_server_key', base64.b64encode(b'owned471-csrf-fixture-key-material').decode())
+    # The shipped mode (H2). The suite defaults to shadow (conftest), where the guard only
+    # records a csrf_failed and the handler's legacy member check answers instead; acting_as
+    # sets enforce too, but this test must not use its authentication seam.
+    monkeypatch.setattr(get_settings(), 'authz_mode', 'enforce')
+    monkeypatch.setattr(get_settings(), 'authz_router_modes', '')
     authn_support.reset_server_key_for_tests()
     try:
         with engine.begin() as c:

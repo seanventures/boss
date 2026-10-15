@@ -222,6 +222,10 @@ def test_a_skill_or_server_the_operator_took_away_stays_away(engine, old_project
 
 
 class _Model:
+    from boss_engine.services.model_routing import ModelChoice
+    # A conversation turn spends through one identified connected source (conversation_spend).
+    _boss_choice = ModelChoice("ollama", "upgraded install fixture", "approved_local_model_host")
+
     def __init__(self):
         self.calls: list[dict] = []
 
@@ -233,8 +237,11 @@ class _Model:
 
 
 @pytest.fixture()
-def model(monkeypatch):
+def model(monkeypatch, engine):
+    from apps.api.tests.test_agent_voice_stream_intent import connect_owned
     from boss_engine.services import agent_converse
+
+    connect_owned(engine, monkeypatch, PROJECT, paid=True)
 
     stub = _Model()
     monkeypatch.setattr(agent_converse, "make_adapter", lambda *_a, **_k: stub)
@@ -253,7 +260,26 @@ def _forget(engine, key: str) -> None:
                   {"p": PROJECT, "k": key})
 
 
-def test_ask_works_for_an_agent_the_boot_installed(client, engine, model):
+@pytest.fixture()
+def owner(engine):
+    """Ask spends model money, so it is asked by a signed-in person (the turn refuses a request
+    with no principal): an Owner of the project, the person the legacy `ceo` seat became."""
+    from dataclasses import replace
+
+    from apps.api.tests.identity_fixtures import IdentityWorld
+
+    with engine.connect() as c:
+        row = c.execute(text("SELECT p.workspace_id, w.org_id FROM projects p JOIN workspaces w "
+                             "ON w.id = p.workspace_id WHERE p.id = :p"),
+                        {"p": PROJECT}).mappings().one()
+    world = IdentityWorld(engine, row["org_id"], row["workspace_id"], PROJECT, PROJECT)
+    person = replace(world.person("upgraded install operator"), legacy_member_ids=(ACTOR,))
+    world.bind(person, "owner", project=PROJECT)
+    with world.acting_as(world.ctx(person)):
+        yield person
+
+
+def test_ask_works_for_an_agent_the_boot_installed(client, engine, model, owner):
     from apps.api.app import main as api_main
 
     _forget(engine, "chief_architect")
