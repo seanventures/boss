@@ -1,13 +1,13 @@
 """Where an app built from templates is reached, for the templates that need to know.
 
 A template that builds absolute URLs (an OAuth redirect URI, a payment return URL) declares the
-well-known env `APP_BASE_URL` (`env: [{name: APP_BASE_URL, default: http://localhost:3000}]`).
+well-known env `APP_BASE_URL` (`env: [{name: APP_BASE_URL, default: <the app's local URL>}]`).
 BOSS fills it wherever the app runs, from the address browsers and providers actually reach:
 
     preview   the preview's gateway URL     (oidc_provider.app_sign_in.preview_environment)
     deploy    the deployment target's public address (`deploy_environment`, below)
 
-Left at the template default, a deployed app built its OAuth callbacks on http://localhost:3000.
+Left at the template default, a deployed app built its OAuth callbacks on its local URL.
 `deploy_environment` is THE reader a deploy uses for the app's environment: the app's `deploy`
 secrets plus the base URL. A value the operator bound by hand under that name wins.
 

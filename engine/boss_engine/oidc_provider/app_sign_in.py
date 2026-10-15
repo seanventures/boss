@@ -19,12 +19,14 @@ Redirect URIs (`<base>/auth/callback/boss`, the template's route) come from:
     public URL / https domains.
 They are kept in step by `sync_redirect_uris`, which every preview start and stop calls: a stopped
 preview's callback is removed, the new one added. URIs an operator registered by hand are kept.
-With no address yet, the template's local default (`http://localhost:3000`) is registered so the
-client is valid; it is dropped as soon as a real address exists.
+With no address yet, the template's local default (its declared `APP_BASE_URL` default, read from
+the template itself) is registered so the client is valid; it is dropped as soon as a real address
+exists.
 """
 from __future__ import annotations
 
 import logging
+from functools import lru_cache
 from typing import Any, Optional
 from urllib.parse import urlsplit
 
@@ -37,11 +39,28 @@ logger = logging.getLogger(__name__)
 
 LOGIN_TEMPLATE = "login-oauth"
 CALLBACK_PATH = "/auth/callback/boss"
-LOCAL_BASE = "http://localhost:3000"
 NAMES = ("OIDC_BOSS_CLIENT_ID", "OIDC_BOSS_CLIENT_SECRET", "OIDC_BOSS_ISSUER")
 ENVS = ("preview", "deploy")
 SCOPES = ["openid", "profile", "email", "roles"]
 _PREVIEW_MARK = "/v1/previews/"
+
+
+@lru_cache(maxsize=1)
+def local_base() -> str:
+    """The login template's own local default for APP_BASE_URL: the placeholder origin registered
+    while the app has no address. Read from the template, so it is the app's port the template
+    declares, never an assumption about where the console runs."""
+    from ..templates.base_url import BASE_URL_ENV
+    from ..templates.manifest import load_manifest
+    from ..templates.service import builtin_dir
+
+    try:
+        manifest = load_manifest(builtin_dir() / LOGIN_TEMPLATE)
+    except Exception:  # noqa: BLE001 — no readable template: no app was built from it either
+        logger.warning("the %s template is not readable; using a bare loopback placeholder", LOGIN_TEMPLATE)
+        return "http://localhost"
+    default = next((str(e.default or "") for e in manifest.env if e.name == BASE_URL_ENV), "")
+    return default.rstrip("/") or "http://localhost"
 
 
 class SignInError(Exception):
@@ -141,7 +160,7 @@ def _callbacks(bases: list[str]) -> list[str]:
 
 def _managed(uri: str) -> bool:
     """A callback BOSS registered for a preview, or the local placeholder: replaced on every sync."""
-    return uri.endswith(CALLBACK_PATH) and (_PREVIEW_MARK in uri or uri == f"{LOCAL_BASE}{CALLBACK_PATH}")
+    return uri.endswith(CALLBACK_PATH) and (_PREVIEW_MARK in uri or uri == f"{local_base()}{CALLBACK_PATH}")
 
 
 def wanted_uris(db: Any, org_id: str, project_id: str, app_key: str, current: list[str], *,
@@ -151,7 +170,7 @@ def wanted_uris(db: Any, org_id: str, project_id: str, app_key: str, current: li
                        + deploy_bases(db, project_id, app_key))
     uris = keep + [u for u in fresh if u not in keep]
     if not uris:
-        uris = [f"{LOCAL_BASE}{CALLBACK_PATH}"]
+        uris = [f"{local_base()}{CALLBACK_PATH}"]
     return uris[: oidc_clients.MAX_REDIRECT_URIS]
 
 
@@ -300,7 +319,7 @@ def connect(db: Any, *, org_id: str, project_id: str, app_key: str, actor: str,
 
 def _merge_logout(client: dict[str, Any], uris: list[str]) -> list[str]:
     keep = [u for u in client.get("post_logout_redirect_uris") or []
-            if not (_PREVIEW_MARK in u or u == f"{LOCAL_BASE}/")]
+            if not (_PREVIEW_MARK in u or u == f"{local_base()}/")]
     return (keep + [u for u in _logout_uris(uris) if u not in keep])[: oidc_clients.MAX_REDIRECT_URIS]
 
 
