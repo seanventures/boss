@@ -597,9 +597,14 @@ Recovery must restore the database **and its matching identity key**. A database
 
 Use `restore.sh` from the current recovery tools against a **fresh checkout at the backed-up source revision**, a new Compose project name, and no existing target `.env`, containers or volumes. Keep the existing installation intact. Restoring older data can erase the receipt or claim of an already accepted provider action, so application startup remains held independently of the restored database.
 
+`BOSS_BACKUP` is the private backup path `backup.sh` or `upgrade.sh` printed (a `boss-…` directory under `~/boss-backups/`, or under `BOSS_BACKUP_DIR` if you set it). `BOSS_FRESH` is a new checkout at the revision in that backup's `source-commit` file. Run `restore.sh` from your current checkout:
+
 ```bash
-./scripts/install/restore.sh --backup /absolute/path/to/boss-backup \
-  --dir /absolute/path/to/fresh-checkout --project boss-recovered
+BOSS_FRESH="$HOME/boss-recovered"
+git clone https://github.com/seanventures/boss.git "$BOSS_FRESH"
+git -C "$BOSS_FRESH" checkout "$(cat "${BOSS_BACKUP:?set BOSS_BACKUP to the backup path backup.sh or upgrade.sh printed}/source-commit")"
+./scripts/install/restore.sh --backup "$BOSS_BACKUP" \
+  --dir "$BOSS_FRESH" --project boss-recovered
 ```
 
 The helper validates the completion manifest, file checksums, safe archive paths, master-key format and database key check value before creating target resources. It uses locally cached immutable database/API image IDs recorded by the backup; it never pulls or builds images. The target source revision must match the archive. It restores the identity and artifact volumes before application startup, restores each database with `pg_restore --exit-on-error --single-transaction`, then checks the restored database/key pairing. On any failure it reports an incomplete recovery, leaves application services stopped, and retains the new target for inspection; it never deletes the original stack.
@@ -609,8 +614,11 @@ Normal recovery also requires a matching source/image pair containing the review
 Pre-guard archives, including RC8, refuse normal recovery. Use explicit offline data-only mode with current recovery tools:
 
 ```bash
-./scripts/install/restore.sh --backup /absolute/path/to/boss-backup \
-  --dir /absolute/path/to/fresh-checkout --project boss-recovered-offline \
+BOSS_FRESH="$HOME/boss-recovered-offline"
+git clone https://github.com/seanventures/boss.git "$BOSS_FRESH"
+git -C "$BOSS_FRESH" checkout "$(cat "${BOSS_BACKUP:?set BOSS_BACKUP to the backup path backup.sh or upgrade.sh printed}/source-commit")"
+./scripts/install/restore.sh --backup "$BOSS_BACKUP" \
+  --dir "$BOSS_FRESH" --project boss-recovered-offline \
   --offline-data-only
 ```
 
