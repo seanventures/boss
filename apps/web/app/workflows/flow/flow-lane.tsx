@@ -50,9 +50,9 @@ import {
   afterGapPoints, caretX, END_ID, gapPoints, planDrag, shiftsFor, type GapArrows, type LanePlan,
 } from "./drag-plan";
 import {
-  BASE_REM, chooseDensity, clampBox, fitScale, offsetFromCanvas, overflows, placedGeometry, ROW_GAP,
-  roomyGeometry,
-  type LaneGeometry,
+  BASE_REM, chooseDensity, clampBox, cubicAt, fitScale, forwardRoute, offsetFromCanvas, overflows, placedGeometry,
+  ROW_GAP, roomyGeometry, routeGrip, routePath, routeSamples, stepsCrossed,
+  type LaneGeometry, type Point, type Route,
 } from "./geometry";
 import { Minimap } from "./minimap";
 import { nodeDetail, viewOf } from "./node-facts";
@@ -89,12 +89,13 @@ export function flowInto(previous: RunPhase | "start", next: RunPhase): "past" |
 
 /* ── Edges for a branched flow ─────────────────────────────────────────────────── */
 
-type Point = { x: number; y: number };
 type Drawn = { key: string; d: string; kind: GraphEdge["kind"] | "start" | "end" | "back";
                label?: { x: number; y: number; text: string; anchor?: "start" | "middle" | "end" };
                /** The arrow as the spec says it, when it is one the operator can point elsewhere:
                 *  `from` where it leaves, `grip` where its end handle sits (near its head). */
-               link?: FlowLink; from?: Point; grip?: Point };
+               link?: FlowLink; from?: Point; grip?: Point;
+               /** What `d` draws (geometry.ts), so where it runs can be checked against the steps. */
+               route: Route; ends: string[] };
 
 /** Arrows whose end can be dragged to another step. A Repeat's step and a path into its join
  *  are their block's own (lib/workflow-graph.ts `rewireLink` says why if asked). */
@@ -102,43 +103,19 @@ const RELINKABLE = new Set<Drawn["kind"]>(["next", "yes", "no", "branch", "end",
 /** The picker's value for End (for an error path: Stop the run). */
 const END_VALUE = "__end__";
 
-/** A point `t` of the way along the cubic a → c1 → c2 → b. */
-function cubicAt(a: Point, c1: Point, c2: Point, b: Point, t: number): Point {
-  const u = 1 - t;
-  return {
-    x: u * u * u * a.x + 3 * u * u * t * c1.x + 3 * u * t * t * c2.x + t * t * t * b.x,
-    y: u * u * u * a.y + 3 * u * u * t * c1.y + 3 * u * t * t * c2.y + t * t * t * b.y,
-  };
-}
-
-/** A point on the cubic from `a` to `b` that `curve` draws, `t` of the way along. */
-function along(a: Point, b: Point, k: number, t: number): Point {
-  const u = 1 - t;
-  const c1 = { x: a.x + k, y: a.y };
-  const c2 = { x: b.x - k, y: b.y };
-  return {
-    x: u * u * u * a.x + 3 * u * u * t * c1.x + 3 * u * t * t * c2.x + t * t * t * b.x,
-    y: u * u * u * a.y + 3 * u * u * t * c1.y + 3 * u * t * t * c2.y + t * t * t * b.y,
-  };
-}
 /** How far along its arrow an end handle sits: off the arrowhead, so arrows that meet at one
  *  step (or at End) keep handles of their own. */
 const GRIP_T = 0.8;
 
-function drawEdges(layout: FlowLayout, g: LaneGeometry, spec: Spec): Drawn[] {
+const drawn = (r: Route) => ({ route: r, d: routePath(r) });
+
+/** Every arrow of a branched flow, each as the route it is drawn along (geometry.ts): forward
+ *  arrows go round any step between their ends (`forwardRoute`), ways back run along the bottom. */
+export function drawEdges(layout: FlowLayout, g: LaneGeometry, spec: Spec): Drawn[] {
   const col = new Map(layout.nodes.map((n) => [n.id, n.column]));
   const out: Drawn[] = [];
   const right = (id: string) => { const b = g.boxes.get(id)!; return { x: b.x + b.w, y: b.y + b.h / 2 }; };
   const left = (id: string) => { const b = g.boxes.get(id)!; return { x: b.x, y: b.y + b.h / 2 }; };
-  // A step moved left of the one it follows still gets an arrow that leaves to the right and
-  // arrives from the left: the curve bows out rather than folding back over the steps.
-  const bend = (a: Point, b: Point) =>
-    (b.x >= a.x + 24 ? Math.max(12, (b.x - a.x) / 2) : Math.max(48, Math.abs(b.x - a.x) / 2));
-  const curve = (a: Point, b: Point) => {
-    const k = bend(a, b);
-    return `M${a.x},${a.y} C${a.x + k},${a.y} ${b.x - k},${b.y} ${b.x},${b.y}`;
-  };
-  const grip = (a: Point, b: Point) => along(a, b, bend(a, b), GRIP_T);
   const bottom = g.height - 8;
   const loopMax = new Map(spec.steps.filter((s) => s.kind === "bounded_loop")
     .map((s) => [s.id, Number(s.max_iterations) || 0]));
@@ -147,16 +124,17 @@ function drawEdges(layout: FlowLayout, g: LaneGeometry, spec: Spec): Drawn[] {
     .map((e) => `${e.from}>${e.to}`));
 
   for (const n of layout.nodes.filter((x) => x.column === 0)) {
-    out.push({ key: `start>${n.id}`, kind: "start",
-               d: curve({ x: g.start.x + g.start.w, y: g.midY }, left(n.id)) });
+    out.push({ key: `start>${n.id}`, kind: "start", ends: [n.id],
+               ...drawn(forwardRoute(g, { x: g.start.x + g.start.w, y: g.midY }, left(n.id), [n.id])) });
   }
   const back = (from: string, to: string, badge: number, link?: FlowLink) => {
     const a = g.boxes.get(from)!;
     const b = g.boxes.get(to)!;
     const ax = a.x + a.w / 2;
     const bx = b.x + b.w / 2;
-    out.push({ key: `back:${from}>${to}`, kind: "back",
-               d: `M${ax},${a.y + a.h} V${bottom} H${bx} V${b.y + b.h}`,
+    const route: Route = { from: { x: ax, y: a.y + a.h },
+                           segs: [{ line: { x: ax, y: bottom } }, { line: { x: bx, y: bottom } }, { line: { x: bx, y: b.y + b.h } }] };
+    out.push({ key: `back:${from}>${to}`, kind: "back", ends: [from, to], ...drawn(route),
                label: badge ? { x: (ax + bx) / 2, y: bottom - 4, text: `↻ ×${badge}` } : undefined,
                ...(link ? { link, from: { x: ax, y: a.y + a.h }, grip: { x: bx, y: (bottom + b.y + b.h) / 2 } } : {}) });
   };
@@ -170,10 +148,14 @@ function drawEdges(layout: FlowLayout, g: LaneGeometry, spec: Spec): Drawn[] {
     }
     const a = right(e.from);
     const b = left(e.to);
+    const route = forwardRoute(g, a, b, [e.from, e.to]);
     let label: Drawn["label"];
     // Labels sit at the start of the edge, in the room geometry leaves after a fan-out.
     if (e.kind === "yes" || e.kind === "no") {
-      label = { x: a.x + 6, y: e.kind === "yes" ? Math.min(a.y, b.y) - 4 : Math.max(a.y, b.y) + 12, text: e.kind };
+      // A path that goes round the steps between is labelled on the side it turns to.
+      const pts = route.segs.length > 1 ? routeSamples(route) : [];
+      const turns = pts.length ? pts[pts.length >> 1].y : b.y;
+      label = { x: a.x + 6, y: e.kind === "yes" ? Math.min(a.y, turns) - 4 : Math.max(a.y, turns) + 12, text: e.kind };
     } else if (e.kind === "branch" && !labelled.has(e.from)) {
       // Under the fork, ending at its bar: every branch's arrow leaves the bar's middle and
       // fans out to the right, so a word beside the bar was always crossed by one of them.
@@ -181,17 +163,17 @@ function drawEdges(layout: FlowLayout, g: LaneGeometry, spec: Spec): Drawn[] {
       const box = g.boxes.get(e.from)!;
       label = { x: a.x, y: box.y + box.h + 14, text: "parallel", anchor: "end" };
     }
-    out.push({ key: `${e.kind}:${e.from}>${e.to}`, kind: e.kind, d: curve(a, b), label,
-               ...(RELINKABLE.has(e.kind) ? { link: { from: e.from, to: e.to, kind: e.kind }, from: a, grip: grip(a, b) } : {}) });
+    out.push({ key: `${e.kind}:${e.from}>${e.to}`, kind: e.kind, ends: [e.from, e.to], ...drawn(route), label,
+               ...(RELINKABLE.has(e.kind) ? { link: { from: e.from, to: e.to, kind: e.kind }, from: a, grip: routeGrip(route, GRIP_T) } : {}) });
     // A loop's body returns to its controller; the spec only names the way in.
     if (e.kind === "loop" && !backs.has(`${e.to}>${e.from}`)) back(e.to, e.from, loopMax.get(e.from) ?? 0);
   }
   for (const id of layout.terminal) {
     if (!g.boxes.has(id)) continue;
     const a = right(id);
-    const b = { x: g.end.x, y: g.midY };
-    out.push({ key: `${id}>end`, kind: "end", d: curve(a, b),
-               link: { from: id, to: null, kind: "end" }, from: a, grip: grip(a, b) });
+    const route = forwardRoute(g, a, { x: g.end.x, y: g.midY }, [id]);
+    out.push({ key: `${id}>end`, kind: "end", ends: [id], ...drawn(route),
+               link: { from: id, to: null, kind: "end" }, from: a, grip: routeGrip(route, GRIP_T) });
   }
   return out;
 }
@@ -207,6 +189,7 @@ function errorEdge(e: GraphEdge, g: LaneGeometry, col: Map<string, number>): Dra
   const a = g.boxes.get(e.from)!;
   const b = g.boxes.get(e.to)!;
   const link: FlowLink = { from: e.from, to: e.to, kind: "error" };
+  const ends = [e.from, e.to];
   const start = { x: a.x + a.w * 0.7, y: a.y + a.h };
   const label = { x: start.x + 6, y: start.y + 12, text: "if it fails" };
   const bottom = g.height - 8;
@@ -215,19 +198,17 @@ function errorEdge(e: GraphEdge, g: LaneGeometry, col: Map<string, number>): Dra
     const end = { x: b.x, y: b.y + b.h / 2 };
     const c1 = { x: start.x, y: start.y + Math.max(24, (end.y - start.y) / 2) };
     const c2 = { x: end.x - Math.max(24, (end.x - start.x) / 3), y: end.y };
-    const crosses = Array.from({ length: 19 }, (_, i) => cubicAt(start, c1, c2, end, (i + 1) / 20))
-      .some((p) => [...g.boxes].some(([id, box]) => id !== e.from && id !== e.to
-        && p.x > box.x && p.x < box.x + box.w && p.y > box.y && p.y < box.y + box.h));
-    if (!crosses) {
-      return { key: `error:${e.from}>${e.to}`, kind: "error", label, link, from: start,
-               d: `M${start.x},${start.y} C${c1.x},${c1.y} ${c2.x},${c2.y} ${end.x},${end.y}`,
+    const route: Route = { from: start, segs: [{ c1, c2, to: end }] };
+    if (!stepsCrossed(route, g.boxes, ends).length) {
+      return { key: `error:${e.from}>${e.to}`, kind: "error", label, link, from: start, ends, ...drawn(route),
                grip: cubicAt(start, c1, c2, end, GRIP_T) };
     }
   }
   // Under the steps: down from the step, along the bottom, up into the target's underside.
   const bx = b.x + b.w * 0.3;
-  return { key: `error:${e.from}>${e.to}`, kind: "error", label, link, from: start,
-           d: `M${start.x},${start.y} V${bottom} H${bx} V${b.y + b.h}`,
+  const route: Route = { from: start, segs: [{ line: { x: start.x, y: bottom } }, { line: { x: bx, y: bottom } },
+                                             { line: { x: bx, y: b.y + b.h } }] };
+  return { key: `error:${e.from}>${e.to}`, kind: "error", label, link, from: start, ends, ...drawn(route),
            grip: { x: bx, y: (bottom + b.y + b.h) / 2 } };
 }
 
