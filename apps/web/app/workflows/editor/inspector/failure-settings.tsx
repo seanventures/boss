@@ -16,7 +16,7 @@ import React, { useEffect, useId, useRef, useState } from "react";
 import { HelpTip } from "../../../help-tip";
 import type { Palette, Problem, Spec, SpecStep, StepPatch } from "../../../../lib/workflow-editor-types";
 import { stepView } from "../../../../lib/step-view";
-import { errorTargetOf } from "../../../../lib/workflow-graph";
+import { errorTargetOf, loopBodies } from "../../../../lib/workflow-graph";
 import {
   BACKOFF_DEFAULTS, DEFAULT_ATTEMPTS, TIME_UNITS, failureOf, readNumber, readTimeLimit, sayWaits,
   unitFor, unitSeconds, withBackoff, type FailureNumber, type TimeUnit,
@@ -24,11 +24,13 @@ import {
 import { FieldError } from "./block-settings";
 import { Section } from "./step-inspector";
 
-/** Step kinds the runtime steps through itself: nothing to retry or time out. */
-const CONTROL_KINDS = new Set(["condition", "parallel", "join", "bounded_loop"]);
+/** Step kinds the runtime steps through itself: nothing to retry or time out. The engine's
+ *  CONTROL_KINDS (workflows.py) refuses failure settings on exactly these. */
+const CONTROL_KINDS = new Set(["condition", "parallel", "join", "bounded_loop", "decision", "timer",
+                               "subworkflow"]);
 
-/** Whether a step has failure settings at all (a Branch, Do at the same time, its join and a
- *  Repeat are run by the runtime itself, not tried). */
+/** Whether a step has failure settings at all (a Branch, Do at the same time, its join, a Repeat,
+ *  an approval, a wait and a sub-workflow are run by the runtime itself, not tried). */
 export function hasFailureSettings(step: SpecStep): boolean {
   return !CONTROL_KINDS.has(step.kind);
 }
@@ -135,7 +137,11 @@ export function FailureSettings({ step, spec, palette, problems, onPatch, onErro
   const f = failureOf(step);
   const target = errorTargetOf(spec, step);
   const pickId = useId();
-  const choices = spec.steps.filter((s) => s.id !== step.id && s.kind !== "join")
+  // The engine refuses an error path on a Repeat's own step, and one into a join or a Repeat's
+  // own step: those return to their block, not onward.
+  const bodies = loopBodies(spec);
+  const inLoop = bodies.has(step.id);
+  const choices = spec.steps.filter((s) => s.id !== step.id && s.kind !== "join" && !bodies.has(s.id))
     .map((s) => ({ id: s.id, title: stepView(s, palette).title }));
   const backoff = (key: "initial_seconds" | "multiplier" | "max_seconds") => (value: number | null) =>
     onPatch({ retry_backoff: withBackoff(step, key, value) });
@@ -171,7 +177,7 @@ export function FailureSettings({ step, spec, palette, problems, onPatch, onErro
       <TimeLimit stored={f.timeoutSeconds} onCommit={(value) => onPatch({ timeout_seconds: value })} />
       <FieldError problems={problems} field="timeout_seconds" />
 
-      <div className="wf-field">
+      {inLoop ? null : <div className="wf-field">
         <label className="wf-label" htmlFor={pickId}>If it still fails, go to…</label>
         <select id={pickId} className="wf-select" value={target ?? STOP} data-testid="wf-fail-on-error"
                 onChange={(e) => onErrorPath(e.target.value === STOP ? null : e.target.value)}>
@@ -179,7 +185,7 @@ export function FailureSettings({ step, spec, palette, problems, onPatch, onErro
           {choices.map((c) => <option key={c.id} value={c.id}>{c.title}</option>)}
         </select>
         <FieldError problems={problems} field="on_error" />
-      </div>
+      </div>}
     </Section>
   );
 }

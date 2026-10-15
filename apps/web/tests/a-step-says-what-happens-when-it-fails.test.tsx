@@ -37,10 +37,10 @@ const {
 } = await import("../lib/workflow-graph");
 const { checkRewire } = await import("../lib/workflow-rewire");
 const { editorReducer, emptyEditorState, newMeta, parseSpecText, specText } = await import("../lib/workflow-editor-store");
-const { FailureSettings } = await import("../app/workflows/editor/inspector/failure-settings");
+const { FailureSettings, hasFailureSettings } = await import("../app/workflows/editor/inspector/failure-settings");
 const { FlowLane } = await import("../app/workflows/flow/flow-lane");
 const { WorkflowEditor } = await import("../app/workflows/editor/workflow-editor");
-const { laneStateOf } = await import("../app/delivery-workflows-ui");
+const { errorPathTaken, laneStateOf, stoppedForYou } = await import("../app/delivery-workflows-ui");
 
 const cap = (id: string, capability: string, next?: string[], extra: Partial<SpecStep> = {}): SpecStep =>
   ({ id, kind: "capability", binding: { capability }, ...(next ? { next } : {}), ...extra });
@@ -620,5 +620,55 @@ describe("in the editor", () => {
     await settle(3);
     expect(document.querySelector('.wf-node[data-step-id="build"] [data-testid="wf-badge-failure"]')!
       .getAttribute("aria-label")).toBe("Time limit 2m");
+  });
+});
+
+/* ── 7. What the engine records and refuses ────────────────────────────────────── */
+
+describe("the designer follows what the engine records and refuses", () => {
+  const run = (over: Record<string, unknown>) =>
+    ({ step_id: "build", kind: "capability", status: "failed", capability: "build",
+       decision_id: null, output: {}, ...over }) as unknown as Parameters<typeof laneStateOf>[0];
+
+  it("offers no failure settings on a step the engine runs itself", () => {
+    for (const kind of ["condition", "parallel", "join", "bounded_loop", "decision", "timer", "subworkflow"]) {
+      expect(hasFailureSettings({ id: "x", kind } as SpecStep), kind).toBe(false);
+    }
+    expect(hasFailureSettings(cap("x", "build"))).toBe(true);
+  });
+
+  it("a step that failed into its error path is marked from the engine's record, not stopped for you", () => {
+    const took = run({ output: { error_path_taken: "tell", reason: "step_timeout" } });
+    expect(errorPathTaken(took)).toBe("tell");
+    expect(stoppedForYou(took)).toBe(false);
+    expect(laneStateOf(took)).toMatchObject({ phase: "failed", meta: "timed out — took its error path", errorPath: true });
+    const plain = run({});
+    expect(errorPathTaken(plain)).toBeNull();
+    expect(laneStateOf(plain).errorPath).toBeUndefined();
+  });
+
+  it("a Repeat's own step gets no error path, and is never offered as one", () => {
+    const LOOP: Spec = {
+      entry_step: "research",
+      steps: [
+        cap("research", "research", ["again"]),
+        { id: "again", kind: "bounded_loop", body: "poll", next: ["build"] } as SpecStep,
+        cap("poll", "poll"),
+        cap("build", "build"),
+      ],
+    };
+    const el = document.createElement("div"); document.body.appendChild(el);
+    const r = createRoot(el);
+    const draw = (id: string) => act(() => r.render(h(FailureSettings, {
+      step: step(LOOP, id), spec: LOOP, palette: PALETTE, problems: [], onPatch: () => {}, onErrorPath: () => {},
+    })));
+    draw("poll");
+    expect(el.querySelector('[data-testid="wf-fail-on-error"]')).toBeNull();
+    expect(el.querySelector('[data-testid="wf-fail-attempts"]')).not.toBeNull();
+    draw("build");
+    const options = [...el.querySelectorAll('[data-testid="wf-fail-on-error"] option')].map((o) => (o as HTMLOptionElement).value);
+    expect(options).not.toContain("poll");
+    expect(options).toContain("research");
+    act(() => r.unmount()); el.remove();
   });
 });

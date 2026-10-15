@@ -410,6 +410,8 @@ export function stoppedForYou(step: RunStep): boolean {
   if (step.kind === "decision") return false;
   // A fan-out branch an `any` join went on without: a visible partial failure, not a stop.
   if ((step.output as { tolerated_by_join?: unknown } | undefined)?.tolerated_by_join) return false;
+  // A step that failed into its error path (#512): the run went on where the workflow said to.
+  if (errorPathTaken(step)) return false;
   return !step.decision_id;
 }
 
@@ -1860,7 +1862,14 @@ export function railMeta(step: RunStep): string {
  *  The states that are NOT plain progress keep their own words, because "this one failed" or
  *  "this did nothing" must never be something you infer from a colour: a step that did nothing
  *  is never drawn as done, and an operator's skip says who and why. */
-export function laneStateOf(step: RunStep): { phase: string; meta: string; tip?: string } {
+/** The step the engine sent the run to after this one failed for good (#512), or null. The engine
+ *  records it as `output.error_path_taken` (and a `workflow.error_path_taken` event). */
+export function errorPathTaken(step: RunStep): string | null {
+  const to = (step.output as { error_path_taken?: unknown } | undefined)?.error_path_taken;
+  return typeof to === "string" && to ? to : null;
+}
+
+export function laneStateOf(step: RunStep): { phase: string; meta: string; tip?: string; errorPath?: boolean } {
   if (needsYou(step)) return { phase: "needs_you", meta: "needs you" };
   switch (phaseOf(step)) {
     case "nothing": return { phase: "skipped", meta: "nothing done", tip: DID_NOTHING };
@@ -1869,7 +1878,11 @@ export function laneStateOf(step: RunStep): { phase: string; meta: string; tip?:
       if (by) return { phase: "skipped", meta: by, tip: by };
       return { phase: "skipped", meta: "skipped", tip: skipReason(step) || "this step did not apply to this run" };
     }
-    case "failed": return timedOut(step)
+    case "failed": if (errorPathTaken(step)) {
+      return { phase: "failed", meta: timedOut(step) ? "timed out — took its error path" : "failed — took its error path",
+               tip: "It failed, and the run went on at its error path", errorPath: true };
+    }
+    return timedOut(step)
       ? { phase: "failed", meta: "timed out", tip: "A try ran longer than the step's time limit" }
       : { phase: "failed", meta: railMeta(step) || "failed" };
     case "failed_on": return { phase: "failed", meta: "failed — went on",

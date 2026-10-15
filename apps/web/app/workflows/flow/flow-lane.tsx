@@ -61,6 +61,8 @@ import { StepNode, type RunPhase } from "./step-node";
 import { DRAG_THRESHOLD, GAP_SNAP, useLaneDrag, type DragSource, type DropGap, type LaneTarget } from "./use-lane-drag";
 
 export type LaneRunState = { phase: string; meta: string; tip?: string;
+  /** The engine recorded that this step failed into its error path (`output.error_path_taken`). */
+  errorPath?: boolean;
   /** Who ran it, once the work is recorded (Agent World: face, live ring, how-glyph). */
   agent?: LaneAgent };
 export type LaneZoom = "fit" | "full";
@@ -705,11 +707,11 @@ export function FlowLane(p: {
     return "refused" in rewireLink(spec, relinking.link, id) ? "no" : "ok";
   };
   const phases = new Map(order.map((id) => [id, runPhase(runState?.[id]?.phase)]));
-  /** On a run, the steps that took their error path: each failed, and the run went on at its
-   *  `on_error` step (that step is no longer still to come). Read from the phases the run already
-   *  reports, so it needs nothing new from the run. */
+  /** On a run, the steps that took their error path: what the engine recorded on the step
+   *  (`output.error_path_taken`), or else a failed step whose `on_error` step has started. */
   const tookError = new Set(mode === "run" ? errorPaths
-    .filter((e) => phases.get(e.from) === "failed" && (phases.get(e.to) ?? "future") !== "future")
+    .filter((e) => runState?.[e.from]?.errorPath
+      || (phases.get(e.from) === "failed" && (phases.get(e.to) ?? "future") !== "future"))
     .map((e) => e.from) : []);
 
   // The `+` on each connector: every gap of a linear flow, and the allowed ones of a branched one.
