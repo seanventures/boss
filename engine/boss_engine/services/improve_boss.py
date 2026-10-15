@@ -225,13 +225,25 @@ def _os_arch() -> tuple[str, str]:
     return os_name, arch
 
 
+_PEP440_PRE = re.compile(r"^(\d+\.\d+\.\d+)\.?(a|alpha|b|beta|rc|dev)\.?(\d*)$")
+_PRE_LABEL = {"a": "alpha", "alpha": "alpha", "b": "beta", "beta": "beta", "rc": "rc", "dev": "dev"}
+
+
 def _version() -> str:
+    """The release version as it is published (`1.0.0-rc.9`), not Python's spelling of it
+    (`1.0.0rc9`): the allow-list only carries the release form, so the raw package version
+    would be dropped from every heartbeat and context."""
     try:
         from .. import __version__
 
-        return str(__version__)
+        raw = str(__version__)
     except Exception:  # noqa: BLE001
         return "0.0.0"
+    pre = _PEP440_PRE.match(raw)
+    if pre:
+        base, label, n = pre.groups()
+        return f"{base}-{_PRE_LABEL[label]}" + (f".{n}" if n else "")
+    return raw
 
 
 def _edition(settings: Any) -> str:
