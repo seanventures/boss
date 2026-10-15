@@ -324,6 +324,12 @@ def skill_references(connection: Connection, project_id: str, skill_key: str) ->
         skill_key, _no_references())
 
 
+def count_authored(connection: Connection) -> int:
+    """How many skills operators authored, across the install (Improve BOSS's anonymous count:
+    a number, never a name). The store's owner counts its own rows."""
+    return int(connection.execute(text("SELECT COUNT(*) FROM skill_definitions")).scalar() or 0)
+
+
 def get_skill(connection: Connection, project_id: str, skill_key: str) -> Optional[dict[str, Any]]:
     row = connection.execute(
         text("SELECT * FROM skill_definitions WHERE project_id = :p AND skill_key = :k"),

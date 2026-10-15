@@ -92,7 +92,7 @@ def _tools() -> tuple[list[dict], list[tuple[str, dict]], Any]:
 def _run(model: StubModel, **kw: Any) -> dict[str, Any]:
     schemas, _, call_tool = _tools()
     return agent.run_agent(adapter=model, evidence=kw.pop("evidence", EVIDENCE), tools=schemas,
-                           call_tool=kw.pop("call_tool", call_tool), step_ids=STEP_IDS, **kw)
+                           run_tool=kw.pop("run_tool", call_tool), step_ids=STEP_IDS, **kw)
 
 
 # ── would it have caught it ───────────────────────────────────────────────────────────────────
@@ -100,7 +100,7 @@ def _run(model: StubModel, **kw: Any) -> dict[str, Any]:
 def test_a_sandbox_init_error_lands_as_a_model_will_fail_with_its_evidence():
     model = StubModel(_socat_script(), engine="claude_agent_sdk")
     schemas, calls, call_tool = _tools()
-    out = agent.run_agent(adapter=model, evidence=EVIDENCE, tools=schemas, call_tool=call_tool,
+    out = agent.run_agent(adapter=model, evidence=EVIDENCE, tools=schemas, run_tool=call_tool,
                           step_ids=STEP_IDS)
     assert calls == [("installed_binaries", {"names": ["socat", "bwrap"]})]
     assert out["stopped"] is None and out["turns"] == 2 and out["tool_calls"] == 1

@@ -437,6 +437,16 @@ def _scorecards(connection, secret: str, since: Optional[datetime], until: datet
     return {"rows": [], "agg": agg}, note
 
 
+def _authored_skill_count(connection: Any) -> int:
+    """How many skills operators authored on this install: the authored store's own count."""
+    from .skill_definitions import count_authored
+
+    try:
+        return count_authored(connection)
+    except Exception:  # noqa: BLE001 — a missing table is zero, as _count treats it
+        return 0
+
+
 def build_batch(connection, settings: Any, *, day: date, since: Optional[datetime],
                 until: datetime, consent_at: Optional[datetime] = None, force_agg: bool = False,
                 level: int = 1) -> dict[str, Any]:
@@ -553,7 +563,7 @@ def build_batch(connection, settings: Any, *, day: date, since: Optional[datetim
              + (SELECT COUNT(*) FROM workflow_runs WHERE status = 'cancelled' AND {w('updated_at')})""", p)
     custom = {
         "roles": allow.count_range(scale["agents_custom"]),
-        "skills": allow.count_range(_count(connection, "SELECT COUNT(*) FROM skill_definitions", p)),
+        "skills": allow.count_range(_authored_skill_count(connection)),
         "mcp_servers": allow.count_range(_count(connection, "SELECT COUNT(*) FROM mcp_servers WHERE "
                                                 "provenance->>'source' IS DISTINCT FROM 'builtin'", p)),
         "workflows": allow.count_range(_count(connection, "SELECT COUNT(*) FROM workflow_definitions "

@@ -60,6 +60,7 @@ from typing import Any, Callable, Iterable, Mapping, Optional, Sequence
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
+from . import owned_process
 from . import workflow_capabilities as caps
 
 VERDICTS = ("ready", "fixable", "will_fail", "unknown")
@@ -908,8 +909,8 @@ def check_toolchain(ctx: Context, step: dict[str, Any]) -> dict[str, Any]:
     node = ""
     if tools.get("node") and not ctx.offline:
         try:
-            node = subprocess.run(["node", "--version"], capture_output=True, text=True,
-                                  timeout=5).stdout.strip()
+            node = owned_process.run(["node", "--version"], capture_output=True, text=True,
+                                     timeout=5).stdout.strip()
         except Exception:  # noqa: BLE001
             node = ""
     want = _engines_node(ctx)
@@ -1595,7 +1596,7 @@ def check_dependencies(ctx: Context, step: dict[str, Any]) -> dict[str, Any]:
                 shutil.copy(ctx.app_dir / name, Path(tmp) / name)
         started = time.monotonic()
         try:
-            proc = subprocess.run(
+            proc = owned_process.run(
                 ["npm", "install", "--dry-run", "--package-lock-only", "--ignore-scripts",
                  "--no-audit", "--no-fund", "--loglevel=error"],
                 cwd=tmp, capture_output=True, text=True, timeout=90)
@@ -2027,9 +2028,9 @@ def _regenerate_lock_dry_run(app_dir: Path) -> str:
             if (app_dir / name).is_file():
                 shutil.copy(app_dir / name, Path(tmp) / name)
         try:
-            proc = subprocess.run(["npm", "install", "--package-lock-only", "--ignore-scripts",
-                                   "--no-audit", "--no-fund", "--loglevel=error"], cwd=tmp,
-                                  capture_output=True, text=True, timeout=90)
+            proc = owned_process.run(["npm", "install", "--package-lock-only", "--ignore-scripts",
+                                      "--no-audit", "--no-fund", "--loglevel=error"], cwd=tmp,
+                                     capture_output=True, text=True, timeout=90)
         except subprocess.TimeoutExpired:
             return "npm took over 90 s"
         if proc.returncode != 0:

@@ -744,8 +744,8 @@ def sandbox_facts() -> str:
 
     lines = []
     try:
-        node = subprocess.run(["node", "--version"], capture_output=True, text=True,
-                              timeout=5).stdout.strip()
+        node = owned_process.run(["node", "--version"], capture_output=True, text=True,
+                                 timeout=5).stdout.strip()
     except Exception:  # noqa: BLE001 — no node: say nothing about it
         node = ""
     if node:
