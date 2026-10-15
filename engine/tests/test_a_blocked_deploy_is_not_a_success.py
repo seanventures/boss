@@ -147,5 +147,9 @@ class TestTheSentenceThatExplainedNothing:
 
         from boss_engine.services import workflows
 
-        body = inspect.getsource(workflows.fail_step)
+        # fail_step hands the attempt to _fail_attempt (the one place a failed attempt is
+        # written, retry and error path included), so the merge lives there.
+        assert "_fail_attempt(" in inspect.getsource(workflows.fail_step)
+        body = inspect.getsource(workflows._fail_attempt)
         assert "COALESCE(output, '{}'::jsonb) || CAST(:output AS JSONB)" in body
+        assert "SET output = CAST(:output" not in body and "output = CAST(:output" not in body

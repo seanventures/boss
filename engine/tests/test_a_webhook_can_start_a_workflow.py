@@ -39,6 +39,14 @@ def made():
     engine = create_engine(DATABASE_URL)
     key = f"hook_probe_{uuid.uuid4().hex[:8]}"
     with engine.begin() as connection:
+        # The project the hooks belong to, in the workspace the database already has: on a
+        # freshly seeded database nothing else has made it.
+        connection.execute(text(
+            "INSERT INTO projects (id, workspace_id, name, slug) "
+            "SELECT :p, workspace_id, 'Test', :p FROM projects ORDER BY created_at LIMIT 1 "
+            "ON CONFLICT DO NOTHING"), {"p": PROJECT})
+        assert connection.execute(text("SELECT 1 FROM projects WHERE id = :p"),
+                                  {"p": PROJECT}).first(), "no workspace to put the project in"
         connection.execute(text(
             "INSERT INTO projects (id, workspace_id, name, slug) "
             "SELECT :o, workspace_id, 'Other', :o FROM projects WHERE id = :p "

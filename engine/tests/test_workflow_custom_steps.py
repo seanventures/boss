@@ -470,11 +470,14 @@ def test_approving_the_gate_actually_lets_the_step_run(eng, project, monkeypatch
     assert row["output"]["_step"]["risk_tier"] == 3
 
 
-def test_a_rejected_gate_blocks_the_run(eng, project, monkeypatch):
+def test_a_rejected_gate_stops_the_run(eng, project, monkeypatch):
+    """A refused gate stops the run as failed (workflows.reject_gate / _stop_run_at), and the
+    skill it guarded never runs."""
     import boss_engine.services.agent_loop as agent_loop
+    ran = []
     monkeypatch.setattr(
         agent_loop, "_invoke_agent_skill",
-        lambda *a, **k: {"status": "succeeded", "result": {}},
+        lambda *a, **k: ran.append(a) or {"status": "succeeded", "result": {}},
     )
     with eng.begin() as c:
         _skill(c, project, "prod.reset", risk_tier=3)
@@ -491,7 +494,8 @@ def test_a_rejected_gate_blocks_the_run(eng, project, monkeypatch):
         runner.tick(c, Ctx(eng), project_id=project)
         status = c.execute(text("SELECT status FROM workflow_runs WHERE id=:r"),
                            {"r": run["id"]}).scalar()
-    assert status == "blocked"
+    assert status == "failed"
+    assert ran == [], "the refused skill ran anyway"
 
 
 def test_a_step_whose_skill_was_disabled_after_publishing_refuses_to_run(eng, project,
