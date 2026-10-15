@@ -90,6 +90,7 @@ nav:
       - Walkthroughs: walkthroughs.md
       - Workflow retries, timeouts and error paths: WORKFLOW_STEP_ERRORS.md
       - Starting a workflow from a webhook: WORKFLOW_WEBHOOKS.md
+      - Workflow test runs and running again from a step: WORKFLOW_TEST_RUNS.md
   - Interfaces:
       - Overview: interfaces.md
       - Metatron terminal: terminal.md
