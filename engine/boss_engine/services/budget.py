@@ -302,7 +302,7 @@ class BudgetGovernor:
         else:
             decision_id = create_blocking_decision(
                 connection, project_id, None, "Reconcile historical unresolved model exposure before paid work",
-                {"action": "reconcile_legacy_model_exposure", **evidence},
+                {**evidence, "action": "reconcile_legacy_model_exposure"},
                 {"original_estimate_usd_micros": int(row['original_estimate_usd_micros']), "actual_cost_known": False},
                 "legacy_model_outcome_unknown")
             emit_event(connection, project_id, 'budget.legacy_reconciliation_required', 'budget_governor',
@@ -414,7 +414,7 @@ class BudgetGovernor:
         else:
             decision_id = create_blocking_decision(
                 connection, project_id, None, "Reconcile historical unresolved provider exposure before paid work",
-                {"action": "reconcile_legacy_provider_exposure", **evidence},
+                {**evidence, "action": "reconcile_legacy_provider_exposure"},
                 {"original_estimate_usd_micros": int(row['original_estimate_usd_micros']), "actual_cost_known": False},
                 "legacy_provider_outcome_unknown")
             emit_event(connection, project_id, 'budget.legacy_reconciliation_required', 'budget_governor',
