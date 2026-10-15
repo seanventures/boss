@@ -28,6 +28,19 @@ older than `TIMESTAMP_TOLERANCE_SECONDS`; within that window the dedupe key stop
 second run. Without a delivery id the dedupe key is the hash of the signed timestamp and body,
 so an identical replay is still one run.
 
+WHOSE AUTHORITY A RUN STARTS ON
+-------------------------------
+A delivery runs as the member who made the trigger, so that member's authority is checked at
+EVERY delivery, not only when the trigger was made — the rule a schedule follows:
+
+* the standing grant linked at creation (`consent.require_for_schedule`) must still be live and
+  theirs (`consent.schedule_acting`). When it is not, the delivery is refused AND the trigger is
+  turned off with "Renew authority", exactly as a schedule pauses;
+* they must still hold the permission to start runs in the project: `workflow_run:start` through
+  the identity PDP when identity is enforced, the `workflow_execute` member permission otherwise.
+  A removed or narrowed member's deliveries are refused (`actor_not_authorized`) and recorded;
+  the trigger stays on, so restoring the member is enough.
+
 EVERY REFUSAL IS VISIBLE
 ------------------------
 A delivery that reaches a trigger is recorded whatever happens to it: `started`, `duplicate`, or
@@ -75,9 +88,13 @@ RECENT_DELIVERIES = 50
 
 REFUSAL_REASONS = (
     "disabled", "too_large", "unsupported_content_type", "missing_signature",
-    "stale_timestamp", "bad_signature", "invalid_json", "not_ready", "rate_limited",
-    "start_failed", "workflow_missing",
+    "stale_timestamp", "bad_signature", "invalid_json", "actor_not_authorized", "not_ready",
+    "rate_limited", "start_failed", "workflow_missing",
 )
+
+#: The legacy member permission (shadow/off) and the catalogue one (enforced) a start needs.
+MEMBER_PERMISSION = "workflow_execute"
+CATALOGUE_PERMISSION = "workflow_run:start"
 
 _NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._-]{0,79}$")
 
@@ -157,6 +174,8 @@ def _describe(row: Mapping[str, Any]) -> dict[str, Any]:
         "secret_last4": row.get("secret_last4"),
         "secret_rotated_at": row.get("secret_rotated_at"),
         "refused_unrecorded": int(row.get("refused_unrecorded") or 0),
+        "last_error": row.get("last_error"),
+        "on_behalf_of": row.get("on_behalf_of"),
         "last_delivery_at": row.get("last_delivery_at"),
         "created_at": row.get("created_at"),
         "actor": row["actor"],
@@ -198,6 +217,7 @@ def create(connection: Connection, *, project_id: str, workflow_key: str, name: 
     if taken:
         raise WebhookTriggerError(f"a webhook trigger named '{name}' already exists.")
 
+    link = _link_authority(connection, project_id, workflow_key, name)
     trigger_id = make_id("wht")
     secret = _new_secret()
     stored = _store_secret(connection, project_id, trigger_id, secret, actor)
@@ -205,12 +225,13 @@ def create(connection: Connection, *, project_id: str, workflow_key: str, name: 
         text("""
             INSERT INTO workflow_webhook_triggers
                 (id, project_id, workflow_key, name, path_token, secret_ref_id, secret_last4,
-                 actor, enabled)
-            VALUES (:id, :p, :k, :n, :tok, :ref, :last4, :actor, TRUE)
+                 actor, enabled, on_behalf_of, grant_id)
+            VALUES (:id, :p, :k, :n, :tok, :ref, :last4, :actor, TRUE, :obo, :grant)
         """),
         {"id": trigger_id, "p": project_id, "k": workflow_key, "n": name,
          "tok": secrets.token_urlsafe(24), "ref": stored["secret_ref_id"],
-         "last4": secret[-4:], "actor": actor},
+         "last4": secret[-4:], "actor": actor,
+         "obo": link.get("on_behalf_of"), "grant": link.get("grant_id")},
     )
     emit_event(connection, project_id, "workflow.webhook_created", actor,
                "workflow_webhook_trigger", trigger_id,
@@ -254,9 +275,20 @@ def rotate(connection: Connection, *, project_id: str, trigger_id: str,
 def set_enabled(connection: Connection, *, project_id: str, trigger_id: str, enabled: bool,
                 actor: str) -> dict[str, Any]:
     row = _row(connection, project_id, trigger_id, lock=True)
+    if enabled:
+        # TURNING IT BACK ON IS WHERE AUTHORITY IS RENEWED: the person doing it links their own
+        # standing grant (or is asked for one), as when the trigger was made. Kept as it was when
+        # identity does not apply to this call.
+        link = _link_authority(connection, project_id, row["workflow_key"], row["name"])
+        if link:
+            connection.execute(
+                text("UPDATE workflow_webhook_triggers SET on_behalf_of = :obo, grant_id = :g "
+                     "WHERE id = :i"),
+                {"obo": link.get("on_behalf_of"), "g": link.get("grant_id"), "i": row["id"]})
     connection.execute(
-        text("UPDATE workflow_webhook_triggers SET enabled = :e, updated_at = now() "
-             "WHERE id = :i AND project_id = :p"),
+        text("UPDATE workflow_webhook_triggers SET enabled = :e, updated_at = now()"
+             + (", last_error = NULL" if enabled else "")
+             + " WHERE id = :i AND project_id = :p"),
         {"e": bool(enabled), "i": row["id"], "p": project_id},
     )
     emit_event(connection, project_id,
@@ -279,6 +311,99 @@ def deliveries(connection: Connection, *, project_id: str, trigger_id: str,
         {"t": trigger_id, "p": project_id, "n": max(1, min(int(limit), 200))},
     ).mappings().all()
     return {"trigger": _describe(row), "deliveries": [dict(i) for i in items]}
+
+
+# ── Authority ─────────────────────────────────────────────────────────────────
+
+
+def _link_authority(connection: Connection, project_id: str, workflow_key: str,
+                    name: str) -> dict[str, Any]:
+    """The standing grant this trigger will run under: the schedule rule, verbatim.
+
+    `require_for_schedule` returns the link for a person's console session, {} when identity does
+    not apply to the call, or raises ConsentRequired (scope "schedule", standing durations only),
+    which the API turns into the consent sheet exactly as it does for a schedule.
+    """
+    from boss_engine.identity import consent as _consent
+
+    spec = connection.execute(
+        text("""
+            SELECT v.spec FROM workflow_definitions d
+            JOIN workflow_versions v ON v.id = d.active_version_id
+            WHERE d.project_id = :p AND d.workflow_key = :k
+        """),
+        {"p": project_id, "k": workflow_key},
+    ).scalar()
+    if spec is None:
+        return {}
+    return _consent.require_for_schedule(connection, project_id=project_id, spec=spec,
+                                         input_data={}, name=name) or {}
+
+
+class _NotAuthorized(Exception):
+    def __init__(self, detail: str, *, pause: bool) -> None:
+        super().__init__(detail)
+        self.detail = detail
+        self.pause = pause
+
+
+def _authority(connection: Connection, trigger: Mapping[str, Any]):
+    """At every delivery: may the trigger's creator still start this workflow here?
+
+    Returns the Acting to start under (None when identity does not apply), or raises
+    _NotAuthorized. `pause` is True only for a lost standing grant, which is what turns a
+    schedule off; a member's lost permission refuses without turning anything off.
+    """
+    from boss_engine.identity import consent as _consent
+    from boss_engine.identity.lineage import _enforced
+
+    try:
+        acting = _consent.schedule_acting(connection, trigger)
+    except _consent.AuthorityLost as lost:
+        raise _NotAuthorized(f"the standing grant this trigger runs under has ended "
+                             f"({lost.reason})", pause=True) from None
+    project_id = trigger["project_id"]
+    if _enforced():
+        principal = (acting.principal_id if acting is not None else None) or trigger["actor"]
+        if not _principal_may_start(connection, project_id, principal):
+            raise _NotAuthorized(f"'{principal}' can no longer start workflows in this project",
+                                 pause=False)
+        return acting
+    from ..config import get_settings
+    from .members import (
+        MemberDirectoryService, ProjectMemberNotFoundError, ProjectMemberPermissionError,
+    )
+
+    try:
+        MemberDirectoryService(get_settings()).require_member(
+            connection, project_id, trigger["actor"], permission=MEMBER_PERMISSION)
+    except (ProjectMemberNotFoundError, ProjectMemberPermissionError):
+        raise _NotAuthorized(f"'{trigger['actor']}' can no longer start workflows in this "
+                             f"project", pause=False) from None
+    return acting
+
+
+def _principal_may_start(connection: Connection, project_id: str, principal_id: str) -> bool:
+    """`workflow_run:start` at this project through the identity PDP's own binding paths."""
+    from boss_engine.identity import authz
+    from boss_engine.identity.scope import ResolvedScope, ScopeKind
+
+    org_id = connection.execute(
+        text("SELECT w.org_id FROM projects p JOIN workspaces w ON w.id = p.workspace_id "
+             "WHERE p.id = :p"), {"p": project_id}).scalar()
+    if not org_id:
+        return False
+    # A removed (suspended, deprovisioned) person holds nothing, whatever bindings remain.
+    status = connection.execute(
+        text("SELECT status FROM identity_principals WHERE id = :i AND org_id = :o"),
+        {"i": str(principal_id), "o": str(org_id)}).scalar()
+    if status != "active":
+        return False
+    try:
+        scope = ResolvedScope(ScopeKind.PROJECT, str(org_id), project_id)
+        return bool(authz.explain(str(principal_id), CATALOGUE_PERMISSION, scope, db=connection))
+    except Exception:  # noqa: BLE001 — a check that cannot answer is a no, never a start
+        return False
 
 
 # ── The inbound door ──────────────────────────────────────────────────────────
@@ -403,6 +528,23 @@ def receive(connection: Connection, path_token: str, raw_body: bytes,
         return _refuse(connection, trigger, "invalid_json", raw_body=raw_body,
                        delivery_id=delivery_id, detail="body must be a JSON object")
 
+    # THE CREATOR'S AUTHORITY, AT EVERY DELIVERY — checked only once the request is proven to
+    # come from the secret's holder, and before anything (even a duplicate answer) is given.
+    try:
+        acting = _authority(connection, trigger)
+    except _NotAuthorized as refused:
+        if refused.pause:
+            connection.execute(
+                text("UPDATE workflow_webhook_triggers SET enabled = FALSE, updated_at = now(), "
+                     "last_error = :err WHERE id = :t"),
+                {"t": trigger["id"], "err": f"Renew authority: {refused.detail}."})
+        emit_event(connection, trigger["project_id"], "workflow.webhook_refused_authority",
+                   trigger["actor"], "workflow_webhook_trigger", trigger["id"],
+                   {"name": trigger["name"], "delivery_id": delivery_id,
+                    "detail": refused.detail, "disabled": refused.pause})
+        return _refuse(connection, trigger, "actor_not_authorized", raw_body=raw_body,
+                       delivery_id=delivery_id, detail=refused.detail)
+
     dedupe_key = (f"id:{delivery_id}" if delivery_id else
                   "sig:" + hashlib.sha256(timestamp.encode() + b"." + raw_body).hexdigest())
     run_dedupe = f"webhook:{trigger['id']}:{hashlib.sha256(dedupe_key.encode()).hexdigest()}"
@@ -432,8 +574,11 @@ def receive(connection: Connection, path_token: str, raw_body: bytes,
                        delivery_id=delivery_id,
                        detail=f"more than {START_LIMIT_PER_MINUTE} runs a minute")
 
-    return _start(connection, trigger, payload, raw_body=raw_body, delivery_id=delivery_id,
-                  dedupe_key=dedupe_key, run_dedupe=run_dedupe)
+    from boss_engine.identity import lineage as _lineage
+
+    with (_lineage.acting(acting) if acting is not None else _lineage.nullcontext()):
+        return _start(connection, trigger, payload, raw_body=raw_body, delivery_id=delivery_id,
+                      dedupe_key=dedupe_key, run_dedupe=run_dedupe)
 
 
 def _start(connection: Connection, trigger: Mapping[str, Any], payload: dict[str, Any], *,

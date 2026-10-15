@@ -20,6 +20,18 @@ DATABASE_URL = os.environ.get("DATABASE_URL")
 pytestmark = pytest.mark.skipif(not DATABASE_URL, reason="no database configured")
 PROJECT = "prj_test"
 OTHER = "prj_webhook_other"
+#: The member who makes the triggers; deliveries run on their authority.
+OWNER = "hook_owner"
+
+
+def _set_owner(connection, *, permissions=("workflow_execute", "workflow_manage"), status="active"):
+    connection.execute(text("""
+        INSERT INTO project_members (id, project_id, member_id, display_name, permissions, status)
+        VALUES (:id, :p, :m, 'Hook owner', CAST(:perms AS JSONB), :s)
+        ON CONFLICT (project_id, member_id) DO UPDATE
+          SET permissions = EXCLUDED.permissions, status = EXCLUDED.status
+    """), {"id": f"pm_{uuid.uuid4().hex[:12]}", "p": PROJECT, "m": OWNER,
+           "perms": json.dumps(list(permissions)), "s": status})
 
 
 @pytest.fixture()
@@ -39,8 +51,9 @@ def made():
             spec={"entry_step": "hold",
                   "steps": [{"id": "hold", "kind": "timer", "wait_seconds": 60,
                              "binding": {}, "next": []}]})
+        _set_owner(connection)
         trigger = hooks.create(connection, project_id=PROJECT, workflow_key=key,
-                               name=f"Hook {key}", actor="test")
+                               name=f"Hook {key}", actor=OWNER)
     yield engine, key, trigger
     with engine.begin() as connection:
         connection.execute(text("DELETE FROM workflow_webhook_triggers WHERE workflow_key = :k"),
@@ -242,3 +255,113 @@ def test_a_flood_of_refusals_is_counted_not_itemised(made):
     shown = _deliveries(engine, trigger)
     assert len(shown["deliveries"]) == hooks.REFUSED_RECORD_LIMIT
     assert shown["trigger"]["refused_unrecorded"] == 3
+
+
+# ── The creator's authority, re-checked at every delivery ────────────────────
+
+
+def _runs(engine, key) -> int:
+    with engine.begin() as connection:
+        return connection.execute(text(
+            "SELECT count(*) FROM workflow_runs r JOIN workflow_versions v "
+            "ON v.id = r.workflow_version_id JOIN workflow_definitions d "
+            "ON d.id = v.workflow_definition_id WHERE d.workflow_key = :k"), {"k": key}).scalar()
+
+
+def _authority_events(engine, trigger):
+    with engine.begin() as connection:
+        return connection.execute(text(
+            "SELECT data FROM events WHERE entity_id = :i "
+            "AND event_type = 'workflow.webhook_refused_authority'"),
+            {"i": trigger["id"]}).scalars().all()
+
+
+@pytest.mark.parametrize("revoke", [
+    {"permissions": ("workflow_manage",)},                       # lost workflow_execute
+    {"status": "removed"},                                       # removed from the project
+])
+def test_a_revoked_creator_is_refused_recorded_and_restored(made, revoke):
+    engine, key, trigger = made
+    with engine.begin() as connection:
+        _set_owner(connection, **revoke)
+    body = b'{"n": 7}'
+    refused = _send(engine, trigger, body, _headers(trigger["secret"], body, delivery="a-1"))
+    assert refused["status"] == "refused" and refused["reason"] == "actor_not_authorized", refused
+    assert _runs(engine, key) == 0
+    shown = _deliveries(engine, trigger)
+    assert [(d["status"], d["reason"]) for d in shown["deliveries"]] == \
+        [("refused", "actor_not_authorized")]
+    [event] = _authority_events(engine, trigger)
+    assert event["disabled"] is False and event["delivery_id"] == "a-1"
+    # A member's lost permission does not turn the trigger off (a schedule is not paused for it):
+    assert shown["trigger"]["enabled"] is True
+
+    with engine.begin() as connection:
+        _set_owner(connection)
+    started = _send(engine, trigger, body, _headers(trigger["secret"], body, delivery="a-1"))
+    assert started["status"] == "started", "restoring the member must be enough"
+    assert _runs(engine, key) == 1
+
+
+def test_a_missing_standing_grant_refuses_and_pauses_like_a_schedule(made, monkeypatch):
+    """Identity enforced and no grant linked: schedule_acting says schedule_has_no_grant, and the
+    trigger is turned off with Renew authority, exactly as a schedule pauses."""
+    from boss_engine.config import get_settings
+
+    engine, key, trigger = made
+    monkeypatch.setattr(get_settings(), "authz_mode", "enforce")
+    body = b'{"n": 8}'
+    refused = _send(engine, trigger, body, _headers(trigger["secret"], body))
+    assert refused["reason"] == "actor_not_authorized"
+    assert "schedule_has_no_grant" in refused["detail"]
+    assert _runs(engine, key) == 0
+    shown = _deliveries(engine, trigger)
+    assert shown["trigger"]["enabled"] is False
+    assert shown["trigger"]["last_error"].startswith("Renew authority")
+    assert [d["reason"] for d in shown["deliveries"]] == ["actor_not_authorized"]
+    assert _authority_events(engine, trigger)[0]["disabled"] is True
+
+
+def test_a_revoked_grant_refuses_and_pauses(made, monkeypatch):
+    from boss_engine.identity import consent
+
+    engine, key, trigger = made
+
+    def lost(_db, _row):
+        raise consent.AuthorityLost("grant_revoked")
+
+    monkeypatch.setattr(consent, "schedule_acting", lost)
+    body = b'{"n": 9}'
+    refused = _send(engine, trigger, body, _headers(trigger["secret"], body))
+    assert refused["reason"] == "actor_not_authorized" and "grant_revoked" in refused["detail"]
+    assert _runs(engine, key) == 0
+    assert _deliveries(engine, trigger)["trigger"]["enabled"] is False
+
+
+def test_under_enforcement_a_principal_without_run_start_is_refused(made, monkeypatch):
+    """The grant is live but the person no longer holds workflow_run:start here."""
+    from boss_engine.config import get_settings
+    from boss_engine.identity import consent
+    from boss_engine.identity.lineage import Acting
+
+    engine, key, trigger = made
+    monkeypatch.setattr(get_settings(), "authz_mode", "enforce")
+    monkeypatch.setattr(consent, "schedule_acting",
+                        lambda _db, _row: Acting(principal_id="usr_gone", org_id="org_test",
+                                                 grant_id="grt_1"))
+    body = b'{"n": 10}'
+    refused = _send(engine, trigger, body, _headers(trigger["secret"], body))
+    assert refused["reason"] == "actor_not_authorized" and "usr_gone" in refused["detail"]
+    assert _runs(engine, key) == 0
+    assert _deliveries(engine, trigger)["trigger"]["enabled"] is True
+
+
+def test_an_unsigned_request_never_reaches_the_authority_check(made):
+    """Authority is checked only for a delivery proven to come from the secret's holder."""
+    engine, key, trigger = made
+    with engine.begin() as connection:
+        _set_owner(connection, status="removed")
+    body = b'{"n": 11}'
+    refused = _send(engine, trigger, body, _headers("whsec_wrong", body))
+    assert refused["reason"] == "bad_signature"
+    assert _authority_events(engine, trigger) == []

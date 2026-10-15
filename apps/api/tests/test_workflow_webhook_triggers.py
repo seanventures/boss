@@ -149,3 +149,36 @@ def test_another_projects_trigger_is_not_found(client, engine, workflow_key):
         assert made["secret"][-8:] not in response.text
     mine = client.get(BASE, params={"project_id": PROJECT, "workflow_key": workflow_key})
     assert mine.json()["webhooks"][0]["enabled"]
+
+
+def _owner(engine, permissions):
+    with engine.begin() as connection:
+        connection.execute(text("""
+            INSERT INTO project_members (id, project_id, member_id, display_name, permissions)
+            VALUES (:id, :p, 'hook_owner', 'Hook owner', CAST(:perms AS JSONB))
+            ON CONFLICT (project_id, member_id) DO UPDATE SET permissions = EXCLUDED.permissions
+        """), {"id": f"pm_{uuid4().hex[:12]}", "p": PROJECT, "perms": json.dumps(permissions)})
+
+
+def test_a_creator_who_lost_the_right_to_run_is_refused_then_restored(client, engine, workflow_key):
+    _owner(engine, ["workflow_manage", "workflow_execute"])
+    made = client.post(BASE, json={"project_id": PROJECT, "actor": "hook_owner",
+                                   "workflow_key": workflow_key, "name": f"Owned {workflow_key}"})
+    assert made.status_code == 201, made.text
+    made = made.json()
+    _owner(engine, ["workflow_manage"])
+    body = b'{"n": 3}'
+    refused = _deliver(client, made, body, made["secret"], delivery="own-1")
+    assert refused.status_code == 403, refused.text
+    assert refused.json()["reason"] == "actor_not_authorized"
+    shown = client.get(f"{BASE}/{made['id']}/deliveries", params={"project_id": PROJECT}).json()
+    assert [(d["status"], d["reason"], d["run_id"]) for d in shown["deliveries"]] == \
+        [("refused", "actor_not_authorized", None)]
+    assert shown["trigger"]["enabled"] is True
+    with engine.begin() as connection:
+        assert connection.execute(text(
+            "SELECT count(*) FROM events WHERE entity_id = :i "
+            "AND event_type = 'workflow.webhook_refused_authority'"), {"i": made["id"]}).scalar() == 1
+
+    _owner(engine, ["workflow_manage", "workflow_execute"])
+    assert _deliver(client, made, body, made["secret"], delivery="own-1").status_code == 202

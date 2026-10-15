@@ -38,6 +38,7 @@ _REFUSAL_STATUS = {
     "invalid_json": 400,
     "not_ready": 409,
     "workflow_missing": 409,
+    "actor_not_authorized": 403,
     "rate_limited": 429,
     "start_failed": 503,
 }
@@ -71,6 +72,8 @@ class WebhookTrigger(BaseModel):
     secret_last4: Optional[str] = None
     secret_rotated_at: Optional[Any] = None
     refused_unrecorded: int = 0
+    last_error: Optional[str] = Field(default=None, description="Why BOSS turned it off, e.g. Renew authority.")
+    on_behalf_of: Optional[str] = None
     last_delivery_at: Optional[Any] = None
     created_at: Optional[Any] = None
     actor: str

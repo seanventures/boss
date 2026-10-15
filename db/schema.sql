@@ -4206,7 +4206,13 @@ CREATE TABLE IF NOT EXISTS workflow_webhook_triggers (
   secret_last4 TEXT,
   secret_rotated_at TIMESTAMPTZ,
   actor TEXT NOT NULL,
+  -- THE STANDING GRANT a delivery runs under, linked at creation exactly as a schedule's is
+  -- (identity/consent.require_for_schedule) and re-checked at every delivery (schedule_acting).
+  on_behalf_of TEXT,
+  grant_id TEXT,
   enabled BOOLEAN NOT NULL DEFAULT TRUE,
+  -- Why BOSS turned the trigger off ("Renew authority"), cleared when the owner turns it on.
+  last_error TEXT,
   -- Refused deliveries past the per-minute recording limit, counted rather than itemised so a
   -- flood of bad signatures cannot fill the table and still shows up on the owner's screen.
   refused_unrecorded INTEGER NOT NULL DEFAULT 0,

@@ -5273,6 +5273,9 @@ export type WorkflowWebhookTrigger = {
   secret_rotated_at?: string | null;
   /** Refusals past the per-minute recording limit: counted, not itemised. */
   refused_unrecorded: number;
+  /** Why BOSS turned it off ("Renew authority: …"), cleared when it is turned back on. */
+  last_error?: string | null;
+  on_behalf_of?: string | null;
   last_delivery_at?: string | null;
   created_at?: string | null;
   actor: string;

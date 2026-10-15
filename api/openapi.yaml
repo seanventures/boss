@@ -31283,6 +31283,17 @@ components:
           type: integer
           title: Refused Unrecorded
           default: 0
+        last_error:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Last Error
+          description: Why BOSS turned it off, e.g. Renew authority.
+        on_behalf_of:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: On Behalf Of
         last_delivery_at:
           anyOf:
           - {}
@@ -31404,6 +31415,17 @@ components:
           type: integer
           title: Refused Unrecorded
           default: 0
+        last_error:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Last Error
+          description: Why BOSS turned it off, e.g. Renew authority.
+        on_behalf_of:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: On Behalf Of
         last_delivery_at:
           anyOf:
           - {}

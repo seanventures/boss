@@ -88,6 +88,10 @@ export function WebhookTriggers({ projectId, workflowKey, actor }: {
             <span className="wf-mono wf-hook-name" data-user-text title={hook.path}>{hook.name}</span>
             <span className={hook.enabled ? "wf-hook-on" : "wf-faint"}>{hook.enabled ? "On" : "Off"}</span>
           </div>
+          {!hook.enabled && hook.last_error ? (
+            <span className="wf-field-error" role="status" title={hook.last_error}
+                  data-testid="wf-webhook-paused">Paused: renew authority</span>
+          ) : null}
           <div className="wf-row wf-hook-actions">
             <button type="button" className="wf-btn wf-btn-sm" title="Path on your BOSS API's public address"
                     data-testid="wf-webhook-copy-url" onClick={() => void copy(hook.path, "Webhook path")}>Copy URL</button>

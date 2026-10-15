@@ -19,6 +19,8 @@ export type WebhookTrigger = {
   enabled: boolean;
   secret_last4?: string | null;
   refused_unrecorded?: number;
+  /** Why BOSS turned the trigger off (its creator's standing grant ended): "Renew authority…". */
+  last_error?: string | null;
   last_delivery_at?: string | null;
 };
 
@@ -71,6 +73,7 @@ const REASONS: Record<string, string> = {
   disabled: "Trigger off",
   unsupported_content_type: "Not JSON",
   invalid_json: "Not a JSON object",
+  actor_not_authorized: "Creator not authorized",
   not_ready: "Workflow not ready",
   workflow_missing: "Not published",
   rate_limited: "Rate limited",

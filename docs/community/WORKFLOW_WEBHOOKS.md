@@ -84,6 +84,7 @@ comma (`v1=<old>,v1=<new>`). BOSS accepts the delivery if either one matches the
 | `202` `{"status": "started", "run_id": …}` | A run was started. |
 | `200` `{"status": "duplicate", "run_id": …}` | This delivery was already accepted, so no second run was started. |
 | `401` `bad_signature`, `stale_timestamp`, `missing_signature` | The signature or timestamp is wrong, or missing. |
+| `403` `actor_not_authorized` | The trigger's creator can no longer start this workflow (see below). |
 | `409` `disabled`, `not_ready`, `workflow_missing` | The trigger is off, the project lacks something the workflow needs, or the workflow has no published version. |
 | `413` `too_large` | The body is larger than 256 KiB. |
 | `415` `unsupported_content_type` / `400` `invalid_json` | The body is not a JSON object. |
@@ -111,7 +112,27 @@ event feed also records `workflow.webhook_created`, `workflow.webhook_secret_rot
 `workflow.webhook_enabled`/`workflow.webhook_disabled` and `workflow.webhook_delivered`, and a
 `workflow.start_refused` with the missing items when the workflow is not ready.
 
-## Who the run belongs to
+## Whose authority a delivery runs on
 
-The run is started as the member who created the trigger. That member needs permission to run
-workflows in the project when they create the trigger or turn it back on.
+A delivery starts its run as the member who created the trigger. BOSS checks that member's
+authority again for **every** delivery, not only when the trigger was created. It does this only
+after the signature has been verified:
+
+- **Standing grant.** When identity is enforced, creating a trigger links the creator's standing
+  grant for the workflow, in the same way that saving a schedule does. If that person has no such
+  grant, BOSS asks them for one. At each delivery the grant must still be live and still belong to
+  that person. If it has expired or been revoked, or if no grant was ever linked, the delivery is
+  refused with `actor_not_authorized`. BOSS also **turns the trigger off** and shows
+  "Paused: renew authority" (the trigger's `last_error`), the same way a schedule pauses. To
+  resume, the owner turns the trigger back on, which links their current standing grant.
+- **Permission to run workflows.** The creator must still be able to start workflows in the
+  project. When identity is enforced, that means `workflow_run:start` at the project through their
+  role bindings, with an active account. Otherwise it means the `workflow_execute` member
+  permission. If the creator has been removed from the project or has lost that permission, the
+  delivery is refused with `actor_not_authorized` and no run starts. The trigger **stays on**, so
+  restoring the member's access is enough for the next delivery to start a run.
+
+Each of these refusals answers `403` with `{"status": "refused", "reason": "actor_not_authorized"}`.
+It is recorded in the trigger's deliveries, and the event feed records a
+`workflow.webhook_refused_authority` event that says whether the trigger was paused. The
+creator also needs permission to run workflows when they create the trigger or turn it back on.

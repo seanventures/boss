@@ -30,6 +30,7 @@ describe("webhook helpers", () => {
     expect(deliveryLabel({ status: "refused", reason: "stale_timestamp" })).toBe("Stale timestamp");
     expect(deliveryLabel({ status: "refused", reason: "too_large" })).toBe("Too large");
     expect(deliveryLabel({ status: "refused", reason: "disabled" })).toBe("Trigger off");
+    expect(deliveryLabel({ status: "refused", reason: "actor_not_authorized" })).toBe("Creator not authorized");
     expect(deliveryLabel({ status: "refused", reason: "something_new" })).toBe("something new");
     expect(deliveryTone({ status: "refused" })).toBe("bad");
     expect(deliveryTone({ status: "started" })).toBe("ok");
@@ -66,10 +67,10 @@ describe("webhook helpers", () => {
 
 type Call = { url: string; body?: Record<string, unknown> };
 
-function fakeApi() {
+function fakeApi(extra: Record<string, unknown>[] = []) {
   const calls: Call[] = [];
-  let hooks = [{ id: "wht_1", workflow_key: "orders", name: "orders webhook 1", path: PATH,
-                 enabled: true, secret_last4: "abcd", refused_unrecorded: 2 }];
+  let hooks: Record<string, unknown>[] = [{ id: "wht_1", workflow_key: "orders", name: "orders webhook 1", path: PATH,
+                 enabled: true, secret_last4: "abcd", refused_unrecorded: 2 }, ...extra];
   const json = (data: unknown, status = 200) =>
     new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json" } });
   const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -108,8 +109,8 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-async function mount() {
-  const api = fakeApi();
+async function mount(extra: Record<string, unknown>[] = []) {
+  const api = fakeApi(extra);
   vi.stubGlobal("fetch", api.fetchImpl);
   vi.stubGlobal("confirm", () => true);
   host = document.createElement("div");
@@ -180,5 +181,14 @@ describe("the Webhooks panel", () => {
     const curl = q(el, "wf-webhook-curl") as HTMLTextAreaElement;
     expect(curl.value).toContain(PATH);
     expect(curl.value).toContain("openssl dgst -sha256 -hmac");
+  });
+
+  it("says a trigger BOSS paused needs its authority renewed", async () => {
+    const { el } = await mount([{ id: "wht_9", workflow_key: "orders", name: "paused", path: PATH,
+                                  enabled: false, last_error: "Renew authority: the standing grant ended." }]);
+    expect(q(q(el, "wf-webhook-wht_9")!, "wf-webhook-paused")?.getAttribute("title"))
+      .toContain("Renew authority");
+    expect(q(q(el, "wf-webhook-wht_1")!, "wf-webhook-paused")).toBeNull();
+    expect(overBudget(el)).toEqual([]);
   });
 });
