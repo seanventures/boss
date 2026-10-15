@@ -1161,6 +1161,15 @@ class GenericCliCodeAgent:
         self.spec = spec
         self.engine = spec.name
 
+    @property
+    def capabilities(self):
+        """What a generic CLI gives BOSS (engine_contract): a read-only mode where the spec has
+        one, nothing else BOSS can rely on. Sessions, a turn transcript and cost are supplied
+        by BOSS's fallbacks; a reviewer on a CLI without read-only mode judges a copy."""
+        from .engine_contract import EngineCapabilities
+
+        return EngineCapabilities(read_only=self.spec.supports_read_only())
+
     # -- process ------------------------------------------------------
     def _resolve_binary(self) -> str:
         found = shutil.which(self.spec.binary)
@@ -1439,21 +1448,18 @@ class GenericCliCodeAgent:
         """
         return self._resolve_secret(self.spec.token_env)
 
-    @tidies_workspace
-    @_proxy_scoped
-    def run_role(self, prompt: str, cwd: Path, *, read_only: bool = False,
-                 model: Optional[str] = None, resume_session_id: Optional[str] = None,
-                 **_ignored) -> dict:
+    def _preflight(self, *, read_only: bool, read_only_by_copy: bool = False) -> None:
+        """What every session of this CLI checks before it starts, whichever driver runs it
+        (this class, or a purpose-written one such as codex_code_agent)."""
         from . import harness_failures
-        from .llm_telemetry import record_llm_call
-        from .scheduling import low_priority
 
         # A run whose engine already could not run starts no new session (harness_failures).
         harness_failures.raise_if_tripped()
-        if read_only and not self.spec.supports_read_only():
+        if read_only and not self.spec.supports_read_only() and not read_only_by_copy:
             # "The reviewer cannot edit" is an invariant of the governed pipeline. A CLI with
             # no read-only mode cannot hold it, so it is refused for the step rather than
-            # trusted to behave.
+            # trusted to behave — unless the engine contract runs the reviewer on a throwaway
+            # copy of the tree (engine_contract._isolated_copy).
             raise CliHarnessUnavailable(
                 f"{self.spec.name!r} has no read-only mode, so it cannot run a review step "
                 f"without being able to edit the code it is reviewing. Set "
@@ -1467,9 +1473,6 @@ class GenericCliCodeAgent:
                     f"{self.spec.name} is not authenticated for this service user. "
                     f"{found.get('next_step') or self.spec.signin_hint}"
                 )
-        import re as _re
-        import tempfile
-
         # Sign in from the stored credential if this deployment has one and the CLI is not
         # already signed in — a token for some CLIs, the CLI's own auth file for others.
         # Cheap after the first call: `detect` short-circuits on "already signed in".
@@ -1477,6 +1480,35 @@ class GenericCliCodeAgent:
                 and not getattr(self, "_auth_checked", False)):
             self._auth_checked = True
             self._auth_state = self.ensure_authorised()
+
+    def _raise_harness_verdict(self, *, stdout: str, stderr: str, summary: str,
+                               ok: bool) -> None:
+        """THE CLI COULD NOT RUN, IN ITS OWN WORDS (harness_failures: its sandbox, a runtime
+        binary; on a failed exit also its login, its account, a crash). Not the agent's work:
+        the stage stops with the harness verdict instead of handing on what it wrote blind."""
+        from . import harness_failures
+
+        verdict = harness_failures.classify(f"{stderr or ''}\n{stdout or ''}",
+                                            engine=self.engine, where="stream")
+        if verdict is None and not ok:
+            verdict = harness_failures.classify(f"{summary}\n{stderr or ''}",
+                                                engine=self.engine, where="engine")
+        if verdict is not None:
+            raise harness_failures.trip(verdict)
+
+    @tidies_workspace
+    @_proxy_scoped
+    def run_role(self, prompt: str, cwd: Path, *, read_only: bool = False,
+                 model: Optional[str] = None, resume_session_id: Optional[str] = None,
+                 **_ignored) -> dict:
+        from .llm_telemetry import record_llm_call
+        from .scheduling import low_priority
+
+        self._preflight(read_only=read_only,
+                        read_only_by_copy=bool(_ignored.get("_contract_read_only_copy")))
+        import re as _re
+        import tempfile
+
         argv = self._argv(prompt, read_only=read_only, model=model)
         final_path = None
         if self.spec.final_message_flag:
@@ -1486,6 +1518,10 @@ class GenericCliCodeAgent:
             insert_at = len(argv) - 1 if self.spec.prompt_via == "argv" else len(argv)
             argv[insert_at:insert_at] = [self.spec.final_message_flag, final_path]
         timeout = self.spec.review_timeout if read_only else self.spec.timeout
+        # THE STAGE'S WALL-TIME DEADLINE bounds this session as it bounds every engine's.
+        from .code_agent import _cap_to_deadline
+
+        timeout = _cap_to_deadline(int(timeout), read_only=read_only)
         started = time.monotonic()
         try:
             proc = owned_process.run(
@@ -1558,16 +1594,18 @@ class GenericCliCodeAgent:
             cost_usd_micros=0, latency_ms=ms, turns=1, ok=ok,
             error=None if ok else (proc.stderr or "")[:400],
         )
-        # THE CLI COULD NOT RUN, IN ITS OWN WORDS (harness_failures: its sandbox, a runtime
-        # binary; on a failed exit also its login, its account, a crash). Not the agent's work:
-        # the stage stops with the harness verdict instead of handing on what it wrote blind.
-        stream = f"{proc.stderr or ''}\n{proc.stdout or ''}"
-        verdict = harness_failures.classify(stream, engine=self.engine, where="stream")
-        if verdict is None and not ok:
-            verdict = harness_failures.classify(f"{summary}\n{proc.stderr or ''}",
-                                                engine=self.engine, where="engine")
-        if verdict is not None:
-            raise harness_failures.trip(verdict)
+        # A TRANSCRIPT IN THE COMMON SCHEMA even from a CLI that streams nothing BOSS can read:
+        # what it was asked and what it said, so every stage of every engine has one.
+        try:
+            from .llm_telemetry import record_agent_turns
+
+            record_agent_turns([{"direction": "completion", "turn_index": 0,
+                                 "content": summary[:8000], "ok": ok}],
+                               engine_name=self.engine, model=model or "", prompt=prompt)
+        except Exception:  # noqa: BLE001 — a transcript never fails a build
+            pass
+        self._raise_harness_verdict(stdout=proc.stdout or "", stderr=proc.stderr or "",
+                                    summary=summary, ok=ok)
         if not ok:
             _log.warning("%s exited %s: %s", self.spec.name, proc.returncode,
                          (proc.stderr or "")[:300])
@@ -1580,8 +1618,11 @@ class GenericCliCodeAgent:
             "cost_usd_micros": 0,
             "cost_unreported": True,
             "turns": 1,
-            "model": model or self.spec.name,
+            # The MODEL, never the harness's name: a caller passes this back as `model=` on a
+            # follow-up turn, and `--model codex` is not a model (crun QA static fix).
+            "model": model or "",
             "exit_code": proc.returncode,
+            "stop_reason": "done" if ok else "error",
         }
 
     def run(self, spec, repo, sandbox):

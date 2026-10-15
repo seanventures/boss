@@ -188,9 +188,12 @@ def test_a_run_authorises_a_file_route_harness_too(monkeypatch, tmp_path) -> Non
 
     from boss_engine.services import cli_harness
 
-    source = inspect.getsource(cli_harness.GenericCliCodeAgent.run_role)
+    # The sign-in lives in _preflight, which every CLI driver's run_role calls first
+    # (GenericCliCodeAgent and the purpose-written Codex driver alike).
+    source = inspect.getsource(cli_harness.GenericCliCodeAgent._preflight)
     assert "auth_file_secret" in source, (
         "run_role still gates authorisation on token_env alone, so the file route never runs")
+    assert "self._preflight(" in inspect.getsource(cli_harness.GenericCliCodeAgent.run_role)
 
 
 # --- a stale credential file must not outrank the store ----------------------

@@ -195,10 +195,17 @@ def test_no_unit_test_spends_the_operators_subscription() -> None:
 
     from boss_engine.services import cli_harness
 
-    src = inspect.getsource(cli_harness.GenericCliCodeAgent.run_role)
-    refusal = src.index("has no read-only mode")
-    launch = src.index("owned_process.run")
-    assert refusal < launch, "the read-only refusal must come before the process launch"
+    from boss_engine.services import codex_code_agent
+
+    # The refusals live in _preflight; every CLI driver calls it before it starts a process.
+    assert "has no read-only mode" in inspect.getsource(cli_harness.GenericCliCodeAgent._preflight)
+    for run_role, launch_call in (
+            (cli_harness.GenericCliCodeAgent.run_role, "owned_process.run"),
+            (codex_code_agent.CodexCodeAgent.run_role, "owned_process.popen")):
+        src = inspect.getsource(run_role)
+        refusal = src.index("self._preflight(")
+        launch = src.index(launch_call)
+        assert refusal < launch, f"{run_role.__qualname__}: refuse before the process launch"
 
 
 def test_an_operator_can_correct_the_flags_without_a_release() -> None:
@@ -501,5 +508,5 @@ def test_signing_in_is_attempted_once_per_agent_not_per_call() -> None:
 
     from boss_engine.services import cli_harness
 
-    src = inspect.getsource(cli_harness.GenericCliCodeAgent.run_role)
-    assert "_auth_checked" in src
+    assert "_auth_checked" in inspect.getsource(cli_harness.GenericCliCodeAgent._preflight)
+    assert "self._preflight(" in inspect.getsource(cli_harness.GenericCliCodeAgent.run_role)

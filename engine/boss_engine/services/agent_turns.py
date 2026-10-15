@@ -307,7 +307,13 @@ def record_turns(
             "ok": True, "error": None,
         })
 
+    from .engine_contract import normalise_turn
+
     for turn in turns:
+        # ONE VOCABULARY AT THE BOUNDARY (engine_contract): every engine's tool names and the
+        # argument keys the profile reads are BOSS's here, the one writer of this table, so the
+        # profile, the levels, the gates and the trims never see an engine's own spelling.
+        turn = normalise_turn(turn)
         direction = str(turn.get("direction") or "")
         if direction not in DIRECTIONS:
             continue
