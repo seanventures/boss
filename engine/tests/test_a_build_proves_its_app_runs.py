@@ -290,10 +290,18 @@ def test_a_check_that_could_not_run_is_not_blamed_on_the_code():
     assert faults == {"app_serves": "HARNESS"}
 
 
+def _pipeline_source() -> str:
+    """The governed pipeline's body: run_governed_code_task is now the wrapper that scopes the
+    run's harness latch (harness_failures.run_scope) and calls _run_governed_code_task."""
+    wrapper = inspect.getsource(gov.run_governed_code_task)
+    assert "return _run_governed_code_task(" in wrapper
+    return inspect.getsource(gov._run_governed_code_task)
+
+
 def test_the_pipeline_gates_on_the_proof_and_records_it():
     """Wiring, checked at the source: the gate comes from prove_app_serves, the evidence
     carries its record, and the repair is handed the app's error."""
-    body = inspect.getsource(gov.run_governed_code_task)
+    body = _pipeline_source()
     assert "prove_app_serves(" in body
     assert 'gates["app_serves"] = bool(app_serves_record.get("ok"))' in body
     assert '"app_serves": app_serves_record' in body
@@ -407,7 +415,7 @@ def test_a_non_final_decomposition_slice_skips_the_serve_proof():
     assert gov.app_serves_check_skip_reason(
         {"decomposition_index": 3, "decomposition_total": 3}) is None
     assert gov.app_serves_check_skip_reason({}) is None
-    body = inspect.getsource(gov.run_governed_code_task)
+    body = _pipeline_source()
     assert "_serve_skip = app_serves_check_skip_reason(" in body
 
 
@@ -440,7 +448,7 @@ def test_a_blocked_run_carries_the_apps_error_and_an_honest_rescue_reason():
     plain_error, plain_reason = gov.blocked_gate_messages("qg_1", ["review_code"], record)
     assert "ImportError" not in plain_error
     assert plain_reason == "quality gate blocked and never_block is disabled"
-    assert "blocked_gate_messages(" in inspect.getsource(gov.run_governed_code_task)
+    assert "blocked_gate_messages(" in _pipeline_source()
 
 
 def test_a_docker_runtime_build_is_not_proven_on_the_host():
@@ -502,7 +510,7 @@ def test_the_proof_and_the_preview_run_the_same_command_for_a_lineage(tmp_path):
     assert ps._detect_command(root, DECLARED_LINEAGE) == plan.command
     assert "how_app_runs(" in inspect.getsource(ps._detect_command)
     assert "how_app_runs(" in inspect.getsource(ps.prove_app_serves)
-    body = inspect.getsource(gov.run_governed_code_task)
+    body = _pipeline_source()
     assert "lineage = lineage_impl_files(engine, run)" in body
     assert "lineage=lineage" in body
 
@@ -581,7 +589,7 @@ def test_a_library_follow_up_flagged_as_a_web_build_is_not_held_to_serving(tmp_p
                                  known_service=gov.serve_proof_known_service({}, extend_fctx),
                                  timeout=5)
     assert record["ok"] is True and record["source"] == "not_declared", record
-    body = inspect.getsource(gov.run_governed_code_task)
+    body = _pipeline_source()
     assert "known_service=serve_proof_known_service(spec, fctx)" in body
 
 
@@ -649,7 +657,7 @@ def test_the_proof_is_not_run_on_the_host_for_a_micro_vm_build():
     control-plane host and fail on a missing module that is not the code's fault."""
     reason = gov.app_serves_check_skip_reason({}, use_microvm=True)
     assert reason and reason.startswith("inconclusive")
-    body = inspect.getsource(gov.run_governed_code_task)
+    body = _pipeline_source()
     assert "use_microvm=use_microvm)" in body
 
 

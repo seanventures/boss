@@ -4560,9 +4560,10 @@ def reject_gate(
     THE ONE PATH for a refused approval — a decision step and a capability step held at its
     manual approval both end here. It used to block the run with the step left `waiting` (or
     failed and blocked), so the run sat "waiting on a person" who had already answered, with no
-    way forward. Now the run is stopped at a failed step like any other, and offers the run's
-    own two answers: Try again (asks the gate afresh — a new decision) and Skip (carry on
-    without it), each recorded with who chose it.
+    way forward. Now the run is stopped at a failed step like any other, and offers Try again
+    (asks the gate afresh — a new decision), recorded with who chose it. Skip is NOT offered for
+    a refused approval: skipping would turn the person's no into a yes
+    (workflow_run_actions.require, skip_failed_step).
     """
     _refuse_step(connection, run_id, step_id, iteration, decision_id=decision_id,
                  outcome=outcome)
