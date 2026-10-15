@@ -57,10 +57,15 @@ function problemsIn(body: Obj): Problem[] | null {
 
 function toProblem(raw: unknown): Problem {
   const p = asObj(raw);
+  // Severity is kept: a warning ("Needs Deploy set up") is shown but blocks neither Save nor a
+  // link (use-save-flow, lib/workflow-rewire.ts). So is where its gap is fixed.
   return {
     step_id: p.step_id == null || p.step_id === "" ? null : String(p.step_id),
     field: p.field == null || p.field === "" ? null : String(p.field),
     message: str(p.message) || String(raw ?? ""),
+    ...(p.severity === "warning" || p.severity === "error" ? { severity: p.severity } : {}),
+    ...(str(p.fix_label) ? { fix_label: str(p.fix_label) } : {}),
+    ...(str(p.fix_href) ? { fix_href: str(p.fix_href) } : {}),
   };
 }
 

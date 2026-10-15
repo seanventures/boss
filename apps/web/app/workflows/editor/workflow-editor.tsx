@@ -293,15 +293,20 @@ export function WorkflowEditor({ projectId, workflowKey, onBack, onStart, actor,
     if (readOnly) return;
     const before = spec;
     const definitionId = meta.is_catalogue ? (meta.copy?.definition_id ?? null) : meta.definition_id;
+    // A refusal names steps as the canvas does, by title, not by the engine's ids.
+    const titles = (id: string) => {
+      const step = before.steps.find((s) => s.id === id);
+      return step ? viewOf(step, palette).title : undefined;
+    };
     const answer = await checkRewire(before, link, target, (s) => checkSpec(projectId, s, definitionId),
-                                     state.checkedSpec === before ? state.problems : null);
+                                     state.checkedSpec === before ? state.problems : null, titles);
     if (!answer.ok) { show(answer.reason); return; }
     if (answer.spec === before) return;
     // Checked against the flow as it was: an edit since then means the answer is about another flow.
     if (specRef.current !== before) { show("The flow changed while that link was checked: try again"); return; }
     dispatch({ type: "REWIRE", link, target });
     show("Link changed · Undo", true);
-  }, [readOnly, spec, meta, projectId, state.checkedSpec, state.problems, show, dispatch]);
+  }, [readOnly, spec, meta, projectId, palette, state.checkedSpec, state.problems, show, dispatch]);
 
   const openSettings = useCallback(() => { dispatch({ type: "SELECT", id: null }); setSettingsOpen(true); }, [dispatch]);
   const closeDrawer = useCallback(() => { dispatch({ type: "SELECT", id: null }); setSettingsOpen(false); }, [dispatch]);

@@ -31,9 +31,22 @@ export function addedProblems(before: Problem[], after: Problem[]): Problem[] {
   return after.filter((p) => blocking(p) && !had.has(key(p)));
 }
 
-/** A validator message as the canvas says it: its first sentence, capitalised, no trailing stop. */
-export function sayProblem(p: Problem): string {
-  const text = p.message.trim().replace(/\.$/, "");
+/** The name a step goes by on the canvas, or undefined for an id that is not a step. */
+export type StepTitles = (id: string) => string | undefined;
+
+/**
+ * A validator message as the canvas says it: its first sentence, capitalised, no trailing stop,
+ * and every step it names by id ('triage') named by its title instead ("Triage"). The engine's
+ * text is not changed; only what is shown. A quoted word that is not a step id is left alone.
+ */
+export function sayProblem(p: Problem, titles?: StepTitles): string {
+  let text = p.message.trim().replace(/\.$/, "");
+  if (titles) {
+    text = text.replace(/'([^'\s]+)'/g, (whole, id: string) => {
+      const title = titles(id);
+      return title ? `\u201c${title}\u201d` : whole;
+    });
+  }
   return text ? text[0].toUpperCase() + text.slice(1) : "The workflow would not be valid";
 }
 
@@ -43,7 +56,7 @@ export function sayProblem(p: Problem): string {
  * is checked alongside the result.
  */
 export async function checkRewire(spec: Spec, link: FlowLink, target: string | null, check: RewireCheck,
-                                  known?: Problem[] | null): Promise<RewireAnswer> {
+                                  known?: Problem[] | null, titles?: StepTitles): Promise<RewireAnswer> {
   const out = rewireLink(spec, link, target);
   if ("refused" in out) return { ok: false, reason: out.refused };
   if (out.spec === spec) return { ok: true, spec };
@@ -60,5 +73,5 @@ export async function checkRewire(spec: Spec, link: FlowLink, target: string | n
     return { ok: false, reason: CHECK_FAILED };
   }
   const added = addedProblems(before, after);
-  return added.length ? { ok: false, reason: sayProblem(added[0]) } : { ok: true, spec: out.spec };
+  return added.length ? { ok: false, reason: sayProblem(added[0], titles) } : { ok: true, spec: out.spec };
 }

@@ -607,9 +607,32 @@ describe("in the editor", () => {
     await select("deploy");
     choose(byTest(document, "wf-fail-on-error")!, "research");
     await settle();
-    expect(toast()).toMatch(/cycle detected at step 'research'/);
+    // Named as the canvas names it, by title; the engine's id is not shown.
+    expect(toast()).toMatch(/cycle detected at step \u201cResearch\u201d/);
+    expect(toast()).not.toContain("'research'");
     expect(document.querySelector('g[data-kind="error"]')).toBeNull();
     expect((byTest(document, "wf-fail-on-error") as HTMLSelectElement).value).toBe("");
+  });
+
+  it("a warning the link would add is not a refusal: only errors block a link, as only errors block Save", async () => {
+    // The check's warning on the flow as it would be: "Needs Notify set up" (kit ability problems).
+    vi.stubGlobal("fetch", vi.fn(async (input: unknown, init?: RequestInit) => {
+      const body = init?.body ? JSON.parse(String(init.body)) as { action?: string; spec?: Spec } : {};
+      if (body.action === "check" && body.spec) {
+        const r = result(body.spec);
+        const linked = body.spec.steps.find((x) => x.id === "build")?.on_error === "tell";
+        return Response.json({ ...r, problems: [...r.problems, ...(linked ? [{ step_id: "tell", field: "ability",
+          message: "Needs Notify set up", severity: "warning", fix_label: "Set it up", fix_href: "/?area=kit" }] : [])] });
+      }
+      return api.fetch(input, init);
+    }));
+    act(() => root!.render(h(WorkflowEditor, { projectId: "prj_1", workflowKey: "fails", onBack: vi.fn(), onStart: vi.fn() })));
+    await settle();
+    await select("build");
+    choose(byTest(document, "wf-fail-on-error")!, "tell");
+    await settle();
+    expect(toast()).toContain("Link changed");
+    expect(document.querySelector('g[data-edge="error:build>tell"]')).not.toBeNull();
   });
 
   it("a number typed in the panel lands in the spec and on the node's badge", async () => {
