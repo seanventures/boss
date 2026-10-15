@@ -168,7 +168,9 @@ class ArchitectureSpend(TypedDecisionSpend):
         self._decision(
             connection,
             f"Reconcile typed decision {self.run_id}/{self.step_id}",
-            "typed_decision_reconciliation",
+            # Written out, so the decision-button scan sees who writes it; the voice and
+            # conversation subclasses still turn "architecture" into their own names.
+            "architecture_reconciliation",
             {"attempt": self.attempt, "receipt_id": authority.receipt_id, "message": message},
         )
         self._emit(connection, "architecture.reconciliation_required", authority.invocation_dedupe, {
