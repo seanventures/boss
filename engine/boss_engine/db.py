@@ -48,10 +48,12 @@ def _split_top_level_commas(body: str) -> list[str]:
         if ch in ("'", '"'):
             instr, strch = True, ch
             cur.append(ch)
-        elif ch == "(":
+        elif ch in "([":
+            # Brackets too: ARRAY['work', 'chat'] is ONE default, and splitting at its commas
+            # sent `DEFAULT ARRAY['work'` to Postgres (agent_instructions.modes never added).
             depth += 1
             cur.append(ch)
-        elif ch == ")":
+        elif ch in ")]":
             depth -= 1
             cur.append(ch)
         elif ch == "," and depth == 0:
