@@ -4,7 +4,6 @@ import json
 from pathlib import Path
 from typing import Any, Optional
 
-import yaml
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
@@ -156,6 +155,25 @@ class AgentStudioService:
         ready, missing = self._catalog_tables_ready(connection)
         if not ready:
             raise AgentStudioSchemaMissingError(missing)
+        # ONE READING OF THE PROJECT'S SKILLS PER SEED. Seeding writes agents, panels and roles,
+        # never project_skills, so the answer cannot change mid-seed; it was asked once per agent.
+        from . import skill_catalogue
+
+        self._seed_skill_ids: Optional[dict[str, set[str]]] = {}
+        try:
+            # The catalogue is built once for the whole seed too (one_pass): validating each
+            # agent version rebuilt it, and nothing a seed writes is a skill or an MCP server.
+            with skill_catalogue.one_pass(connection):
+                return self._seed_catalog(connection, project_id, actor)
+        finally:
+            self._seed_skill_ids = None
+
+    def _seed_catalog(
+        self,
+        connection: Connection,
+        project_id: str,
+        actor: str,
+    ) -> dict[str, list[dict[str, Any]]]:
         agents: list[dict[str, Any]] = []
         panels: list[dict[str, Any]] = []
         skipped: list[dict[str, str]] = []
@@ -2537,12 +2555,18 @@ class AgentStudioService:
     def _project_skill_ids(
         self, connection: Connection, project_id: str
     ) -> set[str]:
-        return {
+        seeding = getattr(self, "_seed_skill_ids", None)   # a dict only while seed_catalog runs
+        if seeding is not None and project_id in seeding:
+            return set(seeding[project_id])
+        found = {
             str(item["id"])
             for item in EntitlementBrokerService(self.settings).list_skills(
                 project_id, connection=connection
             )
         }
+        if seeding is not None:
+            seeding[project_id] = set(found)
+        return found
 
     def _enabled_project_skill_ids(
         self, connection: Connection, project_id: str
@@ -2598,7 +2622,10 @@ class AgentStudioService:
         )
 
     def _load_yaml(self, path: Path) -> dict[str, Any]:
-        payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+        # Parsed once per version of the file (yaml_files): every seed read all of them again.
+        from . import yaml_files
+
+        payload = yaml_files.load(path)
         if not isinstance(payload, dict):
             raise ValueError(f"{path} must contain a mapping.")
         return payload

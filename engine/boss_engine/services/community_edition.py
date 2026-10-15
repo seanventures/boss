@@ -13,7 +13,6 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
-import yaml
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
@@ -285,7 +284,10 @@ class CommunityEditionService:
         return self.settings.specpack_root / "packs" / self.EDITION_PACKS[edition_id]
 
     def _load_pack(self, edition_id: str) -> dict[str, Any]:
-        payload = yaml.safe_load(self._pack_path(edition_id).read_text(encoding="utf-8"))
+        # Parsed once per version of the file (yaml_files); it was read on every agent seeded.
+        from . import yaml_files
+
+        payload = yaml_files.load(self._pack_path(edition_id))
         if not isinstance(payload, dict):
             return {}
         # Paid editions extend Community rather than replacing its baseline
@@ -293,9 +295,7 @@ class CommunityEditionService:
         # ``requires: [community_edition]``; make it operational so a paid
         # edition can still install the default Community agent modules.
         if "community_edition" in (payload.get("requires") or []):
-            community = yaml.safe_load(
-                self._pack_path("community").read_text(encoding="utf-8")
-            )
+            community = yaml_files.load(self._pack_path("community"))
             inherited = (
                 community.get("includes", []) if isinstance(community, dict) else []
             )
