@@ -548,6 +548,11 @@ def ensure_schema(engine: Engine, settings: Optional[Settings] = None) -> None:
                     cursor.execute("ROLLBACK TO SAVEPOINT _stmt")
                     head = " ".join(stmt.split())[:120]
                     failures.append(f"{head} -> {str(exc).strip()[:160]}")
+                # COMMIT EACH ONE. A released savepoint hands its locks to the transaction, so
+                # one transaction for the whole script held a lock on every table it touched
+                # (CREATE INDEX IF NOT EXISTS takes SHARE even when the index exists) until the
+                # last statement — and deadlocked any writer that reached two of them.
+                raw_connection.commit()
         raw_connection.commit()
 
         # AFTER the script: the tables and columns an index names exist by now.
