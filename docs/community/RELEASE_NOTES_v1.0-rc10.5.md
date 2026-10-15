@@ -1,6 +1,6 @@
-# BOSS Community 1.0.0-rc.10.7 candidate
+# BOSS Community 1.0.0-rc.10.5 candidate
 
-RC10.7 builds on RC9 and carries the rc10.5 and rc10.6 work, which was merged but never tagged. This is a test candidate. The automated suites pass on the release commit; the live checks listed under **Not yet verified** have not been run.
+RC10.5 builds on the published rc10.4 candidate. It carries the work prepared on the rc10.5 and rc10.6 branches, which was merged but never tagged, and everything merged since. The candidates rc10 to rc10.4 left the package version at rc9 and the install guides at rc8; both now name this release. This is a test candidate. The automated suites pass on the release commit; the live checks listed under **Not yet verified** have not been run.
 
 ## What changed
 
@@ -36,6 +36,7 @@ RC10.7 builds on RC9 and carries the rc10.5 and rc10.6 work, which was merged bu
 - **Expired holds wait for a person.** The pre-check reports a positive-amount expired hold for a person to reconcile in Decisions, instead of fixing it automatically.
 - **The org board only changes when something happens.** It no longer reports a change every second while an agent is working.
 - **The heartbeat carries the version again**, including point releases like this one.
+- **The installer picks the newest candidate by number.** It compared release names as text, so a fresh install asking for the newest candidate got rc9 instead of rc10.x.
 - **Releasing a held proof from the CLI checks your identity permissions** when identity enforcement is on.
 
 ## Not yet verified
@@ -50,6 +51,6 @@ These need a laptop or real model keys and have not been run for this candidate:
 
 ## Install and upgrade
 
-Select `v1.0-rc10.7` explicitly with the installer's `--ref` option, from a checkout of that same tag. See the [Quickstart](QUICKSTART.md).
+Select `v1.0-rc10.5` explicitly with the installer's `--ref` option, from a checkout of that same tag. See the [Quickstart](QUICKSTART.md).
 
 Before upgrading an existing install, take a complete protected backup (`boss upgrade` does this). Changing the checkout back does not undo database migrations.
