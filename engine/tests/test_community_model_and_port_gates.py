@@ -60,8 +60,8 @@ def test_community_proves_a_connection_only_through_the_governed_path(edition, m
     seen = []
     monkeypatch.setattr(setup_service, "governed_proof",
                         lambda engine, settings, project, provider, actor, prove=None,
-                        amount=None: seen.append(
-                            (engine, provider, actor, amount)) or {"ok": True, "replied": "BOSS_OK"})
+                        amount=None, intent="": seen.append(
+                            (engine, provider, actor, amount, intent)) or {"ok": True, "replied": "BOSS_OK"})
 
     class _Broker:
         def __init__(self, _settings):
@@ -75,7 +75,7 @@ def test_community_proves_a_connection_only_through_the_governed_path(edition, m
     result = setup_service.connect_coding_agent(
         _Conn(), _Settings(edition), "project-a", "codex", actor="member")
     assert result["connected"] is True and result["proof"]["ok"] is True
-    assert seen == [(_Conn.engine, "codex", "member", 0)]
+    assert seen == [(_Conn.engine, "codex", "member", 0, "")]
 
 
 def test_a_rejected_login_is_not_connected_and_says_what_to_do(monkeypatch):
