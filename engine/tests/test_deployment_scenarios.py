@@ -290,6 +290,11 @@ def test_deploy_build_selects_finalize_ctx_and_does_not_guess_the_only_target():
 # --------------------------------------------------------------------------- #
 # Binding a target must be undoable
 # --------------------------------------------------------------------------- #
+# The deploy card (SetupDeployment, DeploymentLine) moved verbatim out of code-tasks-ui.tsx when
+# that file became the Factory shell (factory spec §4.1); the cockpit imports it from here.
+DEPLOY_CARD = "apps/web/app/factory/legacy-build-parts.tsx"
+
+
 def test_the_console_can_unbind_a_target():
     """"If I already bound the port there's no way to unbind." True: DELETE
     /v1/deployment-targets/{id} has existed all along and nothing in the console called it, so
@@ -303,7 +308,7 @@ def test_the_console_can_unbind_a_target():
     assert "export async function DELETE" in body
     assert "/v1/deployment-targets/" in body
 
-    ui = pathlib.Path("apps/web/app/code-tasks-ui.tsx").read_text(encoding="utf-8")
+    ui = pathlib.Path(DEPLOY_CARD).read_text(encoding="utf-8")
     assert "app-deployment-unbind" in ui, "no unbind control beside Retry"
     assert "app-target-retire" in ui, "no unbind control on an unshipped binding"
 
@@ -328,7 +333,7 @@ def test_the_card_follows_the_binding_not_the_deployment_history():
 
     Deployment runs are permanent history; a retired target is current state."""
     import pathlib
-    ui = pathlib.Path("apps/web/app/code-tasks-ui.tsx").read_text(encoding="utf-8")
+    ui = pathlib.Path(DEPLOY_CARD).read_text(encoding="utf-8")
     assert "if (!latest || (loaded && !targetId))" in ui, (
         "the card still decides boundness from deployment history"
     )
@@ -357,12 +362,15 @@ def test_no_card_button_waits_on_a_route_re_render():
     renders for a one-row write."""
     import pathlib
     import re
-    ui = pathlib.Path("apps/web/app/code-tasks-ui.tsx").read_text(encoding="utf-8")
-    code = re.sub(r"/\*.*?\*/", "", ui, flags=re.S)
-    code = re.sub(r"^\s*//.*$", "", code, flags=re.M)
-    for gone in ("setupDeploymentAction", "deployRunNowAction", "retryDeploymentAction"):
-        assert gone not in code, f"{gone} still re-renders the route to reply"
-    assert "appDeployOp(" in code
+    # The Factory shell that replaced code-tasks-ui.tsx must not bring the actions back either.
+    for path in (DEPLOY_CARD, "apps/web/app/code-tasks-ui.tsx"):
+        ui = pathlib.Path(path).read_text(encoding="utf-8")
+        code = re.sub(r"/\*.*?\*/", "", ui, flags=re.S)
+        code = re.sub(r"^\s*//.*$", "", code, flags=re.M)
+        for gone in ("setupDeploymentAction", "deployRunNowAction", "retryDeploymentAction"):
+            assert gone not in code, f"{path}: {gone} still re-renders the route to reply"
+        if path == DEPLOY_CARD:
+            assert "appDeployOp(" in code
     assert pathlib.Path("apps/web/app/api/app-deploy/route.ts").exists()
 
 
@@ -391,7 +399,7 @@ def test_the_deploy_controls_send_the_operator_s_own_actor():
     Verified against the live API: actor=operator is refused, actor=executive_console is
     accepted."""
     import pathlib
-    ui = pathlib.Path("apps/web/app/code-tasks-ui.tsx").read_text(encoding="utf-8")
+    ui = pathlib.Path(DEPLOY_CARD).read_text(encoding="utf-8")
     for fn in ("function SetupDeployment(", "function DeploymentLine("):
         i = ui.index(fn)
         assert "actor" in ui[i:i + 220], f"{fn} does not receive the actor"
