@@ -25,7 +25,10 @@ def eng():
         pytest.skip("needs BOSS_TEST_DATABASE_URL")
     from apps.api.tests.infra_seed import clear, seed
 
+    from boss_engine.db import ensure_schema
+
     e = create_engine(PG_URL, future=True)
+    ensure_schema(e)          # idempotent: a fresh test database has no tables yet
     seed(e, HOME)
     yield e
     with e.begin() as c:
@@ -61,15 +64,22 @@ def test_no_cpu_or_memory_anywhere(body):
 def test_racks_are_ordered_this_computer_then_state_then_name(body):
     names = [(r["id"], r["state"]["word"]) for r in body["racks"]]
     assert names[0][0] == "this" and body["racks"][0]["this_computer"]
-    assert [n[0] for n in names[1:]] == ["h_down", "h_setup", "h_ready"], names
+    # A retired machine is DRAWN, marked retired, last (P-I-45: "Show retired" filtered racks
+    # the server had already dropped, so it never showed anything).
+    assert [n[0] for n in names[1:]] == ["h_down", "h_setup", "h_ready", "h_retired"], names
     assert body["retired_count"] == 1
-    assert "h_retired" not in [r["id"] for r in body["racks"]]
+    retired = body["racks"][-1]
+    assert retired["retired"] is True and retired["state"]["word"] == "Retired"
 
 
 def test_slots_and_ports_equal_a_sql_recount(eng, body):
     with eng.begin() as c:
         for rack in body["racks"]:
             if rack["id"] == "this":
+                continue
+            if rack.get("retired"):
+                # An app still pointed at a retired machine is placed nowhere (unplaced).
+                assert rack["residents"] == [] and rack["apps"] == 0
                 continue
             host = c.execute(text("SELECT port_min, port_max, max_apps FROM deployment_hosts "
                                   "WHERE id = :i"), {"i": rack["id"]}).mappings().one()
@@ -124,8 +134,19 @@ def test_counts_equal_a_recount(eng, body):
                               "AND status <> 'retired'"), {"p": HOME}).scalar()
         live = c.execute(text("SELECT count(*) FROM app_previews WHERE project_id = :p "
                               "AND status IN ('running', 'starting')"), {"p": HOME}).scalar()
-    assert body["counts"] == {"ready": 1, "setting_up": 1, "unreachable": 1, "apps": apps,
-                              "previews_live": live, "needs_you": len(body["attention"])}
+    # COUNTED FROM THE RACKS THE PAGE DRAWS, retired ones aside: "This computer" is a rack too
+    # (counting hosts said "2 ready" above three Ready racks).
+    drawn = [r["state"]["word"] for r in body["racks"] if not r.get("retired")]
+    assert body["counts"]["ready"] == drawn.count("Ready") == 2
+    # THE ONE NEEDS-YOU RULE (command_center.attention_counts): decisions only. A failed deploy
+    # or an unreachable host is listed in attention and not counted as needing you.
+    from boss_engine.services.command_center import attention_counts
+
+    infra = [i for i in body["attention"] if i.get("area") == "infra"]
+    assert {k: v for k, v in body["counts"].items() if k != "ready"} == {
+        "setting_up": 1, "unreachable": 1, "apps": apps, "previews_live": live,
+        "needs_you": attention_counts(infra)["needs_you"]}
+    assert body["counts"]["needs_you"] <= len(body["attention"])
 
 
 def test_health_words_come_from_the_probes(body):
@@ -145,7 +166,8 @@ def test_the_monitoring_stack_is_what_boss_recorded(eng):
     mon = [r for rack in before["racks"] for r in rack["residents"] if r["kind"] == "monitoring"]
     assert len(mon) == 1 and mon[0]["health"]["word"] == "Status unknown"
     assert mon[0]["url"] == "http://203.0.113.10:3006"
-    assert any(r["kind"] == "monitoring" for r in before["racks"][-1]["residents"])  # h_ready
+    ready = next(r for r in before["racks"] if r["id"] == "h_ready")
+    assert any(r["kind"] == "monitoring" for r in ready["residents"])
     with eng.begin() as c:
         c.execute(text("INSERT INTO events (id, project_id, event_type, actor, entity_type, "
                        "entity_id, data, created_at) VALUES ('ev_mon_chk', :p, "

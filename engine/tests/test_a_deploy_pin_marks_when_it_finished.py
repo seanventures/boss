@@ -22,7 +22,10 @@ def eng():
         pytest.skip("needs BOSS_TEST_DATABASE_URL")
     from apps.api.tests.infra_seed import clear, seed
 
+    from boss_engine.db import ensure_schema
+
     e = create_engine(PG_URL, future=True)
+    ensure_schema(e)          # idempotent: a fresh test database has no tables yet
     seed(e, HOME, samples=False)
     with e.begin() as c:
         c.execute(text(
