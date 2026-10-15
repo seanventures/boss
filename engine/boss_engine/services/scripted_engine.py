@@ -262,6 +262,15 @@ class ScriptedEngine:
             current = (root / rel).read_text(encoding="utf-8") if (root / rel).exists() else None
             if current != body:
                 self._write(root, rel, body, turns, written)
+        # THE APP SAYS IT IS A SERVICE, as a real agent's build does (preview_service.
+        # RUN_DECLARATION_FILE): without it BOSS reads the app as a library whose tests are its
+        # proof, never starts the server, and a server that crashes on start ships unnoticed.
+        server = next((p for p in impl if p.endswith("server.js")), None)
+        if server:
+            declared = f"{prefix}boss.preview.command"
+            command = f"node {server[len(prefix):]}\n"
+            if not (root / declared).exists() or (root / declared).read_text() != command:
+                self._write(root, declared, command, turns, written)
         if stage == "write_tests" or stage == "solo":
             for rel, body in tests.items():
                 if not (root / rel).exists():
