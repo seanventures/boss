@@ -81,11 +81,34 @@ def _safe_add_column_def(definition: str) -> str:
     return " ".join(d.split())
 
 
+def _live_columns(cursor) -> set[tuple[str, str]]:
+    """(table, column) for every column the live schema already has, lower-cased. Empty when it
+    cannot be read — the reconcile then ALTERs every declared column, as it always did, and
+    `IF NOT EXISTS` keeps that correct, only slower."""
+    try:
+        cursor.execute("SAVEPOINT _cols")
+        cursor.execute("SELECT table_name, column_name FROM information_schema.columns "
+                       "WHERE table_schema = current_schema()")
+        rows = cursor.fetchall()
+        cursor.execute("RELEASE SAVEPOINT _cols")
+    except Exception:  # noqa: BLE001 — cannot tell what exists; fall back to altering all
+        cursor.execute("ROLLBACK TO SAVEPOINT _cols")
+        return set()
+    return {(str(table).lower(), str(column).lower()) for table, column in rows}
+
+
 def _reconcile_columns(cursor, sql: str) -> tuple[int, list[str]]:
     """Make every column declared in schema.sql's CREATE TABLE blocks exist on the live
     table — `ALTER TABLE … ADD COLUMN IF NOT EXISTS …`, each in its own savepoint so one
-    bad statement can't abort the rest. Additive only: never drops or retypes a column."""
+    bad statement can't abort the rest. Additive only: never drops or retypes a column.
+
+    ONLY A COLUMN THAT IS MISSING IS ALTERED. `ADD COLUMN IF NOT EXISTS` takes an ACCESS
+    EXCLUSIVE lock on the table even when the column is already there, and this whole pass is one
+    transaction — so issuing it for every declared column locked every table at once on every
+    boot, and a concurrent writer holding one of them deadlocked it once per remaining column
+    (seen: an engine suite run stalled for an hour behind exactly that)."""
     attempted, skipped = 0, []
+    present = _live_columns(cursor)
     # Strip SQL comments first — inline `-- …` comments often contain parens/apostrophes
     # that would corrupt the paren/string depth tracking used to split columns.
     sql = re.sub(r"/\*.*?\*/", "", sql, flags=re.S)
@@ -107,6 +130,8 @@ def _reconcile_columns(cursor, sql: str) -> tuple[int, list[str]]:
                 continue
             stmt = f'ALTER TABLE {table} ADD COLUMN IF NOT EXISTS "{col}" {safe}'
             attempted += 1
+            if (table.lower(), col.lower()) in present:
+                continue
             try:
                 cursor.execute("SAVEPOINT _col")
                 cursor.execute(stmt)
