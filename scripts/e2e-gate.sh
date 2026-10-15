@@ -9,6 +9,13 @@
 #       wiring smoke, the connector's own suite, the blocked-build words, the pull request
 #       through a 502, a deploy to a local target, the retry policy, and an approval that needs
 #       step-up. One PASS/FAIL table; exit 1 on any FAIL.
+#   scripts/e2e-gate.sh engines [--boss-root DIR] [--image IMAGE] [--keep]
+#       Tier A, no model calls: BOSS's REAL governed build pipeline end to end on the scripted
+#       conformance engine (engine/boss_engine/services/scripted_engine.py), as the poorest engine
+#       (no sessions, no read-only mode) and the richest (every Claude Code capability), over a
+#       clean build, a failing test, a reviewer BLOCKER, a server that crashes on start and an
+#       engine that cannot run. Every engine must show the same stages, gates, fix rounds, PR,
+#       events, profile fields and failure words (tests/e2e/gate/engines.py). Same container.
 #   scripts/e2e-gate.sh agent [--brief <name>] [--with-connector] [--budget-min N] [--keep]
 #       Tier B: ONE real, model-driven build of a known-good brief (tests/e2e/briefs/), started
 #       on the local install as the test owner through BOSS's API, watched to an opened PR,
@@ -29,9 +36,9 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TIER="${1:-}"; shift || true
 
 case "$TIER" in
-  plumbing) ;;
+  plumbing|engines) ;;
   agent) exec python3 "$ROOT/scripts/e2e_gate_agent.py" "$@" ;;
-  *) echo "usage: scripts/e2e-gate.sh plumbing [--boss-root DIR] [--image IMAGE] [--keep]" >&2
+  *) echo "usage: scripts/e2e-gate.sh plumbing|engines [--boss-root DIR] [--image IMAGE] [--keep]" >&2
      echo "       scripts/e2e-gate.sh agent [--brief <name>] [--with-connector] [--budget-min N] [--keep]" >&2; exit 2 ;;
 esac
 
@@ -94,14 +101,14 @@ for _ in $(seq 1 60); do
   sleep 0.5
 done
 
-echo "== e2e-gate plumbing: BOSS $(git -C "$BOSS_ROOT" rev-parse --short HEAD 2>/dev/null || echo '?') in $IMAGE"
+echo "== e2e-gate $TIER: BOSS $(git -C "$BOSS_ROOT" rev-parse --short HEAD 2>/dev/null || echo '?') in $IMAGE"
 docker run --name "$GATE" --network "$NET" --label boss-e2egate=1 \
   --entrypoint "" -w /tmp --env-file "$WORK/gate.env" \
   -e BOSS_SANDBOX_ISOLATION=required -e BOSS_SANDBOX_NETWORK=off \
   -e BOSS_BUILD_SERVICES_PREFIX=boss_e2egate_ -e BOSS_ARTIFACTS_DIR=/tmp/boss-e2egate-artifacts \
   -e PYTHONPATH=/boss:/boss/engine -e PYTHONDONTWRITEBYTECODE=1 \
   -v "$BOSS_ROOT":/boss:ro -v "$ROOT":/gate-src:ro -v "$WORK/out":/out \
-  "$IMAGE" python3 /gate-src/tests/e2e/gate/plumbing.py --out /out/results.json > "$WORK/out/gate.log" 2>&1
+  "$IMAGE" python3 "/gate-src/tests/e2e/gate/$TIER.py" --out /out/results.json > "$WORK/out/gate.log" 2>&1
 status=$?
 grep '^\[gate\]' "$WORK/out/gate.log" >/dev/null 2>&1 || tail -30 "$WORK/out/gate.log"
 

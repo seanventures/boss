@@ -122,23 +122,78 @@ def missing_message(name: str, found: str) -> str:
             f"again.")
 
 
+def java_package_command(build: str) -> str:
+    """Build the app's runnable jar without its tests (the gate ran them)."""
+    if build == "maven":
+        return "mvn -B -ntp -q -DskipTests package"
+    return "gradle --no-daemon -q -x test assemble"
+
+
+def java_jar_glob(build: str) -> str:
+    return "target/*.jar" if build == "maven" else "build/libs/*.jar"
+
+
+def java_pick_jar(build: str) -> str:
+    """Shell that sets $jar to the runnable jar the package step wrote (never the -plain,
+    original-, -sources or -javadoc jars beside it), or fails saying where it looked."""
+    jars = java_jar_glob(build)
+    return (f'jar=$(ls {jars} 2>/dev/null | grep -v -e "original-" -e "-plain.jar" '
+            f'-e "-sources.jar" -e "-javadoc.jar" | head -n 1); '
+            f'[ -n "$jar" ] || {{ echo "no jar under {jars.rsplit("/", 1)[0]}" >&2; exit 1; }}; ')
+
+
+def java_config_file(app_root: Path) -> Optional[str]:
+    """A Dropwizard app's config beside its build (it runs as `server config.yml`)."""
+    return next((n for n in ("config.yml", "config.yaml") if (Path(app_root) / n).is_file()), None)
+
+
+def java_run_args(config: Optional[str]) -> str:
+    return f" server {config}" if config else ""
+
+
 def java_preview_command(app_root: Path, build: str) -> list[str]:
     """Build the jar, then run it on $PORT. A Dropwizard app (a config.yml beside the build)
     runs as `server config.yml`; its config reads the port from ${PORT} (see TOOLCHAINS.md).
     Spring Boot takes -Dserver.port. Anything else declares boss.preview.command."""
-    if build == "maven":
-        package = "mvn -B -ntp -q -DskipTests package"
-        jars = "target/*.jar"
-    else:
-        package = "gradle --no-daemon -q -x test assemble"
-        jars = "build/libs/*.jar"
-    config = next((n for n in ("config.yml", "config.yaml") if (app_root / n).is_file()), None)
-    args = f" server {config}" if config else ""
-    pick = (f'jar=$(ls {jars} 2>/dev/null | grep -v -e "original-" -e "-plain.jar" '
-            f'-e "-sources.jar" -e "-javadoc.jar" | head -n 1); '
-            f'[ -n "$jar" ] || {{ echo "no jar under {jars.rsplit("/", 1)[0]}" >&2; exit 1; }}; ')
+    args = java_run_args(java_config_file(app_root))
     return ["sh", "-lc",
-            f'{package} && {pick}exec java -Dserver.port="$PORT" -jar "$jar"{args}']
+            f'{java_package_command(build)} && {java_pick_jar(build)}'
+            f'exec java -Dserver.port="$PORT" -jar "$jar"{args}']
+
+
+# ---- container images (preview and deploy, outside the BOSS image) -----------------------------
+
+#: Where a Java app is BUILT when its image is made outside the BOSS image (a container preview,
+#: the deploy host): the same JDK major and build tools the toolchains-java stage pins.
+JAVA_BUILD_IMAGES = {"maven": "maven:3.9-eclipse-temurin-21",
+                     "gradle": "gradle:8.14-jdk21"}
+#: Where it RUNS: a JRE, no build tools.
+JAVA_RUNTIME_IMAGE = "eclipse-temurin:21-jre"
+#: The port a generated Java image listens on (Spring Boot's own default).
+JAVA_PORT = 8080
+
+
+def java_dockerfile(build: str, app_dir: str = ".", *, config: Optional[str] = None,
+                    port: int = JAVA_PORT) -> str:
+    """A two-stage Dockerfile for a Java app at `app_dir` (relative to the build context): the
+    jar is built with the build tool's image and run on a JRE, on $PORT like every BOSS image.
+    Dropwizard (`config`) reads its port from ${PORT} in its own config."""
+    if build not in JAVA_BUILD_IMAGES:
+        raise ValueError(f"not a Java build: {build!r}")
+    src = "/src" if app_dir in (".", "") else f"/src/{app_dir.strip('/')}"
+    copy_config = f"COPY --from=build {src}/{config} /app/{config}\n" if config else ""
+    return (
+        f"FROM {JAVA_BUILD_IMAGES[build]} AS build\n"
+        "COPY . /src\n"
+        f"WORKDIR {src}\n"
+        f"RUN {java_package_command(build)} && {java_pick_jar(build)}cp \"$jar\" /tmp/app.jar\n"
+        f"FROM {JAVA_RUNTIME_IMAGE}\n"
+        "WORKDIR /app\n"
+        "COPY --from=build /tmp/app.jar /app/app.jar\n"
+        f"{copy_config}"
+        f"ENV HOST=0.0.0.0 PORT={port}\nEXPOSE {port}\n"
+        f'CMD ["sh", "-c", "exec java -Dserver.port=$PORT -jar /app/app.jar'
+        f'{java_run_args(config)}"]\n')
 
 
 # ---- the sandbox: proxy config and per-project caches -----------------------------------------

@@ -85,6 +85,8 @@ _INTERNAL_TITLE = re.compile(
     # self-repair notices, and substrate validation runs.
     r"|ga-slice|sealed-e2e|e2e smoke|auto-repair:|hybrid substrate validation"
     r"|\w[\w-]*\s+test\)"
+    # A host's profile check, under whatever name the host has ("reference host profile check").
+    r"|[\w-]+\s+host\s+profile\s+check\b"
     r")",
     re.I,
 )

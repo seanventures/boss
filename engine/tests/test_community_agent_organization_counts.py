@@ -1,13 +1,20 @@
 """Community agent organization is counted from source, not from a release note.
 
-The public claim is 34 bundled definitions, 12 workflow templates, and five
+The public claim is 34 bundled definitions, 14 workflow templates, and five
 opt-in examples. These tests read the files and the installer that actually
 ships them. A stale sentence in a doc cannot keep the count green.
+
+The catalogue grew from 12: Security Review (`security_review`) and Incremental
+Build (`incremental_build`, ded31293) are deliberate entries. The release-notes
+draft and README.community.md this test once read do not exist in this tree;
+the five-examples claim lives in README.md, and no shipped doc may state a
+workflow-template count that differs from the catalogue.
 """
 from __future__ import annotations
 
 import ast
 import inspect
+import re
 from pathlib import Path
 
 from boss_engine.services.agent_studio import AgentStudioService
@@ -50,20 +57,30 @@ def test_bundled_definitions_templates_and_examples_match_source():
     assert len(definitions) == 34
     assert [path.stem for path in definitions] == sorted(item["id"] for item in templates)
     assert len(templates) == 34
-    assert len(catalogue_keys) == 12
-    assert len(set(catalogue_keys)) == 12
+    assert len(catalogue_keys) == 14
+    assert len(set(catalogue_keys)) == 14
     assert example_dirs == sorted(examples)
     assert len(examples) == 5
 
-    notes = (ROOT / "docs/operations/COMMUNITY_GA_RELEASE_NOTES_DRAFT.md").read_text(encoding="utf-8")
     readme = (ROOT / "examples" / "README.md").read_text(encoding="utf-8")
     features = (ROOT / "docs/community/FEATURES.md").read_text(encoding="utf-8")
-    community = (ROOT / "README.community.md").read_text(encoding="utf-8")
-    assert "Thirty-four bundled agent definitions, twelve workflow templates and five" in notes
+    community = (ROOT / "README.md").read_text(encoding="utf-8")
     assert "The 34 YAML files in `packages/specpack/agents/`" in readme
     assert "First-run seed installs 34 agents" in features
     assert "five example workflows" in community
     assert "None is installed or runs on a" in readme
+
+    # No shipped doc states a workflow-template count the catalogue does not have.
+    words = {"twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15, "sixteen": 16}
+    claim = re.compile(r"\b(\d+|" + "|".join(words) + r")\s+(?:built-in\s+|catalogue\s+|bundled\s+)?"
+                       r"workflow\s+templates\b", re.IGNORECASE)
+    stale = []
+    for doc in [ROOT / "README.md", *sorted((ROOT / "docs").rglob("*.md")), ROOT / "examples" / "README.md"]:
+        for m in claim.finditer(doc.read_text(encoding="utf-8")):
+            n = m.group(1).lower()
+            if (int(n) if n.isdigit() else words[n]) != len(catalogue_keys):
+                stale.append(f"{doc.relative_to(ROOT)}: {m.group(0)}")
+    assert not stale, stale
 
 
 def test_examples_are_opt_in_and_installing_a_definition_does_not_start_work():

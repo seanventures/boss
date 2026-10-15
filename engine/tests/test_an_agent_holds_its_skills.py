@@ -56,15 +56,31 @@ def test_a_skill_the_project_does_not_have_is_reported_not_swallowed():
 def test_syncing_actually_gives_an_agent_its_skills():
     """EXERCISED. The claim is about rows in a table, so it is checked there."""
     engine = create_engine(DATABASE_URL)
-    with engine.begin() as connection:
-        result = sd.sync_role_skills(connection, project_id=PROJECT, actor="test")
-    assert result["assigned_count"] > 0, "no agent was given anything"
-
     with engine.connect() as connection:
-        held = connection.execute(
-            text("SELECT count(*) FROM role_skills WHERE project_id=:p"), {"p": PROJECT},
-        ).scalar()
-    assert held > 0, "role_skills is still empty, so agents still hold nothing"
+        outer = connection.begin()
+        try:
+            # A booted install has synced already, so take one grant its spec declares away (in
+            # this transaction, rolled back below) and prove the sync gives it back.
+            taken = connection.execute(text(
+                "DELETE FROM role_skills WHERE ctid IN (SELECT g.ctid FROM role_skills g "
+                "JOIN roles r ON r.project_id = g.project_id AND r.role_key = g.role_key "
+                "WHERE g.project_id=:p AND (r.spec->'permissions'->'allowed_skills') ? g.skill_id "
+                "LIMIT 1) RETURNING role_key, skill_id"),
+                {"p": PROJECT}).first()
+            result = sd.sync_role_skills(connection, project_id=PROJECT, actor="test")
+            assert result["assigned_count"] > 0, "no agent was given anything"
+            held = connection.execute(
+                text("SELECT count(*) FROM role_skills WHERE project_id=:p"), {"p": PROJECT},
+            ).scalar()
+            assert held > 0, "role_skills is still empty, so agents still hold nothing"
+            assert taken is not None, "no agent holds a skill its spec declares"
+            back = connection.execute(text(
+                "SELECT 1 FROM role_skills WHERE project_id=:p AND role_key=:r "
+                "AND skill_id=:s"), {"p": PROJECT, "r": taken[0], "s": taken[1]}).first()
+            assert back, f"the sync did not give {taken[0]} back {taken[1]}"
+        finally:
+            outer.rollback()
+    engine.dispose()
 
 
 @needs_db

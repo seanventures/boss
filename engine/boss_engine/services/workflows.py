@@ -5158,9 +5158,10 @@ def reject_gate(
     THE ONE PATH for a refused approval — a decision step and a capability step held at its
     manual approval both end here. It used to block the run with the step left `waiting` (or
     failed and blocked), so the run sat "waiting on a person" who had already answered, with no
-    way forward. Now the run is stopped at a failed step like any other, and offers the run's
-    own two answers: Try again (asks the gate afresh — a new decision) and Skip (carry on
-    without it), each recorded with who chose it.
+    way forward. Now the run is stopped at a failed step like any other, and offers Try again
+    (asks the gate afresh — a new decision), recorded with who chose it. Skip is NOT offered for
+    a refused approval: skipping would turn the person's no into a yes
+    (workflow_run_actions.require, skip_failed_step).
     """
     _refuse_step(connection, run_id, step_id, iteration, decision_id=decision_id,
                  outcome=outcome)
@@ -6229,14 +6230,17 @@ def _fail_attempt(
     backoff = retry_backoff_seconds(template, attempts) if can_retry else 0
     delay = max(0, int(retry_delay_seconds), backoff)
     status = "ready" if can_retry else ("failed" if error_step else "deadlettered")
-    run_after = now_utc() + timedelta(seconds=delay)
     if error_step:
         output = {**(output or {}), ERROR_PATH_TAKEN: error_step}
+    # DUE ON THE DATABASE'S CLOCK: a claim compares run_after with the database's now(), so it
+    # is set from that same clock — the app's clock would make a retry with no back-off "not due
+    # yet" whenever the two differ (and inside one transaction, where now() stands still).
     updated = connection.execute(
         text(
             """
             UPDATE workflow_step_runs
-            SET status=:status, last_error=:error, run_after=:run_after,
+            SET status=:status, last_error=:error,
+                run_after = now() + make_interval(secs => :delay),
                 lease_owner=NULL, lease_expires_at=NULL, heartbeat_at=NULL,
                 attempt_timeout_at=NULL,
                 completed_at=CASE WHEN :terminal THEN now() ELSE NULL END,
@@ -6251,7 +6255,7 @@ def _fail_attempt(
             "id": row["id"],
             "status": status,
             "error": _clean_text(error, "error"),
-            "run_after": run_after,
+            "delay": delay,
             "terminal": not can_retry,
             "output": json.dumps(output or {}),
         },
@@ -6279,7 +6283,7 @@ def _fail_attempt(
         run,
         "workflow.step_retry_scheduled" if can_retry else "workflow.step_deadlettered",
         updated,
-        {"error": error, "retryable": can_retry, "run_after": run_after.isoformat(),
+        {"error": error, "retryable": can_retry, "run_after": _iso(updated["run_after"]),
          "attempt": attempts, "backoff_seconds": backoff,
          **({"reason": reason} if reason else {})},
     )

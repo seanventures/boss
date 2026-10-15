@@ -30,18 +30,22 @@ def test_work_trackers_catalog_and_list(client):
     catalog = client.get("/v1/work-trackers/catalog")
     assert catalog.status_code == 200, catalog.text
     body = catalog.json()
-    assert body.get("default_provider_key") == "plane"
+    # GitHub Issues, reusing the repo connection, is the default option (skills-mcp spec E10);
+    # Plane stays selectable.
+    assert body.get("default_provider_key") == "github_issues"
     keys = [item.get("provider_key") for item in body.get("items") or []]
-    assert "plane" in keys
+    assert {"github_issues", "plane"} <= set(keys)
 
     listed = client.get(
         "/v1/work-trackers", params={"project_id": PROJECT_ID}
     )
     assert listed.status_code == 200, listed.text
     payload = listed.json()
-    assert payload.get("default_provider_key")
+    # None is the default until a tracker is connected; once one is, it names that provider.
+    assert "default_provider_key" in payload
     providers = payload.get("items") or payload.get("providers") or []
-    assert len(providers) >= 1
+    defaults = [p.get("provider_key") for p in providers if p.get("is_default")]
+    assert payload["default_provider_key"] == (defaults[0] if defaults else None)
     # Secrets never leak from tracker configuration
     for item in providers:
         cfg = item.get("configuration") or {}

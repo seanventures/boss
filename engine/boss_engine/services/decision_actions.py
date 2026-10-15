@@ -168,6 +168,18 @@ RECORDED_ON_APPROVAL = frozenset({
     "update_deployment_environment_policy",
     "upsert_comms_channel_policy",
     "use_settled_conclusion_or_reopen_with_new_evidence",
+    # A paid call whose outcome is unknown (budget, model_gateway, changeset_apply, an
+    # interrupted conversation turn): the person reconciles the recorded attempt; BOSS resolves
+    # the card itself once the reservation is settled or released (budget._resolve_reconciliation).
+    "conversation_reconciliation",
+    "reconcile_legacy_model_exposure",
+    "reconcile_legacy_provider_exposure",
+    "reconcile_provider_changeset",
+    "verify_provider_outcome_before_retry",
+    "verify_provider_outcome_then_settle_or_release",
+    # A next action an agent-room summary named as a decision (agent_converse): approving records
+    # the person's answer on the conversation; nothing is started.
+    "decide",
 })
 #: Producers that build the action from a provider key (comms: configure_or_enable_slack_…).
 RECORDED_ON_APPROVAL_PREFIXES = ("configure_or_enable_",)

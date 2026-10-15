@@ -245,11 +245,24 @@ def test_a76_a_failed_event_write_leaves_the_bridge_running(db, monkeypatch):
 # ---- A77 -----------------------------------------------------------------------------------------
 
 def test_a77_only_the_audit_module_inserts_security_events():
+    """Shipping code writes the chain only through identity/audit.py. Test files are not shipping
+    code (fixtures and tamper tests write raw rows on purpose); the schema's one INSERT is the
+    SECURITY DEFINER identity_audit_checkpoint, which only audit.py calls."""
     hits = subprocess.run(
         ["git", "grep", "-l", "-i", "-E", r"insert\s+into\s+identity_security_events", "--",
          "*.py", "*.ts", "*.tsx", "*.sql"], cwd=REPO, capture_output=True, text=True).stdout.split()
-    allowed = {"engine/boss_engine/identity/audit.py"}
-    assert set(hits) <= allowed, set(hits) - allowed
+    shipping = {h for h in hits if "/tests/" not in h and not h.startswith("tests/")}
+    allowed = {"engine/boss_engine/identity/audit.py", "db/schema.sql"}
+    assert shipping <= allowed, shipping - allowed
+    schema = (REPO / "db" / "schema.sql").read_text()
+    inserts = [m.start() for m in re.finditer(r"(?i)insert\s+into\s+identity_security_events",
+                                              schema)]
+    owner = schema.rfind("CREATE OR REPLACE FUNCTION identity_audit_checkpoint", 0, inserts[0])
+    assert len(inserts) == 1 and owner != -1, "the schema writes the chain outside the checkpoint"
+    assert schema.find("CREATE OR REPLACE FUNCTION", owner + 1) > inserts[0]
+    callers = subprocess.run(["git", "grep", "-l", "identity_audit_checkpoint(", "--", "*.py"],
+                             cwd=REPO, capture_output=True, text=True).stdout.split()
+    assert {c for c in callers if "/tests/" not in c} == {"engine/boss_engine/identity/audit.py"}
 
 
 def test_a77_no_audit_route_accepts_an_event_and_a_body_cannot_forge_one(db, monkeypatch):

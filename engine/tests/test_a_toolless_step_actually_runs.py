@@ -35,10 +35,14 @@ SOURCE = (
 
 
 def _toolless_branch() -> str:
-    """The body of `if capability.tool is None:` — everything a tool-less step can reach."""
-    start = SOURCE.index("    if capability.tool is None:")
-    end = SOURCE.index("    # ADOPT, DO NOT DUPLICATE.", start)
-    return SOURCE[start:end]
+    """Everything a tool-less step can reach: the dispatch (`if extend or capability.tool is
+    None:`) hands it to _perform_toolless, whose body is the branch."""
+    import inspect
+
+    from boss_engine.services import workflow_capability_runner as runner
+
+    assert "if extend or capability.tool is None:" in SOURCE
+    return inspect.getsource(runner._perform_toolless)
 
 
 def _handled_in_branch() -> set[str]:

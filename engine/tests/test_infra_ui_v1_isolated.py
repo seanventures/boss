@@ -80,7 +80,9 @@ def test_area_id_union_still_includes_hidden_community_areas():
         "org",
         "foundations",
         "components",
-        "pipeline",
+        # "pipeline" was dropped too: the Coding Pipeline page folded into Setup › Model routing
+        # (docs/product/MODEL_ROUTER.md), and `?area=pipeline` bookmarks redirect there — checked
+        # below so the old link never lands on a blank screen.
         "comms",
         "assurance",
         "capabilities",
@@ -97,3 +99,9 @@ def test_area_id_union_still_includes_hidden_community_areas():
             assert 'id: "metatron"' not in shell
             continue
         assert f'id: "{area}"' in shell, f"AREAS dropped hidden {area}"
+
+    legacy = (ROOT / "apps/web/app/legacy-areas.ts").read_text(encoding="utf-8")
+    i = legacy.index('if (area === "pipeline")')
+    redirect = legacy[i:legacy.index("return next;", i)]
+    assert 'next.set("area", "setup")' in redirect, "?area=pipeline no longer resolves"
+    assert 'next.set("focus", "routing")' in redirect

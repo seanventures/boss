@@ -145,12 +145,15 @@ COPY --from=node:22-bookworm-slim@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e3395
 # namespace in this container). An agent session holds a model-proxy run token, never the key
 # (engine/boss_engine/services/model_proxy.py). Engines declare what they exec
 # (harness_registry.RuntimeBinary); test_every_engine_binary_is_in_the_image holds this stage to it.
+# build-essential: a C/C++ toolchain for npm packages that compile on install (better-sqlite3,
+# bcrypt: node-gyp needs make and g++). About 300 MB; agents had been told to avoid such packages
+# (BOSSAPP-515, test_the_build_image_can_compile_native_modules).
 RUN ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
     && ln -s /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
     && apt-get update \
     && apt-get install -y --no-install-recommends \
        ca-certificates git openssh-client ffmpeg libavfilter-extra fonts-dejavu-core \
-       iptables libcap2-bin curl \
+       iptables libcap2-bin curl build-essential \
     && addgroup --system boss \
     && adduser --system --ingroup boss --home /home/boss boss \
     && mkdir -p /home/boss/.codex /home/boss/.claude /var/lib/boss/artifacts /var/lib/boss/identity \

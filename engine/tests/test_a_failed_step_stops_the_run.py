@@ -163,6 +163,24 @@ def _two_step(c, project_id: str, key: str, inputs: dict | None = None):
     return _start(c, project_id, version["id"], {})
 
 
+class _PendingCi:
+    """A GitHub whose checks on the pull request's head have not finished."""
+
+    repository = "acme/app"
+
+    def pull_request(self, number):
+        return {"head": {"sha": "a" * 40}}
+
+    def check_runs(self, sha):
+        return [{"name": "test", "status": "in_progress", "conclusion": None}]
+
+    def statuses(self, sha):
+        return []
+
+    def has_workflows(self, sha):
+        return True
+
+
 def _insert_awaited(c, project_id: str, table: str, row_id: str, status: str) -> None:
     """Land a row in any awaited table in a terminal state, filling whatever the schema insists
     on generically — so this keeps working for every await table, including ones added later."""
@@ -294,16 +312,31 @@ def test_awaited_work_that_fails_stops_the_run_at_that_step(eng, project, monkey
     # Deploy's "no preview, no deploy" guard is its own test; here the deployment is under test.
     monkeypatch.setattr(runner, "_preview_missing_for_run", lambda *a, **k: None)
     table = runner._AWAIT_TABLES[kind][0]
+    inputs = None
+    if key == "wait_for_ci":
+        # wait_for_ci has no tool: it reads the project's GitHub (ci_gate.reader_for_project,
+        # which "tests replace") and records its OWN wait. Give it a pull request and a reader
+        # whose checks have not finished, so it parks; the wait it made is then failed below.
+        from boss_engine.services import ci_gate
+
+        monkeypatch.setattr(ci_gate, "reader_for_project", lambda *a, **k: _PendingCi())
+        inputs = {"pull_request_url": "https://github.com/acme/app/pull/7"}
 
     with eng.begin() as c:
-        run = _two_step(c, project, key)
+        run = _two_step(c, project, key, inputs)
         # Two ticks with approval between: a tier-2 step (deploy, redeploy) asks first.
         _tick_through_retries(eng, c, project, run["id"], times=2)
         parked = _steps(c, run["id"])["s"]
         assert parked["status"] == "waiting", parked
+        if key == "wait_for_ci":
+            awaited_id = parked["output"]["await"]["id"]
         assert parked["output"]["await"] == {"kind": kind, "id": awaited_id}
 
-        _insert_awaited(c, project, table, awaited_id, status)
+        if key == "wait_for_ci":
+            c.execute(text(f"UPDATE {table} SET status=:s WHERE id=:i"),  # noqa: S608
+                      {"s": status, "i": awaited_id})
+        else:
+            _insert_awaited(c, project, table, awaited_id, status)
         runner.tick(c, Ctx(eng), project_id=project)
         runner.tick(c, Ctx(eng), project_id=project)
         steps = _steps(c, run["id"])
@@ -553,8 +586,9 @@ def test_a_step_that_commissions_nothing_says_so_instead_of_claiming_work(eng, p
 
 @pytest.mark.parametrize("key", sorted(GATES))
 def test_a_refused_gate_blocks_the_run_and_cannot_be_skipped(eng, project, monkeypatch, key):
-    """A gate's "failure" is a person saying no. The run blocks there — and Skip is refused,
-    because skipping would turn that no into a yes."""
+    """A gate's "failure" is a person saying no. The run STOPS there at a failed step
+    (workflows.reject_gate: it used to sit `blocked`, "waiting on a person" who had already
+    answered) — and Skip is refused, because skipping would turn that no into a yes."""
     monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([]))
     if key == "security_decide":
         # The security choice is asked only when the scan found something to fix (with nothing,
@@ -572,9 +606,9 @@ def test_a_refused_gate_blocks_the_run_and_cannot_be_skipped(eng, project, monke
         c.execute(text("UPDATE decisions SET status='rejected' WHERE id=:d"), {"d": gate})
         runner.tick(c, Ctx(eng), project_id=project)
         steps = _steps(c, run["id"])
-        assert steps["s"]["status"] != "succeeded"
+        assert steps["s"]["status"] == "failed"
         assert "after" not in steps or steps["after"]["status"] == "pending"
-        assert _run_status(c, run["id"]) == "blocked"
+        assert _run_status(c, run["id"]) not in ("running", "completed", "succeeded")
         # Whatever state the refusal leaves the step in, Skip may not pass it.
         c.execute(text("UPDATE workflow_step_runs SET status='failed' "
                        "WHERE workflow_run_id=:r AND step_id='s'"), {"r": run["id"]})
@@ -593,6 +627,15 @@ def test_an_agent_step_whose_approved_run_fails_stops_the_run(eng, project, monk
         "status": "suspended", "agent_run_id": awaited_id})
     monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([]))
     with eng.begin() as c:
+        # AN AGENT TO GIVE THE STEP TO: an agent step that names nobody goes to an agent holding
+        # a usable skill, and a project with none is refused at publish (step_agents).
+        role = f"helper_{uuid.uuid4().hex[:6]}"
+        c.execute(text("INSERT INTO roles (id, project_id, role_key, display_name) "
+                       "VALUES (:i, :p, :k, 'Helper')"),
+                  {"i": f"role_{uuid.uuid4().hex[:12]}", "p": project, "k": role})
+        c.execute(text("INSERT INTO role_skills (id, project_id, role_key, skill_id) "
+                       "VALUES (:i, :p, :k, 'repo.read')"),
+                  {"i": f"rs_{uuid.uuid4().hex[:12]}", "p": project, "k": role})
         _, version = _publish(c, project, f"agent_{uuid.uuid4().hex[:6]}", [
             {"id": "s", "kind": "capability",
              "binding": {"agent_work": True, "inputs": {"instructions": "do the thing"}},

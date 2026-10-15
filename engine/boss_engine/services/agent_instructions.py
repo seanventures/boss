@@ -557,9 +557,11 @@ def _what_it_holds(connection: Connection, project_id: str, role_key: str) -> tu
                     text("SELECT tools FROM role_mcp_servers WHERE project_id = :p AND "
                          "role_key = :r"), {"p": project_id, "r": role_key}).scalars().all():
                 held |= set(tools or [])
-            known |= set(connection.execute(
-                text("SELECT skill_key FROM skill_definitions WHERE project_id = :p"),
-                {"p": project_id}).scalars().all())
+            # Every skill the project has, from the ONE catalogue (spec pack, project rows and
+            # authored skills merged), not the authored table alone.
+            from .skill_catalogue import entries
+
+            known |= set(entries(connection, project_id))
     except Exception:  # noqa: BLE001 — a warning is a nicety
         pass
     known = {k for k in known if "_" in k or "." in k}

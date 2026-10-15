@@ -463,6 +463,18 @@ def _docker_run_cmd(app: str, app_port: int, remote: str, mode: str = "static",
                f"-v {remote_q}/dist:/app -v {remote_q}/data:/data -w /app "
                f"-e PORT=80 -e HOST=0.0.0.0 -e DATA_DIR=/data -e PYTHONDONTWRITEBYTECODE=1 "
                f"python:3.12-slim sh -c {shlex.quote(entry)}")
+    elif mode == "java":
+        # The jar _java_payload built, on a JRE. Same contract as the node and py modes: the
+        # payload is replaced by the next deploy, /data survives it, HOST/PORT come from the
+        # environment. `entry` is a Dropwizard config's name (its port is ${PORT}), else "".
+        from .toolchains import JAVA_RUNTIME_IMAGE, java_run_args
+
+        java = f"exec java -Dserver.port=$PORT -jar /app/app.jar{java_run_args(entry or None)}"
+        run = (f"docker run -d --name {app_q} --restart unless-stopped {env_opt}-p {int(app_port)}:80 "
+               f"{_OWNERSHIP_LABELS.format(app=app_q)} "
+               f"-v {remote_q}/dist:/app:ro -v {remote_q}/data:/data -w /app "
+               f"-e PORT=80 -e HOST=0.0.0.0 -e DATA_DIR=/data "
+               f"{JAVA_RUNTIME_IMAGE} sh -c {shlex.quote(java)}")
     else:
         run = (f"docker run -d --name {app_q} --restart unless-stopped {env_opt}-p {int(app_port)}:80 "
                f"{_OWNERSHIP_LABELS.format(app=app_q)} "
@@ -805,6 +817,8 @@ def _build_dist(settings: Settings, owner: str, repo: str, branch: str, *, token
                         ignore=shutil.ignore_patterns(".git", "__pycache__", "data", ".e2e-data"))
         shutil.rmtree(work, ignore_errors=True)
         return (payload, "node", "", sha)
+    if kind == "java":
+        return _java_payload(work, value, sha)
     if kind == "static":
         static_dir = work / value
     elif (work / "dist").is_dir():
@@ -821,6 +835,54 @@ def _build_dist(settings: Settings, owner: str, repo: str, branch: str, *, token
     dist = work / "dist"
     shutil.copytree(static_dir, dist)
     return (work, "static", "", sha)
+
+
+#: A JVM and an app framework start slower than a Node or Python server: the health gate waits
+#: this long for a Java deploy before it rolls back.
+JAVA_DEPLOY_HEALTH_TIMEOUT_SECONDS = 240
+
+
+def _java_payload(work: Path, value: str, sha: Optional[str]) -> tuple[Path, str, str, Optional[str]]:
+    """Mode "java": the jar, built HERE with this install's toolchain, laid out as dist/app.jar
+    (plus a Dropwizard config beside it). The host runs it on a JRE image, so it starts in
+    seconds instead of compiling inside the health gate's window. `entry` is the config file's
+    name, or "" for an app that takes its port as -Dserver.port (Spring Boot)."""
+    from . import toolchains
+
+    app_root = work if value in (".", "") else work / value
+    build = None if (app_root / "package.json").is_file() else toolchains.detect_java(app_root)
+    if build is None:
+        raise RuntimeError(f"{value or 'the repository root'} is not a Maven or Gradle build; "
+                           "nothing here to package as a jar")
+    if not toolchains.has("java"):
+        shutil.rmtree(work, ignore_errors=True)
+        raise RuntimeError(toolchains.missing_message("java", toolchains.build_file(build)))
+    home = Path(tempfile.mkdtemp(prefix="boss-deploy-home-"))
+    jar_out = home / "app.jar"
+    try:
+        # Maven and Gradle ignore HTTPS_PROXY: the proxy goes in their own config (no-op without).
+        toolchains.write_proxy_config(home, os.environ.get("HTTPS_PROXY")
+                                      or os.environ.get("https_proxy"))
+        proc = owned_process.run(
+            ["sh", "-lc", f'{toolchains.java_package_command(build)} && '
+                          f'{toolchains.java_pick_jar(build)}cp "$jar" "$BOSS_JAR_OUT"'],
+            cwd=str(app_root), env={**os.environ, "HOME": str(home),
+                                    "BOSS_JAR_OUT": str(jar_out)},
+            capture_output=True, text=True, timeout=toolchains.GATE_TIMEOUT_SECONDS)
+        if proc.returncode != 0 or not jar_out.is_file():
+            tail = ((proc.stderr or "") + (proc.stdout or "")).strip()[-600:]
+            raise RuntimeError(f"the {build} build did not produce a runnable jar: "
+                               f"{tail or f'exit {proc.returncode}'}")
+        payload = Path(tempfile.mkdtemp(prefix="boss-deploy-payload-"))
+        (payload / "dist").mkdir()
+        shutil.copyfile(jar_out, payload / "dist" / "app.jar")
+        config = toolchains.java_config_file(app_root)
+        if config:
+            shutil.copyfile(app_root / config, payload / "dist" / config)
+    finally:
+        shutil.rmtree(home, ignore_errors=True)
+        shutil.rmtree(work, ignore_errors=True)
+    return (payload, "java", config or "", sha)
 
 
 def _python_deploy_command(app_dir: Path, entry: str) -> str:
@@ -998,7 +1060,10 @@ def deploy_ssh(engine, settings: Settings, run_id: str, *, host: str, user: str 
                            {"app": app, "host": host, "reason": "docker_run_failed",
                             "detail": (dep.stderr or "")[:900]})
             raise RuntimeError(f"docker run failed: {(dep.stderr or '')[:900]}")
-        code, waited = _await_healthy(key_path, host, user, ssh_port, int(app_port))  # 6 health gate
+        code, waited = _await_healthy(  # 6 health gate
+            key_path, host, user, ssh_port, int(app_port),
+            timeout=(JAVA_DEPLOY_HEALTH_TIMEOUT_SECONDS if mode == "java"
+                     else DEPLOY_HEALTH_TIMEOUT_SECONDS))
         if not code.startswith("2"):                                           # Phase 3 rollback
             _rollback_remote(key_path, host, user, ssh_port, remote=remote, app=app,
                              app_port=app_port, mode=mode, entry=entry, env_file=env_file)

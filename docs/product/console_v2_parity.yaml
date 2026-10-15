@@ -63,6 +63,10 @@ monitoring:
   to: infra
   what: Deploy health per target.
   risk: Grafana links, the monitoring stack deploy and the observability suite's gap list are v1-only.
+observability:
+  to: infra
+  what: Deploy health per target — Observability is where `?area=monitoring` lands now (app/legacy-areas.ts, infra-observability spec §4.1), so it folds where Monitoring did.
+  risk: The Apps pulse (up, slow, latency), the Models call ledger and its cost, BOSS's own System health and the Sources tab are v1-only.
 observability-suite:
   to: infra
   what: Folded into Infra & Models as health.

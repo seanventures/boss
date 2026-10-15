@@ -532,9 +532,12 @@ def _handler_for(proxy: ModelProxy):
                         reader.feed(chunk)
                         self.wfile.write(b"%x\r\n%s\r\n" % (len(chunk), chunk))
                         self.wfile.flush()
+                    # Tally BEFORE the last chunk: the client (and whoever reads the session's
+                    # usage once it exits) may act the moment the answer ends, and an answer
+                    # whose usage is recorded after that reads as zero tokens.
+                    proxy.tally(grant, reader.finish())
                     self.wfile.write(b"0\r\n\r\n")
                     self.close_connection = True
-                    proxy.tally(grant, reader.finish())
             except (BrokenPipeError, ConnectionResetError):
                 self.close_connection = True
             except Exception as exc:  # noqa: BLE001 — the client gets a 502, never a credential

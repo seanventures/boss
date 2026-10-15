@@ -225,13 +225,25 @@ def _os_arch() -> tuple[str, str]:
     return os_name, arch
 
 
+_PEP440_PRE = re.compile(r"^(\d+\.\d+\.\d+)\.?(a|alpha|b|beta|rc|dev)\.?(\d*)$")
+_PRE_LABEL = {"a": "alpha", "alpha": "alpha", "b": "beta", "beta": "beta", "rc": "rc", "dev": "dev"}
+
+
 def _version() -> str:
+    """The release version as it is published (`1.0.0-rc.9`), not Python's spelling of it
+    (`1.0.0rc9`): the allow-list only carries the release form, so the raw package version
+    would be dropped from every heartbeat and context."""
     try:
         from .. import __version__
 
-        return str(__version__)
+        raw = str(__version__)
     except Exception:  # noqa: BLE001
         return "0.0.0"
+    pre = _PEP440_PRE.match(raw)
+    if pre:
+        base, label, n = pre.groups()
+        return f"{base}-{_PRE_LABEL[label]}" + (f".{n}" if n else "")
+    return raw
 
 
 def _edition(settings: Any) -> str:
@@ -437,6 +449,16 @@ def _scorecards(connection, secret: str, since: Optional[datetime], until: datet
     return {"rows": [], "agg": agg}, note
 
 
+def _authored_skill_count(connection: Any) -> int:
+    """How many skills operators authored on this install: the authored store's own count."""
+    from .skill_definitions import count_authored
+
+    try:
+        return count_authored(connection)
+    except Exception:  # noqa: BLE001 — a missing table is zero, as _count treats it
+        return 0
+
+
 def build_batch(connection, settings: Any, *, day: date, since: Optional[datetime],
                 until: datetime, consent_at: Optional[datetime] = None, force_agg: bool = False,
                 level: int = 1) -> dict[str, Any]:
@@ -553,7 +575,7 @@ def build_batch(connection, settings: Any, *, day: date, since: Optional[datetim
              + (SELECT COUNT(*) FROM workflow_runs WHERE status = 'cancelled' AND {w('updated_at')})""", p)
     custom = {
         "roles": allow.count_range(scale["agents_custom"]),
-        "skills": allow.count_range(_count(connection, "SELECT COUNT(*) FROM skill_definitions", p)),
+        "skills": allow.count_range(_authored_skill_count(connection)),
         "mcp_servers": allow.count_range(_count(connection, "SELECT COUNT(*) FROM mcp_servers WHERE "
                                                 "provenance->>'source' IS DISTINCT FROM 'builtin'", p)),
         "workflows": allow.count_range(_count(connection, "SELECT COUNT(*) FROM workflow_definitions "

@@ -26,7 +26,7 @@ is listed. A registry that presents an untested adapter as ready is worse than n
 from __future__ import annotations
 
 import shutil
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Callable, Optional
 
 #: Builder signature: (settings) -> CodeAgent
@@ -198,6 +198,13 @@ def build_harness(name: Optional[str], settings) -> object:
 def available_harnesses() -> list[dict]:
     """Every registered harness, for the CLI, MCP and console to show an operator."""
     _ensure_builtins()
+    import os
+
+    # The conformance engine ("scripted", kind "conformance") plays no model: it is listed only
+    # where the conformance gate turned it on, never offered to an operator.
+    shown = [s for s in _REGISTRY.values()
+             if s.kind != "conformance"
+             or (os.environ.get("BOSS_SCRIPTED_ENGINE") or "").strip().lower() in ("1", "true", "yes")]
     return [
         {
             "name": s.name,
@@ -208,7 +215,7 @@ def available_harnesses() -> list[dict]:
             "aliases": list(s.aliases),
             "runtime": [r.binary for r in s.runtime],
         }
-        for s in sorted(_REGISTRY.values(), key=lambda x: x.name)
+        for s in sorted(shown, key=lambda x: x.name)
     ]
 
 

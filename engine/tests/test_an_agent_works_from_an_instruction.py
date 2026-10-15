@@ -36,9 +36,24 @@ PROJECT = "boss-dogfood"
 
 @pytest.fixture()
 def db():
+    """One transaction, rolled back: a test that empties an agent or rewrites its spec leaves
+    the shared project as it found it for the tests after it."""
     engine = create_engine(DATABASE_URL)
-    with engine.begin() as connection:
-        yield connection
+    with engine.connect() as connection:
+        outer = connection.begin()
+        try:
+            yield connection
+        finally:
+            outer.rollback()
+    engine.dispose()
+
+
+def _holds_nothing(db, role_key: str) -> None:
+    """Take everything an agent holds: its skills AND its MCP servers (an MCP grant is a
+    holding — agent_steps.holdings — and the seed gives agents servers)."""
+    for table in ("role_skills", "role_mcp_servers"):
+        db.execute(text(f"DELETE FROM {table} WHERE project_id=:p AND role_key=:r"),
+                   {"p": PROJECT, "r": role_key})
 
 
 # --------------------------------------------------------------------------- #
@@ -82,8 +97,7 @@ def test_an_agent_holding_nothing_is_refused_before_a_model_is_called(db):
     A step given to an empty agent would otherwise spend a model call to discover it has no
     tools, then report success having done nothing.
     """
-    db.execute(text("DELETE FROM role_skills WHERE project_id=:p AND role_key='qa'"),
-               {"p": PROJECT})
+    _holds_nothing(db, "qa")
     with pytest.raises(agent_steps.AgentStepError, match="holds no skills"):
         agent_steps.run(db, Settings(), PROJECT, instructions="do something",
                         role_key="qa")
@@ -92,8 +106,7 @@ def test_an_agent_holding_nothing_is_refused_before_a_model_is_called(db):
 @needs_db
 def test_an_agent_holding_nothing_is_not_offered_as_a_candidate(db):
     """It is not a candidate for anything: every call it made would be refused."""
-    db.execute(text("DELETE FROM role_skills WHERE project_id=:p AND role_key='qa'"),
-               {"p": PROJECT})
+    _holds_nothing(db, "qa")
     assert "qa" not in {c["role_key"] for c in agent_steps.candidates(db, Settings(), PROJECT)}
 
 
@@ -184,8 +197,7 @@ def test_no_agent_holds_anything_says_what_to_do_about_it(db):
     passed and then broke two unrelated tests that ran after it. A test that wrecks the state
     other tests read is a worse defect than the one it was checking for.
     """
-    db.execute(text("DELETE FROM role_skills WHERE project_id=:p AND role_key='qa'"),
-               {"p": PROJECT})
+    _holds_nothing(db, "qa")
     with pytest.raises(agent_steps.AgentStepError, match="give it the skills"):
         agent_steps.choose_agent(db, Settings(), PROJECT, instructions="do a thing",
                                  only=["qa"])

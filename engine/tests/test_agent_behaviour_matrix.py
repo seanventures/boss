@@ -532,7 +532,10 @@ def test_the_chat_does_not_revalidate_the_whole_console():
         src = pathlib.Path(f"apps/web/app/{name}").read_text(encoding="utf-8")
         code = re.sub(r"/\*.*?\*/", "", src, flags=re.S)
         code = re.sub(r"^\s*//.*$", "", code, flags=re.M)
-        assert re.search(r"callAction\(askBossAction\)\(", code), (
+        # callAction takes optional (press, permission) arguments after the action — both
+        # surfaces pass the "assistant:chat" permission — so the action is matched as the
+        # first argument, whatever follows it.
+        assert re.search(r"callAction\(askBossAction\b[^()]*\)\(", code), (
             f"{name} does not invoke the non-revalidating action through the press door")
         assert not re.search(r"\baskBossAction\(", code), (
             f"{name} calls askBossAction directly, without the press's key")
@@ -771,12 +774,17 @@ def test_build_reports_success_and_failure():
     """The old action returned void, so a failure and a success looked identical: "Working",
     then nothing, forever."""
     hero = pathlib.Path("apps/web/app/ask-boss-hero.tsx").read_text(encoding="utf-8")
+    # Build is two steps now: `assign` reads a work agreement (POST /api/builds/preview) and
+    # `confirmBuild` starts the run the operator agreed to (POST /api/builds). Each must say
+    # when it failed, and the start must say what it created. Whole callbacks, not fixed
+    # windows: each is sliced to its own dependency list.
     i = hero.index("const assign = useCallback")
-    # The whole callback, not a fixed 1400 characters: Build now also draws the readiness
-    # checklist on a refusal (review of the readiness change), which pushed the confirmation
-    # past a fixed window without changing what the callback does.
-    body = hero[i:hero.index("}, [busy", i)]
-    assert "setError(" in body, "a failed build is still silent"
+    preview = hero[i:hero.index("}, [busy", i)]
+    assert "setAgreementError(" in preview, "a failed agreement read is still silent"
+    i = hero.index("const confirmBuild = useCallback")
+    body = hero[i:hero.index("}, [agreement", i)]
+    assert "setAgreementError(" in body, "a failed build is still silent"
+    assert "setRefusal(" in body, "a refused build does not say what is missing"
     assert "setReply(" in body, "a started build gives no confirmation"
     # The press starts a WORKFLOW RUN now, not a panel, so the id worth naming is the run's —
     # it is the thing the operator goes and watches.
@@ -839,13 +847,22 @@ def test_every_in_flight_row_names_an_area_to_open():
         assert f'"{stage}"' in src, f"{stage} has no console area"
 
 
+#: The deploy card (SetupDeployment, the host lookup) — moved verbatim out of code-tasks-ui.tsx
+#: when that file became the Factory shell; the cockpit imports it from here.
+_DEPLOY_CARD = "apps/web/app/factory/legacy-build-parts.tsx"
+
+
 def test_the_host_list_is_fetched_once_per_page_not_once_per_card():
     """Every app card sat at "Checking for a host…", which reads as "BOSS cannot reach the VM".
     The API was fine — ~3s, one verified host, SSH allowed. SetupDeployment renders inside every
     card and each copy fired its own identical lookup; past ~6 apps they queue behind a browser's
     per-origin connection limit while a multi-megabyte page loads, so none of them resolves."""
     import re
-    src = pathlib.Path("apps/web/app/code-tasks-ui.tsx").read_text(encoding="utf-8")
+    # SetupDeployment and its host lookup moved verbatim out of code-tasks-ui.tsx when that file
+    # became the Factory shell (factory spec §4.1). Both files are read, so the shell cannot
+    # grow a second lookup beside the one the card uses.
+    src = "\n".join(pathlib.Path(p).read_text(encoding="utf-8")
+                    for p in (_DEPLOY_CARD, "apps/web/app/code-tasks-ui.tsx"))
     code = re.sub(r"/\*.*?\*/", "", src, flags=re.S)
     code = re.sub(r"^\s*//.*$", "", code, flags=re.M)
     assert "loadHostsOnce" in code and "hostsCache" in code
@@ -862,7 +879,7 @@ def test_the_host_list_is_fetched_once_per_page_not_once_per_card():
 def test_the_host_lookup_always_settles():
     """A fetch with no timeout can hang forever, and this one is the only thing between the
     operator and the Deploy button — so "still loading" was indistinguishable from "broken"."""
-    src = pathlib.Path("apps/web/app/code-tasks-ui.tsx").read_text(encoding="utf-8")
+    src = pathlib.Path(_DEPLOY_CARD).read_text(encoding="utf-8")
     i = src.index("function loadHostsOnce")
     # Slice to the end of the function rather than a fixed byte count — the first version cut
     # at 900 chars and started failing when a comment grew, which tests nothing about behaviour.
@@ -930,7 +947,7 @@ def test_research_seeds_are_questions_not_products():
 def test_a_stale_tab_is_not_reported_as_a_broken_host():
     """After a redeploy an open tab calls server-action ids that no longer exist. It surfaced as
     "Could not read the host list", sending the operator to check a VM that was never down."""
-    src = pathlib.Path("apps/web/app/code-tasks-ui.tsx").read_text(encoding="utf-8")
+    src = pathlib.Path(_DEPLOY_CARD).read_text(encoding="utf-8")
     assert "isStaleClient" in src
     assert "UnrecognizedActionError" in src
     i = src.index("isStaleClient(loadError)")
@@ -963,10 +980,16 @@ def test_the_auto_refresh_backs_off_to_what_a_render_costs():
     the api healthcheck went unhealthy, and the console 502'd. The code comment shows this
     already happened once at 7s, so 15s only moved the threshold."""
     src = pathlib.Path("apps/web/app/ConsoleShell.tsx").read_text(encoding="utf-8")
-    assert "lastRefreshMs" in src, "the refresh cost is not measured"
+    # The cost is measured by the one refresh coordinator now (lib/console-refresh.ts), start to
+    # landing; the shell's own `lastRefreshMs` timed the synchronous router.refresh() call and
+    # so measured nothing.
+    coordinator = pathlib.Path("apps/web/lib/console-refresh.ts").read_text(encoding="utf-8")
+    assert "lastDuration = landedAt - startedAt" in coordinator, "the refresh cost is not measured"
+    assert "lastDurationMs: () => lastDuration" in coordinator
     i = src.index("const schedule = ()")
-    body = src[i:i + 400]
-    assert "lastRefreshMs.current * 3" in body, "the interval does not scale with the cost"
+    body = src[i:src.index("\n    };", i)]
+    assert "refreshCoordinator.lastDurationMs() * 3" in body, (
+        "the interval does not scale with the cost")
     assert "Math.max(20_000" in body, "no floor on the interval"
     assert "Math.min(180_000" in body, "no ceiling — a slow render could stop refresh entirely"
     assert "setInterval" not in src[i - 600:i + 900], "still a fixed-rate timer"
@@ -977,7 +1000,10 @@ def test_the_refresh_still_skips_a_hidden_tab_and_a_typing_operator():
     src = pathlib.Path("apps/web/app/ConsoleShell.tsx").read_text(encoding="utf-8")
     i = src.index("const tick = ()")
     body = src[i:i + 700]
-    for guard in ("document.hidden", "refreshPending", "paletteOpen", '"TEXTAREA"'):
+    # `refreshCoordinator.busy()` is the in-flight guard that was `refreshPending`: every
+    # refresh goes through the coordinator, and the transition flag settles within a frame of
+    # router.refresh(), long before the render lands (ConsoleShell, lib/console-refresh.ts).
+    for guard in ("document.hidden", "refreshCoordinator.busy()", "paletteOpen", '"TEXTAREA"'):
         assert guard in body, f"lost guard: {guard}"
 
 
@@ -1122,31 +1148,93 @@ def test_the_page_does_not_fetch_its_feeds_one_at_a_time():
     """Load time was 20-30s and none of it was work. Measured: the API serves 82 concurrent
     requests in 1.6s, Node issues 82 in 0.8s, and the same page renders in 1.9s when every feed
     comes from memory. The page was simply asking for them one at a time — seven sequential
-    awaits at the top, each a full round-trip before the next began."""
+    awaits at the top, each a full round-trip before the next began.
+
+    A barrier is an await that STARTS a request and waits for it (`await fetchX(…)`). The page
+    now starts its independent reads first and awaits each where its value is used
+    (`const orgsP = fetchOrgs(); … await orgsP`, the console-latency fix of 2026-10-09); such an
+    await joins a request that is already in flight beside others. That join is only credited
+    when some other request really was started between the promise and its await — otherwise
+    `const p = fetchX(); await p;` would be a barrier under another name."""
     src = pathlib.Path("apps/web/app/page.tsx").read_text(encoding="utf-8")
     body = src[src.index("export default async function HomePage"):]
-    # Count barriers: an await that is not part of a Promise.all forces everything after it to
-    # wait for one round-trip.
-    barriers = [
-        ln.strip() for ln in body.splitlines()
-        if "await " in ln and "Promise.all" not in ln and not ln.strip().startswith(("//", "*"))
-    ]
+    code = re.sub(r"^\s*(//|\*).*$", "", body, flags=re.M)
+    barriers = []
+    for m in re.finditer(r"await\s+(?!Promise\.all\b)([\w.]+)(\()?", code):
+        line = code[code.rindex("\n", 0, m.start()) + 1: code.index("\n", m.end())].strip()
+        if m.group(2):
+            barriers.append(line)
+            continue
+        start = re.search(r"\bconst %s\s*=" % re.escape(m.group(1)), code)
+        between = code[start.end(): m.start()] if start and start.end() < m.start() else ""
+        if not re.search(r"\b(fetch|load)\w*\(|Promise\.all\(", between):
+            barriers.append(line)
     assert len(barriers) <= 4, (
         f"{len(barriers)} sequential round-trips before the page can render:\n  "
         + "\n  ".join(barriers[:10])
     )
 
 
+_FN = r"(?:export\s+)?(?:async\s+)?function\s+%s\b"
+
+
+def _fn_body(text: str, name: str) -> str | None:
+    m = re.search(_FN % re.escape(name), text)
+    if not m:
+        return None
+    nxt = re.search(r"\n(?:export |function |async function |const \w+ = )", text[m.end():])
+    return text[m.start(): m.end() + (nxt.start() if nxt else len(text))]
+
+
+def _cannot_reject(text: str, name: str, seen: frozenset = frozenset()) -> tuple[bool, bool]:
+    """(safe, caught): `safe` when no request in `name` — or in the same-file helpers it calls —
+    can throw past it; `caught` when a catch was actually found on the way, so a fetcher that
+    only calls imported code does not pass by having nothing to inspect."""
+    body = _fn_body(text, name)
+    if body is None or name in seen:
+        return True, False
+    code = re.sub(r"^\s*//.*$", "", body, flags=re.M)
+    if "catch" in code or "allSettled" in code:
+        return True, True
+    if re.search(r"\bfetch\(|\bclient\.\w+\(", code):
+        return False, False
+    caught = False
+    for callee in set(re.findall(r"\b(\w+)(?:<[^()]*?>)?\(", code)) - {name}:
+        if re.search(_FN % re.escape(callee), text):
+            ok, c = _cannot_reject(text, callee, seen | {name})
+            if not ok:
+                return False, False
+            caught = caught or c
+    return True, caught
+
+
 def test_a_failing_feed_still_cannot_take_the_console_down():
     """The batch must not turn one dead panel into a blank page: Promise.all rejects if any
-    member throws, so every feed keeps its own .catch."""
+    member throws, so no feed in a batch may throw.
+
+    REWRITTEN. This read the first `] = await Promise.all([` and required `.catch(` on each
+    `…Action(` line in it. The feeds are no longer server actions: the page calls the
+    lib/ fetchers (`fetchX(projectId, needs(…))`), and each guards its own request and returns
+    its empty shape on failure, so there was no `.catch(` to find and the first batch is now the
+    request headers. The rule is unchanged and checked where it now lives: every fetcher any
+    batch calls catches inside itself (or in a same-file helper), and a server action the page
+    still calls for a feed carries its own `.catch(`."""
     src = pathlib.Path("apps/web/app/page.tsx").read_text(encoding="utf-8")
-    i = src.index("] = await Promise.all([")
-    batch = src[i:i + 700]
-    feeds = [ln for ln in batch.splitlines() if "Action(" in ln]
-    assert feeds, "no feeds in the batch"
-    for ln in feeds:
-        assert ".catch(" in ln, f"unguarded feed in a Promise.all batch: {ln.strip()}"
+    body = src[src.index("export default async function HomePage"):]
+    code = re.sub(r"^\s*//.*$", "", body, flags=re.M)
+    for ln in code.splitlines():
+        if re.search(r"\w+Action\(", ln):
+            assert ".catch(" in ln, f"unguarded server-action feed: {ln.strip()}"
+    feeds: set[str] = set()
+    for m in re.finditer(r"Promise\.all\(\[", code):
+        feeds |= set(re.findall(r"\b((?:fetch|load)\w+)\(", code[m.end(): code.index("])", m.end())]))
+    assert len(feeds) >= 30, f"no feeds in the batches: {sorted(feeds)}"
+    libs = [p.read_text(encoding="utf-8") for p in sorted(pathlib.Path("apps/web/lib").glob("**/*.ts"))]
+    for name in sorted(feeds):
+        defs = [t for t in libs if re.search(r"export\s+(?:async\s+)?function\s+%s\b" % name, t)]
+        assert len(defs) == 1, f"{name}: expected one definition in apps/web/lib, found {len(defs)}"
+        safe, caught = _cannot_reject(defs[0], name)
+        assert safe and caught, f"{name} can reject the batch it is in"
 
 
 def test_the_audit_export_does_not_run_on_every_page():

@@ -133,9 +133,13 @@ class TestTheSentenceThatExplainedNothing:
         engineer — to read afterwards."""
         import inspect
 
-        body = inspect.getsource(runner)
+        # In the tick that fails the step: the reason is worked out BEFORE the output is handed
+        # to fail_step. (Read in `tick` alone: `output=output,` also appears in other functions
+        # of the module, earlier in the file.)
+        body = inspect.getsource(runner.tick)
         assert "reason = _reason_of_last_resort(output, claimed)" in body
-        assert body.index("_reason_of_last_resort(output, claimed)") < body.index("output=output,")
+        reason_at = body.index("_reason_of_last_resort(output, claimed)")
+        assert reason_at < body.index("output=output,", reason_at)
 
     def test_fail_step_merges_rather_than_overwrites(self):
         """A capability's output and the runner's own bookkeeping both belong on the step."""
@@ -143,5 +147,9 @@ class TestTheSentenceThatExplainedNothing:
 
         from boss_engine.services import workflows
 
-        body = inspect.getsource(workflows.fail_step)
+        # fail_step hands the attempt to _fail_attempt (the one place a failed attempt is
+        # written, retry and error path included), so the merge lives there.
+        assert "_fail_attempt(" in inspect.getsource(workflows.fail_step)
+        body = inspect.getsource(workflows._fail_attempt)
         assert "COALESCE(output, '{}'::jsonb) || CAST(:output AS JSONB)" in body
+        assert "SET output = CAST(:output" not in body and "output = CAST(:output" not in body

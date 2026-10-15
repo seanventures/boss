@@ -236,6 +236,14 @@ EXEMPT = {
     ("engine/boss_engine/services/workflows.py", "_process_control_step"):
         "a subworkflow's child run; the parent's preflight included it "
         "(workflow_readiness.requirements recurses into subworkflow steps)",
+    # identity/runs.py calls its OWN start_run: it mints a build's or tool call's run identity
+    # (token, shim), not a workflow run. Same name, a different function.
+    ("engine/boss_engine/identity/runs.py", "start_code_task_run"):
+        "identity.runs.start_run issues the build's run identity, not a workflow run",
+    ("engine/boss_engine/identity/runs.py", "repo_access"):
+        "identity.runs.start_run issues a clone's run identity, not a workflow run",
+    ("engine/boss_engine/identity/runs.py", "delegated"):
+        "identity.runs.start_run issues a delegated act's run identity, not a workflow run",
 }
 _MODULE_ALIASES = {"wf", "workflows", "workflow_runtime"}
 _CHECKS = ("refuse_unless_ready(", "_delivery_readiness_or_409(", "note_unready_start(")

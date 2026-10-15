@@ -8,8 +8,11 @@ from typing import Any, Optional
 
 from sqlalchemy import text
 
-#: A decision in one of these is still waiting on its person.
-OPEN_DECISION = frozenset({"pending", "delegated", "revision_requested", "expired"})
+from .decision_actions import ATTENTION_CANDIDATE_STATUSES
+
+#: A decision in one of these is still waiting on its person: the statuses the Approvals inbox
+#: shows (decision_actions), so a build and its card never disagree about whose move it is.
+OPEN_DECISION = frozenset(ATTENTION_CANDIDATE_STATUSES)
 _GONE = frozenset({"cancelled", "failed", "simulated"})
 
 

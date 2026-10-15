@@ -147,18 +147,18 @@ def test_review_lanes_floor_is_six(client, engine, knobs):
         assert _stored(engine, "code_agent_max_concurrency") == stored
         lanes = _effective(engine, "code_agent_max_concurrency")
         assert lanes == stored
-        assert _eval_pipeline("max_workers", "_lanes", checks=nine_checks, _lanes=lanes) == 6
+        assert _eval_pipeline("max_workers", "_lanes", guarded=nine_checks, _lanes=lanes) == 6
     assert _put_knob(client, "code_agent_max_concurrency", 10).status_code == 200
     lanes = _effective(engine, "code_agent_max_concurrency")
-    assert _eval_pipeline("max_workers", "_lanes", checks=list(range(12)), _lanes=lanes) == 10
+    assert _eval_pipeline("max_workers", "_lanes", guarded=list(range(12)), _lanes=lanes) == 10
     # Capped by the size of the panel.
-    assert _eval_pipeline("max_workers", "_lanes", checks=list(range(4)), _lanes=lanes) == 4
+    assert _eval_pipeline("max_workers", "_lanes", guarded=list(range(4)), _lanes=lanes) == 4
     # Not set: the deployment default (1 here) behaves as the floor too.
     assert _put_knob(client, "code_agent_max_concurrency", None).status_code == 200
     assert _stored(engine, "code_agent_max_concurrency") is None
     lanes = _effective(engine, "code_agent_max_concurrency")
-    assert _eval_pipeline("max_workers", "_lanes", checks=nine_checks, _lanes=lanes) == 6
-    assert _eval_pipeline("max_workers", "_lanes", checks=nine_checks, _lanes=None) == 6
+    assert _eval_pipeline("max_workers", "_lanes", guarded=nine_checks, _lanes=lanes) == 6
+    assert _eval_pipeline("max_workers", "_lanes", guarded=nine_checks, _lanes=None) == 6
 
 
 def test_turn_budget_reaches_the_agent(client, engine, knobs, monkeypatch, tmp_path):
@@ -237,10 +237,10 @@ def test_review_rounds_zero_reads_as_two(client, engine, knobs):
     for stored, used in ((0, 2), (1, 1), (3, 3), (5, 5)):
         assert _put_knob(client, "code_review_inrun_max_rounds", stored).status_code == 200
         settings = _applied(engine)
-        assert _eval_pipeline("inrun_max", "code_review_inrun_max_rounds",
+        assert _eval_pipeline("inrun_max", "code_review_inrun_max_rounds", _spec_rounds=None,
                               settings=settings) == used
     assert _put_knob(client, "code_review_inrun_max_rounds", None).status_code == 200
-    assert _eval_pipeline("inrun_max", "code_review_inrun_max_rounds",
+    assert _eval_pipeline("inrun_max", "code_review_inrun_max_rounds", _spec_rounds=None,
                           settings=_applied(engine)) == 2
 
 

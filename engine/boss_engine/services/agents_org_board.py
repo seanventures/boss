@@ -442,8 +442,22 @@ def _configured_model(spec: Any) -> Optional[str]:
     return None
 
 
-def etag_of(board: Mapping[str, Any]) -> str:
+def _settled(board: Mapping[str, Any]) -> dict[str, Any]:
+    """The board without what the clock alone moves. An open act's `busy_seconds` is "now minus
+    when it started", so it ticks every second while nothing happens; the open act itself is
+    still in the material (each agent's `open` list, by act and start time), and an act ending
+    changes `work`, `open` and `waiting` — so the ETag moves on what happened, never on time."""
     material = {k: v for k, v in board.items() if k not in ("generated_at", "etag")}
+    material["agents"] = [{k: v for k, v in a.items() if k != "busy_seconds"}
+                          for a in material.get("agents") or []]
+    material["teams"] = [{**t, "members_load": sorted(m["role_key"] for m in
+                                                      t.get("members_load") or [])}
+                         for t in material.get("teams") or []]
+    return material
+
+
+def etag_of(board: Mapping[str, Any]) -> str:
+    material = _settled(board)
     return '"ob-' + hashlib.sha256(json.dumps(material, sort_keys=True, default=str)
                                    .encode()).hexdigest()[:24] + '"'
 

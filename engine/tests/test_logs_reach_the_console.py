@@ -14,13 +14,17 @@ import logging
 import time
 
 from boss_engine.services import log_capture
-from boss_engine.services.activity_log import SOURCES, _LOADERS_BY_SOURCE
+from boss_engine.services import activity_sql
+from boss_engine.services.activity_log import SOURCES, _BUILDERS
 from boss_engine.services.activity_retention import PRUNABLE
 
 
 def test_it_is_a_first_class_source_not_a_special_case():
     assert "app_log" in SOURCES
-    assert set(SOURCES) == set(_LOADERS_BY_SOURCE), "source list and loader map disagree"
+    # The per-source loaders became one SQL projection per source (activity_sql.SOURCES) and
+    # one builder per source (_BUILDERS): the source list and both maps must agree.
+    assert set(SOURCES) == set(activity_sql.SOURCES), "source list and SQL projections disagree"
+    assert set(SOURCES) == set(_BUILDERS), "source list and row builders disagree"
 
 
 def test_volume_is_bounded_at_the_handler():
@@ -69,17 +73,23 @@ def test_records_are_attributed_to_a_run_when_there_is_one():
 def test_records_with_no_project_are_still_shown():
     """An error raised before any run was resolved belongs in the log precisely BECAUSE
     nothing owns it — excluding it would hide the failures that have no home."""
-    from boss_engine.services import activity_log
-
-    src = inspect.getsource(activity_log._load_app_logs)
-    assert "project_id = :project_id OR project_id IS NULL" in src
+    # One SQL projection per source now (activity_sql.SOURCES): the project-less rows are a
+    # scope of their own beside the project's, not an OR folded into one loader.
+    assert "t.project_id IS NULL" in activity_sql.SOURCES["app_log"].scopes
 
 
 def test_python_level_names_are_translated_to_this_logs_names():
     from boss_engine.services import activity_log
 
-    src = inspect.getsource(activity_log._load_app_logs)
-    assert '"warning": "warn"' in src and '"critical": "error"' in src
+    def level_of(python_level: str) -> str:
+        row = {"id": "log_1", "ts": None,
+               "raw": {"level": python_level, "logger": "boss_engine.services.sandbox",
+                       "service": "worker", "message": "m"}}
+        return activity_log._build_app_log(row)["level"]
+
+    assert level_of("WARNING") == "warn"
+    assert level_of("critical") == "error" and level_of("fatal") == "error"
+    assert level_of("error") == "error" and level_of("info") == "info"
 
 
 def test_the_log_is_aged_out_like_everything_else():

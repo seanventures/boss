@@ -877,3 +877,22 @@ def test_fix_is_off_by_default_in_the_cli(monkeypatch):
     assert seen["fix"] is False and set(seen["families"]) == set(bh.FAMILIES)
     cli.main(["--workflow", "D1", "--project", "p1", "--fix", "--families", "data"])
     assert seen["fix"] is True and seen["families"] == ["data"]
+
+
+def test_an_expired_hold_with_money_on_it_is_a_persons_reconcile_not_an_auto_fix(store):
+    # The auto-fix (BudgetGovernor.expire_stale_reservations) expires only zero-amount holds,
+    # so offering it for res_… with money on it reported "applied" and changed nothing.
+    store.leases["budget"] = [{"id": "res_money", "amount_usd_micros": 2_500_000}]
+    found = bh.check_leaked(_ctx())
+    assert found["verdict"] == "fixable" and not found["fix"]["auto"]
+    assert "details" not in found
+    assert "res_money $2.50" in found["evidence"] and "Decisions" in found["fix"]["action"]
+
+
+def test_a_zero_amount_expired_hold_is_still_auto_fixed_beside_one_with_money(store):
+    store.leases["budget"] = [{"id": "res_zero", "amount_usd_micros": 0},
+                              {"id": "res_money", "amount_usd_micros": 1_000_000}]
+    found = bh.check_leaked(_ctx())
+    assert found["fix"]["auto"]
+    assert found["details"]["autofix"]["args"]["budget"] == 1
+    assert "res_zero" in found["evidence"] and "res_money" in found["evidence"]

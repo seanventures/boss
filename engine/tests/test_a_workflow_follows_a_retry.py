@@ -136,7 +136,14 @@ class TestWhatCountsAsTheSameWork:
         )[0]
         assert "_terminal_evidence(connection, kind, awaited_id)" in success
         assert "workflows.force_complete_waiting_step(" in success
-        assert "workflows.force_fail_waiting_step(" not in success
+        # The one failure in the success branch is an AGENT RUN that completed without shipping
+        # (_DID_NOT_SHIP: the loop ending is not the work being done). A build's verdict is
+        # still the inner pipeline's: nothing else in this branch fails the step.
+        fails = success.count("workflows.force_fail_waiting_step(")
+        if fails:
+            assert fails == 1
+            guard = success[:success.index("workflows.force_fail_waiting_step(")]
+            assert 'if kind == "agent_run":' in guard and "_DID_NOT_SHIP" in guard
         assert "workflows.force_fail_waiting_step(" in body.split(
             "elif status in bad_states:", 1
         )[1]

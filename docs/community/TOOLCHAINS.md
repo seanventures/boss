@@ -95,3 +95,23 @@ exec java -Dserver.port="$PORT" -jar target/<app>.jar [server config.yml]
   path in a one-line `boss.preview.health` file at the root, for example `/hello`.
 - **Your own command.** `boss.preview.command` still overrides all of this.
 - **Start time.** A Java preview gets 10 minutes to build and bind, instead of 3.
+
+## Container previews and deploys
+
+- **Container preview.** With no Dockerfile in the app, BOSS writes a two-stage one: the jar is
+  built in `maven:3.9-eclipse-temurin-21` (or `gradle:8.14-jdk21`) and runs on
+  `eclipse-temurin:21-jre`, on `$PORT` (8080). A Java app's own `boss.preview.command` runs in
+  the build tool's image, since it needs the JDK.
+- **One-container deploy** (no `boss.deploy.yaml`). BOSS builds the jar where it runs, with this
+  install's toolchain, ships only `app.jar` (and a Dropwizard `config.yml`), and the host runs it
+  on `eclipse-temurin:21-jre` with `-Dserver.port=$PORT`, `/data` kept across deploys. The
+  health gate waits 240 s for a Java deploy instead of 120 s. Without Java turned on, the deploy
+  says how to turn it on instead of failing on a missing `index.html`.
+- **Pre-check.** A Maven or Gradle app is checked for the Java toolchain (not Node), and its
+  health path is read from `@GetMapping`/`@RequestMapping`/`@Path` routes, or
+  `/actuator/health` when Spring Boot Actuator is a dependency.
+- **Agents** on an install with Java are told its JDK, Maven and Gradle versions, and to use the
+  image's `gradle` rather than `./gradlew`.
+- **Memory.** BOSS sets no JVM heap flags: a JVM sizes its heap at 25% of the memory it sees by
+  default. If Spring Boot tests run out of memory in the build, set `JAVA_TOOL_OPTIONS` for the
+  install after measuring, rather than guessing.

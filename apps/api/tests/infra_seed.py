@@ -36,9 +36,21 @@ def _x(c, sql: str, **p) -> None:
     c.execute(text(sql), p)
 
 
+def _ensure_project(c, project_id: str) -> None:
+    """The project the world is seeded into, made if absent (a fresh test database has none; an
+    existing one is left exactly as it is). Never removed by clear: other tests share it."""
+    _x(c, "INSERT INTO orgs (id, name) VALUES ('org_infra_seed', 'infra seed') "
+          "ON CONFLICT DO NOTHING")
+    _x(c, "INSERT INTO workspaces (id, org_id, name) VALUES ('ws_infra_seed', 'org_infra_seed', "
+          "'infra seed') ON CONFLICT DO NOTHING")
+    _x(c, "INSERT INTO projects (id, workspace_id, name, slug) VALUES (:p, 'ws_infra_seed', :p, "
+          ":p) ON CONFLICT DO NOTHING", p=project_id)
+
+
 def seed(engine, project_id: str = "boss-dogfood", *, samples: bool = True) -> dict:
     """Seed the world into `project_id`. Returns the ids. Idempotent per test (delete first)."""
     with engine.begin() as c:
+        _ensure_project(c, project_id)
         clear(c, project_id)
         _x(c, "INSERT INTO provider_accounts (id, project_id, provider, account_label, "
               "created_by) VALUES ('pa_aws', :p, 'aws', 'prod-aws', 'test') "

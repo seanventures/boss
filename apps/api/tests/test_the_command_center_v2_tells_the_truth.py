@@ -67,7 +67,14 @@ def _stage(c, *, run_id: str, role: str, step: str, ended: datetime, kind: str =
 # ── (a) a run with no progress for a week is stalled, not running ────────────────────────────
 
 
-def test_a_run_with_no_progress_for_a_week_is_stalled_and_not_counted_running(engine, client):
+def test_a_run_with_no_progress_for_a_week_is_stalled_and_not_counted_running(engine, client,
+                                                                             monkeypatch):
+    from boss_engine.services import self_observability
+
+    # A calm host: the headline below is about the runs, and a busy test machine's live load
+    # would otherwise outrank it as "Host struggling".
+    monkeypatch.setattr(self_observability, "pressure_now",
+                        lambda *_a, **_k: {"bands": {}, "state": "ok", "reasons": []})
     with engine.begin() as c:
         wf = seed.workflow(c, steps=3)
         stale = seed.run(c, wf, status="running", created=NOW - timedelta(days=30),

@@ -2167,19 +2167,15 @@ def escalate_no_repo_access(engine, project_id: Optional[str], run_id: str,
         return
     try:
         with begin(engine) as c:
-            inserted = c.execute(
-                sql("INSERT INTO shepherd_escalations "
-                    "(id, project_id, task_ref, question, options, evidence) "
-                    "SELECT :i, :p, :t, :q, CAST(:o AS JSONB), CAST(:e AS JSONB) "
-                    "WHERE NOT EXISTS (SELECT 1 FROM shepherd_escalations e "
-                    "                  WHERE e.task_ref = :t AND e.status = 'open')"),
-                {"i": make_id("shesc"), "p": project_id, "t": run_id,
-                 "q": ("No repository access: BOSS cannot reach this build's repository, so "
-                       "retrying it would fail the same way. Connect the repository in Setup "
-                       "(or install the GitHub App on it), then retry."),
-                 "o": json.dumps(["retry", "abandon"]),
-                 "e": json.dumps({"reason": NO_REPO_ACCESS, "detail": reason[:400]})},
-            ).rowcount
+            # Through the one door (open_question): never about a build that waits on a person,
+            # never a second open question about this build or in these words.
+            inserted = open_question(
+                c, project_id=project_id, task_ref=run_id,
+                question=("No repository access: BOSS cannot reach this build's repository, so "
+                          "retrying it would fail the same way. Connect the repository in Setup "
+                          "(or install the GitHub App on it), then retry."),
+                options=["retry", "abandon"],
+                evidence={"reason": NO_REPO_ACCESS, "detail": reason[:400]})
             if inserted:
                 emit_event(c, project_id, "shepherd.no_repo_access", SHEPHERD_ACTOR,
                            "code_task_run", run_id, {"detail": reason[:400]})

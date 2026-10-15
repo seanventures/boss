@@ -220,11 +220,28 @@ class TestARealDebuggingSession:
         assert 'if job.kind == "investigation.run":' in runner
 
     def test_it_executes_where_the_cli_lives(self):
-        """The API image installs @anthropic-ai/claude-code; the worker's does not. Code tasks
-        already hop the same way, and for the same reason."""
-        import pathlib
+        """The API image installs @anthropic-ai/claude-code, and the worker hands the run to the
+        API rather than shelling out itself. Code tasks already hop the same way.
 
-        assert "claude-code" in pathlib.Path("infra/containers/api.Dockerfile").read_text()
+        The API image used to be infra/containers/api.Dockerfile; it is now the `api` stage of
+        Dockerfile.community. Follow that stage's FROM chain and require the CLI install in it,
+        so the check cannot be satisfied by some unrelated stage (the web image) mentioning it.
+        """
+        import pathlib
+        import re
+
+        dockerfile = pathlib.Path("Dockerfile.community").read_text()
+        stages: dict[str, tuple[str, str]] = {}
+        for match in re.finditer(r"^FROM\s+(\S+)\s+AS\s+(\S+)\s*$(.*?)(?=^FROM\s|\Z)",
+                                 dockerfile, re.M | re.S):
+            stages[match.group(2)] = (match.group(1), match.group(3))
+        assert "api" in stages, "Dockerfile.community has no `api` stage"
+        chain, stage = "", "api"
+        while stage in stages:
+            parent, body = stages[stage]
+            chain += body
+            stage = parent
+        assert re.search(r"npm install -g[^\n]*@anthropic-ai/claude-code@", chain)
         client = pathlib.Path("apps/worker/boss_worker/control_plane.py").read_text()
         assert "/v1/investigations/" in client
         main = pathlib.Path("apps/api/app/main.py").read_text()

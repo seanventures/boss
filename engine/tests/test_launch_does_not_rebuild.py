@@ -91,7 +91,9 @@ def test_the_button_offers_the_existing_build_before_offering_to_repeat_it():
     """The UI half. A response the card ignores changes nothing an operator sees."""
     import pathlib
 
-    ui = pathlib.Path(__file__).resolve().parents[2] / "apps/web/app/code-tasks-ui.tsx"
+    # The benchmark card moved verbatim out of code-tasks-ui.tsx when that file became the
+    # Factory shell (factory spec §4.1); it lives with the build's other working parts now.
+    ui = pathlib.Path(__file__).resolve().parents[2] / "apps/web/app/factory/legacy-build-parts.tsx"
     text = ui.read_text()
     assert '"existing"' in text
     assert "Build it again" in text
@@ -117,7 +119,9 @@ def test_the_catalog_reports_which_benchmarks_are_already_built():
 def test_the_card_reads_that_state_before_any_click():
     import pathlib
 
-    ui = pathlib.Path(__file__).resolve().parents[2] / "apps/web/app/code-tasks-ui.tsx"
+    # The benchmark card moved verbatim out of code-tasks-ui.tsx when that file became the
+    # Factory shell (factory spec §4.1); it lives with the build's other working parts now.
+    ui = pathlib.Path(__file__).resolve().parents[2] / "apps/web/app/factory/legacy-build-parts.tsx"
     text = ui.read_text()
     assert "benchmark.built?.run_id" in text
     assert "!startedId && alreadyBuilt" in text

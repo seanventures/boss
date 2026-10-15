@@ -92,8 +92,12 @@ def project(eng):
                       "deadletters", "quality_gates",
                       "deployment_health_samples", "deployment_targets",
                       "role_skills", "roles"):
+            # Each in its own savepoint: on Postgres a failed statement aborts the whole
+            # transaction, so a bare try/except left the final DELETE to fail as
+            # InFailedSqlTransaction and reported a teardown ERROR with the real cause hidden.
             try:
-                c.execute(text(f"DELETE FROM {table} WHERE project_id=:p"), {"p": pid})
+                with c.begin_nested():
+                    c.execute(text(f"DELETE FROM {table} WHERE project_id=:p"), {"p": pid})
             except Exception:
                 pass
         c.execute(text("DELETE FROM projects WHERE id=:p"), {"p": pid})

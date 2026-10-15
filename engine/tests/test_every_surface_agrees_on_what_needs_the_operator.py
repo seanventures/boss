@@ -179,6 +179,32 @@ NOT_READERS = {
      "_refresh_waiting_previews"):
         "a writer: refreshes the action preview on gates still open, so nobody approves "
         "content that has since changed",
+    ("engine/boss_engine/multirepo/change_sets.py", "_withdraw_decision"):
+        "a writer: expires a change set's open approval when its heads move",
+    ("engine/boss_engine/services/budget.py", "_resolve_reconciliation"):
+        "a writer: resolves the pending reconciliation cards of a reservation it has settled",
+    ("engine/boss_engine/services/budget.py", "legacy_model_reconciliation"):
+        "a writer: reopens (sets pending) the reconciliation card of unresolved model exposure",
+    ("engine/boss_engine/services/budget.py", "legacy_provider_reconciliation"):
+        "a writer: reopens (sets pending) the reconciliation card of unresolved provider exposure",
+    ("engine/boss_engine/services/budget.py", "reserve"):
+        "a guard: refuses a reservation while an unreconciled provider outcome holds the budget, "
+        "and names that card",
+    ("engine/boss_engine/services/changeset_apply.py", "_response"):
+        "names the apply's own open reconciliation card in its response; counts nothing",
+    ("engine/boss_engine/services/changeset_apply.py", "_unused"):
+        "a writer: resolves the reconciliation card of an apply proved never dispatched",
+    ("engine/boss_engine/services/changeset_apply.py", "apply_changeset"):
+        "a writer: resolves the apply's reconciliation card once every result is recorded",
+    ("engine/boss_engine/services/connection_spend.py", "_hold_rows"):
+        "a guard: the connection proofs whose hold a reconciliation card still keeps",
+    ("engine/boss_engine/services/connection_spend.py", "release_hold"):
+        "a writer: resolves a released proof's own reconciliation card",
+    ("engine/boss_engine/services/workflow_precheck_behaviour.py", "check_dead_decisions"):
+        "a data check for pending decisions whose run is over; about hygiene, not about what "
+        "waits on the operator",
+    ("engine/boss_engine/templates/secrets.py", "_live_decision"):
+        "deduplication: updates the pending live-key approval instead of raising a second one",
     ("apps/api/app/main.py", "decision_inbox"):
         "the inbox itself: it orders every row and each card carries attention, which the "
         "console filters on",

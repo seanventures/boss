@@ -103,7 +103,7 @@ def test_the_executor_is_registered():
 # The object itself
 # --------------------------------------------------------------------------- #
 def test_the_behaviours_and_no_integration_kind():
-    """Four behaviours, and an integration is still not one of them.
+    """Five behaviours, and an integration is still not one of them.
 
     In BOSS a connection grants authority to a skill; it is not something you can invoke on its
     own, so binding "the Slack integration" as a step has never been a thing to offer.
@@ -112,8 +112,16 @@ def test_the_behaviours_and_no_integration_kind():
     workflow kept. It is not a `sandboxed_command` under another name — that kind demands an image
     pinned by digest because a PERSON chose it, and an agent's program runs in the deployment's own
     container boundary instead. Different author, different guarantee, different shape.
+
+    `guide` is the fifth (agent-loadout spec §4.6, added in 1b03384c): a SKILL.md playbook an
+    operator uploaded. It runs nothing, so it earns its place only while it stays that way — it
+    takes no config at all, because any setting would be a way to make it DO something.
     """
-    assert sd.BEHAVIOURS == ("builtin", "mcp_tool", "sandboxed_command", "agent_program")
+    assert sd.BEHAVIOURS == ("builtin", "mcp_tool", "sandboxed_command", "agent_program", "guide")
+    assert "integration" not in sd.BEHAVIOURS
+    assert sd.validate_config("guide", {}, []) == {}
+    with pytest.raises(sd.SkillDefinitionError, match="takes no config"):
+        sd.validate_config("guide", {"command": "rm -rf /"}, [])
 
 
 def test_an_agent_program_needs_a_language_and_a_source():

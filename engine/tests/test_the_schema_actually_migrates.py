@@ -90,6 +90,11 @@ class FakeCursor:
             raise RuntimeError('column "gone" does not exist')
         self.store.setdefault("ran", []).append(" ".join(text.split())[:60])
 
+    def fetchall(self):
+        # The pg_indexes read of index convergence (_converge_indexes): a fresh database, so no
+        # declared index exists yet under its name and there is nothing to compare.
+        return []
+
     def __enter__(self):
         return self
 
@@ -142,6 +147,15 @@ def script(tmp_path):
     return path
 
 
+def _clean_count() -> str:
+    """"applied N/N" for the 3-statement script: ensure_schema also applies the service modules'
+    own tables at every boot (db.SERVICE_SCHEMAS, so a read never runs DDL), after the script."""
+    from boss_engine.db import _service_schema_sql
+
+    n = 3 + sum(len([c for c in sql.split(";") if c.strip()]) for sql in _service_schema_sql())
+    return f"applied {n}/{n}"
+
+
 class TestOneBadStatementNoLongerDiscardsTheRest:
     def test_the_statements_after_the_failure_still_run(self, script, capsys):
         raw = FakeRawConnection(poison="idx_bad")
@@ -160,7 +174,9 @@ class TestOneBadStatementNoLongerDiscardsTheRest:
 
     def test_a_clean_apply_reports_the_count(self, script, capsys):
         ensure_schema(FakeEngine(FakeRawConnection()), FakeSettings(script))
-        assert "applied 3/3" in capsys.readouterr().out
+        out = capsys.readouterr().out
+        assert _clean_count() in out
+        assert "FAILED" not in out
 
     def test_the_result_is_written_somewhere_a_person_can_read(self, script):
         """'Did the schema migrate?' had exactly one answer path — the container's stdout,
@@ -188,4 +204,4 @@ class TestOneBadStatementNoLongerDiscardsTheRest:
                 return cursor
 
         ensure_schema(FakeEngine(Hostile()), FakeSettings(script))   # must not raise
-        assert "applied 3/3" in capsys.readouterr().out
+        assert _clean_count() in capsys.readouterr().out

@@ -1162,8 +1162,13 @@ def check_stale_targets(ctx: wp.Context) -> dict[str, Any]:
 
 @_run_check("data.leaked_leases", "No lease or reservation is live past its expiry")
 def check_leaked(ctx: wp.Context) -> dict[str, Any]:
-    budget = _rows(ctx, "SELECT id FROM budget_reservations WHERE project_id = :p AND status = "
-                        "'active' AND expires_at <= now()")
+    held = _rows(ctx, "SELECT id, amount_usd_micros FROM budget_reservations WHERE project_id = "
+                      ":p AND status = 'active' AND expires_at <= now()")
+    # BudgetGovernor.expire_stale_reservations expires only zero-amount holds: expiry is not
+    # proof the provider never took the work, so a hold with money on it waits for a person to
+    # reconcile it. Offering the auto-fix for those reported "applied" and changed nothing.
+    budget = [r for r in held if not int(r.get("amount_usd_micros") or 0)]
+    money = [r for r in held if int(r.get("amount_usd_micros") or 0)]
     gateway = _rows(ctx, "SELECT id FROM model_gateway_leases WHERE project_id = :p AND status = "
                          "'active' AND expires_at <= now()")
     branch = _rows(ctx, "SELECT id, ref_name FROM github_branch_leases WHERE project_id = :p AND "
@@ -1173,12 +1178,25 @@ def check_leaked(ctx: wp.Context) -> dict[str, Any]:
                 f"{len(gateway)} model-gateway lease(s), {len(branch)} branch lease(s)"
                 + (" (" + ", ".join(x["id"] for x in (budget + gateway + branch)[:5]) + ")"
                    if total else ""))
-    if not total:
+    reconcile = (f"{len(money)} expired budget reservation(s) still hold money ("
+                 + ", ".join(f"{r['id']} {wp._money(r['amount_usd_micros'])}"
+                             for r in money[:5])
+                 + "); expiry is not proof the provider never took the work, so BOSS will not "
+                 "release them" if money else "")
+    reconcile_action = ("a person reconciles each in Decisions (\"Reconcile expired budget "
+                        "reservation …\"): settle it if the provider ran the work, release it "
+                        "if not")
+    if not total and not money:
         return wp.result("data.leaked_leases", "ready", evidence)
+    if not total:
+        return wp.result("data.leaked_leases", "fixable", reconcile + " — they still count "
+                         "against the budget a new run reserves from", action=reconcile_action)
     return wp.result("data.leaked_leases", "fixable", evidence + " — they still count against "
-                     "the budget/capacity a new run reserves from",
+                     "the budget/capacity a new run reserves from"
+                     + (f". Also: {reconcile}" if money else ""),
                      action="fixable: BOSS can do this — release them through each owner's own "
-                            "expiry path", auto=True,
+                            "expiry path" + (f"; then {reconcile_action}" if money else ""),
+                     auto=True,
                      details={"autofix": {"fix": "leases.release_expired", "args": {
                          "budget": len(budget), "gateway": len(gateway),
                          "branch": [b["id"] for b in branch]}}})

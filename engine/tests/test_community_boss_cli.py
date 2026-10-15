@@ -6,6 +6,7 @@ with inert Docker, curl, and provider CLIs on PATH. No daemon, network, or model
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -23,6 +24,12 @@ HELPERS = (
     "boss.sh", "upgrade.sh", "uninstall.sh", "discover_models.py", "coding_subscriptions.py",
     "console_password.py", "connect_ollama.py", "model_status.py", "local_model.py",
 )
+# What `docker compose config --format json` would say about the build services (install.sh
+# builds them one image at a time from this answer). Kept equal to the real compose file below.
+COMPOSE_BUILDS = {"api": None, "worker": None, "mcp-tools": None, "egress": None, "web": ["web"]}
+COMPOSE_CONFIG_JSON = json.dumps({"services": {
+    name: {"build": {"context": "."}, **({"profiles": profiles} if profiles else {})}
+    for name, profiles in COMPOSE_BUILDS.items()}})
 SECRET = "sk-test-value-that-must-never-print"
 CODEX_SECRET = "codex-auth-bytes-that-must-never-print"
 
@@ -45,6 +52,13 @@ def _git(*args: str | Path, cwd: Path) -> str:
 def _executable(path: Path, body: str) -> None:
     path.write_text(body)
     path.chmod(0o755)
+
+
+def test_the_fake_compose_config_names_the_real_build_services() -> None:
+    import yaml
+
+    services = yaml.safe_load((REPO / "scripts/install/community-compose.yml").read_text())["services"]
+    assert COMPOSE_BUILDS == {name: s.get("profiles") for name, s in services.items() if "build" in s}
 
 
 # ---- the tag rule --------------------------------------------------------------------------
@@ -92,6 +106,16 @@ def _publish(upstream: Path) -> None:
         "printf 'db\\n' > \"$out/boss.dump\"\nprintf 'art\\n' > \"$out/artifacts.tar\"\n"
         "printf '%s\\n' \"$out\"\n",
     )
+    # The archive check, inert like backup.sh above (the real format has its own contract test,
+    # test_recovery_archive_contract): it records what it validated and accepts the fake backup.
+    _executable(
+        helpers / "backup_archive.py",
+        "#!/usr/bin/env python3\nimport os, pathlib, sys\n"
+        "with open(os.environ['BOSS_TEST_BACKUP_TRACE'] + '.validated', 'a') as f:\n"
+        "    f.write(' '.join(sys.argv[1:]) + '\\n')\n"
+        "sys.exit(0 if sys.argv[1] == 'validate' and not os.environ.get('BOSS_TEST_ARCHIVE_REFUSE') and "
+        "(pathlib.Path(sys.argv[2]) / 'source-commit').is_file() else 1)\n",
+    )
     (upstream / "version").write_text("1.0.0\n")
     _git("init", "-q", "-b", "main", cwd=upstream)
     _git("add", ".", cwd=upstream)
@@ -121,6 +145,7 @@ def world(tmp_path: Path) -> dict:
         "[ \"$1\" = compose ] && printf '%s %s\\n' \"${BOSS_COMMUNITY_IMAGE_TAG:-local}\" \"$*\" "
         ">> \"$BOSS_TEST_DOCKER_LOG.tags\"\n"
         "case \"$1:$2\" in compose:version) echo 'Docker Compose version v2' ;; esac\n"
+        f"case \"$*\" in compose*'config --format json'*) echo '{COMPOSE_CONFIG_JSON}' ;; esac\n"
         # The container-side checks and logins the connect paths run.
         "case \"$*\" in\n"
         "  *'network inspect bridge'*) echo 127.0.0.1 ;;\n"
@@ -1109,11 +1134,24 @@ def test_purge_removes_this_installs_boss_command_and_nothing_else(world) -> Non
                   env=env)
 
     assert purged.returncode == 0, purged.stdout + purged.stderr
+    validated = Path(env["BOSS_TEST_BACKUP_TRACE"] + ".validated").read_text().split()
+    assert validated[0] == "validate" and Path(validated[1]).parent == Path(env["BOSS_TEST_BACKUP_ROOT"])
     assert "--volumes" in _docker_calls(world)
     assert not (world["install"] / ".env").exists()
     assert not boss.exists()
     assert f"Removed the boss command: {boss}" in purged.stdout
     assert other.exists()
+
+
+def test_purge_deletes_nothing_when_the_backup_does_not_validate(world) -> None:
+    boss = _installed(world)
+    env = dict(world["env"], BOSS_TEST_ARCHIVE_REFUSE="1")
+    purged = _run(boss, "uninstall", "--purge", "--yes", "--confirm-purge", "DELETE-BOSS-DATA",
+                  env=env)
+    assert purged.returncode != 0
+    assert "data purge was cancelled" in purged.stderr
+    assert "--volumes" not in _docker_calls(world)
+    assert (world["install"] / ".env").exists() and boss.exists()
 
 
 def test_purge_never_removes_another_programs_boss(world) -> None:

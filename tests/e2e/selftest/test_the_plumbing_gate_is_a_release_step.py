@@ -18,6 +18,7 @@ FIXTURE = ROOT / "tests" / "e2e" / "fixtures" / "helpdesk-mini"
 def test_the_gate_is_a_p0_release_step():
     tiers = yaml.safe_load((ROOT / "tests" / "tiers.yaml").read_text())
     assert "scripts/e2e-gate.sh plumbing" in (tiers["P0"].get("release") or [])
+    assert "scripts/e2e-gate.sh engines" in (tiers["P0"].get("release") or [])
     assert (ROOT / "scripts" / "e2e-gate.sh").stat().st_mode & 0o111
 
 
@@ -88,3 +89,23 @@ def test_the_plain_node_fixture_defines_only_its_tests_and_boss_gates_on_them():
                                 changed=["plain/package.json"])
     assert plan.commands == [vt.NPM_INSTALL_CMD, vt.TEST_STEP] and plan.finding is None
     assert "check_plain_node(g)" in (GATE / "plumbing.py").read_text()
+
+
+def test_the_engines_gate_runs_every_scenario_on_every_engine_profile():
+    """The engines tier (scripts/e2e-gate.sh engines): one expectation per scenario, met by every
+    engine profile, and the scripted engine plays every fault a scenario names."""
+    sys.path.insert(0, str(GATE))
+    try:
+        import engines
+    finally:
+        sys.path.remove(str(GATE))
+    from boss_engine.services import scripted_engine
+
+    assert set(engines.PROFILES) == {"poorest", "richest"}
+    assert engines.PROFILES["poorest"] == ""
+    doc = scripted_engine.__doc__ or ""
+    for name, exp in engines.SCENARIOS.items():
+        for fault in filter(None, exp["faults"].split(",")):
+            assert fault in doc, f"{name}: the scripted engine does not play {fault!r}"
+    assert '"$IMAGE" python3 "/gate-src/tests/e2e/gate/$TIER.py"' in (
+        ROOT / "scripts" / "e2e-gate.sh").read_text()

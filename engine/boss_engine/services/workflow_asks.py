@@ -47,23 +47,28 @@ def _label(step: dict[str, Any]) -> str:
     return str(step.get("label") or step.get("name") or step.get("id") or "")
 
 
-def _effective_steps(spec: dict[str, Any]) -> list[dict[str, Any]]:
-    """The steps with the approval each will REALLY run under (the risk floor applied)."""
+def _effective_steps(spec: dict[str, Any],
+                     roster: Optional[frozenset[str]] = None) -> list[dict[str, Any]]:
+    """The steps with the approval each will REALLY run under (the risk floor applied).
+
+    `roster` is the project's (workflows.project_roster): without it a step captained by an
+    agent the operator created fails validation and its risk floor is never applied."""
     from . import workflows
 
     steps = [dict(s) for s in (spec.get("steps") or []) if isinstance(s, dict)]
     try:
         effective = workflows.validate_workflow_spec(
             {"entry_step": spec.get("entry_step") or (steps[0]["id"] if steps else ""),
-             "steps": steps})
+             "steps": steps}, roster)
         return [dict(s) for s in effective.get("steps") or steps]
     except Exception:  # noqa: BLE001 — an unvalidatable spec still lists what it declares
         return steps
 
 
-def asks_for_spec(spec: dict[str, Any], *, prd_auto_approve: bool) -> list[dict[str, Any]]:
+def asks_for_spec(spec: dict[str, Any], *, prd_auto_approve: bool,
+                  roster: Optional[frozenset[str]] = None) -> list[dict[str, Any]]:
     """The asks one workflow version will raise, in run order."""
-    steps = _effective_steps(spec)
+    steps = _effective_steps(spec, roster)
     keys = [_capability(s) for s in steps]
     has_spec_review = "spec_review" in keys
     last_build = max((i for i, k in enumerate(keys) if k in BUILD_CAPABILITIES), default=-1)
@@ -103,13 +108,14 @@ def project_asks(connection: Connection, settings: Any, project_id: str,
                  *, prd_auto_approve: Optional[bool] = None) -> dict[str, Any]:
     """GET /v1/delivery-workflows/asks: every workflow the project can run, by the version
     that runs (the active one), plus the two non-workflow routes."""
-    from .workflows import running_version
+    from .workflows import project_roster, running_version
 
     auto = prd_auto_approved(settings) if prd_auto_approve is None else bool(prd_auto_approve)
     keys = connection.execute(text(
         "SELECT DISTINCT workflow_key FROM workflow_definitions WHERE project_id = :p "
         "AND status <> 'retired' ORDER BY workflow_key"),
         {"p": project_id}).scalars().all()
+    roster = project_roster(connection, project_id)
     workflows: dict[str, list[dict[str, Any]]] = {}
     for key in keys:
         running = running_version(connection, project_id, str(key))
@@ -123,6 +129,6 @@ def project_asks(connection: Connection, settings: Any, project_id: str,
                 spec = json.loads(spec)
             except ValueError:
                 spec = {}
-        workflows[str(key)] = asks_for_spec(spec, prd_auto_approve=auto)
+        workflows[str(key)] = asks_for_spec(spec, prd_auto_approve=auto, roster=roster)
     return {"project_id": project_id, "prd_auto_approve": auto, "workflows": workflows,
             "routes": route_asks(prd_auto_approve=auto)}

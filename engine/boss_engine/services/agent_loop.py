@@ -296,30 +296,73 @@ def _append_repo_read_tools(
     spec: Optional[dict[str, Any]],
 ) -> dict[str, tuple[dict[str, Any], str]]:
     """Offer `repo.read`'s tools under their own names: {offered name: (skill spec, tool)}."""
-    if spec is None:
-        return {}
-    from ..tools.builtin import build_discuss_read_registry
-    from .skill_executors import REPO_READ_TOOLS
+    return _append_bundle_tools(schemas, occupied, [spec] if spec is not None else [])
 
+
+#: How each bundle reads in the tool list, so the model knows which grant a tool came from.
+_BUNDLE_LABEL = {"repo.read": "Read the repo", "boss.fundamentals": "BOSS fundamentals",
+                 "boss.propose_fix": "Propose a fix"}
+
+
+def _append_bundle_tools(
+    schemas: list[dict[str, Any]],
+    occupied: set[str],
+    specs: list[dict[str, Any]],
+) -> dict[str, tuple[dict[str, Any], str]]:
+    """Offer every held BUNDLE skill's tools under their own names: {offered name: (skill spec,
+    tool)}. A bundle is a skill that offers BOSS's own engine tools (agent_baseline.bundles():
+    repo.read, boss.fundamentals, boss.propose_fix); each call is a call of that one skill, so
+    the grant, the budget gate and the invocation record are the ordinary skill runtime's. A
+    tool not registered on this build is skipped, never offered and then failed."""
+    from ..tools.builtin import build_discuss_read_registry
+    from .agent_baseline import bundles
+
+    offered_by = bundles()
     registry = build_discuss_read_registry(edition="community")
     offered: dict[str, tuple[dict[str, Any], str]] = {}
-    for tool in REPO_READ_TOOLS:
-        if tool not in registry.names():
-            continue
-        found = registry.get(tool)
-        name = _unique_tool_name(tool, occupied, f"skill:repo.read:{tool}")
-        parameters = dict(found.parameters or {"type": "object", "properties": {}})
-        properties = dict(parameters.get("properties") or {})
-        if "repo" in properties:
-            properties["repo"] = {"type": "string",
-                                  "description": "owner/name; leave out for this project's repo"}
-        parameters["properties"] = properties
-        schemas.append({"type": "function", "function": {
-            "name": name,
-            "description": f"[BOSS Skill · Read the repo] {found.description}",
-            "parameters": parameters}})
-        offered[name] = (spec, tool)
+    for spec in specs:
+        skill_id = str(spec.get("id") or "")
+        for tool in offered_by.get(skill_id, ()):
+            if tool not in registry.names():
+                continue
+            found = registry.get(tool)
+            name = _unique_tool_name(tool, occupied, f"skill:{skill_id}:{tool}")
+            parameters = dict(found.parameters or {"type": "object", "properties": {}})
+            properties = dict(parameters.get("properties") or {})
+            if skill_id == "repo.read" and "repo" in properties:
+                properties["repo"] = {"type": "string",
+                                      "description": "owner/name; leave out for this project's repo"}
+            parameters["properties"] = properties
+            description = (f"[BOSS Skill · {_BUNDLE_LABEL.get(skill_id, skill_id)}] "
+                           f"{found.description}")
+            if tool == "propose_action":
+                # WHAT CAN BE PROPOSED, NAMED. A live Harbor turn diagnosed a blocked build
+                # correctly and then said it had "no retry_code_task tool to propose" — the
+                # actions are not tools it holds, they are what `tool` may name.
+                from ..tools.builtin import _DISCUSS_OPERATIONS_TOOLS
+
+                description += (" In an agent run the proposal becomes a decision a person "
+                                "approves; it runs as them. `tool` may name: "
+                                + ", ".join(sorted(_DISCUSS_OPERATIONS_TOOLS)) + ".")
+            schemas.append({"type": "function", "function": {
+                "name": name, "description": description, "parameters": parameters}})
+            offered[name] = (spec, tool)
     return offered
+
+
+def _bundle_tool_permission(skill_id: str, tool: str) -> str:
+    """The permission a bundled tool call is checked against inside a delegated run: the TOOL's
+    own declared permission, so a Passport that does not hold it refuses it honestly. repo.read
+    keeps the one permission it has always been checked against."""
+    if skill_id == "repo.read":
+        return "repository:read"
+    from ..tools.builtin import build_discuss_read_registry
+
+    try:
+        return str(build_discuss_read_registry(edition="community").get(tool).permission
+                   or "skill:invoke")
+    except Exception:  # noqa: BLE001 — an unknown tool is refused by the gate as undeclared
+        return "skill:invoke"
 
 
 def _mcp_tool_policy(server: dict[str, Any], tool: dict[str, Any]) -> str:
@@ -1630,7 +1673,12 @@ def execute_agent_tool(
     approval for deferred high-risk calls)."""
     entry = _WRITE_FNS.get(tool)
     if entry is None:
-        return {"error": f"unknown write tool: {tool}"}
+        # AN AGENT'S PROPOSED FIX, APPROVED (boss.propose_fix → a hold-default decision). The
+        # action is one of the engine's operational tools — the same set a chat proposal may
+        # name — and it runs now under the APPROVER's identity (`actor`, and the tool-call
+        # identity of the request that approved it), confirmed by that approval. The agent
+        # that proposed it never runs it.
+        return _execute_proposed_tool(connection, project_id, settings, tool, args, actor)
     fn, _ = entry
     # Make the owning task available to write tools (e.g. so a published document
     # artifact links to the right task) without the model having to supply it.
@@ -1644,6 +1692,27 @@ def execute_agent_tool(
         nested.rollback()
         return {"error": f"{type(exc).__name__}: {exc}"}
     emit_event(connection, project_id, "agent.tool_executed", actor, "task", project_id, {"tool": tool})
+    return result
+
+
+def _execute_proposed_tool(connection: Connection, project_id: str, settings: Settings,
+                           tool: str, args: dict, actor: str) -> dict:
+    """Run an approved agent proposal: an operational engine tool, as the approver."""
+    from ..context import EngineContext
+    from ..tools.builtin import _DISCUSS_OPERATIONS_TOOLS, action_unavailable, build_default_registry
+
+    if tool not in _DISCUSS_OPERATIONS_TOOLS:
+        return {"error": f"unknown write tool: {tool}"}
+    unavailable = action_unavailable(tool, settings)
+    if unavailable:
+        return {"error": unavailable}
+    ctx = EngineContext(settings=settings, engine=connection.engine)
+    result = build_default_registry().invoke(
+        tool, ctx, project_id=project_id, actor=actor,
+        args={k: v for k, v in dict(args or {}).items() if not str(k).startswith("_")},
+        operator_confirmed=True)
+    emit_event(connection, project_id, "agent.proposal_executed", actor, "task", project_id,
+               {"tool": tool, "ok": bool(result.get("ok", True))})
     return result
 
 
@@ -1828,7 +1897,8 @@ def _agent_tool_permission(name: str, *, mcp_map: dict, repo_map: dict, skill_ma
     if name in mcp_map or name in skill_map or (on_demand_loader is not None and name == on_demand_loader):
         return "skill:invoke"
     if name in repo_map:
-        return "repository:read"
+        spec, tool = repo_map[name]
+        return _bundle_tool_permission(str(spec.get("id") or ""), tool)
     return AGENT_TOOL_PERMISSIONS.get(name)
 
 
@@ -2195,13 +2265,17 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
     eager = [spec for spec in skill_resolution["eager"]
              if _skill_policy(connection, settings, project_id, spec) != "off"]
     # READ THE REPO IS FIVE TOOLS, ONE SKILL (kit E11): holding `repo.read` offers the engine's
-    # read tools by their own names and schemas; each call is a call of that one skill.
-    repo_map = _append_repo_read_tools(
-        schemas, occupied, next((s for s in eager if str(s["id"]) == "repo.read"), None))
+    # read tools by their own names and schemas; each call is a call of that one skill. The
+    # baseline every agent holds (boss.fundamentals, boss.propose_fix) is offered the same way.
+    from .agent_baseline import bundles as _bundles
+
+    _bundled = set(_bundles())
+    repo_map = _append_bundle_tools(
+        schemas, occupied, [s for s in eager if str(s["id"]) in _bundled])
     skill_map = _append_skill_tools(
         schemas,
         occupied,
-        [spec for spec in eager if str(spec["id"]) != "repo.read"],
+        [spec for spec in eager if str(spec["id"]) not in _bundled],
     )
     on_demand_loader: Optional[str] = None
     if skill_resolution["on_demand"]:
@@ -2472,22 +2546,28 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
                     )
             elif name in repo_map:
                 spec, tool = repo_map[name]
-                held_now = any(str(item["id"]) == "repo.read" for item in
+                bundle_id = str(spec.get("id") or "repo.read")
+                held_now = any(str(item["id"]) == bundle_id for item in
                                _skill_resolution_for_run(connection, settings, run)["eager"])
                 if not held_now:
-                    result = {"status": "denied", "skill_id": "repo.read",
-                              "reason": "Read the repo is no longer held by this agent"}
+                    result = {"status": "denied", "skill_id": bundle_id,
+                              "reason": f"{_BUNDLE_LABEL.get(bundle_id, bundle_id)} is no "
+                                        "longer held by this agent"}
                 else:
                     caller = str(spec.get("caller") or skill_resolution.get("role_key")
                                  or "agent_loop")
+                    from .agent_baseline import BUNDLE_TOOL_KEY
+
+                    picked = ({"tool": tool, **args} if bundle_id == "repo.read"
+                              else {**args, BUNDLE_TOOL_KEY: tool})
                     result, exhausted = waiter.invoke(lambda: _invoke_agent_skill(
-                        connection, settings, project_id, "repo.read", caller,
-                        {"tool": tool, **args}, actor="agent_loop", skill_spec=spec))
+                        connection, settings, project_id, bundle_id, caller,
+                        picked, actor="agent_loop", skill_spec=spec))
                     if exhausted is not None and bounded:
                         budget_wait = exhausted
                     emit_event(connection, project_id, "agent.skill_invoked", "agent_loop",
                                "agent_run", run_id,
-                               {"skill_id": "repo.read", "tool": tool, "step": step})
+                               {"skill_id": bundle_id, "tool": tool, "step": step})
             elif name in skill_map:
                 skill = skill_map[name]
                 skill_id = str(skill["id"])

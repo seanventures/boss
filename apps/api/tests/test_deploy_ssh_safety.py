@@ -80,6 +80,7 @@ def test_deploy_ssh_rejects_malicious_host_before_any_subprocess(monkeypatch):
         raise AssertionError("subprocess must not run for an invalid host")
 
     monkeypatch.setattr(ds.subprocess, "run", boom)
+    monkeypatch.setattr(ds.owned_process, "run", boom)  # every deploy process goes through here
     monkeypatch.setattr(ds, "load_code_task_run", lambda *_a, **_k: {"id": "r1", "project_id": "p1"})
     monkeypatch.setattr(ds, "begin", MagicMock)
 
@@ -145,6 +146,7 @@ def test_docker_run_failure_rolls_back_previous_build(monkeypatch):
 
     monkeypatch.setattr(ds, "_ssh", fake_ssh)
     monkeypatch.setattr(ds.subprocess, "run", fake_run)
+    monkeypatch.setattr(ds.owned_process, "run", fake_run)  # the tar|ssh transfer runs here
     # File-lineage resolution has its own database contract. This test isolates the
     # post-transfer rollback guarantee and supplies a deterministic build input.
     monkeypatch.setattr(preview_service, "lineage_impl_files", lambda *_args: [])

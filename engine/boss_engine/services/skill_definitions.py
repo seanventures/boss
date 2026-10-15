@@ -324,6 +324,12 @@ def skill_references(connection: Connection, project_id: str, skill_key: str) ->
         skill_key, _no_references())
 
 
+def count_authored(connection: Connection) -> int:
+    """How many skills operators authored, across the install (Improve BOSS's anonymous count:
+    a number, never a name). The store's owner counts its own rows."""
+    return int(connection.execute(text("SELECT COUNT(*) FROM skill_definitions")).scalar() or 0)
+
+
 def get_skill(connection: Connection, project_id: str, skill_key: str) -> Optional[dict[str, Any]]:
     row = connection.execute(
         text("SELECT * FROM skill_definitions WHERE project_id = :p AND skill_key = :k"),
@@ -778,7 +784,13 @@ def sync_role_skills(
     missing: list[dict[str, str]] = []
     for row in roles:
         spec = row["spec"] if isinstance(row["spec"], dict) else {}
-        wanted = ((spec.get("permissions") or {}).get("allowed_skills")) or []
+        wanted = list(((spec.get("permissions") or {}).get("allowed_skills")) or [])
+        # THE BASELINE EVERY AGENT HOLDS, whatever its role spec names — shipped, authored in
+        # the console, or a custom key with an empty spec (services/agent_baseline.py). Same
+        # rules as any spec grant: additive, and an operator's removal stays removed.
+        from .agent_baseline import BASELINE_SKILLS
+
+        wanted += [s for s in BASELINE_SKILLS if s not in wanted]
         for skill_id in wanted:
             # A ROLE MAY NAME A SKILL BY ANOTHER NAME (packages/specpack/kits/aliases.yaml):
             # the grant is the skill it means.

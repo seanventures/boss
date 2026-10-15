@@ -714,7 +714,9 @@ def test_prd_and_web_app_builds_require_target_project_execution_grant(
 
     calls = []
 
-    def fake_plan(_settings, _prd, *, max_tasks):
+    # plan_only decomposes with the PROJECT's chat model (model_routing.project_chat_adapter),
+    # passed as `adapter=`.
+    def fake_plan(_settings, _prd, *, max_tasks, adapter=None):
         calls.append(("plan", max_tasks))
         return [{"title": "Reviewed task"}]
 

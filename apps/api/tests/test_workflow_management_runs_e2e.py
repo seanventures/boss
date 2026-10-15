@@ -225,7 +225,9 @@ def test_skip_goes_on_without_the_failed_step_and_a_refused_gate_stops_the_run(
     _decide(client, gate["decision_id"], "reject")
     wf.tick(client)
     view = wf.run_view(client, second)
-    assert view["status"] == "blocked", view
+    # Stopped at a failed step like any other stop (workflows.reject_gate -> _stop_run_at),
+    # not left `blocked`, "waiting on a person" who had already answered.
+    assert view["status"] == "failed", view
     assert wf.statuses(view) == {"draft": "succeeded", "look": "failed", "finish": "pending"}, \
         "the run walked past a rejected gate"
     assert "rejected" in view["blocked_reason"]
@@ -334,7 +336,9 @@ def test_a_gate_nobody_answered_in_time_stops_the_run(client, engine, monkeypatc
     assert client.get(f"/v1/decisions/{gate['decision_id']}").json()["status"] == "expired"
     wf.tick(client)
     view = wf.run_view(client, run_id)
-    assert view["status"] == "blocked", view
+    # An expired gate is refused through the same door as a No (workflows.reject_gate): the
+    # run stops at the failed step.
+    assert view["status"] == "failed", view
     assert "expired" in view["blocked_reason"]
     assert wf.statuses(view) == {"draft": "succeeded", "look": "failed", "finish": "pending"}
 

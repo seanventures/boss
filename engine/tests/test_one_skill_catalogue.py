@@ -62,6 +62,8 @@ _READERS = {
     "engine/boss_engine/services/skill_definitions.py::list_skills": "owner: the authored page",
     "engine/boss_engine/services/skill_definitions.py::save_skill": "owner: create vs overwrite",
     "engine/boss_engine/services/skill_definitions.py::delete_skill": "owner: the delete",
+    "engine/boss_engine/services/skill_definitions.py::count_authored":
+        "owner: a count of its own rows (Improve BOSS, a number never a name)",
     "engine/boss_engine/services/skill_registry.py::list_project_skills": "owner: project rows",
     "engine/boss_engine/services/skill_registry.py::ensure_skill": "owner: upsert",
     # "What points at this server" — a reference check before a delete, not a catalogue read.
@@ -89,6 +91,8 @@ _OWNER_READ_CALLERS = {
         "one skill's config at execution",
     "engine/boss_engine/services/skill_executors.py::execute_agent_program":
         "one skill's config at execution",
+    "engine/boss_engine/services/skill_executors.py::execute_guide":
+        "one guide's body at execution",
 }
 
 _SHIPPING = ("engine/boss_engine", "apps/api/app", "apps/worker")

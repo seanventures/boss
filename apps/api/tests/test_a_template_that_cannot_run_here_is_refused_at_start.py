@@ -104,8 +104,16 @@ def test_every_catalogue_template_offers_a_form_and_its_own_example(client):
     assert len(items) >= 12
     for item in items:
         schema = item["input_schema"]
-        assert "directive" in schema["required"], item["key"]
-        assert schema["properties"]["directive"]["title"], item["key"]
+        title = schema["properties"]["directive"]["title"]
+        assert title, item["key"]
+        if title.endswith("(optional)"):
+            # A template whose directive is only a focus (the Security Review scans a whole
+            # app): it requires what it does run on, and its example names that too.
+            assert "directive" not in schema["required"], item["key"]
+            assert schema["required"], item["key"]
+            assert all(item["example"].get(f) for f in schema["required"]), item["key"]
+        else:
+            assert "directive" in schema["required"], item["key"]
         assert item["example"]["directive"], item["key"]
         assert "spec_review" not in item["gates"], item["key"]
         assert {n["key"] for n in item["needs"]} >= {"model"}, item["key"]

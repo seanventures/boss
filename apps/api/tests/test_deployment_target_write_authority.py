@@ -7,7 +7,7 @@ import pytest
 from sqlalchemy import text
 
 from apps.api.app import main as api_main
-from boss_engine.services import delivery_pipeline, deploy_service, deployment_connectors
+from boss_engine.services import deploy_service, deployment_connectors
 
 
 HOME = "boss-dogfood"
@@ -108,20 +108,26 @@ def test_community_ssh_plan_records_blocked_decision_before_build(
     assert denied.status_code == 409, denied.text
     # A host deployment is planned only for an app on a verified host; this one is on none.
     assert "not attached to a deployment host" in denied.text
+    # A refused plan is an answer and one plain event (governed_host_deploy.refuse_plan): no
+    # deployment run that could later be executed, and no decision nobody can act on.
     with engine.begin() as connection:
-        run = connection.execute(
-            text("SELECT id, status, decision_id, changeset_id, failure_reason "
-                 "FROM deployment_runs WHERE deployment_target_id=:id"),
+        runs = connection.execute(
+            text("SELECT COUNT(*) FROM deployment_runs WHERE deployment_target_id=:id"),
             {"id": target_id},
-        ).mappings().one()
-    assert run["status"] == "failed"
-    assert run["decision_id"]
-    assert run["changeset_id"] is None
-    assert "not attached to a deployment host" in run["failure_reason"]
-    replay = delivery_pipeline.execute_deployment(
-        engine, api_main.settings, run["id"], actor="ceo"
-    )
-    assert replay["status"] == "blocked"
+        ).scalar_one()
+        decisions = connection.execute(
+            text("SELECT COUNT(*) FROM decisions WHERE project_id=:p AND status='pending' "
+                 "AND (recommendation->>'deployment_target_id'=:t "
+                 "     OR recommendation->>'target_id'=:t)"),
+            {"p": HOME, "t": target_id},
+        ).scalar_one()
+        refused = connection.execute(
+            text("SELECT data FROM events WHERE event_type='deployment.plan_refused' "
+                 "AND entity_id=:t"),
+            {"t": target_id},
+        ).scalars().all()
+    assert runs == 0 and decisions == 0
+    assert len(refused) == 1 and refused[0]["reason"] == "host_not_attached"
     direct = client.post(
         f"/v1/code-tasks/{code_run_id}/deploy",
         headers={"Authorization": f"Bearer {key}"},

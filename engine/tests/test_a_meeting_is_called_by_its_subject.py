@@ -169,6 +169,10 @@ _NOT_A_TITLE_READER = {
         "reads artifact ids and status; returns no title",
     "engine/boss_engine/tools/builtin.py::read_spec":
         "returns the directive AS the spec text, not as a name",
+    "engine/boss_engine/services/decisions.py::extend_run_of_prd":
+        "searches the directive for the extend-run marker; shows no title",
+    "engine/boss_engine/services/decisions.py::_build_prd_onto_app":
+        "parses the operator's ask out of the directive (feature_asked), not the meeting's name",
 }
 
 

@@ -24,6 +24,9 @@ class _Result:
     def first(self):
         return self.row
 
+    def scalar(self):
+        return self.row
+
     def all(self):
         return self.rows
 
@@ -116,6 +119,11 @@ class _OwnRunConnection:
             }])
         if "FROM code_task_runs" in sql and "status = 'completed'" in sql:
             return _Result(rows=[])
+        if "FROM events WHERE project_id = :p AND entity_id = :r" in sql:
+            # diagnose_run reads the run's own events (whether its engine could not run, the
+            # latest of a kind): this run has none. Every one is fenced to the session's project.
+            assert (params or {}).get("p") == "project-a", params
+            return _Result()
         raise AssertionError(f"unexpected query: {sql}")
 
 

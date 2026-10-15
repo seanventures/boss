@@ -139,19 +139,64 @@ def _argument(call: ast.Call, func: ast.FunctionDef, param: str) -> Optional[ast
     if param not in names:
         return None
     index = names.index(param)
-    # self.method(...) does not pass self positionally.
-    if names and names[0] in {"self", "cls"} and isinstance(call.func, ast.Attribute):
+    # self.method(...) does not pass self positionally; Base.method(self, ...) does.
+    explicit_self = bool(call.args) and isinstance(call.args[0], ast.Name) \
+        and call.args[0].id in {"self", "cls"}
+    if names and names[0] in {"self", "cls"} and isinstance(call.func, ast.Attribute) \
+            and not explicit_self:
         index -= 1
     return call.args[index] if 0 <= index < len(call.args) else None
 
 
+def _enclosing_class(module: Module, node: ast.AST) -> Optional[ast.ClassDef]:
+    while node in module.parents:
+        node = module.parents[node]
+        if isinstance(node, ast.ClassDef):
+            return node
+    return None
+
+
+def _subclass_modules(module: Module, func: ast.FunctionDef) -> list[Module]:
+    """Modules holding a subclass (by name, transitively) of the class `func` is a method of:
+    an inherited method is called as self.method(...) from the subclass's own module."""
+    owner = _enclosing_class(module, func)
+    if owner is None:
+        return []
+    names, found = {owner.name}, []
+    grew = True
+    while grew:
+        grew = False
+        for other in MODULES:
+            for node in ast.walk(other.tree):
+                if isinstance(node, ast.ClassDef) and node.name not in names and any(
+                        isinstance(b, ast.Name) and b.id in names for b in node.bases):
+                    names.add(node.name)
+                    grew = True
+                    if other not in found and other is not module:
+                        found.append(other)
+    return found
+
+
+def _overrides(module: Module, func: ast.FunctionDef) -> bool:
+    """Whether a method overrides one of its base classes' (it then also inherits their
+    callers, which are scanned through the base)."""
+    owner = _enclosing_class(module, func)
+    bases = {b.id for b in (owner.bases if owner else []) if isinstance(b, ast.Name)}
+    return any(isinstance(node, ast.ClassDef) and node.name in bases and any(
+                   isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == func.name
+                   for n in node.body)
+               for other in MODULES for node in ast.walk(other.tree))
+
+
 def _callers(module: Module, func: ast.FunctionDef) -> Iterable[tuple[Module, ast.Call]]:
-    """Calls of a wrapper. A method is looked for in its own module; a function everywhere."""
+    """Calls of a wrapper. A method is looked for in its own module and its subclasses'; a
+    function everywhere. A call inside the wrapper itself (an override calling its base) is
+    not a caller of it."""
     method = bool(_params(func)) and _params(func)[0] in {"self", "cls"}
-    for other in ([module] if method else MODULES):
+    for other in ([module, *_subclass_modules(module, func)] if method else MODULES):
         for node in ast.walk(other.tree):
             if isinstance(node, ast.Call) and _called_name(node) == func.name \
-                    and node is not None:
+                    and not (other is module and module.enclosing_function(node) is func):
                 yield other, node
 
 
@@ -169,6 +214,15 @@ def _resolve_action(module: Module, expr: ast.expr, func: Optional[ast.FunctionD
     if isinstance(expr, ast.IfExp):
         return (_resolve_action(module, expr.body, func, depth)
                 + _resolve_action(module, expr.orelse, func, depth))
+    # A subclass renaming its base's action: reason.replace("typed_decision", "architecture").
+    if isinstance(expr, ast.Call) and isinstance(expr.func, ast.Attribute) \
+            and expr.func.attr == "replace" and len(expr.args) == 2 and all(
+                isinstance(a, ast.Constant) and isinstance(a.value, str) for a in expr.args):
+        old, new = expr.args[0].value, expr.args[1].value
+        return [Found(f.where, action=f.action.replace(old, new) if f.action else None,
+                      prefix=f.prefix.replace(old, new) if f.prefix else None, gate=f.gate,
+                      none=f.none, unresolved=f.unresolved)
+                for f in _resolve_action(module, expr.func.value, func, depth)]
     if isinstance(expr, ast.JoinedStr):
         head = expr.values[0] if expr.values else None
         if isinstance(head, ast.Constant) and isinstance(head.value, str) and head.value:
@@ -279,6 +333,8 @@ def _through_wrapper(module, func, param, depth, resolve) -> list[Found]:
         if arg is None:
             continue
         found += resolve(caller_module, arg, caller_module.enclosing_function(call), depth + 1)
+    if not found and _overrides(module, func):
+        return found   # its callers are its base's, scanned through the base
     if not found:
         found.append(Found(_where(module, func),
                            unresolved=f"wrapper {func.name}({param}) has no callers"))

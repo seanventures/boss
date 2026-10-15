@@ -24,6 +24,7 @@ BOSS requires. Acting on that diagnosis would have "fixed" correct code.
 """
 
 import inspect
+import re
 
 from boss_engine.services import deploy_service as ds
 
@@ -58,7 +59,12 @@ def test_the_old_single_shot_sleep_is_gone():
 
 def test_the_health_gate_uses_the_waiter():
     src = inspect.getsource(ds)
-    assert "_await_healthy(key_path, host, user, ssh_port, int(app_port))" in src
+    call = re.search(r"_await_healthy\(\s*#[^\n]*\n?\s*key_path, host, user, ssh_port, int\(app_port\)"
+                     r"(?P<rest>[^)]*\)?[^)]*)\)", src)
+    assert call, "the health gate no longer waits through _await_healthy"
+    # A JVM app gets its longer start-up allowance; everything else the default.
+    assert "JAVA_DEPLOY_HEALTH_TIMEOUT_SECONDS if mode == \"java\"" in call.group("rest")
+    assert "DEPLOY_HEALTH_TIMEOUT_SECONDS" in call.group("rest")
 
 
 def test_nothing_listening_is_reported_differently_from_unhealthy():

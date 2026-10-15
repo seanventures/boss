@@ -94,6 +94,16 @@ system_principals:
 # run starts with always grants workflow_run:read (consent.WORKFLOW_BASE_PERMISSIONS). A preset
 # without it made a tool-less step's token empty (person ∩ ceiling ∩ grant = {}), and the step
 # failed `empty_scope` after the person had consented (a Document step run by Quill).
+# EVERY PRESET HOLDS THE BOSS BASELINE READS (services/agent_baseline.py): every agent holds the
+# fundamentals skills — run logs, run diagnosis, infra and health, schema and project rows, the
+# catalogue, memory, the repo, and proposing a fix — and inside a delegated run each tool is checked
+# against its own permission, still bounded by the person and by the run's consent. These are the
+# delegable reads those tools declare. setup:read and job:read are NOT delegable, so diagnose_setup,
+# list_harnesses and list_running_work are refused inside a delegated run (they work in chat, as
+# the person). The enforcing test is engine/tests/test_every_agent_holds_the_baseline.py.
+# `baseline`: the baseline reads and nothing else. The panel voices (Nova, Axiom, Tempo, Sage) had no
+# preset and so an EMPTY ceiling — every tool refused; and it is the preset of any agent whose role
+# names no other (an agent made in the console), via passports.upgrade_from_roles.
 passport_presets:
   - key: builder
     name: Builder
@@ -101,7 +111,8 @@ passport_presets:
     permissions: [code_task:read, code_task:create, code_task:steer, code_task:retry, repository:read,
                   github:read, github:sync, preview:read, preview:manage, artifact:read, artifact:rebuild,
                   workflow:read, workflow_run:read, skill:read, skill:invoke, memory:read, memory:manage,
-                  spend:reserve, secret:lease, sandbox:read]
+                  spend:reserve, secret:lease, sandbox:read,
+                  agent:read, decision:read, deployment:read, host:read, meeting:read, observability:read, project:read, system:read]
     external_ceiling: {github: {contents: write, pull_requests: write, push_refs: "boss/*"}}
   - key: reviewer
     name: Reviewer
@@ -111,39 +122,52 @@ passport_presets:
     permissions: [code_task:read, code_task:steer, repository:read, github:read, preview:read,
                   artifact:read, assurance:read, assurance:run, workflow_run:read, skill:read,
                   skill:invoke, memory:read, spend:reserve, security_scan:run, meeting:read,
-                  meeting:convene]
+                  meeting:convene,
+                  agent:read, decision:read, deployment:read, host:read, observability:read, project:read, sandbox:read, system:read, workflow:read]
     external_ceiling: {github: {contents: read, pull_requests: write}}
   - key: planner
     name: Planner
     agents: [juno, atlas, keystone, rally, vector, cadence]
     permissions: [code_task:read, code_task:create, meeting:read, meeting:convene, discovery:read,
                   discovery:create, workflow:read, workflow:create, workflow_run:read, workflow_run:start,
-                  work_item:read, work_item:manage, decision:read, memory:read, memory:manage, spend:reserve]
+                  work_item:read, work_item:manage, decision:read, memory:read, memory:manage, spend:reserve,
+                  agent:read, deployment:read, github:read, host:read, observability:read, preview:read, project:read, repository:read, sandbox:read, skill:read, system:read]
     external_ceiling: {github: {contents: read, issues: write}}
   - key: operator_agent
     name: Operator agent
     agents: [harbor, pilot, bedrock, relay, beacon]
     permissions: [deployment:read, deployment:create, host:read, infra:read, observability:read,
                   reliability:read, reliability:respond, preview:read, preview:manage, workflow_run:read,
-                  workflow_run:control, spend:reserve, secret:lease]
+                  workflow_run:control, spend:reserve, secret:lease,
+                  agent:read, code_task:read, decision:read, github:read, meeting:read, memory:read, project:read, repository:read, sandbox:read, skill:read, system:read, workflow:read]
     external_ceiling: {}
   - key: analyst
     name: Analyst
     agents: [ledger, meter, conduit, sweep]
     permissions: [budget:read, model_provider:read, infra:read, observability:read, activity:read,
-                  spend:reserve, workflow_run:read]
+                  spend:reserve, workflow_run:read,
+                  agent:read, code_task:read, decision:read, deployment:read, github:read, host:read, meeting:read, memory:read, preview:read, project:read, repository:read, sandbox:read, skill:read, system:read, workflow:read]
     external_ceiling: {}
   - key: writer
     name: Writer and publisher
     agents: [quill, herald, splice]
     permissions: [artifact:read, artifact:rebuild, discovery:read, comms:read, comms:send, memory:read,
-                  spend:reserve, workflow_run:read]
+                  spend:reserve, workflow_run:read,
+                  agent:read, code_task:read, decision:read, deployment:read, github:read, host:read, meeting:read, observability:read, preview:read, project:read, repository:read, sandbox:read, skill:read, system:read, workflow:read]
     external_ceiling: {}
   - key: guardian
     name: Guardian
     agents: [warden, vault, halo]
     permissions: [agent:read, agent_passport:read, activity:read, policy:read, secret:read_metadata,
-                  workflow_run:read]
+                  workflow_run:read,
+                  code_task:read, decision:read, deployment:read, github:read, host:read, meeting:read, memory:read, observability:read, preview:read, project:read, repository:read, sandbox:read, skill:read, system:read, workflow:read]
+    external_ceiling: {}
+  - key: baseline
+    name: Baseline (every agent)
+    agents: [nova, axiom, tempo, sage]
+    permissions: [agent:read, code_task:read, decision:read, deployment:read, github:read, host:read,
+                  meeting:read, memory:read, observability:read, preview:read, project:read,
+                  repository:read, sandbox:read, skill:read, system:read, workflow:read, workflow_run:read]
     external_ceiling: {}
 
 categories:

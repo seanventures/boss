@@ -77,10 +77,10 @@ class EntitlementBrokerService:
             self._gateway_source_kinds.add(self._paid_gateway.source_kind)
 
     def _load_yaml(self, path: Path) -> dict[str, Any]:
-        payload = yaml.safe_load(path.read_text(encoding="utf-8"))
-        if not isinstance(payload, dict):
-            raise ValueError(f"{path} did not contain an object payload")
-        return payload
+        # Parsed once per version of the file (yaml_files): list_skills reads every skill file.
+        from .yaml_files import load_mapping
+
+        return load_mapping(path)
 
     def _provider_registry(self) -> dict[str, Any]:
         registry = self._load_yaml(self.settings.specpack_root / "models" / "providers.yaml")

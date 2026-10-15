@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 from pathlib import Path
 
 import pytest
@@ -24,14 +25,22 @@ from boss_engine.services.hardware_manager import (
 )
 
 ROOT = Path(__file__).resolve().parents[2]
-URL = "postgresql+psycopg://boss:boss@127.0.0.1:55455/boss_test"
-HOOK_URL = URL + "?options=-csearch_path%3Dhw_kernel"
+# The suite's test database, as every other database test reads it (this file named one
+# developer's port, 55455, and failed everywhere else).
+URL = os.environ.get("BOSS_TEST_DATABASE_URL", "")
+HOOK_URL = URL + ("&" if "?" in URL else "?") + "options=-csearch_path%3Dhw_kernel"
 
 
-def _ddl() -> str:
+def _ddl() -> list[str]:
+    """schema.sql's hardware statements, as written there: the tables, indexes and alters of
+    hardware_*. ("Everything after hardware_places" stopped standing alone once later sections
+    altered tables defined before it.)"""
+    import re
+
+    from boss_engine.db import split_statements
+
     schema = (ROOT / "db" / "schema.sql").read_text(encoding="utf-8")
-    start = schema.index("CREATE TABLE IF NOT EXISTS hardware_places (")
-    return schema[start:]
+    return [s for s in split_statements(schema) if re.search(r"\bhardware_\w+", s)]
 
 
 def _hook():
@@ -45,12 +54,14 @@ def _hook():
 
 @pytest.fixture(scope="module")
 def engine():
+    if not URL.startswith("postgres"):
+        pytest.skip("needs BOSS_TEST_DATABASE_URL")
     eng = sa.create_engine(URL, future=True)
     with eng.begin() as connection:
         connection.execute(text("CREATE SCHEMA IF NOT EXISTS hw_kernel"))
         connection.execute(text("SET search_path TO hw_kernel"))
         connection.execute(text("CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY)"))
-        for statement in _ddl().split(";"):
+        for statement in _ddl():
             statement = statement.strip()
             if statement:
                 connection.execute(text(statement))

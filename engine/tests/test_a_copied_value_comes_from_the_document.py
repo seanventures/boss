@@ -148,7 +148,9 @@ def test_the_resolution_runs_before_the_value_is_passed_on():
 
     from boss_engine.services import agent_steps
 
-    source = inspect.getsource(agent_steps.run)
+    # The hand-on lives in `products_of`, shared by `run` and the runner's approval path.
+    assert "products_of(" in inspect.getsource(agent_steps.run)
+    source = inspect.getsource(agent_steps.products_of)
     resolve = source.index("_copied_exactly(")
     hand_on = source.index("produced.update(declared)")
     assert resolve < hand_on, "a copied value must be resolved before the next step reads it"
@@ -232,7 +234,8 @@ def test_numbers_are_preferred_over_a_quote():
 
     from boss_engine.services import agent_steps
 
-    source = inspect.getsource(agent_steps.run)
+    assert "products_of(" in inspect.getsource(agent_steps.run)
+    source = inspect.getsource(agent_steps.products_of)
     by_number = source.index("_lines_of(")
     by_quote = source.index("_copied_exactly(")
     assert by_number < by_quote, "the pointer that cannot be damaged has to be tried first"

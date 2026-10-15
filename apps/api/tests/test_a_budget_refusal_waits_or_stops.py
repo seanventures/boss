@@ -535,7 +535,13 @@ def test_a_waiting_request_never_blocks_a_concurrent_reserver(eng, project):
     finally:
         first_tx.rollback()
         first_conn.close()
-    assert first["refusal"] == second["refusal"] == "burst"
+    assert first["refusal"] == "burst"
+    # reserve() TRIES the project's admission lock rather than waiting on it (budget.py:
+    # "Contention must not ... queue behind provider I/O"; test_financial_admission_real_postgres).
+    # The second reserver returns at once, under the 2s lock_timeout, with a transient refusal
+    # it retries in a second — never stuck behind the first tick's open transaction.
+    assert second["status"] == "denied" and second["refusal"] == "admission_busy", second
+    assert second["transient"] is True and second["retry_after_seconds"] == 1
 
 
 def test_the_period_caps_still_count_every_reservation_in_full(eng, project):

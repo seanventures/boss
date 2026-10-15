@@ -90,10 +90,10 @@ class SpecPackService:
     def _load_yaml(self, path: Path) -> dict[str, Any]:
         if not path.exists():
             raise FileNotFoundError(path)
-        payload = yaml.safe_load(path.read_text(encoding="utf-8"))
-        if not isinstance(payload, dict):
-            raise ValueError(f"{path} did not contain an object payload")
-        return payload
+        # Parsed once per version of the file (yaml_files).
+        from .yaml_files import load_mapping
+
+        return load_mapping(path)
 
     def _pack_path(self, pack_id: str) -> Path:
         return self.settings.specpack_root / "packs" / f"{pack_id}.yaml"

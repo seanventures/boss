@@ -98,7 +98,10 @@ def test_summarize_lock_is_in_out_cloud_counts_only():
         1 for row in rows if row["lock"] == "cloud_enterprise"
     )
     assert summary["in"] >= 65
-    assert summary["out"] >= 14
+    # 13, not 14: V1-OUT-010 (shared-server features / metrics) left the Community lock with
+    # the private shared-server PaaS in 9945ebf6 ("remove a private deployment name from the
+    # Community tree"); the ids are not renumbered.
+    assert summary["out"] >= 13
     assert summary["cloud"] == 12
     assert all(isinstance(value, int) and value >= 0 for value in summary.values())
 

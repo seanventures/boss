@@ -205,6 +205,9 @@ DETECT_JAVA_ALLOWED = {
     ("services/stacks.py", "_java_steps"),         # a service dir from detect_services(app dir)
     ("services/stacks.py", "_start_java"),         # the same service dir
     ("services/preview_service.py", "command_for_entry"),  # the entry resolve_app_entry chose
+    ("services/preview_service.py", "_java_build_of"),     # the dir how_app_runs chose
+    ("services/deploy_service.py", "_java_payload"),       # resolve_app_entry's java entry
+    ("services/workflow_precheck.py", "_java_app"),        # ctx.app_dir, the app's own dir
 }
 
 

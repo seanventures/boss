@@ -571,7 +571,7 @@ def deferred_wait(exc: BaseException) -> Optional[int]:
 
 def run_agent(*, adapter: Any, raw_adapter: Any = None, evidence: Mapping[str, Any],
               tools: Optional[list[dict[str, Any]]] = None,
-              call_tool: Optional[Callable[[str, dict], dict]] = None,
+              run_tool: Optional[Callable[[str, dict], dict]] = None,
               max_usd_micros: int = 500_000, max_turns: int = 8,
               step_ids: Iterable[str] = (),
               max_wait_seconds: float = DEFAULT_MAX_WAIT_SECONDS,
@@ -605,7 +605,7 @@ def run_agent(*, adapter: Any, raw_adapter: Any = None, evidence: Mapping[str, A
     error: Optional[str] = None
     items: Optional[list[Any]] = None
     model_seen = ""
-    can_tool = tools is not None and call_tool is not None
+    can_tool = tools is not None and run_tool is not None
     while True:
         if spent >= max_usd_micros:
             stopped = "cost_cap"
@@ -652,7 +652,7 @@ def run_agent(*, adapter: Any, raw_adapter: Any = None, evidence: Mapping[str, A
                 except (TypeError, ValueError):
                     args = {}
                 try:
-                    result = call_tool(str(call.get("name") or ""),
+                    result = run_tool(str(call.get("name") or ""),
                                        args if isinstance(args, dict) else {})
                 except Exception as exc:  # noqa: BLE001
                     result = {"ok": False, "error": f"{type(exc).__name__}: {exc}"[:400]}
@@ -715,7 +715,7 @@ def precheck_with_model(engine: Any, settings: Any, *, project_id: str,
         ctx = EngineContext(settings=settings, engine=engine if engine is not None
                             else getattr(c, "engine", None))
         return run_agent(adapter=adapter, raw_adapter=raw, evidence=evidence, tools=schemas,
-                         call_tool=lambda name, args: run(ctx, project_id, name, args),
+                         run_tool=lambda name, args: run(ctx, project_id, name, args),
                          max_usd_micros=cap, max_turns=turns, max_wait_seconds=wait_limit,
                          step_ids=[str(s.get("id")) for s in spec.get("steps") or []])
 

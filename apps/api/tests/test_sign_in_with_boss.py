@@ -185,7 +185,7 @@ def test_preview_start_and_stop_keep_the_redirect_uris_in_step(w):
     assert not any(first in u for u in uris)
     # the second preview is not in app_previews yet (it is starting): the next sync keeps only what runs
     assert uris == [f"{PREVIEWS}/v1/previews/{second}/web/auth/callback/boss"] or uris == [
-        f"{app_sign_in.LOCAL_BASE}{app_sign_in.CALLBACK_PATH}"]
+        f"{app_sign_in.local_base()}{app_sign_in.CALLBACK_PATH}"]
 
 
 def test_with_no_address_yet_the_local_default_keeps_the_client_valid_until_a_preview_starts(w):

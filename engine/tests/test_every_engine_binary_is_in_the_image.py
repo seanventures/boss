@@ -116,3 +116,10 @@ def test_missing_runtime_reads_path():
         "claude_code", which=lambda b: None if b == "claude" else "/usr/bin/" + b)] == ["claude"]
     assert hr.missing_runtime("claude_agent_sdk", which=lambda b: None) == []
     assert hr.missing_runtime("no_such_engine") == []
+
+
+def test_the_build_image_has_a_c_toolchain_for_native_npm_packages():
+    """BOSSAPP-515: better-sqlite3, bcrypt and the like compile on install (node-gyp needs make
+    and g++). Agents were told to avoid them; the stage builds run in now carries the toolchain,
+    and the "no compiler" sandbox fact follows the PATH (test_the_build_image_can_compile_...)."""
+    assert "build-essential" in installed_by_image(_runtime_stage())["apt"]

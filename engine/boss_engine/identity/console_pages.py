@@ -24,6 +24,7 @@ CONSOLE_PAGES: tuple[tuple[str, str, str], ...] = (
     ("/identity/service-accounts", "Service accounts", "service_account:read"),
     ("/identity/agents", "Agents", "agent_passport:read"),
     ("/identity/agents/[id]", "Passport", "agent_passport:read"),
+    ("/identity/app-sign-in", "App sign-in", "oidc_client:read"),  # anyScope
     ("/identity/sign-in", "Sign-in & SSO", "identity_provider:read"),
     ("/identity/audit", "Audit", "audit:read"),
     ("/account/keys", "API keys", "api_key:manage_own"),

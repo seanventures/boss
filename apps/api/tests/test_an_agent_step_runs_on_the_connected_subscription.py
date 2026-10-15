@@ -130,14 +130,27 @@ def test_with_no_model_at_all_the_step_fails_with_the_fix(client, engine, monkey
 # ── A key stored through the console, not a subscription ─────────────────────────────────────
 
 def _store_key(client, monkeypatch, provider: str, key: str) -> None:
-    """The console's own route: POST /v1/setup/model (Community stores it unverified)."""
-    from boss_engine.services import secret_backends
+    """The console's own route: POST /v1/setup/model. Every edition stores a key only after one
+    governed completion proves it; the provider's answer to that proof is faked here, so the
+    test never calls OpenAI or OpenRouter with a key that is not real."""
+    from boss_engine.services import secret_backends, setup_checks
 
     monkeypatch.setattr(secret_backends, "default_secret_backend", lambda _s: "database")
+    proved = []
+
+    def provider_accepts(*, api, endpoint, api_key, model, **_kw):
+        proved.append({"api": api, "endpoint": endpoint, "key": api_key, "model": model})
+        return {"ok": True, "state": "working", "status": 200, "latency_ms": 5,
+                "usage": {"model": model, "base_url": endpoint, "prompt_tokens": 1,
+                          "completion_tokens": 1},
+                "host": endpoint, "retry_at": None, "model": model, "usage_present": True}
+
+    monkeypatch.setattr(setup_checks, "complete_once", provider_accepts)
     stored = client.post("/v1/setup/model", json={
         "project_id": PROJECT, "actor": "ceo", "provider": provider, "api_key": key,
         "model": f"{provider}-test-model"})
     assert stored.status_code == 201, stored.text
+    assert [p["key"] for p in proved] == [key], proved   # proved once, with the key pasted
 
 
 def _openai_compatible_answers(monkeypatch) -> list:
@@ -207,7 +220,9 @@ def test_an_agent_step_on_a_capped_project_is_refused_by_the_budget(client, engi
         c.execute(text("UPDATE budget_policies SET daily_cap_usd_micros = 1 "
                        "WHERE scope_type='project' AND scope_id=:p"), {"p": PROJECT})
 
-    step = _start_edit_step(client, "Video edit past the cap")
+    # Start's readiness already says the budget is red (the key's own proof spent past a 1-micro
+    # cap); started anyway, the agent step's reservation still refuses before the provider is asked.
+    step = _start_edit_step(client, "Video edit past the cap", start_anyway=["budget"])
     assert asked == [], "the provider was asked past the budget cap"
     assert step["status"] in ("failed", "deadlettered"), step
     assert step["attempt"] == 1, step

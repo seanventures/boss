@@ -8,6 +8,9 @@ on the request thread, the catalog read blocked on `readline()` for a CLI that w
   * inside `catalogs_from_cache_only()` (what the setup view runs under) a catalog comes from
     the cache, and a missing one is fetched on a background thread — the read returns at once;
   * the Claude catalog read has a hard deadline: the CLI is killed when it passes.
+
+The secret store's first read on a cold cache may wait a bounded moment (COLD_SECRET_BACKEND_WAIT_SECONDS,
+75498a53); a store that hangs still never holds the page past that bound.
 """
 from __future__ import annotations
 
@@ -77,10 +80,16 @@ def test_the_view_reads_detection_and_the_store_without_waiting(monkeypatch):
     monkeypatch.setattr(setup_view, "_detect_clis", lambda _s: gate.wait(5) or {})
     monkeypatch.setattr(setup_view, "_pick_backend", lambda _s: gate.wait(5) or "database")
     monkeypatch.delenv("BOSS_COMMUNITY_SECRET_STORE", raising=False)
+    # The first read on a cold cache waits a BOUNDED moment for the secret store (75498a53: so the
+    # board knows whether to ask for database consent); a hung store still never holds the page
+    # past that bound. CLI detection never waits at all.
+    monkeypatch.setattr(setup_view, "COLD_SECRET_BACKEND_WAIT_SECONDS", 0.2)
     setup_view.forget_cached()
     started = time.monotonic()
     assert setup_view._cli_detection(SimpleNamespace()) == {}
+    assert time.monotonic() - started < 0.5
+    started = time.monotonic()
     assert setup_view._secret_backend(SimpleNamespace()) is None
     assert setup_view.detection_pending() is True
-    assert time.monotonic() - started < 0.5
+    assert time.monotonic() - started < 0.2 + 0.5
     gate.set()
