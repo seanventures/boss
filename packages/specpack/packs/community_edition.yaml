@@ -65,7 +65,11 @@ installs:
   # executor — Read the repo (repo.read), Tests & CI (ci.status), Render docs (docs.draft),
   # Team chat (slack.post_real_guarded) and Deploy / Watch health (deployment.*).
   # test_every_kit_skill_has_an_executor enforces both halves.
+  # `agent_conversation` and `agent_voice` are the model calls behind an agent's conversation
+  # turn and its voice test/draft (conversation_spend, voice_spend): the same durable
+  # model-job shape as model_gateway's typed_decision and architecture.draft, and every edition
+  # can talk to its agents.
   skills: [model_gateway, github, software_factory, model_providers, work_tracker,
            mattermost, youtube, video, meeting_ops, email, agent_code, mobile,
-           kit, slack, deployment]
+           kit, slack, deployment, agent_conversation, agent_voice]
 status: active  # Independent product; Cloud is opt-in via Easy Connect
