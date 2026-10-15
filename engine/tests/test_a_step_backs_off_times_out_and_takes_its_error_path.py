@@ -377,6 +377,7 @@ def test_a_timeout_on_the_last_attempt_fails_the_step_for_good(eng, project):
         row = _row(c, run_id, "a")
         assert row["status"] == "deadlettered"
         assert row["output"]["failure_reason"] == "step_timeout"
+        assert row["output"]["reason"] == "step_timeout"
         assert "Timed out" in row["last_error"]
         assert _run_status(c, run_id) == "deadlettered", "stopped at the step, as before"
         dead = _events(c, run_id, "workflow.step_deadlettered", "a")

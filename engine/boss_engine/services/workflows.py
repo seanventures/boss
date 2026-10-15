@@ -5798,7 +5798,9 @@ def _fail_attempt(
     template = spec_steps.get(str(row["step_id"])) or {}
     why = reason or ("attempts_exhausted" if retryable else "not_retryable")
     if reason:
-        output = {**(output or {}), "failure_reason": reason}
+        # `reason` too, the key a step's output already says why under (a skip's reason), so a
+        # reader looking for `step_timeout` finds it where it looks for any step's reason.
+        output = {**(output or {}), "failure_reason": reason, "reason": reason}
     error_step = str(template.get("on_error") or "").strip() if not can_retry else ""
     if error_step not in spec_steps:
         error_step = ""
