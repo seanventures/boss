@@ -51,6 +51,13 @@ ENFORCED: dict[str, tuple[str, str]] = {
     "build_test_budget": ("Each build", "each_build"),
     # Checked before every implement session and caps a running one (governed stage budget).
     "build_implement_budget_minutes": ("Each build", "each_build"),
+    # The model pre-check at the start door (workflow_precheck_agent): whether it runs, and its
+    # cost, turn and wait caps — read at each start it runs at (wanted_at_the_door, caps_for,
+    # wait_limit_for); no turn starts once a cap is spent.
+    "workflow_precheck_agent": ("Each start", "each_start"),
+    "workflow_precheck_agent_max_cents": ("Each start", "each_start"),
+    "workflow_precheck_agent_max_turns": ("Each start", "each_start"),
+    "workflow_precheck_agent_max_wait_seconds": ("Each start", "each_start"),
     "code_review_inrun_max_rounds": ("Review loop", "review_loop"),
     "captain_leads_projects": ("Every build", "every_build"),
     "captain_auto_improve": ("Captain's own builds", "captain_own_builds"),
