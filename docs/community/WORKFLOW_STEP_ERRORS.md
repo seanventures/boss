@@ -53,7 +53,8 @@ Publishing refuses a workflow, naming the step, when:
 - `on_error` names a step that does not exist, the step itself, or the workflow's start step.
 - `on_error` leads back to a step that reaches the failing step. That would make a loop with
   no bound. Use `max_attempts` to retry, or a `bounded_loop` to repeat.
-- `on_error` points at a join or a loop body, or it is set on a loop body.
+- `on_error` points at a join or a loop body, or it is set on a loop body. The same holds for
+  the step a `for_each` runs (see [Workflow for each](WORKFLOW_FOR_EACH.md)).
 - `retry_backoff`, `timeout_seconds` or `on_error` is set on a condition, parallel, join, loop,
   approval gate, timer or sub-workflow step. Those steps have no attempts of their own.
 - A value is outside its range, or `retry_backoff` has a field it does not know.
