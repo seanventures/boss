@@ -3605,6 +3605,15 @@ class WorkflowRunSummary(BaseModel):
     #: closed or compensating — from `workflow_run_actions.standing`, so no client keeps its
     #: own list of run states.
     standing: Optional[str] = None
+    #: 'test' for a test run (services/workflow_test_runs): pinned steps did not execute, and a
+    #: step that could spend was refused unless named in `allow_live`. Left out of run lists
+    #: unless asked for.
+    mode: str = "normal"
+    #: {step_id: {output, source}} — what each pinned step was settled with, and where from.
+    pins: dict[str, Any] = Field(default_factory=dict)
+    allow_live: list[str] = Field(default_factory=list)
+    #: {run_id, from_step} when this run was started from a step of an earlier run.
+    rerun_of: Optional[dict[str, Any]] = None
 
 
 class WorkflowRunDetail(WorkflowRunSummary):

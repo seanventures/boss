@@ -2940,8 +2940,16 @@ def start_run(
     parent_run_id: Optional[str] = None,
     adopted: Optional[dict[str, Any]] = None,
     precheck_record: Optional[dict[str, Any]] = None,
+    mode: str = "normal",
+    pins: Optional[dict[str, Any]] = None,
+    allow_live: Optional[list[str]] = None,
+    rerun_of: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """Start a run.
+
+    `mode` 'test', `pins`, `allow_live` and `rerun_of` are set only through
+    workflow_test_runs (start_test_run / rerun_from_step), which validates them against the
+    version's spec; see that module for what they do. A normal run has none of them.
 
     `precheck_record` is what the start door's pre-check recorded (workflow_precheck.gate_start:
     the will_fail checks started anyway, the steps skipped, who and why). It is written under
@@ -2959,6 +2967,8 @@ def start_run(
     (`workflow_run_actions.research_to_adopt`, or `start_project_run`, true by construction).
     """
     dedupe_key = _clean_text(dedupe_key, "dedupe_key")
+    if mode not in ("normal", "test"):
+        raise WorkflowValidationError(f"mode must be 'normal' or 'test', not {mode!r}")
     # Identity is never a caller's to set (IDENTITY.md §2): `_identity*` keys are dropped here.
     input_data = {k: v for k, v in (input_data or {}).items()
                   if not str(k).startswith(ADOPT_PREFIX) and not str(k).startswith("_identity")
@@ -3061,13 +3071,16 @@ def start_run(
                 id, project_id, workflow_definition_id, workflow_version_id,
                 workflow_mapping_id, parent_run_id, root_run_id, actor, status,
                 input, context, policy_snapshot, dedupe_key,
-                on_behalf_of, grant_id, authority_org_id, authority_run_id
+                on_behalf_of, grant_id, authority_org_id, authority_run_id,
+                mode, pins, allow_live, rerun_of
             ) VALUES (
                 :id, :project_id, :definition_id, :version_id, :mapping_id,
                 :parent_run_id, :root_run_id, :actor, 'validating',
                 CAST(:input AS JSONB), CAST(:context AS JSONB),
                 CAST(:policy AS JSONB), :dedupe_key,
-                :on_behalf_of, :grant_id, :authority_org_id, :authority_run_id
+                :on_behalf_of, :grant_id, :authority_org_id, :authority_run_id,
+                :mode, CAST(:pins AS JSONB), CAST(:allow_live AS JSONB),
+                CAST(:rerun_of AS JSONB)
             )
             ON CONFLICT DO NOTHING
             """
@@ -3085,6 +3098,10 @@ def start_run(
             "context": json.dumps({}),
             "policy": json.dumps(policy_snapshot or {}),
             "dedupe_key": dedupe_key,
+            "mode": mode,
+            "pins": json.dumps(pins or {}),
+            "allow_live": json.dumps(list(allow_live or [])),
+            "rerun_of": json.dumps(rerun_of) if rerun_of else None,
             **_consent.authority_columns(identity_acting),
         },
     )
@@ -3141,6 +3158,10 @@ def start_run(
             "workflow_mapping_id": mapping_id,
             "dedupe_key": dedupe_key,
             "parent_run_id": parent_run_id,
+            "mode": mode,
+            **({"pinned_steps": sorted(pins)} if pins else {}),
+            **({"allow_live": list(allow_live)} if allow_live else {}),
+            **({"rerun_of": rerun_of} if rerun_of else {}),
         },
     )
     _activate_step(connection, run_id, spec["entry_step"], 0)
@@ -3365,6 +3386,11 @@ def _serialize_run(row: Any) -> dict[str, Any]:
         "policy_snapshot": _json(row["policy_snapshot"], {}),
         "current_frontier": _json(row["current_frontier"], []),
         "dedupe_key": row.get("dedupe_key"),
+        # TEST RUNS AND RE-RUNS (workflow_test_runs): every run says which it is.
+        "mode": row.get("mode") or "normal",
+        "pins": _json(row.get("pins"), {}),
+        "allow_live": _json(row.get("allow_live"), []),
+        "rerun_of": _json(row.get("rerun_of"), None),
         "blocked_reason": row.get("blocked_reason"),
         "error": row.get("error"),
         "paused_at": _iso(row.get("paused_at")),
@@ -3464,10 +3490,18 @@ def list_runs(
     *,
     status: Optional[str] = None,
     limit: int = 50,
+    include_test: bool = False,
+    only_test: bool = False,
 ) -> list[dict[str, Any]]:
+    """Runs of this project, newest first. Test runs (workflow_test_runs) are left out unless
+    `include_test`; `only_test` lists nothing else."""
     if limit < 1 or limit > 200:
         raise WorkflowValidationError("limit must be between 1 and 200.")
     status_clause = "AND r.status=:status" if status else ""
+    if only_test:
+        status_clause += " AND r.mode = 'test'"
+    elif not include_test:
+        status_clause += " AND r.mode <> 'test'"
     params: dict[str, Any] = {"project_id": project_id, "limit": limit}
     if status:
         params["status"] = status
@@ -3658,6 +3692,13 @@ def _activate_step(
         )
         row = _step_row(connection, run_id, step_id, iteration)
     if row["status"] != "pending":
+        return
+    # A PINNED STEP (a test run's or a re-run's) is settled with its pinned output instead of
+    # running; a test run refuses a step that could spend or reach outside BOSS. Either way the
+    # step never becomes `ready`, so no runner can claim it (workflow_test_runs).
+    from . import workflow_test_runs
+
+    if workflow_test_runs.on_activate(connection, run, template, row):
         return
     connection.execute(
         text(
@@ -4853,6 +4894,16 @@ def claim_step(
     ).mappings().first()
     if not row:
         return None
+    # A TEST RUN NEVER LEASES WORK IT MAY NOT DO. Activation already refuses such a step; this
+    # is the second lock on the same door, for a step put back by Try again or a re-check.
+    from . import workflow_test_runs
+
+    if workflow_test_runs.is_test(run):
+        template = _step_map(_run_spec(connection, run_id)).get(str(row["step_id"])) or {}
+        why = workflow_test_runs.refusal_for(run, template)
+        if why:
+            workflow_test_runs.refuse(connection, run, row, why)
+            return None
     reclaimed = row["status"] in {"leased", "running"}
     if reclaimed:
         _emit_step_event(
@@ -5158,6 +5209,15 @@ def retry_failed_step(
     from .workflow_run_actions import require
 
     require(connection, project_id, run_id, "retry_step", step_id=step_id)
+    from . import workflow_test_runs
+
+    why = (workflow_test_runs.refusal_for(
+        run, _step_map(_run_spec(connection, run_id)).get(str(step_id)) or {})
+        if workflow_test_runs.is_test(run) else None)
+    if why:
+        raise WorkflowConflictError(
+            f"this is a test run, and step '{step_id}' {why}. Start a new test run that pins "
+            "its output or allows it to run live.")
     # A RETRY RUNS UNDER AUTHORITY THAT COVERS IT. When the grant recorded on the run no longer
     # covers what the run needs (an agent it never named, a narrowed grant), the person is asked
     # again (409 consent_required, the start's own sheet) and the covering grant is recorded on

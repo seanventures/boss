@@ -4319,6 +4319,20 @@ CREATE INDEX IF NOT EXISTS idx_workflow_steps_run
 -- past it, the attempt is ended as failed with reason `step_timeout` and counts as an attempt.
 -- NULL for a step with no timeout, which is every step written before this column existed.
 ALTER TABLE workflow_step_runs ADD COLUMN IF NOT EXISTS attempt_timeout_at TIMESTAMPTZ;
+-- TEST RUNS AND RE-RUNS (#512, services/workflow_test_runs.py). `mode` 'test' marks a run
+-- started as a test: its `pins` ({step_id: {output, source}}) stand in for those steps' work,
+-- and a step that could spend or reach outside BOSS is refused unless pinned or named in
+-- `allow_live`. Test runs are left out of run lists and scorecards unless asked for.
+-- `rerun_of` ({run_id, from_step}) marks a run started from a step of an earlier run, whose
+-- earlier steps are pinned to what that run produced. Every run before these columns is
+-- 'normal' with no pins.
+ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS mode TEXT NOT NULL DEFAULT 'normal'
+  CHECK (mode IN ('normal', 'test'));
+ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS pins JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS allow_live JSONB NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS rerun_of JSONB;
+CREATE INDEX IF NOT EXISTS idx_workflow_runs_project_mode
+  ON workflow_runs(project_id, mode, updated_at DESC);
 
 -- A STEP WHOSE WORK FAILED WAS NEVER SUCCEEDED. Until 2026-10-02 the runner recorded research
 -- that died as status 'succeeded' with output.status 'failed_continued' (boss-1: research failed,

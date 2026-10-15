@@ -504,12 +504,13 @@ _WF_TERMINAL = {"completed": "completed", "failed": "failed", "deadlettered": "f
 def _read_workflow_run(connection, run_id: str) -> Optional[dict[str, Any]]:
     r = connection.execute(text("""
         SELECT wr.id, wr.project_id, wr.status, wr.created_at, wr.updated_at, wr.completed_at,
-               wd.workflow_key, wd.namespace, wd.is_catalogue, wv.version
+               wr.mode, wd.workflow_key, wd.namespace, wd.is_catalogue, wv.version
         FROM workflow_runs wr
         JOIN workflow_definitions wd ON wd.id = wr.workflow_definition_id
         JOIN workflow_versions wv ON wv.id = wr.workflow_version_id
         WHERE wr.id = :id"""), {"id": run_id}).mappings().first()
-    if not r or r["namespace"] != "product":
+    # A TEST RUN (workflow_test_runs) is not production work: it is never scored.
+    if not r or r["namespace"] != "product" or r.get("mode") == "test":
         return None
     terminal = _WF_TERMINAL.get(str(r["status"]))
     if not terminal:
@@ -568,13 +569,13 @@ def _read_step(connection, step_run_id: str) -> Optional[dict[str, Any]]:
     s = connection.execute(text("""
         SELECT s.id, s.project_id, s.workflow_run_id, s.step_id, s.step_kind, s.status, s.attempt,
                s.max_attempts, s.output, s.started_at, s.completed_at, s.created_at, s.updated_at,
-               wd.workflow_key, wd.namespace, wd.is_catalogue, wv.version
+               wr.mode, wd.workflow_key, wd.namespace, wd.is_catalogue, wv.version
         FROM workflow_step_runs s
         JOIN workflow_runs wr ON wr.id = s.workflow_run_id
         JOIN workflow_definitions wd ON wd.id = wr.workflow_definition_id
         JOIN workflow_versions wv ON wv.id = wr.workflow_version_id
         WHERE s.id = :id"""), {"id": step_run_id}).mappings().first()
-    if not s or s["namespace"] != "product":
+    if not s or s["namespace"] != "product" or s.get("mode") == "test":
         return None
     terminal = _STEP_TERMINAL.get(str(s["status"]))
     if not terminal:
@@ -927,12 +928,13 @@ _MISSING = {
               "ORDER BY r.updated_at DESC LIMIT :n"),
     "workflow_run": ("SELECT r.id FROM workflow_runs r JOIN workflow_definitions d "
                      "ON d.id = r.workflow_definition_id WHERE d.namespace = 'product' AND "
-                     "r.status IN ('completed','failed','deadlettered','cancelled','compensated') "
+                     "r.mode <> 'test' AND r.status IN ('completed','failed','deadlettered','cancelled','compensated') "
                      "AND NOT EXISTS (SELECT 1 FROM run_scorecards s WHERE s.unit_kind = "
                      "'workflow_run' AND s.unit_id = r.id) ORDER BY r.updated_at DESC LIMIT :n"),
     "step": ("SELECT s.id FROM workflow_step_runs s JOIN workflow_runs r ON r.id = s.workflow_run_id "
              "JOIN workflow_definitions d ON d.id = r.workflow_definition_id WHERE d.namespace = "
-             "'product' AND s.status IN ('succeeded','failed','deadlettered','cancelled') "
+             "'product' AND r.mode <> 'test' "
+             "AND s.status IN ('succeeded','failed','deadlettered','cancelled') "
              "AND NOT (s.status = 'cancelled' AND s.started_at IS NULL) AND NOT "
              "EXISTS (SELECT 1 FROM run_scorecards c WHERE c.unit_kind = 'step' AND c.unit_id = "
              "s.id) ORDER BY s.updated_at DESC LIMIT :n"),
