@@ -60,19 +60,23 @@ def _capability(step: dict[str, Any]) -> str:
 
 
 def _targets(step: dict[str, Any]) -> list[str]:
-    """Every step this one can lead to (the same edges as workflows._targets)."""
-    out: list[str] = []
-    nxt = step.get("next", [])
-    out.extend([nxt] if isinstance(nxt, str) else [str(t) for t in nxt or []])
-    if step.get("kind") == "condition":
-        out.extend([str(step.get("on_true") or ""), str(step.get("on_false") or "")])
-    elif step.get("kind") == "parallel":
-        out.extend(str(b) for b in step.get("branches") or [])
-        if step.get("join"):
-            out.append(str(step["join"]))
-    elif step.get("kind") == "bounded_loop" and step.get("body"):
-        out.append(str(step["body"]))
-    return [t for t in out if t]
+    """Every step this one can lead to, its error path included: the runtime's own edges
+    (workflows._targets), read from there so the two never drift."""
+    from . import workflows
+
+    return workflows._targets(step)  # noqa: SLF001 — the one definition of a step's edges
+
+
+def _success_targets(step: dict[str, Any]) -> list[str]:
+    """The steps this one leads to when it does NOT fail (workflows._success_targets). Pass 2
+    follows a build that succeeded, so the straight walks below follow these."""
+    from . import workflows
+
+    return workflows._success_targets(step)  # noqa: SLF001
+
+
+def _has_error_path(step: dict[str, Any]) -> bool:
+    return _targets(step) != _success_targets(step)
 
 
 def _straight_on(by_id: dict[str, dict[str, Any]], start: dict[str, Any]) -> list[dict[str, Any]]:
@@ -81,7 +85,7 @@ def _straight_on(by_id: dict[str, dict[str, Any]], start: dict[str, Any]) -> lis
     seen = {str(start.get("id"))}
     current = start
     while True:
-        targets = _targets(current)
+        targets = _success_targets(current)
         if len(targets) != 1 or targets[0] in seen or targets[0] not in by_id:
             return chain
         current = by_id[targets[0]]
@@ -90,13 +94,15 @@ def _straight_on(by_id: dict[str, dict[str, Any]], start: dict[str, Any]) -> lis
 
 
 def _reachable(by_id: dict[str, dict[str, Any]], start_id: str, *,
-               stop_at_builds: bool = False) -> set[str]:
-    """Every step reachable from `start_id`; with `stop_at_builds`, not past another build."""
+               stop_at_builds: bool = False, on_success: bool = False) -> set[str]:
+    """Every step reachable from `start_id`, error paths included; with `stop_at_builds`, not
+    past another build; with `on_success`, only along the edges a step takes when it succeeds."""
+    edges = _success_targets if on_success else _targets
     seen: set[str] = set()
     stack = [start_id]
     while stack:
         sid = stack.pop()
-        for target in _targets(by_id.get(sid) or {}):
+        for target in edges(by_id.get(sid) or {}):
             if target not in seen and target in by_id:
                 seen.add(target)
                 if not (stop_at_builds and _capability(by_id[target]) == BUILD_CAPABILITY):
@@ -133,8 +139,11 @@ def builds_without_more_tests(spec: dict[str, Any]) -> list[str]:
     for step in steps:
         if _capability(step) != BUILD_CAPABILITY or _depth(spec, step) is None:
             continue
+        # Pass 2 follows the build when it succeeds: a More tests only its error path reaches
+        # is not it.
         if not any(_capability(by_id[t]) == MORE_TESTS_CAPABILITY
-                   for t in _reachable(by_id, str(step["id"]), stop_at_builds=True)):
+                   for t in _reachable(by_id, str(step["id"]), stop_at_builds=True,
+                                       on_success=True)):
             missing.append(str(step["id"]))
     return missing
 
@@ -246,8 +255,9 @@ def with_more_tests(spec: Any, *, captains: Optional[dict[str, str]] = None) -> 
 
         # 2. WHAT RUNS ALONGSIDE: the straight steps after pass 1 that neither write the branch
         # nor branch themselves.
-        # A step other paths also lead to (a report several branches end at) is where the
-        # workflow meets again, never part of one build's pass-2 branch.
+        # A step other paths also lead to (a report several branches end at, or a step some
+        # step's error path goes to) is where the workflow meets again, never part of one
+        # build's pass-2 branch.
         entered: dict[str, int] = {}
         for each in steps:
             for target in _targets(each):
@@ -256,12 +266,16 @@ def with_more_tests(spec: Any, *, captains: Optional[dict[str, str]] = None) -> 
         after: list[str] = []
         current = anchor
         while True:
-            targets = _targets(current)
+            targets = _success_targets(current)
             if len(targets) != 1 or targets[0] not in by_id:
                 break
             following = by_id[targets[0]]
+            # A step with an error path may leave along it and never reach the join, so it
+            # stays out of the branch the join waits for (it runs after pass 2 instead, where
+            # its error path works as drawn).
             if _capability(following) in _WRITES_BRANCH or following.get("kind") in _CONTROL \
-                    or len(_targets(following)) > 1 or entered.get(str(following["id"]), 0) > 1:
+                    or len(_targets(following)) > 1 or _has_error_path(following) \
+                    or entered.get(str(following["id"]), 0) > 1:
                 after = [str(following["id"])]
                 break
             alongside.append(following)

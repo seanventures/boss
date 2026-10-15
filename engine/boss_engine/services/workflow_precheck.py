@@ -289,9 +289,10 @@ def _steps(spec: Mapping[str, Any]) -> list[dict[str, Any]]:
 
 
 def _targets(step: Mapping[str, Any]) -> list[str]:
-    from . import two_pass
+    """Every step this one can lead to, its error path included: the runtime's own edges."""
+    from . import workflows
 
-    return two_pass._targets(dict(step))  # noqa: SLF001 — the runtime's own edges
+    return workflows._targets(dict(step))  # noqa: SLF001 — the runtime's own edges
 
 
 def _reachable(by_id: Mapping[str, dict], start: str, stop: Optional[str] = None) -> set[str]:
