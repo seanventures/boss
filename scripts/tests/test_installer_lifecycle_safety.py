@@ -47,7 +47,7 @@ if args[-3:] == ['config', '--format', 'json']:
         print('never-render-this-secret', file=sys.stderr)
         sys.exit(27)
     print(pathlib.Path(os.environ['CONFIG']).read_text())
-elif len(args) >= 2 and args[-2] == 'build':
+elif 'build' in args:
     service = args[-1]
     active = pathlib.Path(os.environ['TRACE'] + '.active')
     active.mkdir()  # A second build cannot start until the first load finishes.
@@ -69,7 +69,10 @@ else:
         "set -euo pipefail\nui_info() { printf '%s\\n' \"$*\"; }\n"
         "die() { printf '%s\\n' \"$*\" >&2; exit 1; }\n"
         f"COMPOSE=({shlex.quote(str(fake))}); COMPOSE_PROFILES={shlex.quote(profiles)}\n"
-        "ENV_FILE='private path/.env'\n" + _installer_block("serial image builds")
+        "ENV_FILE='private path/.env'\n"
+        # What the build-metadata block (just above in install.sh) exports.
+        "BOSS_SOURCE_SHA=0123456789abcdef0123456789abcdef01234567 BOSS_BUILT_AT=2026-10-15T00:00:00Z\n"
+        + _installer_block("serial image builds")
         + "\nprintf 'reached start phase\\n'\n"
     )
     trace = tmp_path / "trace"
@@ -90,10 +93,13 @@ def test_installer_finishes_each_selected_image_before_starting_another(tmp_path
     expected = ["api", "worker", "mcp-tools", "egress", *optional]
     events = [call for call in calls if call[0] in {"start", "loaded"}]
     assert events == [event for service in expected for event in (["start", service], ["loaded", service])]
-    builds = [call for call in calls if len(call) > 2 and call[-2] == "build"]
+    builds = [call for call in calls if "build" in call]
     assert [call[-1] for call in builds] == expected
     prefix = ["-f", "scripts/install/community-compose.yml", "--env-file", "private path/.env", *profiles.split()]
-    assert all(call[:-2] == prefix for call in builds)
+    # Each build carries the observed source revision and build time as build arguments.
+    metadata = ["--build-arg", "BOSS_SOURCE_SHA=0123456789abcdef0123456789abcdef01234567",
+                "--build-arg", "BOSS_BUILT_AT=2026-10-15T00:00:00Z"]
+    assert all(call[:-1] == [*prefix, "build", *metadata] for call in builds)
     assert "never-render-this-secret" not in result.stdout + result.stderr
     assert "reached start phase" in result.stdout
 
