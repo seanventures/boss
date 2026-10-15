@@ -359,9 +359,13 @@ def test_register_from_the_roster_installs_the_shipped_agent(client, engine):
         assert not seed_exclusions.is_excluded(c, PROJECT, "role_spec", "video_editor")
         skills = set(c.execute(text("SELECT skill_id FROM role_skills WHERE project_id = :p "
                                     "AND role_key = 'video_editor'"), {"p": PROJECT}).scalars())
+    from boss_engine.services.agent_baseline import BASELINE_SKILLS
+
+    # Its pack's skills, and the baseline every agent holds on top (agent_baseline).
     wanted = {s for s in SpecPackServiceSpec("video_editor")["permissions"]["allowed_skills"]
-              if "*" not in s}
+              if "*" not in s} | set(BASELINE_SKILLS)
     assert skills and skills <= wanted
+    assert set(BASELINE_SKILLS) <= skills
 
 
 def test_register_with_something_written_is_the_operators_agent(client, engine):

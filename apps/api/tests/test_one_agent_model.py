@@ -33,8 +33,11 @@ def _key(prefix: str = "agent") -> str:
 
 
 def _builtin_skills(client, n: int = 2) -> list[str]:
+    from boss_engine.services.agent_baseline import BASELINE_SKILLS
+
     items = client.get("/v1/skills", params={"project_id": PROJECT}).json()["items"]
-    ids = [i["id"] for i in items]
+    # Skills an agent does not already hold from birth: giving one is then a visible change.
+    ids = [i["id"] for i in items if i["id"] not in BASELINE_SKILLS]
     assert len(ids) >= n, "this project has too few built-in skills; the fixture changed"
     return ids[:n]
 
@@ -53,9 +56,16 @@ def _create(client, **body):
 
 
 def _holds(client, role_key: str) -> tuple[set[str], set[str]]:
+    """What the agent holds BESIDES the baseline every agent is born with (agent_baseline:
+    boss.fundamentals, repo.read, boss.propose_fix) — which this asserts it does hold."""
+    from boss_engine.services.agent_baseline import BASELINE_SKILLS
+
     detail = client.get(f"/v1/console/v2/agents/{role_key}",
                         params={"project_id": PROJECT}).json()
-    return ({s["skill_id"] for s in detail["skills"]["holds"]},
+    skills = {s["skill_id"] for s in detail["skills"]["holds"]}
+    missing = set(BASELINE_SKILLS) - skills
+    assert not missing, f"{role_key} lacks the baseline every agent holds: {sorted(missing)}"
+    return (skills - set(BASELINE_SKILLS),
             {m["mcp_server_id"] for m in detail["mcp"]["holds"]})
 
 

@@ -1412,7 +1412,14 @@ def update_agent(
 
         held = _held_skill_ids(connection, project_id, key)
         if desired_skills is not None:
-            for skill in sorted(held - desired_skills - added_skills):
+            # THE BASELINE IS NOT PART OF A REPLACE (agent_baseline.BASELINE_SKILLS). Replacing an
+            # agent's skills sets its OWN skills; a list that simply did not name the baseline
+            # would otherwise unassign it, and unassigning records an exclusion, so the agent
+            # would lose BOSS's fundamentals for good. Taking one off is the explicit remove
+            # (unassign_skill_from_role), recorded with who did it.
+            from .agent_baseline import BASELINE_SKILLS
+
+            for skill in sorted(held - desired_skills - added_skills - set(BASELINE_SKILLS)):
                 unassign_skill_from_role(connection, project_id=project_id, actor=actor,
                                          role_key=key, skill_id=skill)
             to_add = (desired_skills | added_skills) - held
