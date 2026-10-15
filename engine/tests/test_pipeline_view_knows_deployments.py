@@ -49,7 +49,10 @@ def test_it_picks_the_most_recent_deployment_per_target():
 
 
 def test_the_card_falls_back_to_the_targets_own_history():
-    from pathlib import Path
-    src = Path("apps/web/app/delivery-ui.tsx").read_text()
-    assert "stage?.deploy_status ?? last?.status" in src
-    assert "last_deployment" in src
+    """Every target carries its own newest deployment (`last_deployment`), so a card with no
+    pipeline stage still shows how its last deploy went. The console's old delivery card that
+    read it (apps/web/app/delivery-ui.tsx, `stage?.deploy_status ?? last?.status`) was removed
+    with the v1 console; the server half is what is left to hold."""
+    src = inspect.getsource(delivery_pipeline.pipeline_view)
+    assert '"last_deployment": latest.get(t["id"])' in src
+    assert "d.status AS deploy_status" in src
