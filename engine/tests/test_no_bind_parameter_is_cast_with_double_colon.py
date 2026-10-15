@@ -14,6 +14,20 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 _BIND_CAST = re.compile(r"(?<![:\w]):[a-z_][a-z0-9_]*::[a-z]", re.IGNORECASE)
+#: Prose that QUOTES the mistake to explain it (`:s::text` in a docstring) is not SQL: SQL text
+#: never holds a backtick, so a backticked span is dropped before the line is read.
+_QUOTED = re.compile(r"`[^`]*`")
+
+
+def _casts(line: str) -> bool:
+    return bool(_BIND_CAST.search(_QUOTED.sub("", line)))
+
+
+def test_the_guard_reads_sql_and_skips_prose_that_quotes_the_mistake():
+    assert _casts("    \"UPDATE t SET x = to_jsonb(:s::text) WHERE id = :id\"")
+    assert _casts("text('SELECT :attempt::int')")
+    assert not _casts("    The cast is CAST(:s AS text), never `:s::text`: a text clause ...")
+    assert not _casts("    \"SELECT CAST(:s AS text), x::jsonb, '{}'::jsonb\"")
 
 
 def test_no_sql_text_casts_a_bind_parameter_with_double_colon():
@@ -24,6 +38,6 @@ def test_no_sql_text_casts_a_bind_parameter_with_double_colon():
                                      .splitlines(), 1):
                 if line.lstrip().startswith("#"):
                     continue
-                if _BIND_CAST.search(line):
+                if _casts(line):
                     found.append(f"{path.relative_to(ROOT)}:{n}: {line.strip()[:120]}")
     assert not found, "write CAST(:name AS type), not :name::type:\n" + "\n".join(found)
