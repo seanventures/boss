@@ -84,6 +84,7 @@ export const WRITE_HELPERS: Readonly<Record<string, WriteGate | readonly Permiss
   "lib/workflow-api.ts#renameWorkflow": "workflow:create",        // PATCH /v1/delivery-workflows/{id}
   "lib/workflow-api.ts#deleteWorkflow": "workflow:delete",        // DELETE /v1/delivery-workflows/{id}
   "lib/workflow-api.ts#draftFromDescription": "workflow:create",  // POST /v1/delivery-workflows/draft
+  "lib/workflow-api.ts#startTestRun": "workflow_run:start",       // POST /v1/delivery-workflows/test-runs
 
   // lib/hardware.ts — Infra › hardware places
   "lib/hardware.ts#registerLocalPlace": "host:manage",            // POST /v1/hardware/places/local
@@ -118,6 +119,8 @@ export const WRITE_OPS: Readonly<Record<string, Readonly<Record<string, WriteGat
     retry_step: "workflow_run:control", skip_step: "workflow_run:control", recheck: "workflow_run:control",
     set_input: "workflow_run:control", prepare_target: "deployment_target:manage",
     start_preview: "preview:manage", stop: "workflow_run:control",
+    // A NEW run from one step of a finished one (#512): a start, not a control of the old run.
+    rerun_from: "workflow_run:start",
   },
   // lib/govern.ts `governWrite(op, …)` → /api/govern → lib/govern-ops.ts (the two previews only read)
   "lib/govern.ts#governWrite": {

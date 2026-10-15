@@ -385,6 +385,23 @@ export async function publishSpec(projectId: string, req: PublishRequest): Promi
   };
 }
 
+/**
+ * Run the SAVED workflow as a test (#512): pinned steps return their pinned output instead of
+ * running, steps in `allow_live` run for real under every approval and budget rule, and any
+ * other step that could spend is refused by the server. Returns the new run's id.
+ */
+export async function startTestRun(projectId: string, req: {
+  workflow_key: string; version?: number | null; input?: Record<string, unknown>;
+  pins: Record<string, Record<string, unknown>>; allow_live: string[];
+}): Promise<{ id: string; status: string }> {
+  const body = await send("POST", {
+    action: "test_run", project_id: projectId, workflow_key: req.workflow_key,
+    ...(req.version ? { version: req.version } : {}),
+    input: req.input ?? {}, pins: req.pins, allow_live: req.allow_live,
+  });
+  return { id: str(body.id), status: str(body.status) };
+}
+
 /** Name and description change in place: no new version. */
 export async function renameWorkflow(projectId: string, definitionId: string,
                                      patch: { name?: string; description?: string }): Promise<void> {

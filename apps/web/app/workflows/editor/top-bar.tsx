@@ -64,6 +64,8 @@ export function TopBar(p: {
   describeBlocked?: string | null;
   onCheck(): void; checking: boolean; checkBlocked?: string | null;
   onStart(): void; startBlocked?: string | null; startRef: RefObject<HTMLButtonElement | null>;
+  /** Run the saved version as a test with pinned step outputs (#512). */
+  onTestRun?(): void; testRunBlocked?: string | null;
   onSave(): void; saveLabel: string; saveBlocked?: string | null; saveTip: string; saving: boolean;
   saveRef: RefObject<HTMLButtonElement | null>;
   onDuplicate(): void; duplicateBlocked?: string | null; onUseFor(): void; onChanges(): void; onDiscard(): void; onDelete(): void;
@@ -177,6 +179,13 @@ export function TopBar(p: {
                  tip="Start a run of this workflow" testId="wf-start" onClick={p.onStart}>
               Start<Play size={12} weight="fill" aria-hidden />
             </Btn>
+            {p.onTestRun ? (
+              <Btn className="wf-btn wf-btn-secondary" blocked={p.testRunBlocked}
+                   tip="Run it as a test: pin step outputs, nothing spends unless you allow it"
+                   testId="wf-test-run-open" onClick={p.onTestRun}>
+                Test run
+              </Btn>
+            ) : null}
             <Btn className="wf-btn wf-btn-primary" buttonRef={p.saveRef} blocked={p.saveBlocked} tip={p.saveTip}
                  onClick={p.onSave} testId="wf-save">{p.saving ? "Saving…" : p.saveLabel}</Btn>
             <Btn className="wf-icon-btn" buttonRef={menuRef} label="More" tip="More" onClick={() => setPop("menu")}

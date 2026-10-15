@@ -25,6 +25,9 @@ const VIEWS: Record<string, (project: string) => string> = {
   // which also uses the fields the list gained for it (copies, run count, last run).
   library: (p) => `/v1/delivery-workflows?project_id=${encodeURIComponent(p)}`,
   runs: (p) => `/v1/delivery-workflows/runs?project_id=${encodeURIComponent(p)}`,
+  // The same list WITH test runs, which the ordinary one leaves out (#512).
+  runs_with_tests: (p) =>
+    `/v1/delivery-workflows/runs?project_id=${encodeURIComponent(p)}&include_test=true`,
   schedules: (p) =>
     `/v1/delivery-workflows/schedules?project_id=${encodeURIComponent(p)}`,
   // Where a build can go. The registry has always existed and nothing over HTTP could read it,
@@ -161,6 +164,9 @@ const ACTIONS: Record<string, string> = {
   fork: "/v1/delivery-workflows/fork",
   save: "/v1/delivery-workflows/save",
   start: "/v1/delivery-workflows/start",
+  // A TEST RUN (#512): pinned steps do not run; anything that could spend is refused unless
+  // allowed live. Its own endpoint, so a test can never be a normal start with a flag lost.
+  test_run: "/v1/delivery-workflows/test-runs",
   advance: "/v1/delivery-workflows/run-capabilities",
   define_step: "/v1/delivery-workflows/custom-steps",
   schedule: "/v1/delivery-workflows/schedules",
@@ -247,6 +253,8 @@ const RUN_ACTIONS: Record<string, (runId: string) => string> = {
   // not to a step: an operator arriving at a stalled workflow is asking "is this still true?"
   // of the whole thing, and does not know which step to point at.
   recheck: (id) => `/v1/delivery-workflows/runs/${encodeURIComponent(id)}/recheck`,
+  // RUN AGAIN FROM HERE (#512): a NEW run from one step, earlier steps pinned to this run's.
+  rerun_from: (id) => `/v1/delivery-workflows/runs/${encodeURIComponent(id)}/rerun`,
   set_input: (id) => `/v1/delivery-workflows/runs/${encodeURIComponent(id)}/input`,
   prepare_target: (id) =>
     `/v1/delivery-workflows/runs/${encodeURIComponent(id)}/deploy-target`,

@@ -41,6 +41,7 @@ import { useSaveFlow } from "./save/use-save-flow";
 import { StartsWith } from "./starts-with";
 import { SummaryChips } from "./summary-chips";
 import { NO_DELETE_TIP, TopBar } from "./top-bar";
+import { TestRunPanel } from "./test-run-panel";
 import { useCan } from "../../../components/identity/identity-provider";
 
 const BLOCK_REMOVED: Record<ControlBlock, string> = {
@@ -120,6 +121,8 @@ export function WorkflowEditor({ projectId, workflowKey, onBack, onStart, actor,
   const [sheet, setSheet] = useState(false);
   const [note, setNote] = useState<Note | null>(null);
   const [describeBlocked, setDescribeBlocked] = useState<string | null>(null);
+  // The Test run panel (#512): pins and live steps for a test of the saved version.
+  const [testing, setTesting] = useState(false);
 
   /* ── Save, check, start (the save flow's) ── */
   const keyRef = useRef(key);
@@ -482,6 +485,9 @@ export function WorkflowEditor({ projectId, workflowKey, onBack, onStart, actor,
               onCheck={() => void saveFlow.check()} checking={saveFlow.checking}
               checkBlocked={noSteps ? "Add a step first" : null}
               onStart={saveFlow.start} startRef={saveFlow.startRef}
+              onTestRun={() => setTesting(true)}
+              testRunBlocked={!meta.workflow_key || !meta.definition_id ? "Save the workflow first"
+                : noSteps ? "Add a step first" : null}
               startBlocked={readOnly ? `Viewing v${meta.readOnlyVersion}` : noSteps ? "Add a step first" : null}
               onSave={() => void saveFlow.save()} saveLabel={saveFlow.label} saveRef={saveFlow.saveRef}
               saveBlocked={!publishGate.allowed ? publishGate.reason : saveFlow.canSave ? null : saveFlow.saving ? "Saving…" : saveFlow.saveTip}
@@ -492,6 +498,16 @@ export function WorkflowEditor({ projectId, workflowKey, onBack, onStart, actor,
               onDelete={() => void deleteThis()}
               deleteBlocked={!deleteGate.allowed ? deleteGate.reason : meta.is_catalogue ? NO_DELETE_TIP : !meta.definition_id ? "Not saved yet" : null} />
       {saveFlow.popover}
+      {testing && meta.workflow_key ? (
+        <TestRunPanel projectId={projectId} workflowKey={meta.workflow_key}
+                      version={meta.readOnlyVersion ?? meta.version ?? null}
+                      steps={(state.loaded ?? spec).steps} capabilities={palette?.capabilities ?? []}
+                      dirty={dirty} onClose={() => setTesting(false)}
+                      onStarted={(runId) => {
+                        setTesting(false);
+                        toast("success", `Test run ${runId} started. It is listed under test runs.`);
+                      }} />
+      ) : null}
 
       {restore ? (
         <div className="wf-notice" role="status" data-testid="wf-restore-offer">
