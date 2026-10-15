@@ -32,6 +32,11 @@ from .test_workflow_capability_runner import (  # noqa: F401 - fixtures used by 
 
 WORKER = "worker-t"
 
+
+def OPEN(plan):
+    """The start door, passing: what a ready, clean start returns (no pre-check record)."""
+    return None
+
 CHAIN = [
     {"id": "a", "kind": "task", "next": ["b"]},
     {"id": "b", "kind": "task", "next": ["c"]},
@@ -227,7 +232,7 @@ def test_a_rerun_copies_earlier_outputs_with_provenance_and_runs_from_the_step(e
             text("SELECT * FROM workflow_step_runs WHERE workflow_run_id=:r"),
             {"r": source}).mappings()}
         rerun = tr.rerun_from_step(c, project_id=project, run_id=source, from_step="c",
-                                   actor="test")
+                                   actor="test", door=OPEN)
         assert rerun["rerun_of"] == {"run_id": source, "from_step": "c"}
         assert rerun["mode"] == "normal"
         steps = _steps(c, rerun["id"])
@@ -248,7 +253,7 @@ def test_a_rerun_from_a_middle_step_runs_it_and_everything_after(eng, project):
     with eng.begin() as c:
         source = _failed_at_c(c, project)
         rerun = tr.rerun_from_step(c, project_id=project, run_id=source, from_step="b",
-                                   actor="test")
+                                   actor="test", door=OPEN)
         steps = _steps(c, rerun["id"])
         assert steps["a"]["status"] == "succeeded" and steps["b"]["status"] == "ready"
         assert set(rerun["pins"]) == {"a"}
@@ -266,7 +271,7 @@ def test_a_rerun_is_refused_when_the_step_depends_on_one_that_did_not_complete(e
                                actor="test")
         # From the failed step itself is fine: nothing before it is missing.
         assert tr.rerun_from_step(c, project_id=project, run_id=run_id, from_step="a",
-                                  actor="test")["pins"] == {}
+                                  actor="test", door=OPEN)["pins"] == {}
 
 
 def test_a_rerun_is_refused_while_the_source_is_still_running(eng, project):
@@ -324,3 +329,68 @@ def test_a_test_run_is_not_scored_as_production_work(eng, project):
         step_b = c.execute(text("SELECT id FROM workflow_step_runs WHERE workflow_run_id=:r "
                                 "AND step_id='b'"), {"r": test}).scalar()
         assert scorecards._read_step(c, step_b) is None
+
+
+# ── a normal re-run goes through the start door ───────────────────────────────────────────
+
+
+def _runs_of(c, project):
+    return c.execute(text("SELECT count(*) FROM workflow_runs WHERE project_id=:p"),
+                     {"p": project}).scalar()
+
+
+def test_a_normal_rerun_without_the_start_door_is_refused_and_starts_nothing(eng, project):
+    with eng.begin() as c:
+        source = _failed_at_c(c, project)
+        before = _runs_of(c, project)
+        with pytest.raises(workflows.WorkflowConflictError, match="start door"):
+            tr.rerun_from_step(c, project_id=project, run_id=source, from_step="c",
+                               actor="test")
+        assert _runs_of(c, project) == before
+
+
+def test_a_normal_rerun_the_door_refuses_starts_nothing_and_keeps_the_doors_words(
+        eng, project):
+    class NotReady(Exception):
+        pass
+
+    seen = []
+
+    def refusing(plan):
+        seen.append(plan)
+        raise NotReady("This workflow cannot run here yet: connect a deployment host.")
+
+    with eng.begin() as c:
+        source = _failed_at_c(c, project)
+        before = _runs_of(c, project)
+        with pytest.raises(NotReady, match="cannot run here yet: connect a deployment host"):
+            tr.rerun_from_step(c, project_id=project, run_id=source, from_step="c",
+                               actor="test", door=refusing)
+        assert _runs_of(c, project) == before
+        assert not _events(c, source, tr.RERUN_EVENT)
+        version = _run(c, source)["workflow_version_id"]
+        assert seen == [{"version_id": version, "input": {}, "mode": "normal",
+                         "source_run_id": source, "from_step": "c"}]
+
+
+def test_a_normal_rerun_the_door_passes_starts_and_keeps_its_precheck(eng, project):
+    with eng.begin() as c:
+        source = _failed_at_c(c, project)
+        rerun = tr.rerun_from_step(
+            c, project_id=project, run_id=source, from_step="c", actor="test",
+            door=lambda plan: {"will_fail": [], "checked_by": "the door"})
+        assert rerun["input"][workflows.PRECHECK_KEY] == {"will_fail": [],
+                                                          "checked_by": "the door"}
+        assert _steps(c, rerun["id"])["c"]["status"] == "ready"
+
+
+def test_a_test_rerun_keeps_its_own_path_and_never_asks_the_door(eng, project):
+    def never(plan):
+        raise AssertionError("a test re-run does not go through the start door")
+
+    with eng.begin() as c:
+        version = _publish(c, project)
+        source = _test_run(c, project, version, pins={"a": {}, "b": {}, "c": {}})["id"]
+        rerun = tr.rerun_from_step(c, project_id=project, run_id=source, from_step="c",
+                                   actor="test", door=never)
+        assert rerun["mode"] == "test"

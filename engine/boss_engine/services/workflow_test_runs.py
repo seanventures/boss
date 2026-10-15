@@ -35,7 +35,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from typing import Any, Iterable, Mapping, Optional
+from typing import Any, Callable, Iterable, Mapping, Optional
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
@@ -229,8 +229,18 @@ def rerun_from_step(
     from_step: str,
     actor: str,
     dedupe_key: Optional[str] = None,
+    door: Optional[Callable[[dict[str, Any]], Optional[dict[str, Any]]]] = None,
 ) -> dict[str, Any]:
-    """Start a new run that copies what the source run produced before `from_step`."""
+    """Start a new run that copies what the source run produced before `from_step`.
+
+    A NORMAL RE-RUN GOES THROUGH THE START DOOR. Everything after `from_step` runs for real, so
+    a re-run must meet every check a fresh start of the same version would: `door` is that
+    check (the API's readiness and pre-check), called with the plan — version, input, mode —
+    BEFORE anything is written. It raises to refuse, in its own words, and returns the
+    pre-check record to keep on the run. A normal re-run without a door is refused: no caller
+    can start one past the checks by forgetting them. A test re-run keeps the test path: every
+    step that could spend is pinned, refused, or one its test explicitly allowed live.
+    """
     wf = _workflows()
     from_step = str(from_step or "").strip()
     if not from_step:
@@ -286,11 +296,20 @@ def rerun_from_step(
     input_data = {k: v for k, v in (_json(source["input"], {}) or {}).items()
                   if k != wf.PRECHECK_KEY}
     rerun_of = {"run_id": run_id, "from_step": from_step}
+    precheck_record: Optional[dict[str, Any]] = None
+    if mode != TEST_MODE:
+        if door is None:
+            raise wf.WorkflowConflictError(
+                "a re-run that runs for real must pass the start door's checks; none was given")
+        precheck_record = door({"version_id": str(source["workflow_version_id"]),
+                                "input": dict(input_data), "mode": mode,
+                                "source_run_id": run_id, "from_step": from_step})
     run = wf.start_run(
         connection, project_id=project_id, actor=actor, input_data=input_data,
         dedupe_key=dedupe_key or f"rerun:{run_id}:{from_step}:{uuid.uuid4().hex[:12]}",
         workflow_version_id=str(source["workflow_version_id"]),
-        mode=mode, pins=pins, allow_live=allow_live, rerun_of=rerun_of)
+        mode=mode, pins=pins, allow_live=allow_live, rerun_of=rerun_of,
+        precheck_record=precheck_record)
     if not run.get("duplicate"):
         emit_event(connection, project_id, RERUN_EVENT, actor, "workflow_run", run_id,
                    {"new_run_id": run["id"], "from_step": from_step,

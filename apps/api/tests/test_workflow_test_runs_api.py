@@ -111,3 +111,87 @@ def test_neither_door_reaches_another_projects_run(client, engine, workflow_key)
         "project_id": other, "actor": "ceo",
         "workflow_version_id": started["workflow_version_id"]})
     assert test.status_code in (403, 404), test.text
+
+
+# ── a normal re-run goes through the start door ───────────────────────────────────────────
+
+#: A channel BOSS cannot post to is missing on every install (as in
+#: test_a_template_that_cannot_run_here_is_refused_at_start), so the workflow below is not
+#: ready here whatever this database has connected.
+NOWHERE = "slack:#announcements"
+
+
+@pytest.fixture
+def unready_run(engine):
+    """A finished normal run of a workflow that cannot run here now: started past the door (as
+    it could have been while it was ready), its one step failed."""
+    key = f"unready_{uuid4().hex[:10]}"
+    with engine.begin() as c:
+        definition = workflows.create_definition(
+            c, project_id=PROJECT, workflow_key=key, name=key, description=None,
+            actor="ceo", namespace=workflows.PRODUCT_NAMESPACE)
+        version = workflows.publish_version(
+            c, project_id=PROJECT, definition_id=definition["id"], actor="ceo",
+            spec={"entry_step": "tell",
+                  "input_schema": {"properties": {"notify_channel": {"title": "Who to tell"}}},
+                  "steps": [{"id": "tell", "kind": "capability",
+                             "binding": {"capability": "notify",
+                                         "inputs": {"message": "hello",
+                                                    "channel": {"from_input":
+                                                                "notify_channel"}}},
+                             "next": []}]})
+        run = workflows.start_run(
+            c, project_id=PROJECT, actor="ceo", input_data={"notify_channel": NOWHERE},
+            dedupe_key=f"dk_{uuid4().hex[:10]}", workflow_version_id=version["id"])
+        c.execute(text("UPDATE workflow_step_runs SET status='failed', last_error='no' "
+                       "WHERE workflow_run_id=:r"), {"r": run["id"]})
+        c.execute(text("UPDATE workflow_runs SET status='failed' WHERE id=:r"),
+                  {"r": run["id"]})
+    return run["id"]
+
+
+def _reruns_of(engine, run_id):
+    with engine.begin() as c:
+        return c.execute(text("SELECT count(*) FROM workflow_runs "
+                              "WHERE rerun_of->>'run_id' = :r"), {"r": run_id}).scalar()
+
+
+def test_a_normal_rerun_of_a_workflow_no_longer_ready_is_refused_by_the_start_door(
+        client, engine, unready_run):
+    refused = client.post(f"/v1/delivery-workflows/runs/{unready_run}/rerun", json={
+        "project_id": PROJECT, "actor": "ceo", "from_step": "tell"})
+    assert refused.status_code == 409, refused.text
+    detail = refused.json()["detail"]
+    # The door's own words and checklist, exactly as a fresh start is refused.
+    assert "cannot run here yet" in detail["message"]
+    assert [m["key"] for m in detail["readiness"]["missing"]] == [f"channel:{NOWHERE}"]
+    assert _reruns_of(engine, unready_run) == 0
+    # Starting anyway is the operator's choice here too, as at the start door.
+    anyway = client.post(f"/v1/delivery-workflows/runs/{unready_run}/rerun", json={
+        "project_id": PROJECT, "actor": "ceo", "from_step": "tell",
+        "start_anyway": [f"channel:{NOWHERE}"]})
+    assert anyway.status_code == 201, anyway.text
+    assert _reruns_of(engine, unready_run) == 1
+
+
+def test_a_normal_rerun_of_a_ready_workflow_starts(client, engine, workflow_key):
+    with engine.begin() as c:
+        version = c.execute(text(
+            "SELECT d.active_version_id FROM workflow_definitions d "
+            "WHERE d.project_id=:p AND d.workflow_key=:k"),
+            {"p": PROJECT, "k": workflow_key}).scalar()
+        run = workflows.start_run(c, project_id=PROJECT, actor="ceo", input_data={},
+                                  dedupe_key=f"dk_{uuid4().hex[:10]}",
+                                  workflow_version_id=version)
+        c.execute(text("UPDATE workflow_step_runs SET status='succeeded', output='{\"a\": 1}' "
+                       "WHERE workflow_run_id=:r AND step_id='a'"), {"r": run["id"]})
+        c.execute(text("UPDATE workflow_step_runs SET status='failed' "
+                       "WHERE workflow_run_id=:r AND step_id='b'"), {"r": run["id"]})
+        c.execute(text("UPDATE workflow_runs SET status='failed' WHERE id=:r"),
+                  {"r": run["id"]})
+    started = client.post(f"/v1/delivery-workflows/runs/{run['id']}/rerun", json={
+        "project_id": PROJECT, "actor": "ceo", "from_step": "b"})
+    assert started.status_code == 201, started.text
+    body = started.json()
+    assert body["mode"] == "normal" and body["rerun_of"]["from_step"] == "b"
+    assert _steps(engine, body["id"])["b"]["status"] == "ready"

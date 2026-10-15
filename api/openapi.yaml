@@ -63363,6 +63363,30 @@ components:
           - type: string
           - type: 'null'
           title: Dedupe Key
+        start_anyway:
+          items:
+            type: string
+          type: array
+          title: Start Anyway
+        accept:
+          items:
+            type: string
+          type: array
+          title: Accept
+        skip_steps:
+          items: {}
+          type: array
+          title: Skip Steps
+        precheck_reason:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Precheck Reason
+        allow_unsupported_stack:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Allow Unsupported Stack
       type: object
       required:
       - project_id

@@ -56,7 +56,15 @@ run of the same workflow version:
 - It keeps the original run's mode. Running a test run again from a step keeps that test's own
   pins on later steps, and its `allow_live` list.
 
-BOSS refuses a rerun in two cases. The original run must be finished. And every step the chosen
+A rerun of a normal run executes for real from the chosen step, so it goes through the same
+start checks as a fresh start of that version: a deployment target you may use, a stack BOSS
+can build, readiness and the workflow pre-check. If a check refuses, no run starts and the
+refusal is returned in the check's own words, with its checklist. The rerun request takes the
+same answers a start does (`start_anyway`, `accept`, `skip_steps`, `precheck_reason`,
+`allow_unsupported_stack`). Whatever the original run was started anyway past carries over, as
+it does for "Run this workflow again". A rerun of a test run keeps the test rules instead.
+
+BOSS also refuses a rerun in two cases. The original run must be finished. And every step the chosen
 step depends on, meaning the steps that are certain to have finished before it starts, must have
 completed in the original run. Otherwise the refusal names each step that did not complete and
 the state it was in.
@@ -67,7 +75,7 @@ the state it was in.
 |---|---|---|
 | `POST` | `/v1/delivery-workflows/test-runs` | `project_id`, `workflow_key` (and optionally `version`) or `workflow_version_id`, `input`, `pins` (`{step_id: output}`), `allow_live` (`[step_id]`), optional `dedupe_key` |
 | `GET` | `/v1/delivery-workflows/test-runs` | `project_id`, `limit`: the project's test runs |
-| `POST` | `/v1/delivery-workflows/runs/{run_id}/rerun` | `project_id`, `from_step`, optional `dedupe_key` |
+| `POST` | `/v1/delivery-workflows/runs/{run_id}/rerun` | `project_id`, `from_step`, optional `dedupe_key`; for a normal run, the start door's `start_anyway`, `accept`, `skip_steps`, `precheck_reason`, `allow_unsupported_stack` |
 | `GET` | `/v1/delivery-workflows/runs` | `include_test=true` to list test runs too |
 
 Each route is checked against the project named in the request. A run or version from another

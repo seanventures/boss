@@ -51,6 +51,14 @@ class RerunBody(BaseModel):
     from_step: str
     actor: Optional[str] = None
     dedupe_key: Optional[str] = None
+    #: The start door's own answers, as on POST /v1/delivery-workflows/start: what is missing
+    #: and started anyway, the pre-check findings accepted or the steps skipped (with a reason),
+    #: and the unsupported-stack override. A normal re-run is checked exactly as a start is.
+    start_anyway: list[str] = Field(default_factory=list)
+    accept: list[str] = Field(default_factory=list)
+    skip_steps: list[Any] = Field(default_factory=list)
+    precheck_reason: Optional[str] = None
+    allow_unsupported_stack: Optional[bool] = None
 
 
 def _actor(connection, project_id: str, claimed: Optional[str]) -> str:
@@ -137,9 +145,55 @@ def rerun_from_step(run_id: str, payload: RerunBody) -> dict:
     not complete here."""
     with begin(get_engine()) as connection:
         actor = _actor(connection, payload.project_id, payload.actor)
+        checked: dict[str, Any] = {}
         try:
-            return test_runs.rerun_from_step(
+            run = test_runs.rerun_from_step(
                 connection, project_id=payload.project_id, run_id=run_id,
-                from_step=payload.from_step, actor=actor, dedupe_key=payload.dedupe_key)
+                from_step=payload.from_step, actor=actor, dedupe_key=payload.dedupe_key,
+                door=lambda plan: _start_door(connection, payload, actor, plan, checked))
         except workflow_runtime.WorkflowError as error:
             _raise(error)
+        if checked and not run.get("duplicate"):
+            from boss_engine.services.workflow_precheck import record_on_run
+            from boss_engine.services.workflow_readiness import record_started_anyway
+
+            # As a start records them: the pre-check first, then what was started anyway.
+            record_on_run(connection, payload.project_id, actor, run["id"],
+                          checked.get("precheck"))
+            record_started_anyway(connection, payload.project_id, actor, run["id"],
+                                  checked.get("readiness") or {})
+        return run
+
+
+def _start_door(connection, payload: RerunBody, actor: str, plan: dict,
+                checked: dict) -> Optional[dict]:
+    """THE START DOOR, for a re-run that runs for real: the same checks, in the same order, as
+    POST /v1/delivery-workflows/start makes for a fresh start of this version and input — a
+    deployment target this actor may use, a stack BOSS can build, readiness, the pre-check.
+    Each refuses with its own HTTP status and words, before any run is written. What the
+    source run was started anyway past carries over, as it does for "Run this workflow again".
+    """
+    from apps.api.app.main import (
+        _authorize_delivery_target_input, _delivery_readiness_or_409, _precheck_or_409,
+    )
+    from boss_engine.services import stacks as _stacks
+    from boss_engine.services.workflow_readiness import accepted_by_run
+
+    project_id, version_id = payload.project_id, plan["version_id"]
+    run_input = dict(plan["input"])
+    _authorize_delivery_target_input(connection, project_id, actor, run_input)
+    accepted = sorted({*payload.start_anyway,
+                       *accepted_by_run(connection, project_id, plan["source_run_id"])})
+    try:
+        _stacks.refuse_unsupported_start(connection, version_id=version_id, run_input=run_input,
+                                         allow=bool(payload.allow_unsupported_stack))
+    except _stacks.StackUnsupported as refused:
+        raise HTTPException(status_code=409, detail=refused.detail()) from refused
+    checked["readiness"] = _delivery_readiness_or_409(
+        connection, project_id, version_id=version_id, work_class="", run_input=run_input,
+        start_anyway=accepted)
+    checked["precheck"] = _precheck_or_409(
+        connection, project_id, version_id=version_id, work_class="", run_input=run_input,
+        actor=actor, accept=payload.accept, skip_steps=payload.skip_steps,
+        reason=payload.precheck_reason, start_anyway=accepted)
+    return checked["precheck"]
