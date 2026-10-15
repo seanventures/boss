@@ -89,7 +89,7 @@ _REF = re.compile(r"^[0-9a-f]{12}$")
 _DAY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _INSTALL_ID = re.compile(r"^bi_[a-z2-7]{26}$")
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
-_VERSION = re.compile(r"^\d{1,3}\.\d{1,3}\.\d{1,3}(?:-(?:rc|beta|alpha|dev)\.?\d{0,3})?$")
+_VERSION = re.compile(r"^\d{1,3}\.\d{1,3}\.\d{1,3}(?:-(?:rc|beta|alpha|dev)\.?\d{0,3}(?:\.\d{1,3})?)?$")
 _SCORE_VERSION = re.compile(r"^\d{1,2}(?:\.\d{1,4})?$")
 
 # --------------------------------------------------------------------------------------------

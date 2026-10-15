@@ -225,7 +225,7 @@ def _os_arch() -> tuple[str, str]:
     return os_name, arch
 
 
-_PEP440_PRE = re.compile(r"^(\d+\.\d+\.\d+)\.?(a|alpha|b|beta|rc|dev)\.?(\d*)$")
+_PEP440_PRE = re.compile(r"^(\d+\.\d+\.\d+)\.?(a|alpha|b|beta|rc|dev)\.?(\d*)(?:\.post(\d+))?$")
 _PRE_LABEL = {"a": "alpha", "alpha": "alpha", "b": "beta", "beta": "beta", "rc": "rc", "dev": "dev"}
 
 
@@ -241,8 +241,10 @@ def _version() -> str:
         return "0.0.0"
     pre = _PEP440_PRE.match(raw)
     if pre:
-        base, label, n = pre.groups()
-        return f"{base}-{_PRE_LABEL[label]}" + (f".{n}" if n else "")
+        base, label, n, post = pre.groups()
+        # A point release of a candidate (rc10.post7) is published as 1.0.0-rc.10.7.
+        return (f"{base}-{_PRE_LABEL[label]}" + (f".{n}" if n else "")
+                + (f".{post}" if post else ""))
     return raw
 
 
