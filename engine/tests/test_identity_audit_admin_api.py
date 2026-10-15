@@ -51,12 +51,18 @@ def test_every_route_is_declared_and_only_the_epoch_is_open_to_any_signed_in_pri
     from apps.api.app.routers.identity_admin import build_identity_admin_router
     routes = [r for r in build_identity_admin_router(start_background=False).routes
               if isinstance(r, APIRoute)]
-    assert len(routes) == 15
+    assert len(routes) == 16   # + POST /v1/identity/setup-link (BOSSAPP-509)
     for route in routes:
         access = access_of(route.endpoint)
         assert access is not None, route.path
         if route.path.startswith("/v1/identity/epoch"):
             assert type(access).__name__ == "Authenticated" and access.self_only
+        elif route.path == "/v1/identity/setup-link":
+            # Signed in, and then decided inside (claim.setup_link_over_api): the install's
+            # admin key only (403 otherwise), only while unclaimed (404 for good after),
+            # rate-limited. There is no catalogue permission an admin KEY holds before an Owner.
+            assert type(access).__name__ == "Authenticated" and not access.self_only
+            assert "admin key" in (access.note or "")
         else:
             assert access.permission in PERMISSION_META, route.path
         assert route.endpoint.__module__.rsplit(".", 1)[-1].startswith("identity")   # enforced
@@ -356,7 +362,7 @@ def test_shadow_report_and_explanations(db, monkeypatch):
     finally:
         LEDGER.clear()
     mine = {r["router_key"]: r for r in report["routers"]}["identity_admin"]
-    assert mine["operations"] == 15 and mine["undeclared"] == 0
+    assert mine["operations"] == 16 and mine["undeclared"] == 0
     assert mine["would_deny"] == 1 and mine["unexplained"] == 1 and not mine["ready_to_enforce"]
     assert mine["top"][0]["principal_kind"] == "anonymous"
     explained = client.post("/v1/identity/shadow-report/explain", json={
