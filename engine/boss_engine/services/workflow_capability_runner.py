@@ -3045,7 +3045,8 @@ def _perform_capability(
         if stack_target is not None:
             refusal = _assignment_refusal(
                 connection, project_id, context.get("input") or {},
-                str((step.get("approval") or {}).get("approver_role") or ""))
+                str((step.get("approval") or {}).get("approver_role") or ""),
+                run_id=str(context.get("run_id") or "") or None)
             if refusal:
                 emit_event(connection, project_id, "workflow.assignment_refused", actor,
                            "workflow_run", str(context.get("run_id") or ""),
@@ -4833,6 +4834,7 @@ def _gate_subject(
 
 def _assignment_refusal(
     connection: Connection, project_id: str, run_input: Any, approver_role: str,
+    run_id: Optional[str] = None,
 ) -> Optional[dict[str, Any]]:
     """Why this approver may not answer for this run's app, or None when they may.
 
@@ -4852,6 +4854,23 @@ def _assignment_refusal(
     except Exception as error:  # noqa: BLE001 — an unreadable table must not stop a gate
         log.warning("assignment check failed for %s: %s", approver, error)
         return None
+    if not verdict.get("allowed") and run_id:
+        # A TEAM NOBODY CHOSE GAINS THE AGENTS THIS RUN'S WORKFLOW NAMES (agent_assignment.
+        # ensure_defaults), here as well as at the run's start: a run started before that fix,
+        # or on an app an older run seeded, would otherwise stay refused on every retry.
+        try:
+            row = connection.execute(
+                text("SELECT v.spec FROM workflow_runs r JOIN workflow_versions v "
+                     "ON v.id = r.workflow_version_id WHERE r.id = :r"), {"r": run_id},
+            ).mappings().first()
+            spec = (row or {}).get("spec")
+            if isinstance(spec, dict) and approver in agent_assignment.workflow_named(spec):
+                agent_assignment.ensure_defaults(connection, project_id=project_id,
+                                                 app_name=app_name, actor="boss", spec=spec)
+                verdict = agent_assignment.may_act(
+                    connection, project_id=project_id, app_name=app_name, role_key=approver)
+        except Exception as error:  # noqa: BLE001 — the first verdict stands
+            log.warning("could not top up the team for %s: %s", approver, error)
     if verdict.get("allowed"):
         return None
     return {"reason": verdict.get("reason") or f"{approver} is not assigned to this app.",
@@ -4889,7 +4908,8 @@ def _open_gate(
     # choice, not work on something nobody has chosen about yet, or every app that predates the
     # table becomes unrunnable.
     refusal = _assignment_refusal(connection, project_id, run.get("input") or {},
-                                  str(approval.get("approver_role") or ""))
+                                  str(approval.get("approver_role") or ""),
+                                  run_id=str(run.get("id") or "") or None)
     if refusal:
         connection.execute(
             text("UPDATE workflow_step_runs SET status='failed', "
