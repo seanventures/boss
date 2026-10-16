@@ -782,36 +782,42 @@ def sync_role_skills(
         {"p": project_id}).mappings()}
     assigned: list[dict[str, str]] = []
     missing: list[dict[str, str]] = []
-    for row in roles:
-        spec = row["spec"] if isinstance(row["spec"], dict) else {}
-        wanted = list(((spec.get("permissions") or {}).get("allowed_skills")) or [])
-        # THE BASELINE EVERY AGENT HOLDS, whatever its role spec names — shipped, authored in
-        # the console, or a custom key with an empty spec (services/agent_baseline.py). Same
-        # rules as any spec grant: additive, and an operator's removal stays removed.
-        from .agent_baseline import BASELINE_SKILLS
+    # ONE CATALOGUE BUILD FOR THE WHOLE SYNC (skill_catalogue.one_pass): each grant checked the
+    # skill exists and its MCP reach by rebuilding the catalogue, and a grant writes only
+    # role_skills, never a skill or a server the catalogue is built from.
+    from . import skill_catalogue
 
-        wanted += [s for s in BASELINE_SKILLS if s not in wanted]
-        for skill_id in wanted:
-            # A ROLE MAY NAME A SKILL BY ANOTHER NAME (packages/specpack/kits/aliases.yaml):
-            # the grant is the skill it means.
-            skill_id = role_skill_alias(str(skill_id).strip())
-            if (str(row["role_key"]), skill_id) in held:
-                continue
-            # A wildcard is a description, not a grant. "infra.*" cannot be cashed in, and
-            # expanding it here would hand an agent whatever happens to match it next week.
-            if not skill_id or "*" in skill_id:
-                continue
-            if seed_exclusions.role_skill_subject(row["role_key"], skill_id) in removed:
-                kept_off.append({"role_key": row["role_key"], "skill_id": skill_id})
-                continue
-            try:
-                assign_skill_to_role(
-                    connection, project_id=project_id, actor=actor,
-                    role_key=str(row["role_key"]), skill_id=skill_id)
-                assigned.append({"role_key": row["role_key"], "skill_id": skill_id})
-            except SkillDefinitionError as error:
-                missing.append({"role_key": row["role_key"], "skill_id": skill_id,
-                                "reason": str(error)})
+    with skill_catalogue.one_pass(connection):
+        for row in roles:
+            spec = row["spec"] if isinstance(row["spec"], dict) else {}
+            wanted = list(((spec.get("permissions") or {}).get("allowed_skills")) or [])
+            # THE BASELINE EVERY AGENT HOLDS, whatever its role spec names — shipped, authored in
+            # the console, or a custom key with an empty spec (services/agent_baseline.py). Same
+            # rules as any spec grant: additive, and an operator's removal stays removed.
+            from .agent_baseline import BASELINE_SKILLS
+
+            wanted += [s for s in BASELINE_SKILLS if s not in wanted]
+            for skill_id in wanted:
+                # A ROLE MAY NAME A SKILL BY ANOTHER NAME (packages/specpack/kits/aliases.yaml):
+                # the grant is the skill it means.
+                skill_id = role_skill_alias(str(skill_id).strip())
+                if (str(row["role_key"]), skill_id) in held:
+                    continue
+                # A wildcard is a description, not a grant. "infra.*" cannot be cashed in, and
+                # expanding it here would hand an agent whatever happens to match it next week.
+                if not skill_id or "*" in skill_id:
+                    continue
+                if seed_exclusions.role_skill_subject(row["role_key"], skill_id) in removed:
+                    kept_off.append({"role_key": row["role_key"], "skill_id": skill_id})
+                    continue
+                try:
+                    assign_skill_to_role(
+                        connection, project_id=project_id, actor=actor,
+                        role_key=str(row["role_key"]), skill_id=skill_id)
+                    assigned.append({"role_key": row["role_key"], "skill_id": skill_id})
+                except SkillDefinitionError as error:
+                    missing.append({"role_key": row["role_key"], "skill_id": skill_id,
+                                    "reason": str(error)})
     return {"assigned": assigned, "assigned_count": len(assigned),
             "unavailable": missing, "unavailable_count": len(missing),
             "kept_off_by_operator": kept_off}
