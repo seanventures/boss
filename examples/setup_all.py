@@ -31,6 +31,23 @@ EXAMPLES = [
     ("weekly-newsletter", "research, written up, in your inbox", "email"),
     ("meeting-to-tickets", "a transcript becomes tracked work", "a work tracker — Plane, "
      "Jira, Linear, GitHub Issues or Azure DevOps"),
+    # THE USE-CASE LIBRARY. Same prerequisites as the five above, in the same order: email
+    # first, then a bound repository, then a work tracker.
+    ("pipeline-digest", "a CRM export becomes the weekly digest", "email"),
+    ("prd-from-interviews", "interview notes become a PRD, or an honest no", "email"),
+    ("competitive-teardown", "two research runs become a teardown", "email"),
+    ("support-ticket-triage", "a batch of tickets, triaged one by one", "email"),
+    ("oncall-handoff", "what BOSS ran and what is waiting, as a handoff", "email"),
+    ("release-notes", "merged pull requests become release notes", "email, and a bound "
+     "repository"),
+    ("dependency-upgrade-pr", "an upgrade is assessed, gated, built and checked", "email, "
+     "and a bound repository"),
+    ("security-finding-triage", "a finding is confirmed or dismissed", "email, a bound "
+     "repository, and a work tracker"),
+    ("flaky-test-triage", "a failing test is classified and routed", "email, a bound "
+     "repository, and a work tracker"),
+    ("incident-postmortem", "notes become a postmortem and action items", "email, and a work "
+     "tracker"),
 ]
 
 

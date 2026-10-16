@@ -181,7 +181,7 @@ Remote MCP over HTTP requires a bearer token in `BOSS_MCP_HTTP_TOKEN`. The [MCP 
 
 **Software Factory.** Turn an outcome into a governed code task, from spec and architecture through implementation and tests to a pull request with evidence attached. Each run stops for the approvals, budget checks, and receipts it needs along the way.
 
-**Agents and workflows.** A starter catalog of agent definitions, role and skill packs, and [five example workflows](examples/README.md) covering research, content preparation, and handoff to a person for approval. Installing a definition or a workflow never starts work on its own.
+**Agents and workflows.** A starter catalog of agent definitions, role and skill packs, and [fifteen example workflows](examples/README.md) covering engineering, product, support, sales and operations use cases — research, triage, drafting, and handoff to a person for approval. Installing a definition or a workflow never starts work on its own.
 
 **Bring your own models.** OpenAI, Anthropic, and OpenAI-compatible endpoints, plus the Claude Code, Codex CLI, and Grok Build subscriptions you already have. See [Model connections](docs/community/MODEL_CONNECTIONS.md).
 

@@ -1,14 +1,18 @@
 """Community agent organization is counted from source, not from a release note.
 
-The public claim is 34 bundled definitions, 14 workflow templates, and five
+The public claim is 34 bundled definitions, 14 workflow templates, and fifteen
 opt-in examples. These tests read the files and the installer that actually
 ships them. A stale sentence in a doc cannot keep the count green.
 
 The catalogue grew from 12: Security Review (`security_review`) and Incremental
-Build (`incremental_build`, ded31293) are deliberate entries. The release-notes
-draft and README.community.md this test once read do not exist in this tree;
-the five-examples claim lives in README.md, and no shipped doc may state a
-workflow-template count that differs from the catalogue.
+Build (`incremental_build`, ded31293) are deliberate entries. The examples grew
+from five to fifteen with the use-case library (release notes, dependency
+upgrade PR, flaky-test triage, incident postmortem, security-finding triage,
+competitive teardown, PRD from interviews, support ticket triage, pipeline
+digest, on-call handoff). The release-notes draft and README.community.md this
+test once read do not exist in this tree; the fifteen-examples claim lives in
+README.md, and no shipped doc may state a workflow-template count that differs
+from the catalogue.
 """
 from __future__ import annotations
 
@@ -60,14 +64,14 @@ def test_bundled_definitions_templates_and_examples_match_source():
     assert len(catalogue_keys) == 14
     assert len(set(catalogue_keys)) == 14
     assert example_dirs == sorted(examples)
-    assert len(examples) == 5
+    assert len(examples) == 15
 
     readme = (ROOT / "examples" / "README.md").read_text(encoding="utf-8")
     features = (ROOT / "docs/community/FEATURES.md").read_text(encoding="utf-8")
     community = (ROOT / "README.md").read_text(encoding="utf-8")
     assert "The 34 YAML files in `packages/specpack/agents/`" in readme
     assert "First-run seed installs 34 agents" in features
-    assert "five example workflows" in community
+    assert "fifteen example workflows" in community
     assert "None is installed or runs on a" in readme
 
     # No shipped doc states a workflow-template count the catalogue does not have.
