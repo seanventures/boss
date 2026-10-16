@@ -23,8 +23,28 @@ REF_SCHEME = "app_secret"
 _REF = re.compile(r"^app_secret://(?P<env>[a-z]+)/(?P<app>[^/]+)/(?P<name>[A-Z][A-Z0-9_]*)$")
 
 
+#: What an app key may hold AS-IS inside a reference (contract.SECRET_REF, minus its separators
+#: "/" and ":" — ":" starts an escape). Anything else is written ":<2 hex>" per UTF-8 byte.
+_SAFE_APP_CHARS = re.compile(r"[A-Za-z0-9_.@-]")
+
+
+def _encode_app(app_key: str) -> str:
+    """An app key as it may stand in a reference. App keys are people's names ("helpdesk ai"),
+    and the contract's reference pattern refuses a space: HelpDesk AI's first deploy failed
+    "provision failed: ValidationError … 'app_secret://deploy/helpdesk ai/DATABASE_URL'". The
+    escape is reversible (parse_ref), so the vault is still keyed by the app's own key."""
+    return "".join(ch if _SAFE_APP_CHARS.fullmatch(ch)
+                   else "".join(f":{b:02x}" for b in ch.encode("utf-8"))
+                   for ch in str(app_key))
+
+
+def _decode_app(encoded: str) -> str:
+    return re.sub(rb":([0-9a-f]{2})", lambda m: bytes([int(m.group(1), 16)]),
+                  encoded.encode("utf-8")).decode("utf-8")
+
+
 def make_ref(env: str, app_key: str, name: str) -> SecretRef:
-    return SecretRef(secretRef=f"{REF_SCHEME}://{env}/{app_key}/{name}")
+    return SecretRef(secretRef=f"{REF_SCHEME}://{env}/{_encode_app(app_key)}/{name}")
 
 
 def parse_ref(ref: Union[SecretRef, str]) -> tuple[str, str, str]:
@@ -32,7 +52,7 @@ def parse_ref(ref: Union[SecretRef, str]) -> tuple[str, str, str]:
     m = _REF.match(raw)
     if not m:
         raise ContractError([f"{raw!r} is not an app_secret:// reference"], "secret reference")
-    return m.group("env"), m.group("app"), m.group("name")
+    return m.group("env"), _decode_app(m.group("app")), m.group("name")
 
 
 class Redactor:
