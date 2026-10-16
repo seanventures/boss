@@ -4537,16 +4537,36 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # else the brief's folder, resolved inside resolve_gate_plan), this run's changed paths,
         # and the files the app's lineage wrote before. A repair whose own diff is two files
         # still plans in the lineage's app folder, never at a shared repository root.
+        # THE APP'S OWN RECORD FIRST (app_root.recorded_app_dir: its code component, else the
+        # folder an earlier run of the app recorded), then every file the app ever wrote
+        # (app_root.identity_paths: the lineage and every run of the same app). One attempt's
+        # diff is never the app's identity: crun_cd48617a was seeded with the root package.json
+        # an earlier retry rewrote, and planned the shared root as "the app".
         _lineage_paths: list[str] = []
+        _recorded_app: Optional[str] = None
         try:
-            from .preview_service import lineage_impl_files as _lineage_files
+            from . import app_root as _app_root
 
-            _lineage_paths[:] = [str(p) for p in (_lineage_files(engine, run) or [])]
+            _lineage_paths[:] = [str(p) for p in (_app_root.identity_paths(engine, run) or [])]
+            with _transaction(engine) as _c:
+                _recorded_app = _app_root.recorded_app_dir(_c, run)
         except Exception:  # noqa: BLE001 — the named app and the change list still decide
             _log_caught(logger)
         _gate_plan0 = verification_target.resolve_gate_plan(
             spec, title, root, app_id=_app_id, pinned=_pinned_manifest, layout=_stack_layout,
-            lineage=_lineage_paths)
+            lineage=_lineage_paths, recorded=_recorded_app)
+        # RECORD THE APP'S FOLDER once BOSS knows it, so every later attempt of this app reads it
+        # (app_root.recorded_app_dir) instead of re-deriving it from its own diff.
+        try:
+            from . import app_root as _app_root
+
+            _known = _app_root.resolve(root, app_id=_app_id or _app_scope, recorded=_recorded_app,
+                                       lineage=_lineage_paths)
+            if _known.path is not None and _known.path != Path(root):
+                with _transaction(engine) as _c:
+                    _app_root.remember_app_dir(_c, run_id, _known.path.relative_to(root).as_posix())
+        except Exception:  # noqa: BLE001 — recording is a convenience; the plan above stands
+            _log_caught(logger)
         # CONTINUE FROM THE FAILED ATTEMPT'S WORKSPACE (saved_workspace_files). Seeded after the
         # verify manifest is pinned, exactly as the parent's agents wrote after it. A seeded run
         # skips the design chain, write_tests and the first implement: its first pass is the
@@ -4578,7 +4598,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 # verify will (_changed_paths), not from the base branch alone.
                 _gate_plan0 = verification_target.resolve_gate_plan(
                     spec, title, root, app_id=_app_id, changed=list(_seeded_paths),
-                    pinned=_pinned_manifest, layout=_stack_layout, lineage=_lineage_paths)
+                    pinned=_pinned_manifest, layout=_stack_layout, lineage=_lineage_paths, recorded=_recorded_app)
         # BUILD SERVICES (build_services): the run's own throwaway Postgres when the repo
         # declares `services: [postgres]` or the project's setting asks for it. Provisioned
         # before any agent, so the agents and every verify command see DATABASE_URL; a run that
@@ -4635,9 +4655,12 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             Never the shared repository root for an app in a subfolder (crun_7768e91e)."""
             from . import app_root
 
+            # None = BOSS cannot place the app in a shared repository: the gate plan already
+            # carries that refusal (source "app_unknown") and blocks the build with it, so a
+            # template gate here only needs a directory to report against, never to test.
             return app_root.gate_dir(root, app_id=_app_id or _app_scope,
                                      changed=sorted(set(list(changed or []) + _changed_paths())),
-                                     lineage=_lineage_paths)
+                                     lineage=_lineage_paths, recorded=_recorded_app) or Path(root)
 
         def _review_change_now() -> review_input.ChangeUnderReview:
             """THE change every reviewer seat judges (review_input.build): the live diff, plus
@@ -4806,7 +4829,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             try:
                 plan = verification_target.resolve_gate_plan(
                     spec, title, root, app_id=_app_id, changed=_changed_paths(),
-                    pinned=_pinned_manifest, layout=_stack_layout, lineage=_lineage_paths)
+                    pinned=_pinned_manifest, layout=_stack_layout, lineage=_lineage_paths, recorded=_recorded_app)
                 if plan.runs_steps or plan.source != "default" or plan.error:
                     return []
                 wanted = [c for c in plan.commands
@@ -4844,7 +4867,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 return None
             plan = verification_target.resolve_gate_plan(
                 spec, title, root, app_id=_app_id, changed=_changed_paths(),
-                pinned=_pinned_manifest, layout=_stack_layout, lineage=_lineage_paths)
+                pinned=_pinned_manifest, layout=_stack_layout, lineage=_lineage_paths, recorded=_recorded_app)
             if plan.runs_steps:
                 return None
             app_cwd, prep, _note = _prepare_app(plan, plan.cwd)
@@ -4897,7 +4920,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                      timed_out=False, stdout="", stderr=tampered_manifest)
             plan = verification_target.resolve_gate_plan(
                 spec, title, root, app_id=_app_id, changed=_changed_paths(),
-                pinned=_pinned_manifest, layout=_stack_layout, lineage=_lineage_paths)
+                pinned=_pinned_manifest, layout=_stack_layout, lineage=_lineage_paths, recorded=_recorded_app)
             _last_stack_plan[0] = plan.stack if plan.source == "stack" else None
             cwd = plan.cwd
             try:

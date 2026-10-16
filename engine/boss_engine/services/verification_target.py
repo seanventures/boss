@@ -694,6 +694,7 @@ def resolve_gate_plan(
     pinned: PinnedVerifyManifest | None = None,
     layout: Any = None,
     lineage: list[str] | None = None,
+    recorded: str | None = None,
 ) -> GatePlan:
     """The verify plan for a provisioned checkout.
 
@@ -711,19 +712,36 @@ def resolve_gate_plan(
     app), else the folder the brief names (app_scope), then ``changed``, then ``lineage`` (the
     files the app's lineage wrote before). Never the shared repository root for an app that
     lives in a subfolder: a pom.xml at boss-sandbox's root made HelpDesk (helpdesk-ai/) "need
-    Java" three times.
+    Java" four times. ``recorded`` is the folder BOSS recorded for the app
+    (app_root.recorded_app_dir); it outranks every per-attempt guess. Resolved ONCE here and
+    every branch below plans inside it; when BOSS cannot place the app in a shared repository
+    the plan is the refusal (source "app_unknown"), never the root.
     """
     from . import app_root, verify_manifest
 
     base = Path(root)
     # The named app: the pinned benchmark app, else the one folder the brief names.
     named = app_id or app_scope(spec, None)
+    where = app_root.resolve(base, app_id=named, recorded=recorded, changed=changed,
+                             lineage=lineage)
+    if where.path is None:
+        return GatePlan([], base, "app_unknown", where.refusal or "", error=where.refusal)
+    # Every branch below plans in the app's folder: the resolved folder IS the named app.
+    # A Python command keeps its own rule (it stays at the root it was written for) unless the
+    # app was NAMED or RECORDED: a JS tools/ folder a change touched is no Python app's home.
+    named_python = named or (where.path.relative_to(base).as_posix()
+                             if where.source in ("named", "recorded") and where.path != base
+                             else None)
+    in_subfolder = where.path != base
+    if in_subfolder:
+        named = where.path.relative_to(base).as_posix()
 
     def _cwd(commands: list[str]) -> Path:
         # resolve_verify_cwd looks for a package.json ancestor of the changed files, which
         # only means something to npm. A Python command stays at the root it was written for.
         npm = bool(commands) and commands[0].split(" ", 1)[0] in ("npm", "npx", "pnpm", "yarn")
-        return resolve_verify_cwd(base, app_id=named, changed=changed if npm else None,
+        return resolve_verify_cwd(base, app_id=named if npm else named_python,
+                                  changed=changed if npm else None,
                                   lineage=lineage if npm else None)
 
     raw = spec.get("test_commands")
@@ -736,7 +754,9 @@ def resolve_gate_plan(
         cwd = base if any(names_its_directory(c) for c in commands) else _cwd(commands)
         return GatePlan(commands, cwd, "task", " && ".join(commands))
     # An official/benchmark app is scaffolded and verified by its own package scripts; a
-    # sandbox monorepo's manifest is not its contract.
+    # sandbox monorepo's manifest is not its contract. A repository that DECLARES its suites
+    # (boss.verify.yaml, scoped by the changed files) is followed wherever its app lives: the
+    # repo's own declaration beats BOSS's inference.
     if not app_id:
         if pinned is None:
             pinned = pin_verify_manifest(base)
@@ -756,7 +776,20 @@ def resolve_gate_plan(
     # app never matches and keeps everything below.
     from . import stacks
 
-    stack_root = stacks.find_stack_root(base, changed, named)
+    # In a subfolder app, only ITS folder can be the multi-service app: the shared root (a
+    # pom.xml and a dozen npm apps at boss-sandbox's root) is never asked (crun_cd48617a).
+    # The app's folder may be ONE service of a multi-service app (app/api of app/{api,web}):
+    # walk up from it, stopping BEFORE the root, to the first folder that is a multi-service app.
+    if in_subfolder:
+        stack_root = None
+        for d in [where.path, *where.path.parents]:
+            if d == base or base not in d.parents:
+                break
+            if stacks.is_multi_service(stacks.detect_services(d)):
+                stack_root = d
+                break
+    else:
+        stack_root = stacks.find_stack_root(base, changed, named)
     if stack_root is not None:
         stack = stacks.stack_plan(stack_root)
         return GatePlan([c for c, _ in stack.steps + stack.e2e_steps], stack_root, "stack",
@@ -778,7 +811,9 @@ def resolve_gate_plan(
     # not found". The app's directory, never the repository root: app_root.java_build.
     from . import toolchains
 
-    app_dir, java = app_root.java_build(base, app_id=named, changed=changed, lineage=lineage)
+    app_dir, java = app_root.java_build(base, app_id=named, recorded=recorded, changed=changed,
+                                        lineage=lineage)
+    app_dir = app_dir or where.path
     node_here = (app_dir / "package.json").is_file() \
         or str(spec.get("project_kind", "")).lower() in _WEB_KINDS
     if java and not node_here:
@@ -791,6 +826,18 @@ def resolve_gate_plan(
                         timeout_seconds=toolchains.GATE_TIMEOUT_SECONDS,
                         steps=[(c, app_dir) for c in commands])
     commands = default_test_commands(spec, title)
+    # THE APP'S OWN FILES SAY WHAT IT IS when the task does not (no explicit project_kind): a
+    # folder with a package.json and no Python manifest is a Node app whatever the brief's
+    # wording suggested, and the reverse. detect_kind reads only the task text, which once
+    # planned `python3 -m unittest` for HelpDesk's npm project.
+    if not str(spec.get("project_kind", "")).strip():
+        has_node = (where.path / "package.json").is_file()
+        has_py = any((where.path / n).is_file()
+                     for n in ("requirements.txt", "pyproject.toml", "setup.py"))
+        if has_node and not has_py:
+            commands = web_test_commands()
+        elif has_py and not has_node:
+            commands = [PYTHON_TEST_CMD]
     cwd = _cwd(commands)
     if commands == [PYTHON_TEST_CMD] and is_pytest_project(cwd):
         commands = [PYTEST_CMD]
