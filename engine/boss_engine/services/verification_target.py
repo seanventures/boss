@@ -727,6 +727,11 @@ def resolve_gate_plan(
     if where.path is None:
         return GatePlan([], base, "app_unknown", where.refusal or "", error=where.refusal)
     # Every branch below plans in the app's folder: the resolved folder IS the named app.
+    # A Python command keeps its own rule (it stays at the root it was written for) unless the
+    # app was NAMED or RECORDED: a JS tools/ folder a change touched is no Python app's home.
+    named_python = named or (where.path.relative_to(base).as_posix()
+                             if where.source in ("named", "recorded") and where.path != base
+                             else None)
     in_subfolder = where.path != base
     if in_subfolder:
         named = where.path.relative_to(base).as_posix()
@@ -735,7 +740,8 @@ def resolve_gate_plan(
         # resolve_verify_cwd looks for a package.json ancestor of the changed files, which
         # only means something to npm. A Python command stays at the root it was written for.
         npm = bool(commands) and commands[0].split(" ", 1)[0] in ("npm", "npx", "pnpm", "yarn")
-        return resolve_verify_cwd(base, app_id=named, changed=changed if npm else None,
+        return resolve_verify_cwd(base, app_id=named if npm else named_python,
+                                  changed=changed if npm else None,
                                   lineage=lineage if npm else None)
 
     raw = spec.get("test_commands")
@@ -748,9 +754,10 @@ def resolve_gate_plan(
         cwd = base if any(names_its_directory(c) for c in commands) else _cwd(commands)
         return GatePlan(commands, cwd, "task", " && ".join(commands))
     # An official/benchmark app is scaffolded and verified by its own package scripts; a
-    # sandbox monorepo's manifest is not its contract — nor is the shared root's manifest the
-    # contract of an app that lives in a subfolder of it.
-    if not app_id and not in_subfolder:
+    # sandbox monorepo's manifest is not its contract. A repository that DECLARES its suites
+    # (boss.verify.yaml, scoped by the changed files) is followed wherever its app lives: the
+    # repo's own declaration beats BOSS's inference.
+    if not app_id:
         if pinned is None:
             pinned = pin_verify_manifest(base)
         if pinned.error:
