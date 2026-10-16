@@ -146,7 +146,7 @@ None of these are required for a first run.
 - **Connect a model you already have.** See [model connections](MODEL_CONNECTIONS.md). **Connect** in the console makes one small budgeted, receipted model call. Importing keys through `boss connect keys` stores them without a completion; their first governed check or job proves them.
 - **Connect a subscription you already have** with `boss connect`. It asks before copying a Codex login, and `boss connect claude` or `boss connect grok` signs those CLIs in inside the BOSS container. To use an existing Grok subscription, see [Grok CLI](GROK_CLI.md).
 - **Install host copies of Claude Code, Codex CLI, and Grok Build** with `boss update --install-coding-clis`. This installs the tools but does not sign you in.
-- **Explore the [five example workflows](https://github.com/seanventures/boss/blob/main/examples/README.md).** Installing them does not start any work.
+- **Explore the [fifteen example workflows](https://github.com/seanventures/boss/blob/main/examples/README.md).** Installing them does not start any work.
 - **Upgrade or uninstall** with `boss upgrade` and `boss uninstall`. The [installer guide](https://github.com/seanventures/boss/blob/main/scripts/install/README.md#upgrade--recover) covers backups and recovery.
 
 The [guide index](README.md) lists every page. To report a problem, see [feedback](FEEDBACK_LOOP.md). Report security vulnerabilities by email only, as described in [SECURITY.md](https://github.com/seanventures/boss/blob/main/SECURITY.md).
