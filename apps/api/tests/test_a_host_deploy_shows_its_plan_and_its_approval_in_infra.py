@@ -93,3 +93,29 @@ def test_a_healthy_host_deploy_links_its_app_and_a_rolled_back_one_says_why(
     assert d["row"]["word"] == "Rolled back"
     assert d["failure"] and "health check failed" in d["failure"]["error"]
     assert d["open_url"] is None
+
+
+def test_a_removal_reads_removed_and_leaves_nothing_of_the_app_live(
+        client, engine, world, monkeypatch):
+    """A finished removal said "Live" at the top of Deploys over the app it had taken down."""
+    monkeypatch.setattr(api_main.settings, "boss_edition", "community")
+    with engine.begin() as c:
+        c.execute(text("UPDATE deployment_runs SET status = 'succeeded', finished_at = now() "
+                       "- interval '1 hour' WHERE id = 'dr_host'"))
+        c.execute(text("UPDATE decisions SET status = 'approved' WHERE id = 'dec_host'"))
+        c.execute(text(
+            "INSERT INTO deployment_runs (id, project_id, deployment_target_id, app_name, "
+            "environment, repo, target_kind, target_ref, commit_ref, status, trigger, "
+            "release_packet, created_by, finished_at) VALUES ('dr_rm', :p, 't_live', 'invoice', "
+            "'prod', 'acme/invoice', 'ssh', 'deploy@x:22', 'main', 'succeeded', 'manual', "
+            "CAST('{\"kind\": \"remove\"}' AS JSONB), 'ceo', now())"), {"p": HOME})
+    try:
+        removed = client.get("/v1/infra/deploys/delivery:dr_rm", params={"project_id": HOME}).json()
+        assert removed["row"]["word"] == "Removed"
+        assert removed["open_url"] is None
+        assert _detail(client)["row"]["word"] == "Done", "the deploy it removed is not Live"
+        live = client.get("/v1/infra/deploys", params={"project_id": HOME, "state": "live"}).json()
+        assert not [r for r in live.get("rows", live.get("items", [])) if r.get("target_id") == "t_live"]
+    finally:
+        with engine.begin() as c:
+            c.execute(text("DELETE FROM deployment_runs WHERE id = 'dr_rm'"))

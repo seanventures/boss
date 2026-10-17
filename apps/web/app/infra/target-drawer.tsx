@@ -363,7 +363,9 @@ export function TargetDrawer({ projectId, actor, targetId, canWrite, racks, onCl
 }) {
   const detail = useTargetDetail(projectId, targetId);
   const now = useNow(30_000);
-  const [sheet, setSheet] = useState<"move" | "retire" | "remove" | null>(null);
+  // `sheet=remove` in the address opens Remove at once (a deploy's ⋯ › Remove app…).
+  const [sheet, setSheet] = useState<"move" | "retire" | "remove" | null>(() =>
+    typeof window !== "undefined" && new URLSearchParams(window.location.search).get("sheet") === "remove" ? "remove" : null);
   const t = detail.data;
   const openDeploy = (ref: string) => go({ view: "deploys", target: null, host: null, deploy: ref });
   const label = t ? `${t.app} · ${t.env}` : "App";
@@ -433,7 +435,7 @@ export function TargetDrawer({ projectId, actor, targetId, canWrite, racks, onCl
           <Secrets projectId={projectId} actor={actor} t={t} canBind={canWrite} refresh={detail.refresh} />
           {sheet === "move" ? <MoveSheet t={t} projectId={projectId} actor={actor} racks={racks} onClose={() => setSheet(null)}
                                          onMoved={() => { setSheet(null); detail.refresh(); }} /> : null}
-          {sheet === "remove" ? <RemoveAppSheet t={t} actor={actor} onClose={() => setSheet(null)}
+          {sheet === "remove" ? <RemoveAppSheet t={t} actor={actor} onClose={() => { setSheet(null); dropSheetParam(); }}
                                                 onPlanned={() => { setSheet(null); go({ view: "deploys", target: null }); }} /> : null}
           {sheet === "retire" ? <RetireTargetSheet t={t} actor={actor} onClose={() => setSheet(null)}
                                                    onRetired={() => { setSheet(null); onClose(); }} /> : null}
@@ -441,4 +443,14 @@ export function TargetDrawer({ projectId, actor, targetId, canWrite, racks, onCl
       ) : null}
     </Drawer>
   );
+}
+
+/** Closing Remove forgets `sheet=remove`, so reopening the drawer does not reopen the sheet. */
+function dropSheetParam(): void {
+  try {
+    const u = new URL(window.location.href);
+    if (!u.searchParams.has("sheet")) return;
+    u.searchParams.delete("sheet");
+    window.history.replaceState(window.history.state, "", u.toString());
+  } catch { /* non-browser */ }
 }

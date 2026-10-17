@@ -77,6 +77,8 @@ WORDS: dict[str, dict[str, Word]] = {
         # A request a newer one for the same target replaced, or one whose decision another
         # run took (deploy_status): nothing ran, and nothing will.
         "superseded": {"word": "Superseded", "tone": "grey"},
+        # The app was taken off its host by a governed removal (app_removal.py).
+        "removed": {"word": "Removed", "tone": "grey"},
     },
     "preview": {
         "starting": {"word": "Starting", "tone": "accent"},
@@ -191,6 +193,7 @@ def deploy_status(raw_status: Optional[str], *, decision_status: Optional[str] =
         "superseded": "Replaced by another deploy request. Nothing ran.",
         "rejected": "Not approved. Nothing was deployed.",
         "cancelled": "Cancelled. Nothing was deployed.",
+        "removed": "Removed from its host. Nothing of this app runs there now.",
         "rolled_back": ("The health check failed after release, so the previous release was "
                         "restored." + (f" Checked: {checked}." if checked else "")),
     }.get(phase)
@@ -1349,7 +1352,13 @@ _UNION = """
   FROM stack_deployments s WHERE s.project_id = :p
   UNION ALL
   SELECT CASE WHEN d.trigger IS NULL THEN 'registry' ELSE 'delivery' END, d.id,
-         d.deployment_target_id, NULL::text, d.status, d.commit_ref, d.commit_ref, d.decision_id,
+         -- A finished REMOVAL is `removed`, never a success: it said "Live" over an app it had
+         -- just taken down. The newest success-or-removal of a target decides what is live,
+         -- so after a removal nothing of that app reads Live.
+         d.deployment_target_id, NULL::text,
+         CASE WHEN d.release_packet->>'kind' = 'remove'
+                   AND d.status IN ('healthy', 'succeeded', 'deployed', 'completed')
+              THEN 'removed' ELSE d.status END, d.commit_ref, d.commit_ref, d.decision_id,
          CASE WHEN d.trigger = 'rollback' THEN d.release_packet->>'redeploy_of' END,
          NULL::text, d.release_packet->>'code_task_run_id',
          d.trigger, d.steps, COALESCE(d.started_at, d.created_at), d.finished_at, d.created_at,
@@ -1613,7 +1622,7 @@ def _shape_rows(connection: Any, settings: Any, project_id: str, raw: list[dict[
 _STATE_FILTERS = {
     "needs_you": ("u.decision_id IS NOT NULL AND dd.status = 'pending' "
                   "AND u.status = ANY(:waiting)"),
-    "live": "(u.kind || ':' || u.id) IN (SELECT ref FROM live)",
+    "live": "(u.kind || ':' || u.id) IN (SELECT ref FROM live) AND u.status <> 'removed'",
     # A failure a later success of the same target fixed is history, not a Failed row.
     "failed": ("u.status = ANY(:failed) AND NOT EXISTS (SELECT 1 FROM u u2 "
                "WHERE u2.target_id = u.target_id AND u2.status = ANY(:success) "
@@ -1626,7 +1635,7 @@ def _union_query(where: str, tail: str) -> str:
     return (
         "WITH u AS (" + _UNION + "), "
         "live AS (SELECT DISTINCT ON (target_id) kind || ':' || id AS ref FROM u "
-        "         WHERE status = ANY(:success) "
+        "         WHERE (status = ANY(:success) OR status = 'removed') "
         "         ORDER BY target_id, COALESCE(finished_at, started_at, created_at) DESC) "
         "SELECT u.*, COALESCE(u.finished_at, u.started_at, u.created_at) AS ts, "
         "       u.kind || ':' || u.id AS ref, t.app_name, t.environment, t.target_kind, "
@@ -1678,7 +1687,7 @@ def deploy_rows(connection: Any, settings: Any, project_id: str, *, state: Optio
                     {**params, "lim": limit + 1})
         live = {r[0] for r in connection.execute(text(
             "WITH u AS (" + _UNION + ") SELECT DISTINCT ON (target_id) kind || ':' || id "
-            "FROM u WHERE status = ANY(:success) "
+            "FROM u WHERE (status = ANY(:success) OR status = 'removed') "
             "ORDER BY target_id, COALESCE(finished_at, started_at, created_at) DESC"),
             {"p": project_id, "success": list(SUCCESS_STATES)})}
         return raw, live
@@ -1693,7 +1702,7 @@ def deploy_rows(connection: Any, settings: Any, project_id: str, *, state: Optio
     def counts() -> dict[str, int]:
         sql_ = ("WITH u AS (" + _UNION + "), "
                 "live AS (SELECT DISTINCT ON (target_id) kind || ':' || id AS ref FROM u "
-                "         WHERE status = ANY(:success) "
+                "         WHERE (status = ANY(:success) OR status = 'removed') "
                 "         ORDER BY target_id, COALESCE(finished_at, started_at, created_at) DESC) "
                 "SELECT count(*) AS all_, "
                 f"  count(*) FILTER (WHERE {_STATE_FILTERS['needs_you']}) AS needs_you, "
@@ -1763,7 +1772,7 @@ def _one_row(connection: Any, settings: Any, project_id: str, ref: str,
         raise LookupError(f"No such deploy in this project: {ref}")
     live = {r[0] for r in connection.execute(text(
         "WITH u AS (" + _UNION + ") SELECT DISTINCT ON (target_id) kind || ':' || id "
-        "FROM u WHERE status = ANY(:success) AND target_id = :t "
+        "FROM u WHERE (status = ANY(:success) OR status = 'removed') AND target_id = :t "
         "ORDER BY target_id, COALESCE(finished_at, started_at, created_at) DESC"),
         {"p": project_id, "success": list(SUCCESS_STATES), "t": raw[0]["target_id"]})}
     row = _shape_rows(connection, settings, project_id, raw, live_refs=live, viewer=viewer,
@@ -2055,7 +2064,7 @@ def target_detail(connection: Any, settings: Any, project_id: str, target_id: st
                                              "ORDER BY ts DESC, ref DESC LIMIT 5"), params)
         live = {r[0] for r in connection.execute(text(
             "WITH u AS (" + _UNION + ") SELECT DISTINCT ON (target_id) kind || ':' || id "
-            "FROM u WHERE status = ANY(:success) AND target_id = :t "
+            "FROM u WHERE (status = ANY(:success) OR status = 'removed') AND target_id = :t "
             "ORDER BY target_id, COALESCE(finished_at, started_at, created_at) DESC"),
             {"p": project_id, "success": list(SUCCESS_STATES), "t": target_id})}
         return _shape_rows(connection, settings, project_id, raw, live_refs=live, viewer=None,

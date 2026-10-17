@@ -54,6 +54,11 @@ export function DeployDrawer({ projectId, actor, deployRef, onClose, onOpen, onC
         { key: "link", label: "Copy link", testId: "inf-deploy-copy-link", onPick: () => void copyText(window.location.href) },
         { key: "open", label: "Open app ↗", testId: "inf-deploy-menu-open", hidden: !d?.openUrl,
           onPick: () => { if (d?.openUrl) window.open(d.openUrl, "_blank", "noopener"); } },
+        // REMOVE IS REACHABLE FROM ANY DEPLOY OF THE APP. It lived only on the target's drawer,
+        // which a retired target never shows, so a removal that left the app running had no way
+        // back. It opens that drawer's governed Remove sheet.
+        { key: "remove", label: "Remove app…", testId: "inf-deploy-menu-remove", hidden: !row.targetId,
+          onPick: () => goConsole(`?area=infra&view=fleet&target=${encodeURIComponent(row.targetId ?? "")}&sheet=remove`) },
       ]} />
     </span>
   ) : <strong>Deploy</strong>;

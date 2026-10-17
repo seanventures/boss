@@ -42,4 +42,13 @@ describe("Remove app", () => {
     const src = readFileSync(join(process.cwd(), "app/infra/infra-actions.ts"), "utf8");
     expect(src).toContain("/v1/deployment-targets/${enc(targetId)}/remove");
   });
+
+  it("is reachable from any deploy of the app, even once its target is retired", () => {
+    // A retired target is not drawn on the Fleet, so Remove lived nowhere a person could reach.
+    const drawer = readFileSync(join(process.cwd(), "app/infra/deploy-drawer.tsx"), "utf8");
+    expect(drawer).toContain('testId: "inf-deploy-menu-remove"');
+    expect(drawer).toContain("&sheet=remove");
+    const target = readFileSync(join(process.cwd(), "app/infra/target-drawer.tsx"), "utf8");
+    expect(target).toMatch(/get\("sheet"\) === "remove" \? "remove"/);
+  });
 });
