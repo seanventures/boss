@@ -1475,7 +1475,8 @@ def _run_history(connection: Any, target_ids: list[str]) -> dict[str, list[dict[
     hist: dict[str, list[dict[str, Any]]] = {t: [] for t in target_ids}
     if target_ids:
         for h in connection.execute(text(
-                "SELECT id, deployment_target_id AS target_id, status, commit_ref, created_at "
+                "SELECT id, deployment_target_id AS target_id, status, commit_ref, created_at, "
+                "COALESCE(release_packet->>'kind', 'deploy') AS kind "
                 "FROM deployment_runs WHERE deployment_target_id = ANY(:t) "
                 "  AND trigger IS NOT NULL ORDER BY created_at DESC"),
                 {"t": list(target_ids)}).mappings():
@@ -1489,9 +1490,23 @@ def delivery_rollback_source(row_id: str, history: list[dict[str, Any]]) -> Opti
     if not history or history[0]["id"] != row_id or history[0]["status"] != "failed":
         return None
     for h in history[1:]:
+        if is_removal_run(h):
+            # A REMOVAL IS NOT A RELEASE TO GO BACK TO, and nothing older than it is either:
+            # the app it removed is gone. Picking it re-ran the removal — with its data — from a
+            # Roll back press, on no new approval (HelpDesk AI deprun_a2a265b71ce145a08249).
+            return None
         if h["status"] in ("succeeded", "deployed"):
             return h["id"]
     return None
+
+
+def is_removal_run(row: dict[str, Any]) -> bool:
+    """A deployment run that REMOVED an app (services/app_removal.py), not one that shipped it."""
+    kind = row.get("kind")
+    if kind is None:
+        packet = row.get("release_packet") or {}
+        kind = packet.get("kind") if isinstance(packet, dict) else None
+    return str(kind or "") == "remove"
 
 
 def governed_host(r: dict[str, Any]) -> bool:

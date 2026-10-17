@@ -725,6 +725,13 @@ def redeploy(engine, settings: Settings, deployment_run_id: str, *,
         from .resource_plane import ResourcePlaneService
 
         packet = dict(prior["release_packet"] or {})
+        if str(packet.get("kind") or "") == "remove":
+            # A REMOVAL IS NEVER RUN AGAIN BY A REDEPLOY OR A ROLLBACK: removing an app is its own
+            # governed act (app_removal.plan_removal, typed name, its own approval). Planning
+            # its packet again re-ran it with its `delete_data` (deprun_a2a265b71ce145a08249).
+            return {"status": "blocked", "deployment_run_id": deployment_run_id,
+                    "reason": "That deploy removed the app; it cannot be run again. Deploy the "
+                              "app from its build or its workflow."}
         # Keep the lineage explicit: a redeploy that cannot say what it came from is just an
         # unexplained second row.
         packet.update({"source": "redeploy", "redeploy_of": deployment_run_id})
