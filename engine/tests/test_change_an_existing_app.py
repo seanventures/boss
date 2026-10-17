@@ -123,15 +123,37 @@ def test_naming_a_run_that_does_not_exist_says_so(monkeypatch):
         cts.start_followup_task(None, parent_run_id="nope", instructions="x", jobs=None)
 
 
-def test_followup_copies_parent_design_so_official_plan_is_not_lost(monkeypatch):
+def test_an_official_followup_keeps_the_parents_plan(monkeypatch):
     captured: dict = {}
     monkeypatch.setattr(cts, "start_code_task",
                         lambda connection, **kw: captured.update(kw) or "crun_new")
     parent = dict(PARENT)
     parent["state"] = {"design": {"plan": "Keep HookWatch. Make verify real.", "plan_ok": True}}
+    parent["finalize_ctx"] = {**(PARENT.get("finalize_ctx") or {}), "official": True}
     monkeypatch.setattr(cts, "load_code_task_run", lambda _c, _r: parent)
     cts.start_followup_task(None, parent_run_id="crun_child", instructions="fix verify", jobs=None)
     assert captured["finalize_ctx"]["inherited_design"]["plan"].startswith("Keep HookWatch")
+
+
+def test_a_new_change_plans_itself_instead_of_resuming_the_parents_plan(monkeypatch):
+    """HelpDesk AI crun_c54a6f0fad234f02b63e: "a polished, vivid look" resumed the ticket-tags
+    build's plan (design_resumed: standards, spec, plan, review_plan skipped) and changed one
+    route. A follow-up with a new requested change runs its own design chain; the parent's plan
+    rides along as reference only. Its brief no longer forbids a restyle it asks for."""
+    captured: dict = {}
+    monkeypatch.setattr(cts, "start_code_task",
+                        lambda connection, **kw: captured.update(kw) or "crun_new")
+    parent = dict(PARENT)
+    parent["state"] = {"design": {"plan": "Add ticket tags.", "plan_ok": True}}
+    parent["finalize_ctx"] = {k: v for k, v in (PARENT.get("finalize_ctx") or {}).items()
+                              if k not in ("official", "qa_benchmark")}
+    monkeypatch.setattr(cts, "load_code_task_run", lambda _c, _r: parent)
+    cts.start_followup_task(None, parent_run_id="crun_child", instructions="a vivid new look",
+                            jobs=None)
+    fctx = captured["finalize_ctx"]
+    assert "inherited_design" not in fctx
+    assert fctx["parent_design"]["plan"] == "Add ticket tags."
+    assert "unless the requested change asks for that" in captured["instructions"]
 
 
 def test_followup_engine_override_pins_openai(started):

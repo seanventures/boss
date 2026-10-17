@@ -1090,7 +1090,16 @@ def start_followup_task(
             child_fctx["qa_benchmark"] = dict(bench)
     parent_design = (run.get("state") or {}).get("design")
     if isinstance(parent_design, dict) and str(parent_design.get("plan") or "").strip():
-        child_fctx["inherited_design"] = dict(parent_design)
+        # A NEW CHANGE PLANS ITSELF. Inheriting the parent's design makes the build skip its
+        # standards, spec, plan and plan review (code_task.design_resumed) and implement the
+        # PARENT's plan: HelpDesk AI's "a polished, vivid look, a dashboard, a dark mode"
+        # (crun_c54a6f0fad234f02b63e) resumed the ticket-tags build's plan and changed one route.
+        # The parent's plan stays as reference for the new plan; it is resumed only for an
+        # official benchmark follow-up, whose fixed plan must survive (qa_benchmark / official).
+        if child_fctx.get("qa_benchmark") or child_fctx.get("official"):
+            child_fctx["inherited_design"] = dict(parent_design)
+        else:
+            child_fctx["parent_design"] = {"plan": str(parent_design.get("plan") or "")[:12000]}
     # THE STEP THAT STARTED THIS, over the parent's. The parent's `origin` may name the workflow
     # run that built the app first; left in place, start_code_task would lift it and file this
     # change under a run that finished long ago instead of the one that asked for it.
@@ -1120,8 +1129,9 @@ def start_followup_task(
         instructions=(
             "Continue work on an EXISTING application. Its code is already on this branch: "
             "read it first and build on top of it.\n\n"
-            "Do not rebuild the app, restructure it, or restyle it. Change what is asked for "
-            "and leave the rest as it is -- someone is already using this.\n\n"
+            "Do not rebuild the app or restructure it, and do not change how it looks unless "
+            "the requested change asks for that. Change what is asked for and leave the rest as "
+            "it is -- someone is already using this.\n\n"
             f"REQUESTED CHANGE:\n{instructions}"),
         # A CHANGE TO AN APP SOMEONE USES keeps its existing tests passing, whoever wrote the
         # rest of the criteria — enforced here, where every follow-up path converges (a workflow
