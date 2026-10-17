@@ -909,8 +909,12 @@ def response_view(connection, project_id: str, incident_id: str) -> Optional[dic
                          "SELECT step_id, status FROM workflow_step_runs WHERE "
                          "workflow_run_id = :r ORDER BY created_at"),
                          {"r": run_id}).mappings().all()]
+            pr = connection.execute(sql(
+                "SELECT pull_request_url FROM code_task_runs WHERE finalize_ctx->>'workflow_run_id'"
+                " = :r AND pull_request_url IS NOT NULL ORDER BY created_at DESC LIMIT 1"),
+                {"r": run_id}).scalar()
             run = {"id": row["id"], "status": row["status"], "started_at": _iso(row["created_at"]),
-                   "steps": steps}
+                   "steps": steps, "pull_request_url": pr}
     auto = connection.execute(sql(
         "SELECT id, enabled, on_behalf_of FROM event_subscriptions WHERE project_id = :p AND "
         "event_type = :e AND sink_kind = 'workflow' AND sink_ref = :k"),

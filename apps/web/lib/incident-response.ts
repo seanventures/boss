@@ -28,7 +28,8 @@ export type IncidentResponse = {
   reportedOnly: boolean;
   evidence: IncidentEvidence[];
   reports: IncidentReport[];
-  response: { id: string; status: string; startedAt: string | null; steps: IncidentStep[] } | null;
+  response: { id: string; status: string; startedAt: string | null; steps: IncidentStep[];
+              pullRequestUrl: string | null } | null;
   autoRespond: { subscriptionId: string; enabled: boolean; onBehalfOf: string | null } | null;
   reportReady: boolean;
   respondInput: Record<string, unknown>;
@@ -63,7 +64,8 @@ export function parseIncidentResponse(w: unknown): IncidentResponse {
                refs: arr(y.refs).filter((s): s is string => typeof s === "string" && !!s), count: num(y.count, 1) || 1 };
     }),
     response: r ? { id: str(r.id), status: str(r.status), startedAt: optStr(r.started_at),
-                    steps: arr(r.steps).map((x) => { const y = obj(x); return { stepId: str(y.step_id), status: str(y.status) }; }) } : null,
+                    steps: arr(r.steps).map((x) => { const y = obj(x); return { stepId: str(y.step_id), status: str(y.status) }; }),
+                    pullRequestUrl: optStr(r.pull_request_url) } : null,
     autoRespond: auto ? { subscriptionId: str(auto.subscription_id), enabled: auto.enabled === true, onBehalfOf: optStr(auto.on_behalf_of) } : null,
     reportReady: o.report_ready === true,
     respondInput: obj(o.respond_input),
@@ -131,8 +133,10 @@ export function responseStrip(steps: IncidentStep[]): { id: string; label: strin
 export const evidenceOf = (r: IncidentResponse, kind: string): IncidentEvidence | null =>
   [...r.evidence].reverse().find((e) => e.kind === kind) ?? null;
 
-/** The fix's pull request, when any evidence carries one (it is optional in the payload). */
+/** The fix's pull request: the response run's build, else any evidence that carries one. */
 export function pullRequestUrl(r: IncidentResponse): string | null {
+  const own = r.response?.pullRequestUrl;
+  if (own && /^https?:\/\//.test(own)) return own;
   for (const e of [...r.evidence].reverse()) {
     const u = e.payload.pull_request_url;
     if (typeof u === "string" && /^https?:\/\//.test(u)) return u;

@@ -910,7 +910,9 @@ def metrics_view(connection, target: dict, *, now: Optional[datetime] = None,
             "err": (round(r["errors"] / req, 4) if r["errors"] is not None and req else None),
             "p50": r["p50_ms"], "p95": r["p95_ms"]})
     inc = _incident(connection, target["project_id"], target["id"])
-    firing = bool(inc and inc["status"] not in _CLOSED)
+    # An incident only an app REPORTED is open without the monitor alerting: it is shown on its
+    # card, never as this monitor's "Alerting".
+    firing = bool(inc and inc["status"] not in _CLOSED and inc.get("alerted"))
     verdict = "firing" if firing else judge(window, rule)
     state = ("waiting" if not latest else "ok" if latest["ok"] else "failing")
     return {
