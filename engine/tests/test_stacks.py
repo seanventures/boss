@@ -558,3 +558,26 @@ def test_a_backticked_stack_line_is_read_and_rejected_alternatives_are_not_reque
         {"service": "backend", "language": "node", "framework": "express"},
         {"service": "frontend", "language": "node", "framework": "react"}]
     assert stacks.check_architecture(md).ok
+
+
+def test_bosss_own_sentence_about_the_deploy_machine_is_not_a_request():
+    """HelpDesk AI's add-a-feature build (crun_d3af188d7da7402d930d) was refused: "This build asks
+    for Ruby or PHP … needs Java". Those words were BOSS's own host brief, added to the directive:
+    the machine "has no node, npm, pip3, java, go, ruby, php, make"."""
+    from boss_engine.services import stacks
+    from boss_engine.services.workflow_capability_runner import (
+        DEPLOY_BRIEF_MARKER, DEPLOY_HOST_MARKER)
+
+    directive = (
+        "Ticket tags: agents can add short tags to a ticket, and the queue has a tag filter.\n\n"
+        f"{DEPLOY_HOST_MARKER}: vm-1 (203.0.113.10) has Docker (29.1.3), Docker Compose 2.40, "
+        "python3 (3.14.4), git; has no node, npm, pip3, java, go, ruby, php, make. Write "
+        "boss.deploy.yaml for what that machine has: use kind: compose.\n\n"
+        f"{DEPLOY_BRIEF_MARKER} by BOSS after review. Write a boss.deploy.yaml.\n"
+        "---\nThe spec.")
+    verdict = stacks.check_build(directive)
+    assert verdict.ok, verdict.message
+    assert "Ticket tags" in stacks.operator_text(directive)
+    # A request in the brief itself is still read.
+    asked = stacks.check_build("Rewrite the server in Ruby on Rails.\n\n" + directive)
+    assert not asked.ok and "Ruby" in asked.message

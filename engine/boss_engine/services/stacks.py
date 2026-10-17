@@ -861,13 +861,24 @@ _TEMPLATE_MATERIAL = re.compile(
     r"(?:<<<BEGIN UNTRUSTED TEMPLATE MATERIAL>>>|^## The template's brief).*?(?=\n-{3,}\s*\n|\Z)",
     re.S | re.M)
 _ARCHITECTURE_PROSE = re.compile(r"THE APPROVED ARCHITECTURE BELOW IS BINDING.*\Z", re.S)
+#: BOSS's own deploy briefs, added to a build's directive (workflow_capability_runner
+#: DEPLOY_HOST_MARKER / DEPLOY_BRIEF_MARKER): a paragraph each, up to the next blank line. They
+#: describe the MACHINE ("has no node, npm, pip3, java, go, ruby, php, make") — never a request.
+_DEPLOY_BRIEFS = re.compile(
+    r"^(?:THE MACHINE THIS APP DEPLOYS TO|THIS APP WILL BE DEPLOYED)\b.*?(?=\n\s*\n|\Z)",
+    re.S | re.M)
 
 
 def operator_text(instructions: str) -> str:
     """A build brief without the material BOSS added that is not a request: an applied template's
-    brief and reference code (it describes every stack it ships, Java and React included) and
-    the approved architecture's prose (whose stack is read from its `Stack:` line instead)."""
+    brief and reference code (it describes every stack it ships, Java and React included), BOSS's
+    briefs about the deploy machine, and the approved architecture's prose (whose stack is read
+    from its `Stack:` line instead)."""
     text = _TEMPLATE_MATERIAL.sub("", str(instructions or ""))
+    # HelpDesk AI's "add a feature" build (crun_d3af188d7da7402d930d) was refused as asking for
+    # Java, Ruby and PHP: the only place those words appeared was BOSS's own sentence about the
+    # deploy machine, "has no node, npm, pip3, java, go, ruby, php, make".
+    text = _DEPLOY_BRIEFS.sub("", text)
     return _ARCHITECTURE_PROSE.sub("", text)
 
 
