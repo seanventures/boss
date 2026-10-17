@@ -205,6 +205,9 @@ const SENTENCES: Record<string, string> = {
   // Fix and redeploy (engine deploy_repair): the deploy failed for the app's reason.
   "deploy.fix_started": "Deploy failed — fixing the app",
   "deploy.redeploying": "App fixed — deploying again",
+  "recovery.decided": "The step's agent decided how to recover",
+  "recovery.resumed": "Recovery: running the step again",
+  "boss.recommendation_recorded": "Recorded a fix for BOSS's developers",
 };
 
 function words(snake: string): string {
@@ -232,6 +235,12 @@ export function stepLogSentence(item: Pick<ActivityLogItem, "source" | "kind" | 
     const took = Number.isFinite(secs) && secs > 0 ? ` in ${humanDuration(secs)}` : "";
     const which = attempt > 1 ? `Attempt ${attempt}` : "Step";
     return status ? `${which} ${status}${took}` : null;
+  }
+  // The recovery agent (engine step_recovery) says each decision in its own words:
+  // "Harbor: port 8000 held by this app's earlier release (helpdesk-ai) → cleaning it up…".
+  if ((item.kind.startsWith("recovery.") || item.kind === "boss.recommendation_recorded")
+      && typeof data.sentence === "string" && data.sentence.trim()) {
+    return data.sentence.trim();
   }
   if (SENTENCES[item.kind]) return SENTENCES[item.kind];
   // Fallback: the classifier's title, without the source's name in front of it.

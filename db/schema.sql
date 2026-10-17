@@ -9075,3 +9075,27 @@ CREATE TABLE IF NOT EXISTS infra_platform_resources (
   UNIQUE (project_id, resource_id)
 );
 CREATE INDEX IF NOT EXISTS infra_platform_resources_app ON infra_platform_resources (project_id, app_key);
+
+-- WHAT BOSS SHOULD CHANGE IN ITS OWN CODE (services/boss_recommendations.py). A step's recovery
+-- agent that concludes a failure is BOSS's own (wiring, planner, a missing capability, the
+-- image's tooling) records it here, once per distinct cause: the evidence, the hypothesis and the
+-- proposed change, for a developer to implement. Rendered as RECOMMENDATIONS.md (console, API).
+CREATE TABLE IF NOT EXISTS boss_recommendations (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  signature TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'open',          -- open | done | wont_fix
+  title TEXT NOT NULL,
+  symptom TEXT NOT NULL DEFAULT '',
+  evidence JSONB NOT NULL DEFAULT '[]'::jsonb,  -- redacted log lines / citations
+  root_cause TEXT NOT NULL DEFAULT '',
+  proposed_change TEXT NOT NULL DEFAULT '',
+  files JSONB NOT NULL DEFAULT '[]'::jsonb,     -- files/functions, when known
+  refs JSONB NOT NULL DEFAULT '[]'::jsonb,      -- [{run_id, step_id, build_id, deployment_id, at}]
+  occurrences INTEGER NOT NULL DEFAULT 1,
+  boss_version TEXT,
+  created_by TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (project_id, signature)
+);
