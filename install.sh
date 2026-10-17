@@ -1356,6 +1356,11 @@ if [[ -d scripts/install/initdb ]]; then
   find scripts/install/initdb -type f -name '*.sql' -exec chmod 644 {} +
 fi
 
+# BOSS's own source mirror for self-fixes (docs/product/BOSS_FIXES_ITSELF.md §6.1): the
+# directory exists before Compose mounts it, so Docker never creates it as root. Empty until
+# `boss self-fix seed`; nothing in it is secret.
+mkdir -p .boss/selfsrc && chmod 755 .boss .boss/selfsrc
+
 # Start only the database and API for bootstrap. A fresh worker cannot poll
 # before the default project and its actor memberships exist.
 # shellcheck disable=SC2086

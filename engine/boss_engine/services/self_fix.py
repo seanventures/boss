@@ -236,9 +236,12 @@ def set_switch(connection: Connection, *, on: bool, actor: str, why: str = "",
         audit(connection, "self_fix.policy_changed", actor=actor, outcome="success",
               details={"settings": dict(settings_patch)})
     if not on:
+        # OFF MEANS OFF (§8.7): every self-fix still building, waiting for a person, or approved
+        # but not yet taken by the host is cancelled and its tickets revoked. An install the host
+        # already took finishes its health window or rolls back; nothing installed is removed.
         for row in connection.execute(text(
                 "SELECT id FROM self_fixes WHERE status = ANY(:s)"),
-                {"s": sorted(BUILDING | {AWAITING_APPROVAL})}).all():
+                {"s": sorted(BUILDING | {AWAITING_APPROVAL, APPROVED})}).all():
             cancel(connection, row[0], actor=actor, why="self-fix was switched off")
     return switch(connection)
 

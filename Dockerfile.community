@@ -224,6 +224,9 @@ COPY scripts/wait_for_postgres.py ./scripts/wait_for_postgres.py
 # copied into the image, so the step died with "can't open file" on every install — hidden until
 # the node agent before it stopped failing under `sh`.
 COPY scripts/install/ensure_local_place.py ./scripts/install/ensure_local_place.py
+# BOSS fixes itself: the one implementation of the local-stack plan (upgrade_plan reads it), the
+# same file the host self-installer runs.
+COPY scripts/install/self_fix_installer.py ./scripts/install/self_fix_installer.py
 COPY tools ./tools
 COPY docs/product/V1_FEATURE_LOCK.md ./docs/product/V1_FEATURE_LOCK.md
 COPY docs/product/TRACEABILITY.md ./docs/product/TRACEABILITY.md

@@ -33,6 +33,8 @@ tmp/
 
 # The installed release record (written by the installer; not a local change)
 .boss-release
+# BOSS fixes itself: the self-source mirror, the stack worktree, the self-installer's key
+/.boss/
 
 # Artifacts the API writes under the checkout when run or tested in place (settings.artifact_root)
 /artifacts/

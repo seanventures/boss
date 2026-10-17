@@ -62,6 +62,10 @@ def _write_tree(source: Path, root: Path, written: list[str]) -> None:
 def _apply(root: Path, patch: Path, written: list[str]) -> str:
     if not patch.is_file():
         return f"(no {patch.name} in the fixture)"
+    check = subprocess.run(["git", "apply", "--check", "--whitespace=nowarn", str(patch)],
+                           cwd=str(root), capture_output=True, text=True)
+    if check.returncode != 0:
+        return f"{patch.name} is already in place"
     done = subprocess.run(["git", "apply", "--whitespace=nowarn", str(patch)], cwd=str(root),
                           capture_output=True, text=True)
     if done.returncode != 0:
@@ -91,9 +95,9 @@ def play(stage: str, prompt: str, root: Path, *, read_only: bool, state: Any
         _write_tree(tests, root, written)
         return "TEST: " + ", ".join(written), written
     if stage == "self_fix_implement" and not read_only:
-        said = [_apply(root, fixture / "fix.patch", written)] \
-            if "fix_applied" not in state.fired else []
-        state.fired.add("fix_applied")
+        # Every writing turn starts from what is in the workspace (a repair round may start from
+        # the base again): the fix is applied when it is not already there.
+        said = [_apply(root, fixture / "fix.patch", written)]
         extra = {"weakens_test": "weaken.patch", "protected_path": "protected.patch",
                  "out_of_scope": "out_of_scope.patch"}.get(script)
         if extra and f"extra:{extra}" not in state.fired:

@@ -381,9 +381,13 @@ def pending_tickets(connection: Connection, settings: Any) -> list[dict[str, Any
     tickets, and cards whose fix was checked on a stack that is no longer running."""
     expire_tickets(connection)
     rebase_stale(connection, settings)
+    # SWITCHED OFF: no new install is handed out; a rollback always is (§8.7).
+    on = not sf.env_off() and sf.switch(connection)["on"]
+    kinds = list(KINDS) if on else ["rollback"]
     rows = connection.execute(text(
         "SELECT t.id, t.kind, t.token, t.self_fix_id, t.expires_at FROM self_fix_tickets t "
-        "WHERE t.status = 'issued' ORDER BY t.created_at")).mappings().all()
+        "WHERE t.status = 'issued' AND t.kind = ANY(:k) ORDER BY t.created_at"),
+        {"k": kinds}).mappings().all()
     return [{"ticket_id": r["id"], "kind": r["kind"], "token": r["token"],
              "self_fix_id": r["self_fix_id"], "expires_at": r["expires_at"].isoformat()}
             for r in rows]
@@ -423,10 +427,12 @@ def _approver(connection: Connection, decision_id: Any) -> Optional[str]:
 def take(connection: Connection, ticket_id: str) -> dict[str, Any]:
     """The self-installer takes a ticket: ONCE. Returns what it needs to check and apply it —
     the token, the decision's status as it is NOW, and the fix's commit as a git bundle."""
+    on = not sf.env_off() and sf.switch(connection)["on"]
     row = connection.execute(text(
         "UPDATE self_fix_tickets SET status = 'taken', taken_at = now(), updated_at = now() "
-        "WHERE id = :i AND status = 'issued' AND expires_at > now() RETURNING id, self_fix_id, "
-        "kind, token, body"), {"i": ticket_id}).mappings().first()
+        "WHERE id = :i AND status = 'issued' AND expires_at > now() "
+        "AND (CAST(:on AS BOOLEAN) OR kind = 'rollback') RETURNING id, self_fix_id, "
+        "kind, token, body"), {"i": ticket_id, "on": on}).mappings().first()
     if row is None:
         state = connection.execute(text("SELECT status, expires_at FROM self_fix_tickets "
                                         "WHERE id = :i"), {"i": ticket_id}).mappings().first()

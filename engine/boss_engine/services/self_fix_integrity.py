@@ -326,7 +326,7 @@ def within_size(changes: Iterable[FileChange], *, max_files: int, max_lines: int
                           f"(the most is {max_files} files and {max_lines} lines)",
                           {"files": len(code), "lines": lines}, final=True)
     if not code:
-        return GateResult("size", False, "the change touches no code, only tests",
+        return GateResult("code_changed", False, "the fix changed no code, only tests",
                           {"files": 0, "lines": 0})
     return GateResult("size", True, "", {"files": len(code), "lines": lines})
 
