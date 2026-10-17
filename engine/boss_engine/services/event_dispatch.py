@@ -34,6 +34,10 @@ DISPATCHABLE_EVENT_TYPES = frozenset(
         "github.issue_comment",
         "github.pr_opened",
         "github.pr_review",
+        # An app's own error-rate alert opened / resolved an incident (incident_response):
+        # the door a "respond to incidents" workflow subscription starts from.
+        "incident.opened",
+        "incident.resolved",
     }
 )
 

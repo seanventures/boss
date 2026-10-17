@@ -324,6 +324,41 @@ class GitHubAdapter:
             .get("sha"),
         }
 
+    def compare_summary(self, base_sha: str, head_sha: str, *, limit: int = 100) -> dict:
+        """What one release added over another: its commits (sha, first line, author, date)
+        and its files with bounded patches — what an incident investigation reads."""
+        payload = self._request(
+            "GET",
+            (
+                f"/repos/{self.repository_full_name}/compare/"
+                f"{quote(base_sha, safe='')}...{quote(head_sha, safe='')}"
+            ),
+        )
+        commits = []
+        for c in (payload.get("commits") or [])[-limit:]:
+            info = c.get("commit") or {}
+            commits.append({
+                "sha": str(c.get("sha") or ""),
+                "message": str(info.get("message") or "").splitlines()[0][:200]
+                if info.get("message") else "",
+                "author": str((info.get("author") or {}).get("name") or "")[:100],
+                "date": (info.get("author") or {}).get("date"),
+            })
+        files = []
+        for item in (payload.get("files") or [])[:300]:
+            patch = item.get("patch")
+            files.append({
+                "filename": str(item.get("filename") or ""),
+                "status": str(item.get("status") or "modified"),
+                "additions": max(0, int(item.get("additions") or 0)),
+                "deletions": max(0, int(item.get("deletions") or 0)),
+                "patch": str(patch)[:20000] if isinstance(patch, str) else None,
+            })
+        return {"status": str(payload.get("status") or ""),
+                "ahead_by": max(0, int(payload.get("ahead_by") or 0)),
+                "behind_by": max(0, int(payload.get("behind_by") or 0)),
+                "commits": commits, "files": files}
+
     def commit_identity(self, commit_sha: str) -> dict:
         """Return the commit and tree identity for an immutable Git object."""
         payload = self._request(

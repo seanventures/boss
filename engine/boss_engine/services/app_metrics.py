@@ -71,6 +71,13 @@ REQUEST_FAMILIES = ("http_requests_total", "starlette_requests_total")
 HISTOGRAM_FAMILIES = ("http_request_duration_highr_seconds", "http_request_duration_seconds",
                       "starlette_request_duration_seconds")
 STATUS_LABELS = ("status", "code", "status_code")
+#: The labels a request counter names its route by (the platform standard says `route`, always
+#: a TEMPLATE). The per-route split is what says WHICH endpoint is failing — "POST /orders 31%"
+#: is a lead; "9% of all requests" is only an alarm.
+ROUTE_LABELS = ("route", "handler", "path", "endpoint")
+#: An app that labels by raw path (against the standard) would give one key per order id; past
+#: this many the split is dropped to the busiest routes rather than stored without bound.
+MAX_ROUTES = 50
 NAMING = {
     "http_requests_total": "prometheus",
     "starlette_requests_total": "starlette-exporter",
@@ -229,6 +236,7 @@ def extract(samples: list[Sample]) -> dict[str, Any]:
     hist_family = next((f for f in HISTOGRAM_FAMILIES if f + "_bucket" in by_name), None)
 
     requests = errors = None
+    routes: dict[str, dict[str, float]] = {}
     if req_family:
         rows = by_name[req_family]
         requests = sum(s.value for s in rows if not math.isnan(s.value))
@@ -236,6 +244,20 @@ def extract(samples: list[Sample]) -> dict[str, Any]:
         if status_key:
             errors = sum(s.value for s in rows
                          if _is_5xx(s.labels.get(status_key, "")) and not math.isnan(s.value))
+        route_key = next((k for k in ROUTE_LABELS if any(k in s.labels for s in rows)), None)
+        if route_key:
+            for s in rows:
+                if math.isnan(s.value):
+                    continue
+                key = " ".join(x for x in (str(s.labels.get("method") or "").upper(),
+                                           str(s.labels.get(route_key) or "")) if x)[:120]
+                r = routes.setdefault(key or "?", {"requests": 0.0, "errors": 0.0})
+                r["requests"] += s.value
+                if status_key and _is_5xx(s.labels.get(status_key, "")):
+                    r["errors"] += s.value
+            if len(routes) > MAX_ROUTES:
+                routes = dict(sorted(routes.items(), key=lambda kv: -kv[1]["requests"])
+                              [:MAX_ROUTES])
 
     buckets: dict[str, float] = {}
     hist_count = hist_sum = None
@@ -267,6 +289,7 @@ def extract(samples: list[Sample]) -> dict[str, Any]:
         "hist_count": hist_count, "hist_sum": hist_sum,
         "naming": NAMING.get(hist_family or "", None) or NAMING.get(req_family or "", "prometheus"),
         "request_family": req_family, "histogram_family": hist_family,
+        "routes": routes,
     }
 
 
@@ -279,7 +302,7 @@ def window_delta(prev: Optional[dict], cur: dict) -> dict[str, Any]:
     traffic would draw a cliff; ignoring it would lose the requests served since the restart.
     """
     if not prev:
-        return {"requests": None, "errors": None, "buckets": {}, "reset": False}
+        return {"requests": None, "errors": None, "buckets": {}, "reset": False, "routes": {}}
     pb, cb = prev.get("buckets") or {}, cur.get("buckets") or {}
     reset = (cur["requests"] < prev["requests"]
              or (cur.get("errors") is not None and prev.get("errors") is not None
@@ -288,12 +311,28 @@ def window_delta(prev: Optional[dict], cur: dict) -> dict[str, Any]:
              or (set(pb) and set(cb) and set(pb) != set(cb)))
     if reset:
         return {"requests": cur["requests"], "errors": cur.get("errors"),
-                "buckets": dict(cb), "reset": True}
+                "buckets": dict(cb), "reset": True,
+                "routes": {k: dict(v) for k, v in (cur.get("routes") or {}).items()}}
     errors = None
     if cur.get("errors") is not None:
         errors = cur["errors"] - (prev.get("errors") or 0.0)
     return {"requests": cur["requests"] - prev["requests"], "errors": errors,
-            "buckets": {k: v - pb.get(k, 0.0) for k, v in cb.items()}, "reset": False}
+            "buckets": {k: v - pb.get(k, 0.0) for k, v in cb.items()}, "reset": False,
+            "routes": route_delta(prev.get("routes") or {}, cur.get("routes") or {})}
+
+
+def route_delta(prev: dict, cur: dict) -> dict[str, dict[str, float]]:
+    """Per-route requests/errors between two scrapes. A route new since the last scrape counts
+    from zero; one whose counter went down restarted (the same `increase()` rule as the total)."""
+    out: dict[str, dict[str, float]] = {}
+    for key, c in cur.items():
+        p = prev.get(key) or {"requests": 0.0, "errors": 0.0}
+        req, err = c["requests"] - p["requests"], c["errors"] - p["errors"]
+        if req < 0 or err < 0:
+            req, err = c["requests"], c["errors"]
+        if req or err:
+            out[key] = {"requests": req, "errors": err}
+    return out
 
 
 def histogram_quantile(q: float, buckets: dict[str, float]) -> Optional[float]:
@@ -346,10 +385,20 @@ def aggregate(rows: list[dict]) -> dict[str, Any]:
     errors = sum(float(r["errors"]) for r in with_err) if with_err else None
     seconds = sum(float(r.get("interval_s") or 0) for r in got)
     buckets: dict[str, float] = {}
+    routes: dict[str, dict[str, float]] = {}
     for r in got:
         for k, v in (r.get("bucket_deltas") or {}).items():
             buckets[k] = buckets.get(k, 0.0) + float(v)
+        for k, v in (r.get("route_deltas") or {}).items():
+            acc = routes.setdefault(k, {"requests": 0.0, "errors": 0.0})
+            acc["requests"] += float(v.get("requests") or 0)
+            acc["errors"] += float(v.get("errors") or 0)
     return {
+        "routes": [{"route": k, "requests": round(v["requests"], 3),
+                    "errors": round(v["errors"], 3),
+                    "error_rate": round(v["errors"] / v["requests"], 4) if v["requests"] else None}
+                   for k, v in sorted(routes.items(),
+                                      key=lambda kv: (-kv[1]["errors"], -kv[1]["requests"]))],
         "requests": round(requests, 3) if got else None,
         "errors": round(errors, 3) if errors is not None else None,
         "error_rate": (round(errors / requests, 4) if errors is not None and requests > 0
@@ -584,9 +633,29 @@ def due(connection, target_id: str, spec: dict, now: datetime) -> bool:
     return (now - last["scraped_at"]).total_seconds() >= interval
 
 
+def _serialize(connection, target_id: str) -> None:
+    """One writer per app at a time, for the length of the writing transaction.
+
+    Two scrapers windowing against the same previous row both count the same requests: the
+    laptop's three lease slots each swept on their idle branch and HelpDesk AI's traffic was
+    stored three times over (21:10:43.061/.064/.086, 3 requests each against one 122 s window).
+    The lock makes the second writer see the first one's row, so its delta is measured from it.
+    """
+    connection.execute(sql("SELECT pg_advisory_xact_lock(hashtextextended(:k, 0))"),
+                       {"k": "app_metrics:" + target_id})
+
+
 def scrape_target(engine, settings: Any, target: dict, decl: dict, *,
-                  now: Optional[datetime] = None, host_access: Any = None) -> dict[str, Any]:
-    """Scrape one app, store what it said (or why it could not), evaluate its alert."""
+                  now: Optional[datetime] = None, host_access: Any = None,
+                  only_if_due: bool = False) -> dict[str, Any]:
+    """Scrape one app, store what it said (or why it could not), evaluate its alert.
+
+    The fetch is network I/O and runs outside any transaction; the write is serialized per app
+    (`_serialize`). Under that lock a scrape is DISCARDED, not stored, when a newer one already
+    landed (storing an older snapshot after a newer one reads as a counter reset — a spike of
+    the whole counter), or — `only_if_due`, the sweep's own call — when another sweep took
+    this slot while this one was fetching.
+    """
     from ..db import begin
 
     now = now or datetime.now(timezone.utc)
@@ -606,18 +675,29 @@ def scrape_target(engine, settings: Any, target: dict, decl: dict, *,
     ok = snapshot is not None
 
     with begin(engine) as c:
+        _serialize(c, target["id"])
+        latest = _last(c, target["id"])
+        if latest and latest["scraped_at"] >= now:
+            return {"ok": ok, "word": "A newer scrape is already stored", "skipped": True,
+                    "route": got.get("route"), "url": got.get("url"), "requests": None,
+                    "errors": None, "reset": False, "alert": None}
+        if only_if_due and not due(c, target["id"], decl["spec"], now):
+            return {"ok": ok, "word": "Another sweep scraped this app first", "skipped": True,
+                    "route": got.get("route"), "url": got.get("url"), "requests": None,
+                    "errors": None, "reset": False, "alert": None}
         prev = _last(c, target["id"], ok_only=True) if ok else None
         delta = window_delta(prev["snapshot"] if prev else None, snapshot) if ok else \
-            {"requests": None, "errors": None, "buckets": {}, "reset": False}
+            {"requests": None, "errors": None, "buckets": {}, "reset": False, "routes": {}}
         interval_s = ((now - prev["scraped_at"]).total_seconds() if prev and ok else None)
         if ok and not prev:
             word = "Scraped; rates need a second scrape"
         c.execute(sql(
             "INSERT INTO app_metrics_scrapes (id, project_id, deployment_target_id, scraped_at, "
             " ok, route, url, status_code, word, naming, took_ms, snapshot, interval_s, "
-            " requests, errors, counter_reset, bucket_deltas, p50_ms, p95_ms) VALUES "
-            "(:id, :p, :t, :at, :ok, :route, :url, :sc, :word, :naming, :took, "
-            " CAST(:snap AS JSONB), :iv, :req, :err, :reset, CAST(:bd AS JSONB), :p50, :p95)"),
+            " requests, errors, counter_reset, bucket_deltas, p50_ms, p95_ms, route_deltas) "
+            "VALUES (:id, :p, :t, :at, :ok, :route, :url, :sc, :word, :naming, :took, "
+            " CAST(:snap AS JSONB), :iv, :req, :err, :reset, CAST(:bd AS JSONB), :p50, :p95, "
+            " CAST(:rd AS JSONB))"),
             {"id": make_id("ams"), "p": target["project_id"], "t": target["id"], "at": now,
              "ok": ok, "route": got.get("route"), "url": got.get("url"),
              "sc": got.get("status"), "word": word[:200],
@@ -626,7 +706,8 @@ def scrape_target(engine, settings: Any, target: dict, decl: dict, *,
              "req": delta["requests"], "err": delta["errors"], "reset": bool(delta["reset"]),
              "bd": json.dumps(delta["buckets"]) if delta["buckets"] else None,
              "p50": _ms(histogram_quantile(0.5, delta["buckets"])),
-             "p95": _ms(histogram_quantile(0.95, delta["buckets"]))})
+             "p95": _ms(histogram_quantile(0.95, delta["buckets"])),
+             "rd": json.dumps(delta.get("routes")) if delta.get("routes") else None})
         c.execute(sql("DELETE FROM app_metrics_scrapes WHERE deployment_target_id = :t "
                       "AND scraped_at < :cut"),
                   {"t": target["id"], "cut": now - timedelta(days=RETENTION_DAYS)})
@@ -653,7 +734,9 @@ def sweep(engine, settings: Any, targets: list[dict], *, now: Optional[datetime]
             with begin(engine) as c:
                 if not force and not due(c, t["id"], decl["spec"], now):
                     continue
-            res = scrape_target(engine, settings, t, decl, now=now)
+            res = scrape_target(engine, settings, t, decl, now=now, only_if_due=not force)
+            if res.get("skipped"):
+                continue
             scraped += 1
             failed += 0 if res["ok"] else 1
     except Exception as exc:  # noqa: BLE001
@@ -667,15 +750,17 @@ def sweep(engine, settings: Any, targets: list[dict], *, now: Optional[datetime]
 # --------------------------------------------------------------------------- #
 def _window_rows(connection, target_id: str, start: datetime, end: datetime) -> list[dict]:
     rows = connection.execute(sql(
-        "SELECT scraped_at, ok, requests, errors, interval_s, bucket_deltas, counter_reset "
+        "SELECT scraped_at, ok, requests, errors, interval_s, bucket_deltas, counter_reset, "
+        "       route_deltas "
         "FROM app_metrics_scrapes WHERE deployment_target_id = :t AND scraped_at > :a "
         "AND scraped_at <= :z ORDER BY scraped_at"),
         {"t": target_id, "a": start, "z": end}).mappings().all()
     out = []
     for r in rows:
         d = dict(r)
-        if isinstance(d.get("bucket_deltas"), str):
-            d["bucket_deltas"] = json.loads(d["bucket_deltas"])
+        for k in ("bucket_deltas", "route_deltas"):
+            if isinstance(d.get(k), str):
+                d[k] = json.loads(d[k])
         out.append(d)
     return out
 
@@ -751,8 +836,23 @@ def evaluate_alert(connection, target: dict, spec: dict, now: datetime) -> dict[
         connection.execute(sql(
             "UPDATE incidents SET status = 'resolved', last_seen = :now WHERE id = :id"),
             {"id": inc["id"], "now": now})
-        action = "resolved"
-    return {"verdict": verdict, "action": action, "window": window, "rule": rule}
+        action, inc_id = "resolved", inc["id"]
+    event_id = None
+    if action in ("opened", "reopened", "resolved"):
+        # WHAT WAS SERVING, AND SAY SO. The row above says "x% failing"; the response needs the
+        # release, the routes and the app's build lineage, and something has to be told. Its
+        # own savepoint: evidence that cannot be written never costs the scrape or the alert.
+        from . import incident_response
+
+        point = connection.begin_nested()
+        try:
+            event_id = incident_response.on_alert(connection, target, inc_id, action=action,
+                                                  window=window, rule=rule, now=now)
+            point.commit()
+        except Exception:  # noqa: BLE001
+            point.rollback()
+    return {"verdict": verdict, "action": action, "window": window, "rule": rule,
+            "event_id": event_id}
 
 
 # --------------------------------------------------------------------------- #

@@ -2106,6 +2106,9 @@ CREATE TABLE IF NOT EXISTS app_metrics_scrapes (
 );
 CREATE INDEX IF NOT EXISTS idx_app_metrics_scrapes_target
   ON app_metrics_scrapes(deployment_target_id, scraped_at DESC);
+-- Per-route requests/errors in the window since the previous good scrape ({"POST /orders":
+-- {requests, errors}}): which endpoint is failing, not only how much.
+ALTER TABLE app_metrics_scrapes ADD COLUMN IF NOT EXISTS route_deltas JSONB;
 
 -- Generalized customer-app rollout state reuses the existing deployment_rollouts
 -- ledger while linking each new rollout to its ProviderOps DeploymentRun.
@@ -4972,6 +4975,34 @@ CREATE TABLE IF NOT EXISTS remediations (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_remediations_incident ON remediations(incident_id, created_at DESC);
+
+-- Has an app recovered after its incident's fix shipped? Judged by BOSS's own scrapes of the
+-- app's /metrics (incident_response.look_at_recovery), never by what the fixing agent says:
+-- `status` waiting -> recovered | timed_out once the error rate has stayed at the pre-incident
+-- `baseline` on enough traffic for `stable_minutes`. A workflow's verify_recovery step parks on
+-- the row like a CI wait.
+CREATE TABLE IF NOT EXISTS incident_recovery_checks (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  incident_id TEXT NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+  target_id TEXT NOT NULL,
+  workflow_run_id TEXT,
+  since TIMESTAMPTZ NOT NULL,
+  deadline TIMESTAMPTZ NOT NULL,
+  stable_minutes DOUBLE PRECISION NOT NULL DEFAULT 3,
+  baseline JSONB NOT NULL DEFAULT '{}'::jsonb,
+  rule JSONB NOT NULL DEFAULT '{}'::jsonb,
+  status TEXT NOT NULL DEFAULT 'waiting'
+    CHECK (status IN ('waiting', 'recovered', 'timed_out', 'failed')),
+  summary TEXT NOT NULL DEFAULT '',
+  checks INTEGER NOT NULL DEFAULT 0,
+  first_clear_at TIMESTAMPTZ,
+  last_window JSONB,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_incident_recovery_checks_incident
+  ON incident_recovery_checks(incident_id, created_at DESC);
 
 -- Evidence-only AI SRE postmortems (not break-glass). One artifact per incident.
 CREATE TABLE IF NOT EXISTS sre_postmortems (
