@@ -4627,6 +4627,21 @@ def resume_awaited(
             # A BUILD WAITING ON THE OPERATOR HAS NOT FAILED (factory walk). A plan to approve,
             # checks to waive or a budget to raise is the build's own card; failing the step
             # above it added a second card for the same wait ("Build, review and test failed").
+            # UNLESS THE PERSON ALREADY ANSWERED IT BY RETRYING (Factory › Retry on a build
+            # parked for a waiver, HelpDesk AI wfr_f383649a8b024d97a80c): the retry is a new
+            # attempt of the lineage, and the old one stays parked forever — the step must
+            # follow the attempt the person started, or it waits on an answered question.
+            successor = _successor_attempt(connection, project_id, awaited_id, run_id)
+            if successor:
+                workflows.repoint_waiting_step(
+                    connection, project_id=project_id, step_run_id=step["id"],
+                    handle={**handle, "id": successor},
+                    note=(f"a person retried the build that was waiting on them; this step "
+                          f"now follows {successor} (the earlier attempt {awaited_id})"),
+                )
+                done.append({"run_id": run_id, "step_id": step["step_id"],
+                             "outcome": "following_retry", "awaited": kind,
+                             "was": awaited_id, "now": successor})
             continue
         if kind == "code_task" and (status == "repairing" or status in ok_states):
             # A REPAIRED ATTEMPT IS NOT THE RESULT, AND A FINISHED BUILD IS NOT A PASSED ONE.

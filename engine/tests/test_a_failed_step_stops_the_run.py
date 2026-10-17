@@ -376,6 +376,49 @@ def test_a_build_waiting_on_the_operator_has_not_failed_its_step(eng, project, m
         c.execute(text("DELETE FROM code_task_runs WHERE id=:i"), {"i": awaited_id})
 
 
+@pytest.mark.parametrize("phase", ["awaiting_gate_override", "awaiting_plan_approval"])
+def test_a_step_follows_the_retry_a_person_answered_its_wait_with(eng, project, monkeypatch,
+                                                                    phase):
+    """HelpDesk AI wfr_f383649a8b024d97a80c: the build parked for a waiver (its reviewers left
+    findings open), the person pressed Retry in the Factory, attempt 2 fixed them and opened
+    PR #229 — and the workflow step went on waiting on attempt 1, which stays parked forever.
+    A person's retry IS the answer to the wait: the step follows the newer attempt of the same
+    lineage, then finishes the ordinary way."""
+    key = next(k for k, kind in sorted(AWAITED.items()) if kind == "code_task")
+    awaited_id = f"aw_{key}_{uuid.uuid4().hex[:8]}"
+    retry_id = f"aw_{key}_{uuid.uuid4().hex[:8]}"
+    field = runner._AWAIT_KINDS[key][1][0]
+    tool_name = CAPABILITIES[key].tool
+    tools = [RecordingTool(tool_name, {field: awaited_id})] if tool_name else []
+    monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry(tools))
+    monkeypatch.setattr(runner, "_preview_missing_for_run", lambda *a, **k: None)
+    with eng.begin() as c:
+        run = _two_step(c, project, key)
+        _tick_through_retries(eng, c, project, run["id"], times=2)
+        assert _steps(c, run["id"])["s"]["status"] == "waiting"
+        _insert_awaited(c, project, "code_task_runs", awaited_id, "blocked")
+        c.execute(text("UPDATE code_task_runs SET phase = :ph, created_at = now() - "
+                       "interval '1 hour' WHERE id = :i"), {"ph": phase, "i": awaited_id})
+        runner.tick(c, Ctx(eng), project_id=project)
+        step = _steps(c, run["id"])["s"]
+        assert step["status"] == "waiting"
+        assert (step["output"].get("await") or {}).get("id") == awaited_id, \
+            "with no retry, the step keeps waiting on the person's card"
+        # The person's Retry: a later attempt of the same lineage.
+        _insert_awaited(c, project, "code_task_runs", retry_id, "running")
+        c.execute(text("UPDATE code_task_runs SET phase = 'implement', finalize_ctx = "
+                       "COALESCE(finalize_ctx, '{}'::jsonb) || CAST(:fc AS JSONB) WHERE id = :i"),
+                  {"fc": json.dumps({"root_run_id": awaited_id, "attempt": 2}), "i": retry_id})
+        runner.tick(c, Ctx(eng), project_id=project)
+        step = _steps(c, run["id"])["s"]
+        assert step["status"] == "waiting"
+        assert (step["output"].get("await") or {}).get("id") == retry_id, \
+            "the step follows the attempt the person started"
+        assert _run_status(c, run["id"]) not in {"failed", "deadlettered"}
+        c.execute(text("DELETE FROM code_task_runs WHERE id = ANY(:i)"),
+                  {"i": [awaited_id, retry_id]})
+
+
 @pytest.mark.parametrize("key", ["deploy", "redeploy"])
 def test_a_deploy_is_done_when_its_deployment_is_healthy_not_when_it_is_planned(
         eng, project, monkeypatch, key):
