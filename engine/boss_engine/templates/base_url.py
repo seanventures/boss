@@ -96,26 +96,38 @@ def target_base_url(target: dict) -> str:
     return f"http://{domain}" if domain else ""
 
 
+def _callback_paths(manifest: dict) -> list[str]:
+    return [mo.group(1) for r in manifest.get("routes") or [] if (mo := _CALLBACK_ROUTE.match(str(r).strip()))]
+
+
+def sign_in_providers(manifest: dict) -> list[dict[str, str]]:
+    """The sign-in providers a template wires: [{provider, id, secret}], one per
+    `<PROVIDER>_CLIENT_ID` secret (`OIDC_BOSS_CLIENT_ID` is `boss`) of a template with a route
+    `GET <path with callback>/:provider`; `id` and `secret` are the names the app reads. A template
+    with a `_CLIENT_ID` and no callback route (a payment API's client) wires no sign-in provider."""
+    if not _callback_paths(manifest):
+        return []
+    out: list[dict[str, str]] = []
+    for s in manifest.get("secrets") or []:
+        name = str((s or {}).get("name") or "") if isinstance(s, dict) else ""
+        if not name.endswith("_CLIENT_ID"):
+            continue
+        p = name[: -len("_CLIENT_ID")].lower()
+        p = p[len("oidc_"):] if p.startswith("oidc_") else p
+        if p and p not in [o["provider"] for o in out]:
+            out.append({"provider": p, "id": name, "secret": name[: -len("_ID")] + "_SECRET"})
+    return out
+
+
 def callbacks(manifests: list[dict], base: str) -> list[dict[str, str]]:
     """[{provider, url}] the operator registers at each sign-in provider, for `base`."""
     out: list[dict[str, str]] = []
     if not base:
         return out
     for m in manifests:
-        paths = [mo.group(1) for r in m.get("routes") or [] if (mo := _CALLBACK_ROUTE.match(str(r).strip()))]
-        if not paths:
-            continue
-        providers = []
-        for s in m.get("secrets") or []:
-            name = str((s or {}).get("name") or "") if isinstance(s, dict) else ""
-            if name.endswith("_CLIENT_ID"):
-                p = name[: -len("_CLIENT_ID")].lower()
-                p = p[len("oidc_"):] if p.startswith("oidc_") else p
-                if p and p not in providers:
-                    providers.append(p)
-        for path in paths:
-            for p in providers:
-                item = {"provider": p, "url": f"{base.rstrip('/')}{path}/{p}"}
+        for path in _callback_paths(m):
+            for p in sign_in_providers(m):
+                item = {"provider": p["provider"], "url": f"{base.rstrip('/')}{path}/{p['provider']}"}
                 if item not in out:
                     out.append(item)
     return out

@@ -69,16 +69,40 @@ def app_key(app_name: str) -> str:
     return identity_key(project_name(name)[0] if name else "")
 
 
-def _names_anybody(spec: Optional[dict[str, Any]]) -> bool:
-    """Whether this workflow says who should work on it, in any step."""
-    for step in ((spec or {}).get("steps") or []):
+def _all_steps(steps: Any) -> Iterable[dict[str, Any]]:
+    """EVERY step of a workflow, a parallel branch's and a nested block's included. Reading only
+    the top level missed HelpDesk D1's deploy (inside pass_2's branch): its approver
+    `release_manager` never joined the team, and the deploy was refused for it."""
+    for step in steps or []:
+        if isinstance(step, list):
+            yield from _all_steps(step)
+            continue
         if not isinstance(step, dict):
             continue
-        if str(step.get("captain") or "").strip():
-            return True
-        if str((step.get("approval") or {}).get("approver_role") or "").strip():
-            return True
-    return False
+        yield step
+        for key in ("steps", "branches", "then", "else", "body"):
+            inner = step.get(key)
+            if isinstance(inner, list):
+                yield from _all_steps(inner)
+            elif isinstance(inner, dict):
+                yield from _all_steps(inner.get("steps") or [inner])
+
+
+def workflow_named(spec: Optional[dict[str, Any]]) -> list[str]:
+    """The agents this workflow names, in order: each step's `captain` and each gate's
+    `approval.approver_role`, at any depth."""
+    out: list[str] = []
+    for step in _all_steps((spec or {}).get("steps")):
+        for named in (str(step.get("captain") or "").strip(),
+                      str((step.get("approval") or {}).get("approver_role") or "").strip()):
+            if named and named not in out:
+                out.append(named)
+    return out
+
+
+def _names_anybody(spec: Optional[dict[str, Any]]) -> bool:
+    """Whether this workflow says who should work on it, in any step."""
+    return bool(workflow_named(spec))
 
 
 def default_roles(spec: Optional[dict[str, Any]] = None) -> list[str]:
@@ -103,16 +127,7 @@ def default_roles(spec: Optional[dict[str, Any]] = None) -> list[str]:
     """
     from .llm_telemetry import STAGE_ROLES, canonical_role
 
-    named: set[str] = set()
-    for step in ((spec or {}).get("steps") or []):
-        if not isinstance(step, dict):
-            continue
-        captain = str(step.get("captain") or "").strip()
-        if captain:
-            named.add(captain)
-        approver = str((step.get("approval") or {}).get("approver_role") or "").strip()
-        if approver:
-            named.add(approver)
+    named = set(workflow_named(spec))
     if named:
         return sorted(r for r in named if r)
 
@@ -264,6 +279,18 @@ def ensure_defaults(connection, *, project_id: str, app_name: str, actor: str = 
         return {"ok": False, "error": "no app name"}
     existing = assigned(connection, project_id, key)
     if existing:
+        # A TEAM NOBODY CHOSE GAINS THE AGENTS THIS RUN'S WORKFLOW NAMES. HelpDesk AI's team was
+        # seeded by an older run (12 Oct) with the default software team; a later run of the D1
+        # workflow found "a team exists" and added none of its own agents, so its deploy's
+        # approver (release_manager) was refused. A team a PERSON chose is left as they chose
+        # it: the pre-check names the gap instead.
+        missing = [r for r in workflow_named(spec)
+                   if r not in {row["role_key"] for row in existing}]
+        if missing and all(row.get("source") == DEFAULT for row in existing):
+            assign(connection, project_id=project_id, app_name=app_name, role_keys=missing,
+                   actor=actor, source=DEFAULT)
+            return {"ok": True, "seeded": missing,
+                    "assigned": [r["role_key"] for r in assigned(connection, project_id, key)]}
         return {"ok": True, "seeded": [], "assigned": [r["role_key"] for r in existing]}
     # THE PROJECT'S OWN TEAM FIRST, IF SOMEBODY ACTUALLY CHOSE IT.
     #
@@ -299,13 +326,9 @@ def ensure_defaults(connection, *, project_id: str, app_name: str, actor: str = 
         # `video_editor` nor `media_publisher`, the two agents its steps actually name. The
         # panel under a run reads "Only these agents may sign off this app's gates. Anyone else
         # is refused", so leaving them off is not cosmetic.
-        for step in (spec.get("steps") or []):
-            if not isinstance(step, dict):
-                continue
-            for named in (str(step.get("captain") or "").strip(),
-                          str((step.get("approval") or {}).get("approver_role") or "").strip()):
-                if named and named not in seeds:
-                    seeds.append(named)
+        for named in workflow_named(spec):
+            if named not in seeds:
+                seeds.append(named)
     # ESTABLISHING, NOT ADDING: this call decides the run's team, so nothing underneath it
     # should be materialised first.
     return {**assign(connection, project_id=project_id, app_name=app_name,

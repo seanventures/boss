@@ -6749,6 +6749,36 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 .dw-detail-head h4 { margin: 0; font-size: 0.73684rem; }
 .dw-detail .dw-step-links { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 9px; }
 .dw-detail .dw-step-decide { display: flex; gap: 8px; margin-top: 10px; }
+/* Retry / Skip panel: replaces the button row while open, so one Retry is ever on screen.
+   Dressed as the console's own fields: dark well, sans text, teal focus ring, quiet Cancel. */
+.dw-retry-panel {
+  display: flex; flex-direction: column; gap: 12px; flex-basis: 100%; width: 100%;
+  max-width: 36rem; padding: 16px 18px; box-sizing: border-box;
+  border: 1px solid var(--border-strong); border-radius: 10px; background: var(--surface-2);
+}
+.dw-retry-panel .dw-retry-title { font-size: 0.78947rem; font-weight: 600; color: var(--ink); }
+.dw-retry-panel .dw-retry-what { margin: -6px 0 0; font-size: 0.68421rem; color: var(--muted); }
+.dw-retry-panel label {
+  display: flex; flex-direction: column; gap: 6px;
+  font-size: 0.63158rem; letter-spacing: .03em; color: var(--faint);
+}
+.dw-retry-panel textarea, .dw-retry-panel input[type="text"] {
+  width: 100%; box-sizing: border-box; padding: 10px 12px; min-height: 76px;
+  font: inherit; font-size: 0.73684rem; line-height: 1.45; color: var(--ink);
+  background: var(--base); border: 1px solid var(--border-strong); border-radius: 8px;
+  resize: vertical;
+}
+.dw-retry-panel input[type="text"] { min-height: 40px; }
+.dw-retry-panel textarea::placeholder, .dw-retry-panel input::placeholder { color: var(--quiet); }
+.dw-retry-panel textarea:focus, .dw-retry-panel input[type="text"]:focus {
+  outline: none; border-color: var(--teal); box-shadow: 0 0 0 3px rgba(46, 197, 197, 0.18);
+}
+.dw-retry-panel .dw-retry-actions { display: flex; gap: 10px; align-items: center; justify-content: flex-end; }
+.dw-retry-panel .linklike {
+  order: -1; padding: 8px 14px; min-height: 36px; border-radius: 8px; text-decoration: none;
+  border: 1px solid var(--border-strong); background: transparent; color: var(--ink-soft);
+}
+.dw-retry-panel .linklike:hover { color: var(--ink); border-color: var(--muted); }
 .dw-detail .dw-step-out {
   display: grid; grid-template-columns: repeat(auto-fit, minmax(9.47368rem, 1fr));
   gap: 6px 16px; margin: 10px 0 0;

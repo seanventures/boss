@@ -648,13 +648,37 @@ def _register_read_tools(reg: ToolRegistry) -> None:
 
     @reg.tool(
         "list_deployments",
-        "Recent deployment runs: app, environment, target, commit, status and when. "
-        "Use for 'what shipped', 'did the last deploy succeed', 'what is on <host> now'.",
-        _obj({"project_id": {"type": "string"}, "limit": _LIMIT}), permission="deployment:read")
+        "Recent deployments — one-container deployment runs and stack deployments "
+        "(boss.deploy.yaml, sdep_…): app, environment, target, commit, status, why it failed "
+        "and when. Pass deployment_id (an sdep_… id) for ONE stack deployment in full: its "
+        "steps and their states, the failing step and command, the redacted log tail, what the "
+        "host has, and the manifest. Use for 'what shipped', 'why did the deploy fail', "
+        "'what is on <host> now'.",
+        _obj({"project_id": {"type": "string"}, "limit": _LIMIT,
+              "deployment_id": {
+                  "type": "string",
+                  "description": "a stack deployment id (sdep_…) to read in full"}}),
+        permission="deployment:read")
     def list_deployments(ctx, *, project_id, actor, args):
         pid = args.get("project_id") or project_id
         limit = int(args.get("limit") or 25)
+        wanted = str(args.get("deployment_id") or "").strip()
+        from ..services.agent_baseline import redact_for_agent
+
         with ctx.begin() as c:
+            if wanted:
+                # READ ONLY, and redacted: the log tail was redacted by value when stored, and
+                # is scrubbed again here by shape before any model sees it.
+                from ..services import deploy_repair
+
+                owned = c.execute(_text("SELECT 1 FROM stack_deployments WHERE id=:i "
+                                        "AND project_id=:p"), {"i": wanted, "p": pid}).first()
+                failure = deploy_repair.failure_of_deployment(c, wanted) if owned else None
+                if not failure:
+                    return {"error": f"no stack deployment {wanted!r} in this project"}
+                failure["host_facts_said"] = deploy_repair.facts_sentence(
+                    failure.get("host_facts"))
+                return {"project_id": pid, "deployment": redact_for_agent(_json_safe(failure))}
             rows = c.execute(
                 _text(
                     "SELECT id, app_name, environment, target_kind, target_ref, commit_ref, "
@@ -664,7 +688,19 @@ def _register_read_tools(reg: ToolRegistry) -> None:
                 ),
                 {"p": pid, "l": limit},
             ).mappings().all()
-        return {"project_id": pid, "deployments": [_json_safe(dict(r)) for r in rows]}
+            stacks = c.execute(
+                _text(
+                    "SELECT d.id, t.app_name, t.environment, d.target_id, d.host_id, "
+                    "       d.commit_sha, d.status, d.failure_reason, d.workflow_run_id, "
+                    "       d.code_task_run_id, d.created_at, d.finished_at "
+                    "FROM stack_deployments d "
+                    "LEFT JOIN deployment_targets t ON t.id = d.target_id "
+                    "WHERE d.project_id=:p ORDER BY d.created_at DESC LIMIT :l"
+                ),
+                {"p": pid, "l": limit},
+            ).mappings().all()
+        return {"project_id": pid, "deployments": [_json_safe(dict(r)) for r in rows],
+                "stack_deployments": redact_for_agent([_json_safe(dict(r)) for r in stacks])}
 
 
 def _build_onto_existing_app(ctx, cts, pid: str, actor: str, args: dict, extends: str,

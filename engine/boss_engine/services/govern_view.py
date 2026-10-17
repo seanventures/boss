@@ -61,6 +61,9 @@ ENFORCED: dict[str, tuple[str, str]] = {
     "code_review_inrun_max_rounds": ("Review loop", "review_loop"),
     "captain_leads_projects": ("Every build", "every_build"),
     "captain_auto_improve": ("Captain's own builds", "captain_own_builds"),
+    # Read when a deploy step's deployment fails for the app's reason (deploy_repair.fix_cap):
+    # past it, no repair build starts and the step fails for a person.
+    "deploy_fix_attempts": ("Each deploy step", "each_deploy_step"),
     "max_concurrent_jobs": ("Job queue", "job_queue"),
     "max_workers_total": ("Scaling", "scaling"),
     "token_default": ("Advisory", "advisory"),

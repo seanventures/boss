@@ -1120,6 +1120,11 @@ class Settings(BaseSettings):
     # one real model spend. 0 = the Captain proposes, never starts one; Govern turns it on per
     # project (project_settings `captain_auto_improve`). Installs that predate this keep theirs on.
     captain_auto_improve: int = Field(default=0, alias="BOSS_CAPTAIN_AUTO_IMPROVE")
+    # FIX AND REDEPLOY (services/deploy_repair.py): how many repair builds a workflow's deploy
+    # step starts by itself when its deployment fails for the APP's reason (a runtime the machine
+    # lacks, a manifest that does not fit, the app's own install/health error). 0 = never; the
+    # step then fails for a person as before. Govern sets it per project (`deploy_fix_attempts`).
+    deploy_fix_attempts: int = Field(default=2, alias="BOSS_DEPLOY_FIX_ATTEMPTS")
     # THE MODEL PRE-CHECK (services/workflow_precheck_agent.py): an agent that reads the coded
     # pre-check's evidence and predicts what the coded checks do not cover. Off at the start
     # door by default, so starting a workflow is neither slower nor costs money unasked; the

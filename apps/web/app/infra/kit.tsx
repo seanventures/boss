@@ -228,17 +228,27 @@ function useDialog(onClose: () => void) {
 }
 
 /** A right drawer over the tab (full screen under 640 px). URL state, so Back closes it. */
-export function Drawer({ label, testId, width = 440, onClose, head, children }: {
-  label: string; testId: string; width?: 440 | 520 | 560; onClose: () => void; head: React.ReactNode; children: React.ReactNode;
+export function Drawer({ label, testId, width = 440, expandable = false, onClose, head, children }: {
+  label: string; testId: string; width?: 440 | 520 | 560 | 880; onClose: () => void; head: React.ReactNode; children: React.ReactNode;
+  /** A drawer that reads better at a page's width (an app's health: its chart, traffic, incidents)
+   *  offers Expand: the drawer fills the page until Collapse. */
+  expandable?: boolean;
 }) {
   const ref = useDialog(onClose);
+  const [expanded, setExpanded] = React.useState(false);
   return (
     <div className="inf-drawer-back" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <aside ref={ref as React.RefObject<HTMLElement>} className="inf-drawer" data-width={width} role="dialog"
+      <aside ref={ref as React.RefObject<HTMLElement>} className="inf-drawer" data-width={width}
+             data-expanded={expanded || undefined} role="dialog"
              aria-modal="true" aria-label={label} data-testid={testId}>
         <header className="inf-drawer-head">
           {head}
           <span className="ag-spacer" />
+          {expandable ? (
+            <button type="button" className="ag-icon-btn" aria-pressed={expanded} data-testid={`${testId}-expand`}
+                    title={expanded ? "Back to the panel" : "Use the whole page"}
+                    onClick={() => setExpanded((v) => !v)}>{expanded ? "Collapse" : "Expand"}</button>
+          ) : null}
           <button type="button" className="ag-act-close" aria-label="Close" data-testid={`${testId}-close`} onClick={onClose}>×</button>
         </header>
         <div className="inf-drawer-body">{children}</div>

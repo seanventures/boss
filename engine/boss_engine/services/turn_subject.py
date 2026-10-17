@@ -70,6 +70,9 @@ _PREFIX_KIND = (
     ("prev_", "preview"),
     ("drun_", "discovery"),
     ("deprun_", "deployment"),
+    # A stack deployment (boss.deploy.yaml) is a deployment too: a deploy step's Ask that names
+    # its sdep_ is on subject (deploy_repair).
+    ("sdep_", "deployment"),
     ("deptgt_", "deployment"),
     ("dept_", "deployment"),
     ("dec_", "decision"),
@@ -617,6 +620,59 @@ def _resolve_preview(connection, project_id: str, ref: SubjectRef) -> SubjectEvi
     return ev
 
 
+def _stack_deployment_of(out: dict) -> str:
+    """The stack deployment a deploy step planned, waited on, or was failed by."""
+    handle = out.get("await") if isinstance(out.get("await"), dict) else {}
+    reached = out.get("reached_before_failing") \
+        if isinstance(out.get("reached_before_failing"), dict) else {}
+    fixes = [f for f in out.get("deploy_fixes") or [] if isinstance(f, dict)]
+    failure = out.get("deploy_failure") if isinstance(out.get("deploy_failure"), dict) else {}
+    return str(out.get("stack_deployment_id")
+               or (handle.get("id") if handle.get("kind") == "stack_deployment" else "")
+               or reached.get("stack_deployment_id") or failure.get("deployment_id")
+               or next((f.get("deployment_id") for f in reversed(fixes)
+                        if f.get("deployment_id")), "") or "")
+
+
+def _with_the_deployment(connection, ev: SubjectEvidence, out: dict,
+                         deployment_id: str) -> None:
+    """A DEPLOY STEP'S ASK KNOWS ITS DEPLOYMENT (deploy_repair): the deployment's steps and
+    states, the failing command and its redacted log tail, what the machine has, the manifest,
+    and every fix BOSS started for it — so the deploy agent answers from the record, and the
+    operator talks to it about the failure as about anything else."""
+    from . import deploy_repair
+
+    facts: dict = {}
+    if deployment_id and connection is not None:
+        try:
+            with connection.begin_nested():
+                facts = deploy_repair.deployment_facts(connection, deployment_id)
+        except Exception as exc:  # noqa: BLE001 — evidence is an aid
+            _log.info("deployment evidence for %s not read: %s", deployment_id, exc)
+            facts = {}
+    tail = str(facts.pop("_log_tail", "") or "")
+    if tail and not ev.log_tail:
+        ev.log_tail = tail[-_LOG_TAIL_CHARS:]
+    for key, value in facts.items():
+        ev.facts[key] = value
+    failure = out.get("deploy_failure") if isinstance(out.get("deploy_failure"), dict) else {}
+    if failure and "deployment failure" not in ev.facts:
+        ev.facts["deploy refused before anything ran"] = (
+            f"{failure.get('headline') or ''} {failure.get('action') or ''}".strip()
+            + f" (cause: {failure.get('cause') or 'unplaced'})")
+        machine = deploy_repair.facts_sentence(failure.get("host_facts"))
+        if machine and "the machine" not in ev.facts:
+            ev.facts["the machine"] = machine
+    fixes = [f for f in out.get("deploy_fixes") or [] if isinstance(f, dict)]
+    if fixes:
+        ev.facts["automatic fixes"] = deploy_repair.fixes_sentence(fixes)
+        for fix in fixes:
+            ev.linked.append(f"build {fix.get('build_run_id')} — BOSS's fix {fix.get('attempt')} "
+                             f"for this deploy ({fix.get('cause')})")
+    ev.facts.pop("output.deploy_fixes", None)
+    ev.facts.pop("output.deploy_failure", None)
+
+
 def _resolve_workflow_step(connection, project_id: str, ref: SubjectRef) -> SubjectEvidence:
     ev = SubjectEvidence(ref)
     rows = _rows(connection,
@@ -685,10 +741,18 @@ def _resolve_workflow_step(connection, project_id: str, ref: SubjectRef) -> Subj
         line, _ = _code_task_line(connection, project_id, build_id)
         if line:
             ev.linked.append(line)
+    deployment_id = _stack_deployment_of(out)
+    if deployment_id or out.get("deploy_failure") or out.get("deploy_fixes"):
+        _with_the_deployment(connection, ev, out, deployment_id)
     ev.findings = _crash_findings(ev.error, ev.log_tail,
                                   failure_kind=failure_kind or str(preview.get("failure_kind") or ""))
     ev.open_points = [("the run's other steps and its way out",
                        f"describe_workflow_run(run_id={ref.id})")]
+    if deployment_id:
+        ev.open_points.append(("the deployment in full, its log tail and steps",
+                               f"list_deployments(deployment_id={deployment_id})"))
+        ev.open_points.append(("what the machine has",
+                               "describe_deployment_host(host=<the host above>)"))
     if preview_id:
         ev.open_points.append(("the full start-up log",
                                f"read_preview_log(preview_id={preview_id})"))
@@ -776,6 +840,20 @@ def _resolve_discovery(connection, project_id: str, ref: SubjectRef) -> SubjectE
 
 def _resolve_deployment(connection, project_id: str, ref: SubjectRef) -> SubjectEvidence:
     ev = SubjectEvidence(ref)
+    if ref.id.startswith("sdep_"):
+        rows = _rows(connection, "SELECT id, status, failure_reason FROM stack_deployments "
+                                 "WHERE id = :i AND project_id = :p",
+                     {"i": ref.id, "p": project_id})
+        if not rows:
+            return ev
+        ev.found = True
+        ev.status = str(rows[0].get("status") or "")
+        ev.error = _cap(rows[0].get("failure_reason"))
+        _with_the_deployment(connection, ev, {}, ref.id)
+        ev.findings = _crash_findings(ev.error, ev.log_tail)
+        ev.open_points = [("the deployment's full record",
+                           f"list_deployments(deployment_id={ref.id})")]
+        return ev
     runs = _rows(connection,
                  "SELECT id, deployment_target_id, app_name, environment, status, "
                  "failure_reason, target_ref, commit_ref FROM deployment_runs "

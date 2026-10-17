@@ -89,25 +89,40 @@ KEEP_RELEASES = 3
 RETIRE_STEP = "retire previous single-container release"
 
 
-class StackDeployError(Exception):
-    """A plan BOSS refuses, said as {headline, action} — the console shows both."""
+#: WHOSE FIX A FAILURE IS (deploy_repair). `app`: the app's own manifest or code is wrong for
+#: this machine — a missing runtime it assumed, an invalid manifest, an install, start or health
+#: check failing with the app's own error — and a repair build of the app can fix it. `host`:
+#: the machine, its access or BOSS's own plumbing — a person's to fix; never auto-repaired.
+CAUSE_APP = "app"
+CAUSE_HOST = "host"
 
-    def __init__(self, headline: str, action: str, *, status_code: int = 422):
+
+class StackDeployError(Exception):
+    """A plan BOSS refuses, said as {headline, action} — the console shows both.
+
+    `cause` (CAUSE_APP / CAUSE_HOST) is whose fix it is, when the refusal knows; `facts` are
+    what the host was found to have, when it was asked."""
+
+    def __init__(self, headline: str, action: str, *, status_code: int = 422,
+                 cause: Optional[str] = None, facts: Optional[dict] = None):
         super().__init__(headline)
         self.headline = headline
         self.action = action
         self.status_code = status_code
+        self.cause = cause
+        self.facts = dict(facts or {})
 
     def to_dict(self) -> dict[str, str]:
         return {"headline": self.headline, "action": self.action}
 
 
 class StackStepFailed(Exception):
-    def __init__(self, step: str, headline: str, action: str):
+    def __init__(self, step: str, headline: str, action: str, cause: Optional[str] = None):
         super().__init__(headline)
         self.step = step
         self.headline = headline
         self.action = action
+        self.cause = cause
 
 
 # ── GitHub: the commit, the manifest at it, and its tree ─────────────────────────────────────
@@ -294,8 +309,178 @@ def host_access_for(connection: Connection, settings: Settings, host: dict,
                       adapter=adapter or SSHHostAdapter(settings))
 
 
-def preflight_host(access: HostAccess, manifest: DeployManifest) -> list[dict[str, str]]:
-    """Read-only questions to the host. Each problem is {headline, action}; none writes."""
+#: The runtimes a host is asked about on every preflight, whatever the manifest runs: what the
+#: machine HAS is what a build is told to write its manifest for (deploy_repair.host_brief).
+RUNTIME_TOOLS: tuple[str, ...] = ("docker", "node", "npm", "python3", "pip3", "java", "go",
+                                  "ruby", "php", "git", "make")
+#: How each runtime says its version, when it is there.
+_VERSION_PROBES: dict[str, str] = {
+    "docker": "docker --version", "compose": "docker compose version --short",
+    "node": "node --version", "python3": "python3 --version", "java": "java -version 2>&1",
+    "go": "go version",
+}
+#: Words a shell understands itself: a command segment starting with one runs no program the
+#: machine might lack.
+_SHELL_WORDS = frozenset({
+    "cd", "export", "source", ".", "set", "unset", "echo", "printf", "test", "[", "[[", "true",
+    "false", "exit", "return", ":", "if", "elif", "fi", "for", "while", "until", "command",
+    "done", "case", "esac", "in", "function", "}", "wait", "trap", "read", "type", "hash",
+    "shift", "eval", "exec", "local", "declare", "alias", "umask", "ulimit", "sleep", "mkdir",
+    "cp", "mv", "rm", "ln", "cat", "chmod", "chown", "touch", "ls", "pwd", "kill",
+})
+#: Wrappers whose NEXT word is the program.
+_WRAPPERS = frozenset({"sudo", "env", "nohup", "time", "nice", "setsid", "stdbuf",
+                       # a keyword that opens a body: the body's first word is the program
+                       "then", "else", "do", "{", "!"})
+#: Wrapper flags that take no value (`sudo -E npm ci`).
+_BARE_FLAGS = frozenset({"-E", "-n", "-H", "-S", "-i", "-k", "-b", "-P", "--preserve-env"})
+#: A command that may install software for the commands after it: a program missing now may
+#: exist by the time its own step runs, so nothing after one of these is refused for it.
+_INSTALLS = re.compile(
+    r"\b(apt-get|apt|yum|dnf|apk|zypper|brew|nvm|asdf|volta|fnm|pyenv|sdk|snap)\b\s+"
+    r"(install|add|use)\b|\b(curl|wget)\b[^|]*\|\s*(sudo\s+)?(ba|z)?sh\b", re.I)
+_TOOL_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$")
+_ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+
+
+def command_executables(command: str) -> list[str]:
+    """The programs one manifest command runs, in order: the first word of each segment, after
+    its `VAR=x` assignments and wrappers (`sudo`, `env`, `nohup`, `timeout 30`). A path
+    (`./start.sh`, `bin/x`) is the app's own file and is never asked about; a shell word is
+    skipped; a command that cannot be read as shell yields nothing (never a guess)."""
+    try:
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        tokens = list(lexer)
+    except ValueError:
+        return []
+    found: list[str] = []
+    segment: list[str] = []
+    for token in tokens + [";"]:
+        if token and set(token) <= set("&|;()"):
+            words, segment = segment, []
+            while words and (_ASSIGNMENT.match(words[0]) or words[0] in _WRAPPERS):
+                words.pop(0)
+                # A wrapper's flag that takes a value (`sudo -u bob`) hides which word is the
+                # program: such a segment is not judged at all, never guessed at.
+                while words and words[0].startswith("-"):
+                    if words.pop(0) not in _BARE_FLAGS:
+                        words = []
+            if words and words[0] == "timeout":
+                words = [w for w in words[1:] if not w.startswith("-")][1:]
+            if not words:
+                continue
+            first = words[0]
+            if first in _SHELL_WORDS or "/" in first or "$" in first \
+                    or not _TOOL_NAME.match(first):
+                continue
+            if first not in found:
+                found.append(first)
+            continue
+        segment.append(token)
+    return found
+
+
+def manifest_executables(manifest: DeployManifest) -> list[tuple[str, str]]:
+    """(program, step name) for every program a `kind: commands` manifest runs on the machine
+    directly — none after a step that may install software. A compose manifest runs Docker,
+    which `requires.docker` already asks about."""
+    if manifest.kind != "commands":
+        return []
+    out: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for section in (manifest.install, manifest.update):
+        for step in section:
+            for tool in command_executables(step.run):
+                if tool not in seen:
+                    seen.add(tool)
+                    out.append((tool, step.name))
+            if _INSTALLS.search(step.run):
+                break
+    return out
+
+
+class Preflight(list):
+    """The problems a preflight found (each {headline, action, cause}) and `facts`: what the
+    host was found to have — {"tools": {name: bool}, "versions": {name: str}, "docker": bool,
+    "docker_usable": bool, "sudo": bool}. Names and versions only, never a secret."""
+
+    def __init__(self, problems: Optional[list] = None, facts: Optional[dict] = None):
+        super().__init__(problems or [])
+        self.facts: dict[str, Any] = dict(facts or {})
+
+
+def host_facts_from(out: str) -> dict[str, Any]:
+    """The facts a preflight probe printed (BOSS_HAS / BOSS_LACKS / BOSS_VERSION lines). A
+    program the probe did not mention is unknown, never missing."""
+    tools: dict[str, bool] = {}
+    versions: dict[str, str] = {}
+    for line in (out or "").splitlines():
+        parts = line.strip().split(" ", 2)
+        if len(parts) >= 2 and parts[0] in ("BOSS_HAS", "BOSS_LACKS") \
+                and _TOOL_NAME.match(parts[1]):
+            tools[parts[1]] = parts[0] == "BOSS_HAS"
+        elif len(parts) == 3 and parts[0] == "BOSS_VERSION" and _TOOL_NAME.match(parts[1]) \
+                and parts[2].strip():
+            versions[parts[1]] = parts[2].strip()[:80]
+    facts: dict[str, Any] = {"tools": tools, "versions": versions}
+    if "DOCKER_PRESENT" in out or "DOCKER_MISSING" in out:
+        facts["docker"] = "DOCKER_PRESENT" in out
+        facts["docker_usable"] = "DOCKER_USABLE" in out
+        tools.setdefault("docker", bool(facts["docker"]))
+    if "SUDO_OK" in out or "SUDO_NO" in out:
+        facts["sudo"] = "SUDO_OK" in out
+    return facts
+
+
+def host_has(facts: Optional[Mapping[str, Any]]) -> list[str]:
+    """The runtimes the facts say the host has, in a stable order."""
+    tools = (facts or {}).get("tools") or {}
+    return [t for t in RUNTIME_TOOLS if tools.get(t)] + sorted(
+        t for t, present in tools.items() if present and t not in RUNTIME_TOOLS)
+
+
+def missing_tool_problem(tool: str, step: str, host: str,
+                         facts: Mapping[str, Any]) -> dict[str, str]:
+    """The refusal for a manifest that runs a program the machine does not have — the app's
+    to fix (its manifest assumed a runtime), so `cause` is CAUSE_APP."""
+    has = host_has(facts)
+    docker = bool((facts.get("tools") or {}).get("docker"))
+    return {
+        "headline": (f"The target machine {host} has no `{tool}` (it has: "
+                     f"{', '.join(has) or 'none of the runtimes BOSS asks about'}); this "
+                     f"manifest runs commands on the machine directly ('{step}' runs `{tool}`)."),
+        "action": (f"Use kind: compose with a Dockerfile and docker-compose.yml (the machine has "
+                   f"Docker), or install {tool} on it." if docker else
+                   f"Install {tool} on the machine, or deploy to one that has it."),
+        "cause": CAUSE_APP, "missing_tool": tool, "step": step,
+    }
+
+
+def _tools_probe(needed: list[str]) -> str:
+    """`command -v` for every runtime and every program the manifest runs, in a LOGIN shell
+    (the steps run under `bash -lc`, so a profile's nvm/asdf paths count), then the versions."""
+    names = [t for t in dict.fromkeys(list(RUNTIME_TOOLS) + list(needed)) if _TOOL_NAME.match(t)]
+    versions = "; ".join(
+        f"command -v {cmd.split()[0]} >/dev/null 2>&1 && "
+        f"echo BOSS_VERSION {name} $({cmd} 2>/dev/null | head -n 1)"
+        for name, cmd in _VERSION_PROBES.items())
+    script = (f"for t in {' '.join(shlex.quote(n) for n in names)}; do "
+              'if command -v "$t" >/dev/null 2>&1; then echo "BOSS_HAS $t"; '
+              'else echo "BOSS_LACKS $t"; fi; done; ' + versions)
+    return f"bash -lc {shlex.quote(script)} 2>/dev/null || true"
+
+
+def preflight_host(access: HostAccess, manifest: DeployManifest) -> Preflight:
+    """Read-only questions to the host. Each problem is {headline, action, cause}; none writes.
+
+    ONE SSH SESSION asks everything: the directory, sudo, Docker, tar and curl the deploy itself
+    needs, every program a `kind: commands` manifest runs (`command -v`, in a login shell as the
+    steps run), and which runtimes the machine has, with versions (`Preflight.facts`). A
+    manifest that runs `npm` on a machine with no Node is refused HERE, before anything is
+    approved or written — not at its install step after prepare, upload and switch had already
+    changed the host (sdep_f145247613894c0bbff9: `bash: line 1: npm: command not found`)."""
+    needed = manifest_executables(manifest)
     d = shlex.quote(manifest.dir)
     parent = shlex.quote(os.path.dirname(manifest.dir) or "/")
     probe = (
@@ -308,14 +493,17 @@ def preflight_host(access: HostAccess, manifest: DeployManifest) -> list[dict[st
         "command -v docker >/dev/null 2>&1 && echo DOCKER_PRESENT || echo DOCKER_MISSING; "
         "docker info >/dev/null 2>&1 && echo DOCKER_USABLE || echo DOCKER_UNUSABLE; "
         "command -v tar >/dev/null 2>&1 && echo TAR_OK || echo TAR_MISSING; "
-        "command -v curl >/dev/null 2>&1 && echo CURL_OK || echo CURL_MISSING"
+        "command -v curl >/dev/null 2>&1 && echo CURL_OK || echo CURL_MISSING; "
+        + _tools_probe([t for t, _ in needed])
     )
     result = access.run(probe, timeout=40)
     out = result.output
     where = f"{access.user}@{access.host}"
     if "BOSS_SSH_OK" not in out:
-        return [explain_failure("preflight", result.returncode, out, host=where)]
-    problems: list[dict[str, str]] = []
+        said = explain_failure("preflight", result.returncode, out, host=where)
+        return Preflight([{**said, "cause": CAUSE_HOST}])
+    facts = host_facts_from(out)
+    problems = Preflight(facts=facts)
     sudo = "SUDO_OK" in out
     if "DIR_NOT_WRITABLE" in out and not sudo:
         problems.append({
@@ -351,58 +539,106 @@ def preflight_host(access: HostAccess, manifest: DeployManifest) -> list[dict[st
         problems.append({
             "headline": f"curl is not installed on {access.host}; health checks run there.",
             "action": "Install curl on the host (apt-get install -y curl)."})
+    for found in problems:
+        found.setdefault("cause", CAUSE_HOST)
+    tools = facts.get("tools") or {}
+    for tool, step in needed:
+        if tools.get(tool) is False:
+            problems.append(missing_tool_problem(tool, step, access.host, facts))
     return problems
 
 
 # ── Failures, in words ───────────────────────────────────────────────────────────────────────
 
+def _app_step(step: str) -> bool:
+    """A step the app's manifest wrote (its install/update commands), not BOSS's plumbing."""
+    return str(step or "").startswith(("install: ", "update: "))
+
+
 def explain_failure(step: str, returncode: int, output: str, *,
                     host: str = "the host", url: str = "", timeout: int = 0) -> dict[str, str]:
-    """{headline, action} for a failed step — the model_failures shape, for a host."""
+    """{headline, action, cause} for a failed step — the model_failures shape, for a host.
+
+    `cause` says whose fix it is (CAUSE_APP / CAUSE_HOST): the machine's access, disk, Docker
+    or sudo are a person's; the app's own command or health check failing is the app's."""
+    said = _explained(step, returncode, output, host=host, url=url, timeout=timeout)
+    said.setdefault("cause", CAUSE_APP if (step == "health" or _app_step(step)) else CAUSE_HOST)
+    return said
+
+
+def _explained(step: str, returncode: int, output: str, *,
+               host: str, url: str, timeout: int) -> dict[str, str]:
     lowered = (output or "").lower()
     if returncode == 127 and "ssh` client" in lowered:
         return {"headline": "BOSS cannot run ssh where it is installed.",
-                "action": "Install openssh-client in the API image and restart BOSS."}
+                "action": "Install openssh-client in the API image and restart BOSS.",
+                "cause": CAUSE_HOST}
     if "boss_ssh_outward_allowed" in lowered or "configured not to reach out" in lowered:
         return {"headline": "BOSS is configured not to reach out over SSH.",
                 "action": "Remove BOSS_SSH_OUTWARD_ALLOWED=false from the API's environment "
-                          "and restart it."}
+                          "and restart it.", "cause": CAUSE_HOST}
     if "permission denied (publickey" in lowered or "host key verification failed" in lowered:
         return {"headline": f"{host} refused BOSS's SSH key.",
                 "action": "In Infra, open the host, add the public key it shows to "
-                          "~/.ssh/authorized_keys on the VM, then Verify."}
+                          "~/.ssh/authorized_keys on the VM, then Verify.", "cause": CAUSE_HOST}
     if any(m in lowered for m in ("could not resolve hostname", "connection refused",
                                   "connection timed out", "no route to host",
-                                  "operation timed out", "network is unreachable")):
+                                  "operation timed out", "network is unreachable")) \
+            and (returncode == 255 or not (step == "health" or _app_step(step))):
+        # ssh's own exit (255) is the connection; an app's command refused by ITS database is
+        # the app's error, said below with the log tail.
         return {"headline": f"BOSS could not connect to {host}.",
                 "action": "Check the address and that port 22 is open to BOSS, then Verify the "
-                          "host in Infra."}
+                          "host in Infra.", "cause": CAUSE_HOST}
     if "boss_dir_not_writable" in lowered:
         return {"headline": f"The deploy directory is not writable on {host}.",
                 "action": "On the host, chown the directory to the SSH user (or grant "
-                          "passwordless sudo), then deploy again."}
+                          "passwordless sudo), then deploy again.", "cause": CAUSE_HOST}
     if "no space left on device" in lowered:
         return {"headline": f"{host} ran out of disk space during {step}.",
                 "action": "Inspect Docker disk use on the host with `docker system df`. "
-                          "Remove only confirmed BOSS-owned, unused resources, then deploy again."}
+                          "Remove only confirmed BOSS-owned, unused resources, then deploy again.",
+                "cause": CAUSE_HOST}
+    unwired = re.search(r"(?:getaddrinfo|could not translate host name)\W+(?:\w+\W+)?\"?(res-[a-z0-9-]+)",
+                        output or "", re.I)
+    if step == "health" and unwired:
+        # THE APP CANNOT REACH A SERVICE BOSS PROVISIONED (res-db): BOSS's wiring, never the
+        # app's code — a repair build would "fix" a working app (sdep_3521765ccd404540ba1d).
+        return {"headline": f"The app could not reach {unwired.group(1)}, the service BOSS "
+                            f"provisioned for it on {host}, so it exited at start.",
+                "action": "This is BOSS's network wiring, not the app: the app's compose project "
+                          "must share the resources' project. Update BOSS and deploy again.",
+                "cause": CAUSE_HOST}
     if step == "health":
         return {"headline": f"The app did not answer as expected at {url} within {timeout}s.",
                 "action": "Read the log tail for what the install printed, fix it and deploy "
-                          "again — or roll back to the previous healthy commit."}
+                          "again — or roll back to the previous healthy commit.",
+                "cause": CAUSE_APP}
     if returncode == 124 or "did not finish within" in lowered:
         return {"headline": f"The step '{step}' timed out on {host}.",
                 "action": "Raise timeout_seconds for that step in boss.deploy.yaml, or read the "
                           "log tail for where it stalled."}
     if re.search(r"docker: (command )?not found", lowered):
         return {"headline": f"Docker is not installed on {host}.",
-                "action": "Install Docker on the host, then deploy again."}
+                "action": "Install Docker on the host, then deploy again.", "cause": CAUSE_HOST}
     if "permission denied while trying to connect to the docker daemon" in lowered:
         return {"headline": f"The SSH user cannot use Docker on {host}.",
-                "action": "Add the user to the docker group on the host, then deploy again."}
+                "action": "Add the user to the docker group on the host, then deploy again.",
+                "cause": CAUSE_HOST}
     if "sudo: a password is required" in lowered or "sudo: a terminal is required" in lowered:
         return {"headline": f"A step needed sudo and the SSH user has no passwordless sudo on "
                             f"{host}.",
-                "action": "Grant passwordless sudo to that user, or remove sudo from the step."}
+                "action": "Grant passwordless sudo to that user, or remove sudo from the step.",
+                "cause": CAUSE_HOST}
+    missing = re.search(r"(?:^|\n)(?:bash: )?(?:line \d+: )?([A-Za-z0-9._+-]+): (?:command )?"
+                        r"not found", output or "")
+    if returncode == 127 and missing and _app_step(step):
+        tool = missing.group(1)
+        return {"headline": f"The step '{step}' failed on {host}: the machine has no "
+                            f"`{tool}` (exit 127).",
+                "action": f"This manifest runs `{tool}` on the machine directly. Use kind: "
+                          "compose with a Dockerfile when the machine has Docker, or install "
+                          f"{tool} on it.", "cause": CAUSE_APP}
     return {"headline": f"The step '{step}' failed on {host} (exit {returncode}).",
             "action": "Read the log tail for the command's own error, fix it in the repository "
                       "and deploy again — or roll back to the previous healthy commit."}
@@ -484,6 +720,30 @@ class StackApplier:
         self._append(f"\n$ [{name}]\n")
         self.record(self.steps, self.log)
 
+    def _compose_state(self) -> str:
+        """The compose project's containers and the last lines of each one not running, from
+        the install command's `-p <project>`; "" for a manifest that runs no compose. Read-only."""
+        project = ""
+        # The step that BRINGS THE APP UP names its project; the step before it may retire an
+        # older project of the app (join_resource_project), whose containers are not the answer.
+        for step in reversed(list(self.rendered.get("install") or [])):
+            run = str(step.get("run") or "")
+            m = re.search(r"\s-p\s+([A-Za-z0-9._-]+)", run)
+            if m and " up " in run:
+                project = m.group(1)
+                break
+        if not project:
+            return ""
+        q = shlex.quote(f"label=com.docker.compose.project={project}")
+        probe = (f"docker ps -a --filter {q} --format '{{{{.Names}}}} {{{{.Status}}}}'; "
+                 f"for c in $(docker ps -a --filter {q} --filter status=exited --format '{{{{.Names}}}}'); do "
+                 "echo \"--- $c (last lines) ---\"; docker logs --tail 30 \"$c\" 2>&1; done")
+        try:
+            result = self.access.run(probe, timeout=60, write=False)
+        except Exception:  # noqa: BLE001 — diagnosis only; the health verdict stands
+            return ""
+        return redact(result.output[-3000:], self.redact_values) if result.output.strip() else ""
+
     def _finish(self, name: str, status: str) -> None:
         self._step(name).update(status=status, ended_at=self.now())
         self.record(self.steps, self.log)
@@ -502,7 +762,7 @@ class StackApplier:
             said = explain_failure(name, result.returncode, result.output,
                                    host=f"{self.access.user}@{self.access.host}",
                                    timeout=timeout)
-            raise StackStepFailed(name, said["headline"], said["action"])
+            raise StackStepFailed(name, said["headline"], said["action"], said.get("cause"))
         return result
 
     # -- the steps ----------------------------------------------------------------------------
@@ -541,7 +801,7 @@ class StackApplier:
                     self.fetch_tree(tarball)
                 except StackDeployError as exc:
                     self._finish("upload", "failed")
-                    raise StackStepFailed("upload", exc.headline, exc.action)
+                    raise StackStepFailed("upload", exc.headline, exc.action, CAUSE_HOST)
                 partial = shlex.quote(f"{release}.partial")
                 self._write("upload", (
                     "set -e; "
@@ -626,10 +886,20 @@ class StackApplier:
             result = self.access.run(probe, timeout=limit + 60, write=False)
             self._append(result.output[-2000:])
             if result.returncode != 0 or "BOSS_HEALTHY" not in result.output:
+                # WHAT THE APP ITSELF SAID. "Did not answer within 600s" sent a repair build
+                # to fix an app whose container had exited on `getaddrinfo EAI_AGAIN res-db`
+                # (sdep_3521765ccd404540ba1d) — a BOSS wiring fault nobody could see. The
+                # compose project's containers and the last lines of each one that is not
+                # running go into the log, read-only, so a person and the repair both see it.
+                tail = self._compose_state()
+                if tail:
+                    self._append(tail)
                 self._finish("health", "failed")
-                said = explain_failure("health", result.returncode, result.output,
+                said = explain_failure("health", result.returncode,
+                                       result.output + ("\n" + tail if tail else ""),
                                        host=self.access.host, url=check["url"], timeout=limit)
-                raise StackStepFailed("health", said["headline"], said["action"])
+                raise StackStepFailed("health", said["headline"], said["action"],
+                                      said.get("cause"))
         if self.rendered["health"]:
             self._finish("health", "succeeded")
 
@@ -1150,6 +1420,54 @@ def _plan_infrastructure(engine, *, project_id: str, target: dict, run_id: Optio
     return doc, app
 
 
+def join_resource_project(rendered: dict[str, Any], app_project: str,
+                          shared: Optional[str]) -> dict[str, Any]:
+    """A `kind: compose` app with `resources:` runs its compose commands IN THE RESOURCES'
+    PROJECT, so its services share one default network with `res-<name>`. Run as a project of
+    its own, HelpDesk AI's app could not resolve its database — `getaddrinfo EAI_AGAIN res-db`
+    (sdep_3521765ccd404540ba1d) — while res-db sat healthy in bossapp-helpdesk-ai-deploy.
+    Resource services are named `res-…` precisely so the two never collide in one project."""
+    if not shared or not app_project or shared == app_project:
+        return rendered
+    old, new = f" -p {app_project} ", f" -p {shared} "
+
+    def steps(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return [{**s, "run": str(s.get("run") or "").replace(old, new)} for s in items or []]
+
+    def retire_first(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        # THE APP'S OWN OLD PROJECT GOES FIRST: an earlier deploy under `-p <app>` kept the port
+        # (helpdesk-ai-app-1 held 0.0.0.0:8000, sdep_ca4042c2 'port is already allocated').
+        # Only that project's containers — never the shared one's resources.
+        up = next((str(s.get("run") or "") for s in items or [] if old in str(s.get("run") or "")), "")
+        if " up " not in up:
+            return steps(items)
+        down = up.split(" up ", 1)[0] + " down --remove-orphans || true"
+        return ([{"name": "retire the app's own compose project", "run": down,
+                  "timeout_seconds": 300}] + steps(items))
+
+    return {**rendered, "install": retire_first(rendered.get("install")),
+            "update": retire_first(rendered.get("update")),
+            "teardown": steps(rendered.get("teardown"))}
+
+
+def record_host_facts(engine, host_id: str, facts: Mapping[str, Any]) -> None:
+    """What a preflight found the host to have, on the host's record (last_preflight.facts),
+    so a build can be told before it writes its manifest and an agent can read it later.
+    Its own short transaction; never fails a plan."""
+    from .core import now_utc
+
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                text("UPDATE deployment_hosts SET last_preflight = "
+                     "COALESCE(last_preflight, '{}'::jsonb) || jsonb_build_object("
+                     "'facts', CAST(:f AS JSONB), 'facts_at', CAST(:at AS TEXT)), "
+                     "updated_at = now() WHERE id = :h"),
+                {"f": json.dumps(dict(facts)), "at": now_utc().isoformat(), "h": host_id})
+    except Exception:  # noqa: BLE001 — facts are an aid; the plan's verdict stands without them
+        log.warning("stack deploy: host facts for %s not recorded", host_id, exc_info=True)
+
+
 def plan_stack_deploy(engine, settings: Settings, *, project_id: str, target_id: str,
                       repository: Optional[str], ref: str, actor: str,
                       run_id: Optional[str] = None, workflow_run_id: Optional[str] = None,
@@ -1226,56 +1544,85 @@ def plan_stack_deploy(engine, settings: Settings, *, project_id: str, target_id:
             f"{owner}/{repo} has no {path} at {commit[:12]}.",
             f"Add {path} to the repository (version: 1, name, install, health — see "
             "engine/boss_engine/services/app_deploy_manifest.py), or set the target's "
-            "manifest path.")
+            "manifest path.", cause=CAUSE_APP)
     try:
-        manifest = load_manifest(manifest_text)
-        rendered = render(manifest, _deployment_ctx(target, host, commit, ref))
-    except ManifestError as exc:
-        raise StackDeployError(f"{path} at {commit[:12]} is not valid: {exc}",
-                               f"Fix {path} in the repository and deploy again.")
+        try:
+            manifest = load_manifest(manifest_text)
+            rendered = render(manifest, _deployment_ctx(target, host, commit, ref))
+        except ManifestError as exc:
+            raise StackDeployError(f"{path} at {commit[:12]} is not valid: {exc}",
+                                   f"Fix {path} in the repository and deploy again.",
+                                   cause=CAUSE_APP)
 
-    with engine.begin() as connection:
-        # THE APP'S DEPLOY ENVIRONMENT, by name — the same set the one-container deploy passes
-        # (governed_host_deploy.app_secret_problem): generated secrets made now, a required one
-        # with no deploy value refuses the plan in words, an optional one goes only when set.
-        from .governed_host_deploy import APP_SECRET_ACTION, app_secret_problem
+        with engine.begin() as connection:
+            # THE APP'S DEPLOY ENVIRONMENT, by name — the same set the one-container deploy
+            # passes (governed_host_deploy.app_secret_problem): generated secrets made now, a
+            # required one with no deploy value refuses the plan in words, an optional one goes
+            # only when set.
+            from .governed_host_deploy import APP_SECRET_ACTION, app_secret_problem
 
-        _app_key, app_secrets, secret_refusal = app_secret_problem(
-            connection, project_id, target, {"code_task_run_id": run_id} if run_id else None)
-        if secret_refusal:
-            raise StackDeployError(secret_refusal, APP_SECRET_ACTION)
-        app_secret_names = sorted({str(a["name"]) for a in app_secrets})
-        unfit = manifest_misfit(connection, manifest=manifest, rendered=rendered, path=path,
-                                target=target, host=host, run_id=run_id,
-                                read=lambda p: github.read_file(owner, repo, p, commit),
-                                provided=app_secret_names)
-    if unfit:
-        # BEFORE ANYONE IS ASKED TO APPROVE: a plan that cannot work is refused in words.
-        raise StackDeployError(unfit[0], unfit[1])
-    with engine.begin() as connection:
-        missing = {key: name for key, name in rendered["env_secrets"].items()
-                   if not operator_secret_ref(connection, project_id, target_id, name)}
-    if missing:
-        raise StackDeployError(
-            "The manifest reads secrets this target does not have: "
-            + ", ".join(f"{key} → {name}" for key, name in missing.items()) + ".",
-            _secret_action(target_id, sorted(set(missing.values()))))
+            _app_key, app_secrets, secret_refusal = app_secret_problem(
+                connection, project_id, target, {"code_task_run_id": run_id} if run_id else None)
+            if secret_refusal:
+                raise StackDeployError(secret_refusal, APP_SECRET_ACTION)
+            app_secret_names = sorted({str(a["name"]) for a in app_secrets})
+            unfit = manifest_misfit(connection, manifest=manifest, rendered=rendered, path=path,
+                                    target=target, host=host, run_id=run_id,
+                                    read=lambda p: github.read_file(owner, repo, p, commit),
+                                    provided=app_secret_names)
+        if unfit:
+            # BEFORE ANYONE IS ASKED TO APPROVE: a plan that cannot work is refused in words.
+            raise StackDeployError(unfit[0], unfit[1], cause=CAUSE_APP)
+        with engine.begin() as connection:
+            missing = {key: name for key, name in rendered["env_secrets"].items()
+                       if not operator_secret_ref(connection, project_id, target_id, name)}
+        if missing:
+            raise StackDeployError(
+                "The manifest reads secrets this target does not have: "
+                + ", ".join(f"{key} → {name}" for key, name in missing.items()) + ".",
+                _secret_action(target_id, sorted(set(missing.values()))))
 
-    problems = preflight_host(access, manifest)
-    if problems:
-        first = problems[0]
-        more = f" (and {len(problems) - 1} more)" if len(problems) > 1 else ""
-        raise StackDeployError(first["headline"] + more, first["action"])
+        problems = preflight_host(access, manifest)
+        facts = dict(getattr(problems, "facts", None) or {})
+        if facts:
+            # WHAT THE MACHINE HAS, kept where the next build and the deploy agent read it
+            # (deploy_repair.host_brief, the step's Ask) — refused plan or not.
+            record_host_facts(engine, str(host["id"]), facts)
+        if problems:
+            # A person's problem first: when the host needs something AND the manifest asks
+            # for a program it lacks, fixing the app alone would not deploy it.
+            ordered = sorted(problems, key=lambda p: p.get("cause") == CAUSE_APP)
+            first = ordered[0]
+            more = f" (and {len(problems) - 1} more)" if len(problems) > 1 else ""
+            raise StackDeployError(first["headline"] + more, first["action"],
+                                   cause=first.get("cause") or CAUSE_HOST, facts=facts)
+    except StackDeployError as exc:
+        # WHAT WAS REFUSED, with the refusal: the manifest as read at the commit, so a
+        # repair of the app (deploy_repair) is told exactly what it wrote.
+        exc.manifest_path, exc.manifest_text, exc.commit = path, manifest_text, commit
+        raise
 
     infra_doc, infra_app = _plan_infrastructure(engine, project_id=project_id, target=target,
                                                 run_id=run_id, manifest=manifest, access=access)
+    shared_project = None
+    if infra_doc is not None and manifest.kind == "compose" and manifest.compose_project:
+        from ..infra_plugins._runtime import compose_project_for
+
+        # THE RESOURCES' environment, not the target's name: resources default to "deploy"
+        # (ResourceRequest.environment) while HelpDesk AI's target is called "staging", and the
+        # app joined bossapp-helpdesk-ai-staging while res-db lived in …-deploy (sdep_ca4042c2).
+        shared_project = compose_project_for(
+            str(infra_app), str(manifest.resources[0].environment or "deploy"))
+        rendered = join_resource_project(rendered, manifest.compose_project, shared_project)
 
     deployment_id = make_id("sdep")
     short = commit[:12]
     # A manifest in a directory speaks for that directory: its compose file and its commands
     # are relative to it (helpdesk-ai/boss.deploy.yaml's docker-compose.yml is helpdesk-ai's).
     summary = {**manifest.summary(), "manifest_path": path,
-               "workdir": manifest_workdir(path), "app_secrets": app_secret_names}
+               "workdir": manifest_workdir(path), "app_secrets": app_secret_names,
+               # Read back at apply, which renders the manifest again (join_resource_project).
+               **({"shared_compose_project": shared_project} if shared_project else {})}
     rp = ResourcePlaneService(settings)
     with engine.begin() as connection:
         # Check-then-insert under ONE lock per target. Everything above took seconds (GitHub,
@@ -1416,7 +1763,10 @@ def plan_stack_deploy(engine, settings: Settings, *, project_id: str, target_id:
              "repo": f"{owner}/{repo}", "ref": ref, "c": commit, "m": json.dumps(summary),
              "mt": manifest_text, "d": decision_id, "cs": changeset["id"],
              "res": reservation["reservation_id"], "steps": json.dumps(steps),
-             "open": rendered["open_url"], "pf": json.dumps({"ok": True, "host": host["name"]}),
+             "open": rendered["open_url"],
+             "pf": json.dumps({"ok": True, "host": host["name"],
+                               "address": host.get("address"),
+                               **({"facts": facts} if facts else {})}),
              "wr": workflow_run_id, "cr": run_id, "rb": rollback_of, "by": actor,
              "dir": manifest.dir})
         if infra_doc:
@@ -1585,17 +1935,24 @@ def _short(connection: Connection) -> None:
 
 def _fail(connection: Connection, deployment_id: str, project_id: str, *, headline: str,
           action: str, actor: str, steps: Optional[list] = None,
-          log_tail: Optional[str] = None) -> None:
+          log_tail: Optional[str] = None, cause: Optional[str] = None) -> None:
+    """Fail a deployment with its words. `cause` (CAUSE_APP / CAUSE_HOST) is whose fix it is;
+    unsaid, it is a person's — BOSS never auto-repairs a failure it cannot place."""
+    failed_step = next((str(s.get("name")) for s in steps or []
+                        if isinstance(s, dict) and s.get("status") == "failed"), None)
     fields: dict[str, Any] = {"status": "failed", "finished_at": "__now__",
                               "failure_reason": headline, "waiting_on": None,
-                              "error": {"headline": headline, "action": action}}
+                              "error": {"headline": headline, "action": action,
+                                        "cause": cause or CAUSE_HOST,
+                                        **({"step": failed_step} if failed_step else {})}}
     if steps is not None:
         fields["steps"] = steps
     if log_tail is not None:
         fields["log_tail"] = log_tail
     _set(connection, deployment_id, **fields)
     emit_event(connection, project_id, "deployment.stack_failed", actor, "stack_deployment",
-               deployment_id, {"headline": headline})
+               deployment_id, {"headline": headline, "cause": cause or CAUSE_HOST,
+                               **({"step": failed_step} if failed_step else {})})
 
 
 def _close_governance(connection: Connection, settings: Settings, row: Any, *, actor: str,
@@ -1727,12 +2084,13 @@ class _ApplyFailed(Exception):
     """The host work ended without a healthy stack: headline, action and what had run."""
 
     def __init__(self, headline: str, action: str, steps: Optional[list] = None,
-                 log_tail: Optional[str] = None):
+                 log_tail: Optional[str] = None, cause: Optional[str] = None):
         super().__init__(headline)
         self.headline = headline
         self.action = action
         self.steps = steps
         self.log_tail = log_tail
+        self.cause = cause
 
 
 def _finalize(connection: Connection, settings: Settings, *, deployment_id: str, token: str,
@@ -1768,7 +2126,8 @@ def _finalize(connection: Connection, settings: Settings, *, deployment_id: str,
                     {"h": json.dumps(checks), "t": row["target_id"]})
         else:
             _fail(connection, deployment_id, row["project_id"], headline=error.headline,
-                  action=error.action, actor=actor, steps=error.steps, log_tail=error.log_tail)
+                  action=error.action, actor=actor, steps=error.steps, log_tail=error.log_tail,
+                  cause=error.cause)
     final = _row(connection, deployment_id)
     return {"status": final["status"], "retry": False, "deployment": serialize(final)}
 
@@ -1861,6 +2220,8 @@ def apply_on_host(engine, settings: Settings, *, deployment_id: str, apply_token
             rendered = render(manifest, _deployment_ctx(target, host, deployment["commit_sha"],
                                                          deployment["ref"]))
             recorded = _json(deployment.get("manifest")) or {}
+            rendered = join_resource_project(rendered, manifest.compose_project or "",
+                                             recorded.get("shared_compose_project"))
             rendered["workdir"] = str(recorded.get("workdir") or "")
             if not is_stack_target(target):
                 # A host target shipping its app's declared manifest: its one-container release
@@ -1883,7 +2244,9 @@ def apply_on_host(engine, settings: Settings, *, deployment_id: str, apply_token
         except (StackStepFailed, StackDeployError, ManifestError) as exc:
             raise _ApplyFailed(
                 getattr(exc, "headline", None) or f"The manifest is not valid: {exc}",
-                getattr(exc, "action", None) or "Fix boss.deploy.yaml and deploy again.")
+                getattr(exc, "action", None) or "Fix boss.deploy.yaml and deploy again.",
+                cause=(CAUSE_APP if isinstance(exc, ManifestError)
+                       else getattr(exc, "cause", None)))
 
     def record(steps: list[dict[str, Any]], log_tail: str) -> None:
         try:
@@ -1942,7 +2305,7 @@ def apply_on_host(engine, settings: Settings, *, deployment_id: str, apply_token
             outcome = applier.run()
     except (StackStepFailed, StackDeployError) as exc:
         raise _ApplyFailed(exc.headline, exc.action, applier.steps if applier else None,
-                           applier.log if applier else None)
+                           applier.log if applier else None, cause=exc.cause)
     except Exception as exc:  # noqa: BLE001 — recorded with a sentence, never a stack trace
         log.warning("stack deploy %s failed unexpectedly", deployment_id, exc_info=True)
         said = explain_failure("deploy", 1, redact(str(exc), hidden + [access.key_material]))
@@ -2437,8 +2800,22 @@ def plan_for_workflow_step(engine, settings: Settings, *, project_id: str, actor
             manifest_path=None if is_stack_target(target) else target.get("manifest_path"),
             approval_decision_id=approval_decision_id)
     except StackDeployError as exc:
-        return {"capability": "deploy", "tool": None, "status": "failed",
-                "error": f"{exc.headline} {exc.action}"}
+        refused: dict[str, Any] = {"capability": "deploy", "tool": None, "status": "failed",
+                                   "error": f"{exc.headline} {exc.action}"}
+        if exc.cause:
+            manifest_text = str(getattr(exc, "manifest_text", "") or "")
+            # WHOSE FIX IT IS, for the runner (deploy_repair): an app-side refusal — a program
+            # the machine lacks, a manifest that does not fit — is repaired by a build of the
+            # app, not by a person; nothing was planned or written, so nothing needs undoing.
+            refused["deploy_failure"] = {
+                "phase": "plan", "cause": exc.cause, "headline": exc.headline,
+                "action": exc.action, "host_id": target.get("host_id"),
+                "target_id": target.get("id"), "target_name": target.get("app_name"),
+                "commit": getattr(exc, "commit", None),
+                "manifest_path": getattr(exc, "manifest_path", None),
+                **({"manifest_text": manifest_text[:6000]} if manifest_text else {}),
+                **({"host_facts": exc.facts} if exc.facts else {})}
+        return refused
     return {
         "capability": "deploy", "tool": None, "status": "awaiting",
         "await": {"kind": "stack_deployment", "id": deployment["id"]},

@@ -226,3 +226,24 @@ def test_a_team_a_person_chose_is_still_respected():
             text("DELETE FROM project_agents WHERE project_id=:p AND app_key IN (:a, :b)"),
             {"p": PROJECT, "a": agent_assignment.app_key(app_name),
              "b": agent_assignment.PROJECT_DEFAULT})
+
+
+# HelpDesk D1's shape: deploy (approver release_manager) sits inside pass_2's parallel branch.
+D1 = {"steps": [
+    {"id": "build", "captain": "engineering_captain"},
+    {"id": "pass_2", "kind": "parallel", "branches": [
+        [{"id": "more_tests", "captain": "qa"}],
+        [{"id": "report"},
+         {"id": "deploy", "approval": {"approver_role": "release_manager"}},
+         {"id": "monitor", "captain": "sre"}],
+    ]},
+]}
+
+
+def test_an_agent_named_inside_a_parallel_branch_is_on_the_run():
+    """Reading only the top level missed the deploy's approver, and the deploy was refused
+    "'release_manager' is not assigned" (HelpDesk AI, 16 Oct)."""
+    from boss_engine.services.agent_assignment import workflow_named
+
+    assert set(workflow_named(D1)) == {"engineering_captain", "qa", "release_manager", "sre"}
+    assert "release_manager" in default_roles(D1)

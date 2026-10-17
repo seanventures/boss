@@ -369,7 +369,7 @@ function CockpitView({ c, projectId, runId, actor, onClose, onOpenBuild, refresh
           {/* THE APP'S SETTINGS, IN THE OPEN: secrets, deploy settings and the sign-in guide were
               behind Factory › Apps › ⋯ › Setup, which an operator asked for twice could not find. */}
           <button type="button" className="ag-btn" data-testid="fx-app-settings"
-                  title="Secrets, deploy settings and setup for this app"
+                  title="Its settings, connectors and sign-in setup"
                   onClick={() => setSettingsOpen(true)}>Settings</button>
           <span className="fx-state" data-state={s.state} data-testid="fx-state">
             <span className="fx-state-word" title={s.tip || undefined}>{s.word}</span>
@@ -481,7 +481,7 @@ function CockpitView({ c, projectId, runId, actor, onClose, onOpenBuild, refresh
                                       localOnly onClose={() => setDiagnostics(false)} /> : null}
         {err ? <span className="fx-err" role="alert" data-user-text data-testid="fx-error">{err}</span> : null}
         {settingsOpen ? <AppSetupSheet projectId={projectId} runId={c.run.id} appName={c.app}
-                                       onClose={() => setSettingsOpen(false)} /> : null}
+                                       tab="settings" onClose={() => setSettingsOpen(false)} /> : null}
       </header>
 
       {c.attention.length ? (

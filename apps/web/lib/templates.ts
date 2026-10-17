@@ -116,12 +116,26 @@ export function parseDetail(v: unknown): TemplateDetail {
 // ---- an app's side --------------------------------------------------------------------------------
 
 export type SecretBinding = { name: string; env: string; mode: string; shape: string; setAt: string; lastUsedAt: string; liveApproved: boolean | null };
-export type DeclaredSecret = { name: string; purpose: string; testDefault: string; bound: boolean };
+export type DeclaredSecret = { name: string; purpose: string; testDefault: string; bound: boolean;
+  /** false: the app runs without it (a sign-in provider it turns on only once its key is set). */
+  required?: boolean };
 export type AppSecrets = { bindings: SecretBinding[]; declared: DeclaredSecret[];
   /** The app's own deploy settings: values set for deploy that no template declares. */
   deployValues: string[] };
-export type Applied = { id: string; templateId: string; key: string; name: string; version: string; stack: string; status: string; workflowRunId: string; codeTaskRunId: string; createdAt: string };
+/** A sign-in provider a connector wires (GET /v1/apps/{key}/templates' `sign_in_providers`):
+ *  `id` and `secret` are the names of its client id and secret ("boss" is OIDC_BOSS_*). */
+export type SignInProvider = { provider: string; id: string; secret: string };
+export type Applied = { id: string; templateId: string; key: string; name: string; version: string; stack: string; status: string; workflowRunId: string; codeTaskRunId: string; createdAt: string;
+  /** Why it is blocked, in the API's words ("" when it is not). */
+  blockedReason: string;
+  /** This connector's own secret names, and the sign-in providers it wires. */
+  secrets: string[]; signInProviders: SignInProvider[] };
 export type Guide = { key: string; name: string; version: string; status: string; guide: string; copy: Record<string, string> };
+/** Where the app and BOSS are reached (GET /v1/apps/{key}/setup-guide): BOSS's public address
+ *  (null: none yet), and the app's preview — running or not, and its address only when a browser
+ *  outside BOSS reaches it (`reach` "inside_only": it runs, but BOSS has no public address). */
+export type SetupAddresses = { bossPublicUrl: string | null; preview: { running: boolean; url: string | null; reach: "public" | "inside_only" | null } };
+export type SetupGuides = { guides: Guide[]; addresses: SetupAddresses };
 
 export function parseSecretsView(v: unknown): AppSecrets {
   const o = obj(v);
@@ -134,7 +148,8 @@ export function parseSecretsView(v: unknown): AppSecrets {
     }),
     declared: arr(o.declared).map((x) => {
       const d = obj(x);
-      return { name: str(d.name), purpose: str(d.purpose), testDefault: str(d.test_default) || "none", bound: d.bound === true };
+      return { name: str(d.name), purpose: str(d.purpose), testDefault: str(d.test_default) || "none", bound: d.bound === true,
+               required: d.required !== false };
     }),
     deployValues: arr(o.deploy_values).map((x) => str(x)).filter(Boolean),
   };
@@ -148,7 +163,12 @@ export function parseApplied(v: unknown): Applied[] {
     const a = obj(x);
     return { id: str(a.id), templateId: str(a.template_id), key: str(a.template_key), name: str(a.name) || str(a.template_key),
              version: str(a.version), stack: str(a.stack), status: str(a.status), workflowRunId: str(a.workflow_run_id),
-             codeTaskRunId: str(a.code_task_run_id), createdAt: str(a.created_at) };
+             codeTaskRunId: str(a.code_task_run_id), createdAt: str(a.created_at), blockedReason: str(a.blocked_reason),
+             secrets: strs(a.secrets),
+             signInProviders: arr(a.sign_in_providers).map((p) => {
+               const o = obj(p);
+               return { provider: str(o.provider), id: str(o.id), secret: str(o.secret) };
+             }).filter((p) => p.provider && p.id) };
   });
 }
 
@@ -162,9 +182,19 @@ export function parseGuides(v: unknown): Guide[] {
   });
 }
 
+export function parseSetupGuides(v: unknown): SetupGuides {
+  const o = obj(v);
+  const p = obj(o.preview);
+  const reach = p.reach === "public" || p.reach === "inside_only" ? p.reach : null;
+  return { guides: parseGuides(v),
+           addresses: { bossPublicUrl: str(o.boss_public_url) || null,
+                        preview: { running: p.running === true, url: str(p.url) || null, reach } } };
+}
+
 /** An applied template's state, in words. */
 export const APPLIED_WORD: Record<string, string> = {
   building: "Building", pr_open: "PR open", applied: "Applied", failed: "Failed", abandoned: "Abandoned",
+  blocked: "Blocked",
 };
 
 /** The three environments a secret is bound for, as the person reads them. */
@@ -344,6 +374,9 @@ export const templatesApi = {
     parseSecretsView(await idGet(`/v1/apps/${enc(appKey)}/secrets?${q({ project_id: projectId })}`)),
   guides: async (projectId: string, appKey: string) =>
     parseGuides(await idGet(`/v1/apps/${enc(appKey)}/setup-guide?${q({ project_id: projectId })}`)),
+  /** The same read, with where BOSS and the app's preview are reached. */
+  setupGuides: async (projectId: string, appKey: string) =>
+    parseSetupGuides(await idGet(`/v1/apps/${enc(appKey)}/setup-guide?${q({ project_id: projectId })}`)),
   /** One write for every env named (`envs`), so a test key typed once is stored once. */
   putSecret: (projectId: string, appKey: string, name: string, b: { env?: string; envs?: string[]; mode: string; value?: string; template_id?: string }) =>
     idPut<O>(`/v1/apps/${enc(appKey)}/secrets/${enc(name)}`, { project_id: projectId, ...b }),

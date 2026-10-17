@@ -99,6 +99,23 @@ def test_14_a_workflow_runs_this_run_grant_ends_with_the_run(env):
         assert grants.load(g.id, db=c).status.value == "expired"
 
 
+def test_14_a_failed_runs_grant_outlives_the_failure_so_a_retry_can_finish(env):
+    """HelpDesk AI (wfr_fb4fb5de) failed on a deploy, was retried and deployed healthy — then its
+    Monitor step died "the authority this run was started under has ended": the grant had been
+    ended while the run was failed. A failed run is retryable, so its grant waits out the grace;
+    a completed run's still ends at once."""
+    g = env.grant(agents=(env.forge,), children=(), task_run_id="run_wf:wfr_retry")
+    with env.db() as c:
+        c.execute(text("INSERT INTO workflow_runs (id, status) VALUES ('wfr_retry', 'failed')"))
+    with env.db() as c:
+        assert maintenance.end_finished_workflow_grants(db=c) == [], "ended a retryable run's grant"
+    with env.db() as c:
+        c.execute(text("UPDATE workflow_runs SET updated_at = now() - interval '25 hours' "
+                       "WHERE id = 'wfr_retry'"))
+    with env.db() as c:
+        assert maintenance.end_finished_workflow_grants(db=c) == [g.id], "the grace never ends"
+
+
 def _child_work_tables(c):
     """What a full install has and this throwaway schema leaves out."""
     c.execute(text("ALTER TABLE code_task_runs ADD COLUMN IF NOT EXISTS finalize_ctx JSONB "
@@ -120,6 +137,8 @@ def test_14_a_finished_runs_grant_waits_for_its_live_child_work(env):
     with env.db() as c:
         _child_work_tables(c)
         c.execute(text("INSERT INTO workflow_runs (id, status) VALUES ('wfr_kids', 'failed')"))
+        # Failed long enough ago that its retry grace is over (RETRYABLE_GRANT_GRACE_HOURS).
+        c.execute(text("UPDATE workflow_runs SET updated_at = now() - interval '25 hours' WHERE id = 'wfr_kids'"))
         c.execute(text("INSERT INTO code_task_runs (id, project_id, status, spec, finalize_ctx) VALUES "
                        "('crun_kid', :p, 'running', '{}', '{\"workflow_run_id\": \"wfr_kids\"}')"),
                   {"p": env.project})
@@ -152,6 +171,8 @@ def test_14_a_finished_runs_grant_waits_for_a_branch_still_in_flight(env):
     with env.db() as c:
         _child_work_tables(c)
         c.execute(text("INSERT INTO workflow_runs (id, status) VALUES ('wfr_branch', 'failed')"))
+        # Failed long enough ago that its retry grace is over (RETRYABLE_GRANT_GRACE_HOURS).
+        c.execute(text("UPDATE workflow_runs SET updated_at = now() - interval '25 hours' WHERE id = 'wfr_branch'"))
         c.execute(text("INSERT INTO workflow_step_runs (id, workflow_run_id, step_id, status, "
                        "lease_expires_at, output) VALUES ('wfs_deploy', 'wfr_branch', 'deploy', "
                        "'running', now() + interval '5 minutes', '{}')"))
@@ -170,7 +191,9 @@ def test_14_a_finished_runs_grant_ends_once_its_last_branch_settles(env):
     g = env.grant(agents=(env.forge,), children=(), task_run_id="run_wf:wfr_settled")
     with env.db() as c:
         _child_work_tables(c)
+        c.execute(text("DELETE FROM workflow_step_runs WHERE id = 'wfs_smoke'"))  # a crashed earlier run's row
         c.execute(text("INSERT INTO workflow_runs (id, status) VALUES ('wfr_settled', 'failed')"))
+        c.execute(text("UPDATE workflow_runs SET updated_at = now() - interval '25 hours' WHERE id = 'wfr_settled'"))
         c.execute(text("INSERT INTO workflow_step_runs (id, workflow_run_id, step_id, status, "
                        "lease_expires_at, output) VALUES ('wfs_smoke', 'wfr_settled', 'smoke_test', "
                        "'leased', now() + interval '5 minutes', '{}')"))

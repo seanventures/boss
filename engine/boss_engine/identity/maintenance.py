@@ -31,6 +31,13 @@ log = logging.getLogger("boss.identity.maintenance")
 MAINTENANCE_SECONDS = 30
 _LOCK_KEY = 0x6964_6D61_696E      # "idmain"
 TERMINAL_WORKFLOW_STATUSES = ("completed", "failed", "deadlettered", "cancelled", "compensated")
+#: A run that FAILED can still be retried step by step (workflows.retry_failed_step revives it), so
+#: its grant outlives the failure by this long; a completed, cancelled or compensated run's grant
+#: ends at once. HelpDesk AI's run (wfr_fb4fb5de) failed on a deploy, was retried and deployed
+#: healthy — then its next step, Monitor, died "the authority this run was started under has
+#: ended": the grant had been ended while the run was failed. The grant's own expiry still applies.
+RETRYABLE_WORKFLOW_STATUSES = ("failed", "deadlettered")
+RETRYABLE_GRANT_GRACE_HOURS = 24
 
 
 #: A run's child work that has settled: a code task, a stack deployment.
@@ -93,9 +100,12 @@ def end_finished_workflow_grants(*, db: Any) -> list[str]:
         "AND to_regclass('workflow_step_runs') IS NOT NULL")).scalar()
     rows = db.execute(text(
         "SELECT g.task_run_id, g.org_id FROM identity_delegation_grants g JOIN workflow_runs w "
-        "ON g.task_run_id = 'run_wf:' || w.id WHERE g.status = 'active' AND w.status = ANY(:t)"
+        "ON g.task_run_id = 'run_wf:' || w.id WHERE g.status = 'active' AND w.status = ANY(:t) "
+        "AND (w.status <> ALL(:retryable) "
+        "     OR w.updated_at < now() - make_interval(hours => :grace))"
         + (f" AND NOT {live_child_work_sql()}" if children else "")),
-        {"t": list(TERMINAL_WORKFLOW_STATUSES)}).all()
+        {"t": list(TERMINAL_WORKFLOW_STATUSES), "retryable": list(RETRYABLE_WORKFLOW_STATUSES),
+         "grace": RETRYABLE_GRANT_GRACE_HOURS}).all()
     ended: list[str] = []
     for run_id, org in {(r[0], r[1]) for r in rows}:
         ended += grants.end_task_grants(run_id, db=db, org_id=org)

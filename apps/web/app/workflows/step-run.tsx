@@ -202,6 +202,9 @@ const SENTENCES: Record<string, string> = {
   "code_task.step_escalating": "Escalated a stuck stage",
   "code_task.completed": "Work finished",
   "code_task.failed": "Work failed",
+  // Fix and redeploy (engine deploy_repair): the deploy failed for the app's reason.
+  "deploy.fix_started": "Deploy failed — fixing the app",
+  "deploy.redeploying": "App fixed — deploying again",
 };
 
 function words(snake: string): string {

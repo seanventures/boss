@@ -5827,6 +5827,47 @@ def repoint_waiting_step(
     return _serialize_step(row)
 
 
+def requeue_waiting_step(
+    connection: Connection,
+    *,
+    project_id: str,
+    step_run_id: str,
+    output: dict[str, Any],
+    event: str,
+    data: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    """Run a PARKED step's capability again, from the runner itself — the deploy step whose
+    repair build finished goes back to `ready` and plans a new deployment (deploy_repair).
+
+    Only a step in `waiting` moves. Its answered gate is cleared (`decision_id`): what it
+    approved was the earlier commit, and the new deployment asks under its own approval rule.
+    `output` is merged onto the step's (the redeploy marker and the fixes so far), and the
+    attempt count starts afresh as a Try again's does. The run moves again, through the one
+    door out of a stop, so a paused or closed run is left as it is.
+    """
+    row = connection.execute(
+        text(
+            """
+            UPDATE workflow_step_runs
+            SET status='ready', attempt=0, last_error=NULL, started_at=NULL, completed_at=NULL,
+                lease_owner=NULL, lease_expires_at=NULL, run_after=now(), decision_id=NULL,
+                output = (COALESCE(output, '{}'::jsonb) - 'waiting' - 'await')
+                         || CAST(:output AS JSONB),
+                updated_at=now()
+            WHERE id=:id AND project_id=:project_id AND status='waiting'
+            RETURNING *
+            """
+        ),
+        {"id": step_run_id, "project_id": project_id, "output": json.dumps(output)},
+    ).mappings().first()
+    if not row:
+        raise WorkflowNotFoundError("Waiting workflow step not found.")
+    emit_event(connection, project_id, event, "boss", "workflow_run", row["workflow_run_id"],
+               {"step_id": row["step_id"], "workflow_step_run_id": row["id"], **(data or {})})
+    _set_moving_again(connection, row["workflow_run_id"])
+    return _serialize_step(row)
+
+
 def reopen_failed_step(
     connection: Connection,
     *,

@@ -142,7 +142,7 @@ export function AppDrawer({ projectId, actor, url, go, pulse, targetId, row }: O
   );
 
   return (
-    <Drawer label={`${name} health`} testId="obs-app-drawer" width={560} onClose={close} head={head}>
+    <Drawer label={`${name} health`} testId="obs-app-drawer" width={880} expandable onClose={close} head={head}>
       {!d ? (detail.error ? <span className="inf-error" title={detail.error}>Can&apos;t load this app</span> : <Skeleton testId="obs-app-loading" />) : (
         <>
           <div className="obs-facts" data-testid="obs-app-facts">
