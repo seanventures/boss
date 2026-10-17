@@ -115,3 +115,69 @@ def test_the_apply_reads_what_the_plan_recorded():
     source = Path(stack_deploy.__file__).read_text()
     assert '"retire_app_in": moved_from' in source
     assert 'retire_app_in_shared(rendered, [' in source
+
+
+# ── the old resources' values stay with the release that asked for them ──────────────────────
+
+class _Nested:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+class _BindingRows:
+    """infra_platform_resources rows: (bindings,)"""
+    def __init__(self, rows):
+        self.rows = rows
+
+    def begin_nested(self):
+        return _Nested()
+
+    def execute(self, *_a, **_k):
+        rows = self.rows
+
+        class R:
+            def all(self):
+                return [(r,) for r in rows]
+        return R()
+
+
+def _manifest(resources: bool):
+    from boss_engine.services.app_deploy_manifest import load_manifest
+
+    doc = ("version: 1\nname: helpdesk-ai\nkind: compose\ncompose:\n  file: docker-compose.yml\n"
+           "health: [{url: \"{target.public_url}/auth/providers\", expect: 200}]\n")
+    if resources:
+        doc += "resources:\n  db: {capability: database.relational, engine: postgres}\n"
+    return load_manifest(doc)
+
+
+def test_a_release_that_brings_its_own_database_is_not_handed_the_old_one(monkeypatch):
+    """HelpDesk AI sdep_121762db692549afa39b: the release's compose file runs its own Postgres
+    (DATABASE_URL defaults to its `db` service), BOSS still wrote the earlier release's resource
+    binding DATABASE_URL=…res-db… into its env file, and the app exited on EAI_AGAIN res-db."""
+    from boss_engine.app_links import service as links
+    from boss_engine.services import governed_host_deploy
+    from boss_engine.templates import base_url
+
+    monkeypatch.setattr(governed_host_deploy, "_app_key_for", lambda *a, **k: "helpdesk ai")
+    monkeypatch.setattr(links, "project_org", lambda *a, **k: "org_x")
+    monkeypatch.setattr(base_url, "deploy_environment", lambda *a, **k: (
+        {"DATABASE_URL": "postgresql://app@res-db/db", "SESSION_SECRET": "s" * 40}, [], ""))
+    conn = _BindingRows([{"DATABASE_URL": {"secretRef": "app_secret://deploy/helpdesk:20ai/"
+                                                        "DATABASE_URL"}}])
+    own = stack_deploy.app_deploy_env(conn, "p", {"id": "t"}, None, manifest=_manifest(False))
+    assert "DATABASE_URL" not in own and own["SESSION_SECRET"], \
+        "a release without resources keeps its own database and every other app value"
+    asks = stack_deploy.app_deploy_env(conn, "p", {"id": "t"}, None, manifest=_manifest(True))
+    assert asks["DATABASE_URL"].endswith("res-db/db"), "a release that asks for them keeps them"
+    legacy = stack_deploy.app_deploy_env(conn, "p", {"id": "t"}, None)
+    assert "DATABASE_URL" in legacy, "a caller with no manifest sees what it always saw"
+
+
+def test_the_binding_names_are_read_from_the_apps_live_resources():
+    rows = [{"DATABASE_URL": {}}, '{"REDIS_URL": {}}', None]
+    assert stack_deploy.resource_binding_names(_BindingRows(rows), "p", "helpdesk ai") == \
+        {"DATABASE_URL", "REDIS_URL"}

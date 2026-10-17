@@ -1328,10 +1328,17 @@ def _live_deployment(connection: Connection, target_id: str, commit: str):
 # ── Plan ─────────────────────────────────────────────────────────────────────────────────────
 
 def app_deploy_env(connection: Connection, project_id: str, target: dict,
-                   code_task_run_id: Optional[str]) -> dict[str, str]:
+                   code_task_run_id: Optional[str],
+                   manifest: Optional[DeployManifest] = None) -> dict[str, str]:
     """The app's deploy environment: THE ONE READER both deploy paths use
     (templates.base_url.deploy_environment) — its `deploy` secret values, generated, set or
-    approved live, plus APP_BASE_URL where a template declares it. {} for an app with no key."""
+    approved live, plus APP_BASE_URL where a template declares it. {} for an app with no key.
+
+    `manifest`: the release being deployed. When it declares NO `resources:`, the values BOSS's
+    resources bound for an EARLIER release of the app (`resource_binding_names`: a
+    DATABASE_URL pointing at res-db) are not this release's: HelpDesk AI sdep_121762db692549afa39b
+    brought its own Postgres in its compose file (`${DATABASE_URL:-…@db…}`), was handed the old
+    resource's DATABASE_URL anyway, and exited on `getaddrinfo EAI_AGAIN res-db`."""
     from ..app_links.service import project_org
     from ..templates.base_url import deploy_environment
     from .governed_host_deploy import _app_key_for
@@ -1343,7 +1350,30 @@ def app_deploy_env(connection: Connection, project_id: str, target: dict,
     env, _withheld, _address = deploy_environment(
         connection, org_id=project_org(connection, project_id), project_id=project_id,
         app_key=key, target=target)
+    if manifest is not None and not manifest.resources:
+        for name in resource_binding_names(connection, project_id, key):
+            env.pop(name, None)
     return env
+
+
+def resource_binding_names(connection: Connection, project_id: str, app_key: str) -> set[str]:
+    """The env names BOSS's platform resources bind for this app (infra_platform_resources
+    .bindings, e.g. DATABASE_URL) — values that belong to a release which asks for those
+    resources, never to one that brings its own."""
+    try:
+        with connection.begin_nested():
+            rows = connection.execute(
+                text("SELECT bindings FROM infra_platform_resources WHERE project_id = :p "
+                     "AND app_key = :a AND destroyed_at IS NULL"),
+                {"p": project_id, "a": app_key}).all()
+    except Exception:  # noqa: BLE001 — unread: keep the environment as it was
+        log.warning("stack deploy: resource bindings of %s not read", app_key, exc_info=True)
+        return set()
+    names: set[str] = set()
+    for (bindings,) in rows:
+        data = bindings if isinstance(bindings, dict) else json.loads(bindings or "{}")
+        names.update(str(k) for k in (data or {}) if k)
+    return names
 
 
 def merge_app_env(manifest: DeployManifest, values: dict[str, str], hidden: list[str],
@@ -2371,7 +2401,7 @@ def apply_on_host(engine, settings: Settings, *, deployment_id: str, apply_token
             env_values, hidden = _environment(connection, settings, deployment=deployment,
                                               manifest=manifest, rendered=rendered)
             app_env = app_deploy_env(connection, project_id, target,
-                                     deployment.get("code_task_run_id"))
+                                     deployment.get("code_task_run_id"), manifest=manifest)
             env_values, hidden = merge_app_env(manifest, env_values, hidden, app_env)
             for key, value in address_env(target, host).items():
                 env_values.setdefault(key, value)
