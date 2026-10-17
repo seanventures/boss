@@ -307,7 +307,7 @@ describe("(A) Output is what the step made, for a person", () => {
     expect(all).not.toMatch(/awaiting|approve_decision|deptgt_/);
     expect(details.map((d) => d.value).join(" ")).not.toMatch(/(deprun|dec|chg)_/);
     expect(details.map((d) => d.href)).toEqual(expect.arrayContaining([
-      "?area=approvals&decision=dec_fb1f425c2979",
+      "?area=decisions&decision=dec_fb1f425c2979",
       "?area=infra&view=cloud&cloud=changes&changeset=chg_13206e6b5f80"]));
   });
 

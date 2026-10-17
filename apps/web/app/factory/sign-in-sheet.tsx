@@ -86,7 +86,9 @@ export function useBossSignIn(projectId: string, appKey: string, onChange?: () =
     setBusy(which);
     let r: Awaited<ReturnType<typeof useSignInWithBossAction>>;
     try {
-      r = await callAction(which === "use" ? useSignInWithBossAction : stopSignInWithBossAction, undefined, "oidc_client:manage")(form());
+      r = which === "use"
+        ? await callAction(useSignInWithBossAction, undefined, "oidc_client:manage")(form())
+        : await callAction(stopSignInWithBossAction, undefined, "oidc_client:manage")(form());
     } catch (e) {
       // The press itself got no answer (or threw): said, and the buttons come back.
       setBusy(null);

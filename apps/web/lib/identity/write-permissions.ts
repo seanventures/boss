@@ -135,6 +135,7 @@ export const WRITE_OPS: Readonly<Record<string, Readonly<Record<string, WriteGat
     model_remove: "model_provider:manage", job: "setup:manage", budget: "budget:manage", try: "workflow_run:start",
     decision_key: "model_provider:manage", routing: "setup:manage", routing_catalogue: "model_provider:manage",
     ci_workflows: "github:connect", build_database: "settings:update", build_speed: "settings:update",
+    release_hold: "entitlement:manage",
   },
   // lib/improve.ts `improveWrite(op, …)` → /api/improve (lib/improve-ops.ts)
   "lib/improve.ts#improveWrite": {

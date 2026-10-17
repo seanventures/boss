@@ -252,7 +252,9 @@ describe("DecisionInbox (W1.6 actionable default)", () => {
     expect(markup).toContain('data-testid="decision-default-action"');
     expect(markup).toContain("default hold");
     expect(markup).toContain('data-testid="decision-reason"');
-    expect(markup).toContain("reason merge_decision_required");
+    // The reason in words, never the raw code.
+    expect(markup).toContain("why: merge decision required");
+    expect(markup).not.toContain("merge_decision_required<");
   });
 
   it("does not pretend the API is a clear queue when it is unreachable", () => {
