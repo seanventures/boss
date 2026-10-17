@@ -181,3 +181,34 @@ def test_the_binding_names_are_read_from_the_apps_live_resources():
     rows = [{"DATABASE_URL": {}}, '{"REDIS_URL": {}}', None]
     assert stack_deploy.resource_binding_names(_BindingRows(rows), "p", "helpdesk ai") == \
         {"DATABASE_URL", "REDIS_URL"}
+
+
+# ── a host target shipping its declared manifest can be rolled back ──────────────────────────
+
+def test_a_rollback_ships_from_the_manifest_the_release_shipped_from(monkeypatch):
+    """HelpDesk AI 2026-10-17: Roll back on a release the workflow had shipped to the app's SSH
+    host target from helpdesk-ai/boss.deploy.yaml answered "Target 'HelpDesk AI' is a 'ssh'
+    target, not a stack target" — the rollback planned without the manifest path."""
+    import contextlib
+
+    row = {"project_id": "p", "target_id": "t", "repository": "o/r",
+           "manifest": {"manifest_path": "helpdesk-ai/boss.deploy.yaml", "kind": "compose"}}
+
+    class Engine:
+        @contextlib.contextmanager
+        def begin(self):
+            yield object()
+
+    planned = {}
+    monkeypatch.setattr(stack_deploy, "_row", lambda c, i, **k: row)
+    monkeypatch.setattr(stack_deploy, "get_stack_deployment",
+                        lambda c, i: {"actions": ["rollback"], "rollback_commit": "abc123"})
+    monkeypatch.setattr(stack_deploy, "plan_stack_deploy",
+                        lambda engine, settings, **kw: planned.update(kw) or {"id": "sdep_new"})
+    stack_deploy.rollback_stack_deploy(Engine(), None, deployment_id="sdep_x", actor="a")
+    assert planned["manifest_path"] == "helpdesk-ai/boss.deploy.yaml"
+    assert planned["ref"] == "abc123" and planned["rollback_of"] == "sdep_x"
+    assert stack_deploy.release_manifest_path({"manifest": '{"manifest_path": "/a/b.yaml/"}'}) \
+        == "a/b.yaml"
+    assert stack_deploy.release_manifest_path({"manifest": {}}) is None, \
+        "a stack target's release (no declared path) plans as before"

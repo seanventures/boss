@@ -1968,10 +1968,28 @@ def rollback_stack_deploy(engine, settings: Settings, *, deployment_id: str,
             "Roll back is offered only on a target's latest applied deployment, once it has "
             "finished and an earlier healthy commit exists; otherwise deploy a commit that "
             "works.", status_code=409)
+    # A HOST TARGET SHIPPING ITS APP'S DECLARED MANIFEST (`_declared_stack_target`) is planned
+    # with that manifest's path, like the workflow's deploy that made this release: without it
+    # plan_stack_deploy refused the rollback of every such release ("Target 'HelpDesk AI' is a
+    # 'ssh' target, not a stack target", HelpDesk AI 2026-10-17).
     return plan_stack_deploy(engine, settings, project_id=row["project_id"],
                              target_id=row["target_id"], repository=row["repository"],
                              ref=str(current["rollback_commit"]), actor=actor,
-                             rollback_of=deployment_id)
+                             rollback_of=deployment_id,
+                             manifest_path=release_manifest_path(row))
+
+
+def release_manifest_path(row: Mapping[str, Any]) -> Optional[str]:
+    """The boss.deploy.yaml a recorded stack deployment shipped from (its manifest summary's
+    `manifest_path`), or None — what any later plan of the same app on the same target reuses."""
+    manifest = row.get("manifest")
+    if isinstance(manifest, str):
+        try:
+            manifest = json.loads(manifest or "{}")
+        except ValueError:
+            manifest = {}
+    path = str((manifest or {}).get("manifest_path") or "").strip().strip("/")
+    return path or None
 
 
 # ── Approval (DecisionService follow-on) ─────────────────────────────────────────────────────
