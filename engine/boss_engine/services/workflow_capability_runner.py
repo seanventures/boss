@@ -3772,15 +3772,9 @@ def _recover_build_step(
     is `build`; any other step that waits on a build is not recovered here."""
     if ctx is None or not build_run_id:
         return None
-    if handle.get("then") == deploy_repair.THEN_REDEPLOY:
-        kind = "deploy_repair"
-    else:
-        spec_step = workflows._step_map(workflows._run_spec(connection, run_id)).get(
-            str(step["step_id"])) or {}
-        capability = str((spec_step.get("binding") or {}).get("capability") or "")
-        if capability not in ("build", "retry_build"):
-            return None
-        kind = "build"
+    kind = _build_recovery_kind(connection, run_id, step, handle)
+    if kind is None:
+        return None
     if status == "cancelled":
         return None  # somebody stopped it: never started again by itself
     evidence = step_recovery.build_evidence(connection, build_run_id, why)
@@ -3789,6 +3783,92 @@ def _recover_build_step(
     return _recover_awaited(connection, ctx, project_id=project_id, run_id=run_id, step=step,
                             output=output, handle=handle, kind=kind, failure=failure,
                             evidence=evidence)
+
+
+def _build_recovery_kind(connection: Connection, run_id: str, step: Any,
+                         handle: dict[str, Any]) -> Optional[str]:
+    """Whose build this is: a deploy step's repair build (`deploy_repair`), a build step's own
+    build (`build`), or None — any other step that waits on a build is not recovered here."""
+    if handle.get("then") == deploy_repair.THEN_REDEPLOY:
+        return "deploy_repair"
+    spec_step = workflows._step_map(workflows._run_spec(connection, run_id)).get(
+        str(step["step_id"])) or {}
+    capability = str((spec_step.get("binding") or {}).get("capability") or "")
+    return "build" if capability in ("build", "retry_build") else None
+
+
+#: The step-output key naming the parked build whose findings the agent already answered.
+FINDINGS_ANSWERED_KEY = "recovery_findings_answered"
+
+
+def _recover_open_findings(
+    connection: Connection, ctx: Any, *, project_id: str, run_id: str, step: Any,
+    output: dict[str, Any], handle: dict[str, Any], build_run_id: str,
+) -> Optional[dict[str, Any]]:
+    """A build the step waits on is PARKED FOR A WAIVER: its reviewers left findings open after
+    their fix rounds (governed_code_task_service, phase awaiting_gate_override).
+
+    THE CASE (HelpDesk AI recording run, 2026-10-16): a security finding was still open, and
+    the build went straight to a person to waive the gates. The step's OWN agent answers first
+    (step_recovery, kind `review_findings`): told the failing gates and the reviewers' findings
+    verbatim, it starts a repair build of the lineage to fix them (fix_app), and the step
+    follows it. A person is asked to waive only after that — the same findings back after the
+    fix, the budget spent, or the repair refused — and then the step goes on waiting on the
+    build's own waiver card, never failed: the waiver (or a person's retry) is the answer.
+
+    Decided ONCE per parked build (`FINDINGS_ANSWERED_KEY`), and only with a worker that can
+    start a build (a job queue): a sweep that cannot act never asks the model. Returns the
+    tick's record, or None when nothing was decided."""
+    if ctx is None or getattr(ctx, "jobs", None) is None or not build_run_id:
+        return None
+    if str(output.get(FINDINGS_ANSWERED_KEY) or "") == build_run_id:
+        return None
+    try:
+        with connection.begin_nested():
+            row = connection.execute(
+                text("SELECT phase, error FROM code_task_runs WHERE id = :i"),
+                {"i": build_run_id}).mappings().first()
+    except Exception:  # noqa: BLE001 — unread, the build's card still holds the wait
+        return None
+    if not row or str(row["phase"] or "") != step_recovery.GATE_WAIT_PHASE:
+        return None  # a plan to approve or a budget to raise is a person's, not the agent's
+    if _build_recovery_kind(connection, run_id, step, handle) is None:
+        return None
+    from ..templates.gate import held_run
+
+    try:
+        with connection.begin_nested():
+            if held_run(connection, build_run_id) is not None:
+                return None  # a template gate cannot be fixed by waiving or by this loop
+    except Exception:  # noqa: BLE001
+        pass
+    evidence = step_recovery.build_evidence(connection, build_run_id, str(row["error"] or ""))
+    failure = {**evidence["failure"], "build_run_id": build_run_id}
+    evidence["failure"] = failure
+    recovered = _recover_awaited(connection, ctx, project_id=project_id, run_id=run_id,
+                                 step=step, output=output, handle=handle,
+                                 kind=step_recovery.FINDINGS_KIND, failure=failure,
+                                 evidence=evidence)
+    if recovered is None:
+        return None
+    if recovered.get("done"):
+        return recovered["done"]
+    # A PERSON IS ASKED NOW, AND ONLY NOW: the step keeps waiting on the build's waiver card,
+    # saying what the agent tried and the one question.
+    extra = dict(recovered.get("output") or {})
+    state = extra.get(step_recovery.STATE_KEY) or step_recovery.state_of(output)
+    last = step_recovery.last_decision(state)
+    ask = step_recovery.waiver_ask(failure, reason=str(last.get("reasoning") or ""))
+    connection.execute(
+        text("UPDATE workflow_step_runs SET output = COALESCE(output, '{}'::jsonb) "
+             "|| CAST(:o AS JSONB), updated_at = now() WHERE id = :i AND project_id = :p "
+             "AND status = 'waiting'"),
+        {"i": step["id"], "p": project_id,
+         "o": json.dumps({step_recovery.STATE_KEY: state, FINDINGS_ANSWERED_KEY: build_run_id,
+                          "note": str(extra.get("note") or last.get("sentence") or ""),
+                          "recovery_question": ask["question"]}, default=str)})
+    return {"run_id": run_id, "step_id": step["step_id"], "awaited": "code_task",
+            "outcome": "asked_to_waive", "build": build_run_id}
 
 
 def _resume_recovery(connection: Connection, ctx: Any, *, project_id: str, run_id: str,
@@ -4642,6 +4722,14 @@ def resume_awaited(
                 done.append({"run_id": run_id, "step_id": step["step_id"],
                              "outcome": "following_retry", "awaited": kind,
                              "was": awaited_id, "now": successor})
+                continue
+            # OPEN REVIEW FINDINGS ARE THE STEP'S AGENT'S FIRST (step_recovery): it fixes them
+            # in a repair build before anybody is asked to waive them.
+            answered = _recover_open_findings(
+                connection, ctx, project_id=project_id, run_id=run_id, step=step,
+                output=output, handle=handle, build_run_id=awaited_id)
+            if answered:
+                done.append(answered)
             continue
         if kind == "code_task" and (status == "repairing" or status in ok_states):
             # A REPAIRED ATTEMPT IS NOT THE RESULT, AND A FINISHED BUILD IS NOT A PASSED ONE.

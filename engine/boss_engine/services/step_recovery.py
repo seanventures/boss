@@ -96,7 +96,14 @@ KINDS: dict[str, tuple[str, ...]] = {
     # The deploy step's repair build itself failed: build it again, fix again, BOSS, a person.
     "deploy_repair": (RETRY, FIX_APP, WAIT_FOR_BOSS, ASK_PERSON),
     "build": (RETRY, FIX_APP, WAIT_FOR_BOSS, ASK_PERSON),
+    # A build (or a deploy's repair build) PARKED FOR A WAIVER: its reviewers left findings
+    # open. The agent fixes them in a repair build; only if that does not hold is a person
+    # asked to waive. Nothing else answers it: a retry rebuilds the same findings, and a BOSS
+    # update does not close a finding in the app's code.
+    "review_findings": (FIX_APP, ASK_PERSON),
 }
+#: The kind of a build step whose build is parked for a waiver (`KINDS`).
+FINDINGS_KIND = "review_findings"
 
 #: The step-output keys this module owns.
 STATE_KEY = "recovery"
@@ -128,6 +135,15 @@ MAX_TOOL_RESULT_CHARS = 8_000
 MAX_DECISIONS_KEPT = 30
 DEFAULT_BACKOFF = 60
 MAX_BACKOFF = 1800
+
+#: A build parked for a person to WAIVE its failed gates (governed_code_task_service): reviewers
+#: left a finding open after their fix round. Its step's agent gets the first answer — a repair
+#: build told exactly which findings to fix — before anyone is asked to waive security.
+GATE_WAIT_PHASE = "awaiting_gate_override"
+#: The review summaries a parked build carries, as the agent reads them (code_task_runs.state).
+FINDING_KEYS = ("security_summary", "consistency_summary", "review_summary")
+MAX_FINDINGS_CHARS = 6_000
+_FAILING_GATES = re.compile(r"failing gates:\s*\[([^\]]*)\]", re.I)
 
 _PROJECT = re.compile(r"^[a-z0-9][a-z0-9_-]{0,62}$")
 _UNWIRED = re.compile(r"(?:getaddrinfo|could not translate host name)\W+(?:\w+\W+)?\"?"
@@ -302,6 +318,13 @@ def cause_signature(kind: str, failure: Mapping[str, Any]) -> tuple[str, dict[st
     from .deploy_repair import _missing_tool
 
     family = "deploy" if kind.startswith("deploy") else kind
+    if kind == FINDINGS_KIND or (str(failure.get("phase") or "") == GATE_WAIT_PHASE
+                                 and family != "deploy"):
+        # First: a review finding can quote anything (a port, a host name, "secret"), and it
+        # is still the reviewers' finding, not that.
+        gates = sorted({str(g) for g in failure.get("failing_gates") or [] if g}) or ["review"]
+        return (f"build:open_findings:{'+'.join(gates)}",
+                {"pattern": "open_findings", "gates": gates})
     said = _failure_text(failure)
     port = port_held(failure)
     if port:
@@ -464,10 +487,62 @@ def build_evidence(connection: Connection, build_run_id: str, why: str) -> dict[
         events = []
     build = dict(row) if row else {"id": build_run_id}
     build["error"] = _scrub(build.get("error"), 2000)
-    return {"failure": {"build_run_id": build_run_id, "why": _scrub(why, 2000),
-                        "error": build.get("error"), "status": build.get("status"),
-                        "phase": build.get("phase"), "reason_code": build.get("reason")},
-            "build": build, "events": events, "own_projects": []}
+    failure = {"build_run_id": build_run_id, "why": _scrub(why, 2000),
+               "error": build.get("error"), "status": build.get("status"),
+               "phase": build.get("phase"), "reason_code": build.get("reason")}
+    if str(build.get("phase") or "") == GATE_WAIT_PHASE:
+        failure.update(open_findings(connection, build_run_id, str(build.get("error") or "")))
+    return {"failure": failure, "build": build, "events": events, "own_projects": []}
+
+
+def open_findings(connection: Connection, build_run_id: str, error: str) -> dict[str, Any]:
+    """What a build parked for a waiver still has open: its failing gates (from its error, as
+    governed_code_task_service words them) and its reviewers' own findings, verbatim and
+    bounded — the brief of the repair build that fixes them."""
+    gates: list[str] = []
+    summaries: dict[str, str] = {}
+    try:
+        with connection.begin_nested():
+            row = connection.execute(
+                text("SELECT " + ", ".join(f"state->>'{k}' AS {k}" for k in FINDING_KEYS)
+                     + ", finalize_ctx->'failing_gates' AS failing_gates"
+                     " FROM code_task_runs WHERE id = :i"), {"i": build_run_id}
+            ).mappings().first()
+        summaries = {k: str(row[k]) for k in FINDING_KEYS if row and row[k]}
+        recorded = row["failing_gates"] if row else None
+        recorded = json.loads(recorded) if isinstance(recorded, str) else recorded
+        gates = [str(g) for g in recorded or [] if g] if isinstance(recorded, list) else []
+    except Exception:  # noqa: BLE001 — the gates alone still say what to fix
+        summaries = {}
+    if not gates:
+        # The gates the run recorded are the truth; its error's wording is the fallback.
+        found = _FAILING_GATES.search(error or "")
+        if found:
+            gates = [g.strip().strip("'\"") for g in found.group(1).split(",") if g.strip()]
+    # Security first: it is the finding nobody may waive away quietly.
+    budget, parts = MAX_FINDINGS_CHARS, []
+    for key in FINDING_KEYS:
+        body = summaries.get(key, "")
+        cut = body.find("## Findings")
+        body = (body[cut:] if cut >= 0 else body).strip()
+        if not body or budget <= 200:
+            continue
+        piece = _scrub(body, budget)
+        parts.append(f"[{key.replace('_summary', '')}]\n{piece}")
+        budget -= len(piece)
+    return {"failing_gates": gates, "findings": "\n\n".join(parts)}
+
+
+def findings_note(failure: Mapping[str, Any]) -> str:
+    """The repair build's instruction for open review findings: fix them, prove it, never waive."""
+    gates = ", ".join(failure.get("failing_gates") or []) or "the review gates"
+    lines = [f"The reviewers left findings open after their fix round, so {gates} failed. "
+             "Fix EVERY finding below in the code (not by weakening a test or a check), add a "
+             "test that fails without the fix where one is practical, and keep everything "
+             "that already passes passing. The reviewers run again on this attempt."]
+    if failure.get("findings"):
+        lines.append(str(failure["findings"]))
+    return "\n\n".join(lines)
 
 
 # ── The model ─────────────────────────────────────────────────────────────────────────────────
@@ -492,6 +567,11 @@ when BOSS is updated.
 - "ask_person": only for what a person alone can decide or do (a secret only they have, an \
 approval, a host they must change). ONE specific "question", and "after": what BOSS will do \
 once they answer.
+
+A build "parked for a waiver" (phase awaiting_gate_override) has review findings still open \
+("findings" in the failure): choose "fix_app" with a note naming each finding to fix — never \
+ask a person to waive a security finding the app can fix. Ask a person (to waive, or to change \
+the brief) only when a fix for the same findings did not hold.
 
 Rules: read the evidence (and use your read tools if you need more). Never choose the same \
 action for the same cause as the previous decision — choose a different one or ask a person. \
@@ -738,6 +818,14 @@ def coded_decision(kind: str, evidence: Mapping[str, Any], *, signature: str,
                            "environment instead (process.env / os.environ), with a safe "
                            "development default that is not secret-shaped."
                            if kind_of == "secret_scan" else "")}
+    elif kind_of == "open_findings":
+        # Reviewers found something real and it is still open: the build's own agent fixes it
+        # (a repair build told exactly what), never a waiver nobody was asked to think about.
+        choice = {"action": FIX_APP,
+                  "cause": f"review findings still open ({', '.join(pattern.get('gates') or [])})",
+                  "reasoning": "the reviewers' findings are the app's code to fix; a person is "
+                               "asked to waive them only if the fix does not hold",
+                  "note": findings_note(failure)}
     elif kind in ("build", "deploy_repair") and not last:
         choice = {"action": RETRY, "backoff_seconds": 0, "cause": "the build failed",
                   "reasoning": "one fresh attempt of the same lineage before asking anyone"}
@@ -747,9 +835,26 @@ def coded_decision(kind: str, evidence: Mapping[str, Any], *, signature: str,
     if choice["action"] not in allowed or (last.get("signature") == signature
                                            and last.get("action") == choice["action"]):
         repeated = last.get("action") == choice["action"]
-        choice = {**_ask(failure, host, repeated=repeated, cause=choice.get("cause")),
-                  "evidence": choice["evidence"]}
+        asked = waiver_ask(failure, repeated=repeated) if kind_of == "open_findings" else \
+            _ask(failure, host, repeated=repeated, cause=choice.get("cause"))
+        choice = {**asked, "evidence": choice["evidence"]}
     return choice
+
+
+def waiver_ask(failure: Mapping[str, Any], *, repeated: bool = False,
+               reason: str = "") -> dict[str, Any]:
+    """The ONE question for open review findings the agent could not close itself: waive them
+    on the build's own card (its waiver records who and why), or change the brief and retry."""
+    gates = ", ".join(failure.get("failing_gates") or []) or "the review gates"
+    build = str(failure.get("build_run_id") or "the build")
+    return {"action": ASK_PERSON, "cause": f"review findings still open ({gates})",
+            "reasoning": reason or ("a repair build for these same findings did not close them"
+                                    if repeated else "the findings could not be fixed here"),
+            "question": (f"The reviewers' findings on {build} are still open ({gates}) after "
+                         "BOSS's own fix attempt. Waive them on the build's card (say why), or "
+                         "retry the build with a note on what to change?")[:600],
+            "after": "A waiver opens the pull request and the step goes on; a retry is "
+                     "followed by this step."}
 
 
 def _ask(failure: Mapping[str, Any], host: Mapping[str, Any], *, repeated: bool = False,
@@ -990,6 +1095,7 @@ def due(handle: Mapping[str, Any]) -> bool:
 
 
 __all__ = ["ACTIONS", "ASK_PERSON", "AWAIT_KIND", "CLEAN_AND_RETRY", "DECIDED_EVENT", "FIX_APP",
+           "FINDINGS_KIND", "GATE_WAIT_PHASE", "findings_note", "open_findings", "waiver_ask",
            "KINDS", "PENDING_KEY", "RESUMED_EVENT", "RETRY", "STATE_KEY", "WAIT_FOR_BOSS",
            "agent_of", "ask_model", "boss_build", "boss_update_handle", "budget_left",
            "build_evidence", "cause_signature", "coded_decision", "decide", "deploy_evidence",
