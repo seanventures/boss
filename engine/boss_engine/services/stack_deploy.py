@@ -599,6 +599,16 @@ def _explained(step: str, returncode: int, output: str, *,
                 "action": "Inspect Docker disk use on the host with `docker system df`. "
                           "Remove only confirmed BOSS-owned, unused resources, then deploy again.",
                 "cause": CAUSE_HOST}
+    unwired = re.search(r"(?:getaddrinfo|could not translate host name)\W+(?:\w+\W+)?\"?(res-[a-z0-9-]+)",
+                        output or "", re.I)
+    if step == "health" and unwired:
+        # THE APP CANNOT REACH A SERVICE BOSS PROVISIONED (res-db): BOSS's wiring, never the
+        # app's code — a repair build would "fix" a working app (sdep_3521765ccd404540ba1d).
+        return {"headline": f"The app could not reach {unwired.group(1)}, the service BOSS "
+                            f"provisioned for it on {host}, so it exited at start.",
+                "action": "This is BOSS's network wiring, not the app: the app's compose project "
+                          "must share the resources' project. Update BOSS and deploy again.",
+                "cause": CAUSE_HOST}
     if step == "health":
         return {"headline": f"The app did not answer as expected at {url} within {timeout}s.",
                 "action": "Read the log tail for what the install printed, fix it and deploy "
@@ -709,6 +719,27 @@ class StackApplier:
         step.update(status="running", started_at=self.now())
         self._append(f"\n$ [{name}]\n")
         self.record(self.steps, self.log)
+
+    def _compose_state(self) -> str:
+        """The compose project's containers and the last lines of each one not running, from
+        the install command's `-p <project>`; "" for a manifest that runs no compose. Read-only."""
+        project = ""
+        for step in list(self.rendered.get("install") or []):
+            m = re.search(r"\s-p\s+([A-Za-z0-9._-]+)", str(step.get("run") or ""))
+            if m:
+                project = m.group(1)
+                break
+        if not project:
+            return ""
+        q = shlex.quote(f"label=com.docker.compose.project={project}")
+        probe = (f"docker ps -a --filter {q} --format '{{{{.Names}}}} {{{{.Status}}}}'; "
+                 f"for c in $(docker ps -a --filter {q} --filter status=exited --format '{{{{.Names}}}}'); do "
+                 "echo \"--- $c (last lines) ---\"; docker logs --tail 30 \"$c\" 2>&1; done")
+        try:
+            result = self.access.run(probe, timeout=60, write=False)
+        except Exception:  # noqa: BLE001 — diagnosis only; the health verdict stands
+            return ""
+        return redact(result.output[-3000:], self.redact_values) if result.output.strip() else ""
 
     def _finish(self, name: str, status: str) -> None:
         self._step(name).update(status=status, ended_at=self.now())
@@ -852,8 +883,17 @@ class StackApplier:
             result = self.access.run(probe, timeout=limit + 60, write=False)
             self._append(result.output[-2000:])
             if result.returncode != 0 or "BOSS_HEALTHY" not in result.output:
+                # WHAT THE APP ITSELF SAID. "Did not answer within 600s" sent a repair build
+                # to fix an app whose container had exited on `getaddrinfo EAI_AGAIN res-db`
+                # (sdep_3521765ccd404540ba1d) — a BOSS wiring fault nobody could see. The
+                # compose project's containers and the last lines of each one that is not
+                # running go into the log, read-only, so a person and the repair both see it.
+                tail = self._compose_state()
+                if tail:
+                    self._append(tail)
                 self._finish("health", "failed")
-                said = explain_failure("health", result.returncode, result.output,
+                said = explain_failure("health", result.returncode,
+                                       result.output + ("\n" + tail if tail else ""),
                                        host=self.access.host, url=check["url"], timeout=limit)
                 raise StackStepFailed("health", said["headline"], said["action"],
                                       said.get("cause"))
@@ -1377,6 +1417,24 @@ def _plan_infrastructure(engine, *, project_id: str, target: dict, run_id: Optio
     return doc, app
 
 
+def join_resource_project(rendered: dict[str, Any], app_project: str,
+                          shared: Optional[str]) -> dict[str, Any]:
+    """A `kind: compose` app with `resources:` runs its compose commands IN THE RESOURCES'
+    PROJECT, so its services share one default network with `res-<name>`. Run as a project of
+    its own, HelpDesk AI's app could not resolve its database — `getaddrinfo EAI_AGAIN res-db`
+    (sdep_3521765ccd404540ba1d) — while res-db sat healthy in bossapp-helpdesk-ai-deploy.
+    Resource services are named `res-…` precisely so the two never collide in one project."""
+    if not shared or not app_project or shared == app_project:
+        return rendered
+    old, new = f" -p {app_project} ", f" -p {shared} "
+
+    def steps(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return [{**s, "run": str(s.get("run") or "").replace(old, new)} for s in items or []]
+
+    return {**rendered, "install": steps(rendered.get("install")),
+            "update": steps(rendered.get("update")), "teardown": steps(rendered.get("teardown"))}
+
+
 def record_host_facts(engine, host_id: str, facts: Mapping[str, Any]) -> None:
     """What a preflight found the host to have, on the host's record (last_preflight.facts),
     so a build can be told before it writes its manifest and an agent can read it later.
@@ -1531,13 +1589,22 @@ def plan_stack_deploy(engine, settings: Settings, *, project_id: str, target_id:
 
     infra_doc, infra_app = _plan_infrastructure(engine, project_id=project_id, target=target,
                                                 run_id=run_id, manifest=manifest, access=access)
+    shared_project = None
+    if infra_doc is not None and manifest.kind == "compose" and manifest.compose_project:
+        from ..infra_plugins._runtime import compose_project_for
+
+        shared_project = compose_project_for(str(infra_app),
+                                             str(target.get("environment") or "deploy"))
+        rendered = join_resource_project(rendered, manifest.compose_project, shared_project)
 
     deployment_id = make_id("sdep")
     short = commit[:12]
     # A manifest in a directory speaks for that directory: its compose file and its commands
     # are relative to it (helpdesk-ai/boss.deploy.yaml's docker-compose.yml is helpdesk-ai's).
     summary = {**manifest.summary(), "manifest_path": path,
-               "workdir": manifest_workdir(path), "app_secrets": app_secret_names}
+               "workdir": manifest_workdir(path), "app_secrets": app_secret_names,
+               # Read back at apply, which renders the manifest again (join_resource_project).
+               **({"shared_compose_project": shared_project} if shared_project else {})}
     rp = ResourcePlaneService(settings)
     with engine.begin() as connection:
         # Check-then-insert under ONE lock per target. Everything above took seconds (GitHub,
@@ -2135,6 +2202,8 @@ def apply_on_host(engine, settings: Settings, *, deployment_id: str, apply_token
             rendered = render(manifest, _deployment_ctx(target, host, deployment["commit_sha"],
                                                          deployment["ref"]))
             recorded = _json(deployment.get("manifest")) or {}
+            rendered = join_resource_project(rendered, manifest.compose_project or "",
+                                             recorded.get("shared_compose_project"))
             rendered["workdir"] = str(recorded.get("workdir") or "")
             if not is_stack_target(target):
                 # A host target shipping its app's declared manifest: its one-container release

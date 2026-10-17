@@ -70,10 +70,16 @@ def _slug(value: str, limit: int = 40) -> str:
     return re.sub(r"[^a-z0-9-]+", "-", value.lower()).strip("-")[:limit] or "x"
 
 
+def compose_project_for(app_key: str, environment: str) -> str:
+    """The compose project an app's resources live in — and, for a `kind: compose` app, the
+    project its own services must join so `res-<name>` resolves on their shared network."""
+    return f"bossapp-{_slug(app_key)}-{_slug(environment, 16)}"
+
+
 def project_name(ctx: HookContext) -> str:
     """One compose project per (app, environment). `bossapp-` keeps it clear of BOSS's own
     `boss-community` project, whatever an app is called."""
-    return f"bossapp-{_slug(ctx.app_key)}-{_slug(ctx.resource.environment, 16)}"
+    return compose_project_for(ctx.app_key, ctx.resource.environment)
 
 
 def network_name(ctx: HookContext) -> str:
