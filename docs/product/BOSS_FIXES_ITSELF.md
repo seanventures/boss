@@ -1106,3 +1106,28 @@ Rule: record only after the replay passes on that box; the number shown is the r
 | D5 | **Self-fixes in tier-3 hot spots, starting with host commands** (F11/§8.1) | (a) let `stack_deploy.py` shell changes be tier 2; (b) tier 3 with the waiver on one-person installs; (c) make them `never` | **(b).** Replay A is exactly such a fix (`docker rm -f`), so `never` would rule out half the proof; tier 2 would let a single approval on a shared install change what BOSS runs as root on hosts. Tier 3 plus the `host_effect` badge and the security seat on another engine is the right weight, and costs a one-person dev box nothing extra |
 
 Further decisions that need an answer before Phase 3 but not before Phase 1: who at the BOSS team owns the upstream labeler workflow (it is CI on the public repository); whether the collector accepts patches (`SELF_FIX` share schema) or only counts; whether the person may choose to sign upstream commits as themselves (`On-behalf-of` with their GitHub identity) instead of the neutral `BOSS-Approved: yes`.
+
+---
+
+## 16. As built: phases 1 and 2
+
+What the code does where it differs from, or narrows, the sections above. Everything here is under the `never` rule (`engine/boss_engine/services/self_fix*.py`, `scripts/install/**`).
+
+| Topic | As built | Why |
+|---|---|---|
+| The build | Its own pipeline (`self_fix_build.Build`), run by the worker's `self_fix.build` job under its lease, not a `code_task_runs` row | All of it stays under `never` (a self-fix cannot change the machinery that checks it), and no code-task waiver route can reach a self-fix: its gates are unwaivable by construction |
+| Delivery | The fix commit travels as a git bundle on the self-fix (`self_fixes.bundle`); the mirror is mounted read-only; the host self-installer fetches the bundle into the checkout and writes `boss/self-fix/<sfx>-<slug>` there | Nothing in a container writes to BOSS's source; the exact commit and tree the gates ran on are what the ticket names |
+| Images | The running images are re-tagged `:prev`; the new build keeps the default tag | The sudo-scope Docker check requires the default `BOSS_COMMUNITY_IMAGE_TAG` |
+| Ticket key | The install's `actor` EdDSA family, header `typ: boss-self-fix-ticket+jwt`, verified on the host against `/.well-known/boss-jwks.json` with a dependency-free Ed25519 | No new key family to provision; the type keeps it from being taken for an actor assertion |
+| Host credential | System principal `sys_self_installer`, fixed role `system_self_installer` (`self_fix:ticket_read`, `self_fix:ticket_report`); `boss self-fix enroll` keeps its key 0600 in `.boss/self-installer.key` | §6.5 |
+| Settings | `system_state['self_fix']` (switch + settings) over `Settings` (`BOSS_SELF_FIX_*`), not project knobs | Install-wide by nature |
+| Red | A failure that is only `AttributeError: module … has no attribute` is refused, like an import error | Calling the function the fix will add proves nothing about the bug |
+| Affected suites / P0 | Run on the clean base and on the fix; the gate fails only on a test that passed on the base and fails with the fix | Pre-existing failures are not the fix's |
+| `api` suite (F8) | Not built: a diagnosis in `apps/api/**` is refused (`api_suite`) unless `BOSS_SELF_FIX_TEST_DATABASE_URL` is set | As F8 |
+| Health window | API answers as the new stack head, worker heartbeat, restart counts, job error rate vs the hour before. The plumbing e2e gate is not run | It needs the model-free e2e image; next phase |
+| Rollback | Only the top of the stack rolls back by re-tag; a fix below it is Removed by a rebuild (`remove` tickets: not built yet) | `:prev` is only the build before the top |
+| `self_improvement_proposals` | Not written per install | That table requires a task id; the self-fix row, its tickets and the identity audit are the trail |
+| Upgrade | `upgrade.sh` plans the stack before anything changes (`--without SFX` to leave one out); `restack` re-applies carried fixes after the installer; `boss update` restacks too | §6.4 |
+| Proof | `engine/tests/test_replay_a_boss_fixes_a_held_port_itself.py` (opt-in, `BOSS_SELF_FIX_REPLAY=1`) | §13.6 on the scripted engine |
+
+Left for phases 3 and 4: upstream (preview, send, labels upstream, dedupe, PR template, forks, patch export, collector), the console surfaces (parked-step strip, the approval card UI, the Self-fixes page, Send sheet, Govern › Self-fix), the autonomy metric, `remove`/`remove_all` tickets, MCP tools, the watcher's launchd/systemd unit, and the live engine matrix.

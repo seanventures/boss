@@ -364,7 +364,9 @@ class FakeHost:
         self.h = h
         self.health = health
         self.dir = h.root / "install"
-        git(h.root, "clone", "-q", str(h.repo), str(self.dir))
+        git(h.root, "clone", "-q", "--shared", str(h.repo), str(self.dir))
+        if git(self.dir, "rev-parse", "HEAD") != h.base:
+            git(self.dir, "checkout", "-q", "--detach", h.base)
         (self.dir / ".env").write_text("BOSS_COMMUNITY_WEB_ENABLED=0\nBOSS_API_PORT=8000\n")
         (self.dir / ".boss-release").write_text("BOSS_RELEASE_REF=v0.0.0-test\n")
         self.release = git(self.dir, "rev-parse", "HEAD")

@@ -1,0 +1,71 @@
+diff --git a/engine/boss_engine/services/stack_deploy.py b/engine/boss_engine/services/stack_deploy.py
+index ca3907f28..52347274d 100644
+--- a/engine/boss_engine/services/stack_deploy.py
++++ b/engine/boss_engine/services/stack_deploy.py
+@@ -1508,6 +1508,54 @@ def retire_own_projects(rendered: dict[str, Any], projects: list[str]) -> dict[s
+             "update": steps + list(rendered.get("update") or [])}
+ 
+ 
++#: The step that retires this app's own containers from a project it shared with its resources.
++RETIRE_SHARED_STEP = "retire the app's earlier release from its resources' project"
++
++
++def earlier_shared_projects(connection: Any, target_id: str, keep: Optional[str]) -> list[str]:
++    """The resources' shared compose projects an EARLIER release of this target's app ran in
++    (`shared_compose_project` on its stack deployments), other than the one this release runs in
++    (`keep`). A release that brings its own database runs as the app's own project, and the
++    earlier release's app container — inside the shared project, beside the resource service —
++    still holds its port: nothing retired it there."""
++    try:
++        rows = connection.execute(
++            text("SELECT DISTINCT manifest->>'shared_compose_project' AS p FROM stack_deployments "
++                 "WHERE target_id = :t AND COALESCE(manifest->>'shared_compose_project', '') <> ''"),
++            {"t": target_id}).all()
++    except Exception:  # noqa: BLE001 — nothing to retire is the safe answer
++        log.warning("stack deploy: earlier shared projects of %s not read", target_id,
++                    exc_info=True)
++        return []
++    return sorted({str(r[0]) for r in rows
++                   if r[0] and _PROJECT_NAME.match(str(r[0])) and str(r[0]) != (keep or "")})
++
++
++def retire_app_in_shared(rendered: dict[str, Any], projects: list[str]) -> dict[str, Any]:
++    """THIS APP'S OWN CONTAINERS in a project it shared with its resources, retired before the
++    new release comes up: `docker rm -f` of exactly the containers started from under this
++    target's directory (compose's `project.working_dir` label). The resource services are another
++    working directory and are never touched; another app's containers have another directory;
++    nothing is ever removed with `-v`. Nothing of the app there: nothing happens."""
++    wanted = [p for p in dict.fromkeys(str(p or "").strip() for p in projects or [])
++              if _PROJECT_NAME.match(p)]
++    if not wanted:
++        return rendered
++    marker = shlex.quote(str(rendered.get("dir") or "").rstrip("/") + "/")
++    steps = []
++    for project in wanted:
++        label = shlex.quote(f"label=com.docker.compose.project={project}")
++        steps.append({"name": f"{RETIRE_SHARED_STEP} ({project})", "timeout_seconds": 300, "run": (
++            f"for id in $(docker ps -aq --filter {label}); do "
++            "wd=$(docker inspect -f '{{index .Config.Labels \"com.docker.compose.project.working_dir\"}}' "
++            "\"$id\"); "
++            f"case \"$wd/\" in {marker}*) n=$(docker inspect -f '{{{{.Name}}}}' \"$id\"); "
++            "docker rm -f \"$id\" >/dev/null && echo \"BOSS_RETIRED ${n#/}\";; esac; done; "
++            f"echo BOSS_SHARED_CHECKED {shlex.quote(project)}")})
++    return {**rendered, "install": steps + list(rendered.get("install") or []),
++            "update": steps + list(rendered.get("update") or [])}
++
++
+ def record_host_facts(engine, host_id: str, facts: Mapping[str, Any]) -> None:
+     """What a preflight found the host to have, on the host's record (last_preflight.facts),
+     so a build can be told before it writes its manifest and an agent can read it later.
+@@ -2294,6 +2342,11 @@ def apply_on_host(engine, settings: Settings, *, deployment_id: str, apply_token
+             rendered = retire_own_projects(rendered, [
+                 p for p in recorded.get("retire_projects") or []
+                 if p != recorded.get("shared_compose_project")])
++            # A release that LEFT the resources' shared project (it brings its own database now)
++            # retires its own container there first, or the old one keeps holding the port.
++            rendered = retire_app_in_shared(rendered, earlier_shared_projects(
++                connection, str(deployment["target_id"]),
++                keep=recorded.get("shared_compose_project")))
+             rendered["workdir"] = str(recorded.get("workdir") or "")
+             if not is_stack_target(target):
+                 # A host target shipping its app's declared manifest: its one-container release
