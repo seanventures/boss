@@ -377,6 +377,9 @@ def capabilities() -> list[str]:
         # this job's lease. Declared here or the worker never leases it and the deploy sits
         # `running` at step one.
         "deployment.stack_apply",
+        # BOSS fixes itself (services/self_fix_build.py): Mender's build of a fix to BOSS's own
+        # code; the API runs it under this job's lease. Declared here or it sits queued.
+        "self_fix.build",
         "infra.operation",
         # An approved host deployment (services/governed_host_deploy.py): the API applies its
         # ChangeSet through the SSH connector under this job's lease.
@@ -843,6 +846,13 @@ def execute_job(job: LeasedJob, client: ControlPlaneClient) -> dict[str, Any]:
         # has already handed the job back to the queue without spending an attempt, so there
         # is nothing to complete or fail here (see the job_deferred check after execution).
         return result
+    if job.kind == "self_fix.build":
+        # A BOSS self-fix build: diagnosis, red test, fix, gates, reviewers. The API owns it
+        # under the lease; it ends at the approval card (or a refusal), never retried blind.
+        return client.run_self_fix_build({
+            "self_fix_id": job.payload["self_fix_id"], "job_id": job.id,
+            "worker_id": client.worker_id, "lease_token": job.lease_token,
+            "note": job.payload.get("note") or ""})
     if job.kind == "infra.operation":
         # One lifecycle hook on one provisioned resource (platform/operations.py); the API runs
         # it under this lease and writes its receipt.

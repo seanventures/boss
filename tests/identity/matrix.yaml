@@ -3,7 +3,7 @@
 # One line per operation: its declaration, then the built-in roles allowed
 # (O owner, A admin, P operator, V viewer, U auditor; '-' none). Every other role is denied
 # 403, or 404 when the operation names an object the role cannot even read.
-# 1536 operations.
+# 1553 operations.
 "GET /.well-known/boss-jwks.json": ["public:jwks", "OAPVU"]
 "GET /docs": ["public:api_description", "OAPVU"]
 "GET /docs/oauth2-redirect": ["public:api_description", "OAPVU"]
@@ -256,6 +256,8 @@
 "GET /v1/aws/metal/types": ["permit infra:read @ org", "OAPVU"]
 "GET /v1/bakeoff/{batch_id}/report": ["permit assurance:read @ bakeoff_batch(path=batch_id)", "OAPVU"]
 "POST /v1/bootstrap/seed": ["permit owner:assign @ org", "O"]
+"GET /v1/boss-recommendations": ["permit improvement:read @ project(query=project_id)", "OAPVU"]
+"GET /v1/boss-recommendations.md": ["permit improvement:read @ project(query=project_id)", "OAPVU"]
 "GET /v1/break-glass/grants": ["permit role_binding:read @ org", "OAU"]
 "POST /v1/break-glass/grants": ["permit role_binding:assign @ project(body=project_id)", "OA"]
 "POST /v1/break-glass/grants/{grant_id}/revoke": ["permit role_binding:assign @ break_glass_grant(path=grant_id)", "OA"]
@@ -1322,6 +1324,21 @@
 "GET /v1/security/scans/{scan_id}": ["permit project:read @ security_scan(path=scan_id)", "OAPVU"]
 "GET /v1/security/scans/{scan_id}/findings": ["permit project:read @ security_scan(path=scan_id)", "OAPVU"]
 "POST /v1/security/scans/{scan_id}/run": ["permit worker:lease @ org", "-"]
+"GET /v1/self-fix/settings": ["permit improvement:read @ project(query=project_id)", "OAPVU"]
+"PUT /v1/self-fix/settings": ["permit improvement:manage @ project(body=project_id)", "OA"]
+"GET /v1/self-fix/upgrade-plan": ["permit improvement:read @ project(query=project_id)", "OAPVU"]
+"GET /v1/self-fixes": ["permit improvement:read @ project(query=project_id)", "OAPVU"]
+"POST /v1/self-fixes": ["permit improvement:manage @ project(body=project_id)", "OA"]
+"GET /v1/self-fixes/health": ["permit self_fix:ticket_read @ org", "-"]
+"POST /v1/self-fixes/stack-report": ["permit self_fix:ticket_report @ org", "-"]
+"GET /v1/self-fixes/tickets": ["permit self_fix:ticket_read @ org", "-"]
+"POST /v1/self-fixes/tickets/reissue": ["permit self_fix:ticket_read @ org", "-"]
+"POST /v1/self-fixes/tickets/{ticket_id}/report": ["permit self_fix:ticket_report @ org", "-"]
+"POST /v1/self-fixes/tickets/{ticket_id}/take": ["permit self_fix:ticket_read @ org", "-"]
+"GET /v1/self-fixes/{self_fix_id}": ["permit improvement:read @ project(query=project_id)", "OAPVU"]
+"POST /v1/self-fixes/{self_fix_id}/build": ["permit worker:lease @ org", "-"]
+"POST /v1/self-fixes/{self_fix_id}/cancel": ["permit improvement:manage @ project(body=project_id)", "OA"]
+"GET /v1/self-fixes/{self_fix_id}/diff": ["permit improvement:read @ project(query=project_id)", "OAPVU"]
 "GET /v1/self/diagnostics": ["permit system:read @ org", "OAPVU"]
 "POST /v1/self/host-sample": ["permit system:operate @ org", "OA"]
 "POST /v1/self/host-stall": ["permit worker:lease @ org", "-"]
