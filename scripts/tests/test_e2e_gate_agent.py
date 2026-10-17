@@ -43,6 +43,13 @@ def test_each_final_check_fails_on_its_own_evidence():
     assert failing(gate.final_checks(DONE, [e for e in GOOD if e["event_type"] != "code_task.build_profile"])) \
         == ["build profile recorded"]
     assert failing(gate.final_checks(DONE, GOOD + [ev("code_task.test_budget", over=True)])) == ["test budget not over"]
+    # A PR that opened with its checks failing (checks_failing.py) is not a passing build.
+    assert failing(gate.final_checks(DONE, GOOD + [ev("code_task.pr_opened_with_checks_failing",
+                                                      failing_gates=["security_clean"])])) \
+        == ["no checks failing on the PR"]
+    assert failing(gate.final_checks(DONE, GOOD + [ev("code_task.shipped_with_dissent",
+                                                      unresolved_gates=["code_review_passed"])])) \
+        == ["no checks failing on the PR"]
 
 
 def test_an_empty_advisory_event_is_not_a_failing_gate():

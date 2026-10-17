@@ -135,6 +135,14 @@ def final_checks(run: dict, events: list[dict]) -> list[tuple[str, bool, str]]:
     failing = sorted({g for e in adv for g in ((e.get("data") or {}).get("advisory_failing_gates") or [])})
     out.append(("no advisory-failing gates", not failing, ", ".join(failing) or "none"))
 
+    # A PR CAN OPEN WITH ITS CHECKS FAILING (services/checks_failing.py: past the repair rounds
+    # the build no longer parks for a waiver). "Completed with a PR" is then not a pass.
+    shipped = [e for e in events if e["event_type"] in ("code_task.shipped_with_dissent",
+                                                         "code_task.pr_opened_with_checks_failing")]
+    red = sorted({g for e in shipped for g in ((e.get("data") or {}).get("unresolved_gates")
+                                               or (e.get("data") or {}).get("failing_gates") or [])})
+    out.append(("no checks failing on the PR", not shipped, ", ".join(red) or "none"))
+
     serve = _latest(events, "code_task.app_serve_checked")
     serve_ok = bool(serve and (serve.get("data") or {}).get("ok") is True)
     out.append(("the app started", serve_ok,
