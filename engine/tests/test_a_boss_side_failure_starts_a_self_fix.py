@@ -158,3 +158,32 @@ def test_the_evidence_a_self_fix_keeps_holds_no_host_address(harness):
     out = harness.propose(evidence_extra={"log_tail": "ssh deploy@203.0.113.10: refused",
                                           "headline": "Port 8000 on 203.0.113.10 is held"})
     assert "203.0.113.10" not in json.dumps(out["self_fix"]["evidence"])
+
+
+def test_the_parked_step_says_boss_is_fixing_itself_at_every_stage(harness, monkeypatch):
+    """§10.1: the step shows Fixing BOSS, the stages and where it is, never "waiting" alone."""
+    from boss_engine.services import workflow_capability_runner as runner
+
+    from ._self_fix_support import Worker
+
+    with harness.eng.begin() as c:
+        run, _ = failing_build_step(harness, c, monkeypatch)
+        step = _steps(c, run["id"])["s"]
+        view = step["output"]["self_fix"]
+        assert view["label"] == "Fixing BOSS" and view["stage"] == "found"
+        sfx_id = view["id"]
+        for to, stage in ((sf.DIAGNOSING, "found"), (sf.REPRODUCING, "reproduced"),
+                          (sf.FIXING, "fixing"), (sf.CHECKING, "checks"),
+                          (sf.REVIEWING, "review"), (sf.AWAITING_APPROVAL, "you")):
+            sf.transition(c, sfx_id, to, actor="test", sentence=f"Mender is at {stage}.")
+            runner.tick(c, Worker(harness.eng, harness.settings), project_id=harness.project)
+            view = _steps(c, run["id"])["s"]["output"]["self_fix"]
+            assert view["stage"] == stage, (to, view)
+            assert [s["state"] for s in view["stages"]].count("now") == 1
+            assert view["line"] and "waiting" != view["line"].lower()
+        assert view["needs_you"] is True and "approval" in view["line"]
+
+
+def test_mender_is_the_author(harness):
+    sfx = harness.propose()["self_fix"]
+    assert sfx["created_by"] in (sf.MENDER_AGENT_ID, sf.ACTOR_AGENT)

@@ -3711,7 +3711,7 @@ def _boss_side_wait(connection: Connection, ctx: Any, *, project_id: str, run_id
         waiting = proposed["outcome"] == "waiting_on"
         handle = self_fix.handle_for(sfx, step_kind=kind, waiting_on=waiting,
                                      decision=entry.get("n"), build_run_id=build_run_id)
-        merge.update({"self_fix_id": sfx["id"],
+        merge.update({"self_fix_id": sfx["id"], "self_fix": self_fix.step_view(sfx),
                       "note": (f"BOSS is already fixing this ({sfx['id']}); this step waits "
                                "for that fix." if waiting else self_fix.step_line(sfx))})
         return handle, merge
@@ -3729,11 +3729,13 @@ def _follow_self_fix(connection: Connection, ctx: Any, *, project_id: str, run_i
     step_id = str(step["step_id"])
     if verdict == "wait":
         line = self_fix.step_line(sfx) if sfx else why
-        if line and line != output.get("note"):
+        view = self_fix.step_view(sfx) if sfx else None
+        if line and (line != output.get("note") or view != output.get("self_fix")):
             connection.execute(
                 text("UPDATE workflow_step_runs SET output = COALESCE(output, '{}'::jsonb) || "
                      "CAST(:o AS JSONB), updated_at = now() WHERE id = :i AND status = "
-                     "'waiting'"), {"i": step["id"], "o": json.dumps({"note": line})})
+                     "'waiting'"), {"i": step["id"], "o": json.dumps(
+                         {"note": line, **({"self_fix": view} if view else {})}, default=str)})
         return None
     if verdict == "fallback":
         fallback = {"kind": step_recovery.AWAIT_KIND, "then": step_recovery.THEN_BOSS_UPDATE,

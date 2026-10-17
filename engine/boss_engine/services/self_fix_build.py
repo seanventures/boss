@@ -791,7 +791,9 @@ def trailers(sfx: Mapping[str, Any], base_sha: str, engine_name: str) -> dict[st
         engine_public = public_model(engine_name) or engine_name
     except Exception:  # noqa: BLE001
         engine_public = engine_name
-    return {"BOSS-Agent": sf.ACTOR_AGENT, "BOSS-Self-Fix": str(sfx["id"]),
+    return {"BOSS-Agent": sf.ACTOR_AGENT, "BOSS-Passport": str(sfx.get("created_by") or
+                                                             sf.ACTOR_AGENT),
+            "BOSS-Self-Fix": str(sfx["id"]),
             "BOSS-Run": str(sfx.get("run_id") or ""), "BOSS-Signature": str(
                 sfx.get("class_signature") or ""),
             "BOSS-Base": base_sha, "BOSS-Engine": str(engine_public),

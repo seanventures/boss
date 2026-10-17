@@ -127,6 +127,9 @@ def test_red_on_base_then_green_on_the_fix_passes():
                              "1 error in 0.1s")),
     ("unrelated failure", _run(1, "FAILED engine/tests/test_new.py::test_x - KeyError: 'zzz'\n"
                                   "1 failed in 0.1s")),
+    ("calls a function the fix adds",
+     _run(1, "E   AttributeError: module 'boss_engine.services.stack_deploy' has no attribute "
+             "'retire_app_in_shared'\nFAILED engine/tests/test_new.py::test_x\n1 failed in 0.1s")),
 ])
 def test_no_reproduction_is_refused(label, red):
     assert not si.red_then_green(red, _run(0, GREEN), location=LOCATION).ok, label

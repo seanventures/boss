@@ -398,6 +398,13 @@ def is_red(run: SuiteRun, *, location: Mapping[str, Any], symptom: str = "") -> 
         return False, ("the new test errors before it can fail (an import, a name or collection "
                        "error), so it proves nothing about the bug")
     text = run.output
+    if re.search(r"AttributeError: module '[\w.]+' has no attribute|"
+                 r"AttributeError: type object '\w+' has no attribute", text) and not re.search(
+                     r"^E\s+(?:Assertion|assert )", text, re.M):
+        # Calling a function the fix will add fails only because it does not exist yet: that
+        # is an import error in disguise and proves nothing about the bug.
+        return False, ("the new test fails only because it calls code that does not exist on "
+                       "BOSS yet; it must fail through the behaviour BOSS has today")
     file = str(location.get("file") or "")
     names = [PurePosixPath(file).stem] if file else []
     names += [str(location.get("function") or "").split(".")[-1]]

@@ -59,6 +59,12 @@ log = logging.getLogger(__name__)
 ID_PREFIX = "sfx"
 ACTOR_AGENT = "boss_maintainer"          # Mender's role key (its Passport, §8.5)
 AGENT_NAME = "Mender"
+#: Mender's agent principal: autonomous (BOSS started it), sponsored by the install's first
+#: Owner, a READ-ONLY ceiling. It can never approve, waive a gate, read a secret, run on a host
+#: or deploy, and it has no route to the self-installer: tickets come only from approved
+#: decisions (§8.5, identity §7.13).
+MENDER_AGENT_ID = "agt_boss_maintainer"
+MENDER_CEILING = ("workflow_run:read", "code_task:read", "repository:read")
 SYSTEM_ACTOR = "sys_worker"
 INSTALLER_ACTOR = "sys_self_installer"
 
@@ -440,6 +446,36 @@ def meets(level: str, minimum: str) -> bool:
         return False
 
 
+def mender(connection: Connection) -> dict[str, Any]:
+    """Mender's Passport, made once per install (idempotent). Returns {agent_id, passport}: the
+    passport is absent on an install whose identity has no Owner yet; the self-fix still records
+    Mender's role as its author, and its audit names the role."""
+    try:
+        from ..identity import passports, users
+        from ..identity.migration import default_org
+
+        with connection.begin_nested():
+            if passports.get(MENDER_AGENT_ID, db=connection) is not None:
+                return {"agent_id": MENDER_AGENT_ID, "passport": True}
+            org = default_org(connection)
+            owners = sorted(users.active_owner_ids(connection, org)) if org else []
+            if not owners:
+                return {"agent_id": ACTOR_AGENT, "passport": False}
+            passports.ensure_passport(
+                org_id=org, agent_id=MENDER_AGENT_ID, role_key=ACTOR_AGENT,
+                display_name=f"{AGENT_NAME} (BOSS maintainer)", sponsor_principal_id=owners[0],
+                db=connection, autonomous=True, can_spawn=False, max_depth=0,
+                created_by=SYSTEM_ACTOR)
+            for key in MENDER_CEILING:
+                connection.execute(text(
+                    "INSERT INTO identity_agent_ceilings (agent_id, permission_key) VALUES "
+                    "(:a, :k) ON CONFLICT DO NOTHING"), {"a": MENDER_AGENT_ID, "k": key})
+            return {"agent_id": MENDER_AGENT_ID, "passport": True}
+    except Exception as error:  # noqa: BLE001 — no identity schema: the role still authors it
+        log.info("Mender's passport not made: %s", error)
+        return {"agent_id": ACTOR_AGENT, "passport": False}
+
+
 # ── budget (§8.4) ────────────────────────────────────────────────────────────────────────────
 
 def month_spent(connection: Connection) -> int:
@@ -816,6 +852,7 @@ def propose(connection: Connection, settings: Any, *, project_id: str, run_id: s
     from . import boss_recommendations, self_fix_privacy
 
     sfx_id = make_id(ID_PREFIX)
+    author = mender(connection)["agent_id"]
     known = self_fix_privacy.known_hosts(connection)
     fix = dict(entry.get("boss_fix") or {})
     failure = dict(evidence.get("failure") or {})
@@ -850,7 +887,7 @@ def propose(connection: Connection, settings: Any, *, project_id: str, run_id: s
          ("deploy" if kind.startswith("deploy") else "build"),
          "status": PROPOSED, "conf": confidence["level"],
          "reasons": json.dumps(confidence["reasons"]), "ev": json.dumps(masked_evidence),
-         "base": running_stack_head(), "by": ACTOR_AGENT, "b": budget_micros})
+         "base": running_stack_head(), "by": author, "b": budget_micros})
     sfx = get(connection, sfx_id)
     emit(connection, sfx, "proposed", actor=ACTOR_AGENT,
          sentence=(f"{AGENT_NAME}: this is a bug in BOSS, not in your app, so BOSS is fixing "
@@ -1035,8 +1072,10 @@ def verdict_of_step(connection: Connection, sfx: Mapping[str, Any]
             output = json.loads(output)
         except ValueError:
             output = {}
-    if str(row["status"]) in ("succeeded", "skipped") and str(row["status"]) == "succeeded":
+    if str(row["status"]) == "succeeded":
         return {"outcome": "passed"}
+    if str(row["status"]) == "skipped":
+        return {"outcome": "inconclusive", "why": "a person skipped the step"}
     decisions = [d for d in (step_recovery.state_of(output).get("decisions") or [])
                  if isinstance(d, Mapping) and d.get("signature") and _after(d, since)
                  and d.get("action") in step_recovery.ACTIONS]
@@ -1046,7 +1085,7 @@ def verdict_of_step(connection: Connection, sfx: Mapping[str, Any]
         same = class_signature(nxt) == str(sfx.get("class_signature"))
         return {"outcome": "same_cause" if same else "new_cause", "next_signature": nxt,
                 "decision": first.get("n")}
-    if str(row["status"]) == "failed":
+    if str(row["status"]) in ("failed", "deadlettered"):
         nxt, _ = step_recovery.cause_signature(str(sfx.get("step_kind") or "deploy"),
                                                {"headline": str(row["last_error"] or "")})
         same = class_signature(nxt) == str(sfx.get("class_signature"))
@@ -1156,6 +1195,20 @@ def lineage(connection: Connection, sfx_id: str) -> Optional[dict[str, Any]]:
             "waiters": waiters(connection, sfx_id),
             "stages": [{"stage": s, "done": STAGES.index(s) < STAGES.index(sfx["stage"])
                         if sfx.get("stage") in STAGES else False} for s in STAGES]}
+
+
+def step_view(sfx: Mapping[str, Any]) -> dict[str, Any]:
+    """What the parked step shows (§10.1): "Fixing BOSS", the strip of stages with where it is,
+    the live line, and the way to the self-fix. The run page reads it from the step's output."""
+    stage = _STAGE_OF.get(str(sfx.get("status") or ""))
+    at = STAGES.index(stage) if stage in STAGES else -1
+    return {"id": sfx.get("id"), "status": sfx.get("status"), "chip": CHIPS.get(
+                str(sfx.get("status")), "Building"),
+            "label": "Fixing BOSS", "stage": stage,
+            "stages": [{"stage": s, "state": "done" if i < at else "now" if i == at else "next"}
+                       for i, s in enumerate(STAGES)],
+            "line": step_line(sfx), "needs_you": sfx.get("status") == AWAITING_APPROVAL,
+            "decision_id": sfx.get("decision_id")}
 
 
 def step_line(sfx: Mapping[str, Any]) -> str:
