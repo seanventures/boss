@@ -46,6 +46,7 @@ const ENFORCED_TIP: Record<string, string> = {
   review_loop: "Rounds of review before a colder path",
   every_build: "Applied when each build starts",
   captain_own_builds: "Checked before the Captain starts a build nobody asked for",
+  each_deploy_step: "Checked before BOSS fixes an app whose deploy failed and ships it again",
   job_queue: "Job slots seeded at project start",
   scaling: "Autoscaling never goes past this",
   advisory: "Shapes alerts and tips. Doesn't stop model calls.",

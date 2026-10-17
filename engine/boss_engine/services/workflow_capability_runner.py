@@ -30,7 +30,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from ..config import get_settings
-from . import agent_acts, change_record, step_agents, workflows
+from . import agent_acts, change_record, deploy_repair, step_agents, workflows
 from . import workflow_custom_steps as custom_steps
 from .core import emit_event, now_utc
 # Named import so "who approved this" is compared against one constant rather than a
@@ -365,6 +365,8 @@ def _run_context(connection: Connection, run_id: str) -> dict[str, Any]:
 #: The words that open DEPLOY_MANIFEST_BRIEF: a build whose brief holds them was asked for its
 #: own manifest (stack_deploy.undeclared_deploy_refusal).
 DEPLOY_BRIEF_MARKER = "THIS APP WILL BE DEPLOYED"
+#: The words that open deploy_repair.host_brief: what the deploy's machine has.
+DEPLOY_HOST_MARKER = "THE MACHINE THIS APP DEPLOYS TO"
 
 DEPLOY_MANIFEST_BRIEF = (
     f"{DEPLOY_BRIEF_MARKER} by BOSS after review. Write a boss.deploy.yaml IN THE APP'S OWN "
@@ -3055,18 +3057,57 @@ def _perform_capability(
                 # Settled, exactly as `_open_gate` fails the step: retrying cannot change who
                 # is assigned.
                 raise SettledCapabilityError(refusal["reason"])
-            return plan_for_workflow_step(
+            # FIX AND REDEPLOY (deploy_repair): a step queued again after its repair build
+            # finished ships the pull request's NEW head, from that build — never the pin.
+            run_id = str(context.get("run_id") or "")
+            step_id = str(step.get("id") or "")
+            before = _latest_step_output(connection, project_id, run_id, step_id) \
+                if run_id and step_id else {}
+            redeploy = before.get(deploy_repair.REDEPLOY_KEY) \
+                if isinstance(before.get(deploy_repair.REDEPLOY_KEY), dict) else None
+            fixes = _deploy_fixes(before) if redeploy else []
+            if redeploy and str(redeploy.get("build_run_id") or ""):
+                inputs = {**inputs, "run_id": str(redeploy["build_run_id"])}
+            planned = plan_for_workflow_step(
                 ctx.engine, getattr(ctx, "settings", None), project_id=project_id,
                 actor=actor, target=stack_target, inputs=inputs,
-                workflow_run_id=str(context.get("run_id") or "") or None,
+                workflow_run_id=run_id or None,
                 approver_role=str((step.get("approval") or {}).get("approver_role") or "")
                 or None,
-                step_id=str(step.get("id") or "") or None,
+                step_id=step_id or None,
                 # ONE APPROVAL PER DEPLOY: the gate a person already answered, passed on.
                 approval_decision_id=str(context.get("approval_decision_id") or "") or None,
                 # Pass 1's deploy ships the head pass 1 left; "Deploy again" ships pass 2's.
-                commit=(None if pass_2_of else
-                        pinned_pass_one_commit(connection, str(context.get("run_id") or ""))))
+                commit=(None if (pass_2_of or redeploy) else
+                        pinned_pass_one_commit(connection, run_id)))
+            if redeploy:
+                planned = {**planned, deploy_repair.FIXES_KEY: fixes,
+                           deploy_repair.REDEPLOY_KEY: redeploy}
+            failure = planned.get("deploy_failure") if planned.get("status") == "failed" else None
+            if deploy_repair.is_app_side(failure) and run_id and step_id:
+                # REFUSED FOR THE APP'S REASON BEFORE ANYTHING WAS PLANNED (a program the
+                # machine lacks, a manifest that does not fit): the app is repaired and the
+                # step waits on that build, then plans again.
+                failure = deploy_repair.failure_of_refusal(
+                    connection, failure, str(inputs.get("run_id") or ""))
+                fix, why_not = _start_deploy_fix(
+                    connection, ctx, project_id=project_id, run_id=run_id, step_id=step_id,
+                    failure=failure, fixes=fixes)
+                if fix is not None:
+                    return _deploy_fix_awaiting(failure, fix, fixes, base={
+                        "tool": None, "stack_target_id": stack_target.get("id"),
+                        "stack_target_name": stack_target.get("app_name")})
+                # SETTLED: the same commit is refused the same way on every retry; a person
+                # decides now (Try again after a change, or Skip).
+                planned = {**planned, SETTLED_FAILURE: True,
+                           "error": f"{planned.get('error') or ''} BOSS did not fix "
+                                    f"it by itself: {why_not}.".strip()}
+            if fixes and planned.get("status") == "failed":
+                planned = {**planned, "error": (
+                    f"{planned.get('error') or ''} (after {len(fixes)} automatic fix"
+                    f"{'es' if len(fixes) != 1 else ''}: {deploy_repair.fixes_sentence(fixes)})"
+                ).strip()}
+            return planned
     if key == "deploy" and not pass_2_of:
         from .stack_deploy import undeclared_deploy_refusal
 
@@ -3165,6 +3206,16 @@ def _perform_capability(
     # this needs two of them joined; `instructions` stays the field create_code_task owns.
     if key == "build" and context.get("deploys") and "boss.deploy.yaml" not in str(inputs.get("instructions") or ""):
         inputs = {**inputs, "instructions": f"{str(inputs.get('instructions') or '').strip()}\n\n{DEPLOY_MANIFEST_BRIEF}"}
+    if key == "build" and context.get("deploys") \
+            and DEPLOY_HOST_MARKER not in str(inputs.get("instructions") or ""):
+        # THE MACHINE IT SHIPS TO, BEFORE THE MANIFEST IS WRITTEN. HelpDesk's build wrote a
+        # `kind: commands` manifest running npm for a host that has Docker and no Node, and
+        # the deploy found out at its install step (deploy_repair). Told up front, the build
+        # writes for what the machine has.
+        brief = deploy_repair.host_brief(connection, project_id, context)
+        if brief:
+            inputs = {**inputs, "instructions":
+                      f"{str(inputs.get('instructions') or '').strip()}\n\n{brief}"}
     if key == "build":
         spec = str(inputs.get("spec_markdown") or "").strip()
         inputs = {k: v for k, v in inputs.items() if k != "spec_markdown"}
@@ -3371,6 +3422,110 @@ def _retried_build(
     instructions = str(inputs.get("instructions") or "").strip()
     return (None, {**inputs, "instructions": f"{instructions}\n\n{RETRY_NOTE_HEADING}\n{note}"},
             note)
+
+
+def _deploy_fixes(output: Any) -> list[dict[str, Any]]:
+    """The repairs a deploy step has started so far (deploy_repair), oldest first."""
+    fixes = output.get(deploy_repair.FIXES_KEY) if isinstance(output, dict) else None
+    return [f for f in fixes if isinstance(f, dict)] if isinstance(fixes, list) else []
+
+
+def _both_causes(output: Any, handle: dict[str, Any], build_id: str, how: str) -> str:
+    """A deploy step's repair build that did not pass: the deploy's cause AND the build's, so
+    the person deciding next reads both (deploy_repair)."""
+    if handle.get("then") != deploy_repair.THEN_REDEPLOY:
+        return how
+    fixes = _deploy_fixes(output)
+    cause = (fixes[-1].get("headline") or fixes[-1].get("cause")) if fixes else ""
+    return (f"the deploy failed ({str(cause or 'for the app').rstrip('.')}), and BOSS's repair "
+            f"build {build_id} did not pass: {how}. Nothing new was deployed.")
+
+
+def _latest_step_output(connection: Connection, project_id: str, run_id: str,
+                        step_id: str) -> dict[str, Any]:
+    if not run_id or not step_id:
+        return {}
+    row = connection.execute(
+        text("SELECT output FROM workflow_step_runs WHERE workflow_run_id=:r "
+             "AND project_id=:p AND step_id=:s ORDER BY created_at DESC LIMIT 1"),
+        {"r": run_id, "p": project_id, "s": step_id}).scalar()
+    output = json.loads(row) if isinstance(row, str) else row
+    return output if isinstance(output, dict) else {}
+
+
+def _start_deploy_fix(
+    connection: Connection, ctx: Any, *, project_id: str, run_id: str, step_id: str,
+    failure: dict[str, Any], fixes: list[dict[str, Any]],
+) -> tuple[Optional[dict[str, Any]], str]:
+    """Start the repair build for a deploy that failed for the app's reason (deploy_repair).
+
+    Returns (the fix, "") when a build was started, or (None, why not) — the cap is reached, the
+    project turned it off, or the build could not be resumed. WHO STARTS IT: exactly who starts
+    the run's own build — the build step's agent under the run's recorded authority, past the
+    same tool checks (`_retried_build`) — so a repair is never a way around a grant.
+    """
+    from . import code_task_service as cts
+
+    settings = getattr(ctx, "settings", None) or get_settings()
+    cap = deploy_repair.fix_cap(connection, project_id, settings)
+    if cap <= 0:
+        return None, ("automatic deploy fixes are off for this project "
+                      f"({deploy_repair.CAP_SETTING} = 0)")
+    if len(fixes) >= cap:
+        return None, (f"BOSS already fixed and redeployed this app {len(fixes)} time"
+                      f"{'s' if len(fixes) != 1 else ''} (the most it does by itself is {cap})")
+    build_run_id = str(failure.get("build_run_id") or "")
+    if not build_run_id:
+        return None, "the deployment names no build to fix"
+    if ctx is None or getattr(ctx, "engine", None) is None or getattr(ctx, "jobs", None) is None:
+        return None, "the repair build could not be started here (no job queue)"
+    attempt = len(fixes) + 1
+    note = deploy_repair.fix_note(failure, attempt=attempt, cap=cap)
+    spec_steps = [s for s in (workflows._run_spec(connection, run_id).get("steps") or [])
+                  if isinstance(s, dict)]
+    build_step = next((s for s in spec_steps if (s.get("binding") or {}).get("capability")
+                       in ("build", "retry_build")), None) or {"id": step_id}
+    run_actor = str(connection.execute(
+        text("SELECT actor FROM workflow_runs WHERE id = :r"), {"r": run_id}).scalar() or "ceo")
+    try:
+        from .step_agents import resolve as who_runs_it
+
+        ran_as = who_runs_it(connection, settings, project_id, build_step, actor=run_actor)
+        with _step_authority(ctx, connection, project_id, {"run_id": run_id}, build_step,
+                             ran_as["agent"]):
+            _, refused = _authorize_step_tool(ctx, "create_code_task", project_id, {})
+            if refused is not None:
+                return None, str(refused.get("error") or refused.get("message")
+                                 or "the build step's agent may not start a build")
+            started = cts.retry_code_task(ctx.engine, settings, ctx.jobs, build_run_id,
+                                          fix_note=note)
+    except Exception as error:  # noqa: BLE001 — said on the failed step, never a crash
+        log.warning("deploy fix for %s/%s not started: %s", run_id, step_id, error)
+        return None, f"the repair build could not be started ({error})"
+    new_id = str(started.get("run_id") or "")
+    if not new_id:
+        return None, "the repair build returned no run id"
+    fix = {"attempt": attempt, "build_run_id": new_id, "from_build_run_id": build_run_id,
+           "deployment_id": failure.get("deployment_id"), "phase": failure.get("phase"),
+           "cause": deploy_repair.short_cause(failure), "headline": failure.get("headline"),
+           "host": deploy_repair.where(failure), "started_at": now_utc().isoformat()}
+    emit_event(connection, project_id, deploy_repair.FIX_EVENT, "boss", "workflow_run", run_id,
+               {"step_id": step_id, **{k: v for k, v in fix.items() if k != "started_at"}})
+    return fix, ""
+
+
+def _deploy_fix_awaiting(failure: dict[str, Any], fix: dict[str, Any],
+                         fixes: list[dict[str, Any]], *,
+                         base: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+    """The deploy step's output while it waits for its repair build."""
+    note = deploy_repair.progress_note(failure, fix["build_run_id"])
+    return {**(base or {}), "capability": "deploy", "status": "awaiting",
+            "await": {"kind": "code_task", "id": fix["build_run_id"],
+                      "then": deploy_repair.THEN_REDEPLOY, "attempt": fix["attempt"]},
+            "code_task_run_id": fix["build_run_id"],
+            deploy_repair.FIXES_KEY: [*fixes, fix], "note": note,
+            "deploy_failure": {k: v for k, v in failure.items()
+                               if k not in ("manifest_text", "log_tail", "steps")}}
 
 
 def _security_step(connection: Connection, ctx: Any, project_id: str, key: str,
@@ -4012,7 +4167,8 @@ def _complete_advisory_failure(connection: Connection, *, project_id: str, run_i
 
 
 def resume_awaited(
-    connection: Connection, *, project_id: str, run_id: str, worker_id: str
+    connection: Connection, *, project_id: str, run_id: str, worker_id: str,
+    ctx: Any = None,
 ) -> list[dict[str, Any]]:
     """Finish steps whose awaited work has reached a terminal state.
 
@@ -4023,6 +4179,11 @@ def resume_awaited(
     A step whose work FAILED fails the step, with the underlying status in the message, and the
     run stops there until an operator retries or skips it. No kind of work is exempt. Silently
     succeeding would let a workflow report a shipped product on top of a build that did not.
+
+    FIX AND REDEPLOY (deploy_repair), with `ctx`: a deploy step whose stack deployment failed
+    for the APP's reason waits on a repair build instead of failing; when that build completes
+    the step is queued to deploy again, and when it fails the step fails with both causes.
+    Without `ctx` (a revival sweep) nothing is started.
     """
     parked = connection.execute(
         text(
@@ -4133,7 +4294,7 @@ def resume_awaited(
                     continue
                 workflows.force_fail_waiting_step(
                     connection, project_id=project_id, step_run_id=step["id"],
-                    error=str(not_passed)[:500],
+                    error=_both_causes(output, handle, awaited_id, str(not_passed))[:500],
                     output={**output, "status": "failed", "awaited_status": status,
                             "reached_before_failing": _evidence_quietly(
                                 connection, kind, awaited_id)},
@@ -4142,6 +4303,23 @@ def resume_awaited(
                              "outcome": "failed", "awaited": kind, "awaited_status": status,
                              "because": not_passed})
                 continue
+        if kind == "code_task" and status in ok_states \
+                and handle.get("then") == deploy_repair.THEN_REDEPLOY:
+            # THE APP WAS FIXED FOR ITS DEPLOY: the step deploys again, from the repair build.
+            fixes = _deploy_fixes(output)
+            note = (f"{output.get('note') or 'Deploy failed'} — fixed by build {awaited_id}; "
+                    "deploying it again")
+            workflows.requeue_waiting_step(
+                connection, project_id=project_id, step_run_id=step["id"],
+                output={deploy_repair.REDEPLOY_KEY: {
+                            "build_run_id": awaited_id, "attempt": handle.get("attempt"),
+                            "at": now_utc().isoformat()},
+                        deploy_repair.FIXES_KEY: fixes, "note": note},
+                event=deploy_repair.REDEPLOY_EVENT,
+                data={"build_run_id": awaited_id, "attempt": handle.get("attempt")})
+            done.append({"run_id": run_id, "step_id": step["step_id"],
+                         "outcome": "redeploying", "awaited": kind, "build": awaited_id})
+            continue
         if status in ok_states:
             # `completed` IS the inner pipeline's success. A missing pull request is not a
             # refusal — reviewer refusal lands as `blocked` / `failed`, already handled below.
@@ -4216,6 +4394,42 @@ def resume_awaited(
                 # deployment that was not approved is a release that was not approved.
                 why = ("the release was not approved — the stack deployment's decision is this "
                        "step's approval, and it was answered no. Nothing was deployed.")
+            refused_fix = ""
+            if kind == "stack_deployment" and status == "failed":
+                # FIX AND REDEPLOY: failed for the APP's reason → a repair build of the app, and
+                # this step waits on it (deploy_repair). A person's "no" is `rejected`, never
+                # here; a failure BOSS did not place on the app stays a person's.
+                failure = deploy_repair.failure_of_deployment(connection, awaited_id)
+                if deploy_repair.is_app_side(failure) and ctx is not None:
+                    fixes = _deploy_fixes(output)
+                    fix, refused_fix = _start_deploy_fix(
+                        connection, ctx, project_id=project_id, run_id=run_id,
+                        step_id=str(step["step_id"]), failure=failure, fixes=fixes)
+                    if fix is not None:
+                        waiting = _deploy_fix_awaiting(failure, fix, fixes, base=output)
+                        workflows.repoint_waiting_step(
+                            connection, project_id=project_id, step_run_id=step["id"],
+                            handle=waiting["await"], note=waiting["note"])
+                        connection.execute(
+                            text("UPDATE workflow_step_runs SET output = output "
+                                 "|| CAST(:o AS JSONB), updated_at = now() WHERE id = :i"),
+                            {"i": step["id"], "o": json.dumps(
+                                {k: waiting[k] for k in (deploy_repair.FIXES_KEY, "note",
+                                                         "deploy_failure")})})
+                        done.append({"run_id": run_id, "step_id": step["step_id"],
+                                     "outcome": "fixing_the_app", "awaited": kind,
+                                     "was": awaited_id, "now": fix["build_run_id"]})
+                        continue
+                fixes = _deploy_fixes(output)
+                if fixes:
+                    why = (f"{why or 'it failed'} (after {len(fixes)} automatic fix"
+                           f"{'es' if len(fixes) != 1 else ''}: "
+                           f"{deploy_repair.fixes_sentence(fixes)})")
+                if refused_fix:
+                    why = f"{why or 'it failed'}. BOSS did not fix it by itself: {refused_fix}"
+            if kind == "code_task" and handle.get("then") == deploy_repair.THEN_REDEPLOY:
+                why = _both_causes(output, handle, awaited_id,
+                                   f"finished as '{status}'" + (f" — {why}" if why else ""))
             # FAILED IS TERMINAL FOR THE STEP, FOR EVERY KIND OF WORK — RESEARCH INCLUDED.
             #
             # Research used to be the exception: a discovery that died was force-COMPLETED with
@@ -4231,7 +4445,9 @@ def resume_awaited(
             # the run context reads succeeded steps only.
             workflows.force_fail_waiting_step(
                 connection, project_id=project_id, step_run_id=step["id"],
-                error=(f"the {kind} it started finished as '{status}' — {why}"
+                error=(why if (kind == "code_task"
+                               and handle.get("then") == deploy_repair.THEN_REDEPLOY) else
+                       f"the {kind} it started finished as '{status}' — {why}"
                        if why else f"the {kind} it started finished as '{status}'"),
                 output={"status": "failed", "awaited_status": status,
                         "reached_before_failing": _evidence_quietly(
@@ -5438,7 +5654,8 @@ def tick(
 
             phase = "resume awaited work"
             performed.extend(resume_awaited(
-                connection, project_id=project_id, run_id=run_id, worker_id=worker_id
+                connection, project_id=project_id, run_id=run_id, worker_id=worker_id,
+                ctx=ctx,
             ))
 
             # A WAIT THAT IS OVER, ENDED — whatever kind of wait it was. Timers, approval gates

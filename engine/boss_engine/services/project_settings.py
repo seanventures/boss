@@ -52,6 +52,16 @@ KNOBS: dict[str, dict[str, Any]] = {
                 "shows gaps. Each one spends model budget. Off: it only proposes them.",
         "kind": "int", "min": 0, "max": 1,
     },
+    # FIX AND REDEPLOY (deploy_repair.py): a deploy that failed for the app's own reason is
+    # repaired by a build and shipped again, at most this many times per deploy step.
+    "deploy_fix_attempts": {
+        "attr": "deploy_fix_attempts",
+        "label": "Deploy fixes",
+        "help": "When a workflow's deploy fails because of the app (a runtime the machine lacks, "
+                "the app's own install or health error), how many times BOSS fixes the app and "
+                "deploys again by itself. 0: never, a person decides.",
+        "kind": "int", "min": 0, "max": 5,
+    },
     # THE MODEL PRE-CHECK at the start door (workflow_precheck_agent.py). OFF unless turned on:
     # it is a model call, so it costs money and time on every start it runs at.
     "workflow_precheck_agent": {
