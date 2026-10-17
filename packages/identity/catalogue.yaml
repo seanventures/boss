@@ -70,6 +70,11 @@ access_roles:
     description: SCIM 2.0 provisioning for one identity provider.
     bindable_scopes: [org]
     system: true
+  - key: system_self_installer
+    name: System self-installer
+    description: "The host self-installer (BOSS fixes itself): read signed install tickets and report install phases. Nothing else."
+    bindable_scopes: [org]
+    system: true
 
 # Built-in system principals (IDENTITY.md §3). `access_role` is their fixed role; `none` holds nothing.
 system_principals:
@@ -82,6 +87,9 @@ system_principals:
   - id: sys_scim
     access_role: system_scim
     replaces: "BOSS_ENTERPRISE_SCIM_BEARER_TOKENS (one principal per provider: sys_scim_<provider>)"
+  - id: sys_self_installer
+    access_role: system_self_installer
+    replaces: "nothing; the host self-installer that runs approved BOSS self-fix tickets (scripts/install/self_fix_installer.py)"
   - id: sys_host_cli
     access_role: none
     replaces: "nothing; the actor of host-shell recovery (boss identity recover-owner)"
@@ -1380,4 +1388,16 @@ categories:
         description: "Poll, heartbeat and complete leased jobs (worker protocol)."
         roles: [system_worker]
         scope: project
+        flags: [system_only]
+      - key: self_fix:ticket_read
+        title: "Read self-fix install tickets"
+        description: "List and take the signed, single-use tickets of approved BOSS self-fixes (host self-installer only)."
+        roles: [system_self_installer]
+        scope: org
+        flags: [system_only]
+      - key: self_fix:ticket_report
+        title: "Report self-fix install phases"
+        description: "Report each install phase of a taken self-fix ticket (host self-installer only)."
+        roles: [system_self_installer]
+        scope: org
         flags: [system_only]

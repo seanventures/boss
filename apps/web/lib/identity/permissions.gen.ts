@@ -4,7 +4,7 @@
 // misspelt permission anywhere in apps/web is a type error.
 
 export const CATALOGUE_VERSION = 1 as const;
-export const CATALOGUE_FINGERPRINT = "d5135441b3e60cb5";
+export const CATALOGUE_FINGERPRINT = "f1f4b961111a7b88";
 
 export const PERMISSIONS = [
   "directory:read",
@@ -202,11 +202,13 @@ export const PERMISSIONS = [
   "telemetry:manage",
   "telemetry:ingest",
   "worker:lease",
+  "self_fix:ticket_read",
+  "self_fix:ticket_report",
 ] as const;
 
 export type Permission = (typeof PERMISSIONS)[number];
 
-export const ACCESS_ROLE_KEYS = ["owner", "admin", "operator", "viewer", "auditor", "system_worker", "system_collector", "system_scim"] as const;
+export const ACCESS_ROLE_KEYS = ["owner", "admin", "operator", "viewer", "auditor", "system_worker", "system_collector", "system_scim", "system_self_installer"] as const;
 export type AccessRoleKey = (typeof ACCESS_ROLE_KEYS)[number];
 export type BuiltinHumanRoleKey = "owner" | "admin" | "operator" | "viewer" | "auditor";
 export type PermissionScope = "org" | "project";
@@ -420,6 +422,8 @@ export const PERMISSION_META: Readonly<Record<Permission, PermissionMeta>> = {
   "telemetry:manage": { key: "telemetry:manage", title: "Manage telemetry", description: "Rotate, forget and delete telemetry.", category: "Operations and assurance", roles: ["owner", "admin"], scope: "project", stepUp: true, delegable: false, critical: false, systemOnly: false },
   "telemetry:ingest": { key: "telemetry:ingest", title: "Ingest telemetry", description: "Send collector telemetry (machine only).", category: "Operations and assurance", roles: ["system_collector"], scope: "project", stepUp: false, delegable: false, critical: false, systemOnly: true },
   "worker:lease": { key: "worker:lease", title: "Lease worker jobs", description: "Poll, heartbeat and complete leased jobs (worker protocol).", category: "Operations and assurance", roles: ["system_worker"], scope: "project", stepUp: false, delegable: false, critical: false, systemOnly: true },
+  "self_fix:ticket_read": { key: "self_fix:ticket_read", title: "Read self-fix install tickets", description: "List and take the signed, single-use tickets of approved BOSS self-fixes (host self-installer only).", category: "Operations and assurance", roles: ["system_self_installer"], scope: "org", stepUp: false, delegable: false, critical: false, systemOnly: true },
+  "self_fix:ticket_report": { key: "self_fix:ticket_report", title: "Report self-fix install phases", description: "Report each install phase of a taken self-fix ticket (host self-installer only).", category: "Operations and assurance", roles: ["system_self_installer"], scope: "org", stepUp: false, delegable: false, critical: false, systemOnly: true },
 };
 
 export const ROLE_PERMISSIONS: Readonly<Record<AccessRoleKey, readonly Permission[]>> = {
@@ -431,6 +435,7 @@ export const ROLE_PERMISSIONS: Readonly<Record<AccessRoleKey, readonly Permissio
   "system_worker": ["spend:reserve", "secret:lease", "worker:lease"],
   "system_collector": ["telemetry:ingest"],
   "system_scim": ["scim:provision"],
+  "system_self_installer": ["self_fix:ticket_read", "self_fix:ticket_report"],
 };
 
 const PERMISSION_SET: ReadonlySet<string> = new Set(PERMISSIONS);

@@ -27,7 +27,7 @@ SCOPE_KINDS = frozenset({"org", "project"})
 #: The five built-in human access roles, in display order. The YAML may not add a sixth.
 HUMAN_ROLES = ("owner", "admin", "operator", "viewer", "auditor")
 #: The fixed system roles. Never bindable by a person.
-SYSTEM_ROLES = ("system_worker", "system_collector", "system_scim")
+SYSTEM_ROLES = ("system_worker", "system_collector", "system_scim", "system_self_installer")
 
 #: Permissions that must never be delegable, whatever a later catalogue edit says (§7.13, D12).
 #: The generator refuses a catalogue that marks any of them delegable.
