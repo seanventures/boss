@@ -67,3 +67,48 @@ def test_a_folder_another_active_app_uses_is_never_removed():
     src = inspect.getsource(ar.removal_scope)
     assert "t.status = 'active'" in src and "s.target_id <> :t" in src
     assert "if f not in taken_dirs" in src and "if p not in taken_projects" in src
+
+
+class _Rows:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def mappings(self):
+        return self
+
+    def all(self):
+        return self._rows
+
+    def first(self):
+        return self._rows[0] if self._rows else None
+
+
+class _Conn:
+    """Answers removal_scope's three queries: this target's deploys, other active ones, single."""
+
+    def __init__(self, own, others):
+        self.own, self.others = own, others
+
+    def execute(self, stmt, params=None):
+        sql = str(stmt)
+        if "s.target_id <> :t" in sql:
+            return _Rows(self.others)
+        if "FROM stack_deployments" in sql:
+            return _Rows(self.own)
+        return _Rows([])
+
+
+def test_a_compose_app_with_resources_is_removed_from_the_shared_project():
+    """deprun_bdb914b2: Remove stopped `helpdesk-ai` while the app and its database ran in the
+    resources' project `bossapp-helpdesk-ai-deploy`, so nothing stopped."""
+    own = [{"deploy_dir": "/opt/boss-apps/helpdesk-ai",
+            "manifest": {"kind": "compose", "name": "helpdesk-ai",
+                         "shared_compose_project": "bossapp-helpdesk-ai-deploy"}}]
+    scope = ar.removal_scope(_Conn(own, []), {"id": "t1", "repo": "o/r", "app_name": "helpdesk-ai"})
+    assert "bossapp-helpdesk-ai-deploy" in scope["projects"]
+    # ...but never when another active app now runs in that shared project.
+    other = [{"deploy_dir": "/opt/boss-apps/helpdesk-ai-2",
+              "manifest": {"kind": "compose", "name": "helpdesk-ai-2",
+                           "shared_compose_project": "bossapp-helpdesk-ai-deploy"}}]
+    scope = ar.removal_scope(_Conn(own, other), {"id": "t1", "repo": "o/r", "app_name": "helpdesk-ai"})
+    assert "bossapp-helpdesk-ai-deploy" not in scope["projects"]

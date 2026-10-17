@@ -69,6 +69,12 @@ def removal_scope(connection: Connection, target: dict) -> dict[str, list[str]]:
             folders.append(guard_folder(r["deploy_dir"]))
         # A compose app's project is `compose.project`, else its name (app_deploy_manifest);
         # manifests stored before `compose_project` was recorded carry only the name.
+        # A compose app with resources ran in the RESOURCES' project (stack_deploy.
+        # join_resource_project records it as `shared_compose_project`); removing only its own
+        # name stopped nothing while the app and its database kept running (deprun_bdb914b2).
+        shared = (manifest or {}).get("shared_compose_project")
+        if shared:
+            projects.append(guard_project(shared))
         proj = (manifest or {}).get("compose_project") or (
             (manifest or {}).get("name") if (manifest or {}).get("kind") == "compose" else None)
         if proj:
@@ -87,6 +93,8 @@ def removal_scope(connection: Connection, target: dict) -> dict[str, list[str]]:
     for r in shared:
         m = r["manifest"] if isinstance(r["manifest"], dict) else json.loads(r["manifest"] or "{}")
         taken_projects.add((m or {}).get("compose_project") or (m or {}).get("name"))
+        if (m or {}).get("shared_compose_project"):
+            taken_projects.add(m["shared_compose_project"])
     folders = [f for f in folders if f not in taken_dirs]
     projects = [p for p in projects if p not in taken_projects]
     container = _app_name(str(target.get("repo") or ""), target.get("app_name"))
