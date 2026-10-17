@@ -13,6 +13,7 @@ which nothing in this input can anyway: those are decided by BOSS, not by run in
 """
 from __future__ import annotations
 
+import json
 from pathlib import PurePosixPath
 from typing import Any, Optional
 
@@ -559,17 +560,36 @@ def applications(c, project_id: str, app_key: str) -> list[dict]:
     rows = c.execute(text(
         "SELECT a.id, a.template_id, t.template_key, a.version, a.stack, a.framework, a.workflow_run_id, "
         "a.code_task_run_id, a.status, a.blocked_reason, a.created_by, a.created_at, a.updated_at, "
-        "t.manifest->>'name' AS name "
+        "t.manifest->>'name' AS name, t.manifest "
         "FROM app_template_applications a JOIN app_templates t ON t.id = a.template_id "
         "WHERE a.project_id = :p AND a.app_key = :k ORDER BY a.created_at DESC"),
         {"p": project_id, "k": app_key}).mappings().all()
-    return [{**{k: v for k, v in r.items() if k not in ("created_at", "updated_at")},
-             "created_at": r["created_at"].isoformat() if r["created_at"] else None,
-             "updated_at": r["updated_at"].isoformat() if r["updated_at"] else None} for r in rows]
+    from .base_url import sign_in_providers
+
+    def _manifest(v) -> dict:
+        if isinstance(v, str):
+            try:
+                v = json.loads(v)
+            except ValueError:
+                v = None
+        return v if isinstance(v, dict) else {}
+
+    out = []
+    for r in rows:
+        m = _manifest(r["manifest"])
+        out.append({**{k: v for k, v in r.items() if k not in ("created_at", "updated_at", "manifest")},
+                    "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+                    "updated_at": r["updated_at"].isoformat() if r["updated_at"] else None,
+                    # Which of the app's secrets are THIS connector's, and the sign-in providers it
+                    # wires (App › Connectors draws one card per connector from these). Names only.
+                    "secrets": [str(s.get("name")) for s in m.get("secrets") or []
+                                if isinstance(s, dict) and s.get("name")],
+                    "sign_in_providers": sign_in_providers(m)})
+    return out
 
 
 def setup_guide(c, *, project_id: str, app_key: str, public_url: str = "",
-                preview_url: Optional[str] = None) -> list[dict]:
+                preview_url: Optional[str] = None, preview_inside_only: bool = False) -> list[dict]:
     """The guides of the app's applied (or building) templates with placeholders filled.
     Only known placeholders are filled; secret values are never placeholders (§2.9 S2.6).
 
@@ -602,8 +622,11 @@ def setup_guide(c, *, project_id: str, app_key: str, public_url: str = "",
         if base and not base.startswith(("http://", "https://")):
             base = ""          # a relative gateway path is not an address a provider can call back
         values = {
-            "preview_url": base or "(start a preview to get its URL)",
-            "public_url": public_url.rstrip("/") or "(BOSS_PUBLIC_URL is not set)",
+            # A preview that runs but has no public address is said so: it is reachable inside
+            # BOSS only, and no browser or provider can use its address.
+            "preview_url": base or ("(the preview is reachable inside BOSS only: set BOSS's public address)"
+                                    if preview_inside_only else "(start a preview to get its URL)"),
+            "public_url": public_url.rstrip("/") or "(BOSS has no public address yet: set BOSS_PUBLIC_URL)",
             "app_key": app_key,
         }
         for hook in m.get("webhooks") or []:

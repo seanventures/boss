@@ -1,14 +1,17 @@
 "use client";
 
 /**
- * App ▸ Sign-in (APP_TEMPLATES_AND_SECURITY_LOOP.md §6.4): one press makes an app built from the
- * login-oauth template sign people in with BOSS. BOSS registers the app as a client of its OIDC
- * provider, registers the app's addresses (each running preview, where it is deployed) as redirect
- * URIs, and gives the app OIDC_BOSS_CLIENT_ID, _SECRET and _ISSUER as app secrets for preview and
- * deploy. The sheet shows presence and addresses only: never a secret.
+ * SIGN IN WITH BOSS for one app (APP_TEMPLATES_AND_SECURITY_LOOP.md §6.4): one press makes an app
+ * built from the login-oauth template sign people in with BOSS. BOSS registers the app as a client
+ * of its OIDC provider, registers the app's addresses (each running preview, where it is deployed)
+ * as redirect URIs, and gives the app OIDC_BOSS_CLIENT_ID, _SECRET and _ISSUER as app secrets for
+ * preview and deploy. Presence and addresses only: never a secret.
+ *
+ * It is the BOSS row of App › Connectors (components/v2/templates/setup-sheet.tsx): one surface for
+ * an app's sign-in providers. It used to be a sheet of its own (⋯ › Sign-in), beside Setup.
  */
 import { SpinnerGap } from "@phosphor-icons/react";
-import React, { useCallback, useEffect, useId, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 
 import { callAction } from "../../lib/call-action";
 import { GatedButton } from "../../components/gated";
@@ -45,10 +48,8 @@ export function uriWords(uri: string): string {
   catch { return uri; }
 }
 
-export type SignInSheetProps = { projectId: string; appKey: string; app: string; onClose: () => void };
-
-export function SignInSheet({ projectId, appKey, app, onClose }: SignInSheetProps) {
-  const titleId = useId();
+/** The app's Sign in with BOSS state, and its two presses. */
+export function useBossSignIn(projectId: string, appKey: string, onChange?: () => void) {
   const [status, setStatus] = useState<SignInStatus | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState("");
@@ -65,13 +66,7 @@ export function SignInSheet({ projectId, appKey, app, onClose }: SignInSheetProp
     }
     setLoaded(true);
   }, [appKey, projectId]);
-
   useEffect(() => { void load(); }, [load]);
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [onClose]);
 
   const form = () => {
     const f = new FormData();
@@ -79,81 +74,72 @@ export function SignInSheet({ projectId, appKey, app, onClose }: SignInSheetProp
     f.set("app_key", appKey);
     return f;
   };
-
-  async function use() {
-    setBusy("use");
-    const r = await callAction(useSignInWithBossAction, undefined, "oidc_client:manage")(form());
+  async function press(which: "use" | "stop") {
+    setBusy(which);
+    const r = await callAction(which === "use" ? useSignInWithBossAction : stopSignInWithBossAction, undefined, "oidc_client:manage")(form());
     setBusy(null);
-    if (r.ok) { showToast("success", r.message ?? "Sign in with BOSS is on"); setError(""); void load(); }
-    else setError(r.error ?? "");
+    if (r.ok) {
+      showToast("success", r.message ?? (which === "use" ? "Sign in with BOSS is on" : "Sign in with BOSS is off"));
+      setError("");
+      void load();
+      onChange?.();
+    } else setError(r.error ?? "");
   }
+  return { status, loaded, error, busy, use: () => press("use"), stop: () => press("stop") };
+}
 
-  async function stop() {
-    setBusy("stop");
-    const r = await callAction(stopSignInWithBossAction, undefined, "oidc_client:manage")(form());
-    setBusy(null);
-    if (r.ok) { showToast("success", r.message ?? "Sign in with BOSS is off"); setError(""); void load(); }
-    else setError(r.error ?? "");
-  }
-
-  const s = status;
+/** What the BOSS row says and does once BOSS has a public address. */
+export function BossSignInDetails({ state }: { state: ReturnType<typeof useBossSignIn> }) {
+  const { status: s, loaded, error, busy } = state;
   const envs = (["preview", "deploy"] as const).filter((e) => (s?.secrets[e] ?? []).length === 3);
   return (
-    <div className="fx-sheet-back" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="fx-sheet fx-signin" role="dialog" aria-modal="true" aria-labelledby={titleId}
-           data-testid="fx-signin-sheet">
-        <header className="fx-sheet-head">
-          <h2 id={titleId} title={SIGN_IN_TIP}>Sign-in</h2>
-          <span className="fx-sheet-sub ag-trunc" data-user-text title={app}>{app}</span>
-          <button type="button" className="ag-act-close" aria-label="Close" onClick={onClose}>×</button>
-        </header>
-        {!loaded ? <span className="fx-muted"><SpinnerGap size={12} className="ag-spin" aria-hidden /> Loading</span> : null}
-        {loaded && s && !s.template_applied ? (
-          <p className="fx-muted" data-testid="fx-signin-needs-template">
-            Apply the login-oauth template to this app first: its BOSS button is what this turns on.
+    <div className="tpl-boss" data-testid="fx-signin-panel">
+      {!loaded ? <span className="tpl-muted"><SpinnerGap size={12} className="ag-spin" aria-hidden /> Loading</span> : null}
+      {loaded && s && !s.template_applied ? (
+        <p className="tpl-muted" data-testid="fx-signin-needs-template">
+          Apply the login-oauth template to this app first: its BOSS button is what this turns on.
+        </p>
+      ) : null}
+      {loaded && s?.template_applied ? (
+        <>
+          <p className="fx-signin-state" data-testid="fx-signin-state">
+            {s.connected ? "Sign in with BOSS is on" : s.client ? "Registered, not wired" : "Sign in with BOSS is off"}
+            {s.connected ? <span className="tpl-muted" title="OIDC_BOSS_CLIENT_ID, _SECRET and _ISSUER, in the vault">
+              {` · settings for ${envs.map((e) => (e === "deploy" ? "deploys" : "previews")).join(" and ")}`}</span> : null}
           </p>
-        ) : null}
-        {loaded && s?.template_applied ? (
-          <>
-            <p className="fx-signin-state" data-testid="fx-signin-state">
-              {s.connected ? "Sign in with BOSS is on" : s.client ? "Registered, not wired" : "Sign in with BOSS is off"}
-              {s.connected ? <span className="fx-muted" title="OIDC_BOSS_CLIENT_ID, _SECRET and _ISSUER, in the vault">
-                {` · settings for ${envs.map((e) => (e === "deploy" ? "deploys" : "previews")).join(" and ")}`}</span> : null}
-            </p>
+          {s.client ? (
+            <dl className="fx-signin-facts">
+              <dt>Client</dt><dd><code data-testid="fx-signin-client">{s.client.client_id}</code></dd>
+              {s.issuer ? (<><dt>Issuer</dt><dd><code>{s.issuer}</code></dd></>) : null}
+              <dt title="Where BOSS may send people back after they sign in">Returns to</dt>
+              <dd><ul className="fx-signin-uris" aria-label="Redirect URIs">
+                {s.client.redirect_uris.map((u) => (
+                  <li key={u} title={u} data-user-text>{uriWords(u)}</li>
+                ))}
+              </ul></dd>
+            </dl>
+          ) : null}
+          <span className="tpl-prov-acts">
+            <GatedButton permission="oidc_client:manage" type="button" className="cap-btn primary"
+                         disabled={busy !== null} data-testid="fx-signin-use" aria-busy={busy === "use" || undefined}
+                         title={s.connected ? "Register the app's current preview and deploy addresses again"
+                           : `${SIGN_IN_TIP} BOSS registers the app as its client and stores its settings. Asks you to confirm it is you.`}
+                         onClick={() => void state.use()}>
+              {busy === "use" ? <SpinnerGap size={12} className="ag-spin" aria-hidden /> : null}
+              {s.connected ? "Refresh addresses" : "Use Sign in with BOSS"}
+            </GatedButton>
             {s.client ? (
-              <dl className="fx-signin-facts">
-                <dt>Client</dt><dd><code data-testid="fx-signin-client">{s.client.client_id}</code></dd>
-                {s.issuer ? (<><dt>Issuer</dt><dd><code>{s.issuer}</code></dd></>) : null}
-                <dt title="Where BOSS may send people back after they sign in">Returns to</dt>
-                <dd><ul className="fx-signin-uris" aria-label="Redirect URIs">
-                  {s.client.redirect_uris.map((u) => (
-                    <li key={u} title={u} data-user-text>{uriWords(u)}</li>
-                  ))}
-                </ul></dd>
-              </dl>
+              <GatedButton permission="oidc_client:manage" type="button" className="cap-btn" disabled={busy !== null}
+                           data-testid="fx-signin-stop" title="Removes the client: everyone signed in through it is signed out"
+                           onClick={() => void state.stop()}>Stop using</GatedButton>
             ) : null}
-            <span className="fx-sheet-actions">
-              <GatedButton permission="oidc_client:manage" type="button" className="ag-btn ag-btn-primary"
-                           disabled={busy !== null} data-testid="fx-signin-use" aria-busy={busy === "use" || undefined}
-                           title={s.connected ? "Register the app's current preview and deploy addresses again"
-                             : `${SIGN_IN_TIP} Asks you to confirm it is you.`}
-                           onClick={() => void use()}>
-                {busy === "use" ? <SpinnerGap size={12} className="ag-spin" aria-hidden /> : null}
-                {s.connected ? "Refresh addresses" : "Use Sign in with BOSS"}
-              </GatedButton>
-              {s.client ? (
-                <GatedButton permission="oidc_client:manage" type="button" className="ag-link" disabled={busy !== null}
-                             data-testid="fx-signin-stop" title="Removes the client: everyone signed in through it is signed out"
-                             onClick={() => void stop()}>Stop using</GatedButton>
-              ) : null}
-            </span>
-            <p className="fx-muted fx-signin-note">
-              A preview gets these settings when it starts; a new preview&apos;s address is registered as it starts.
-            </p>
-          </>
-        ) : null}
-        {error ? <span className="ag-att-error" role="alert" data-user-text>{error}</span> : null}
-      </div>
+          </span>
+          <p className="tpl-faint">
+            A preview gets these settings when it starts; a new preview&apos;s address is registered as it starts.
+          </p>
+        </>
+      ) : null}
+      {error ? <span className="tpl-err" role="alert" data-user-text>{error}</span> : null}
     </div>
   );
 }

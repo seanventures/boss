@@ -2804,6 +2804,9 @@ class AppRow(TypedDict, total=False):
     run_id: str                    # its newest build (the cockpit `↗` opens)
     app_id: Optional[str]          # finalize_ctx.app_id: App › Security addresses this
     app_key: str                   # the name's identity key: templates, secrets, links
+    # What its connectors still need a person for (templates.setup_needs), or None:
+    # {"providers": ["google", …], "keys": ["STRIPE_SECRET_KEY", …]} — names only.
+    setup: Optional[dict[str, list[str]]]
     state: str                     # BuildStateKey of that build
     word: str
     preview: Optional[PreviewFlag]
@@ -2897,6 +2900,11 @@ def apps(connection: Any, project_id: str, *, viewer: Optional[str] = None,
             {"p": project_id, "ids": ids},
         ).mappings().all():
             builders_of.setdefault(str(row["code_task_run_id"]), []).append(str(row["role_key"]))
+    # WHAT ITS CONNECTORS STILL NEED A PERSON FOR (the row's "Set up sign-in · N providers"
+    # chip): names only, two queries for the whole project (templates.setup_needs).
+    from ..templates.setup_needs import needs as setup_needs
+
+    to_set_up = setup_needs(connection, project_id)
     rows: list[AppRow] = []
     for group in groups:
         head = group[0]
@@ -2940,8 +2948,10 @@ def apps(connection: Any, project_id: str, *, viewer: Optional[str] = None,
         # AND ITS KEY (the name's identity key): what the app-level APIs keyed by app —
         # templates, secrets, setup guide, links — address. One row carries all three of the
         # app's handles (its newest run, its id, its key) so no surface has to guess another.
+        key_of_app = _app_key_of_name(app_name(head))
         rows.append({"key": rid, "app": app_name(head), "builders": roles, "run_id": rid,
-                     "app_id": app_id, "app_key": _app_key_of_name(app_name(head)),
+                     "app_id": app_id, "app_key": key_of_app,
+                     "setup": to_set_up.get(key_of_app),
                      "pr_number": _pr_number(with_pr) if with_pr else None,
                      "pr_url": (with_pr or {}).get("pull_request_url"),
                      "pr_state": _pr_state(with_pr, facts),
@@ -2960,5 +2970,5 @@ def apps(connection: Any, project_id: str, *, viewer: Optional[str] = None,
                                       else 2), -(_aware(r.get("at")) or now).timestamp()))
     out: Apps = {"project_id": project_id, "etag": "", "apps": rows}
     out["etag"] = _etag([(r["run_id"], r["state"], r["word"], r["builders"], r["deploys"],
-                          r["builds"], r.get("preview")) for r in rows])
+                          r["builds"], r.get("preview"), r.get("setup")) for r in rows])
     return out
