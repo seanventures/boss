@@ -261,6 +261,12 @@ def test_every_path_that_queues_a_caller_chosen_kind_authorizes_it():
             tree = ast.parse(src)
             consts = {t.id for n in tree.body if isinstance(n, ast.Assign) and isinstance(n.value, ast.Constant)
                       for t in n.targets if isinstance(t, ast.Name)}
+            # `self.job_kind` where a class here sets `job_kind = "agent.voice"`: fixed per class,
+            # never chosen by a caller (the *_spend modules).
+            class_consts = {t.id for c in ast.walk(tree) if isinstance(c, ast.ClassDef) for n in c.body
+                            if isinstance(n, ast.Assign) and isinstance(n.value, ast.Constant)
+                            and isinstance(n.value.value, str)
+                            for t in n.targets if isinstance(t, ast.Name)}
             for fn in ast.walk(tree):
                 if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
                     continue
@@ -276,7 +282,9 @@ def test_every_path_that_queues_a_caller_chosen_kind_authorizes_it():
                     if kind is None and len(n.args) >= 3:
                         kind = n.args[2]
                     literal = (isinstance(kind, ast.Constant) and isinstance(kind.value, str)) or \
-                        (isinstance(kind, ast.Name) and (kind.id in consts or kind.id.isupper()))
+                        (isinstance(kind, ast.Name) and (kind.id in consts or kind.id.isupper())) or \
+                        (isinstance(kind, ast.Attribute) and isinstance(kind.value, ast.Name)
+                         and kind.value.id == "self" and kind.attr in class_consts)
                     if not literal and not checks:
                         flagged.add((str(path.relative_to(ROOT)), fn.name))
     assert flagged <= safe, flagged - safe
