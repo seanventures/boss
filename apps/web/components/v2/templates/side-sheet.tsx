@@ -9,9 +9,11 @@
 import React, { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 
-export function SideSheet({ title, sub, onClose, children, foot, testId, wide = false, labelledTitle }: {
+export function SideSheet({ title, sub, onClose, children, foot, testId, wide = false, page = false, labelledTitle }: {
   title: ReactNode; sub?: ReactNode; onClose: () => void; children: ReactNode; foot?: ReactNode;
   testId?: string; wide?: boolean;
+  /** A page's width (an app's Setup): its tables keep their columns instead of folding into a strip. */
+  page?: boolean;
   /** A plain-text name for the dialog when `title` is not text. */
   labelledTitle?: string;
 }) {
@@ -37,7 +39,7 @@ export function SideSheet({ title, sub, onClose, children, foot, testId, wide = 
   }, [host, onClose]);
   const sheet = (
     <div className="tpl-scrim" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div ref={ref} className="tpl-sheet" data-wide={wide || undefined} role="dialog" aria-modal="true"
+      <div ref={ref} className="tpl-sheet" data-wide={wide || undefined} data-page={page || undefined} role="dialog" aria-modal="true"
            aria-labelledby={labelledTitle ? undefined : titleId} aria-label={labelledTitle} data-testid={testId}>
         <header className="tpl-sheet-head">
           <h2 id={titleId}>{title}</h2>

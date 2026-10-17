@@ -724,9 +724,12 @@ class StackApplier:
         """The compose project's containers and the last lines of each one not running, from
         the install command's `-p <project>`; "" for a manifest that runs no compose. Read-only."""
         project = ""
-        for step in list(self.rendered.get("install") or []):
-            m = re.search(r"\s-p\s+([A-Za-z0-9._-]+)", str(step.get("run") or ""))
-            if m:
+        # The step that BRINGS THE APP UP names its project; the step before it may retire an
+        # older project of the app (join_resource_project), whose containers are not the answer.
+        for step in reversed(list(self.rendered.get("install") or [])):
+            run = str(step.get("run") or "")
+            m = re.search(r"\s-p\s+([A-Za-z0-9._-]+)", run)
+            if m and " up " in run:
                 project = m.group(1)
                 break
         if not project:
@@ -1431,8 +1434,20 @@ def join_resource_project(rendered: dict[str, Any], app_project: str,
     def steps(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return [{**s, "run": str(s.get("run") or "").replace(old, new)} for s in items or []]
 
-    return {**rendered, "install": steps(rendered.get("install")),
-            "update": steps(rendered.get("update")), "teardown": steps(rendered.get("teardown"))}
+    def retire_first(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        # THE APP'S OWN OLD PROJECT GOES FIRST: an earlier deploy under `-p <app>` kept the port
+        # (helpdesk-ai-app-1 held 0.0.0.0:8000, sdep_ca4042c2 'port is already allocated').
+        # Only that project's containers — never the shared one's resources.
+        up = next((str(s.get("run") or "") for s in items or [] if old in str(s.get("run") or "")), "")
+        if " up " not in up:
+            return steps(items)
+        down = up.split(" up ", 1)[0] + " down --remove-orphans || true"
+        return ([{"name": "retire the app's own compose project", "run": down,
+                  "timeout_seconds": 300}] + steps(items))
+
+    return {**rendered, "install": retire_first(rendered.get("install")),
+            "update": retire_first(rendered.get("update")),
+            "teardown": steps(rendered.get("teardown"))}
 
 
 def record_host_facts(engine, host_id: str, facts: Mapping[str, Any]) -> None:
@@ -1593,8 +1608,11 @@ def plan_stack_deploy(engine, settings: Settings, *, project_id: str, target_id:
     if infra_doc is not None and manifest.kind == "compose" and manifest.compose_project:
         from ..infra_plugins._runtime import compose_project_for
 
-        shared_project = compose_project_for(str(infra_app),
-                                             str(target.get("environment") or "deploy"))
+        # THE RESOURCES' environment, not the target's name: resources default to "deploy"
+        # (ResourceRequest.environment) while HelpDesk AI's target is called "staging", and the
+        # app joined bossapp-helpdesk-ai-staging while res-db lived in …-deploy (sdep_ca4042c2).
+        shared_project = compose_project_for(
+            str(infra_app), str(manifest.resources[0].environment or "deploy"))
         rendered = join_resource_project(rendered, manifest.compose_project, shared_project)
 
     deployment_id = make_id("sdep")

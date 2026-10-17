@@ -297,7 +297,14 @@ describe("HelpDesk AI's Connectors", () => {
     expect($$('[data-testid^="tpl-provider-login-oauth-"]').map((e) => e.getAttribute("data-testid")))
       .toEqual(["tpl-provider-login-oauth-google", "tpl-provider-login-oauth-github", "tpl-provider-login-oauth-boss", "tpl-provider-login-oauth-demo"]);
     expect($('[data-testid="tpl-provider-status-login-oauth-boss"]').textContent).toBe("Can't work yet");
+    // Every row is one line until opened; only one opens at a time.
+    expect($('[data-testid="tpl-boss-no-address"]')).toBeNull();
+    expect($('[data-testid="tpl-provider-form-login-oauth-google"]')).toBeNull();
+    await press('[data-testid="tpl-provider-open-login-oauth-boss"]');  // rows start collapsed (the mockup)
     expect($('[data-testid="tpl-boss-no-address"]').textContent).toContain("BOSS_PUBLIC_URL");
+    await press('[data-testid="tpl-provider-open-login-oauth-google"]');  // rows start collapsed (the mockup)
+    expect($('[data-testid="tpl-boss-no-address"]')).toBeNull();
+    expect($('[data-testid="tpl-provider-login-oauth-google"]').hasAttribute("data-open")).toBe(true);
     expect($('[data-testid="tpl-summary-login-oauth"]').textContent).toContain("Works in the preview now with the demo login.");
     // Google warns about http + IP; GitHub, on the same address, does not.
     expect($('[data-testid="tpl-warning-login-oauth-google-deploy"]').textContent).toMatch(/https/);
@@ -320,6 +327,7 @@ describe("HelpDesk AI's Connectors", () => {
 
   it("Google's keys: Client ID + secret, Use for Both = one guarded call, test keys for previews and live keys for the deploy", async () => {
     await mount(<AppSetup projectId="p1" appKey="helpdesk ai" deployLabel="Staging" />);
+    await press('[data-testid="tpl-provider-open-login-oauth-google"]');  // rows start collapsed (the mockup)
     expect($('[data-testid="tpl-provider-save-login-oauth-google"]').hasAttribute("disabled")).toBe(true);
     expect($('label[for]').textContent).toBe("Client ID");
     await type('[data-testid="tpl-provider-id-login-oauth-google"]', "123-abc.apps.googleusercontent.com");
@@ -339,6 +347,7 @@ describe("HelpDesk AI's Connectors", () => {
 
   it("an Operator stores preview keys but a deploy (live) key is greyed with the reason", async () => {
     await mount(<AppSetup projectId="p1" appKey="helpdesk ai" />, "operator");
+    await press('[data-testid="tpl-provider-open-login-oauth-github"]');  // rows start collapsed (the mockup)
     await type('[data-testid="tpl-provider-id-login-oauth-github"]', "Iv1.abc");
     await type('[data-testid="tpl-provider-secret-login-oauth-github"]', "s3cr3t");
     expect($('[data-testid="tpl-provider-save-login-oauth-github"]').getAttribute("data-can")).toBe("yes");
@@ -384,7 +393,15 @@ describe("every capability of the old Setup sheet is still reachable", () => {
       "demo login passwords": '[data-testid="tpl-demo-logins-row-show"]',
       "BOSS address / how to set it": '[data-testid="tpl-boss-no-address"]',
     };
-    for (const [job, sel] of Object.entries(reach)) expect($(sel), job).toBeTruthy();
+    // Provider details are behind each row's Set up: open the row a job lives in, then look.
+    const row: Record<string, string> = {
+      "set a provider's test key": "google", "callback URL with Copy": "github",
+      "BOSS address / how to set it": "boss",
+    };
+    for (const [job, sel] of Object.entries(reach)) {
+      if (row[job]) await press(`[data-testid="tpl-provider-open-login-oauth-${row[job]}"]`);
+      expect($(sel), job).toBeTruthy();
+    }
     await press('[data-testid="tpl-tab-settings"]');
     for (const [job, sel] of Object.entries({
       "app settings for deploy: add": '[data-testid="tpl-deploy-value-form"]',
@@ -398,6 +415,7 @@ describe("every capability of the old Setup sheet is still reachable", () => {
     guide = { ...GUIDE, boss_public_url: "https://boss.acme.dev" };
     await mount(<AppSetup projectId="p1" appKey="helpdesk ai" />);
     expect($('[data-testid="tpl-provider-status-login-oauth-boss"]').textContent).toBe("Not connected");
+    await press('[data-testid="tpl-provider-open-login-oauth-boss"]');  // rows start collapsed (the mockup)
     await press('[data-testid="fx-signin-use"]');
     expect(useBoss).toHaveBeenCalledTimes(1);
   });

@@ -23,9 +23,26 @@ def test_the_app_runs_in_the_resources_project():
     shared = compose_project_for("helpdesk ai", "deploy")
     assert shared == "bossapp-helpdesk-ai-deploy"  # where res-db really lives
     out = sd.join_resource_project(_rendered(), "helpdesk-ai", shared)
-    for key in ("install", "update", "teardown"):
-        assert all(f" -p {shared} " in s["run"] and " -p helpdesk-ai " not in s["run"]
-                   for s in out[key])
+    for key in ("install", "update"):
+        # First the app's own old project goes (it held port 8000, sdep_ca4042c2) …
+        first, *rest = out[key]
+        assert " -p helpdesk-ai " in first["run"] and " down --remove-orphans" in first["run"]
+        assert first["run"].endswith("|| true")
+        # … then everything runs in the resources' project.
+        assert rest and all(f" -p {shared} " in s["run"] and " -p helpdesk-ai " not in s["run"]
+                            for s in rest)
+    assert all(f" -p {shared} " in s["run"] for s in out["teardown"])
+
+
+def test_the_shared_project_is_the_resources_environment_not_the_targets_name():
+    """HelpDesk AI's target is called 'staging' but its resources default to 'deploy': the app
+    joined bossapp-helpdesk-ai-staging while res-db lived in bossapp-helpdesk-ai-deploy."""
+    from boss_engine.platform.contract import ResourceRequest
+
+    assert ResourceRequest(name="db", capability="database.relational").environment == "deploy"
+    assert compose_project_for("helpdesk ai", "deploy") != compose_project_for("helpdesk ai", "staging")
+    src = open(sd.__file__).read()
+    assert "manifest.resources[0].environment" in src  # the plan names the resources' env
 
 
 def test_nothing_changes_without_resources():

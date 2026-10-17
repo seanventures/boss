@@ -9,6 +9,7 @@
   box-shadow: var(--shadow-lg); animation: tpl-in 140ms ease-out both;
 }
 .tpl-sheet[data-wide] { width: min(760px, 100vw); }
+.tpl-sheet[data-page] { width: min(var(--page-max, 1120px), 96vw); }
 @keyframes tpl-in { from { opacity: 0; transform: translateX(18px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { .tpl-sheet { animation: none; } }
 .tpl-sheet-head { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 14px 16px; border-bottom: 1px solid var(--border); }
@@ -188,3 +189,9 @@ details.tpl-fold[open] > summary { margin-bottom: 6px; }
   .tpl-prov-do { grid-column: 1 / -1; }
   .tpl-setup .cap-btn { min-height: 44px; }
 }
+
+/* A provider row is ONE line until opened: name · status · what it needs · Set up. */
+.tpl-prov-line { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0; }
+.tpl-prov-hint { color: var(--muted); flex: 1 1 14rem; min-width: 0; }
+.tpl-prov[data-open] { background: var(--surface-2); }
+.tpl-prov-do code { overflow-wrap: anywhere; white-space: normal; }

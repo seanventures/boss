@@ -83,7 +83,7 @@ export function AppSetupSheet({ projectId, appKey, runId, appName, onClose, tab 
     return () => { alive = false; };
   }, [projectId, appKey, runId]);
   return (
-    <SideSheet title="Setup" sub={appName} onClose={onClose} testId="tpl-setup-sheet" wide>
+    <SideSheet title="Setup" sub={appName} onClose={onClose} testId="tpl-setup-sheet" page>
       {key ? <AppSetup projectId={projectId} appKey={key} initialTab={tab} deployLabel={deployLabel} />
         : <p className="tpl-muted">{missing ? "This app has no finished build yet." : "Loading…"}</p>}
     </SideSheet>
@@ -244,6 +244,8 @@ function ConnectorCardView({ card, ctx }: { card: ConnectorCard; ctx: Ctx }) {
   const guide = ctx.guides.find((g) => g.key === card.key);
   const latest = card.latest;
   const stateWord = APPLIED_WORD[latest.status] ?? latest.status;
+  // ONE PROVIDER OPEN AT A TIME (the approved mockup): every row is one line until "Set up".
+  const [openRow, setOpenRow] = useState<string | null>(null);
   return (
     <article className="tpl-conn" data-testid={`tpl-connector-${card.key}`} aria-labelledby={`tpl-conn-h-${card.key}`}>
       <header className="tpl-conn-head">
@@ -270,7 +272,9 @@ function ConnectorCardView({ card, ctx }: { card: ConnectorCard; ctx: Ctx }) {
           <div className="tpl-prov-head" role="row">
             <span role="columnheader">Provider</span><span role="columnheader">Status</span><span role="columnheader">What to do</span>
           </div>
-          {rows.map((r) => <ProviderRowView key={r.provider} row={r} card={card} guide={guide} ctx={ctx} />)}
+          {rows.map((r) => <ProviderRowView key={r.provider} row={r} card={card} guide={guide} ctx={ctx}
+                                            open={openRow === r.provider}
+                                            onToggle={() => setOpenRow(openRow === r.provider ? null : r.provider)} />)}
           {hasDemo ? (
             <div className="tpl-prov" role="row" data-testid={`tpl-provider-${card.key}-demo`}>
               <span className="tpl-prov-name" role="cell">Demo login</span>
@@ -360,15 +364,39 @@ const STEPS: Record<string, (cb: string) => string[]> = {
 const stepsFor = (provider: string, cb: string) => (STEPS[provider] ?? ((c: string) => [
   `Register an OAuth client at the provider with the callback ${c}.`, "Paste its client ID and secret below."]))(cb);
 
-function ProviderRowView({ row, card, guide, ctx }: { row: ProviderRow; card: ConnectorCard; guide: Guide | undefined; ctx: Ctx }) {
+/** What a closed row says it needs, in a few words. */
+export function providerHint(row: ProviderRow): string {
+  if (row.provider === "boss") {
+    return row.status === "cant_work" ? "BOSS needs a public address first."
+      : "BOSS registers the app — nothing to paste.";
+  }
+  return row.needsYou ? "Needs a client ID and secret." : "Keys saved.";
+}
+
+function ProviderRowView({ row, card, guide, ctx, open, onToggle }: {
+  row: ProviderRow; card: ConnectorCard; guide: Guide | undefined; ctx: Ctx; open: boolean; onToggle: () => void;
+}) {
+  const key = `${card.key}-${row.provider}`;
   return (
-    <div className="tpl-prov" role="row" data-testid={`tpl-provider-${card.key}-${row.provider}`} data-status={row.status}>
+    <div className="tpl-prov" role="row" data-testid={`tpl-provider-${key}`} data-status={row.status} data-open={open || undefined}>
       <span className="tpl-prov-name" role="cell">{row.name}</span>
       <span role="cell">
-        <span className="tpl-chip" data-tone={row.tone} data-testid={`tpl-provider-status-${card.key}-${row.provider}`}>{row.word}</span>
+        <span className="tpl-chip" data-tone={row.tone} data-testid={`tpl-provider-status-${key}`}>{row.word}</span>
       </span>
       <div className="tpl-prov-do" role="cell">
-        {row.provider === "boss" ? <BossDo row={row} ctx={ctx} /> : <OAuthDo row={row} card={card} guide={guide} ctx={ctx} />}
+        <div className="tpl-prov-line">
+          <span className="tpl-prov-hint">{providerHint(row)}</span>
+          <button type="button" className="cap-btn" aria-expanded={open}
+                  aria-controls={`tpl-prov-body-${key}`} data-testid={`tpl-provider-open-${key}`}
+                  onClick={onToggle}>
+            {open ? "Close" : row.needsYou || row.status === "cant_work" ? "Set up" : "Edit"}
+          </button>
+        </div>
+        {open ? (
+          <div id={`tpl-prov-body-${key}`} className="tpl-prov-body">
+            {row.provider === "boss" ? <BossDo row={row} ctx={ctx} /> : <OAuthDo row={row} card={card} guide={guide} ctx={ctx} />}
+          </div>
+        ) : null}
       </div>
     </div>
   );
