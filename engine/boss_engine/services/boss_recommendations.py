@@ -17,6 +17,12 @@ WHERE IT LIVES.
   * The event `boss.recommendation_recorded` on the run, so the run page says it.
 
 Nothing secret enters: every text passes the agent redaction (`redact_for_agent`) first.
+
+NO HOST ADDRESS ENTERS EITHER (self_fix_privacy). A recommendation seeds a self-fix, and a
+self-fix's evidence is what a person may send to the BOSS team: every text is also host-masked
+(IPs, host names, URL hosts, this install's own machines) when it is written, and again when it
+is read, so a row written before the rule (the two real rows held the deploy host's public
+address) is never shown or served with one.
 """
 from __future__ import annotations
 
@@ -40,11 +46,19 @@ MAX_REFS = 25
 MAX_EVIDENCE = 12
 
 
-def _clean(value: Any, limit: int = 2000) -> str:
+def _clean(value: Any, limit: int = 2000, known: tuple[str, ...] = ()) -> str:
     from .agent_baseline import redact_for_agent
+    from .self_fix_privacy import mask_hosts
 
     cleaned = redact_for_agent(str(value or ""))
-    return (cleaned if isinstance(cleaned, str) else str(value or ""))[:limit]
+    cleaned = cleaned if isinstance(cleaned, str) else ""
+    return mask_hosts(cleaned, known)[:limit]
+
+
+def _known(connection: Connection) -> tuple[str, ...]:
+    from .self_fix_privacy import known_hosts
+
+    return tuple(known_hosts(connection))
 
 
 def _json(value: Any, default: Any) -> Any:
@@ -84,6 +98,7 @@ def _record(connection: Connection, *, project_id: str, signature: str, title: s
             proposed_change: str, files: Optional[list[str]], ref: Optional[Mapping[str, Any]],
             actor: str, run_id: Optional[str], boss_version: str) -> dict[str, Any]:
     entry = {**{k: v for k, v in dict(ref or {}).items() if v}, "at": now_utc().isoformat()}
+    known = _known(connection)
     row = connection.execute(
         text("SELECT id, refs, occurrences FROM boss_recommendations WHERE project_id = :p "
              "AND signature = :s FOR UPDATE"), {"p": project_id, "s": signature}
@@ -106,17 +121,18 @@ def _record(connection: Connection, *, project_id: str, signature: str, title: s
              "evidence, root_cause, proposed_change, files, refs, boss_version, created_by) "
              "VALUES (:i, :p, :s, :t, :sy, CAST(:e AS JSONB), :rc, :pc, CAST(:f AS JSONB), "
              "CAST(:r AS JSONB), :v, :by)"),
-        {"i": rec_id, "p": project_id, "s": signature[:300], "t": _clean(title, 300),
-         "sy": _clean(symptom), "e": json.dumps([_clean(e, 600) for e in
-                                                 (evidence or [])[:MAX_EVIDENCE]]),
-         "rc": _clean(root_cause), "pc": _clean(proposed_change, 4000),
-         "f": json.dumps([_clean(f, 300) for f in (files or [])[:20]]),
+        {"i": rec_id, "p": project_id, "s": signature[:300], "t": _clean(title, 300, known),
+         "sy": _clean(symptom, 2000, known),
+         "e": json.dumps([_clean(e, 600, known) for e in (evidence or [])[:MAX_EVIDENCE]]),
+         "rc": _clean(root_cause, 2000, known), "pc": _clean(proposed_change, 4000, known),
+         "f": json.dumps([_clean(f, 300, known) for f in (files or [])[:20]]),
          "r": json.dumps([entry]), "v": boss_version[:80], "by": actor[:120]})
     emit_event(connection, project_id, EVENT, actor, "workflow_run" if run_id else "project",
                run_id or project_id,
                {"recommendation_id": rec_id, "signature": signature[:300],
-                "title": _clean(title, 300), **{k: v for k, v in entry.items() if k != "at"},
-                "sentence": f"Recorded for BOSS's developers: {_clean(title, 200)}"})
+                "title": _clean(title, 300, known),
+                **{k: v for k, v in entry.items() if k != "at"},
+                "sentence": f"Recorded for BOSS's developers: {_clean(title, 200, known)}"})
     return {"id": rec_id, "created": True, "occurrences": 1}
 
 
@@ -128,11 +144,18 @@ def list_recommendations(connection: Connection, project_id: str, *,
              "updated_at FROM boss_recommendations WHERE project_id = :p "
              "AND (CAST(:s AS TEXT) IS NULL OR status = :s) ORDER BY created_at"),
         {"p": project_id, "s": status}).mappings().all()
+    from .self_fix_privacy import mask_value
+
+    known = _known(connection) if rows else ()
     out = []
     for r in rows:
         item = dict(r)
         for key in ("evidence", "files", "refs"):
             item[key] = _json(item.get(key), [])
+        # Masked on read too: a row written before the rule must never be served with an
+        # address (the prose fields only; ids, the signature and the refs are BOSS's own).
+        for key in ("title", "symptom", "root_cause", "proposed_change", "evidence", "files"):
+            item[key] = mask_value(item.get(key), known)
         for key in ("created_at", "updated_at"):
             value = item.get(key)
             item[key] = value.isoformat() if hasattr(value, "isoformat") else value
