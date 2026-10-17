@@ -343,3 +343,137 @@ def test_recovery_is_judged_by_the_monitor_and_the_report_keeps_spend_apart(pg, 
     assert any("Alert fired" in t["what"] for t in rep["timeline"])
     assert any(t["kind"] == "verification" for t in rep["timeline"])
     assert stored == "incident_report"
+
+
+# ── The whole path, through the real runner (the D2 plumbing check) ─────────────────────────
+def test_an_alert_is_answered_end_to_end_by_incident_response(pg, app, monkeypatch):
+    """Alert -> incident.opened -> Incident Response (started by the event) -> investigate
+    (metrics x logs x diff) -> the fix built AS THE APP'S NEXT CHANGE with the brief -> CI ->
+    a person approves the deploy -> recovery judged from BOSS's own scrapes -> the report.
+
+    The build, CI and the deploy are fakes that land finished rows where the runner looks; the
+    monitor, the investigation, the recovery check and the report are real."""
+    from boss_engine.services import event_dispatch, event_subscription_service as subs
+    from boss_engine.services import workflow_capability_runner as runner
+    from boss_engine.services import workflow_catalogue as wc
+    from .test_a_failed_step_stops_the_run import _insert_awaited
+    from .test_every_template_runs_end_to_end import FakeTool, Registry, _drive
+    from .test_workflow_capability_runner import Ctx, _publish, _steps
+
+    eng, pid = pg
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    with eng.begin() as c:
+        tid = _seed(c, pid, app.origin + "/",
+                    releases=[("a" * 40, "crun_root"), ("b" * 40, None)])
+    # the release before the fault was healthy; then the regression
+    app.status, app.body = 200, orders_page(100, 0, 100)
+    _scrape(eng, tid, now - timedelta(minutes=12))
+    app.body = orders_page(300, 0, 300)
+    _scrape(eng, tid, now - timedelta(minutes=10))
+    app.body = orders_page(330, 30, 360)
+    fired = _scrape(eng, tid, now - timedelta(minutes=8))
+    assert fired["alert"]["action"] == "opened"
+
+    monkeypatch.setattr(ir, "_host_for_target", lambda c, t: {"name": "vm"})
+    import boss_engine.services.stack_deploy as sd
+    monkeypatch.setattr(sd, "host_access_for", lambda c, s, h: FakeHost(
+        '{"level":"error","method":"POST","route":"/orders","status":500,'
+        '"exc_type":"TypeError","location":"/app/app/pricing.py:41"}\n' * 4))
+    monkeypatch.setattr(ir, "_github_for", lambda *a, **k: FakeGitHub())
+    # two minutes clear since the fix shipped (it shipped three minutes ago, below)
+    monkeypatch.setattr(ir, "DEFAULT_STABLE_MINUTES", 2)
+    # The stack plan (SSH preflight, approval card) is its own suite; here the deploy is the
+    # tool fake below, which lands the healthy release the recovery is judged from.
+    monkeypatch.setattr(sd, "stack_target_for_deploy", lambda *a, **k: None)
+
+    builds: list[dict] = []
+    with eng.begin() as c:
+        entry = next(e for e in wc.CATALOGUE if e["key"] == "incident_response")
+        spec = wc.entry_spec(entry)
+        _definition, version = _publish(c, pid, "incident_response", spec["steps"],
+                                        spec["entry_step"])
+        c.execute(text("UPDATE workflow_versions SET spec = spec || CAST(:x AS JSONB) "
+                       "WHERE id = :v"),
+                  {"v": version["id"], "x": json.dumps({"more_tests": False,
+                                                       "input_schema": spec["input_schema"]})})
+        c.execute(text("UPDATE workflow_definitions SET active_version_id = :v WHERE id = :d"),
+                  {"v": version["id"], "d": _definition["id"]})
+
+        def code_task(p, args):
+            builds.append(args)
+            run_id = f"crun_fix_{uuid4().hex[:6]}"
+            _insert_awaited(c, p, "code_task_runs", run_id, "completed")
+            c.execute(text("UPDATE code_task_runs SET pull_request_url = :u WHERE id = :i"),
+                      {"u": "https://github.com/acme/sandbox/pull/12", "i": run_id})
+            return {"status": "queued", "run_id": run_id,
+                    "pull_request_url": "https://github.com/acme/sandbox/pull/12"}
+
+        def deploy(p, args):
+            sdep, drn = f"sd_{uuid4().hex[:8]}", f"drn_{uuid4().hex[:8]}"
+            c.execute(text(
+                "INSERT INTO stack_deployments (id, project_id, target_id, repository, ref, "
+                " commit_sha, manifest, status, created_by, created_at, finished_at) VALUES "
+                " (:i, :p, :t, 'acme/sandbox', 'pull/12', :c, CAST(:m AS JSONB), 'healthy', "
+                " 'usr_op', :at, :at)"),
+                {"i": sdep, "p": p, "t": tid, "c": "c" * 40, "at": now - timedelta(minutes=3),
+                 "m": json.dumps({"name": "order-api", "compose_project": "order-api",
+                                  "metrics": {"path": "/metrics", "via": "public"}})})
+            _insert_awaited(c, p, "deployment_runs", drn, "succeeded")
+            return {"status": "planned", "deployment_run_id": drn, "stack_deployment_id": sdep}
+
+        tools = {n: FakeTool(n, h) for n, h in (("create_code_task", code_task),
+                                                ("deploy_app", deploy))}
+        monkeypatch.setattr(runner, "_tool_registry", lambda: Registry(list(tools.values())))
+
+        def ci_passed(_c, _p, _ctx, _inputs):
+            wait_id = f"ciw_{uuid4().hex[:10]}"
+            _insert_awaited(c, pid, "ci_waits", wait_id, "passed")
+            return {"capability": "wait_for_ci", "tool": None, "status": "awaiting",
+                    "await": {"kind": "ci_wait", "id": wait_id}, "ci_wait_id": wait_id,
+                    "ci_status": "passed"}
+        monkeypatch.setattr(runner, "_start_ci_wait", ci_passed)
+
+        # THE ALERT'S OWN EVENT STARTS THE RESPONSE (a subscription; no person in this test)
+        # (this bare test project has no model, repository or release manager: accepted, as an
+        # operator can when setting a subscription up — the readiness refusal is its own test)
+        subs.create_event_subscription(c, pid, "incident.opened", "workflow",
+                                       "incident_response", actor="test",
+                                       config={"start_anyway": ["model", "repository",
+                                                                "role:release_manager"]})
+        event_dispatch.invalidate_subscription_cache(pid)
+        data = c.execute(text("SELECT data FROM events WHERE id = :e"),
+                         {"e": fired["alert"]["event_id"]}).scalar()
+        started = event_dispatch.dispatch_event(
+            c, event_id=fired["alert"]["event_id"], project_id=pid,
+            event_type="incident.opened", actor="monitor", entity_type="incident",
+            entity_id=data["incident_id"], data=data)
+        assert any(s.get("run_id") for s in started), started
+        run_id = next(s["run_id"] for s in started if s.get("kind") == "workflow")
+
+        # recovery: the fixed release serves cleanly, scraped after it shipped
+        app.body = orders_page(30, 0, 30)
+        _scrape(eng, tid, now - timedelta(minutes=2))
+        app.body = orders_page(230, 0, 230)
+        _scrape(eng, tid, now - timedelta(seconds=30))
+        _drive(eng, c, pid, run_id, ticks=30)
+        status = c.execute(text("SELECT status FROM workflow_runs WHERE id = :r"),
+                           {"r": run_id}).scalar()
+        steps = _steps(c, run_id)
+        inc = c.execute(text("SELECT status FROM incidents WHERE id = :i"),
+                        {"i": data["incident_id"]}).scalar()
+        rep = c.execute(text("SELECT payload FROM sre_postmortems WHERE incident_id = :i"),
+                        {"i": data["incident_id"]}).scalar()
+
+    unfinished = {k: (v["status"], v["last_error"]) for k, v in steps.items()
+                  if v["status"] != "succeeded"}
+    assert status == "completed" and not unfinished, (status, unfinished)
+    assert list(steps) == ["investigate", "build", "ci", "report", "deploy", "verify",
+                           "incident_report"]
+    brief = builds[0]["instructions"]
+    assert brief.startswith("INCIDENT FIX") and "pricing.py" in brief
+    assert builds[0].get("extends_run_id") == "crun_root", builds[0]
+    assert any("FAILS on the faulty release" in a for a in builds[0]["acceptance_criteria"])
+    assert inc == "resolved"
+    assert rep["kind"] == "incident_report" and rep["root_cause"]["suspect_commit"] == "b" * 40
+    kinds = [t["kind"] for t in rep["timeline"]]
+    assert {"alert", "deployment", "rca_hypothesis", "verification", "deploy"} <= set(kinds)
