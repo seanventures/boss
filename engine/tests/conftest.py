@@ -125,6 +125,19 @@ def _no_real_cli_model_catalog(monkeypatch):
     monkeypatch.setattr(cli_harness, "_catalog_cache", {}, raising=False)
 
 
+@pytest.fixture(autouse=True)
+def _no_real_recovery_model(monkeypatch):
+    """A failed step's recovery agent (step_recovery) never calls a real model in a test: with
+    no model it answers with BOSS's coded triage, exactly as an install with none connected.
+    A test about the agent's model hands it a stub (monkeypatch `routed_adapter` again)."""
+    from boss_engine.services import step_recovery
+
+    def no_model(*_a, **_k):
+        raise RuntimeError("no recovery model in tests")
+
+    monkeypatch.setattr(step_recovery, "routed_adapter", no_model)
+
+
 def _stub(name: str):
     """A module from tests/e2e/stubs, loaded by path (that folder is not a package)."""
     import importlib.util

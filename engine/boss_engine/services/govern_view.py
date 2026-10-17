@@ -64,6 +64,11 @@ ENFORCED: dict[str, tuple[str, str]] = {
     # Read when a deploy step's deployment fails for the app's reason (deploy_repair.fix_cap):
     # past it, no repair build starts and the step fails for a person.
     "deploy_fix_attempts": ("Each deploy step", "each_deploy_step"),
+    # Read at every recovery decision (step_recovery.enabled / limits): past the budget or the
+    # time, the step's agent asks a person instead of acting.
+    "step_recovery": ("Each failed step", "each_failed_step"),
+    "recovery_budget_cents": ("Each failed step", "each_failed_step"),
+    "recovery_max_minutes": ("Each failed step", "each_failed_step"),
     "max_concurrent_jobs": ("Job queue", "job_queue"),
     "max_workers_total": ("Scaling", "scaling"),
     "token_default": ("Advisory", "advisory"),
@@ -71,7 +76,7 @@ ENFORCED: dict[str, tuple[str, str]] = {
 }
 
 #: The on/off controls (0 or 1), drawn as a switch.
-SWITCHES = frozenset({"captain_leads_projects", "captain_auto_improve"})
+SWITCHES = frozenset({"captain_leads_projects", "captain_auto_improve", "step_recovery"})
 
 #: The four thresholds, as the screen names them (key, label, budget_policies column).
 THRESHOLDS = (

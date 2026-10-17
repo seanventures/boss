@@ -30,7 +30,8 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from ..config import get_settings
-from . import agent_acts, change_record, deploy_repair, step_agents, workflows
+from . import (agent_acts, change_record, deploy_repair, step_agents,
+               step_recovery, workflows)
 from . import workflow_custom_steps as custom_steps
 from .core import emit_event, now_utc
 # Named import so "who approved this" is compared against one constant rather than a
@@ -3068,6 +3069,13 @@ def _perform_capability(
             fixes = _deploy_fixes(before) if redeploy else []
             if redeploy and str(redeploy.get("build_run_id") or ""):
                 inputs = {**inputs, "run_id": str(redeploy["build_run_id"])}
+            # THE RECOVERY LOOP (step_recovery): what it decided last travels with the step —
+            # its history and budget, and for clean_and_retry this app's own earlier releases
+            # to retire as a step of the new deployment (guarded on the host, approved with it).
+            recovery_state = step_recovery.state_of(before)
+            pending = before.get(step_recovery.PENDING_KEY) \
+                if isinstance(before.get(step_recovery.PENDING_KEY), dict) else {}
+            retire = [str(p) for p in pending.get("retire_projects") or [] if p]
             planned = plan_for_workflow_step(
                 ctx.engine, getattr(ctx, "settings", None), project_id=project_id,
                 actor=actor, target=stack_target, inputs=inputs,
@@ -3079,11 +3087,32 @@ def _perform_capability(
                 approval_decision_id=str(context.get("approval_decision_id") or "") or None,
                 # Pass 1's deploy ships the head pass 1 left; "Deploy again" ships pass 2's.
                 commit=(None if (pass_2_of or redeploy) else
-                        pinned_pass_one_commit(connection, run_id)))
+                        pinned_pass_one_commit(connection, run_id)),
+                retire_projects=retire or None)
             if redeploy:
                 planned = {**planned, deploy_repair.FIXES_KEY: fixes,
                            deploy_repair.REDEPLOY_KEY: redeploy}
+            if recovery_state:
+                planned = {**planned, step_recovery.STATE_KEY: recovery_state}
             failure = planned.get("deploy_failure") if planned.get("status") == "failed" else None
+            if failure and run_id and step_id:
+                # REFUSED BEFORE ANYTHING WAS PLANNED (a program the machine lacks, a manifest
+                # that does not fit, a host that needs a person): the deploy step's agent
+                # decides what happens next (step_recovery) — never the operator by default.
+                failure = deploy_repair.failure_of_refusal(
+                    connection, failure, str(inputs.get("run_id") or ""))
+                recovered = _recover_refused_plan(
+                    connection, ctx, project_id=project_id, run_id=run_id, step_id=step_id,
+                    failure=failure, before=before, fixes=fixes, redeploy=redeploy,
+                    base={"tool": None, "stack_target_id": stack_target.get("id"),
+                          "stack_target_name": stack_target.get("app_name")})
+                if recovered is not None and recovered.get("status") == "awaiting":
+                    return recovered
+                if recovered is not None:
+                    planned = {**planned, **recovered,
+                               "error": f"{recovered.get('error') or ''} — "
+                                        f"{planned.get('error') or ''}".strip(" —")}
+                    failure = None
             if deploy_repair.is_app_side(failure) and run_id and step_id:
                 # REFUSED FOR THE APP'S REASON BEFORE ANYTHING WAS PLANNED (a program the
                 # machine lacks, a manifest that does not fit): the app is repaired and the
@@ -3455,17 +3484,16 @@ def _latest_step_output(connection: Connection, project_id: str, run_id: str,
 
 def _start_deploy_fix(
     connection: Connection, ctx: Any, *, project_id: str, run_id: str, step_id: str,
-    failure: dict[str, Any], fixes: list[dict[str, Any]],
+    failure: dict[str, Any], fixes: list[dict[str, Any]], extra_note: str = "",
 ) -> tuple[Optional[dict[str, Any]], str]:
     """Start the repair build for a deploy that failed for the app's reason (deploy_repair).
 
-    Returns (the fix, "") when a build was started, or (None, why not) — the cap is reached, the
-    project turned it off, or the build could not be resumed. WHO STARTS IT: exactly who starts
-    the run's own build — the build step's agent under the run's recorded authority, past the
-    same tool checks (`_retried_build`) — so a repair is never a way around a grant.
+    Returns (the fix, "") when a build was started, or (None, why not) — the ceiling is reached,
+    the project turned it off, or the build could not be resumed. WHO STARTS IT: exactly who
+    starts the run's own build — the build step's agent under the run's recorded authority, past
+    the same tool checks (`_retried_build`) — so a repair is never a way around a grant.
+    `extra_note`: the recovery agent's own precise note (step_recovery), added to BOSS's.
     """
-    from . import code_task_service as cts
-
     settings = getattr(ctx, "settings", None) or get_settings()
     cap = deploy_repair.fix_cap(connection, project_id, settings)
     if cap <= 0:
@@ -3477,10 +3505,36 @@ def _start_deploy_fix(
     build_run_id = str(failure.get("build_run_id") or "")
     if not build_run_id:
         return None, "the deployment names no build to fix"
-    if ctx is None or getattr(ctx, "engine", None) is None or getattr(ctx, "jobs", None) is None:
-        return None, "the repair build could not be started here (no job queue)"
     attempt = len(fixes) + 1
     note = deploy_repair.fix_note(failure, attempt=attempt, cap=cap)
+    if extra_note.strip():
+        note = f"{note}\n\nTHE DEPLOY AGENT'S DIAGNOSIS: {extra_note.strip()}"
+    new_id, why_not = _start_recovery_build(connection, ctx, project_id=project_id,
+                                            run_id=run_id, step_id=step_id,
+                                            build_run_id=build_run_id, note=note)
+    if not new_id:
+        return None, why_not
+    fix = {"attempt": attempt, "build_run_id": new_id, "from_build_run_id": build_run_id,
+           "deployment_id": failure.get("deployment_id"), "phase": failure.get("phase"),
+           "cause": deploy_repair.short_cause(failure), "headline": failure.get("headline"),
+           "host": deploy_repair.where(failure), "started_at": now_utc().isoformat()}
+    emit_event(connection, project_id, deploy_repair.FIX_EVENT, "boss", "workflow_run", run_id,
+               {"step_id": step_id, **{k: v for k, v in fix.items() if k != "started_at"}})
+    return fix, ""
+
+
+def _start_recovery_build(
+    connection: Connection, ctx: Any, *, project_id: str, run_id: str, step_id: str,
+    build_run_id: str, note: str,
+) -> tuple[str, str]:
+    """A new attempt of `build_run_id`'s lineage (code_task_service.retry_code_task), told
+    `note` — started by the run's BUILD step's agent under the run's recorded authority, past
+    the same tool check as any build it starts. Returns (new run id, "") or ("", why not)."""
+    from . import code_task_service as cts
+
+    settings = getattr(ctx, "settings", None) or get_settings()
+    if ctx is None or getattr(ctx, "engine", None) is None or getattr(ctx, "jobs", None) is None:
+        return "", "the repair build could not be started here (no job queue)"
     spec_steps = [s for s in (workflows._run_spec(connection, run_id).get("steps") or [])
                   if isinstance(s, dict)]
     build_step = next((s for s in spec_steps if (s.get("binding") or {}).get("capability")
@@ -3495,23 +3549,17 @@ def _start_deploy_fix(
                              ran_as["agent"]):
             _, refused = _authorize_step_tool(ctx, "create_code_task", project_id, {})
             if refused is not None:
-                return None, str(refused.get("error") or refused.get("message")
-                                 or "the build step's agent may not start a build")
+                return "", str(refused.get("error") or refused.get("message")
+                               or "the build step's agent may not start a build")
             started = cts.retry_code_task(ctx.engine, settings, ctx.jobs, build_run_id,
                                           fix_note=note)
-    except Exception as error:  # noqa: BLE001 — said on the failed step, never a crash
-        log.warning("deploy fix for %s/%s not started: %s", run_id, step_id, error)
-        return None, f"the repair build could not be started ({error})"
+    except Exception as error:  # noqa: BLE001 — said on the step, never a crash
+        log.warning("recovery build for %s/%s not started: %s", run_id, step_id, error)
+        return "", f"the repair build could not be started ({error})"
     new_id = str(started.get("run_id") or "")
     if not new_id:
-        return None, "the repair build returned no run id"
-    fix = {"attempt": attempt, "build_run_id": new_id, "from_build_run_id": build_run_id,
-           "deployment_id": failure.get("deployment_id"), "phase": failure.get("phase"),
-           "cause": deploy_repair.short_cause(failure), "headline": failure.get("headline"),
-           "host": deploy_repair.where(failure), "started_at": now_utc().isoformat()}
-    emit_event(connection, project_id, deploy_repair.FIX_EVENT, "boss", "workflow_run", run_id,
-               {"step_id": step_id, **{k: v for k, v in fix.items() if k != "started_at"}})
-    return fix, ""
+        return "", "the repair build returned no run id"
+    return new_id, ""
 
 
 def _deploy_fix_awaiting(failure: dict[str, Any], fix: dict[str, Any],
@@ -3526,6 +3574,310 @@ def _deploy_fix_awaiting(failure: dict[str, Any], fix: dict[str, Any],
             deploy_repair.FIXES_KEY: [*fixes, fix], "note": note,
             "deploy_failure": {k: v for k, v in failure.items()
                                if k not in ("manifest_text", "log_tail", "steps")}}
+
+
+# ── THE RECOVERY AGENT (step_recovery): a failed step's own agent decides what happens next ──
+
+def _recovery_begin(connection: Connection, ctx: Any, *, project_id: str, run_id: str,
+                    step_id: str, kind: str, output: Any, evidence: dict[str, Any]
+                    ) -> Optional[tuple[dict[str, Any], dict[str, Any], dict[str, str]]]:
+    """(the decision, the step's recovery state, the agent) — or None when recovery is off for
+    the project, the kind is not recoverable, or there is no worker context to act in."""
+    if ctx is None or kind not in step_recovery.KINDS:
+        return None
+    settings = getattr(ctx, "settings", None) or get_settings()
+    if not step_recovery.enabled(connection, settings, project_id):
+        return None
+    state = step_recovery.state_of(output)
+    if not state.get("started_at"):
+        state = step_recovery.open_window(state)
+    elif step_recovery.last_decision(state).get("action") == step_recovery.ASK_PERSON:
+        # A NEW FAILURE AFTER A PERSON WAS ASKED means a person retried (or BOSS was updated):
+        # a fresh window — the budget, the clock and the per-cause rule start again.
+        state = step_recovery.open_window(
+            state, why="the step was run again after a person was asked")
+    spec_step = workflows._step_map(workflows._run_spec(connection, run_id)).get(step_id) or {}
+    agent = step_recovery.agent_of(connection, project_id, spec_step)
+    entry = step_recovery.decide(connection, settings, project_id=project_id, run_id=run_id,
+                                 step_id=step_id, kind=kind, evidence=evidence, state=state,
+                                 agent=agent)
+    return entry, state, agent
+
+
+def _park_for_recovery(connection: Connection, project_id: str, step_run_id: str,
+                       handle: dict[str, Any], merge: dict[str, Any]) -> None:
+    """A WAITING step now waits on what its recovery decided (a repair build, a backoff, a BOSS
+    update): its await handle replaced, the decision merged onto its output."""
+    connection.execute(
+        text("UPDATE workflow_step_runs SET output = (COALESCE(output, '{}'::jsonb) - 'await') "
+             "|| CAST(:o AS JSONB), updated_at = now() WHERE id = :i AND project_id = :p "
+             "AND status = 'waiting'"),
+        {"i": step_run_id, "p": project_id,
+         "o": json.dumps({**merge, "await": handle}, default=str)})
+
+
+def _build_fix_note(failure: dict[str, Any], entry: dict[str, Any]) -> str:
+    """The brief of a build the recovery agent starts again: what failed, and what to change."""
+    why = str(failure.get("why") or failure.get("error") or "").strip()
+    lines = [f"THE LAST ATTEMPT OF THIS BUILD FAILED ({str(failure.get('status') or 'failed')})."
+             f" {entry.get('agent') or 'BOSS'}, the step's agent, started this attempt."]
+    if why:
+        lines.append(f"Why it ended: {why[:1500]}")
+    if entry.get("note"):
+        lines.append(f"What to change: {entry['note']}")
+    elif entry.get("action") == step_recovery.RETRY:
+        lines.append("The cause looked transient: build it again as it was, keeping the work.")
+    return "\n\n".join(lines)
+
+
+def _recover_refused_plan(
+    connection: Connection, ctx: Any, *, project_id: str, run_id: str, step_id: str,
+    failure: dict[str, Any], before: dict[str, Any], fixes: list[dict[str, Any]],
+    redeploy: Optional[dict[str, Any]], base: dict[str, Any],
+) -> Optional[dict[str, Any]]:
+    """The recovery decision for a deploy whose PLAN was refused, inside the deploy capability.
+    Returns the step's output: `awaiting` (a repair build, a backoff, a BOSS update) or a
+    SETTLED failure with the agent's one question — or None when recovery is off."""
+    settings = getattr(ctx, "settings", None) or get_settings()
+    evidence = step_recovery.deploy_evidence(connection, settings, failure)
+    began = _recovery_begin(connection, ctx, project_id=project_id, run_id=run_id,
+                            step_id=step_id, kind="deploy", output=before, evidence=evidence)
+    if began is None:
+        return None
+    entry, state, agent = began
+    action = entry["action"]
+    carry = {**base, "capability": "deploy", step_recovery.STATE_KEY: state,
+             "note": entry["sentence"],
+             "deploy_failure": {k: v for k, v in failure.items()
+                                if k not in ("manifest_text", "log_tail", "steps")},
+             **({deploy_repair.FIXES_KEY: fixes, deploy_repair.REDEPLOY_KEY: redeploy}
+                if redeploy else {})}
+    why_not = ""
+    if action == step_recovery.FIX_APP:
+        fix, why_not = _start_deploy_fix(
+            connection, ctx, project_id=project_id, run_id=run_id, step_id=step_id,
+            failure=failure, fixes=fixes, extra_note=str(entry.get("note") or ""))
+        if fix is not None:
+            state["build_ids"] = [*state.get("build_ids", []), fix["build_run_id"]]
+            waiting = _deploy_fix_awaiting(failure, fix, fixes, base=base)
+            return {**waiting, step_recovery.STATE_KEY: state,
+                    "note": f"{agent.get('name') or 'BOSS'}: {waiting['note']}"}
+    elif action in (step_recovery.RETRY, step_recovery.CLEAN_AND_RETRY):
+        return {**carry, "status": "awaiting",
+                "await": step_recovery.run_again_handle(entry, kind="deploy")}
+    elif action == step_recovery.WAIT_FOR_BOSS:
+        rec = step_recovery.recommend_boss_fix(connection, settings, project_id=project_id,
+                                               run_id=run_id, step_id=step_id, entry=entry,
+                                               evidence=evidence)
+        return {**carry, "status": "awaiting", "boss_recommendation_id": rec.get("id"),
+                "await": step_recovery.boss_update_handle(entry, kind="deploy")}
+    if why_not:
+        entry = step_recovery.record_ask(
+            connection, project_id=project_id, run_id=run_id, step_id=step_id, state=state,
+            agent=agent, failure=failure, reason=why_not,
+            signature=str(entry.get("signature") or ""))
+    # SETTLED: the same commit is refused the same way on every retry; a person decides now.
+    return {step_recovery.STATE_KEY: state, "note": entry["sentence"], SETTLED_FAILURE: True,
+            "recovery_question": entry.get("question"), "error": step_recovery.ask_error(entry),
+            **({"recovery_resume_on_update": step_recovery.boss_build()}
+               if step_recovery.resumes_on_update(entry, failure) else {})}
+
+
+def _recover_awaited(
+    connection: Connection, ctx: Any, *, project_id: str, run_id: str, step: Any,
+    output: dict[str, Any], handle: dict[str, Any], kind: str, failure: dict[str, Any],
+    evidence: dict[str, Any],
+) -> Optional[dict[str, Any]]:
+    """Run one recovery decision for a WAITING step whose awaited work failed, and carry it out.
+
+    Returns None (recovery is off: the caller fails the step as before), {"done": …} when the
+    step now waits on what was decided, or {"ask": the error's words, "output": …} for the
+    caller to fail the step for a person, with the agent's one question."""
+    step_id = str(step["step_id"])
+    began = _recovery_begin(connection, ctx, project_id=project_id, run_id=run_id,
+                            step_id=step_id, kind=kind, output=output, evidence=evidence)
+    if began is None:
+        return None
+    entry, state, agent = began
+    action = entry["action"]
+    done = {"run_id": run_id, "step_id": step_id, "awaited": "recovery", "action": action,
+            "decision": entry.get("n")}
+    why_not = ""
+    if action == step_recovery.FIX_APP and kind == "deploy":
+        fixes = _deploy_fixes(output)
+        fix, why_not = _start_deploy_fix(
+            connection, ctx, project_id=project_id, run_id=run_id, step_id=step_id,
+            failure=failure, fixes=fixes, extra_note=str(entry.get("note") or ""))
+        if fix is not None:
+            state["build_ids"] = [*state.get("build_ids", []), fix["build_run_id"]]
+            waiting = _deploy_fix_awaiting(failure, fix, fixes, base=output)
+            _park_for_recovery(connection, project_id, step["id"], waiting["await"], {
+                deploy_repair.FIXES_KEY: waiting[deploy_repair.FIXES_KEY],
+                "deploy_failure": waiting["deploy_failure"],
+                "code_task_run_id": fix["build_run_id"],
+                "note": f"{agent.get('name') or 'BOSS'}: {waiting['note']}",
+                step_recovery.STATE_KEY: state})
+            return {"done": {**done, "outcome": "fixing_the_app", "now": fix["build_run_id"]}}
+    elif action in (step_recovery.FIX_APP, step_recovery.RETRY) and kind != "deploy":
+        build_run_id = str(failure.get("build_run_id") or "")
+        new_id, why_not = _start_recovery_build(
+            connection, ctx, project_id=project_id, run_id=run_id, step_id=step_id,
+            build_run_id=build_run_id, note=_build_fix_note(failure, entry)) \
+            if build_run_id else ("", "the step names no build to start again")
+        if new_id:
+            state["build_ids"] = [*state.get("build_ids", []), new_id]
+            follow = {"kind": "code_task", "id": new_id,
+                      **({"then": handle.get("then"), "attempt": handle.get("attempt")}
+                         if handle.get("then") == deploy_repair.THEN_REDEPLOY else {})}
+            _park_for_recovery(connection, project_id, step["id"], follow, {
+                "code_task_run_id": new_id, "note": entry["sentence"],
+                step_recovery.STATE_KEY: state})
+            return {"done": {**done, "outcome": "building_again", "now": new_id}}
+    elif action in (step_recovery.RETRY, step_recovery.CLEAN_AND_RETRY):
+        _park_for_recovery(connection, project_id, step["id"],
+                           step_recovery.run_again_handle(entry, kind=kind),
+                           {"note": entry["sentence"], step_recovery.STATE_KEY: state})
+        return {"done": {**done, "outcome": "will_run_again"}}
+    elif action == step_recovery.WAIT_FOR_BOSS:
+        settings = getattr(ctx, "settings", None) or get_settings()
+        rec = step_recovery.recommend_boss_fix(connection, settings, project_id=project_id,
+                                               run_id=run_id, step_id=step_id, entry=entry,
+                                               evidence=evidence)
+        _park_for_recovery(connection, project_id, step["id"],
+                           step_recovery.boss_update_handle(
+                               entry, kind=kind,
+                               build_run_id=str(failure.get("build_run_id") or "") or None),
+                           {"note": entry["sentence"], step_recovery.STATE_KEY: state,
+                            "boss_recommendation_id": rec.get("id")})
+        return {"done": {**done, "outcome": "waiting_for_boss",
+                         "recommendation": rec.get("id")}}
+    if why_not:
+        entry = step_recovery.record_ask(
+            connection, project_id=project_id, run_id=run_id, step_id=step_id, state=state,
+            agent=agent, failure=failure, reason=why_not,
+            signature=str(entry.get("signature") or ""))
+    extra: dict[str, Any] = {step_recovery.STATE_KEY: state, "note": entry["sentence"],
+                             "recovery_question": entry.get("question")}
+    if step_recovery.resumes_on_update(entry, failure):
+        extra["recovery_resume_on_update"] = step_recovery.boss_build()
+    return {"ask": step_recovery.ask_error(entry), "output": extra}
+
+
+def _recover_build_step(
+    connection: Connection, ctx: Any, *, project_id: str, run_id: str, step: Any,
+    output: dict[str, Any], handle: dict[str, Any], build_run_id: str, status: str, why: str,
+) -> Optional[dict[str, Any]]:
+    """A build the step waited on failed (or finished without passing): the step's agent
+    decides (step_recovery). A deploy step's own repair build is `deploy_repair`; a build step
+    is `build`; any other step that waits on a build is not recovered here."""
+    if ctx is None or not build_run_id:
+        return None
+    if handle.get("then") == deploy_repair.THEN_REDEPLOY:
+        kind = "deploy_repair"
+    else:
+        spec_step = workflows._step_map(workflows._run_spec(connection, run_id)).get(
+            str(step["step_id"])) or {}
+        capability = str((spec_step.get("binding") or {}).get("capability") or "")
+        if capability not in ("build", "retry_build"):
+            return None
+        kind = "build"
+    if status == "cancelled":
+        return None  # somebody stopped it: never started again by itself
+    evidence = step_recovery.build_evidence(connection, build_run_id, why)
+    failure = {**evidence["failure"], "build_run_id": build_run_id}
+    evidence["failure"] = failure
+    return _recover_awaited(connection, ctx, project_id=project_id, run_id=run_id, step=step,
+                            output=output, handle=handle, kind=kind, failure=failure,
+                            evidence=evidence)
+
+
+def _resume_recovery(connection: Connection, ctx: Any, *, project_id: str, run_id: str,
+                     step: Any, output: dict[str, Any], handle: dict[str, Any]
+                     ) -> Optional[dict[str, Any]]:
+    """A step the recovery loop parked, whose wait is over (its backoff passed, or BOSS was
+    updated): a deploy step is queued to plan again (with this app's earlier releases to retire,
+    for clean_and_retry); a build step starts its build again."""
+    step_id = str(step["step_id"])
+    state = step_recovery.state_of(output)
+    updated = handle.get("then") == step_recovery.THEN_BOSS_UPDATE
+    if updated:
+        state = step_recovery.open_window(
+            state, why=f"BOSS was updated (now {step_recovery.boss_build()})")
+    agent = state.get("agent") or "BOSS"
+    retiring = bool(handle.get("retire_projects"))
+    note = (f"{agent}: BOSS was updated — trying again" if updated else
+            f"{agent}: retiring this app's earlier release and deploying again" if retiring else
+            f"{agent}: trying again")
+    kind = str(handle.get("step_kind") or "deploy")
+    if kind == "deploy":
+        workflows.requeue_waiting_step(
+            connection, project_id=project_id, step_run_id=step["id"],
+            output={step_recovery.PENDING_KEY: {
+                        "action": handle.get("action") or step_recovery.RETRY,
+                        "retire_projects": list(handle.get("retire_projects") or []),
+                        "decision": handle.get("decision")},
+                    step_recovery.STATE_KEY: state, "note": note},
+            event=step_recovery.RESUMED_EVENT,
+            data={"why": "boss_updated" if updated else "backoff_over", "sentence": note,
+                  **({"retire_projects": handle["retire_projects"]} if retiring else {})})
+        return {"run_id": run_id, "step_id": step_id, "outcome": "running_again",
+                "awaited": "recovery", "why": "boss_updated" if updated else "backoff_over"}
+    build_run_id = str(handle.get("build_run_id") or "")
+    new_id, why_not = _start_recovery_build(
+        connection, ctx, project_id=project_id, run_id=run_id, step_id=step_id,
+        build_run_id=build_run_id,
+        note=("BOSS was updated since this build failed for a cause BOSS placed on itself "
+              f"({handle.get('signature') or 'BOSS-side'}). Build it again as it was.")) \
+        if build_run_id else ("", "no build to start again")
+    if not new_id:
+        workflows.force_fail_waiting_step(
+            connection, project_id=project_id, step_run_id=step["id"],
+            error=f"BOSS was updated, but the build could not be started again: {why_not}"[:500],
+            output={step_recovery.STATE_KEY: state})
+        return {"run_id": run_id, "step_id": step_id, "outcome": "failed", "because": why_not}
+    state["build_ids"] = [*state.get("build_ids", []), new_id]
+    _park_for_recovery(connection, project_id, step["id"],
+                       {"kind": "code_task", "id": new_id,
+                        **({"then": deploy_repair.THEN_REDEPLOY} if kind == "deploy_repair"
+                           else {})},
+                       {"code_task_run_id": new_id, "note": note,
+                        step_recovery.STATE_KEY: state})
+    emit_event(connection, project_id, step_recovery.RESUMED_EVENT, "boss", "workflow_run",
+               run_id, {"step_id": step_id, "why": "boss_updated", "build_run_id": new_id,
+                        "sentence": note})
+    return {"run_id": run_id, "step_id": step_id, "outcome": "building_again",
+            "awaited": "recovery", "now": new_id}
+
+
+def _revive_after_boss_update(connection: Connection, *, project_id: str, run_id: str,
+                              step: Any, output: dict[str, Any]) -> list[dict[str, Any]]:
+    """A FAILED step whose agent asked a person about a cause BOSS placed on itself or on the
+    host: when BOSS's build changes, the step is tried again by itself (retry_failed_step, the
+    one Try again) — a BOSS fix may be all it needed."""
+    marked = str(output.get("recovery_resume_on_update") or "")
+    if not marked or marked == step_recovery.boss_build():
+        return []
+    state = step_recovery.state_of(output)
+    point = connection.begin_nested()
+    try:
+        connection.execute(
+            text("UPDATE workflow_step_runs SET output = output - 'recovery_resume_on_update' "
+                 "WHERE id = :i"), {"i": step["id"]})
+        workflows.retry_failed_step(
+            connection, project_id=project_id, run_id=run_id, step_id=str(step["step_id"]),
+            actor=str(state.get("role") or "boss"),
+            note="BOSS was updated since this step failed; trying it again by itself.")
+        point.commit()
+    except Exception as error:  # noqa: BLE001 — a person's Retry still works
+        point.rollback()
+        log.info("step %s/%s not revived after the update: %s", run_id, step["step_id"], error)
+        return []
+    emit_event(connection, project_id, step_recovery.RESUMED_EVENT, "boss", "workflow_run",
+               run_id, {"step_id": step["step_id"], "why": "boss_updated",
+                        "sentence": f"{state.get('agent') or 'BOSS'}: BOSS was updated — "
+                                    "trying the step again"})
+    return [{"run_id": run_id, "step_id": step["step_id"],
+             "outcome": "revived_after_update"}]
 
 
 def _security_step(connection: Connection, ctx: Any, project_id: str, key: str,
@@ -4235,8 +4587,21 @@ def resume_awaited(
                 done.append({"run_id": run_id, "step_id": step["step_id"],
                              "outcome": "following_retry", "awaited": kind,
                              "was": awaited_id, "now": successor})
+            elif output.get("recovery_resume_on_update"):  # retried after a BOSS update
+                done.extend(_revive_after_boss_update(connection, project_id=project_id,
+                                                      run_id=run_id, step=step, output=output))
             continue
 
+        if kind == step_recovery.AWAIT_KIND:
+            # PARKED BY THE RECOVERY LOOP: a backoff, or a BOSS update. Nothing moves without a
+            # worker context (a revival sweep), and nothing before its wait is over.
+            if ctx is not None and step_recovery.due(handle):
+                resumed = _resume_recovery(connection, ctx, project_id=project_id,
+                                           run_id=run_id, step=step, output=output,
+                                           handle=handle)
+                if resumed:
+                    done.append(resumed)
+            continue
         table_spec = _AWAIT_TABLES.get(kind)
         if not table_spec or not awaited_id:
             # A step waiting for a timer, a gate or a subworkflow. Those have their own
@@ -4292,12 +4657,23 @@ def resume_awaited(
                                               step=step, output=output, status=status,
                                               why=str(not_passed), done=done):
                     continue
+                recovered = _recover_build_step(
+                    connection, ctx, project_id=project_id, run_id=run_id, step=step,
+                    output=output, handle=handle, build_run_id=awaited_id, status=status,
+                    why=str(not_passed))
+                if recovered and recovered.get("done"):
+                    done.append(recovered["done"])
+                    continue
+                said = _both_causes(output, handle, awaited_id, str(not_passed))
+                if recovered:
+                    said = f"{recovered['ask']} — {said}"
                 workflows.force_fail_waiting_step(
                     connection, project_id=project_id, step_run_id=step["id"],
-                    error=_both_causes(output, handle, awaited_id, str(not_passed))[:500],
+                    error=said[:500],
                     output={**output, "status": "failed", "awaited_status": status,
                             "reached_before_failing": _evidence_quietly(
-                                connection, kind, awaited_id)},
+                                connection, kind, awaited_id),
+                            **((recovered or {}).get("output") or {})},
                 )
                 done.append({"run_id": run_id, "step_id": step["step_id"],
                              "outcome": "failed", "awaited": kind, "awaited_status": status,
@@ -4395,10 +4771,33 @@ def resume_awaited(
                 why = ("the release was not approved — the stack deployment's decision is this "
                        "step's approval, and it was answered no. Nothing was deployed.")
             refused_fix = ""
+            recovered = None
             if kind == "stack_deployment" and status == "failed":
-                # FIX AND REDEPLOY: failed for the APP's reason → a repair build of the app, and
-                # this step waits on it (deploy_repair). A person's "no" is `rejected`, never
-                # here; a failure BOSS did not place on the app stays a person's.
+                # THE DEPLOY STEP'S AGENT DECIDES (step_recovery): retry, fix the app, clean this
+                # app's earlier release, wait for a BOSS fix, or ask a person ONE question. A
+                # person's "no" is `rejected`, never here.
+                failure = deploy_repair.failure_of_deployment(connection, awaited_id)
+                if failure:
+                    settings_ = getattr(ctx, "settings", None) or get_settings()
+                    recovered = _recover_awaited(
+                        connection, ctx, project_id=project_id, run_id=run_id, step=step,
+                        output=output, handle=handle, kind="deploy", failure=failure,
+                        evidence=step_recovery.deploy_evidence(connection, settings_, failure)
+                    ) if ctx is not None else None
+                    if recovered and recovered.get("done"):
+                        done.append(recovered["done"])
+                        continue
+            elif kind == "code_task":
+                recovered = _recover_build_step(
+                    connection, ctx, project_id=project_id, run_id=run_id, step=step,
+                    output=output, handle=handle, build_run_id=awaited_id, status=status,
+                    why=str(why or ""))
+                if recovered and recovered.get("done"):
+                    done.append(recovered["done"])
+                    continue
+            if kind == "stack_deployment" and status == "failed" and recovered is None:
+                # FIX AND REDEPLOY with the recovery agent OFF: failed for the APP's reason → a
+                # repair build of the app, and this step waits on it (deploy_repair).
                 failure = deploy_repair.failure_of_deployment(connection, awaited_id)
                 if deploy_repair.is_app_side(failure) and ctx is not None:
                     fixes = _deploy_fixes(output)
@@ -4427,6 +4826,15 @@ def resume_awaited(
                            f"{deploy_repair.fixes_sentence(fixes)})")
                 if refused_fix:
                     why = f"{why or 'it failed'}. BOSS did not fix it by itself: {refused_fix}"
+            if kind == "stack_deployment" and status == "failed" and recovered:
+                fixes = _deploy_fixes(output)
+                if fixes:
+                    why = (f"{why or 'it failed'} (after {len(fixes)} automatic fix"
+                           f"{'es' if len(fixes) != 1 else ''}: "
+                           f"{deploy_repair.fixes_sentence(fixes)})")
+            if recovered and recovered.get("ask"):
+                # THE QUESTION FIRST: it is what the person reading the failure must answer.
+                why = f"{recovered['ask']} — {(why or 'it failed').rstrip('.')}"
             if kind == "code_task" and handle.get("then") == deploy_repair.THEN_REDEPLOY:
                 why = _both_causes(output, handle, awaited_id,
                                    f"finished as '{status}'" + (f" — {why}" if why else ""))
@@ -4456,7 +4864,8 @@ def resume_awaited(
                         # "Skip and proceed" on it: skipping would turn the refusal into a yes.
                         **({REJECTED_BY_APPROVER: True}
                            if kind in ("stack_deployment", "architecture")
-                           and status == "rejected" else {})},
+                           and status == "rejected" else {}),
+                        **((recovered or {}).get("output") or {})},
             )
             done.append({"run_id": run_id, "step_id": step["step_id"],
                          "outcome": "failed", "awaited": kind, "awaited_status": status,
@@ -5519,7 +5928,8 @@ def projects_with_work(connection: Connection, asked: str) -> list[str]:
                    OR (r.status = 'failed' AND EXISTS (
                          SELECT 1 FROM workflow_step_runs s
                          WHERE s.workflow_run_id = r.id AND s.status = 'failed'
-                           AND s.output->'await'->>'kind' = 'code_task')))
+                           AND (s.output->'await'->>'kind' = 'code_task'
+                                OR s.output ? 'recovery_resume_on_update'))))
             ORDER BY r.project_id
             LIMIT 50
             """
@@ -5581,7 +5991,10 @@ def tick(
               AND EXISTS (
                     SELECT 1 FROM workflow_step_runs s
                     WHERE s.workflow_run_id = r.id AND s.status = 'failed'
-                      AND s.output->'await'->>'kind' = 'code_task'
+                      AND (s.output->'await'->>'kind' = 'code_task'
+                           -- asked a person about a cause BOSS placed on itself or the host:
+                           -- revived when BOSS's build changes (step_recovery)
+                           OR s.output ? 'recovery_resume_on_update')
               )
             ORDER BY r.updated_at DESC
             LIMIT 20

@@ -178,7 +178,7 @@ def test_a_missing_runtime_is_refused_before_the_host_is_touched_then_fixed_and_
     assert len(repairs) == 1 and repairs[0]["from"] == build
     note = repairs[0]["note"]
     for said in ("has no `npm`", "Docker", "has no node, npm", "kind: compose",
-                 "npm install --no-audit", "automatic fix 1 of 2"):
+                 "npm install --no-audit", "automatic fix 1 of 4"):
         assert said in note, said
 
     step = _step(engine, run_id)
@@ -186,8 +186,9 @@ def test_a_missing_runtime_is_refused_before_the_host_is_touched_then_fixed_and_
     handle = step["output"]["await"]
     assert handle == {"kind": "code_task", "id": repairs[0]["run_id"],
                       "then": deploy_repair.THEN_REDEPLOY, "attempt": 1}
-    assert step["output"]["note"] == (
-        f"Deploy failed: `npm` missing on 203.0.113.40 → fixing the app "
+    # Said by the deploy step's own agent (step_recovery), with the build it started.
+    assert step["output"]["note"].endswith(
+        f": Deploy failed: `npm` missing on 203.0.113.40 → fixing the app "
         f"(build {repairs[0]['run_id']}) → redeploying")
     assert [f["build_run_id"] for f in step["output"]["deploy_fixes"]] == [repairs[0]["run_id"]]
     assert _events(engine, run_id, deploy_repair.FIX_EVENT)

@@ -60,7 +60,30 @@ KNOBS: dict[str, dict[str, Any]] = {
         "help": "When a workflow's deploy fails because of the app (a runtime the machine lacks, "
                 "the app's own install or health error), how many times BOSS fixes the app and "
                 "deploys again by itself. 0: never, a person decides.",
-        "kind": "int", "min": 0, "max": 5,
+        "kind": "int", "min": 0, "max": 10,
+    },
+    # THE RECOVERY AGENT (step_recovery.py): a failed deploy or build step is recovered by the
+    # step's own agent until it succeeds or the window's budget is spent.
+    "step_recovery": {
+        "attr": "step_recovery",
+        "label": "Agents recover failed steps",
+        "help": "When a deploy or build step fails, its agent reads the evidence and decides: "
+                "retry, fix the app, clean this app's earlier release, wait for a BOSS fix, or "
+                "ask you one question. 1 on, 0 to send every failure to a person.",
+        "kind": "int", "min": 0, "max": 1,
+    },
+    "recovery_budget_cents": {
+        "attr": "recovery_budget_cents",
+        "label": "Recovery budget (cents)",
+        "help": "The most one failed step's recovery may spend before it asks you: the agent's "
+                "model turns plus the repair builds it starts. A Retry starts a new budget.",
+        "kind": "int", "min": 0, "max": 10000,
+    },
+    "recovery_max_minutes": {
+        "attr": "recovery_max_minutes",
+        "label": "Recovery time (minutes)",
+        "help": "How long one failed step's recovery may go on before it asks you.",
+        "kind": "int", "min": 5, "max": 1440,
     },
     # THE MODEL PRE-CHECK at the start door (workflow_precheck_agent.py). OFF unless turned on:
     # it is a model call, so it costs money and time on every start it runs at.
