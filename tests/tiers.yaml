@@ -17,6 +17,12 @@ P0:
     - engine/tests/test_identity_audit_redaction.py
     # The public tree names no private host, network, project or home directory
     - engine/tests/test_the_public_tree_names_no_private_infrastructure.py
+    # BOSS fixes itself (BOSSAPP-571): a self-fix never touches a protected path or symbol, never
+    # weakens a test, and a recommendation never holds a host address
+    - engine/tests/test_a_self_fix_never_touches_a_protected_path.py
+    - engine/tests/test_protected_symbols_still_exist.py
+    - engine/tests/test_a_self_fix_never_weakens_a_test.py
+    - engine/tests/test_a_recommendation_never_holds_a_host_address.py
     # Sandbox and network fence
     - engine/tests/test_identity_f1_sandbox_boundary.py
     - engine/tests/test_sandbox_network_fence.py
