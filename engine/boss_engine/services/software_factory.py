@@ -2489,6 +2489,15 @@ class SoftwareFactoryService:
             from ..multirepo import change_sets as _change_sets
 
             _change_sets.mark_single(connection, branch_name.rsplit("/", 1)[-1], "merged")
+        # THE BUILD'S OWN RECORD OF ITS MERGE (pr_merge): the sha, so every reader says "merged"
+        # from the merge itself, never from the approval that asked for it.
+        from .pr_merge import record_for_pull_request as _record_merge
+
+        try:
+            with connection.begin_nested():
+                _record_merge(connection, project_id, pull_request_url, merge.sha, source="boss")
+        except Exception:  # noqa: BLE001 — the merge_result artifact still records it
+            pass
         follow_on_decision_id = self._mark_merge_completed(
             connection,
             project_id,

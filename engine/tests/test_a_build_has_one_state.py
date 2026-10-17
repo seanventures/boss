@@ -98,13 +98,24 @@ def test_a_cancelled_run_with_a_pr_is_cancelled():
     assert s["state"] == "cancelled"
 
 
-@pytest.mark.parametrize("dstatus,expected", [("pending", "pr_open"), ("approved", "merged"),
-                                              ("executed", "merged")])
-def test_pr_open_then_merged(dstatus, expected):
-    r = run("completed", "done", pull_request_url="https://x/pull/842", pull_request_number=842)
+@pytest.mark.parametrize("dstatus,merged_sha,run_merge,expected,word", [
+    ("pending", "", None, "pr_open", "PR open"),
+    # PR #229: an APPROVED merge question with no merge behind it is still an open PR.
+    ("approved", "", None, "pr_open", "Approved · not merged"),
+    ("executed", "", None, "pr_open", "Approved · not merged"),
+    # Merged only from a real merge: BOSS's merge job's sha, or the run's recorded merge.
+    ("executed", "abc123", None, "merged", "Merged"),
+    ("approved", "", {"sha": "def456", "source": "github"}, "merged", "Merged"),
+    ("pending", "", {"sha": "def456", "source": "github"}, "merged", "Merged"),
+])
+def test_pr_open_then_merged(dstatus, merged_sha, run_merge, expected, word):
+    r = run("completed", "done", pull_request_url="https://x/pull/842", pull_request_number=842,
+            fctx={"merge": run_merge} if run_merge else None)
     decision = {"id": "d", "status": dstatus, "recommendation": {"action": "review_pull_request"},
-                "deadline_at": None, "default_action": "hold", "risk_tier": 1}
-    assert state(r, decision=decision)["state"] == expected
+                "deadline_at": None, "default_action": "hold", "risk_tier": 1,
+                **({"merged_sha": merged_sha} if merged_sha else {})}
+    got = state(r, decision=decision)
+    assert (got["state"], got["word"]) == (expected, word)
 
 
 def test_deployed_and_done_no_pr():

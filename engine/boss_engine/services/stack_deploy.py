@@ -2956,6 +2956,24 @@ def plan_for_workflow_step(engine, settings: Settings, *, project_id: str, actor
     ref = f"pull/{int(run['pull_request_number'])}"
     if commit and _SHA.match(str(commit)):
         ref = str(commit)
+    # NEVER AN UNMERGED BRANCH AS IF MERGED (pr_merge, PR #229): this ships the pull request's
+    # head; whether that change is merged comes from GitHub or a recorded merge, and when it is
+    # not — above all a merge approval that asked for a MANUAL merge — the step says so plainly.
+    from . import pr_merge
+
+    with engine.begin() as connection:
+        merge = pr_merge.observe(connection, settings, project_id, run_id)
+        unmerged = pr_merge.sentence(merge)
+        if unmerged:
+            from .core import emit_event
+
+            emit_event(connection, project_id, "workflow.deploy_unmerged", actor,
+                       "workflow_run", str(workflow_run_id or ""),
+                       {"code_task_run_id": run_id, "step_id": step_id,
+                        "pull_request_number": merge.get("number"),
+                        "merge_state": merge.get("state"),
+                        "manual_merge_pending": bool(merge.get("manual")),
+                        "said": unmerged})
     try:
         deployment = plan_stack_deploy(
             engine, settings, project_id=project_id, target_id=target["id"],
@@ -2993,7 +3011,10 @@ def plan_for_workflow_step(engine, settings: Settings, *, project_id: str, actor
         "stack_target_name": target.get("app_name"),
         "stack_host": (deployment.get("preflight") or {}).get("host"),
         **({"approver_role": approver_role} if approver_role else {}),
-        "note": planned_note(deployment, target.get("app_name")),
+        "merge": {k: v for k, v in merge.items() if k != "unread"},
+        **({"manual_merge_pending": True} if merge.get("manual") else {}),
+        "note": " ".join(p for p in (unmerged, planned_note(deployment, target.get("app_name")))
+                         if p),
     }
 
 

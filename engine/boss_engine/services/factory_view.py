@@ -699,6 +699,12 @@ def load_facts(connection: Any, project_id: str, runs: list[Mapping[str, Any]], 
             item = dict(row)
             item["recommendation"] = _j(item.get("recommendation"), {}) or {}
             facts.decisions[str(row["id"])] = item
+        # THE MERGES BOSS PERFORMED, by merge question (pr_merge): what makes a PR "merged".
+        from .pr_merge import merged_shas
+
+        for did, sha in merged_shas(connection, project_id, decision_ids).items():
+            if did in facts.decisions:
+                facts.decisions[did]["merged_sha"] = sha
     for row in connection.execute(
         text("SELECT DISTINCT ON (run_id) id, run_id, status, url, error, expires_at, steps, "
              "created_at, substrate FROM app_previews WHERE project_id = :p AND run_id = ANY(:ids) "
@@ -817,8 +823,9 @@ def _rounds(acts: list[Mapping[str, Any]]) -> int:
 
 
 def _decision_state(decision: Optional[Mapping[str, Any]], now: datetime) -> Optional[str]:
-    """`waiting` (the operator's), `merged`, or `other` — read through decision_actions, the one
-    rule for what waits on the operator."""
+    """`waiting` (the operator's), `approved`, or `other` — read through decision_actions, the
+    one rule for what waits on the operator. APPROVED IS NOT MERGED: whether the pull request
+    merged is `pr_merge.state` (a merge sha on record, or GitHub's own state)."""
     if not decision:
         return None
     from . import decision_actions
@@ -826,7 +833,7 @@ def _decision_state(decision: Optional[Mapping[str, Any]], now: datetime) -> Opt
     if decision_actions.attention(dict(decision), now) == "needs_action":
         return "waiting"
     if str(decision.get("status") or "") in ("approved", "executed"):
-        return "merged"
+        return "approved"
     return "other"
 
 
@@ -951,8 +958,16 @@ def build_state(run: Mapping[str, Any], *, acts: Optional[list[Mapping[str, Any]
         return out("deployed", f"Deployed · {ok_deploys[0].get('environment') or 'dev'}", None,
                    "Working", "ship")
     if run.get("pull_request_url") or run.get("pull_request_number"):
-        if _decision_state(decision, now) == "merged":
+        from . import pr_merge
+
+        merge = pr_merge.state(run, decision)
+        if merge == pr_merge.MERGED:
             return out("merged", "Merged", None, "Working", "ship")
+        if merge == pr_merge.MERGE_PENDING:
+            # #229: the merge was approved, and BOSS does not merge here — still open.
+            return out("pr_open", "Approved · not merged",
+                       "The merge was approved, but the pull request is still open: merge it "
+                       "in GitHub", "Needs you", "ship")
         return out("pr_open", "PR open", None, "Needs you", "ship")
     index, total = fctx.get("decomposition_index"), fctx.get("decomposition_total")
     tip = f"Part {index} of {total}" if index and total else None
@@ -2539,10 +2554,15 @@ def _outputs(connection: Any, run: Mapping[str, Any], facts: Facts, st: BuildSta
     n = _pr_number(run)
     agents = len({a.get("role_key") for a in _stage_acts(acts) if a.get("role_key")})
     pr: Optional[dict[str, Any]] = None
+    from . import pr_merge
+
     dstate = _decision_state(decision, now) if (n or run.get("pull_request_url")) else None
+    merge = pr_merge.state(run, decision)
     if n or run.get("pull_request_url"):
-        word = (f"#{n} · Merged" if dstate == "merged" else
-                f"#{n} · Waiting on you" if dstate == "waiting" else f"#{n} · Open")
+        word = (f"#{n} · Merged" if merge == pr_merge.MERGED else
+                f"#{n} · Waiting on you" if dstate == "waiting" else
+                f"#{n} · Approved, not merged" if merge == pr_merge.MERGE_PENDING else
+                f"#{n} · Open")
         url = run.get("pull_request_url")
         pr = {"number": n, "url": url, "files_url": f"{url}/files" if url else None,
               "decision_id": run.get("decision_id"),
@@ -2668,7 +2688,7 @@ def _outputs(connection: Any, run: Mapping[str, Any], facts: Facts, st: BuildSta
                        if not g["ok"] and not g.get("waived_by"))
         # MERGED ONLY WHEN IT WAS. A deployed build is not a merged one: the OUTPUTS header said
         # "Merged" while PR #223 was open, because the build had been deployed from its branch.
-        if st["state"] == "merged" or (st["state"] == "deployed" and dstate == "merged"):
+        if st["state"] == "merged" or (st["state"] == "deployed" and merge == pr_merge.MERGED):
             ready = {"ready": False, "word": "Merged"}
         elif st["state"] == "deployed" and not n:
             ready = {"ready": False, "word": "Deployed"}
@@ -2857,17 +2877,17 @@ def _attempt_row(run: Mapping[str, Any], facts: Facts, *, now: datetime,
 
 
 def _pr_state(run: Optional[Mapping[str, Any]], facts: Facts) -> Optional[str]:
-    """open | merged | closed, from the PR's merge question; None without a PR."""
+    """open | merged | closed — merged only from a real merge (pr_merge.state: a merge sha on
+    record or GitHub's state), never from an approval; None without a PR."""
     if not run or not _pr_number(run):
         return None
+    from . import pr_merge
+
     decision = facts.decisions.get(str(run.get("decision_id") or "")) or {}
-    status = str(decision.get("status") or "")
-    if status in ("approved", "merged", "executed"):
-        return "merged"
-    if status in ("rejected", "cancelled"):
-        return "closed"
-    # `withdrawn`: a newer attempt asks about the same PR (run_decisions) — the PR is still open.
-    return "open"
+    merge = pr_merge.state(run, decision)
+    # `merge_pending` (approved, not merged) and `withdrawn` (a newer attempt asks about the same
+    # PR, run_decisions) are both a PR that is still open.
+    return merge if merge in (pr_merge.MERGED, pr_merge.CLOSED) else "open"
 
 
 def _app_key_of_name(name: str) -> str:

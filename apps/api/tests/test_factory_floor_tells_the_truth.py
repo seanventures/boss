@@ -239,6 +239,16 @@ def test_apps_number_each_build_and_say_its_pr(client, engine):
                         title="Numbered Ledger", minutes_ago=5)
     body = client.get("/v1/factory/apps", params={"project_id": fx.PROJECT}).json()
     row = next(r for r in body["apps"] if second in r["run_ids"])
+    # PR #229: an APPROVED merge question is not a merged PR — still open until a real merge.
+    assert row["pr_number"] == 41 and row["pr_state"] == "open"
+    with engine.begin() as c:  # BOSS's merge job's record: the merge itself, with its sha
+        c.execute(text("INSERT INTO artifacts (id, project_id, artifact_type, title, content) "
+                       "VALUES (:i, :p, 'merge_result', 'Merge result', CAST(:c AS JSONB))"),
+                  {"i": f"art_{uuid.uuid4().hex[:12]}", "p": fx.PROJECT,
+                   "c": '{"decision_id": "%s", "merged_sha": "%s", "merged": true}'
+                        % (dec, "a" * 40)})
+    body = client.get("/v1/factory/apps", params={"project_id": fx.PROJECT}).json()
+    row = next(r for r in body["apps"] if second in r["run_ids"])
     orders = {a["run_id"]: a["order"] for a in row["attempts"]}
     assert orders == {second: 2, first: 1}
     assert row["pr_number"] == 41 and row["pr_state"] == "merged"

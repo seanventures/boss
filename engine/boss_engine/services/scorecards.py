@@ -413,7 +413,15 @@ def _read_code_task(connection, run_id: str) -> Optional[dict[str, Any]]:
         pr_state = connection.execute(text("SELECT status FROM decisions WHERE id = :d"),
                                       {"d": r["decision_id"]}).scalar()
     pr_opened = r["pull_request_number"] is not None
-    pr_merged = (pr_state in ("approved", "merged", "executed")) if pr_opened else None
+    # MERGED ONLY WHEN IT WAS (pr_merge): an approved merge question is not a merged PR.
+    from .pr_merge import MERGED, merged_shas, state as merge_state
+
+    pr_merged = (merge_state(
+        {"pull_request_number": r["pull_request_number"], "finalize_ctx": fc},
+        {"status": pr_state,
+         "merged_sha": merged_shas(connection, r["project_id"], [r["decision_id"]]).get(
+             str(r["decision_id"]), "") if r["decision_id"] else ""}) == MERGED) \
+        if pr_opened else None
     pr_reverted = None
     if pr_merged:
         pr_reverted = bool(connection.execute(text(

@@ -105,6 +105,28 @@ def test_the_sweep_records_what_no_event_announced_and_skipped_steps_get_none(en
         assert len(cards(c, quiet)) == 1 and cards(c, quiet)[0]["source"] == "backfill"
 
 
+def _merged_by_boss(c, decision_id: str) -> None:
+    """A REAL merge (pr_merge): BOSS's merge job's merge_result, with its sha. An approved or
+    executed merge question alone is not a merged pull request."""
+    import json
+    import uuid
+
+    c.execute(text("INSERT INTO artifacts (id, project_id, artifact_type, title, content) "
+                   "VALUES (:i, :p, 'merge_result', 'Merge result', CAST(:c AS JSONB))"),
+              {"i": f"art_{uuid.uuid4().hex[:12]}", "p": project(),
+               "c": json.dumps({"decision_id": decision_id, "merged_sha": "a" * 40,
+                                "merged": True})})
+
+
+def test_an_approved_merge_with_no_merge_behind_it_is_not_merged(engine):
+    from boss_engine.services import scorecards
+
+    reset_state(engine)
+    with engine.begin() as c:
+        rid = seed_build(c, pr=78, decision_status="approved")
+        assert scorecards.record_scorecard(c, "build", rid)["pr_merged"] is False
+
+
 def test_a_late_merge_updates_the_same_row_and_raises_the_score(engine):
     from boss_engine.services.agent_acts import settle_code_task
     from boss_engine.services.core import emit_event
@@ -119,6 +141,7 @@ def test_a_late_merge_updates_the_same_row_and_raises_the_score(engine):
         did = c.execute(text("SELECT decision_id FROM code_task_runs WHERE id = :id"),
                         {"id": rid}).scalar()
         c.execute(text("UPDATE decisions SET status = 'executed' WHERE id = :d"), {"d": did})
+        _merged_by_boss(c, did)  # what BOSS's merge job records before it marks executed
         emit_event(c, project(), "decision.executed", "ceo", "decision", did, {})
         after = cards(c, rid)
     assert len(after) == 1
@@ -133,6 +156,8 @@ def test_a_revert_and_a_rollback_take_the_score_down(engine):
     reset_state(engine)
     with engine.begin() as c:
         rid = seed_build(c, pr=77, decision_status="executed")
+        _merged_by_boss(c, c.execute(text("SELECT decision_id FROM code_task_runs WHERE id = :id"),
+                                     {"id": rid}).scalar())
         merged = scorecards.record_scorecard(c, "build", rid)
         seed_build(c, title="Revert \"Add a thing\" (#77)")
         reverted = scorecards.record_scorecard(c, "build", rid, late=True)
