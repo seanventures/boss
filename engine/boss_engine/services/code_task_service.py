@@ -2163,6 +2163,145 @@ def override_code_task(engine, settings: Settings, jobs, run_id: str, *,
             "decision_id": proposal.get("decision_id")}
 
 
+def open_parked_with_checks_failing(engine, settings: Settings, jobs, run_id: str, *,
+                                    actor: str = "boss", why: str = "") -> dict:
+    """A build PARKED FOR A WAIVER (awaiting_gate_override) opens its pull request with its
+    checks failing instead (checks_failing.py, the operator's rule) — from the diff kept when
+    its gates failed, no re-run, no waiver: a draft labelled `checks failing`, every failing
+    gate and finding listed (security first), its follow-up build queued, and a merge card that
+    a person answers with a reason. Nothing is waived: the gates stay failed on the run.
+
+    For a build parked before the rule was on, or whose recovery agent could not close its
+    findings (workflow_capability_runner._recover_open_findings). Refused, saying why, when the
+    rule cannot open it: a template's gate or a committed secret, a secret only a person can
+    set, no kept diff. Returns {"status": "completed", ...} or {"status": "refused", "why"}."""
+    from ..schemas import FileChange
+    from . import checks_failing as cf
+    from .governed_code_task_service import (_spawn_deferred_findings_task,
+                                             classify_gate_faults)
+
+    with _transaction(engine) as c:
+        run = load_code_task_run(c, run_id)
+    if run is None:
+        return {"status": "refused", "why": f"code task run not found: {run_id}"}
+    if str(run.get("phase") or "") != "awaiting_gate_override":
+        return {"status": "refused", "why": "the build is not parked for a waiver"}
+    fctx = dict(run.get("finalize_ctx") or {})
+    evidence = dict(run.get("state") or {})
+    failing = [str(g) for g in fctx.get("failing_gates") or [] if g]
+    pending = fctx.get("pending_diff") or []
+    # A PARKED BUILD USUALLY HAS ITS PR ALREADY: the exit rescue opened it as `[partial]`
+    # (governed_code_task_service._rescue_pr), with an ordinary merge card. That PR is the one
+    # this build delivers; its card is told the checks are failing below.
+    already = str(run.get("pull_request_url") or "")
+    faults = classify_gate_faults(failing=failing, evidence=evidence) if failing else {}
+    if not cf.may_open(failing, faults=faults, open_pr=bool(pending or already)):
+        return {"status": "refused",
+                "why": ("no diff was kept to open a pull request from" if not pending else
+                        "a person must act (set a secret) or an applied template's gate failed, "
+                        "so no pull request opens past it")}
+    details = {}
+    if "app_serves" in failing:
+        from .preview_service import app_serves_failure_sentence
+
+        details["app_serves"] = app_serves_failure_sentence(evidence.get("app_serves"))[:700]
+    record = {**cf.collect(failing, evidence, details=details), "hard": True,
+              "quality_gate_id": fctx.get("quality_gate_id"), "from_parked_build": True}
+    files = [FileChange(path=f["path"], content=f["content"]) for f in pending]
+    ports = _engine_ports()
+    budget = ports.budget
+    sf = SoftwareFactoryService(settings, ports=ports)
+    project_id = run["project_id"]
+    task_id = run.get("task_id")
+    root_run = fctx.get("root_run_id") or run_id
+    branch = f"boss/code/{root_run}"
+    if already:
+        proposal = {"status": "reused", "pull_request_url": already,
+                    "pull_request_number": run.get("pull_request_number"),
+                    "decision_id": run.get("decision_id")}
+    else:
+        with _transaction(engine) as c:
+            reservation = budget.reserve(c, project_id, category="code_task",
+                amount_usd_micros=200_000, reason=f"checks-failing PR {run_id[:12]}",
+                expires_in_minutes=15)
+            _set_phase(c, run_id, "opening_pr")
+            proposal = sf.propose_pull_request(
+                c, project_id, task_id, reservation_id=reservation.get("reservation_id"),
+                dedupe_key=f"code:task:{run_id}", title=run["title"], branch_name=branch,
+                summary=cf.pr_section(record) + str(fctx.get("pr_summary") or ""),
+                files=files, created_by_job_id=fctx.get("created_by_job_id"),
+                evidence=evidence, quality_gate_id=fctx.get("quality_gate_id"), run_id=run_id,
+                checks_failing=record)
+    status = proposal.get("status")
+    if status not in ("created", "succeeded", "reused") or not proposal.get("pull_request_url"):
+        with _transaction(engine) as c:
+            _set_phase(c, run_id, "awaiting_gate_override")
+        return {"status": "refused", "why": f"the pull request was not opened ({status})",
+                "proposal": proposal}
+    if status == "reused":
+        # The PR (and its merge card) existed before this record: the card is told, so its
+        # merge is a person's stated decision like any checks-failing PR's.
+        with _transaction(engine) as c:
+            proposal["decision_id"] = cf.flag_existing_decision(
+                c, project_id, str(proposal.get("pull_request_url") or ""), record,
+                decision_id=proposal.get("decision_id"))
+        try:
+            number = int(proposal.get("pull_request_number") or 0)
+            spec = dict(run.get("spec") or {})
+            with _transaction(engine) as c:
+                sf.bind_project_github(c, project_id, owner=spec.get("owner"),
+                                       repo=spec.get("repo"))
+            add = getattr(sf.github, "add_labels", None)
+            if number and add is not None:
+                add(number, [cf.LABEL])
+        except Exception:  # noqa: BLE001 — the card, not the label, refuses a silent merge
+            logger.info("checks-failing label not added to %s", proposal.get("pull_request_url"))
+    with _transaction(engine) as c:
+        c.execute(sql(
+            "UPDATE code_task_runs SET status='completed', phase='done', pull_request_url=:u, "
+            "pull_request_number=:n, decision_id=:d, error=:e, "
+            "finalize_ctx = COALESCE(finalize_ctx,'{}'::jsonb) "
+            "|| jsonb_build_object('checks_failing', CAST(:cf AS JSONB)), "
+            "updated_at=now() WHERE id=:id"),
+            {"u": proposal.get("pull_request_url"), "n": proposal.get("pull_request_number"),
+             "d": proposal.get("decision_id"),
+             "e": f"PR open with checks failing: {cf.headline(record)}.",
+             "cf": json.dumps(record), "id": run_id})
+        emit_event(c, project_id, cf.OPENED_EVENT, actor, "code_task_run", run_id,
+                   {"failing_gates": cf.gate_names(record), "security": record.get("security"),
+                    "findings": len(record.get("findings") or []),
+                    "pull_request_url": proposal.get("pull_request_url"),
+                    "from_parked_build": True,
+                    "why": why or "the build was parked for a waiver; the rule opens its PR"})
+    followup = None
+    try:
+        from .governed_code_task_service import _already_spawned_followup
+
+        if not fctx.get("is_followup") and not _already_spawned_followup(engine, run_id):
+            followup = _spawn_deferred_findings_task(
+                engine, settings, jobs, project_id=project_id, task_id=task_id,
+                spec=dict(run.get("spec") or {}), base_branch=branch,
+                findings=cf.followup_findings(record), parent_run_id=run_id,
+                parent_title=run["title"], parent_root=root_run,
+                parent_origin=fctx.get("origin"), checks_failing=record)
+            with _transaction(engine) as c:
+                emit_event(c, project_id, "code_task.deferred_findings_task", "boss",
+                           "code_task_run", run_id,
+                           {"followup_run_id": followup, "checks_failing": True,
+                            "findings": cf.followup_findings(record)[:20]})
+                if followup:
+                    c.execute(sql(
+                        "UPDATE code_task_runs SET finalize_ctx = jsonb_set(finalize_ctx, "
+                        "'{checks_failing,followup_run_id}', to_jsonb(CAST(:f AS text))) "
+                        "WHERE id = :id"), {"f": str(followup), "id": run_id})
+    except Exception:  # noqa: BLE001 — the PR is open; its follow-up is bookkeeping
+        logger.exception("checks-failing follow-up for %s not queued", run_id)
+    return {"status": "completed", "run_id": run_id, "checks_failing": record,
+            "pull_request_url": proposal.get("pull_request_url"),
+            "pull_request_number": proposal.get("pull_request_number"),
+            "decision_id": proposal.get("decision_id"), "followup_run_id": followup}
+
+
 def _release(
     budget, connection, project_id: str, reservation_id: Optional[str], reason: str,
     run_id: Optional[str] = None,

@@ -3818,10 +3818,16 @@ def _recover_open_findings(
 
     Decided ONCE per parked build (`FINDINGS_ANSWERED_KEY`), and only with a worker that can
     start a build (a job queue): a sweep that cannot act never asks the model. Returns the
-    tick's record, or None when nothing was decided."""
+    tick's record, or None when nothing was decided.
+
+    WITH `open_pr_when_checks_fail` ON (the default, checks_failing.py) NOTHING WAITS FOR A
+    WAIVER. A new build no longer parks at all (its PR opens with the checks failing), and a
+    repair build the agent starts does the same. A build parked anyway (before the rule, or
+    while it was off) still gets its agent first; where the agent would ask a person to waive
+    — or recovery is off, or it already asked — BOSS opens the parked build's PR with its checks
+    failing instead (code_task_service.open_parked_with_checks_failing) and the step goes on to
+    the merge decision."""
     if ctx is None or getattr(ctx, "jobs", None) is None or not build_run_id:
-        return None
-    if str(output.get(FINDINGS_ANSWERED_KEY) or "") == build_run_id:
         return None
     try:
         with connection.begin_nested():
@@ -3842,6 +3848,16 @@ def _recover_open_findings(
                 return None  # a template gate cannot be fixed by waiving or by this loop
     except Exception:  # noqa: BLE001
         pass
+    from . import checks_failing
+
+    settings = getattr(ctx, "settings", None) or get_settings()
+    open_instead = checks_failing.enabled(connection, settings, project_id)
+    if str(output.get(FINDINGS_ANSWERED_KEY) or "") == build_run_id:
+        # Already answered (asked to waive): under the rule the PR opens instead of waiting.
+        return (_open_parked_with_checks_failing(
+            connection, ctx, settings, project_id=project_id, run_id=run_id, step=step,
+            build_run_id=build_run_id, why="the build was waiting for a waiver")
+            if open_instead else None)
     evidence = step_recovery.build_evidence(connection, build_run_id, str(row["error"] or ""))
     failure = {**evidence["failure"], "build_run_id": build_run_id}
     evidence["failure"] = failure
@@ -3849,10 +3865,25 @@ def _recover_open_findings(
                                  step=step, output=output, handle=handle,
                                  kind=step_recovery.FINDINGS_KIND, failure=failure,
                                  evidence=evidence)
+    if recovered is not None and recovered.get("done"):
+        return recovered["done"]
+    if open_instead:
+        # The agent did not start a fix (it would ask a person, or recovery is off): the
+        # parked build's PR opens with its checks failing, and the step goes on.
+        if recovered is None:
+            why = "the build's recovery agent did not act on it"
+        else:
+            said = dict(recovered.get("output") or {}).get(step_recovery.STATE_KEY) \
+                or step_recovery.state_of(output)
+            why = ("its agent could not close the findings: "
+                   + str(step_recovery.last_decision(said).get("reasoning") or ""))
+        opened = _open_parked_with_checks_failing(
+            connection, ctx, settings, project_id=project_id, run_id=run_id, step=step,
+            build_run_id=build_run_id, why=why)
+        if opened is not None:
+            return opened
     if recovered is None:
         return None
-    if recovered.get("done"):
-        return recovered["done"]
     # A PERSON IS ASKED NOW, AND ONLY NOW: the step keeps waiting on the build's waiver card,
     # saying what the agent tried and the one question.
     extra = dict(recovered.get("output") or {})
@@ -3869,6 +3900,41 @@ def _recover_open_findings(
                           "recovery_question": ask["question"]}, default=str)})
     return {"run_id": run_id, "step_id": step["step_id"], "awaited": "code_task",
             "outcome": "asked_to_waive", "build": build_run_id}
+
+
+def _open_parked_with_checks_failing(
+    connection: Connection, ctx: Any, settings: Any, *, project_id: str, run_id: str,
+    step: Any, build_run_id: str, why: str,
+) -> Optional[dict[str, Any]]:
+    """Open a parked build's PR with its checks failing (checks_failing.py), saying so on the
+    step. None when it could not be opened (the step then waits as before, saying why)."""
+    from . import code_task_service as cts
+
+    try:
+        result = cts.open_parked_with_checks_failing(
+            ctx.engine, settings, ctx.jobs, build_run_id, actor="boss", why=why[:300])
+    except Exception as error:  # noqa: BLE001 — said on the step, never a crash
+        log.warning("checks-failing PR for %s not opened: %s", build_run_id, error)
+        result = {"status": "refused", "why": str(error)[:300]}
+    if str(result.get("status") or "") != "completed":
+        connection.execute(
+            text("UPDATE workflow_step_runs SET output = COALESCE(output, '{}'::jsonb) "
+                 "|| CAST(:o AS JSONB), updated_at = now() WHERE id = :i AND project_id = :p "
+                 "AND status = 'waiting'"),
+            {"i": step["id"], "p": project_id,
+             "o": json.dumps({FINDINGS_ANSWERED_KEY: build_run_id,
+                              "note": "The pull request could not open with its checks "
+                                      f"failing: {result.get('why') or 'unknown'}"},
+                             default=str)})
+        return None
+    emit_event(connection, project_id, "workflow.build_opened_with_checks_failing", "boss",
+               "workflow_run", run_id,
+               {"step_id": step["step_id"], "build_run_id": build_run_id,
+                "pull_request_url": result.get("pull_request_url"),
+                "followup_run_id": result.get("followup_run_id"), "why": why[:300]})
+    return {"run_id": run_id, "step_id": step["step_id"], "awaited": "code_task",
+            "outcome": "opened_with_checks_failing", "build": build_run_id,
+            "pull_request_url": result.get("pull_request_url")}
 
 
 def _resume_recovery(connection: Connection, ctx: Any, *, project_id: str, run_id: str,

@@ -282,3 +282,35 @@ def of_decision(row: Mapping[str, Any]) -> Optional[dict[str, Any]]:
             rec = None
     found = (rec or {}).get(KEY) if isinstance(rec, Mapping) else None
     return dict(found) if isinstance(found, Mapping) and found.get("gates") else None
+
+
+def flag_existing_decision(connection: Any, project_id: str, pull_request_url: str,
+                           record: Mapping[str, Any], *,
+                           decision_id: Optional[str] = None) -> Optional[str]:
+    """Tell an EXISTING open merge card that its checks are failing (a parked build's PR,
+    opened by the exit rescue with an ordinary card): it then leads with the failing checks and
+    merges only on a person's stated reason, like a card opened with them. Returns its id."""
+    import json
+
+    from sqlalchemy import text
+
+    row = connection.execute(text(
+        "SELECT id FROM decisions WHERE project_id = :p "
+        "AND recommendation->>'action' = 'review_pull_request' "
+        "AND (id = :d OR recommendation->>'pull_request_url' = :u) "
+        "AND status IN ('pending', 'delegated', 'expired', 'revision_requested') "
+        "ORDER BY (id = :d) DESC, created_at DESC LIMIT 1"),
+        {"p": project_id, "d": decision_id or "", "u": pull_request_url}).first()
+    if row is None:
+        return decision_id
+    found = str(row[0])
+    flagged = {**dict(record), "draft": False, "label": LABEL}
+    connection.execute(text(
+        "UPDATE decisions SET recommendation = COALESCE(recommendation, '{}'::jsonb) "
+        "|| jsonb_build_object(CAST(:k AS text), CAST(:r AS JSONB), 'summary', "
+        "CAST(:lead AS text) || ' ' || COALESCE(recommendation->>'summary', '')), "
+        "question = CASE WHEN question LIKE 'Checks failing%' THEN question "
+        "ELSE 'Checks failing — decide the merge: ' || question END, updated_at = now() "
+        "WHERE id = :id"),
+        {"k": KEY, "r": json.dumps(flagged), "lead": decision_summary(record), "id": found})
+    return found

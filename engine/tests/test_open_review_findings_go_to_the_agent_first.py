@@ -109,6 +109,11 @@ def _park(c, project_id: str, run_id: str, gates: list[str]) -> None:
 
 def test_a_build_parked_on_open_findings_is_repaired_by_its_agent_then_waived(
         eng, project, monkeypatch):
+    """With `open_pr_when_checks_fail` OFF (an org's return to the waiver stop). On, the PR
+    opens instead of the waiver question: test_a_build_opens_its_pr_when_checks_fail_runs_on."""
+    from boss_engine.services import checks_failing
+
+    monkeypatch.setattr(checks_failing, "enabled", lambda *a, **k: False)
     awaited_id = f"crun_{uuid.uuid4().hex[:10]}"
     repair_id = f"crun_{uuid.uuid4().hex[:10]}"
     monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry(
