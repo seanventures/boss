@@ -55,11 +55,12 @@ def _env(extra: Optional[Mapping[str, str]] = None) -> dict[str, str]:
 
 def git(args: list[str], cwd: Optional[Path] = None, *, check: bool = True,
         input_text: Optional[str] = None, timeout: int = GIT_TIMEOUT) -> str:
+    from .owned_process import boss_run
+
     try:
-        done = subprocess.run(["git", "-c", "core.hooksPath=/dev/null",
-                               "-c", "commit.gpgsign=false", *args],
-                              cwd=str(cwd) if cwd else None, env=_env(), text=True,
-                              input=input_text, capture_output=True, timeout=timeout)
+        done = boss_run(["git", "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false",
+                         *args], cwd=str(cwd) if cwd else None, env=_env(), text=True,
+                        input=input_text, capture_output=True, timeout=timeout)
     except (OSError, subprocess.TimeoutExpired) as error:
         raise SourceError(f"git {' '.join(args[:2])}: {error}") from error
     if check and done.returncode != 0:
@@ -275,9 +276,13 @@ def run_pytest(work: Path, tests: Iterable[str], *, settings: Any = None, timeou
     argv = [_python(), "-m", "pytest", "-q", "-p", "no:cacheprovider", "--rootdir", str(work),
             "-o", "pythonpath=engine", "-x" if not junit else "--maxfail=1000",
             *(["--junitxml", str(report)] if junit else []), *selected]
+    from .owned_process import boss_run
+    from .scheduling import low_priority
+
     try:
-        done = subprocess.run(argv, cwd=str(work), env=test_env(work, settings), text=True,
-                              capture_output=True, timeout=timeout)
+        # BOSS's own tests run as a build does: at low priority, so the API keeps answering.
+        done = boss_run(low_priority(argv), cwd=str(work), env=test_env(work, settings),
+                        text=True, capture_output=True, timeout=timeout)
         output = (done.stdout or "") + (done.stderr or "")
         code = done.returncode
     except subprocess.TimeoutExpired as error:

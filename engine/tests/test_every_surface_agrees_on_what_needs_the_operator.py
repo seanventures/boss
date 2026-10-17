@@ -137,6 +137,10 @@ THE_RULE = "engine/boss_engine/services/decision_actions.py"
 #: (file, function) -> why it may name decision statuses itself. None of these tells the
 #: operator what is waiting on them.
 NOT_READERS = {
+    ("engine/boss_engine/services/self_fix_install.py", "request_approval"):
+        "a writer: withdraws the earlier card of a self-fix that changed before drawing a new one",
+    ("engine/boss_engine/services/self_fix_install.py", "rebase_stale"):
+        "a writer: withdraws the card of a self-fix checked on a stack that no longer runs",
     ("engine/boss_engine/services/typed_decision_spend.py", "resolve_reconciliation_decisions"):
         "a writer: resolves the pending reconciliation cards of a call it has just settled",
     ("engine/boss_engine/services/governed_host_deploy.py", "repair_refusal_records"):

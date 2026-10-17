@@ -30,7 +30,6 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 from pathlib import Path
 from typing import Any, Optional
 
@@ -62,12 +61,14 @@ def _write_tree(source: Path, root: Path, written: list[str]) -> None:
 def _apply(root: Path, patch: Path, written: list[str]) -> str:
     if not patch.is_file():
         return f"(no {patch.name} in the fixture)"
-    check = subprocess.run(["git", "apply", "--check", "--whitespace=nowarn", str(patch)],
-                           cwd=str(root), capture_output=True, text=True)
+    from .owned_process import boss_run
+
+    check = boss_run(["git", "apply", "--check", "--whitespace=nowarn", str(patch)],
+                     cwd=str(root), capture_output=True, text=True)
     if check.returncode != 0:
         return f"{patch.name} is already in place"
-    done = subprocess.run(["git", "apply", "--whitespace=nowarn", str(patch)], cwd=str(root),
-                          capture_output=True, text=True)
+    done = boss_run(["git", "apply", "--whitespace=nowarn", str(patch)], cwd=str(root),
+                    capture_output=True, text=True)
     if done.returncode != 0:
         return f"git apply {patch.name} failed: {done.stderr[-300:]}"
     for line in patch.read_text(encoding="utf-8").splitlines():
