@@ -566,6 +566,13 @@ def explain_failure(step: str, returncode: int, output: str, *,
     return said
 
 
+#: "Bind for 0.0.0.0:8000 failed: port is already allocated" (Docker), "listen tcp
+#: 0.0.0.0:8000: bind: address already in use" — the port, from either.
+PORT_HELD = re.compile(
+    r"Bind for [^\s]*?:(\d{1,5}) failed: port is already allocated"
+    r"|(?:listen|bind)[^\n]*?:(\d{1,5}):? ?(?:bind: )?address already in use", re.I)
+
+
 def _explained(step: str, returncode: int, output: str, *,
                host: str, url: str, timeout: int) -> dict[str, str]:
     lowered = (output or "").lower()
@@ -599,6 +606,21 @@ def _explained(step: str, returncode: int, output: str, *,
                 "action": "Inspect Docker disk use on the host with `docker system df`. "
                           "Remove only confirmed BOSS-owned, unused resources, then deploy again.",
                 "cause": CAUSE_HOST}
+    held = PORT_HELD.search(output or "")
+    if held:
+        # Not the app's code: something on the machine already holds the port — often this
+        # app's own earlier release (step_recovery's clean_and_retry frees exactly that).
+        port = next(g for g in held.groups() if g)
+        return {"headline": f"Port {port} on {host} is already held by another container, so "
+                            "the app could not start.",
+                "action": "Stop what holds the port (BOSS retires this app's own earlier "
+                          "release by itself), or publish the app on another port.",
+                "cause": CAUSE_HOST}
+    if "boss_not_this_apps" in lowered:
+        return {"headline": f"A compose project BOSS was to retire on {host} has containers "
+                            "that are not this app's, so nothing was removed.",
+                "action": "Free the resource by hand, or deploy the app on another port or "
+                          "host.", "cause": CAUSE_HOST}
     unwired = re.search(r"(?:getaddrinfo|could not translate host name)\W+(?:\w+\W+)?\"?(res-[a-z0-9-]+)",
                         output or "", re.I)
     if step == "health" and unwired:
@@ -1450,6 +1472,42 @@ def join_resource_project(rendered: dict[str, Any], app_project: str,
             "teardown": steps(rendered.get("teardown"))}
 
 
+#: A compose project name BOSS will ever retire (compose's own rule, lower-case).
+_PROJECT_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{0,62}$")
+RETIRE_OWN_STEP = "retire this app's earlier release"
+
+
+def retire_own_projects(rendered: dict[str, Any], projects: list[str]) -> dict[str, Any]:
+    """THIS APP'S OWN EARLIER RELEASES, retired before it comes up (step_recovery's
+    `clean_and_retry`): `docker compose -p <project> down --remove-orphans` — containers and
+    networks only, never `-v`: a volume (a database's data) is kept.
+
+    Guarded ON THE HOST as well as in BOSS: a project is taken down only when EVERY one of its
+    containers was started from under this target's own directory (compose's
+    `project.working_dir` label), so another app's project — same name or not — is never
+    touched; the step then fails with BOSS_NOT_THIS_APPS and nothing is removed. The project the
+    app is about to run in (the resources' shared project, with its data services) is never in
+    `projects` (step_recovery refuses it before planning)."""
+    wanted = [p for p in dict.fromkeys(str(p or "").strip() for p in projects or [])
+              if _PROJECT_NAME.match(p)]
+    if not wanted:
+        return rendered
+    marker = shlex.quote(str(rendered.get("dir") or "").rstrip("/") + "/")
+    steps = []
+    for project in wanted:
+        label = shlex.quote(f"label=com.docker.compose.project={project}")
+        q = shlex.quote(project)
+        steps.append({"name": f"{RETIRE_OWN_STEP} ({project})", "timeout_seconds": 300, "run": (
+            f"ids=$(docker ps -aq --filter {label}); "
+            "if [ -z \"$ids\" ]; then echo BOSS_NOTHING_TO_RETIRE " + q + "; exit 0; fi; "
+            "if docker inspect -f '{{index .Config.Labels \"com.docker.compose.project.working_dir\"}}' "
+            f"$ids | grep -v -F {marker} | grep -q .; then "
+            f"echo BOSS_NOT_THIS_APPS {q}; exit 3; fi; "
+            f"docker compose -p {q} down --remove-orphans && echo BOSS_RETIRED {q}")})
+    return {**rendered, "install": steps + list(rendered.get("install") or []),
+            "update": steps + list(rendered.get("update") or [])}
+
+
 def record_host_facts(engine, host_id: str, facts: Mapping[str, Any]) -> None:
     """What a preflight found the host to have, on the host's record (last_preflight.facts),
     so a build can be told before it writes its manifest and an agent can read it later.
@@ -1475,8 +1533,13 @@ def plan_stack_deploy(engine, settings: Settings, *, project_id: str, target_id:
                       approver_role: Optional[str] = None,
                       workflow_step_id: Optional[str] = None,
                       manifest_path: Optional[str] = None,
-                      approval_decision_id: Optional[str] = None) -> dict[str, Any]:
+                      approval_decision_id: Optional[str] = None,
+                      retire_projects: Optional[list[str]] = None) -> dict[str, Any]:
     """Record a deployment of `repository@ref` to a stack target, held for approval.
+
+    `retire_projects`: this app's own earlier compose projects to take down before it comes up
+    (step_recovery's clean_and_retry; `retire_own_projects`, guarded on the host). Part of what
+    is approved: the plan's steps and the decision say so.
 
     `manifest_path` is the boss.deploy.yaml the build's app DECLARED (`_declared_stack_target`):
     with it, the app's host target ships from that manifest like any stack target.
@@ -1614,6 +1677,8 @@ def plan_stack_deploy(engine, settings: Settings, *, project_id: str, target_id:
         shared_project = compose_project_for(
             str(infra_app), str(manifest.resources[0].environment or "deploy"))
         rendered = join_resource_project(rendered, manifest.compose_project, shared_project)
+    retire = [p for p in dict.fromkeys(str(x or "").strip() for x in retire_projects or [])
+              if _PROJECT_NAME.match(p) and p != shared_project]
 
     deployment_id = make_id("sdep")
     short = commit[:12]
@@ -1622,7 +1687,8 @@ def plan_stack_deploy(engine, settings: Settings, *, project_id: str, target_id:
     summary = {**manifest.summary(), "manifest_path": path,
                "workdir": manifest_workdir(path), "app_secrets": app_secret_names,
                # Read back at apply, which renders the manifest again (join_resource_project).
-               **({"shared_compose_project": shared_project} if shared_project else {})}
+               **({"shared_compose_project": shared_project} if shared_project else {}),
+               **({"retire_projects": retire} if retire else {})}
     rp = ResourcePlaneService(settings)
     with engine.begin() as connection:
         # Check-then-insert under ONE lock per target. Everything above took seconds (GitHub,
@@ -1695,6 +1761,8 @@ def plan_stack_deploy(engine, settings: Settings, *, project_id: str, target_id:
             "repository": f"{owner}/{repo}", "ref": ref, "commit": commit,
             "host": host["name"], "dir": manifest.dir, "steps": summary["steps"],
             "env_keys": summary["env_keys"],
+            # THIS APP'S OWN EARLIER RELEASES to take down first (step_recovery), by name.
+            **({"retire_projects": retire} if retire else {}),
             # Which BOSS secret each key carries to the host: the approver sees the names.
             "env_secrets": dict(rendered["env_secrets"]),
             "generated_env_keys": summary["generated_env_keys"],
@@ -1748,6 +1816,7 @@ def plan_stack_deploy(engine, settings: Settings, *, project_id: str, target_id:
         steps = [{"name": n, "status": "pending", "started_at": None, "ended_at": None}
                  for n in ["prepare", "upload", "environment", "switch"]
                  + ([] if is_stack_target(target) else [RETIRE_STEP])
+                 + [f"{RETIRE_OWN_STEP} ({p})" for p in retire]
                  + [f"install or update: {s}" for s in summary["steps"]["install"]]
                  + (["health"] if manifest.health else []) + ["finalize"]]
         connection.execute(
@@ -2222,6 +2291,9 @@ def apply_on_host(engine, settings: Settings, *, deployment_id: str, apply_token
             recorded = _json(deployment.get("manifest")) or {}
             rendered = join_resource_project(rendered, manifest.compose_project or "",
                                              recorded.get("shared_compose_project"))
+            rendered = retire_own_projects(rendered, [
+                p for p in recorded.get("retire_projects") or []
+                if p != recorded.get("shared_compose_project")])
             rendered["workdir"] = str(recorded.get("workdir") or "")
             if not is_stack_target(target):
                 # A host target shipping its app's declared manifest: its one-container release
@@ -2751,7 +2823,8 @@ def plan_for_workflow_step(engine, settings: Settings, *, project_id: str, actor
                            approver_role: Optional[str] = None,
                            step_id: Optional[str] = None,
                            approval_decision_id: Optional[str] = None,
-                           commit: Optional[str] = None) -> dict[str, Any]:
+                           commit: Optional[str] = None,
+                           retire_projects: Optional[list[str]] = None) -> dict[str, Any]:
     """Plan the build's pull-request head onto a stack target; the step waits on it.
 
     `commit`: ship exactly this commit of the pull request instead of its head — pass 1's deploy
@@ -2798,7 +2871,7 @@ def plan_for_workflow_step(engine, settings: Settings, *, project_id: str, actor
             run_id=run_id, workflow_run_id=workflow_run_id, approver_role=approver_role,
             workflow_step_id=step_id,
             manifest_path=None if is_stack_target(target) else target.get("manifest_path"),
-            approval_decision_id=approval_decision_id)
+            approval_decision_id=approval_decision_id, retire_projects=retire_projects)
     except StackDeployError as exc:
         refused: dict[str, Any] = {"capability": "deploy", "tool": None, "status": "failed",
                                    "error": f"{exc.headline} {exc.action}"}

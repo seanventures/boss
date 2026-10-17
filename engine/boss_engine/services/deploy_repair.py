@@ -26,10 +26,11 @@ THE DESIGN, FOR THE CLASS.
   `then: redeploy`). When the repair completes, the step is queued again with `redeploy` on its
   output and plans a NEW deployment of the pull request's new head — under that deployment's
   own approval rule, never the earlier answer. When the repair fails, the step fails with both
-  causes. At most `deploy_fix_attempts` repairs per step (project setting, default 2).
+  causes. At most `deploy_fix_attempts` repairs per step (project setting, default 4) — a
+  hard ceiling under the recovery agent (step_recovery), which decides each failure.
 * EVERY MOVE IS SAID on the step's output (`note`, `deploy_fixes`) and as events
   (`deploy.fix_started`, `deploy.redeploying`), so the run page reads "Deploy failed: `npm`
-  missing on 2.29.2.202 → fixing the app (build crun_…) → redeploying", and the step's Ask
+  missing on 203.0.113.10 → fixing the app (build crun_…) → redeploying", and the step's Ask
   (turn_subject) carries the deployment, its failure, the host facts and the fixes.
 """
 from __future__ import annotations
@@ -54,7 +55,7 @@ FIX_EVENT = "deploy.fix_started"
 REDEPLOY_EVENT = "deploy.redeploying"
 #: The setting (project_settings.KNOBS) that caps repairs per deploy step.
 CAP_SETTING = "deploy_fix_attempts"
-DEFAULT_CAP = 2
+DEFAULT_CAP = 4
 #: How much of a deployment's log a repair build and the Ask are shown.
 LOG_TAIL_CHARS = 3000
 MANIFEST_CHARS = 4000
@@ -249,7 +250,7 @@ def where(failure: Mapping[str, Any]) -> str:
 
 
 def _placed(failure: Mapping[str, Any]) -> str:
-    """"HelpDesk AI · staging on vm-1 (2.29.2.202)"."""
+    """"HelpDesk AI · staging on vm-1 (203.0.113.10)"."""
     name, address = failure.get("host_name"), failure.get("host_address")
     machine = f"{name} ({address})" if name and address else str(name or address or
                                                                   "its machine")

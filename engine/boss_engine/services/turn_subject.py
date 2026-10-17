@@ -744,6 +744,17 @@ def _resolve_workflow_step(connection, project_id: str, ref: SubjectRef) -> Subj
     deployment_id = _stack_deployment_of(out)
     if deployment_id or out.get("deploy_failure") or out.get("deploy_fixes"):
         _with_the_deployment(connection, ev, out, deployment_id)
+    # WHAT THE STEP'S AGENT DECIDED to recover it (step_recovery): each decision in its own
+    # words, so asking the step "what happened?" reads the loop, not a raw dump of it.
+    recovery = out.get("recovery") if isinstance(out.get("recovery"), dict) else {}
+    decided = [d for d in recovery.get("decisions") or []
+               if isinstance(d, dict) and d.get("sentence")]
+    if decided:
+        ev.facts["recovery decisions"] = " | ".join(
+            f"{d.get('n')}. {d['sentence']}" for d in decided[-6:])[:1500]
+        if out.get("recovery_question"):
+            ev.facts["recovery question for a person"] = out["recovery_question"]
+    ev.facts.pop("output.recovery", None)
     ev.findings = _crash_findings(ev.error, ev.log_tail,
                                   failure_kind=failure_kind or str(preview.get("failure_kind") or ""))
     ev.open_points = [("the run's other steps and its way out",

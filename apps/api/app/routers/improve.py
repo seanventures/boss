@@ -221,6 +221,34 @@ def build_improve_router(
             except ValueError as error:
                 raise HTTPException(status_code=422, detail=str(error)) from error
 
+    # ------------------------------------------- what BOSS should change in its own code
+    # Written by a failed step's recovery agent when the cause is BOSS's own
+    # (services/boss_recommendations.py). The .md form is RECOMMENDATIONS.md, to download.
+    @router.get("/v1/boss-recommendations")
+    @permit(P.IMPROVEMENT_READ, scope=Scope.project(query="project_id"))
+    def get_boss_recommendations(project_id: str, status: Optional[str] = None) -> dict:
+        from boss_engine.services import boss_recommendations
+
+        pid = _reader(project_id)
+        with begin(engine) as c:
+            require_reader(c, pid)
+            items = boss_recommendations.list_recommendations(c, pid, status=status or None)
+        return {"recommendations": items, "count": len(items),
+                "file": boss_recommendations.FILE_NAME}
+
+    @router.get("/v1/boss-recommendations.md")
+    @permit(P.IMPROVEMENT_READ, scope=Scope.project(query="project_id"))
+    def get_boss_recommendations_markdown(project_id: str) -> PlainTextResponse:
+        from boss_engine.services import boss_recommendations
+
+        pid = _reader(project_id)
+        with begin(engine) as c:
+            require_reader(c, pid)
+            body = boss_recommendations.markdown(
+                boss_recommendations.list_recommendations(c, pid))
+        return PlainTextResponse(body, media_type="text/markdown", headers={
+            "Content-Disposition": f'attachment; filename="{boss_recommendations.FILE_NAME}"'})
+
     @router.post("/v1/scorecards/backfill")
     @permit(P.SYSTEM_OPERATE, scope=Scope.org())
     def backfill_scorecards(payload: Body) -> dict:

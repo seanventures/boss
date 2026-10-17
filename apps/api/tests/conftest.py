@@ -98,6 +98,8 @@ def clean_tables(engine):
         # Missing tables in partial Community schemas are skipped.
         for tbl in [
             "api_idempotency_keys",
+            # What a step's recovery agent recorded for BOSS's developers (step_recovery).
+            "boss_recommendations",
             # Run scorecards, experiments, person feedback, Improve BOSS (client and collector).
             "run_scorecards",
             # The model router: its policy, its route records and OpenRouter's catalogue.
@@ -464,6 +466,19 @@ def _no_real_cli_model_catalog(monkeypatch):
     monkeypatch.setattr(cli_harness, "_read_model_catalog",
                         lambda spec: reported.get(spec.name, ()))
     monkeypatch.setattr(cli_harness, "_catalog_cache", {})
+
+
+@pytest.fixture(autouse=True)
+def _no_real_recovery_model(monkeypatch):
+    """A failed step's recovery agent (step_recovery) never calls a real model in a test: with
+    no model it answers with BOSS's coded triage, exactly as an install with none connected.
+    A test about the agent's model hands it a stub (monkeypatch `routed_adapter` again)."""
+    from boss_engine.services import step_recovery
+
+    def no_model(*_a, **_k):
+        raise RuntimeError("no recovery model in tests")
+
+    monkeypatch.setattr(step_recovery, "routed_adapter", no_model)
 
 
 @pytest.fixture(autouse=True)

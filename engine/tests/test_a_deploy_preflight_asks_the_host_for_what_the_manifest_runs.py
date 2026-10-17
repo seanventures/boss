@@ -54,7 +54,7 @@ class DockerHost:
 
 
 def _access(host):
-    return HostAccess("2.29.2.202", "deploy", 22, KEY, host)
+    return HostAccess("203.0.113.10", "deploy", 22, KEY, host)
 
 
 def test_a_commands_manifest_running_a_program_the_machine_lacks_is_refused_read_only():
@@ -118,7 +118,7 @@ def test_an_unreachable_host_is_a_persons_problem():
     class Down:
         def stack_exec(self, **kwargs):
             return subprocess.CompletedProcess(
-                [], 255, "", "ssh: connect to host 2.29.2.202 port 22: Connection refused\n")
+                [], 255, "", "ssh: connect to host 203.0.113.10 port 22: Connection refused\n")
 
     problems = preflight_host(_access(Down()), load_manifest(HELPDESK))
     assert problems and problems[0]["cause"] == CAUSE_HOST
@@ -127,7 +127,7 @@ def test_an_unreachable_host_is_a_persons_problem():
 
 def test_a_failure_says_whose_fix_it_is():
     npm = explain_failure("install: install 1", 127, "bash: line 1: npm: command not found\n",
-                          host="deploy@2.29.2.202")
+                          host="deploy@203.0.113.10")
     assert npm["cause"] == CAUSE_APP and "`npm`" in npm["headline"]
     assert "kind: compose" in npm["action"]
     assert explain_failure("health", 1, "BOSS_UNHEALTHY 502", url="http://x")["cause"] \

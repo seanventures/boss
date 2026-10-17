@@ -53,7 +53,7 @@ def test_nothing_changes_without_resources():
 def test_an_unreachable_boss_service_is_bosss_to_fix_not_the_apps():
     tail = ("BOSS_UNHEALTHY 000\n--- helpdesk-ai-app-1 (last lines) ---\n"
             "[helpdesk-ai] failed to start: Error: getaddrinfo EAI_AGAIN res-db\n")
-    said = sd.explain_failure("health", 1, tail, host="2.29.2.202", url="http://x/readyz",
+    said = sd.explain_failure("health", 1, tail, host="203.0.113.10", url="http://x/readyz",
                               timeout=600)
     assert said["cause"] == sd.CAUSE_HOST and "res-db" in said["headline"]
     # A health check failing for the app's own reason is still the app's.
@@ -65,7 +65,7 @@ def test_a_failed_health_check_collects_what_the_containers_said():
     seen = []
 
     class Access:
-        host = "2.29.2.202"
+        host = "203.0.113.10"
 
         def run(self, command, timeout=0, write=False):
             seen.append((command, write))

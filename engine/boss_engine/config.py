@@ -1124,7 +1124,17 @@ class Settings(BaseSettings):
     # step starts by itself when its deployment fails for the APP's reason (a runtime the machine
     # lacks, a manifest that does not fit, the app's own install/health error). 0 = never; the
     # step then fails for a person as before. Govern sets it per project (`deploy_fix_attempts`).
-    deploy_fix_attempts: int = Field(default=2, alias="BOSS_DEPLOY_FIX_ATTEMPTS")
+    # Since the recovery agent (services/step_recovery.py) decides each failure, this is a HARD
+    # CEILING on repair builds per deploy step, not the loop's limit (that is the budget below).
+    deploy_fix_attempts: int = Field(default=4, alias="BOSS_DEPLOY_FIX_ATTEMPTS")
+    # THE RECOVERY AGENT (services/step_recovery.py): a failed deploy/build step is recovered by
+    # the step's own agent — retry, fix the app, clean this app's earlier release, wait for a
+    # BOSS fix, or ask a person one question — until it succeeds or this window's budget is
+    # spent: a cost ceiling in cents (its model turns plus the repair builds it starts) and a
+    # wall-time ceiling in minutes. 0 turns the agent off (failures go to a person as before).
+    step_recovery: int = Field(default=1, alias="BOSS_STEP_RECOVERY")
+    recovery_budget_cents: int = Field(default=500, alias="BOSS_RECOVERY_BUDGET_CENTS", ge=0)
+    recovery_max_minutes: int = Field(default=120, alias="BOSS_RECOVERY_MAX_MINUTES", ge=1)
     # THE MODEL PRE-CHECK (services/workflow_precheck_agent.py): an agent that reads the coded
     # pre-check's evidence and predicts what the coded checks do not cover. Off at the start
     # door by default, so starting a workflow is neither slower nor costs money unasked; the

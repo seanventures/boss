@@ -82,10 +82,10 @@ const GUIDE = {
     guide: "# Login with Google, GitHub or BOSS: setup\n\n## Google\n\n1. Open the Google Cloud console.",
     copy: { preview_url: "(the preview is reachable inside BOSS only: set BOSS's public address)",
             public_url: "(BOSS has no public address yet: set BOSS_PUBLIC_URL)",
-            redirect_uri: "<preview>/auth/callback", deploy_url: "http://2.29.2.202:8000",
-            "callback_url:google": "http://2.29.2.202:8000/auth/callback/google",
-            "callback_url:github": "http://2.29.2.202:8000/auth/callback/github",
-            "callback_url:boss": "http://2.29.2.202:8000/auth/callback/boss" } }],
+            redirect_uri: "<preview>/auth/callback", deploy_url: "http://203.0.113.10:8000",
+            "callback_url:google": "http://203.0.113.10:8000/auth/callback/google",
+            "callback_url:github": "http://203.0.113.10:8000/auth/callback/github",
+            "callback_url:boss": "http://203.0.113.10:8000/auth/callback/boss" } }],
 };
 const BOSS_OFF = { app_key: "helpdesk ai", template_applied: true, connected: false, secrets: { preview: [], deploy: [] }, client: null };
 
@@ -212,14 +212,14 @@ describe("a row per provider, with its status", () => {
 
 describe("a warning only when an address cannot work", () => {
   it("Google: http:// off localhost, and a bare IP", () => {
-    expect(addressProblem("http://2.29.2.202:8000/auth/callback/google", "google")).toMatch(/only https:\/\/ callbacks on a domain name/);
+    expect(addressProblem("http://203.0.113.10:8000/auth/callback/google", "google")).toMatch(/only https:\/\/ callbacks on a domain name/);
     expect(addressProblem("http://helpdesk.acme.dev/auth/callback/google", "google")).toMatch(/only https:\/\//);
     expect(addressProblem("https://203.0.113.9/auth/callback/google", "google")).toMatch(/bare IP/);
     expect(addressProblem("http://localhost:3000/auth/callback/google", "google")).toBe("");
     expect(addressProblem("https://helpdesk.acme.dev/auth/callback/google", "google")).toBe("");
   });
   it("GitHub accepts http; nobody can reach an address inside BOSS", () => {
-    expect(addressProblem("http://2.29.2.202:8000/auth/callback/github", "github")).toBe("");
+    expect(addressProblem("http://203.0.113.10:8000/auth/callback/github", "github")).toBe("");
     expect(addressProblem("http://api:3001/v1/previews/p1/web/auth/callback/github", "github")).toMatch(/inside BOSS/);
     expect(isInternalHost("api")).toBe(true);
     expect(isInternalHost("localhost")).toBe(false);
@@ -231,7 +231,7 @@ describe("a warning only when an address cannot work", () => {
     const old = parseSetupGuides({ ...GUIDE, preview: { running: true, url: "http://api:3001/v1/previews/p1/web", reach: "public" } });
     expect(previewReachWords(old.addresses)).toMatch(/inside BOSS only/);
     const cbs = providerCallbacks({ provider: "google", guide: { ...g.guides[0], copy: { ...g.guides[0].copy, redirect_uri: "http://api:3001/v1/previews/p1/web/auth/callback" } }, addresses: old.addresses });
-    expect(cbs.callbacks.map((c) => c.url)).toEqual(["http://2.29.2.202:8000/auth/callback/google"]);
+    expect(cbs.callbacks.map((c) => c.url)).toEqual(["http://203.0.113.10:8000/auth/callback/google"]);
     expect(cbs.missing[0]).toMatch(/inside BOSS only/);
   });
   it("a public preview gives its callback, with no warning for an https address", () => {
@@ -309,7 +309,7 @@ describe("HelpDesk AI's Connectors", () => {
     // Google warns about http + IP; GitHub, on the same address, does not.
     expect($('[data-testid="tpl-warning-login-oauth-google-deploy"]').textContent).toMatch(/https/);
     expect($('[data-testid="tpl-warning-login-oauth-github-deploy"]')).toBeNull();
-    expect($('[data-testid="tpl-callback-login-oauth-google-deploy"]').textContent).toContain("http://2.29.2.202:8000/auth/callback/google");
+    expect($('[data-testid="tpl-callback-login-oauth-google-deploy"]').textContent).toContain("http://203.0.113.10:8000/auth/callback/google");
     expect($('[data-testid="tpl-callback-missing-login-oauth-google"]').textContent).toMatch(/inside BOSS only/);
     expect(document.body.textContent).not.toContain("api:3001");
     // No per-secret Build/Preview/Deploy chips for the provider secrets.
