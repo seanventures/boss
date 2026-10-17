@@ -3064,19 +3064,23 @@ export function FailedStepActions({ step, capability, actions, busy, onRetry, on
                 setSkipOpen(false);
                 setSkipWhy("");
               }}>
+          <div className="dw-retry-title">Skip {name}</div>
+          <p className="dw-retry-what">The run carries on without it; later steps are told it was skipped.</p>
           <label>
-            Why go on without {name}?{" "}
+            Why go on without {name}?
             <input type="text" value={skipWhy} autoFocus required
                    data-testid={`${idPrefix}-skip-reason`}
                    placeholder="kept on the run's record"
                    onChange={(e) => setSkipWhy(e.target.value)} />
           </label>
-          <button type="submit" className="cap-btn primary"
-                  disabled={!!busy || !skipWhy.trim()} data-testid={`${idPrefix}-skip-confirm`}>
-            Skip it
-          </button>
-          <button type="button" className="linklike"
-                  onClick={() => { setSkipOpen(false); setSkipWhy(""); }}>Cancel</button>
+          <div className="dw-retry-actions">
+            <button type="submit" className="cap-btn primary"
+                    disabled={!!busy || !skipWhy.trim()} data-testid={`${idPrefix}-skip-confirm`}>
+              Skip it
+            </button>
+            <button type="button" className="linklike"
+                    onClick={() => { setSkipOpen(false); setSkipWhy(""); }}>Cancel</button>
+          </div>
         </form>
       ) : null}
     </div>
