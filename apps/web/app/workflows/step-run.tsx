@@ -81,7 +81,7 @@ export type OutputFact = { label: string; value: string; tip?: string; href?: st
 const ID_LINKS: Array<[RegExp, string, (id: string) => string]> = [
   [/^deprun_/, "Deployment", (id) => `?area=infra&view=deploys&deploy=${encodeURIComponent(`delivery:${id}`)}`],
   [/^sdep_/, "Deployment", (id) => `?area=infra&view=deploys&deploy=${encodeURIComponent(`stack:${id}`)}`],
-  [/^dec_/, "Decision", (id) => `?area=approvals&decision=${encodeURIComponent(id)}`],
+  [/^dec_/, "Decision", (id) => `?area=decisions&decision=${encodeURIComponent(id)}`],
   [/^chg_/, "Change set", (id) => `?area=infra&view=cloud&cloud=changes&changeset=${encodeURIComponent(id)}`],
   [/^crun_/, "Build", (id) => `?area=code_tasks&build=${encodeURIComponent(id)}`],
   [/^wfr_/, "Workflow run", (id) => `?area=delivery_workflows&wfr=${encodeURIComponent(id)}`],

@@ -2,7 +2,7 @@
   "name": "@boss/api-client",
   "private": true,
   "license": "Apache-2.0",
-  "version": "1.0.0-rc.10.6",
+  "version": "1.0.0-rc.10.7",
   "type": "module",
   "exports": {
     ".": "./src/community.ts",

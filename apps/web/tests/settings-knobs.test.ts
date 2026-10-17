@@ -66,7 +66,7 @@ describe("the knob is read by the thing it governs", () => {
     expect(GOV).toContain('_effective_setting(');
     expect(GOV).toContain('"code_agent_max_concurrency"');
     // ...through the one helper the Govern board also shows, so the two cannot disagree.
-    expect(GOV).toContain("effective_review_lanes(_lanes, panel_size=len(checks))");
+    expect(GOV).toContain("effective_review_lanes(_lanes, panel_size=len(guarded))");
   });
 
   it("falls back to the environment when the project has said nothing", () => {
