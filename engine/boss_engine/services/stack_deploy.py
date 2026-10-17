@@ -2678,12 +2678,47 @@ def stack_target_for_deploy(connection: Connection, project_id: str,
              "AND status = 'active' AND (:e = '' OR environment = :e) ORDER BY created_at"),
         {"p": project_id, "k": TARGET_KIND, "e": environment}).mappings().all()]
     rows = [r for r in rows if _same_repository(r.get("repo"), repository)]
+    # THE APP'S OWN TARGET, NEVER THE REPOSITORY'S. A shared repository holds several apps:
+    # paramg/boss-sandbox has HelpDesk AI's stack target, and a second app built there (Order
+    # API) matched it as "the one stack target for this repository" — its first deploy would
+    # have been planned onto HelpDesk's target, with HelpDesk's manifest path, at the new app's
+    # commit. A target is this build's when it ships this build's manifest, was shipped by this
+    # build's lineage, or carries this app's name.
+    rows = _targets_of_this_app(connection, rows, run_id)
     if len(rows) == 1:
         return rows[0]
     if rows:
         return None
     return _declared_stack_target(connection, project_id, inputs, None, default_owner,
                                   create=create)
+
+
+def _targets_of_this_app(connection: Connection, rows: list[dict],
+                         run_id: str) -> list[dict]:
+    if not rows:
+        return rows
+    from .delivery_pipeline import app_name_of_run
+
+    manifest = declared_manifest_for_run(connection, run_id)
+    lineage = {a["id"] for a in lineage_of(connection, run_id)} or {run_id}
+    shipped = {str(r[0]) for r in connection.execute(
+        text("SELECT DISTINCT target_id FROM stack_deployments "
+             "WHERE code_task_run_id = ANY(:ids)"), {"ids": list(lineage)}).all()}
+    run = connection.execute(
+        text("SELECT id, title, finalize_ctx FROM code_task_runs WHERE id = :i"),
+        {"i": run_id}).mappings().first()
+    name = app_name_of_run(run) if run else ""
+    mine = [r for r in rows
+            if r["id"] in shipped
+            or (manifest and str(r.get("manifest_path") or "") == manifest)
+            or (name and _same_app(r, name))]
+    if mine:
+        return mine
+    # Nothing ties a target to this build. When the build DECLARED its own manifest, it is an
+    # app of its own (its first deploy makes its target: _declared_stack_target). When it
+    # declared nothing — a feature whose files were never recorded — the repository's stack
+    # target is the app, as it always was in a repository that holds one.
+    return [] if manifest else rows
 
 
 _POSTGRES_IMAGE = re.compile(r"""image:\s*["']?[\w./-]*(postgres|postgis)""", re.I)
