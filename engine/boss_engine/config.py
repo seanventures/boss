@@ -1135,6 +1135,25 @@ class Settings(BaseSettings):
     step_recovery: int = Field(default=1, alias="BOSS_STEP_RECOVERY")
     recovery_budget_cents: int = Field(default=500, alias="BOSS_RECOVERY_BUDGET_CENTS", ge=0)
     recovery_max_minutes: int = Field(default=120, alias="BOSS_RECOVERY_MAX_MINUTES", ge=1)
+    # BOSS FIXES ITSELF (services/self_fix.py, docs/product/BOSS_FIXES_ITSELF.md §8.4, §11.5). A
+    # BOSS-side failure starts a self-fix on BOSS's own source; a person approves every install.
+    # BOSS_SELF_FIX=off (any TELEMETRY_OFF_WORDS word) beats everything and is read on every call;
+    # the org switch (Govern › Self-fix, system_state 'self_fix') is next. These are the
+    # install-wide defaults the switch's settings override.
+    self_fix_min_confidence: str = Field(default="medium", alias="BOSS_SELF_FIX_MIN_CONFIDENCE")
+    self_fix_budget_cents: int = Field(default=1000, alias="BOSS_SELF_FIX_BUDGET_CENTS", ge=0)
+    self_fix_month_cents: int = Field(default=5000, alias="BOSS_SELF_FIX_MONTH_CENTS", ge=0)
+    self_fix_max_minutes: int = Field(default=60, alias="BOSS_SELF_FIX_MAX_MINUTES", ge=1)
+    self_fix_attempts_per_signature: int = Field(
+        default=2, alias="BOSS_SELF_FIX_ATTEMPTS_PER_SIGNATURE", ge=0)
+    self_fix_max_diff_lines: int = Field(default=300, alias="BOSS_SELF_FIX_MAX_DIFF_LINES", ge=1)
+    self_fix_health_minutes: int = Field(default=10, alias="BOSS_SELF_FIX_HEALTH_MINUTES", ge=1)
+    # The self-source mirror (spec §6.1): a bare clone of the install's checkout, seeded by the
+    # host self-installer (`boss self-fix seed`), mounted read-write into the API and the worker.
+    self_fix_source: str = Field(default="/var/lib/boss/selfsrc/boss.git",
+                                 alias="BOSS_SELF_FIX_SOURCE")
+    # Where self-fix builds check BOSS out and run its tests ("" = <artifact root>/self-fix).
+    self_fix_work_dir: str = Field(default="", alias="BOSS_SELF_FIX_WORK_DIR")
     # THE MODEL PRE-CHECK (services/workflow_precheck_agent.py): an agent that reads the coded
     # pre-check's evidence and predicts what the coded checks do not cover. Off at the start
     # door by default, so starting a workflow is neither slower nor costs money unasked; the

@@ -351,6 +351,14 @@ class DecisionService:
                 require_a_person(connection, row, actor, system_policy=system_policy)
             except ArchitectureApprovalRefused as refused:
                 raise InvalidDecisionTransitionError(str(refused)) from refused
+            # A BOSS SELF-FIX INSTALL IS APPROVED BY A PERSON (BOSSAPP-571 R5): never a policy,
+            # an agent or a system account — refused before anything is recorded.
+            from .self_fix_install import InstallRefused, refuse_policy_approval
+
+            try:
+                refuse_policy_approval(row, system_policy=system_policy, actor=actor)
+            except InstallRefused as refused:
+                raise InvalidDecisionTransitionError(str(refused)) from refused
         identity_ctx = None if system_policy else _identity_decides(connection, row)
         if system_policy and action == "approve" and actor == SYSTEM_ACTOR:
             pass
@@ -964,6 +972,16 @@ class DecisionService:
             self.role_governance.apply_decision_outcome(
                 connection, row, "approve", actor, row.get("resolution_note")
             )
+        elif action == "self_fix.install":
+            # A person approved a BOSS self-fix: it is approved and its signed, single-use
+            # install ticket issued for the host self-installer (services/self_fix_install.py).
+            # Refused (the approval not recorded) when BOSS's stack moved since it was checked.
+            from .self_fix_install import InstallRefused, on_approved as approve_self_fix
+
+            try:
+                approve_self_fix(connection, self.settings, row, actor)
+            except InstallRefused as refused:
+                raise InvalidDecisionTransitionError(str(refused)) from refused
         elif action == "deploy_stack":
             # A stack deployment held for approval: approving it approves its ChangeSet and
             # queues the apply as a durable worker job (services/stack_deploy.py).
@@ -1068,6 +1086,15 @@ class DecisionService:
             self.role_governance.apply_decision_outcome(
                 connection, row, action, actor, note
             )
+        elif recommendation_action == "self_fix.install":
+            # Request changes: one more repair round with the note, then a new card. Reject: the
+            # self-fix ends and its recommendation reopens with the person's note.
+            from .self_fix_install import on_rejected, on_revise
+
+            if action == "revise":
+                on_revise(connection, row, actor, note)
+            else:
+                on_rejected(connection, row, actor, note)
         elif recommendation_action == "review_architecture":
             # Changes requested (the architect revises from the note) or rejected (the step
             # fails and the run stops) — architecture_docs.
@@ -2237,8 +2264,9 @@ def approve_by_policy(connection: Connection, decision_id: str, *, project_id: s
         {"id": decision_id, "p": project_id}).mappings().first()
     if row is None or row["status"] != "pending":
         return False
-    if row.get("action") == "review_architecture":
-        # An architecture is approved by a person, never by a setting (architecture_docs).
+    if row.get("action") in ("review_architecture", "self_fix.install"):
+        # An architecture, and a BOSS self-fix install, are approved by a person, never by a
+        # setting (architecture_docs, self_fix_install; auto-install is off in v1).
         return False
     tier = int(row["risk_tier"] or 0)
     if _approvals.seats_for_tier(tier) or tier in _approvals.TWO_PERSON_TIERS:

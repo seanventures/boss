@@ -63,6 +63,10 @@ DIRECT_INSERTS = {
     ("engine/boss_engine/services/canonical.py", "_create_meeting_decision"),
     ("engine/boss_engine/services/role_governance.py", "_create_autonomy_change_decision"),
     ("engine/boss_engine/templates/secrets.py", "_live_decision"),
+    # BOSS fixes itself: the install card (self_fix.install) and the incident a failed rollback
+    # raises for a person (review_rollback_or_retry).
+    ("engine/boss_engine/services/self_fix_install.py", "request_approval"),
+    ("engine/boss_engine/services/self_fix_install.py", "_incident"),
 }
 #: The Postgres body of create_blocking_decision: its callers are the producers scanned above.
 SINK_INSERTS = {("engine/boss_engine/services/core.py", "_create_blocking_decision_postgres")}

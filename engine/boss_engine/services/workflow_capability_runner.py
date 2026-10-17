@@ -31,7 +31,7 @@ from sqlalchemy.engine import Connection
 
 from ..config import get_settings
 from . import (agent_acts, change_record, deploy_repair, step_agents,
-               step_recovery, workflows)
+               self_fix, step_recovery, workflows)
 from . import workflow_custom_steps as custom_steps
 from .core import emit_event, now_utc
 # Named import so "who approved this" is compared against one constant rather than a
@@ -3665,12 +3665,11 @@ def _recover_refused_plan(
     elif action in (step_recovery.RETRY, step_recovery.CLEAN_AND_RETRY):
         return {**carry, "status": "awaiting",
                 "await": step_recovery.run_again_handle(entry, kind="deploy")}
-    elif action == step_recovery.WAIT_FOR_BOSS:
-        rec = step_recovery.recommend_boss_fix(connection, settings, project_id=project_id,
-                                               run_id=run_id, step_id=step_id, entry=entry,
-                                               evidence=evidence)
-        return {**carry, "status": "awaiting", "boss_recommendation_id": rec.get("id"),
-                "await": step_recovery.boss_update_handle(entry, kind="deploy")}
+    elif action in step_recovery.BOSS_SIDE_ACTIONS:
+        handle, merge = _boss_side_wait(connection, ctx, project_id=project_id, run_id=run_id,
+                                        step_id=step_id, kind="deploy", entry=entry,
+                                        evidence=evidence, state=state)
+        return {**carry, **merge, "status": "awaiting", "await": handle}
     if why_not:
         entry = step_recovery.record_ask(
             connection, project_id=project_id, run_id=run_id, step_id=step_id, state=state,
@@ -3681,6 +3680,89 @@ def _recover_refused_plan(
             "recovery_question": entry.get("question"), "error": step_recovery.ask_error(entry),
             **({"recovery_resume_on_update": step_recovery.boss_build()}
                if step_recovery.resumes_on_update(entry, failure) else {})}
+
+
+def _boss_side_wait(connection: Connection, ctx: Any, *, project_id: str, run_id: str,
+                    step_id: str, kind: str, entry: dict[str, Any], evidence: dict[str, Any],
+                    state: dict[str, Any], build_run_id: Optional[str] = None
+                    ) -> tuple[dict[str, Any], dict[str, Any]]:
+    """A BOSS-side decision (wait_for_boss or fix_boss): recorded for BOSS's developers as
+    always, then considered for a SELF-FIX (services/self_fix.py, BOSSAPP-571). Returns (the
+    step's await handle, what goes on its output): the self-fix's own handle when one started
+    or another one already holds this cause; today's wait for a BOSS update otherwise, with the
+    reason the self-fix did not start."""
+    settings = getattr(ctx, "settings", None) or get_settings()
+    rec = step_recovery.recommend_boss_fix(connection, settings, project_id=project_id,
+                                           run_id=run_id, step_id=step_id, entry=entry,
+                                           evidence=evidence)
+    try:
+        with connection.begin_nested():
+            proposed = self_fix.propose(
+                connection, settings, project_id=project_id, run_id=run_id, step_id=step_id,
+                kind=kind, entry=entry, evidence=evidence, state=state,
+                recommendation_id=rec.get("id"), jobs=getattr(ctx, "jobs", None))
+    except Exception as error:  # noqa: BLE001 — a self-fix that cannot start is today's wait
+        log.warning("self-fix for %s/%s did not start: %s", run_id, step_id, error)
+        proposed = {"outcome": "skipped",
+                    "why": f"BOSS could not start a self-fix ({type(error).__name__})"}
+    merge: dict[str, Any] = {"boss_recommendation_id": rec.get("id")}
+    if proposed.get("outcome") in ("started", "waiting_on"):
+        sfx = proposed["self_fix"]
+        waiting = proposed["outcome"] == "waiting_on"
+        handle = self_fix.handle_for(sfx, step_kind=kind, waiting_on=waiting,
+                                     decision=entry.get("n"), build_run_id=build_run_id)
+        merge.update({"self_fix_id": sfx["id"],
+                      "note": (f"BOSS is already fixing this ({sfx['id']}); this step waits "
+                               "for that fix." if waiting else self_fix.step_line(sfx))})
+        return handle, merge
+    merge.update({"note": entry["sentence"], "self_fix_skipped": proposed.get("why") or ""})
+    return step_recovery.boss_update_handle(entry, kind=kind, build_run_id=build_run_id), merge
+
+
+def _follow_self_fix(connection: Connection, ctx: Any, *, project_id: str, run_id: str,
+                     step: Any, output: dict[str, Any], handle: dict[str, Any]
+                     ) -> Optional[dict[str, Any]]:
+    """A step waiting on a self-fix (its own, or another run's that holds the same cause): it
+    resumes when the fix is installed and running, and falls back to today's wait for a BOSS
+    update when the self-fix ended without holding — a person's own fix still resumes it."""
+    verdict, why, sfx = self_fix.handle_verdict(connection, handle)
+    step_id = str(step["step_id"])
+    if verdict == "wait":
+        line = self_fix.step_line(sfx) if sfx else why
+        if line and line != output.get("note"):
+            connection.execute(
+                text("UPDATE workflow_step_runs SET output = COALESCE(output, '{}'::jsonb) || "
+                     "CAST(:o AS JSONB), updated_at = now() WHERE id = :i AND status = "
+                     "'waiting'"), {"i": step["id"], "o": json.dumps({"note": line})})
+        return None
+    if verdict == "fallback":
+        fallback = {"kind": step_recovery.AWAIT_KIND, "then": step_recovery.THEN_BOSS_UPDATE,
+                    "step_kind": handle.get("step_kind") or "deploy",
+                    "decision": handle.get("decision"), "boss_build": step_recovery.boss_build(),
+                    "signature": handle.get("signature"),
+                    **({"build_run_id": handle["build_run_id"]}
+                       if handle.get("build_run_id") else {})}
+        _park_for_recovery(connection, project_id, step["id"], fallback, {
+            "note": f"BOSS did not fix itself ({why}); this step resumes by itself when BOSS "
+                    "is updated.", "self_fix_outcome": (sfx or {}).get("status")})
+        return {"run_id": run_id, "step_id": step_id, "outcome": "waiting_for_boss",
+                "awaited": "self_fix", "because": why}
+    if ctx is None:
+        return None  # a revival sweep never resumes work
+    own = not handle.get("waiting_on") and sfx is not None and sfx.get("run_id") == run_id \
+        and sfx.get("step_id") == step_id
+    self_fix.mark_resumed(connection, str(handle.get("id")), run_id=run_id, step_id=step_id,
+                          own=own)
+    resumed = _resume_recovery(
+        connection, ctx, project_id=project_id, run_id=run_id, step=step, output=output,
+        handle={"kind": step_recovery.AWAIT_KIND, "then": step_recovery.THEN_BOSS_UPDATE,
+                "step_kind": handle.get("step_kind") or "deploy",
+                "decision": handle.get("decision"), "signature": handle.get("signature"),
+                **({"build_run_id": handle["build_run_id"]} if handle.get("build_run_id")
+                   else {})},
+        note=f"BOSS fixed itself ({handle.get('id')}) — trying the step again",
+        self_fix_id=str(handle.get("id")))
+    return resumed
 
 
 def _recover_awaited(
@@ -3738,19 +3820,18 @@ def _recover_awaited(
                            step_recovery.run_again_handle(entry, kind=kind),
                            {"note": entry["sentence"], step_recovery.STATE_KEY: state})
         return {"done": {**done, "outcome": "will_run_again"}}
-    elif action == step_recovery.WAIT_FOR_BOSS:
-        settings = getattr(ctx, "settings", None) or get_settings()
-        rec = step_recovery.recommend_boss_fix(connection, settings, project_id=project_id,
-                                               run_id=run_id, step_id=step_id, entry=entry,
-                                               evidence=evidence)
-        _park_for_recovery(connection, project_id, step["id"],
-                           step_recovery.boss_update_handle(
-                               entry, kind=kind,
-                               build_run_id=str(failure.get("build_run_id") or "") or None),
-                           {"note": entry["sentence"], step_recovery.STATE_KEY: state,
-                            "boss_recommendation_id": rec.get("id")})
-        return {"done": {**done, "outcome": "waiting_for_boss",
-                         "recommendation": rec.get("id")}}
+    elif action in step_recovery.BOSS_SIDE_ACTIONS:
+        handle, merge = _boss_side_wait(
+            connection, ctx, project_id=project_id, run_id=run_id, step_id=step_id, kind=kind,
+            entry=entry, evidence=evidence, state=state,
+            build_run_id=str(failure.get("build_run_id") or "") or None)
+        _park_for_recovery(connection, project_id, step["id"], handle,
+                           {**merge, step_recovery.STATE_KEY: state})
+        return {"done": {**done, "outcome": ("fixing_boss" if handle.get("kind") ==
+                                             self_fix.AWAIT_KIND else "waiting_for_boss"),
+                         "recommendation": merge.get("boss_recommendation_id"),
+                         **({"self_fix": merge["self_fix_id"]} if merge.get("self_fix_id")
+                            else {})}}
     if why_not:
         entry = step_recovery.record_ask(
             connection, project_id=project_id, run_id=run_id, step_id=step_id, state=state,
@@ -3872,7 +3953,8 @@ def _recover_open_findings(
 
 
 def _resume_recovery(connection: Connection, ctx: Any, *, project_id: str, run_id: str,
-                     step: Any, output: dict[str, Any], handle: dict[str, Any]
+                     step: Any, output: dict[str, Any], handle: dict[str, Any],
+                     note: Optional[str] = None, self_fix_id: Optional[str] = None
                      ) -> Optional[dict[str, Any]]:
     """A step the recovery loop parked, whose wait is over (its backoff passed, or BOSS was
     updated): a deploy step is queued to plan again (with this app's earlier releases to retire,
@@ -3882,10 +3964,13 @@ def _resume_recovery(connection: Connection, ctx: Any, *, project_id: str, run_i
     updated = handle.get("then") == step_recovery.THEN_BOSS_UPDATE
     if updated:
         state = step_recovery.open_window(
-            state, why=f"BOSS was updated (now {step_recovery.boss_build()})")
+            state, why=(f"BOSS fixed itself ({self_fix_id}; now {step_recovery.boss_build()})"
+                        if self_fix_id else f"BOSS was updated (now {step_recovery.boss_build()})"))
     agent = state.get("agent") or "BOSS"
     retiring = bool(handle.get("retire_projects"))
-    note = (f"{agent}: BOSS was updated — trying again" if updated else
+    why_resumed = "self_fix_installed" if self_fix_id else "boss_updated"
+    note = (f"{agent}: {note}" if note else
+            f"{agent}: BOSS was updated — trying again" if updated else
             f"{agent}: retiring this app's earlier release and deploying again" if retiring else
             f"{agent}: trying again")
     kind = str(handle.get("step_kind") or "deploy")
@@ -3898,10 +3983,12 @@ def _resume_recovery(connection: Connection, ctx: Any, *, project_id: str, run_i
                         "decision": handle.get("decision")},
                     step_recovery.STATE_KEY: state, "note": note},
             event=step_recovery.RESUMED_EVENT,
-            data={"why": "boss_updated" if updated else "backoff_over", "sentence": note,
+            data={"why": why_resumed if updated else "backoff_over", "sentence": note,
+                  **({"self_fix_id": self_fix_id} if self_fix_id else {}),
                   **({"retire_projects": handle["retire_projects"]} if retiring else {})})
         return {"run_id": run_id, "step_id": step_id, "outcome": "running_again",
-                "awaited": "recovery", "why": "boss_updated" if updated else "backoff_over"}
+                "awaited": "self_fix" if self_fix_id else "recovery",
+                "why": why_resumed if updated else "backoff_over"}
     build_run_id = str(handle.get("build_run_id") or "")
     new_id, why_not = _start_recovery_build(
         connection, ctx, project_id=project_id, run_id=run_id, step_id=step_id,
@@ -3923,10 +4010,11 @@ def _resume_recovery(connection: Connection, ctx: Any, *, project_id: str, run_i
                        {"code_task_run_id": new_id, "note": note,
                         step_recovery.STATE_KEY: state})
     emit_event(connection, project_id, step_recovery.RESUMED_EVENT, "boss", "workflow_run",
-               run_id, {"step_id": step_id, "why": "boss_updated", "build_run_id": new_id,
-                        "sentence": note})
+               run_id, {"step_id": step_id, "why": why_resumed, "build_run_id": new_id,
+                        "sentence": note,
+                        **({"self_fix_id": self_fix_id} if self_fix_id else {})})
     return {"run_id": run_id, "step_id": step_id, "outcome": "building_again",
-            "awaited": "recovery", "now": new_id}
+            "awaited": "self_fix" if self_fix_id else "recovery", "now": new_id}
 
 
 def _revive_after_boss_update(connection: Connection, *, project_id: str, run_id: str,
@@ -4639,6 +4727,15 @@ def resume_awaited(
     ).mappings().all()
 
     done: list[dict[str, Any]] = []
+    # THE VERDICT OF A RESUMED SELF-FIX (Stage 12): the step it was for passed, or failed for a
+    # new cause (verified), or for the same one (rolled back).
+    try:
+        with connection.begin_nested():
+            for settled in self_fix.settle_run(
+                    connection, getattr(ctx, "settings", None) or get_settings(), run_id=run_id):
+                done.append({"run_id": run_id, "outcome": "self_fix_settled", **settled})
+    except Exception as error:  # noqa: BLE001 — a verdict never stops the sweep
+        log.warning("self-fix verdicts for %s not settled: %s", run_id, error)
     for step in parked:
         output = step["output"] or {}
         if isinstance(output, str):
@@ -4672,6 +4769,14 @@ def resume_awaited(
                                                       run_id=run_id, step=step, output=output))
             continue
 
+        if kind == self_fix.AWAIT_KIND:
+            # WAITING ON A BOSS SELF-FIX (services/self_fix.py): resumes when the fix is
+            # installed and running; falls back to a BOSS-update wait when it did not hold.
+            followed = _follow_self_fix(connection, ctx, project_id=project_id, run_id=run_id,
+                                        step=step, output=output, handle=handle)
+            if followed:
+                done.append(followed)
+            continue
         if kind == step_recovery.AWAIT_KIND:
             # PARKED BY THE RECOVERY LOOP: a backoff, or a BOSS update. Nothing moves without a
             # worker context (a revival sweep), and nothing before its wait is over.

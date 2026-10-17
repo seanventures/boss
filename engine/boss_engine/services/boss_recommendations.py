@@ -39,7 +39,9 @@ from .core import emit_event, make_id, now_utc
 log = logging.getLogger(__name__)
 
 EVENT = "boss.recommendation_recorded"
-STATUSES = ("open", "done", "wont_fix")
+#: open → fixing (a self-fix is working on it) → implemented (verified on this box) → done (in a
+#: release). A cause seen again after `implemented` or `done` reopens it.
+STATUSES = ("open", "fixing", "implemented", "done", "wont_fix")
 FILE_DIR = "boss-improvements"
 FILE_NAME = "RECOMMENDATIONS.md"
 MAX_REFS = 25
@@ -111,7 +113,8 @@ def _record(connection: Connection, *, project_id: str, signature: str, title: s
         occurrences = int(row["occurrences"] or 1) + (0 if seen else 1)
         connection.execute(
             text("UPDATE boss_recommendations SET refs = CAST(:r AS JSONB), occurrences = :n, "
-                 "status = CASE WHEN status = 'done' THEN 'open' ELSE status END, "
+                 "status = CASE WHEN status IN ('done', 'implemented') THEN 'open' "
+                 "ELSE status END, "
                  "updated_at = now() WHERE id = :i"),
             {"r": json.dumps(refs), "n": occurrences, "i": row["id"]})
         return {"id": row["id"], "created": False, "occurrences": occurrences}
@@ -141,7 +144,8 @@ def list_recommendations(connection: Connection, project_id: str, *,
     rows = connection.execute(
         text("SELECT id, signature, status, title, symptom, evidence, root_cause, "
              "proposed_change, files, refs, occurrences, boss_version, created_by, created_at, "
-             "updated_at FROM boss_recommendations WHERE project_id = :p "
+             "updated_at, self_fix_id, class_signature, attempts FROM boss_recommendations "
+             "WHERE project_id = :p "
              "AND (CAST(:s AS TEXT) IS NULL OR status = :s) ORDER BY created_at"),
         {"p": project_id, "s": status}).mappings().all()
     from .self_fix_privacy import mask_value
@@ -150,7 +154,7 @@ def list_recommendations(connection: Connection, project_id: str, *,
     out = []
     for r in rows:
         item = dict(r)
-        for key in ("evidence", "files", "refs"):
+        for key in ("evidence", "files", "refs", "attempts"):
             item[key] = _json(item.get(key), [])
         # Masked on read too: a row written before the rule must never be served with an
         # address (the prose fields only; ids, the signature and the refs are BOSS's own).
@@ -170,6 +174,29 @@ def set_status(connection: Connection, project_id: str, rec_id: str, status: str
         text("UPDATE boss_recommendations SET status = :s, updated_at = now() "
              "WHERE id = :i AND project_id = :p"), {"s": status, "i": rec_id, "p": project_id})
     return bool(done.rowcount)
+
+
+def link_self_fix(connection: Connection, project_id: str, rec_id: str, self_fix_id: str,
+                  class_signature: str) -> None:
+    """A self-fix started on this cause: the recommendation says so (status `fixing`)."""
+    connection.execute(
+        text("UPDATE boss_recommendations SET status = 'fixing', self_fix_id = :f, "
+             "class_signature = :c, updated_at = now() WHERE id = :i AND project_id = :p"),
+        {"f": self_fix_id, "c": class_signature[:300], "i": rec_id, "p": project_id})
+
+
+def record_attempt(connection: Connection, project_id: str, rec_id: str,
+                   attempt: Mapping[str, Any]) -> None:
+    """A self-fix for this cause ended without holding (refused, rejected, rolled back): the
+    recommendation is open again, with what was learned, for the person or the next attempt."""
+    from .self_fix_privacy import mask_value
+
+    connection.execute(
+        text("UPDATE boss_recommendations SET status = 'open', "
+             "attempts = (COALESCE(attempts, '[]'::jsonb) || CAST(:a AS JSONB)), "
+             "updated_at = now() WHERE id = :i AND project_id = :p"),
+        {"a": json.dumps([mask_value(dict(attempt), _known(connection))], default=str),
+         "i": rec_id, "p": project_id})
 
 
 def markdown(items: list[Mapping[str, Any]]) -> str:
@@ -201,6 +228,14 @@ def markdown(items: list[Mapping[str, Any]]) -> str:
         files = [f for f in item.get("files") or [] if f]
         if files:
             lines += ["**Where.** " + ", ".join(f"`{f}`" for f in files), ""]
+        if item.get("self_fix_id"):
+            lines += [f"**Self-fix.** {item['self_fix_id']}", ""]
+        tried = [a for a in item.get("attempts") or [] if isinstance(a, dict)]
+        if tried:
+            lines.append("**Tried by BOSS itself, did not hold.**")
+            for a in tried:
+                lines.append(f"- {a.get('self_fix_id')}: {a.get('outcome')} — {a.get('why') or ''}")
+            lines.append("")
         refs = [r for r in item.get("refs") or [] if isinstance(r, dict)]
         if refs:
             lines.append("**Runs.**")
@@ -234,5 +269,6 @@ def write_file(connection: Connection, settings: Any, project_id: str) -> Option
         return None
 
 
-__all__ = ["EVENT", "FILE_NAME", "file_path", "list_recommendations", "markdown", "record",
-           "set_status", "write_file"]
+__all__ = ["EVENT", "FILE_NAME", "STATUSES", "file_path", "link_self_fix",
+           "list_recommendations", "markdown", "record", "record_attempt", "set_status",
+           "write_file"]
