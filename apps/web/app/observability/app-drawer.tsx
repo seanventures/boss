@@ -8,6 +8,7 @@
  *   <latency chart>
  *   TRAFFIC  Requests 42/min · Errors 1.2% · p50 18 ms · p95 240 ms · Alert Within limit
  *            Metrics: scraped 20s ago   (or the failure in words: "Metrics endpoint returned 404")
+ *   INCIDENT   the app's alert, answered (incident-card.tsx), when its metrics carry an incident
  *   INCIDENTS  start · duration (Ongoing) · first error · deploy before it ↗
  *   [Probe now] Open app ↗  Dashboard ↗  Logs ↗  [Ask BOSS]
  *
@@ -25,6 +26,7 @@ import { showToast } from "../client-forms";
 import { notifyChanged } from "../changed";
 import { ago, plainClick, useNow } from "../agents/live-util";
 import type { ObsTabProps } from "./obs-home";
+import { IncidentCard } from "./incident-card";
 import { LatencyChart } from "./latency-chart";
 import { obsWrite } from "./obs-write";
 import { dur, leaveTo, obsAsks } from "./obs-util";
@@ -66,7 +68,8 @@ export function TrafficSection({ m, now }: { m: AppMetrics; now: number | null }
   const win = m.windowMinutes ?? 5;
   const a = m.alert;
   const ruleTip = a ? (a.rule.enabled
-    ? `Alerts when more than ${a.rule.errorRatePercent}% of requests fail (5xx) over ${a.rule.windowMinutes} min, once ${a.rule.minRequests}+ requests were seen. Set metrics.alert in boss.deploy.yaml.`
+    // ≤ 14 words (copy budget): the rule is set by metrics.alert in boss.deploy.yaml.
+    ? `Alerts when more than ${a.rule.errorRatePercent}% of requests fail (5xx) over ${a.rule.windowMinutes} min (${a.rule.minRequests}+ requests)`
     : "Alert switched off in boss.deploy.yaml") : undefined;
   return (
     <DrawerSection label="TRAFFIC" testId="obs-app-traffic">
@@ -166,6 +169,10 @@ export function AppDrawer({ projectId, actor, url, go, pulse, targetId, row }: O
                  onClick={(e) => { if (plainClick(e)) { e.preventDefault(); leaveTo(hostHref(d.facts.host!.id)); } }}>Host ↗</a>
             ) : null}
           </div>
+
+          {d.metrics.alert?.incidentId ? (
+            <IncidentCard projectId={projectId} actor={actor} incidentId={d.metrics.alert.incidentId} />
+          ) : null}
 
           <LatencyChart series={d.series} pins={d.pins} incidents={d.incidents} fromIso={d.window.from} toIso={d.window.to} label={name} />
 

@@ -103,7 +103,7 @@ export type AppMetrics = {
   route: string | null; url: string | null; naming: string | null; intervalS: number | null;
   requests: number | null; errors: number | null; errorRate: number | null; ratePerMin: number | null;
   p50Ms: number | null; p95Ms: number | null; windowMinutes: number | null;
-  alert: { state: AlertState; word: string; incidentId: string | null; since: string | null;
+  alert: { state: AlertState; word: string; incidentId: string | null; incidentStatus: string | null; since: string | null;
            rule: { errorRatePercent: number | null; windowMinutes: number | null; minRequests: number | null; enabled: boolean } } | null;
 };
 const ALERT_STATES = new Set(["firing", "ok", "quiet", "off"]);
@@ -121,7 +121,7 @@ export function parseAppMetrics(w: unknown): AppMetrics {
     windowMinutes: optNum(o.window_minutes),
     alert: a ? {
       state: (ALERT_STATES.has(str(a.state)) ? str(a.state) : "quiet") as AlertState, word: str(a.word),
-      incidentId: optStr(a.incident_id), since: optStr(a.since),
+      incidentId: optStr(a.incident_id), incidentStatus: optStr(a.incident_status), since: optStr(a.since),
       rule: { errorRatePercent: optNum(r.error_rate_percent), windowMinutes: optNum(r.window_minutes),
               minRequests: optNum(r.min_requests), enabled: r.enabled !== false },
     } : null,
