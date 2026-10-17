@@ -240,7 +240,19 @@ export function trialWord(t: TrialResult | null): string {
  * A refusal in plain words: the API's own sentence (`message`), never a code, never a spec
  * reference like "(D3)" or "(§2.4)", never a traceback's internal path.
  */
+/** A request that got NO answer (the browser's "Failed to fetch", Safari's "Load failed", Firefox's
+ *  "NetworkError…", Node's "fetch failed"): BOSS was not reached, which is never the person's or
+ *  the app's fault — said as that, never as the browser's raw words. */
+export function isUnanswered(e: unknown): boolean {
+  return e instanceof TypeError
+    && /failed to fetch|load failed|networkerror|network request failed|fetch failed|network error/i.test(e.message);
+}
+
+export const UNANSWERED_WORDS =
+  "BOSS did not answer: the request never reached it (BOSS may be restarting, or the connection dropped). Try again in a moment.";
+
 export function refusalWords(e: unknown): string {
+  if (isUnanswered(e)) return UNANSWERED_WORDS;
   if (e instanceof IdentityError) {
     const b = e.body;
     const said = typeof b.message === "string" ? b.message

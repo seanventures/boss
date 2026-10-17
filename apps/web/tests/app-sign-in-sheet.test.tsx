@@ -88,6 +88,51 @@ describe("App ▸ Sign-in", () => {
     expect($("[role='alert']")!.textContent).toContain("no sign-in pool yet");
   });
 
+  // HelpDesk AI recording (2026-10-16): the row said the browser's raw "Failed to fetch".
+  it("says plainly when BOSS did not answer, and offers to try again", async () => {
+    let fail = true;
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      if (fail) throw new TypeError("Failed to fetch");
+      return Response.json(OFF);
+    }));
+    await mount(<SignInSheet projectId="p1" appKey="crun_1" app="Login demo" onClose={() => {}} />);
+    await settle();
+    const said = $("[data-testid='fx-signin-error']")!.textContent!;
+    expect(said).toContain("Sign in with BOSS could not be read");
+    expect(said).toContain("BOSS did not answer");
+    expect(said).not.toContain("Failed to fetch");
+    fail = false;
+    await click($("[data-testid='fx-signin-retry']")!);
+    await settle();
+    expect($("[data-testid='fx-signin-error']")).toBeNull();
+    expect($("[data-testid='fx-signin-state']")!.textContent).toBe("Sign in with BOSS is off");
+  });
+
+  it.each([
+    [404, { error: "unknown_app", message: "no such app in this project" }, "No such app in this project"],
+    [403, { detail: { message: "You need project:read here." } }, "You need project:read here"],
+    [401, { detail: "unauthenticated" }, "Your session ended"],
+    [502, { ok: false, error: "connect ECONNREFUSED" }, "BOSS could not answer"],
+  ])("says the API's own reason for HTTP %s", async (status, body, words) => {
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json(body, { status })));
+    await mount(<SignInSheet projectId="p1" appKey="crun_1" app="Login demo" onClose={() => {}} />);
+    await settle();
+    const said = $("[data-testid='fx-signin-error']")!.textContent!;
+    expect(said).toContain(`(HTTP ${status})`);
+    expect(said).toContain(words);
+  });
+
+  it("a press that gets no answer says so and gives the buttons back", async () => {
+    serve(OFF);
+    use.mockRejectedValueOnce(new TypeError("Failed to fetch") as never);
+    await mount(<SignInSheet projectId="p1" appKey="crun_1" app="Login demo" onClose={() => {}} />);
+    await settle();
+    await click($("[data-testid='fx-signin-use']")!);
+    await settle();
+    expect($("[role='alert']")!.textContent).toContain("was not turned on. BOSS did not answer");
+    expect(($("[data-testid='fx-signin-use']") as HTMLButtonElement).disabled).toBe(false);
+  });
+
   it("stops using it", async () => {
     serve(ON, OFF);
     await mount(<SignInSheet projectId="p1" appKey="crun_1" app="Login demo" onClose={() => {}} />);

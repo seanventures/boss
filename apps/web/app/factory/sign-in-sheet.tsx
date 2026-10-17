@@ -15,6 +15,7 @@ import React, { useCallback, useEffect, useState } from "react";
 
 import { callAction } from "../../lib/call-action";
 import { GatedButton } from "../../components/gated";
+import { plainSentence, refusalWords } from "../../lib/templates";
 import { showToast } from "../client-forms";
 import { stopSignInWithBossAction, useSignInWithBossAction } from "./sign-in-actions";
 
@@ -55,14 +56,21 @@ export function useBossSignIn(projectId: string, appKey: string, onChange?: () =
   const [error, setError] = useState("");
   const [busy, setBusy] = useState<"use" | "stop" | null>(null);
 
+  // EVERY WAY THIS READ FAILS IS SAID AS ITS REASON (HelpDesk AI recording, 2026-10-16): the row
+  // showed the browser's raw "Failed to fetch" when the request got no answer, and a bare HTTP
+  // status when the API refused — never what happened or what to do.
   const load = useCallback(async () => {
     try {
       const r = await fetch(`/v1/apps/${encodeURIComponent(appKey)}/sign-in-with-boss?project_id=${encodeURIComponent(projectId)}`,
                             { cache: "no-store" });
-      if (!r.ok) setError(`Sign-in could not be read (HTTP ${r.status}).`);
-      else setStatus(parseSignIn(await r.json()));
+      if (!r.ok) setError(await signInRefusal(r));
+      else {
+        const parsed = parseSignIn(await r.json().catch(() => null));
+        setStatus(parsed);
+        setError(parsed ? "" : "BOSS answered, but not with this app's sign-in state. Try again; if it stays, BOSS's API is older than this console.");
+      }
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(`Sign in with BOSS could not be read. ${refusalWords(e)}`);
     }
     setLoaded(true);
   }, [appKey, projectId]);
@@ -76,7 +84,15 @@ export function useBossSignIn(projectId: string, appKey: string, onChange?: () =
   };
   async function press(which: "use" | "stop") {
     setBusy(which);
-    const r = await callAction(which === "use" ? useSignInWithBossAction : stopSignInWithBossAction, undefined, "oidc_client:manage")(form());
+    let r: Awaited<ReturnType<typeof useSignInWithBossAction>>;
+    try {
+      r = await callAction(which === "use" ? useSignInWithBossAction : stopSignInWithBossAction, undefined, "oidc_client:manage")(form());
+    } catch (e) {
+      // The press itself got no answer (or threw): said, and the buttons come back.
+      setBusy(null);
+      setError(`${which === "use" ? "Sign in with BOSS was not turned on" : "Sign in with BOSS was not turned off"}. ${refusalWords(e)}`);
+      return;
+    }
     setBusy(null);
     if (r.ok) {
       showToast("success", r.message ?? (which === "use" ? "Sign in with BOSS is on" : "Sign in with BOSS is off"));
@@ -85,7 +101,26 @@ export function useBossSignIn(projectId: string, appKey: string, onChange?: () =
       onChange?.();
     } else setError(r.error ?? "");
   }
-  return { status, loaded, error, busy, use: () => press("use"), stop: () => press("stop") };
+  return { status, loaded, error, busy, use: () => press("use"), stop: () => press("stop"), reload: () => void load() };
+}
+
+/** What a refused read says: the API's own sentence (its `message` / `detail`) and the status. */
+export async function signInRefusal(r: Response): Promise<string> {
+  let said = "";
+  try {
+    const b = (await r.json()) as { message?: unknown; detail?: unknown; error?: unknown };
+    said = typeof b.message === "string" ? b.message
+      : typeof b.detail === "string" ? b.detail
+      : (b.detail && typeof b.detail === "object" && typeof (b.detail as { message?: unknown }).message === "string")
+        ? String((b.detail as { message: string }).message)
+      : typeof b.error === "string" ? b.error.replace(/_/g, " ") : "";
+  } catch { said = ""; }
+  const why = r.status === 401 ? "Your session ended: sign in again."
+    : r.status === 403 ? (said ? plainSentence(said) : "You may not read this project's apps.")
+    : r.status === 404 ? (said ? `${plainSentence(said)}.`.replace(/\.\.$/, ".") : "BOSS has no such app in this project.")
+    : r.status >= 500 ? `BOSS could not answer${said ? `: ${plainSentence(said)}` : ""}. Try again in a moment.`
+    : said ? plainSentence(said) : "";
+  return `Sign in with BOSS could not be read (HTTP ${r.status})${why ? `: ${why}` : "."}`;
 }
 
 /** What the BOSS row says and does once BOSS has a public address. */
@@ -139,7 +174,12 @@ export function BossSignInDetails({ state }: { state: ReturnType<typeof useBossS
           </p>
         </>
       ) : null}
-      {error ? <span className="tpl-err" role="alert" data-user-text>{error}</span> : null}
+      {error ? (
+        <span className="tpl-err" role="alert" data-user-text data-testid="fx-signin-error">
+          {error}
+          {!s ? <> <button type="button" className="cap-btn" data-testid="fx-signin-retry" onClick={() => state.reload()}>Try again</button></> : null}
+        </span>
+      ) : null}
     </div>
   );
 }
