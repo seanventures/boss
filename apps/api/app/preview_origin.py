@@ -28,12 +28,13 @@ It is started next to the API by the API's lifespan when apps/api/serve.py asks 
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import re
 from typing import Any, Awaitable, Callable, Optional
 
 from boss_engine.services.preview_cookies import is_relayable_set_cookie, own_cookie_pairs
-from boss_engine.services.preview_service import PREVIEW_SANDBOX_CSP
+from boss_engine.services.preview_service import PREVIEW_SANDBOX_CSP, PREVIEW_TAB_NAME
 
 Scope = dict[str, Any]
 Receive = Callable[[], Awaitable[dict]]
@@ -54,6 +55,32 @@ _IDENTITY_HEADER = re.compile(
 )
 
 _NOT_FOUND = b'{"detail":"Not found: this origin serves previews only."}'
+
+#: A RELOAD AT THE APP'S OWN PATH. On this origin a preview is shown at its own paths
+#: (preview_service._inject_shim, at_root): the address bar says "/tickets", not
+#: "/v1/previews/<id>/web/tickets", so the app's router matches it. Reloading it (or a back/forward
+#: that left the page) asks this origin for "/tickets". This page — static, no credential, no
+#: request of its own — sends the tab back to ITS preview, which the shim named in the tab's
+#: `window.name`; the id is checked to be one path segment, and only a preview path on this same
+#: origin is ever opened. A tab with no preview named is told so.
+_BOOTSTRAP = (
+    "<!doctype html><meta charset=utf-8><title>Preview</title>"
+    "<p id=m style=\"font:14px system-ui;padding:24px\">Opening the preview…</p>"
+    "<script>(function(){var n=\"\";try{n=String(window.name||\"\")}catch(e){}"
+    "var k=" + json.dumps(PREVIEW_TAB_NAME) + ",id=n.indexOf(k)===0?n.slice(k.length):\"\";"
+    "if(/^[A-Za-z0-9_-]{1,100}$/.test(id)){location.replace(\"/v1/previews/\"+id+\"/web\"+"
+    "location.pathname+location.search+location.hash);return;}"
+    "document.getElementById(\"m\").textContent=\"This address belongs to a BOSS preview, but this "
+    "tab no longer knows which one. Open the preview again from BOSS.\";})()</script>"
+).encode()
+
+
+def _is_page_navigation(scope: Scope) -> bool:
+    """A browser loading a top-level page (a reload, back/forward), never a script's request."""
+    headers = {k.lower(): v for k, v in scope.get("headers") or []}
+    return (scope.get("method") == "GET"
+            and headers.get(b"sec-fetch-mode") == b"navigate"
+            and headers.get(b"sec-fetch-dest") in (b"document", b"iframe"))
 
 
 def is_preview_capability_path(path: str) -> bool:
@@ -137,6 +164,15 @@ def preview_only(app: ASGIApp) -> ASGIApp:
         # Both spellings must be preview paths: the decoded one is what the router matches.
         if not (is_preview_capability_path(path) and is_preview_capability_path(raw)) or \
                 "\\" in path or "\x00" in path:
+            if kind == "http" and _is_page_navigation(scope) and not path.startswith("/v1/") \
+                    and "\\" not in path and "\x00" not in path:
+                await send({"type": "http.response.start", "status": 200, "headers": [
+                    (b"content-type", b"text/html; charset=utf-8"),
+                    (b"cache-control", b"no-store"),
+                    (b"content-security-policy", PREVIEW_SANDBOX_CSP.encode()),
+                ]})
+                await send({"type": "http.response.body", "body": _BOOTSTRAP})
+                return
             if kind == "websocket":
                 await send({"type": "websocket.close", "code": 4404})
                 return

@@ -3469,21 +3469,53 @@ def _kill(pid: Optional[int]) -> None:
         pass
 
 
-def _inject_shim(html: bytes, prefix: str) -> bytes:
+#: What the shim keeps in `window.name` (per tab, kept across a reload) so the preview origin's
+#: root-path bootstrap (apps/api/app/preview_origin.py) can send a reload back to its preview.
+PREVIEW_TAB_NAME = "boss-preview:"
+
+
+def _inject_shim(html: bytes, prefix: str, *, at_root: bool = False) -> bytes:
     """Make a path-prefixed preview behave like an app mounted at `/`.
 
     The server-side rewrite handles initial markup/CSS; the client shim covers
     dynamic DOM, fetch/XHR, history routing, WebSocket/EventSource, and captures
     preview-anchored operator feedback.
+
+    `at_root` (the preview ORIGIN, which serves previews and nothing else): THE APP'S ROUTER SEES
+    ITS OWN PATHS. A client-side router (React Router's BrowserRouter, createBrowserRouter, any
+    router reading `location.pathname`) matched "/v1/previews/<id>/web/" against its "/" route,
+    matched nothing and rendered a blank page (HelpDesk AI, 2026-10-16) — and nothing an app can
+    do about a prefix it never heard of. So before the app's scripts run the shim replaces the
+    address with the app's own path ("/v1/previews/<id>/web/tickets" → "/tickets"), and history
+    calls stay unprefixed (a prefixed one is unprefixed). Requests (fetch, XHR, assets, sockets,
+    links and forms) are still sent under the prefix, through the gateway; a RELOAD of "/tickets"
+    is sent back to this preview by the origin's bootstrap, from the tab's `window.name`.
+    Elsewhere (the API origin) the address keeps its prefix, as before.
     """
     prefix = prefix.rstrip("/")
     p_json = json.dumps(prefix)
     feedback_url = json.dumps(prefix.rsplit("/web", 1)[0] + "/feedback")
+    preview_id = prefix.rsplit("/web", 1)[0].rsplit("/", 1)[-1]
     shim = (
         "<base href=\"" + prefix + "/\">"
-        "<script data-boss-preview-shim>(function(){var P=" + p_json + ",F=" + feedback_url + ";"
-        "function path(u){if(typeof u!==\"string\")return u;"
+        "<script data-boss-preview-shim>(function(){var P=" + p_json + ",F=" + feedback_url + ","
+        "R=" + ("true" if at_root else "false") + ",I=" + json.dumps(PREVIEW_TAB_NAME + preview_id)
+        + ";"
+        # AT ROOT: the app's own path in the address bar before any of its scripts reads it.
+        "if(R){try{var lp=location.pathname;if(lp===P||lp.indexOf(P+\"/\")===0)"
+        "history.replaceState(history.state,\"\",(lp.slice(P.length)||\"/\")+location.search+"
+        "location.hash);}catch(e){}"
+        "try{var wn=String(window.name||\"\");if(!wn||wn.indexOf(" + json.dumps(PREVIEW_TAB_NAME)
+        + ")===0)window.name=I;}catch(e){}}"
+        "function path(u){if(typeof URL!==\"undefined\"&&u instanceof URL)u=u.href;"
+        "if(typeof u!==\"string\")return u;var o=location.origin;"
+        "if(o&&o!==\"null\"&&u.indexOf(o+\"/\")===0&&u.indexOf(o+P)!==0)return o+P+u.slice(o.length);"
         "if(u.charAt(0)===\"/\"&&u.slice(0,2)!==\"//\"&&u.indexOf(P)!==0)return P+u;return u;}"
+        "function unpath(u){if(typeof URL!==\"undefined\"&&u instanceof URL)u=u.href;"
+        "if(typeof u!==\"string\")return u;var o=location.origin;"
+        "if(o&&u.indexOf(o+P)===0)u=u.slice(o.length);if(u===P)return \"/\";"
+        "if(u.indexOf(P)===0&&\"/?#\".indexOf(u.charAt(P.length))>=0){u=u.slice(P.length);"
+        "return u.charAt(0)===\"/\"?u:\"/\"+u;}return u;}"
         "function srcset(v){return String(v||\"\").split(\",\").map(function(x){var p=x.trim().split(/\\s+/);"
         "p[0]=path(p[0]);return p.join(\" \").trim();}).join(\", \");}"
         "function ws(u){u=path(u);if(typeof u===\"string\"&&u.charAt(0)===\"/\")"
@@ -3492,7 +3524,7 @@ def _inject_shim(html: bytes, prefix: str) -> bytes:
         "var xo=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(m,u){"
         "arguments[1]=path(u);return xo.apply(this,arguments);};"
         "[\"pushState\",\"replaceState\"].forEach(function(k){var old=history[k];"
-        "history[k]=function(s,t,u){return old.call(this,s,t,path(u));};});"
+        "history[k]=function(s,t,u){return old.call(this,s,t,R?unpath(u):path(u));};});"
         "var OW=window.WebSocket;if(OW){window.WebSocket=function(u,p){"
         "return p===undefined?new OW(ws(u)):new OW(ws(u),p);};window.WebSocket.prototype=OW.prototype;}"
         "var OE=window.EventSource;if(OE){window.EventSource=function(u,o){return new OE(path(u),o);};"
@@ -3659,7 +3691,8 @@ def proxy_preview(engine, preview_id: str, subpath: str, method: str,
                   content_type: Optional[str] = None,
                   sandbox_token: str = "",
                   incoming_headers: Optional[dict] = None,
-                  app_cookie_header: Optional[str] = None):
+                  app_cookie_header: Optional[str] = None,
+                  serve_at_root: bool = False):
     """Reverse-proxy a request to a running preview's loopback port → (status, content_type, bytes,
     headers). Only the api can reach the preview's 127.0.0.1 port, so this exposes it via the api's
     own (tailnet-routed) URL. HTML responses get the root-relative path-rewrite shim.
@@ -3667,7 +3700,10 @@ def proxy_preview(engine, preview_id: str, subpath: str, method: str,
     Cookies (preview_cookies): `app_cookie_header` is the app's OWN cookies, already filtered and
     untagged by the caller (the incoming Cookie header is never forwarded); the app's Set-Cookie
     answers come back under headers["Set-Cookie"] as a LIST, each tagged and scoped to this
-    preview's path, the ones naming a BOSS cookie or another path dropped."""
+    preview's path, the ones naming a BOSS cookie or another path dropped.
+
+    `serve_at_root`: the request came through the preview origin, so the app is shown at its own
+    paths (see `_inject_shim`)."""
     from .preview_cookies import outbound_set_cookie
     import urllib.error
     with begin(engine) as c:
@@ -3735,7 +3771,7 @@ def proxy_preview(engine, preview_id: str, subpath: str, method: str,
     if location:
         response_headers["Location"] = _gateway_location(preview_id, location)
     if "text/html" in (ctype or ""):
-        data = _inject_shim(data, f"/v1/previews/{preview_id}/web")
+        data = _inject_shim(data, f"/v1/previews/{preview_id}/web", at_root=serve_at_root)
     return status, ctype, data, response_headers
 
 

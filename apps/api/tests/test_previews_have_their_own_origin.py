@@ -160,3 +160,44 @@ def test_a_previews_preflight_is_answered_without_credentials():
     assert ok.headers["access-control-allow-headers"] == "content-type, x-request-id"
     assert seen == {}
     assert client.options("/v1/identity/me").status_code == 404
+
+
+def test_a_reload_at_the_apps_own_path_goes_back_to_its_preview():
+    """On the preview origin an SPA is shown at its own paths (preview_service._inject_shim,
+    at_root), so a reload asks for "/tickets". A page navigation there gets the static bootstrap,
+    which sends the tab back to the preview its window.name names; anything else is still a 404
+    that never reaches the app, and /v1/ paths never get it."""
+    inner, seen = _recorder()
+    client = TestClient(preview_only(inner))
+    nav = {"sec-fetch-mode": "navigate", "sec-fetch-dest": "document",
+           "cookie": f"{SESSION}=bss_secret"}
+    answer = client.get("/tickets/42?open=1", headers=nav)
+    assert answer.status_code == 200
+    _sandboxed(answer)
+    assert "set-cookie" not in answer.headers
+    assert "location.replace(\"/v1/previews/\"+id+\"/web\"+location.pathname" in answer.text
+    assert "boss-preview:" in answer.text
+    for path, headers in (("/tickets", {}), ("/app.js", {"sec-fetch-mode": "no-cors",
+                                                       "sec-fetch-dest": "script"}),
+                          ("/v1/identity/me", nav)):
+        assert client.get(path, headers=headers).status_code == 404, path
+    assert seen == {}, "the bootstrap must never reach the app behind the origin"
+
+
+def test_the_preview_origin_shows_the_app_at_its_own_paths(client, monkeypatch):
+    """The API's own preview handler, reached through the preview origin, asks the shim for
+    at_root; reached on the API origin it does not."""
+    from apps.api.app import main as api_main
+    from boss_engine.services import preview_service
+
+    asked: list = []
+
+    def proxy(*_a, serve_at_root=False, **_k):
+        asked.append(serve_at_root)
+        return 200, "text/html", b"<html><head></head></html>", {}
+
+    monkeypatch.setattr(preview_service, "proxy_preview", proxy)
+    monkeypatch.setattr(api_main, "database_is_reachable", lambda _e: True)
+    TestClient(preview_only(api_main.app)).get("/v1/previews/prv_x/web/")
+    client.get("/v1/previews/prv_x/web/")
+    assert asked == [True, False]

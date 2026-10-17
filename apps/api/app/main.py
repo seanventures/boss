@@ -11804,6 +11804,8 @@ async def preview_web_proxy(preview_id: str, request: Request, path: str = ""):
         body or None, request.headers.get("content-type"), settings.sandbox_token,
         incoming_headers=dict(request.headers),
         app_cookie_header=inbound_cookie_header(preview_id, request.headers.get("cookie")),
+        # On the preview origin the app is shown at its own paths, so its router matches them.
+        serve_at_root=bool((request.scope.get("state") or {}).get("boss_preview_origin")),
     )
     set_cookies = list((headers or {}).pop("Set-Cookie", None) or [])
     # The previewed app's own CSP / CORS answers never replace the isolation.
