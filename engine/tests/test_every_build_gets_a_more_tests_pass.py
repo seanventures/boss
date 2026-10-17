@@ -57,13 +57,21 @@ def _its_more_tests(spec, build_id):
 
 BUILDERS = [e for e in CATALOGUE if any(_cap(s) == "build" for s in e["steps"])]
 
+#: The catalogue workflows that build with NO pass 2, each with its reason. Opting out is a
+#: decision a template states (`"more_tests": False`), never an accident.
+OPTED_OUT = {
+    # Users are failing now: the fix's own criteria demand the regression test and its gates run
+    # the whole existing suite; a second pass and its second deploy would hold the recovery.
+    "incident_response",
+}
+
 
 def test_the_catalogue_workflows_that_build_are_the_ones_expected():
     assert {e["key"] for e in BUILDERS} == {
         "standard_product_delivery", "minor_feature", "major_feature", "fast_fix",
         "backend_service_setup", "ux_certification", "security_hardening", "data_migration",
         "compliance_release", "third_party_integration", "deprecation_sunset",
-        "incremental_build"}
+        "incremental_build", "incident_response"}
 
 
 def _the_rule_holds(spec, key):
@@ -93,7 +101,16 @@ def _the_rule_holds(spec, key):
             assert join
 
 
-@pytest.mark.parametrize("entry", BUILDERS, ids=lambda e: e["key"])
+def test_only_the_named_templates_opt_out_and_the_opt_out_holds_at_run_time():
+    assert {e["key"] for e in CATALOGUE if e.get("more_tests") is False} == OPTED_OUT
+    for entry in CATALOGUE:
+        if entry["key"] in OPTED_OUT:
+            run_spec = workflows._published_spec(entry_spec(entry))
+            assert not [s for s in run_spec["steps"] if _cap(s) == "more_tests"], entry["key"]
+
+
+@pytest.mark.parametrize("entry", [e for e in BUILDERS if e["key"] not in OPTED_OUT],
+                         ids=lambda e: e["key"])
 def test_every_catalogue_build_gets_pass_2_and_nothing_waits_for_it(entry):
     for spec in (entry_spec(entry), workflows._published_spec(entry_spec(entry))):
         _the_rule_holds(spec, entry["key"])

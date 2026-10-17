@@ -131,6 +131,26 @@ def written(result: Mapping[str, Any], inputs: Mapping[str, Any]) -> Verdict:
     return Verdict(FAILED, "nothing was written — the record has no id")
 
 
+def investigated(result: Mapping[str, Any], inputs: Mapping[str, Any]) -> Verdict:
+    """investigate_incident: done when there is a brief to build the fix from."""
+    refused = _refused(result)
+    if refused:
+        return refused
+    if str(result.get("incident_brief") or "").strip():
+        return Verdict(SUCCEEDED)
+    return Verdict(FAILED, _reason(result) or "the investigation produced no brief")
+
+
+def incident_reported(result: Mapping[str, Any], inputs: Mapping[str, Any]) -> Verdict:
+    """incident_report: done when the report exists (it is stored with the incident)."""
+    refused = _refused(result)
+    if refused:
+        return refused
+    if str(result.get("report_markdown") or "").strip():
+        return Verdict(SUCCEEDED)
+    return Verdict(FAILED, _reason(result) or "no incident report was written")
+
+
 def commissions_nothing(result: Mapping[str, Any], inputs: Mapping[str, Any]) -> Verdict:
     """video_edit, social_publish as bare capabilities: no tool performs them, so the runner
     records an honest `recorded` no-op that says so in its note. The work, when there is any,
@@ -225,6 +245,9 @@ VERDICTS: dict[str, Callable[[Mapping[str, Any], Mapping[str, Any]], Verdict]] =
     "security_fix": awaited_work,
     "security_rereview": observed,
     "security_report": written,
+    "investigate_incident": investigated,
+    "verify_recovery": awaited_work,
+    "incident_report": incident_reported,
 }
 
 

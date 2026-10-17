@@ -73,6 +73,9 @@ DEFAULT_STEP_AGENTS: dict[str, str] = {
     "more_tests": "qa",
     "monitor": "sre",
     "document": "docs_writer",
+    "investigate_incident": "sre",
+    "verify_recovery": "sre",
+    "incident_report": "sre",
     # THE SECURITY REVIEW: the security reviewer scans, re-reviews and reports; the PM convenes
     # the panel exactly as for any panel (the security lens chairs its seats); the engineering
     # captain builds the fix like any build.
@@ -454,6 +457,43 @@ CATALOGUE: list[dict[str, Any]] = [
             _step("deploy", "deploy", {"run_id": _from("build", "code_task_run_id")},
                   approver_role="release_manager"),
             _step("notify", "notify", _notify_inputs()),
+        ]),
+    },
+    {
+        # AN APP'S OWN ALERT, ANSWERED (services/incident_response.py). Started by the
+        # `incident.opened` event an app's error-rate alert emits (an event subscription the
+        # operator turns on) or by Respond on the incident; its input is the event's data:
+        # incident_id, extends_run_id (the app's build lineage), title, directive.
+        "key": "incident_response",
+        "name": "Incident Response",
+        "description": "An app's alert fired. Investigate, fix the root cause with a regression "
+                       "test, have someone approve the release, ship it, and prove recovery "
+                       "from the monitor.",
+        "objective": (
+            "An app BOSS deployed is failing in front of users, and its own monitor raised the "
+            "alarm. Find the root cause from the evidence — the app's metrics, its logs and the "
+            "release that was serving — fix exactly that with a regression test that fails on "
+            "the faulty release, and restore service. A person approves the release; recovery "
+            "is judged by BOSS's monitor, not by the fix's author. If the evidence does not "
+            "support a root cause, say so and stop rather than guess."
+        ),
+        "work_class": "bugfix",
+        # NO SECOND PASS: users are failing now. The fix's own acceptance criteria demand the
+        # regression test, and the build's gates run the app's whole existing suite; a More
+        # tests pass and its second deploy would hold the recovery for another build.
+        "more_tests": False,
+        "steps": _chain([
+            _step("investigate", "investigate_incident", {"incident_id": _in("incident_id")}),
+            # The investigation's brief and the incident's acceptance criteria reach the build
+            # the way a panel's PRD does: folded in by the runner from the step that produced
+            # them (`incident_brief`), so this build binds what every catalogue build binds.
+            _step("build", "build", _build_inputs()),
+            _step("ci", "wait_for_ci", {"pull_request_url": _from("build", "pull_request_url")}),
+            _step("report", "report"),
+            _step("deploy", "deploy", {"run_id": _from("build", "code_task_run_id")},
+                  approver_role="release_manager"),
+            _step("verify", "verify_recovery", {"incident_id": _in("incident_id")}),
+            _step("incident_report", "incident_report", {"incident_id": _in("incident_id")}),
         ]),
     },
     {
@@ -859,6 +899,11 @@ _FIELD_TEXT: dict[str, dict[str, Any]] = {
                  "title": "Running-app scan (optional)",
                  "description": "baseline (default) watches the app passively; api also "
                                 "attacks its API, only inside the scan's own sandbox."},
+    "incident_id": {"type": "string", "title": "Incident",
+                    "description": "The incident to respond to (Observability › the app's "
+                                   "alert). An app's alert starts this for you when "
+                                   "Respond automatically is on.",
+                    "examples": ["inc_0123456789ab"]},
     "notify_channel": {"type": "string", "title": "Who to tell",
                        "description": "Where the outcome is posted: email:someone@example.com or "
                                       "mattermost:<channel id>. Leave blank and the notify step "
@@ -916,6 +961,15 @@ BRIEFS: dict[str, dict[str, Any]] = {
                     "directive": "In the Shift swap board, the approvals page returns HTTP 500 "
                                  "when a swap has no claimant. It should list the swap as "
                                  "unclaimed instead."},
+    },
+    "incident_response": {
+        "directive": ("Which incident?",
+                      "Started from an app's alert: the incident names the app, the release "
+                      "that was serving and what failed."),
+        "example": {"title": "Order API: 18% of requests failing",
+                    "directive": "Respond to the incident: Order API (staging): 18% of "
+                                 "requests failing."},
+        "required": ("incident_id",),
     },
     "research_led_discovery": {
         "directive": ("What do you want to find out?",
@@ -1051,10 +1105,17 @@ def entry_spec(entry: dict[str, Any]) -> dict[str, Any]:
     # same generic PRD meeting: Research-Led Discovery, whose own description says it
     # "ends in a decision and a document, not in code", asked for an implementation
     # plan exactly like Standard Product Delivery did.
-    return {"entry_step": entry["steps"][0]["id"], "steps": entry["steps"],
+    spec = {"entry_step": entry["steps"][0]["id"], "steps": entry["steps"],
             "objective": entry.get("objective") or "",
             "workflow_name": entry["name"],
             "input_schema": input_schema_for(entry)}
+    # AN OPT-OUT TRAVELS WITH THE SPEC. Pass 2 is re-applied where a version becomes a run's
+    # steps (workflows._published_spec); a "light" pass survives because its steps are already
+    # in the list, but "no pass 2" is an absence, and without the flag the run added a full
+    # pass and a second deploy to the template that had said no.
+    if entry.get("more_tests") is False:
+        spec["more_tests"] = False
+    return spec
 
 
 def example_for(workflow_key: str) -> Optional[dict[str, Any]]:

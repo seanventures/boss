@@ -91,6 +91,8 @@ def project(eng):
                       # exist where before three retries were still pending at teardown.
                       "deadletters", "quality_gates",
                       "deployment_health_samples", "deployment_targets",
+                      # incident response: the recovery checks cascade from their incident
+                      "incident_recovery_checks", "incidents",
                       "role_skills", "roles"):
             # Each in its own savepoint: on Postgres a failed statement aborts the whole
             # transaction, so a bare try/except left the final DELETE to fail as

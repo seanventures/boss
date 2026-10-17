@@ -362,6 +362,38 @@ class ReliabilityService:
         ).mappings().first()
         hypothesis = (hyp["payload"] if hyp else None) or {}
 
+        # AN APP'S INCIDENT IS FIXED AS THAT APP'S NEXT CHANGE. The incident an app's own monitor
+        # raised knows the build lineage that owns the app (incident_response.deploy_context);
+        # the fix continues it — the app's branch, its repository, its identity — instead of a
+        # fresh task against the deployment's default repository under a NEW app identity
+        # derived from the incident's title, which would have built "Fix: …" as another app.
+        ctx = connection.execute(
+            text("SELECT finalize_ctx FROM incidents WHERE id = :id"), {"id": incident_id},
+        ).scalar() or {}
+        if isinstance(ctx, str):
+            ctx = json.loads(ctx)
+        lineage = str(((ctx.get("deploy") or {}).get("extends_run_id")) or "").strip()
+        if lineage:
+            from .code_task_service import start_followup_task
+
+            started = start_followup_task(
+                connection, parent_run_id=lineage, jobs=jobs, actor=actor,
+                title=f"Fix: {inc['title']}"[:150],
+                instructions=_bug_frame(dict(inc), hypothesis),
+                acceptance_criteria=[
+                    "A regression test reproduces the incident and FAILS before the fix, passes "
+                    "after.",
+                    "The fix eliminates the incident's error signature at the root cause.",
+                    "No unrelated behavior changes.",
+                ],
+                finalize_extra={"source": "reliability", "incident_id": incident_id})
+            run_id = started["run_id"]
+            return self._record_remediation(connection, project_id, incident_id, run_id)
+        # A telemetry incident (no app behind it) keeps the old route: the given repository,
+        # else the deployment's default one.
+        owner = owner or getattr(self.settings, "target_github_owner", "") or ""
+        repo = repo or getattr(self.settings, "target_github_repo", "") or ""
+
         from .code_task_service import start_code_task
         run_id = start_code_task(
             connection, project_id=project_id, task_id=None,
@@ -373,12 +405,16 @@ class ReliabilityService:
                 "No unrelated behavior changes.",
             ],
             test_commands=[],
-            owner=owner or getattr(self.settings, "target_github_owner", "") or "",
-            repo=repo or getattr(self.settings, "target_github_repo", "") or "",
+            owner=owner,
+            repo=repo,
             base_branch=base_branch,
             finalize_ctx={"source": "reliability", "incident_id": incident_id, "service": inc["service"]},
             jobs=jobs, risk_tier=3, open_pr=True,        # bug rigor + open the gated PR
         )
+        return self._record_remediation(connection, project_id, incident_id, run_id)
+
+    def _record_remediation(self, connection: Connection, project_id: str, incident_id: str,
+                            run_id: str) -> dict[str, Any]:
         rem_id = make_id("rem")
         connection.execute(
             text("INSERT INTO remediations (id, project_id, incident_id, code_task_run_id, status, "

@@ -778,7 +778,10 @@ def judge(window: dict, rule: dict) -> str:
 
 def _incident(connection, project_id: str, target_id: str) -> Optional[dict]:
     row = connection.execute(sql(
-        "SELECT id, status, title, first_seen, last_seen FROM incidents "
+        "SELECT id, status, title, first_seen, last_seen, "
+        "       (finalize_ctx->'alert') IS NOT NULL AND finalize_ctx->'alert' <> 'null'::jsonb "
+        "         AS alerted "
+        "FROM incidents "
         "WHERE project_id = :p AND dedupe_key = :k"),
         {"p": project_id, "k": INCIDENT_PREFIX + target_id}).mappings().first()
     return dict(row) if row else None
@@ -797,6 +800,11 @@ def evaluate_alert(connection, target: dict, spec: dict, now: datetime) -> dict[
     verdict = judge(window, rule)
     inc = _incident(connection, target["project_id"], target["id"])
     is_open = bool(inc and inc["status"] not in _CLOSED)
+    # An incident an APP REPORTED (incident_signals) is open before the monitor says anything.
+    # When the monitor then fires, that is the alert opening it — the release, the routes and
+    # the event the response starts from are recorded now. And the monitor never closes an
+    # incident it did not raise: reports wait for the alert, or for a person.
+    alerted = bool(inc and inc.get("alerted"))
     action = None
     if verdict == "firing":
         pct = round(window["error_rate"] * 100.0, 1)
@@ -822,7 +830,8 @@ def evaluate_alert(connection, target: dict, spec: dict, now: datetime) -> dict[
                 " first_seen = CASE WHEN status IN ('resolved', 'dismissed') THEN :now "
                 "                   ELSE first_seen END "
                 "WHERE id = :id"), {"id": inc_id, "title": title, "now": now})
-            action = "reopened" if not is_open else "still_firing"
+            action = ("reopened" if not is_open else
+                      "still_firing" if alerted else "opened")
         connection.execute(sql(
             "INSERT INTO anomaly_signals (id, project_id, incident_id, kind, signature, service, "
             " score, count, sample, ts) VALUES (:id, :p, :inc, 'error_surge', 'http_error_rate', "
@@ -832,7 +841,7 @@ def evaluate_alert(connection, target: dict, spec: dict, now: datetime) -> dict[
              "count": int(window["errors"] or 0),
              "sample": json.dumps({"target_id": target["id"], "window": window, "rule": rule}),
              "now": now})
-    elif verdict in ("ok", "off") and is_open:
+    elif verdict in ("ok", "off") and is_open and alerted:
         connection.execute(sql(
             "UPDATE incidents SET status = 'resolved', last_seen = :now WHERE id = :id"),
             {"id": inc["id"], "now": now})

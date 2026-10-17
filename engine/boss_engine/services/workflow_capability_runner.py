@@ -2738,6 +2738,120 @@ def _look_at_ci(connection: Connection, project_id: str, wait_id: str) -> None:
         log.warning("cannot look at CI wait %s: %s", wait_id, error)
 
 
+#: What an incident's fix is held to, when no person wrote other criteria.
+INCIDENT_FIX_CRITERIA = (
+    "A regression test reproduces the incident's failing requests and FAILS on the faulty "
+    "release; it passes with the fix.",
+    "The change is the smallest that fixes the root cause; nothing unrelated is changed.",
+    "The pull request description states the root cause, the regression test and the fix.",
+)
+
+
+def _incident_id(context: dict[str, Any], inputs: dict[str, Any]) -> str:
+    return str(inputs.get("incident_id") or (context.get("input") or {}).get("incident_id")
+               or "").strip()
+
+
+def _investigate_incident(connection: Connection, ctx: Any, project_id: str,
+                          context: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
+    """`investigate_incident`: metrics x logs x release diff -> the fix brief. Records this run
+    as the incident's response, so the alert firing again starts no second one."""
+    from . import incident_response
+
+    incident_id = _incident_id(context, inputs)
+    if not incident_id:
+        raise SettledCapabilityError("There is no incident to investigate: start this workflow "
+                                     "from an incident (its incident_id).")
+    try:
+        got = incident_response.investigate(connection, getattr(ctx, "settings", None)
+                                            or _settings(), project_id, incident_id)
+    except (LookupError, ValueError) as refused:
+        raise SettledCapabilityError(str(refused)) from refused
+    run_id = str(context.get("run_id") or "")
+    if run_id:
+        incident_response._merge_ctx(connection, incident_id, {"response": {
+            "workflow_run_id": run_id, "started_at": incident_response._iso(
+                incident_response._now())}})
+    return {"capability": "investigate_incident", "tool": None, "status": "succeeded",
+            **{k: got[k] for k in ("incident_id", "title", "incident_brief", "root_cause",
+                                   "suspect_commit", "extends_run_id")},
+            "basis": got["hypothesis"]["basis"], "confidence": got["hypothesis"]["confidence"],
+            "note": f"{got['logs_word']}; {got['diff_word']}. {got['root_cause']}"}
+
+
+def _settings() -> Any:
+    from ..config import get_settings
+
+    return get_settings()
+
+
+def _start_recovery_check(connection: Connection, project_id: str, context: dict[str, Any],
+                          inputs: dict[str, Any]) -> dict[str, Any]:
+    """`verify_recovery`: judged from the release the run shipped. Its clock starts when that
+    deploy finished (the step after it), never before — a window that reached back into the
+    incident would read the failures as the fix's."""
+    from . import incident_response
+
+    incident_id = _incident_id(context, inputs)
+    if not incident_id:
+        return {"capability": "verify_recovery", "status": "failed",
+                "error": "There is no incident to verify: start this workflow from one."}
+    since = None
+    sdep = _from_any_step(context, "stack_deployment_id")
+    if sdep:
+        since = connection.execute(text(
+            "SELECT COALESCE(finished_at, updated_at) FROM stack_deployments WHERE id = :i"),
+            {"i": str(sdep)}).scalar()
+    try:
+        check = incident_response.start_recovery_check(
+            connection, project_id, incident_id, since=since,
+            workflow_run_id=str(context.get("run_id") or "") or None,
+            stable_minutes=float(inputs.get("stable_minutes")
+                                 or incident_response.DEFAULT_STABLE_MINUTES),
+            timeout_minutes=float(inputs.get("timeout_minutes")
+                                  or incident_response.DEFAULT_RECOVERY_TIMEOUT_MINUTES))
+    except (LookupError, ValueError) as refused:
+        return {"capability": "verify_recovery", "status": "failed", "error": str(refused)}
+    return {"capability": "verify_recovery", "tool": None, "status": "awaiting",
+            "await": {"kind": "recovery_check", "id": check["id"]},
+            "recovery_check_id": check["id"], "recovery_status": check["status"],
+            "recovery_summary": check["summary"], "note": check["summary"]}
+
+
+def _look_at_recovery(connection: Connection, check_id: str) -> None:
+    """One look at a parked recovery check, in its own savepoint (like _look_at_ci)."""
+    from . import incident_response
+
+    point = connection.begin_nested()
+    try:
+        incident_response.look_at_recovery(connection, check_id)
+        point.commit()
+    except Exception as error:  # noqa: BLE001 — looked at again next tick; the deadline holds
+        point.rollback()
+        log.warning("cannot look at recovery check %s: %s", check_id, error)
+
+
+def _write_the_incident_report(connection: Connection, ctx: Any, project_id: str,
+                               context: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
+    """`incident_report`: the timeline, root cause and cost, stored with the incident."""
+    from . import incident_response
+
+    incident_id = _incident_id(context, inputs)
+    if not incident_id:
+        raise SettledCapabilityError("There is no incident to report on.")
+    rep = incident_response.report(connection, project_id, incident_id,
+                                   workflow_run_id=str(context.get("run_id") or "") or None)
+    told = incident_response.tell_reporters(connection, getattr(ctx, "settings", None)
+                                            or _settings(), project_id, incident_id, rep)
+    return {"capability": "incident_report", "tool": None, "status": "succeeded",
+            "report_markdown": rep["markdown"],
+            "minutes_to_recover": rep.get("minutes_to_recover"),
+            "cost_billed_usd": rep["cost"]["billed_usd"], "reporters_told": told,
+            "note": (f"Recovered in {rep['minutes_to_recover']} min" if
+                     rep.get("minutes_to_recover") else "Not recovered yet")
+                    + f"; billed ${rep['cost']['billed_usd']:.2f}."}
+
+
 def _existing_app_note(connection: Connection, project_id: str, run_id: str) -> str:
     """What a panel must know when the run builds onto an existing app; "" when it does not."""
     if not run_id:
@@ -2820,6 +2934,15 @@ def _perform_toolless(
     if key == "wait_for_ci":
         return _settle_started_work(
             capability, key, _start_ci_wait(connection, project_id, context, inputs))
+    # INCIDENT RESPONSE (services/incident_response.py): the investigation and the report read
+    # what is recorded; the recovery check parks on BOSS's own monitor like a CI wait.
+    if key == "investigate_incident":
+        return _investigate_incident(connection, ctx, project_id, context, inputs)
+    if key == "verify_recovery":
+        return _settle_started_work(
+            capability, key, _start_recovery_check(connection, project_id, context, inputs))
+    if key == "incident_report":
+        return _write_the_incident_report(connection, ctx, project_id, context, inputs)
     # Same shape as `document`: no tool because it commissions nothing — it READS what the
     # run has already recorded and leaves a document behind.
     # THE RE-REVIEW AND THE SECURITY REPORT (services/security_review_steps.py).
@@ -3245,6 +3368,19 @@ def _perform_capability(
         if brief:
             inputs = {**inputs, "instructions":
                       f"{str(inputs.get('instructions') or '').strip()}\n\n{brief}"}
+    # AN INCIDENT'S INVESTIGATION IS THE FIX'S BRIEF (Incident Response): what the monitor saw,
+    # what the app logged, what the serving release changed, and the hypothesis — before the
+    # one-line directive, with the incident's own acceptance criteria unless a person gave some.
+    if key == "build":
+        brief = str(_from_any_step(context, "incident_brief") or "").strip()
+        if brief and brief not in str(inputs.get("instructions") or ""):
+            inputs = {**inputs, "instructions":
+                      f"{brief}\n\n---\n\n{str(inputs.get('instructions') or '').strip()}"}
+            if not inputs.get("acceptance_criteria"):
+                inputs = {**inputs, "acceptance_criteria": list(INCIDENT_FIX_CRITERIA)}
+            fixed_title = str(_from_any_step(context, "title") or "").strip()
+            if fixed_title.startswith("Fix "):
+                inputs = {**inputs, "title": fixed_title}
     if key == "build":
         spec = str(inputs.get("spec_markdown") or "").strip()
         inputs = {k: v for k, v in inputs.items() if k != "spec_markdown"}
@@ -4094,6 +4230,9 @@ _AWAIT_KINDS: dict[str, tuple[str, tuple[str, ...]]] = {
     # WAITING FOR CI IS WAITING. The step records a ci_waits row and parks on it; every tick
     # takes one look at GitHub (with backoff) until the checks finish or the wait times out.
     "wait_for_ci": ("ci_wait", ("ci_wait_id", "id")),
+    # VERIFYING RECOVERY IS WAITING TOO: on an incident_recovery_checks row that every tick
+    # judges from the app's own scrapes (incident_response.look_at_recovery).
+    "verify_recovery": ("recovery_check", ("recovery_check_id", "id")),
 }
 
 #: Envelopes a capability's tool nests its handle in, beyond the ones named after the kind and
@@ -4358,6 +4497,11 @@ _AWAIT_TABLES: dict[str, tuple[str, frozenset[str], frozenset[str]]] = {
     "ci_wait": ("ci_waits",
                 frozenset({"passed", "no_ci"}),
                 frozenset({"failed", "timed_out", "unreadable", "cancelled"})),
+    # Recovered means BOSS's monitor saw the error rate back at baseline for the stability
+    # window; timing out is a fix that did not hold (or traffic that never came back).
+    "recovery_check": ("incident_recovery_checks",
+                       frozenset({"recovered"}),
+                       frozenset({"timed_out", "failed"})),
     # A multi-repo change set (multirepo/change_sets.py) is done when every repository merged
     # and every component is live (or ships with the merge). `blocked` is not failed: a lane is
     # being retried or a person is deciding; `merged` waits for its deploy.
@@ -4370,7 +4514,8 @@ _AWAIT_TABLES: dict[str, tuple[str, frozenset[str], frozenset[str]]] = {
 _STATUS_COLUMN: dict[str, str] = {"repo_change_sets": "state"}
 
 #: Where a table keeps the reason its run ended, when it is not a column called `error`.
-_REASON_COLUMN: dict[str, str] = {"ci_waits": "summary", "deployment_runs": "failure_reason",
+_REASON_COLUMN: dict[str, str] = {"ci_waits": "summary", "incident_recovery_checks": "summary",
+                                  "deployment_runs": "failure_reason",
                                   "stack_deployments": "failure_reason",
                                   "repo_change_sets": "COALESCE(error, blocked_reason)",
                                   "security_scans": "counts->>'error'"}
@@ -4771,6 +4916,8 @@ def resume_awaited(
         table, ok_states, bad_states = table_spec
         if kind == "ci_wait":
             _look_at_ci(connection, project_id, awaited_id)
+        if kind == "recovery_check":
+            _look_at_recovery(connection, awaited_id)
         try:
             row = connection.execute(
                 text(f"SELECT {_STATUS_COLUMN.get(table, 'status')} AS status FROM {table} "  # noqa: S608

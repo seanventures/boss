@@ -261,3 +261,21 @@ def test_toolchains_are_opt_in_in_the_image_and_compose():
     assert compose.count("boss_community_toolchain_cache:/var/lib/boss/toolchain-cache") == 2
     boss_sh = (ROOT / "scripts" / "install" / "boss.sh").read_text()
     assert "toolchains) cmd_toolchains" in boss_sh
+
+
+def test_an_api_previews_where_its_deploy_manifest_says_it_is_healthy(tmp_path):
+    """D2: a JSON API has nothing at `/`; its boss.deploy.yaml declares /health for the deploy,
+    and the preview asked `/` anyway and failed it as "no page at the site root". One
+    declaration of health: the preview asks the manifest's path when boss.preview.health is
+    absent, and the preview file still wins when present."""
+    from boss_engine.services import preview_service
+
+    (tmp_path / "boss.deploy.yaml").write_text(
+        "version: 1\nname: order-api\ninstall: [make up]\n"
+        "health: [{url: 'http://127.0.0.1:8000/health', expect: 200}]\n")
+    assert preview_service.preview_health_path(tmp_path) == "/health"
+    (tmp_path / "boss.preview.health").write_text("/ready\n")
+    assert preview_service.preview_health_path(tmp_path) == "/ready"
+    (tmp_path / "boss.preview.health").unlink()
+    (tmp_path / "boss.deploy.yaml").write_text("not: [valid")
+    assert preview_service.preview_health_path(tmp_path) == "/"

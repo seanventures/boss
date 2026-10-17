@@ -195,9 +195,16 @@ def on_alert(connection, target: dict, incident_id: str, *, action: str, window:
                  "errors": window.get("errors"), "routes": (window.get("routes") or [])[:8]}
         # A REOPENED incident is a new occurrence: the response, the verification and the
         # report of the last one must not be read as this one's.
-        _merge_ctx(connection, incident_id, {"app": app, "deploy": deploy, "alert": alert,
-                                             "occurrence": _iso(now), "verification": None,
-                                             "response": None})
+        # An incident an app reported first keeps its reports (they are about this same
+        # failure); it stops being reported-only the moment the monitor confirms it.
+        reported_first = action == "opened" and bool(connection.execute(sql(
+            "SELECT 1 FROM incident_evidence WHERE incident_id = :i AND kind = "
+            "'customer_reports' LIMIT 1"), {"i": incident_id}).first())
+        patch = {"app": app, "deploy": deploy, "alert": alert, "verification": None,
+                 "response": None, "reported_only": False}
+        if not reported_first:
+            patch["occurrence"] = _iso(now)
+        _merge_ctx(connection, incident_id, patch)
         _evidence(connection, incident_id, "alert", ref=str(rule.get("error_rate_percent")),
                   payload=alert, at=now)
         if deploy:
@@ -669,20 +676,21 @@ def look_at_recovery(connection, check_id: str, *, now: Optional[datetime] = Non
         first_clear = None
     status, summary = row["status"], row["summary"]
     pct = None if w.get("error_rate") is None else round(w["error_rate"] * 100.0, 2)
+    seen = int(w.get("requests") or 0)
     if verdict == "clear" and first_clear and now - first_clear >= stable and \
             now - since >= stable:
         status = "recovered"
-        summary = (f"Recovered: {pct}% of {int(w['requests'])} requests failed over the last "
+        summary = (f"Recovered: {pct}% of {seen} requests failed over the last "
                    f"{row['stable_minutes']:g} min (baseline "
                    f"{round(float(base.get('error_rate') or 0) * 100, 2)}%, alert above "
                    f"{rule['error_rate_percent']}%)")
     elif now >= row["deadline"]:
         status = "timed_out"
-        summary = (f"Not recovered in time: last window {pct}% of {w.get('requests')} requests "
+        summary = (f"Not recovered in time: last window {pct}% of {seen} requests "
                    "failed" if pct is not None else "Not recovered in time: too little traffic "
                    "to judge")
     elif verdict == "failing":
-        summary = f"Still failing: {pct}% of {int(w['requests'])} requests"
+        summary = f"Still failing: {pct}% of {seen} requests"
     elif verdict == "quiet":
         summary = "Waiting for enough traffic on the new release"
     else:
@@ -869,3 +877,69 @@ def report_markdown(d: dict[str, Any]) -> str:
             f"${cost.get('included_list_usd', 0):.2f}",
             f"- Model calls: {cost.get('calls', 0)}; tokens: {cost.get('tokens', 0)}"]
     return "\n".join(out)
+
+
+def response_view(connection, project_id: str, incident_id: str) -> Optional[dict[str, Any]]:
+    """Everything the console's incident card shows, in one read."""
+    inc = _incident(connection, incident_id)
+    if not inc or inc["project_id"] != project_id:
+        return None
+    ctx = inc["finalize_ctx"]
+    evidence = [{"kind": e["kind"], "ref": e["ref"], "at": _iso(e["created_at"]),
+                 "payload": _json(e["payload"])} for e in connection.execute(sql(
+                     "SELECT kind, ref, payload, created_at FROM incident_evidence "
+                     "WHERE incident_id = :i ORDER BY created_at"),
+                     {"i": incident_id}).mappings().all()]
+    reports = [{"reporter_target_id": r["reporter_target_id"], "via": r["via"],
+                "at": _iso(r["received_at"]), **(_json(r["payload"]) or {})}
+               for r in connection.execute(sql(
+                   "SELECT reporter_target_id, via, payload, received_at FROM "
+                   "app_signal_receipts WHERE incident_id = :i ORDER BY received_at"),
+                   {"i": incident_id}).mappings().all()]
+    run_id = (ctx.get("response") or {}).get("workflow_run_id") or \
+        _response_in_flight(connection, project_id, incident_id)
+    run = None
+    if run_id:
+        row = connection.execute(sql(
+            "SELECT id, status, created_at, updated_at FROM workflow_runs WHERE id = :r"),
+            {"r": run_id}).mappings().first()
+        if row:
+            steps = [{"step_id": s["step_id"], "status": s["status"]}
+                     for s in connection.execute(sql(
+                         "SELECT step_id, status FROM workflow_step_runs WHERE "
+                         "workflow_run_id = :r ORDER BY created_at"),
+                         {"r": run_id}).mappings().all()]
+            run = {"id": row["id"], "status": row["status"], "started_at": _iso(row["created_at"]),
+                   "steps": steps}
+    auto = connection.execute(sql(
+        "SELECT id, enabled, on_behalf_of FROM event_subscriptions WHERE project_id = :p AND "
+        "event_type = :e AND sink_kind = 'workflow' AND sink_ref = :k"),
+        {"p": project_id, "e": EVENT_OPENED, "k": WORKFLOW_KEY}).mappings().first()
+    report_ready = bool(connection.execute(sql(
+        "SELECT 1 FROM sre_postmortems WHERE incident_id = :i AND "
+        "payload->>'kind' = 'incident_report'"), {"i": incident_id}).first())
+    return {
+        "incident": {k: (_iso(inc[k]) if k in ("first_seen", "last_seen") else inc[k])
+                     for k in ("id", "title", "service", "severity", "status", "confidence",
+                               "first_seen", "last_seen")},
+        "app": ctx.get("app"), "deploy": ctx.get("deploy"), "alert": ctx.get("alert"),
+        "verification": ctx.get("verification"),
+        "reported_only": bool(ctx.get("reported_only")),
+        "evidence": evidence, "reports": reports, "response": run,
+        "auto_respond": {"subscription_id": auto["id"], "enabled": bool(auto["enabled"]),
+                         "on_behalf_of": auto["on_behalf_of"]} if auto else None,
+        "report_ready": report_ready,
+        "respond_input": {"incident_id": incident_id,
+                          "extends_run_id": (ctx.get("deploy") or {}).get("extends_run_id"),
+                          "title": inc["title"],
+                          "directive": f"Respond to the incident: {inc['title']}."},
+    }
+
+
+def tell_reporters(connection, settings: Any, project_id: str, incident_id: str,
+                   rep: dict[str, Any]) -> list[dict[str, Any]]:
+    """Tell every app that reported this incident how it ended (incident_signals). Returns one
+    receipt per reporter; [] when no app reported it."""
+    from . import incident_signals
+
+    return incident_signals.notify_reporters(connection, settings, project_id, incident_id, rep)

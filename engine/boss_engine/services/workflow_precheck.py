@@ -169,6 +169,12 @@ CAPABILITY_PRECHECKS: dict[str, CapabilityPrecheck] = {
     "teardown_preview": CapabilityPrecheck(("authority.consent",)),
     "cost_check": CapabilityPrecheck(("authority.consent",)),
     "document": CapabilityPrecheck(_AGENT),
+    # Incident response: model-free reads of what is recorded. What the investigation cannot
+    # read (a host's logs, the release diff) it says in its evidence and carries on.
+    "investigate_incident": NO_CHECKS("reads the incident's recorded evidence, the app's logs "
+                                      "and its release diff; what it cannot read it says"),
+    "verify_recovery": NO_CHECKS("waits on BOSS's own monitor of the deployed app"),
+    "incident_report": NO_CHECKS("writes the report from what the response recorded"),
 }
 
 #: Which route a capability's agent takes (engine_startup): the build pipeline's stages, the

@@ -68,6 +68,32 @@ class ChangeCorrelationService:
                           "target_ref": r["target_ref"]},
             ))
 
+        # stack deploys (boss.deploy.yaml) — where the deployed COMMIT is recorded. Read
+        # alongside the one-container deployment_runs: an app shipped by its manifest never
+        # appears there, so its release was invisible to the correlation that names it.
+        for r in connection.execute(
+            text(
+                """
+                SELECT s.id, s.commit_sha, s.ref, s.status, s.target_id, s.created_at,
+                       COALESCE(s.finished_at, s.created_at) AS landed, t.app_name,
+                       t.environment
+                FROM stack_deployments s JOIN deployment_targets t ON t.id = s.target_id
+                WHERE s.project_id = :p AND s.status = 'healthy'
+                  AND COALESCE(s.finished_at, s.created_at) BETWEEN :lo AND :hi
+                ORDER BY s.created_at DESC
+                """
+            ),
+            {"p": project_id, "lo": lo, "hi": onset},
+        ).mappings().all():
+            changes.append(self._mk(
+                kind="deployment", key=f"release-{str(r['commit_sha'])[:12]}",
+                name=f"release {str(r['commit_sha'])[:7]} of {r['app_name']} "
+                     f"({r['environment']})",
+                ts=r["landed"], onset=onset,
+                evidence={"stack_deployment_id": r["id"], "commit_sha": r["commit_sha"],
+                          "ref": r["ref"], "target_id": r["target_id"]},
+            ))
+
         changes.sort(key=lambda c: c["evidence"]["proximity_minutes"])   # closest to onset first
         return changes[:limit]
 

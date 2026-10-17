@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import threading
 import time
@@ -225,15 +226,42 @@ def dispatch_event(
                                      "workflow_key": subscription["sink_ref"],
                                      "missing": [m["key"] for m in record["missing"]]})
                     continue
-                run = start_run(
-                    connection,
-                    project_id=project_id,
-                    actor=str(config.get("actor") or "event-dispatcher"),
-                    input_data={"event_type": event_type, "entity_type": entity_type,
-                                "entity_id": entity_id, **(data or {})},
-                    dedupe_key=f"event:{dedupe_hash}",
-                    workflow_version_id=str(active),
-                )
+                # ON THE GRANT OF WHOEVER SET IT UP (event_subscription_service._workflow_link),
+                # checked at EVERY event like a schedule's firing: an ended grant turns the
+                # subscription off with "Renew authority" instead of running on stale authority.
+                from boss_engine.identity import consent as _consent
+                from boss_engine.identity import lineage as _lineage
+
+                acting, lost_reason, run = None, None, None
+                try:
+                    if subscription.get("on_behalf_of"):
+                        acting = _consent.schedule_acting(connection, subscription)
+                    with (_lineage.acting(acting) if acting is not None
+                          else _lineage.nullcontext()):
+                        run = start_run(
+                            connection,
+                            project_id=project_id,
+                            actor=str((acting.principal_id if acting is not None else None)
+                                      or config.get("actor") or "event-dispatcher"),
+                            input_data={"event_type": event_type, "entity_type": entity_type,
+                                        "entity_id": entity_id, **(data or {})},
+                            dedupe_key=f"event:{dedupe_hash}",
+                            workflow_version_id=str(active),
+                        )
+                except _consent.AuthorityLost as lost:
+                    lost_reason = lost.reason
+                if lost_reason is not None:
+                    connection.execute(text(
+                        "UPDATE event_subscriptions SET enabled = false, updated_at = now(), "
+                        "config = config || CAST(:c AS JSONB) WHERE id = :i"),
+                        {"i": subscription["id"], "c": json.dumps(
+                            {"last_error": "Renew authority: the standing grant this "
+                                           f"subscription runs on has ended ({lost_reason})."})})
+                    invalidate_subscription_cache(project_id)
+                    enqueued.append({"kind": "workflow", "refused": True,
+                                     "workflow_key": subscription["sink_ref"],
+                                     "reason": f"authority_lost:{lost_reason}"})
+                    continue
                 if not run.get("duplicate"):
                     record_started_anyway(
                         connection, project_id,

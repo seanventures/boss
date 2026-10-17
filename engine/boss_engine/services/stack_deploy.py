@@ -1288,6 +1288,16 @@ def _environment(connection: Connection, settings: Settings, *, deployment: dict
         "BOSS_DEPLOY_DIR": manifest.dir,
     }
     hidden: list[str] = []
+    if manifest.signals:
+        # THE APP'S OWN CHANNEL TO BOSS (incident_signals): one token per target, minted once,
+        # the same one BOSS authenticates with when it reads the app's signals and signs what
+        # it tells the app back.
+        from .incident_signals import ENV_KEY, channel_token
+
+        token = channel_token(connection.engine, settings, project_id=deployment["project_id"],
+                              target_id=deployment["target_id"])
+        values[ENV_KEY] = token
+        hidden.append(token)
     for item in manifest.env:
         if item.source == "literal":
             values[item.key] = rendered["env_literals"][item.key]

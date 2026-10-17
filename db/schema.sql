@@ -2719,6 +2719,10 @@ CREATE INDEX IF NOT EXISTS idx_event_subscriptions_match
 -- rc6: who passed the job-kind check for a job sink (C-2). NULL on a sink created before the
 -- check existed: dispatch holds it until a person who holds the kind's permission re-saves it.
 ALTER TABLE event_subscriptions ADD COLUMN IF NOT EXISTS kind_authorized_by TEXT;
+-- A workflow sink runs UNATTENDED, so like a schedule it runs on the standing grant of the person
+-- who set it up (consent.require_for_schedule): the link, stored server-side, never in config.
+ALTER TABLE event_subscriptions ADD COLUMN IF NOT EXISTS on_behalf_of TEXT;
+ALTER TABLE event_subscriptions ADD COLUMN IF NOT EXISTS grant_id TEXT;
 
 CREATE TABLE IF NOT EXISTS webhook_endpoints (
   id TEXT PRIMARY KEY,
@@ -5003,6 +5007,32 @@ CREATE TABLE IF NOT EXISTS incident_recovery_checks (
 );
 CREATE INDEX IF NOT EXISTS idx_incident_recovery_checks_incident
   ON incident_recovery_checks(incident_id, created_at DESC);
+
+-- An app's reports of a suspected incident (incident_signals): one row per signal the app sent
+-- or BOSS read, deduplicated by the app's own id, linked to the incident it created or joined.
+-- `received_at` is also the per-app rate limit's clock.
+CREATE TABLE IF NOT EXISTS app_signal_receipts (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  reporter_target_id TEXT NOT NULL,
+  signal_id TEXT NOT NULL,
+  incident_id TEXT REFERENCES incidents(id) ON DELETE CASCADE,
+  via TEXT NOT NULL CHECK (via IN ('pull', 'push')),
+  payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+  received_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (reporter_target_id, signal_id)
+);
+CREATE INDEX IF NOT EXISTS idx_app_signal_receipts_incident
+  ON app_signal_receipts(incident_id);
+CREATE INDEX IF NOT EXISTS idx_app_signal_receipts_rate
+  ON app_signal_receipts(reporter_target_id, received_at DESC);
+-- When BOSS last read an app's signals page and what it found, in words.
+CREATE TABLE IF NOT EXISTS app_signal_channels (
+  target_id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  last_polled_at TIMESTAMPTZ,
+  last_word TEXT NOT NULL DEFAULT ''
+);
 
 -- Evidence-only AI SRE postmortems (not break-glass). One artifact per incident.
 CREATE TABLE IF NOT EXISTS sre_postmortems (

@@ -126,3 +126,81 @@ def test_an_event_nobody_subscribed_to_starts_nothing(workflow):
     with engine.begin() as connection:
         fired = _fire(connection, key, f"ev_{uuid.uuid4().hex[:8]}", {"company": "Acme"})
     assert not [f for f in fired if f.get("kind") == "workflow"]
+
+
+# ── An event-started run acts on the subscriber's standing grant (D2 pre-mortem) ─────────────
+#
+# A workflow started by an event used to start as "event-dispatcher" with no recorded
+# authority, so under enforce its build was blocked "No one's authority covers this build: it
+# was started by BOSS itself" (crun_9bed8a42 and two more on the laptop). The incident response
+# an app's alert starts would have died at its build. A workflow sink now runs like a schedule:
+# on the standing grant of the person who set it up, checked at every event.
+
+def test_a_person_setting_up_a_workflow_sink_links_their_standing_grant(workflow, monkeypatch):
+    from boss_engine.identity import consent
+
+    engine, key = workflow
+    asked = []
+    monkeypatch.setattr(consent, "require_for_schedule",
+                        lambda *a, **k: asked.append(k) or {"on_behalf_of": "usr_op",
+                                                            "org_id": "org_1",
+                                                            "grant_id": "grt_live"})
+    with engine.begin() as connection:
+        made = subs.create_event_subscription(
+            connection, project_id=PROJECT, event_type="meeting.completed",
+            sink_kind="workflow", sink_ref=key, actor="usr_op")
+        listed = [s for s in subs.list_event_subscriptions(connection, PROJECT)
+                  if s["id"] == made["id"]][0]
+    assert asked and asked[0]["project_id"] == PROJECT
+    assert (listed["on_behalf_of"], listed["grant_id"]) == ("usr_op", "grt_live")
+
+
+def test_the_run_starts_under_that_grant(workflow, monkeypatch):
+    from boss_engine.identity import consent, lineage
+    from boss_engine.identity.lineage import Acting
+
+    engine, key = workflow
+    monkeypatch.setattr(consent, "require_for_schedule",
+                        lambda *a, **k: {"on_behalf_of": "usr_op", "grant_id": "grt_live"})
+    monkeypatch.setattr(consent, "schedule_acting", lambda db, row: Acting(
+        principal_id=row["on_behalf_of"], org_id="org_1", grant_id=row["grant_id"]))
+    seen = []
+    real = workflows.start_run
+
+    def spy(connection, **kw):
+        seen.append((kw.get("actor"), lineage.current()))
+        return real(connection, **kw)
+
+    monkeypatch.setattr(workflows, "start_run", spy)
+    with engine.begin() as connection:
+        subs.create_event_subscription(
+            connection, project_id=PROJECT, event_type="meeting.completed",
+            sink_kind="workflow", sink_ref=key, actor="usr_op")
+        dispatch.invalidate_subscription_cache(PROJECT)
+        fired = _fire(connection, key, f"ev_{uuid.uuid4().hex[:8]}", {})
+    assert [f for f in fired if f.get("kind") == "workflow" and f.get("run_id")], fired
+    actor, acting = seen[0]
+    assert actor == "usr_op" and acting is not None and acting.grant_id == "grt_live"
+
+
+def test_an_ended_grant_turns_the_subscription_off_with_renew_authority(workflow, monkeypatch):
+    from boss_engine.identity import consent
+
+    engine, key = workflow
+    monkeypatch.setattr(consent, "require_for_schedule",
+                        lambda *a, **k: {"on_behalf_of": "usr_op", "grant_id": "grt_gone"})
+
+    def lost(db, row):
+        raise consent.AuthorityLost("grant_revoked")
+
+    monkeypatch.setattr(consent, "schedule_acting", lost)
+    with engine.begin() as connection:
+        made = subs.create_event_subscription(
+            connection, project_id=PROJECT, event_type="meeting.completed",
+            sink_kind="workflow", sink_ref=key, actor="usr_op")
+        dispatch.invalidate_subscription_cache(PROJECT)
+        fired = _fire(connection, key, f"ev_{uuid.uuid4().hex[:8]}", {})
+        row = connection.execute(text("SELECT enabled, config FROM event_subscriptions "
+                                      "WHERE id = :i"), {"i": made["id"]}).mappings().one()
+    assert [f for f in fired if f.get("refused")][0]["reason"] == "authority_lost:grant_revoked"
+    assert row["enabled"] is False and row["config"]["last_error"].startswith("Renew authority")
