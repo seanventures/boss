@@ -12,6 +12,8 @@
  *   - Settings split into Managed by BOSS and Your settings;
  *   - every capability of the old sheet still reachable (the parity list at the bottom).
  */
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -266,6 +268,13 @@ describe("the Apps row's chip", () => {
     expect($('[data-testid="fx-app-setup-chip-crun_1"]').textContent).toBe("Set up sign-in · 2 providers");
     expect($('[data-testid="fx-app-setup-chip-crun_1"]').tagName).toBe("BUTTON");
     expect($('[data-testid="fx-app-setup-chip-crun_2"]')).toBeNull();
+    // The chip sits UNDER the name, never in its place: the name and the row's ⋯ always show.
+    const title = $('[data-testid="fx-app-setup-chip-crun_1"]').closest(".fx-app-title")!;
+    expect(title.querySelector(".fx-app-name")!.textContent).toBe("HelpDesk AI");
+    expect($('[data-testid="fx-app-more-crun_1"]')).toBeTruthy();
+    const css = readFileSync(resolve(__dirname, "../app/factory/factory.css"), "utf8");
+    expect(css).toMatch(/\.fx-app-title\s*\{[^}]*flex-direction:\s*column/);
+    expect(css.match(/\.fx-setup-chip\s*\{[^}]*\}/)![0]).not.toMatch(/flex-shrink:\s*0/);
     await press('[data-testid="fx-app-setup-chip-crun_1"]');
     expect($('[data-testid="tpl-setup-sheet"]')).toBeTruthy();
     expect($('[data-testid="tpl-tab-connectors"]').getAttribute("aria-selected")).toBe("true");

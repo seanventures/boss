@@ -355,15 +355,18 @@ export function AppsTab({ projectId, runs, previews, query = "", onOpen, onNew, 
                   </button>
                 </span>
                 <span className="fx-c-app fx-app-cell" role="cell">
-                  <span className="fx-app-name" title={a.brief || a.app} data-user-text>{a.app}</span>
-                  {/* ONLY WHEN A CONNECTOR NEEDS THE OPERATOR: one press to the app's Connectors. */}
-                  {chipOf(a) ? (
-                    <button type="button" className="fx-setup-chip" data-testid={`fx-app-setup-chip-${a.key}`}
-                            title={chipOf(a)!.tip} aria-label={`${chipOf(a)!.text} for ${a.app}`}
-                            onClick={(e) => { e.stopPropagation(); setSetupOf({ app: a, tab: "connectors" }); }}>
-                      {chipOf(a)!.text}
-                    </button>
-                  ) : null}
+                  {/* THE NAME ALWAYS SHOWS: the chip sits under it, never in its place. */}
+                  <span className="fx-app-title">
+                    <span className="fx-app-name" title={a.brief || a.app} data-user-text>{a.app}</span>
+                    {/* ONLY WHEN A CONNECTOR NEEDS THE OPERATOR: one press to the app's Connectors. */}
+                    {chipOf(a) ? (
+                      <button type="button" className="fx-setup-chip" data-testid={`fx-app-setup-chip-${a.key}`}
+                              title={chipOf(a)!.tip} aria-label={`${chipOf(a)!.text} for ${a.app}`}
+                              onClick={(e) => { e.stopPropagation(); setSetupOf({ app: a, tab: "connectors" }); }}>
+                        {chipOf(a)!.text}
+                      </button>
+                    ) : null}
+                  </span>
                   {/* ADD A FEATURE, ON THE ROW (the everyday job): on hover, and in the row's menu. */}
                   <span className="fx-app-acts">
                     <a className="fx-app-add" href={addFeatureHref(opens)} data-testid={`fx-app-add-${a.key}`}
