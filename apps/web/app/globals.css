@@ -6756,15 +6756,15 @@ a.sp-node:hover .sp-label { color: var(--ink); }
   max-width: 36rem; padding: 16px 18px; box-sizing: border-box;
   border: 1px solid var(--border-strong); border-radius: 10px; background: var(--surface-2);
 }
-.dw-retry-panel .dw-retry-title { font-size: 15px; font-weight: 600; color: var(--ink); }
-.dw-retry-panel .dw-retry-what { margin: -6px 0 0; font-size: 13px; color: var(--muted); }
+.dw-retry-panel .dw-retry-title { font-size: 0.78947rem; font-weight: 600; color: var(--ink); }
+.dw-retry-panel .dw-retry-what { margin: -6px 0 0; font-size: 0.68421rem; color: var(--muted); }
 .dw-retry-panel label {
   display: flex; flex-direction: column; gap: 6px;
-  font-size: 12px; letter-spacing: .03em; color: var(--faint);
+  font-size: 0.63158rem; letter-spacing: .03em; color: var(--faint);
 }
 .dw-retry-panel textarea, .dw-retry-panel input[type="text"] {
   width: 100%; box-sizing: border-box; padding: 10px 12px; min-height: 76px;
-  font: inherit; font-size: 14px; line-height: 1.45; color: var(--ink);
+  font: inherit; font-size: 0.73684rem; line-height: 1.45; color: var(--ink);
   background: var(--base); border: 1px solid var(--border-strong); border-radius: 8px;
   resize: vertical;
 }
