@@ -1,8 +1,9 @@
 // @vitest-environment happy-dom
 /**
  * App ▸ Sign-in (APP_TEMPLATES_AND_SECURITY_LOOP.md §6.4): one press turns on Sign in with BOSS for an
- * app built from login-oauth. The sheet shows the client, the issuer and where people return to, in
- * words; never a secret.
+ * app built from login-oauth. The BOSS row of App › Connectors shows the client, the issuer and where
+ * people return to, in words; never a secret. It was a sheet of its own; ⋯ › Sign-in now opens the
+ * app's Setup (one surface for the job).
  */
 import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -20,7 +21,12 @@ vi.mock("../app/factory/links-actions", () => ({
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const { AppsTab } = await import("../app/factory/apps-tab");
-const { SignInSheet, parseSignIn, uriWords } = await import("../app/factory/sign-in-sheet");
+const { BossSignInDetails, useBossSignIn, parseSignIn, uriWords } = await import("../app/factory/sign-in-sheet");
+
+/** The BOSS row's body, as App › Connectors draws it. */
+function SignInSheet({ projectId, appKey }: { projectId: string; appKey: string; app?: string; onClose?: () => void }) {
+  return <BossSignInDetails state={useBossSignIn(projectId, appKey)} />;
+}
 
 afterEach(() => { unmount(); vi.unstubAllGlobals(); use.mockClear(); stop.mockClear(); });
 
@@ -102,7 +108,8 @@ describe("App ▸ Sign-in", () => {
     await settle();
     await click($(`[data-testid='fx-app-menu-signin-${key}']`)!);
     await settle();
-    expect($("[data-testid='fx-signin-sheet']")).not.toBeNull();
+    expect($("[data-testid='fx-signin-sheet']")).toBeNull();          // no second sheet for one job
+    expect($("[data-testid='tpl-setup-sheet']")).not.toBeNull();
   });
 
   it("parses defensively and names addresses in words", () => {

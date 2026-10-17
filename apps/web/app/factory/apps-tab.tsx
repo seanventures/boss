@@ -30,8 +30,9 @@ import { GatedButton } from "../../components/gated";
 import { NEW_BUILD_TIP } from "../../lib/compose-links";
 import { LINKS_TIP, LinksSheet } from "./links-sheet";
 import { SecuritySheet, readSecurityParam, writeSecurityParam } from "./security/security-sheet";
-import { SIGN_IN_TIP, SignInSheet } from "./sign-in-sheet";
-import { AppSetupSheet } from "../../components/v2/templates/setup-sheet";
+import { SIGN_IN_TIP } from "./sign-in-sheet";
+import { AppSetupSheet, type SetupTab } from "../../components/v2/templates/setup-sheet";
+import { parseSetupNeeds, setupChip, type SetupNeeds } from "../../lib/app-connectors";
 import { LabLinks } from "./lab-links";
 import { useOnScreen } from "../../lib/area-shown";
 
@@ -64,6 +65,8 @@ export type AppRow = {
   appId?: string;
   /** The app's key (its name's identity key): what templates, secrets, Setup and links address. */
   appKey?: string;
+  /** What its connectors still need a person for (the server's `setup`): the row's chip. */
+  setup?: SetupNeeds;
 };
 
 const BUILT = new Set(["pr_open", "merged", "deployed", "done_no_pr"]);
@@ -139,7 +142,7 @@ export function parseApps(w: unknown): AppRow[] {
       rank: rankOf(word),
       prNumber: numOrU(o.pr_number), prUrl: opt(o.pr_url), prState: prStateOf(o.pr_state),
       costUsd: num(o.cost_usd), included: o.included === true, repo: opt(o.repo), brief: opt(o.brief),
-      at: opt(o.at), appId: opt(o.app_id), appKey: opt(o.app_key),
+      at: opt(o.at), appId: opt(o.app_id), appKey: opt(o.app_key), setup: parseSetupNeeds(o.setup),
     };
   });
 }
@@ -240,6 +243,9 @@ function stateCell(b: { word: string; row?: BuildRowData }): { word: string; whe
   return { word: b.word, where: st && !b.word.split(" · ").includes(st.label) ? st.label : "" };
 }
 
+/** The row's setup chip ("Set up sign-in · 2 providers"), or null when nothing needs you. */
+const chipOf = (a: AppRow) => setupChip(a.setup);
+
 export type AppsTabProps = {
   projectId: string;
   runs: CodeTaskRun[];
@@ -265,10 +271,9 @@ export function AppsTab({ projectId, runs, previews, query = "", onOpen, onNew, 
   const [menu, setMenu] = useState<string | null>(null);
   /** App ▸ Links (F5): the app whose links sheet is open. */
   const [linksOf, setLinksOf] = useState<AppRow | null>(null);
-  /** App ▸ Sign-in (F6): the app whose Sign in with BOSS sheet is open. */
-  const [signInOf, setSignInOf] = useState<AppRow | null>(null);
-  /** App ▸ Setup (F2): the app whose templates, secrets and guide are open. */
-  const [setupOf, setSetupOf] = useState<AppRow | null>(null);
+  /** App ▸ Setup: the app whose Connectors and Settings are open, and on which tab. Its chip,
+   *  ⋯ › Setup and ⋯ › Sign-in all open it: one surface for an app's setup. */
+  const [setupOf, setSetupOf] = useState<{ app: AppRow; tab: SetupTab } | null>(null);
   /** App › Security: the app id it is open on (`?security=<app id>`, so it can be linked). */
   const [security, setSecurity] = useState<string | null>(() => readSecurityParam());
   const openSecurity = (appId: string | null) => { setSecurity(appId); writeSecurityParam(appId); };
@@ -351,6 +356,14 @@ export function AppsTab({ projectId, runs, previews, query = "", onOpen, onNew, 
                 </span>
                 <span className="fx-c-app fx-app-cell" role="cell">
                   <span className="fx-app-name" title={a.brief || a.app} data-user-text>{a.app}</span>
+                  {/* ONLY WHEN A CONNECTOR NEEDS THE OPERATOR: one press to the app's Connectors. */}
+                  {chipOf(a) ? (
+                    <button type="button" className="fx-setup-chip" data-testid={`fx-app-setup-chip-${a.key}`}
+                            title={chipOf(a)!.tip} aria-label={`${chipOf(a)!.text} for ${a.app}`}
+                            onClick={(e) => { e.stopPropagation(); setSetupOf({ app: a, tab: "connectors" }); }}>
+                      {chipOf(a)!.text}
+                    </button>
+                  ) : null}
                   {/* ADD A FEATURE, ON THE ROW (the everyday job): on hover, and in the row's menu. */}
                   <span className="fx-app-acts">
                     <a className="fx-app-add" href={addFeatureHref(opens)} data-testid={`fx-app-add-${a.key}`}
@@ -375,11 +388,11 @@ export function AppsTab({ projectId, runs, previews, query = "", onOpen, onNew, 
                           ) : null}
                           <button type="button" role="menuitem" title="Its connectors, secrets and setup guide"
                                   data-testid={`fx-app-menu-setup-${a.key}`}
-                                  onClick={(e) => { e.stopPropagation(); setMenu(null); setSetupOf(a); }}>Setup</button>
+                                  onClick={(e) => { e.stopPropagation(); setMenu(null); setSetupOf({ app: a, tab: "connectors" }); }}>Setup</button>
                           <button type="button" role="menuitem" title={LINKS_TIP} data-testid={`fx-app-menu-links-${a.key}`}
                                   onClick={(e) => { e.stopPropagation(); setMenu(null); setLinksOf(a); }}>Links</button>
                           <button type="button" role="menuitem" title={SIGN_IN_TIP} data-testid={`fx-app-menu-signin-${a.key}`}
-                                  onClick={(e) => { e.stopPropagation(); setMenu(null); setSignInOf(a); }}>Sign-in</button>
+                                  onClick={(e) => { e.stopPropagation(); setMenu(null); setSetupOf({ app: a, tab: "connectors" }); }}>Sign-in</button>
                           {a.appId ? (
                             <button type="button" role="menuitem" data-testid={`fx-app-menu-security-${a.key}`}
                                     title="Scans, findings and security reviews of this app" onClick={(e) => {
@@ -452,12 +465,11 @@ export function AppsTab({ projectId, runs, previews, query = "", onOpen, onNew, 
                     others={apps.filter((o) => o.key !== linksOf.key).map((o) => ({ key: o.key, app: o.app }))}
                     onClose={() => setLinksOf(null)} />
       ) : null}
-      {signInOf ? (
-        <SignInSheet projectId={projectId} appKey={signInOf.key} app={signInOf.app} onClose={() => setSignInOf(null)} />
-      ) : null}
       {setupOf ? (
-        <AppSetupSheet projectId={projectId} appKey={setupOf.appKey ?? null} runId={builtBuild(setupOf.builds)?.runId ?? setupOf.key}
-                       appName={setupOf.app} onClose={() => setSetupOf(null)} />
+        <AppSetupSheet projectId={projectId} appKey={setupOf.app.appKey ?? null}
+                       runId={builtBuild(setupOf.app.builds)?.runId ?? setupOf.app.key}
+                       appName={setupOf.app.app} tab={setupOf.tab} deployLabel={setupOf.app.deploys[0]?.env}
+                       onClose={() => setSetupOf(null)} />
       ) : null}
       {security ? (
         <SecuritySheet projectId={projectId} appKey={security}

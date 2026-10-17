@@ -39,7 +39,7 @@ describe("N8: a test key is written once", () => {
     expect(sheet).toContain('envs: ["build", "preview"], mode: "test"');
     expect(sheet).not.toMatch(/for \(const env of \["build", "preview"\]\)/);
     const setup = codeOnly("components/v2/templates/setup-sheet.tsx");
-    expect(setup).toContain("{ envs, mode: editing.kind, value: value.trim() }");
+    expect(setup).toContain("{ envs: step.envs, mode: step.mode, value: v.value }");
     expect(setup).not.toMatch(/for \(const env of envs\)/);
   });
 });

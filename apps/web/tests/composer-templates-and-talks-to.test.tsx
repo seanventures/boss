@@ -398,7 +398,8 @@ describe("the walk's findings", () => {
 
   it("the app card lists each connector once and keeps long lists short, the rest in a tooltip", () => {
     const a = (key: string, version: string, createdAt: string, status = "applied") =>
-      ({ id: `${key}${version}`, templateId: "", key, name: key, version, stack: "node", status, workflowRunId: "", codeTaskRunId: "", createdAt });
+      ({ id: `${key}${version}`, templateId: "", key, name: key, version, stack: "node", status, workflowRunId: "", codeTaskRunId: "", createdAt,
+         blockedReason: "", secrets: [], signInProviders: [] });
     expect(distinctTemplates([a("login", "1.0.0", "2026-10-01"), a("login", "1.1.0", "2026-10-05"), a("x", "1", "", "abandoned")])
       .map((t) => t.version)).toEqual(["1.1.0"]);
     expect(shortList(["A", "B", "C", "D", "E"])).toBe("A, B, C +2");

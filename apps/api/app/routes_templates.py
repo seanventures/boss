@@ -475,6 +475,7 @@ def build_templates_router() -> APIRouter:
                 "deploy_values": sorted({b["name"] for b in bound
                                          if b["name"] not in known and b.get("env") == "deploy"}),
                 "declared": [{"name": s.name, "purpose": s.purpose, "test_default": s.test_default,
+                              "required": s.required,
                               "bound": s.name in names} for m in declared for s in m.secrets]}
 
     # Write-only. mode=live additionally needs app_secret:live, checked in the handler.
@@ -555,20 +556,26 @@ def build_templates_router() -> APIRouter:
     @permit(P.PROJECT_READ, scope=Scope.project(query="project_id"))
     def app_setup_guide(request: Request, app_key: str, project_id: str) -> dict:
         ctx = _ctx(request)
+        from boss_engine.identity.authn_support import public_origin
+        from boss_engine.oidc_provider.app_sign_in import preview_base
         from boss_engine.services.preview_service import public_preview_url
 
         with begin() as db:
             _project_in_org(db, project_id, ctx.principal.org_id)
             app_key = _app(db, project_id, app_key)
             preview_id = apply_service.preview_for(db, project_id, app_key)
-            # The address the person's browser and the provider's callback REACH: the preview
-            # origin for the host this request came in on, never the app's port inside BOSS.
-            preview_url = public_preview_url(
-                preview_id, request.headers.get("host"),
-                "https" if request.url.scheme == "https" else "http") if preview_id else None
+            # BOSS's PUBLIC address (BOSS_PUBLIC_URL, else the one bound at the claim) and the
+            # preview's address on it — the one a browser and a provider's callback REACH. Never
+            # this request's Host: behind the console that is BOSS's own container (api:3001),
+            # which the guide printed as the preview URL for a person to register.
+            boss_url = public_origin(db, ctx.principal.org_id) or ""
+            preview_url = (preview_base(db, ctx.principal.org_id, preview_id)
+                           or public_preview_url(preview_id) or None) if preview_id else None
             guides = apply_service.setup_guide(
-                db, project_id=project_id, app_key=app_key,
-                public_url=os.environ.get("BOSS_PUBLIC_URL", ""), preview_url=preview_url)
-        return {"app_key": app_key, "guides": guides}
+                db, project_id=project_id, app_key=app_key, public_url=boss_url,
+                preview_url=preview_url, preview_inside_only=bool(preview_id and not preview_url))
+        return {"app_key": app_key, "guides": guides, "boss_public_url": boss_url or None,
+                "preview": {"running": bool(preview_id), "url": preview_url,
+                            "reach": None if not preview_id else "public" if preview_url else "inside_only"}}
 
     return router
