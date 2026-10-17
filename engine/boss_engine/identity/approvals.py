@@ -192,10 +192,28 @@ def _approver(db: Any, ctx: AuthContext) -> str:
 
 
 def _names(db: Any, ids: list[str]) -> dict[str, str]:
+    """Each person's name, told apart from anyone ACTIVE in the same org with the same name: a
+    seat refusal said "held by … Seed Owner" while the refused person was also named Seed Owner,
+    so it read as "you hold it, and you may not approve". A shared name gets the person's email,
+    else the day they joined; never their id."""
     if not ids:
         return {}
-    return {r[0]: r[1] for r in db.execute(text(
-        "SELECT id, display_name FROM identity_principals WHERE id = ANY(:i)"), {"i": ids}).all()}
+    rows = db.execute(text(
+        "SELECT p.id, p.display_name, p.created_at, u.email, "
+        "       (SELECT count(*) FROM identity_principals q WHERE q.org_id = p.org_id "
+        "          AND q.kind = p.kind AND q.status = 'active' "
+        "          AND lower(q.display_name) = lower(p.display_name)) AS same "
+        "FROM identity_principals p LEFT JOIN identity_users u ON u.principal_id = p.id "
+        "WHERE p.id = ANY(:i)"), {"i": ids}).mappings().all()
+    out: dict[str, str] = {}
+    for r in rows:
+        name = r["display_name"]
+        if name and (r["same"] or 0) > 1:
+            tell = r["email"] or (f"joined {r['created_at']:%b} {r['created_at'].day}"
+                                  if r["created_at"] else None)
+            name = f"{name} ({tell})" if tell else name
+        out[r["id"]] = name
+    return out
 
 
 def recorded(db: Any, decision_id: str) -> list[dict[str, Any]]:

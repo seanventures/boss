@@ -98,3 +98,18 @@ def test_a_vacant_seat_refusal_says_an_owner_approves(world, people):
         db.execute(text("DELETE FROM identity_approval_seats WHERE org_id = :o"), {"o": world.org})
         refusal = approvals.seat_refusal(db, world.org, 2, ("ceo",))
     assert refusal.extra["holders"] == [] and "an Owner approves it" in refusal.message
+
+
+def test_a_refusal_tells_apart_two_people_with_the_same_name(world, people):
+    """Two active "Seed Owner"s: the refusal named the seat holder by a name the refused person
+    also had, so it read as if they held the seat."""
+    from boss_engine.identity import approvals
+
+    twin = world.person("Alice")
+    with world.engine.begin() as db:
+        refusal = approvals.seat_refusal(db, world.org, 2, ("ceo",))
+        assert twin.id not in [h["principal_id"] for h in refusal.extra["holders"]]
+    name = refusal.extra["holders"][0]["display_name"]
+    assert name.startswith("Alice (") and name != "Alice"
+    assert people["alice"].id not in refusal.message
+
