@@ -474,6 +474,7 @@ def start_code_task(
     repair_retries: Optional[int] = None, review_panel_size: Optional[int] = None,
     substrate: Optional[str] = None, repo_host: Optional[str] = None,
     allow_duplicate: bool = False, simulated: bool = False,
+    supersedes: Optional[str] = None,
     job_priority: Optional[int] = None,
     reference_links: Optional[list[str]] = None,
     role_key: Optional[str] = None,
@@ -543,8 +544,13 @@ def start_code_task(
                                    base_branch=base_branch, title=title,
                                    instructions=instructions.replace(_DEPLOYABILITY_NOTE, ""))
     if not allow_duplicate:
+        # A NEXT ATTEMPT IS NOT A DUPLICATE OF THE ATTEMPT IT REPLACES. A review-repair round
+        # starts its child from INSIDE the parent's pipeline, while the parent is still
+        # `running`; without `supersedes` the child was deduped onto its own parent
+        # (code_task.duplicate_suppressed on crun_f18bdf2db6144534ac27), the parent went to
+        # `repairing` with no child, and the build stopped for good.
         existing = in_flight_same_work(connection, project_id, fingerprint=fingerprint,
-                                       repo=repo, title=title)
+                                       repo=repo, title=title, exclude=supersedes)
         if existing:
             # Idempotent, not an error: the caller wanted this work running, and it is.
             # Raising would make an impatient second click look like a broken button, which
@@ -1903,7 +1909,7 @@ def retry_code_task(
     with _transaction(engine) as c:
         new_id = start_code_task(
             c, project_id=prev["project_id"], task_id=prev.get("task_id"), title=title,
-            instructions=augmented,
+            instructions=augmented, supersedes=run_id,
             # AN OPERATOR'S CHANGE TO A WORKING APP (a quick change: the note says what to
             # change) is held to the app's existing tests, as every other change path is —
             # enforced here so no client can drop it. A blind retry keeps its own criteria.

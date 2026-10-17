@@ -131,3 +131,31 @@ def test_a_dedupe_hit_is_not_counted_as_a_retry(monkeypatch):
     monkeypatch.setattr(code_task_service, "retry_code_task",
                         lambda *a, **k: {"status": "queued", "run_id": "crun_new", "created": True})
     assert shepherd_service._retry_run(None, None, None, "crun_37f4ccef", "killed") == 1
+
+
+def test_a_next_attempt_is_not_deduped_onto_the_attempt_it_replaces(db):
+    """HelpDesk AI crun_f18bdf2db6144534ac27: a review-repair round started its child from
+    inside the parent's pipeline, while the parent was still `running`. The same-app guard found
+    the parent itself and suppressed the child; the parent went to `repairing` with no child and
+    the build stopped for good. The attempt being replaced is never "the same work in flight"."""
+    with db.begin() as c:
+        _run(c, "crun_parent", status="running", title="HelpDesk AI: a vivid look",
+             fp="fp-1", minutes_ago=5)
+        assert cts.in_flight_same_work(c, "p1", fingerprint="fp-1", repo="apps",
+                                       title="HelpDesk AI: a vivid look · retry 1") == "crun_parent"
+        assert cts.in_flight_same_work(c, "p1", fingerprint="fp-1", repo="apps",
+                                       title="HelpDesk AI: a vivid look · retry 1",
+                                       exclude="crun_parent") is None
+        # Another LIVE run of the same app is still caught.
+        _run(c, "crun_other", status="running", title="HelpDesk AI: a vivid look",
+             fp="fp-2", minutes_ago=3)
+        assert cts.in_flight_same_work(c, "p1", fingerprint="fp-1", repo="apps",
+                                       title="HelpDesk AI: a vivid look · retry 1",
+                                       exclude="crun_parent") == "crun_other"
+
+
+def test_retry_tells_the_start_which_attempt_it_supersedes():
+    import inspect
+    src = inspect.getsource(cts.retry_code_task)
+    assert "supersedes=run_id" in src
+    assert "supersedes" in inspect.signature(cts.start_code_task).parameters
