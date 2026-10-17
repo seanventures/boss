@@ -150,6 +150,9 @@ export const WRITE_OPS: Readonly<Record<string, Readonly<Record<string, WriteGat
     "/v1/observability/stack/deploy": "observability:manage",
     "/v1/observability-suite/health-check": "observability:manage",
     "/v1/observability/apps/": "observability:manage",
+    // The incident card's "Respond automatically": POST creates, PATCH …/{id} turns it on/off.
+    "/v1/event-subscriptions": "integration:manage",
+    "/v1/event-subscriptions/": "integration:manage",
   },
 };
 

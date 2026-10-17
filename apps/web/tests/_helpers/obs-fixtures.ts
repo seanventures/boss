@@ -13,6 +13,7 @@
 import { vi } from "vitest";
 
 import { board } from "./setup-fixtures";
+import { INCIDENT_REPORT_WIRE, incidentResponseWire } from "./incident-fixtures";
 
 export const NOW = "2026-10-04T12:00:00.000Z";
 export const NOW_MS = Date.parse(NOW);
@@ -123,6 +124,12 @@ export function appWire(targetId = "t_live", over: Record<string, unknown> = {})
     ],
     pins: down ? [PIN_FAILED] : [PIN_LIVE],
     window: { win: "24h", from: FROM_24H, to: NOW, cell_s: 900, cells: 96 },
+    // t_down's own metrics carry an open error-rate incident, so its drawer draws the Incident card.
+    ...(down ? { metrics: { declared: true, path: "/metrics", via: "auto", interval_s: 120, state: "ok", word: "Scraped",
+      last_scrape_at: iso(NOW_MS - 20_000), requests: 220, errors: 27, error_rate: 0.125, rate_per_min: 44, p50_ms: 60, p95_ms: 440,
+      window_minutes: 5, series: [],
+      alert: { state: "firing", word: "Alerting", incident_id: "inc_1", incident_status: "open", since: iso(NOW_MS - 12 * 60_000),
+               rule: { error_rate_percent: 5, window_minutes: 5, min_requests: 20, enabled: true } } } } : {}),
     etag: `"obs-app-${targetId}"`,
     ...over,
   };
@@ -379,6 +386,8 @@ export type ObsBodies = {
   llmCalls?: (offset: number) => unknown; routes?: unknown; catalog?: unknown; entitlements?: unknown; sessions?: unknown;
   /** Repo and models' board (GET /api/setup), for the `setup` parity rows. */
   setup?: unknown;
+  /** GET /v1/reliability/incidents/{id}/response (the Incident card). */
+  incident?: unknown;
   /** POST answers by path suffix (`/probe`, `/stack/deploy`, …). */
   writes?: Record<string, { status?: number; body: unknown }>;
 };
@@ -428,6 +437,8 @@ export function mockObsFetch(bodies: ObsBodies = {}) {
     if (path === "/v1/entitlements/sources") return json(bodies.entitlements ?? entitlementSourcesWire());
     if (path === "/v1/entitlement-connection-sessions") return json(bodies.sessions ?? entitlementSessionsWire());
     if (path === "/api/setup") return json(bodies.setup ?? board());
+    if (/^\/v1\/reliability\/incidents\/[^/]+\/response$/.test(path)) return json(bodies.incident ?? incidentResponseWire());
+    if (/^\/v1\/reliability\/incidents\/[^/]+\/report$/.test(path)) return json(INCIDENT_REPORT_WIRE);
     return new Response("{}", { status: 404 });
   });
   vi.stubGlobal("fetch", fn);
