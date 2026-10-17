@@ -68,3 +68,19 @@ def test_it_stops_when_the_worker_does():
     body = inspect.getsource(worker._run_background_sweeps)
     assert "while not _STOPPING" in body
     assert "if _STOPPING:" in body
+
+
+def test_monitoring_sweeps_once_on_the_background_thread_never_per_slot():
+    """D2 pre-mortem: every lease slot ran the health/metrics sweep on its idle branch
+    (runner.run_worker_cycle), concurrently — the laptop (BOSS_WORKER_SLOTS=auto, 3 slots) stored
+    three scrapes of HelpDesk AI within 25 ms, each windowed against the same previous one, so
+    every request was counted three times; and it stopped whenever every slot was busy."""
+    from boss_worker import runner
+
+    assert "_sweep_deployment_health" in inspect.getsource(worker._run_background_sweeps)
+    assert "_sweep_deployment_health" not in inspect.getsource(runner.run_worker_cycle)
+    assert not hasattr(runner, "_sweep_deployment_health"), "a second in-process sweeper"
+    idle = _loop_body()
+    idle = idle[idle.index("if not ran_job:"):]
+    assert "_sweep_deployment_health(client)" not in idle
+    assert worker.HEALTH_SWEEP_INTERVAL_SECONDS < 15, "shorter than the shortest metrics interval"
