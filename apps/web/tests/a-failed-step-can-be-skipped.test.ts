@@ -71,7 +71,7 @@ describe("Skip and proceed", () => {
     expect(skip).toBeGreaterThan(retry);
     expect(skip - retry).toBeLessThan(900);
     expect(ENGINE).toContain('"Skip and proceed"');
-    expect(body).toContain("{skip ? (");
+    expect(body).toContain("{skip && !panelOpen ? (");  // hidden while a Retry/Skip panel is open
     // Rendered on the failed step's own detail, keyed so a half-typed reason never follows the
     // operator to a different step.
     expect(UI).toContain("<FailedStepActions key={step.step_id} step={step}");

@@ -6749,6 +6749,17 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 .dw-detail-head h4 { margin: 0; font-size: 0.73684rem; }
 .dw-detail .dw-step-links { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 9px; }
 .dw-detail .dw-step-decide { display: flex; gap: 8px; margin-top: 10px; }
+/* Retry / Skip panel: replaces the button row while open, so one Retry is ever on screen. */
+.dw-retry-panel {
+  display: flex; flex-direction: column; gap: 8px; flex-basis: 100%; width: 100%;
+  max-width: 34rem; padding: 12px; border: 1px solid var(--border-strong);
+  border-radius: 8px; background: var(--surface, transparent);
+}
+.dw-retry-panel .dw-retry-title { font-weight: 600; }
+.dw-retry-panel .dw-retry-what { margin: 0; color: var(--muted, #8b949e); }
+.dw-retry-panel label { display: flex; flex-direction: column; gap: 4px; }
+.dw-retry-panel textarea, .dw-retry-panel input[type="text"] { width: 100%; box-sizing: border-box; }
+.dw-retry-panel .dw-retry-actions { display: flex; gap: 10px; align-items: center; justify-content: flex-end; }
 .dw-detail .dw-step-out {
   display: grid; grid-template-columns: repeat(auto-fit, minmax(9.47368rem, 1fr));
   gap: 6px 16px; margin: 10px 0 0;

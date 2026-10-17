@@ -2960,6 +2960,17 @@ function useLearned(topic: string): [boolean, () => void] {
 /** The longest retry note the API accepts (WorkflowRetryStepBody.note). */
 export const RETRY_NOTE_LIMIT = 4000;
 
+/** The note's example, fitted to the step: a deploy is not fixed by a login test. */
+export function retryExample(capability: string): string {
+  const kind = String(capability || "").toLowerCase();
+  if (kind.includes("deploy")) return "e.g. deploy on port 8080";
+  if (kind.includes("build") || kind.includes("test") || kind.includes("fix")) {
+    return "e.g. the login test fails — read DEMO_PASSWORD from the environment";
+  }
+  if (kind.includes("preview")) return "e.g. start the app with npm run dev";
+  return "e.g. what to do differently this time";
+}
+
 export function FailedStepActions({ step, capability, actions, busy, onRetry, onSkip,
                             idPrefix = "dw-step" }: {
   step: RunStep; capability?: Capability; busy: string | null;
@@ -2979,9 +2990,13 @@ export function FailedStepActions({ step, capability, actions, busy, onRetry, on
   const name = capability?.label ?? step.step_id;
   const { retry, skip } = actions;
   if (!retry && !skip) return null;
+  // ONE RETRY ON SCREEN. The note form used to open BESIDE the Retry and Skip buttons, so two
+  // Retry buttons stood side by side and the cramped box cut its own example off (operator,
+  // 16 Oct). An open panel now replaces the button row; Cancel brings it back.
+  const panelOpen = (retry?.enabled && retryOpen) || (skip?.enabled && skipOpen);
   return (
     <div className="dw-step-decide" data-testid={`${idPrefix}-decide`}>
-      {retry ? (
+      {panelOpen ? null : retry ? (
         <>
           <GatedButton permission="workflow_run:control" type="button" className="cap-btn primary"
                   onClick={() => setRetryOpen(true)}
@@ -2996,14 +3011,14 @@ export function FailedStepActions({ step, capability, actions, busy, onRetry, on
           </Explain>
         </>
       ) : null}
-      {skip ? (
+      {skip && !panelOpen ? (
         <GatedButton permission="workflow_run:control" type="button" className="cap-btn" onClick={() => setSkipOpen(true)}
                 disabled={!!busy || skipOpen || !skip.enabled} title={skip.reason ?? undefined}
                 data-testid={`${idPrefix}-skip`}>
           {busy === "Skip" ? "Skipping…" : skip.label}
         </GatedButton>
       ) : null}
-      {skip ? (
+      {skip && !panelOpen ? (
         <Explain label="What skipping this step does">
           {skip.enabled
             ? "Marks it skipped with your reason and carries on. Steps that use what it would "
@@ -3012,7 +3027,8 @@ export function FailedStepActions({ step, capability, actions, busy, onRetry, on
         </Explain>
       ) : null}
       {retry?.enabled && retryOpen ? (
-        <form className="dw-skip-why" data-testid={`${idPrefix}-retry-form`}
+        <form className="dw-retry-panel" data-testid={`${idPrefix}-retry-form`}
+              aria-label={`Retry ${name}`}
               onSubmit={(e) => {
                 e.preventDefault();
                 const note = retryNote.trim();
@@ -3020,23 +3036,27 @@ export function FailedStepActions({ step, capability, actions, busy, onRetry, on
                 setRetryOpen(false);
                 setRetryNote("");
               }}>
+          <div className="dw-retry-title">Retry {name}</div>
+          <p className="dw-retry-what">Runs {name} again. Steps before it stay done.</p>
           <label title="Optional. Sent with the retry; a build gets it as instructions.">
-            What should change? (optional){" "}
-            <textarea value={retryNote} autoFocus rows={2} maxLength={RETRY_NOTE_LIMIT}
+            What should change? (optional)
+            <textarea value={retryNote} autoFocus rows={3} maxLength={RETRY_NOTE_LIMIT}
                       data-testid={`${idPrefix}-retry-note`}
-                      placeholder="e.g. the login test fails — fix the redirect"
+                      placeholder={retryExample(step.capability ?? step.step_id)}
                       onChange={(e) => setRetryNote(e.target.value)} />
           </label>
-          <button type="submit" className="cap-btn primary" disabled={!!busy}
-                  data-testid={`${idPrefix}-retry-confirm`}>
-            Retry
-          </button>
-          <button type="button" className="linklike"
-                  onClick={() => { setRetryOpen(false); setRetryNote(""); }}>Cancel</button>
+          <div className="dw-retry-actions">
+            <button type="submit" className="cap-btn primary" disabled={!!busy}
+                    data-testid={`${idPrefix}-retry-confirm`}>
+              Retry {name}
+            </button>
+            <button type="button" className="linklike"
+                    onClick={() => { setRetryOpen(false); setRetryNote(""); }}>Cancel</button>
+          </div>
         </form>
       ) : null}
       {skip?.enabled && skipOpen ? (
-        <form className="dw-skip-why" data-testid={`${idPrefix}-skip-form`}
+        <form className="dw-retry-panel" data-testid={`${idPrefix}-skip-form`}
               onSubmit={(e) => {
                 e.preventDefault();
                 if (!skipWhy.trim()) return;

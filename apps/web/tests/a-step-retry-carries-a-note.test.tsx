@@ -8,7 +8,7 @@ import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { $, cleanup, click, render, type } from "./_helpers/kit-render";
-import { FailedStepActions, RETRY_NOTE_LIMIT, type RunAction, type RunStep } from "../app/delivery-workflows-ui";
+import { FailedStepActions, RETRY_NOTE_LIMIT, retryExample, type RunAction, type RunStep } from "../app/delivery-workflows-ui";
 import { codeOnly } from "./_helpers/source";
 
 const step = { step_id: "build", kind: "capability", status: "failed",
@@ -53,5 +53,51 @@ describe("Retry with a note", () => {
     const UI = codeOnly("app/delivery-workflows-ui.tsx");
     // (codeOnly blanks an empty `{}`, so the assertion stops before it.)
     expect(UI).toContain('act("Retry", "retry_step", { run_id: runId, step_id: stepId, ...(note ? { note } :');
+  });
+});
+
+describe("One Retry on screen (operator, 16 Oct)", () => {
+  const deploy = { step_id: "deploy", kind: "capability", status: "failed",
+                   capability: "deploy" } as unknown as RunStep;
+  const retryDeploy: RunAction = { key: "retry_step", step_id: "deploy", label: "Retry",
+                                   enabled: true, reason: null };
+  const skipDeploy: RunAction = { key: "skip_step", step_id: "deploy", label: "Skip",
+                                  enabled: true, reason: null };
+
+  it("the panel replaces the Retry and Skip buttons, and Cancel brings them back", async () => {
+    await render(<FailedStepActions step={deploy} busy={null}
+                                    actions={{ retry: retryDeploy, skip: skipDeploy }}
+                                    onRetry={() => {}} onSkip={() => {}} />);
+    await click('[data-testid="dw-step-retry"]');
+    expect($('[data-testid="dw-step-retry"]')).toBeNull();
+    expect($('[data-testid="dw-step-skip"]')).toBeNull();
+    const retries = Array.from(document.querySelectorAll("button"))
+      .filter((b) => /retry/i.test(b.textContent ?? ""));
+    expect(retries).toHaveLength(1);
+    expect($('[data-testid="dw-step-retry-confirm"]')!.textContent).toContain("Retry deploy");
+    await click('[data-testid="dw-step-retry-form"] button.linklike');
+    expect($('[data-testid="dw-step-retry"]')).not.toBeNull();
+    expect($('[data-testid="dw-step-skip"]')).not.toBeNull();
+  });
+
+  it("the example fits the step: a deploy is not fixed by a login test", async () => {
+    expect(retryExample("deploy")).toBe("e.g. deploy on port 8080");
+    expect(retryExample("build")).toContain("login test");
+    expect(retryExample("research")).toBe("e.g. what to do differently this time");
+    await render(<FailedStepActions step={deploy} busy={null} actions={{ retry: retryDeploy }}
+                                    onRetry={() => {}} onSkip={() => {}} />);
+    await click('[data-testid="dw-step-retry"]');
+    expect($('[data-testid="dw-step-retry-note"]')!.getAttribute("placeholder"))
+      .toBe("e.g. deploy on port 8080");
+  });
+
+  it("the skip panel replaces the buttons the same way", async () => {
+    await render(<FailedStepActions step={deploy} busy={null}
+                                    actions={{ retry: retryDeploy, skip: skipDeploy }}
+                                    onRetry={() => {}} onSkip={() => {}} />);
+    await click('[data-testid="dw-step-skip"]');
+    expect($('[data-testid="dw-step-skip-form"]')).not.toBeNull();
+    expect($('[data-testid="dw-step-retry"]')).toBeNull();
+    expect($('[data-testid="dw-step-skip"]')).toBeNull();
   });
 });
