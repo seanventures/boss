@@ -968,6 +968,14 @@ def build_state(run: Mapping[str, Any], *, acts: Optional[list[Mapping[str, Any]
             return out("pr_open", "Approved · not merged",
                        "The merge was approved, but the pull request is still open: merge it "
                        "in GitHub", "Needs you", "ship")
+        checks = fctx.get("checks_failing")
+        if isinstance(checks, dict) and checks.get("gates"):
+            # THE PR OPENED WITH ITS CHECKS FAILING (checks_failing.py): open, never parked for
+            # a waiver, and never read as a passing change. The merge is the person's.
+            from .checks_failing import tip as _checks_tip
+
+            return out("pr_open", "PR open · checks failing", _checks_tip(checks),
+                       "Needs you", "ship")
         return out("pr_open", "PR open", None, "Needs you", "ship")
     index, total = fctx.get("decomposition_index"), fctx.get("decomposition_total")
     tip = f"Part {index} of {total}" if index and total else None

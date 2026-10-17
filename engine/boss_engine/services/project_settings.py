@@ -85,6 +85,17 @@ KNOBS: dict[str, dict[str, Any]] = {
         "help": "How long one failed step's recovery may go on before it asks you.",
         "kind": "int", "min": 5, "max": 1440,
     },
+    # OPEN THE PR WHEN CHECKS FAIL (checks_failing.py): after its repair rounds a build whose
+    # checks still fail opens a draft PR labelled `checks failing` instead of waiting for a waiver.
+    "open_pr_when_checks_fail": {
+        "attr": "open_pr_when_checks_fail",
+        "label": "Open the PR when checks fail",
+        "help": "When a build's checks still fail after its repair rounds, open its pull request "
+                "anyway: a draft labelled checks failing, listing every failing check and finding "
+                "(security first), with a follow-up build to fix them. You decide the merge. "
+                "1 on, 0 to stop the build until a person waives the checks.",
+        "kind": "int", "min": 0, "max": 1,
+    },
     # THE MODEL PRE-CHECK at the start door (workflow_precheck_agent.py). OFF unless turned on:
     # it is a model call, so it costs money and time on every start it runs at.
     "workflow_precheck_agent": {

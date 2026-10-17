@@ -1142,6 +1142,22 @@ def refuse_approval(connection: Any, row: Mapping[str, Any], actor: str, *,
               "key or a run token.", ci_changed_files=changed["files"])
     if action not in DEPLOY_ACTIONS | MERGE_ACTIONS:
         return
+    if action in MERGE_ACTIONS:
+        # CHECKS FAILING (checks_failing.py): the PR opened after its repair rounds with BOSS's
+        # own checks still failing. It is merged only by a PERSON who says why (a forced merge,
+        # whose note decisions.transition requires), never by a click, a policy or an agent.
+        from .checks_failing import merge_refusal, of_decision
+
+        failing = of_decision(row)
+        if failing is not None:
+            if system_policy or not is_person(connection, project_id, actor, identity_ctx):
+                raise CiGateRefused(
+                    "person_approval_required",
+                    merge_refusal(failing) + " Only a person signed in to BOSS can decide it.",
+                    checks_failing=True)
+            if not force:
+                raise CiGateRefused("checks_failing", merge_refusal(failing),
+                                    checks_failing=True)
     wait = latest_wait(connection, project_id, pull_request_url=rec.get("pull_request_url"),
                        shas=_shas(rec))
     if wait is not None and wait["status"] in RECHECKABLE:

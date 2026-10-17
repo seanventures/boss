@@ -1696,7 +1696,14 @@ class SoftwareFactoryService:
         evidence: Optional[dict] = None,
         quality_gate_id: Optional[str] = None,
         run_id: Optional[str] = None,
+        checks_failing: Optional[dict] = None,
     ) -> dict:
+        """Open the change's pull request and its merge decision.
+
+        ``checks_failing`` (services/checks_failing.py): the build's checks still fail after
+        its repair rounds. The pull request is then a draft where the host has drafts, carries
+        the `checks failing` label, and its merge card says what is failing (security first)
+        and merges only on a person's stated reason (decisions.transition)."""
         # Prefer Mission Control primary binding credentials when present (P0-6).
         # Surface github_plane on every return path so dual-path is never silent.
         plane = self.bind_project_github(
@@ -1836,17 +1843,19 @@ class SoftwareFactoryService:
                 )
                 for file in files
             ]
-            pr = self.github.create_pull_request(
-                branch_name,
-                title,
-                "\n\n".join(
-                    [
-                        summary,
-                        "## Review packet",
-                        review_text,
-                    ]
-                ),
+            pr_body = "\n\n".join(
+                [
+                    summary,
+                    "## Review packet",
+                    review_text,
+                ]
             )
+            if checks_failing and getattr(self.github, "supports_draft_pull_requests", False):
+                # A DRAFT where the host has drafts: GitHub itself then refuses a merge until
+                # it is marked ready, which BOSS does only for a person's approved merge.
+                pr = self.github.create_pull_request(branch_name, title, pr_body, draft=True)
+            else:
+                pr = self.github.create_pull_request(branch_name, title, pr_body)
         except IntegrationConfigurationError as error:
             self.receipts.mark_failed(
                 connection, pr_receipt["id"], {"message": str(error)}
@@ -1911,6 +1920,9 @@ class SoftwareFactoryService:
             ci_changed["head_sha"] = branch_head_sha
             self._flag_ci_changed(connection, project_id, pr.number, pr.url, ci_changed,
                                   pr_receipt["id"])
+        if checks_failing:
+            self._flag_checks_failing(connection, project_id, pr.number, pr.url,
+                                      checks_failing, pr_receipt["id"])
         try:
             validation = self.pipeline.wait_for_verdict(
                 branch_head_sha,
@@ -2115,11 +2127,14 @@ class SoftwareFactoryService:
         from ..multirepo import change_sets as _change_sets
 
         set_member = _change_sets.member_change_set(connection, run_id) if run_id else None
+        from . import checks_failing as _checks_failing
+
         decision_id = None if set_member else self.decisions.create_blocking(
             connection,
             project_id,
             task_id,
-            f"Approve code change: {title} (PR #{pr.number})",
+            (f"Checks failing — decide the merge: {title} (PR #{pr.number})"
+             if checks_failing else f"Approve code change: {title} (PR #{pr.number})"),
             {
                 # FIRST, so nothing it carries can replace the action below. Its keys are the
                 # sealed evidence keys (ui/ux/capability_evidence) and collide with none here;
@@ -2127,7 +2142,9 @@ class SoftwareFactoryService:
                 **sealed_evidence,
                 "action": "review_pull_request",
                 "summary": (
-                    f"BOSS built “{title}” in a sandbox and opened pull request #{pr.number}. "
+                    (_checks_failing.decision_summary(checks_failing) + " "
+                     if checks_failing else "")
+                    + f"BOSS built “{title}” in a sandbox and opened pull request #{pr.number}. "
                     f"Automated checks: {validation_status}"
                     + (f" — {validation_summary}" if validation_summary else "")
                     + ". Review the diff on GitHub, then approve to merge or reject to send back."
@@ -2159,6 +2176,12 @@ class SoftwareFactoryService:
                 "quality_gate_id": quality_gate_id,
                 "run_id": run_id,
                 "no_auto_merge": True,
+                # What the merge card leads with, and what makes its approval a person's stated
+                # decision rather than a click (decisions.transition, checks_failing.py).
+                **({_checks_failing.KEY: {
+                    **checks_failing,
+                    "draft": bool(getattr(self.github, "supports_draft_pull_requests", False)),
+                    "label": _checks_failing.LABEL}} if checks_failing else {}),
             },
             {},
             "merge_decision_required",
@@ -2273,6 +2296,63 @@ class SoftwareFactoryService:
                          {"pull_request_url": url, "files": ci_changed["ci_changed_files"],
                           "findings": len(findings), **posted})
 
+    def _ready_a_checks_failing_draft(self, connection: Any, project_id: str, decision_id: str,
+                                      number: int, receipt_id: str, *,
+                                      pull_request_url: str = "") -> None:
+        """A person decided to merge a pull request BOSS opened as a draft because its checks
+        were failing (their approval is already required above): mark it ready, so GitHub
+        accepts the merge they decided. The same holds when a later build of the lineage made
+        the checks pass on that PR (its new card carries no failing checks, the PR is still the
+        draft BOSS opened). Any other draft is left as it is."""
+        from . import checks_failing as _checks_failing
+
+        rows = connection.execute(
+            sql("SELECT recommendation FROM decisions WHERE project_id = :p AND (id = :d "
+                "OR (CAST(:u AS text) <> '' AND recommendation->>'pull_request_url' = :u "
+                "AND recommendation ? 'checks_failing'))"),
+            {"d": decision_id, "p": project_id, "u": pull_request_url or ""}).mappings().all()
+        records = [_checks_failing.of_decision(dict(r)) for r in rows]
+        if not any(r and r.get("draft") for r in records):
+            return
+        ready = getattr(self.github, "mark_ready_for_review", None)
+        if ready is None:
+            return
+        try:
+            done = ready(number)
+        except Exception as error:  # noqa: BLE001 — the merge then says GitHub's refusal
+            done = False
+            self.events.emit(connection, project_id, "software_factory.draft_ready_failed",
+                             "release_manager", "receipt", receipt_id,
+                             {"pull_request_number": number,
+                              "error": f"{type(error).__name__}: {error}"[:200]})
+        if done:
+            self.events.emit(connection, project_id, "software_factory.draft_marked_ready",
+                             "release_manager", "receipt", receipt_id,
+                             {"pull_request_number": number, "decision_id": decision_id,
+                              "why": "a person decided to merge it with its checks failing"})
+
+    def _flag_checks_failing(self, connection: Any, project_id: str, number: int, url: str,
+                             checks_failing: dict, receipt_id: str) -> None:
+        """The `checks failing` label on the pull request (checks_failing.LABEL). Best effort at
+        GitHub: what refuses a silent merge is BOSS's own decision, not the label."""
+        from . import checks_failing as _checks_failing
+
+        posted: dict[str, Any] = {}
+        try:
+            add = getattr(self.github, "add_labels", None)
+            if add is None:
+                posted["label_error"] = "this git host takes no labels from BOSS"
+            else:
+                add(number, [_checks_failing.LABEL])
+                posted["label"] = True
+        except Exception as error:  # noqa: BLE001
+            posted["label_error"] = f"{type(error).__name__}: {error}"[:200]
+        self.events.emit(connection, project_id, "software_factory.checks_failing_flagged",
+                         "coding_worker", "receipt", receipt_id,
+                         {"pull_request_url": url,
+                          "failing_gates": _checks_failing.gate_names(checks_failing),
+                          "security": bool(checks_failing.get("security")), **posted})
+
     def merge_pull_request(
         self,
         connection: Any,
@@ -2359,6 +2439,9 @@ class SoftwareFactoryService:
         )
         if not pull_request_url.rstrip("/").endswith(f"/pull/{pull_request_number}"):
             raise ValueError("The pull request number does not match the approved URL.")
+        self._ready_a_checks_failing_draft(connection, project_id, decision_id,
+                                           pull_request_number, merge_receipt["id"],
+                                           pull_request_url=pull_request_url)
         recovered_from_stale_base = False
         try:
             merge = self.github.merge_pull_request(pull_request_number, title)

@@ -295,6 +295,8 @@ blindly restart research or assume the held budget has been released.
 
 When the build step finishes, Factory shows the task as done with a link to the pull request, and a merge approval appears in **Approvals**: `Approve code change: <title> (PR #N)`. BOSS does not merge on its own.
 
+**If its checks still fail.** A build whose tests or review checks still fail after its repair rounds opens its pull request anyway. It does not stop to wait for a waiver. The pull request is a draft labelled `checks failing`, and its description opens with every failing check and finding, security findings first. Factory shows the build as **PR open · checks failing**, a follow-up build is queued to fix those checks, and the workflow goes on. The approval reads `Checks failing — decide the merge: <title> (PR #N)` and lists the same checks. **Approve** is replaced by **Merge with checks failing**, which needs your reason and is recorded with the merge; **Keep blocked** leaves the pull request open. The checks themselves are unchanged. To make a failing build stop and wait for a waiver instead, set **Open the PR when checks fail** to 0 for the project (`open_pr_when_checks_fail`, or `BOSS_OPEN_PR_WHEN_CHECKS_FAIL=0` for the whole install). Two cases still stop: a build that needs you to set a secret, and a build whose applied template's tests failed or that committed a secret.
+
 Before you approve, review:
 
 - **The PRD** from step 6. Does the change do what it says?

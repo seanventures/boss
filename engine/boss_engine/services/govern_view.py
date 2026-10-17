@@ -66,6 +66,9 @@ ENFORCED: dict[str, tuple[str, str]] = {
     "deploy_fix_attempts": ("Each deploy step", "each_deploy_step"),
     # Read at every recovery decision (step_recovery.enabled / limits): past the budget or the
     # time, the step's agent asks a person instead of acting.
+    # Read when a build's checks still fail after its repair rounds (checks_failing.enabled):
+    # on, its PR opens as a draft with the checks listed; off, it waits for a waiver.
+    "open_pr_when_checks_fail": ("Each build", "each_build"),
     "step_recovery": ("Each failed step", "each_failed_step"),
     "recovery_budget_cents": ("Each failed step", "each_failed_step"),
     "recovery_max_minutes": ("Each failed step", "each_failed_step"),
@@ -76,7 +79,8 @@ ENFORCED: dict[str, tuple[str, str]] = {
 }
 
 #: The on/off controls (0 or 1), drawn as a switch.
-SWITCHES = frozenset({"captain_leads_projects", "captain_auto_improve", "step_recovery"})
+SWITCHES = frozenset({"captain_leads_projects", "captain_auto_improve", "step_recovery",
+                      "open_pr_when_checks_fail"})
 
 #: The four thresholds, as the screen names them (key, label, budget_policies column).
 THRESHOLDS = (

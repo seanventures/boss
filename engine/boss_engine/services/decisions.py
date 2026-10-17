@@ -31,6 +31,10 @@ class InvalidDecisionTransitionError(Exception):
     pass
 
 
+class ForceNeedsANote(InvalidDecisionTransitionError, ValueError):
+    """A forced merge without its reason. Still a ValueError for the callers that caught it."""
+
+
 #: The actor recorded when a policy, not a person, resolves a gate. Deliberately not a member
 #: of any org: it must be impossible to sign in as, and obvious in an audit trail.
 SYSTEM_ACTOR = "auto_approval"
@@ -327,8 +331,9 @@ class DecisionService:
         if force and not (note or "").strip():
             # A force merge overrides BOSS's own safety verdict. The reason is the ONLY
             # record of why, so it is mandatory — an unexplained override is indistinguishable
-            # from a bug six months later.
-            raise ValueError(
+            # from a bug six months later. A refusal (409 in words), never a 500: a merge with
+            # checks failing (checks_failing.py) is sent exactly this way.
+            raise ForceNeedsANote(
                 "force requires a note: state why BOSS's merge gate is being overridden.")
 
         row = self.get_row(connection, decision_id, for_update=True)
@@ -922,6 +927,20 @@ class DecisionService:
                      "pull_request_url": recommendation.get("pull_request_url"),
                      "note": "operator override — BOSS's automated merge gate did not pass"},
                 )
+                from . import checks_failing as _checks_failing
+
+                _failing = _checks_failing.of_decision(row)
+                if _failing is not None:
+                    # A PERSON DECIDED TO MERGE IT WITH ITS CHECKS FAILING: who, why, and
+                    # exactly which checks and whether security was among them.
+                    emit_event(
+                        connection, row["project_id"], _checks_failing.MERGE_EVENT, actor,
+                        "decision", row["id"],
+                        {"reason": (note or "").strip()[:500],
+                         "failing_gates": _checks_failing.gate_names(_failing),
+                         "security": bool(_failing.get("security")),
+                         "pull_request_url": recommendation.get("pull_request_url")},
+                    )
             if ci_gate is not None:
                 self._create_merge_gate_block(
                     connection,

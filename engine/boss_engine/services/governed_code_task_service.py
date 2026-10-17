@@ -1041,6 +1041,41 @@ def resolve_gate_failure_action(
     template_repair_max: Optional[int] = None,
     blockers: Optional[list[str]] = None,
     fix_round_ran: bool = True,
+    open_pr_when_failing: bool = False,
+) -> str:
+    """Decide what to do after a non-passing quality gate (`_gate_failure_action`), then apply
+    the operator's rule (checks_failing.py): with ``open_pr_when_failing`` (the project setting
+    `open_pr_when_checks_fail`, on by default), a build that would stop for a waiver once its
+    repair rounds are spent opens its pull request instead — ``"ship_failing"``: a draft,
+    labelled, every failing gate and finding on it, a follow-up build for them, and a merge only
+    a person decides. Its gates are judged exactly as before; only the stop moves. A build that
+    needs a person's act (a secret only they can set), one held by an applied template's gate,
+    and one that opens no PR (``open_pr`` false) still stop."""
+    action = _gate_failure_action(
+        failing=failing, advisory_gate=advisory_gate, rounds_used=rounds_used,
+        max_repair_rounds=max_repair_rounds, open_pr=open_pr, never_block=never_block,
+        faults=faults, template_repair_max=template_repair_max, blockers=blockers,
+        fix_round_ran=fix_round_ran)
+    if action == "block" and open_pr_when_failing:
+        from .checks_failing import ACTION, may_open
+
+        if may_open(failing, faults=faults, open_pr=open_pr):
+            return ACTION
+    return action
+
+
+def _gate_failure_action(
+    *,
+    failing: list[str],
+    advisory_gate: bool,
+    rounds_used: int,
+    max_repair_rounds: int,
+    open_pr: bool = True,
+    never_block: bool = True,
+    faults: Optional[dict[str, str]] = None,
+    template_repair_max: Optional[int] = None,
+    blockers: Optional[list[str]] = None,
+    fix_round_ran: bool = True,
 ) -> str:
     """Decide what to do after a non-passing quality gate.
 
@@ -2654,6 +2689,7 @@ def _spawn_deferred_findings_task(
     engine, settings, jobs, *, project_id, task_id, spec, base_branch,
     findings: list[dict], parent_run_id: str, parent_title: str,
     parent_root: Optional[str] = None, parent_origin: Optional[dict] = None,
+    checks_failing: Optional[dict] = None,
 ):
     """Queue sub-threshold review findings as their own code task on the shipped branch.
 
@@ -2661,24 +2697,44 @@ def _spawn_deferred_findings_task(
     cosmetic defect" safe, because the defect leaves as tracked work rather than as a note in a
     receipt nobody reads. Best-effort by construction — a PR that is already open must not be
     failed by bookkeeping.
+
+    ``checks_failing`` (checks_failing.collect): the parent's PR opened with checks still
+    failing after its repair rounds. The task is then those checks' fix — its failing gates
+    and open findings come first in ``findings``, security first — and says so.
     """
     lines = [f"- [{f['severity'].upper()}] {f['text']}"
              for f in (findings or []) if f.get("text")]
     if not lines:
         return None
     from .code_task_service import start_code_task
-    body = "\n".join(lines[:20])
+    limit = 40 if checks_failing else 20
+    body = "\n".join(lines[:limit])
+    if checks_failing:
+        from .checks_failing import headline
+
+        title_lead = "Follow-up: checks failing"
+        why = ("The parent change's pull request opened with these checks still FAILING after "
+               f"its repair rounds ({headline(checks_failing)}), so it is a draft and is not "
+               "merged until they pass or a person decides. Make every failing check pass and "
+               "fix every open finding below on top of the shipped branch, security first.")
+        heading = "FAILING CHECKS AND OPEN FINDINGS"
+    else:
+        title_lead = "Follow-up: deferred review findings"
+        why = ("An adversarial review of the parent change graded these findings BELOW the "
+               "blocking threshold, so the change shipped and they were deferred to this task. "
+               "Fix them on top of the shipped branch.")
+        heading = "DEFERRED FINDINGS"
     with _transaction(engine) as c:
         return start_code_task(
             c, project_id=project_id, task_id=task_id,
-            title=f"Follow-up: deferred review findings — {parent_title}"[:160],
+            title=f"{title_lead} — {parent_title}"[:160],
             instructions=(
-                "An adversarial review of the parent change graded these findings BELOW the "
-                "blocking threshold, so the change shipped and they were deferred to this task. "
-                "Fix them on top of the shipped branch.\n\n"
-                f"DEFERRED FINDINGS (from run {parent_run_id}):\n{body}\n\n"
-                "Fix ONLY these. Do not refactor beyond them and do not weaken existing tests."),
-            acceptance_criteria=[f"Deferred finding addressed: {ln[:180]}" for ln in lines[:20]],
+                f"{why}\n\n"
+                f"{heading} (from run {parent_run_id}):\n{body}\n\n"
+                "Fix ONLY these. Do not refactor beyond them and do not weaken existing tests "
+                "or checks."),
+            acceptance_criteria=[f"{'Fixed' if checks_failing else 'Deferred finding addressed'}: "
+                                 f"{ln[:180]}" for ln in lines[:limit]],
             test_commands=spec.get("test_commands") or [],
             owner=spec.get("owner"), repo=spec.get("repo"),
             base_branch=base_branch,
@@ -7589,6 +7645,16 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 consistency_summary=r6.get("summary", ""), hollow=_hollow_seats)
             if _blockers:
                 evidence["unresolved_blockers"] = _blockers
+            # THE OPERATOR'S RULE (checks_failing.py): past the repair rounds a failing check
+            # opens the PR (draft, labelled, listed) instead of parking for a waiver.
+            from . import checks_failing as _checks_failing
+
+            try:
+                with _transaction(engine) as c:
+                    _open_when_failing = _checks_failing.enabled(c, settings, project_id)
+            except Exception:  # noqa: BLE001 — the default is the rule
+                _log_caught(logger)
+                _open_when_failing = _checks_failing.enabled(None, settings, project_id)
             action = resolve_gate_failure_action(
                 failing=failing,
                 advisory_gate=advisory_gate,
@@ -7600,6 +7666,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 template_repair_max=max_repair,
                 blockers=_blockers,
                 fix_round_ran=_fix_rounds_run > 0,
+                open_pr_when_failing=_open_when_failing,
             )
             if action == "inconclusive":
                 # The checks never finished, so nothing is known about the code. Re-run the
@@ -7682,7 +7749,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         open_pr=_can_ship_pr,
                         never_block=bool(getattr(settings, "code_gate_never_block", True)),
                         faults=gate_faults, template_repair_max=max_repair,
-                        blockers=_blockers, fix_round_ran=_fix_rounds_run > 0)
+                        blockers=_blockers, fix_round_ran=_fix_rounds_run > 0,
+                        open_pr_when_failing=_open_when_failing)
                 if action == "inconclusive":
                     # Escalations exhausted: ship, recording that the code was NOT reviewed.
                     # Still respect _can_ship_pr — a non-final slice / open_pr=false run must
@@ -7690,6 +7758,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     action = ("ship_with_dissent"
                               if (bool(getattr(settings, "code_gate_never_block", True))
                                   and _can_ship_pr)
+                              else _checks_failing.ACTION
+                              if (_open_when_failing and _checks_failing.may_open(
+                                  failing, faults=gate_faults, open_pr=_can_ship_pr))
                               else "block")
             if action == "ship" and failing and advisory_gate:
                 # ADVISORY first pass: surface the failing checks (their verdicts are already
@@ -7704,11 +7775,30 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     emit_event(c, project_id, "code_task.gate_advisory", "boss",
                                "code_task_run", run_id, {"advisory_failing_gates": failing})
                 # Fall through to GATE PASSED below — do NOT enter repair/block.
-            elif action == "ship_with_dissent":
+            elif action in ("ship_with_dissent", _checks_failing.ACTION):
                 # AUTONOMY TERMINAL: convergence and repair are spent and the panel is still
                 # unhappy. Ship, but make the dissent impossible to miss — the failing gates and
                 # the reviewer's reasoning land on the run AND become their own task, so a human
                 # can reverse this without having to discover it first.
+                #
+                # CHECKS FAILING (checks_failing.py): the same PR, made impossible to merge by
+                # accident — a draft labelled `checks failing`, its description opening with
+                # every failing gate and finding word for word (security first), and a merge
+                # card a person answers with a reason. Both terminals record it: a PR with
+                # failing checks is one thing, whichever rule let it open.
+                _details = {}
+                if "app_serves" in failing:
+                    _details["app_serves"] = _app_serves_sentence(app_serves_record)[:700]
+                if _blockers:
+                    for _g in _blockers:
+                        _details.setdefault(_g, "a BLOCKER-level finding is still open after "
+                                                "its fix round")
+                checks_record = {
+                    **_checks_failing.collect(failing, evidence, details=_details),
+                    "hard": action == _checks_failing.ACTION,
+                    "rounds_used": rounds_used, "quality_gate_id": qg_id,
+                }
+                evidence[_checks_failing.KEY] = checks_record
                 dissent = {
                     "unresolved_gates": failing,
                     "adversarial_verdict": verdict,
@@ -7719,19 +7809,29 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     "quality_gate_id": qg_id,
                 }
                 evidence["unresolved_dissent"] = dissent
-                # Carry the unresolved gates into the follow-up task alongside deferred findings.
-                deferred_findings = list(deferred_findings) + [
-                    {"severity": "major", "text": f"Unresolved quality gate '{g}' at ship time"}
-                    for g in failing]
+                # Carry the failing gates and their open findings (verbatim, security first)
+                # into the follow-up task, ahead of the deferred findings.
+                deferred_findings = (_checks_failing.followup_findings(checks_record)
+                                     + list(deferred_findings))
                 with _transaction(engine) as c:
                     c.execute(sql(
                         "UPDATE code_task_runs SET state=CAST(:s AS JSONB), "
                         "finalize_ctx=COALESCE(finalize_ctx,'{}'::jsonb) "
-                        "|| jsonb_build_object('unresolved_dissent', CAST(:d AS JSONB)), "
+                        "|| jsonb_build_object('unresolved_dissent', CAST(:d AS JSONB), "
+                        "'checks_failing', CAST(:cf AS JSONB)), "
                         "updated_at=now() WHERE id=:id"),
-                        {"s": json.dumps(evidence), "d": json.dumps(dissent), "id": run_id})
+                        {"s": json.dumps(evidence), "d": json.dumps(dissent),
+                         "cf": json.dumps(checks_record), "id": run_id})
                     emit_event(c, project_id, "code_task.shipped_with_dissent", "boss",
                                "code_task_run", run_id, dissent)
+                    if action == _checks_failing.ACTION:
+                        emit_event(c, project_id, _checks_failing.OPENED_EVENT, "boss",
+                                   "code_task_run", run_id,
+                                   {"failing_gates": _checks_failing.gate_names(checks_record),
+                                    "security": checks_record.get("security"),
+                                    "findings": len(checks_record.get("findings") or []),
+                                    "why": "the repair rounds are spent; the PR opens with its "
+                                           "checks failing instead of waiting for a waiver"})
                 # Fall through to GATE PASSED below — ship it.
             elif action == "repair":
                 # AUTONOMOUS REVIEW-REPAIR (BOSS's moat: agents converge in a loop, not a human).
@@ -7985,11 +8085,16 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # THE STOP WINS WHEN IT CAN (factory walk D1). The PR step is one long transaction
             # with no phase change inside, so a Stop pressed during it was only seen after the
             # PR existed. Checked right before the first GitHub write (the push and the PR).
+            # CHECKS FAILING (checks_failing.py): the description OPENS with them, and the PR
+            # is a draft with the label, so nobody reads it as a passing change.
+            from .checks_failing import KEY as _CF_KEY, pr_section as _cf_section
+
+            _checks = evidence.get(_CF_KEY) if isinstance(evidence.get(_CF_KEY), dict) else None
             _abort_if_cancelled("before opening the PR")
             _pr_files = ([FileChange(path=p, content=content)
                           for p, content in accumulated.items()]
                          if use_microvm else sandbox.diff())
-            _pr_summary = _generated_pr_summary(
+            _pr_summary = _cf_section(_checks) + _generated_pr_summary(
                 engine, settings, run_id, project_id, title=title, evidence=evidence,
                 gates=gates, paths=[f.path for f in _pr_files], qg_id=qg_id)
             proposal = sf.propose_pull_request(
@@ -7999,7 +8104,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 summary=_pr_summary + agent_acts.pr_trailers(c, run_id),
                 files=_pr_files,
                 created_by_job_id=job_id, actual_usd_micros=cost,
-                evidence=evidence, quality_gate_id=qg_id, run_id=run_id)
+                evidence=evidence, quality_gate_id=qg_id, run_id=run_id,
+                **({"checks_failing": _checks} if _checks else {}))
 
         status = proposal.get("status")
         # RETRY THE PR ITSELF. A transient GitHub error, an expired reservation, a network
@@ -8047,7 +8153,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         summary=_pr_summary + agent_acts.pr_trailers(c, run_id),
                         files=_pr_files,
                         created_by_job_id=job_id, actual_usd_micros=cost,
-                        evidence=evidence, quality_gate_id=qg_id, run_id=run_id)
+                        evidence=evidence, quality_gate_id=qg_id, run_id=run_id,
+                        **({"checks_failing": _checks} if _checks else {}))
                     status = proposal.get("status")
                 except Exception as exc:  # noqa: BLE001
                     _log_caught(logger)
@@ -8199,8 +8306,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # DEFERRED FINDINGS → their own task on the shipped branch. After the PR exists, so a
         # bookkeeping failure can never cost the delivery; guarded so follow-ups don't recurse.
         followup_run_id = None
+        # A PR that opened with its checks failing always gets its follow-up: it is the fix.
         if (deferred_findings
-                and getattr(settings, "code_review_followup_tasks", True)
+                and (getattr(settings, "code_review_followup_tasks", True) or _checks)
                 and not fctx.get("is_followup")
                 and not _already_spawned_followup(engine, run_id)):
             try:
@@ -8209,12 +8317,23 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     spec=spec, base_branch=work_branch, findings=deferred_findings,
                     parent_run_id=run_id, parent_title=title,
                     parent_root=(fctx.get("root_run_id") or run_id),
-                    parent_origin=fctx.get("origin"))
+                    parent_origin=fctx.get("origin"),
+                    checks_failing=_checks)
                 with _transaction(engine) as c:
                     emit_event(c, project_id, "code_task.deferred_findings_task", "boss",
                                "code_task_run", run_id,
                                {"followup_run_id": followup_run_id,
-                                "findings": deferred_findings[:20]})
+                                "findings": deferred_findings[:20],
+                                **({"checks_failing": True} if _checks else {})})
+                    if _checks and followup_run_id:
+                        # Where its fix is being built: the build page and the merge card
+                        # name the follow-up next to the failing checks.
+                        c.execute(sql(
+                            "UPDATE code_task_runs SET finalize_ctx = jsonb_set("
+                            "finalize_ctx, '{checks_failing,followup_run_id}', "
+                            "to_jsonb(CAST(:f AS text))) WHERE id = :id "
+                            "AND finalize_ctx ? 'checks_failing'"),
+                            {"f": str(followup_run_id), "id": run_id})
             except Exception as exc:  # noqa: BLE001 — never fail a shipped PR on follow-up bookkeeping
                 _log_caught(logger)
                 with _transaction(engine) as c:
@@ -8224,7 +8343,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                 "findings": deferred_findings[:20]})
         return {"status": "completed", "done": True, "quality_gate_id": qg_id,
                 "deferred_findings": deferred_findings,
-                "followup_run_id": followup_run_id, **proposal}
+                "followup_run_id": followup_run_id,
+                **({"checks_failing": _checks} if _checks else {}), **proposal}
 
     except RunFenced as exc:
         # THE LOSER OF A RACE MUST NOT BURY THE WINNER.

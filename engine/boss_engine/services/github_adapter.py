@@ -652,9 +652,15 @@ class GitHubAdapter:
         data_json = response.json()
         return data_json["commit"]["sha"]
 
+    #: GitHub has draft pull requests (software_factory opens a checks-failing PR as one).
+    supports_draft_pull_requests = True
+
     def create_pull_request(
-        self, branch_name: str, title: str, body: str
+        self, branch_name: str, title: str, body: str, draft: Optional[bool] = None
     ) -> PullRequestResult:
+        """Open (or refresh) the PR for this head. ``draft`` None follows BOSS_OPEN_PR_AS_DRAFT;
+        True opens a draft (a build whose checks still fail, checks_failing.py). An already-open
+        PR keeps its own draft state: only its body is refreshed."""
         default_branch, _ = self.default_branch_sha()
         # Idempotent for feedback-iterations that reuse a branch: if a PR is already open
         # for this head, refresh its body and return it — GitHub would otherwise 422 on a
@@ -686,11 +692,47 @@ class GitHubAdapter:
                 "head": branch_name,
                 "base": default_branch,
                 "body": body,
-                "draft": self.settings.open_pr_as_draft,
+                "draft": (self.settings.open_pr_as_draft if draft is None else bool(draft)),
                 "maintainer_can_modify": False,
             },
         )
         return PullRequestResult(url=response["html_url"], number=response["number"])
+
+    def add_labels(self, pull_request_number: int, labels: list[str]) -> None:
+        """Add labels to a pull request (GitHub creates a label it does not have yet)."""
+        self._request(
+            "POST",
+            f"/repos/{self.repository_full_name}/issues/{pull_request_number}/labels",
+            {"labels": list(labels)},
+        )
+
+    def mark_ready_for_review(self, pull_request_number: int) -> bool:
+        """Turn a draft PR into one GitHub will merge. REST cannot: it is the GraphQL
+        `markPullRequestReadyForReview` mutation on the PR's node id. True when it is ready
+        (or was never a draft)."""
+        pull = self._request(
+            "GET", f"/repos/{self.repository_full_name}/pulls/{pull_request_number}")
+        if not pull.get("draft"):
+            return True
+        node_id = pull.get("node_id")
+        if not node_id:
+            return False
+        # GitHub Enterprise serves REST at <host>/api/v3 and GraphQL at <host>/api/graphql.
+        base = self.api_base_url
+        graphql = (base[: -len("/v3")] + "/graphql") if base.endswith("/api/v3") \
+            else base + "/graphql"
+        answer = self._send(
+            "POST", graphql, headers=self._headers(),
+            json={"query": "mutation($id: ID!) { markPullRequestReadyForReview("
+                           "input: {pullRequestId: $id}) { pullRequest { isDraft } } }",
+                  "variables": {"id": node_id}},
+        ).json()
+        if (answer or {}).get("errors"):
+            raise RuntimeError(f"GitHub refused to mark PR #{pull_request_number} ready: "
+                               f"{str(answer['errors'])[:200]}")
+        ready = ((((answer or {}).get("data") or {}).get("markPullRequestReadyForReview") or {})
+                 .get("pullRequest") or {})
+        return ready.get("isDraft") is False
 
     def update_pull_request_branch(self, pull_request_number: int) -> bool:
         """Merge the base branch INTO the PR's head branch (GitHub's "Update branch").

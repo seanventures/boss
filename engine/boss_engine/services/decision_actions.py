@@ -434,6 +434,21 @@ def allowed_actions(decision: Mapping[str, Any]) -> list[dict[str, Any]]:
                     "Nothing is merged or deployed. The pull requests stay open."),
         ]
     if kind == "pull_request":
+        from .checks_failing import of_decision
+
+        if of_decision(decision) is not None:
+            # CHECKS FAILING (checks_failing.py): the merge is a person's stated decision. The
+            # approval needs a reason and is sent as a forced merge (ci_gate.refuse_approval
+            # refuses anything else); keeping it blocked is the other answer.
+            return [
+                _action("approve", "Merge with checks failing", "reject",
+                        "Merges this pull request although BOSS's checks are failing. Say why: "
+                        "your reason is recorded with the merge.", needs="note"),
+                _action("reject", "Keep blocked", "reject",
+                        "The pull request stays open and unmerged while its follow-up build "
+                        "fixes the failing checks."),
+                _delegate(),
+            ]
         # No "Request changes" either. Nothing reads a PR review's revision_requested, and the
         # status could no longer be approved, so a PR sent back that way could never be merged
         # from BOSS. Changing the code is a new build, which Factory starts from a note.

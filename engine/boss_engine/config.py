@@ -1111,6 +1111,14 @@ class Settings(BaseSettings):
     code_gate_never_block: bool = Field(
         default=True, alias="BOSS_CODE_GATE_NEVER_BLOCK"
     )
+    # OPEN THE PR WHEN CHECKS FAIL (services/checks_failing.py, the operator's rule). The gates
+    # that still stop a build after its repair rounds even with never-block on (a BLOCKER finding
+    # such as a security hole, failing tests, an app that does not start) open the pull request
+    # anyway: a draft labelled `checks failing`, every failing gate and finding listed in it
+    # (security first), a follow-up build for them, and a merge card that says so and merges only
+    # on a person's stated reason. The build is never parked waiting for a waiver. 0 restores the
+    # waiver stop (awaiting_gate_override). Govern/Settings sets it per project.
+    open_pr_when_checks_fail: int = Field(default=1, alias="BOSS_OPEN_PR_WHEN_CHECKS_FAIL")
     # Max agent turns inside the sandbox before we stop and take the diff. 40 is fine for a module
     # but too few for APP-SCALE work (scaffolding a whole Vite/React app is more file-writes than
     # that) — a too-low cap surfaces as error_max_turns and fails the task. 90 fits real app tasks.

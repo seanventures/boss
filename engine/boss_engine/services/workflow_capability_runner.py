@@ -4333,14 +4333,29 @@ def _terminal_evidence(
                     "pull_requests": [dict(r) for r in rows]}
         if kind == "code_task":
             row = connection.execute(
-                text("SELECT pull_request_url, pull_request_number FROM code_task_runs "
+                text("SELECT pull_request_url, pull_request_number, "
+                     "finalize_ctx->'checks_failing' AS checks_failing FROM code_task_runs "
                      "WHERE id = :r"),
                 {"r": awaited_id},
             ).mappings().first()
             if not row or not row["pull_request_url"]:
                 return {}
-            return {"pull_request_url": row["pull_request_url"],
-                    "pull_request_number": row["pull_request_number"]}
+            out = {"pull_request_url": row["pull_request_url"],
+                   "pull_request_number": row["pull_request_number"]}
+            checks = row["checks_failing"]
+            checks = json.loads(checks) if isinstance(checks, str) else checks
+            if isinstance(checks, dict) and checks.get("gates"):
+                # THE PR OPENED WITH ITS CHECKS FAILING (checks_failing.py): the step is done
+                # and the run goes on to the merge decision, saying so — never a waiver wait.
+                from .checks_failing import gate_names, headline
+
+                out["checks_failing"] = {"gates": gate_names(checks),
+                                         "security": bool(checks.get("security")),
+                                         "followup_run_id": checks.get("followup_run_id")}
+                out["note"] = ("PR open · checks failing: " + headline(checks)
+                               + (" (security finding open)" if checks.get("security") else "")
+                               + ". The merge is a person's decision.")
+            return out
         if kind == "discovery":
             # WHAT THE RESEARCH FOUND, not just that it finished. Without this the research
             # step completes carrying nothing, and the panel that follows it debates the
