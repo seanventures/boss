@@ -308,6 +308,7 @@ cmd_upgrade() {
       --to|--ref) args+=(--ref "${2:?--to needs a ref}"); shift 2 ;;
       --backup-dir) args+=(--backup-dir "${2:?--backup-dir needs a path}"); shift 2 ;;
       --dry-run|--web|--no-web|--no-rollback) args+=("$1"); shift ;;
+      --without) args+=(--without "${2:?--without needs a self-fix id}"); shift 2 ;;
       *) die "unknown upgrade option: $1 (see boss help)" ;;
     esac
   done
@@ -377,6 +378,15 @@ cmd_update() {
   done
   # The installer reads the remembered release from .boss-release, so this cannot move to main.
   bash "$INSTALL_DIR/install.sh" --dir "$INSTALL_DIR" --yes "$@"
+  # The installer builds the release; the local BOSS self-fixes are re-applied on it.
+  local stack_ref ref
+  stack_ref="$(grep -m 1 '^BOSS_STACK_REF=' "$INSTALL_DIR/.boss-release" 2>/dev/null | cut -d= -f2- || true)"
+  ref="$(grep -m 1 '^BOSS_RELEASE_REF=' "$INSTALL_DIR/.boss-release" 2>/dev/null | cut -d= -f2- || true)"
+  if [[ -n "$stack_ref" && -n "$ref" && -f "$INSTALL_DIR/scripts/install/self_fix_installer.py" ]]; then
+    BOSS_SELF_FIX_API="$(api_url)" python3 "$INSTALL_DIR/scripts/install/self_fix_installer.py" \
+      --dir "$INSTALL_DIR" restack --to "$ref" ||
+      printf 'The release runs without the local BOSS fixes; BOSS re-ports them.\n' >&2
+  fi
   post_deploy_prune
 }
 

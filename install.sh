@@ -1050,12 +1050,18 @@ write_release_state() {
   fi
   INSTALLED_REF="$ref"
   tmp="$INSTALL_DIR/$RELEASE_STATE_NAME.writing.$$"
+  # The local BOSS self-fix stack (scripts/install/self_fix_installer.py) is kept: boss upgrade
+  # and boss update re-apply it after this run (restack), so it is never dropped silently.
+  local stack_ref stack_head
+  stack_ref="$(state_value BOSS_STACK_REF)"
+  stack_head="$(state_value BOSS_STACK_HEAD)"
   printf '%s\n' \
     "# BOSS install record, written by install.sh. Not secret. Reruns and boss upgrade read it." \
     "BOSS_RELEASE_REF=$ref" \
     "BOSS_RELEASE_CHANNEL=$INSTALLED_CHANNEL" \
     "BOSS_INSTALLED_COMMIT=$head" \
-    "BOSS_INSTALLED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$tmp"
+    "BOSS_INSTALLED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    ${stack_ref:+"BOSS_STACK_REF=$stack_ref"} ${stack_head:+"BOSS_STACK_HEAD=$stack_head"} > "$tmp"
   mv -f "$tmp" "$INSTALL_DIR/$RELEASE_STATE_NAME"
   # Keep the record out of `git status` in this checkout. The exported repository has no
   # .gitignore entry for it, so use the checkout's own exclude file; nothing tracked changes.

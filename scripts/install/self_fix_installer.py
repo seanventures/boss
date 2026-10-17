@@ -661,10 +661,13 @@ def plan_stack(source: str, to_ref: str, fixes: list[dict[str, Any]], *,
             commit = str(fix.get("commit") or "")
             sfx = str(fix.get("self_fix_id") or "")
             item = {"self_fix_id": sfx, "commit": commit}
+            merged = subprocess.run(["git", "merge-base", "--is-ancestor", commit, to_sha],
+                                    cwd=source, capture_output=True).returncode == 0
             cherry = _git(source, "cherry", to_sha, commit, f"{commit}^", check=False)
             trailer = _git(source, "log", "--format=%H", f"--grep=BOSS-Self-Fix: {sfx}",
                            to_sha, check=False) if sfx else ""
-            if cherry.startswith("-"):
+            if merged or cherry.startswith("-"):
+                # The release holds this very commit (merged as it is), or an equivalent patch.
                 item.update(outcome="dropped_upstream", how="commit")
             elif trailer:
                 item.update(outcome="dropped_upstream", how="trailer")
@@ -824,6 +827,12 @@ def cmd_restack(host: Host, to_ref: str, without: list[str]) -> int:
     (host.dir / ".boss").mkdir(exist_ok=True)
     (host.dir / ".boss" / "stack-plan.json").write_text(json.dumps(
         {"release": to_ref, "fixes": plan}, indent=1))
+    try:
+        # BOSS records each fix's fate (dropped, carried, rework, removed); when it cannot be
+        # reached now, .boss/stack-plan.json keeps it for `boss self-fix status`.
+        host.call("POST", "/v1/self-fixes/stack-report", {"release": to_ref, "fixes": plan})
+    except Refused as error:
+        host.out(f"(BOSS did not take the stack plan yet: {error})")
     if head == host.release_sha():
         host.record(new_ref, head)
         host.out("No local fixes carried over; BOSS runs the new release as it is.")
