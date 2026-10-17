@@ -660,6 +660,10 @@ export async function resolveDecisionAction(formData: FormData): Promise<ActionR
       && !(action === "execute" && typeof externalRef === "string" && externalRef.trim())) {
     return missingInput("note");
   }
+  // A MERGE WITH CHECKS FAILING is a person's stated decision: a forced merge, with the reason
+  // they wrote (the engine refuses one without it, and refuses a plain Approve of such a PR).
+  const forced = action === "approve" && String(formData.get("force") ?? "") === "true";
+  if (forced && !said) return missingInput("reason");
 
   const payload = {
     actor: getActor(formData),
@@ -672,6 +676,7 @@ export async function resolveDecisionAction(formData: FormData): Promise<ActionR
     // The preview's hash the approver was shown; refused by the engine if it has moved on.
     content_hash: action === "approve" && typeof contentHash === "string" && contentHash
       ? contentHash : undefined,
+    force: forced || undefined,
   };
   // NO CATCH HERE. This used to swallow every API error into console.error and then report
   // "Decision recorded" — a refused Approve read as success. act() turns the refusal into

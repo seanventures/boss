@@ -2038,6 +2038,8 @@ export type DecisionActionRequest = {
   external_ref?: string;
   /** The `action_preview.content_hash` the approver saw; a moved-on preview is refused. */
   content_hash?: string;
+  /** A person overriding BOSS's merge gate (e.g. merging with checks failing); needs a note. */
+  force?: boolean;
 };
 
 export type DecisionDigestRequest = {

@@ -10,6 +10,7 @@ import { ClientRelativeTime } from "./client-relative-time";
 import { ActionForm, DecisionResolveForm } from "./client-forms";
 import { ActionPreview, actionPreviewOf, previewLead } from "./action-preview";
 import { ArchitectureDoc } from "./architecture-doc";
+import { ChecksFailing, checksFailingOf } from "./checks-failing";
 import { architectureDocOf } from "../lib/architecture";
 import { AreaLink } from "./area-link";
 import { isAreaId } from "../lib/area-ids";
@@ -827,6 +828,9 @@ function DecisionInboxRow({
           <h3 className="dq-title">
             {refusal && guidance ? guidance.what_happened : decision.question}
           </h3>
+          {/* A PR that opened with its checks failing says so FIRST, security first: its merge
+              is the person's stated decision, never a click (engine checks_failing.py). */}
+          {checksFailingOf(rec) ? <ChecksFailing record={checksFailingOf(rec)!} /> : null}
           {/* An expired card says so before its buttons: "Approve and merge" on a pull request
               from weeks ago is a different act from the same button on one raised today. */}
           {expired ? (
@@ -1014,6 +1018,9 @@ export function DecisionActions({ decision, projectId, actorId }: {
 }) {
   const offers = offeredActions(decision).filter((a) => a.action !== "execute");
   const direct = offers.filter((a) => !a.needs);
+  // AN APPROVAL THAT NEEDS A REASON (a merge with checks failing): drawn open, never behind
+  // "More", with the reason box; sent as the forced merge the engine requires.
+  const reasoned = offers.find((a) => a.action === "approve" && a.needs === "note");
   const revise = offers.find((a) => a.action === "revise");
   const delegate = offers.find((a) => a.action === "delegate");
   const runId = typeof decision.recommendation.workflow_run_id === "string"
@@ -1043,6 +1050,24 @@ export function DecisionActions({ decision, projectId, actorId }: {
       {startsWork ? <input type="hidden" name="starts_work" value="1" /> : null}
       {dismiss ? <input type="hidden" name="reject_label" value="Dismiss" /> : null}
       {contentHash ? <input type="hidden" name="content_hash" value={contentHash} /> : null}
+      {reasoned ? (
+        <div className="dq-reasoned" data-testid="decision-reasoned-approve">
+          <input type="hidden" name="force" value="true" />
+          <textarea
+            aria-label={`Why merge ${decision.id} with its checks failing`}
+            className="textarea decision-note"
+            name="note"
+            rows={2}
+            placeholder="Why merge it with its checks failing? Recorded with the merge."
+            data-testid="decision-reason"
+          />
+          <SubmitButton permission="decision:approve" className="dq-btn reject" name="action"
+                        value="approve" title={reasoned.effect || undefined}
+                        data-testid="decision-approve">
+            {reasoned.label}
+          </SubmitButton>
+        </div>
+      ) : null}
       {direct.map((offer) => (
         <SubmitButton permission="decision:approve"
           key={offer.action}

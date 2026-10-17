@@ -28,6 +28,13 @@
   border-radius: var(--r-sm);
 }
 .dq-guidance p { margin: 0; flex: 1 1 280px; color: var(--ink-soft); }
+/* Approvals: a pull request that opened with its checks failing (engine checks_failing.py). */
+.dq-checks-failing { display: block; border-left-color: var(--red); background: var(--red-soft); }
+.dq-checks-failing ul { margin: 6px 0 0; padding-left: 18px; color: var(--ink-soft); }
+.dq-checks-failing li { margin: 2px 0; overflow-wrap: anywhere; }
+.dq-checks-failing details { margin-top: 6px; }
+.dq-reasoned { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-start; width: 100%; }
+.dq-reasoned .decision-note { flex: 1 1 260px; min-width: 0; }
 
 /* Agent Studio: the quiet setup check, what Flows holds, and the runs started here. */
 .as-button.ghost { border: 1px solid transparent; background: transparent; color: var(--muted); }
