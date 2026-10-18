@@ -1101,10 +1101,20 @@ def _test_ids(paths: Any) -> list[str]:
     return [p for p in paths if str(p).endswith(".py")]
 
 
+#: A finding that asks for test coverage (the real-engine Replay A, attempt 3: "add a regression
+#: covering this combination"). Only the test stage writes tests, so such a round goes there.
+_ASKS_FOR_TEST = re.compile(r"\badd (?:a |an |one )?(?:new )?(?:regression|test)|\bno test\b|"
+                            r"\bhas no (?:regression )?test|\buntested\b|\btest(?:s)? "
+                            r"(?:covering|that covers|for this)|\bregression (?:test )?covering",
+                            re.I)
+
+
 def _cites_tests(findings: list[dict[str, Any]], tests: Mapping[str, str]) -> bool:
-    """A finding names one of the self-fix's own new test files (by path or file name)."""
+    """A finding names one of the self-fix's own new test files (by path or file name), or asks
+    for a test: either way the round's answer is a test, which only the RED stage writes."""
     names = {p for p in tests} | {Path(p).name for p in tests}
-    return any(any(n and n in str(f.get("what") or "") for n in names) for f in findings)
+    return any(any(n and n in str(f.get("what") or "") for n in names)
+               or _ASKS_FOR_TEST.search(str(f.get("what") or "")) for f in findings)
 
 
 def _covered_by(path: str, tests: Mapping[str, str]) -> bool:

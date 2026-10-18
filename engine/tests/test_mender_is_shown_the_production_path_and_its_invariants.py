@@ -159,6 +159,10 @@ def test_a_finding_reaches_the_repair_round_word_for_word():
     tests = {"engine/tests/test_new.py": ""}
     assert b._cites_tests([{"what": "engine/tests/test_new.py:47 — the test calls a helper"}], tests)
     assert not b._cites_tests([{"what": "stack_deploy.py:1 — quoting"}], tests)
+    asked = ("stack_deploy.py:1543 — this path first deletes, then refuses. Keep the existing "
+             "refusal guards ahead of the new destructive step and add a regression covering "
+             "this combination.")
+    assert b._cites_tests([{"what": asked}], tests), "a finding that asks for a test goes to RED"
 
 
 # ── the lanes ───────────────────────────────────────────────────────────────────────────────
