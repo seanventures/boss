@@ -150,8 +150,27 @@ def diagnose_prompt(sfx: Mapping[str, Any], feedback: str = "") -> str:
         "\"why_not_the_recommendation\": \"<when the hypothesis below was wrong, why>\", "
         "\"test_plan\": \"<the test that will fail because of it>\", \"files\": [{\"path\": "
         "\"<another file the fix needs>\", \"reason\": \"<why>\"}]}",
+        _protected_note(),
         f"Refused last time: {feedback}" if feedback else "",
         _DATA_RULE, _fenced(evidence)) if p)
+
+
+def _protected_note() -> str:
+    """What BOSS never changes by itself, said BEFORE Mender answers (the real-engine Replay A
+    finding: told nothing, a real model placed the held-port fix in the recovery classifier,
+    which is protected, and the self-fix ended there although a fix outside it existed)."""
+    try:
+        policy = sp.load()
+        globs = [r.glob + (f"#{r.group}" if r.group else "") for r in policy.never]
+    except Exception:  # noqa: BLE001 — the gate still refuses; the note is only a help
+        globs = []
+    listed = ", ".join(g for g in globs if not g.startswith(("**", "engine/tests/")))[:2400]
+    return ("PROTECTED: BOSS never changes these by itself (security, governance, the gates, "
+            "the recovery classifier, the self-fix machinery, the installer, dependencies, the "
+            "schema): " + (listed or "see packages/specpack/policies/self_fix_paths.yaml") +
+            ". When the cause lies in one of them, name the smallest fix OUTSIDE them that "
+            "makes BOSS behave correctly (in the code that calls it, or the code that acts on "
+            "its answer). Only when no such fix exists, name the protected location.")
 
 
 def write_test_prompt(sfx: Mapping[str, Any], diagnosis: Mapping[str, Any],
@@ -414,7 +433,10 @@ class Build:
         self.boundary()
         self.move(sf.DIAGNOSING, f"{sf.AGENT_NAME}: reading BOSS's own code to find the bug.")
         feedback = ""
-        for _ in range(MAX_DIAGNOSIS_TRIES):
+        protected_first: Optional[dict[str, Any]] = None
+        tries = 0
+        while tries < MAX_DIAGNOSIS_TRIES:
+            tries += 1
             answer = self.turn(self.engines.builder, "self_fix_diagnose",
                                diagnose_prompt(self.sfx(), feedback), work, read_only=True)
             diagnosis = parse_diagnosis(answer)
@@ -427,9 +449,26 @@ class Build:
                                                      diagnosis.get("files") or []
                                                      if isinstance(f, Mapping)],
                                            [str(loc.get("function") or "")], self.policy)
+            if refusal and protected_first is None:
+                # ONE MORE ASK, for a fix outside BOSS's protected code (the class the real-engine
+                # Replay A hit: the natural place was protected, a correct fix elsewhere existed).
+                # The protected answer is kept as a rejected hypothesis; a second protected answer
+                # ends the self-fix as before. Not counted against the tries for a bad answer.
+                protected_first = {"hypothesis": str(diagnosis.get("hypothesis") or "")[:600],
+                                   "location": f"{path}::{loc.get('function') or ''}",
+                                   "why": refusal}
+                self.say(f"{sf.AGENT_NAME}: the first place it found is protected ({path}); "
+                         "looking for a fix outside BOSS's protected code.")
+                feedback = (f"{refusal}. Find the smallest fix OUTSIDE BOSS's protected code "
+                            "that makes BOSS behave correctly here; name the protected location "
+                            "again only if no such fix exists.")
+                tries -= 1
+                continue
             if refusal:
                 self._record_diagnosis(diagnosis)
                 raise Stop("protected_path", refusal)
+            if protected_first is not None:
+                diagnosis = {**diagnosis, "protected_first": protected_first}
             if not path or not (work / path).is_file():
                 feedback = f"{path or 'the location'} is not a file in BOSS's source"
                 continue
@@ -457,6 +496,11 @@ class Build:
             clean["rejected"] = [{"hypothesis": (self.sfx().get("evidence") or {})
                                   .get("hypothesis", {}).get("proposed_change") or
                                   "the recommendation", "why": rejected[:1500]}]
+        first = diagnosis.get("protected_first")
+        if isinstance(first, Mapping):
+            clean.setdefault("rejected", []).append(mask_value({
+                "hypothesis": f"{first.get('hypothesis')} ({first.get('location')})",
+                "why": f"{first.get('why')}; fixed outside the protected code instead"}))
         location = f"{sp.norm(loc.get('file'))}::{loc.get('function') or ''}".rstrip(":")
         self.write(diagnosis=clean, location=location,
                    area=sp.area_of([sp.norm(loc.get("file"))]))

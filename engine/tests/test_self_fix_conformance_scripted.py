@@ -87,6 +87,30 @@ def test_a_protected_diagnosis_stops_before_any_code_is_written(harness):
     assert "never changes by itself" in row["refusal_detail"]
 
 
+def test_a_protected_first_answer_is_asked_again_for_a_fix_outside_it(harness):
+    """The real-engine Replay A finding (2026-10-17): a real model placed the held-port fix in
+    the recovery classifier (protected) and the self-fix ended, though a fix outside it existed.
+    Mender is now told what is protected and asked once more; the protected answer is kept as a
+    rejected hypothesis, and only a second protected answer refuses."""
+    row = _build(harness, "protected_then_outside")["row"]
+    assert row["status"] == sf.AWAITING_APPROVAL, (row["refusal"], row["refusal_detail"])
+    assert row["location"] == "engine/boss_engine/services/widget.py::double"
+    rejected = row["diagnosis"]["rejected"]
+    assert any("fixed outside the protected code" in r["why"] for r in rejected), rejected
+    with harness.eng.begin() as c:
+        said = [r[0] for r in c.execute(text(
+            "SELECT data->>'sentence' FROM events WHERE event_type = 'self_fix.progress' "
+            "AND data->>'self_fix_id' = :i"), {"i": row["id"]}).all()]
+    assert any("looking for a fix outside" in (s or "") for s in said), said
+
+
+def test_the_diagnosis_prompt_names_what_is_protected():
+    prompt = self_fix_build.diagnose_prompt({"signature": "deploy:port_held:8000",
+                                             "evidence": {}})
+    assert "PROTECTED" in prompt and "engine/boss_engine/services/step_recovery.py" in prompt
+    assert "OUTSIDE" in prompt
+
+
 def test_open_review_findings_get_one_repair_round(harness):
     row = _build(harness, "review_blocker")["row"]
     assert row["status"] == sf.AWAITING_APPROVAL and row["repair_rounds"] == 1

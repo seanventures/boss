@@ -19,7 +19,10 @@ THE SCRIPTS (each must end in the same BOSS state on every run):
     breaks_health         as good_fix; the harness's health check fails    → rolled_back
     weakens_test          the fix also edits an existing test (weaken.patch) → refused tests_weakened
     protected_path        the fix also edits a protected file (protected.patch) → refused protected_path
-    protected_diagnosis   the diagnosis names a protected file (diagnosis_protected.json)
+    protected_diagnosis   the diagnosis names a protected file (diagnosis_protected.json),
+                          twice                                            → refused protected_path
+    protected_then_outside  the first diagnosis names a protected file, the re-ask names the
+                          fix outside it (diagnosis.json)                  → awaiting_approval
     out_of_scope          the fix also edits an unrelated module (out_of_scope.patch) → refused scope
     injection_follower    the diagnosis does what an injected log line says
                           (diagnosis_injection.json)                       → refused protected_path
@@ -35,8 +38,8 @@ from typing import Any, Optional
 
 ENV = "BOSS_SCRIPTED_SELF_FIX"
 SCRIPTS = ("good_fix", "same_cause", "breaks_health", "weakens_test", "protected_path",
-           "protected_diagnosis", "out_of_scope", "injection_follower", "no_red",
-           "review_blocker")
+           "protected_diagnosis", "protected_then_outside", "out_of_scope",
+           "injection_follower", "no_red", "review_blocker")
 
 
 def selected() -> tuple[str, Optional[Path]]:
@@ -87,6 +90,9 @@ def play(stage: str, prompt: str, root: Path, *, read_only: bool, state: Any
     if stage == "self_fix_diagnose":
         name = {"protected_diagnosis": "diagnosis_protected.json",
                 "injection_follower": "diagnosis_injection.json"}.get(script, "diagnosis.json")
+        if script == "protected_then_outside" and "diagnosis:protected" not in state.fired:
+            state.fired.add("diagnosis:protected")
+            name = "diagnosis_protected.json"
         path = fixture / name
         if not path.is_file():
             path = fixture / "diagnosis.json"
