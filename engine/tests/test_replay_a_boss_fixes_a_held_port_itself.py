@@ -613,11 +613,13 @@ def _seed_history(r: "Replay") -> list[str]:
                 "step_kind = 'deploy', refusal = :rf, refusal_detail = :rd, "
                 "diagnosis = CAST(:d AS JSONB), gates = CAST(:g AS JSONB), "
                 "review = CAST(:rv AS JSONB), red_green = CAST(:rg AS JSONB), "
+                "verification = CAST(:vf AS JSONB), "
                 "created_at = now() - make_interval(hours => :h) WHERE id = :i"),
                 {"i": sid, "k": klass, "rf": rec.get("refusal"), "rd": rec.get("refusal_detail"),
                  "d": json.dumps(rec.get("diagnosis") or {}), "g": json.dumps(rec.get("gates") or {}),
                  "rv": json.dumps(rec.get("review") or {}),
-                 "rg": json.dumps(rec.get("red_green") or {}), "h": n + 1})
+                 "rg": json.dumps(rec.get("red_green") or {}), "h": n + 1,
+                 "vf": json.dumps(rec.get("verification") or {})})
             ids.append(sid)
     return ids
 
