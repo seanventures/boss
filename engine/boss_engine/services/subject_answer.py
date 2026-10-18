@@ -96,22 +96,25 @@ def answer_seconds(settings: Any) -> float:
 
 
 def wants_first_answer(message: str, evidence: Optional[SubjectEvidence],
-                       depth: Optional[str], *, has_images: bool = False) -> bool:
+                       depth: Optional[str], *, has_images: bool = False,
+                       looking_only: bool = True, live_look: bool = False) -> bool:
     """Is this turn answered by the one-call first answer?
 
     Only a QUESTION about a record BOSS found. An instruction ("retry it", "do the fix") needs
     the loop — it acts — and so does an explicit "Investigate further". A screenshot goes to the
     loop too: the first call is text, and an image read as text is an empty question.
-    """
-    from .intent_router import asked_only_to_look
 
+    `looking_only` and `live_look` are the turn's DECISION (agent_decision, in route_turn): the
+    model read whether this asks for a change and whether it needs a live look at the machine.
+    The words are not re-read here.
+    """
     if depth == INVESTIGATE or has_images:
         return False
     if evidence is None or not evidence.found:
         return False
-    if asks_for_a_live_read(message or ""):
+    if live_look:
         return False
-    return asked_only_to_look(message or "")
+    return bool(looking_only)
 
 
 #: A question only a live look can answer: the app's logs, what is running on a host now. The

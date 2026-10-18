@@ -343,8 +343,15 @@ def test_the_same_cause_twice_needs_a_different_action(client, engine, host, rep
     assert "BOSS already tried that for this same cause" in step["last_error"]
 
 
-def test_with_no_model_boss_triage_recovers_the_known_classes(client, engine, host, repairs):
-    """No model connected (the conftest's default): BOSS's coded triage still decides."""
+def test_with_no_model_nothing_is_done_and_a_person_is_asked(client, engine, host, repairs,
+                                                             monkeypatch):
+    """No model connected: BOSS does NOT act on its coded triage (operator, 2026-10-18 — "it
+    cannot work just on keywords without context or models"). The step asks a person, says no
+    model decided, and names what BOSS's triage would suggest."""
+    def no_model(*_a, **_k):
+        raise RuntimeError("no model connected")
+
+    monkeypatch.setattr(step_recovery, "routed_adapter", no_model)
     stack = host
     stack["manifest"] = {"*": SCRIPT_MANIFEST}
     stack["host"].install_fails_with = (1, PORT + "\n")
@@ -353,9 +360,12 @@ def test_with_no_model_boss_triage_recovers_the_known_classes(client, engine, ho
     _deploy_and_approve(client, engine, stack)
     _tick(engine)
     decision = _recovery(engine, run_id)["decisions"][-1]
-    assert decision["action"] == "clean_and_retry" and decision["projects"] == [OWN_PROJECT]
-    assert decision["by"]["engine"] == "coded"
-    assert _step(engine, run_id)["status"] == "waiting"
+    assert decision["action"] == "ask_person"
+    assert decision["by"]["engine"] == "none"
+    assert "connected model" in decision["reasoning"]
+    assert "cleaning it up" in decision["question"], "the triage's suggestion is named"
+    assert not [c for c in stack["host"].writes() if " down" in c["command"]], "nothing done"
+    assert repairs == []
 
 
 def test_a_host_side_question_is_tried_again_after_a_boss_update(client, engine, host, repairs,
