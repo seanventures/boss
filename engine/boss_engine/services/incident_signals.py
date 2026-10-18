@@ -87,6 +87,50 @@ def channel_token(engine, settings: Any, *, project_id: str, target_id: str) -> 
                                    actor="boss")
 
 
+def rotate_token(engine, settings: Any, *, project_id: str, target_id: str,
+                 actor: str) -> dict[str, Any]:
+    """Mint a NEW signals token for the app (its own committed transaction), replacing the old
+    one in BOSS's secret store. The value is never returned, shown or logged; the app receives
+    it at its next deploy, and until then its signed reports are refused (bad signature)."""
+    from .secret_backends import durable_secret_backend
+    from .secrets_service import put_secret
+    from .stack_deploy import _GENERATE, _generated_secret_name
+
+    name = _generated_secret_name(_TOKEN_STACK, _TOKEN_KEY)
+    with engine.begin() as connection:
+        stored = put_secret(connection, settings, project_id=project_id, name=name,
+                            value=_GENERATE["token"](), secret_kind="api_token",
+                            backend=durable_secret_backend(settings),
+                            scope_type="deployment_target", scope_id=target_id, actor=actor)
+        # Not even the last four characters of a generated credential are kept in metadata.
+        connection.execute(sql("UPDATE secret_refs SET metadata = metadata - 'last4' "
+                               "WHERE id = :i"), {"i": stored["secret_ref_id"]})
+        emit_event(connection, project_id, "app_signals.token_rotated", actor,
+                   "deployment_target", target_id, {"target_id": target_id})
+        at = connection.execute(sql("SELECT updated_at FROM secret_refs WHERE id = :i"),
+                                {"i": stored["secret_ref_id"]}).scalar()
+    return {"target_id": target_id, "rotated_at": at.isoformat() if at else None}
+
+
+def token_status(connection, project_id: str, target_id: str) -> dict[str, Any]:
+    """Whether the app has a signals token and when it was minted or last rotated. Never the
+    value, never any part of it."""
+    from .secrets_service import ref_key_for
+    from .stack_deploy import _generated_secret_name
+
+    row = connection.execute(sql(
+        "SELECT created_at, updated_at FROM secret_refs WHERE project_id = :p AND ref_key = :k "
+        "AND status = 'active' ORDER BY updated_at DESC LIMIT 1"),
+        {"p": project_id, "k": ref_key_for(target_id, _generated_secret_name(
+            _TOKEN_STACK, _TOKEN_KEY))}).mappings().first()
+    if not row:
+        return {"minted": False, "minted_at": None, "rotated_at": None}
+    rotated = row["updated_at"] if row["updated_at"] and row["created_at"] and (
+        row["updated_at"] - row["created_at"]).total_seconds() > 1 else None
+    return {"minted": True, "minted_at": row["created_at"].isoformat(),
+            "rotated_at": rotated.isoformat() if rotated else None}
+
+
 def read_token(connection, settings: Any, project_id: str, target_id: str) -> Optional[str]:
     """The token if one was minted (by a deploy that declared signals); None otherwise."""
     from .secret_backends import resolve_secret_ref
@@ -317,6 +361,18 @@ def ingest(connection, reporter: dict, raw: Any, *, via: str,
         {"id": make_id("sgr"), "p": project_id, "t": reporter["id"], "s": signal["id"],
          "i": incident_id, "via": via, "payload": json.dumps(signal), "now": now})
     reporter_name = reporter.get("app_name")
+    # THE REPORT IS AN ALERT TOO (app_alerts): it shows in the affected app's alert history,
+    # from its signal source, and is triaged like any other. Its own savepoint: the alert
+    # record never costs the report.
+    from . import app_alerts
+
+    point = connection.begin_nested()
+    try:
+        app_alerts.record_signal(connection, reporter=reporter, affected=affected,
+                                 signal=signal, incident_id=incident_id, now=now)
+        point.commit()
+    except Exception:  # noqa: BLE001
+        point.rollback()
     ir._evidence(connection, incident_id, "customer_reports", ref=str(reporter["id"]),
                  payload={"reporter": {"target_id": reporter["id"], "app_name": reporter_name},
                           "via": via, **signal}, at=now)

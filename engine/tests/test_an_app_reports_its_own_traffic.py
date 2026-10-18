@@ -312,7 +312,11 @@ def test_scrapes_become_traffic_an_alert_fires_and_resolves(pg, app):
     assert view["series"][1]["err"] == 0.1 and view["series"][1]["p50"] == 62.5
     assert len(cards) == 1 and cards[0]["area"] == "observability"
 
-    app.body = page(418, 2, 300, 400, 415)                  # recovered: 400 more, 0 errors
+    # recovered: 400 more, 0 errors. A rate needs two scrapes inside the alert's window
+    # (Prometheus' rule, and so the monitor's), so the recovery is scraped on a cadence.
+    app.body = page(218, 2, 150, 200, 215)
+    _scrape(eng, tid, t0 + timedelta(seconds=420))
+    app.body = page(418, 2, 300, 400, 415)
     fourth = _scrape(eng, tid, t0 + timedelta(seconds=480))
     assert fourth["alert"]["verdict"] == "ok" and fourth["alert"]["action"] == "resolved"
     with eng.begin() as c:

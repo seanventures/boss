@@ -193,14 +193,19 @@ def on_alert(connection, target: dict, incident_id: str, *, action: str, window:
         alert = {"fired_at": _iso(now), "rule": rule,
                  "error_rate": window.get("error_rate"), "requests": window.get("requests"),
                  "errors": window.get("errors"), "routes": (window.get("routes") or [])[:8]}
+        if rule.get("alert_id"):
+            # The app_alerts record this evidence belongs to (and the mark that keeps the
+            # schema's one-time backfill of older alerts from copying it again).
+            alert["alert_id"] = rule["alert_id"]
+        ref = str(rule.get("error_rate_percent") if rule.get("error_rate_percent") is not None
+                  else rule.get("alert") or "")
         running = _response_in_flight(connection, project_id, incident_id)
         if running:
             # One response per incident at a time: an alert firing again while the fix is being
             # built is the same problem, not a second one. It is evidence, and nothing more: the
             # occurrence, the response and its verification stay the ones in flight (D2: a
             # re-fire mid-fix reset the opening, and the report said 4.5 min for an 11.7 min fix).
-            _evidence(connection, incident_id, "alert", ref=str(rule.get("error_rate_percent")),
-                      payload=alert, at=now)
+            _evidence(connection, incident_id, "alert", ref=ref, payload=alert, at=now)
             _evidence(connection, incident_id, "note", ref=running,
                       payload={"text": "Alert fired again while response "
                                        f"{running} is in flight; no second response."}, at=now)
@@ -217,14 +222,17 @@ def on_alert(connection, target: dict, incident_id: str, *, action: str, window:
         if not reported_first:
             patch["occurrence"] = _iso(now)
         _merge_ctx(connection, incident_id, patch)
-        _evidence(connection, incident_id, "alert", ref=str(rule.get("error_rate_percent")),
-                  payload=alert, at=now)
+        _evidence(connection, incident_id, "alert", ref=ref, payload=alert, at=now)
         if deploy:
             _evidence(connection, incident_id, "deployment",
                       ref=str(deploy.get("commit_sha") or ""), payload=deploy, at=now)
         pct = round(float(window.get("error_rate") or 0) * 100.0, 1)
         title = (f"{target.get('app_name')} ({target.get('environment')}): {pct}% of requests "
                  f"failing")
+        if rule.get("kind") not in (None, "error_rate"):
+            # Another rule opened it (latency, health check, ...): say which, not a percentage.
+            title = (f"{target.get('app_name')} ({target.get('environment')}): "
+                     f"{rule.get('alert') or 'alert'} fired")
         return emit_event(connection, project_id, EVENT_OPENED, "monitor", "incident",
                           incident_id, {
                               "incident_id": incident_id, **app,

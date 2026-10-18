@@ -5037,6 +5037,296 @@ CREATE TABLE IF NOT EXISTS app_signal_channels (
   last_word TEXT NOT NULL DEFAULT ''
 );
 
+-- ── App alerts (BOSSAPP-598; services/app_alerts.py) ──────────────────────────────────────
+-- An app's alert rules, in the Prometheus alerting-rule shape: `alert`, `expr` (PromQL), `for`,
+-- labels.severity and annotations summary / description / runbook_url. BOSS's built-in rules
+-- (`kind` error_rate | latency_p95 | health_check | no_traffic | deploy_health) are PromQL over
+-- the platform-standard metrics; `kind` custom is a person's own PromQL. The app's
+-- boss.deploy.yaml gives the starting values (`source` yaml, or builtin with none); an edit in
+-- the console wins (`source` console) and is recorded in app_alert_rule_changes. Respond
+-- automatically runs on the standing grant of the person who switched it on (`respond_link`:
+-- {on_behalf_of, grant_id}), the rule a workflow subscription follows.
+CREATE TABLE IF NOT EXISTS app_alert_rules (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  target_id TEXT NOT NULL REFERENCES deployment_targets(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL,
+  alert TEXT NOT NULL,
+  expr TEXT NOT NULL,
+  for_seconds INTEGER NOT NULL DEFAULT 0,
+  params JSONB NOT NULL DEFAULT '{}'::jsonb,
+  labels JSONB NOT NULL DEFAULT '{}'::jsonb,
+  annotations JSONB NOT NULL DEFAULT '{}'::jsonb,
+  enabled BOOLEAN NOT NULL DEFAULT true,
+  triage BOOLEAN NOT NULL DEFAULT true,
+  auto_respond BOOLEAN NOT NULL DEFAULT false,
+  respond_link JSONB,
+  notify TEXT NOT NULL DEFAULT 'console',
+  source TEXT NOT NULL DEFAULT 'builtin' CHECK (source IN ('builtin', 'yaml', 'console')),
+  yaml_params JSONB,
+  changed_by TEXT,
+  changed_at TIMESTAMPTZ,
+  -- The last evaluation, in words: state ok | firing | pending | no_data | too_little | off |
+  -- silenced | inhibited | error, the value of the rule's measure, and who evaluated it
+  -- (boss: BOSS's own scrapes; prometheus: the deployed stack).
+  last_eval_at TIMESTAMPTZ,
+  last_state TEXT,
+  last_value DOUBLE PRECISION,
+  last_word TEXT,
+  last_source TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_app_alert_rules_builtin
+  ON app_alert_rules(target_id, kind) WHERE kind <> 'custom';
+CREATE INDEX IF NOT EXISTS idx_app_alert_rules_project ON app_alert_rules(project_id, target_id);
+
+-- Who changed a rule, when, from what to what, and why. Never updated, never deleted.
+CREATE TABLE IF NOT EXISTS app_alert_rule_changes (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  rule_id TEXT NOT NULL,
+  target_id TEXT NOT NULL,
+  change TEXT NOT NULL,                     -- edited | created | deleted | silenced | unsilenced
+  before JSONB,
+  after JSONB,
+  reason TEXT NOT NULL DEFAULT '',
+  changed_by TEXT NOT NULL,
+  changed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_app_alert_rule_changes_rule
+  ON app_alert_rule_changes(rule_id, changed_at DESC);
+
+-- A person silenced a rule until `ends_at`, with a reason. `expired_at` when ended early.
+CREATE TABLE IF NOT EXISTS app_alert_silences (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  rule_id TEXT NOT NULL REFERENCES app_alert_rules(id) ON DELETE CASCADE,
+  target_id TEXT NOT NULL,
+  starts_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  ends_at TIMESTAMPTZ NOT NULL,
+  reason TEXT NOT NULL,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  expired_at TIMESTAMPTZ,
+  expired_by TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_app_alert_silences_rule ON app_alert_silences(rule_id, ends_at DESC);
+
+-- Every alert that fired, Alertmanager-style. `fingerprint` (the rule's identity + the result's
+-- labels) dedupes: a re-firing alert updates its row (`fire_count`), one that resolved and
+-- fires again within the resolve window reopens it. `group_key` (labels.group_key, else the
+-- runbook) puts breaches with one resolution in one incident. `inhibited_by` names the firing
+-- availability alert (health check, deploy) that suppresses this symptom; `silenced_by` the
+-- silence. `triage` is the agent's decision, word for word (agent_decision); `value` the
+-- expression's value at breach. `source_kind` signal: an app reported it (incident_signals).
+CREATE TABLE IF NOT EXISTS app_alerts (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  target_id TEXT NOT NULL,
+  rule_id TEXT,
+  rule_kind TEXT NOT NULL,
+  source_kind TEXT NOT NULL DEFAULT 'rule' CHECK (source_kind IN ('rule', 'signal')),
+  reporter_target_id TEXT,
+  fingerprint TEXT NOT NULL,
+  alertname TEXT NOT NULL,
+  labels JSONB NOT NULL DEFAULT '{}'::jsonb,
+  annotations JSONB NOT NULL DEFAULT '{}'::jsonb,
+  expr TEXT NOT NULL DEFAULT '',
+  value DOUBLE PRECISION,                   -- at breach
+  last_value DOUBLE PRECISION,
+  threshold DOUBLE PRECISION,
+  unit TEXT NOT NULL DEFAULT '',
+  state TEXT NOT NULL CHECK (state IN ('pending', 'firing', 'resolved')),
+  active_at TIMESTAMPTZ NOT NULL,
+  fired_at TIMESTAMPTZ,
+  last_eval_at TIMESTAMPTZ,
+  cleared_at TIMESTAMPTZ,
+  cleared_reason TEXT,
+  fire_count INTEGER NOT NULL DEFAULT 1,
+  eval_source TEXT NOT NULL DEFAULT 'boss',
+  release JSONB,
+  group_key TEXT NOT NULL DEFAULT '',
+  incident_id TEXT REFERENCES incidents(id) ON DELETE SET NULL,
+  inhibited_by TEXT,
+  silenced_by TEXT,
+  triage JSONB,
+  triage_state TEXT NOT NULL DEFAULT 'pending'
+    CHECK (triage_state IN ('pending', 'done', 'no_model', 'off', 'skipped')),
+  triage_attempt_at TIMESTAMPTZ,
+  response_run_id TEXT,
+  response_word TEXT,
+  backfilled BOOLEAN NOT NULL DEFAULT false,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+-- One OPEN alert per fingerprint: the dedupe, held by the database.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_app_alerts_open_fingerprint
+  ON app_alerts(fingerprint) WHERE state IN ('pending', 'firing');
+CREATE INDEX IF NOT EXISTS idx_app_alerts_target ON app_alerts(target_id, active_at DESC);
+CREATE INDEX IF NOT EXISTS idx_app_alerts_project ON app_alerts(project_id, state, active_at DESC);
+CREATE INDEX IF NOT EXISTS idx_app_alerts_incident ON app_alerts(incident_id);
+
+-- Did Grafana / Prometheus answer when BOSS last asked? A console link to Grafana is shown only
+-- from an `answering` row (observability_stack.check_endpoint): a link built by concatenation
+-- to a host that does not answer looked exactly like a working one.
+CREATE TABLE IF NOT EXISTS observability_endpoint_checks (
+  project_id TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('grafana', 'prometheus')),
+  base_url TEXT NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('answering', 'not_answering')),
+  reason TEXT NOT NULL DEFAULT '',
+  detail JSONB NOT NULL DEFAULT '{}'::jsonb,
+  checked_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (project_id, kind)
+);
+
+-- THE ALERT HISTORY STARTS WITH WHAT ALREADY HAPPENED. Every app error-rate alert the monitor
+-- raised before app_alerts existed is in incident_evidence (`alert`, then `monitor_resolved`);
+-- each becomes an alert here, once (`alrt_bf_<first evidence id>`): its value at breach, the
+-- release that was serving, the incident, and the investigation's finding as its triage. A
+-- re-fire within five minutes of clearing is the same alert again (the resolve window
+-- app_alerts.RESOLVE_WINDOW applies live). The expression is the built-in error-rate rule as
+-- app_alerts.render_expr writes it (test_the_backfill_writes_the_rule_the_engine_writes).
+CREATE OR REPLACE FUNCTION boss_promql_quote(v TEXT) RETURNS TEXT LANGUAGE SQL IMMUTABLE AS
+$$ SELECT '"' || replace(replace(COALESCE(v, ''), '\', '\\'), '"', '\"') || '"' $$;
+CREATE OR REPLACE FUNCTION boss_promql_num(v DOUBLE PRECISION) RETURNS TEXT LANGUAGE SQL IMMUTABLE AS
+$$ SELECT CASE WHEN v = trunc(v) THEN trunc(v)::bigint::text ELSE v::text END $$;
+CREATE OR REPLACE FUNCTION boss_promql_window(minutes DOUBLE PRECISION) RETURNS TEXT
+  LANGUAGE SQL IMMUTABLE AS
+$$ SELECT CASE WHEN minutes = trunc(minutes) THEN trunc(minutes)::bigint::text || 'm'
+               ELSE round(minutes * 60)::bigint::text || 's' END $$;
+
+INSERT INTO app_alerts (id, project_id, target_id, rule_kind, fingerprint, alertname, labels,
+                        annotations, expr, value, threshold, unit, state, active_at, fired_at,
+                        last_eval_at, cleared_at, cleared_reason, fire_count, eval_source,
+                        release, group_key, incident_id, triage, triage_state, backfilled,
+                        created_at, updated_at)
+WITH alerts AS (
+  SELECT e.id, e.incident_id, e.created_at, e.seq, e.payload, i.project_id, i.status AS inc_status,
+         i.last_seen AS inc_last_seen, substring(i.dedupe_key FROM 16) AS target_id,
+         i.finalize_ctx->'app' AS app,
+         lead(e.created_at) OVER (PARTITION BY e.incident_id ORDER BY e.created_at, e.seq)
+           AS next_alert_at
+  FROM incident_evidence e JOIN incidents i ON i.id = e.incident_id
+  WHERE e.kind = 'alert' AND i.dedupe_key LIKE 'app_error_rate:%'
+), cleared AS (
+  SELECT a.*, (SELECT min(r.created_at) FROM incident_evidence r
+               WHERE r.incident_id = a.incident_id AND r.kind = 'monitor_resolved'
+                 AND r.created_at > a.created_at
+                 AND (a.next_alert_at IS NULL OR r.created_at < a.next_alert_at)) AS cleared_at
+  FROM alerts a
+), occurrences AS (
+  SELECT c.*, sum(CASE WHEN prev_cleared IS NOT NULL
+                        AND c.created_at - prev_cleared <= interval '5 minutes' THEN 0 ELSE 1 END)
+                OVER (PARTITION BY c.incident_id ORDER BY c.created_at, c.seq) AS occurrence
+  FROM (SELECT c0.*, lag(c0.cleared_at) OVER (PARTITION BY c0.incident_id
+                                              ORDER BY c0.created_at, c0.seq) AS prev_cleared
+        FROM cleared c0) c
+), grouped AS (
+  SELECT incident_id, occurrence,
+         (array_agg(id ORDER BY created_at, seq))[1] AS first_id,
+         (array_agg(payload ORDER BY created_at, seq))[1] AS payload,
+         min(created_at) AS fired_at, max(created_at) AS last_at,
+         (array_agg(cleared_at ORDER BY created_at DESC, seq DESC))[1] AS cleared_at,
+         count(*) AS fire_count, max(project_id) AS project_id, max(target_id) AS target_id,
+         max(inc_status) AS inc_status, max(inc_last_seen) AS inc_last_seen,
+         (array_agg(app))[1] AS app
+  FROM occurrences GROUP BY incident_id, occurrence
+)
+SELECT 'alrt_bf_' || g.first_id, g.project_id, g.target_id, 'error_rate',
+       left(encode(sha256(convert_to(g.target_id || '|AppErrorRate|', 'UTF8')), 'hex'), 16),
+       'AppErrorRate',
+       '{"severity": "critical", "layer": "symptom"}'::jsonb,
+       jsonb_build_object(
+         'summary', 'Error rate on ' || (g.app->>'app_name'),
+         'description', 'More than ' || boss_promql_num((g.payload->'rule'->>'error_rate_percent')::float8)
+           || '% of requests failed (5xx) over ' || boss_promql_num((g.payload->'rule'->>'window_minutes')::float8)
+           || ' min, on at least ' || boss_promql_num((g.payload->'rule'->>'min_requests')::float8) || ' requests.',
+         'runbook_url', 'boss:runbook/app-serving'),
+       '100 * sum(increase(http_requests_total{app=' || boss_promql_quote(g.app->>'app_name')
+         || ',environment=' || boss_promql_quote(g.app->>'environment') || ',status=~"5.."}['
+         || boss_promql_window((g.payload->'rule'->>'window_minutes')::float8)
+         || '])) / sum(increase(http_requests_total{app=' || boss_promql_quote(g.app->>'app_name')
+         || ',environment=' || boss_promql_quote(g.app->>'environment') || '}['
+         || boss_promql_window((g.payload->'rule'->>'window_minutes')::float8) || '])) > '
+         || boss_promql_num((g.payload->'rule'->>'error_rate_percent')::float8)
+         || ' and sum(increase(http_requests_total{app=' || boss_promql_quote(g.app->>'app_name')
+         || ',environment=' || boss_promql_quote(g.app->>'environment') || '}['
+         || boss_promql_window((g.payload->'rule'->>'window_minutes')::float8) || '])) >= '
+         || boss_promql_num((g.payload->'rule'->>'min_requests')::float8),
+       round(((g.payload->>'error_rate')::float8 * 100)::numeric, 2)::float8,
+       (g.payload->'rule'->>'error_rate_percent')::float8, '%',
+       CASE WHEN g.cleared_at IS NOT NULL OR g.inc_status IN ('resolved', 'dismissed')
+            THEN 'resolved' ELSE 'firing' END,
+       g.fired_at, g.fired_at, g.last_at,
+       COALESCE(g.cleared_at, CASE WHEN g.inc_status IN ('resolved', 'dismissed')
+                                   THEN g.inc_last_seen END),
+       CASE WHEN g.cleared_at IS NOT NULL THEN 'recovered'
+            WHEN g.inc_status IN ('resolved', 'dismissed') THEN 'incident_closed' END,
+       g.fire_count, 'boss',
+       (SELECT jsonb_build_object('commit_sha', d.payload->>'commit_sha', 'ref', d.payload->>'ref',
+                                  'deployed_at', d.payload->>'deployed_at')
+        FROM incident_evidence d WHERE d.incident_id = g.incident_id AND d.kind = 'deployment'
+          AND d.created_at = g.fired_at LIMIT 1),
+       'serving', g.incident_id,
+       (SELECT jsonb_build_object(
+                 'status', 'decided', 'action', 'open_incident', 'outcome', 'opened',
+                 'incident_id', g.incident_id, 'reason', h.payload->>'root_cause',
+                 'confidence', (h.payload->>'confidence')::float8,
+                 'by', jsonb_build_object('backend', 'investigation',
+                                          'word', 'Incident Response''s investigation'),
+                 'at', h.created_at, 'backfilled', true)
+        FROM incident_evidence h WHERE h.incident_id = g.incident_id AND h.kind = 'rca_hypothesis'
+          AND h.created_at >= g.fired_at
+          AND (g.cleared_at IS NULL OR h.created_at <= g.cleared_at)
+        ORDER BY h.created_at LIMIT 1),
+       CASE WHEN EXISTS (SELECT 1 FROM incident_evidence h WHERE h.incident_id = g.incident_id
+                           AND h.kind = 'rca_hypothesis' AND h.created_at >= g.fired_at
+                           AND (g.cleared_at IS NULL OR h.created_at <= g.cleared_at))
+            THEN 'done' ELSE 'skipped' END,
+       true, g.fired_at, now()
+FROM grouped g
+WHERE g.target_id IS NOT NULL AND g.app IS NOT NULL AND g.payload ? 'rule'
+  -- an alert the live monitor recorded carries its own id; only what came before is backfilled
+  AND NOT (g.payload ? 'alert_id')
+  AND EXISTS (SELECT 1 FROM deployment_targets t WHERE t.id = g.target_id)
+ON CONFLICT DO NOTHING;
+
+-- ...and every report an app sent about it (app_signal_receipts): an alert from a signal
+-- source, under the incident it created or joined.
+INSERT INTO app_alerts (id, project_id, target_id, rule_kind, source_kind, reporter_target_id,
+                        fingerprint, alertname, labels, annotations, value, unit, state,
+                        active_at, fired_at, last_eval_at, cleared_at, cleared_reason,
+                        group_key, incident_id, triage_state, backfilled, created_at, updated_at)
+SELECT 'alrt_sg_' || r.id, r.project_id, substring(i.dedupe_key FROM 16), 'signal', 'signal',
+       r.reporter_target_id,
+       left(encode(sha256(convert_to(r.reporter_target_id || '|AppSignal|' || r.signal_id, 'UTF8')), 'hex'), 16),
+       'AppSignal',
+       jsonb_build_object('severity', COALESCE(NULLIF(r.payload->>'severity', ''), 'warning'),
+                          'layer', 'symptom'),
+       jsonb_build_object('summary', COALESCE(r.payload->>'title', 'Reported by the app'),
+                          'description', COALESCE(r.payload->>'summary', ''),
+                          'runbook_url', 'boss:runbook/app-serving'),
+       COALESCE((r.payload->>'count')::float8, 1), 'reports',
+       CASE WHEN done.at IS NOT NULL OR i.status IN ('resolved', 'dismissed') THEN 'resolved'
+            ELSE 'firing' END,
+       r.received_at, r.received_at, r.received_at,
+       COALESCE(done.at, CASE WHEN i.status IN ('resolved', 'dismissed') THEN i.last_seen END),
+       CASE WHEN done.at IS NOT NULL OR i.status IN ('resolved', 'dismissed')
+            THEN 'incident_closed' END,
+       'serving', r.incident_id, 'skipped', true, r.received_at, now()
+FROM app_signal_receipts r JOIN incidents i ON i.id = r.incident_id
+-- the occurrence the report joined ended when its recovery was verified (a later occurrence
+-- of the same incident is not this report's)
+LEFT JOIN LATERAL (SELECT min(v.created_at) AS at FROM incident_evidence v
+                   WHERE v.incident_id = r.incident_id AND v.kind = 'verification'
+                     AND v.ref = 'recovered' AND v.created_at > r.received_at) done ON true
+WHERE i.dedupe_key LIKE 'app_error_rate:%'
+  AND EXISTS (SELECT 1 FROM deployment_targets t WHERE t.id = substring(i.dedupe_key FROM 16))
+  AND NOT EXISTS (SELECT 1 FROM app_alerts x WHERE x.fingerprint = left(encode(sha256(convert_to(
+        r.reporter_target_id || '|AppSignal|' || r.signal_id, 'UTF8')), 'hex'), 16))
+ON CONFLICT DO NOTHING;
+
 -- Evidence-only AI SRE postmortems (not break-glass). One artifact per incident.
 CREATE TABLE IF NOT EXISTS sre_postmortems (
   id TEXT PRIMARY KEY,

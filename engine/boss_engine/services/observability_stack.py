@@ -727,7 +727,8 @@ def provisioned_dashboards(base: str, timeout: float = 4.0) -> Optional[set[str]
     check that looks at the status code.
 
     Asking Grafana is authoritative and cannot drift from what was provisioned, which a flag
-    stored on our side would.
+    stored on our side would. `None` (not asked) is never read as "no dashboards"; it is read as
+    "Grafana did not answer", and then no link is shown at all (`check_endpoint`).
     """
     import urllib.request
 
@@ -737,7 +738,225 @@ def provisioned_dashboards(base: str, timeout: float = 4.0) -> Optional[set[str]
             rows = json.loads(r.read(400_000).decode("utf-8", "replace"))
     except Exception:  # noqa: BLE001 — unreachable Grafana is not the same as an empty one
         return None
+    if not isinstance(rows, list):
+        return None
     return {str(x.get("uid") or "") for x in rows if isinstance(x, dict)}
+
+
+# --------------------------------------------------------------------------- #
+# Does it answer? Asked, recorded, and the only thing a console link is built from.
+# --------------------------------------------------------------------------- #
+#: A recorded check older than this is asked again by the monitor's sweep (never by a poll).
+ENDPOINT_CHECK_TTL_SECONDS = 300
+CHECK_TIMEOUT_SECONDS = 3.0
+_KIND_NAMES = {"grafana": "Grafana", "prometheus": "Prometheus"}
+
+
+def grafana_base(connection, project_id: str) -> Optional[str]:
+    """Where this project's Grafana is: the registered boss-prometheus source's host (the stack
+    BOSS deployed), else the address of the host its first active target deploys to. None when
+    BOSS knows no host. ONE answer for every caller: the stack endpoint and the Observability
+    views used to derive it two different ways."""
+    from urllib.parse import urlparse
+
+    row = connection.execute(sql(
+        "SELECT config FROM telemetry_sources WHERE project_id = :p AND kind = 'prometheus' "
+        "AND name = 'boss-prometheus'"), {"p": project_id}).mappings().first()
+    host = ""
+    if row:
+        cfg = row["config"] or {}
+        if isinstance(cfg, str):
+            try:
+                cfg = json.loads(cfg)
+            except json.JSONDecodeError:
+                cfg = {}
+        host = urlparse(str(cfg.get("base_url") or "")).hostname or ""
+    if not host:
+        host = str(connection.execute(sql(
+            "SELECT h.address FROM deployment_targets t "
+            "JOIN deployment_hosts h ON h.id = t.host_id "
+            "WHERE t.project_id = :p AND t.status = 'active' AND h.address <> '' "
+            "ORDER BY t.created_at LIMIT 1"), {"p": project_id}).scalar() or "").strip()
+    return f"http://{host}:{DEFAULT_PORTS['grafana']}" if host else None
+
+
+def prometheus_base(connection, project_id: str) -> Optional[str]:
+    """The registered boss-prometheus source's URL, or None when the stack was never deployed."""
+    row = connection.execute(sql(
+        "SELECT config FROM telemetry_sources WHERE project_id = :p AND kind = 'prometheus' "
+        "AND name = 'boss-prometheus' AND enabled"), {"p": project_id}).mappings().first()
+    if not row:
+        return None
+    cfg = row["config"] or {}
+    if isinstance(cfg, str):
+        try:
+            cfg = json.loads(cfg)
+        except json.JSONDecodeError:
+            cfg = {}
+    return str(cfg.get("base_url") or "").rstrip("/") or None
+
+
+def _why(exc: BaseException) -> str:
+    import socket
+    import urllib.error
+
+    reason = getattr(exc, "reason", exc)
+    if isinstance(reason, (socket.timeout, TimeoutError)):
+        return f"timed out after {CHECK_TIMEOUT_SECONDS:g}s"
+    if isinstance(reason, ConnectionRefusedError):
+        return "connection refused"
+    if isinstance(exc, urllib.error.HTTPError):
+        return f"answered {exc.code}"
+    if isinstance(reason, socket.gaierror):
+        return "the host name does not resolve"
+    return f"{type(reason).__name__}"
+
+
+def _get_json(url: str, timeout: float) -> Any:
+    import urllib.request
+
+    with urllib.request.urlopen(url, timeout=timeout) as r:   # noqa: S310 — our own stack
+        return json.loads(r.read(400_000).decode("utf-8", "replace"))
+
+
+def ask_endpoint(kind: str, base: str, *, timeout: float = CHECK_TIMEOUT_SECONDS
+                 ) -> dict[str, Any]:
+    """Ask Grafana or Prometheus whether it answers. Never raises; network I/O, so never inside
+    a transaction and never on a console poll.
+
+    Grafana answers if its search API answers with JSON (then the dashboards it has are known)
+    or its health API reports a database. Prometheus answers if its build-info API answers."""
+    name = _KIND_NAMES[kind]
+    host = base.split("//", 1)[-1].rstrip("/")
+    if kind == "grafana":
+        dashboards = provisioned_dashboards(base, timeout=timeout)
+        if dashboards is not None:
+            return {"state": "answering", "reason": "", "detail": {
+                "dashboards": sorted(dashboards)}}
+        try:
+            health = _get_json(f"{base.rstrip('/')}/api/health", timeout)
+        except Exception as exc:  # noqa: BLE001
+            return {"state": "not_answering",
+                    "reason": f"{name} isn't answering on its host",
+                    "detail": {"why": _why(exc), "at": host}}
+        if isinstance(health, dict) and health.get("database"):
+            return {"state": "answering", "reason": "", "detail": {"dashboards": None}}
+        return {"state": "not_answering", "reason": f"Something else answers where {name} should",
+                "detail": {"why": "not a Grafana health answer", "at": host}}
+    try:
+        info = _get_json(f"{base.rstrip('/')}/api/v1/status/buildinfo", timeout)
+    except Exception as exc:  # noqa: BLE001
+        return {"state": "not_answering", "reason": f"{name} isn't answering on its host",
+                "detail": {"why": _why(exc), "at": host}}
+    if isinstance(info, dict) and info.get("status") == "success":
+        return {"state": "answering", "reason": "", "detail": {
+            "version": str((info.get("data") or {}).get("version") or "")}}
+    return {"state": "not_answering", "reason": f"Something else answers where {name} should",
+            "detail": {"why": "not a Prometheus answer", "at": host}}
+
+
+def record_check(connection, project_id: str, kind: str, base: str, result: dict[str, Any],
+                 *, now: Any = None) -> dict[str, Any]:
+    from datetime import datetime, timezone
+
+    at = now or datetime.now(timezone.utc)
+    connection.execute(sql(
+        "INSERT INTO observability_endpoint_checks (project_id, kind, base_url, state, reason, "
+        " detail, checked_at) VALUES (:p, :k, :b, :s, :r, CAST(:d AS JSONB), :at) "
+        "ON CONFLICT (project_id, kind) DO UPDATE SET base_url = EXCLUDED.base_url, "
+        " state = EXCLUDED.state, reason = EXCLUDED.reason, detail = EXCLUDED.detail, "
+        " checked_at = EXCLUDED.checked_at"),
+        {"p": project_id, "k": kind, "b": base, "s": result["state"],
+         "r": result.get("reason") or "", "d": json.dumps(result.get("detail") or {}), "at": at})
+    return {**result, "base_url": base, "checked_at": at}
+
+
+def recorded_check(connection, project_id: str, kind: str) -> Optional[dict[str, Any]]:
+    row = connection.execute(sql(
+        "SELECT base_url, state, reason, detail, checked_at FROM observability_endpoint_checks "
+        "WHERE project_id = :p AND kind = :k"), {"p": project_id, "k": kind}).mappings().first()
+    if not row:
+        return None
+    out = dict(row)
+    if isinstance(out.get("detail"), str):
+        out["detail"] = json.loads(out["detail"])
+    return out
+
+
+def check_endpoint(engine, project_id: str, kind: str, *, base: Optional[str] = None,
+                   only_if_stale: bool = False) -> Optional[dict[str, Any]]:
+    """Ask now (outside any transaction) and record the answer. None when BOSS knows no address.
+    `only_if_stale`: the sweep's call, which leaves a check younger than the TTL alone."""
+    from datetime import datetime, timezone
+
+    from ..db import begin
+
+    with begin(engine) as c:
+        if base is None:
+            base = grafana_base(c, project_id) if kind == "grafana" else prometheus_base(
+                c, project_id)
+        if not base:
+            return None
+        if only_if_stale:
+            last = recorded_check(c, project_id, kind)
+            if last and last["base_url"] == base and (
+                    datetime.now(timezone.utc) - last["checked_at"]).total_seconds()                     < ENDPOINT_CHECK_TTL_SECONDS:
+                return last
+    result = ask_endpoint(kind, base)
+    with begin(engine) as c:
+        return record_check(c, project_id, kind, base, result)
+
+
+def endpoint_state(connection, project_id: str, kind: str = "grafana") -> dict[str, Any]:
+    """What the console may say about Grafana (or Prometheus), from the RECORDED check only:
+
+        answering      BOSS asked and it answered — the only state a link is shown in
+        not_answering  BOSS asked and it did not; `reason` says so in words
+        unchecked      BOSS has not asked since this address was known
+        not_deployed   BOSS knows no address for it
+
+    A recorded check for a different address than today's is `unchecked`: the host moved."""
+    name = _KIND_NAMES[kind]
+    base = grafana_base(connection, project_id) if kind == "grafana" else prometheus_base(
+        connection, project_id)
+    if not base:
+        return {"state": "not_deployed", "url": None, "base_url": None,
+                "reason": f"No monitoring stack: deploy it to get {name}",
+                "checked_at": None, "dashboards": None, "why": None}
+    last = recorded_check(connection, project_id, kind)
+    if not last or last["base_url"] != base:
+        return {"state": "unchecked", "url": None, "base_url": base,
+                "reason": f"BOSS hasn't checked {name} yet", "checked_at": None,
+                "dashboards": None, "why": None}
+    detail = last.get("detail") or {}
+    answering = last["state"] == "answering"
+    return {"state": last["state"], "url": base if answering else None, "base_url": base,
+            "reason": "" if answering else (last.get("reason") or f"{name} isn't answering"),
+            "checked_at": last["checked_at"].isoformat() if last.get("checked_at") else None,
+            "dashboards": detail.get("dashboards"), "why": detail.get("why")}
+
+
+def dashboard_link(state: dict[str, Any], app: str) -> tuple[Optional[str], Optional[str]]:
+    """(the app's dashboard URL, or None and why). A link only when the recorded check says
+    Grafana answers and — when it could list them — has this app's dashboard."""
+    if state.get("state") != "answering" or not state.get("base_url"):
+        return None, state.get("reason") or "Grafana isn't answering"
+    known = state.get("dashboards")
+    if known is not None and dashboard_uid(app) not in set(known):
+        return None, "No dashboard for this app yet: deploy the stack again"
+    return grafana_url(state["base_url"], app), None
+
+
+def explore_url(base: str, expr: str, start_ms: int, end_ms: int) -> str:
+    """Grafana Explore with `expr` over [start, end], on the stack's Prometheus datasource."""
+    from urllib.parse import quote
+
+    panes = {"a": {"datasource": "boss-prometheus",
+                   "queries": [{"refId": "A", "expr": expr, "range": True,
+                                "datasource": {"type": "prometheus", "uid": "boss-prometheus"}}],
+                   "range": {"from": str(int(start_ms)), "to": str(int(end_ms))}}}
+    return (f"{base.rstrip('/')}/explore?schemaVersion=1&orgId=1&panes="
+            + quote(json.dumps(panes, separators=(",", ":")), safe=""))
 
 
 def deploy_stack(engine, settings: Settings, *, project_id: str, host_target_id: str,

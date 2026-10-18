@@ -37,6 +37,7 @@ With no request counter at all, the latency histogram's `_count` stands in for t
 from __future__ import annotations
 
 import json
+import logging
 import math
 import re
 import shlex
@@ -48,6 +49,8 @@ from urllib.parse import urlsplit
 
 from ..ports import sql
 from .core import make_id
+
+log = logging.getLogger(__name__)
 
 #: Bounds an app may ask for in boss.deploy.yaml. Below 15 s a scrape is load on the thing being
 #: measured; above an hour the alert window can never fill.
@@ -800,77 +803,69 @@ def _being_answered(connection, project_id: str, incident_id: str) -> bool:
     return bool(_response_in_flight(connection, project_id, incident_id))
 
 
-def evaluate_alert(connection, target: dict, spec: dict, now: datetime) -> dict[str, Any]:
-    """Open (or reopen) the app's error-rate incident when the rule fires; resolve it once the
-    rate is back under the threshold on enough traffic. Too little traffic HOLDS the current
-    state: silence is not evidence of recovery."""
+def effective_rule(connection, target: dict, spec: Optional[dict]) -> dict[str, Any]:
+    """The error-rate rule in this module's shape ({enabled, error_rate_percent,
+    window_minutes, min_requests}): the console's edit when a person made one (app_alerts),
+    else the yaml's `metrics.alert`, else the default."""
     rule = alert_rule(spec)
+    row = connection.execute(sql(
+        "SELECT enabled, params FROM app_alert_rules WHERE target_id = :t AND kind = 'error_rate'"),
+        {"t": target["id"]}).mappings().first()
+    if row:
+        params = row["params"] if isinstance(row["params"], dict) else json.loads(
+            row["params"] or "{}")
+        rule = {**rule, "enabled": bool(row["enabled"]),
+                "error_rate_percent": float(params.get("threshold", rule["error_rate_percent"])),
+                "window_minutes": params.get("window_minutes", rule["window_minutes"]),
+                "min_requests": params.get("min_requests", rule["min_requests"])}
+    return rule
+
+
+_LEGACY_VERDICT = {"firing": "firing", "inhibited": "firing", "silenced": "firing",
+                   "pending": "pending", "ok": "ok", "off": "off", "no_data": "quiet",
+                   "too_little": "quiet", "error": "quiet"}
+
+
+def evaluate_alert(connection, target: dict, spec: dict, now: datetime) -> dict[str, Any]:
+    """Evaluate the app's alert rules on this scrape (app_alerts: PromQL, one semantics with
+    Prometheus) and answer for the error-rate rule in this module's shape:
+    {verdict firing|ok|quiet|off|pending, action opened|reopened|joined|resolved|None, window,
+    rule, event_id}.
+
+    The record, the grouping into incidents, inhibition and silences are app_alerts'. What this
+    keeps is the scrape's own question — did the error-rate alert just open, reopen or resolve
+    the app's incident — which the incident response and its tests read."""
+    from . import app_alerts
+
+    rule = effective_rule(connection, target, spec)
     window = aggregate(_window_rows(connection, target["id"],
                                     now - timedelta(minutes=float(rule["window_minutes"])), now))
-    verdict = judge(window, rule)
-    inc = _incident(connection, target["project_id"], target["id"])
-    is_open = bool(inc and inc["status"] not in _CLOSED)
-    # An incident an APP REPORTED (incident_signals) is open before the monitor says anything.
-    # When the monitor then fires, that is the alert opening it — the release, the routes and
-    # the event the response starts from are recorded now. And the monitor never closes an
-    # incident it did not raise: reports wait for the alert, or for a person.
-    alerted = bool(inc and inc.get("alerted"))
-    action = None
-    if verdict == "firing":
-        pct = round(window["error_rate"] * 100.0, 1)
-        title = (f"{target.get('app_name')} ({target.get('environment')}): {pct}% of requests "
-                 f"failing over {rule['window_minutes']} min (alert above "
-                 f"{rule['error_rate_percent']}%)")[:200]
-        if inc is None:
-            inc_id = make_id("inc")
-            connection.execute(sql(
-                "INSERT INTO incidents (id, project_id, dedupe_key, title, service, severity, "
-                " status, signal_count, first_seen, last_seen) VALUES "
-                "(:id, :p, :k, :title, :svc, 'warning', 'open', 1, :now, :now)"),
-                {"id": inc_id, "p": target["project_id"], "k": INCIDENT_PREFIX + target["id"],
-                 "title": title, "svc": target.get("app_name") or "", "now": now})
-            action = "opened"
-        else:
-            inc_id = inc["id"]
-            connection.execute(sql(
-                "UPDATE incidents SET title = :title, last_seen = :now, "
-                " signal_count = signal_count + 1, "
-                " status = CASE WHEN status IN ('resolved', 'dismissed') THEN 'open' "
-                "               ELSE status END, "
-                " first_seen = CASE WHEN status IN ('resolved', 'dismissed') THEN :now "
-                "                   ELSE first_seen END "
-                "WHERE id = :id"), {"id": inc_id, "title": title, "now": now})
-            action = ("reopened" if not is_open else
-                      "still_firing" if alerted else "opened")
-        connection.execute(sql(
-            "INSERT INTO anomaly_signals (id, project_id, incident_id, kind, signature, service, "
-            " score, count, sample, ts) VALUES (:id, :p, :inc, 'error_surge', 'http_error_rate', "
-            " :svc, :score, :count, CAST(:sample AS JSONB), :now)"),
-            {"id": make_id("sig"), "p": target["project_id"], "inc": inc_id,
-             "svc": target.get("app_name") or "", "score": window["error_rate"],
-             "count": int(window["errors"] or 0),
-             "sample": json.dumps({"target_id": target["id"], "window": window, "rule": rule}),
-             "now": now})
-    elif verdict in ("ok", "off") and is_open and alerted and not _being_answered(
-            connection, target["project_id"], inc["id"]):
-        connection.execute(sql(
-            "UPDATE incidents SET status = 'resolved', last_seen = :now WHERE id = :id"),
-            {"id": inc["id"], "now": now})
-        action, inc_id = "resolved", inc["id"]
-    event_id = None
-    if action in ("opened", "reopened", "resolved"):
-        # WHAT WAS SERVING, AND SAY SO. The row above says "x% failing"; the response needs the
-        # release, the routes and the app's build lineage, and something has to be told. Its
-        # own savepoint: evidence that cannot be written never costs the scrape or the alert.
-        from . import incident_response
-
-        point = connection.begin_nested()
-        try:
-            event_id = incident_response.on_alert(connection, target, inc_id, action=action,
-                                                  window=window, rule=rule, now=now)
-            point.commit()
-        except Exception:  # noqa: BLE001
-            point.rollback()
+    point = connection.begin_nested()
+    try:
+        out = app_alerts.evaluate_target(connection, target, now, local_only=True)
+        point.commit()
+    except Exception:  # noqa: BLE001 — a rule that cannot be evaluated never costs the scrape
+        log.exception("app_metrics: alert evaluation failed")
+        point.rollback()
+        return {"verdict": judge(window, rule), "action": None, "window": window, "rule": rule,
+                "event_id": None}
+    er = connection.execute(sql(
+        "SELECT id FROM app_alert_rules WHERE target_id = :t AND kind = 'error_rate'"),
+        {"t": target["id"]}).scalar()
+    state = out["rules"].get(er)
+    verdict = _LEGACY_VERDICT.get(state or "", judge(window, rule)) if rule["enabled"] else "off"
+    serving = INCIDENT_PREFIX + target["id"]
+    action = event_id = None
+    for item in out["incidents"]:
+        key = connection.execute(sql("SELECT dedupe_key FROM incidents WHERE id = :i"),
+                                 {"i": item["incident_id"]}).scalar()
+        if key == serving:
+            action, event_id = item["action"], item.get("event_id")
+            if action == "joined":
+                action = "still_firing"
+            break
+    if action is None and verdict == "firing":
+        action = "still_firing"
     return {"verdict": verdict, "action": action, "window": window, "rule": rule,
             "event_id": event_id}
 
@@ -896,7 +891,7 @@ def metrics_view(connection, target: dict, *, now: Optional[datetime] = None,
         return {"declared": False, "word": "Not declared",
                 "tip": "Add metrics: {path: /metrics} to boss.deploy.yaml and redeploy"}
     spec = decl["spec"]
-    rule = alert_rule(spec)
+    rule = effective_rule(connection, target, spec)
     latest = connection.execute(sql(
         "SELECT scraped_at, ok, route, url, status_code, word, naming FROM app_metrics_scrapes "
         "WHERE deployment_target_id = :t ORDER BY scraped_at DESC LIMIT 1"),

@@ -3,7 +3,7 @@
 # One line per operation: its declaration, then the built-in roles allowed
 # (O owner, A admin, P operator, V viewer, U auditor; '-' none). Every other role is denied
 # 403, or 404 when the operation names an object the role cannot even read.
-# 1567 operations.
+# 1576 operations.
 "GET /.well-known/boss-jwks.json": ["public:jwks", "OAPVU"]
 "GET /docs": ["public:api_description", "OAPVU"]
 "GET /docs/oauth2-redirect": ["public:api_description", "OAPVU"]
@@ -169,6 +169,7 @@
 "POST /v1/ai-sre/runbooks/load": ["permit reliability:read @ project(query=project_id) +writes_on_get", "OAPVU"]
 "GET /v1/ai-sre/runbooks/runs": ["permit reliability:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/ai-sre/runbooks/{runbook_id}/runs": ["permit reliability:respond @ project(body=project_id)", "OAP"]
+"GET /v1/alerts": ["permit observability:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/anomalies/scan": ["permit system:operate @ project(body=project_id)", "OA"]
 "GET /v1/approval-rules": ["permit decision:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/apps/{app_key}/change-sets": ["permit code_task:create @ project(body=project_id)", "OAP"]
@@ -189,6 +190,13 @@
 "GET /v1/apps/{app_key}/templates": ["permit project:read @ project(query=project_id)", "OAPVU"]
 "GET /v1/apps/{app_key}/test-users": ["permit project:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/apps/{app_key}/test-users/reveal": ["permit app_secret:write @ project(body=project_id)", "OAP"]
+"GET /v1/apps/{target_id}/alert-rules": ["permit observability:read @ project(query=project_id)", "OAPVU"]
+"PUT /v1/apps/{target_id}/alert-rules": ["permit observability:manage @ project(body=project_id)", "OA"]
+"POST /v1/apps/{target_id}/alert-rules/{rule_id}/silence": ["permit observability:manage @ project(body=project_id)", "OA"]
+"POST /v1/apps/{target_id}/alert-silences/{silence_id}/end": ["permit observability:manage @ project(body=project_id)", "OA"]
+"GET /v1/apps/{target_id}/alerts": ["permit observability:read @ project(query=project_id)", "OAPVU"]
+"POST /v1/apps/{target_id}/alerts/{alert_id}/triage": ["permit observability:manage @ project(body=project_id)", "OA"]
+"POST /v1/apps/{target_id}/signal-sources/{source_id}/rotate": ["permit observability:manage @ project(body=project_id)", "OA"]
 "POST /v1/apps/{target_id}/signals": ["public:hmac_signed_webhook", "OAPVU"]
 "GET /v1/architecture-reviews": ["permit workflow:read @ project(query=project_id)", "OAPVU"]
 "GET /v1/architecture-reviews/{review_id}": ["permit workflow:read @ project(query=project_id)", "OAPVU"]
@@ -1073,6 +1081,7 @@
 "GET /v1/observability/apps": ["permit observability:read @ project(query=project_id)", "OAPVU"]
 "GET /v1/observability/apps/{target_id}": ["permit observability:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/observability/apps/{target_id}/probe": ["permit observability:manage @ project(body=project_id)", "OA"]
+"POST /v1/observability/grafana/check": ["permit observability:manage @ project(body=project_id)", "OA"]
 "GET /v1/observability/models": ["permit observability:read @ project(query=project_id)", "OAPVU"]
 "GET /v1/observability/sources": ["permit observability:read @ project(query=project_id)", "OAPVU"]
 "GET /v1/observability/stack": ["permit observability:read @ project(query=project_id) +confine(query.host_target_id->deployment_target|deployment_host)", "OAPVU"]

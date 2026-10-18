@@ -331,7 +331,14 @@ def sweep(engine, settings: Settings, *, project_id: Optional[str] = None,
     from . import incident_signals
 
     signals = incident_signals.sweep(engine, settings, targets, now=now)
-    return {"probed": probed, "skipped": skipped, "failed": failed, **scraped, **signals}
+    # ...and every app's alert rules are evaluated over what was just recorded (health check,
+    # deploy health and the metrics rules of apps that were not scraped this time), then what
+    # fired is triaged (app_alerts: never raises).
+    from . import app_alerts
+
+    alerts = app_alerts.sweep(engine, settings, targets, now=now)
+    return {"probed": probed, "skipped": skipped, "failed": failed, **scraped, **signals,
+            **alerts}
 
 
 # --------------------------------------------------------------------------- #

@@ -237,7 +237,8 @@ def test_reports_open_one_incident_the_alert_then_owns(pg, app, desk):
     quiet = _scrape(eng, orders, now + timedelta(seconds=60))
     assert quiet["alert"]["verdict"] == "ok" and quiet["alert"]["action"] is None
     # the monitor fires: the SAME incident, now alerted, and the response can start
-    app.body = orders_page(330, 30, 360)
+    # 60 of ~670 requests failing in the window, as Prometheus' increase() counts them (9%)
+    app.body = orders_page(330, 60, 360)
     fired = _scrape(eng, orders, now + timedelta(seconds=120))
     assert fired["alert"]["action"] == "opened" and fired["alert"]["event_id"]
     with eng.begin() as c:

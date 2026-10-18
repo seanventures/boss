@@ -285,6 +285,11 @@ def _fired_incident(eng, pid, app, *, t0) -> tuple[str, str]:
     _scrape(eng, tid, t0 - timedelta(minutes=20))
     app.body = orders_page(300, 0, 300)
     _scrape(eng, tid, t0 - timedelta(minutes=10))              # the pre-incident baseline: 0%
+    # A rate needs two scrapes inside the alert's window (Prometheus' rule, and so the
+    # monitor's): the scrape before the failure is two minutes before it, as on the monitor's
+    # cadence, not ten.
+    app.body = orders_page(302, 0, 302)
+    _scrape(eng, tid, t0 - timedelta(minutes=2))
     app.body = orders_page(330, 30, 360)
     _scrape(eng, tid, t0)
     with eng.begin() as c:
@@ -399,7 +404,8 @@ def test_an_alert_is_answered_end_to_end_by_incident_response(pg, app, monkeypat
     _scrape(eng, tid, now - timedelta(minutes=12))
     app.body = orders_page(300, 0, 300)
     _scrape(eng, tid, now - timedelta(minutes=10))
-    app.body = orders_page(330, 30, 360)
+    # 60 of ~670 requests failing in the window, as Prometheus' increase() counts them (9%)
+    app.body = orders_page(330, 60, 360)
     fired = _scrape(eng, tid, now - timedelta(minutes=8))
     assert fired["alert"]["action"] == "opened"
 

@@ -28,7 +28,6 @@ import math
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal, Optional, TypedDict
-from urllib.parse import urlparse
 
 from sqlalchemy import text
 
@@ -400,38 +399,36 @@ def _pins(connection: Any, ids: list[str], start: datetime, end: datetime,
         return {i: [] for i in ids}
 
 
-def _grafana_base(connection: Any, project_id: str) -> Optional[str]:
-    """Where Grafana is, from the registry (the registered boss-prometheus source's host),
-    never from a live probe. None when the stack was never deployed."""
-    from .observability_stack import DEFAULT_PORTS
+def _grafana(connection: Any, project_id: str) -> dict[str, Any]:
+    """Grafana as the console may show it: from the RECORDED check only, never a live probe
+    (observability_stack.endpoint_state). A link exists only in state `answering`."""
+    from .observability_stack import endpoint_state
 
-    row = connection.execute(text(
-        "SELECT config FROM telemetry_sources WHERE project_id = :p AND kind = 'prometheus' "
-        "AND name = 'boss-prometheus'"), {"p": project_id}).mappings().first()
-    if not row:
-        return None
-    cfg = row["config"] or {}
-    if isinstance(cfg, str):
-        try:
-            cfg = json.loads(cfg)
-        except json.JSONDecodeError:
-            cfg = {}
-    host = urlparse(str(cfg.get("base_url") or "")).hostname
-    return f"http://{host}:{DEFAULT_PORTS['grafana']}" if host else None
+    g = endpoint_state(connection, project_id, "grafana")
+    return {k: g.get(k) for k in ("state", "url", "base_url", "reason", "checked_at", "why",
+                                  "dashboards")}
 
 
-def _dashboard_url(base: Optional[str], app: str, project_id: str) -> Optional[str]:
-    """A link only to a dashboard that exists, when the last `Check now` asked Grafana; the
-    link as before when Grafana was never asked (observability_stack's rule)."""
-    from .observability_stack import dashboard_uid, grafana_url
+def _grafana_wire(g: dict[str, Any]) -> dict[str, Any]:
+    """The header's Grafana: state, link (answering only), the reason in words, when checked."""
+    return {"state": g["state"], "url": g["url"], "reason": g["reason"] or None,
+            "checked_at": g["checked_at"], "why": g.get("why")}
 
-    if not base:
-        return None
-    probe = _STACK_PROBES.get(project_id) or {}
-    existing = probe.get("dashboards")
-    if existing is not None and dashboard_uid(app) not in existing:
-        return None
-    return grafana_url(base, app)
+
+_NO_GRAFANA = {"state": "unchecked", "url": None, "base_url": None, "reason": "",
+               "checked_at": None, "why": None, "dashboards": None}
+
+
+def _dashboard_url(g: dict[str, Any], app: str) -> Optional[str]:
+    from .observability_stack import dashboard_link
+
+    return dashboard_link(g, app)[0]
+
+
+def _dashboard_reason(g: dict[str, Any], app: str) -> Optional[str]:
+    from .observability_stack import dashboard_link
+
+    return dashboard_link(g, app)[1]
 
 
 # ── Apps: the Pulse (§4.9) ──────────────────────────────────────────────────────────────────
@@ -492,7 +489,7 @@ def _opened_sql() -> tuple[str, str]:
 
 
 def _not_watched(connection: Any, project_id: str, targets: list[dict],
-                 base: Optional[str]) -> list[dict[str, Any]]:
+                 grafana: dict[str, Any]) -> list[dict[str, Any]]:
     """Scraped by Prometheus with no health target watching it (today's monitoring-orphans):
     the scrape list and the health list are keyed differently and can legitimately differ."""
     from .observability_stack import scrape_targets
@@ -500,7 +497,7 @@ def _not_watched(connection: Any, project_id: str, targets: list[dict],
     watched = {(t["app_name"], t["environment"]) for t in targets}
     return [{"app": s["app"], "env": s["environment"],
              "scrape_url": f"{s['scrape_url']}/metrics",
-             "dashboard_url": _dashboard_url(base, s["app"], project_id)}
+             "dashboard_url": _dashboard_url(grafana, s["app"])}
             for s in scrape_targets(connection, project_id)
             if (s["app"], s["environment"]) not in watched]
 
@@ -600,10 +597,11 @@ def pulse(connection: Any, settings: Any, project_id: str, *, win: str = "24h",
         counts[key[r["state"]]] += 1
 
     not_watched: list[dict[str, Any]] = []
+    grafana = dict(_NO_GRAFANA)
     try:
         with connection.begin_nested():
-            not_watched = _not_watched(connection, project_id, targets,
-                                       _grafana_base(connection, project_id))
+            grafana = _grafana(connection, project_id)
+            not_watched = _not_watched(connection, project_id, targets, grafana)
     except Exception:  # noqa: BLE001
         log.exception("obs_view: not-watched failed")
         partial.append("not_watched")
@@ -618,6 +616,8 @@ def pulse(connection: Any, settings: Any, project_id: str, *, win: str = "24h",
         "window": _window_wire(w),
         "attention": _attention(connection, settings, project_id, partial),
         "spend_24h_micros": spend, "spend_24h_estimated": estimated,
+        # Observability's header link: shown only when BOSS checked that Grafana answers.
+        "grafana": _grafana_wire(grafana),
         "partial": partial,
     }
     return _sealed(body)  # type: ignore[return-value]
@@ -698,10 +698,10 @@ def app_detail(connection: Any, settings: Any, project_id: str, target_id: str, 
     commit = (dep or {}).get("commit_ref")
     mismatch = bool(observed and commit and not (
         str(commit).startswith(str(observed)) or str(observed).startswith(str(commit))))
-    base = None
+    grafana = dict(_NO_GRAFANA)
     try:
         with connection.begin_nested():
-            base = _grafana_base(connection, project_id)
+            grafana = _grafana(connection, project_id)
     except Exception:  # noqa: BLE001
         partial.append("dashboard")
     body: AppDetail = {
@@ -719,7 +719,10 @@ def app_detail(connection: Any, settings: Any, project_id: str, target_id: str, 
             "host": ({"id": t["host_id"], "name": t["host_name"] or t["host_id"]}
                      if t["host_id"] else None),
             "open_url": t.get("public_url") or ((t.get("domains") or [None])[0]),
-            "dashboard_url": _dashboard_url(base, t["app_name"], project_id),
+            "dashboard_url": _dashboard_url(grafana, t["app_name"]),
+            # Why there is no link, in words ("Grafana isn't answering on its host").
+            "dashboard_reason": _dashboard_reason(grafana, t["app_name"]),
+            "grafana": _grafana_wire(grafana),
             "last_error": newest.get("error") if newest else None,
         },
         "series": series,
@@ -1331,10 +1334,16 @@ def _probe_stack(connection: Any, settings: Any, project_id: str, host: dict[str
                  base: Optional[str]) -> dict[str, Any]:
     """`Check now`: ask the host (SSH, through observability_stack) and Grafana. Only ever
     reached with fresh=True."""
-    from .observability_stack import provisioned_dashboards, stack_status
+    from .observability_stack import ask_endpoint, record_check, stack_status
 
     status = stack_status(connection.engine, settings, host_target_id=host["id"])
-    dashboards = provisioned_dashboards(base) if base else None
+    # Grafana is asked too, and the answer RECORDED: it is what every Grafana link is built from.
+    dashboards = None
+    if base:
+        answer = ask_endpoint("grafana", base)
+        with connection.begin_nested():
+            record_check(connection, project_id, "grafana", base, answer)
+        dashboards = (answer.get("detail") or {}).get("dashboards")
     probe = {"at": time.monotonic(), "checked_at": _iso(_now()), "status": status,
              "dashboards": dashboards}
     _STACK_PROBES[project_id] = probe
@@ -1356,7 +1365,9 @@ def sources(connection: Any, settings: Any, project_id: str, *, fresh: bool = Fa
     except Exception:  # noqa: BLE001
         log.exception("obs_view.sources: suite status failed")
         partial.append("sources")
-    base = _grafana_base(connection, project_id)
+    from .observability_stack import grafana_base
+
+    base = grafana_base(connection, project_id)
     host = _stack_host(connection, project_id)
     deployed = bool((suite.get("stack") or {}).get("deployed"))
 
@@ -1388,6 +1399,12 @@ def sources(connection: Any, settings: Any, project_id: str, *, fresh: bool = Fa
     else:
         host_ref = None
 
+    grafana = dict(_NO_GRAFANA)
+    try:
+        with connection.begin_nested():
+            grafana = _grafana(connection, project_id)    # read AFTER a Check now recorded it
+    except Exception:  # noqa: BLE001
+        partial.append("grafana")
     health_keys = {(t["app_name"], t["environment"]) for t in _targets(connection, project_id)}
     scraped = []
     try:
@@ -1395,7 +1412,7 @@ def sources(connection: Any, settings: Any, project_id: str, *, fresh: bool = Fa
             for s in scrape_targets(connection, project_id):
                 scraped.append({"app": s["app"], "env": s["environment"],
                                 "scrape_url": f"{s['scrape_url']}/metrics",
-                                "dashboard_url": _dashboard_url(base, s["app"], project_id),
+                                "dashboard_url": _dashboard_url(grafana, s["app"]),
                                 "watched": (s["app"], s["environment"]) in health_keys})
     except Exception:  # noqa: BLE001
         partial.append("scraped")
@@ -1408,7 +1425,9 @@ def sources(connection: Any, settings: Any, project_id: str, *, fresh: bool = Fa
     body: Sources = {
         "stack": {"state": state, "word": sw["word"], "tone": sw["tone"], "host": host_ref,
                   "host_target_id": host["id"] if host else None,
-                  "grafana_url": base,
+                  # A link only once BOSS has checked that Grafana answers; else the reason.
+                  "grafana_url": grafana["url"],
+                  "grafana": _grafana_wire(grafana),
                   "containers": [{"name": str(c.get("name") or ""),
                                   "status": str(c.get("status") or "")}
                                  for c in (status.get("containers") or [])],

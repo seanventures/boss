@@ -1,0 +1,389 @@
+"""What Observability shows about alerts: one app's Alerts tab, and every app's alerts.
+
+Read-only over app_alerts' records and the recorded Grafana check — never a live probe, never a
+model call. Every fired alert carries its PromQL `expr`, its value at breach, a Grafana Explore
+link for the breach window (only when BOSS checked that Grafana answers; otherwise the reason),
+its runbook and the agent's triage in the agent's words.
+"""
+from __future__ import annotations
+
+import json
+from datetime import datetime, timedelta, timezone
+from typing import Any, Optional
+
+from ..ports import sql
+from . import app_alerts as aa
+
+#: History windows the tab offers.
+SINCE = {"24h": timedelta(hours=24), "7d": timedelta(days=7), "30d": timedelta(days=30)}
+
+_STATE_WORDS = {"firing": "Firing", "pending": "Pending", "ok": "OK", "no_data": "No data",
+                "too_little": "Too little traffic", "off": "Off", "silenced": "Silenced",
+                "inhibited": "Held back", "error": "Can't evaluate", None: "Not evaluated yet"}
+_STATE_TONES = {"firing": "red", "pending": "amber", "inhibited": "amber", "silenced": "grey",
+                "error": "amber", "no_data": "grey", "too_little": "grey", "off": "grey",
+                "ok": "green", None: "grey"}
+_STATE_TIPS = {
+    "no_data": "The app exports none of the metrics this rule reads",
+    "too_little": "Too few requests in the window to judge",
+    "inhibited": "Held back while the app's health or deploy alert fires",
+    "error": None, None: "BOSS evaluates rules on its monitoring sweep",
+}
+_CLEARED_WORDS = {"recovered": "Recovered", "no_data": "Data stopped",
+                  "too_little": "Traffic too low to judge", "rule_off": "Rule switched off",
+                  "incident_closed": "Incident closed", "error": "Could not evaluate"}
+_SOURCE_WORDS = {"yaml": "from boss.deploy.yaml", "builtin": "BOSS default",
+                 "console": "changed in the console"}
+_EVAL_WORDS = {"boss": "BOSS's own monitoring", "prometheus": "Prometheus"}
+
+
+def _json(v: Any, default: Any = None) -> Any:
+    if isinstance(v, str):
+        try:
+            return json.loads(v)
+        except ValueError:
+            return default
+    return v if v is not None else default
+
+
+def _iso(v: Any) -> Optional[str]:
+    return v.isoformat() if isinstance(v, datetime) else (v or None)
+
+
+def _person(connection, pid: Optional[str]) -> Optional[str]:
+    if not pid:
+        return None
+    from .incident_response import _person as person
+
+    return person(connection, pid)
+
+
+def value_word(value: Optional[float], unit: str) -> str:
+    if value is None:
+        return "—"
+    v = round(float(value), 1)
+    text = aa.num(v)
+    if unit == "%":
+        return f"{text}%"
+    if unit == "ms":
+        return f"{text} ms" if v < 1000 else f"{aa.num(round(v / 1000.0, 2))} s"
+    return f"{text} {unit}".strip()
+
+
+def _runbook(url: str, target: dict) -> dict[str, Any]:
+    """A runbook is BOSS's own (boss:runbook/<name>), a markdown page kept with the app (a path
+    in its repo), or a URL."""
+    url = (url or "").strip()
+    if url.startswith(aa.BUILTIN_RUNBOOK):
+        name = url[len(aa.BUILTIN_RUNBOOK):]
+        book = aa.RUNBOOKS.get(name)
+        return {"url": url, "kind": "builtin", "title": (book or {}).get("title") or name,
+                "markdown": (book or {}).get("markdown"), "href": None}
+    if url.startswith(("http://", "https://")):
+        return {"url": url, "kind": "link", "title": url, "markdown": None, "href": url}
+    if url:
+        repo = str(target.get("repo") or "").strip()
+        href = None
+        if repo and "/" in repo:
+            from ..identity.github_urls import web_base
+
+            href = f"{web_base()}/{repo}/blob/HEAD/{url.lstrip('/')}"
+        return {"url": url, "kind": "repo", "title": url, "markdown": None, "href": href}
+    return {"url": "", "kind": "none", "title": "No runbook", "markdown": None, "href": None}
+
+
+def _grafana(connection, project_id: str) -> dict[str, Any]:
+    from .observability_stack import endpoint_state
+
+    return endpoint_state(connection, project_id, "grafana")
+
+
+def _explore(grafana: dict, alert: dict) -> tuple[Optional[str], Optional[str]]:
+    """Grafana Explore for the breach window (10 minutes before it fired to when it cleared, or
+    now), or None and why."""
+    from .observability_stack import explore_url
+
+    if alert.get("source_kind") == "signal" or not alert.get("expr"):
+        return None, None
+    if grafana.get("state") != "answering":
+        return None, grafana.get("reason") or "Grafana isn't answering"
+    start = (alert.get("fired_at") or alert.get("active_at")) - timedelta(minutes=10)
+    end = alert.get("cleared_at") or datetime.now(timezone.utc)
+    return explore_url(grafana["base_url"], alert["expr"], int(start.timestamp() * 1000),
+                       int(end.timestamp() * 1000)), None
+
+
+def _triage_wire(alert: dict) -> dict[str, Any]:
+    t = alert.get("triage") or {}
+    st = alert.get("triage_state")
+    if st == "no_model":
+        return {"state": "no_model", "word": aa.NO_MODEL_WORD, "reason": None, "question": None,
+                "outcome": None, "by": None, "at": t.get("at"), "confidence": None}
+    if st == "off":
+        return {"state": "off", "word": "Triage off for this rule", "reason": None,
+                "question": None, "outcome": None, "by": None, "at": None, "confidence": None}
+    if st in ("pending", "skipped") or not t:
+        held = alert.get("inhibited_by") or alert.get("silenced_by")
+        word = ("Not triaged: held back" if alert.get("inhibited_by") else
+                "Not triaged: silenced" if alert.get("silenced_by") else
+                "Waiting for the agent" if st == "pending" and alert.get("state") == "firing"
+                else "Not triaged")
+        return {"state": "held" if held else st or "none", "word": word, "reason": None,
+                "question": None, "outcome": None, "by": None, "at": None, "confidence": None}
+    outcome = t.get("outcome")
+    word = {"opened": "Opened an incident", "joined": "Joined the incident",
+            "split": "Opened its own incident", "noise": "Noise", "asked": "Asks you"}.get(
+        outcome or "", t.get("word") or "Triaged")
+    by = t.get("by") or {}
+    return {"state": "done", "word": word, "outcome": outcome, "reason": t.get("reason") or None,
+            "question": t.get("question") or None,
+            "by": by.get("word") or by.get("model") or by.get("backend") or None,
+            "at": t.get("at"), "confidence": t.get("confidence")}
+
+
+def _alert_wire(connection, a: dict, *, target: dict, grafana: dict,
+                incidents: dict[str, dict], names: dict[str, str]) -> dict[str, Any]:
+    labels = _json(a.get("labels"), {}) or {}
+    ann = _json(a.get("annotations"), {}) or {}
+    rel = _json(a.get("release"), None) or {}
+    a = {**a, "labels": labels, "annotations": ann, "triage": _json(a.get("triage"), None)}
+    explore, explore_why = _explore(grafana, a)
+    inc = incidents.get(a.get("incident_id") or "")
+    kind = a["rule_kind"]
+    label = aa.BUILTIN.get(kind, {}).get("label") or (
+        "Reported" if a["source_kind"] == "signal" else a["alertname"])
+    unit = a.get("unit") or ""
+    summary = ann.get("summary") or a["alertname"]
+    if a["source_kind"] == "signal":
+        summary = f"{names.get(a.get('reporter_target_id') or '', 'An app')}: {summary}"
+    return {
+        "id": a["id"], "target_id": a["target_id"], "app": target.get("app_name"),
+        "env": target.get("environment"), "rule_id": a.get("rule_id"), "kind": kind,
+        "label": label, "alertname": a["alertname"], "summary": summary,
+        "description": ann.get("description") or None,
+        "severity": labels.get("severity") or "warning", "state": a["state"],
+        "state_word": {"firing": "Firing", "pending": "Pending",
+                       "resolved": "Resolved"}[a["state"]],
+        "active_at": _iso(a["active_at"]), "fired_at": _iso(a.get("fired_at")),
+        "cleared_at": _iso(a.get("cleared_at")),
+        "cleared_word": _CLEARED_WORDS.get(a.get("cleared_reason") or "", None),
+        "fire_count": int(a.get("fire_count") or 1),
+        "value": a.get("value"), "value_word": value_word(a.get("value"), unit),
+        "threshold": a.get("threshold"),
+        "threshold_word": value_word(a.get("threshold"), unit) if a.get(
+            "threshold") is not None else None,
+        "expr": a.get("expr") or None, "evaluated_by": _EVAL_WORDS.get(a.get("eval_source") or "",
+                                                                        None),
+        "release": ({"sha7": str(rel.get("commit_sha") or "")[:7] or None, "ref": rel.get("ref"),
+                     "deployed_at": rel.get("deployed_at")} if rel else None),
+        "incident": ({"id": inc["id"], "title": inc["title"], "status": inc["status"],
+                      "word": inc["status"].capitalize()} if inc else None),
+        "held_back": ({"by": "inhibited", "word": "Held back: the app's health or deploy alert"
+                       " is firing"} if a.get("inhibited_by") else
+                      {"by": "silenced", "word": "Silenced"} if a.get("silenced_by") else None),
+        "triage": _triage_wire(a),
+        "response": ({"run_id": a.get("response_run_id"), "word": a.get("response_word")}
+                     if a.get("response_word") else None),
+        "runbook": _runbook(ann.get("runbook_url") or "", target),
+        "explore_url": explore, "explore_reason": explore_why,
+        "source_kind": a["source_kind"],
+        "reporter": ({"target_id": a.get("reporter_target_id"),
+                      "app": names.get(a.get("reporter_target_id") or "")}
+                     if a["source_kind"] == "signal" else None),
+        "backfilled": bool(a.get("backfilled")),
+    }
+
+
+def _targets(connection, project_id: str, ids: Optional[list[str]] = None) -> dict[str, dict]:
+    q = "SELECT * FROM deployment_targets WHERE project_id = :p"
+    params: dict[str, Any] = {"p": project_id}
+    if ids is not None:
+        q += " AND id = ANY(:ids)"
+        params["ids"] = ids
+    return {r["id"]: dict(r) for r in connection.execute(sql(q), params).mappings().all()}
+
+
+def _incidents(connection, ids: list[str]) -> dict[str, dict]:
+    if not ids:
+        return {}
+    return {r["id"]: dict(r) for r in connection.execute(sql(
+        "SELECT id, title, status FROM incidents WHERE id = ANY(:i)"),
+        {"i": ids}).mappings().all()}
+
+
+def alerts(connection, project_id: str, *, target_id: Optional[str] = None,
+           state: str = "all", since: str = "7d", severity: Optional[str] = None,
+           limit: int = 100) -> dict[str, Any]:
+    """Alerts, newest first. state firing (open now: pending + firing) | resolved | all."""
+    now = datetime.now(timezone.utc)
+    where = ["a.project_id = :p"]
+    params: dict[str, Any] = {"p": project_id, "n": max(1, min(int(limit), 500))}
+    if target_id:
+        where.append("a.target_id = :t")
+        params["t"] = target_id
+    if state == "firing":
+        where.append("a.state IN ('pending', 'firing')")
+    else:
+        if state == "resolved":
+            where.append("a.state = 'resolved'")
+        params["since"] = now - SINCE.get(since, SINCE["7d"])
+        where.append("(a.state IN ('pending', 'firing') OR a.active_at >= :since "
+                     "OR a.cleared_at >= :since)")
+    if severity in aa.SEVERITIES:
+        where.append("a.labels->>'severity' = :sev")
+        params["sev"] = severity
+    rows = [dict(r) for r in connection.execute(sql(
+        "SELECT a.* FROM app_alerts a WHERE " + " AND ".join(where)
+        + " ORDER BY (a.state <> 'resolved') DESC, COALESCE(a.fired_at, a.active_at) DESC "
+          "LIMIT :n"), params).mappings().all()]
+    tids = sorted({r["target_id"] for r in rows} | {r["reporter_target_id"] for r in rows
+                                                     if r.get("reporter_target_id")})
+    targets = _targets(connection, project_id, tids)
+    names = {k: str(v.get("app_name") or k) for k, v in targets.items()}
+    incidents = _incidents(connection, sorted({r["incident_id"] for r in rows
+                                               if r.get("incident_id")}))
+    grafana = _grafana(connection, project_id)
+    counts = connection.execute(sql(
+        "SELECT count(*) FILTER (WHERE state = 'firing') AS firing, "
+        "       count(*) FILTER (WHERE state = 'pending') AS pending "
+        "FROM app_alerts WHERE project_id = :p" + (" AND target_id = :t" if target_id else "")),
+        {"p": project_id, **({"t": target_id} if target_id else {})}).mappings().first()
+    apps = [{"target_id": t["id"], "app": t["app_name"], "env": t["environment"]}
+            for t in _targets(connection, project_id).values()
+            if connection.execute(sql("SELECT 1 FROM app_alert_rules WHERE target_id = :t "
+                                      "LIMIT 1"), {"t": t["id"]}).first()]
+    return {
+        "project_id": project_id, "target_id": target_id, "state": state, "since": since,
+        "severity": severity,
+        "counts": {"firing": int(counts["firing"] or 0), "pending": int(counts["pending"] or 0)},
+        "alerts": [_alert_wire(connection, r, target=targets.get(r["target_id"], {}),
+                               grafana=grafana, incidents=incidents, names=names) for r in rows],
+        "apps": sorted(apps, key=lambda x: (str(x["app"]).lower(), str(x["env"]))),
+        "grafana": {"state": grafana["state"], "reason": grafana["reason"] or None},
+    }
+
+
+def _rule_wire(connection, r: dict, target: dict, silences: dict[str, dict]) -> dict[str, Any]:
+    kind = r["kind"]
+    b = aa.BUILTIN.get(kind, {})
+    st = r.get("last_state") if r["enabled"] else "off"
+    sil = silences.get(r["id"])
+    tip = _STATE_TIPS.get(st)
+    if st == "error":
+        tip = r.get("last_word")
+    link = r.get("respond_link") or {}
+    return {
+        "id": r["id"], "kind": kind, "label": b.get("label") or r["alert"], "alert": r["alert"],
+        "expr": r["expr"], "for_seconds": int(r.get("for_seconds") or 0),
+        "condition": aa.condition_words(kind, r["params"], int(r.get("for_seconds") or 0)),
+        "params": r["params"] if kind != "custom" else {},
+        "bounds": {k: list(v) for k, v in aa.PARAM_BOUNDS.get(kind, {}).items()},
+        "severity": (r.get("labels") or {}).get("severity") or "warning",
+        "labels": r.get("labels") or {}, "summary": (r.get("annotations") or {}).get("summary"),
+        "description": (r.get("annotations") or {}).get("description"),
+        "runbook": _runbook((r.get("annotations") or {}).get("runbook_url") or "", target),
+        "enabled": bool(r["enabled"]), "triage": bool(r.get("triage", True)),
+        "auto_respond": bool(r.get("auto_respond")),
+        "respond_on_behalf_of": _person(connection, link.get("on_behalf_of")),
+        "notify": r.get("notify") or "console",
+        "source": r["source"], "source_word": _SOURCE_WORDS.get(r["source"], r["source"]),
+        "changed_by": _person(connection, r.get("changed_by")),
+        "changed_at": _iso(r.get("changed_at")),
+        "state": st, "state_word": "Silenced" if sil and st in ("firing", "pending") else
+        _STATE_WORDS.get(st, st or ""), "state_tone": _STATE_TONES.get(st, "grey"),
+        "state_tip": tip,
+        "value": r.get("last_value"),
+        "value_word": value_word(r.get("last_value"), b.get("unit", "")) if r.get(
+            "last_value") is not None else None,
+        "evaluated_at": _iso(r.get("last_eval_at")),
+        "evaluated_by": _EVAL_WORDS.get(r.get("last_source") or "", None),
+        "silence": ({"id": sil["id"], "ends_at": _iso(sil["ends_at"]), "reason": sil["reason"],
+                     "by": _person(connection, sil["created_by"])} if sil else None),
+        "editable": "params" if kind != "custom" else "promql",
+    }
+
+
+def _sources(connection, target: dict) -> list[dict[str, Any]]:
+    """The apps (or outside systems) that report problems with this app through their signed
+    channel: whoever reported about it, and the app's own channel when it declares one."""
+    from . import incident_signals
+
+    tid, pid = target["id"], target["project_id"]
+    since = datetime.now(timezone.utc) - timedelta(hours=24)
+    rows = connection.execute(sql(
+        "SELECT a.reporter_target_id AS rid, max(a.active_at) AS last_at, "
+        "       count(*) FILTER (WHERE a.active_at >= :since) AS today, "
+        "       COALESCE(sum(a.value) FILTER (WHERE a.active_at >= :since), 0) AS reports "
+        "FROM app_alerts a WHERE a.target_id = :t AND a.source_kind = 'signal' "
+        "GROUP BY a.reporter_target_id"), {"t": tid, "since": since}).mappings().all()
+    seen = {r["rid"]: dict(r) for r in rows if r["rid"]}
+    declares = incident_signals.declarations(connection, [tid])
+    if tid in declares and tid not in seen:
+        seen[tid] = {"rid": tid, "last_at": None, "today": 0, "reports": 0}
+    out = []
+    names = _targets(connection, pid, sorted(seen)) if seen else {}
+    for rid, r in seen.items():
+        channel = connection.execute(sql(
+            "SELECT last_polled_at, last_word FROM app_signal_channels WHERE target_id = :t"),
+            {"t": rid}).mappings().first()
+        token = incident_signals.token_status(connection, pid, rid)
+        reporter = names.get(rid, {})
+        out.append({
+            "id": rid, "app": reporter.get("app_name") or rid, "kind": "signed reports",
+            "connected": bool(token["minted"]),
+            "last_report_at": _iso(r["last_at"]),
+            "reports_today": int(float(r["reports"] or 0)),
+            "last_poll_at": _iso((channel or {}).get("last_polled_at")),
+            "last_word": (channel or {}).get("last_word") or None,
+            "token": token,
+        })
+    return sorted(out, key=lambda s: str(s["app"]).lower())
+
+
+def app_alerts_tab(connection, settings: Any, project_id: str, target_id: str, *,
+                   state: str = "all", since: str = "24h") -> dict[str, Any]:
+    """One app's Alerts tab: its rules, its signal sources and its history."""
+    t = connection.execute(sql("SELECT * FROM deployment_targets WHERE id = :t "
+                               "AND project_id = :p"), {"t": target_id, "p": project_id}
+                           ).mappings().first()
+    if not t:
+        raise LookupError(f"No app {target_id} in this project.")
+    target = dict(t)
+    rule_rows = aa.rules(connection, target_id)
+    if not rule_rows:
+        # Rules exist from the first evaluation; a tab opened before it shows the starting
+        # values instead of an empty list (written in a savepoint: a read never fails on it).
+        point = connection.begin_nested()
+        try:
+            rule_rows = aa.ensure_rules(connection, target)
+            point.commit()
+        except Exception:  # noqa: BLE001
+            point.rollback()
+    now = datetime.now(timezone.utc)
+    silences = aa.active_silences(connection, target_id, now)
+    history = alerts(connection, project_id, target_id=target_id, state=state, since=since)
+    changes = [{"rule_id": c["rule_id"], "change": c["change"], "reason": c["reason"] or None,
+                "by": _person(connection, c["changed_by"]), "at": _iso(c["changed_at"])}
+               for c in connection.execute(sql(
+                   "SELECT rule_id, change, reason, changed_by, changed_at FROM "
+                   "app_alert_rule_changes WHERE target_id = :t ORDER BY changed_at DESC "
+                   "LIMIT 10"), {"t": target_id}).mappings().all()]
+    from .observability_stack import endpoint_state
+
+    prom = endpoint_state(connection, project_id, "prometheus")
+    return {
+        "target_id": target_id, "app": target["app_name"], "env": target["environment"],
+        "rules": [_rule_wire(connection, r, target, silences) for r in rule_rows],
+        "evaluator": ("Prometheus" if prom["state"] == "answering"
+                      else "BOSS's own monitoring"),
+        "evaluator_tip": (None if prom["state"] == "answering" else
+                          prom["reason"] or "Prometheus isn't answering"),
+        "sources": _sources(connection, target),
+        "history": history["alerts"], "counts": history["counts"],
+        "state": state, "since": since, "changes": changes,
+        "export": aa.export_rules(rule_rows),
+        "grafana": history["grafana"],
+    }
+
+
+__all__ = ["alerts", "app_alerts_tab", "value_word"]
