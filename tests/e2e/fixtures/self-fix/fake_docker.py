@@ -7,7 +7,8 @@ State: $FAKE_DOCKER_STATE, a JSON file {"containers": [{"id", "name", "labels", 
 separate. Every command that removes or stops something is appended to "log", and removed
 containers leave the state, so a later `ps` no longer lists them.
 
-  ps [-a] [-q] [--no-trunc] [--filter K=V]... [--format TPL]
+  ps [-a] [-q] [--no-trunc] [--filter K=V]... [--format TPL]   TPL: .ID .Names .Label "K"
+       .Labels .State .Status .Ports
        filters (ANDed, like the CLI): label=KEY, label=KEY=VALUE, name=SUBSTR, id=PREFIX,
        publish=PORT, status=STATE
   inspect [-f|--format TPL] ID|NAME...      TPL: {{.Name}}, {{.Id}}, {{.State.Status}},
@@ -61,9 +62,22 @@ def matches(c: dict, flt: str) -> bool:
     return False
 
 
-def render(c: dict, tpl: str) -> str:
+def render(c: dict, tpl: str, *, ps: bool = False) -> str:
+    """One container through a Go template, as `inspect -f` (ps=False) or `ps --format`
+    (ps=True: the CLI's own ps fields, .ID, .Names, .Label "K", .Labels, .State, .Ports)."""
     def one(expr: str) -> str:
         expr = expr.strip()
+        if ps:
+            m = re.fullmatch(r'\.Label "([^"]+)"', expr)
+            if m:
+                return c["labels"].get(m.group(1), "")
+            fields = {".ID": c["id"][:12], ".Names": c["name"],
+                      ".Labels": ",".join(f"{k}={v}" for k, v in sorted(c["labels"].items())),
+                      ".State": c.get("state", "running"), ".Status": "Up 2 days",
+                      ".Ports": ", ".join(f"0.0.0.0:{p}->{p}/tcp" for p in c.get("ports") or [])}
+            if expr in fields:
+                return fields[expr]
+            raise ValueError(f"template: {expr}")
         if expr == ".Name":
             return "/" + c["name"]
         if expr == ".Id":
@@ -116,7 +130,11 @@ def main(argv: list[str]) -> int:
                 continue
             if all(matches(c, f) for f in filters):
                 if fmt:
-                    print(render(c, fmt))
+                    try:
+                        print(render(c, fmt, ps=True))
+                    except ValueError as error:
+                        print(f"template parsing error: {error}", file=sys.stderr)
+                        return 1
                 else:
                     print(c["id"][:12] if trunc else c["id"]) if quiet else print(c["name"])
         return 0

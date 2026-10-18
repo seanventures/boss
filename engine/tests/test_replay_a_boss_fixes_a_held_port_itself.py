@@ -319,13 +319,23 @@ def _seed_host(eng, project_id: str) -> str:
                        "(:i, 'active', :p, 'example-app', 'example/example-app', :e, 'stack', "
                        "'example-app', 'replay', :h)"),
                   {"i": target_id, "p": project_id, "h": host_id, "e": f"replay-{suffix}"})
+        # A RELEASE THAT REALLY RAN: applied, finished healthy, its steps done (a fix may rightly
+        # look only at releases that were applied; attempt 6 did).
         c.execute(text("INSERT INTO stack_deployments (id, project_id, target_id, host_id, "
                        "repository, ref, commit_sha, manifest, status, created_by, deploy_dir, "
-                       "created_at) VALUES (:i, :p, :t, :h, 'example/example-app', 'main', :c, "
-                       "CAST(:m AS JSONB), 'healthy', 'replay', :d, now() - interval '1 day')"),
+                       "steps, open_url, apply_started_at, finished_at, created_at, updated_at) "
+                       "VALUES (:i, :p, :t, :h, 'example/example-app', 'main', :c, "
+                       "CAST(:m AS JSONB), 'healthy', 'replay', :d, CAST(:s AS JSONB), "
+                       "'http://203.0.113.10:8000', now() - interval '1 day', "
+                       "now() - interval '1 day' + interval '2 minutes', "
+                       "now() - interval '1 day' - interval '1 minute', "
+                       "now() - interval '1 day' + interval '2 minutes')"),
                   {"i": earlier, "p": project_id, "t": target_id, "h": host_id, "c": "b" * 40,
                    "d": TARGET_DIR,
-                   "m": json.dumps({"shared_compose_project": SHARED, "workdir": ""})})
+                   "m": json.dumps({"shared_compose_project": SHARED, "workdir": ""}),
+                   "s": json.dumps([{"name": n, "status": "succeeded"} for n in
+                                    ("prepare", "upload", "environment", "switch",
+                                     "install or update: up", "health", "finalize")])})
     return target_id
 
 
