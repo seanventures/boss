@@ -171,6 +171,48 @@ def test_a_secret_shaped_fixture_value_is_said_at_red_while_the_test_can_change(
     assert len(writes) == 2 and "secret-shaped values" in writes[1]["prompt_head"]
 
 
+ADDED_TEST = ("from boss_engine.services import widget\n\n\n"
+              "def test_double_of_two_stays_four():\n"
+              "    assert widget.double(2) == 4, \"widget.double(2) is still 4\"\n")
+
+
+def test_a_finding_that_asks_for_a_test_keeps_the_red_test_and_adds_one(harness):
+    """The real-engine Replay A, attempt 3, round 2: the security seat asked for "a regression
+    covering this combination" and the fix stage, which may not write tests, wrote one. Now the
+    round goes to the TEST stage: the red test stays as it was, the asked-for test is added (it
+    may pass on the base: it pins what must not change), then the fix is written again; both
+    tests are proven red-then-green together."""
+    from boss_engine.services import scripted_engine
+
+    added = harness.fixture / "tests_added" / "engine" / "tests"
+    added.mkdir(parents=True, exist_ok=True)
+    (added / "test_a_widget_keeps_two.py.txt").write_text(ADDED_TEST)
+    row = _build(harness, "review_asks_for_test")["row"]
+    assert row["status"] == sf.AWAITING_APPROVAL, (row["refusal"], row["refusal_detail"])
+    assert row["repair_rounds"] == 1
+    files = row["red_green"]["test_files"]
+    assert set(files) == {"engine/tests/test_a_widget_doubles.py",
+                          "engine/tests/test_a_widget_keeps_two.py"}, files
+    assert row["red_green"]["added"] == ["engine/tests/test_a_widget_keeps_two.py"]
+    assert row["gates"]["red_then_green"]["ok"]
+    writes = [c for c in scripted_engine.run_state(row["id"]).calls
+              if c["stage"] == "self_fix_write_test"]
+    assert len(writes) == 2 and "KEEP these red tests" in writes[1]["prompt_head"]
+    assert "add a regression covering this combination" in writes[1]["prompt_head"]
+
+
+def test_the_fix_stage_never_writes_a_test_file(harness):
+    row = _build(harness, "fix_writes_test")["row"]
+    assert row["status"] == sf.AWAITING_APPROVAL, (row["refusal"], row["refusal_detail"])
+    assert not any(p["path"] == "engine/tests/test_written_by_the_fix_stage.py"
+                   for p in row["paths"])
+    with harness.eng.begin() as c:
+        said = [r[0] for r in c.execute(text(
+            "SELECT data->>'sentence' FROM events WHERE event_type = 'self_fix.progress' "
+            "AND data->>'self_fix_id' = :i"), {"i": row["id"]}).all()]
+    assert any("only the test stage adds tests" in (s or "") for s in said), said
+
+
 def test_the_same_script_ends_the_same_way_twice(harness):
     first = _build(harness, "good_fix")["row"]
     with harness.eng.begin() as c:

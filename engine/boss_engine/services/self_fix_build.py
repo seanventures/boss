@@ -406,12 +406,23 @@ def _protected_note() -> str:
 
 
 def write_test_prompt(sfx: Mapping[str, Any], diagnosis: Mapping[str, Any],
-                      feedback: str = "", work: Optional[Path] = None) -> str:
+                      feedback: str = "", work: Optional[Path] = None,
+                      keep: Optional[Mapping[str, str]] = None) -> str:
     loc = diagnosis.get("location") or {}
     entry = entry_point(sfx, work)
+    adding = (
+        "STAGE: ADD THE TEST THE REVIEWERS ASKED FOR (a repair round; the code is back at the "
+        "base, the fix comes after). KEEP these red tests exactly as they are, never edit them: "
+        + ", ".join(sorted(keep or {})) + ". Add the asked-for test in a NEW file under "
+        "engine/tests/. It may PASS on this checkout when it pins a behaviour that must not "
+        "change (a guard that refuses, what must not be removed); it must pass once the fix is "
+        "right, and the rules below hold for it too, except that it need not fail here: it imports "
+        "and calls the diagnosed code, and a test that names neither the diagnosed module nor "
+        "its function is refused with the whole self-fix.") \
+        if keep else ""
     return "\n\n".join(p for p in (
         _ROLE,
-        "STAGE: WRITE THE FAILING TEST (first; no fix yet).",
+        adding or "STAGE: WRITE THE FAILING TEST (first; no fix yet).",
         f"Diagnosis: {diagnosis.get('hypothesis')}\nLocation: {loc.get('file')} "
         f"{loc.get('function') or ''}\nTest plan: {diagnosis.get('test_plan') or ''}",
         "Rules, each checked by BOSS:\n"
@@ -451,7 +462,8 @@ def implement_prompt(sfx: Mapping[str, Any], diagnosis: Mapping[str, Any], *, re
         "fixes the class of bug.",
         f"Diagnosis: {diagnosis.get('hypothesis')}\nLocation: {loc.get('file')} "
         f"{loc.get('function') or ''}",
-        "Rules, each checked by BOSS: never edit any test file (the new one included); change "
+        "Rules, each checked by BOSS: never edit or add any test file (the new one included; "
+        "when a reviewer asks for a test, BOSS asks for it in the test stage); change "
         "only the diagnosed file and what it imports or is imported by (or a file the diagnosis "
         f"named with a reason); at most {limits.max_files} files and {limits.max_diff_lines} "
         "changed lines; no new dependency, image or compose change; no secret; never weaken a "
@@ -689,7 +701,8 @@ class Build:
                 self.move(sf.FIXING, f"{sf.AGENT_NAME}: the reviewers found "
                                      f"{len(findings)} thing(s); fixing them (round {rounds}).",
                           repair_rounds=rounds)
-                if _cites_tests(findings, tests):
+                kind = test_round(findings, tests)
+                if kind == "rewrite":
                     # A FINDING ABOUT THE NEW TEST cannot be fixed by a fix that may not edit
                     # it. The round starts from the base: the test is written again (red on the
                     # base again, every gate again), then the fix.
@@ -698,6 +711,13 @@ class Build:
                              "writing it again from BOSS as it is, then the fix.")
                     tests = self.reproduce(work, base_sha, diagnosis, feedback=note,
                                            rewrite=True)
+                    red = (self.sfx().get("red_green") or {}).get("base") or {}
+                elif kind == "add":
+                    # A FINDING THAT ASKS FOR ANOTHER TEST (the real-engine Replay A, attempt 3:
+                    # "add a regression covering this combination"). Only the test stage writes
+                    # tests: the red test stands, the code goes back to the base, the test stage
+                    # ADDS the asked-for test, then the fix is written again.
+                    tests = self.add_tests(work, base_sha, diagnosis, tests, note=note)
                     red = (self.sfx().get("red_green") or {}).get("base") or {}
                 continue
             break
@@ -847,6 +867,68 @@ class Build:
             raise Stop("secrets", feedback.split(". Your test")[0])
         raise Stop("no_reproduction", feedback.split("\n")[0] if feedback else "no red test")
 
+    def add_tests(self, work: Path, base_sha: str, diagnosis: dict[str, Any],
+                  tests: dict[str, str], *, note: str) -> dict[str, str]:
+        """A repair round's TEST STAGE: the red test(s) stay exactly as they are, the code is
+        back at the base, and Mender adds the test(s) the reviewers asked for. An added test may
+        PASS on the base (it pins a behaviour that must not change, such as a guard); together
+        with the red test the set must still fail on the base through the entry point, and every
+        new test must pass with the fix (red_then_green, among the gates)."""
+        self.boundary()
+        src.discard(work, [c.path for c in src.changes(work, base_sha)
+                           if not sp.is_test_path(c.path)], base_sha)
+        self.say(f"{sf.AGENT_NAME}: the reviewers asked for a test; the red test stays, adding "
+                 "the one they asked for, then writing the fix again.")
+        location = diagnosis.get("location") or {}
+        symptom = str((self.sfx().get("evidence") or {}).get("symptom") or "")
+        entry = entry_point(self.sfx(), work)
+        feedback = note
+        for _ in range(MAX_RED_TRIES):
+            self.turn(self.engines.builder, "self_fix_write_test",
+                      write_test_prompt(self.sfx(), diagnosis, feedback, work=work,
+                                        keep=tests), work, read_only=False,
+                      model=self.engines.builder_model)
+            changes = src.changes(work, base_sha)
+            code = si.non_test_paths(changes)
+            if code:
+                src.discard(work, code, base_sha)
+                changes = src.changes(work, base_sha)
+            edited = si.tests_edited(tests, src.snapshot(work, tests))
+            if edited:
+                raise Stop("tests_weakened", f"the test stage edited the red test it was told "
+                                             f"to keep ({', '.join(edited)})")
+            weakened = si.tests_not_weakened(changes, location=location)
+            if not weakened.ok:
+                raise Stop("tests_weakened", weakened.why)
+            added = [c.path for c in changes if c.after is not None and c.path not in tests]
+            if not added:
+                feedback = note + "\n\nNo test was added: add the test the reviewers asked for."
+                continue
+            secrets = si.no_committed_secrets(changes)
+            if not secrets.ok:
+                feedback = (f"{secrets.why}. Your tests are still in place: change only those "
+                            "values, to placeholders of at most three characters.")
+                continue
+            every = {**tests, **src.snapshot(work, added)}
+            run, outcomes = self.runner(work, _test_ids(every), settings=self.settings,
+                                        timeout=TEST_TIMEOUT)
+            red, why = si.is_red(run, location=location, symptom=symptom)
+            if red:
+                drives = si.drives_entry_point(every, entry, outcomes)
+                red, why = drives.ok, drives.why
+            if red:
+                self.write(red_green={**(self.sfx().get("red_green") or {}),
+                                      "test_files": every, "tests": list(every),
+                                      "base": run.as_dict(), "added": added})
+                return every
+            feedback = (note + f"\n\nThe tests together no longer fail on BOSS as it is the way "
+                        f"they must ({why}); the red test must keep failing, and an added test "
+                        "may only import what exists now.\n"
+                        + (f"Their output:\n{run.output[-2000:]}" if run.output else ""))
+            src.discard(work, added, base_sha)
+        raise Stop("no_reproduction", "the test stage could not add the test the reviewers "
+                                      "asked for: " + feedback.split("\n")[-1][:300])
+
     def fix(self, work: Path, base_sha: str, diagnosis: dict[str, Any], tests: dict[str, str],
             *, red_output: str, note: str) -> None:
         self.boundary()
@@ -863,6 +945,15 @@ class Build:
             # coder_did_not_edit_tests: a fix that changed its own test proves nothing. Final.
             raise Stop("tests_weakened", f"the fix edited the test it must pass "
                                          f"({', '.join(edited)})")
+        # THE FIX STAGE NEVER WRITES A TEST FILE. A new test file it added is removed (only the
+        # test stage writes tests, under the red-test rules); an edit to an existing BOSS test
+        # is left for tests_not_weakened, which refuses it: that is a weakening attempt.
+        stray = [c.path for c in src.changes(work, base_sha)
+                 if c.before is None and sp.is_test_path(c.path) and c.path not in tests]
+        if stray:
+            src.discard(work, stray, base_sha)
+            self.say(f"{sf.AGENT_NAME}: the fix stage wrote a test file "
+                     f"({', '.join(stray[:3])}); it was removed: only the test stage adds tests.")
 
     def check(self, work: Path, base_sha: str, diagnosis: dict[str, Any],
               tests: dict[str, str], source: Path) -> Optional[si.GateResult]:
@@ -1107,6 +1198,18 @@ _ASKS_FOR_TEST = re.compile(r"\badd (?:a |an |one )?(?:new )?(?:regression|test)
                             r"\bhas no (?:regression )?test|\buntested\b|\btest(?:s)? "
                             r"(?:covering|that covers|for this)|\bregression (?:test )?covering",
                             re.I)
+
+
+def test_round(findings: list[dict[str, Any]], tests: Mapping[str, str]) -> Optional[str]:
+    """What a repair round's open findings need from the TEST stage: "rewrite" when one finds
+    fault with Mender's own new test (named by path or file name), "add" when one asks for
+    another test, else None (the fix stage alone answers them)."""
+    names = {p for p in tests} | {Path(p).name for p in tests}
+    if any(any(n and n in str(f.get("what") or "") for n in names) for f in findings):
+        return "rewrite"
+    if any(_ASKS_FOR_TEST.search(str(f.get("what") or "")) for f in findings):
+        return "add"
+    return None
 
 
 def _cites_tests(findings: list[dict[str, Any]], tests: Mapping[str, str]) -> bool:

@@ -163,6 +163,9 @@ def test_a_finding_reaches_the_repair_round_word_for_word():
              "refusal guards ahead of the new destructive step and add a regression covering "
              "this combination.")
     assert b._cites_tests([{"what": asked}], tests), "a finding that asks for a test goes to RED"
+    assert b.test_round([{"what": asked}], tests) == "add", "the red test stays; one is added"
+    assert b.test_round([{"what": "engine/tests/test_new.py:47 — a helper"}], tests) == "rewrite"
+    assert b.test_round([{"what": "stack_deploy.py:1 — quoting"}], tests) is None
 
 
 # ── the lanes ───────────────────────────────────────────────────────────────────────────────

@@ -31,6 +31,10 @@ THE SCRIPTS (each must end in the same BOSS state on every run):
                           (diagnosis_injection.json)                       → refused protected_path
     no_red                the test passes on the base (no_red_tests/)      → refused no_reproduction
     review_blocker        the first security review finds a BLOCKER; the repair round clears it
+    review_asks_for_test  the first security review asks for another test; the test stage keeps the
+                          red test and adds tests_added/, the fix again   → awaiting_approval
+    fix_writes_test       the fix stage also writes a test file (removed: only the test stage
+                          adds tests)                                     → awaiting_approval
     secret_in_test        the first test carries a secret-shaped fixture value; told so at RED, the
                           next turn writes it without one                  → awaiting_approval
     review_test_finding   the first regression review finds fault with the NEW test; the round
@@ -47,7 +51,7 @@ ENV = "BOSS_SCRIPTED_SELF_FIX"
 SCRIPTS = ("good_fix", "same_cause", "breaks_health", "weakens_test", "protected_path",
            "protected_diagnosis", "protected_then_outside", "protected_once", "out_of_scope",
            "injection_follower", "no_red", "review_blocker", "review_test_finding",
-           "secret_in_test")
+           "secret_in_test", "review_asks_for_test", "fix_writes_test")
 
 
 def selected() -> tuple[str, Optional[Path]]:
@@ -106,6 +110,9 @@ def play(stage: str, prompt: str, root: Path, *, read_only: bool, state: Any
             path = fixture / "diagnosis.json"
         return json.dumps(json.loads(path.read_text(encoding="utf-8"))), written
     if stage == "self_fix_write_test" and not read_only:
+        if "KEEP these red tests" in prompt and (fixture / "tests_added").is_dir():
+            _write_tree(fixture / "tests_added", root, written)
+            return "TEST: " + ", ".join(written), written
         tests = fixture / ("no_red_tests" if script == "no_red" else "tests")
         _write_tree(tests, root, written)
         if script == "secret_in_test" and "secret_in_test" not in state.fired:
@@ -118,6 +125,11 @@ def play(stage: str, prompt: str, root: Path, *, read_only: bool, state: Any
         # Every writing turn starts from what is in the workspace (a repair round may start from
         # the base again): the fix is applied when it is not already there.
         said = [_apply(root, fixture / "fix.patch", written)]
+        if script == "fix_writes_test" and "fix_writes_test" not in state.fired:
+            state.fired.add("fix_writes_test")
+            stray = root / "engine" / "tests" / "test_written_by_the_fix_stage.py"
+            stray.write_text("def test_nothing():\n    assert 1 == 1\n", encoding="utf-8")
+            written.append("engine/tests/test_written_by_the_fix_stage.py")
         extra = {"weakens_test": "weaken.patch", "protected_path": "protected.patch",
                  "protected_once": "protected.patch",
                  "out_of_scope": "out_of_scope.patch"}.get(script)
@@ -133,6 +145,12 @@ def play(stage: str, prompt: str, root: Path, *, read_only: bool, state: Any
         state.fired.add("review_blocker")
         return ("FINDING: BLOCKER engine/boss_engine/services/x.py:1 — scripted fault: a quoted "
                 "value is not quoted\nVERDICT: FINDINGS"), written
+    if stage == "self_fix_security_check" and script == "review_asks_for_test" \
+            and "review_asks_for_test" not in state.fired:
+        state.fired.add("review_asks_for_test")
+        return ("FINDING: MAJOR engine/boss_engine/services/widget.py:4 — scripted fault: keep "
+                "the old behaviour for two and add a regression covering this combination.\n"
+                "VERDICT: FINDINGS"), written
     if stage == "self_fix_regression" and script == "review_test_finding" \
             and "review_test_finding" not in state.fired:
         state.fired.add("review_test_finding")
