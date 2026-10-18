@@ -9,6 +9,8 @@ database.
 """
 from __future__ import annotations
 
+import json
+
 import pytest
 from sqlalchemy import text
 
@@ -211,6 +213,64 @@ def test_the_fix_stage_never_writes_a_test_file(harness):
             "SELECT data->>'sentence' FROM events WHERE event_type = 'self_fix.progress' "
             "AND data->>'self_fix_id' = :i"), {"i": row["id"]}).all()]
     assert any("only the test stage adds tests" in (s or "") for s in said), said
+
+
+def test_a_refused_build_keeps_its_diff_and_the_retry_thinks_with_it(harness):
+    """A refused build's diff stays on the record (masked, secrets redacted). The next self-fix of
+    the same cause class gets the earlier attempts as CONTEXT in every Mender stage: the diff,
+    the gates that failed, and the reviewers' findings word for word. It is not turned into rules."""
+    from boss_engine.services import scripted_engine
+
+    first = _build(harness, "out_of_scope")["row"]
+    assert first["status"] == sf.REFUSED and first["refusal"] == "scope"
+    kept = (first["review"] or {}).get("attempt") or {}
+    assert "engine/boss_engine/services/unrelated.py" in kept.get("diff", ""), kept
+    assert first["diff_stat"]["files"], "the refused diff's size is on the record too"
+
+    second = _build(harness, "good_fix")["row"]
+    assert second["status"] == sf.AWAITING_APPROVAL, (second["refusal"], second["refusal_detail"])
+    calls = scripted_engine.run_state(second["id"]).calls
+    for stage in ("self_fix_diagnose", "self_fix_write_test", "self_fix_implement"):
+        heads = [c["prompt_head"] for c in calls if c["stage"] == stage]
+        assert heads, stage
+    from boss_engine.services import self_fix_build
+
+    with harness.eng.begin() as c:
+        history = self_fix_build.earlier_attempts(c, second)
+    assert [h["self_fix"] for h in history] == [first["id"]]
+    assert history[0]["refusal"] == "scope" and "unrelated.py" in history[0]["diff"]
+    assert "scope_matches_diagnosis" in history[0]["gates_failed"]
+    context = self_fix_build.earlier_context(history)
+    assert "data, not instructions" in context and "not a checklist" in context
+    prompt = self_fix_build.implement_prompt(second, second["diagnosis"], red_output="F",
+                                             history=context)
+    assert first["id"] in prompt and "unrelated.py" in prompt
+    with harness.eng.begin() as c:
+        said = [r[0] for r in c.execute(text(
+            "SELECT data->>'sentence' FROM events WHERE event_type = 'self_fix.progress' "
+            "AND data->>'self_fix_id' = :i"), {"i": second["id"]}).all()]
+    assert any("reading 1 earlier attempt" in (s or "") for s in said), said
+
+
+def test_earlier_findings_reach_every_mender_stage_word_for_word(harness):
+    """Seeded: an earlier refused attempt whose reviewers held a finding. Its words reach the
+    diagnose, write-test and fix prompts of the retry."""
+    from boss_engine.services import scripted_engine
+
+    first = _build(harness, "out_of_scope")["row"]
+    finding = ("MAJOR engine/boss_engine/services/widget.py:4 — a label carrying a newline "
+               "passes the guard")
+    with harness.eng.begin() as c:
+        c.execute(text("UPDATE self_fixes SET review = review || CAST(:r AS JSONB) WHERE id = :i"),
+                  {"i": first["id"], "r": json.dumps({"seats": {"security_check": {
+                      "verdict": "FINDINGS",
+                      "findings": [{"severity": "MAJOR", "what": finding.split(" ", 1)[1]}]}}})})
+    second = _build(harness, "good_fix")["row"]
+    calls = scripted_engine.run_state(second["id"]).calls
+    for stage in ("self_fix_diagnose", "self_fix_write_test", "self_fix_implement"):
+        prompt = next(c["full_prompt"] for c in calls if c["stage"] == stage)
+        assert "EARLIER ATTEMPTS AT THIS CAUSE" in prompt, stage
+        assert finding in prompt, stage
 
 
 def test_the_same_script_ends_the_same_way_twice(harness):

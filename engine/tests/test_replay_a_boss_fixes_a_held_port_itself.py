@@ -581,6 +581,35 @@ def _oracle(stack_worktree: Path) -> dict:
     return {"passed": passed, "failed": failed}
 
 
+def _seed_history(r: "Replay") -> list[str]:
+    """EARLIER ATTEMPTS AT THIS CAUSE, from BOSS_SELF_FIX_REPLAY_HISTORY (a JSON list of real,
+    recorded attempts: their status, refusal, diagnosis, gates, reviewers' findings, diff when it
+    was kept), put on this replay's record as refused self-fixes of the same cause class, as an
+    install that had tried before would hold them. Seeded BEFORE the claim, so the attempts cap
+    counts them as it would."""
+    path = (os.environ.get("BOSS_SELF_FIX_REPLAY_HISTORY") or "").strip()
+    if not path:
+        return []
+    klass = sf.class_signature("deploy:port_held:8000")
+    ids = []
+    with r.eng.begin() as c:
+        for n, rec in enumerate(json.loads(Path(path).read_text())):
+            sid = f"sfx_hist{uuid.uuid4().hex[:10]}"
+            _insert_awaited(c, r.project, "self_fixes", sid, rec.get("status") or "refused")
+            c.execute(text(
+                "UPDATE self_fixes SET signature = 'deploy:port_held:8000', class_signature = :k, "
+                "step_kind = 'deploy', refusal = :rf, refusal_detail = :rd, "
+                "diagnosis = CAST(:d AS JSONB), gates = CAST(:g AS JSONB), "
+                "review = CAST(:rv AS JSONB), red_green = CAST(:rg AS JSONB), "
+                "created_at = now() - make_interval(hours => :h) WHERE id = :i"),
+                {"i": sid, "k": klass, "rf": rec.get("refusal"), "rd": rec.get("refusal_detail"),
+                 "d": json.dumps(rec.get("diagnosis") or {}), "g": json.dumps(rec.get("gates") or {}),
+                 "rv": json.dumps(rec.get("review") or {}),
+                 "rg": json.dumps(rec.get("red_green") or {}), "h": n + 1})
+            ids.append(sid)
+    return ids
+
+
 def _deploy_on_the_running_build(r: Replay, host: "FakeHost", layout: dict, outcomes: list):
     """The deploy capability, as the resumed step runs it: on the build BOSS now runs (the
     installed stack), against the model of the real host. Its plan, approval and apply are the
@@ -623,6 +652,9 @@ def _run_replay(r: Replay, monkeypatch, *, layout: dict) -> dict:
         first = _failed_deployment(c, r.project, PORT_FAILURE)
         _park_on(c, step_row, first)
     r.mark("deploy failed: port 8000 held by the earlier release's app container")
+    seeded = _seed_history(r)
+    if seeded:
+        r.mark(f"history: {len(seeded)} earlier attempt(s) at this cause on the record")
     _tick(r)
     with r.eng.begin() as c:
         step = _steps(c, run_id)["deploy"]
@@ -635,6 +667,12 @@ def _run_replay(r: Replay, monkeypatch, *, layout: dict) -> dict:
                                  source=r.mirror).run()
     with r.eng.begin() as c:
         sfx = sf.get(c, sfx_id)
+        read = c.execute(text(
+            "SELECT data->>'sentence' FROM events WHERE event_type = 'self_fix.progress' AND "
+            "data->>'self_fix_id' = :i AND data->>'sentence' LIKE '%earlier attempt%'"),
+            {"i": sfx_id}).scalar()
+    if read:
+        r.mark(read)
     r.mark(f"Mender build ended {sfx['status']} (engine {sfx.get('engine')}, "
            f"${int(sfx.get('cost_micros') or 0) / 1e6:.2f}, rounds {sfx.get('repair_rounds')})")
     if sfx["status"] != sf.AWAITING_APPROVAL:
@@ -725,6 +763,7 @@ def _report_build(r: Replay, sfx: dict, built: dict) -> None:
              "green": (sfx.get("red_green") or {}).get("head"),
              "test_files": (sfx.get("red_green") or {}).get("test_files"),
              "red_attempts": (sfx.get("red_green") or {}).get("attempts"),
+             "attempt_diff": ((sfx.get("review") or {}).get("attempt") or {}).get("diff"),
              "progress": sfx.get("progress"), **_seats(sfx)}
     existing = json.loads(Path(path).read_text()) if Path(path).exists() else []
     Path(path).write_text(json.dumps(existing + [entry], indent=1, default=str))

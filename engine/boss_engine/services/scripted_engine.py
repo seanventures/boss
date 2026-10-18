@@ -151,7 +151,9 @@ class ScriptedEngine:
         stage = str(ctx.get("stage") or "").strip().lower() or _stage_from_prompt(prompt)
         state = run_state(ctx.get("run_id"))
         state.calls.append({"stage": stage, "read_only": read_only, "resumed": resume_session_id,
-                            "max_turns": max_turns, "prompt_head": (prompt or "")[:4000]})
+                            "max_turns": max_turns, "prompt_head": (prompt or "")[:4000],
+                            # The whole prompt, so a conformance test can see what reached it.
+                            "full_prompt": prompt or ""})
         if "crash" in self.faults:
             record_llm_call(engine_name=self.engine, usage={"model": MODEL}, latency_ms=0,
                             ok=False, error="scripted fault: crash")
