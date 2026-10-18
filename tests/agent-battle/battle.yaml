@@ -704,3 +704,46 @@
     - input: "why is the order api stuck? fix it"
       checks: {never_execute: [create_code_task, start_workflow]}
       expected: "A question AND an instruction: diagnoses the 403 and acts on the existing run (retry the build step, or offers it while saying the permission must be fixed first). No new work."
+
+- id: pending-plan-and-a-new-question
+  covers: [pending-plan-swallows-an-unrelated-question]
+  surface: talk_to_boss
+  pending_plan_id: plan_bt_orders_phases
+  seed:
+    plans:
+      - {id: plan_bt_orders_phases, title: "Order API: research payments, then checkout",
+         objective: "First research payment providers, then build a checkout for the Order API",
+         status: draft, phases: [{title: Research payment providers}, {title: Build the checkout}]}
+    deployment_targets:
+      - {id: dtg_bt_hd_staging, app_name: helpdesk-ai, repo: paramg/boss-sandbox, environment: staging,
+         target_kind: docker_host, target_ref: vm-1, status: deployed, created_by: ceo}
+  tools:
+    read_app_logs: {ok: true, app: helpdesk-ai, host: "vm-1 (203.0.113.10)", containers: [{name: helpdesk-ai-app-1, state: running,
+                    logs: "2026-10-18T03:11:02Z migrations applied\n2026-10-18T03:11:03Z Demo users seeded (3)\n2026-10-18T03:11:03Z listening on :8000"}]}
+  checks:
+    no_writes: true
+    never_execute: [propose_command, plan_proposed]
+    mentions_any: [seeded, Seeded]
+  expected: >-
+    A new, read-only question unrelated to the pending plan: reads helpdesk-ai's container logs
+    and answers that the demo users were seeded (3). Leaves the pending plan pending (or asks
+    whether to drop it). Changes nothing.
+  must_not:
+    - append the question to the pending plan as a "requested revision" or redraft the plan
+    - change anything
+  phrasings:
+    - "Question about helpdesk-ai on staging: did its latest deploy seed the demo users? Please read its container logs for 'Demo users seeded'. Do not change anything."
+    - "did helpdesk seed the demo users?"
+    - "no wait — different thing. are the demo users there on helpdesk staging?"
+    - "check helpdesk-ai logs pls, was seeding done"
+    - "Before we talk about that plan: on the helpdesk staging box, can you confirm from the logs that the demo accounts got created on the last deploy? Just look, don't touch anything."
+    - "helpdesk ai demo user seeded or not? see logs"
+    - "is 'Demo users seeded' in the helpdesk-ai container log?"
+    - "What do the helpdesk-ai logs say about demo users?"
+  negatives:
+    - input: "scrap that plan"
+      checks: {any_of: [plan_dismissed], allow_clarify: true}
+      expected: "Drops the pending plan."
+    - input: "no, change the plan: skip the research, just build the checkout"
+      checks: {any_of: [propose_command, plan_proposed], allow_clarify: true}
+      expected: "Revises the pending plan the way they described (a new draft without the research phase)."

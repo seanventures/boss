@@ -210,7 +210,7 @@ def _jsonable(row: dict) -> dict:
     return {k: (json.dumps(v) if isinstance(v, (dict, list)) else v) for k, v in row.items()}
 
 
-_JSONB = {"input", "output", "state", "data", "options", "recommendation", "spec", "context",
+_JSONB = {"phases", "success_criteria", "risks", "input", "output", "state", "data", "options", "recommendation", "spec", "context",
           "finalize_ctx", "health_checks", "domains", "required_resources", "secret_refs",
           "rollback_points", "path_globs"}
 
@@ -257,19 +257,21 @@ def prepare(engine, settings, scenario: dict, model_settings: dict) -> str:
                             "LIMIT 1")).mappings().first()
         # The world, fresh: this scenario's rows only.
         for table in ("workflow_step_runs", "workflow_runs", "code_task_runs", "decisions",
-                      "deployment_targets"):
+                      "deployment_targets", "plans"):
             c.execute(text(f"DELETE FROM {table} WHERE project_id = :p"), {"p": pid})
         c.execute(text("DELETE FROM events WHERE project_id = :p AND actor = 'battle'"),
                   {"p": pid})
         seed = scenario.get("seed") or {}
         for table in ("deployment_targets", "workflow_runs", "workflow_step_runs",
-                      "code_task_runs", "decisions", "events"):
+                      "code_task_runs", "decisions", "events", "plans"):
             for raw in seed.get(table) or []:
                 row = {**raw, "project_id": pid}
                 if table == "workflow_runs":
                     row.setdefault("workflow_definition_id", wf["id"])
                     row.setdefault("workflow_version_id", wf["vid"])
                     row.setdefault("actor", "ceo")
+                if table == "plans":
+                    row.setdefault("created_by", "ceo")
                 if table == "events":
                     row.setdefault("id", "evt_bt_" + uuid.uuid4().hex[:12])
                     row["actor"] = "battle"
@@ -292,10 +294,14 @@ def run_talk_to_boss(engine, settings, pid: str, sc: dict, case: dict) -> dict:
         turn = IntentRouter(settings).route_turn(
             c, project_id=pid, actor="ceo",
             messages=[{"role": "user", "content": case["input"]}], manifest=manifest,
-            external_ref=sc.get("external_ref"))
+            external_ref=sc.get("external_ref"), pending_plan_id=sc.get("pending_plan_id"))
     offered = [str(p.get("tool") or "") for p in (turn.proposed_actions or [])]
+    kinds = [str(a.get("kind") or "") for a in (turn.actions or [])]
+    if sc.get("pending_plan_id") and not ({"plan_dismissed", "plan_dispatched"} & set(kinds)) \
+            and not turn.pending_confirmation:
+        kinds.append("plan_kept")
     return {"reply": turn.reply or "",
-            "actions": [str(a.get("kind") or "") for a in (turn.actions or [])],
+            "actions": kinds,
             "offered": offered,
             "decision": getattr(turn, "decision", None) or {},
             "pending_plan": bool(turn.pending_confirmation)}
