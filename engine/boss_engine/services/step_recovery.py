@@ -385,7 +385,8 @@ def host_state(connection: Connection, settings: Any, *, host_id: Optional[str],
     marker = str(target_dir or "").rstrip("/")
     probe = ("echo BOSS_RECOVERY_PROBE; docker ps -a --format '{{.Names}}\t"
              "{{.Label \"com.docker.compose.project\"}}\t"
-             "{{.Label \"com.docker.compose.project.working_dir\"}}\t{{.State}}\t{{.Ports}}' "
+             "{{.Label \"com.docker.compose.project.working_dir\"}}\t{{.State}}\t{{.Ports}}\t"
+             "{{.Networks}}' "
              "2>&1 | head -300")
     try:
         access = stack_deploy.host_access_for(connection, settings, host)
@@ -399,9 +400,10 @@ def host_state(connection: Connection, settings: Any, *, host_id: Optional[str],
             continue
         name, project, workdir, state = (p.strip() for p in parts[:4])
         ports = parts[4].strip() if len(parts) > 4 else ""
+        networks = parts[5].strip() if len(parts) > 5 else ""
         own = bool(marker) and (workdir == marker or workdir.startswith(marker + "/"))
         containers.append({"name": name, "project": project, "state": state, "ports": ports,
-                           "own": own})
+                           "own": own, **({"networks": networks} if networks else {})})
     projects: dict[str, list[dict[str, Any]]] = {}
     for c in containers:
         if c["project"]:
@@ -432,6 +434,14 @@ def host_state(connection: Connection, settings: Any, *, host_id: Optional[str],
             "target_dir": marker, "keep_project": keep_project,
             "own_containers": [c for c in containers if c["own"]][:30],
             "own_projects": own_projects, "port": port, "port_holders": holders,
+            # THE RESOURCES BOSS PROVISIONED FOR THIS APP (its shared compose project: res-db
+            # and the like) and the networks they are on — what tells "the app cannot resolve
+            # res-db" apart as BOSS's wiring (the app is on another network) from the app's own
+            # bug. They are BOSS's, never another app's, so the agent may see them.
+            "resources_project": keep_project,
+            "resource_containers": [{k: c[k] for k in ("name", "state", "networks") if k in c}
+                                    for c in containers if keep_project
+                                    and c["project"] == keep_project][:12],
             "exited_logs": logs, "containers_seen": len(containers)}
 
 

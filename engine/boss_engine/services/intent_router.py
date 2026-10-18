@@ -119,9 +119,10 @@ _DECIDED_MEANS = {
                     "run history), report the cause and what fixes it; change nothing. Offer "
                     "each fix as a button (propose_action)."),
     "operate": ("an instruction about work that ALREADY EXISTS. Read it, then carry it out ON "
-                "THAT WORK with the tool that acts on it — retry_workflow_step for a run's step, "
-                "retry_code_task (with a fix_note) for a build's own lineage, redeploy for a "
-                "deployment, skip/recheck for a stopped run. Never start new work for it. If "
+                "THAT WORK with the tool that acts on it — retry_workflow_step for a workflow run's "
+                "step (also when the build in question IS that step: retry the step, not the "
+                "build), retry_code_task (with a fix_note) for a build that is not a workflow "
+                "step, redeploy for a deployment, skip/recheck for a stopped run. Never start new work for it. If "
                 "what they asked would destroy or replay something they may not intend (a "
                 "removal, deleted data), ask ONE question instead. Report only what a tool did."),
     "new_code_change": ("a request for NEW work. Offer it: create_code_task for one scoped "
@@ -1779,7 +1780,36 @@ class IntentRouter:
             _log.info("decision context unavailable: %s", exc)
         if objective is not None:
             context["pending plan"] = objective[:1500]
+        glance = self._project_glance(connection, project_id)
+        if glance:
+            context["this project"] = glance
         return context
+
+    @staticmethod
+    def _project_glance(connection, project_id: str) -> dict:
+        """What exists in this project, in a few lines, so "roll back helpdesk" or "retry the
+        build" can be read against the apps and runs that are actually there."""
+        out: dict[str, Any] = {}
+        queries = {
+            "recent workflow runs": (
+                "SELECT id, status, input->>'title' AS title, left(error, 200) AS error "
+                "FROM workflow_runs WHERE project_id = :p ORDER BY created_at DESC LIMIT 6"),
+            "recent builds": (
+                "SELECT id, status, phase, title, left(error, 160) AS error FROM code_task_runs "
+                "WHERE project_id = :p ORDER BY created_at DESC LIMIT 6"),
+            "apps' deployment targets": (
+                "SELECT id, app_name, environment, status FROM deployment_targets "
+                "WHERE project_id = :p ORDER BY updated_at DESC LIMIT 6"),
+        }
+        for label, sql in queries.items():
+            try:
+                with connection.begin_nested():
+                    rows = connection.execute(text(sql), {"p": project_id}).mappings().all()
+            except Exception:  # noqa: BLE001 — a glance, not a requirement
+                continue
+            if rows:
+                out[label] = [" · ".join(str(v) for v in r.values() if v) for r in rows]
+        return out
 
     def _decide_turn(self, connection, project_id: str, messages: list,
                      manifest: CapabilityManifest, *, external_ref: Optional[str],
@@ -2111,6 +2141,14 @@ class IntentRouter:
             "• git_history — when something changed and why.\n"
             "• get_config / explain_run / get_run_activity — effective settings; where a run's "
             "wall clock and money went.\n\n"
+            "SAY WHOSE FAULT IT IS: BOSS's (its planner, its wiring, its tokens, its image), "
+            "the app's own code or manifest, or the host. BOSS's own error text is BOSS's "
+            "claim, not a fact: a remedy it prints (\"install Java\", \"grant the "
+            "permission\") can be BOSS looking in the wrong place — compare it with the record "
+            "(which folder it planned from, what the token asked for, which network the app "
+            "ran in). When the cause is BOSS's, say so plainly in the first sentence, and never "
+            "tell the person to change their app or their machine to work around it; say what "
+            "BOSS must change, and offer a retry only for after that.\n\n"
             "WHAT YOU CAN CHANGE — you are not limited to describing problems:\n"
             "• find_starved_work — work that is QUEUED and not progressing, and what holds the "
             "worker slot. Starvation is the ABSENCE of progress, so nothing appears as failed "

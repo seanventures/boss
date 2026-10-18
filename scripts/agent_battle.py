@@ -210,7 +210,9 @@ def _jsonable(row: dict) -> dict:
     return {k: (json.dumps(v) if isinstance(v, (dict, list)) else v) for k, v in row.items()}
 
 
-_JSONB = {"input", "output", "state", "data", "options", "recommendation", "spec", "context"}
+_JSONB = {"input", "output", "state", "data", "options", "recommendation", "spec", "context",
+          "finalize_ctx", "health_checks", "domains", "required_resources", "secret_refs",
+          "rollback_points", "path_globs"}
 
 
 def prepare(engine, settings, scenario: dict, model_settings: dict) -> str:
@@ -254,13 +256,14 @@ def prepare(engine, settings, scenario: dict, model_settings: dict) -> str:
                             "workflow_versions v ON v.workflow_definition_id = d.id "
                             "LIMIT 1")).mappings().first()
         # The world, fresh: this scenario's rows only.
-        for table in ("workflow_step_runs", "workflow_runs", "code_task_runs", "decisions"):
+        for table in ("workflow_step_runs", "workflow_runs", "code_task_runs", "decisions",
+                      "deployment_targets"):
             c.execute(text(f"DELETE FROM {table} WHERE project_id = :p"), {"p": pid})
         c.execute(text("DELETE FROM events WHERE project_id = :p AND actor = 'battle'"),
                   {"p": pid})
         seed = scenario.get("seed") or {}
-        for table in ("workflow_runs", "workflow_step_runs", "code_task_runs", "decisions",
-                      "events"):
+        for table in ("deployment_targets", "workflow_runs", "workflow_step_runs",
+                      "code_task_runs", "decisions", "events"):
             for raw in seed.get(table) or []:
                 row = {**raw, "project_id": pid}
                 if table == "workflow_runs":
@@ -404,7 +407,7 @@ def deterministic(case: dict, got: dict, calls: list[dict]) -> list[str]:
         if writes:
             fails.append(f"wrote on a question: {writes}")
     words = checks.get("mentions_any") or []
-    if words and not any(w.lower() in str(got.get("reply") or "").lower() for w in words):
+    if words and not any(str(w).lower() in str(got.get("reply") or "").lower() for w in words):
         fails.append(f"reply mentions none of {words}")
     rec = (got.get("recovery") or {}).get("action")
     if checks.get("recovery_in") and rec not in checks["recovery_in"]:

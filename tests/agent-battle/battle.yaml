@@ -287,7 +287,7 @@
         - {name: helpdesk-ai-app-1, project: helpdesk-ai, state: running, ports: "0.0.0.0:8000->8000/tcp", own: true}
     own_projects: [helpdesk-ai]
   variants:
-    - {failure: {headline: "docker compose up failed", log_tail: "Error response from daemon: driver failed programming external connectivity on endpoint deploy-app-1: Bind for 0.0.0.0:8000 failed: port is already allocated"}}
+    - {failure: {headline: "Port 8000 on vm-1 is already held by another container, so the app could not start.", action: "Stop what holds the port (BOSS retires this app's own earlier release by itself), or publish the app on another port.", log_tail: "Error response from daemon: driver failed programming external connectivity on endpoint deploy-app-1: Bind for 0.0.0.0:8000 failed: port is already allocated"}}
     - {failure: {headline: "the app could not publish port 8000", log_tail: "Error starting userland proxy: listen tcp4 0.0.0.0:8000: bind: address already in use"}}
     - {failure: {headline: "compose up exited 1", log_tail: "Container deploy-app-1  Error\nBind for 0.0.0.0:8000 failed: port is already allocated\nError: failed to start containers: deploy-app-1"}}
     - {failure: {headline: "port 8000 is in use on vm-1", log_tail: "listen tcp :8000: bind: address already in use"}}
@@ -323,6 +323,7 @@
   kind: deploy
   evidence:
     <<: *deploy_base
+    manifest: "kind: compose\nversion: 1\ndir: /opt/boss-apps/helpdesk-ai\nservices: [app]\nresources: [postgres]\nenv: {DATABASE_URL: \"postgres://app@res-db:5432/helpdesk\"}"
     host_state:
       read: true
       host: vm-1
@@ -332,17 +333,22 @@
       own_projects: []
       port: null
       port_holders: []
-      exited_logs: "--- helpdesk-ai-app-1 (last lines) ---\nError: getaddrinfo EAI_AGAIN res-db\n    at GetAddrInfoReqWrap.onlookup [as oncomplete] (node:dns:107:26)"
+      own_containers:
+        - {name: helpdesk-ai-app-1, project: helpdesk-ai, state: restarting, ports: "", own: true, networks: helpdesk-ai_default}
+      resources_project: deploy
+      resource_containers:
+        - {name: deploy-res-db-1, state: running, networks: deploy_default}
+      exited_logs: "--- helpdesk-ai-app-1 (last lines) ---\n(see the failure's log tail)"
     own_projects: []
   variants:
-    - {failure: {headline: "health check failed after 600s", log_tail: "Error: getaddrinfo EAI_AGAIN res-db\n    at GetAddrInfoReqWrap.onlookup (node:dns:107:26)"}}
-    - {failure: {headline: "the app exited at start", log_tail: "psycopg2.OperationalError: could not translate host name \"res-db\" to address: Temporary failure in name resolution"}}
-    - {failure: {headline: "app container restarting", log_tail: "PrismaClientInitializationError: Can't reach database server at `res-db`:`5432`"}}
-    - {failure: {headline: "health 000 for 10 minutes", log_tail: "getaddrinfo ENOTFOUND res-db"}}
-    - {failure: {headline: "the app could not connect to its database", log_tail: "Error: connect ECONNREFUSED: getaddrinfo EAI_AGAIN res-db:5432"}}
-    - {failure: {headline: "start failed", log_tail: "sqlalchemy.exc.OperationalError: (psycopg.OperationalError) failed to resolve host 'res-db': [Errno -3] Temporary failure in name resolution"}}
-    - {failure: {headline: "app exited (code 1)", log_tail: "dial tcp: lookup res-db on 127.0.0.11:53: no such host"}}
-    - {failure: {headline: "health check timed out", log_tail: "java.net.UnknownHostException: res-db: Name or service not known"}}
+    - {failure: {headline: "The app could not reach res-db, the service BOSS provisioned for it on vm-1, so it exited at start.", action: "This is BOSS's network wiring, not the app: the app's compose project must share the resources' project. Update BOSS and deploy again.", cause: host, log_tail: "Error: getaddrinfo EAI_AGAIN res-db\n    at GetAddrInfoReqWrap.onlookup (node:dns:107:26)"}}
+    - {failure: {headline: "The app could not reach res-db, the service BOSS provisioned for it on vm-1, so it exited at start.", action: "This is BOSS's network wiring, not the app: the app's compose project must share the resources' project. Update BOSS and deploy again.", cause: host, log_tail: "psycopg2.OperationalError: could not translate host name \"res-db\" to address: Temporary failure in name resolution"}}
+    - {failure: {headline: "The app did not answer as expected at http://203.0.113.10:8000/health within 600s.", action: "Read the log tail for what the install printed, fix it and deploy again — or roll back to the previous healthy commit.", cause: app, log_tail: "PrismaClientInitializationError: Can't reach database server at `res-db`:`5432`"}}
+    - {failure: {headline: "The app did not answer as expected at http://203.0.113.10:8000/health within 600s.", action: "Read the log tail for what the install printed, fix it and deploy again — or roll back to the previous healthy commit.", cause: app, log_tail: "getaddrinfo ENOTFOUND res-db"}}
+    - {failure: {headline: "The app could not reach res-db, the service BOSS provisioned for it on vm-1, so it exited at start.", action: "This is BOSS's network wiring, not the app: the app's compose project must share the resources' project. Update BOSS and deploy again.", cause: host, log_tail: "Error: connect ECONNREFUSED: getaddrinfo EAI_AGAIN res-db:5432"}}
+    - {failure: {headline: "The app did not answer as expected at http://203.0.113.10:8000/health within 600s.", action: "Read the log tail for what the install printed, fix it and deploy again — or roll back to the previous healthy commit.", cause: app, log_tail: "sqlalchemy.exc.OperationalError: (psycopg.OperationalError) failed to resolve host 'res-db': [Errno -3] Temporary failure in name resolution"}}
+    - {failure: {headline: "The app did not answer as expected at http://203.0.113.10:8000/health within 600s.", action: "Read the log tail for what the install printed, fix it and deploy again — or roll back to the previous healthy commit.", cause: app, log_tail: "dial tcp: lookup res-db on 127.0.0.11:53: no such host"}}
+    - {failure: {headline: "The app did not answer as expected at http://203.0.113.10:8000/health within 600s.", action: "Read the log tail for what the install printed, fix it and deploy again — or roll back to the previous healthy commit.", cause: app, log_tail: "java.net.UnknownHostException: res-db: Name or service not known"}}
   negatives:
     - variant:
         failure: {headline: "the app exited at start", log_tail: "Error: connect ECONNREFUSED 127.0.0.1:5433\n    at db.js:4 (const pool = new Pool({ host: 'localhost', port: 5433 }))"}
@@ -378,7 +384,7 @@
       port_holders: []
     own_projects: []
   variants:
-    - {failure: {headline: "the manifest runs npm on a machine that has no `npm`", log_tail: "bash: line 1: npm: command not found"}}
+    - {failure: {headline: "The target machine vm-1 has no `npm` (it has: docker, compose, python3); this manifest runs commands on the machine directly ('install' runs `npm`).", action: "Use kind: compose with a Dockerfile and docker-compose.yml (the machine has Docker), or install npm on it.", cause: app, log_tail: "bash: line 1: npm: command not found"}}
     - {failure: {headline: "install failed (exit 127)", log_tail: "sh: 1: npm: not found"}}
     - {failure: {headline: "install step failed", log_tail: "/bin/sh: npm: command not found\nexit status 127"}}
     - {failure: {headline: "deploy install exited 127", log_tail: "bash: npm: command not found"}}
@@ -497,11 +503,11 @@
          state: {summary: "Adds tags to tickets: a tags column, PUT /tickets/:id/tags, a filter", tests_passed: true}}
       - {id: crun_bt_darkmode_02, status: completed, phase: done,
          title: "HelpDesk AI: a polished, vivid look — a dashboard, a dark mode, coloured chips",
-         state: {summary: "Changed one route: PUT /tickets/:id/tags now validates tag names", tests_passed: true,
-                 design_resumed_from: crun_bt_tags_01, inherited_design: "ticket-tags plan (tags column, tags route, filter)"}}
+         state: {summary: "Changed one route: PUT /tickets/:id/tags now validates tag names", tests_passed: true},
+         finalize_ctx: {parent_run_id: crun_bt_tags_01, inherited_design: {plan: "1. tags column 2. PUT /tickets/:id/tags 3. tag filter"}}}
     events:
       - {entity_type: code_task_run, entity_id: crun_bt_darkmode_02, event_type: code_task.design_resumed,
-         data: {from: crun_bt_tags_01, skipped: [standards, spec, plan, plan_review], why: "follow-up inherited the parent's design"}}
+         data: {from_run: crun_bt_tags_01, skipped_stages: [standards, spec, plan, review_plan]}}
   checks:
     never_execute: [create_code_task, retry_code_task, start_workflow]
   expected: >-
@@ -529,6 +535,13 @@
 - id: rollback-replays-removal
   covers: []
   surface: talk_to_boss
+  seed:
+    deployment_targets:
+      - {id: dtg_bt_helpdesk, app_name: HelpDesk AI, repo: paramg/boss-sandbox, environment: staging,
+         target_kind: docker_host, target_ref: vm-1, status: retired, created_by: ceo}
+    code_task_runs:
+      - {id: crun_bt_hd_1, status: completed, phase: done, title: "HelpDesk AI", state: {summary: "HelpDesk AI v1 (healthy release, commit 7be36aa)"}}
+      - {id: crun_bt_hd_3, status: completed, phase: done, title: "HelpDesk AI: ticket tags", state: {summary: "tags feature"}}
   tools:
     list_deployments:
       ok: true
