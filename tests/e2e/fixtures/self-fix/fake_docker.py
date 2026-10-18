@@ -12,8 +12,9 @@ containers leave the state, so a later `ps` no longer lists them.
        filters (ANDed, like the CLI): label=KEY, label=KEY=VALUE, name=SUBSTR, id=PREFIX,
        publish=PORT, status=STATE
   inspect [-f|--format TPL] ID|NAME...      TPL: {{.Name}}, {{.Id}}, {{.State.Status}},
-       {{index .Config.Labels "K"}}, {{json .Config.Labels}}, {{.Config.Labels}} — anything
-       else is an error, as a template the CLI cannot parse is
+       {{index .Config.Labels "K"}}, {{.Config.Labels}}, `json` of any of them, parenthesised
+       or not ({{json (index .Config.Labels "K")}}) — anything else is an error, as a template
+       the CLI cannot parse is
   rm [-f] [-v] [--] ID|NAME...    stop ID|NAME...    kill ID|NAME...
   compose -p P down [...]          removes every container of project P
   anything else (pull, compose up, network, ...) succeeds and changes nothing
@@ -62,36 +63,45 @@ def matches(c: dict, flt: str) -> bool:
     return False
 
 
-def render(c: dict, tpl: str, *, ps: bool = False) -> str:
-    """One container through a Go template, as `inspect -f` (ps=False) or `ps --format`
-    (ps=True: the CLI's own ps fields, .ID, .Names, .Label "K", .Labels, .State, .Ports)."""
-    def one(expr: str) -> str:
-        expr = expr.strip()
-        if ps:
-            m = re.fullmatch(r'\.Label "([^"]+)"', expr)
-            if m:
-                return c["labels"].get(m.group(1), "")
-            fields = {".ID": c["id"][:12], ".Names": c["name"],
-                      ".Labels": ",".join(f"{k}={v}" for k, v in sorted(c["labels"].items())),
-                      ".State": c.get("state", "running"), ".Status": "Up 2 days",
-                      ".Ports": ", ".join(f"0.0.0.0:{p}->{p}/tcp" for p in c.get("ports") or [])}
-            if expr in fields:
-                return fields[expr]
-            raise ValueError(f"template: {expr}")
-        if expr == ".Name":
-            return "/" + c["name"]
-        if expr == ".Id":
-            return c["id"]
-        if expr == ".State.Status":
-            return c.get("state", "running")
-        if expr == "json .Config.Labels":
-            return json.dumps(c["labels"])
-        if expr == ".Config.Labels":
-            return "map[" + " ".join(f"{k}:{v}" for k, v in sorted(c["labels"].items())) + "]"
-        m = re.fullmatch(r'index \.Config\.Labels "([^"]+)"', expr)
+def _value(c: dict, expr: str, ps: bool):
+    """The Go-template value of one pipeline-free expression: a field, `index .Config.Labels
+    "K"` (inspect) or `.Label "K"` (ps), parenthesised or not, or `json <expr>` of any of them."""
+    expr = expr.strip()
+    while expr.startswith("(") and expr.endswith(")"):
+        expr = expr[1:-1].strip()
+    if expr.startswith("json "):
+        # Go's encoding/json: compact, map keys sorted.
+        return json.dumps(_value(c, expr[5:], ps), separators=(",", ":"), sort_keys=True)
+    if ps:
+        m = re.fullmatch(r'\.Label "([^"]+)"', expr)
         if m:
             return c["labels"].get(m.group(1), "")
+        fields = {".ID": c["id"][:12], ".Names": c["name"],
+                  ".Labels": ",".join(f"{k}={v}" for k, v in sorted(c["labels"].items())),
+                  ".State": c.get("state", "running"), ".Status": "Up 2 days",
+                  ".Ports": ", ".join(f"0.0.0.0:{p}->{p}/tcp" for p in c.get("ports") or [])}
+        if expr in fields:
+            return fields[expr]
         raise ValueError(f"template: {expr}")
+    fields = {".Name": "/" + c["name"], ".Id": c["id"], ".State.Status": c.get("state", "running"),
+              ".Config.Labels": dict(c["labels"])}
+    if expr in fields:
+        return fields[expr]
+    m = re.fullmatch(r'index \.Config\.Labels "([^"]+)"', expr)
+    if m:
+        return c["labels"].get(m.group(1), "")
+    raise ValueError(f"template: {expr}")
+
+
+def render(c: dict, tpl: str, *, ps: bool = False) -> str:
+    """One container through a Go template, as `inspect -f` (ps=False) or `ps --format`
+    (ps=True: the CLI's own ps fields, .ID, .Names, .Label "K", .Labels, .State, .Ports). A map
+    prints as Go prints it (map[k:v ...]); `json` prints JSON, as the CLI's template func does."""
+    def one(expr: str) -> str:
+        value = _value(c, expr, ps)
+        if isinstance(value, dict):
+            return "map[" + " ".join(f"{k}:{v}" for k, v in sorted(value.items())) + "]"
+        return str(value)
     return re.sub(r"\{\{(.*?)\}\}", lambda m: one(m.group(1)), tpl)
 
 

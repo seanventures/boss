@@ -68,6 +68,11 @@ BASE = "290a8215f"
 HUMAN_FIX = "c56bd88a3"
 SHARED = "bossapp-example-app-deploy"
 TARGET_DIR = "/opt/boss-apps/example-app"
+#: The earlier release, and where BOSS put it on the host (StackApplier: <dir>/releases/<commit>,
+#: compose run from the manifest's workdir): its app container's compose working_dir is
+#: <dir>/releases/<EARLIER_COMMIT>/example-app. The run's own short "0f3c" was a stand-in that
+#: no BOSS release directory has.
+EARLIER_COMMIT = "0f3c" + "5e2a9b71" * 4 + "d4c6"
 #: The real run's 07:57 failure and host probe, with the install's names and address neutralised.
 PORT_FAILURE = {
     "headline": "Port 8000 on 203.0.113.10 is already held by another container",
@@ -333,9 +338,10 @@ def _seed_host(eng, project_id: str) -> str:
                        "now() - interval '1 day' + interval '2 minutes', "
                        "now() - interval '1 day' - interval '1 minute', "
                        "now() - interval '1 day' + interval '2 minutes')"),
-                  {"i": earlier, "p": project_id, "t": target_id, "h": host_id, "c": "b" * 40,
+                  {"i": earlier, "p": project_id, "t": target_id, "h": host_id, "c": EARLIER_COMMIT,
                    "d": TARGET_DIR,
-                   "m": json.dumps({"shared_compose_project": SHARED, "workdir": ""}),
+                   "m": json.dumps({"shared_compose_project": SHARED, "workdir": "example-app",
+                                   "manifest_path": "example-app/boss.deploy.yaml"}),
                    "s": json.dumps([{"name": n, "status": "succeeded"} for n in
                                     ("prepare", "upload", "environment", "switch",
                                      "install or update: up", "health", "finalize")])})
@@ -534,12 +540,12 @@ def _tick(r: Replay, times: int = 1) -> None:
 ORACLE_HOSTS = {
     # The real run: the app's old container holds 8000 in the resources' project, beside res-db.
     "the real host": (
-        {"app1": (SHARED, f"{TARGET_DIR}/releases/0f3c/example-app"),
+        {"app1": (SHARED, f"{TARGET_DIR}/releases/{EARLIER_COMMIT}/example-app"),
          "resdb": (SHARED, "/opt/boss-infra/example-app/deploy"),
          "otherapp": ("bossapp-other-deploy", "/opt/boss-apps/other/releases/9")}, ["app1"]),
     # A look-alike directory (example-app-two) in the same project, and another app.
     "a look-alike and another app": (
-        {"app1": (SHARED, f"{TARGET_DIR}/releases/0f3c/example-app"),
+        {"app1": (SHARED, f"{TARGET_DIR}/releases/{EARLIER_COMMIT}/example-app"),
          "resdb": (SHARED, "/opt/boss-infra/example-app/deploy"),
          "lookalike": (SHARED, "/opt/boss-apps/example-app-two/releases/1"),
          "otherapp": ("bossapp-other-deploy", "/opt/boss-apps/other/releases/9")}, ["app1"]),
@@ -798,7 +804,7 @@ def _report(r: Replay, name: str, result: dict) -> None:
     Path(path).write_text(json.dumps(existing + [entry], indent=1, default=str))
 
 
-REAL_HOST = {"app1": (SHARED, f"{TARGET_DIR}/releases/0f3c/example-app"),
+REAL_HOST = {"app1": (SHARED, f"{TARGET_DIR}/releases/{EARLIER_COMMIT}/example-app"),
              "resdb": (SHARED, "/opt/boss-infra/example-app/deploy"),
              "otherapp": ("bossapp-other-deploy", "/opt/boss-apps/other/releases/9")}
 
