@@ -128,69 +128,166 @@ class RecoveryModel:
 
 PROBE = r'''
 import contextlib, json, os, subprocess, sys
-from boss_engine.services import deployment_fleet, stack_deploy
-SHARED, TARGET_DIR = sys.argv[1], sys.argv[2]
-layout = json.loads(sys.argv[3])
+from sqlalchemy import create_engine
+from boss_engine.config import get_settings
+from boss_engine.services import stack_deploy
+SHARED, TARGET_DIR, PROJECT, TARGET = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+layout = json.loads(sys.argv[5])
+work = sys.argv[6]
 MANIFEST = """version: 1
 name: example-app
 kind: compose
 compose: {file: docker-compose.yml, project: example-app}
 health: [{url: "http://127.0.0.1:8000/health"}]
 """
-class R:
-    def __init__(s, rows): s.rows = rows
-    def all(s): return list(s.rows)
-    def first(s): return s.rows[0] if s.rows else None
-    def mappings(s): return s
-    def scalar(s): return s.rows[0][0] if s.rows else None
-class C:
-    def execute(s, st, p=None):
-        q = str(st)
-        return R([(SHARED,)] if "shared_compose_project" in q and "stack_deployments" in q else [])
-class E:
+# THE DATABASE IS REAL: the replay's test database, where this target's EARLIER release is on
+# record as having run in the resources' shared project (seeded by the replay). Whatever the
+# installed code reads, at plan or at apply, it reads from real rows.
+engine = create_engine(os.environ["REPLAY_PROBE_DATABASE_URL"])
+
+
+class Planned(Exception):
+    pass
+
+
+class Capture:
+    """The plan's own INSERT of the deployment is captured and its transaction rolled back: the
+    deployment is exactly what the INSTALLED plan records, and nothing is written."""
+
+    def __init__(self, inner):
+        self.inner, self.row = inner, None
+
     @contextlib.contextmanager
-    def begin(s): yield C()
+    def begin(self):
+        with self.inner.begin() as c:
+            yield Conn(c, self)
+
+    def connect(self):
+        return self.inner.connect()
+
+
+class Conn:
+    def __init__(self, c, cap):
+        self.c, self.cap = c, cap
+
+    def execute(self, statement, *a, **k):
+        if "INSERT INTO stack_deployments" in str(statement):
+            self.cap.row = dict(a[0] if a else k.get("parameters") or {})
+            raise Planned()
+        return self.c.execute(statement, *a, **k)
+
+    def __getattr__(self, name):
+        return getattr(self.c, name)
+
+
+class GitHub:
+    def resolve_commit(self, owner, repo, ref):
+        return "a" * 40
+
+    def read_file(self, owner, repo, path, commit):
+        return MANIFEST if path.endswith("boss.deploy.yaml") else "services: {}\n"
+
+
+class Access:
+    key_material, user, host = "", "deploy", "h"
+
+    def run(self, *a, **k):
+        raise AssertionError("the probe never runs anything on a host")
+
+
+# THE EDGES OUTSIDE BOSS (GitHub, ssh, the budget, the approval card) and the plan's checks of
+# the APP (its secrets, its manifest's fit, the deploy guard), none of them this replay's
+# subject. Everything that decides what is retired runs as installed, on real rows.
+from boss_engine.services import budget, deploy_policy, governed_host_deploy, resource_plane
+from boss_engine.services import run_decisions
+from boss_engine.templates import deploy_guard
+
+stack_deploy.github_source_for = lambda *a, **k: GitHub()
+stack_deploy.host_access_for = lambda *a, **k: Access()
+stack_deploy.preflight_host = lambda *a, **k: []
+stack_deploy.manifest_misfit = lambda *a, **k: None
+stack_deploy._plan_infrastructure = lambda *a, **k: (None, None)
+stack_deploy.create_blocking_decision = lambda *a, **k: "dec_probe"
+deploy_guard.deploy_refusal = lambda *a, **k: None
+governed_host_deploy.app_secret_problem = lambda *a, **k: (None, [], None)
+budget.BudgetGovernor.reserve = lambda self, *a, **k: {"status": "ok",
+                                                       "reservation_id": "res_probe"}
+
+
+class RP:
+    def __init__(self, *a, **k):
+        pass
+
+    def create_changeset(self, *a, **k):
+        return {"id": "cs_probe"}
+
+    def required_approvers_for_changeset(self, *a, **k):
+        return []
+
+
+resource_plane.ResourcePlaneService = RP
+run_decisions.open_step_decision = lambda *a, **k: "dec_probe"
+deploy_policy.pre_approval = lambda *a, **k: None
+settings = get_settings()
+
+# 1. THE RESUMED STEP PLANS AGAIN, on the installed code.
+cap = Capture(engine)
+try:
+    stack_deploy.plan_stack_deploy(cap, settings, project_id=PROJECT, target_id=TARGET,
+                                   repository="example/example-app", ref="main", actor="replay")
+    raise SystemExit("the plan returned without recording a deployment")
+except Planned:
+    pass
+row = cap.row
+dep = {"id": row["i"], "project_id": PROJECT, "target_id": TARGET, "host_id": row["h"],
+       "changeset_id": row["cs"], "commit_sha": row["c"], "ref": row["ref"],
+       "manifest_text": row["mt"], "repository": row["repo"], "manifest": json.loads(row["m"]),
+       "code_task_run_id": None, "created_by": "replay", "apply_token": "tok",
+       "deploy_dir": row.get("dir")}
+
+# 2. ITS APPROVED APPLY, on the installed code, against the same real rows.
 captured = {}
-class A:
-    def __init__(s, **kw): captured["rendered"] = kw["rendered"]; s.steps, s.log = [], ""
-    def run(s): return {"mode": "install", "open_url": ""}
-dep = {"id": "sdep_resumed", "project_id": "p", "target_id": "t", "host_id": "h",
-       "changeset_id": "cs", "commit_sha": "a" * 40, "ref": "main", "manifest_text": MANIFEST,
-       "repository": "example/example-app", "manifest": {"workdir": ""},
-       "code_task_run_id": None, "created_by": "replay", "apply_token": "tok"}
+
+
+class Applier:
+    def __init__(self, **kw):
+        captured["rendered"] = kw["rendered"]
+        self.steps, self.log = [], ""
+
+    def run(self):
+        return {"mode": "install", "open_url": ""}
+
+
 stack_deploy._row = lambda c, i, lock=False: dict(dep)
 stack_deploy._require_owner = lambda d, t: None
 stack_deploy._require_governed = lambda *a, **k: None
-stack_deploy._target = lambda c, i: {"id": "t", "target_kind": "stack", "app_name": "example-app",
-                                     "repo": "example/example-app", "domains": []}
-deployment_fleet.get_host = lambda c, i: {"id": "h", "address": "203.0.113.10", "ssh_user": "deploy"}
-stack_deploy.host_access_for = lambda *a, **k: type("X", (), {"key_material": "", "user": "d",
-                                                                "host": "h"})()
-stack_deploy.github_source_for = lambda *a, **k: object()
 stack_deploy._environment = lambda *a, **k: ({}, [])
 stack_deploy.app_deploy_env = lambda *a, **k: {}
-stack_deploy.StackApplier = A
-stack_deploy.apply_on_host(E(), None, deployment_id="sdep_resumed", apply_token="tok", dedupe_key="dk")
-# The model of the real host: the old app container holds 8000 in the resources' project.
-work = sys.argv[4]
+stack_deploy.StackApplier = Applier
+stack_deploy.apply_on_host(engine, settings, deployment_id=dep["id"], apply_token="tok",
+                           dedupe_key="dk")
+
+# 3. THE MODEL OF THE REAL HOST: the old app container holds 8000 in the resources' project.
 db = os.path.join(work, "containers.txt")
 with open(db, "w") as f:
     for cid, (proj, wd) in layout.items():
         f.write(f"{cid} {proj} {wd}\n")
 removed = os.path.join(work, "removed.txt")
-bin_dir = os.path.join(work, "bin"); os.makedirs(bin_dir, exist_ok=True)
-with open(os.path.join(bin_dir, "docker"), "w") as f:
-    f.write(f"""#!/bin/sh
-DB={db}; RM={removed}
+bin_dir = os.path.join(work, "bin")
+os.makedirs(bin_dir, exist_ok=True)
+FAKE = r"""#!/bin/sh
+DB=@DB@; RM=@RM@
 case "$1" in
-  ps) proj=$(echo "$@" | sed -n 's/.*com.docker.compose.project=\\([^ ]*\\).*/\\1/p')
-      awk -v p="$proj" '$2==p {{print $1}}' "$DB" ;;
-  inspect) id=$(eval echo \\${{$#}})
-      case "$3" in *Name*) echo "/$id" ;; *) awk -v i="$id" '$1==i {{print $3}}' "$DB" ;; esac ;;
-  rm) id=$(eval echo \\${{$#}}); echo "$id" >> "$RM"; echo "$id" ;;
+  ps) proj=$(echo "$@" | sed -n 's/.*com.docker.compose.project=\([^ ]*\).*/\1/p')
+      awk -v p="$proj" '$2==p {print $1}' "$DB" ;;
+  inspect) id=$(eval echo \${$#})
+      case "$3" in *Name*) echo "/$id" ;; *) awk -v i="$id" '$1==i {print $3}' "$DB" ;; esac ;;
+  rm) id=$(eval echo \${$#}); echo "$id" >> "$RM"; echo "$id" ;;
   *) : ;;
 esac
-""")
+"""
+with open(os.path.join(bin_dir, "docker"), "w") as f:
+    f.write(FAKE.replace("@DB@", db).replace("@RM@", removed))
 os.chmod(os.path.join(bin_dir, "docker"), 0o755)
 env = {**os.environ, "PATH": bin_dir + ":" + os.environ["PATH"]}
 names = []
@@ -198,22 +295,55 @@ for step in captured["rendered"]["install"]:
     names.append(step["name"])
     if step["name"] == "compose up" or ("compose" in step["run"] and " up" in step["run"]):
         break
-    subprocess.run(["bash", "-c", step["run"]], env=env, capture_output=True, text=True, timeout=60)
+    subprocess.run(["bash", "-c", step["run"]], env=env, capture_output=True, text=True,
+                   timeout=60)
 gone = open(removed).read().split() if os.path.exists(removed) else []
-holder = "app1"
-print(json.dumps({"steps": names, "removed": gone, "port_free": holder in gone}))
+print(json.dumps({"steps": names, "removed": gone, "port_free": "app1" in gone,
+                  "planned": sorted(k for k in dep["manifest"] if k != "steps")}))
 '''
 
 
-def _resumed_outcome(stack_worktree: Path, layout: dict, tmp: Path) -> dict:
-    """What the resumed deploy meets on the host, decided by the INSTALLED code."""
+def _seed_host(eng, project_id: str) -> str:
+    """The real rows a resumed deploy plans against: a verified host, this app's stack target,
+    and the target's EARLIER release, which ran in the resources' shared project."""
+    suffix = uuid.uuid4().hex[:8]
+    host_id, target_id, earlier = f"host_{suffix}", f"deptgt_{suffix}", f"sdep_{suffix}"
+    with eng.begin() as c:
+        _insert_awaited(c, project_id, "deployment_hosts", host_id, "verified")
+        c.execute(text("UPDATE deployment_hosts SET name = :n, address = '203.0.113.10', "
+                       "ssh_user = 'deploy' WHERE id = :i"),
+                  {"i": host_id, "n": f"example-host-{suffix}"})
+        # Its own environment name: (project, app, environment) is unique, and a replay plans
+        # more than once.
+        c.execute(text("INSERT INTO deployment_targets (id, status, project_id, app_name, repo, "
+                       "environment, target_kind, target_ref, created_by, host_id) VALUES "
+                       "(:i, 'active', :p, 'example-app', 'example/example-app', :e, 'stack', "
+                       "'example-app', 'replay', :h)"),
+                  {"i": target_id, "p": project_id, "h": host_id, "e": f"replay-{suffix}"})
+        c.execute(text("INSERT INTO stack_deployments (id, project_id, target_id, host_id, "
+                       "repository, ref, commit_sha, manifest, status, created_by, deploy_dir, "
+                       "created_at) VALUES (:i, :p, :t, :h, 'example/example-app', 'main', :c, "
+                       "CAST(:m AS JSONB), 'healthy', 'replay', :d, now() - interval '1 day')"),
+                  {"i": earlier, "p": project_id, "t": target_id, "h": host_id, "c": "b" * 40,
+                   "d": TARGET_DIR,
+                   "m": json.dumps({"shared_compose_project": SHARED, "workdir": ""})})
+    return target_id
+
+
+def _resumed_outcome(stack_worktree: Path, layout: dict, tmp: Path, *, eng, project_id: str
+                     ) -> dict:
+    """What the resumed deploy meets on the host, decided by the INSTALLED code: it plans again
+    and applies, as a real resumed step does, against real rows and a model of the real host."""
     work = tmp / f"probe-{uuid.uuid4().hex[:6]}"
     work.mkdir()
-    env = {**os.environ, "PYTHONPATH": f"{stack_worktree}{os.pathsep}{stack_worktree / 'engine'}"}
+    target_id = _seed_host(eng, project_id)
+    env = {**os.environ, "PYTHONPATH": f"{stack_worktree}{os.pathsep}{stack_worktree / 'engine'}",
+           "REPLAY_PROBE_DATABASE_URL": eng.url.render_as_string(hide_password=False)}
     env.pop("BOSS_SCRIPTED_SELF_FIX", None)
-    done = subprocess.run([sys.executable, "-c", PROBE, SHARED, TARGET_DIR, json.dumps(layout),
-                           str(work)], capture_output=True, text=True, env=env, timeout=120)
-    assert done.returncode == 0, done.stderr[-2000:]
+    done = subprocess.run([sys.executable, "-c", PROBE, SHARED, TARGET_DIR, project_id,
+                           target_id, json.dumps(layout), str(work)], capture_output=True,
+                          text=True, env=env, timeout=180)
+    assert done.returncode == 0, done.stderr[-3000:]
     return json.loads(done.stdout.strip().splitlines()[-1])
 
 
@@ -407,7 +537,14 @@ def _deploy_on_the_running_build(r: Replay, host: "FakeHost", layout: dict, outc
             return original(connection, ctx, project_id=project_id, actor=actor, step=step,
                             context=context, key=key, capability=capability, inputs=inputs)
         assert os.environ.get("BOSS_STACK_HEAD"), "re-deployed before BOSS ran its fix"
-        outcome = _resumed_outcome(host.dir / ".boss" / "stack-worktree", layout, r.root)
+        try:
+            outcome = _resumed_outcome(host.dir / ".boss" / "stack-worktree", layout, r.root,
+                                       eng=r.eng, project_id=project_id)
+        except BaseException as error:  # said, or the runner's own handling hides it
+            import traceback
+
+            print("PROBE FAILED", "".join(traceback.format_exception(error))[-3000:])
+            raise
         outcomes.append(outcome)
         deployment = _failed_deployment(connection, project_id,
                                         RESDB_FAILURE if outcome["port_free"] else PORT_FAILURE)
@@ -588,3 +725,25 @@ def test_replay_a_rollback_path(replay, monkeypatch):
     assert result["verification"]["outcome"] == "same_cause"
     rec = result["recommendation"][0]
     assert rec["status"] == "open" and rec["attempts"]
+
+
+@pytest.mark.parametrize("commit, freed", [(HUMAN_FIX, True), (BASE, False)])
+def test_the_probe_judges_a_plan_time_fix_fairly(eng, project, tmp_path, commit, freed):
+    """THE HARNESS, not BOSS: the resumed deploy is judged by the installed code planning again
+    and applying, as a real resumed step does. The person's fix c56bd88a3 decides at PLAN time
+    (retire_app_in on the recorded manifest) and must free the port here; the base must not."""
+    tree = tmp_path / "tree"
+    git(ROOT, "worktree", "add", "-q", "--detach", str(tree), commit)
+    try:
+        out = _resumed_outcome(tree, REAL_HOST, tmp_path, eng=eng, project_id=project)
+    finally:
+        git(ROOT, "worktree", "remove", "--force", str(tree))
+        with eng.begin() as c:
+            for table in ("stack_deployments", "deployment_targets", "deployment_hosts"):
+                c.execute(text(f"DELETE FROM {table} WHERE project_id = :p"),  # noqa: S608
+                          {"p": project})
+    assert out["port_free"] is freed, out
+    assert out["removed"] == (["app1"] if freed else []), \
+        "res-db and another app's container are never touched"
+    if freed:
+        assert "retire_app_in" in out["planned"], "decided at plan time, read back at apply"
