@@ -40,7 +40,6 @@ from .telemetry_source import (
 )
 
 _CRITICAL_KINDS = ("error_surge", "new_template")
-_TUNED_MIN_COUNT = 9        # a raise-listed signature needs 3x the default floor to fire again
 _SEV_RANK = {"info": 0, "warning": 1, "critical": 2}
 
 # incident feedback verdict → learning-example outcome + the incident status it drives
@@ -158,23 +157,31 @@ class ReliabilityService:
         if not persist:
             return report                          # RB-3: read-only Insight, nothing written
 
-        # RB-12 auto-tuning: signatures repeatedly dismissed as false alarms need a higher bar
-        raised = {t["signature"]
+        # RB-12'S CODED THRESHOLD IS RETIRED (BOSSAPP-598, R1.29, G8): a signature a person
+        # dismissed twice used to be dropped below a hard-coded count — code deciding what is
+        # noise. Now nothing is dropped: the dismissal history rides along as CONTEXT for the
+        # agent's triage (`noise_history`), which may propose a rule change for a person.
+        raised = {t["signature"]: t
                   for t in self.learning.suggest_tuning(connection, project_id, "sre")["raise_threshold"]}
         svc_by_tmpl = _service_by_template(events)
         touched: dict[str, dict] = {}
         suppressed: list[dict[str, Any]] = []
+        noise_history: list[dict[str, Any]] = []
         for sig in report["signals"]:
-            if sig["key"] in raised and int(sig.get("count") or 0) < _TUNED_MIN_COUNT:
-                suppressed.append({"kind": sig["kind"], "key": sig["key"],
-                                   "count": sig.get("count"), "reason": "tuned_threshold"})
-                continue
+            if sig["key"] in raised:
+                noise_history.append({"kind": sig["kind"], "key": sig["key"],
+                                      "count": sig.get("count"),
+                                      "dismissed_before": raised[sig["key"]].get("dismissals")
+                                      or raised[sig["key"]].get("count") or 2,
+                                      "word": "A person marked this signature a false alarm "
+                                              "before; context for the agent, not a filter"})
             service = svc_by_tmpl.get(sig["key"], "") if sig["kind"] in ("new_template", "template_spike") else ""
             inc = self._upsert_incident(connection, project_id, sig, service)
             self._insert_signal(connection, project_id, source_id, sig, service, inc["id"])
             touched[inc["id"]] = inc
         report["incidents"] = list(touched.values())
-        report["suppressed"] = suppressed          # transparency: tuned-out, not silently dropped
+        report["suppressed"] = suppressed          # always empty now: nothing is tuned out
+        report["noise_history"] = noise_history
         return report
 
     def _upsert_incident(self, connection: Connection, project_id: str, sig: dict[str, Any],
@@ -324,6 +331,29 @@ class ReliabilityService:
                                          known_causes=known, subgraph=context, changes=changes)
         hypothesis = result["winner"]
         hypotheses = result["hypotheses"]
+        # THE VERDICT IS A MODEL'S (G8): the scores above are evidence ("BOSS's statistical
+        # guess"); the model chooses among the hypotheses or says it does not know.
+        from .investigation import model_verdict
+
+        point = connection.begin_nested()
+        try:
+            verdict = model_verdict(connection, self.settings, project_id,
+                                    incident={"id": incident_id, "title": inc["title"],
+                                              "service": service},
+                                    hypotheses=hypotheses, signals=signals,
+                                    adapter=getattr(self, "verdict_adapter", None))
+            point.commit()
+        except Exception as exc:  # noqa: BLE001 — a verdict never costs the investigation
+            point.rollback()
+            verdict = {"status": "no_model", "word": f"No verdict: {type(exc).__name__}"}
+        chosen = next((h for h in hypotheses if verdict.get("cause_key")
+                       and h.get("cause_key") == verdict["cause_key"]), None)
+        if chosen is not None:
+            hypothesis = {**chosen, "decided_by": "model", "verdict": verdict}
+        else:
+            hypothesis = {**hypothesis, "verdict": verdict}
+        self._add_evidence(connection, incident_id, "rca_verdict", ref=str(
+            verdict.get("cause_key") or verdict.get("status")), payload=verdict)
 
         # RB-12: confirmed prior examples ride along as few-shot context (for the LLM stage)
         few_shot = self.learning.suggest_tuning(connection, project_id, "sre")["few_shot_candidates"]
@@ -521,11 +551,21 @@ class ReliabilityService:
         blast = len(self.kg.subgraph(connection, project_id, "service", inc["service"] or "",
                                      depth=1)["nodes"]) if inc["service"] else 0
         conf = float(inc["confidence"] or 0.0)
+        verdict = connection.execute(
+            text("SELECT payload FROM incident_evidence WHERE incident_id = :id AND "
+                 "kind = 'rca_verdict' ORDER BY created_at DESC LIMIT 1"),
+            {"id": incident_id}).scalar()
+        verdict = (verdict if isinstance(verdict, dict) else
+                   __import__("json").loads(verdict)) if verdict else {}
         if not policy["auto_remediate"]:
             tier, action, reason = 1, "gated_pr", "auto_remediate disabled by policy"
         elif conf < float(policy["min_confidence"]):
             tier, action, reason = 1, "gated_pr", \
                 f"confidence {conf} below policy floor {policy['min_confidence']}"
+        elif verdict.get("status") != "decided" or not verdict.get("cause_key"):
+            # Statistics never act alone: without a model's verdict a person launches the fix.
+            tier, action, reason = 1, "gated_pr", \
+                "no model verdict on the cause: a person launches the fix"
         elif blast > int(policy["max_blast_radius"]):
             tier, action, reason = 2, "handoff", \
                 f"blast radius {blast} exceeds cap {policy['max_blast_radius']} — human judgment"

@@ -162,9 +162,13 @@ def build_app_alerts_router(
     @permit(P.OBSERVABILITY_READ, scope=Scope.project(query="project_id"))
     def all_alerts(project_id: str, request: Request, response: Response,
                    app: Optional[str] = None, state: str = "firing", since: str = "7d",
-                   severity: Optional[str] = None):
+                   severity: Optional[str] = None, source: Optional[str] = None,
+                   flapping: Optional[bool] = None, acked: Optional[bool] = None):
+        """Every app's and service's alerts (filters: app or service, state, severity, source
+        kind, flapping, acked), with the open incidents in the same words every card uses."""
         return _read(project_id, request, response, lambda c, pid: view.alerts(
-            c, pid, target_id=app or None, state=state, since=since, severity=severity))
+            c, pid, target_id=app or None, state=state, since=since, severity=severity,
+            source=source or None, flapping=flapping, acked=acked))
 
     @router.post("/v1/apps/{target_id}/alerts/{alert_id}/triage")
     @permit(P.OBSERVABILITY_MANAGE, scope=Scope.project(body="project_id"))

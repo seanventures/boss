@@ -29,12 +29,20 @@ _STATE_TIPS = {
     "inhibited": "Held back while the app's health or deploy alert fires",
     "error": None, None: "BOSS evaluates rules on its monitoring sweep",
 }
-_CLEARED_WORDS = {"recovered": "Recovered", "no_data": "Data stopped",
+_CLEARED_WORDS = {"source_resolved": "Resolved by its source",
+                  "source_quiet": "Source went quiet for 24 hours",
+                  "recovered": "Recovered", "no_data": "Data stopped",
                   "too_little": "Traffic too low to judge", "rule_off": "Rule switched off",
                   "incident_closed": "Incident closed", "error": "Could not evaluate"}
 _SOURCE_WORDS = {"yaml": "from boss.deploy.yaml", "builtin": "BOSS default",
                  "console": "changed in the console"}
-_EVAL_WORDS = {"boss": "BOSS's own monitoring", "prometheus": "Prometheus"}
+_EVAL_WORDS = {"boss": "BOSS's own monitoring", "prometheus": "Prometheus",
+               "alertmanager": "Alertmanager", "grafana": "Grafana", "sentry": "Sentry",
+               "datadog": "Datadog", "cloudwatch": "CloudWatch", "pagerduty_v2": "PagerDuty event",
+               "generic": "An event", "heartbeat": "Heartbeat"}
+_SUPPRESS_WORDS = {"silence": "Silenced", "maintenance": "In a maintenance window",
+                   "deploy_hold": "Held for the agent: a deploy just finished",
+                   "inhibit": "Held back by a firing cause"}
 
 
 def _json(v: Any, default: Any = None) -> Any:
@@ -132,7 +140,8 @@ def _triage_wire(alert: dict) -> dict[str, Any]:
                 "question": None, "outcome": None, "by": None, "at": None, "confidence": None}
     outcome = t.get("outcome")
     word = {"opened": "Opened an incident", "joined": "Joined the incident",
-            "split": "Opened its own incident", "noise": "Noise", "asked": "Asks you"}.get(
+            "split": "Opened its own incident", "noise": "Noise", "asked": "Asks you",
+            "page": "Page now", "storm": t.get("word") or "Storm"}.get(
         outcome or "", t.get("word") or "Triaged")
     by = t.get("by") or {}
     return {"state": "done", "word": word, "outcome": outcome, "reason": t.get("reason") or None,
@@ -191,6 +200,26 @@ def _alert_wire(connection, a: dict, *, target: dict, grafana: dict,
                       "app": names.get(a.get("reporter_target_id") or "")}
                      if a["source_kind"] == "signal" else None),
         "backfilled": bool(a.get("backfilled")),
+        "subject_id": a.get("subject_id") or a.get("target_id"),
+        "service_id": a.get("service_id"),
+        "source": _EVAL_WORDS.get(a.get("eval_source") or "", a.get("eval_source")),
+        "urgency": a.get("urgency") or "high",
+        "flapping": bool(a.get("flapping")),
+        "flap_score": a.get("flap_score"),
+        "flap_tuning": ((a.get("triage") or {}).get("flap_tuning") or None),
+        "acked": ({"by": _person(connection, a["acked_by"]) or a["acked_by"],
+                   "at": _iso(a["acked_at"]), "until": _iso(a.get("ack_expires_at"))}
+                  if a.get("acked_at") and (a.get("ack_expires_at") is None
+                                            or a["ack_expires_at"] > datetime.now(timezone.utc))
+                  else None),
+        "no_data_since": _iso(a.get("no_data_since")),
+        "keep_firing_since": _iso(a.get("missing_since")),
+        "suppressed": [{"kind": x.get("kind"), "id": x.get("id"), "until": x.get("until"),
+                        "word": _SUPPRESS_WORDS.get(x.get("kind") or "", x.get("kind")),
+                        "reason": x.get("reason")}
+                       for x in (_json(a.get("suppressed_by"), []) or [])],
+        "links": _json(a.get("links"), []) or [],
+        "notified_at": _iso(a.get("notified_at")),
     }
 
 
@@ -211,16 +240,92 @@ def _incidents(connection, ids: list[str]) -> dict[str, dict]:
         {"i": ids}).mappings().all()}
 
 
+def incident_states(connection, project_id: str, *, subject_id: Optional[str] = None,
+                    incident_ids: Optional[list[str]] = None) -> list[dict[str, Any]]:
+    """THE ONE ANSWER to "is this incident's problem happening now?", read from its alerts:
+    every card, list and badge about an open incident says what this says. An incident can be
+    open while nothing fires (it recovered, and a response or a person still has it): that is
+    said as such, never as "requests failing"."""
+    from .incident_response import _response_in_flight
+
+    q = ("SELECT i.id, i.title, i.status, i.lifecycle, i.first_seen, i.acked_by, i.urgency, "
+         " i.finalize_ctx, "
+         " count(a.id) FILTER (WHERE a.state = 'firing' AND a.inhibited_by IS NULL) AS firing, "
+         " count(a.id) FILTER (WHERE a.state = 'pending') AS pending, "
+         " count(a.id) AS alerts, max(a.cleared_at) AS last_cleared, "
+         " min(COALESCE(a.subject_id, a.target_id)) AS subject_id "
+         "FROM incidents i LEFT JOIN app_alerts a ON a.incident_id = i.id "
+         "WHERE i.project_id = :p AND i.status NOT IN ('resolved', 'dismissed')")
+    params: dict[str, Any] = {"p": project_id}
+    if incident_ids is not None:
+        q += " AND i.id = ANY(:ids)"
+        params["ids"] = list(incident_ids)
+    q += " GROUP BY i.id"
+    out = []
+    for r in connection.execute(sql(q), params).mappings().all():
+        if subject_id and r["subject_id"] != subject_id:
+            continue
+        firing = int(r["firing"] or 0)
+        run = _response_in_flight(connection, project_id, r["id"])
+        run_status = connection.execute(sql("SELECT status FROM workflow_runs WHERE id = :i"),
+                                        {"i": run}).scalar() if run else None
+        if firing:
+            word = f"Firing: {firing} alert{'s' if firing != 1 else ''}"
+        elif int(r["pending"] or 0):
+            word = "Pending: an alert is waiting out its `for`"
+        elif int(r["alerts"] or 0):
+            word = ("Recovered at " + r["last_cleared"].strftime("%H:%M") if r["last_cleared"]
+                    else "Recovered") + (
+                "; a response is waiting on you" if run_status == "waiting" else
+                "; a response is still running" if run else "; the incident is still open")
+        else:
+            word = "Reported; no alert of BOSS's is firing"
+        out.append({"id": r["id"], "title": r["title"], "status": r["status"],
+                    "lifecycle": r["lifecycle"], "since": _iso(r["first_seen"]),
+                    "firing": firing, "happening": bool(firing),
+                    "subject_id": r["subject_id"], "urgency": r["urgency"],
+                    "acked": bool(r["acked_by"]), "response_run_id": run,
+                    "response_status": run_status, "word": word})
+    return sorted(out, key=lambda x: (not x["happening"], x["since"] or ""))
+
+
+def _subjects(connection, project_id: str, ids: list[str]) -> dict[str, dict]:
+    """Targets and monitored services by the id alerts carry, each with app_name/environment."""
+    out = _targets(connection, project_id, ids)
+    rest = [i for i in ids if i not in out]
+    if rest:
+        for r in connection.execute(sql(
+                "SELECT id, name, environment, deployment_target_id FROM monitored_services "
+                "WHERE project_id = :p AND id = ANY(:i)"), {"p": project_id, "i": rest}
+        ).mappings().all():
+            out[r["id"]] = {"id": r["id"], "app_name": r["name"],
+                            "environment": r["environment"], "subject_kind": "service"}
+    return out
+
+
 def alerts(connection, project_id: str, *, target_id: Optional[str] = None,
            state: str = "all", since: str = "7d", severity: Optional[str] = None,
-           limit: int = 100) -> dict[str, Any]:
-    """Alerts, newest first. state firing (open now: pending + firing) | resolved | all."""
+           limit: int = 100, source: Optional[str] = None, flapping: Optional[bool] = None,
+           acked: Optional[bool] = None) -> dict[str, Any]:
+    """Alerts, newest first. state firing (open now: pending + firing) | resolved | all.
+    Filters: an app or service (target_id: either id), severity, source kind (rule, external,
+    synthetic, heartbeat, signal), flapping, acked."""
     now = datetime.now(timezone.utc)
     where = ["a.project_id = :p"]
     params: dict[str, Any] = {"p": project_id, "n": max(1, min(int(limit), 500))}
     if target_id:
-        where.append("a.target_id = :t")
+        where.append("a.subject_id = :t")
         params["t"] = target_id
+    if source in ("rule", "external", "synthetic", "heartbeat", "signal"):
+        where.append("a.source_kind = :src")
+        params["src"] = source
+    if flapping is not None:
+        where.append("a.flapping = :fl")
+        params["fl"] = bool(flapping)
+    if acked is not None:
+        where.append("(a.acked_at IS NOT NULL AND (a.ack_expires_at IS NULL OR "
+                     "a.ack_expires_at > now()))" if acked else
+                     "(a.acked_at IS NULL OR a.ack_expires_at <= now())")
     if state == "firing":
         where.append("a.state IN ('pending', 'firing')")
     else:
@@ -236,9 +341,9 @@ def alerts(connection, project_id: str, *, target_id: Optional[str] = None,
         "SELECT a.* FROM app_alerts a WHERE " + " AND ".join(where)
         + " ORDER BY (a.state <> 'resolved') DESC, COALESCE(a.fired_at, a.active_at) DESC "
           "LIMIT :n"), params).mappings().all()]
-    tids = sorted({r["target_id"] for r in rows} | {r["reporter_target_id"] for r in rows
-                                                     if r.get("reporter_target_id")})
-    targets = _targets(connection, project_id, tids)
+    tids = sorted({r["subject_id"] or r["target_id"] for r in rows}
+                  | {r["reporter_target_id"] for r in rows if r.get("reporter_target_id")})
+    targets = _subjects(connection, project_id, [t for t in tids if t])
     names = {k: str(v.get("app_name") or k) for k, v in targets.items()}
     incidents = _incidents(connection, sorted({r["incident_id"] for r in rows
                                                if r.get("incident_id")}))
@@ -246,20 +351,30 @@ def alerts(connection, project_id: str, *, target_id: Optional[str] = None,
     counts = connection.execute(sql(
         "SELECT count(*) FILTER (WHERE state = 'firing') AS firing, "
         "       count(*) FILTER (WHERE state = 'pending') AS pending "
-        "FROM app_alerts WHERE project_id = :p" + (" AND target_id = :t" if target_id else "")),
+        "FROM app_alerts WHERE project_id = :p" + (" AND subject_id = :t" if target_id else "")),
         {"p": project_id, **({"t": target_id} if target_id else {})}).mappings().first()
     apps = [{"target_id": t["id"], "app": t["app_name"], "env": t["environment"]}
             for t in _targets(connection, project_id).values()
-            if connection.execute(sql("SELECT 1 FROM app_alert_rules WHERE target_id = :t "
+            if connection.execute(sql("SELECT 1 FROM app_alert_rules WHERE subject_id = :t "
                                       "LIMIT 1"), {"t": t["id"]}).first()]
+    apps += [{"target_id": r["id"], "app": r["name"], "env": r["environment"], "service": True}
+             for r in connection.execute(sql(
+                 "SELECT s.id, s.name, s.environment FROM monitored_services s WHERE "
+                 "s.project_id = :p AND s.deployment_target_id IS NULL AND EXISTS (SELECT 1 FROM "
+                 "app_alerts a WHERE a.service_id = s.id UNION SELECT 1 FROM app_alert_rules r "
+                 "WHERE r.service_id = s.id)"), {"p": project_id}).mappings().all()]
     return {
         "project_id": project_id, "target_id": target_id, "state": state, "since": since,
         "severity": severity,
         "counts": {"firing": int(counts["firing"] or 0), "pending": int(counts["pending"] or 0)},
-        "alerts": [_alert_wire(connection, r, target=targets.get(r["target_id"], {}),
+        "alerts": [_alert_wire(connection, r, target=targets.get(r["subject_id"] or
+                                                               r["target_id"], {}),
                                grafana=grafana, incidents=incidents, names=names) for r in rows],
         "apps": sorted(apps, key=lambda x: (str(x["app"]).lower(), str(x["env"]))),
         "grafana": {"state": grafana["state"], "reason": grafana["reason"] or None},
+        # Open incidents, in the same words every card uses (incident_states): the page can
+        # never say "0 firing" above a card that says "requests failing".
+        "incidents": incident_states(connection, project_id, subject_id=target_id),
     }
 
 
@@ -386,4 +501,4 @@ def app_alerts_tab(connection, settings: Any, project_id: str, target_id: str, *
     }
 
 
-__all__ = ["alerts", "app_alerts_tab", "value_word"]
+__all__ = ["alerts", "app_alerts_tab", "incident_states", "value_word"]

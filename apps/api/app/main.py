@@ -2276,6 +2276,14 @@ async def require_transport_auth_for_v1(request: Request, call_next):
     is_bitbucket_webhook = route_path == "/v1/webhooks/bitbucket"
     # Alerting tools sign reliability alert deliveries (X-Reliability-Signature HMAC) — same model.
     is_reliability_alert = route_path == "/v1/reliability/alert"
+    # MONITORING INGEST (routers/monitoring.py): OTLP, remote write and every alerting tool post
+    # with their OWN source's token (the project comes from it), and an email's ack link is a
+    # signed single-use token. Exempt from TRANSPORT auth like the signed webhooks; each route
+    # verifies its own credential and refuses in words.
+    is_monitoring_ingest = (
+        (request.method == "POST" and route_path.startswith("/v1/ingest/"))
+        or route_path.startswith("/v1/alert-actions/")
+    )
     # An investigation's sandbox authenticates with a token minted for that ONE investigation,
     # checked per request, scoped to its project, carrying its read/fix mode, and cleared the
     # moment it finishes. That is a narrower credential than the API key, not a way around it —
@@ -2332,6 +2340,7 @@ async def require_transport_auth_for_v1(request: Request, call_next):
         or is_plane_webhook
         or is_bitbucket_webhook
         or is_reliability_alert
+        or is_monitoring_ingest
         or is_investigation_callback
         or is_telemetry_collector
         or is_identity_public
@@ -4764,23 +4773,54 @@ def reliability_list_sources(project_id: str) -> ReliabilitySourceListResponse:
 @app.post("/v1/reliability/alert", status_code=202)
 @public(reason=PublicReason.HMAC_SIGNED_WEBHOOK, verifier=_identity_verifiers.reliability_alert_hmac)
 async def reliability_alert_webhook(request: Request):
-    """RB-10 — the incident-response trigger: a signed alert (Alertmanager/Grafana/PagerDuty/generic)
-    becomes an incident, every enabled source is scan-scoped to the alert window, and diagnose runs
-    immediately. Auth-exempt but X-Reliability-Signature (HMAC-sha256) verified; fail-closed."""
+    """DEPRECATED ALIAS of /v1/ingest/<source>/<kind> (BOSSAPP-598, R1.25): one incident pipeline.
+
+    An alert here goes through the same adapters, the same alert record, incident model and
+    triage as every other source. It needs a SOURCE TOKEN (Authorization: Bearer, from Connect an
+    app); the project comes from the token, never from the payload. The old install-wide
+    X-Reliability-Signature is accepted for this release only where it is still set, and then
+    writes to the install's default project — whatever project the body names."""
+    from datetime import datetime, timezone
+
+    from boss_engine.services import alert_ingest
+    from boss_engine.services import monitoring as _mon
+
     raw_body = await request.body()
-    signature = request.headers.get("x-reliability-signature", "")
-    if not reliability.verify_alert_signature(raw_body, signature):
-        raise HTTPException(status_code=401, detail="Invalid alert signature.")
+    headers = dict(request.headers)
+    now = datetime.now(timezone.utc)
     try:
-        payload = json.loads(raw_body.decode() or "{}")
-    except json.JSONDecodeError as error:
-        raise HTTPException(status_code=400, detail="Invalid alert payload.") from error
-    project_id = payload.get("project_id") or settings.default_project_id
-    with begin(engine) as connection:
-        result = reliability.ingest_alert(connection, project_id, payload, jobs=jobs)
-    if not result:
-        raise HTTPException(status_code=400, detail="Unrecognized alert shape.")
-    return JSONResponse(status_code=202, content=jsonable_encoder(result))
+        kind, body = alert_ingest.legacy_kind(raw_body)
+        has_token = any(h in {k.lower() for k in headers}
+                        for h in ("authorization", "x-boss-token"))
+        if has_token:
+            with begin(engine) as connection:
+                source = _mon.authenticate(
+                    connection, headers=headers, raw=raw_body, query=dict(request.query_params),
+                    kinds=("alertmanager", "grafana", "pagerduty_v2", "generic", "datadog",
+                           "sentry"), now=now)
+        elif reliability.verify_alert_signature(raw_body,
+                                                request.headers.get("x-reliability-signature",
+                                                                    "")):
+            with begin(engine) as connection:
+                source = alert_ingest.legacy_source(connection, settings.default_project_id)
+        else:
+            raise _mon.IngestRefused(401, "Send this source's token (Authorization: Bearer "
+                                          "<token>, from Observability › Connect an app). "
+                                          "/v1/reliability/alert is deprecated: use "
+                                          "/v1/ingest/<source id>/<kind>.")
+        if alert_ingest.names_another_project(raw_body, source["project_id"]):
+            raise _mon.IngestRefused(403, "The body names another project. The project comes "
+                                          "from the source's token, never from the payload.",
+                                     source["id"])
+        got = alert_ingest.receive(engine, settings, source_id=source["id"], kind=kind,
+                                   headers=headers, query={}, raw=body, now=now, source=source)
+    except _mon.IngestRefused as exc:
+        _mon.record_refusal(engine, exc, now)
+        return JSONResponse(status_code=exc.status, content={"detail": exc.word,
+                                                             "word": exc.word})
+    return JSONResponse(status_code=202, content=jsonable_encoder({
+        **got, "deprecated": "Use /v1/ingest/<source id>/<kind>; this alias goes away next "
+                             "release."}))
 
 
 @app.get("/v1/reliability/policy", response_model=ReliabilityPolicyResponse)
@@ -30992,9 +31032,10 @@ from .routers.infra_view import build_infra_router
 from .routers.observability_view import build_observability_router
 # APP ALERTS (BOSSAPP-598): an app's rules, its alerts and every app's (routers/app_alerts.py).
 from .routers.app_alerts import build_app_alerts_router
+from .routers.monitoring import build_monitoring_router
 
 for _build_view_router in (build_infra_router, build_observability_router,
-                           build_app_alerts_router):
+                           build_app_alerts_router, build_monitoring_router):
     app.include_router(_build_view_router(
         engine=engine,
         # main's own settings object (what every other route reads, and what tests patch).

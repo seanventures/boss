@@ -123,6 +123,26 @@ def _sweep_deployment_health(client: ControlPlaneClient) -> None:
         LOGGER.debug("health_sweep_failed", exc_info=True)
 
 
+#: The monitor scheduler's tick (BOSSAPP-598): rule groups carry their own interval and phase,
+#: so this only has to be shorter than the shortest one (15 s).
+MONITOR_TICK_INTERVAL_SECONDS = 10
+_last_monitor_tick_monotonic = 0.0
+
+
+def _monitor_tick(client: ControlPlaneClient) -> None:
+    """Evaluate due rule groups, run synthetics, triage, notify — on the background thread,
+    out of the health sweep (spec R1.9). Swallows everything: monitoring never fails its caller."""
+    global _last_monitor_tick_monotonic
+    now = time.monotonic()
+    if now - _last_monitor_tick_monotonic < MONITOR_TICK_INTERVAL_SECONDS:
+        return
+    _last_monitor_tick_monotonic = now
+    try:
+        client.monitoring_tick()
+    except Exception:  # noqa: BLE001
+        LOGGER.debug("monitor_tick_failed", exc_info=True)
+
+
 def _run_shepherd_autopilot(client: ControlPlaneClient, settings) -> None:
     """Apply what the shepherd has already decided, on the idle path.
 
@@ -512,6 +532,7 @@ def _run_background_sweeps(settings) -> None:
                 _advance_delivery_workflows(client, settings)
                 _watch_running_tasks(client)
                 _sweep_deployment_health(client)
+                _monitor_tick(client)
             except Exception:  # noqa: BLE001 — a sweep must never take the worker down
                 LOGGER.debug("background_sweep_failed", exc_info=True)
             for _ in range(5):

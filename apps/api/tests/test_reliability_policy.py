@@ -19,21 +19,19 @@ def _win():
 
 
 # --- RB-12: auto-threshold tuning --------------------------------------------
-def test_tuned_signature_is_suppressed_until_higher_count(engine):
+def test_a_dismissed_signature_is_context_for_the_agent_never_a_coded_filter(engine):
+    # RB-12's coded threshold is retired (BOSSAPP-598, G8): nothing is dropped below a count;
+    # the dismissal history rides along as context for the agent's triage.
     with begin(engine) as c:
-        # incidents fire (template + error_surge), each dismissed twice -> signatures raise-listed
         spec = {"kind": "memory", "logs": _errors("tn-svc", 5)}
         rep = RS.scan(c, PID, spec, _win(), persist=True)
         for inc in rep["incidents"]:
             RS.feedback(c, PID, inc["id"], "false_alarm", actor=ACTOR)
             RS.feedback(c, PID, inc["id"], "false_alarm", actor=ACTOR)
-        # same low-count signature again -> suppressed (tuned), reported transparently
         again = RS.scan(c, PID, spec, _win(), persist=True)
-        assert again["incidents"] == []
-        assert again["suppressed"] and again["suppressed"][0]["reason"] == "tuned_threshold"
-        # but a LOUD recurrence (>= 3x floor) still fires — tuning raises the bar, not a mute
-        loud = RS.scan(c, PID, {"kind": "memory", "logs": _errors("tn-svc", 12)}, _win(), persist=True)
-        assert loud["incidents"]
+        assert again["incidents"], "the same low-count signature still raises its incident"
+        assert again["suppressed"] == []
+        assert again["noise_history"] and again["noise_history"][0]["dismissed_before"] >= 2
 
 
 def test_diagnose_carries_few_shot_context(engine):
@@ -74,8 +72,13 @@ def test_decide_action_tiers(engine):
         d = RS.decide_action(c, PID, inc_id)
         assert d["tier"] == 1 and "confidence" in d["reason"]
 
-        # high confidence within bounds -> Tier-0 auto_remediate
+        # high confidence within bounds, but no model verdict: statistics never act alone
         c.execute(text("UPDATE incidents SET confidence = 0.95 WHERE id = :id"), {"id": inc_id})
+        d = RS.decide_action(c, PID, inc_id)
+        assert d["tier"] == 1 and "no model verdict" in d["reason"]
+        # a model's verdict on the cause, high confidence within bounds -> Tier-0 auto_remediate
+        RS._add_evidence(c, inc_id, "rca_verdict", ref="dep-1",
+                         payload={"status": "decided", "cause_key": "dep-1"})
         d = RS.decide_action(c, PID, inc_id)
         assert d["tier"] == 0 and d["action"] == "auto_remediate"
 

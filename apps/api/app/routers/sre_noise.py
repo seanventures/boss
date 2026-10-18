@@ -51,4 +51,6 @@ def post_ask(payload: AskBody) -> dict[str, Any]:
     pid = payload.project_id.strip()
     if not pid:
         raise HTTPException(status_code=422, detail="project_id is required")
-    return plan_query(pid, payload.question)
+    engine = get_engine(get_settings())
+    with begin(engine) as connection:
+        return plan_query(pid, payload.question, connection=connection, settings=get_settings())

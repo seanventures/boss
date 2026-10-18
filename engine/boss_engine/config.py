@@ -1547,6 +1547,10 @@ class Settings(BaseSettings):
     #: every emailed link come from here (or from the origin bound at the network claim), never
     #: from a request's Host header.
     public_url: str = Field(default="", alias="BOSS_PUBLIC_URL")
+    #: The Prometheus bundled with BOSS (compose `monitoring` profile; spec D1, topology T2):
+    #: ingested metrics are forwarded to it and rules over them are evaluated by it. Unset: the
+    #: Postgres floor (T0) holds and evaluates them.
+    monitoring_prometheus_url: str = Field(default="", alias="BOSS_MONITORING_PROMETHEUS_URL")
     #: argon2id cost: "default" (m=64 MiB, t=3) or "small" (m=19 MiB, t=2; hosts under 2 GiB).
     argon2_profile: str = Field(default="default", alias="BOSS_ARGON2_PROFILE")
     #: Hosts (comma-separated names or IPs) the identity outbound client may reach on a private

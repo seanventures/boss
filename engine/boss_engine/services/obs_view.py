@@ -517,7 +517,8 @@ def _attention(connection: Any, settings: Any, project_id: str,
         partial.append("attention")
     try:
         with connection.begin_nested():
-            items += system_doctor.card_items(connection, project_id)
+            items += [i for i in system_doctor.card_items(connection, project_id)
+                      if i.get("area") == "observability"]
     except Exception:  # noqa: BLE001
         log.exception("obs_view: system findings failed")
         partial.append("findings")

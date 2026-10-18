@@ -119,6 +119,24 @@ services:
       # Loopback for the same reason. The operator needs the UI; the internet does not.
       - "127.0.0.1:${INFISICAL_PORT:-8080}:8080"
 
+  # THE BUNDLED PROMETHEUS (BOSSAPP-598, decision D1, topology T2). Opt-in with the
+  # `monitoring` profile; its OTLP and remote-write receivers are on, BOSS forwards the metrics
+  # apps send it here and evaluates rules over them, scoped to each project. Set
+  # BOSS_MONITORING_PROMETHEUS_URL=http://prometheus:9090 in .env to use it; without it BOSS's
+  # Postgres floor (T0) holds and evaluates everything. Not published on the host.
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    profiles: ["monitoring"]
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+      - --web.enable-otlp-receiver
+      - --web.enable-remote-write-receiver
+    volumes:
+      - boss_community_prometheus:/prometheus
+
   api:
     build:
       context: ../..
@@ -193,6 +211,7 @@ services:
       # be able to check it. The public origin binds cookies, passkeys and every emailed link.
       BOSS_CONSOLE_PASSWORD: ${BOSS_CONSOLE_PASSWORD:-}
       BOSS_PUBLIC_URL: ${BOSS_PUBLIC_URL:-${BOSS_CONSOLE_PUBLIC_ORIGIN:-}}
+      BOSS_MONITORING_PROMETHEUS_URL: ${BOSS_MONITORING_PROMETHEUS_URL:-}
       # The console's real port, for links printed before any public origin is bound (the claim
       # link of a laptop install): identity/authn_support.local_console_origin.
       BOSS_WEB_PORT: ${BOSS_WEB_PORT:-3000}
@@ -458,6 +477,7 @@ services:
       BOSS_MASTER_KEY_FILE: ${BOSS_MASTER_KEY_FILE:-/var/lib/boss/identity/master.key}
       BOSS_IDENTITY_SERVER_KEY: ${BOSS_IDENTITY_SERVER_KEY:-}
       BOSS_PUBLIC_URL: ${BOSS_PUBLIC_URL:-${BOSS_CONSOLE_PUBLIC_ORIGIN:-}}
+      BOSS_MONITORING_PROMETHEUS_URL: ${BOSS_MONITORING_PROMETHEUS_URL:-}
       # The console's real port, for links printed before any public origin is bound (the claim
       # link of a laptop install): identity/authn_support.local_console_origin.
       BOSS_WEB_PORT: ${BOSS_WEB_PORT:-3000}
@@ -673,6 +693,7 @@ volumes:
   boss_community_grok_home:
   boss_community_infisical_redis:
   boss_community_pg:
+  boss_community_prometheus:
   boss_community_artifacts:
   boss_community_identity:
   boss_community_toolchain_cache:

@@ -851,6 +851,10 @@ def card_items(connection: Any, project_id: str) -> list[dict[str, Any]]:
                         for o in options],
             "actions": [o["key"] for o in options],
             "run_id": None, "at": f.get("first_seen"),
+            # EVERY CARD SAYS WHICH AREA OWNS IT (one surface per job): Shepherd's questions are
+            # about builds and runs (Factory); the doctor's findings are BOSS's own machine
+            # (Observability › System). Observability showed build questions above its alerts.
+            "area": "factory" if fid.startswith("shepherd:") else "observability",
         })
     return items
 
