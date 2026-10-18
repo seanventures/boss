@@ -1131,3 +1131,41 @@ What the code does where it differs from, or narrows, the sections above. Everyt
 | Proof | `engine/tests/test_replay_a_boss_fixes_a_held_port_itself.py` (opt-in, `BOSS_SELF_FIX_REPLAY=1`) | §13.6 on the scripted engine |
 
 Left for phases 3 and 4: upstream (preview, send, labels upstream, dedupe, PR template, forks, patch export, collector), the console surfaces (parked-step strip, the approval card UI, the Self-fixes page, Send sheet, Govern › Self-fix), the autonomy metric, `remove`/`remove_all` tickets, MCP tools, the watcher's launchd/systemd unit, and the live engine matrix.
+
+---
+
+## 17. As built: phases 3 and 4
+
+Where the code differs from, or narrows, §7, §10, §11 and §12. The new modules are `never` for self-fixes: `self_fix_upstream.py` (by `self_fix*.py`), `private_infra.py`, `autonomy_metric.py`, and the labeler and PR template (by `.github/**`).
+
+| Topic | As built | Why |
+|---|---|---|
+| One denylist | The P0 private-infrastructure tables moved from the test into `services/private_infra.py`; the P0 test and the upstream check both import it | Two copies would drift; the send must be checked against exactly the list the tree is |
+| The code check (§7.3) | Diff, title, trailers and commit message are checked for the denylist, this install's names (not its app FILE names: BOSS's own diff names BOSS's files), machines it knows, addresses outside RFC 5737 / 6598 / loopback / RFC 3849, and credentials (`redaction.redact_secrets`) | Full `redact()` masks every IPv4, so a fixture's `203.0.113.10` or a `0.0.0.0:8000` bind would have blocked every deploy fix; addresses are judged by their range instead. Person-typed edits to the body or evidence are checked the same way |
+| Prose | `share_scrub.scrub` + host/address masking + BOSS record ids (`wfr_…`, `sfx_…`) → `[id]`, then the allow-list's text gate | §7.3: install ids stay local |
+| The stored send | `self_fix_upstream_sends` with `meta` (check, scrub counts, dedupe, channel); statuses `previewed`, `blocked`, `sent`, `failed`, `superseded` (an edit) | Preview = the exact bytes; an edit is new bytes and clears the tick |
+| Dedupe | Run at Preview (an explicit act) with the person's own GitHub connection, never with telemetry off; merged → `upstream_state = merged` (chip In release), open PR → channel `github_comment`, open issue → `Fixes #n`, closed PR → said | §7.4. A search that cannot run is `skipped` with the reason, never fatal |
+| Fork PR | The person's own connection (`vault.token_for_access_check`): blobs, tree, one commit on the release the fix was made on, a branch in the fork, a PR to upstream `main` (said in the body: rebase if needed) | No git push from a container; the release commit is in every fork's network |
+| Collector | The existing `/v1/telemetry/share` takes `kind: self_fix` under its own allow-list `SELF_FIX` (a new `code` spec: verbatim or dropped, never masked); the collector dashboard gains `self_fixes` counts per class signature | No new public route or verifier |
+| Labels | Local PR gains `verified:local` when verified. Upstream: `.github/workflows/boss-agent-labels.yml` (`pull_request_target`, reads only the body, no checkout) applies `source:boss-agent`/`boss:self-fix`/`area:*`/`engine:*`/`verified:local` from the machine block (`engine_family`), else `source:user`; it removes only `source:*` labels | F11. Needs the BOSS team's approval (CI on the public repository) |
+| Patch export | `GET /v1/self-fixes/{id}/patch`: a `.tar.gz` with `fix.patch` (`git am`), `evidence.md`, `README.txt` (with the check's result); writes nothing | A GET that writes is a different kind of route |
+| Remove / Remove all | `self_fix.remove` decisions (tier 2, a person, never a policy); `remove` / `remove_all` tickets rebuild the stack without the fix(es) on the install phases, rolling back on a failed start or health. The fix keeps its status; `stack_state = removed`, chip Rolled back | §6.5 "same install path, same approval rules" |
+| The watcher | `boss self-fix watch --install-service` / `--remove-service` / `--service-status`: a launchd agent or a systemd `--user` unit; refused before anything is written on a host never enrolled; the key never in the unit. The API records the installer's last poll (Govern says "watching") | §6.5 |
+| MCP | Reads only: `list_self_fixes`, `get_self_fix`, `autonomy_report` (`improvement:read`). Start, preview and send stay in the console | No tool moves a self-fix |
+| The diagnosis re-ask | Mender is told what is protected, and a protected first answer is asked once more for a fix outside protected code (kept as a rejected hypothesis); a second protected answer refuses as before | The real-engine Replay A finding (below) |
+| The strip | `step_view` carries `facts` (files, tests added, cost of budget, minutes); every transition refreshes the view on every step that shows the fix (`refresh_step_views`) | A verified fix never still says "Install" |
+| Lineage | `lineage_steps`: nine steps with state `done/now/next/failed/skipped` and words, computed by BOSS | The page draws, never guesses |
+| Autonomy (§12) | Computed on read from `events` (`recovery.*`, `self_fix.verified`/`.approved`, `workflow.step_*`), not stored on `run_scorecards`; `GET /v1/autonomy`, `GET /v1/autonomy/runs/{id}` | One rule for the run page, the trend and the tools |
+| Console | The strip in the step detail, the approval card in Approvals, a Self-fixes area (list, lineage, autonomy trend, Send sheet), Govern › Self-fix, the run bar's autonomy line | §10 |
+
+### 17.1 Replay A on a real engine (2026-10-17)
+
+`BOSS_SELF_FIX_REPLAY=1 BOSS_SELF_FIX_REPLAY_ENGINE=claude_code BOSS_SELF_FIX_REPLAY_MODEL=sonnet` (the laptop install's configured engines are `claude_agent_sdk` for builds and `claude_code` for reviews, both Sonnet; the Agent SDK is not installed for the host's Python, so `claude_code` ran both seats — the security review was "the same engine in a separate session"). Mender wrote everything itself; the recovery decision was the recorded model answer. Not yet verified on a real engine.
+
+| Run | Outcome | Cost · time | What it taught |
+|---|---|---|---|
+| 1 | `refused: protected_path` at the diagnosis | $0.17 · 39 s | The model placed the fix in `step_recovery.host_state` (protected) though a fix outside it exists → the diagnosis is told what is protected and re-asked once (`4d396f5f4`) |
+| 2 | Diagnosis outside protected code (`stack_deploy.retire_own_projects`), red test failed for the diagnosed reason, green passed; `refused: protected_path` at the gates | $1.09 · 7 min 24 s | The fix also edited `step_recovery.py` → the implementer is told too, and a protected edit is undone and asked once more (`1137e345d`) |
+| 3 | Every mechanical gate passed (red→green, affected suites, P0 tier incl. private infra, protected paths, scope, size, tests not weakened); `refused: review` after 2 repair rounds | $2.06 · 14 min 15 s | The reviewers held MAJOR findings: the fix loosened the explicit-project guard (`docker rm -f` where a foreign container used to refuse) and its test exercised that path, not the one `apply_on_host` uses. The refusal is the safety system working; the next lever is fix quality (a stronger engine for the build, the security seat on a second engine), not a looser gate |
+
+The c56bd88a3 oracle was not run: no fix reached the card.
