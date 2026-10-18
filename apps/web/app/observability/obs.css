@@ -346,3 +346,17 @@
   .obs-adetail { margin-left: 0; }
   .obs-arule-acts .inf-link, .obs-alert .inf-link, .obs-alert .ag-icon-btn, .obs-rnum { min-height: 44px; }
 }
+
+/* ── monitoring Phase 1a: Connect an app, Notify, signal sources ─────────────────────────── */
+.obs-rform fieldset { margin: 0; padding: 0; border: 0; min-width: 0; }
+.obs-connect-paths { display: flex; flex-direction: column; gap: 6px; }
+.obs-connect-row { display: flex; flex-wrap: wrap; gap: 8px 12px; }
+.obs-connect-row > .inf-field { flex: 1 1 10rem; min-width: 0; }
+.obs-notify { gap: 20px; }
+.obs-policy { min-width: 0; }
+.obs-policy[data-depth="1"] { padding-inline-start: 18px; }
+.obs-policy[data-depth="2"] { padding-inline-start: 36px; }
+.obs-policy[data-depth="3"] { padding-inline-start: 54px; }
+.obs-policy[data-depth="4"] { padding-inline-start: 72px; }
+.obs-srcline { gap: 2px; padding: 4px 2px; }
+.obs-rform pre.obs-promql { margin: 0; max-height: 16rem; overflow: auto; }

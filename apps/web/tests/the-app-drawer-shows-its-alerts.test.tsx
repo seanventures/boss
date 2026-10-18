@@ -163,7 +163,8 @@ describe("the edit-rule sheet", () => {
     expect(sheet.getAttribute("aria-label")).toBe("Error rate alert");
     expect(text(sheet)).toContain("errors (5xx) are above");
     expect(text(sheet.querySelector("[data-testid='obs-rule-promql']"))).toBe(FIRING_ALERT.expr);
-    expect(text(sheet)).toContain("Email, Slack, paging: later");
+    // Notify: who is told is chosen from the contact points (Observability › Notify adds them).
+    expect(text(sheet.querySelector("[data-testid='obs-rule-notify-none']"))).toMatch(/^Console/);
     await type(sheet.querySelector("[data-testid='obs-rule-threshold']"), "3");
     await type(sheet.querySelector("[data-testid='obs-rule-reason']"), "checkout matters");
     await click(sheet.querySelector("[data-testid='obs-rule-sev-warning']"));

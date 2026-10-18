@@ -17,7 +17,7 @@ function said(body: unknown, status: number): string {
 }
 
 export async function obsWrite<T = Record<string, unknown>>(
-  path: string, body: Record<string, unknown>, press: { scope: string; label: string }, method: "POST" | "PATCH" | "PUT" = "POST",
+  path: string, body: Record<string, unknown>, press: { scope: string; label: string }, method: "POST" | "PATCH" | "PUT" | "DELETE" = "POST",
 ): Promise<WriteResult<T>> {
   try {
     const send = (withPress: boolean) => apiWrite(path, {

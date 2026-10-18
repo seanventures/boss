@@ -1,0 +1,174 @@
+// @vitest-environment happy-dom
+/**
+ * Monitoring Phase 1a (BOSSAPP-598) in the console.
+ *
+ * THE OPERATOR'S SCREENSHOT: Observability › Alerts showed build and workflow cards (the generic
+ * Needs-you strip, and untagged cards leaking into Observability). The Alerts tab now shows only
+ * alerts and incidents, and only cards the server tagged `observability` reach any Observability
+ * tab. An open incident whose alerts have all cleared is shown with its recovered word, never as
+ * failing. Plus: the new filters live in the URL, bulk ack, Connect an app, and Notify's preview.
+ */
+import React, { act } from "react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { FIRING_ALERT, SIGNAL_ALERT, allAlertsWire } from "./_helpers/alerts-fixtures";
+import { ATTENTION_APP_DOWN, pulseWire } from "./_helpers/obs-fixtures";
+import { $, $$, click, settle, unmount } from "./_helpers/live-render";
+import { openObs, params, text } from "./_helpers/obs-render";
+
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }),
+  useSearchParams: () => new URLSearchParams(window.location.search),
+}));
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+afterEach(() => { unmount(); vi.unstubAllGlobals(); });
+
+async function type(el: Element | null, value: string) {
+  const t = el as HTMLInputElement;
+  const proto = t instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype
+    : t instanceof HTMLSelectElement ? HTMLSelectElement.prototype : HTMLInputElement.prototype;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(proto, "value")?.set?.call(t, value);
+    t.dispatchEvent(new Event(t instanceof HTMLSelectElement ? "change" : "input", { bubbles: true }));
+  });
+  await settle();
+}
+
+const BUILD_CARD = {
+  id: "decision:d_build", kind: "decision", title: "Approve the HelpDesk AI build plan", detail: "Waiting on you",
+  role_key: "cto", actions: [], answers: [], decide_inline: false, at: "2026-10-04T11:00:00.000Z",
+};
+const RECOVERED = {
+  id: "inc_rec", title: "invoice (prod): p95 slow", status: "open", lifecycle: "recovered", since: "2026-10-04T10:00:00.000Z",
+  firing: 0, happening: false, subject_id: "t_live", urgency: "high", acked: null, response_run_id: "wfr_9",
+  response_status: "waiting", word: "Recovered at 22:46; a response is waiting on you",
+};
+
+describe("Observability › Alerts shows only alerts and incidents", () => {
+  it("draws no Needs-you cards on the Alerts tab, and no untagged card on any tab", async () => {
+    const pulse = pulseWire({ attention: [ATTENTION_APP_DOWN, BUILD_CARD] });
+    await openObs("?view=alerts", { pulse });
+    expect($("[data-testid='obs-needs']")).toBeNull();
+    expect(text($("[data-testid='obs']"))).not.toContain("Approve the HelpDesk AI build plan");
+    unmount();
+    await openObs("?view=apps", { pulse });
+    const needs = text($("[data-testid='obs-needs']"));
+    expect(needs).toContain("api is down");
+    expect(needs).not.toContain("Approve the HelpDesk AI build plan");
+  });
+
+  it("an open incident with nothing firing shows its recovered word, never as failing", async () => {
+    await openObs("?view=alerts", { alerts: () => allAlertsWire([], { counts: { firing: 0, pending: 0 }, incidents: [RECOVERED] }) });
+    const row = $("[data-testid='obs-incident-inc_rec']")!;
+    expect(text(row.querySelector("[data-testid='obs-incident-word']"))).toBe("Recovered at 22:46; a response is waiting on you");
+    expect(row.querySelector(".obs-adot")?.getAttribute("data-tone")).toBe("grey");
+    expect(text(row)).not.toMatch(/fail/i);
+    expect(text($("[data-testid='obs-alerts-empty']"))).toBe("Nothing firing");
+  });
+
+  it("source, flapping and acked filters live in the URL and reach the API", async () => {
+    const rec = await openObs("?view=alerts");
+    await type($("[data-testid='obs-alerts-source']"), "external");
+    await type($("[data-testid='obs-alerts-flapping']"), "true");
+    await type($("[data-testid='obs-alerts-acked']"), "false");
+    expect(params().get("asrc")).toBe("external");
+    expect(params().get("aflap")).toBe("true");
+    expect(params().get("aack")).toBe("false");
+    await settle();
+    expect(rec.calls.some((u) => u.includes("source=external&flapping=true&acked=false"))).toBe(true);
+  });
+
+  it("badges a row and acks several at once, saying what happened", async () => {
+    const flappy = { ...SIGNAL_ALERT, source: "Alertmanager", flapping: true, urgency: "low",
+                     links: [{ href: "https://alerts.example.com/x", text: "Alertmanager" }, { href: "javascript:alert(1)", text: "bad" }] };
+    const rec = await openObs("?view=alerts", {
+      alerts: () => allAlertsWire([FIRING_ALERT, flappy]),
+      writes: { "/alerts/ack": { body: { acked: ["alrt_err", "alrt_sig"], until: "2026-10-04T16:00:00.000Z" } } },
+    });
+    const sig = $("[data-testid='obs-alert-alrt_sig']")!;
+    expect(text(sig.querySelector("[data-testid='obs-alert-source']"))).toBe("Alertmanager");
+    expect(sig.querySelector("[data-testid='obs-alert-flapping']")).not.toBeNull();
+    expect(sig.querySelector("[data-testid='obs-alert-low']")).not.toBeNull();
+    expect(sig.querySelectorAll("[data-testid='obs-alert-link']")).toHaveLength(1);
+    for (const box of $$("[data-testid='obs-alert-select']")) await click(box);
+    expect(text($("[data-testid='obs-alerts-bulk']"))).toContain("2 selected");
+    await click($("[data-testid='obs-alerts-ack-selected']"));
+    const ack = rec.writes.find((w) => w.url === "/v1/alerts/ack")!;
+    expect((ack.body as { alert_ids: string[] }).alert_ids.sort()).toEqual(["alrt_err", "alrt_sig"]);
+    expect((ack.body as { actor: string }).actor).toBe("ceo");
+  });
+});
+
+describe("Connect an app", () => {
+  it("asks how it talks, shows the values once, then what arrived", async () => {
+    const rec = await openObs("?view=alerts", {
+      writes: { "/monitoring/connect": { status: 201, body: {
+        path: "otel", service: { id: "svc_1", name: "checkout-api", environment: "prod", onboarding: "waiting" },
+        source: { id: "src_1", kind: "otlp", token_hint: "x9" }, shown_once: true, word: "checkout-api is ready for OpenTelemetry",
+        paste: { values: [{ name: "OTEL_EXPORTER_OTLP_ENDPOINT", value: "https://boss.example.com/v1/ingest/otlp" },
+                          { name: "OTEL_EXPORTER_OTLP_HEADERS", value: "Authorization=Bearer tok" }], block: null },
+      } } },
+      gets: { "/v1/monitoring/services/svc_1/live": () => ({
+        service_id: "svc_1", arrived: true, series: 12, events: 0, rules: [1, 2, 3], hint: null,
+        word: "12 series from checkout-api; HTTP server metrics recognised (OpenTelemetry semconv); 3 rules proposed",
+      }) },
+    });
+    await click($("[data-testid='obs-connect']"));
+    expect($("[data-testid='obs-connect-sheet']")).not.toBeNull();
+    // A URL is not asked for OpenTelemetry; the name is, and Connect waits for it.
+    await click($("[data-testid='obs-connect-otel']"));
+    expect($("[data-testid='obs-connect-target']")).toBeNull();
+    expect(($("[data-testid='obs-connect-go']") as HTMLButtonElement).disabled).toBe(true);
+    await type($("[data-testid='obs-connect-name']"), "checkout-api");
+    await click($("[data-testid='obs-connect-go']"));
+    const sent = rec.writes.find((w) => w.url === "/v1/monitoring/connect")!.body as Record<string, unknown>;
+    expect(sent).toMatchObject({ project_id: "p1", actor: "ceo", path: "otel", name: "checkout-api", environment: "prod" });
+    expect($("[data-testid='obs-connect-once']")).not.toBeNull();
+    expect($$("[data-testid='obs-connect-value']")).toHaveLength(2);
+    await settle();
+    expect(text($("[data-testid='obs-connect-arrived']"))).toContain("12 series from checkout-api");
+  });
+
+  it("a URL check asks for the URL; a refusal is said in the API's words", async () => {
+    await openObs("?view=alerts", { writes: { "/monitoring/connect": { status: 422, body: { detail: "That URL is not reachable from BOSS." } } } });
+    await click($("[data-testid='obs-connect']"));
+    await click($("[data-testid='obs-connect-url']"));
+    const url = $("[data-testid='obs-connect-target']");
+    expect(url).not.toBeNull();
+    await type($("[data-testid='obs-connect-name']"), "checkout");
+    await type(url, "https://checkout.example.com/health");
+    await click($("[data-testid='obs-connect-go']"));
+    expect(text($("[data-testid='obs-connect-error']"))).toBe("That URL is not reachable from BOSS.");
+  });
+});
+
+describe("Notify", () => {
+  it("is a tab: contact points say verified or not, and the preview says where it goes and what is skipped", async () => {
+    await openObs("?view=notify", {
+      gets: {
+        "/v1/contact-points": () => ({ contact_points: [
+          { id: "cp_console", name: "Console", kind: "console", shows: "", verified: true },
+          { id: "cp_mail", name: "On-call", kind: "email", shows: "on…@example.com", verified: false },
+        ] }),
+        "/v1/notification-policies": () => ({ policies: [
+          { id: "pol_root", parent_id: null, position: 0, name: "Default", matchers: [], contact_point_ids: ["cp_console"], group_wait_s: 30 },
+          { id: "pol_co", parent_id: "pol_root", position: 0, name: "Checkout", matchers: [{ name: "service", op: "=", value: "checkout" }],
+            contact_point_ids: ["cp_mail"], quiet_hours: { start: "22:00", end: "07:00", timezone: "UTC" } },
+        ] }),
+        "/v1/silences": () => ({ silences: [], windows: [], inhibit_rules: [] }),
+      },
+      writes: { "/notification-policies/preview": { body: {
+        urgency: "high", word: "Goes to Checkout after 30 s",
+        routes: [{ policy_id: "pol_co", path: ["Default", "Checkout"], group_wait_s: 30, repeat_interval_s: 14400, quiet_until: null,
+                   contact_points: [{ id: "cp_mail", name: "On-call", kind: "email", skipped: "not verified" }] }],
+      } } },
+    });
+    expect($("[data-testid='obs-tab-notify']")?.getAttribute("title")).toBe("Who is told, how, and when");
+    expect($("[data-testid='obs-cp-cp_mail'] [data-testid='obs-cp-unverified']")?.getAttribute("title")).toMatch(/high-urgency/);
+    expect(text($("[data-testid='obs-policy-pol_co']"))).toContain('service="checkout"');
+    expect(text($("[data-testid='obs-policy-pol_co']"))).toContain("quiet 22:00–07:00");
+    await click($("[data-testid='obs-route-go']"));
+    expect(text($("[data-testid='obs-route-word']"))).toBe("Goes to Checkout after 30 s");
+    expect(text($("[data-testid='obs-route-cp']"))).toBe("On-call: skipped, not verified");
+  });
+});

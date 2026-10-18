@@ -6,6 +6,7 @@
  *   STACK         OTel → Prometheus → Grafana · ● Running · boss-1 ↗ · prometheus: running …   [Redeploy] Grafana ↗
  *   SCRAPED APPS  App · Env · Scrape URL · Dashboard ↗ / No dashboard · Not watched
  *   SOURCES       Kind · Name · URL · Enabled                                          [Check config]
+ *   SIGNAL SOURCES  OTLP · remote write · webhooks · heartbeats: last seen, in/refused, Rotate, Test
  *   GAPS          No metrics backend · No log backend · Nothing watched yet
  *                                                                                      [Add tools…]
  *
@@ -24,6 +25,7 @@ import { notifyChanged } from "../changed";
 import { ago, plainClick, useNow } from "../agents/live-util";
 import type { ObsTabProps } from "./obs-home";
 import { AddToolsSheet } from "./add-tools-sheet";
+import { SignalSources } from "./signal-sources";
 import { leaveTo } from "./obs-util";
 import { obsRead, obsWrite } from "./obs-write";
 import { Empty, Skeleton, StateWord, ZoneHead } from "../infra/kit";
@@ -202,6 +204,8 @@ export function SourcesTab({ projectId, actor }: ObsTabProps) {
       </section>
 
       <SourcesList s={s} projectId={projectId} actor={actor} />
+
+      <SignalSources projectId={projectId} actor={actor} />
 
       <section className="obs-zone" aria-labelledby="obs-gaps-head" data-testid="obs-gaps">
         <ZoneHead id="obs-gaps-head" label="GAPS" count={s.gaps.length} />

@@ -86,6 +86,12 @@ export type Alert = {
   heldBack: { by: string; word: string } | null; triage: Triage; response: { runId: string | null; word: string } | null;
   runbook: Runbook; exploreUrl: string | null; exploreReason: string | null; sourceKind: "rule" | "signal";
   reporter: { targetId: string | null; app: string | null } | null; backfilled: boolean;
+  /** Phase 1a (monitoring): where it came from, how loud it is, and what holds it back. */
+  subjectId: string | null; serviceId: string | null; source: string | null; urgency: "high" | "low";
+  flapping: boolean; flapScore: number | null; flapTuning: { status: string; action: string; reason: string } | null;
+  acked: { by: string; at: string; until: string | null } | null; noDataSince: string | null; keepFiringSince: string | null;
+  suppressed: { kind: string; id: string; until: string | null; word: string; reason: string | null }[];
+  links: { href: string; text: string }[]; notifiedAt: string | null;
 };
 const STATES = new Set(["firing", "pending", "resolved"]);
 export function parseAlert(w: unknown): Alert {
@@ -96,6 +102,8 @@ export function parseAlert(w: unknown): Alert {
   const held = o.held_back ? obj(o.held_back) : null;
   const resp = o.response ? obj(o.response) : null;
   const rep = o.reporter ? obj(o.reporter) : null;
+  const ft = o.flap_tuning ? obj(o.flap_tuning) : null;
+  const ack = o.acked ? obj(o.acked) : null;
   return {
     id: str(o.id), targetId: str(o.target_id), app: str(o.app), env: str(o.env), ruleId: optStr(o.rule_id), kind: str(o.kind),
     label: str(o.label), alertname: str(o.alertname), summary: str(o.summary, str(o.alertname)), description: optStr(o.description),
@@ -113,6 +121,16 @@ export function parseAlert(w: unknown): Alert {
     runbook: parseRunbook(o.runbook), exploreUrl: optStr(o.explore_url), exploreReason: optStr(o.explore_reason),
     sourceKind: o.source_kind === "signal" ? "signal" : "rule",
     reporter: rep ? { targetId: optStr(rep.target_id), app: optStr(rep.app) } : null, backfilled: o.backfilled === true,
+    subjectId: optStr(o.subject_id), serviceId: optStr(o.service_id), source: optStr(o.source),
+    urgency: o.urgency === "low" ? "low" : "high", flapping: o.flapping === true, flapScore: optNum(o.flap_score),
+    flapTuning: ft ? { status: str(ft.status), action: str(ft.action), reason: str(ft.reason) } : null,
+    acked: ack ? { by: str(ack.by), at: str(ack.at), until: optStr(ack.until) } : null,
+    noDataSince: optStr(o.no_data_since), keepFiringSince: optStr(o.keep_firing_since),
+    suppressed: arr(o.suppressed).map((x) => { const y = obj(x); return { kind: str(y.kind), id: str(y.id), until: optStr(y.until),
+                                                                          word: str(y.word), reason: optStr(y.reason) }; }),
+    links: arr(o.links).map((x) => { const y = obj(x); return { href: str(y.href), text: str(y.text, str(y.href)) }; })
+      .filter((l) => /^https?:\/\//.test(l.href)),
+    notifiedAt: optStr(o.notified_at),
   };
 }
 
@@ -132,10 +150,17 @@ export function parseRulesView(w: unknown): RulesView {
   };
 }
 
+/** An open incident, worded from its alerts ("Firing: 2 alerts", "Recovered at 22:46; …"). */
+export type OpenIncident = {
+  id: string; title: string; status: string; lifecycle: string; since: string | null; firing: number; happening: boolean;
+  subjectId: string | null; urgency: "high" | "low"; acked: boolean; responseRunId: string | null; responseStatus: string | null;
+  word: string;
+};
 export type AlertsView = {
   alerts: Alert[]; counts: { firing: number; pending: number };
-  apps: { targetId: string; app: string; env: string }[];
+  apps: { targetId: string; app: string; env: string; service: boolean }[];
   grafana: { state: string; reason: string | null };
+  incidents: OpenIncident[];
 };
 export function parseAlertsView(w: unknown): AlertsView {
   const o = obj(w);
@@ -143,8 +168,15 @@ export function parseAlertsView(w: unknown): AlertsView {
   const g = obj(o.grafana);
   return {
     alerts: arr(o.alerts).map(parseAlert), counts: { firing: num(c.firing), pending: num(c.pending) },
-    apps: arr(o.apps).map((a) => { const x = obj(a); return { targetId: str(x.target_id), app: str(x.app), env: str(x.env) }; }),
+    apps: arr(o.apps).map((a) => { const x = obj(a); return { targetId: str(x.target_id), app: str(x.app), env: str(x.env), service: x.service === true }; }),
     grafana: { state: str(g.state, "unchecked"), reason: optStr(g.reason) },
+    incidents: arr(o.incidents).map((w) => {
+      const x = obj(w);
+      return { id: str(x.id), title: str(x.title), status: str(x.status), lifecycle: str(x.lifecycle), since: optStr(x.since),
+               firing: num(x.firing), happening: x.happening === true, subjectId: optStr(x.subject_id),
+               urgency: x.urgency === "low" ? "low" : "high", acked: Boolean(x.acked), responseRunId: optStr(x.response_run_id),
+               responseStatus: optStr(x.response_status), word: str(x.word) } as OpenIncident;
+    }),
   };
 }
 
@@ -176,9 +208,21 @@ export const HISTORY_WINS: { key: HistoryWin; label: string; tip: string }[] = [
 ];
 export const historyUrl = (projectId: string, targetId: string, win: HistoryWin) =>
   `${appPath(targetId)}/alerts?${q(projectId, win === "firing" ? { state: "firing" } : { state: "all", since: win })}`;
-export type AlertsFilter = { app: string | null; state: "firing" | "resolved" | "all"; severity: "warning" | "critical" | null };
+export type AlertSource = "rule" | "external" | "synthetic" | "heartbeat" | "signal";
+export const ALERT_SOURCES: { key: AlertSource; label: string; tip: string }[] = [
+  { key: "rule", label: "BOSS rules", tip: "Rules BOSS evaluates" },
+  { key: "external", label: "Other tools", tip: "Alertmanager, Grafana, Sentry, Datadog, CloudWatch, PagerDuty-style" },
+  { key: "synthetic", label: "URL checks", tip: "BOSS calling a URL on a schedule" },
+  { key: "heartbeat", label: "Heartbeats", tip: "A job that stopped checking in" },
+  { key: "signal", label: "Signals", tip: "Signed reports from an app" },
+];
+export type AlertsFilter = { app: string | null; state: "firing" | "resolved" | "all"; severity: "warning" | "critical" | null;
+  source?: AlertSource | null; flapping?: boolean | null; acked?: boolean | null };
+const tri = (v: boolean | null | undefined) => (v === true ? "true" : v === false ? "false" : null);
 export const allAlertsUrl = (projectId: string, f: AlertsFilter) =>
-  `/v1/alerts?${q(projectId, { app: f.app, state: f.state, severity: f.severity, since: f.state === "firing" ? null : "7d" })}`;
+  `/v1/alerts?${q(projectId, { app: f.app, state: f.state, severity: f.severity, since: f.state === "firing" ? null : "7d",
+                               source: f.source ?? null, flapping: tri(f.flapping), acked: tri(f.acked) })}`;
+export const ACK_PATH = "/v1/alerts/ack";
 export const rulesPutPath = (targetId: string) => `${appPath(targetId)}/alert-rules`;
 export const silencePath = (targetId: string, ruleId: string) => `${appPath(targetId)}/alert-rules/${encodeURIComponent(ruleId)}/silence`;
 export const endSilencePath = (targetId: string, silenceId: string) => `${appPath(targetId)}/alert-silences/${encodeURIComponent(silenceId)}/end`;

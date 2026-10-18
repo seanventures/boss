@@ -10,6 +10,7 @@ import { COLLECTOR_BODY_CAP, readCapped } from "../../../lib/read-capped";
 import { noReuse } from "../../../lib/feed-cache";
 import { clientHop, proxyHops } from "../../../lib/client-hop";
 import { rawRequestUrl } from "../../../lib/raw-request-url";
+import { forwardMonitoring, monitoringPath, oddMonitoringSpelling } from "../../../lib/monitoring-proxy";
 
 /**
  * The control plane, on the console's own origin.
@@ -117,6 +118,10 @@ const PREVIEW_REFUSAL_CSP = "sandbox; default-src 'none'";
 async function proxy(req: Request, path: string[]): Promise<Response> {
   const pathname = rawRequestUrl(req).pathname;
   if (isPreviewCapabilityPath(pathname)) return toPreviewOrigin(req);
+  // MONITORING'S MACHINE ROUTES (lib/monitoring-proxy.ts): ingest posts and an email's ack link
+  // pass with no session and nothing added; any other spelling of them is refused.
+  if (monitoringPath(pathname)) return forwardMonitoring(req, { apiUrl: API_URL });
+  if (oddMonitoringSpelling(pathname)) return refuse(req, 404, "not_found");
   if (identityStubEnabled() && isIdentityPath(pathname)) {
     // The identity stub (lib/identity/stub) answers in process while S1–S5 build the real routes.
     const method = req.method.toUpperCase();

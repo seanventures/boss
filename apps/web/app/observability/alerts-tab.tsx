@@ -180,16 +180,65 @@ function AlertDetail({ a, targetId, projectId, actor, onDone }: { a: Alert; targ
   );
 }
 
-export function AlertRow({ a, targetId, projectId, actor, onDone, showApp, onApp, onIncident }: {
+/** What holds an alert back or changes how loud it is, as short chips with the reason in a tooltip. */
+export function AlertBadges({ a }: { a: Alert }) {
+  const lt = useLocalTime();
+  return (
+    <>
+      {a.source ? <span className="obs-chip" data-testid="obs-alert-source" title="Where this alert came from">{a.source}</span> : null}
+      {a.urgency === "low" ? (
+        <span className="obs-chip" data-testid="obs-alert-low" title="Low urgency: it waits for working hours and never pages">Low urgency</span>
+      ) : null}
+      {a.flapping ? (
+        <span className="obs-chip" data-tone="amber" data-testid="obs-alert-flapping"
+              title={a.flapTuning ? `${a.flapTuning.reason} Suggested: ${a.flapTuning.action}` : `Firing and clearing over and over${a.flapScore !== null ? ` (score ${a.flapScore})` : ""}`}>
+          Flapping
+        </span>
+      ) : null}
+      {a.acked ? (
+        <span className="obs-chip" data-tone="green" data-testid="obs-alert-acked"
+              title={`Acked by ${a.acked.by} at ${lt.full(a.acked.at)}. Repeats stop; it is not silenced.`}>
+          Acked{a.acked.until ? ` until ${whenWord(a.acked.until, lt)}` : ""}
+        </span>
+      ) : null}
+      {a.suppressed.map((x) => (
+        <span key={`${x.kind}:${x.id}`} className="obs-chip" data-testid="obs-alert-suppressed"
+              title={[x.reason, x.until ? `until ${lt.full(x.until)}` : null].filter(Boolean).join(" · ") || x.word}>{x.word}</span>
+      ))}
+      {a.noDataSince ? (
+        <span className="obs-chip" data-tone="amber" data-testid="obs-alert-nodata" title={`No data since ${lt.full(a.noDataSince)}`}>
+          No data since {whenWord(a.noDataSince, lt)}
+        </span>
+      ) : null}
+      {a.keepFiringSince ? (
+        <span className="obs-chip" data-testid="obs-alert-keepfiring" title={`Recovered at ${lt.full(a.keepFiringSince)}; kept firing a while to be sure`}>
+          Holding since {whenWord(a.keepFiringSince, lt)}
+        </span>
+      ) : null}
+      {a.links.map((l) => (
+        <a key={l.href} className="inf-link" href={l.href} target="_blank" rel="noreferrer noopener" data-testid="obs-alert-link"
+           title={l.href}>{l.text} ↗</a>
+      ))}
+    </>
+  );
+}
+
+export function AlertRow({ a, targetId, projectId, actor, onDone, showApp, onApp, onIncident, selected, onSelect, onAck }: {
   a: Alert; targetId: string; projectId: string; actor: string; onDone: () => void;
   showApp?: boolean; onApp?: () => void; onIncident?: () => void;
+  /** Observability › Alerts: select-many for Ack selected, and a per-row Ack. */
+  selected?: boolean; onSelect?: (on: boolean) => void; onAck?: () => void;
 }) {
   const lt = useLocalTime();
   const [open, setOpen] = useState(false);
-  const tone = a.state === "firing" ? (a.heldBack ? "amber" : "red") : a.state === "pending" ? "amber" : "grey";
+  const tone = a.state === "firing" ? (a.heldBack || a.acked ? "amber" : "red") : a.state === "pending" ? "amber" : "grey";
   return (
     <li className="obs-alert" data-testid={`obs-alert-${a.id}`} data-state={a.state}>
       <span className="obs-line">
+        {onSelect ? (
+          <input type="checkbox" checked={Boolean(selected)} aria-label={`Select ${a.label} on ${a.app}`} data-testid="obs-alert-select"
+                 onChange={(e) => onSelect(e.target.checked)} />
+        ) : null}
         <Dot tone={tone} />
         <span className="inf-num obs-alert-time" title={lt.full(a.firedAt ?? a.activeAt)}>{whenWord(a.firedAt ?? a.activeAt, lt)}</span>
         {showApp ? (
@@ -206,8 +255,13 @@ export function AlertRow({ a, targetId, projectId, actor, onDone, showApp, onApp
           <button type="button" className="inf-link" data-testid="obs-alert-incident" title={a.incident.title}
                   onClick={onIncident}>{a.incident.word}</button>
         ) : null}
+        <AlertBadges a={a} />
         <span className="ag-spacer" />
         <span className="inf-faint">{a.state === "resolved" ? (a.clearedWord ?? "Resolved") : a.stateWord}</span>
+        {onAck && a.state !== "resolved" && !a.acked ? (
+          <GatedButton permission="observability:manage" type="button" className="inf-link" data-testid="obs-alert-ack"
+                       title="Stops repeat notifications for 4 hours. It does not silence the alert." onClick={onAck}>Ack</GatedButton>
+        ) : null}
         <button type="button" className="ag-icon-btn" aria-expanded={open} aria-label={open ? "Hide details" : "Show details"}
                 data-testid="obs-alert-open" title={open ? "Hide details" : "PromQL, value, Explore, runbook, triage"}
                 onClick={() => setOpen((v) => !v)}>{open ? "▾" : "▸"}</button>

@@ -5,7 +5,8 @@
  * thinking costing.
  *
  *   Observability [● Apps 5] [Models] [System ●] [Sources]   4 up · 1 slow · $3.12 · 24h   [24h|7d|30d] [Find] [Ask BOSS]
- *   NEEDS YOU   AttentionCards filtered to Observability (app down, the system doctor)
+ *   NEEDS YOU   AttentionCards tagged Observability (app down, the system doctor) — not on Alerts,
+ *               which shows only its alerts and incidents
  *   <tab>       Apps (the Pulse) · Models (the llm_calls ledger) · System (BOSS's machine) · Sources
  *
  * One window control drives every number and chart on a tab, and it lives in the URL (`win=`).
@@ -32,6 +33,9 @@ import { SystemTab } from "./system";
 import { SourcesTab } from "./sources";
 import { ScorecardsTab } from "./scorecards";
 import { InstallsTab } from "./installs";
+import { NotifyTab } from "./notify";
+import { ConnectSheet } from "./connect-sheet";
+import { GatedButton } from "../../components/gated";
 import { polledImprove, type SharingView } from "../../lib/improve";
 import { usePolledRead } from "../../lib/log-stream";
 import "../infra/infra.css";
@@ -55,6 +59,7 @@ export function ObsHome({ projectId, actor, orgId }: { projectId: string; actor:
   const live = useConsoleLive();
   const [url, reread] = useUrlState(readObsUrl);
   const [query, setQuery] = useState(url.q);
+  const [connecting, setConnecting] = useState(false);
   const go = useCallback((patch: Record<string, string | null>, mode: "push" | "replace" = "push") => {
     // `tab=` is read once and rewritten as `view=`.
     writeUrl({ tab: null, ...patch }, mode);
@@ -91,7 +96,8 @@ export function ObsHome({ projectId, actor, orgId }: { projectId: string; actor:
   const props: ObsTabProps = { projectId, actor, orgId: orgId ?? null, url, go, query, pulse, system };
   const panel: Record<ObsTab, React.ReactNode> = {
     apps: <AppsTab {...props} />,
-    alerts: <AlertsTab {...props} />,
+    alerts: <AlertsTab {...props} onConnect={() => setConnecting(true)} />,
+    notify: <NotifyTab {...props} />,
     models: <ModelsTab {...props} />,
     system: <SystemTab {...props} />,
     sources: <SourcesTab {...props} />,
@@ -100,7 +106,8 @@ export function ObsHome({ projectId, actor, orgId }: { projectId: string; actor:
   };
   const spend = pulse.data?.spend24hMicros ?? 0;
   const attention = [
-    ...(pulse.data?.attention ?? []).filter((a) => !a.area || a.area === "observability"),
+    // Only cards the server tagged Observability: an untagged build or workflow card is not ours.
+    ...(pulse.data?.attention ?? []).filter((a) => a.area === "observability"),
   // On System, the doctor's findings are its FINDINGS section: one card, not two on one screen.
   ].filter((a) => !(url.view === "system" && a.kind === "system_health"));
 
@@ -120,7 +127,7 @@ export function ObsHome({ projectId, actor, orgId }: { projectId: string; actor:
                     ) : null}
                   </>
                 ) : null}>
-        {url.view !== "sources" && url.view !== "scorecards" && url.view !== "installs" && url.view !== "alerts" ? (
+        {url.view !== "sources" && url.view !== "scorecards" && url.view !== "installs" && url.view !== "alerts" && url.view !== "notify" ? (
           <span className="inf-seg" role="radiogroup" aria-label="Window" data-testid="obs-window">
             {WINDOWS.map((w) => (
               <button key={w} type="button" role="radio" aria-checked={url.win === w} className="inf-seg-btn"
@@ -129,15 +136,20 @@ export function ObsHome({ projectId, actor, orgId }: { projectId: string; actor:
           </span>
         ) : null}
         {pulse.data ? <GrafanaHeaderLink g={pulse.data.grafana} projectId={projectId} actor={actor} onChecked={pulse.refresh} /> : null}
+        <GatedButton permission="observability:manage" type="button" className="ag-btn ag-btn-sm" data-testid="obs-connect"
+                     title="Bring an app's metrics or alerts into BOSS" onClick={() => setConnecting(true)}>Connect an app</GatedButton>
         <FindBox value={query} onChange={(v) => { setQuery(v); writeUrl({ q: v || null }, "replace"); }} label="Find" testId="obs-find" />
         <ObsAskBoss {...props} />
       </AreaHead>
       <PartialLine partial={pulse.data?.partial ?? []} error={pulse.data ? null : pulse.error} testId="obs-partial" />
-      <NeedsYou items={attention} projectId={projectId} actor={actor} orgId={orgId}
-                onRefresh={() => { pulse.refresh(); system.refresh(); }} testId="obs-needs" />
+      {url.view !== "alerts" ? (
+        <NeedsYou items={attention} projectId={projectId} actor={actor} orgId={orgId}
+                  onRefresh={() => { pulse.refresh(); system.refresh(); }} testId="obs-needs" />
+      ) : null}
       <div role="tabpanel" aria-label={OBS_TABS.find((t) => t.key === url.view)?.label} data-testid={`obs-panel-${url.view}`}>
         {panel[url.view]}
       </div>
+      {connecting ? <ConnectSheet projectId={projectId} actor={actor} onClose={() => { setConnecting(false); pulse.refresh(); }} /> : null}
     </div>
   );
 }
