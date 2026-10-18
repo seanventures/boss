@@ -1,0 +1,115 @@
+# WHAT A BOSS SELF-FIX MAY CHANGE (BOSSAPP-571, docs/product/BOSS_FIXES_ITSELF.md §8.1).
+#
+# Read by the `protected_paths` gate (services/self_fix_policy.py) on the self-fix's final diff
+# and on its diagnosis. Matched in this order: `never`, then `tier3`; anything unlisted is tier 2.
+# Renames count as both paths. This file is itself `never`: a person changes it through a normal
+# pull request, never a self-fix.
+#
+# A rule is a path glob (`**` any depth, `*` within one segment) or `path#group`: a HUNK rule
+# that applies only to hunks inside the symbols of that group (`symbols:` below, resolved with
+# Python's ast on the base and the head), or that change a line naming one of the group's
+# protected words. engine/tests/test_protected_symbols_still_exist.py (P0) asserts every symbol
+# still exists, so a rename cannot silently unprotect a gate.
+version: 1
+
+never:            # never self-fixable in v1; a fix that needs these is a recommendation for a person
+  - engine/boss_engine/identity/**              # authn, authz, approvals, seats, passports, delegation, vault, audit, redaction
+  - engine/boss_engine/services/decisions.py
+  - engine/boss_engine/services/decision_actions.py
+  - engine/boss_engine/services/ci_gate.py
+  - engine/boss_engine/services/self_fix*.py     # the self-fix machinery itself
+  - engine/boss_engine/services/step_recovery.py # the classifier that decides what is BOSS-side
+  - engine/boss_engine/services/scripted_engine.py   # the conformance engine that proves the flow
+  - engine/boss_engine/services/governed_code_task_service.py#gates
+  - engine/boss_engine/services/code_task_service.py#gates
+  - engine/boss_engine/services/factory_view.py#UNWAIVABLE_GATES
+  - engine/boss_engine/services/mutation_probe.py
+  - engine/boss_engine/services/mutation_gate.py
+  - engine/boss_engine/services/improve_allowlist.py
+  - engine/boss_engine/services/share_scrub.py
+  - engine/boss_engine/services/redaction.py
+  - engine/boss_engine/services/private_infra.py  # the denylist every upstream send is checked against
+  - engine/boss_engine/services/autonomy_metric.py # how BOSS counts what it solved by itself
+  - engine/boss_engine/services/agent_baseline.py  # agent redaction and baseline grants
+  - engine/boss_engine/services/skill_runtime.py   # allowed_callers / role_skills enforcement
+  - engine/boss_engine/services/budget*.py
+  - engine/boss_engine/sandbox*/**
+  - engine/boss_engine/services/sandbox*.py        # the sandbox write boundary (run doc B6)
+  - apps/egress/**
+  - packages/specpack/policies/**                   # default_safety.yaml and this file
+  - packages/identity/**                            # the permission catalogue
+  - db/**                                           # schema and migrations (no DB rollback in v1)
+  - scripts/install/**                              # installer, upgrade, backup, restore, the self-installer
+  - install.sh
+  - "**/Dockerfile*"
+  - "**/requirements*.txt"
+  - "**/package.json"
+  - "**/pnpm-lock.yaml"
+  - "**/package-lock.json"
+  - "**/yarn.lock"
+  - "**/poetry.lock"
+  - "**/uv.lock"
+  - "**/*compose*.yml"
+  - "**/*compose*.yaml"
+  - .github/**
+  - "**/pytest.ini"
+  - "**/pyproject.toml"
+  - "**/setup.cfg"
+  - "**/tox.ini"
+  - "**/vitest.config.*"
+  - "**/conftest.py"
+  - engine/tests/test_the_public_tree_names_no_private_infrastructure.py
+  - engine/tests/test_protected_symbols_still_exist.py
+  - engine/tests/test_a_self_fix_never_touches_a_protected_path.py
+  - engine/tests/test_a_self_fix_never_weakens_a_test.py
+  - tests/tiers.yaml
+  - boss.verify.yaml
+
+tier3:            # allowed, two people (or the single-operator waiver), always the security reviewer on another engine
+  - engine/boss_engine/services/stack_deploy.py#host_commands   # see host_effect below
+  - engine/boss_engine/services/governed_host_deploy.py#host_commands
+  - engine/boss_engine/services/governed_code_task_service.py   # the pipeline's plumbing (its gates are never)
+  - engine/boss_engine/services/code_task_service.py
+  - engine/boss_engine/services/verification_target.py
+  - engine/boss_engine/services/workflow_capability_runner.py   # park/resume, including this feature's handle
+  - engine/boss_engine/services/resource_plane*.py
+  - engine/boss_engine/services/github_adapter.py
+  - engine/boss_engine/services/software_factory.py
+
+symbols:
+  gates:
+    # The quality gates and their evaluation: never self-fixable, even though the files around
+    # them are (F17). A hunk inside one of these top-level symbols, or a changed line that names
+    # one of the gates they define (`words_from`: every string constant those symbols hold), is
+    # refused.
+    engine/boss_engine/services/governed_code_task_service.py:
+      symbols: [_TEST_GATES, _ALL_GATE_NAMES, _FAIL_CLOSED_TEST_GATES, _ADVISORY_HARD_FLOOR,
+                _NEVER_SHIP_PAST, classify_gate_faults, resolve_gate_failure_action,
+                _record_quality_gate, _review_gate_from_findings, _aggregate_panel,
+                blocked_gate_messages, template_push_hold]
+      words_from: [_TEST_GATES, _ALL_GATE_NAMES, _NEVER_SHIP_PAST]
+    engine/boss_engine/services/code_task_service.py:
+      symbols: [with_existing_tests_criterion, override_code_task, _prior_failing_gates,
+                _recorded_failed_gates]
+  UNWAIVABLE_GATES:
+    engine/boss_engine/services/factory_view.py:
+      symbols: [UNWAIVABLE_GATES, UNWAIVABLE_WHY]
+  host_commands:
+    # A hunk that changes a rendered shell string BOSS sends to a host (a string literal on a
+    # changed line that reads like a command) is tier 3; other hunks of the file are tier 2.
+    engine/boss_engine/services/stack_deploy.py:
+      shell_strings: true
+    engine/boss_engine/services/governed_host_deploy.py:
+      shell_strings: true
+
+flags:
+  host_effect:          # the diff adds a shell command BOSS sends to a host that removes, stops or overwrites
+    patterns: ["rm -f", "rm -rf", "compose down", "docker rm", "docker volume", "docker kill",
+               "docker stop", "chmod", "chown", "> /etc", "systemctl stop", "kill -9"]
+    effect: security_focus + card_badge + tier3
+  protected_adjacent:   # the diff adds an import of a never-path module
+    effect: security_focus + card_badge
+
+limits:
+  max_files: 6          # changed files outside the new tests
+  max_diff_lines: 300   # changed lines outside the new tests (setting self_fix_max_diff_lines)

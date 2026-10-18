@@ -25,6 +25,7 @@ import { IdentityProvider } from "../components/identity/identity-provider";
 import { LockedPanel, ReadFailure, readFailureLabel } from "../components/locked-panel";
 import { apiErrorText } from "../lib/api-error";
 import { IMPROVE_READS } from "../lib/improve-ops";
+import { SELF_FIX_READS } from "../lib/self-fix-ops";
 import type { MePermissionsResponse, MeResponse } from "../lib/identity/contract";
 import { installMirror } from "../lib/identity/mirror";
 import { ROLE_PERMISSIONS, type Permission } from "../lib/identity/permissions.gen";
@@ -64,7 +65,7 @@ describe("1. the gate's table is the API's", () => {
   it("finds the GET proxies (the scan is not empty)", () => {
     expect(getProxies.length).toBeGreaterThan(40);
   });
-  it.each(getProxies.filter((p) => p !== "/api/improve"))("%s has an entry in API_READ_OPS", (proxy) => {
+  it.each(getProxies.filter((p) => p !== "/api/improve" && p !== "/api/self-fix"))("%s has an entry in API_READ_OPS", (proxy) => {
     expect(API_READ_OPS[proxy], `map ${proxy} in lib/identity/read-gates.ts API_READ_OPS`).toBeDefined();
   });
   it("names no proxy that does not exist", () => {
@@ -77,6 +78,9 @@ describe("1. the gate's table is the API's", () => {
   });
   it.each(Object.keys(IMPROVE_READS))("/api/improve?view=%s maps to a declared route", (view) => {
     expect(permissionForRead(`/api/improve?view=${view}&project_id=p&id=x`), view).not.toBeNull();
+  });
+  it.each(Object.keys(SELF_FIX_READS))("/api/self-fix?view=%s maps to a declared route", (view) => {
+    expect(permissionForRead(`/api/self-fix?view=${view}&project_id=p&id=x&run_id=r`), view).not.toBeNull();
   });
 });
 

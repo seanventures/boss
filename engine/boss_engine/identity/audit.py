@@ -111,6 +111,12 @@ EVENT_TYPES: frozenset[str] = frozenset({
     "oidc.pool_user.email_verified", "oidc.pool_user.mfa_enrolled", "oidc.pool_user.mfa_failed",
     "oidc.pool_user.passkey_added", "oidc.pool_user.factor_removed", "oidc.pool_user.password_reset",
     "oidc.pool_user.signed_out",
+    # BOSS fixes itself (docs/product/BOSS_FIXES_ITSELF.md §8.5): who started, refused,
+    # approved, ticketed, installed, rolled back or removed a change to BOSS's own code, and who
+    # switched the feature or its policy
+    "self_fix.started", "self_fix.refused", "self_fix.approved", "self_fix.rejected",
+    "self_fix.ticket_issued", "self_fix.installed", "self_fix.rolled_back", "self_fix.removed",
+    "self_fix.upstream_sent", "self_fix.policy_changed", "self_fix.switch_changed",
 })
 
 #: hash of "no previous event" for the first row of an org's chain.

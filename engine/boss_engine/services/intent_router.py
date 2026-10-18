@@ -15,7 +15,7 @@ from .agent_process import AgentProcessService
 from .budget import BudgetGovernor
 from .canonical import CanonicalObjectService
 from .capability_manifest import CapabilityManifest
-from . import model_routing
+from . import agent_decision, model_routing
 from .code_task_service import start_code_task
 from .core import stable_dedupe_key, emit_event, make_id
 from .turn_budget import TurnBudget
@@ -91,6 +91,69 @@ class RouterTurn:
     #: The turns the dock offers next — "Investigate further", "Do the fix" — under an answer
     #: given from a record in one call (subject_answer.py). Each is {id, label, depth, message}.
     next_steps: list[dict[str, Any]] = field(default_factory=list)
+    #: HOW THIS TURN WAS DECIDED (agent_decision.AgentDecision.to_dict): the action the model
+    #: chose, its confidence, and who answered. Empty when nothing was decided (a button press).
+    decision: dict[str, Any] = field(default_factory=dict)
+
+
+#: The governed initiators a turn can start: name -> (manifest capability, what it does).
+_INITIATORS: dict[str, tuple[str, str]] = {
+    "create_meeting": ("meeting", "open an agent panel meeting to debate an open design or "
+                                  "product decision"),
+    "create_prd": ("prd", "write a product requirements document for a fuzzy feature idea"),
+    "run_discovery": ("discovery", "start a research discovery (web research and evidence) on "
+                                   "a NEW topic; never for looking into existing work"),
+    "propose_command": ("multi_phase_command", "draft a multi-phase delivery plan for several "
+                                               "dependent pieces of new work"),
+    "create_agent_process": ("agent_process", "author a role-handoff process or workflow "
+                                              "definition from their description"),
+    "start_agent_process": ("agent_process", "run an existing agent process against a PRD "
+                                             "(simulated)"),
+}
+
+#: What each decided turn asks of the answering agent — said to it before it starts.
+_DECIDED_MEANS = {
+    "answer": ("a QUESTION. Answer it from what you can read; change nothing. A fix you would "
+               "make is offered as a button (propose_action with the real tool and arguments)."),
+    "investigate": ("a request to LOOK INTO something. Read what you need (logs, hosts, code, "
+                    "run history), report the cause and what fixes it; change nothing. Offer "
+                    "each fix as a button (propose_action)."),
+    "operate": ("an instruction about work that ALREADY EXISTS. Read it, then carry it out ON "
+                "THAT WORK with the tool that acts on it — retry_workflow_step for a workflow run's "
+                "step (also when the build in question IS that step: retry the step, not the "
+                "build), retry_code_task (with a fix_note) for a build that is not a workflow "
+                "step, redeploy for a deployment, skip/recheck for a stopped run. Never start new work for it. If "
+                "what they asked would destroy or replay something they may not intend (a "
+                "removal, deleted data), ask ONE question instead. Report only what a tool did."),
+    "new_code_change": ("a request for NEW work. Offer it: create_code_task for one scoped "
+                        "change, start_workflow for a whole delivery — both come back as a "
+                        "button the person presses; say it is offered, not started. Do not "
+                        "retry or redeploy existing work in its place."),
+}
+
+
+def _decision_note(decision: Any) -> str:
+    action = getattr(decision, "action", None)
+    if getattr(decision, "status", "") == agent_decision.CLARIFY:
+        return ("THIS TURN WAS DECIDED (by BOSS's decision model) to be UNCLEAR: it could mean "
+                f"'{action}' or something else, and the words alone did not settle it. Read the "
+                "records it is about first. Then answer with ONE short question that settles "
+                "what they want, and offer each option you found as a button (propose_action "
+                "with the real tool and arguments). Change nothing this turn. If the records "
+                "make the meaning plain, say what you would do and offer exactly that.")
+    means = _DECIDED_MEANS.get(str(action or ""))
+    if not means:
+        return ""
+    reason = str(getattr(decision, "reason", "") or "").strip()
+    return ("THIS TURN WAS DECIDED (by BOSS's decision model, reading the request in context) "
+            f"to be {means}" + (f" Why: {reason}" if reason else ""))
+
+
+#: The decided actions the tool-holding agent carries out (the others start an initiator).
+_AGENT_ACTIONS = frozenset({"answer", "investigate", "operate", "new_code_change"})
+
+#: The decided actions that authorise the agent to change things this turn.
+_WRITE_ACTIONS = frozenset({"operate", "new_code_change"})
 
 
 _TOOL_SCHEMAS = [
@@ -1197,7 +1260,12 @@ def _one_conversation_brief() -> str:
         "ABOUT THE RUNNING SYSTEM — runs, deploys, spend, why something failed, what is "
         "blocked, fix this, retry that. Answer exactly as instructed above: investigate with "
         "tools, ground every claim in what you read, and act when they ask you to act. Nothing "
-        "below changes any of that.\n\n"
+        "below changes any of that. A request about work that EXISTS (a run, a step, a build, "
+        "a deploy — named by id or by description) is carried out on that work: read it first, "
+        "then take the action its state calls for. Never start new work to carry out a request "
+        "about existing work. If what they want is genuinely ambiguous after reading, ask ONE "
+        "question instead of guessing an action; if you cannot do it, say so and say where it "
+        "is done.\n\n"
         "ABOUT AN IDEA — should I build this, is it worth it, what would it need to be, who is "
         "it for. Reading deployments to answer this is answering a question nobody asked. "
         "Instead:\n"
@@ -1570,6 +1638,8 @@ class IntentRouter:
         # the database.
         # The thread and its first message: what the model router picks a model from, once.
         self._turn_messages, self._turn_thread = messages, thread_id
+        self._turn_action = None
+        self._turn_verdict = None
         self._use_project_chat_model(connection, project_id)
         latest = str(messages[-1].get("content") or "").strip() if messages else ""
         if confirm_plan_id:
@@ -1581,24 +1651,29 @@ class IntentRouter:
                 pending_plan_id=pending_plan_id,
             )
 
+        # THE MODEL DECIDES WHAT THIS TURN DOES. NO KEYWORD DOES.
+        #
+        # This method used to sort the sentence with regexes before any model saw it: a pending
+        # plan was dismissed on "cancel|scrap|start over", revised on "no|change|instead";
+        # "should we" opened a meeting, "research|compare|investigate" started a discovery,
+        # "first|then|step 2" drafted a multi-phase plan, and with no model connected "fix|build|
+        # add" started a governed build. Every misroute in this file's history came from that —
+        # "please retry the Build step of wfr_…" became a NEW build (crun_61720b80), "why did
+        # this take so long, can you investigate?" a discovery that hit the burst cap — because
+        # the difference between those readings is the STATE of the work, and a regex has never
+        # seen it. The write gate was the same: `asked_only_to_look` decided from the words
+        # whether the agent could change anything.
+        #
+        # Now the decision model (Jev when it is available and not held, else this project's
+        # routed model — agent_decision.decide) reads the request, the thread, the record it is
+        # about and the candidate actions, and answers with ONE action and a confidence. The
+        # keyword readings are handed to it as hints. Below the threshold the person is asked
+        # ONE question and nothing is done. With no model, BOSS says so and does nothing.
+        if not self._a_model_can_answer(connection, project_id):
+            return RouterTurn(reply=agent_decision.NO_MODEL_REPLY,
+                              decision={"status": agent_decision.NO_MODEL})
+        objective = None
         if pending_plan_id:
-            low = latest.lower()
-            # DISMISS: clear a stale/unwanted plan and move on (agent_service clears it on this action).
-            if re.search(r"\b(cancel|discard|dismiss|scrap|forget (it|this|that)|never ?mind|"
-                         r"drop (it|this|the plan)|(remove|delete|clear|scrap|ignore) the plan|"
-                         r"start over)\b", low):
-                return RouterTurn(reply="Okay — cleared that pending plan. What would you like to do next?",
-                                  actions=[{"kind": "plan_dismissed"}])
-            # A leading QUESTION is discussion — answer it without touching the plan (the pending plan
-            # must not swallow every message: a user has to be able to ask things).
-            if bool(re.match(r"^\s*(how|what|why|when|where|who|which|explain|tell me|show me)\b", low)) or (
-                    latest.strip().endswith("?") and not re.match(r"^\s*(can|could|would|will|please)\b", low)):
-                return self._answer(connection, project_id, messages, actor=actor, external_ref=external_ref,
-                                mode=mode,
-                                thread_id=thread_id,
-                                role=role, depth=depth)
-            # Any other new instruction REVISES the plan to reflect it (re-propose). This also unjams a
-            # thread whose plan was already handled another way — the user just steers with a message.
             row = connection.execute(
                 text("SELECT objective FROM plans WHERE id = :id AND project_id = :project_id"),
                 {"id": pending_plan_id, "project_id": project_id},
@@ -1606,111 +1681,253 @@ class IntentRouter:
             if row is None:
                 return RouterTurn(reply="That pending plan no longer exists — cleared it.",
                                   actions=[{"kind": "plan_dismissed"}])
-            revising = bool(re.search(r"\b(no|don't|do not|change|revise|edit|instead|not yet)\b", low))
-            command = (f"{row['objective']}\n\nRequested revision: {latest}" if revising else latest)
+            objective = str(row["objective"] or "")
+        if mode == "discuss":
+            # A discussion starts nothing by design (`_one_conversation_brief`): no decision to
+            # make, and no write the turn could authorise.
+            self._turn_action = "answer"
+            return self._answer(connection, project_id, messages, actor=actor,
+                                external_ref=external_ref, mode=mode, thread_id=thread_id,
+                                role=role, depth=depth, writes=False)
+        decision = self._decide_turn(connection, project_id, messages, manifest,
+                                     external_ref=external_ref, objective=objective,
+                                     role=role, depth=depth)
+        verdict = decision.to_dict()
+        if decision.status == agent_decision.NO_MODEL:
+            return RouterTurn(reply=agent_decision.NO_MODEL_REPLY, decision=verdict)
+        if decision.status == agent_decision.CLARIFY and decision.action in _AGENT_ACTIONS:
+            # UNSURE IS ONE QUESTION, NEVER A GUESSED ACTION — but an INFORMED question. The
+            # decision model could not tell "fix order api deploy" apart as a retry, a repair of
+            # the build or new work from the words and a glance; the record can. The agent
+            # reads it with every write withheld, then asks ONE question with each option it
+            # found offered as a button. Nothing runs until the person answers or presses.
+            self._turn_action, self._turn_verdict = "clarify", decision
+            turn = self._answer(connection, project_id, messages, actor=actor,
+                                external_ref=external_ref, mode=mode, thread_id=thread_id,
+                                role=role, depth=depth, writes=False)
+            turn.decision = verdict
+            return turn
+        if decision.status == agent_decision.CLARIFY:
+            # UNSURE IS ONE QUESTION, NEVER A GUESSED ACTION.
+            return RouterTurn(reply=decision.question, decision=verdict)
+        action = str(decision.action)
+        if action == "dismiss_plan":
+            return RouterTurn(reply="Okay — cleared that pending plan. What would you like to do next?",
+                              actions=[{"kind": "plan_dismissed"}], decision=verdict)
+        if action == "confirm_plan" and pending_plan_id:
+            turn = self._confirm_plan(connection, project_id=project_id, actor=actor,
+                                      confirm_plan_id=pending_plan_id,
+                                      pending_plan_id=pending_plan_id)
+            turn.decision = verdict
+            return turn
+        if action == "revise_plan" and objective is not None:
             try:
-                return self._dispatch(
-                    connection, "propose_command", {"command": command},
+                turn = self._dispatch(
+                    connection, "propose_command",
+                    {"command": self._revised_objective(connection, project_id, objective,
+                                                        latest)},
                     project_id=project_id, actor=actor, external_ref=external_ref)
             except (ProjectMemberNotFoundError, ProjectMemberPermissionError) as error:
-                return RouterTurn(reply=f"I can’t revise that plan: {error}")
+                return RouterTurn(reply=f"I can’t revise that plan: {error}", decision=verdict)
+            turn.decision = verdict
+            return turn
+        if action in _INITIATORS:
+            turn = self._start_initiator(connection, action, latest, manifest,
+                                         project_id=project_id, actor=actor,
+                                         external_ref=external_ref)
+            turn.decision = verdict
+            return turn
+        # answer / investigate / operate / new_code_change: the tool-holding agent, with the
+        # writes the decision authorised. A question never authorises a write; a write the agent
+        # still wants comes back as a button.
+        self._turn_action, self._turn_verdict = action, decision
+        turn = self._answer(connection, project_id, messages, actor=actor,
+                            external_ref=external_ref, mode=mode, thread_id=thread_id,
+                            role=role, depth=depth,
+                            writes=action in _WRITE_ACTIONS)
+        turn.decision = verdict
+        return turn
 
-        if self._asks_for_capabilities(latest):
-            enabled = [item for item in manifest.capabilities if item.enabled]
-            disabled = [item for item in manifest.capabilities if not item.enabled]
-            reply = "I can currently:\n" + "\n".join(
-                f"- {item.title}: {item.summary}" for item in enabled
-            )
-            if disabled:
-                reply += "\n\nUnavailable in this project:\n" + "\n".join(
-                    f"- {item.title}: {item.reason or 'not enabled'}" for item in disabled
-                )
-            return RouterTurn(reply=reply)
+    # ── The turn's decision ─────────────────────────────────────────────────────────────────
 
-        # THE MODEL ROUTES. THE REGEX IS WHAT HAPPENS WHEN THERE IS NO MODEL.
-        #
-        # This used to run in the opposite order: a keyword matcher decided first, a classifier
-        # second, and the AGENT — the only component holding the fifty tools and the run's
-        # actual state — was the last resort, reached only when both abstained.
-        #
-        # Every misroute in this file's history comes from that inversion. Two occurrences of
-        # the word "and" became a multi-phase plan. A pasted WHERE clause became a plan. The
-        # bare word "fix" became a governed code task, so "the deployment failed, fix it and
-        # retry" spawned a build — real money — when the answer was one redeploy call. Each was
-        # patched by narrowing the pattern, which is the wrong repair: a regex cannot know that
-        # "fix" means redeploy HERE and create_code_task THERE, because the difference is the
-        # state of the run, and the regex has never seen it.
-        #
-        # The agent can. It holds every capability the deterministic branches below actuate —
-        # create_code_task, start_workflow — plus the reads to decide
-        # between them. Handing it the sentence IS the routing decision, and it is the same
-        # design every competent coding agent uses: tools, a model, and no keyword layer in
-        # front deciding what the model is allowed to consider.
-        #
-        # `_deterministic_intent` stays for two callers that genuinely need it: this method
-        # when no model is configured, and `classify_message`, which community-facing surfaces
-        # use so an untrusted GitHub issue cannot create work merely by being classified.
-        # Gated on whether a MODEL EXISTS, not on `agent_router_llm_enabled`.
-        #
-        # I first gated this on that flag, which defaults to False and is unset in production —
-        # so the inversion was dead code and the regex stayed in charge. Worse, my own
-        # verification passed: the sentences I tested contained no build verbs, the matcher
-        # abstained, and the turn reached the agent anyway. I read "the regex had no opinion"
-        # as "the agent is routing". The next message that did contain one — "list the tools
-        # you can call that CHANGE something" — spawned a governed code task.
-        #
-        # That flag governs the older LLM CLASSIFIER (`_model_intent`), a different mechanism
-        # from the tool-calling agent. The agent is the same one that answers every question in
-        # this console today; if a model is configured at all, it is available.
-        # A configured model used to swallow every turn, including named discovery
-        # and meetings, so those paths never reserved budget. Questions and
-        # create_code_task still go to the agent when a model exists. Discovery,
-        # meetings, PRDs, and phased commands stay on the governed path.
-        name, arguments = self._deterministic_intent(latest)
-        model_configured = bool(
-            self.settings.openai_api_key or self.settings.azure_openai_key
-        )
-        if name is None or (model_configured and name == "create_code_task"):
-            return self._answer(connection, project_id, messages, actor=actor, external_ref=external_ref,
-                                mode=mode,
-                                thread_id=thread_id,
-                                role=role, depth=depth)
+    def _turn_candidates(self, manifest: CapabilityManifest, *, pending_plan: bool
+                         ) -> list["agent_decision.Candidate"]:
+        """What this turn may do, as the decision model is offered it — availability from the
+        manifest, so a disabled initiator is chosen only to be told where it is done."""
+        C = agent_decision.Candidate
+        out = [
+            C("answer", "answer a question or explain something from what BOSS already knows "
+                        "about the thing in view; change nothing", acts=False),
+            C("investigate", "look into it live (logs, hosts, containers, code, run history) and "
+                             "report the cause; change nothing — any fix is offered as a button",
+              acts=False),
+            C("operate", "carry out what they asked on work that ALREADY EXISTS: retry, resume "
+                         "or skip a step, retry a build's delivery, redeploy, roll back, retarget, "
+                         "change a setting, cancel, prioritise (expensive or destructive tools "
+                         "still come back as buttons for them to press)"),
+            C("new_code_change", "start NEW code work on an app: a new app, a feature or a "
+                                 "change to an app's code (offered as a button for them to start)"),
+        ]
+        if pending_plan:
+            out += [C("confirm_plan", "run the pending plan exactly as proposed"),
+                    C("revise_plan", "change the pending plan the way they described"),
+                    C("dismiss_plan", "drop the pending plan")]
+        for name, (capability_id, means) in _INITIATORS.items():
+            cap = manifest.get(capability_id)
+            enabled = cap is not None and cap.enabled
+            out.append(C(name, means, available=enabled,
+                         why_not="" if enabled else (cap.reason if cap else
+                                                     "not registered in this project")))
+        return out
 
-        capability_id = {
-            "create_code_task": "code_task",
-            "create_meeting": "meeting",
-            "create_prd": "prd",
-            "run_discovery": "discovery",
-            "propose_command": "multi_phase_command",
-            "create_agent_process": "agent_process",
-            "start_agent_process": "agent_process",
-        }[name]
+    def _decision_context(self, connection, project_id: str, latest: str,
+                          external_ref: Optional[str], objective: Optional[str]) -> dict:
+        """What the decision model sees besides the words: the record the turn is about (the
+        dock's subject, or the one id the request names) and any pending plan."""
+        context: dict[str, Any] = {}
+        try:
+            ref = parse_subject(external_ref) if external_ref else None
+            if ref is None:
+                ref = subject_named_in(latest)
+            if ref is not None:
+                with connection.begin_nested():
+                    evidence = resolve_subject(connection, project_id, ref)
+                context["in view"] = {
+                    "what": ref.label, "found": bool(evidence.found),
+                    "title": evidence.title, "status": evidence.status,
+                    "error": str(evidence.error or "")[:1500],
+                    "facts": {k: v for k, v in list((evidence.facts or {}).items())[:16]},
+                    "linked": list(evidence.linked or [])[:8],
+                }
+        except Exception as exc:  # noqa: BLE001 — context is evidence; missing it is not a failure
+            _log.info("decision context unavailable: %s", exc)
+        if objective is not None:
+            context["pending plan"] = objective[:1500]
+        glance = self._project_glance(connection, project_id)
+        if glance:
+            context["this project"] = glance
+        return context
+
+    @staticmethod
+    def _project_glance(connection, project_id: str) -> dict:
+        """What exists in this project, in a few lines, so "roll back helpdesk" or "retry the
+        build" can be read against the apps and runs that are actually there."""
+        out: dict[str, Any] = {}
+        queries = {
+            "recent workflow runs": (
+                "SELECT id, status, input->>'title' AS title, left(error, 200) AS error "
+                "FROM workflow_runs WHERE project_id = :p ORDER BY created_at DESC LIMIT 6"),
+            "recent builds": (
+                "SELECT id, status, phase, title, left(error, 160) AS error FROM code_task_runs "
+                "WHERE project_id = :p ORDER BY created_at DESC LIMIT 6"),
+            "apps' deployment targets": (
+                "SELECT id, app_name, environment, status FROM deployment_targets "
+                "WHERE project_id = :p ORDER BY updated_at DESC LIMIT 6"),
+        }
+        for label, sql in queries.items():
+            try:
+                with connection.begin_nested():
+                    rows = connection.execute(text(sql), {"p": project_id}).mappings().all()
+            except Exception:  # noqa: BLE001 — a glance, not a requirement
+                continue
+            if rows:
+                out[label] = [" · ".join(str(v) for v in r.values() if v) for r in rows]
+        return out
+
+    def _decide_turn(self, connection, project_id: str, messages: list,
+                     manifest: CapabilityManifest, *, external_ref: Optional[str],
+                     objective: Optional[str], role: Optional[str],
+                     depth: Optional[str]) -> "agent_decision.AgentDecision":
+        latest = str(messages[-1].get("content") or "").strip() if messages else ""
+        hints: list[str] = []
+        guessed, _ = self._deterministic_intent(latest)
+        if guessed:
+            hints.append(f"a keyword reading of the words suggests '{guessed}'")
+        hints.append("the wording reads as " + ("a question" if asked_only_to_look(latest)
+                                                else "an instruction or a report"))
+        if depth == "investigate":
+            hints.append("the person pressed 'Investigate further' or 'Do the fix' on an answer")
+        return agent_decision.decide(
+            connection, self.settings, project_id,
+            situation=("A person typed this in BOSS's console"
+                       + (f", to the {role} agent" if role else "")
+                       + ". Decide what BOSS does with it."),
+            message=latest, history=messages[:-1],
+            context=self._decision_context(connection, project_id, latest, external_ref,
+                                           objective),
+            candidates=self._turn_candidates(manifest, pending_plan=objective is not None),
+            hints=hints, agent=(role or "BOSS"), ref=f"turn:{project_id}",
+            # The model this turn's agent answers on (`_use_project_chat_model`), so the
+            # decision and the answer are the same project's routed model; otherwise the
+            # decision routes its own (Jev when ready).
+            adapter=(getattr(self, "_decision_adapter", None)
+                     or getattr(self, "_answer_adapter", None)))
+
+    def _revised_objective(self, connection, project_id: str, objective: str,
+                           revision: str) -> str:
+        """The plan's objective rewritten with the person's change, by the project's model.
+
+        Appending "Requested revision: skip the research" to "First research…, then build…"
+        drafted the same two phases again (battle test): the phase drafter reads the text, so
+        the text must BE the revised plan. A model that cannot answer leaves the old shape."""
+        adapter = getattr(self, "_decision_adapter", None) or self._answer_adapter
+        fallback = f"{objective}\n\nRequested revision: {revision}"
+        if adapter is None or not hasattr(adapter, "create_text_response"):
+            return fallback
+        try:
+            result = adapter.create_text_response(
+                f"PLAN OBJECTIVE:\n{objective}\n\nTHE PERSON'S CHANGE:\n{revision}\n\n"
+                "Rewrite the objective with the change applied, as one paragraph that states "
+                "the work in order (use 'first … then …' for phases). Output only the new "
+                "objective.",
+                system_prompt="You revise delivery plans. Output only the revised objective.")
+            text_out = str(result[1] if isinstance(result, tuple) else result or "").strip()
+        except Exception:  # noqa: BLE001 — the person's words still travel with the plan
+            return fallback
+        if not text_out or text_out.startswith("{") or len(text_out) > 4000:
+            return fallback
+        return text_out
+
+    def _start_initiator(self, connection, name: str, message: str,
+                         manifest: CapabilityManifest, *, project_id: str, actor: str,
+                         external_ref: Optional[str]) -> RouterTurn:
+        """A governed initiator the decision model chose, started through `_dispatch`."""
+        capability_id = _INITIATORS[name][0]
         capability = manifest.get(capability_id)
-        # A missing GitHub target means the PR has nowhere to land yet. The run
-        # is still created locally; opening the PR fails closed until a repo is set.
-        missing_repo_only = (
-            name == "create_code_task"
-            and capability is not None
-            and not capability.enabled
-            and "GitHub repository" in (capability.reason or "")
-        )
-        if (capability is None or not capability.enabled) and not missing_repo_only:
+        if capability is None or not capability.enabled:
             reason = capability.reason if capability else "Capability is not registered."
             return RouterTurn(reply=f"I can’t start that here: {reason}")
-
         try:
-            return self._dispatch(
-                connection,
-                name,
-                arguments,
-                project_id=project_id,
-                actor=actor,
-                external_ref=external_ref,
-            )
+            return self._dispatch(connection, name, self._initiator_arguments(name, message),
+                                  project_id=project_id, actor=actor, external_ref=external_ref)
         except (ProjectMemberNotFoundError, ProjectMemberPermissionError) as error:
             return RouterTurn(reply=f"I can’t start that work: {error}")
         except ValueError as error:
             return RouterTurn(reply=f"I couldn’t start that work: {error}")
+
+    def _initiator_arguments(self, name: str, message: str) -> dict[str, Any]:
+        """The arguments an initiator starts with — the request itself; the choice is made."""
+        if name == "create_meeting":
+            return {"title": self._short_title(message, "Decision meeting"), "purpose": message}
+        if name == "create_prd":
+            return {"directive": message}
+        if name == "run_discovery":
+            return {"title": self._short_title(message, "Discovery"), "seed": message}
+        if name == "propose_command":
+            return {"command": message}
+        if name == "create_agent_process":
+            args: dict[str, Any] = {"text": message}
+            given = self._extract_process_name(message)
+            if given:
+                args["name"] = given
+            return args
+        if name == "start_agent_process":
+            args = {"prd": self._extract_prd(message), "simulated": True}
+            key = self._extract_process_key(message.lower())
+            if key:
+                args["process_key"] = key
+            return args
+        raise ValueError(f"{name} is not an initiator")
 
     def _scope_note(self, connection, project_id: str, external_ref: Optional[str],
                     question: str = "", evidence: Any = None) -> str:
@@ -1840,7 +2057,11 @@ class IntentRouter:
                 #: `_discussion_brief`. Anything else is the operating agent it has always been.
                 mode: str = "operate",
                 thread_id: Optional[str] = None,
-                depth: Optional[str] = None) -> RouterTurn:
+                depth: Optional[str] = None,
+                #: WHETHER THIS TURN MAY CHANGE ANYTHING, as the decision model decided it
+                #: (route_turn). None — no decision was made — means it may not: a write the
+                #: agent wants comes back as a button. Never read from the words here.
+                writes: Optional[bool] = None) -> RouterTurn:
         """Conversational answer — DISCUSS/answer without creating any task. Grounded in the recent
         thread (a task-scoped thread carries that task's history), gated on the model budget. Only an
         explicit build intent (handled in route_turn) actuates work."""
@@ -1968,6 +2189,14 @@ class IntentRouter:
             "• git_history — when something changed and why.\n"
             "• get_config / explain_run / get_run_activity — effective settings; where a run's "
             "wall clock and money went.\n\n"
+            "SAY WHOSE FAULT IT IS: BOSS's (its planner, its wiring, its tokens, its image), "
+            "the app's own code or manifest, or the host. BOSS's own error text is BOSS's "
+            "claim, not a fact: a remedy it prints (\"install Java\", \"grant the "
+            "permission\") can be BOSS looking in the wrong place — compare it with the record "
+            "(which folder it planned from, what the token asked for, which network the app "
+            "ran in). When the cause is BOSS's, say so plainly in the first sentence, and never "
+            "tell the person to change their app or their machine to work around it; say what "
+            "BOSS must change, and offer a retry only for after that.\n\n"
             "WHAT YOU CAN CHANGE — you are not limited to describing problems:\n"
             "• find_starved_work — work that is QUEUED and not progressing, and what holds the "
             "worker slot. Starvation is the ABSENCE of progress, so nothing appears as failed "
@@ -2210,6 +2439,11 @@ class IntentRouter:
 
         if asked_before(messages):
             system = ASKED_AGAIN + "\n\n" + system
+        # WHAT THIS TURN WAS DECIDED TO BE (route_turn's decision model), so the agent carries
+        # out the decision instead of re-deciding it from the words.
+        decided = _decision_note(getattr(self, "_turn_verdict", None))
+        if decided:
+            system = decided + "\n\n" + system
         # last 12 user/assistant turns as history; newest user message drives the turn
         convo = [
             {"role": m["role"], "content": m["content"]}
@@ -2243,7 +2477,8 @@ class IntentRouter:
             from .subject_answer import wants_first_answer
 
             if wants_first_answer(_question or latest, subject_ev, depth,
-                                  has_images=bool(latest_blocks)):
+                                  has_images=bool(latest_blocks), looking_only=not writes,
+                                  live_look=getattr(self, "_turn_action", None) != "answer"):
                 first = self._first_answer(connection, project_id, subject_ev,
                                            _question or latest, history=history, role=role,
                                            thread_id=thread_id)
@@ -2279,7 +2514,7 @@ class IntentRouter:
                     #
                     # EngineAgent retries only the model call. Retrying this entire turn
                     # could repeat a write that had already succeeded.
-                    _looking_only = asked_only_to_look(latest)
+                    _looking_only = not writes
                     _report = _progress_reporter(project_id, thread_id)
                     # ONE BUDGET FOR THE WHOLE TURN — see turn_budget.py. Every pass below
                     # draws from it, so a first pass, a grounding re-ask and a continuation can
@@ -3340,6 +3575,9 @@ class IntentRouter:
     def _deterministic_intent(
         self, message: str
     ) -> tuple[Optional[str], dict[str, Any]]:
+        """A KEYWORD READING of the message — a HINT handed to the decision model
+        (`_decide_turn`), never the decision. Nothing a turn does is started from this.
+        `classify_message` (GitHub triage) still reads it as one signal among several."""
         lowered = message.lower()
         if not lowered:
             return None, {}
@@ -3452,10 +3690,13 @@ class IntentRouter:
         # the turn to the agent instead of guessing here. The agent now holds every tool,
         # including create_code_task, so it can still choose to write code when that is the
         # real answer — with the run in front of it, which this regex does not have.
+        # A RUN, ITS STEPS AND RETRYING THEM are operated too: "retry the Build step of
+        # wfr_…" names work that exists; it is never a request for new work (crun_61720b80).
         operational_subject = re.search(
             r"\b(deploy(ment|ed|s)?|redeploy|rollback|rolled back|preview|health check|"
             r"job|queue|worker|gate|decision|approval|stuck|orphan(ed)?|priority|"
-            r"container|host|infra(structure)?)\b", lowered)
+            r"container|host|infra(structure)?|retry|retried|re-?run|step|wfr_\w+|crun_\w+)\b",
+            lowered)
         if re.search(r"\b(fix|implement|build|change|refactor|add|remove|update)\b", lowered) and (
                 not lead_question) and not operational_subject:
             return "create_code_task", {
@@ -3463,6 +3704,32 @@ class IntentRouter:
                 "instructions": message,
             }
         return None, {}
+
+    def _a_model_can_answer(self, connection: Connection, project_id: str) -> bool:
+        """Whether the agent has a model to route this turn with — ANY model this project
+        connected, not only an OpenAI or Azure key.
+
+        Checking the two keys alone put the keyword layer in charge on every install whose model
+        is Anthropic, a Claude or Codex subscription, or a local model: on the D2 laptop
+        "please retry the Build step of the Order API run (wfr_…)" matched "build" and became a
+        NEW governed code task titled with the sentence (crun_61720b80), reported as started,
+        when the operator asked for one step to be retried."""
+        if self.settings.openai_api_key or self.settings.azure_openai_key:
+            return True
+        if self._answer_adapter is not None:
+            return True
+        try:
+            from . import model_routing
+
+            point = connection.begin_nested() if hasattr(connection, "begin_nested") else None
+            try:
+                adapter = model_routing.project_chat_adapter(connection, self.settings, project_id)
+            finally:
+                if point is not None:
+                    point.rollback()
+            return adapter is not None
+        except Exception:  # noqa: BLE001 — no model is the answer: BOSS says so and does nothing
+            return False
 
     def classify_message(self, message: str) -> tuple[Optional[str], dict[str, Any]]:
         """Classify text without actuating the selected capability.

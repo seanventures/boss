@@ -61,6 +61,7 @@ import { AgentProcesses } from "./agent-process-ui";
 import { ProcessManager } from "./process-manager-ui";
 import { LogExplorer } from "./activity/log-explorer";
 import { GovernHome } from "./govern/govern-home";
+import { SelfFixesHome } from "./self-fix/self-fixes-home";
 import { DeliveryWorkflows } from "./delivery-workflows-ui";
 import { fetchWorkOrchestrationFeed } from "../lib/work-orchestration";
 import { WorkOrchestration } from "./work-orchestration-ui";
@@ -1424,6 +1425,13 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         {shows("setup") ? (
         <section className="panel-stack" data-area="setup" aria-label="Repo and models">
           <SetupBoard projectId={activeProjectId} actor={activeActorId} />
+        </section>
+        ) : null}
+
+        {shows("self_fixes") ? (
+        <section className="panel-stack" data-area="self_fixes" aria-label="Self-fixes">
+          {/* BOSS FIXES ITSELF (docs/product/BOSS_FIXES_ITSELF.md §10.3): reads its own data. */}
+          <SelfFixesHome projectId={activeProjectId} actor={activeActorId} />
         </section>
         ) : null}
 

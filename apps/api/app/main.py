@@ -1440,6 +1440,19 @@ async def lifespan(_: FastAPI):
             print(f"[lifespan] orphaned deploy requests closed: {orphans}")
     except Exception as exc:  # noqa: BLE001 — never block boot on a repair
         print(f"[lifespan] refused-plan repair skipped: {exc}")
+    # INCIDENT RESPONSE STARTS PER RULE, NEVER PER APP (BOSSAPP-598). An app-wide "Respond
+    # automatically" subscription left from before becomes Respond automatically on the rules
+    # it answered, on the same person's grant, audited; then it is disabled (row kept).
+    try:
+        from boss_engine.services.app_alerts import retire_app_wide_response
+
+        with begin(engine) as connection:
+            retired = retire_app_wide_response(connection)
+        for r in retired:
+            print(f"[lifespan] app-wide Respond automatically {r['subscription_id']} moved onto "
+                  f"{len(r['rules'])} alert rule(s)")
+    except Exception as exc:  # noqa: BLE001 — never block boot on a migration
+        print(f"[lifespan] app-wide response retirement skipped: {type(exc).__name__}")
     # CONSOLIDATE THE LOGS. Everything BOSS writes about where time went — the sandbox's
     # per-command durations, the queueing-vs-work split, why a preview refused — went to a
     # container log an operator cannot open. From here it also lands in `app_logs`, which the
@@ -9315,9 +9328,10 @@ def observability_stack_endpoint(project_id: str, host_target_id: Optional[str] 
     """
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
-    from .services.observability_stack import (DEFAULT_PORTS, dashboard_uid, grafana_url,
-                                               provisioned_dashboards, scrape_targets,
-                                               stack_status)
+    from .services.observability_stack import (check_endpoint, dashboard_link, endpoint_state,
+                                               grafana_base, recorded_check, scrape_targets,
+                                               stack_status, ENDPOINT_CHECK_TTL_SECONDS)
+    from datetime import datetime, timezone
     with begin(engine) as connection:
         _identity_verifiers.require_in_project(connection, "deployment_targets", host_target_id,
                                                project_id)
@@ -9326,58 +9340,42 @@ def observability_stack_endpoint(project_id: str, host_target_id: Optional[str] 
             text("SELECT id, config FROM telemetry_sources WHERE project_id=:p "
                  "AND kind='prometheus' AND name='boss-prometheus'"),
             {"p": project_id}).mappings().first()
+        base = grafana_base(connection, project_id) or ""
+        last = recorded_check(connection, project_id, "grafana") if base else None
 
     status = (stack_status(engine, settings, host_target_id=host_target_id)
               if host_target_id else {"running": None})
-    # WHERE GRAFANA IS, from the registry rather than from a live SSH round-trip.
+    # WHERE GRAFANA IS comes from the registry (grafana_base), never from the SSH round-trip
+    # `stack_status` makes: one unreachable key used to null every link on the page.
     #
-    # `base` came only from `stack_status`, which SSHes to the host to run `docker ps`. So one
-    # unreachable key, one changed port, one call without `host_target_id` — and every dashboard
-    # link on the page silently became null, including for the dashboards that do exist.
-    # Observed: `stack_status` answered "no such target" for a perfectly good host, because it
-    # looks the id up in `deployment_targets` while the console holds a `deployment_hosts` id.
-    #
-    # The address is already recorded on the host every app deploys to. Whether the stack is UP
-    # is still asked over SSH and still reported — but it no longer decides whether a link that
-    # works is shown.
-    host = status.get("host") or ""
-    if not host:
-        with begin(engine) as connection:
-            host = str(connection.execute(
-                text("SELECT h.address FROM deployment_targets t "
-                     "JOIN deployment_hosts h ON h.id = t.host_id "
-                     "WHERE t.project_id = :p AND t.status = 'active' AND h.address <> '' "
-                     "ORDER BY t.created_at LIMIT 1"),
-                {"p": project_id}).scalar() or "").strip()
-    base = f"http://{host}:{DEFAULT_PORTS['grafana']}" if host else ""
-    # ONLY LINK TO A DASHBOARD THAT EXISTS.
-    #
-    # This emitted `/d/boss-<slug>` for every target unconditionally, and the dashboard JSON is
-    # only on the host if somebody re-ran the stack deploy after that app was onboarded. Grafana
-    # answers 200 to any `/d/...` path and renders "Dashboard not found" client-side, so a link
-    # to a dashboard that was never created looked exactly like a working one.
-    #
-    # `None` means Grafana could not be asked — different from "asked, and it is not there" —
-    # so in that case the link is offered as before rather than withheld on a network blip.
-    existing = provisioned_dashboards(base) if base else None
-    def _dashboard(app: str) -> Optional[str]:
-        if not base:
-            return None
-        if existing is not None and dashboard_uid(app) not in existing:
-            return None
-        return grafana_url(base, app)
+    # WHETHER IT ANSWERS IS ASKED, NOT ASSUMED. This used to offer the link whenever Grafana
+    # "could not be asked" (`existing is None`), so a stack registered on a host whose port does
+    # not answer looked exactly like a working dashboard. A link is now built only from a
+    # recorded check that Grafana answered (observability_stack.dashboard_link); a stale or
+    # missing check is asked now, the way this endpoint always asked Grafana live.
+    if base and (last is None or last["base_url"] != base or (
+            datetime.now(timezone.utc) - last["checked_at"]).total_seconds()
+            >= ENDPOINT_CHECK_TTL_SECONDS):
+        check_endpoint(engine, project_id, "grafana", base=base)
+    with begin(engine) as connection:
+        grafana = endpoint_state(connection, project_id, "grafana")
 
+    apps = []
+    for t in targets:
+        url, why = dashboard_link(grafana, t["app"])
+        apps.append({**t, "dashboard_url": url,
+                     # Why there is no link, so the console can say it rather than showing
+                     # nothing. `dashboard_missing`: Grafana answered and has no such dashboard.
+                     "dashboard_reason": why,
+                     "dashboard_missing": bool(grafana["state"] == "answering" and url is None)})
     return {
         "project_id": project_id,
         "deployed": bool(source),
         "prometheus": (source or {}).get("config"),
-        "grafana_url": base,
+        "grafana_url": grafana["url"] or "",
+        "grafana": grafana,
         "status": status,
-        "apps": [{**t, "dashboard_url": _dashboard(t["app"]),
-                  # Why there is no link, so the console can say it rather than showing nothing.
-                  "dashboard_missing": bool(base and existing is not None
-                                            and dashboard_uid(t["app"]) not in existing)}
-                 for t in targets],
+        "apps": apps,
     }
 
 
@@ -30992,8 +30990,11 @@ app.include_router(build_kit_router(
 # routers/observability_view.py).
 from .routers.infra_view import build_infra_router
 from .routers.observability_view import build_observability_router
+# APP ALERTS (BOSSAPP-598): an app's rules, its alerts and every app's (routers/app_alerts.py).
+from .routers.app_alerts import build_app_alerts_router
 
-for _build_view_router in (build_infra_router, build_observability_router):
+for _build_view_router in (build_infra_router, build_observability_router,
+                           build_app_alerts_router):
     app.include_router(_build_view_router(
         engine=engine,
         # main's own settings object (what every other route reads, and what tests patch).
@@ -31014,6 +31015,18 @@ app.include_router(build_improve_router(
     require_write_actor=require_project_write_actor,
     require_reader=require_project_reader,
     actor_of=signed_in_actor,
+    require_worker=require_worker_principal,
+))
+# BOSS FIXES ITSELF (routers/self_fix.py; docs/product/BOSS_FIXES_ITSELF.md §11.4): people's
+# routes, the host self-installer's (sys_self_installer only), and the worker's build route.
+from .routers.self_fix import build_self_fix_router
+
+app.include_router(build_self_fix_router(
+    engine=engine,
+    settings=lambda: settings,
+    require_write_actor=require_project_write_actor,
+    require_reader=require_project_reader,
+    require_self_installer=identity_guard.require_self_installer,
     require_worker=require_worker_principal,
 ))
 # ARCHITECTURE APPROVAL: a run's architecture documents (routers/architecture.py).

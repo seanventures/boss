@@ -53,6 +53,13 @@ export function forcedApproval(step: SpecStep, palette: Palette): { forced: bool
 
 export const approvalOf = (step: SpecStep): Obj => asObj(step.approval);
 
+/** A Deploy step that lets the environment's deploy policy answer for it
+ *  (`approval.follows_policy`, deploy_policy.follows_policy). Without it a Deploy step promises
+ *  a person, whatever any environment's policy allows. */
+export const isDeploy = (step: SpecStep): boolean => bindingOf(step).capability === "deploy";
+export const followsPolicy = (step: SpecStep): boolean =>
+  isDeploy(step) && approvalOf(step).follows_policy === true;
+
 export const approvalMode = (step: SpecStep): "auto" | "manual" =>
   String(approvalOf(step).mode ?? "auto").toLowerCase() === "manual" ? "manual" : "auto";
 

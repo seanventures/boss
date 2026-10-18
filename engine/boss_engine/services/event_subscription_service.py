@@ -114,6 +114,16 @@ def event_type_matches(pattern: str, event_type: str) -> bool:
     return pattern == event_type
 
 
+def refuse_per_rule_only(sink_kind: str, sink_ref: str) -> None:
+    """A workflow sink may not start Incident Response (BOSSAPP-598: per rule, never per app).
+    Said at setup, not only at dispatch: a subscription that can never start anything must not
+    be saved as if it would."""
+    from .event_dispatch import PER_RULE_ONLY, PER_RULE_WORD
+
+    if sink_kind == "workflow" and sink_ref.strip() in PER_RULE_ONLY:
+        raise ValueError(PER_RULE_WORD + ".")
+
+
 def _row(row) -> dict[str, Any]:
     return {
         "id": row["id"],
@@ -130,7 +140,36 @@ def _row(row) -> dict[str, Any]:
         "updated_at": row["updated_at"].isoformat()
         if hasattr(row["updated_at"], "isoformat")
         else row["updated_at"],
+        # Whose standing grant a workflow sink runs on (None: started as BOSS itself).
+        "on_behalf_of": row.get("on_behalf_of") if hasattr(row, "get") else None,
+        "grant_id": row.get("grant_id") if hasattr(row, "get") else None,
     }
+
+
+def _workflow_link(connection: Connection, project_id: str, workflow_key: str,
+                   event_type: str) -> dict[str, Any]:
+    """A WORKFLOW SINK RUNS UNATTENDED, so it runs on a standing grant — the schedule's rule
+    (consent.require_for_schedule). In a person's session this returns the link to store, or
+    raises ConsentRequired (409 consent_required: the console asks for the grant). Outside one
+    (BOSS's own setup, an API key) it is {} and the sink starts runs as BOSS itself, as before."""
+    from ..identity import consent as _consent
+
+    spec = connection.execute(text(
+        "SELECT v.spec FROM workflow_definitions d "
+        "JOIN workflow_versions v ON v.id = d.active_version_id "
+        "WHERE d.project_id = :p AND d.workflow_key = :k"),
+        {"p": project_id, "k": workflow_key}).scalar()
+    if spec is None:
+        return {}
+    return _consent.require_for_schedule(
+        connection, project_id=project_id, spec=spec, input_data={},
+        name=f"When {event_type} happens: {workflow_key}") or {}
+
+
+def _store_link(connection: Connection, subscription_id: str, link: dict[str, Any]) -> None:
+    connection.execute(text(
+        "UPDATE event_subscriptions SET on_behalf_of = :o, grant_id = :g WHERE id = :i"),
+        {"o": link.get("on_behalf_of"), "g": link.get("grant_id"), "i": subscription_id})
 
 
 def _with_readiness(connection: Connection, subscription: dict[str, Any]) -> dict[str, Any]:
@@ -187,7 +226,7 @@ def list_event_subscriptions(
 ) -> list[dict[str, Any]]:
     query = """
         SELECT id, project_id, event_type, sink_kind, sink_ref, data_boundary,
-               enabled, config, created_at, updated_at
+               enabled, config, created_at, updated_at, on_behalf_of, grant_id
         FROM event_subscriptions
         WHERE project_id = :project_id
     """
@@ -256,6 +295,7 @@ def create_event_subscription(
     normalized_boundary = normalize_data_boundary(data_boundary)
     if not sink_ref.strip():
         raise ValueError("sink_ref must not be empty.")
+    refuse_per_rule_only(normalized_sink_kind, sink_ref)
     if normalized_sink_kind == "job" and authorize:
         # C-2: a job sink queues that kind of job on every matching event, so setting one up
         # needs the kind's own permission (and step-up) — `integration:manage` alone never
@@ -298,6 +338,12 @@ def create_event_subscription(
         raise ValueError(
             "The event subscription conflicts with an existing subscription or project."
         ) from exc
+    if normalized_sink_kind == "workflow" and authorize:
+        link = _workflow_link(connection, project_id, sink_ref.strip(), normalized_event_type)
+        if link:
+            _store_link(connection, subscription_id, link)
+            row = {**row, "on_behalf_of": link.get("on_behalf_of"),
+                   "grant_id": link.get("grant_id")}
     _invalidate(project_id)
     emit_event(
         connection,
@@ -355,6 +401,17 @@ def update_event_subscription(
         assignments.append("config = CAST(:config AS JSONB)")
         params["config"] = json.dumps(config)
 
+    if sink_kind is not None or sink_ref is not None or enabled is True:
+        # Re-pointing or re-enabling a sink: the same refusal as creating it. A retired
+        # app-wide Respond automatically stays off; its row is kept for history.
+        current = connection.execute(text(
+            "SELECT sink_kind, sink_ref, enabled FROM event_subscriptions "
+            "WHERE id = :subscription_id AND project_id = :project_id"), params).mappings().first()
+        if current is not None:
+            will_be_on = enabled if enabled is not None else bool(current["enabled"])
+            if will_be_on:
+                refuse_per_rule_only(params.get("sink_kind", current["sink_kind"]),
+                                     params.get("sink_ref", current["sink_ref"]))
     if assignments:
         changed_fields = [item.split(" =", 1)[0] for item in assignments]
         assignments.append("updated_at = now()")
@@ -397,6 +454,13 @@ def update_event_subscription(
             "WHERE id = :subscription_id AND project_id = :project_id"),
             {"by": _authorizer(actor), "subscription_id": subscription_id,
              "project_id": project_id})
+    if row["sink_kind"] == "workflow" and (sink_kind is not None or sink_ref is not None
+                                           or enabled is True):
+        # Re-pointed or re-enabled ("Renew authority"): on the grant of whoever did it now.
+        link = _workflow_link(connection, project_id, str(row["sink_ref"]),
+                              str(row["event_type"]))
+        if link:
+            _store_link(connection, subscription_id, link)
     _invalidate(project_id)
     emit_event(
         connection,
@@ -453,6 +517,7 @@ def ensure_event_subscription(
     enabled: bool = True,
     config: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
+    refuse_per_rule_only(validate_sink_kind(sink_kind), sink_ref)
     row = connection.execute(
         text(
             """

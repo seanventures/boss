@@ -118,8 +118,11 @@ class TestTheGateIsWiredToTheTurn:
     def test_writes_are_withheld_on_a_looking_turn(self):
         body = inspect.getsource(__import__(
             "boss_engine.services.intent_router", fromlist=["x"]))
-        assert "_looking_only = asked_only_to_look(latest)" in body
+        # The turn's writes are the DECISION MODEL's (route_turn -> _answer(writes=...)); the
+        # words are a hint to it, never the gate itself (agent_decision.py, 2026-10-18).
+        assert "_looking_only = not writes" in body
         assert "allow_writes=not _looking_only" in body
+        assert "writes=action in _WRITE_ACTIONS" in body
 
     def test_the_act_on_claim_retry_cannot_route_around_it(self):
         """That retry tells the model "they have already approved it — call the tool NOW". On a

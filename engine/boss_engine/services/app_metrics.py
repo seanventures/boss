@@ -37,6 +37,7 @@ With no request counter at all, the latency histogram's `_count` stands in for t
 from __future__ import annotations
 
 import json
+import logging
 import math
 import re
 import shlex
@@ -48,6 +49,8 @@ from urllib.parse import urlsplit
 
 from ..ports import sql
 from .core import make_id
+
+log = logging.getLogger(__name__)
 
 #: Bounds an app may ask for in boss.deploy.yaml. Below 15 s a scrape is load on the thing being
 #: measured; above an hour the alert window can never fill.
@@ -71,6 +74,13 @@ REQUEST_FAMILIES = ("http_requests_total", "starlette_requests_total")
 HISTOGRAM_FAMILIES = ("http_request_duration_highr_seconds", "http_request_duration_seconds",
                       "starlette_request_duration_seconds")
 STATUS_LABELS = ("status", "code", "status_code")
+#: The labels a request counter names its route by (the platform standard says `route`, always
+#: a TEMPLATE). The per-route split is what says WHICH endpoint is failing — "POST /orders 31%"
+#: is a lead; "9% of all requests" is only an alarm.
+ROUTE_LABELS = ("route", "handler", "path", "endpoint")
+#: An app that labels by raw path (against the standard) would give one key per order id; past
+#: this many the split is dropped to the busiest routes rather than stored without bound.
+MAX_ROUTES = 50
 NAMING = {
     "http_requests_total": "prometheus",
     "starlette_requests_total": "starlette-exporter",
@@ -229,6 +239,7 @@ def extract(samples: list[Sample]) -> dict[str, Any]:
     hist_family = next((f for f in HISTOGRAM_FAMILIES if f + "_bucket" in by_name), None)
 
     requests = errors = None
+    routes: dict[str, dict[str, float]] = {}
     if req_family:
         rows = by_name[req_family]
         requests = sum(s.value for s in rows if not math.isnan(s.value))
@@ -236,6 +247,20 @@ def extract(samples: list[Sample]) -> dict[str, Any]:
         if status_key:
             errors = sum(s.value for s in rows
                          if _is_5xx(s.labels.get(status_key, "")) and not math.isnan(s.value))
+        route_key = next((k for k in ROUTE_LABELS if any(k in s.labels for s in rows)), None)
+        if route_key:
+            for s in rows:
+                if math.isnan(s.value):
+                    continue
+                key = " ".join(x for x in (str(s.labels.get("method") or "").upper(),
+                                           str(s.labels.get(route_key) or "")) if x)[:120]
+                r = routes.setdefault(key or "?", {"requests": 0.0, "errors": 0.0})
+                r["requests"] += s.value
+                if status_key and _is_5xx(s.labels.get(status_key, "")):
+                    r["errors"] += s.value
+            if len(routes) > MAX_ROUTES:
+                routes = dict(sorted(routes.items(), key=lambda kv: -kv[1]["requests"])
+                              [:MAX_ROUTES])
 
     buckets: dict[str, float] = {}
     hist_count = hist_sum = None
@@ -267,6 +292,7 @@ def extract(samples: list[Sample]) -> dict[str, Any]:
         "hist_count": hist_count, "hist_sum": hist_sum,
         "naming": NAMING.get(hist_family or "", None) or NAMING.get(req_family or "", "prometheus"),
         "request_family": req_family, "histogram_family": hist_family,
+        "routes": routes,
     }
 
 
@@ -279,7 +305,7 @@ def window_delta(prev: Optional[dict], cur: dict) -> dict[str, Any]:
     traffic would draw a cliff; ignoring it would lose the requests served since the restart.
     """
     if not prev:
-        return {"requests": None, "errors": None, "buckets": {}, "reset": False}
+        return {"requests": None, "errors": None, "buckets": {}, "reset": False, "routes": {}}
     pb, cb = prev.get("buckets") or {}, cur.get("buckets") or {}
     reset = (cur["requests"] < prev["requests"]
              or (cur.get("errors") is not None and prev.get("errors") is not None
@@ -288,12 +314,28 @@ def window_delta(prev: Optional[dict], cur: dict) -> dict[str, Any]:
              or (set(pb) and set(cb) and set(pb) != set(cb)))
     if reset:
         return {"requests": cur["requests"], "errors": cur.get("errors"),
-                "buckets": dict(cb), "reset": True}
+                "buckets": dict(cb), "reset": True,
+                "routes": {k: dict(v) for k, v in (cur.get("routes") or {}).items()}}
     errors = None
     if cur.get("errors") is not None:
         errors = cur["errors"] - (prev.get("errors") or 0.0)
     return {"requests": cur["requests"] - prev["requests"], "errors": errors,
-            "buckets": {k: v - pb.get(k, 0.0) for k, v in cb.items()}, "reset": False}
+            "buckets": {k: v - pb.get(k, 0.0) for k, v in cb.items()}, "reset": False,
+            "routes": route_delta(prev.get("routes") or {}, cur.get("routes") or {})}
+
+
+def route_delta(prev: dict, cur: dict) -> dict[str, dict[str, float]]:
+    """Per-route requests/errors between two scrapes. A route new since the last scrape counts
+    from zero; one whose counter went down restarted (the same `increase()` rule as the total)."""
+    out: dict[str, dict[str, float]] = {}
+    for key, c in cur.items():
+        p = prev.get(key) or {"requests": 0.0, "errors": 0.0}
+        req, err = c["requests"] - p["requests"], c["errors"] - p["errors"]
+        if req < 0 or err < 0:
+            req, err = c["requests"], c["errors"]
+        if req or err:
+            out[key] = {"requests": req, "errors": err}
+    return out
 
 
 def histogram_quantile(q: float, buckets: dict[str, float]) -> Optional[float]:
@@ -346,10 +388,20 @@ def aggregate(rows: list[dict]) -> dict[str, Any]:
     errors = sum(float(r["errors"]) for r in with_err) if with_err else None
     seconds = sum(float(r.get("interval_s") or 0) for r in got)
     buckets: dict[str, float] = {}
+    routes: dict[str, dict[str, float]] = {}
     for r in got:
         for k, v in (r.get("bucket_deltas") or {}).items():
             buckets[k] = buckets.get(k, 0.0) + float(v)
+        for k, v in (r.get("route_deltas") or {}).items():
+            acc = routes.setdefault(k, {"requests": 0.0, "errors": 0.0})
+            acc["requests"] += float(v.get("requests") or 0)
+            acc["errors"] += float(v.get("errors") or 0)
     return {
+        "routes": [{"route": k, "requests": round(v["requests"], 3),
+                    "errors": round(v["errors"], 3),
+                    "error_rate": round(v["errors"] / v["requests"], 4) if v["requests"] else None}
+                   for k, v in sorted(routes.items(),
+                                      key=lambda kv: (-kv[1]["errors"], -kv[1]["requests"]))],
         "requests": round(requests, 3) if got else None,
         "errors": round(errors, 3) if errors is not None else None,
         "error_rate": (round(errors / requests, 4) if errors is not None and requests > 0
@@ -584,9 +636,29 @@ def due(connection, target_id: str, spec: dict, now: datetime) -> bool:
     return (now - last["scraped_at"]).total_seconds() >= interval
 
 
+def _serialize(connection, target_id: str) -> None:
+    """One writer per app at a time, for the length of the writing transaction.
+
+    Two scrapers windowing against the same previous row both count the same requests: the
+    laptop's three lease slots each swept on their idle branch and HelpDesk AI's traffic was
+    stored three times over (21:10:43.061/.064/.086, 3 requests each against one 122 s window).
+    The lock makes the second writer see the first one's row, so its delta is measured from it.
+    """
+    connection.execute(sql("SELECT pg_advisory_xact_lock(hashtextextended(:k, 0))"),
+                       {"k": "app_metrics:" + target_id})
+
+
 def scrape_target(engine, settings: Any, target: dict, decl: dict, *,
-                  now: Optional[datetime] = None, host_access: Any = None) -> dict[str, Any]:
-    """Scrape one app, store what it said (or why it could not), evaluate its alert."""
+                  now: Optional[datetime] = None, host_access: Any = None,
+                  only_if_due: bool = False) -> dict[str, Any]:
+    """Scrape one app, store what it said (or why it could not), evaluate its alert.
+
+    The fetch is network I/O and runs outside any transaction; the write is serialized per app
+    (`_serialize`). Under that lock a scrape is DISCARDED, not stored, when a newer one already
+    landed (storing an older snapshot after a newer one reads as a counter reset — a spike of
+    the whole counter), or — `only_if_due`, the sweep's own call — when another sweep took
+    this slot while this one was fetching.
+    """
     from ..db import begin
 
     now = now or datetime.now(timezone.utc)
@@ -606,18 +678,29 @@ def scrape_target(engine, settings: Any, target: dict, decl: dict, *,
     ok = snapshot is not None
 
     with begin(engine) as c:
+        _serialize(c, target["id"])
+        latest = _last(c, target["id"])
+        if latest and latest["scraped_at"] >= now:
+            return {"ok": ok, "word": "A newer scrape is already stored", "skipped": True,
+                    "route": got.get("route"), "url": got.get("url"), "requests": None,
+                    "errors": None, "reset": False, "alert": None}
+        if only_if_due and not due(c, target["id"], decl["spec"], now):
+            return {"ok": ok, "word": "Another sweep scraped this app first", "skipped": True,
+                    "route": got.get("route"), "url": got.get("url"), "requests": None,
+                    "errors": None, "reset": False, "alert": None}
         prev = _last(c, target["id"], ok_only=True) if ok else None
         delta = window_delta(prev["snapshot"] if prev else None, snapshot) if ok else \
-            {"requests": None, "errors": None, "buckets": {}, "reset": False}
+            {"requests": None, "errors": None, "buckets": {}, "reset": False, "routes": {}}
         interval_s = ((now - prev["scraped_at"]).total_seconds() if prev and ok else None)
         if ok and not prev:
             word = "Scraped; rates need a second scrape"
         c.execute(sql(
             "INSERT INTO app_metrics_scrapes (id, project_id, deployment_target_id, scraped_at, "
             " ok, route, url, status_code, word, naming, took_ms, snapshot, interval_s, "
-            " requests, errors, counter_reset, bucket_deltas, p50_ms, p95_ms) VALUES "
-            "(:id, :p, :t, :at, :ok, :route, :url, :sc, :word, :naming, :took, "
-            " CAST(:snap AS JSONB), :iv, :req, :err, :reset, CAST(:bd AS JSONB), :p50, :p95)"),
+            " requests, errors, counter_reset, bucket_deltas, p50_ms, p95_ms, route_deltas) "
+            "VALUES (:id, :p, :t, :at, :ok, :route, :url, :sc, :word, :naming, :took, "
+            " CAST(:snap AS JSONB), :iv, :req, :err, :reset, CAST(:bd AS JSONB), :p50, :p95, "
+            " CAST(:rd AS JSONB))"),
             {"id": make_id("ams"), "p": target["project_id"], "t": target["id"], "at": now,
              "ok": ok, "route": got.get("route"), "url": got.get("url"),
              "sc": got.get("status"), "word": word[:200],
@@ -626,7 +709,8 @@ def scrape_target(engine, settings: Any, target: dict, decl: dict, *,
              "req": delta["requests"], "err": delta["errors"], "reset": bool(delta["reset"]),
              "bd": json.dumps(delta["buckets"]) if delta["buckets"] else None,
              "p50": _ms(histogram_quantile(0.5, delta["buckets"])),
-             "p95": _ms(histogram_quantile(0.95, delta["buckets"]))})
+             "p95": _ms(histogram_quantile(0.95, delta["buckets"])),
+             "rd": json.dumps(delta.get("routes")) if delta.get("routes") else None})
         c.execute(sql("DELETE FROM app_metrics_scrapes WHERE deployment_target_id = :t "
                       "AND scraped_at < :cut"),
                   {"t": target["id"], "cut": now - timedelta(days=RETENTION_DAYS)})
@@ -653,7 +737,9 @@ def sweep(engine, settings: Any, targets: list[dict], *, now: Optional[datetime]
             with begin(engine) as c:
                 if not force and not due(c, t["id"], decl["spec"], now):
                     continue
-            res = scrape_target(engine, settings, t, decl, now=now)
+            res = scrape_target(engine, settings, t, decl, now=now, only_if_due=not force)
+            if res.get("skipped"):
+                continue
             scraped += 1
             failed += 0 if res["ok"] else 1
     except Exception as exc:  # noqa: BLE001
@@ -667,15 +753,17 @@ def sweep(engine, settings: Any, targets: list[dict], *, now: Optional[datetime]
 # --------------------------------------------------------------------------- #
 def _window_rows(connection, target_id: str, start: datetime, end: datetime) -> list[dict]:
     rows = connection.execute(sql(
-        "SELECT scraped_at, ok, requests, errors, interval_s, bucket_deltas, counter_reset "
+        "SELECT scraped_at, ok, requests, errors, interval_s, bucket_deltas, counter_reset, "
+        "       route_deltas "
         "FROM app_metrics_scrapes WHERE deployment_target_id = :t AND scraped_at > :a "
         "AND scraped_at <= :z ORDER BY scraped_at"),
         {"t": target_id, "a": start, "z": end}).mappings().all()
     out = []
     for r in rows:
         d = dict(r)
-        if isinstance(d.get("bucket_deltas"), str):
-            d["bucket_deltas"] = json.loads(d["bucket_deltas"])
+        for k in ("bucket_deltas", "route_deltas"):
+            if isinstance(d.get(k), str):
+                d[k] = json.loads(d[k])
         out.append(d)
     return out
 
@@ -693,7 +781,10 @@ def judge(window: dict, rule: dict) -> str:
 
 def _incident(connection, project_id: str, target_id: str) -> Optional[dict]:
     row = connection.execute(sql(
-        "SELECT id, status, title, first_seen, last_seen FROM incidents "
+        "SELECT id, status, title, first_seen, last_seen, "
+        "       (finalize_ctx->'alert') IS NOT NULL AND finalize_ctx->'alert' <> 'null'::jsonb "
+        "         AS alerted "
+        "FROM incidents "
         "WHERE project_id = :p AND dedupe_key = :k"),
         {"p": project_id, "k": INCIDENT_PREFIX + target_id}).mappings().first()
     return dict(row) if row else None
@@ -702,57 +793,81 @@ def _incident(connection, project_id: str, target_id: str) -> Optional[dict]:
 _CLOSED = ("resolved", "dismissed")
 
 
-def evaluate_alert(connection, target: dict, spec: dict, now: datetime) -> dict[str, Any]:
-    """Open (or reopen) the app's error-rate incident when the rule fires; resolve it once the
-    rate is back under the threshold on enough traffic. Too little traffic HOLDS the current
-    state: silence is not evidence of recovery."""
+def _being_answered(connection, project_id: str, incident_id: str) -> bool:
+    """Is an Incident Response running on this incident? Then IT closes the incident, by its
+    verify step, on the pre-incident baseline over a stable window. A dip under the threshold
+    is not recovery: D2's monitor resolved the incident mid-fix at 07:12:43 and reopened it at
+    07:13:04, and the reopen reset the incident's opening time in the report."""
+    from .incident_response import _response_in_flight
+
+    return bool(_response_in_flight(connection, project_id, incident_id))
+
+
+def effective_rule(connection, target: dict, spec: Optional[dict]) -> dict[str, Any]:
+    """The error-rate rule in this module's shape ({enabled, error_rate_percent,
+    window_minutes, min_requests}): the console's edit when a person made one (app_alerts),
+    else the yaml's `metrics.alert`, else the default."""
     rule = alert_rule(spec)
+    row = connection.execute(sql(
+        "SELECT enabled, params FROM app_alert_rules WHERE target_id = :t AND kind = 'error_rate'"),
+        {"t": target["id"]}).mappings().first()
+    if row:
+        params = row["params"] if isinstance(row["params"], dict) else json.loads(
+            row["params"] or "{}")
+        rule = {**rule, "enabled": bool(row["enabled"]),
+                "error_rate_percent": float(params.get("threshold", rule["error_rate_percent"])),
+                "window_minutes": params.get("window_minutes", rule["window_minutes"]),
+                "min_requests": params.get("min_requests", rule["min_requests"])}
+    return rule
+
+
+_LEGACY_VERDICT = {"firing": "firing", "inhibited": "firing", "silenced": "firing",
+                   "pending": "pending", "ok": "ok", "off": "off", "no_data": "quiet",
+                   "too_little": "quiet", "error": "quiet"}
+
+
+def evaluate_alert(connection, target: dict, spec: dict, now: datetime) -> dict[str, Any]:
+    """Evaluate the app's alert rules on this scrape (app_alerts: PromQL, one semantics with
+    Prometheus) and answer for the error-rate rule in this module's shape:
+    {verdict firing|ok|quiet|off|pending, action opened|reopened|joined|resolved|None, window,
+    rule, event_id}.
+
+    The record, the grouping into incidents, inhibition and silences are app_alerts'. What this
+    keeps is the scrape's own question — did the error-rate alert just open, reopen or resolve
+    the app's incident — which the incident response and its tests read."""
+    from . import app_alerts
+
+    rule = effective_rule(connection, target, spec)
     window = aggregate(_window_rows(connection, target["id"],
                                     now - timedelta(minutes=float(rule["window_minutes"])), now))
-    verdict = judge(window, rule)
-    inc = _incident(connection, target["project_id"], target["id"])
-    is_open = bool(inc and inc["status"] not in _CLOSED)
-    action = None
-    if verdict == "firing":
-        pct = round(window["error_rate"] * 100.0, 1)
-        title = (f"{target.get('app_name')} ({target.get('environment')}): {pct}% of requests "
-                 f"failing over {rule['window_minutes']} min (alert above "
-                 f"{rule['error_rate_percent']}%)")[:200]
-        if inc is None:
-            inc_id = make_id("inc")
-            connection.execute(sql(
-                "INSERT INTO incidents (id, project_id, dedupe_key, title, service, severity, "
-                " status, signal_count, first_seen, last_seen) VALUES "
-                "(:id, :p, :k, :title, :svc, 'warning', 'open', 1, :now, :now)"),
-                {"id": inc_id, "p": target["project_id"], "k": INCIDENT_PREFIX + target["id"],
-                 "title": title, "svc": target.get("app_name") or "", "now": now})
-            action = "opened"
-        else:
-            inc_id = inc["id"]
-            connection.execute(sql(
-                "UPDATE incidents SET title = :title, last_seen = :now, "
-                " signal_count = signal_count + 1, "
-                " status = CASE WHEN status IN ('resolved', 'dismissed') THEN 'open' "
-                "               ELSE status END, "
-                " first_seen = CASE WHEN status IN ('resolved', 'dismissed') THEN :now "
-                "                   ELSE first_seen END "
-                "WHERE id = :id"), {"id": inc_id, "title": title, "now": now})
-            action = "reopened" if not is_open else "still_firing"
-        connection.execute(sql(
-            "INSERT INTO anomaly_signals (id, project_id, incident_id, kind, signature, service, "
-            " score, count, sample, ts) VALUES (:id, :p, :inc, 'error_surge', 'http_error_rate', "
-            " :svc, :score, :count, CAST(:sample AS JSONB), :now)"),
-            {"id": make_id("sig"), "p": target["project_id"], "inc": inc_id,
-             "svc": target.get("app_name") or "", "score": window["error_rate"],
-             "count": int(window["errors"] or 0),
-             "sample": json.dumps({"target_id": target["id"], "window": window, "rule": rule}),
-             "now": now})
-    elif verdict in ("ok", "off") and is_open:
-        connection.execute(sql(
-            "UPDATE incidents SET status = 'resolved', last_seen = :now WHERE id = :id"),
-            {"id": inc["id"], "now": now})
-        action = "resolved"
-    return {"verdict": verdict, "action": action, "window": window, "rule": rule}
+    point = connection.begin_nested()
+    try:
+        out = app_alerts.evaluate_target(connection, target, now, local_only=True)
+        point.commit()
+    except Exception:  # noqa: BLE001 — a rule that cannot be evaluated never costs the scrape
+        log.exception("app_metrics: alert evaluation failed")
+        point.rollback()
+        return {"verdict": judge(window, rule), "action": None, "window": window, "rule": rule,
+                "event_id": None}
+    er = connection.execute(sql(
+        "SELECT id FROM app_alert_rules WHERE target_id = :t AND kind = 'error_rate'"),
+        {"t": target["id"]}).scalar()
+    state = out["rules"].get(er)
+    verdict = _LEGACY_VERDICT.get(state or "", judge(window, rule)) if rule["enabled"] else "off"
+    serving = INCIDENT_PREFIX + target["id"]
+    action = event_id = None
+    for item in out["incidents"]:
+        key = connection.execute(sql("SELECT dedupe_key FROM incidents WHERE id = :i"),
+                                 {"i": item["incident_id"]}).scalar()
+        if key == serving:
+            action, event_id = item["action"], item.get("event_id")
+            if action == "joined":
+                action = "still_firing"
+            break
+    if action is None and verdict == "firing":
+        action = "still_firing"
+    return {"verdict": verdict, "action": action, "window": window, "rule": rule,
+            "event_id": event_id}
 
 
 # --------------------------------------------------------------------------- #
@@ -776,7 +891,7 @@ def metrics_view(connection, target: dict, *, now: Optional[datetime] = None,
         return {"declared": False, "word": "Not declared",
                 "tip": "Add metrics: {path: /metrics} to boss.deploy.yaml and redeploy"}
     spec = decl["spec"]
-    rule = alert_rule(spec)
+    rule = effective_rule(connection, target, spec)
     latest = connection.execute(sql(
         "SELECT scraped_at, ok, route, url, status_code, word, naming FROM app_metrics_scrapes "
         "WHERE deployment_target_id = :t ORDER BY scraped_at DESC LIMIT 1"),
@@ -801,7 +916,9 @@ def metrics_view(connection, target: dict, *, now: Optional[datetime] = None,
             "err": (round(r["errors"] / req, 4) if r["errors"] is not None and req else None),
             "p50": r["p50_ms"], "p95": r["p95_ms"]})
     inc = _incident(connection, target["project_id"], target["id"])
-    firing = bool(inc and inc["status"] not in _CLOSED)
+    # An incident only an app REPORTED is open without the monitor alerting: it is shown on its
+    # card, never as this monitor's "Alerting".
+    firing = bool(inc and inc["status"] not in _CLOSED and inc.get("alerted"))
     verdict = "firing" if firing else judge(window, rule)
     state = ("waiting" if not latest else "ok" if latest["ok"] else "failing")
     return {

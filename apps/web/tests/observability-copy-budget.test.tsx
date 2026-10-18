@@ -62,6 +62,13 @@ const CASES: { name: string; url: string; press?: string[] }[] = [
   { name: "Scorecards by harness, 90d", url: "?view=scorecards&by=harness&swin=90d" },
   { name: "Experiments + new", url: "?view=scorecards&sc=experiments", press: ["sc-exp-add"] },
   { name: "Installs (collector mode)", url: "?view=installs" },
+  // App alerts (BOSSAPP-598): the drawer's Alerts tab with a fired alert open, its sheets, and
+  // Observability › Alerts; the drawer without a Grafana that answers.
+  { name: "App drawer › Alerts + an alert's detail", url: "?view=apps&app=t_down&atab=alerts", press: ["obs-alert-open", "obs-alert-runbook"] },
+  { name: "App drawer › Alerts + edit rule", url: "?view=apps&app=t_down&atab=alerts", press: ["obs-rule-edit"] },
+  { name: "App drawer › Alerts + add rule", url: "?view=apps&app=t_down&atab=alerts", press: ["obs-rule-add"] },
+  { name: "App drawer › Alerts + silence", url: "?view=apps&app=t_down&atab=alerts", press: ["obs-rule-silence"] },
+  { name: "Alerts (all apps)", url: "?view=alerts", press: ["obs-alert-open"] },
 ];
 
 describe("the Observability copy budget", () => {

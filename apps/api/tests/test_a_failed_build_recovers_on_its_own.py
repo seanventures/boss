@@ -171,13 +171,16 @@ def test_a_secret_scan_block_is_fixed_by_the_app(engine, builds, repairs, model)
     assert step["output"]["note"].endswith("fixing the app in a repair build")
 
 
-def test_with_no_model_boss_triage_still_places_the_build_failures(engine, builds, repairs):
+def test_a_model_reading_boss_triage_places_the_build_failures(engine, builds, repairs):
+    """The conftest's scripted model answers with BOSS's triage, handed to it as evidence: the
+    triage informs the decision, a model makes it."""
     run_id = _build_run(engine)
     _tick(engine)
     _fail(engine, builds[0], NO_ENV)
     _tick(engine)
     decision = _decisions(engine, run_id)[-1]
-    assert decision["action"] == "wait_for_boss" and decision["by"]["engine"] == "coded"
+    assert decision["action"] == "wait_for_boss"
+    assert decision["by"]["model"] == "scripted-triage"
 
     other = _build_run(engine)
     _tick(engine)

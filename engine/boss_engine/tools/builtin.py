@@ -19,6 +19,7 @@ import subprocess as _subprocess
 from typing import Any, Optional as _Optional
 
 from .._compat import services_module
+from ..services.workflow_step_order import in_declared_order as _in_declared_order
 # Drafting a workflow from a described sequence is shared with the console's Describe (the
 # `/v1/delivery-workflows/draft` endpoint), so it lives in a service and the tool imports it.
 from ..services.workflow_drafting import (
@@ -273,6 +274,10 @@ def _register_read_tools(reg: ToolRegistry) -> None:
         if not row:
             return {"ok": False, "error": f"no code task run {run_id}"}
         out = {"run": _json_safe(dict(row))}
+        with ctx.begin() as c:
+            step = _workflow_step_of(c, project_id, run_id)
+        if step:
+            out["part_of_workflow_run"] = step
         # The one state every surface says (factory spec §4.4): the Floor, the cockpit and
         # this tool read the same derivation.
         try:
@@ -282,6 +287,68 @@ def _register_read_tools(reg: ToolRegistry) -> None:
         except Exception:  # noqa: BLE001 — the run is the answer; its state word is extra
             pass
         return out
+
+    # ── BOSS fixes itself (BOSSAPP-571): read the self-fixes and the autonomy metric ─────────
+    # Read only. No tool starts, approves, installs, removes or sends a self-fix: those are a
+    # person's acts in the console (and approval is the decisions API), never an agent's.
+    @reg.tool(
+        "list_self_fixes",
+        "BOSS's self-fixes (newest first): bugs in BOSS's own code that BOSS diagnosed, fixed "
+        "with a regression test and its reviewers, and installed after a person approved — "
+        "with status chip, cause, area, run, upstream state and the one-line progress.",
+        _obj({"project_id": {"type": "string"}, "status": {"type": "string"},
+              "limit": _LIMIT}), permission="improvement:read")
+    def list_self_fixes(ctx, *, project_id, actor, args):
+        sf = services_module("self_fix")
+        pid = args.get("project_id") or project_id
+        with ctx.begin() as c:
+            items = sf.list_self_fixes(c, project_id=pid, status=args.get("status") or None,
+                                       limit=int(args.get("limit") or 25))
+        keep = ("id", "status", "chip", "stage", "area", "signature", "class_signature",
+                "run_id", "step_id", "confidence", "tier", "refusal", "upstream_state",
+                "upstream_url", "created_at", "updated_at")
+        return {"count": len(items), "self_fixes": [
+            {**{k: _json_safe(i.get(k)) for k in keep},
+             "title": (i.get("pr") or {}).get("title"), "line": sf.step_line(i)} for i in items]}
+
+    @reg.tool(
+        "get_self_fix",
+        "One BOSS self-fix by id (sfx_…) with its lineage: problem → diagnosis (and the "
+        "rejected hypothesis) → fix → tests (red then green) → review → approval → install → "
+        "resumed step → upstream, its events, and the approval card while it waits for one.",
+        _obj({"self_fix_id": {"type": "string"}}, ["self_fix_id"]),
+        permission="improvement:read")
+    def get_self_fix(ctx, *, project_id, actor, args):
+        sf = services_module("self_fix")
+        si = services_module("self_fix_install")
+        sfx_id = str(args["self_fix_id"])
+        with ctx.begin() as c:
+            found = sf.get(c, sfx_id)
+            if found is None or found.get("project_id") != project_id:
+                return {"ok": False, "error": f"no self-fix {sfx_id} in this project"}
+            out = sf.lineage(c, sfx_id) or {}
+            if found.get("status") == sf.AWAITING_APPROVAL:
+                out["card"] = si.card(found)
+        (out.get("self_fix") or {}).pop("bundle", None)
+        out["line"] = sf.step_line(found)
+        return _json_safe(out)
+
+    @reg.tool(
+        "autonomy_report",
+        "The autonomy metric: of the problems runs hit, how many BOSS's agents solved end to "
+        "end, how many a person solved, how many an outside coding agent solved, how many are "
+        "open — per run (run_id) or for the project over a window (7d, 30d, 90d) with a "
+        "weekly trend and the BOSS-side cut.",
+        _obj({"project_id": {"type": "string"}, "run_id": {"type": "string"},
+              "window": {"type": "string", "enum": ["7d", "30d", "90d"]}}),
+        permission="improvement:read")
+    def autonomy_report(ctx, *, project_id, actor, args):
+        am = services_module("autonomy_metric")
+        pid = args.get("project_id") or project_id
+        with ctx.begin() as c:
+            if args.get("run_id"):
+                return _json_safe(am.run_report(c, project_id=pid, run_id=str(args["run_id"])))
+            return _json_safe(am.report(c, project_id=pid, window=args.get("window") or "30d"))
 
     @reg.tool(
         "list_running_work",
@@ -347,7 +414,7 @@ def _register_read_tools(reg: ToolRegistry) -> None:
     @reg.tool(
         "list_previews",
         "App previews with their open URLs AND, for the failed ones, why they failed: "
-        "`failure_kind` (port_timeout / no_page_at_root / clone_failed / command_missing / "
+        "`failure_kind` (port_timeout / no_page_at_root / no_health_route / clone_failed / command_missing / "
         "boot_crash) and the error, which usually names the real fault — a build error, a "
         "missing entry file, a port the app did not honour, or an app that started correctly "
         "and serves no page at '/' because the build produced only an API. Read "
@@ -1089,7 +1156,9 @@ def _register_write_tools(reg: ToolRegistry) -> None:
         "Can also SWITCH THE PROFILE for the new attempt (e.g. profile='lean' to re-run "
         "the same work faster). Prefer this over create_code_task whenever the work "
         "already has a run: it reuses the branch, the existing code and the approved plan. "
-        "To ADD to an app that completed successfully, use extend_code_task instead.",
+        "To ADD to an app that completed successfully, use extend_code_task instead. If the "
+        "run is a STEP of a workflow run (get_code_task says part_of_workflow_run), retry the "
+        "step with retry_workflow_step instead, or the run never follows the new attempt.",
         _obj(
             {
                 "run_id": {"type": "string"},
@@ -2367,7 +2436,10 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
                                          "project has more than one verified host"},
               "approval_decision_id": {"type": "string",
                                        "description": "set by a workflow's Deploy step only; "
-                                                      "leave empty"}},
+                                                      "leave empty"},
+              "person_required": {"type": "boolean",
+                                  "description": "set by a workflow's Deploy step only; "
+                                                 "leave empty"}},
              required=["run_id", "environment"]),
         kind="write",
         reversibility="safe", permission="deployment:create")
@@ -2386,6 +2458,9 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
             # (deploy_policy.pre_approval).
             approval_decision_id=(str(args["approval_decision_id"])
                                   if args.get("approval_decision_id") else None),
+            # A Deploy step that promised a person: no environment policy answers for it. Only
+            # ever makes a deploy stricter, so a model setting it can only add a question.
+            person_required=args.get("person_required") is True,
         )
 
     @reg.tool(
@@ -2853,6 +2928,10 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
                     "WHERE id = ANY(:ids)"),
                     {"ids": [r["id"] for r in found],
                      "e": f"closed as orphaned by {actor}: no live job"})
+                from ..services.run_terminal import on_status_written
+
+                for r in found:
+                    on_status_written(c, r["id"])
         return {"dry_run": dry, "count": len(found), "runs": found[:50],
                 "closed": 0 if dry else len(found)}
 
@@ -3959,6 +4038,32 @@ def _existing_app_branch(conn, project_id: str, task_id: str) -> tuple:
     return (f"boss/code/{root}", root) if root else (None, None)
 
 
+def _workflow_step_of(c, project_id: str, run_id: str) -> "_Optional[dict]":
+    """The workflow run step this build is, if it is one — so a retry goes to THE STEP.
+
+    Asked to "rerun the build step on the Order API run", the agent found the build
+    (crun_…) and offered retry_code_task on it: a new attempt outside the run, which the run
+    never follows, while the step stayed failed (battle test, retry-existing-step)."""
+    try:
+        with c.begin_nested():
+            row = c.execute(_text(
+                "SELECT workflow_run_id, step_id, status FROM workflow_step_runs "
+                "WHERE project_id = :p AND (output->>'build_run_id' = :r "
+                "OR output->>'run_id' = :r) ORDER BY updated_at DESC LIMIT 1"),
+                {"p": project_id, "r": run_id}).mappings().first()
+    except Exception:  # noqa: BLE001 — the link is extra; the run is the answer
+        return None
+    if not row:
+        return None
+    return {"workflow_run_id": row["workflow_run_id"], "step_id": row["step_id"],
+            "step_status": row["status"],
+            "retry_with": (f"retry_workflow_step(run_id={row['workflow_run_id']}, "
+                           f"step_id={row['step_id']})"),
+            "note": ("This build is a step of a workflow run. Retry or resume THE STEP "
+                     "(retry_workflow_step) so the run follows it; retry_code_task would start "
+                     "an attempt the run never picks up.")}
+
+
 def _slim_run(r: dict) -> dict:
     # "pr_url" is not a key on a run — the column is pull_request_url. So the PR link this
     # tool's own description promises ("with status, phase, title and PR link") was ALWAYS
@@ -4974,10 +5079,10 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
                 # NAME WHAT IS THERE. A step is addressed by id ('meeting'), and the console
                 # shows its LABEL ('Convene a panel') — so the obvious guess is the wrong one,
                 # and "step not found" sends the reader hunting for a typo they did not make.
-                available = c.execute(
+                available = _in_declared_order(c, run_id, c.execute(
                     _text("SELECT step_id, status FROM workflow_step_runs "
                           " WHERE workflow_run_id=:r AND project_id=:p ORDER BY created_at"),
-                    {"r": run_id, "p": pid}).mappings().all()
+                    {"r": run_id, "p": pid}).mappings().all())
                 return {"ok": False,
                         "error": f"no step {step_id!r} on {run_id}",
                         "steps_on_this_run": [
@@ -5043,10 +5148,10 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
                     reason=reason)
             except _workflows.WorkflowError as error:
                 if isinstance(error, _workflows.WorkflowNotFoundError):
-                    available = c.execute(
+                    available = _in_declared_order(c, run_id, c.execute(
                         _text("SELECT step_id, status FROM workflow_step_runs "
                               " WHERE workflow_run_id=:r AND project_id=:p ORDER BY created_at"),
-                        {"r": run_id, "p": pid}).mappings().all()
+                        {"r": run_id, "p": pid}).mappings().all())
                     return {"ok": False, "error": str(error),
                             "steps_on_this_run": [
                                 {"step_id": s["step_id"], "status": s["status"]}
@@ -5424,7 +5529,17 @@ def _register_diagnosis_tools(reg: ToolRegistry) -> None:
         # it as a button and the operator is one click from done.
         resolution = None
         status = str(run["status"] or "")
-        if status in ("cancelled", "failed", "blocked", "error"):
+        with ctx.begin() as c:
+            owning_step = _workflow_step_of(c, project_id, run_id)
+        if status in ("cancelled", "failed", "blocked", "error") and owning_step:
+            resolution = {
+                "tool": "retry_workflow_step",
+                "args": {"run_id": owning_step["workflow_run_id"],
+                         "step_id": owning_step["step_id"]},
+                "label": f"Retry the {owning_step['step_id']} step",
+                "why": owning_step["note"],
+            }
+        elif status in ("cancelled", "failed", "blocked", "error"):
             resolution = {
                 "tool": "retry_code_task",
                 "args": {"run_id": run_id},

@@ -75,7 +75,9 @@ def test_sources_ask_the_host_only_on_check_now(stack):
     assert first["stack"]["state"] == "unknown" and first["stack"]["word"] == "Status unknown"
     assert first["stack"]["checked_at"] is None
     assert again is first, "a poll within 60 s reuses the composed body"
-    assert first["stack"]["grafana_url"] == "http://10.0.0.9:3006"
+    # Grafana has not been asked yet: no link, and the reason (operator decision 2026-10-18)
+    assert first["stack"]["grafana_url"] is None
+    assert first["stack"]["grafana"]["state"] == "unchecked"
     assert first["stack"]["can_deploy"] is True and first["stack"]["host_target_id"] == f"{pid}_t"
 
     with eng.begin() as c:
@@ -84,6 +86,8 @@ def test_sources_ask_the_host_only_on_check_now(stack):
     assert checked["stack"]["state"] == "running" and checked["stack"]["word"] == "Running"
     assert checked["stack"]["checked_at"]
     assert len(checked["stack"]["containers"]) == 2
+    # ...and Check now asked Grafana, which answered: the link is back
+    assert checked["stack"]["grafana_url"] == "http://10.0.0.9:3006"
 
     with eng.begin() as c:
         polled = obs_view.sources(c, s, pid)

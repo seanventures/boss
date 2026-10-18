@@ -13,6 +13,8 @@
 import { vi } from "vitest";
 
 import { board } from "./setup-fixtures";
+import { INCIDENT_REPORT_WIRE, incidentResponseWire } from "./incident-fixtures";
+import { allAlertsWire, historyWire, rulesWire } from "./alerts-fixtures";
 
 export const NOW = "2026-10-04T12:00:00.000Z";
 export const NOW_MS = Date.parse(NOW);
@@ -78,6 +80,11 @@ export const PULSE_ROWS = [
   pulseRow({ target_id: "t_cloud", app: "billing", env: "prod", state: "not_deployed", word: "Not deployed", tone: "grey" }),
 ];
 
+/** Grafana as the server reports it (observability_stack.endpoint_state, recorded checks only). */
+export const GRAFANA_UP = { state: "answering", url: "http://grafana.local", reason: null, checked_at: NOW, why: null };
+export const GRAFANA_DOWN = { state: "not_answering", url: null, reason: "Grafana isn't answering on its host",
+                              checked_at: NOW, why: "connection refused" };
+
 export function pulseWire(over: Record<string, unknown> = {}) {
   return {
     counts: { up: 1, slow: 1, down: 1, no_signal: 1, not_deployed: 1 },
@@ -86,6 +93,7 @@ export function pulseWire(over: Record<string, unknown> = {}) {
     window: { win: "24h", from: FROM_24H, to: NOW, cell_s: 900, cells: 96 },
     attention: [ATTENTION_APP_DOWN, ATTENTION_SYSTEM],
     spend_24h_micros: 3_120_000, spend_24h_estimated: true, partial: [], etag: "\"obs-pulse\"",
+    grafana: GRAFANA_UP, alerts_firing: 2,
     ...over,
   };
 }
@@ -111,6 +119,8 @@ export function appWire(targetId = "t_live", over: Record<string, unknown> = {})
       observed_version: down ? "a1b2c3d" : "9f1e2d3", serving_mismatch: !down,
       host: down ? { id: "h_down", name: "edge-2" } : { id: "h_ready", name: "boss-1" },
       open_url: down ? "http://edge-2:8080" : "https://invoice.example.com", dashboard_url: down ? null : "http://grafana.local/d/invoice",
+      dashboard_reason: down ? "Grafana isn't answering on its host" : null,
+      grafana: down ? GRAFANA_DOWN : GRAFANA_UP,
       last_error: down ? "connect ECONNREFUSED 10.0.0.9:8080 — the upstream refused the connection after 3 retries" : null,
     },
     series,
@@ -123,6 +133,12 @@ export function appWire(targetId = "t_live", over: Record<string, unknown> = {})
     ],
     pins: down ? [PIN_FAILED] : [PIN_LIVE],
     window: { win: "24h", from: FROM_24H, to: NOW, cell_s: 900, cells: 96 },
+    // t_down's own metrics carry an open error-rate incident, so its drawer draws the Incident card.
+    ...(down ? { metrics: { declared: true, path: "/metrics", via: "auto", interval_s: 120, state: "ok", word: "Scraped",
+      last_scrape_at: iso(NOW_MS - 20_000), requests: 220, errors: 27, error_rate: 0.125, rate_per_min: 44, p50_ms: 60, p95_ms: 440,
+      window_minutes: 5, series: [],
+      alert: { state: "firing", word: "Alerting", incident_id: "inc_1", incident_status: "open", since: iso(NOW_MS - 12 * 60_000),
+               rule: { error_rate_percent: 5, window_minutes: 5, min_requests: 20, enabled: true } } } } : {}),
     etag: `"obs-app-${targetId}"`,
     ...over,
   };
@@ -379,8 +395,12 @@ export type ObsBodies = {
   llmCalls?: (offset: number) => unknown; routes?: unknown; catalog?: unknown; entitlements?: unknown; sessions?: unknown;
   /** Repo and models' board (GET /api/setup), for the `setup` parity rows. */
   setup?: unknown;
+  /** GET /v1/reliability/incidents/{id}/response (the Incident card). */
+  incident?: unknown;
   /** POST answers by path suffix (`/probe`, `/stack/deploy`, …). */
   writes?: Record<string, { status?: number; body: unknown }>;
+  /** App alerts (alerts-fixtures.ts): an app's rules, its history (by `url`), every app's. */
+  rules?: (targetId: string) => unknown; history?: (url: URL) => unknown; alerts?: (url: URL) => unknown;
 };
 export type Recorded = { url: string; method: string; body: unknown };
 
@@ -408,6 +428,12 @@ export function mockObsFetch(bodies: ObsBodies = {}) {
       if (path.endsWith("/observability-suite/health-check")) return json(HEALTH_CHECK_WIRE);
       return json({ ok: true });
     }
+    if (/^\/v1\/apps\/[^/]+\/alert-rules$/.test(path)) {
+      const id = decodeURIComponent(path.split("/")[3] ?? "");
+      return json(bodies.rules ? bodies.rules(id) : rulesWire(id));
+    }
+    if (/^\/v1\/apps\/[^/]+\/alerts$/.test(path)) return json(bodies.history ? bodies.history(u) : historyWire());
+    if (path === "/v1/alerts") return json(bodies.alerts ? bodies.alerts(u) : allAlertsWire());
     if (path === "/v1/observability/apps") return json(bodies.pulse ?? pulseWire());
     if (path.startsWith("/v1/observability/apps/")) {
       const id = decodeURIComponent(path.split("/")[4] ?? "");
@@ -428,6 +454,8 @@ export function mockObsFetch(bodies: ObsBodies = {}) {
     if (path === "/v1/entitlements/sources") return json(bodies.entitlements ?? entitlementSourcesWire());
     if (path === "/v1/entitlement-connection-sessions") return json(bodies.sessions ?? entitlementSessionsWire());
     if (path === "/api/setup") return json(bodies.setup ?? board());
+    if (/^\/v1\/reliability\/incidents\/[^/]+\/response$/.test(path)) return json(bodies.incident ?? incidentResponseWire());
+    if (/^\/v1\/reliability\/incidents\/[^/]+\/report$/.test(path)) return json(INCIDENT_REPORT_WIRE);
     return new Response("{}", { status: 404 });
   });
   vi.stubGlobal("fetch", fn);

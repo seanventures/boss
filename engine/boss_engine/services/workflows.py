@@ -1759,7 +1759,11 @@ def list_definitions(
         item = _serialize_definition(row)
         item["version_count"] = int(row["version_count"])
         item["step_count"] = int(row["step_count"] or 0)
-        item["steps"] = _step_outline(row["step_specs"], step_labels)
+        from .deploy_policy import step_answer
+
+        item["steps"] = _step_outline(
+            row["step_specs"], step_labels,
+            deploy_answer=lambda step: step_answer(connection, project_id, step))
         item["active_version"] = (
             int(row["active_version"]) if row["active_version"] is not None else None)
         # WHAT STARTING IT WILL ASK FOR. The query above already loads this from the live
@@ -1792,7 +1796,8 @@ def step_title(step: Any) -> str:
     return title.strip() if isinstance(title, str) else ""
 
 
-def _step_outline(specs: Any, step_labels: dict[str, str]) -> list[dict[str, Any]]:
+def _step_outline(specs: Any, step_labels: dict[str, str],
+                  deploy_answer: Any = None) -> list[dict[str, Any]]:
     """Just enough of each step to DRAW a workflow rather than count it.
 
     Name, WHO RUNS IT, whether it is the customer's own, and whether it stops for a person —
@@ -1847,6 +1852,18 @@ def _step_outline(specs: Any, step_labels: dict[str, str]) -> list[dict[str, Any
             "agent_work": bool(binding.get("agent_work")),
             "approval": str((step.get("approval") or {}).get("mode") or "auto"),
         })
+        if capability == "deploy":
+            # WHO ANSWERS A DEPLOY is deploy_policy.step_answer, the runner's own answer: a
+            # step the environment's policy ships unasked is not drawn as a person's gate, and
+            # `says` is the sentence every surface shows for it.
+            from .deploy_policy import PERSON_SAYS
+
+            answer = deploy_answer(step) if deploy_answer else {"who": "you",
+                                                                 "says": PERSON_SAYS}
+            if answer.get("who") == "policy":
+                outline[-1]["approval"] = "policy"
+                outline[-1]["policy"] = answer.get("environment")
+            outline[-1]["says"] = answer.get("says") or PERSON_SAYS
     return outline
 
 

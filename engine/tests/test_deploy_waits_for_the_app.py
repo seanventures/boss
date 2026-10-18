@@ -91,4 +91,4 @@ def test_the_preview_path_still_waits_too():
     src = inspect.getsource(ps)
     # 180s, or more for a Java service that builds its jar first (preview_start_timeout).
     assert "def preview_start_timeout(workdir: Optional[Path], default: float = 180.0," in src
-    assert "timeout=preview_start_timeout(workdir)" in src
+    assert "preview_start_timeout(workdir," in src

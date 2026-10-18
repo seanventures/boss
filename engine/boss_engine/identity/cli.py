@@ -11,6 +11,8 @@
     shadow-report [--json]                   the per-router shadow -> enforce report
     posture                                  the six posture checks
     claim-status                             one line for `boss doctor`: claimed or not
+    self-installer-key [--quiet]             mint the host self-installer's boss_sak_ key
+                                             (sys_self_installer; boss self-fix enroll keeps it)
     egress-key [--revoke-others]             mint the egress service's boss_sak_ key (sys_egress),
                                              shown once; it authenticates /v1/identity/introspect
     setup-link                               a new single-use claim link (1 hour), while unclaimed
@@ -280,6 +282,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     mk.add_argument("--permission", action="append", dest="permissions", default=None,
                     help="a capability (agent_chat, …) or a permission (workflow_run:start); repeat")
     mk.add_argument("--quiet", action="store_true", help="print the key alone (for make mcp-setup)")
+    sik = sub.add_parser("self-installer-key",
+                         help="mint the host self-installer's boss_sak_ key (boss self-fix enroll)")
+    sik.add_argument("--quiet", action="store_true", help="print the key alone (for boss self-fix enroll)")
     egk = sub.add_parser("egress-key", help="mint the egress service's own boss_sak_ key (shown once)")
     egk.add_argument("--revoke-others", action="store_true", help="end every earlier egress key now")
     args = parser.parse_args(argv)
@@ -295,6 +300,15 @@ def main(argv: Optional[list[str]] = None) -> int:
                 print(recovery_summary(done))
             elif args.cmd == "rotate-master-key":
                 print(rotate_master_key(args.new_key_file, db=db))
+            elif args.cmd == "self-installer-key":
+                from . import tokens
+
+                created = tokens.issue_self_installer_key(db, org_id=org_id, created_by=HOST_CLI_PRINCIPAL)
+                if args.quiet:
+                    print(created.key)
+                else:
+                    print("The host self-installer's key (sys_self_installer). It is shown once; "
+                          f"`boss self-fix enroll` keeps it for you.\n\n  {created.key}\n")
             elif args.cmd == "egress-key":
                 from . import tokens
 

@@ -33,6 +33,7 @@ import {
 import type { RoleFeedItem } from "../lib/roles";
 import type { TaskFeedItem } from "../lib/tasks";
 import { ChangeSetApproval, isChangeSetDecision } from "./multirepo/change-set-approval";
+import { SelfFixCard, cardOf, isSelfFixDecision } from "./self-fix/approval-card";
 
 function formatMicros(amount: unknown): string {
   if (typeof amount !== "number") {
@@ -801,6 +802,31 @@ function DecisionInboxRow({
     );
   }
 
+  // A BOSS SELF-FIX: its own card (what broke, the change, the red→green test, the reviewers,
+  // the tier) above the inbox's own answers, so the content hash still binds the approval.
+  if (isSelfFixDecision(decision) && cardOf(rec)) {
+    return (
+      <article className="dq-row dq-row-selffix" data-testid="decision-row" data-decision-status={decision.status}
+               data-highlighted={highlighted || undefined} id={`decision-${decision.id}`}
+               ref={(el) => { if (el && highlighted) el.scrollIntoView({ block: "center" }); }}>
+        <SelfFixCard card={cardOf(rec)!} projectId={projectId}
+                     selfFixId={typeof rec.self_fix_id === "string" ? rec.self_fix_id : undefined} />
+        <div className="dq-foot">
+          {isPending ? (
+            <DecisionActions decision={decision} projectId={projectId} actorId={actorId} />
+          ) : (
+            <>
+              <span className={`dq-verdict ${isApproved ? "green" : decision.status === "rejected" ? "red" : "muted"}`}>
+                {decision.status.toUpperCase()}
+              </span>
+              <span className="dq-note">{decisionStatusDetail(decision)}</span>
+            </>
+          )}
+        </div>
+      </article>
+    );
+  }
+
   return (
     <article
       className="dq-row"
@@ -1030,7 +1056,11 @@ export function DecisionActions({ decision, projectId, actorId }: {
   const dismiss = direct.find((a) => a.action === "reject")?.label === "Dismiss";
   // THE CONTENT THIS APPROVAL IS OF. The engine refuses the approval if the preview has moved
   // on since this card was drawn, so nobody approves an email they did not read.
-  const contentHash = actionPreviewOf(decision.recommendation.action_preview)?.content_hash ?? "";
+  // A preview without a drawable kind can still bind the approval (a self-fix card's preview is
+  // its hash of the commit, tree, diff, tests and review): its hash is sent all the same.
+  const rawPreview = decision.recommendation.action_preview as { content_hash?: unknown } | undefined;
+  const contentHash = actionPreviewOf(decision.recommendation.action_preview)?.content_hash
+    ?? (typeof rawPreview?.content_hash === "string" ? rawPreview.content_hash : "");
   // Why it is a no: optional chips, sent when Reject is pressed (the press itself is unchanged).
   const [why, setWhy] = useState<string[]>([]);
   const onPress = (e: React.MouseEvent) => {

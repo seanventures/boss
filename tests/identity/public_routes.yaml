@@ -111,6 +111,9 @@ POST /saml/v2/acs:
 POST /saml/v2/{project_id}/acs:
   reason: saml_signed_assertion
   verifier: boss_engine.services.saml:SamlAuthenticator.verify_response
+POST /v1/apps/{target_id}/signals:
+  reason: hmac_signed_webhook
+  verifier: boss_engine.services.incident_signals:receive
 POST /v1/auth/email-code:
   reason: auth_endpoint
   verifier: apps.api.app.routers.identity_auth:verify_auth_request

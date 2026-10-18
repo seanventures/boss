@@ -445,3 +445,26 @@ def test_pressing_approve_after_a_rerun_went_green_reads_ci_again(client, engine
                        json={"actor": "ceo", "note": "ship"}).status_code == 200
     got = client.get(f"/v1/ci/waits/{wait['id']}", params={"project_id": PROJECT}).json()
     assert got["status"] == "passed"
+
+
+def test_ci_is_read_with_the_token_clone_and_pr_use(monkeypatch):
+    """D2: the project connection's fine-grained token answered 403 on check runs, statuses and
+    Actions runs while the App's installation token read them. CI is now read with the shared
+    repo_token decision; the connection's credential is only the fallback."""
+    from boss_engine.services import ci_gate, github_app_adapter, kit_connections
+
+    monkeypatch.setattr(kit_connections, "github_state",
+                        lambda *a, **k: {"connected": True, "repo": "acme/shop"})
+    monkeypatch.setattr(kit_connections, "github_token", lambda *a, **k: "connection-token")
+    asked = []
+    monkeypatch.setattr(github_app_adapter, "repo_token",
+                        lambda s, o, r, **k: asked.append((o, r)) or "app-token")
+    reader = ci_gate.reader_for_project(None, object(), "p1", "acme/shop")
+    assert reader.token == "app-token" and asked == [("acme", "shop")]
+
+    def no_app(*a, **k):
+        raise github_app_adapter.GitHubAppConfigurationError("not installed here")
+
+    monkeypatch.setattr(github_app_adapter, "repo_token", no_app)
+    assert ci_gate.reader_for_project(None, object(), "p1", "acme/shop").token == \
+        "connection-token"

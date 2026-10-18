@@ -96,22 +96,25 @@ def answer_seconds(settings: Any) -> float:
 
 
 def wants_first_answer(message: str, evidence: Optional[SubjectEvidence],
-                       depth: Optional[str], *, has_images: bool = False) -> bool:
+                       depth: Optional[str], *, has_images: bool = False,
+                       looking_only: bool = True, live_look: bool = False) -> bool:
     """Is this turn answered by the one-call first answer?
 
     Only a QUESTION about a record BOSS found. An instruction ("retry it", "do the fix") needs
     the loop — it acts — and so does an explicit "Investigate further". A screenshot goes to the
     loop too: the first call is text, and an image read as text is an empty question.
-    """
-    from .intent_router import asked_only_to_look
 
+    `looking_only` and `live_look` are the turn's DECISION (agent_decision, in route_turn): the
+    model read whether this asks for a change and whether it needs a live look at the machine.
+    The words are not re-read here.
+    """
     if depth == INVESTIGATE or has_images:
         return False
     if evidence is None or not evidence.found:
         return False
-    if asks_for_a_live_read(message or ""):
+    if live_look:
         return False
-    return asked_only_to_look(message or "")
+    return bool(looking_only)
 
 
 #: A question only a live look can answer: the app's logs, what is running on a host now. The
@@ -144,6 +147,11 @@ _SYSTEM = (
     "Not confirmed: what the record does not show that would confirm the cause or the fix, one "
     "short line each — or \"nothing; the record settles it\".\n"
     "\n"
+    "Say whose fault it is — BOSS's own (its planner, wiring, tokens, image), the app's code "
+    "or manifest, or the host — and when it is BOSS's, say so in the Cause line and make the "
+    "Fix what BOSS must change: never tell the operator to change their app or their machine "
+    "to work around BOSS (\"install Java\" when BOSS read the wrong folder). BOSS's printed "
+    "remedy is a claim; check it against the record.\n"
     "Rules: a checker's label or suggested_action is not the cause unless the error text "
     "agrees with it. Never invent a file, line or value the record does not contain. Do not ask "
     "the operator anything and do not offer to investigate — the console offers that next. "

@@ -46,6 +46,18 @@ from .typed_decision_spend import TypedDecisionReconciliationRequired
 
 log = logging.getLogger("boss.agent_converse")
 
+#: A TALK ANSWERS; IT DOES NOT ACT. Asked on a failed step to "retry the delivery", the Backend
+#: Engineer replied "I'm retrying now: pushing the saved branch … [act:github.create_pr_real]"
+#: — a talk has no tools, nothing ran, and the operator was told work was under way (D2,
+#: 2026-10-18). Said in every talk turn, so an agent never claims an action it cannot take.
+TALK_CANNOT_ACT = (
+    "In this conversation you have NO tools and cannot take any action: you cannot retry, "
+    "push, deploy, approve or start anything. Never say or imply you are doing, have done or "
+    "will now do something. If the operator asks for an action, say plainly that you cannot "
+    "do it from here and name where it is done: the step's own button (for example Retry), or "
+    "Talk to BOSS, whose agent can act once the operator consents. [act:<id>] is ONLY for "
+    "citing your own past work by its act id; never write it for an action.")
+
 KINDS = ("talk", "plan", "room")
 SEATS = {"talk": (1, 1), "plan": (1, 1), "room": (2, 5)}
 MAX_MESSAGE_CHARS = 8000
@@ -963,7 +975,7 @@ def _instruction(plan: _Plan, conv: dict, speaker: _Speaker, roles: dict[str, di
                     "role. Mention once that you are an AI agent. No lists.")
         return ("Reply to the operator's last message. Answer first, from your role's lens; at "
                 "most 180 words unless they asked for depth. Cite your own work as [act:<id>] "
-                "only if you use it.")
+                "only if you use it. " + TALK_CANNOT_ACT)
     if conv["kind"] == "plan":
         if greeting:
             return ("The operator wants to start a piece of work with you. Greet them in one "

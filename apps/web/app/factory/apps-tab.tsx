@@ -54,7 +54,7 @@ export type AppBuild = {
 export type AppRow = {
   key: string; app: string; builders: string[]; word: string;
   preview: { status: string; url?: string } | null;
-  deploys: { env: string; ok: boolean; word?: string }[];
+  deploys: { env: string; ok: boolean; word?: string; targetId?: string }[];
   builds: AppBuild[];
   rank: number;
   /** The app's PR (its newest attempt that opened one) and that PR's state, its metered spend,
@@ -136,7 +136,7 @@ export function parseApps(w: unknown): AppRow[] {
       preview: p && opt(p.status) ? { status: str(p.status), url: opt(p.url) } : null,
       deploys: arr(o.deploys).map((d) => {
         const y = obj(d);
-        return { env: str(y.env), ok: y.ok === true, word: opt(y.word) };
+        return { env: str(y.env), ok: y.ok === true, word: opt(y.word), targetId: opt(y.target_id) };
       }),
       builds,
       rank: rankOf(word),
@@ -396,6 +396,12 @@ export function AppsTab({ projectId, runs, previews, query = "", onOpen, onNew, 
                                   onClick={(e) => { e.stopPropagation(); setMenu(null); setLinksOf(a); }}>Links</button>
                           <button type="button" role="menuitem" title={SIGN_IN_TIP} data-testid={`fx-app-menu-signin-${a.key}`}
                                   onClick={(e) => { e.stopPropagation(); setMenu(null); setSetupOf({ app: a, tab: "connectors" }); }}>Sign-in</button>
+                          {/* ALERTS LIVE IN OBSERVABILITY: this links to the app's Alerts tab there. */}
+                          {a.deploys.find((d) => d.targetId) ? (
+                            <a role="menuitem" data-testid={`fx-app-menu-alerts-${a.key}`} title="Its alert rules and every alert that fired"
+                               href={areaHref({ area: "observability", app: a.deploys.find((d) => d.targetId)!.targetId!, atab: "alerts" })}
+                               onClick={(e) => e.stopPropagation()}>Alerts</a>
+                          ) : null}
                           {a.appId ? (
                             <button type="button" role="menuitem" data-testid={`fx-app-menu-security-${a.key}`}
                                     title="Scans, findings and security reviews of this app" onClick={(e) => {

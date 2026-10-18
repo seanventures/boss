@@ -58,8 +58,8 @@ export function OnboardingHelpCard() {
             </li>
             <li>
               Deploying needs a <b>host and a target</b>: register the host in <b>Infra</b>,
-              then bind the app to it on the run&apos;s Deploy step. Nothing ships until you approve
-              the deploy gate.
+              then bind the app to it on the run&apos;s Deploy step. A Deploy step asks you first;
+              only one set to follow an environment&apos;s policy ships unasked, and its plan says so.
             </li>
             <li>
               Previews and sandboxes are <b>not guaranteed</b>. A blocked surface fails closed

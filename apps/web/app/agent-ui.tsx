@@ -16,6 +16,7 @@ import { LedgerStrip } from "./memory-ui";
 import { apiWrite } from "../lib/api-write";
 
 import { callAction } from "../lib/call-action";
+import { askConsent, consentFromBody } from "../lib/identity/consent";
 import { GatedButton, useGate } from "../components/gated";
 // Agent World (S-runs): the agent's face, its live state, and the work it cites.
 import { CitedActs, citedIds, DockAgentHead, DockGutterFace, dockFaceKey, dockRoleKey, useDockSpeech } from "./agents/dock-agent";
@@ -838,7 +839,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
       // still held four messages — while the console showed a turn in flight.
       let r: Awaited<ReturnType<typeof askBossAction>> | typeof stalled;
       try {
-        r = await Promise.race([
+        const turn = () => Promise.race([
         // NOT agentChatAction: that one calls revalidatePath("/"), so the transition stays
         // pending while the entire 8 MB console re-renders. The answer painted and the
         // "Working…" bubble kept spinning for another 15 seconds underneath it. Nothing on the
@@ -848,6 +849,13 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
         new Promise<typeof stalled>((res) =>
           window.setTimeout(() => res(stalled), AGENT_STALL_SECONDS * 1000)),
         ]);
+        r = await turn();
+        // THE AGENT ACTS ON YOUR BEHALF, SO IT ASKS FIRST. A turn that needs a grant the
+        // person does not hold yet comes back as a consent request (actions.ts postJsonReturn):
+        // open the consent sheet, and once granted send the same turn once more.
+        const asked = r !== stalled && !r.ok
+          ? consentFromBody((r.data as Record<string, unknown> | undefined)?.consent) : null;
+        if (asked && await askConsent(asked)) r = await turn();
       } catch (e) {
         setMessages((m) => [...m, { role: "assistant", content:
           "That message did not reach BOSS — " + String((e as Error)?.message ?? e)
@@ -1044,9 +1052,16 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
 
   const acceptAction = useCallback((action: ProposedAction) => {
     startTransition(async () => {
-      const r = await callAction(runAgentActionAction, undefined, "assistant:chat")(
+      const press = () => callAction(runAgentActionAction, undefined, "assistant:chat")(
         projectId, actor, action.tool, action.args, threadId ?? undefined,
         action.id, action.label);
+      let r = await press();
+      // A BUTTON THAT NEEDS YOUR GRANT ASKS FOR IT, the same way a turn does (runTurn): a 409
+      // consent_required opens the consent sheet and, once granted, the same press is sent once
+      // more. Read as a failure it showed "Needs your consent" and started a repair turn.
+      const asked = !r.ok
+        ? consentFromBody((r.data as Record<string, unknown> | undefined)?.consent) : null;
+      if (asked && await askConsent(asked)) r = await press();
       const payload = (r.data ?? {}) as Record<string, unknown>;
       const ok = r.ok && payload?.ok !== false;
       // BOSS CHANGED SOMETHING THE OTHER PANELS ARE SHOWING. Clicking "Create the target" here

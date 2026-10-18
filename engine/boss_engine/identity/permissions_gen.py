@@ -7,7 +7,7 @@ from enum import StrEnum
 from .catalogue import AccessRoleMeta, PassportPreset, PermissionMeta, SystemPrincipalMeta
 
 CATALOGUE_VERSION = 1
-CATALOGUE_FINGERPRINT = "d5135441b3e60cb5"
+CATALOGUE_FINGERPRINT = "f1f4b961111a7b88"
 
 
 class Permission(StrEnum):
@@ -208,6 +208,8 @@ class Permission(StrEnum):
     TELEMETRY_MANAGE = "telemetry:manage"
     TELEMETRY_INGEST = "telemetry:ingest"
     WORKER_LEASE = "worker:lease"
+    SELF_FIX_TICKET_READ = "self_fix:ticket_read"
+    SELF_FIX_TICKET_REPORT = "self_fix:ticket_report"
 
 
 #: Alias for declarations: `@permit(P.WORKFLOW_PUBLISH, ...)`.
@@ -409,6 +411,8 @@ PERMISSION_META: dict[str, PermissionMeta] = {
     "telemetry:manage": PermissionMeta(key="telemetry:manage", title="Manage telemetry", description="Rotate, forget and delete telemetry.", category="Operations and assurance", roles=('owner', 'admin'), scope='project', step_up=True, delegable=False, critical=False, system_only=False, readonly_post=False),
     "telemetry:ingest": PermissionMeta(key="telemetry:ingest", title="Ingest telemetry", description="Send collector telemetry (machine only).", category="Operations and assurance", roles=('system_collector',), scope='project', step_up=False, delegable=False, critical=False, system_only=True, readonly_post=False),
     "worker:lease": PermissionMeta(key="worker:lease", title="Lease worker jobs", description="Poll, heartbeat and complete leased jobs (worker protocol).", category="Operations and assurance", roles=('system_worker',), scope='project', step_up=False, delegable=False, critical=False, system_only=True, readonly_post=False),
+    "self_fix:ticket_read": PermissionMeta(key="self_fix:ticket_read", title="Read self-fix install tickets", description="List and take the signed, single-use tickets of approved BOSS self-fixes (host self-installer only).", category="Operations and assurance", roles=('system_self_installer',), scope='org', step_up=False, delegable=False, critical=False, system_only=True, readonly_post=False),
+    "self_fix:ticket_report": PermissionMeta(key="self_fix:ticket_report", title="Report self-fix install phases", description="Report each install phase of a taken self-fix ticket (host self-installer only).", category="Operations and assurance", roles=('system_self_installer',), scope='org', step_up=False, delegable=False, critical=False, system_only=True, readonly_post=False),
 }
 
 ACCESS_ROLES: dict[str, AccessRoleMeta] = {
@@ -420,6 +424,7 @@ ACCESS_ROLES: dict[str, AccessRoleMeta] = {
     "system_worker": AccessRoleMeta(key="system_worker", name="System worker", description="The worker protocol: lease, heartbeat and complete jobs; reserve spend; lease secrets for a running step.", bindable_scopes=('org',), mfa_required=False, system=True),
     "system_collector": AccessRoleMeta(key="system_collector", name="System collector", description="Collector machine telemetry ingest.", bindable_scopes=('org',), mfa_required=False, system=True),
     "system_scim": AccessRoleMeta(key="system_scim", name="System SCIM", description="SCIM 2.0 provisioning for one identity provider.", bindable_scopes=('org',), mfa_required=False, system=True),
+    "system_self_installer": AccessRoleMeta(key="system_self_installer", name="System self-installer", description="The host self-installer (BOSS fixes itself): read signed install tickets and report install phases. Nothing else.", bindable_scopes=('org',), mfa_required=False, system=True),
 }
 
 #: Built-in role -> its permissions. Derived ONLY from each entry's `roles`.
@@ -1019,6 +1024,10 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
     "system_scim": frozenset({  # 1
         "scim:provision",
     }),
+    "system_self_installer": frozenset({  # 2
+        "self_fix:ticket_read",
+        "self_fix:ticket_report",
+    }),
 }
 
 PASSPORT_PRESETS: dict[str, PassportPreset] = {
@@ -1036,6 +1045,7 @@ SYSTEM_PRINCIPALS: dict[str, SystemPrincipalMeta] = {
     "sys_worker": SystemPrincipalMeta(id="sys_worker", access_role="system_worker", replaces="BOSS_WORKER_PRINCIPAL and the shared key on worker protocols"),
     "sys_collector": SystemPrincipalMeta(id="sys_collector", access_role="system_collector", replaces="collector machine POSTs"),
     "sys_scim": SystemPrincipalMeta(id="sys_scim", access_role="system_scim", replaces="BOSS_ENTERPRISE_SCIM_BEARER_TOKENS (one principal per provider: sys_scim_<provider>)"),
+    "sys_self_installer": SystemPrincipalMeta(id="sys_self_installer", access_role="system_self_installer", replaces="nothing; the host self-installer that runs approved BOSS self-fix tickets (scripts/install/self_fix_installer.py)"),
     "sys_host_cli": SystemPrincipalMeta(id="sys_host_cli", access_role="none", replaces="nothing; the actor of host-shell recovery (boss identity recover-owner)"),
     "sys_egress": SystemPrincipalMeta(id="sys_egress", access_role="none", replaces="BOSS_EGRESS_SERVICE_KEY (the egress proxy's shared key; it authenticates to /v1/identity/introspect with a boss_sak_ key of its own)"),
 }

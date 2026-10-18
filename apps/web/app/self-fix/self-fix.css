@@ -1,0 +1,79 @@
+/* ── BOSS fixes itself (docs/product/BOSS_FIXES_ITSELF.md §10) ──
+   sfx- classes only; design-system tokens only. The strip on a parked step, the approval card, the
+   Self-fixes page with its lineage, the Send sheet and Govern › Self-fix. Page width from the
+   layout scale (--page-max-compact), type in rem. */
+
+.sfx-strip { display: flex; flex-direction: column; gap: 8px; margin: 10px 0; padding: 12px 14px; border: 1px solid var(--accent-line); border-radius: var(--r-xl); background: var(--accent-soft); min-width: 0; }
+.sfx-strip-off { flex-direction: row; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; border-color: var(--border); background: var(--surface-2); }
+.sfx-strip-head { display: flex; align-items: center; gap: 10px; }
+.sfx-strip-label { font-weight: 700; color: var(--ink); font-size: 0.9rem; }
+.sfx-strip-why { color: var(--muted); font-size: 0.82rem; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.sfx-stages { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 0; padding: 0; list-style: none; font-size: 0.8rem; color: var(--faint); }
+.sfx-stage[data-state="done"] { color: var(--green); }
+.sfx-stage[data-state="now"] { color: var(--ink); font-weight: 650; }
+.sfx-strip-line { color: var(--ink-soft); font-size: 0.86rem; line-height: 1.45; }
+.sfx-strip-facts, .sfx-sub { color: var(--muted); font-size: 0.78rem; }
+.sfx-strip-actions, .sfx-sheet-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.sfx-primary { border-color: var(--accent-line); color: var(--accent-text); font-weight: 650; }
+
+.sfx-card { display: flex; flex-direction: column; gap: 8px; padding: 14px 16px; min-width: 0; }
+.sfx-card-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.sfx-card-eyebrow { font-size: 0.72rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--faint); }
+.sfx-card-title { margin: 0; }
+.sfx-card-grid { display: grid; grid-template-columns: minmax(5rem, max-content) minmax(0, 1fr); gap: 6px 14px; margin: 0; font-size: 0.85rem; }
+.sfx-card-grid dt { color: var(--faint); font-size: 0.72rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; padding-top: 2px; }
+.sfx-card-grid dd { margin: 0; color: var(--ink-soft); min-width: 0; display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; }
+.sfx-card-foot { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; }
+.sfx-plus { color: var(--green); font-variant-numeric: tabular-nums; }
+.sfx-minus { color: var(--red); font-variant-numeric: tabular-nums; }
+.sfx-redgreen { font-weight: 650; color: var(--ink); }
+.sfx-rejected { color: var(--amber); cursor: help; }
+.sfx-seat { white-space: nowrap; }
+.sfx-diff { max-height: 26rem; overflow: auto; border: 1px solid var(--border); border-radius: var(--r); background: var(--surface-2); padding: 8px 10px; font-size: 0.76rem; }
+.sfx-diff pre { margin: 0; white-space: pre; }
+
+.sfx-home { display: flex; flex-direction: column; gap: 14px; width: 100%; max-width: var(--page-max-compact); margin: 0 auto; min-width: 0; }
+.sfx-autonomy { display: inline-flex; align-items: center; gap: 8px; cursor: help; }
+.sfx-spark { display: inline-flex; align-items: flex-end; gap: 2px; height: 1.1rem; }
+.sfx-spark-bar { width: 5px; border-radius: 1px; background: var(--accent); }
+.sfx-spark-bar[data-empty] { background: var(--surface-3); }
+.sfx-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+.sfx-table th { text-align: left; color: var(--faint); font-size: 0.72rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+.sfx-table td { padding: 8px; border-bottom: 1px solid var(--border); vertical-align: baseline; }
+.sfx-table td .ag-btn { margin-left: 8px; }
+.sfx-row-open { text-align: left; }
+.sfx-recs summary { cursor: pointer; color: var(--muted); font-size: 0.84rem; }
+.sfx-recs ul { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.sfx-recs li { display: flex; gap: 10px; align-items: center; justify-content: space-between; }
+.sfx-one { display: flex; flex-direction: column; gap: 10px; padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--r-xl); background: var(--surface); }
+.sfx-one-head { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.sfx-one-title { margin: 0; font-size: 1rem; color: var(--ink); }
+.sfx-lineage { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.sfx-lineage-step { display: grid; grid-template-columns: 7rem minmax(0, 1fr) auto; gap: 12px; padding: 6px 0; border-bottom: 1px dotted var(--border); font-size: 0.85rem; }
+.sfx-lineage-label { color: var(--faint); font-size: 0.74rem; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; }
+.sfx-lineage-detail { color: var(--ink-soft); min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.sfx-lineage-step[data-state="done"] .sfx-lineage-label { color: var(--green); }
+.sfx-lineage-step[data-state="now"] .sfx-lineage-label { color: var(--accent-text); }
+.sfx-lineage-step[data-state="failed"] .sfx-lineage-label { color: var(--red); }
+.sfx-lineage-step[data-state="next"], .sfx-lineage-step[data-state="skipped"] { opacity: 0.6; }
+.sfx-events { margin: 0; padding-left: 1.2rem; font-size: 0.8rem; color: var(--ink-soft); display: flex; flex-direction: column; gap: 4px; }
+
+.sfx-sheet { display: flex; flex-direction: column; gap: 10px; padding: 14px 16px; border: 1px solid var(--accent-line); border-radius: var(--r-xl); background: var(--surface); }
+.sfx-sheet-head { display: flex; align-items: baseline; gap: 12px; }
+.sfx-sheet-title { margin: 0; font-size: 1rem; color: var(--ink); }
+.sfx-send-where { color: var(--ink); font-size: 0.88rem; }
+.sfx-send-similar { color: var(--muted); font-size: 0.8rem; }
+.sfx-text { width: 100%; font-family: inherit; font-size: 0.8rem; }
+.sfx-trailer { display: block; font-size: 0.74rem; color: var(--muted); }
+.sfx-blocked { padding: 8px 12px; border: 1px solid var(--red); border-radius: var(--r); background: var(--red-soft); color: var(--ink); font-size: 0.84rem; }
+.sfx-blocked ul { margin: 4px 0 0; padding-left: 1.2rem; }
+.sfx-ok { color: var(--green); font-size: 0.84rem; }
+.sfx-tick { display: inline-flex; gap: 8px; align-items: center; font-size: 0.85rem; color: var(--ink-soft); }
+
+.sfx-govern { display: flex; flex-direction: column; gap: 10px; padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--r-xl); background: var(--surface); }
+.sfx-govern-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; font-size: 0.86rem; color: var(--ink-soft); }
+.sfx-govern-label { min-width: 9rem; font-weight: 650; color: var(--ink); cursor: help; }
+.sfx-govern-caps { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; font-size: 0.84rem; }
+.sfx-cap { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); cursor: help; }
+.sfx-cap-input { width: 5.5rem; }
+.sfx-run-autonomy { cursor: help; }

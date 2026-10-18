@@ -376,35 +376,80 @@ def _swallowed_summary(events: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
 
 # ── Emission ──────────────────────────────────────────────────────────────────────────────────
 
+def _emit_in(connection: Any, run_id: str) -> tuple[Optional[dict[str, Any]], str]:
+    """Profile `run_id` inside `connection`'s transaction: (the profile, "emitted"), or
+    (None, why not) — "no such run", "not terminal yet (status X)" or "already profiled"."""
+    from sqlalchemy import text
+
+    from .core import emit_event
+
+    rows = load_rows(connection, run_id)
+    run = rows["run"]
+    if not run:
+        return None, "no such run"
+    if run.get("status") not in TERMINAL_STATUSES:
+        return None, f"not terminal yet (status {run.get('status')!r})"
+    profile = profile_from_rows(rows["turns"], rows["llm_calls"], run, run_id=run_id,
+                                swallowed=rows["swallowed"])
+    last = connection.execute(text(
+        "SELECT data FROM events WHERE entity_id = :r AND event_type = :k "
+        "ORDER BY created_at DESC LIMIT 1"), {"r": run_id, "k": EVENT_TYPE}).scalar()
+    if isinstance(last, str):
+        last = json.loads(last)
+    if isinstance(last, Mapping) and last.get("status") == profile["status"] and (
+            last.get("turn_rows") == profile["turn_rows"]):
+        return None, "already profiled"
+    emit_event(connection, str(run["project_id"]), EVENT_TYPE, "boss", "code_task_run", run_id,
+               json.loads(json.dumps(profile, default=str)))
+    return profile, "emitted"
+
+
+def profiled_at(connection: Any, run_id: str) -> Optional[str]:
+    """The status the run's latest profile was taken at, or None when it has none."""
+    from sqlalchemy import text
+
+    last = connection.execute(text(
+        "SELECT data->>'status' FROM events WHERE entity_id = :r AND event_type = :k "
+        "ORDER BY created_at DESC LIMIT 1"), {"r": run_id, "k": EVENT_TYPE}).scalar()
+    return str(last) if last is not None else None
+
+
+def emit_build_profile_in(connection: Any, run_id: str) -> Optional[dict[str, Any]]:
+    """`emit_build_profile` inside the caller's transaction, in a savepoint. Never raises.
+
+    For the terminal-status hook (services/run_terminal.py): the profile is written in the same
+    transaction as the status that made the run terminal, so it commits — or rolls back — with
+    it, whichever path wrote that status."""
+    try:
+        with connection.begin_nested():
+            profile, why = _emit_in(connection, run_id)
+        if profile is not None:
+            log.info("build profile %s: %s", run_id, profile["totals"])
+        else:
+            log.info("build profile: %s not profiled — %s", run_id, why)
+        return profile
+    except Exception:  # noqa: BLE001 — a diagnostic never fails the run it describes
+        log.warning("build profile: could not profile %s", run_id, exc_info=True)
+        return None
+
+
 def emit_build_profile(engine: Any, run_id: str) -> Optional[dict[str, Any]]:
     """Emit the profile of a run that has reached a terminal state. Never raises.
 
-    Called from the build's single finalize path (agent_acts.settle_code_task). A run that
-    settles again with nothing new (same status, same transcript) is not profiled twice.
+    Recorded when the run's status turns terminal (services/run_terminal.py, on every path that
+    writes it); called again from the build's `finally` (agent_acts.settle_code_task) as the
+    backstop. A run that settles again with nothing new (same status, same transcript) is not
+    profiled twice. A skip says why in the log: "not terminal yet" was silent, and a gate that
+    found no profile had nothing to go on (crun_16c5e245, rc10.8).
     """
     try:
-        from sqlalchemy import text
-
         from ..db import begin
-        from .core import emit_event
 
         with begin(engine) as c:
-            rows = load_rows(c, run_id)
-            run = rows["run"]
-            if not run or run.get("status") not in TERMINAL_STATUSES:
-                return None
-            profile = profile_from_rows(rows["turns"], rows["llm_calls"], run, run_id=run_id,
-                                        swallowed=rows["swallowed"])
-            last = c.execute(text(
-                "SELECT data FROM events WHERE entity_id = :r AND event_type = :k "
-                "ORDER BY created_at DESC LIMIT 1"), {"r": run_id, "k": EVENT_TYPE}).scalar()
-            if isinstance(last, str):
-                last = json.loads(last)
-            if isinstance(last, Mapping) and last.get("status") == profile["status"] and (
-                    last.get("turn_rows") == profile["turn_rows"]):
-                return None
-            emit_event(c, str(run["project_id"]), EVENT_TYPE, "boss", "code_task_run", run_id,
-                       json.loads(json.dumps(profile, default=str)))
+            profile, why = _emit_in(c, run_id)
+        if profile is None:
+            log.info("build profile: %s not profiled — %s", run_id, why)
+            return None
         log.info("build profile %s: %s", run_id, profile["totals"])
         return profile
     except Exception:  # noqa: BLE001 — a diagnostic never fails the run it describes

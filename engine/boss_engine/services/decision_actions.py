@@ -101,6 +101,12 @@ CARRIED_OUT_ON_APPROVAL = frozenset({
     # (typed_decision_spend.on_reconciliation_approved).
     "architecture_reconciliation",
     "typed_decision_reconciliation",
+    # Approving a BOSS self-fix issues its signed, single-use install ticket for the host
+    # self-installer (services/self_fix_install.on_approved).
+    "self_fix.install",
+    # Approving the removal of installed self-fixes issues the signed `remove` / `remove_all`
+    # ticket (services/self_fix_install.on_remove_approved).
+    "self_fix.remove",
 })
 
 #: "Request changes" DOES SOMETHING ONLY FOR THESE: DecisionService._handle_non_approved_follow_on
@@ -115,6 +121,8 @@ REVISE_CONSUMED = frozenset({
     "review_architecture",
     # "Send back": every PR of the set gets a fix build from the note (change_sets._send_back).
     "approve_change_set",
+    # Mender fixes it again from the note, then asks again (self_fix_install.on_revise).
+    "self_fix.install",
 })
 
 #: A workflow decision step (workflows.py) writes this action and no run id. The runner reads

@@ -444,6 +444,33 @@ SHARE: dict[str, Spec] = {
     "context": {"version": ("re", _VERSION), "edition": _enum(EDITIONS, "other")},
 }
 
+# A BOSS self-fix sent to the BOSS team through the collector (BOSSAPP-571 spec §7.2, §7.7, R17):
+# the allow-listed facts the team counts per signature, and the patch. The patch is CODE: kept
+# verbatim (a masked diff is a broken one) and dropped whole if the secret/PII gate would change
+# it — the upstream path already refused to send a diff that fails that check (§7.3).
+_CLASS_SIGNATURE = re.compile(r"^[a-z][a-z0-9_:.\-]{0,120}(?:@[a-z0-9_.]{1,120})?$")
+_HEX12 = re.compile(r"^[0-9a-f]{12}$")
+SELF_FIX_AREAS = ("deploy", "build", "preview", "review", "workflow", "console", "install",
+                  "engine")
+SELF_FIX_ENGINES = ("claude", "codex", "openrouter", "ollama", "scripted", "other")
+SELF_FIX: dict[str, Spec] = {
+    "v": ("int", 1, 1),
+    "kind": _enum(("self_fix",)),
+    "install_id": ("re", _INSTALL_ID),
+    "secret_hash": ("re", _HEX64),
+    "class_signature": ("re", _CLASS_SIGNATURE),
+    "area": _enum(SELF_FIX_AREAS, "engine"),
+    "engine": _enum(SELF_FIX_ENGINES, "other"),
+    "verified_local": ("bool",),
+    "tests": ("int", 0, 50),
+    "tier": ("int", 2, 3),
+    "upstream_ref": ("re", _HEX12),
+    "title": ("text", 200),
+    "patch": ("code", 256 * 1024),
+    "evidence": ("text", 50_000),
+    "context": {"version": ("re", _VERSION), "edition": _enum(EDITIONS, "other")},
+}
+
 # --------------------------------------------------------------------------------------------
 # sanitize
 # --------------------------------------------------------------------------------------------
@@ -491,6 +518,15 @@ def _value(spec: Spec, value: Any, drop: Callable[[], None]) -> Any:
         return value if isinstance(value, str) and spec[1].fullmatch(value) else None
     if kind == "text":
         return _scrub_text(value, spec[1]) if isinstance(value, str) else None
+    if kind == "code":
+        # Verbatim or not at all: never masked, never cut (a cut diff does not apply), and
+        # dropped whole when it holds a credential. Documentation addresses (203.0.113.x) and
+        # code that reads like PII are code, not PII: the upstream check judged them (§7.3).
+        from .redaction import redact_secrets
+
+        if not isinstance(value, str) or not value.strip() or len(value) > spec[1]:
+            return None
+        return value if redact_secrets(value) == value else None
     if kind == "catalogue":
         return catalogue_name(spec[1], value) if isinstance(value, str) else None
     if kind == "catalogue_only":
@@ -544,7 +580,7 @@ def _object(schema: dict[str, Spec], value: dict, drop: Callable[[], None]) -> d
 
 def _strict_id(value: str) -> bool:
     return any(p.fullmatch(value) for p in (_DAY, _INSTALL_ID, _HEX64, _VERSION, _REF,
-                                            _SCORE_VERSION))
+                                            _SCORE_VERSION, _CLASS_SIGNATURE, _HEX12))
 
 
 def _gate_strings(value: Any, drop: Callable[[], None], free_text: bool = False) -> Any:
@@ -555,7 +591,8 @@ def _gate_strings(value: Any, drop: Callable[[], None], free_text: bool = False)
             if _gate(str(k)) is None:
                 drop()
                 continue
-            got = _gate_strings(v, drop, free_text=k in ("lines", "bundle", "note"))
+            got = _gate_strings(v, drop, free_text=k in ("lines", "bundle", "note",
+                                                         "evidence", "title", "patch"))
             if got is not None:
                 out[k] = got
         return out

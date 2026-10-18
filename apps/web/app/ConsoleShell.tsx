@@ -74,6 +74,7 @@ import {
   Plus,
   Wallet,
   Wrench,
+  Bandaids,
   X,
   type Icon,
 } from "@phosphor-icons/react";
@@ -131,6 +132,7 @@ const ICONS = {
   dashboard: Gauge,
   overview: House,
   decisions: CheckCircle,
+  self_fixes: Bandaids,
   work: Rows,
   activity: List,
   portfolio: SlidersHorizontal,
@@ -216,6 +218,10 @@ const AREAS: AreaDef[] = [
   { id: "infra", label: "Infra", sub: "Where your apps run and how they got there", group: "Run", icon: ICONS.infra },
   { id: "observability", label: "Observability", sub: "Is it alive, how fast, what thinking costs", group: "Run", icon: ICONS.observability },
   { id: "activity", label: "Activity log", sub: "Every line BOSS wrote, searchable", group: "Run", icon: ICONS.activity },
+  // BOSS FIXES ITSELF (docs/product/BOSS_FIXES_ITSELF.md §10.3): every fix BOSS made to its own
+  // code, from the problem to the release, and the autonomy it bought. After the log: what BOSS
+  // did about what went wrong.
+  { id: "self_fixes", label: "Self-fixes", sub: "Bugs in BOSS that BOSS fixed itself", group: "Run", icon: ICONS.self_fixes },
   { id: "discovery", label: "Research", sub: "Cited dossiers — a verdict, outcomes and the evidence", group: "Run", icon: ICONS.discovery },
   { id: "meetings", label: "Panels", sub: "Agents debate it — a decision or a PRD", group: "Run", icon: ICONS.meetings },
   // ONE ENTRY, NOT TWO. "Metatron" was an always-on captain whose session table does not exist

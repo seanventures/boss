@@ -34,7 +34,7 @@ class _AppInstalledOnOneRepo:
     covered = ("customer", "their-app")
     missing_permissions: list[str] = []
 
-    def usable_token_for_repo(self, owner: str, repo: str) -> tuple[str, list[str]]:
+    def usable_token_for_repo(self, owner: str, repo: str, *, extra=None) -> tuple[str, list[str]]:
         if (owner, repo) != self.covered:
             raise GitHubAppConfigurationError(
                 "Failed to mint installation token (422): There is at least one repository "

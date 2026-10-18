@@ -61,6 +61,7 @@ JOB_KIND_PERMISSIONS: dict[str, str] = {
     "github.repository.reconcile": P.REPOSITORY_MANAGE,
     # deployments and infrastructure
     "deployment.stack_apply": P.DEPLOYMENT_CREATE,
+    "self_fix.build": P.IMPROVEMENT_MANAGE,         # BOSS fixes itself: Mender's build (self_fix_build)
     "deployment.host_apply": P.HOST_MANAGE,
     "infra.operation": P.INFRA_PROVISION,           # platform/operations.py (destroy is approved first)
     "infra.droplet.create": P.INFRA_PROVISION,

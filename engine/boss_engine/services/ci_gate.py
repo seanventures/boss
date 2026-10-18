@@ -841,9 +841,32 @@ def reader_for_project(connection: Any, settings: Any, project_id: str,
     if not state.get("connected") or not (repository or state.get("repo")):
         raise CiSettingError("github_not_connected", 409,
                              "This project has no GitHub repository connected. Connect it in Setup.")
-    token = github_token(connection, settings, project_id)
-    return HttpCiReader(state.get("api_base") or "https://api.github.com",
-                        repository or state["repo"], token)
+    repo = repository or state["repo"]
+    return HttpCiReader(state.get("api_base") or "https://api.github.com", repo,
+                        ci_token(connection, settings, project_id, repo)
+                        or github_token(connection, settings, project_id))
+
+
+def ci_token(connection: Any, settings: Any, project_id: str, repository: str) -> str:
+    """The credential CI is read with: the SAME decision clone and pull request use
+    (github_app_adapter.repo_token — the App's installation token where it covers the repo).
+
+    Reading CI with the project connection's credential instead was a third, independent choice,
+    and the wrong one on the laptop: its fine-grained token answers 403 on check runs, commit
+    statuses AND Actions runs for paramg/boss-sandbox, while the App's installation token reads
+    check runs and statuses (2026-10-18, D2). Every CI wait on a repository with workflows was
+    therefore `unreadable` — not passed — and refused the deploy approval it guards. "" when no
+    App token is to be had; the caller then uses the connection's credential, as before."""
+    owner, _, name = str(repository or "").partition("/")
+    if not owner or not name:
+        return ""
+    try:
+        from .github_app_adapter import repo_token
+
+        return repo_token(settings, owner, name, connection=connection,
+                          project_id=project_id) or ""
+    except Exception:  # noqa: BLE001 — no App here: the connection's credential is the answer
+        return ""
 
 
 _PR_URL = re.compile(r"https?://[^/]+/([^/]+/[^/]+)/pull/(\d+)")

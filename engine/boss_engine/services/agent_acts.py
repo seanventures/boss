@@ -1451,13 +1451,15 @@ def settle_code_task(engine: Any, code_task_run_id: str) -> None:
             withdraw_superseded_pr_questions(c, code_task_run_id)
     except Exception as error:  # noqa: BLE001
         log.warning("could not supersede earlier PR decisions of %s: %s", code_task_run_id, error)
-    # ITS RUN SCORECARD, with the final numbers (docs/product/RUN_SCORECARDS.md). Every build
-    # runner's `finally` comes through here, so no terminal path is missed. Never raises.
+    # ITS RUN SCORECARD, with the final numbers (docs/product/RUN_SCORECARDS.md). Both this and
+    # the profile below are first recorded when the status turns terminal (services/
+    # run_terminal.py); a runner can go on working for minutes after that (the PR path's
+    # auto-preview), so this is the backstop that catches what changed since. Never raises.
     from .scorecards import settle as _settle_scorecard
 
     _settle_scorecard(engine, code_task_run_id)
     # WHERE ITS TIME AND TOKENS WENT (services/build_profile.py), as a `code_task.build_profile`
-    # event once the run is terminal. Same reason it lives here; never raises.
+    # event once the run is terminal — again only if its transcript grew. Never raises.
     from .build_profile import emit_build_profile
 
     emit_build_profile(engine, code_task_run_id)

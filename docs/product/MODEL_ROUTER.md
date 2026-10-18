@@ -582,6 +582,31 @@ independent test's fixes:
 - Setup › Model routing, the builds' *Why this model*, the workflow step, and Agent Studio's model
   policy at 1440 and 390 with no horizontal scroll; `?area=pipeline` lands on the routing row.
 
+## Agent decisions: a model decides, keywords are hints
+
+The router picks *which model* runs a piece of work. A different question is *what an agent does*
+with what a person said: retry a step, answer a question, start new work, approve a decision.
+Those decisions go through one seam, `services/agent_decision.decide` (operator, 2026-10-18: "it
+cannot / should not work just on keywords without context or models"):
+
+- The caller names the **candidate actions**, each with what it does and whether it is available
+  here (and where it is done if not). Keyword readings, coded triage and log patterns are passed
+  as **hints**, labelled as BOSS's guesses.
+- The **context** goes with it: the request and recent thread, the record in view (the dock's
+  subject or the one id the request names), a pending plan.
+- **Jev** answers when it is chosen, keyed and not held (BOSS-451); otherwise the project's routed
+  model, governed. One prompt and one JSON contract (`action`, `confidence`, `reason`, `question`)
+  for every engine.
+- Below the threshold (`agent_decision_confidence`, default 0.7) the agent asks **one** question and
+  does nothing. A candidate that changes nothing (answer, look into it) is taken even when unsure.
+- With **no usable model** the agent says so (`NO_MODEL_REPLY`) and does nothing.
+
+Callers: `IntentRouter.route_turn` (the dock and Talk to BOSS: answer / investigate / operate /
+new work / a governed initiator / a pending plan; writes are allowed only when it decided operate
+or new work), `step_recovery.decide` (its coded triage is `boss_triage` evidence; unsure or no
+model means a question for a person), and `CommsService.decide_reply` (a decision answered by
+email or chat). `scripts/agent-battle-test.sh` scores them on a real model (BOSSAPP-578).
+
 ## Deferred
 
 - **Pooling headroom across projects** that share one subscription. CLI-reported utilisation is

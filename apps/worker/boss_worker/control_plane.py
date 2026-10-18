@@ -191,6 +191,15 @@ class ControlPlaneClient:
         response.raise_for_status()
         return response.json()
 
+    def run_self_fix_build(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Ask the API to run one leased BOSS self-fix build (BOSS's own source lives there)."""
+        response = self._client.post(
+            f"/v1/self-fixes/{payload['self_fix_id']}/build",
+            json={key: payload.get(key) for key in ("job_id", "worker_id", "lease_token",
+                                                    "note")})
+        response.raise_for_status()
+        return response.json()
+
     def run_infra_operation(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Ask the API to run one leased infrastructure operation (vault and host keys live there)."""
         response = self._client.post(

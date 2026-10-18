@@ -73,6 +73,9 @@ DEFAULT_STEP_AGENTS: dict[str, str] = {
     "more_tests": "qa",
     "monitor": "sre",
     "document": "docs_writer",
+    "investigate_incident": "sre",
+    "verify_recovery": "sre",
+    "incident_report": "sre",
     # THE SECURITY REVIEW: the security reviewer scans, re-reviews and reports; the PM convenes
     # the panel exactly as for any panel (the security lens chairs its seats); the engineering
     # captain builds the fix like any build.
@@ -114,7 +117,11 @@ def _step(
     nxt: Optional[list[str]] = None,
     approval: Optional[str] = None,
     approver_role: Optional[str] = None,
+    follows_policy: bool = False,
 ) -> dict[str, Any]:
+    """One catalogue step. `follows_policy` (a Deploy step only): the environment's deploy
+    policy may answer for it (deploy_policy). Without it a Deploy step PROMISES A PERSON, and
+    every surface says so — only a workflow whose words promise nobody at the release opts in."""
     step: dict[str, Any] = {
         "id": step_id,
         "kind": "capability",
@@ -123,12 +130,16 @@ def _step(
     }
     if capability in DEFAULT_STEP_AGENTS:
         _set_default_captain(step, DEFAULT_STEP_AGENTS[capability])
-    if approval or approver_role:
+    if approval or approver_role or follows_policy:
         step["approval"] = {}
         if approval:
             step["approval"]["mode"] = approval
         if approver_role:
             step["approval"]["approver_role"] = approver_role
+        if follows_policy:
+            if capability != "deploy":
+                raise ValueError("only a Deploy step can follow the environment's policy")
+            step["approval"]["follows_policy"] = True
     return step
 
 
@@ -265,7 +276,10 @@ def _increments(count: int) -> list[dict[str, Any]]:
                       "title": f"Increment {k} · Build"})
         steps.append({**_step(f"inc{k}_deploy", "deploy",
                               {"run_id": _from(f"inc{k}_build", "code_task_run_id")},
-                              nxt=[after_deploy], approver_role="release_manager"),
+                              nxt=[after_deploy], approver_role="release_manager",
+                              # "deploys them, then improves in steps": each increment goes
+                              # live as the environment's policy says, and the plan says so.
+                              follows_policy=True),
                       "title": f"Increment {k} · Deploy"})
     steps.append(_step("report", "report", nxt=["notify"]))
     steps.append(_step("notify", "notify", _notify_inputs()))
@@ -287,7 +301,9 @@ def _increments(count: int) -> list[dict[str, Any]]:
 # reporting its verdict through its result, not the outer loop second-guessing it.
 #
 # A PR means there is something to look at, so `preview` follows automatically. `deploy` is the
-# one thing a person still decides: not every app that builds should ship.
+# one thing a person still decides: not every app that builds should ship. A Deploy step
+# promises that person unless it says `follows_policy` (deploy_policy), and only workflows whose
+# words promise nobody at the release say it — test_a_promised_approval_is_always_asked.
 CATALOGUE: list[dict[str, Any]] = [
     {
         "key": "standard_product_delivery",
@@ -457,6 +473,50 @@ CATALOGUE: list[dict[str, Any]] = [
         ]),
     },
     {
+        # AN APP'S OWN ALERT, ANSWERED (services/incident_response.py). Started by an alert
+        # rule whose Respond automatically is on (per rule, on the app's Alerts tab; never by
+        # an app-wide event subscription — event_dispatch.PER_RULE_ONLY) or by Respond on the
+        # incident; its input: incident_id, extends_run_id (the app's build lineage), title,
+        # directive.
+        "key": "incident_response",
+        "name": "Incident Response",
+        "description": "An app's alert fired. Investigate, fix the root cause with a regression "
+                       "test, have someone approve the release, ship it, and prove recovery "
+                       "from the monitor.",
+        "objective": (
+            "An app BOSS deployed is failing in front of users, and its own monitor raised the "
+            "alarm. Find the root cause from the evidence — the app's metrics, its logs and the "
+            "release that was serving — fix exactly that with a regression test that fails on "
+            "the faulty release, and restore service. A person approves the release; recovery "
+            "is judged by BOSS's monitor, not by the fix's author. If the evidence does not "
+            "support a root cause, say so and stop rather than guess."
+        ),
+        "work_class": "bugfix",
+        # NO SECOND PASS: users are failing now. The fix's own acceptance criteria demand the
+        # regression test, and the build's gates run the app's whole existing suite; a More
+        # tests pass and its second deploy would hold the recovery for another build.
+        "more_tests": False,
+        "steps": _chain([
+            _step("investigate", "investigate_incident", {"incident_id": _in("incident_id")}),
+            # The investigation's brief and the incident's acceptance criteria reach the build
+            # the way a panel's PRD does: folded in by the runner from the step that produced
+            # them (`incident_brief`), so this build binds what every catalogue build binds.
+            _step("build", "build", _build_inputs()),
+            _step("ci", "wait_for_ci", {"pull_request_url": _from("build", "pull_request_url")}),
+            _step("report", "report"),
+            # A PERSON OWNS AN INCIDENT FIX'S RELEASE (D2: "require CI success and operator
+            # approval before deployment"), whatever the environment's policy lets a deploy do
+            # unasked — on the laptop staging ships without asking, set 2026-10-12.
+            _step("approve", "release_approval", approver_role="release_manager"),
+            # THE PERSON IS THE GATE ABOVE, so this step follows the environment's policy
+            # rather than asking the same person the same question twice.
+            _step("deploy", "deploy", {"run_id": _from("build", "code_task_run_id")},
+                  approver_role="release_manager", follows_policy=True),
+            _step("verify", "verify_recovery", {"incident_id": _in("incident_id")}),
+            _step("incident_report", "incident_report", {"incident_id": _in("incident_id")}),
+        ]),
+    },
+    {
         "key": "research_led_discovery",
         "name": "Research-Led Discovery",
         "description": "Find out whether it is worth building at all. Ends in a decision and a "
@@ -506,7 +566,9 @@ CATALOGUE: list[dict[str, Any]] = [
             # report is assembled on demand for any run, at any point, from the same evidence.
             _step("report", "report"),
             _step("deploy", "deploy", {"run_id": _from("build", "code_task_run_id")},
-                  approver_role="release_manager"),
+                  approver_role="release_manager",
+                  # Nothing here promises a person at the release: the policy decides.
+                  follows_policy=True),
             _step("monitor", "monitor"),
             _step("document", "document", {"title": _in("title")}),
         ]),
@@ -729,7 +791,9 @@ CATALOGUE: list[dict[str, Any]] = [
             # report is assembled on demand for any run, at any point, from the same evidence.
             _step("report", "report"),
             _step("deploy", "deploy", {"run_id": _from("build", "code_task_run_id")},
-                  approver_role="release_manager"),
+                  approver_role="release_manager",
+                  # Nothing here promises a person at the release: the policy decides.
+                  follows_policy=True),
             _step("monitor", "monitor"),
         ]),
     },
@@ -774,7 +838,9 @@ CATALOGUE: list[dict[str, Any]] = [
             # is exactly how `plrr` spent its whole life.
             _step("report", "report", nxt=["deploy"]),
             _step("deploy", "deploy", {"run_id": _from("build", "code_task_run_id")},
-                  nxt=["document"], approver_role="release_manager"),
+                  nxt=["document"], approver_role="release_manager",
+                  # Nothing here promises a person at the release: the policy decides.
+                  follows_policy=True),
             _step("document", "document", {"title": _in("title")}),
         ],
     },
@@ -859,6 +925,11 @@ _FIELD_TEXT: dict[str, dict[str, Any]] = {
                  "title": "Running-app scan (optional)",
                  "description": "baseline (default) watches the app passively; api also "
                                 "attacks its API, only inside the scan's own sandbox."},
+    "incident_id": {"type": "string", "title": "Incident",
+                    "description": "The incident to respond to (Observability › the app's "
+                                   "alert). An alert rule starts this for you when its "
+                                   "Respond automatically is on (the app's Alerts tab).",
+                    "examples": ["inc_0123456789ab"]},
     "notify_channel": {"type": "string", "title": "Who to tell",
                        "description": "Where the outcome is posted: email:someone@example.com or "
                                       "mattermost:<channel id>. Leave blank and the notify step "
@@ -916,6 +987,15 @@ BRIEFS: dict[str, dict[str, Any]] = {
                     "directive": "In the Shift swap board, the approvals page returns HTTP 500 "
                                  "when a swap has no claimant. It should list the swap as "
                                  "unclaimed instead."},
+    },
+    "incident_response": {
+        "directive": ("Which incident?",
+                      "Started from an app's alert: the incident names the app, the release "
+                      "that was serving and what failed."),
+        "example": {"title": "Order API: 18% of requests failing",
+                    "directive": "Respond to the incident: Order API (staging): 18% of "
+                                 "requests failing."},
+        "required": ("incident_id",),
     },
     "research_led_discovery": {
         "directive": ("What do you want to find out?",
@@ -1051,10 +1131,17 @@ def entry_spec(entry: dict[str, Any]) -> dict[str, Any]:
     # same generic PRD meeting: Research-Led Discovery, whose own description says it
     # "ends in a decision and a document, not in code", asked for an implementation
     # plan exactly like Standard Product Delivery did.
-    return {"entry_step": entry["steps"][0]["id"], "steps": entry["steps"],
+    spec = {"entry_step": entry["steps"][0]["id"], "steps": entry["steps"],
             "objective": entry.get("objective") or "",
             "workflow_name": entry["name"],
             "input_schema": input_schema_for(entry)}
+    # AN OPT-OUT TRAVELS WITH THE SPEC. Pass 2 is re-applied where a version becomes a run's
+    # steps (workflows._published_spec); a "light" pass survives because its steps are already
+    # in the list, but "no pass 2" is an absence, and without the flag the run added a full
+    # pass and a second deploy to the template that had said no.
+    if entry.get("more_tests") is False:
+        spec["more_tests"] = False
+    return spec
 
 
 def example_for(workflow_key: str) -> Optional[dict[str, Any]]:
@@ -1099,11 +1186,17 @@ def catalogue_summary(prd_auto_approve: Optional[bool] = None) -> list[dict[str,
         def _capability(step: dict[str, Any]) -> str:
             return str((step.get("binding") or {}).get("capability") or "")
 
-        gates = [s["id"] for s in manual
-                 if _capability(s) not in CAPABILITIES
-                 or stops_for_a_person(_capability(s), (s.get("approval") or {}).get("mode"),
-                                       prd_auto_approve=prd_auto_approve)]
-        automatic = [s["id"] for s in manual if s["id"] not in gates]
+        # A DEPLOY THAT FOLLOWS THE ENVIRONMENT'S POLICY is nobody's gate until a project's
+        # policy says (GET /v1/delivery-workflows/asks reads it): listed apart, never promised.
+        from .deploy_policy import follows_policy
+
+        policy_decides = [s["id"] for s in manual if follows_policy(s)]
+        gates = [s["id"] for s in manual if s["id"] not in policy_decides
+                 and (_capability(s) not in CAPABILITIES
+                      or stops_for_a_person(_capability(s), (s.get("approval") or {}).get("mode"),
+                                            prd_auto_approve=prd_auto_approve))]
+        automatic = [s["id"] for s in manual if s["id"] not in gates
+                     and s["id"] not in policy_decides]
         needs = needs_of(spec)
         out.append({
             "key": entry["key"],
@@ -1118,6 +1211,7 @@ def catalogue_summary(prd_auto_approve: Optional[bool] = None) -> list[dict[str,
             ],
             "gates": gates,
             "automatic_approvals": automatic,
+            "policy_decides": policy_decides,
             "requires_project": sorted(project_requirements(spec)),
             # EVERYTHING it needs from a project, including a model and the agents its gates
             # name — the same keys the start preflight checks, with their labels.

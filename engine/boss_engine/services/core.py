@@ -178,6 +178,15 @@ def _after_event(connection: Any, event_type: str, entity_type: str, entity_id: 
         on_event(connection, event_type, entity_type, entity_id, data or {})
     except Exception:  # noqa: BLE001
         logger.warning("scorecard hook failed for %s", event_type, exc_info=True)
+    if entity_type == "code_task_run":
+        # A BUILD THAT TURNED TERMINAL records its profile and scorecard now, whichever path
+        # wrote the status (services/run_terminal.py) — not only when its runner returns.
+        try:
+            from .run_terminal import on_event as _on_terminal
+
+            _on_terminal(connection, event_type, entity_type, entity_id)
+        except Exception:  # noqa: BLE001
+            logger.warning("terminal-run hook failed for %s", event_type, exc_info=True)
 
 
 def has_event(connection: Any, entity_id: str, event_type: str) -> bool:

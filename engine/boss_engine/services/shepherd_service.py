@@ -26,6 +26,7 @@ from typing import Any, Optional
 from ..config import Settings
 from ..ports import sql
 from . import decision_actions
+from .run_terminal import on_status_written
 from .core import emit_event, make_id
 from .jobs import JOB_PRIORITY_BACKGROUND
 #: `r` is the row judged; `n` a newer attempt of the same work.
@@ -726,6 +727,7 @@ def _close_as_blocked(connection, run_id: str) -> None:
         "        ELSE jsonb_build_object('template_hold', CAST(:h AS jsonb)) END, "
         "updated_at = now() WHERE id = :i"),
         {"e": error, "h": json.dumps(held) if held is not None else None, "i": run_id})
+    on_status_written(connection, run_id)
 
 
 #: Per run table: is a run at its last phase nevertheless NOT passed (so it ends blocked)?
@@ -1719,6 +1721,7 @@ def _cancel_run(connection, run_id: str, reason: str) -> int:
         sql("UPDATE code_task_runs SET status='cancelled', phase='cancelled', "
             "error=:e, updated_at=now() WHERE id=:i AND status IN ('running','queued')"),
         {"i": run_id, "e": reason[:500]}).rowcount
+    on_status_written(connection, run_id)
     connection.execute(
         sql("UPDATE jobs SET status='cancelled', updated_at=now() "
             "WHERE payload->>'run_id' = :i AND status IN ('queued','running')"),
@@ -1734,10 +1737,12 @@ def _fail_run(connection, run_id: str, reason: str) -> int:
     that will never move is worse than one listing ten failures, because the first invites
     waiting.
     """
-    return connection.execute(
+    changed = connection.execute(
         sql("UPDATE code_task_runs SET status='failed', phase='abandoned', error=:e, "
             "updated_at=now() WHERE id=:i AND status IN ('running','queued')"),
         {"i": run_id, "e": reason[:500]}).rowcount
+    on_status_written(connection, run_id)
+    return changed
 
 
 def _retry_run(engine, settings, jobs, run_id: str, reason: str) -> int:

@@ -13,6 +13,7 @@
 import { arr, num, obj, opt, str, usePolled, type Polled } from "./factory-floor";
 import { parseAttention, type AttentionItem } from "./agents-live-board";
 import { parseWord, toneOf, type Tone, type Word } from "./infra-view";
+import { parseGrafana, type Grafana } from "./app-alerts";
 
 const optNum = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
 const optStr = (v: unknown): string | null => (typeof v === "string" && v ? v : null);
@@ -67,6 +68,10 @@ export type Pulse = {
   rows: PulseRow[]; notWatched: NotWatched[]; window: WindowInfo; attention: AttentionItem[]; partial: string[];
   /** Metered model spend in the last 24 h, for the header (`$3.12 · 24h`); shown only when > 0. */
   spend24hMicros: number; spend24hEstimated: boolean;
+  /** The header's Grafana ↗: a link only once BOSS checked that Grafana answers, else why. */
+  grafana: Grafana;
+  /** Alerts firing now and not held back: the Alerts tab's count and dot. */
+  alertsFiring: number;
 };
 export function parsePulse(w: unknown): Pulse {
   const o = obj(w);
@@ -77,6 +82,7 @@ export function parsePulse(w: unknown): Pulse {
     notWatched: arr(o.not_watched).map((x) => { const y = obj(x); return { app: str(y.app), env: str(y.env), scrapeUrl: optStr(y.scrape_url), dashboardUrl: optStr(y.dashboard_url) }; }),
     window: parseWindow(o.window), attention: arr(o.attention).map(parseAttention), partial: arr(o.partial).map(String),
     spend24hMicros: num(o.spend_24h_micros), spend24hEstimated: o.spend_24h_estimated === true,
+    grafana: parseGrafana(o.grafana), alertsFiring: num(o.alerts_firing),
   };
 }
 
@@ -90,6 +96,8 @@ export type AppDetail = {
     lastProbeAt: string | null; probes: number; failed: number; buildSha7: string | null; deployedAt: string | null;
     observedVersion: string | null; servingMismatch: boolean; host: { id: string; name: string } | null;
     openUrl: string | null; dashboardUrl: string | null; lastError: string | null;
+    /** Why there is no Dashboard ↗ ("Grafana isn't answering on its host"). */
+    dashboardReason: string | null; grafana: Grafana;
   };
   series: SeriesPoint[]; incidents: Incident[]; pins: Pin[]; window: WindowInfo;
   metrics: AppMetrics;
@@ -103,7 +111,7 @@ export type AppMetrics = {
   route: string | null; url: string | null; naming: string | null; intervalS: number | null;
   requests: number | null; errors: number | null; errorRate: number | null; ratePerMin: number | null;
   p50Ms: number | null; p95Ms: number | null; windowMinutes: number | null;
-  alert: { state: AlertState; word: string; incidentId: string | null; since: string | null;
+  alert: { state: AlertState; word: string; incidentId: string | null; incidentStatus: string | null; since: string | null;
            rule: { errorRatePercent: number | null; windowMinutes: number | null; minRequests: number | null; enabled: boolean } } | null;
 };
 const ALERT_STATES = new Set(["firing", "ok", "quiet", "off"]);
@@ -121,7 +129,7 @@ export function parseAppMetrics(w: unknown): AppMetrics {
     windowMinutes: optNum(o.window_minutes),
     alert: a ? {
       state: (ALERT_STATES.has(str(a.state)) ? str(a.state) : "quiet") as AlertState, word: str(a.word),
-      incidentId: optStr(a.incident_id), since: optStr(a.since),
+      incidentId: optStr(a.incident_id), incidentStatus: optStr(a.incident_status), since: optStr(a.since),
       rule: { errorRatePercent: optNum(r.error_rate_percent), windowMinutes: optNum(r.window_minutes),
               minRequests: optNum(r.min_requests), enabled: r.enabled !== false },
     } : null,
@@ -139,6 +147,7 @@ export function parseAppDetail(w: unknown): AppDetail {
       lastProbeAt: optStr(f.last_probe_at), probes: num(f.probes), failed: num(f.failed), buildSha7: optStr(f.build_sha7),
       deployedAt: optStr(f.deployed_at), observedVersion: optStr(f.observed_version), servingMismatch: f.serving_mismatch === true,
       host: ref(f.host), openUrl: optStr(f.open_url), dashboardUrl: optStr(f.dashboard_url), lastError: optStr(f.last_error),
+      dashboardReason: optStr(f.dashboard_reason), grafana: parseGrafana(f.grafana),
     },
     series: arr(o.series).slice(0, 288).map((p) => { const x = obj(p); return { at: str(x.at), p95: optNum(x.p95), avg: optNum(x.avg), ok: num(x.ok), n: num(x.n) }; }),
     incidents: arr(o.incidents).map((i) => {
@@ -325,9 +334,10 @@ export function parseSources(w: unknown): Sources {
 
 // ── URL state (§4.1) ────────────────────────────────────────────────────────────────────────
 
-export type ObsTab = "apps" | "models" | "system" | "sources" | "scorecards" | "installs";
+export type ObsTab = "apps" | "alerts" | "models" | "system" | "sources" | "scorecards" | "installs";
 export const OBS_TABS: { key: ObsTab; label: string; tip: string }[] = [
   { key: "apps", label: "Apps", tip: "Is each app up, and how fast" },
+  { key: "alerts", label: "Alerts", tip: "Every app's alerts: firing now and recent" },
   { key: "models", label: "Models", tip: "Every model call: tokens, time, errors, spend" },
   { key: "system", label: "System", tip: "BOSS's own machine, its queue and stalls" },
   { key: "sources", label: "Sources", tip: "Monitoring stack and telemetry sources" },
@@ -335,7 +345,11 @@ export const OBS_TABS: { key: ObsTab; label: string; tip: string }[] = [
   // Collector mode only (obs-home filters it): installs reporting to this BOSS.
   { key: "installs", label: "Installs", tip: "Installs reporting to this collector" },
 ];
-export type ObsUrl = { view: ObsTab; win: Win; group: Group; metric: Metric; app: string | null; model: string | null; q: string };
+/** `atab=alerts` opens the app drawer on its Alerts tab (Factory ⋯ › Alerts links there);
+ *  `aapp`, `astate`, `asev` are Observability › Alerts' filters. */
+export type DrawerTab = "overview" | "alerts";
+export type ObsUrl = { view: ObsTab; win: Win; group: Group; metric: Metric; app: string | null; model: string | null; q: string;
+  atab: DrawerTab; aapp: string | null; astate: "firing" | "resolved" | "all"; asev: "warning" | "critical" | null };
 const OBS_TAB_KEYS = new Set<string>(OBS_TABS.map((t) => t.key));
 /** `tab=` is accepted as well as `view=`: Govern links to `?area=observability&tab=models`. */
 export function readObsUrl(search: string): ObsUrl {
@@ -346,6 +360,9 @@ export function readObsUrl(search: string): ObsUrl {
   return {
     view: (OBS_TAB_KEYS.has(view) ? view : "apps") as ObsTab, win: govern ? "30d" : winOf(p.get("win")), group: groupOf(p.get("group")),
     metric: metricOf(p.get("metric")), app: p.get("app"), model: p.get("model"), q: p.get("q") ?? "",
+    atab: p.get("atab") === "alerts" ? "alerts" : "overview", aapp: p.get("aapp"),
+    astate: p.get("astate") === "resolved" || p.get("astate") === "all" ? (p.get("astate") as "resolved" | "all") : "firing",
+    asev: p.get("asev") === "warning" || p.get("asev") === "critical" ? (p.get("asev") as "warning" | "critical") : null,
   };
 }
 

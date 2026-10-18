@@ -30,6 +30,9 @@ turn, to exercise the fix rounds:
     crash_on_start  the first implement writes a server that exits on start
     crash           every session raises (an engine that cannot run at all)
 
+SELF-FIX STAGES (`self_fix_*`, BOSSAPP-571) play the scripts of self_fix_scripts.py, chosen by
+BOSS_SCRIPTED_SELF_FIX=<script>:<fixture dir>.
+
 CAPABILITIES (BOSS_SCRIPTED_CAPS, comma-separated, default none): "resume", "read_only",
 "turn_limit", "reports_cost", "streams_turns". The default is the poorest engine — no sessions,
 no read-only mode — so BOSS's fallbacks are what run; the conformance tests also run it with every
@@ -148,7 +151,9 @@ class ScriptedEngine:
         stage = str(ctx.get("stage") or "").strip().lower() or _stage_from_prompt(prompt)
         state = run_state(ctx.get("run_id"))
         state.calls.append({"stage": stage, "read_only": read_only, "resumed": resume_session_id,
-                            "max_turns": max_turns, "prompt_head": (prompt or "")[:4000]})
+                            "max_turns": max_turns, "prompt_head": (prompt or "")[:4000],
+                            # The whole prompt, so a conformance test can see what reached it.
+                            "full_prompt": prompt or ""})
         if "crash" in self.faults:
             record_llm_call(engine_name=self.engine, usage={"model": MODEL}, latency_ms=0,
                             ok=False, error="scripted fault: crash")
@@ -204,6 +209,16 @@ class ScriptedEngine:
 
     def _play(self, stage: str, prompt: str, root: Path, app: str, read_only: bool,
               state: _RunState, turns: list) -> tuple[str, list[str]]:
+        if stage.startswith("self_fix_"):
+            # BOSS FIXING ITSELF (self_fix_scripts.py): Mender's turns, scripted per fault.
+            from .self_fix_scripts import play as play_self_fix
+
+            summary, written = play_self_fix(stage, prompt, root, read_only=read_only,
+                                             state=state)
+            for rel in written:
+                turns.append({"direction": "tool_call", "tool_name": "write_file",
+                              "content": {"path": rel}})
+            return summary, written
         written: list[str] = []
         files = self._files()
         prefix = f"{app}/" if app else ""

@@ -82,6 +82,10 @@ INTERNAL = {
     # The security review's verdict and its report (services/security_review_steps.py).
     "security_rereview": "_security_rereview",
     "security_report": "_security_report",
+    # Incident response (services/incident_response.py): an investigation or a report that
+    # could not be written is a failed step, never a green one.
+    "investigate_incident": "_investigate_incident",
+    "incident_report": "_write_the_incident_report",
 }
 
 #: Tool-less capabilities that commission NOTHING. They are honest no-ops that say so
@@ -181,6 +185,10 @@ class _PendingCi:
         return True
 
 
+#: A parent table whose status column is constrained to words other than "active".
+_PARENT_STATUS = {"incidents": "open"}
+
+
 def _insert_awaited(c, project_id: str, table: str, row_id: str, status: str) -> None:
     """Land a row in any awaited table in a terminal state, filling whatever the schema insists
     on generically — so this keeps working for every await table, including ones added later."""
@@ -209,7 +217,8 @@ def _insert_awaited(c, project_id: str, table: str, row_id: str, status: str) ->
             values[name] = project_id
         elif name in parents:
             parent_id = f"{name}_{uuid.uuid4().hex[:8]}"
-            _insert_awaited(c, project_id, parents[name], parent_id, "active")
+            _insert_awaited(c, project_id, parents[name], parent_id,
+                            _PARENT_STATUS.get(parents[name], "active"))
             values[name] = parent_id
         elif kind in ("jsonb", "json"):
             values[name] = "{}"
@@ -303,6 +312,12 @@ def test_awaited_work_that_fails_stops_the_run_at_that_step(eng, project, monkey
             "run_id": awaited_id})
     if key == "preview":
         monkeypatch.setattr(runner, "_running_preview", lambda *a, **k: None)
+    if key == "verify_recovery":
+        # The check it parks on is under test, not how it is started from an incident.
+        monkeypatch.setattr(runner, "_start_recovery_check", lambda *a, **k: {
+            "capability": "verify_recovery", "tool": None, "status": "awaiting",
+            "await": {"kind": "recovery_check", "id": awaited_id},
+            "recovery_check_id": awaited_id})
     _security_tool_args(monkeypatch)
     if key == "architecture":
         # The architect's document needs an approved PRD; the review it waits on is under test.

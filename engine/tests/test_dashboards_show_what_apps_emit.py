@@ -133,14 +133,26 @@ class TestTheLinkGoesSomewhereReal:
         assert dashboard_uid("Pricing Experiment Log.") == "boss-pricing-experiment-log"
 
     def test_the_stack_endpoint_asks_grafana_rather_than_guessing(self):
-        """A flag stored on our side drifts from what was provisioned; Grafana cannot."""
+        """A flag stored on our side drifts from what was provisioned; Grafana cannot. Every
+        Grafana link (the stack endpoint's and Observability's) is built from ONE recorded
+        answer, by one function."""
         import pathlib
         main = pathlib.Path("apps/api/app/main.py").read_text(encoding="utf-8")
-        assert "provisioned_dashboards(base)" in main
-        assert "dashboard_missing" in main
+        view = pathlib.Path("engine/boss_engine/services/obs_view.py").read_text("utf-8")
+        assert "dashboard_link(grafana" in main and "dashboard_missing" in main
+        assert "dashboard_link(g" in view
+        for src in (main, view):
+            assert "existing is not None" not in src
 
     def test_an_unreachable_grafana_is_not_treated_as_an_empty_one(self):
-        """`None` means it could not be asked. Withholding every link on a network blip would
-        be the same overstatement in the other direction."""
-        from boss_engine.services.observability_stack import provisioned_dashboards
+        """`None` means it could not be asked — never "no dashboards". And an unreachable
+        Grafana gets no link at all (operator decision 2026-10-18): a link is shown only once
+        BOSS has checked that Grafana answers."""
+        from boss_engine.services.observability_stack import (ask_endpoint, dashboard_link,
+                                                              provisioned_dashboards)
         assert provisioned_dashboards("http://127.0.0.1:1", timeout=0.2) is None
+        down = ask_endpoint("grafana", "http://127.0.0.1:1", timeout=0.2)
+        assert down["state"] == "not_answering"
+        state = {"state": down["state"], "base_url": "http://127.0.0.1:1",
+                 "reason": down["reason"], "dashboards": None}
+        assert dashboard_link(state, "invoice") == (None, "Grafana isn't answering on its host")

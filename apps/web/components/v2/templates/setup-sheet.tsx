@@ -746,13 +746,18 @@ export function DemoLogins({ projectId, appKey, compact = false }: { projectId: 
         </GatedButton>
       ) : shown.length ? (
         <ul className="tpl-rows">
-          {shown.map((d) => (
-            <li key={`${d.env}-${d.name}`} className="tpl-row" data-testid={`tpl-demo-login-${d.env}-${d.name}`}>
-              <span className="tpl-row-name tpl-mono">{d.name}</span>
-              <span className="tpl-chip">{ENV_WORD[d.env] ?? d.env}</span>
-              <CopyValue value={d.value} label={`${d.name} (${ENV_WORD[d.env] ?? d.env})`} testId={`tpl-demo-login-copy-${d.env}-${d.name}`} />
-            </li>
-          ))}
+          {shown.map((d) => {
+            // A deploy target's own value carries its environment ("Staging"); one row per target.
+            const where = d.label ?? ENV_WORD[d.env] ?? d.env;
+            const id = `${d.env}-${d.targetId ?? "app"}-${d.name}`;
+            return (
+              <li key={id} className="tpl-row" data-testid={`tpl-demo-login-${d.env}-${d.name}${d.targetId ? `-${d.targetId}` : ""}`}>
+                <span className="tpl-row-name tpl-mono">{d.name}</span>
+                <span className="tpl-chip">{where}</span>
+                <CopyValue value={d.value} label={`${d.name} (${where})`} testId={`tpl-demo-login-copy-${id}`} />
+              </li>
+            );
+          })}
         </ul>
       ) : <span className="tpl-muted" data-testid="tpl-demo-logins-none">BOSS has generated no demo login password for this app.</span>}
       {why ? <span className="tpl-err" role="alert" data-user-text>{why}</span> : null}

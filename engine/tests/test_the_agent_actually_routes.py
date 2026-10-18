@@ -1,4 +1,6 @@
-"""The agent routes. Proven by the mechanism, not by an outcome that could pass either way.
+"""The agent routes — and since 2026-10-18 a MODEL decides what the turn does (agent_decision).
+
+Proven by the mechanism, not by an outcome that could pass either way.
 
 I inverted the router so the agent decides instead of a keyword matcher, gated it on
 `agent_router_llm_enabled` — which defaults to False and is unset in production — and shipped
@@ -14,6 +16,7 @@ apart — which is exactly how the first one passed.
 
 import pytest
 
+from ._decision_stub import decided
 from boss_engine.config import Settings
 from boss_engine.services.intent_router import IntentRouter, RouterTurn
 
@@ -67,7 +70,8 @@ def _router(**overrides) -> IntentRouter:
     return IntentRouter(settings)
 
 
-def _route(router, message: str, calls: list):
+def _route(router, message: str, calls: list, action: str = "operate"):
+    decided(router, action)
     router._answer = lambda *_a, **_k: (calls.append(message), RouterTurn(reply="answered"))[1]
     return router.route_turn(
         None, project_id="p", actor="ceo",
@@ -108,6 +112,7 @@ def test_a_phased_command_stays_governed_when_a_model_exists():
         return RouterTurn(reply="governed")
 
     router._dispatch = _dispatch
+    model = decided(router, "propose_command")
     turn = router.route_turn(
         None, project_id="p", actor="ceo",
         messages=[{"role": "user", "content": message}], manifest=_Manifest(),
@@ -115,6 +120,9 @@ def test_a_phased_command_stays_governed_when_a_model_exists():
     assert answers == [], "a phased command must not reach the agent"
     assert dispatched == ["propose_command"]
     assert turn.reply == "governed"
+    assert turn.decision["action"] == "propose_command"
+    # The keyword reading reached the model as a hint, never as the decision.
+    assert "keyword reading" in model.prompts[0]
 
 
 def test_it_is_not_gated_on_the_classifier_flag():
@@ -148,11 +156,65 @@ def test_openai_api_key_is_the_canonical_model_signal():
     assert calls, "a claude_cli deployment must still route through the agent"
 
 
-def test_without_any_model_the_keyword_fallback_still_works():
-    """A deployment with no model backend at all must still be able to start work, or the
-    fallback is not a fallback."""
+def test_without_any_model_nothing_is_started_and_boss_says_why(monkeypatch):
+    """No model, no keyword fallback: "build a settings page" starts nothing, and the reply
+    says BOSS needs a connected model (operator, 2026-10-18)."""
+    from boss_engine.services import agent_decision
+
     router = _router(openai_api_key=None, BOSS_LLM_ENGINE="none")
-    assert not (router.settings.openai_api_key or router.settings.azure_openai_key), (
-        "the fixture must clear ambient credentials, or this asserts nothing")
-    name, _args = router._deterministic_intent("build a settings page")
-    assert name == "create_code_task"
+    monkeypatch.setattr(router, "_a_model_can_answer", lambda *_a, **_k: False)
+    started: list = []
+    router._dispatch = lambda *a, **k: started.append(a)
+    router._answer = lambda *a, **k: started.append(a)
+    turn = router.route_turn(None, project_id="p", actor="ceo",
+                             messages=[{"role": "user", "content": "build a settings page"}],
+                             manifest=_Manifest())
+    assert started == []
+    assert turn.reply == agent_decision.NO_MODEL_REPLY
+    assert turn.actions == []
+
+
+def test_an_unsure_decision_asks_one_question_and_does_nothing():
+    """Unsure about a governed initiator: ONE question, nothing started."""
+    router = _router()
+    decided(router, "create_meeting", confidence=0.4,
+            question="Do you want a panel to debate this, or just my view?")
+    started: list = []
+    router._dispatch = lambda *a, **k: started.append(a)
+    router._answer = lambda *a, **k: started.append(a)
+    turn = router.route_turn(None, project_id="p", actor="ceo",
+                             messages=[{"role": "user", "content": "postgres or mongo"}],
+                             manifest=_Manifest())
+    assert started == []
+    assert turn.reply == "Do you want a panel to debate this, or just my view?"
+    assert turn.decision["status"] == "clarify"
+
+
+def test_unsure_between_agent_actions_reads_first_with_every_write_withheld():
+    """Unsure whether "build it again" is a retry or new work: the agent reads the records
+    with writes withheld and asks ONE informed question (options as buttons)."""
+    from boss_engine.services.intent_router import _decision_note
+
+    router = _router()
+    decided(router, "new_code_change", confidence=0.4)
+    seen: list = []
+    router._dispatch = lambda *a, **k: seen.append("dispatch")
+    router._answer = lambda *a, **k: (seen.append(k.get("writes")), RouterTurn(reply="q?"))[1]
+    turn = router.route_turn(None, project_id="p", actor="ceo",
+                             messages=[{"role": "user", "content": "build it again"}],
+                             manifest=_Manifest())
+    assert seen == [False] and turn.decision["status"] == "clarify"
+    assert "ONE short question" in _decision_note(router._turn_verdict)
+
+
+def test_a_question_never_authorises_a_write_and_an_instruction_does():
+    seen: list = []
+    for action, writes in (("answer", False), ("investigate", False), ("operate", True),
+                           ("new_code_change", True)):
+        router = _router()
+        decided(router, action)
+        router._answer = lambda *a, **k: (seen.append(k.get("writes")), RouterTurn(reply="ok"))[1]
+        router.route_turn(None, project_id="p", actor="ceo",
+                          messages=[{"role": "user", "content": "the build step failed"}],
+                          manifest=_Manifest())
+        assert seen[-1] is writes, action

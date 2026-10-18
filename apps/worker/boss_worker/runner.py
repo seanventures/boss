@@ -377,6 +377,9 @@ def capabilities() -> list[str]:
         # this job's lease. Declared here or the worker never leases it and the deploy sits
         # `running` at step one.
         "deployment.stack_apply",
+        # BOSS fixes itself (services/self_fix_build.py): Mender's build of a fix to BOSS's own
+        # code; the API runs it under this job's lease. Declared here or it sits queued.
+        "self_fix.build",
         "infra.operation",
         # An approved host deployment (services/governed_host_deploy.py): the API applies its
         # ChangeSet through the SSH connector under this job's lease.
@@ -843,6 +846,13 @@ def execute_job(job: LeasedJob, client: ControlPlaneClient) -> dict[str, Any]:
         # has already handed the job back to the queue without spending an attempt, so there
         # is nothing to complete or fail here (see the job_deferred check after execution).
         return result
+    if job.kind == "self_fix.build":
+        # A BOSS self-fix build: diagnosis, red test, fix, gates, reviewers. The API owns it
+        # under the lease; it ends at the approval card (or a refusal), never retried blind.
+        return client.run_self_fix_build({
+            "self_fix_id": job.payload["self_fix_id"], "job_id": job.id,
+            "worker_id": client.worker_id, "lease_token": job.lease_token,
+            "note": job.payload.get("note") or ""})
     if job.kind == "infra.operation":
         # One lifecycle hook on one provisioned resource (platform/operations.py); the API runs
         # it under this lease and writes its receipt.
@@ -1094,31 +1104,6 @@ def _tick_ai_sre_overwatch(settings: WorkerSettings) -> None:
         LOGGER.debug("ai_sre_overwatch_failed", exc_info=True)
 
 
-def _sweep_deployment_health() -> None:
-    """Sample the health of deployed apps while there is no job to run.
-
-    The idle branch is where this belongs: the worker is about to sleep anyway, and health is a
-    background concern that must never compete with real work. `sweep` itself is due-gated, so
-    running it every idle cycle costs one cheap query per target rather than a probe.
-
-    Swallows everything. A monitoring sweep that can raise would turn "the health graph is
-    stale" into "the worker crash-loops", which is a strictly worse failure than the one it
-    exists to detect.
-    """
-    try:
-        from boss_engine.config import get_settings
-        from boss_engine.db import get_engine
-        from boss_engine.services.deployment_health import sweep
-
-        engine_settings = get_settings()
-        result = sweep(get_engine(engine_settings), engine_settings)
-        if result.get("probed"):
-            LOGGER.info("health_sweep probed=%s failed=%s",
-                        result["probed"], result.get("failed"))
-    except Exception:  # noqa: BLE001
-        LOGGER.debug("health_sweep_skipped", exc_info=True)
-
-
 def _record_redelivery(client: ControlPlaneClient, job) -> None:
     """Note on the code task that this attempt is a REPLAY, so its timeline can say so.
 
@@ -1179,7 +1164,12 @@ def run_worker_cycle(client: ControlPlaneClient, settings: WorkerSettings) -> bo
     )
     if not job:
         LOGGER.info("worker_idle worker_id=%s", settings.worker_id)
-        _sweep_deployment_health()
+        # NO MONITORING SWEEP HERE. Every lease slot runs this function, so a sweep on this idle
+        # branch ran once PER SLOT, concurrently: with `BOSS_WORKER_SLOTS=auto` (3 slots) the
+        # laptop recorded three health samples and three metrics scrapes of HelpDesk AI within
+        # 25 ms, each windowed against the same previous scrape, so every request was counted
+        # three times. It also stopped entirely while every slot was busy. The one sweep runs on
+        # the worker's background thread (main._run_background_sweeps), busy or idle.
         return False
 
     if job.attempt > 1:

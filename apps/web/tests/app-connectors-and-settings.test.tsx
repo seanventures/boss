@@ -110,7 +110,12 @@ beforeEach(() => {
     if (path.startsWith(`${app}/secrets`)) return json(SECRETS);
     if (path.startsWith(`${app}/setup-guide`)) return json(guide);
     if (path.startsWith(`${app}/sign-in-with-boss`)) return json(BOSS_OFF);
-    if (path.startsWith(`${app}/demo-logins`)) return json({ demo_logins: [{ name: "DEMO_PASSWORD", value: "pw-generated" }] });
+    if (path.startsWith(`${app}/demo-logins`)) {
+      // env=deploy also answers the value a stack deploy generated on a TARGET, labelled by it.
+      return json(path.includes("env=deploy")
+        ? { demo_logins: [{ name: "DEMO_PASSWORD", value: "pw-staging", label: "Staging", target_id: "deptgt_s" }] }
+        : { demo_logins: [{ name: "DEMO_PASSWORD", value: "pw-generated" }] });
+    }
     return json({ error: "not_stubbed", path }, 404);
   }));
 });
@@ -369,6 +374,10 @@ describe("HelpDesk AI's Connectors", () => {
     expect($('[data-testid="tpl-provider-login-oauth-demo"]').textContent).toContain("Ready");
     await press('[data-testid="tpl-demo-logins-row-show"]');
     expect($('[data-testid="tpl-demo-login-preview-DEMO_PASSWORD"]')).toBeTruthy();
+    // The staging deploy's own generated password has its row, named for the target's environment.
+    const staging = $('[data-testid="tpl-demo-login-deploy-DEMO_PASSWORD-deptgt_s"]');
+    expect(staging).toBeTruthy();
+    expect(staging.textContent).toContain("Staging");
   });
 
   it("Settings: BOSS's values read-only, the person's with Edit and Remove, and Add setting", async () => {

@@ -175,6 +175,27 @@ STANDARDS: dict[str, str] = {
     "observability": OBSERVABILITY_STANDARD,
 }
 
+
+def _signals_standard() -> str:
+    from .incident_signals import SIGNALS_STANDARD
+
+    return SIGNALS_STANDARD
+
+
+#: A build that has to talk to BOSS about incidents gets the contract it must implement. Named
+#: phrases, not a guess from "incident" alone: a ticket app that merely HAS incidents as data
+#: is not asked to open a channel to BOSS.
+_SIGNAL_HINTS = (
+    "incident signal", "boss signal", "/boss/signals", "boss_signals", "notify boss",
+    "notifies boss", "tell boss", "tells boss", "report incidents to boss",
+    "report the incident to boss", "signals standard",
+)
+
+
+def wants_signals(text: str) -> bool:
+    lowered = (text or "").lower()
+    return any(hint in lowered for hint in _SIGNAL_HINTS)
+
 # Signals that a change is (or will be) a network service, and therefore in scope. Deliberately
 # generous: a false positive costs an agent reading a paragraph it does not need, while a false
 # negative ships an app the platform cannot see.
@@ -303,5 +324,6 @@ def platform_standards(instructions: str = "", *, force: bool = False) -> str:
         # A library still gets rules explicitly scoped to 'all' — an org-wide licence header,
         # say — but not the operational ones, which would be cargo-culted dead code.
         return mandated
+    signals = ("\n\n" + _signals_standard()) if wants_signals(instructions) else ""
     return ("\n\n=== BOSS PLATFORM STANDARDS (mandatory — these come from the platform, not "
-            "from this repository) ===\n" + STANDARDS["observability"] + mandated)
+            "from this repository) ===\n" + STANDARDS["observability"] + signals + mandated)

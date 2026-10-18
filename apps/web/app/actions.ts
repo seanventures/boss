@@ -106,12 +106,20 @@ async function postJsonReturn(path: string, body: Record<string, unknown>): Prom
     if (!r.ok) {
       let detail = "";
       let technical = "";
+      let consent: Record<string, unknown> | null = null;
       try {
         const body = await r.json();
+        // NEEDS YOUR CONSENT IS A QUESTION, NOT A FAILURE. The API answers 409 with the consent
+        // request (flat, error: "consent_required"); reading only `detail` turned it into
+        // "⚠ HTTP 409" in the BOSS agent dock, and the agent could never act on the operator's
+        // behalf from there (D2: asked to retry a stopped build, it answered "HTTP 409" twice).
+        // The request goes back to the caller, which opens the consent sheet and sends again.
+        if (body && body.error === "consent_required") consent = body;
         detail = String(body.detail ?? "");
         // A failed agent turn's technical line, kept apart from the sentence (lib/api-error.ts).
         technical = apiErrorTechnical(body);
       } catch {}
+      if (consent) return { ok: false, error: "Needs your consent", data: { consent } };
       return { ok: false, error: detail || `HTTP ${r.status}`,
                ...(technical ? { data: { technical } } : {}) };
     }

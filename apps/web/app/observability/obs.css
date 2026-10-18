@@ -278,3 +278,71 @@
   .obs-calls .obs-call > :nth-child(4), .obs-calls .obs-call > :nth-child(5), .obs-calls .obs-call > :nth-child(8) { display: none; }
   .obs-prow-name, .obs-go, .obs .ag-link, .obs .inf-link, .obs-dropchip select, .obs-legend-item { min-height: 44px; }
 }
+
+/* ── the app drawer's Incident card (incident-card.tsx) ───────────────────────────────────── */
+.obs-inc-title { font-weight: 650; color: var(--ink); min-width: 0; overflow-wrap: anywhere; }
+.obs-inc-part { display: flex; flex-direction: column; gap: 4px; padding-top: 8px; min-width: 0; }
+.obs-inc-text { font-size: 0.84rem; color: var(--ink); overflow-wrap: anywhere; }
+.obs-inc-text[data-tone="green"] { color: var(--green); }
+.obs-inc-text[data-tone="red"] { color: var(--red); }
+.obs-inc-steps { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; margin: 0; padding: 0; list-style: none; font-size: 0.78rem; color: var(--muted); }
+.obs-inc-steps > li { display: inline-flex; align-items: center; gap: 5px; }
+.obs-inc-steps > li[data-status="running"], .obs-inc-steps > li[data-status="waiting"] { color: var(--ink); font-weight: 600; }
+.obs-inc-auto { display: inline-flex; align-items: center; gap: 6px; font-size: 0.8rem; color: var(--muted); }
+.obs-switch { position: relative; width: 30px; height: 18px; flex: none; border-radius: 999px; border: 1px solid var(--border-strong); background: var(--bg); cursor: pointer; padding: 0; }
+.obs-switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: var(--muted); transition: transform 0.15s; }
+.obs-switch[aria-checked="true"] { background: var(--accent); border-color: var(--accent); }
+.obs-switch[aria-checked="true"]::after { transform: translateX(12px); background: var(--accent-ink); }
+.obs-switch:disabled, .obs-switch[aria-disabled="true"] { opacity: 0.4; cursor: not-allowed; }
+.obs-inc-md { max-height: 360px; overflow: auto; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface-2); font-size: 0.82rem; }
+
+/* ── Alerts: the app drawer's tab, Observability › Alerts and their sheets (BOSSAPP-598) ────── */
+.obs-dtabs { align-self: flex-start; margin-bottom: 4px; }
+.obs-alerts-tab, .obs-allalerts { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.obs-adot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: transparent; box-shadow: inset 0 0 0 1.5px var(--border-strong); }
+.obs-adot[data-tone="red"] { background: var(--red); box-shadow: none; }
+.obs-adot[data-tone="amber"] { background: var(--amber); box-shadow: none; }
+.obs-adot[data-tone="green"] { background: var(--green); box-shadow: none; }
+.obs-arule {
+  display: grid; align-items: center; gap: 4px 12px; min-height: 40px; padding: 6px 2px; font-size: 0.84rem;
+  grid-template-columns: minmax(8rem, 1fr) minmax(9rem, 1.3fr) minmax(6rem, auto) auto auto;
+  grid-template-areas: "name cond state respond acts";
+}
+.obs-arule-name { grid-area: name; display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
+.obs-arule-cond { grid-area: cond; min-width: 0; overflow-wrap: anywhere; }
+.obs-arule-state { grid-area: state; display: inline-flex; align-items: center; gap: 6px; }
+.obs-arule-respond { grid-area: respond; }
+.obs-arule-acts { grid-area: acts; display: inline-flex; align-items: center; gap: 10px; justify-content: flex-end; }
+.obs-arule[data-state="off"] .obs-strong { color: var(--muted); }
+.obs-arule-source { display: inline-flex; flex-wrap: wrap; gap: 0 2px; padding-top: 4px; font-size: 0.76rem; }
+.obs-alert { padding: 2px 0; }
+.obs-alert[data-state="firing"] { box-shadow: inset 2px 0 0 var(--red); padding-left: 8px; }
+.obs-alert-time { min-width: 3.2rem; color: var(--muted); }
+.obs-alert-what { min-width: 0; }
+.obs-adetail { display: flex; flex-direction: column; gap: 8px; margin: 2px 0 8px 18px; padding: 10px 12px; border: 1px solid var(--border);
+  border-radius: var(--r); background: var(--surface-2); min-width: 0; }
+.obs-adetail-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; min-width: 0; }
+.obs-promql { display: block; min-width: 0; max-width: 100%; padding: 6px 8px; border-radius: var(--r-sm); background: var(--surface-3);
+  color: var(--ink-soft); font-family: var(--mono); font-size: 0.74rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+.obs-promql-edit { font-family: var(--mono); font-size: 0.78rem; }
+.obs-grafana-off { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.obs-rform { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.obs-rrow { display: grid; grid-template-columns: 7rem minmax(0, 1fr); align-items: baseline; gap: 4px 12px; }
+.obs-rlabel { font-size: 0.78rem; font-weight: 650; color: var(--muted); }
+.obs-rbody { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; min-width: 0; font-size: 0.84rem; }
+.obs-rfield { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.obs-rnum { width: 5.5rem; min-height: 30px; padding: 2px 8px; border: 1px solid var(--border-strong); border-radius: var(--r-sm);
+  background: var(--bg); color: var(--ink); font: inherit; font-variant-numeric: tabular-nums; }
+.obs-rnum:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 1px; }
+.obs-rcheck { display: inline-flex; align-items: center; gap: 6px; font-size: 0.84rem; color: var(--ink); cursor: pointer; }
+.obs-rcheck input { accent-color: var(--accent); }
+@media (max-width: 1023px) {
+  .obs-arule { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "name state" "cond cond" "respond acts"; }
+}
+@media (max-width: 639px) {
+  .obs-arule { grid-template-columns: minmax(0, 1fr); grid-template-areas: "name" "state" "cond" "respond" "acts"; }
+  .obs-arule-acts { justify-content: flex-start; }
+  .obs-rrow { grid-template-columns: minmax(0, 1fr); }
+  .obs-adetail { margin-left: 0; }
+  .obs-arule-acts .inf-link, .obs-alert .inf-link, .obs-alert .ag-icon-btn, .obs-rnum { min-height: 44px; }
+}

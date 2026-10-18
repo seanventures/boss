@@ -534,10 +534,17 @@ def build_templates_router() -> APIRouter:
                 app_key = _app(db, project_id, app_key)
                 values = secrets_service.demo_login_values(
                     db, org_id=ctx.principal.org_id, project_id=project_id, app_key=app_key, env=env)
+                # What the app's deploy targets RUN with: stack-generated target secrets too.
+                from boss_engine.config import get_settings
+
+                targets = (secrets_service.deploy_target_demo_logins(
+                    db, get_settings(), project_id=project_id, app_key=app_key)
+                    if env == "deploy" else [])
         except TemplateError as exc:
             return _refused(exc)
         return JSONResponse({"app_key": app_key, "env": env,
-                             "demo_logins": [{"name": k, "value": v} for k, v in values.items()]},
+                             "demo_logins": [{"name": k, "value": v} for k, v in values.items()]
+                             + targets},
                             headers={"Cache-Control": "no-store"})
 
     @router.delete("/v1/apps/{app_key}/secrets/{name}")

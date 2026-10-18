@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import threading
 import time
@@ -34,6 +35,11 @@ DISPATCHABLE_EVENT_TYPES = frozenset(
         "github.issue_comment",
         "github.pr_opened",
         "github.pr_review",
+        # An app's alert opened / resolved an incident (incident_response). Any workflow may
+        # follow it EXCEPT Incident Response itself, which only a rule's own Respond
+        # automatically starts (PER_RULE_ONLY below).
+        "incident.opened",
+        "incident.resolved",
     }
 )
 
@@ -45,6 +51,17 @@ _BOUNDARY_RANK = {
     "local-only": 4,
 }
 _CACHE_TTL_SECONDS = 5.0
+
+#: INCIDENT RESPONSE STARTS PER RULE, NEVER PER APP (BOSSAPP-598). An app-wide switch (the
+#: incident card's old "Respond automatically", an `incident.opened` workflow subscription)
+#: answered every alert of every app the same way; the person now chooses per alert rule on the
+#: app's Alerts tab. So the only unattended door that may start these workflows is an alert
+#: rule's own Respond automatically (door PER_RULE_DOOR); every other door is refused here, in
+#: the one function every unattended start goes through.
+PER_RULE_ONLY = frozenset({"incident_response"})
+PER_RULE_DOOR = "alert_rule"
+PER_RULE_WORD = ("Incident Response starts per alert rule: turn on Respond automatically for "
+                 "the rule on the app's Alerts tab")
 _subscription_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
 _cache_lock = threading.RLock()
 
@@ -85,6 +102,112 @@ def _event_boundary(data: dict[str, Any]) -> str:
 def _can_cross_boundary(event_boundary: str, sink_boundary: str) -> bool:
     # A sink may be more restrictive than an event, never less restrictive.
     return _BOUNDARY_RANK[sink_boundary] >= _BOUNDARY_RANK[event_boundary]
+
+
+def start_workflow_on_grant(
+    connection: Connection,
+    *,
+    project_id: str,
+    workflow_key: str,
+    link: Optional[dict[str, Any]],
+    actor: str,
+    input_data: dict[str, Any],
+    dedupe_key: str,
+    door: str,
+    door_id: str,
+    door_name: str,
+    start_anyway: Any = None,
+    log_extra: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    """Start the current version of a workflow UNATTENDED, the one way every door does it: the
+    same readiness preflight every start makes, on the standing grant `link` names
+    ({on_behalf_of, grant_id}; None runs as BOSS itself), checked now. Never raises.
+
+    {run_id, entry, word, lost_reason}: `entry` is what the event dispatcher records; a refusal
+    is said where people look (record_refused) and in `word`. An event subscription and an
+    alert rule's Respond automatically both start their workflow through here."""
+    from .workflows import start_run
+
+    extra = {"project_id": project_id, "workflow_key": workflow_key, "door": door,
+             "door_id": door_id, **(log_extra or {})}
+    if workflow_key in PER_RULE_ONLY and door != PER_RULE_DOOR:
+        logger.warning("event_dispatch.per_rule_only", extra=extra)
+        return {"run_id": None, "lost_reason": None, "word": PER_RULE_WORD,
+                "entry": {"kind": "workflow", "refused": True, "workflow_key": workflow_key,
+                          "reason": "per_rule_only"}}
+    active = connection.execute(
+        text("SELECT active_version_id FROM workflow_definitions "
+             "WHERE project_id = :p AND workflow_key = :k"),
+        {"p": project_id, "k": workflow_key},
+    ).scalar()
+    if not active:
+        # Said once, with the door, rather than raised: one misconfigured door must not stop
+        # the others.
+        logger.warning("event_dispatch.workflow_missing", extra=extra)
+        return {"run_id": None, "entry": None, "lost_reason": None,
+                "word": f"There is no published {workflow_key} workflow here"}
+    from .workflow_readiness import (
+        WorkflowNotReadyError, record_refused, record_started_anyway, refuse_unless_ready,
+    )
+    from boss_engine.identity import consent as _consent
+    from boss_engine.identity import lineage as _lineage
+
+    try:
+        # THE SAME PREFLIGHT EVERY START DOOR MAKES. A start this project cannot finish is
+        # refused here rather than started and failed at its last step — unless the operator
+        # accepted starting without it when they set the door up (`start_anyway`).
+        try:
+            readiness = refuse_unless_ready(
+                connection, None, project_id, version_id=str(active), input_data=input_data,
+                start_anyway=[str(k) for k in start_anyway]
+                if isinstance(start_anyway, list) else [])
+        except WorkflowNotReadyError as refused:
+            # SAID WHERE PEOPLE LOOK, not only in a log: a door that started runs yesterday
+            # must not silently stop starting anything.
+            unaccepted = {**refused.readiness, "missing": [
+                m for m in refused.readiness["missing"]
+                if m["key"] not in refused.readiness.get("started_anyway", [])]}
+            record = record_refused(
+                connection, project_id, actor, door=door, door_id=door_id,
+                door_name=door_name, workflow_key=workflow_key, readiness=unaccepted)
+            missing = [m["key"] for m in record["missing"]]
+            return {"run_id": None, "lost_reason": None,
+                    "entry": {"kind": "workflow", "refused": True, "workflow_key": workflow_key,
+                              "missing": missing},
+                    "word": "Not started: this project is missing " + ", ".join(missing)}
+        # ON THE GRANT OF WHOEVER SET IT UP, checked at EVERY start like a schedule's firing:
+        # an ended grant stops the door with "Renew authority" instead of running on stale
+        # authority.
+        acting, lost_reason, run = None, None, None
+        try:
+            if link and link.get("on_behalf_of"):
+                acting = _consent.schedule_acting(connection, link)
+            with (_lineage.acting(acting) if acting is not None else _lineage.nullcontext()):
+                run = start_run(
+                    connection,
+                    project_id=project_id,
+                    actor=str((acting.principal_id if acting is not None else None) or actor),
+                    input_data=input_data,
+                    dedupe_key=dedupe_key,
+                    workflow_version_id=str(active),
+                )
+        except _consent.AuthorityLost as lost:
+            lost_reason = lost.reason
+        if lost_reason is not None:
+            return {"run_id": None, "lost_reason": lost_reason,
+                    "entry": {"kind": "workflow", "refused": True, "workflow_key": workflow_key,
+                              "reason": f"authority_lost:{lost_reason}"},
+                    "word": "Renew authority: the grant it runs on has ended"}
+        if not run.get("duplicate"):
+            record_started_anyway(connection, project_id, actor, str(run.get("id") or ""),
+                                  readiness)
+        return {"run_id": run.get("id"), "lost_reason": None, "word": "Started",
+                "entry": {"kind": "workflow", "run_id": run.get("id"),
+                          "workflow_key": workflow_key}}
+    except Exception:  # noqa: BLE001 — one door must not take the others down
+        logger.warning("event_dispatch.workflow_start_failed", extra=extra, exc_info=True)
+        return {"run_id": None, "entry": None, "lost_reason": None,
+                "word": "Could not start the workflow"}
 
 
 def dispatch_event(
@@ -166,84 +289,26 @@ def dispatch_event(
             # delivery of one event starts one run, however many times the dispatcher is
             # retried. The event's own data becomes the run's input, which is what makes
             # "a demo request arrived" carry the company with it.
-            from .workflows import start_run
-
-            active = connection.execute(
-                text(
-                    """
-                    SELECT active_version_id FROM workflow_definitions
-                    WHERE project_id = :p AND workflow_key = :k
-                    """
-                ),
-                {"p": project_id, "k": subscription["sink_ref"]},
-            ).scalar()
-            if not active:
-                # Said once, with the subscription, rather than raised: one misconfigured
-                # subscription must not stop the other sinks for this event.
-                logger.warning(
-                    "event_dispatch.workflow_missing",
-                    extra={"project_id": project_id, "event_id": event_id,
-                           "subscription_id": subscription["id"],
-                           "workflow_key": subscription["sink_ref"]},
-                )
-                continue
-            from .workflow_readiness import (
-                WorkflowNotReadyError, record_refused, record_started_anyway,
-                refuse_unless_ready,
-            )
-
-            try:
-                # THE SAME PREFLIGHT EVERY START DOOR MAKES. An event that starts a workflow
-                # this project cannot finish is refused here rather than started and failed
-                # at its last step — unless the operator accepted starting without it when
-                # they set the subscription up (`config.start_anyway`).
-                accepted = config.get("start_anyway")
-                try:
-                    readiness = refuse_unless_ready(
-                        connection, None, project_id, version_id=str(active),
-                        input_data={"event_type": event_type, "entity_type": entity_type,
-                                    "entity_id": entity_id, **(data or {})},
-                        start_anyway=[str(k) for k in accepted]
-                        if isinstance(accepted, list) else [])
-                except WorkflowNotReadyError as refused:
-                    # SAID WHERE PEOPLE LOOK, not only in a log. This door used to refuse and
-                    # log, so a subscription that started runs yesterday silently stopped
-                    # starting anything (review of the readiness change).
-                    unaccepted = {**refused.readiness, "missing": [
-                        m for m in refused.readiness["missing"]
-                        if m["key"] not in refused.readiness.get("started_anyway", [])]}
-                    record = record_refused(
-                        connection, project_id, str(config.get("actor") or "event-dispatcher"),
-                        door="subscription", door_id=subscription["id"],
-                        door_name=f"The subscription to {subscription['event_type']}",
-                        workflow_key=subscription["sink_ref"], readiness=unaccepted)
-                    enqueued.append({"kind": "workflow", "refused": True,
-                                     "workflow_key": subscription["sink_ref"],
-                                     "missing": [m["key"] for m in record["missing"]]})
-                    continue
-                run = start_run(
-                    connection,
-                    project_id=project_id,
-                    actor=str(config.get("actor") or "event-dispatcher"),
-                    input_data={"event_type": event_type, "entity_type": entity_type,
-                                "entity_id": entity_id, **(data or {})},
-                    dedupe_key=f"event:{dedupe_hash}",
-                    workflow_version_id=str(active),
-                )
-                if not run.get("duplicate"):
-                    record_started_anyway(
-                        connection, project_id,
-                        str(config.get("actor") or "event-dispatcher"),
-                        str(run.get("id") or ""), readiness)
-                enqueued.append({"kind": "workflow", "run_id": run.get("id"),
-                                 "workflow_key": subscription["sink_ref"]})
-            except Exception:  # noqa: BLE001 — one sink must not take the others down
-                logger.warning(
-                    "event_dispatch.workflow_start_failed",
-                    extra={"project_id": project_id, "event_id": event_id,
-                           "subscription_id": subscription["id"]},
-                    exc_info=True,
-                )
+            got = start_workflow_on_grant(
+                connection, project_id=project_id, workflow_key=subscription["sink_ref"],
+                link=(subscription if subscription.get("on_behalf_of") else None),
+                actor=str(config.get("actor") or "event-dispatcher"),
+                input_data={"event_type": event_type, "entity_type": entity_type,
+                            "entity_id": entity_id, **(data or {})},
+                dedupe_key=f"event:{dedupe_hash}", door="subscription",
+                door_id=subscription["id"],
+                door_name=f"The subscription to {subscription['event_type']}",
+                start_anyway=config.get("start_anyway"), log_extra={"event_id": event_id})
+            if got.get("lost_reason") is not None:
+                connection.execute(text(
+                    "UPDATE event_subscriptions SET enabled = false, updated_at = now(), "
+                    "config = config || CAST(:c AS JSONB) WHERE id = :i"),
+                    {"i": subscription["id"], "c": json.dumps(
+                        {"last_error": "Renew authority: the standing grant this "
+                                       f"subscription runs on has ended ({got['lost_reason']})."})})
+                invalidate_subscription_cache(project_id)
+            if got.get("entry") is not None:
+                enqueued.append(got["entry"])
             continue
         if subscription["sink_kind"] != "job":
             logger.warning(

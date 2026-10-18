@@ -38,10 +38,14 @@ def test_the_built_in_roles_are_the_reviewed_sizes():
     # security_scan:run, security_finding:triage, oidc:admin, oidc_client:manage,
     # oidc_pool_user:manage, oidc_app:sign_in. +1 app_link:manage (S5: operators link apps, §5.1).
     # +1 oidc:read (Owner/Admin/Auditor, no step-up: the App sign-in console's reads; integration).
-    assert len(Permission) == 195
+    # +2 self_fix:ticket_read and self_fix:ticket_report, held only by the new fixed system role
+    # system_self_installer (BOSS fixes itself, BOSS_FIXES_ITSELF.md §6.5; operator decision 1:
+    # the host self-installer runs signed tickets and nothing else).
+    assert len(Permission) == 197
     sizes = {role: len(perms) for role, perms in ROLE_PERMISSIONS.items()}
     assert sizes == {"owner": 190, "admin": 181, "operator": 93, "viewer": 48, "auditor": 62,
-                     "system_worker": 3, "system_collector": 1, "system_scim": 1}
+                     "system_worker": 3, "system_collector": 1, "system_scim": 1,
+                     "system_self_installer": 2}
 
 
 def test_operator_includes_publish_and_non_production_deploys():
@@ -104,4 +108,4 @@ def test_a_catalogue_that_breaks_a_rule_is_refused(mutate, message):
 
 
 def test_the_source_loads():
-    assert len(load().permissions) == 195
+    assert len(load().permissions) == 197

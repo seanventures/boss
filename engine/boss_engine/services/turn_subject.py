@@ -817,6 +817,27 @@ def _resolve_code_task(connection, project_id: str, ref: SubjectRef) -> SubjectE
     state = state if isinstance(state, dict) else {}
     ev.facts = {"PR": row.get("pull_request_url") or "none opened",
                 "summary": state.get("summary"), "tests_passed": state.get("tests_passed")}
+    # WHAT THE BUILD DID, AS IT RECORDED IT. Asked why a "dark mode" follow-up changed one
+    # route, the agent read the summary and guessed; the build's own event said it resumed the
+    # PREVIOUS build's design and skipped planning (code_task.design_resumed). The run's events
+    # are the record of its path, so they travel with it — newest last, bounded.
+    events = _rows(connection,
+                   "SELECT event_type, data FROM events WHERE entity_id = :r AND project_id = :p "
+                   "ORDER BY created_at DESC LIMIT 12", {"r": row["id"], "p": project_id})
+    step = _rows(connection,
+                 "SELECT workflow_run_id, step_id, status FROM workflow_step_runs "
+                 "WHERE project_id = :p AND (output->>'build_run_id' = :r OR "
+                 "output->>'run_id' = :r) ORDER BY updated_at DESC LIMIT 1",
+                 {"r": row["id"], "p": project_id})
+    if step:
+        ev.linked.append(
+            f"this build is step '{step[0]['step_id']}' ({step[0]['status']}) of workflow run "
+            f"{step[0]['workflow_run_id']}: a retry goes to that step "
+            f"(retry_workflow_step), never retry_code_task, or the run does not follow it")
+    for e in reversed(events):
+        data = _json(e.get("data"))
+        ev.linked.append(f"event {e['event_type']}"
+                         + (f": {_short(json.dumps(data, default=str), 240)}" if data else ""))
     previews = _rows(connection,
                      "SELECT id, status, failure_kind FROM app_previews WHERE run_id = :r "
                      "AND project_id = :p ORDER BY created_at DESC LIMIT 3",

@@ -10,6 +10,7 @@ macOS where container host-networking is awkward. Containerized isolation is the
 from __future__ import annotations
 
 import contextlib
+import http.client
 import json
 import shlex
 import logging
@@ -1733,34 +1734,113 @@ HEALTH_DECLARATION_FILE = "boss.preview.health"
 
 
 def preview_health_path(workdir: Optional[Path]) -> str:
-    """The path a preview's health check asks for: `/`, or the one line of boss.preview.health
-    (an API with nothing at `/`, e.g. a Dropwizard service: `/hello`)."""
+    """The path a preview's health check asks for: the one line of boss.preview.health, else the
+    health check the app's own boss.deploy.yaml declares, else `/`.
+
+    ONE DECLARATION OF HEALTH, NOT TWO. An API with nothing at `/` (a JSON order service, a
+    Dropwizard `/hello`) declares `health: [{url: http://127.0.0.1:8000/health}]` for its deploy
+    and was then failed by its preview as "no page at the site root — check that the build
+    produced a UI and not only an API", because the preview only read its own file. The deploy
+    manifest is the app saying where it is healthy; the preview asks the same path."""
     try:
         line = (Path(workdir) / HEALTH_DECLARATION_FILE).read_text(errors="ignore").strip()
     except (OSError, TypeError):
-        return "/"
+        line = ""
     line = line.splitlines()[0].strip() if line else ""
-    return line if line.startswith("/") and "://" not in line and len(line) < 300 else "/"
+    if line.startswith("/") and "://" not in line and len(line) < 300:
+        return line
+    return _declared_deploy_health_path(workdir) or "/"
+
+
+def _declared_deploy_health_path(workdir: Optional[Path]) -> Optional[str]:
+    """The path of the first health check in the app's boss.deploy.yaml, or None."""
+    from urllib.parse import urlsplit
+
+    from .app_deploy_manifest import DEFAULT_MANIFEST_PATH, ManifestError, load_manifest
+
+    if workdir is None:
+        return None
+    try:
+        manifest = load_manifest(Path(workdir) / DEFAULT_MANIFEST_PATH)
+    except (OSError, TypeError, ValueError, ManifestError):
+        return None
+    for check in manifest.health:
+        path = urlsplit(str(check.url or "")).path
+        if path.startswith("/") and len(path) < 300 and "{" not in path:
+            return path
+    return None
 
 
 def preview_start_timeout(workdir: Optional[Path], default: float = 180.0, *,
-                          changed: Optional[list[str]] = None) -> float:
+                          changed: Optional[list[str]] = None,
+                          limit: Optional[float] = None,
+                          command: Optional[list[str]] = None) -> float:
     """A Java service builds its jar (and downloads its dependencies) before it binds. `workdir`
-    is the app's directory, or a checkout whose app app_root finds from `changed`."""
+    is the app's directory, or a checkout whose app app_root finds from `changed`.
+
+    PASS `changed` FOR A SHARED REPOSITORY. Without it the app is placed from the checkout alone,
+    and a pom.xml at the root of a repository that holds a Node app among others made that Node
+    app "Java": its preview waited 600 s instead of 180 s (crun_16c5e245, 2026-10-18). That
+    repository has its package.json at the root beside the pom.xml, so even `changed` places the
+    app at the root: given the `command` that will start it, the Java window applies only when
+    that command builds or runs Java. `limit` caps the answer for a caller that must not wait
+    that long whatever the app is."""
     from . import app_root
 
     try:
-        return (max(default, 600.0) if workdir and app_root.java_build(workdir, changed=changed)[1]
-                else default)
+        seconds = (max(default, 600.0)
+                   if workdir and (command is None or _command_is_java(command))
+                   and app_root.java_build(workdir, changed=changed)[1]
+                   else default)
     except OSError:
-        return default
+        seconds = default
+    return min(seconds, limit) if limit else seconds
+
+
+_JAVA_LAUNCHERS = frozenset({"mvn", "mvnw", "gradle", "gradlew", "java", "jbang"})
+
+
+def _command_is_java(command) -> bool:
+    """Does this start command build or run Java (`./mvnw spring-boot:run`, `java -jar …`)?"""
+    words = command if isinstance(command, (list, tuple)) else [str(command or "")]
+    for word in re.split(r"[\s;&|()]+", " ".join(str(w) for w in words)):
+        if word.rsplit("/", 1)[-1] in _JAVA_LAUNCHERS:
+            return True
+    return False
 
 
 def _http_ok(port: int, path: str = "/") -> bool:
     return _url_ok(f"http://127.0.0.1:{port}{path if path != '/' else ''}", check_body=True)
 
 
-def _diagnose_listening_port(log_path: str, port_hint: int) -> Optional[str]:
+#: Statuses that say the ROUTE is not there, as opposed to "not ready yet". An app answering
+#: one has bound and is routing requests; waiting longer does not grow it a route.
+ABSENT_ROUTE_STATUSES = (404, 410)
+
+#: How long a port may keep answering ABSENT_ROUTE_STATUSES at the health path before discovery
+#: calls it a failure. A short grace, not zero, for a server that binds a moment before it
+#: mounts its routes — but seconds, never the start window: the Onboarding Path Builder's
+#: preview answered 404 at `/` from its first second and was polled for 600 s, holding its
+#: build's job (and the build's follow-ups) the whole time.
+ABSENT_ROUTE_GRACE_SECONDS = 15.0
+
+
+def _route_absent(port: int, path: str = "/") -> Optional[int]:
+    """The status when `path` on `port` answers one of ABSENT_ROUTE_STATUSES, else None."""
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", int(port), timeout=2)
+        try:
+            conn.request("GET", path or "/")
+            status = int(conn.getresponse().status)
+        finally:
+            conn.close()
+    except Exception:  # noqa: BLE001 — nothing answering is "not ready", not "absent"
+        return None
+    return status if status in ABSENT_ROUTE_STATUSES else None
+
+
+def _diagnose_listening_port(log_path: str, port_hint: int,
+                             health_path: str = "/") -> Optional[str]:
     """Why a port that IS listening still failed the health check.
 
     "app did not serve HTTP within timeout" describes two opposite situations and distinguishes
@@ -1770,28 +1850,38 @@ def _diagnose_listening_port(log_path: str, port_hint: int) -> Optional[str]:
     log said "Serving the interview scorecard app on http://0.0.0.0:47053" and the operator was
     told it never served, which sent everyone looking at the wrong half of the system.
 
-    Returns a sentence naming the port and what "/" actually answered, or None when nothing is
-    listening (in which case the generic timeout really is the right description).
+    Returns a sentence naming the port and what the health path (`/` unless the app declares
+    one — preview_health_path) actually answered, or None when nothing is listening (in which
+    case the generic timeout really is the right description). It asks the SAME path the
+    readiness check asked: a JSON API declaring `/health` that 404s there was reported as
+    "GET / returned 404", a path nobody had asked about.
     """
+    path = health_path if (health_path or "").startswith("/") else "/"
     for port in _candidate_ports(log_path, port_hint):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
             probe.settimeout(1.0)
             if probe.connect_ex(("127.0.0.1", port)) != 0:
                 continue
         try:
-            response = urllib.request.urlopen(f"http://127.0.0.1:{port}", timeout=2)
+            response = urllib.request.urlopen(
+                f"http://127.0.0.1:{port}{path if path != '/' else ''}", timeout=2)
             status, body = int(response.status), response.read(4096)
             if not body.strip():
-                return (f"the app IS listening on port {port}, but GET / returned {status} with "
-                        f"an empty body, so there is no page to preview.")
-            return (f"the app IS listening on port {port} and GET / returned {status}, but the "
-                    f"health check rejected the page it served.")
+                return (f"the app IS listening on port {port}, but GET {path} returned {status} "
+                        f"with an empty body, so there is no page to preview.")
+            return (f"the app IS listening on port {port} and GET {path} returned {status}, but "
+                    f"the health check rejected the page it served.")
         except urllib.error.HTTPError as http_error:
+            if path != "/":
+                return (f"the app IS listening on port {port}, but GET {path} returned "
+                        f"{http_error.code}. It serves no health route at the path it declares "
+                        f"(boss.deploy.yaml health / boss.preview.health) — fix the route or the "
+                        f"declaration.")
             return (f"the app IS listening on port {port}, but GET / returned "
                     f"{http_error.code}. It serves no page at the site root — check that the "
                     f"build produced a UI and not only an API.")
         except Exception:  # noqa: BLE001 — a port that will not answer is a port that failed
-            return (f"the app IS listening on port {port} but GET / did not complete.")
+            return (f"the app IS listening on port {port} but GET {path} did not complete.")
     return None
 
 
@@ -1802,6 +1892,9 @@ def _diagnose_listening_port(log_path: str, port_hint: int) -> Optional[str]:
 START_FAILURE_ADVICE: dict[str, str] = {
     "no_page_at_root": ("The app started but serves nothing at '/'. Check that the build "
                         "produced a UI and not only an API, then preview it again."),
+    "no_health_route": ("The app started but its declared health path answered 404. Fix the "
+                        "route, or the health path in boss.deploy.yaml / boss.preview.health, "
+                        "then preview it again."),
     "clone_failed": "Check repository access and the task branch, then retry.",
     "command_missing": "Add boss.preview.command or retry with an explicit command.",
     "port_timeout": ("Inspect startup logs, ensure HOST/PORT are honored, or retry in Docker "
@@ -1842,6 +1935,8 @@ def _classify_start_failure(message: str, *, exited: Optional[bool] = None) -> t
     # exactly as asked. The fix here is a UI, not a port.
     if "no page at the site root" in lowered:
         kind = "no_page_at_root"
+    elif "no health route at the path it declares" in lowered:
+        kind = "no_health_route"
     elif "clone" in lowered:
         kind = "clone_failed"
     # A CRASH IS A CRASH, whatever wrapper sentence it arrives in. boss-1, 2026-10-02: a
@@ -1932,12 +2027,18 @@ def why_it_failed_text(text: str, limit: int = 900) -> str:
 
 def _discover_working_port(log_path: str, port_hint: int, timeout: float = 20.0,
                            proc: Optional[subprocess.Popen] = None,
-                           health_path: str = "/", listener_uid: Optional[int] = None) -> Optional[int]:
+                           health_path: str = "/", listener_uid: Optional[int] = None,
+                           absent_grace: float = ABSENT_ROUTE_GRACE_SECONDS) -> Optional[int]:
     """Return the port the app actually serves HTTP on — its log-announced port first, then the
     injected PORT — each health-checked, so a neighboring local service is never mistaken for it.
 
     Given the process, stop waiting the moment it exits: an app that died on an ImportError at
-    import time will never bind, and waiting out the full window only delays the real error."""
+    import time will never bind, and waiting out the full window only delays the real error.
+
+    STOP WAITING THE MOMENT THE ANSWER IS "NO SUCH ROUTE", too. A port that keeps answering
+    404/410 at the health path for ABSENT_ROUTE_GRACE_SECONDS has bound and is routing; it is
+    not slow, it has nothing there. That was polled every 0.8 s for the whole window — 600 s
+    for a build — before it was reported, while the caller held its job."""
     def candidates() -> list[int]:
         ports = _candidate_ports(log_path, port_hint)
         if listener_uid is None:
@@ -1948,10 +2049,15 @@ def _discover_working_port(log_path: str, port_hint: int, timeout: float = 20.0,
         return ports if mine is None else [p for p in ports if p in mine]
 
     deadline = time.time() + timeout
+    absent_since: dict[int, float] = {}
     while time.time() < deadline:
         for port in candidates():
             if _http_ok(port, health_path):
                 return port
+            if _route_absent(port, health_path) is None:
+                absent_since.pop(port, None)
+            elif time.time() - absent_since.setdefault(port, time.time()) >= absent_grace:
+                return None
         if proc is not None and proc.poll() is not None:
             # One last look: a server that forked and exited its parent may be up by now.
             for port in candidates():
@@ -2045,10 +2151,10 @@ def launch_app(workdir: Path, command: list[str], log_path: str, *,
     return proc, port_hint
 
 
-def _serve_failure(log_path: str, port_hint: int) -> str:
+def _serve_failure(log_path: str, port_hint: int, health_path: str = "/") -> str:
     """Why an app did not serve, in the words the preview has always used. Call BEFORE killing
     it: once it is dead, "never bound" and "bound and served the wrong thing" look the same."""
-    listening = _diagnose_listening_port(log_path, port_hint)
+    listening = _diagnose_listening_port(log_path, port_hint, health_path)
     if listening:
         return listening + " " + _why_it_failed(log_path)
     return "app did not serve HTTP within timeout. " + _why_it_failed(log_path)
@@ -2399,10 +2505,12 @@ def prove_app_serves(workdir: Path, changed: Optional[list[str]], *,
             return _app_start.split_output(_read_log(log_path))[1]
 
         try:
+            health = preview_health_path(tree)
             port = _discover_working_port(log_path, port_hint,
-                                          timeout=preview_start_timeout(_app_dir_of_plan(tree, plan), timeout),
+                                          timeout=preview_start_timeout(_app_dir_of_plan(tree, plan), timeout,
+                                                                        command=plan.command),
                                           proc=proc,
-                                          health_path=preview_health_path(tree))
+                                          health_path=health)
             exit_code = proc.poll()
             if port is not None:
                 record.update(proven=True, port=port)
@@ -2427,7 +2535,7 @@ def prove_app_serves(workdir: Path, changed: Optional[list[str]], *,
                         record["optional_unset"] = [named]
                     record["error"] = f"the app {run_env.explain_crash(log_text)}. {record['error']}"
             else:
-                listening = _diagnose_listening_port(log_path, port_hint)
+                listening = _diagnose_listening_port(log_path, port_hint, health)
                 record.update(ok=False, error=(
                     f"the app started and kept running but did not answer HTTP within "
                     f"{timeout:g}s. " + (listening + " " if listening else "")
@@ -2542,8 +2650,11 @@ def assert_previewable(run: dict, run_id: str) -> None:
     raise PreviewNotReady(run_id, str(run.get("status") or "?"), str(run.get("phase") or "?"))
 
 
-def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int = 60) -> dict:
-    """Clone the run's branch, launch the app, discover its port, register an expiring preview."""
+def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int = 60,
+                  ready_timeout: Optional[float] = None) -> dict:
+    """Clone the run's branch, launch the app, discover its port, register an expiring preview.
+
+    `ready_timeout` caps how long the app may take to answer (the auto-preview's bound)."""
     with begin(engine) as c:
         run = load_code_task_run(c, run_id)
     if run is None:
@@ -2727,8 +2838,10 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
     # answers, so this never slows the fast case).
     # Given the process, discovery stops the moment it exits — an app that died on an
     # ImportError never binds, and waiting out three minutes only delayed the real error.
-    port = _discover_working_port(log_path, port_hint, timeout=preview_start_timeout(workdir),
-                                  proc=proc, health_path=preview_health_path(workdir),
+    health = preview_health_path(workdir)
+    window = preview_start_timeout(workdir, changed=_changed, limit=ready_timeout, command=command)
+    port = _discover_working_port(log_path, port_hint, timeout=window, proc=proc,
+                                  health_path=health,
                                   listener_uid=ident.uid if ident is not None else None)
     if port is None:
         # NAME WHICH FAILURE THIS IS before killing the process — once it is dead, the
@@ -2739,7 +2852,7 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
         _own = _app_start.split_output(_read_log(log_path))[1]
         why = (
             f"the app exited (code {exit_code}) before serving HTTP: " + why_it_failed_text(_own)
-            if exit_code is not None else _serve_failure(log_path, port_hint)
+            if exit_code is not None else _serve_failure(log_path, port_hint, health)
         )
         needed = app_env.explain_crash(_own)
         if needed:
@@ -3202,7 +3315,9 @@ def _respawn_process_preview(engine, settings: Settings, preview_id: str) -> Non
             extra_env=preview_link_environment(engine, project_id=project_id, run_id=row.get("run_id"),
                                                preview_id=preview_id, expires_at=row.get("expires_at"),
                                                rotate=False, app_env=app_env))
-        port = _discover_working_port(log_path, port_hint, timeout=preview_start_timeout(workdir),
+        port = _discover_working_port(log_path, port_hint,
+                                      timeout=preview_start_timeout(workdir, changed=_changed,
+                                                                    command=command),
                                       health_path=preview_health_path(workdir),
                                       listener_uid=ident.uid if ident is not None else None)
         if port is None:
@@ -4174,7 +4289,8 @@ def list_previews(
     return [publicize_preview(dict(r), settings=settings) for r in rows]
 
 
-def start_preview_for_run(engine, settings: Settings, run_id: str, *, ttl_minutes: int = 60) -> dict:
+def start_preview_for_run(engine, settings: Settings, run_id: str, *, ttl_minutes: int = 60,
+                          ready_timeout: Optional[float] = None) -> dict:
     """Start a preview the same way the console's button does: try the substrates in order.
 
     Exists so the pipeline's auto-preview and the API endpoint share ONE launch policy. The
@@ -4186,7 +4302,10 @@ def start_preview_for_run(engine, settings: Settings, run_id: str, *, ttl_minute
     last: dict = {"status": "failed", "error": "preview could not start"}
     for fn in attempts:
         try:
-            res = fn(engine, settings, run_id, ttl_minutes=ttl_minutes)
+            # Only the host launch waits on the app for long; the others bound their own waits.
+            bound = ({"ready_timeout": ready_timeout}
+                     if fn is start_preview and ready_timeout else {})
+            res = fn(engine, settings, run_id, ttl_minutes=ttl_minutes, **bound)
         except (PreviewNotReady, AmbiguousAppError):
             raise
         except (ValueError, RuntimeError) as exc:

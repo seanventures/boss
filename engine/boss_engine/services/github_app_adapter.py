@@ -33,6 +33,50 @@ from ..config import Settings
 logger = logging.getLogger("boss.github_app")
 
 
+#: Read-only scopes every installation token carries, so CI can be read with the token that
+#: opened the pull request (ci_gate.ci_token): check runs, commit statuses and Actions runs.
+CI_READ_SCOPES = {"checks": "read", "statuses": "read", "actions": "read"}
+
+
+def scope_for_repo(owner: str, repo: str, connection=None) -> dict:
+    """What a token for owner/repo asks GitHub for beyond contents, issues and pull requests.
+
+    A TOKEN NARROWER THAN THE DECISION IT CARRIES OUT. Minting always down-scoped to contents,
+    issues and pull requests, so with "Builds may change CI workflows" on for paramg/boss-sandbox
+    — and `workflows: write` accepted on the App's installation — the Order API build's push of
+    .github/workflows/order-api.yml was refused 403 at the very end of a finished build
+    (crun_4eec9642, 2026-10-18), and the same token could not read the repository's CI.
+    `workflows: write` is asked for only while that repository's opt-in is on, read live."""
+    scope = dict(CI_READ_SCOPES)
+    if _workflows_opted_in(f"{owner}/{repo}", connection):
+        scope["workflows"] = "write"
+    return scope
+
+
+def _workflows_opted_in(full_name: str, connection=None) -> bool:
+    from sqlalchemy import text as _text
+
+    query = _text("SELECT 1 FROM github_repository_bindings WHERE lower(full_name) = lower(:r) "
+                  "AND status = 'active' AND (metadata->>'ci_workflows_write') = 'true' LIMIT 1")
+    try:
+        if connection is not None:
+            point = connection.begin_nested()
+            try:
+                found = connection.execute(query, {"r": full_name}).first() is not None
+                point.commit()
+                return found
+            except Exception:
+                point.rollback()
+                raise
+        from ..db import get_engine
+        from ..config import get_settings
+
+        with get_engine(get_settings()).connect() as c:
+            return c.execute(query, {"r": full_name}).first() is not None
+    except Exception:  # noqa: BLE001 — unknown is not opted in: never widen on an error
+        return False
+
+
 def repo_token(settings, owner: str, repo: str, *, api_base_url: str = "", app=None,
                connection=None, project_id: str = "") -> str:
     """A usable GitHub token for THIS repo: installation token if the App covers it, else PAT.
@@ -58,7 +102,8 @@ def repo_token(settings, owner: str, repo: str, *, api_base_url: str = "", app=N
             else GitHubAppAdapter(settings)
     if app.configured:
         try:
-            token, missing = app.usable_token_for_repo(owner, repo)
+            token, missing = app.usable_token_for_repo(
+                owner, repo, extra=scope_for_repo(owner, repo, connection))
             if not missing:
                 return token
             # The App is installed here but was not granted enough to do the work. Without
@@ -278,7 +323,8 @@ class GitHubAppAdapter:
         """Return a single-repository token for governed code and community work."""
         return self.usable_token_for_repo(owner, repo)[0]
 
-    def usable_token_for_repo(self, owner: str, repo: str) -> tuple[str, list[str]]:
+    def usable_token_for_repo(self, owner: str, repo: str, *,
+                              extra: Optional[dict] = None) -> tuple[str, list[str]]:
         """Return (token, missing_permissions) for this repo.
 
         Minting can *succeed* and still hand back a token that cannot push. When the
@@ -297,6 +343,7 @@ class GitHubAppAdapter:
                 "contents": "write",
                 "issues": "write",
                 "pull_requests": "write",
+                **(extra or {}),
             },
         )
         granted = tok.permissions or {}

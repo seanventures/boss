@@ -13,6 +13,8 @@ import { notifyChanged, onChanged } from "./changed";
 import { Markdown } from "./markdown";
 import { AgentsOnThis } from "./agents-on-this";
 import { consoleHref, readComposeIntent } from "./url-intent";
+import { SelfFixStrip } from "./self-fix/strip";
+import { RunAutonomy } from "./self-fix/run-autonomy";
 import { NEW_BUILD_TIP } from "../lib/compose-links";
 import { StepIcon, hasStepIcon } from "./step-icons";
 import { isLoopbackPreviewUrl, operatorPreviewOpenHref } from "../lib/code-tasks";
@@ -143,6 +145,9 @@ export type CatalogueEntry = {
   gates: string[];
   /** Approvals answered without a person — the PRD approval, by the panel's own decision. */
   automatic_approvals?: string[];
+  /** Deploy steps the environment's policy decides (approval.follows_policy): no one's gate
+   *  until a project's policy is read (GET /v1/delivery-workflows/asks). */
+  policy_decides?: string[];
   requires_project: string[];
   /** Everything it needs from a project, in the start preflight's words. */
   needs?: { key: string; label: string }[];
@@ -171,7 +176,10 @@ export type Installed = {
    *  what it does, so the only way to find out was to open the editor. */
   steps?: { id: string; label: string; kind: string; mine: boolean; approval: string;
             /** WHO RUNS IT. Empty means different things by kind — see the card. */
-            captain?: string; agent_work?: boolean }[];
+            captain?: string; agent_work?: boolean; capability?: string | null;
+            /** A Deploy step's words and the environment whose policy ships it unasked
+             *  (approval "policy"), from deploy_policy.step_answer. */
+            says?: string; policy?: string }[];
   active_version?: number | null;
   /** What starting it will ask for. Every catalogue template declares one; absent only on a
    *  workflow somebody made without inputs. */
@@ -2172,6 +2180,7 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onSkipStep, 
         {rerunNote(run) ? (
           <span className="detail" data-testid="dw-run-rerun-of">{rerunNote(run)}</span>
         ) : null}
+        <RunAutonomy projectId={projectId} runId={run.id} live={!terminal} />
       </div>
       <RunChain chain={chain} viewer={actor} />
       <div className="wf-run-lane" ref={laneRef} data-testid="dw-run-lane">
@@ -3283,7 +3292,7 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
   const asked = !!previewStarting && previewStarting === buildRunId;
   useEffect(() => { if (!asked) setFreshFrom(undefined); }, [asked]);
   const starting = asked && (freshFrom !== undefined ? previewHref === freshFrom : !previewHref);
-  const approval = step.approval as { mode?: string; approver_role?: string };
+  const approval = step.approval as { mode?: string; approver_role?: string; follows_policy?: boolean };
   // A manual gate that has not been answered. The one condition under which "waiting" and
   // "gate · <role>" are the same sentence twice.
   const gateWaiting = approval?.mode === "manual" && step.status === "waiting";
@@ -3375,9 +3384,14 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
         {approval?.mode === "manual" ? (
           <span className="dw-gate" data-tone={gateWaiting ? "waiting" : undefined}
                 data-testid="dw-step-gate"
-                title="Requires a person">
+                // A DEPLOY THAT FOLLOWS ITS ENVIRONMENT'S POLICY is not promised to a person:
+                // the policy may ship it unasked (deploy_policy), and the chip says so.
+                title={approval.follows_policy && !gateWaiting
+                  ? "Asks a person unless this environment's deploy policy ships without asking"
+                  : "Requires a person"}>
             {gateWaiting
               ? `needs ${approval.approver_role || "a person"}`
+              : approval.follows_policy ? "gate · or by policy"
               : `gate${approval.approver_role ? ` · ${approval.approver_role}` : ""}`}
           </span>
         ) : null}
@@ -3657,6 +3671,10 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
           when the operator clicks a different failed step in the rail. */}
       <FailedStepActions key={step.step_id} step={step} capability={capability} busy={busy}
                          actions={actions} onRetry={onRetry} onSkip={onSkip} />
+
+      {/* BOSS IS FIXING ITSELF (docs/product/BOSS_FIXES_ITSELF.md §10.1): a step parked on a bug
+          in BOSS's own code says what BOSS is doing about it, live, from the step's own output. */}
+      <SelfFixStrip output={step.output as Record<string, unknown>} projectId={projectId} actor={actor} />
 
       {/* ANSWER THE APPROVAL WHERE IT IS SEEN. A gate answerable only in another area makes the
           operator leave the screen that told them it was waiting. */}

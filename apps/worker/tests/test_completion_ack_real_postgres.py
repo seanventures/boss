@@ -73,7 +73,6 @@ def authority(database, monkeypatch):
     clock = [datetime.now(timezone.utc)]
     monkeypatch.setattr(job_service, "now_utc", lambda: clock[0])
     monkeypatch.setattr(runner, "_tick_ai_sre_overwatch", lambda *_: None)
-    monkeypatch.setattr(runner, "_sweep_deployment_health", lambda: None)
     runner.SHUTDOWN.clear()
     with engine.begin() as db:
         db.execute(text("INSERT INTO orgs(id,name) VALUES(:p,:p)"), {"p": project})
