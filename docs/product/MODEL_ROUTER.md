@@ -132,8 +132,12 @@ and it always answers. The chain is a cascade, cheapest first:
    - **The call.** One typed decision with three options whose descriptions are the operator's
      editable tier criteria. The same call also answers the rigor questions `model_risk_tier`
      already asks, so routing and rigor share one context.
-   - **The hold.** Today live Jev calls *are* held (BOSS-451, `typed_decisions.GOVERNANCE_HOLD`).
-     The router respects that hold and says so: the UI shows *Jev · paused*.
+   - **The hold.** Live Jev calls are held by default (BOSS-451, `typed_decisions.GOVERNANCE_HOLD`),
+     and the UI shows *Jev · paused*. `BOSS_ROUTER_JEV_LIVE=true` lifts the hold for the router
+     (BOSSAPP-579). Lifted, every call goes through the governed typed-decision path
+     (`store.GovernedJevDecider` on `TypedDecisionBatchSpend`): a committed budget reservation,
+     a job and model lease on TypeSafe's own source, one receipt per attempt, settlement with
+     the actual cost. A missing one refuses the call, records why, and the rules answer.
    - **The timeout.** 800 ms by default. A slower answer falls through to the next step.
 3. **Rules** (the deterministic heuristic), which always answer. They read:
    - the step kind (review, facilitation, docs, chat…);
@@ -392,7 +396,7 @@ is the A/B LangChain ran by hand, as a product feature.
 Schema (all additive, applied by `ensure_schema`): `model_routing_policies`, `model_routes`,
 `provider_model_catalog`, `subscription_accounts`, `llm_calls.route_id`, `run_scorecards.route_mode / route_tier /
 routing`. Settings: `BOSS_MODEL_ROUTING_MODE` (default `fixed`), `BOSS_ROUTER_JEV_LIVE`
-(default off, for when BOSS-451 lifts).
+(default off; on, the router's Jev calls run on the governed typed-decision path, BOSSAPP-579).
 
 ### Where headroom is read from
 
@@ -472,11 +476,13 @@ from Monday to Sunday:
    - Without Jev: the rules, then a cheap model only when the rules are unsure and the operator
      turned it on.
    Routing therefore works with Jev held (today), absent (most installs) or slow.
-9. **Respect the Jev hold.** Live Jev calls are paused under BOSS-451. The router does not
-   bypass that with a direct HTTP call. It shows *Jev · paused* and uses the rules. The cheap-model
-   classifier goes through the governed adapter: reserved, receipted and settled. Like Jev, it has
-   a one-minute cooldown after it times out or fails, so a down Fast source never costs every
-   route its timeout.
+9. **Respect the Jev hold.** Live Jev calls are paused under BOSS-451 until the operator sets
+   `BOSS_ROUTER_JEV_LIVE`. Held, the router shows *Jev · paused* and uses the rules. Lifted, it
+   never makes a direct HTTP call: each classification is one governed typed-decision attempt,
+   reserved, leased, receipted and settled, and the same task replays from its receipt. The
+   cheap-model classifier goes through the governed chat adapter the same way. Both have a
+   one-minute cooldown after a timeout or failure, so a down source never costs every route its
+   timeout.
 10. **Escalation is generic and recorded.** The two hard-coded escalations become rules over named
     signals. New signals (review asks for changes twice, a gate fails) use the same mechanism,
     and every escalation is visible on the route.
