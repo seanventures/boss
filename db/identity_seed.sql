@@ -200,7 +200,9 @@ INSERT INTO identity_permissions (key, resource, action, title, description, cat
   ('telemetry:share', 'telemetry', 'share', 'Share telemetry', 'Share telemetry bundles outside this install.', 'Operations and assurance', 'project', true, false, true, false, false, 1),
   ('telemetry:manage', 'telemetry', 'manage', 'Manage telemetry', 'Rotate, forget and delete telemetry.', 'Operations and assurance', 'project', true, false, false, false, false, 1),
   ('telemetry:ingest', 'telemetry', 'ingest', 'Ingest telemetry', 'Send collector telemetry (machine only).', 'Operations and assurance', 'project', false, false, false, true, false, 1),
-  ('worker:lease', 'worker', 'lease', 'Lease worker jobs', 'Poll, heartbeat and complete leased jobs (worker protocol).', 'Operations and assurance', 'project', false, false, false, true, false, 1)
+  ('worker:lease', 'worker', 'lease', 'Lease worker jobs', 'Poll, heartbeat and complete leased jobs (worker protocol).', 'Operations and assurance', 'project', false, false, false, true, false, 1),
+  ('self_fix:ticket_read', 'self_fix', 'ticket_read', 'Read self-fix install tickets', 'List and take the signed, single-use tickets of approved BOSS self-fixes (host self-installer only).', 'Operations and assurance', 'org', false, false, false, true, false, 1),
+  ('self_fix:ticket_report', 'self_fix', 'ticket_report', 'Report self-fix install phases', 'Report each install phase of a taken self-fix ticket (host self-installer only).', 'Operations and assurance', 'org', false, false, false, true, false, 1)
 ON CONFLICT (key) DO UPDATE SET resource = EXCLUDED.resource, action = EXCLUDED.action,
   title = EXCLUDED.title, description = EXCLUDED.description, category = EXCLUDED.category,
   scope_kind = EXCLUDED.scope_kind, step_up = EXCLUDED.step_up, delegable = EXCLUDED.delegable,
@@ -216,12 +218,13 @@ INSERT INTO identity_access_roles (id, org_id, key, name, description, builtin, 
   ('arl_auditor', NULL, 'auditor', 'Auditor', 'Viewer plus the security audit log, identity configuration (read), sessions, keys and grants metadata.', true, false, ARRAY['org']::text[], true, 1),
   ('arl_system_worker', NULL, 'system_worker', 'System worker', 'The worker protocol: lease, heartbeat and complete jobs; reserve spend; lease secrets for a running step.', true, true, ARRAY['org']::text[], false, 1),
   ('arl_system_collector', NULL, 'system_collector', 'System collector', 'Collector machine telemetry ingest.', true, true, ARRAY['org']::text[], false, 1),
-  ('arl_system_scim', NULL, 'system_scim', 'System SCIM', 'SCIM 2.0 provisioning for one identity provider.', true, true, ARRAY['org']::text[], false, 1)
+  ('arl_system_scim', NULL, 'system_scim', 'System SCIM', 'SCIM 2.0 provisioning for one identity provider.', true, true, ARRAY['org']::text[], false, 1),
+  ('arl_system_self_installer', NULL, 'system_self_installer', 'System self-installer', 'The host self-installer (BOSS fixes itself): read signed install tickets and report install phases. Nothing else.', true, true, ARRAY['org']::text[], false, 1)
 ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, description = EXCLUDED.description,
   builtin = true, system = EXCLUDED.system, bindable_scopes = EXCLUDED.bindable_scopes,
   mfa_required = EXCLUDED.mfa_required, version = EXCLUDED.version;
 
-DELETE FROM identity_access_role_permissions WHERE role_id IN ('arl_owner', 'arl_admin', 'arl_operator', 'arl_viewer', 'arl_auditor', 'arl_system_worker', 'arl_system_collector', 'arl_system_scim')
+DELETE FROM identity_access_role_permissions WHERE role_id IN ('arl_owner', 'arl_admin', 'arl_operator', 'arl_viewer', 'arl_auditor', 'arl_system_worker', 'arl_system_collector', 'arl_system_scim', 'arl_system_self_installer')
   AND (role_id, permission_key) NOT IN (VALUES
   ('arl_owner', 'directory:read'),
   ('arl_owner', 'user:read'),
@@ -801,7 +804,9 @@ DELETE FROM identity_access_role_permissions WHERE role_id IN ('arl_owner', 'arl
   ('arl_system_worker', 'secret:lease'),
   ('arl_system_worker', 'worker:lease'),
   ('arl_system_collector', 'telemetry:ingest'),
-  ('arl_system_scim', 'scim:provision'));
+  ('arl_system_scim', 'scim:provision'),
+  ('arl_system_self_installer', 'self_fix:ticket_read'),
+  ('arl_system_self_installer', 'self_fix:ticket_report'));
 
 INSERT INTO identity_access_role_permissions (role_id, permission_key) VALUES
   ('arl_owner', 'directory:read'),
@@ -1382,5 +1387,7 @@ INSERT INTO identity_access_role_permissions (role_id, permission_key) VALUES
   ('arl_system_worker', 'secret:lease'),
   ('arl_system_worker', 'worker:lease'),
   ('arl_system_collector', 'telemetry:ingest'),
-  ('arl_system_scim', 'scim:provision')
+  ('arl_system_scim', 'scim:provision'),
+  ('arl_system_self_installer', 'self_fix:ticket_read'),
+  ('arl_system_self_installer', 'self_fix:ticket_report')
 ON CONFLICT DO NOTHING;

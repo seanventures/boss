@@ -23,6 +23,7 @@ import { currentMirror } from "./mirror";
 import type { Permission } from "./permissions.gen";
 import { READ_ROUTES } from "./read-routes.gen";
 import { IMPROVE_READS } from "../improve-ops";
+import { SELF_FIX_READS } from "../self-fix-ops";
 import { WRITING_GET_TWIN_SUFFIX } from "../writing-get";
 
 export const LOCKED_HEADER = "x-boss-locked";
@@ -147,8 +148,10 @@ export function upstreamsOf(url: URL): string[] | null {
   if (path.startsWith("/v1/")) return [path];
   if (!path.startsWith("/api/")) return null;
   const view = url.searchParams.get("view");
-  if (path === "/api/improve") {
-    const read = view ? IMPROVE_READS[view] : undefined;
+  // The two named-view proxies (Improve BOSS, BOSS fixes itself): each view IS one /v1 path.
+  if (path === "/api/improve" || path === "/api/self-fix") {
+    const reads = path === "/api/improve" ? IMPROVE_READS : SELF_FIX_READS;
+    const read = view ? reads[view] : undefined;
     if (!read) return null;
     const target = read.path(url.searchParams).split("?")[0];
     return [target.endsWith(WRITING_GET_TWIN_SUFFIX) ? target.slice(0, -WRITING_GET_TWIN_SUFFIX.length) : target];

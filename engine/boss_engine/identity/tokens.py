@@ -806,6 +806,39 @@ def issue_egress_service_key(db: Any, *, org_id: str, created_by: str = "sys_hos
     return CreatedKey(kid, key, None)
 
 
+#: The host self-installer's own principal (BOSS fixes itself, catalogue system_principals). Its
+#: `boss_sak_` key reads and reports self-fix install tickets and nothing else.
+SELF_INSTALLER_PRINCIPAL = "sys_self_installer"
+
+
+def issue_self_installer_key(db: Any, *, org_id: str, created_by: str = "sys_host_cli") -> Any:
+    """Mint the host self-installer's `boss_sak_` key (host shell: `boss self-fix enroll`, which
+    keeps it 0600 beside .env and never prints it). Every earlier key of the self-installer ends:
+    one host installs, one key."""
+    from sqlalchemy import text
+
+    from . import audit, ids
+    from .api_keys import CreatedKey
+    from .authn import hash_token, mint_api_key
+
+    db.execute(text("INSERT INTO identity_principals (id, org_id, kind, status, display_name, created_by) "
+                    "VALUES (:id, :o, 'system', 'active', 'BOSS self-installer', 'identity') "
+                    "ON CONFLICT (id) DO NOTHING"), {"id": SELF_INSTALLER_PRINCIPAL, "o": org_id})
+    db.execute(text("UPDATE identity_api_credentials SET revoked_at = now(), revoked_by = :by "
+                    "WHERE principal_id = :p AND revoked_at IS NULL"),
+               {"by": created_by, "p": SELF_INSTALLER_PRINCIPAL})
+    key = mint_api_key("sak")
+    kid = ids.new_id("key")
+    db.execute(text("INSERT INTO identity_api_credentials (id, principal_id, kind, name, token_hash, scopes, "
+                    "created_by) VALUES (:id, :p, 'sak', 'boss-self-installer', :th, '{}', :by)"),
+               {"id": kid, "p": SELF_INSTALLER_PRINCIPAL, "th": hash_token(key), "by": created_by})
+    audit.record(audit.SecurityEvent(org_id=org_id, event_type="api_key.created", outcome=audit.Outcome.SUCCESS,
+                                     actor_principal_id=created_by, actor_kind="system", target_type="api_key",
+                                     target_id=kid, details={"kind": "sak", "owner": SELF_INSTALLER_PRINCIPAL,
+                                                             "revoked_others": True}), db=db)
+    return CreatedKey(kid, key, None)
+
+
 def introspect(token: str, *, db: Any) -> dict[str, Any]:
     """RFC 7662 for the egress service only (the route checks its credential: A40). EXACTLY the
     checks verification makes (`_check_claims`), minus the DPoP proof (the caller is the proxy, not

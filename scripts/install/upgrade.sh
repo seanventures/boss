@@ -77,11 +77,12 @@ BACKUP_DIR=""
 WEB_MODE=""
 DRY_RUN=0
 ROLLBACK=1
+WITHOUT=()
 
 usage() {
   cat <<'EOF'
 Usage: upgrade.sh [--dir INSTALL_DIR] [--ref REF] [--backup-dir PATH]
-                  [--web | --no-web] [--dry-run] [--no-rollback]
+                  [--web | --no-web] [--dry-run] [--no-rollback] [--without SFX]...
 
 Without --ref, an install stays on the channel it was installed from:
   release  moves to the newest published release tag (v*), never to main
@@ -97,6 +98,13 @@ created before that setting was recorded, pass --no-web once to keep it off.
 Use --web or --no-web to change the existing choice deliberately.
 If the new release fails to start, the previous release is put back and
 started again (data volumes are kept). --no-rollback leaves it as it is.
+
+LOCAL BOSS SELF-FIXES (docs/product/BOSS_FIXES_ITSELF.md §6.4) live on a separate stack ref
+over the release, never on the checkout's HEAD, so the fast-forward rule still applies to the
+release itself. Each installed fix is planned against the new release first: dropped when the
+release already has it, carried (re-applied after the upgrade), or needing rework when it no
+longer applies. A fix that needs rework blocks the upgrade (nothing changes) until BOSS has
+re-ported it, or you upgrade without it: --without SFX (its recommendation reopens).
 EOF
 }
 while [[ $# -gt 0 ]]; do
@@ -109,6 +117,9 @@ while [[ $# -gt 0 ]]; do
       WEB_MODE="$1"; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
     --no-rollback) ROLLBACK=0; shift ;;
+    --without)
+      [[ "${2:-}" =~ ^sfx_[0-9a-f]{6,40}$ ]] || { echo '--without needs a self-fix id (sfx_...)' >&2; exit 2; }
+      WITHOUT+=("$2"); shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) printf 'Unknown option: %s\n' "$1" >&2; exit 2 ;;
   esac
@@ -156,6 +167,36 @@ git -C "$INSTALL_DIR" cat-file -e "$NEW_COMMIT:scripts/install/backup.sh" 2>/dev
   { echo 'Target ref has no backup helper; source and containers were not changed.' >&2; exit 1; }
 [[ "$OLD_COMMIT" != "$NEW_COMMIT" ]] || echo 'Already at the requested source commit; verifying with a safe installer rerun.'
 
+# LOCAL SELF-FIXES: plan each against the new release before anything changes (§6.4).
+STACK_REF="$(grep -m 1 '^BOSS_STACK_REF=' "$INSTALL_DIR/.boss-release" 2>/dev/null | cut -d= -f2- || true)"
+SELF_FIX="$INSTALL_DIR/scripts/install/self_fix_installer.py"
+without_args=()
+for sfx in ${WITHOUT[@]+"${WITHOUT[@]}"}; do without_args+=(--without "$sfx"); done
+if [[ -n "$STACK_REF" && -f "$SELF_FIX" ]]; then
+  command -v python3 >/dev/null 2>&1 ||
+    { echo 'This install carries local BOSS self-fixes and python3 is needed to plan them; nothing changed.' >&2; exit 1; }
+  PLAN="$(python3 "$SELF_FIX" --dir "$INSTALL_DIR" plan-upgrade --to "$NEW_COMMIT" --ref "$STACK_REF" --json)" ||
+    { echo 'Could not plan the local BOSS self-fixes against the new release; nothing changed.' >&2; exit 1; }
+  BLOCKED="$(printf '%s' "$PLAN" | python3 -c '
+import json, sys
+plan = json.load(sys.stdin)
+skip = set(sys.argv[1:])
+print(" ".join(f["self_fix_id"] or f["commit"][:12] for f in plan["fixes"]
+               if f["outcome"] == "needs_rework" and f["self_fix_id"] not in skip))
+' ${WITHOUT[@]+"${WITHOUT[@]}"})"
+  printf '%s' "$PLAN" | python3 -c '
+import json, sys
+for f in json.load(sys.stdin)["fixes"]:
+    print("  local fix %s: %s" % (f["self_fix_id"] or f["commit"][:12],
+                                  f["outcome"].replace("_", " ")))
+'
+  if [[ -n "$BLOCKED" ]]; then
+    echo "These local BOSS fixes no longer apply to $REF: $BLOCKED" >&2
+    echo 'BOSS re-ports them through the normal self-fix loop (with your approval). To upgrade now without one, pass --without SFX; its recommendation reopens. Nothing changed.' >&2
+    exit 1
+  fi
+fi
+
 if [[ "$DRY_RUN" -eq 1 ]]; then
   printf 'Would back up %s, then rerun the installer from %s (%s → %s).\n' "$INSTALL_DIR" "$REF" "$OLD_COMMIT" "$NEW_COMMIT"
   exit 0
@@ -197,5 +238,12 @@ if ! BOSS_RELEASE_REF_NAME="$REF" bash "$FETCHED_INSTALLER" "${install_args[@]}"
   fi
   echo 'Inspect Compose logs before retrying. See scripts/install/README.md for the recovery procedure.' >&2
   exit 1
+fi
+# CARRY THE LOCAL SELF-FIXES onto the new release (dropped ones are not re-applied). A stack
+# that does not build or start leaves the new release running without it, and says so.
+if [[ -n "$STACK_REF" && -f "$SELF_FIX" ]]; then
+  if ! python3 "$SELF_FIX" --dir "$INSTALL_DIR" restack --to "$REF" ${without_args[@]+"${without_args[@]}"} </dev/null; then
+    echo 'The new release runs without the local BOSS fixes; see the line above. BOSS re-ports them.' >&2
+  fi
 fi
 printf 'Upgrade complete: %s → %s (%s)\n' "$OLD_COMMIT" "$NEW_COMMIT" "$REF"

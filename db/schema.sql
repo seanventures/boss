@@ -9156,7 +9156,150 @@ CREATE TABLE IF NOT EXISTS boss_recommendations (
   occurrences INTEGER NOT NULL DEFAULT 1,
   boss_version TEXT,
   created_by TEXT,
+  -- BOSS fixes itself (services/self_fix.py): the self-fix working on this cause, the cause
+  -- with its install parameters stripped (deploy:port_held), and every self-fix that was tried
+  -- for it and did not hold, with what was learned (refused, rejected, rolled back).
+  self_fix_id TEXT,
+  class_signature TEXT,
+  attempts JSONB NOT NULL DEFAULT '[]'::jsonb,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (project_id, signature)
 );
+
+-- BOSS FIXES ITSELF (BOSSAPP-571, docs/product/BOSS_FIXES_ITSELF.md §11). A recovery decision
+-- that places a failure on BOSS's own code starts a SELF-FIX: Mender re-diagnoses against the
+-- code, writes a regression test that fails on the base, the smallest fix that makes it pass,
+-- runs the mechanical gates and the reviewers, and a person approves the install. The host
+-- self-installer installs it from a signed single-use ticket, and the parked step resumes: the
+-- step passing is the proof. Statuses: services/self_fix.py STATUSES.
+CREATE TABLE IF NOT EXISTS self_fixes (
+  id TEXT PRIMARY KEY,                                   -- sfx_…
+  org_id TEXT,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  recommendation_id TEXT,
+  run_id TEXT,
+  step_id TEXT,
+  step_kind TEXT,
+  signature TEXT NOT NULL,                               -- local, e.g. deploy:port_held:8000
+  class_signature TEXT NOT NULL,                         -- e.g. deploy:port_held
+  location TEXT,                                         -- file::function after diagnosis
+  area TEXT NOT NULL DEFAULT 'engine',
+  status TEXT NOT NULL,
+  refusal TEXT,                                          -- protected_path|no_reproduction|tests|tests_weakened|scope|review|budget|…
+  refusal_detail TEXT,
+  confidence TEXT NOT NULL,                              -- low|medium|high
+  confidence_reasons JSONB NOT NULL DEFAULT '[]'::jsonb,
+  evidence JSONB NOT NULL DEFAULT '{}'::jsonb,           -- host-masked; never instructions
+  diagnosis JSONB NOT NULL DEFAULT '{}'::jsonb,
+  base_sha TEXT NOT NULL DEFAULT '',
+  fix_commit_sha TEXT,
+  fix_tree_sha TEXT,
+  branch TEXT,
+  tier INTEGER,
+  flags JSONB NOT NULL DEFAULT '[]'::jsonb,
+  paths JSONB NOT NULL DEFAULT '[]'::jsonb,
+  diff_stat JSONB NOT NULL DEFAULT '{}'::jsonb,
+  red_green JSONB NOT NULL DEFAULT '{}'::jsonb,
+  gates JSONB NOT NULL DEFAULT '{}'::jsonb,
+  review JSONB NOT NULL DEFAULT '{}'::jsonb,
+  pr JSONB NOT NULL DEFAULT '{}'::jsonb,                 -- the local PR record: title, body, labels, trailers, diff
+  bundle BYTEA,                                          -- the fix commit as a git bundle, for the host self-installer
+  progress JSONB NOT NULL DEFAULT '{}'::jsonb,           -- the parked step's live line: {stage, sentence, at}
+  decision_id TEXT,
+  proposal_id TEXT,                                      -- self_improvement_proposals row of the install
+  engine TEXT,
+  harness TEXT,
+  reviewer_engine TEXT,
+  budget_reservation_id TEXT,
+  budget_usd_micros BIGINT NOT NULL DEFAULT 0,
+  cost_micros BIGINT NOT NULL DEFAULT 0,
+  repair_rounds INTEGER NOT NULL DEFAULT 0,
+  installed_stack_head TEXT,
+  installed_at TIMESTAMPTZ,
+  resumed_at TIMESTAMPTZ,
+  verified_at TIMESTAMPTZ,
+  rolled_back_at TIMESTAMPTZ,
+  verification JSONB NOT NULL DEFAULT '{}'::jsonb,       -- {outcome, next_signature, step_attempt}
+  stack_state TEXT,                                      -- on_stack|dropped_upstream|needs_rework|removed
+  upstream_state TEXT NOT NULL DEFAULT 'local_only',
+  upstream_url TEXT,
+  created_by TEXT NOT NULL,
+  started_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_self_fixes_project_status ON self_fixes (project_id, status);
+CREATE INDEX IF NOT EXISTS idx_self_fixes_run ON self_fixes (run_id, step_id);
+CREATE INDEX IF NOT EXISTS idx_self_fixes_class ON self_fixes (class_signature, created_at);
+
+-- One live self-fix per class signature, INSTALL-WIDE (R19, F14): a second step that hits the
+-- same cause waits on the fix being built instead of starting another.
+CREATE TABLE IF NOT EXISTS self_fix_claims (
+  class_signature TEXT PRIMARY KEY,
+  self_fix_id TEXT NOT NULL REFERENCES self_fixes(id) ON DELETE CASCADE,
+  claimed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS self_fix_waiters (
+  self_fix_id TEXT NOT NULL REFERENCES self_fixes(id) ON DELETE CASCADE,
+  run_id TEXT NOT NULL,
+  step_id TEXT NOT NULL,
+  project_id TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (self_fix_id, run_id, step_id)
+);
+
+-- Install / remove orders for the HOST self-installer (scripts/install/self_fix.sh): signed with
+-- the install's EdDSA key, bound to one approved decision, one commit and one tree, single use,
+-- expiring in an hour. Nothing inside a container can install; only the host can, and only this.
+CREATE TABLE IF NOT EXISTS self_fix_tickets (
+  id TEXT PRIMARY KEY,                                   -- sft_…
+  self_fix_id TEXT NOT NULL REFERENCES self_fixes(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL,                                    -- install|rollback|remove|remove_all
+  body JSONB NOT NULL,
+  token TEXT NOT NULL,                                   -- the signed ticket (JWS, EdDSA)
+  status TEXT NOT NULL,                                  -- issued|taken|done|failed|rolled_back|revoked|expired
+  phases JSONB NOT NULL DEFAULT '[]'::jsonb,
+  taken_at TIMESTAMPTZ,
+  finished_at TIMESTAMPTZ,
+  expires_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_self_fix_tickets_status ON self_fix_tickets (status, created_at);
+
+-- What is installed, in order, on top of a release (R8): the local stack the upgrade carries.
+CREATE TABLE IF NOT EXISTS self_fix_stack (
+  release_ref TEXT NOT NULL,
+  position INTEGER NOT NULL,
+  self_fix_id TEXT NOT NULL REFERENCES self_fixes(id) ON DELETE CASCADE,
+  commit_sha TEXT NOT NULL,
+  installed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (release_ref, position)
+);
+
+-- BOSS FIXES ITSELF, UPSTREAM (BOSSAPP-571 spec §7, R9 R11 R18): the EXACT bytes a person
+-- previewed for the BOSS team, and what happened when they sent them. `body_gz` is the payload
+-- (title, labels, diff, body, evidence, trailers, machine block, target) gzipped; Send sends
+-- these bytes and nothing else (the sha256 binds them). `meta` holds what BOSS found while
+-- making the preview: the privacy check of the diff (checked, never masked), the scrub counts of
+-- the prose, the dedupe search and the channel it chose. Channels: github_pr (from the person's
+-- fork), github_comment (evidence on an open upstream PR for the same cause), collector (the
+-- Improve-BOSS collector), patch_export (offline, or no way to send).
+CREATE TABLE IF NOT EXISTS self_fix_upstream_sends (
+  id TEXT PRIMARY KEY,                                   -- sfu_…
+  self_fix_id TEXT NOT NULL REFERENCES self_fixes(id) ON DELETE CASCADE,
+  channel TEXT NOT NULL,                                 -- github_pr|github_comment|collector|patch_export
+  body_gz BYTEA NOT NULL,
+  body_sha256 TEXT NOT NULL,
+  meta JSONB NOT NULL DEFAULT '{}'::jsonb,
+  checked_by TEXT,
+  checked_at TIMESTAMPTZ,
+  status TEXT NOT NULL,                                  -- previewed|sent|blocked|exported|failed|superseded
+  result JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_by TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_self_fix_upstream_sends_fix ON self_fix_upstream_sends (self_fix_id, created_at);

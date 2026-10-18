@@ -85,9 +85,10 @@ const ID_LINKS: Array<[RegExp, string, (id: string) => string]> = [
   [/^chg_/, "Change set", (id) => `?area=infra&view=cloud&cloud=changes&changeset=${encodeURIComponent(id)}`],
   [/^crun_/, "Build", (id) => `?area=code_tasks&build=${encodeURIComponent(id)}`],
   [/^wfr_/, "Workflow run", (id) => `?area=delivery_workflows&wfr=${encodeURIComponent(id)}`],
+  [/^sfx_/, "Self-fix", (id) => `?area=self_fixes&sfx=${encodeURIComponent(id)}`],
 ];
 // BOSS's own record prefixes, named: a looser shape matched words like "not_applicable".
-const RECORD_ID = /^(deprun|sdep|dec|chg|crun|wfr|deptgt|job|act|rrcpt|res|agt|usr|dh|tsk|mrun|prev|qg|drun|asb|tpl|tapp|disc|mtg)_[A-Za-z0-9]+$/;
+const RECORD_ID = /^(deprun|sdep|dec|chg|crun|wfr|deptgt|job|act|rrcpt|res|agt|usr|dh|tsk|mrun|prev|qg|drun|asb|tpl|tapp|disc|mtg|sfx)_[A-Za-z0-9]+$/;
 /** Lifecycle fields that describe a step IN FLIGHT. On a finished step they are stale: a
  *  succeeded deploy still said "verdict awaiting · next action approve_decision". */
 const IN_FLIGHT = new Set(["await", "verdict", "awaited_status", "next_action", "waiting_on",
@@ -105,7 +106,9 @@ const HUMAN: Array<[string, string]> = [
   ["title", "Title"],
 ];
 /** Never shown at all: who ran it is the Done-by line's; the project is the whole run's. */
-const NEVER = new Set(["inputs", "ran_as", "act_id", "project_id", "capability", "tool", "status"]);
+// The self-fix strip (app/self-fix/strip.tsx) says these three, above the output.
+const NEVER = new Set(["inputs", "ran_as", "act_id", "project_id", "capability", "tool", "status",
+  "self_fix", "self_fix_skipped", "self_fix_outcome"]);
 const WORDS: Record<string, string> = { auto_approval: "Automatic", approved: "Approved", rejected: "Rejected" };
 
 

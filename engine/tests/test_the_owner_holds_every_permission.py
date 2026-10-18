@@ -20,6 +20,8 @@ from boss_engine.identity.scope import RequestValues, Scope, ScopeUnresolved
 #: built-in machine principals (worker, collector, scim). There is no break-glass permission.
 OWNER_EXCLUSIONS = {
     "worker:lease": "the worker protocol: poll, heartbeat and complete leased jobs",
+    "self_fix:ticket_read": "the host self-installer only: take signed self-fix install tickets",
+    "self_fix:ticket_report": "the host self-installer only: report install phases",
     "spend:reserve": "budget reservation is done by the runtime for work, never by a person",
     "secret:lease": "a run's secret lease is issued to the runtime, never to a person",
     "telemetry:ingest": "collector telemetry, machine only",

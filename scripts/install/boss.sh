@@ -54,6 +54,13 @@ Commands:
                       main unless you installed from main or pass --to main. If the new
                       release cannot start, the previous one is put back (--no-rollback: don't).
                       Also: --dry-run, --backup-dir PATH, --web, --no-web
+  self-fix COMMAND    BOSS fixes itself: install the fixes you approved (scripts/install/
+                      self_fix_installer.py). seed (mirror BOSS's source for its fixes),
+                      enroll (this host's installer key, kept 0600, never printed),
+                      watch [--once] (poll for approved installs; --install-service runs
+                      it at login, --remove-service stops that), install SFX (run one
+                      now), remove SFX / remove-all (run an approved removal), status,
+                      plan-upgrade --to REF
   update              Re-apply configuration on the installed release: rerun the installer
                       so newly exported model keys and flags take effect. Does not change
                       the release. Accepts installer flags such as --web or --connect-found.
@@ -303,6 +310,7 @@ cmd_upgrade() {
       --to|--ref) args+=(--ref "${2:?--to needs a ref}"); shift 2 ;;
       --backup-dir) args+=(--backup-dir "${2:?--backup-dir needs a path}"); shift 2 ;;
       --dry-run|--web|--no-web|--no-rollback) args+=("$1"); shift ;;
+      --without) args+=(--without "${2:?--without needs a self-fix id}"); shift 2 ;;
       *) die "unknown upgrade option: $1 (see boss help)" ;;
     esac
   done
@@ -372,6 +380,15 @@ cmd_update() {
   done
   # The installer reads the remembered release from .boss-release, so this cannot move to main.
   bash "$INSTALL_DIR/install.sh" --dir "$INSTALL_DIR" --yes "$@"
+  # The installer builds the release; the local BOSS self-fixes are re-applied on it.
+  local stack_ref ref
+  stack_ref="$(grep -m 1 '^BOSS_STACK_REF=' "$INSTALL_DIR/.boss-release" 2>/dev/null | cut -d= -f2- || true)"
+  ref="$(grep -m 1 '^BOSS_RELEASE_REF=' "$INSTALL_DIR/.boss-release" 2>/dev/null | cut -d= -f2- || true)"
+  if [[ -n "$stack_ref" && -n "$ref" && -f "$INSTALL_DIR/scripts/install/self_fix_installer.py" ]]; then
+    BOSS_SELF_FIX_API="$(api_url)" python3 "$INSTALL_DIR/scripts/install/self_fix_installer.py" \
+      --dir "$INSTALL_DIR" restack --to "$ref" ||
+      printf 'The release runs without the local BOSS fixes; BOSS re-ports them.\n' >&2
+  fi
   post_deploy_prune
 }
 
@@ -1244,6 +1261,31 @@ cmd_connect() {
   models_step
 }
 
+# ---- BOSS fixes itself -------------------------------------------------------------------------
+
+# The self-installer runs on THIS host (never in a container), with python3 and nothing else.
+cmd_self_fix() {
+  need_install
+  [[ $# -gt 0 ]] || die "self-fix needs a command: seed, enroll, watch [--install-service], install SFX, remove SFX, remove-all, status, plan-upgrade --to REF"
+  command -v python3 >/dev/null 2>&1 || die "python3 is needed on this machine for the self-installer"
+  case "$1" in
+    enroll)
+      # The installer's own key (sys_self_installer): written 0600 beside .env, never printed.
+      local key_file="$INSTALL_DIR/.boss/self-installer.key" key
+      mkdir -p "$INSTALL_DIR/.boss" && chmod 700 "$INSTALL_DIR/.boss"
+      key="$(compose exec -T -u boss api python -m boss_engine.identity.cli self-installer-key --quiet)" ||
+        die "BOSS did not issue a key. Is the api service running (boss status)?"
+      [[ "$key" == boss_sak_* ]] || die "BOSS did not issue a key."
+      (umask 077 && printf '%s\n' "$key" > "$key_file")
+      printf 'This host can now install the self-fixes you approve. The key is in %s.\n' "$key_file" ;;
+    *)
+      local api
+      api="$(api_url)"
+      BOSS_SELF_FIX_API="$api" python3 "$INSTALL_DIR/scripts/install/self_fix_installer.py" \
+        --dir "$INSTALL_DIR" "$@" ;;
+  esac
+}
+
 # ---- identity ---------------------------------------------------------------------------------
 
 # The identity CLI inside the api container, as the boss user (never root: files it writes must
@@ -1283,6 +1325,7 @@ case "$COMMAND" in
   prune) cmd_prune "$@" ;;
   host-sample) cmd_host_sample "$@" ;;
   toolchains) cmd_toolchains "$@" ;;
+  self-fix) cmd_self_fix "$@" ;;
   version|--version) cmd_version ;;
   *) printf 'boss: unknown command %s\n\n' "$COMMAND" >&2; usage >&2; exit 2 ;;
 esac

@@ -31016,6 +31016,18 @@ app.include_router(build_improve_router(
     actor_of=signed_in_actor,
     require_worker=require_worker_principal,
 ))
+# BOSS FIXES ITSELF (routers/self_fix.py; docs/product/BOSS_FIXES_ITSELF.md §11.4): people's
+# routes, the host self-installer's (sys_self_installer only), and the worker's build route.
+from .routers.self_fix import build_self_fix_router
+
+app.include_router(build_self_fix_router(
+    engine=engine,
+    settings=lambda: settings,
+    require_write_actor=require_project_write_actor,
+    require_reader=require_project_reader,
+    require_self_installer=identity_guard.require_self_installer,
+    require_worker=require_worker_principal,
+))
 # ARCHITECTURE APPROVAL: a run's architecture documents (routers/architecture.py).
 from .routers.architecture import build_architecture_router
 

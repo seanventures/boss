@@ -17,6 +17,17 @@ P0:
     - engine/tests/test_identity_audit_redaction.py
     # The public tree names no private host, network, project or home directory
     - engine/tests/test_the_public_tree_names_no_private_infrastructure.py
+    # BOSS fixes itself (BOSSAPP-571): a self-fix never touches a protected path or symbol, never
+    # weakens a test, and a recommendation never holds a host address
+    - engine/tests/test_a_self_fix_never_touches_a_protected_path.py
+    - engine/tests/test_protected_symbols_still_exist.py
+    - engine/tests/test_a_self_fix_never_weakens_a_test.py
+    - engine/tests/test_a_recommendation_never_holds_a_host_address.py
+    # ... nothing private leaves with a self-fix, nothing leaves without a preview and a tick,
+    # and the parked step always says what BOSS is doing
+    - engine/tests/test_a_self_fix_upstream_send_carries_no_private_infrastructure.py
+    - engine/tests/test_nothing_is_sent_without_preview_and_check.py
+    - engine/tests/test_parked_step_says_what_boss_is_doing.py
     # Sandbox and network fence
     - engine/tests/test_identity_f1_sandbox_boundary.py
     - engine/tests/test_sandbox_network_fence.py
@@ -102,6 +113,21 @@ P1:
     - engine/tests/test_a_retired_connection_proof_is_not_a_listed_source.py
     # Engines: the Claude Agent SDK engine on the Anthropic API key
     - engine/tests/test_the_agent_sdk_engine_runs_on_the_api_key.py
+    # BOSS fixes itself (BOSSAPP-571): the loop, upstream, removal, the watcher and the metric
+    - engine/tests/test_a_boss_side_failure_starts_a_self_fix.py
+    - engine/tests/test_self_fix_conformance_scripted.py
+    - engine/tests/test_an_installed_self_fix_resumes_its_step.py
+    - engine/tests/test_an_installed_self_fix_can_be_removed.py
+    - engine/tests/test_the_self_installer_runs_as_a_service.py
+    - engine/tests/test_self_fix_dedupe_links_instead_of_duplicating.py
+    - engine/tests/test_class_signature_strips_install_parameters.py
+    - engine/tests/test_self_fix_labels_and_trailers.py
+    - engine/tests/test_fork_detection_and_fork_pr.py
+    - engine/tests/test_offline_self_fix_exports_a_patch.py
+    - engine/tests/test_collector_counts_self_fixes_per_signature.py
+    - engine/tests/test_autonomy_counts_every_problem_once.py
+    - engine/tests/test_self_fixes_page_lineage.py
+    - engine/tests/test_self_fixes_can_be_read_by_an_agent_never_moved.py
   api:
     # Approvals
     - apps/api/tests/test_an_approval_shows_what_it_will_send.py
@@ -130,6 +156,8 @@ P1:
     - apps/api/tests/test_a_preview_restarts_on_the_same_build.py
     - apps/api/tests/test_an_agent_step_runs_on_the_connected_subscription.py
     - apps/api/tests/test_agents_activity_folds_tool_calls.py
+    # BOSS fixes itself: the routes for people, the host self-installer, upstream and the metric
+    - apps/api/tests/test_self_fix_routes.py
   web:
     - apps/web/tests/a-promised-deploy-is-always-asked.test.ts
     # Workflows and run card
@@ -157,3 +185,11 @@ P1:
     - apps/web/tests/ask-boss-not-stuck.test.ts
     - apps/web/tests/research-and-panels-never-show-the-prompt.test.tsx
     - apps/web/tests/composer-talks-to.test.tsx
+    # BOSS fixes itself: the parked step, the card, the Self-fixes page, Send, Govern, the metric
+    - apps/web/tests/self-fix/the-parked-step-says-boss-is-fixing-itself.test.tsx
+    - apps/web/tests/self-fix/the-approval-card-holds-everything-to-say-yes.test.tsx
+    - apps/web/tests/self-fix/the-self-fixes-page-shows-each-fix-from-problem-to-release.test.tsx
+    - apps/web/tests/self-fix/send-to-boss-team-sends-exactly-what-was-previewed.test.tsx
+    - apps/web/tests/self-fix/govern-self-fix-is-the-switch-and-the-caps.test.tsx
+    - apps/web/tests/self-fix/a-run-says-who-solved-its-problems.test.tsx
+    - apps/web/tests/self-fix/the-self-fix-proxy-reaches-only-named-routes.test.ts

@@ -1,0 +1,7 @@
+{
+  "hypothesis": "A release that leaves the resources' shared compose project never retires its app container there: apply_on_host retires only the projects it was told to (retire_own_projects, which rightly refuses a project that also holds the resource service and its data), so the earlier release's app container keeps holding the published port and compose up fails with 'port is already allocated'.",
+  "location": {"file": "engine/boss_engine/services/stack_deploy.py", "function": "apply_on_host"},
+  "why_not_the_recommendation": "The recommendation proposed fixing the single-container retire step and widening own_projects. The single-container step only knows the one-container release, and widening own_projects would let a clean take the shared project down with the resource service and its data. The missing piece is a retire of only this app's own containers inside the shared project an earlier release ran in.",
+  "test_plan": "Drive apply_on_host for a release that runs as its own project while an earlier release of the same target ran in the shared project; the steps sent to the host must remove exactly the app's own container there (by compose working_dir), before compose up, never the resource service, another app's container or a volume.",
+  "files": []
+}

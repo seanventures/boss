@@ -123,6 +123,30 @@ def require_worker_principal() -> None:
             "message": "only the worker principal may call the worker protocol"})
 
 
+def require_self_installer() -> None:
+    """THE host self-installer's routes (BOSS fixes itself: tickets, reports, health): only its
+    own system principal, `sys_self_installer`, with its own key — under every mode. There is no
+    legacy bridge: a shared key, a person, an agent or the worker never takes an install ticket.
+    Raises HTTPException 403."""
+    from fastapi import HTTPException
+
+    from boss_engine.identity.permissions_gen import P
+    from boss_engine.identity.principal import PrincipalKind
+
+    ctx = REQUEST_IDENTITY.get()
+    ok = (ctx is not None and ctx.principal.kind == PrincipalKind.SYSTEM
+          and ctx.run_token is None and ctx.principal.id == "sys_self_installer")
+    if ok:
+        try:
+            ok = P.SELF_FIX_TICKET_READ in authz.system_permissions(ctx.principal.id)
+        except Exception:  # noqa: BLE001 — cannot tell: not the self-installer
+            ok = False
+    if not ok:
+        raise HTTPException(status_code=403, detail={
+            "error": "forbidden", "permission": "self_fix:ticket_read",
+            "message": "only the host self-installer may take or report self-fix tickets"})
+
+
 def router_key_for(endpoint: Any) -> str:
     """The rollout unit: the endpoint's module tail (`main`, `setup`, `identity_auth`, ...)."""
     module = getattr(endpoint, "__module__", "") or ""

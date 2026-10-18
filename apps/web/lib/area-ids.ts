@@ -14,6 +14,7 @@ export const AREA_IDS = [
   "dashboard",
   "overview",
   "decisions",
+  "self_fixes",
   "work",
   "activity",
   "delivery_workflows",

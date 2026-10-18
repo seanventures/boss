@@ -1,0 +1,161 @@
+"""A release that leaves the resources' shared compose project retires its app container there
+(services/stack_deploy.py, apply_on_host). Written by Mender, BOSS's maintainer agent, from a
+deploy failure BOSS placed on its own code (deploy:port_held).
+
+THE BUG. An earlier release of a target asked BOSS for its database, so its app ran inside the
+resources' shared compose project and published the port. The next release brought its own
+database and ran as the app's own project — and `compose up` failed on "port is already
+allocated", held by the old app container: nothing retires an app from a shared project it left
+(that project also holds the resource service, so it is never taken down as a whole).
+
+The test drives BOSS's real apply (apply_on_host) for the new release, with the target's earlier
+release on record as having run in the shared project, captures the steps it would send to the
+host, and runs them against a fake `docker`: exactly the app's own container in the shared
+project goes, never the resource service, never another app's, never a volume. Neutral fixtures
+only (example-app, 203.0.113.10).
+"""
+from __future__ import annotations
+
+import contextlib
+import os
+import stat
+import subprocess
+from pathlib import Path
+
+from boss_engine.services import deployment_fleet, stack_deploy
+
+TARGET_DIR = "/opt/boss-apps/example-app"
+SHARED = "bossapp-example-app-deploy"
+MANIFEST = """version: 1
+name: example-app
+kind: compose
+compose: {file: docker-compose.yml, project: example-app}
+health: [{url: "http://127.0.0.1:8000/health"}]
+"""
+
+
+class _Result:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def all(self):
+        return list(self._rows)
+
+    def first(self):
+        return self._rows[0] if self._rows else None
+
+    def mappings(self):
+        return self
+
+    def scalar(self):
+        return self._rows[0][0] if self._rows else None
+
+
+class _Connection:
+    """The database as apply sees it: the target's earlier release ran in the shared project."""
+
+    def execute(self, statement, params=None):
+        sql = str(statement)
+        if "shared_compose_project" in sql and "stack_deployments" in sql:
+            return _Result([(SHARED,)])
+        return _Result([])
+
+
+class _Engine:
+    @contextlib.contextmanager
+    def begin(self):
+        yield _Connection()
+
+    @contextlib.contextmanager
+    def connect(self):
+        yield _Connection()
+
+
+def _apply_steps(monkeypatch, runs_in=None) -> list[dict]:
+    """The install steps apply_on_host would send to the host for the new release."""
+    captured: dict = {}
+
+    class _Applier:
+        def __init__(self, **kw):
+            captured["rendered"] = kw["rendered"]
+            self.steps, self.log = [], ""
+
+        def run(self):
+            return {"mode": "install", "open_url": "http://203.0.113.10:8000"}
+
+    deployment = {"id": "sdep_new", "project_id": "p", "target_id": "deptgt_example",
+                  "host_id": "host_example", "changeset_id": "cs_example", "commit_sha": "a" * 40,
+                  "ref": "main", "manifest_text": MANIFEST, "repository": "example/example-app",
+                  "manifest": {"workdir": "", "shared_compose_project": runs_in},
+                  "code_task_run_id": None, "created_by": "test", "apply_token": "tok"}
+    host = {"id": "host_example", "address": "203.0.113.10", "ssh_user": "deploy",
+            "name": "example-host"}
+    target = {"id": "deptgt_example", "target_kind": "stack", "app_name": "example-app",
+              "repo": "example/example-app", "domains": []}
+    monkeypatch.setattr(stack_deploy, "_row", lambda c, i, lock=False: dict(deployment))
+    monkeypatch.setattr(stack_deploy, "_require_owner", lambda d, t: None)
+    monkeypatch.setattr(stack_deploy, "_require_governed", lambda *a, **k: None)
+    monkeypatch.setattr(stack_deploy, "_target", lambda c, i: dict(target))
+    monkeypatch.setattr(deployment_fleet, "get_host", lambda c, i: dict(host))
+    monkeypatch.setattr(stack_deploy, "host_access_for",
+                        lambda *a, **k: type("A", (), {"key_material": "", "user": "deploy",
+                                                       "host": "203.0.113.10"})())
+    monkeypatch.setattr(stack_deploy, "github_source_for", lambda *a, **k: object())
+    monkeypatch.setattr(stack_deploy, "_environment", lambda *a, **k: ({}, []))
+    monkeypatch.setattr(stack_deploy, "app_deploy_env", lambda *a, **k: {})
+    monkeypatch.setattr(stack_deploy, "StackApplier", _Applier)
+    stack_deploy.apply_on_host(_Engine(), None, deployment_id="sdep_new", apply_token="tok",
+                               dedupe_key="dk")
+    return list(captured["rendered"]["install"])
+
+
+def _fake_docker(tmp_path: Path, containers: dict[str, tuple[str, str]]) -> Path:
+    """A `docker` that knows `ps -aq --filter label=…project=P`, `inspect -f …` and `rm -f`;
+    every removal is logged. containers: id -> (project, working_dir)."""
+    db = tmp_path / "containers.txt"
+    db.write_text("".join(f"{cid} {proj} {wd}\n" for cid, (proj, wd) in containers.items()))
+    removed = tmp_path / "removed.txt"
+    script = tmp_path / "bin" / "docker"
+    script.parent.mkdir()
+    script.write_text(f"""#!/bin/sh
+DB={db}; RM={removed}
+case "$1" in
+  ps) proj=$(echo "$@" | sed -n 's/.*com.docker.compose.project=\\([^ ]*\\).*/\\1/p')
+      awk -v p="$proj" '$2==p {{print $1}}' "$DB" ;;
+  inspect) id=$(eval echo \\${{$#}})
+      case "$3" in *Name*) echo "/$id" ;; *) awk -v i="$id" '$1==i {{print $3}}' "$DB" ;; esac ;;
+  rm) id=$(eval echo \\${{$#}}); echo "$*" >> "$RM"; echo "$id" ;;
+  *) : ;;
+esac
+""")
+    script.chmod(script.stat().st_mode | stat.S_IXUSR)
+    return removed
+
+
+def test_a_release_leaving_the_shared_project_retires_its_app(monkeypatch, tmp_path):
+    steps = _apply_steps(monkeypatch)
+    retire = [s for s in steps if SHARED in s["run"] and "docker rm -f" in s["run"]]
+    assert retire, ("stack_deploy.apply_on_host sends no step that retires this app's container "
+                    f"from the shared project {SHARED} an earlier release ran in, so its port "
+                    f"stays held: {[s['name'] for s in steps]}")
+    assert steps.index(retire[0]) < next(i for i, s in enumerate(steps) if s["name"] == "up"
+                                         or "compose" in s["run"] and " up" in s["run"])
+    removed = _fake_docker(tmp_path, {
+        "app1": (SHARED, f"{TARGET_DIR}/releases/0f3c/example-app"),
+        "resdb": (SHARED, "/opt/boss-infra/example-app/deploy"),
+        "lookalike": (SHARED, "/opt/boss-apps/example-app-two/releases/1"),
+        "otherapp": ("bossapp-other-deploy", "/opt/boss-apps/other/releases/9"),
+    })
+    env = {**os.environ, "PATH": f"{tmp_path / 'bin'}:{os.environ['PATH']}"}
+    done = subprocess.run(["bash", "-c", retire[0]["run"]], capture_output=True, text=True,
+                          env=env, timeout=30)
+    assert done.returncode == 0, done.stderr
+    assert removed.read_text().split() == ["rm", "-f", "app1"], \
+        "the resource service, a look-alike directory and another app are never touched"
+    assert " -v" not in retire[0]["run"] and "volume" not in retire[0]["run"]
+
+
+def test_the_project_this_release_runs_in_is_never_retired_from_under_it(monkeypatch):
+    steps = _apply_steps(monkeypatch, runs_in=SHARED)
+    assert not [s for s in steps if "docker rm -f" in s["run"] and SHARED in s["run"]], \
+        "a release that runs in the shared project keeps its own containers there"
