@@ -90,6 +90,8 @@ const V1_COMMUNITY_PRIMARY_NAV = new Set([
   // from the edition aimed at self-hosting would hide the point.
   "skills",
   "decisions",
+  // BOSS fixes itself: the open-source wedge, so never a paid feature.
+  "self_fixes",
   "code_tasks",
   "budget",
   "enterprise",

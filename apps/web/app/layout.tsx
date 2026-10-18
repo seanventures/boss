@@ -26,6 +26,7 @@ import "./factory/security/security.css";
 import "../components/v2/templates/templates.css";
 import "./activity/log.css";
 import "./govern/govern.css";
+import "./self-fix/self-fix.css";
 // Identity: the identity screens, My account and the sign-in sheet (idn- classes).
 import "./identity/identity.css";
 import "./identity/identity-people.css";

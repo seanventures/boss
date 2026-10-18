@@ -144,6 +144,13 @@ export const WRITE_OPS: Readonly<Record<string, Readonly<Record<string, WriteGat
     experiment_stop: "improvement:manage", experiment_promote: "improvement:manage",
     feedback: "feedback:submit", prompt_shown: "feedback:submit", checkin: "feedback:submit",
   },
+  // lib/self-fix.ts `selfFixWrite(op, …)` → /api/self-fix (lib/self-fix-ops.ts); every one is
+  // improvement:manage at the API (apps/api/app/routers/self_fix.py). Approval is not here.
+  "lib/self-fix.ts#selfFixWrite": {
+    start: "improvement:manage", cancel: "improvement:manage", settings: "improvement:manage",
+    preview: "improvement:manage", edit_preview: "improvement:manage", send: "improvement:manage",
+    fork: "improvement:manage", remove: "improvement:manage", remove_all: "improvement:manage",
+  },
   // app/observability/obs-write.ts `obsWrite(path, …)`
   "app/observability/obs-write.ts#obsWrite": {
     "/v1/observability-suite/recommend": "observability:read",

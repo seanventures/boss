@@ -25,6 +25,7 @@ export const AREA_ACCESS: Readonly<Record<AreaId, AreaAccess>> = {
   delivery_workflows: p("workflow:read"),
   workforce: p("agent:read"),
   decisions: p("decision:read"),
+  self_fixes: p("improvement:read"),
   infra: p("infra:read"),
   delivery: p("infra:read"), // legacy id, redirects to Infra (app/legacy-areas.ts)
   observability: p("observability:read"),
