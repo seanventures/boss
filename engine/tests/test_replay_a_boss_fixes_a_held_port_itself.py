@@ -24,6 +24,13 @@ container in the resources' project, res-db beside it) — port freed → the ru
   test_replay_a_end_to_end      the whole loop → verified (a new cause: Replay B's res-db)
   test_replay_a_rollback_path   a host the fix does not hold on → same cause → rolled back
 Oracle: c56bd88a3's own tests are run against BOSS's installed fix and reported.
+
+ON A REAL ENGINE (the live matrix, spec §9): BOSS_SELF_FIX_REPLAY_ENGINE=<harness key> (e.g.
+claude_code) makes Mender that engine — no scripted fixture, no scripted engine: the model writes
+the diagnosis, the red test and the fix itself, and BOSS decides everything else exactly as on
+the scripted engine. BOSS_SELF_FIX_REPLAY_MODEL picks the model where the harness takes one. A
+build that does not reach the card is REPORTED (refusal class, detail, cost, time) before the
+test fails: a real engine not producing a fix is a quality result, not something to hide.
 """
 from __future__ import annotations
 
@@ -229,8 +236,28 @@ class Replay:
         monkeypatch.setenv("BOSS_SOURCE_SHA", self.base)
         monkeypatch.setenv("BOSS_RELEASE_REF", "v-replay-a")
         monkeypatch.delenv("BOSS_STACK_HEAD", raising=False)
-        monkeypatch.setenv(scripted_engine.ENABLE_ENV, "1")
-        monkeypatch.setenv("BOSS_SCRIPTED_SELF_FIX", f"good_fix:{FIXTURE}")
+        self.real_engine = (os.environ.get("BOSS_SELF_FIX_REPLAY_ENGINE") or "").strip()
+        if self.real_engine:
+            # Mender is a real model: nothing scripted anywhere in the build.
+            monkeypatch.delenv(scripted_engine.ENABLE_ENV, raising=False)
+            monkeypatch.delenv("BOSS_SCRIPTED_SELF_FIX", raising=False)
+            monkeypatch.setenv("BOSS_SELF_FIX_ENGINE", self.real_engine)
+            monkeypatch.setenv("BOSS_SELF_FIX_REVIEW_ENGINE",
+                               os.environ.get("BOSS_SELF_FIX_REPLAY_REVIEW_ENGINE")
+                               or self.real_engine)
+            update = {}
+            model = (os.environ.get("BOSS_SELF_FIX_REPLAY_MODEL") or "").strip()
+            if model:
+                update.update(claude_cli_model=model, code_agent_model=model)
+            # The test database holds no stored login, and the host's own secret store is the
+            # live install's: a `claude` child here runs on the host CLI's own login ("none"
+            # binds no credential into its environment) unless told otherwise.
+            update["claude_credential_kind"] = (
+                os.environ.get("BOSS_SELF_FIX_REPLAY_CREDENTIAL") or "none").strip()
+            self.settings = self.settings.model_copy(update=update)
+        else:
+            monkeypatch.setenv(scripted_engine.ENABLE_ENV, "1")
+            monkeypatch.setenv("BOSS_SCRIPTED_SELF_FIX", f"good_fix:{FIXTURE}")
         test_db = os.environ.get("BOSS_TEST_DATABASE_URL")
         if test_db:
             monkeypatch.setenv("BOSS_SELF_FIX_TEST_DATABASE_URL", test_db)
@@ -404,6 +431,10 @@ def _run_replay(r: Replay, monkeypatch, *, layout: dict) -> dict:
                                  source=r.mirror).run()
     with r.eng.begin() as c:
         sfx = sf.get(c, sfx_id)
+    r.mark(f"Mender build ended {sfx['status']} (engine {sfx.get('engine')}, "
+           f"${int(sfx.get('cost_micros') or 0) / 1e6:.2f}, rounds {sfx.get('repair_rounds')})")
+    if sfx["status"] != sf.AWAITING_APPROVAL:
+        _report_build(r, sfx, built)
     assert sfx["status"] == sf.AWAITING_APPROVAL, (built, sfx.get("refusal_detail"))
     r.mark(f"Mender: red on {BASE} → green; gates "
            f"{sorted(k for k, v in sfx['gates'].items() if v.get('ok'))}; tier {sfx['tier']} "
@@ -460,12 +491,33 @@ def _run_replay(r: Replay, monkeypatch, *, layout: dict) -> dict:
         host.close()
 
 
+def _report_build(r: Replay, sfx: dict, built: dict) -> None:
+    """A build that stopped before the card, said in full (the real-engine matrix's row)."""
+    path = os.environ.get("BOSS_SELF_FIX_REPLAY_REPORT")
+    if not path:
+        return
+    entry = {"replay": "A: build stopped", "engine": sfx.get("engine"),
+             "timeline": r.timeline, "final_status": sfx["status"], "refusal": sfx.get("refusal"),
+             "refusal_detail": sfx.get("refusal_detail"), "built": built,
+             "cost_micros": sfx.get("cost_micros"), "repair_rounds": sfx.get("repair_rounds"),
+             "diagnosis": sfx.get("diagnosis"),
+             "gates": {k: v.get("ok") for k, v in (sfx.get("gates") or {}).items()},
+             "red": (sfx.get("red_green") or {}).get("base"),
+             "green": (sfx.get("red_green") or {}).get("head"),
+             "test_files": (sfx.get("red_green") or {}).get("test_files"),
+             "progress": sfx.get("progress")}
+    existing = json.loads(Path(path).read_text()) if Path(path).exists() else []
+    Path(path).write_text(json.dumps(existing + [entry], indent=1, default=str))
+
+
 def _report(r: Replay, name: str, result: dict) -> None:
     path = os.environ.get("BOSS_SELF_FIX_REPLAY_REPORT")
     if not path:
         return
     row = result["row"]
-    entry = {"replay": name, "timeline": r.timeline, "final_status": result["final_status"],
+    entry = {"replay": name, "engine": row.get("engine"), "cost_micros": row.get("cost_micros"),
+             "repair_rounds": row.get("repair_rounds"), "diff": (row.get("pr") or {}).get("diff"),
+             "timeline": r.timeline, "final_status": result["final_status"],
              "verification": result.get("verification"), "outcome": result["outcome"],
              "oracle": result["oracle"], "tier": row["tier"], "flags": row["flags"],
              "gates": {k: v.get("ok") for k, v in row["gates"].items()},
