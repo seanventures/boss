@@ -700,6 +700,20 @@ class Build:
                     # Only the test stage writes tests: it adds the one that calls it.
                     tests = self.add_tests(work, base_sha, diagnosis, tests, note=note)
                     red = (self.sfx().get("red_green") or {}).get("base") or {}
+                broke = test_broke(gate, tests) if gate.name == "red_then_green" else None
+                if broke:
+                    # THE TEST ITSELF IS BROKEN (the real-engine Replay A, attempt 7: once the
+                    # fix let it get past its first assertion, the test's own helper raised
+                    # FileNotFoundError, and two fix rounds could not touch it). The fix stage
+                    # may not edit the test, so the round goes back to RED from the base.
+                    note = (f"{note}\n\n{broke}\nThe test's output with the fix:\n"
+                            + str((gate.detail.get("head") or {}).get("output_tail") or "")[-2500:])
+                    src.discard(work, [c.path for c in src.changes(work, base_sha)], base_sha)
+                    self.say(f"{sf.AGENT_NAME}: the new test broke in its own code once the fix "
+                             "let it run further; writing it again from BOSS as it is.")
+                    tests = self.reproduce(work, base_sha, diagnosis, feedback=note,
+                                           rewrite=True)
+                    red = (self.sfx().get("red_green") or {}).get("base") or {}
                 continue
             findings = self.review(work, base_sha, diagnosis)
             if findings:
@@ -1255,6 +1269,29 @@ def _unpinned_path(entry: Optional[Mapping[str, Any]], changes: list[sp.FileChan
                     "why": f"the fix changes {fn} ({also.get('what')}), and no new test calls "
                            f"it: add a test that calls {fn} and hands what it records to "
                            f"{entry.get('function')}"}
+    return None
+
+
+_FRAME = re.compile(r"^([\w./-]+\.py):(\d+):", re.M)
+_ERROR = re.compile(r"^E\s+(\w+(?:Error|Exception))\b", re.M)
+
+
+def test_broke(gate: si.GateResult, tests: Mapping[str, str]) -> Optional[str]:
+    """Why the new test failed WITH the fix in its own code, not by an assertion about BOSS: the
+    error is not an AssertionError and the innermost repository frame is one of the new tests.
+    None when the failure is BOSS's (a fix round can answer it)."""
+    head = str((gate.detail.get("head") or {}).get("output_tail") or "")
+    errors = [e for e in _ERROR.findall(head) if e != "AssertionError"]
+    if not errors or re.search(r"^E\s+(?:AssertionError|assert )", head, re.M):
+        return None
+    frames = [m.group(1) for m in _FRAME.finditer(head)
+              if not m.group(1).startswith(("/", "..")) and "site-packages" not in m.group(1)]
+    if frames and frames[-1] in tests:
+        line = next((m.group(0) for m in _FRAME.finditer(head) if m.group(1) == frames[-1]), "")
+        return (f"The new test is broken: with the fix it raised {errors[-1]} in its own code "
+                f"({line.rstrip(':')}), not an assertion about BOSS. Write it again so it runs "
+                "through once BOSS is fixed (create every directory and file it uses, with "
+                "parents), and still fails on BOSS as it is.")
     return None
 
 

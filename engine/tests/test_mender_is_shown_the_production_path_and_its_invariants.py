@@ -244,3 +244,26 @@ def test_a_fix_that_changes_the_plan_needs_a_test_that_calls_the_plan():
                                  after=before.replace("return 1", "return 2"))]
     assert b._unpinned_path(entry, apply_only_fix, only_apply) is None, \
         "a fix of the apply alone needs no test of the plan"
+
+
+def test_a_test_broken_in_its_own_code_goes_back_to_red_not_to_the_fix():
+    """The real-engine Replay A, attempt 7: with the fix the test got past its first assertion
+    and its own helper raised FileNotFoundError (bin_dir.mkdir() without parents); two fix
+    rounds, which may not edit it, could not answer that."""
+    tests = {"engine/tests/test_new.py": ""}
+
+    def gate(tail):
+        return si.GateResult("red_then_green", False, "the new test still fails",
+                             {"head": {"output_tail": tail}})
+
+    broken = ("engine/tests/test_new.py:372: \n"
+              "engine/tests/test_new.py:338: in _run_on_fake_host\n    bin_dir.mkdir()\n"
+              "/Library/Frameworks/Python.framework/lib/python3.13/pathlib/_local.py:722: in mkdir\n"
+              "E           FileNotFoundError: [Errno 2] No such file or directory: 'x/bin'\n")
+    assert "FileNotFoundError" in (b.test_broke(gate(broken), tests) or "")
+    asserted = "engine/tests/test_new.py:40: \nE       AssertionError: port still held\n"
+    assert b.test_broke(gate(asserted), tests) is None, "BOSS's failure: the fix answers it"
+    in_boss = ("engine/tests/test_new.py:40: \n"
+               "engine/boss_engine/services/stack_deploy.py:1500: in retire\n"
+               "E       KeyError: 'dir'\n")
+    assert b.test_broke(gate(in_boss), tests) is None, "an error in BOSS's code is the fix's"
