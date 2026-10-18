@@ -427,23 +427,69 @@ def _openrouter_catalogue(connection: Any, settings: Any, project_id: Optional[s
 
 def _wire_deciders(snap: Snapshot, connection: Any, settings: Any,
                    project_id: Optional[str]) -> None:
-    """Jev and the cheap-model classifier, built only when a route actually asks for them."""
-    if snap.jev_state == "ready":
-        def jev():
-            from ..typed_decisions import TypeSafeDecider
+    """Jev and the cheap-model classifier, built only when a route actually asks for them.
 
-            return TypeSafeDecider(settings)
-        snap.jev_factory = jev
-    if not project_id:
-        return
+    Both are governed: neither is ever a bare provider client. Jev goes through the typed-
+    decision spend path (reservation, job and model lease, receipt, settlement); the cheap
+    model through the governed chat adapter.
+    """
     try:
         db_engine = connection.engine
     except Exception:  # noqa: BLE001
+        db_engine = None
+    if snap.jev_state == "ready":
+        def jev():
+            return GovernedJevDecider(db_engine, settings, project_id)
+        snap.jev_factory = jev
+    if not project_id or db_engine is None:
         return
 
     def model():
         return GovernedModelDecider(db_engine, settings, project_id, snap)
     snap.model_factory = model
+
+
+class GovernedJevDecider:
+    """The router's Jev classifier on the governed typed-decision path (BOSSAPP-579).
+
+    `jev_state` is only "ready" once the operator has lifted the hold (`BOSS_ROUTER_JEV_LIVE`),
+    and even then no call leaves this process without a committed budget reservation, a live
+    job and model lease on TypeSafe's own source, a receipt with a dedupe key for the attempt,
+    and a settlement of what it cost. A missing one refuses the call and records why; the
+    classifier then falls through to its rules as it would for any Jev failure.
+
+    Only Jev answers here. The spend path's Claude fallback and second opinion stay off: the
+    router's fallback is its rules, and a Claude answer would be a different classifier.
+    """
+
+    backend = "typesafe"
+    source_id = "typesafe_jev"
+    run_id = "model_router"
+
+    def __init__(self, db_engine: Any, settings: Any, project_id: Optional[str]):
+        self._db, self._settings, self._project_id = db_engine, settings, project_id
+
+    def decide(self, context: str, questions: list):
+        import hashlib
+        import os
+
+        from ..typed_decision_spend import TypedDecisionBatchSpend
+        from ..typed_decisions import TypeSafeDecider
+
+        if self._db is None or not self._project_id:
+            raise RuntimeError(
+                "Jev needs a project and a database connection to reserve, lease and receipt "
+                "its call; the rules classify instead")
+        # The same questions about the same context replay from their receipt; the identity
+        # (TypedDecisionSpend._identity) hashes both, so the step id only has to be readable.
+        digest = hashlib.sha256(context.encode("utf-8")).hexdigest()[:16]
+        spend = TypedDecisionBatchSpend.for_runner(
+            self._settings, engine=self._db, project_id=self._project_id, run_id=self.run_id,
+            step_id=f"classify-{digest}", attempt=1, actor=self.run_id,
+            worker_id=f"{self.run_id}:{os.getpid()}",
+        )
+        spend.decider_factory = lambda role, bound: TypeSafeDecider(bound, attempts=1)
+        return spend.decide(self._settings, context, list(questions))
 
 
 class GovernedModelDecider:
