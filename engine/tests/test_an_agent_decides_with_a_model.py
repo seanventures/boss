@@ -137,3 +137,28 @@ def test_with_no_model_a_recovery_asks_and_names_the_triage_suggestion():
                             error="RuntimeError: no model connected")
     assert asked["action"] == sr.ASK_PERSON
     assert "connected model" in asked["reasoning"] and "cleaning it up" in asked["question"]
+
+
+def test_an_unsure_choice_that_changes_nothing_is_taken_not_asked():
+    """"Answer or look into it?" is not worth a question: neither acts."""
+    cands = [ad.Candidate("answer", "answer it", acts=False),
+             ad.Candidate("investigate", "look into it", acts=False),
+             ad.Candidate("operate", "retry the step")]
+    got = ad.decide(None, SETTINGS, "p", situation="t", message="why did it fail",
+                    candidates=cands, adapter=DecisionModel("investigate", confidence=0.5))
+    assert got.decided and got.action == "investigate"
+    got = ad.decide(None, SETTINGS, "p", situation="t", message="do it",
+                    candidates=cands, adapter=DecisionModel("operate", confidence=0.5))
+    assert got.status == ad.CLARIFY
+
+
+def test_a_tool_less_cli_reply_in_the_tool_protocol_reads_as_its_answer():
+    from boss_engine.services.claude_cli_adapter import _unwrapped_final
+
+    assert _unwrapped_final('{"thought": "t", "final": "The step is queued."}') == \
+        "The step is queued."
+    assert _unwrapped_final('{"thought": "Offer the retry.", "tool_calls": [{"name": "x"}]}') \
+        == "Offer the retry."
+    assert _unwrapped_final('{"action": "retry", "confidence": 0.9}') == \
+        '{"action": "retry", "confidence": 0.9}', "other JSON answers are left alone"
+    assert _unwrapped_final("plain text") == "plain text"

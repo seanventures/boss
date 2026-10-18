@@ -73,6 +73,10 @@ class Candidate:
     available: bool = True
     #: When not available: why, and where a person does it instead.
     why_not: str = ""
+    #: Whether choosing it CHANGES anything. A candidate that does not (answer a question, look
+    #: into something) is taken even below the confidence bar: there is no action to guess,
+    #: and asking "did you want me to answer or to look?" helps nobody.
+    acts: bool = True
 
 
 @dataclass
@@ -352,7 +356,8 @@ def decide(connection: Any, settings: Any, project_id: str, *, situation: str, m
             f"the model answered '{action}', which is not one of the candidates"),
             question=_question_for(candidates, None, str(raw.get("question") or "")),
             by=by, cost_usd_micros=cost)
-    if confidence < bar:
+    chosen = next(c for c in candidates if c.key == action)
+    if confidence < bar and chosen.acts:
         return AgentDecision(CLARIFY, action=action, confidence=confidence, reason=reason,
                              question=_question_for(candidates, action,
                                                     str(raw.get("question") or "")),

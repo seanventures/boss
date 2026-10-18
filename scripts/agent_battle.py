@@ -576,6 +576,17 @@ def main(argv: Optional[list[str]] = None) -> int:
                             model_settings)
         by_world[world] = pids[sid]
 
+    # Interleaved by project, so workers never queue behind one project's lock.
+    queues: dict[str, list] = {}
+    for case in cases:
+        queues.setdefault(pids[case["scenario"]], []).append(case)
+    order: list = []
+    while any(queues.values()):
+        for q in sorted(queues.values(), key=len, reverse=True):
+            if q:
+                order.append(q.pop(0))
+    cases = order
+
     judge_adapter = None
     if not args.no_judge:
         from boss_engine.services.claude_cli_adapter import ClaudeCliAdapter

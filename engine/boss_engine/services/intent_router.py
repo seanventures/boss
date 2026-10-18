@@ -111,6 +111,36 @@ _INITIATORS: dict[str, tuple[str, str]] = {
                                              "(simulated)"),
 }
 
+#: What each decided turn asks of the answering agent — said to it before it starts.
+_DECIDED_MEANS = {
+    "answer": ("a QUESTION. Answer it from what you can read; change nothing. A fix you would "
+               "make is offered as a button (propose_action with the real tool and arguments)."),
+    "investigate": ("a request to LOOK INTO something. Read what you need (logs, hosts, code, "
+                    "run history), report the cause and what fixes it; change nothing. Offer "
+                    "each fix as a button (propose_action)."),
+    "operate": ("an instruction about work that ALREADY EXISTS. Read it, then carry it out ON "
+                "THAT WORK with the tool that acts on it — retry_workflow_step for a run's step, "
+                "retry_code_task (with a fix_note) for a build's own lineage, redeploy for a "
+                "deployment, skip/recheck for a stopped run. Never start new work for it. If "
+                "what they asked would destroy or replay something they may not intend (a "
+                "removal, deleted data), ask ONE question instead. Report only what a tool did."),
+    "new_code_change": ("a request for NEW work. Offer it: create_code_task for one scoped "
+                        "change, start_workflow for a whole delivery — both come back as a "
+                        "button the person presses; say it is offered, not started. Do not "
+                        "retry or redeploy existing work in its place."),
+}
+
+
+def _decision_note(decision: Any) -> str:
+    action = getattr(decision, "action", None)
+    means = _DECIDED_MEANS.get(str(action or ""))
+    if not means:
+        return ""
+    reason = str(getattr(decision, "reason", "") or "").strip()
+    return ("THIS TURN WAS DECIDED (by BOSS's decision model, reading the request in context) "
+            f"to be {means}" + (f" Why: {reason}" if reason else ""))
+
+
 #: The decided actions that authorise the agent to change things this turn.
 _WRITE_ACTIONS = frozenset({"operate", "new_code_change"})
 
@@ -1598,6 +1628,7 @@ class IntentRouter:
         # The thread and its first message: what the model router picks a model from, once.
         self._turn_messages, self._turn_thread = messages, thread_id
         self._turn_action = None
+        self._turn_verdict = None
         self._use_project_chat_model(connection, project_id)
         latest = str(messages[-1].get("content") or "").strip() if messages else ""
         if confirm_plan_id:
@@ -1685,7 +1716,7 @@ class IntentRouter:
         # answer / investigate / operate / new_code_change: the tool-holding agent, with the
         # writes the decision authorised. A question never authorises a write; a write the agent
         # still wants comes back as a button.
-        self._turn_action = action
+        self._turn_action, self._turn_verdict = action, decision
         turn = self._answer(connection, project_id, messages, actor=actor,
                             external_ref=external_ref, mode=mode, thread_id=thread_id,
                             role=role, depth=depth,
@@ -1702,9 +1733,10 @@ class IntentRouter:
         C = agent_decision.Candidate
         out = [
             C("answer", "answer a question or explain something from what BOSS already knows "
-                        "about the thing in view; change nothing"),
+                        "about the thing in view; change nothing", acts=False),
             C("investigate", "look into it live (logs, hosts, containers, code, run history) and "
-                             "report the cause; change nothing — any fix is offered as a button"),
+                             "report the cause; change nothing — any fix is offered as a button",
+              acts=False),
             C("operate", "carry out what they asked on work that ALREADY EXISTS: retry, resume "
                          "or skip a step, retry a build's delivery, redeploy, roll back, retarget, "
                          "change a setting, cancel, prioritise (expensive or destructive tools "
@@ -2321,6 +2353,11 @@ class IntentRouter:
 
         if asked_before(messages):
             system = ASKED_AGAIN + "\n\n" + system
+        # WHAT THIS TURN WAS DECIDED TO BE (route_turn's decision model), so the agent carries
+        # out the decision instead of re-deciding it from the words.
+        decided = _decision_note(getattr(self, "_turn_verdict", None))
+        if decided:
+            system = decided + "\n\n" + system
         # last 12 user/assistant turns as history; newest user message drives the turn
         convo = [
             {"role": m["role"], "content": m["content"]}
