@@ -49,7 +49,17 @@ def _unwrapped_final(text: str) -> str:
     if not (stripped.startswith("{") and stripped.endswith("}")):
         return text
     obj = _first_json_object(stripped)
-    if not isinstance(obj, dict) or not ({"final", "tool_calls", "tool_call"} & set(obj)):
+    if not isinstance(obj, dict):
+        # Malformed protocol JSON (a misplaced brace): its final or thought is still the answer.
+        for key in ("final", "thought"):
+            found = re.search(r'"%s"\s*:\s*"((?:[^"\\]|\\.)*)"' % key, stripped)
+            if found and stripped.startswith('{"thought"'):
+                try:
+                    return json.loads(f'"{found.group(1)}"')
+                except ValueError:
+                    return found.group(1)
+        return text
+    if not ({"final", "tool_calls", "tool_call"} & set(obj)):
         return text
     final = obj.get("final")
     if isinstance(final, str) and final.strip():
@@ -271,10 +281,11 @@ class CliChatBrain:
         obj = _first_json_object(result_text)
         if not isinstance(obj, dict):
             # Could not parse an action — treat the text as a final answer so the
-            # loop terminates gracefully rather than spinning.
+            # loop terminates gracefully rather than spinning (never the raw protocol JSON).
+            text_out = _unwrapped_final(result_text)
             return (
-                {"content": result_text, "tool_calls": None,
-                 "raw": {"role": "assistant", "content": result_text}},
+                {"content": text_out, "tool_calls": None,
+                 "raw": {"role": "assistant", "content": text_out}},
                 usage,
             )
 

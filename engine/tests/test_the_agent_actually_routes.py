@@ -175,18 +175,36 @@ def test_without_any_model_nothing_is_started_and_boss_says_why(monkeypatch):
 
 
 def test_an_unsure_decision_asks_one_question_and_does_nothing():
+    """Unsure about a governed initiator: ONE question, nothing started."""
     router = _router()
-    decided(router, "new_code_change", confidence=0.4,
-            question="Do you want a new build, or the Build step of wfr_x retried?")
+    decided(router, "create_meeting", confidence=0.4,
+            question="Do you want a panel to debate this, or just my view?")
     started: list = []
     router._dispatch = lambda *a, **k: started.append(a)
     router._answer = lambda *a, **k: started.append(a)
     turn = router.route_turn(None, project_id="p", actor="ceo",
-                             messages=[{"role": "user", "content": "build it again"}],
+                             messages=[{"role": "user", "content": "postgres or mongo"}],
                              manifest=_Manifest())
     assert started == []
-    assert turn.reply == "Do you want a new build, or the Build step of wfr_x retried?"
+    assert turn.reply == "Do you want a panel to debate this, or just my view?"
     assert turn.decision["status"] == "clarify"
+
+
+def test_unsure_between_agent_actions_reads_first_with_every_write_withheld():
+    """Unsure whether "build it again" is a retry or new work: the agent reads the records
+    with writes withheld and asks ONE informed question (options as buttons)."""
+    from boss_engine.services.intent_router import _decision_note
+
+    router = _router()
+    decided(router, "new_code_change", confidence=0.4)
+    seen: list = []
+    router._dispatch = lambda *a, **k: seen.append("dispatch")
+    router._answer = lambda *a, **k: (seen.append(k.get("writes")), RouterTurn(reply="q?"))[1]
+    turn = router.route_turn(None, project_id="p", actor="ceo",
+                             messages=[{"role": "user", "content": "build it again"}],
+                             manifest=_Manifest())
+    assert seen == [False] and turn.decision["status"] == "clarify"
+    assert "ONE short question" in _decision_note(router._turn_verdict)
 
 
 def test_a_question_never_authorises_a_write_and_an_instruction_does():

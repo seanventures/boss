@@ -295,7 +295,8 @@ def run_talk_to_boss(engine, settings, pid: str, sc: dict, case: dict) -> dict:
             c, project_id=pid, actor="ceo",
             messages=[{"role": "user", "content": case["input"]}], manifest=manifest,
             external_ref=sc.get("external_ref"), pending_plan_id=sc.get("pending_plan_id"))
-    offered = [str(p.get("tool") or "") for p in (turn.proposed_actions or [])]
+    offered = [str(p.get("tool") or "") for p in (turn.proposed_actions or [])] + \
+        [f"next step: {n.get('label')}" for n in (getattr(turn, "next_steps", None) or [])]
     kinds = [str(a.get("kind") or "") for a in (turn.actions or [])]
     if sc.get("pending_plan_id") and not ({"plan_dismissed", "plan_dispatched"} & set(kinds)) \
             and not turn.pending_confirmation:

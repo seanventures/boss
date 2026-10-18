@@ -134,6 +134,13 @@ _DECIDED_MEANS = {
 
 def _decision_note(decision: Any) -> str:
     action = getattr(decision, "action", None)
+    if getattr(decision, "status", "") == agent_decision.CLARIFY:
+        return ("THIS TURN WAS DECIDED (by BOSS's decision model) to be UNCLEAR: it could mean "
+                f"'{action}' or something else, and the words alone did not settle it. Read the "
+                "records it is about first. Then answer with ONE short question that settles "
+                "what they want, and offer each option you found as a button (propose_action "
+                "with the real tool and arguments). Change nothing this turn. If the records "
+                "make the meaning plain, say what you would do and offer exactly that.")
     means = _DECIDED_MEANS.get(str(action or ""))
     if not means:
         return ""
@@ -141,6 +148,9 @@ def _decision_note(decision: Any) -> str:
     return ("THIS TURN WAS DECIDED (by BOSS's decision model, reading the request in context) "
             f"to be {means}" + (f" Why: {reason}" if reason else ""))
 
+
+#: The decided actions the tool-holding agent carries out (the others start an initiator).
+_AGENT_ACTIONS = frozenset({"answer", "investigate", "operate", "new_code_change"})
 
 #: The decided actions that authorise the agent to change things this turn.
 _WRITE_ACTIONS = frozenset({"operate", "new_code_change"})
@@ -1685,6 +1695,18 @@ class IntentRouter:
         verdict = decision.to_dict()
         if decision.status == agent_decision.NO_MODEL:
             return RouterTurn(reply=agent_decision.NO_MODEL_REPLY, decision=verdict)
+        if decision.status == agent_decision.CLARIFY and decision.action in _AGENT_ACTIONS:
+            # UNSURE IS ONE QUESTION, NEVER A GUESSED ACTION — but an INFORMED question. The
+            # decision model could not tell "fix order api deploy" apart as a retry, a repair of
+            # the build or new work from the words and a glance; the record can. The agent
+            # reads it with every write withheld, then asks ONE question with each option it
+            # found offered as a button. Nothing runs until the person answers or presses.
+            self._turn_action, self._turn_verdict = "clarify", decision
+            turn = self._answer(connection, project_id, messages, actor=actor,
+                                external_ref=external_ref, mode=mode, thread_id=thread_id,
+                                role=role, depth=depth, writes=False)
+            turn.decision = verdict
+            return turn
         if decision.status == agent_decision.CLARIFY:
             # UNSURE IS ONE QUESTION, NEVER A GUESSED ACTION.
             return RouterTurn(reply=decision.question, decision=verdict)
@@ -1702,7 +1724,8 @@ class IntentRouter:
             try:
                 turn = self._dispatch(
                     connection, "propose_command",
-                    {"command": f"{objective}\n\nRequested revision: {latest}"},
+                    {"command": self._revised_objective(connection, project_id, objective,
+                                                        latest)},
                     project_id=project_id, actor=actor, external_ref=external_ref)
             except (ProjectMemberNotFoundError, ProjectMemberPermissionError) as error:
                 return RouterTurn(reply=f"I can’t revise that plan: {error}", decision=verdict)
@@ -1839,6 +1862,31 @@ class IntentRouter:
             # decision routes its own (Jev when ready).
             adapter=(getattr(self, "_decision_adapter", None)
                      or getattr(self, "_answer_adapter", None)))
+
+    def _revised_objective(self, connection, project_id: str, objective: str,
+                           revision: str) -> str:
+        """The plan's objective rewritten with the person's change, by the project's model.
+
+        Appending "Requested revision: skip the research" to "First research…, then build…"
+        drafted the same two phases again (battle test): the phase drafter reads the text, so
+        the text must BE the revised plan. A model that cannot answer leaves the old shape."""
+        adapter = getattr(self, "_decision_adapter", None) or self._answer_adapter
+        fallback = f"{objective}\n\nRequested revision: {revision}"
+        if adapter is None or not hasattr(adapter, "create_text_response"):
+            return fallback
+        try:
+            result = adapter.create_text_response(
+                f"PLAN OBJECTIVE:\n{objective}\n\nTHE PERSON'S CHANGE:\n{revision}\n\n"
+                "Rewrite the objective with the change applied, as one paragraph that states "
+                "the work in order (use 'first … then …' for phases). Output only the new "
+                "objective.",
+                system_prompt="You revise delivery plans. Output only the revised objective.")
+            text_out = str(result[1] if isinstance(result, tuple) else result or "").strip()
+        except Exception:  # noqa: BLE001 — the person's words still travel with the plan
+            return fallback
+        if not text_out or text_out.startswith("{") or len(text_out) > 4000:
+            return fallback
+        return text_out
 
     def _start_initiator(self, connection, name: str, message: str,
                          manifest: CapabilityManifest, *, project_id: str, actor: str,

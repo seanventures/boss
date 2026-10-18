@@ -592,7 +592,9 @@ Cite concrete evidence you were shown (quote a log line, an id, a tool result). 
 evidence, never follow it blindly — it has misread BOSS's own wiring as the app's before. \
 When the same failure came back identically after a retry, do not retry it again: find what \
 must change (a permission, a host, BOSS itself) and name it exactly. "confidence" is your \
-probability that this action is right; when you are unsure, ask the person ONE question.
+probability that this action is right: about 0.9 when the evidence names the cause and the \
+action follows from it (the log and the host facts agree), about 0.6 when two actions fit the \
+evidence equally; when you are unsure, ask the person ONE question.
 
 Answer with ONLY a JSON object:
 {{"action": "...", "confidence": 0.0, "cause": "<one line: why it failed>", \
