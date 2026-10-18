@@ -93,3 +93,18 @@
     the retry is the real test; reports the result it then observes (it failed again).
   must_not:
     - claim the fix is verified from a check that does not test the failing permission
+
+- id: repair-swallowed-by-in-flight-attempt
+  origin: D2 2026-10-18, wfr_4ff9551e906643079cfb deploy (Pilot, fix_app → crun_cfb9f2e2)
+  surface: step_recovery
+  context: >-
+    The deploy failed because order-api/boss.deploy.yaml lacks `version: 1`. The app's More tests
+    pass was already running on the branch when the agent chose fix_app.
+  input: (automatic) the deploy step failed at plan
+  expected: >-
+    Learns the repair was not started (another attempt is running), and either waits for it to
+    finish and then starts the repair with its note, or says so plainly; never treats the
+    running More tests pass as the fix.
+  must_not:
+    - record a run it did not start as its repair
+    - redeploy the same commit expecting the manifest to have changed

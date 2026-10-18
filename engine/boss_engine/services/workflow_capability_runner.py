@@ -3695,6 +3695,16 @@ def _start_recovery_build(
     new_id = str(started.get("run_id") or "")
     if not new_id:
         return "", "the repair build returned no run id"
+    if started.get("created") is False:
+        # THE REPAIR WAS NOT STARTED: another attempt of this app was already running on its
+        # branch, and the retry returned THAT run — without this note. Recording it as the fix
+        # sent the deploy back to wait on Order API's More tests pass, which never touched the
+        # manifest Pilot had diagnosed (crun_cfb9f2e2, D2); the agent then saw "fix applied,
+        # manifest unchanged" and could not tell why. Said as it is, so the agent (or a person)
+        # starts the repair once that attempt has finished.
+        return "", (f"the repair was not started: another attempt of this app ({new_id}) is "
+                    "still running on its branch, and a second build on the same branch is "
+                    "refused. Start the repair (with this note) when it has finished.")
     return new_id, ""
 
 
