@@ -60,3 +60,35 @@ def test_an_unreadable_opt_in_never_widens(monkeypatch):
         def begin_nested(self):
             raise RuntimeError("db down")
     assert gaa._workflows_opted_in("acme/shop", Broken()) is False
+
+
+def test_the_setup_apps_push_token_carries_the_opt_in(monkeypatch):
+    """crun_4eec9642: the Setup App's control-plane token (the one that pushes a finished build)
+    was minted from a fixed set without workflows, whatever the repository's opt-in said."""
+    from boss_engine.identity import github_setup as gs
+
+    monkeypatch.setattr(gaa, "_workflows_opted_in", lambda full, connection=None: full == "acme/on")
+    assert gs.control_plane_permissions(None, "acme/on") == {
+        **gs.CONTROL_PLANE_PERMISSIONS, "workflows": "write"}
+    assert gs.control_plane_permissions(None, "acme/off") == gs.CONTROL_PLANE_PERMISSIONS
+    asked = []
+    monkeypatch.setattr(gs, "app_config", lambda db: {"source": "setup"})
+    monkeypatch.setattr(gs, "app_ready", lambda db: True)
+    monkeypatch.setattr(gs.github_app, "mint_installation_token",
+                        lambda repos, perms, db=None: asked.append(dict(perms)) or
+                        type("T", (), {"token": "ghs_x"})())
+    monkeypatch.setattr(gs, "_account_for", lambda tok: None)
+    monkeypatch.setattr(gs, "replace", lambda tok, **k: tok)
+    assert gs.control_plane_token(None, "acme", "on") == "ghs_x"
+    assert asked[-1]["workflows"] == "write"
+
+
+def test_a_held_delivery_says_what_the_token_asked_for_and_what_github_grants():
+    """The recovery agent gets the facts to compare, not a 403 alone."""
+    from boss_engine.services import governed_code_task_service as g
+
+    words = g._perm_words({"workflows": "write", "contents": "write"})
+    assert words == "contents: write, workflows: write"
+    assert g._perm_words(None) == "nothing recorded"
+    src = __import__("inspect").getsource(g.hold_delivery)
+    assert "delivery_credential_facts" in src and '"credential": credential' in src

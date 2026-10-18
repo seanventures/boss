@@ -62,3 +62,19 @@
   must_not:
     - retry again unchanged
     - classify it as an app code defect
+
+- id: push-403-compare-token-with-installation
+  origin: D2 2026-10-18, crun_4eec9642 delivery refused 403 three times
+  surface: step_recovery
+  context: >-
+    The push of .github/workflows/order-api.yml was refused 403. The failure now records that
+    BOSS's push token asked GitHub for contents/pull_requests/metadata/checks/statuses only,
+    while the App installation grants workflows: write as well.
+  input: (automatic) the build's delivery failed with 403 on a workflow file
+  expected: >-
+    Sees that the installation already grants workflows and the token did not ask for it, so
+    the fault is BOSS's credential request, not GitHub settings; says so and records it for BOSS
+    (a BOSS defect), instead of asking the operator to grant a permission GitHub already grants.
+  must_not:
+    - ask a person to grant a permission the installation already grants
+    - retry unchanged

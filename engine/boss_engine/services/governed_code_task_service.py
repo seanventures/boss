@@ -1225,22 +1225,68 @@ def delivery_failure_words(detail: str) -> str:
             "its review are done; Retry pushes and opens the pull request only.")
 
 
+def _perm_words(perms: Any) -> str:
+    if not isinstance(perms, dict) or not perms:
+        return "nothing recorded"
+    return ", ".join(f"{k}: {v}" for k, v in sorted(perms.items()))
+
+
+def delivery_credential_facts(connection, run_id: str) -> Optional[dict]:
+    """What the push credential for this run's repository asks GitHub for, and what the Setup
+    App's installation was last verified to grant. None when there is no Setup App. Never
+    raises: a failure explanation without these facts is still an explanation."""
+    try:
+        from ..identity import github_setup
+
+        point = connection.begin_nested()
+        try:
+            spec = connection.execute(sql("SELECT spec FROM code_task_runs WHERE id = :i"),
+                                      {"i": run_id}).scalar() or {}
+            if isinstance(spec, str):
+                spec = json.loads(spec)
+            full = f"{spec.get('owner') or ''}/{spec.get('repo') or ''}".lower()
+            row = connection.execute(sql(
+                "SELECT verified FROM identity_github_app LIMIT 1")).first()
+        finally:
+            point.rollback()
+        if row is None or full == "/":
+            return None
+        verified = row[0] if isinstance(row[0], dict) else json.loads(row[0] or "{}")
+        grants = {p.get("name"): p.get("granted") for p in (verified or {}).get("permissions") or []
+                  if p.get("granted")}
+        return {"repository": full,
+                "token_asks": github_setup.control_plane_permissions(connection, full),
+                "installation_grants": grants}
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def hold_delivery(connection, run_id: str, project_id: str, *, files: list[dict], summary: str,
                   quality_gate_id: Optional[str], branch: str, detail: str) -> dict:
     """A gated build whose push / pull request failed: keep what to deliver on the run
     (finalize_ctx.pending_delivery) and fail it `recoverable`, saying which operation failed.
     code_task_service.retry_code_task sees `pending_delivery` and redelivers only."""
     words = delivery_failure_words(detail)
+    # WHAT THE CREDENTIAL COULD DO, NEXT TO WHAT FAILED. A 403 alone sent the recovery agent to
+    # ask a person to grant `workflows` at GitHub — already granted on the installation, while
+    # the token BOSS minted had never asked for it (crun_4eec9642, D2). Facts, not a verdict:
+    # the agent reading the failure compares them itself.
+    credential = delivery_credential_facts(connection, run_id)
+    if credential:
+        words = (f"{words} BOSS's push token asked GitHub for "
+                 f"{_perm_words(credential.get('token_asks'))}; the App installation grants "
+                 f"{_perm_words(credential.get('installation_grants'))}.")
     connection.execute(sql(
         "UPDATE code_task_runs SET finalize_ctx = COALESCE(finalize_ctx,'{}'::jsonb) "
         "|| jsonb_build_object('pending_delivery', CAST(:d AS JSONB)) WHERE id = :id"),
         {"id": run_id, "d": json.dumps({
             "files": files, "summary": summary, "quality_gate_id": quality_gate_id,
             "branch": branch, "failed_operation": "push_and_pull_request",
-            "error": str(detail or "")[:500]})})
+            "error": str(detail or "")[:500], "credential": credential})})
     emit_event(connection, project_id, "code_task.delivery_held", "boss", "code_task_run", run_id,
                {"failed_operation": "push_and_pull_request", "files": len(files),
-                "quality_gate_id": quality_gate_id, "error": str(detail or "")[:300]})
+                "quality_gate_id": quality_gate_id, "error": str(detail or "")[:300],
+                "credential": credential})
     return {**_fail(connection, run_id, project_id, words, failure_class="recoverable",
                     reason_code="delivery_failed"), "delivery_held": True}
 
