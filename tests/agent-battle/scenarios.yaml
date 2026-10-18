@@ -133,7 +133,7 @@
   surface: talk_to_boss
   context: A drafted plan (not confirmed) is pending in the thread from an earlier message.
   input: >-
-    Question about helpdesk-ai on 2.29.2.202 (staging): did its latest deploy seed the demo
+    Question about helpdesk-ai on 203.0.113.10 (staging): did its latest deploy seed the demo
     users? Please read its container logs for 'Demo users seeded' … Do not change anything.
   expected: >-
     Sees this is a new, read-only question, answers it with read tools, and leaves the pending
