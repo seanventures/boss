@@ -157,6 +157,20 @@ def test_a_finding_about_the_new_test_writes_the_test_again_from_the_base(harnes
     assert row["review"]["lanes"]["diagnose"]["engine"] == "scripted"
 
 
+def test_a_secret_shaped_fixture_value_is_said_at_red_while_the_test_can_change(harness):
+    """The real-engine Replay A, fourth run: a test driving apply_on_host passed
+    apply_token="tok_new", and the final secret gate (rightly final) refused the whole self-fix.
+    The scan now also runs at RED, where Mender is told and the test can still change."""
+    from boss_engine.services import scripted_engine
+
+    row = _build(harness, "secret_in_test")["row"]
+    assert row["status"] == sf.AWAITING_APPROVAL, (row["refusal"], row["refusal_detail"])
+    assert row["gates"]["no_committed_secrets"]["ok"]
+    writes = [c for c in scripted_engine.run_state(row["id"]).calls
+              if c["stage"] == "self_fix_write_test"]
+    assert len(writes) == 2 and "secret-shaped values" in writes[1]["prompt_head"]
+
+
 def test_the_same_script_ends_the_same_way_twice(harness):
     first = _build(harness, "good_fix")["row"]
     with harness.eng.begin() as c:

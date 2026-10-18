@@ -425,6 +425,10 @@ def write_test_prompt(sfx: Mapping[str, Any], diagnosis: Mapping[str, Any],
         "- neutral fixtures only: example-app, example.com, RFC 5737 addresses (192.0.2.x, "
         "198.51.100.x, 203.0.113.x); never a name from this install;\n"
         "- no network, no real host (fake docker and fake hosts, as BOSS's own tests do);\n"
+        "- no secret-shaped value on any line you add: BOSS's secret scan refuses the whole "
+        "self-fix, with no second try, on a credential-named field or argument (token, "
+        "apply_token, password, key, secret) holding a value longer than three characters; "
+        "give such a field a placeholder of at most three characters (\"tok\", \"pw\");\n"
         "- no skip, xfail, early return or assertion that cannot fail.",
         call_path(work, entry, loc) if entry and work else "",
         safety_invariants(work, loc, entry) if work else "",
@@ -785,6 +789,7 @@ class Build:
                                       "a test that fails because of it.")
         symptom = str((self.sfx().get("evidence") or {}).get("symptom") or "")
         entry = entry_point(self.sfx(), work)
+        secrets_failed = False
         for attempt in range(MAX_RED_TRIES):
             self.turn(self.engines.builder, "self_fix_write_test",
                       write_test_prompt(self.sfx(), diagnosis, feedback, work=work), work,
@@ -800,6 +805,17 @@ class Build:
             new = [c.path for c in changes if c.after is not None]
             if not new:
                 feedback = "no test was written"
+                continue
+            # THE SECRET SCAN, early: the gate after the fix is final, so a fixture value that
+            # merely looks like a credential (the real-engine Replay A, fourth run: an
+            # apply_token="tok_new" argument) is said here, while the test can still be written
+            # again. The final gate is unchanged.
+            secrets = si.no_committed_secrets(changes)
+            secrets_failed = not secrets.ok
+            if secrets_failed:
+                # Left in place: the next turn changes only those values.
+                feedback = (f"{secrets.why}. Your test is still in place: change only those "
+                            "values, to placeholders of at most three characters.")
                 continue
             run, outcomes = self.runner(work, _test_ids(new), settings=self.settings,
                                         timeout=TEST_TIMEOUT)
@@ -817,8 +833,11 @@ class Build:
                 return tests
             feedback = why + (f"\nIts output:\n{run.output[-2000:]}" if run.output else "")
             if attempt + 1 < MAX_RED_TRIES:
-                for path in new:
-                    (work / path).unlink(missing_ok=True)
+                # Back to the base, not deleted: the test may have been appended to an existing
+                # file, which must stay as it is.
+                src.discard(work, new, base_sha)
+        if secrets_failed:
+            raise Stop("secrets", feedback.split(". Your test")[0])
         raise Stop("no_reproduction", feedback.split("\n")[0] if feedback else "no red test")
 
     def fix(self, work: Path, base_sha: str, diagnosis: dict[str, Any], tests: dict[str, str],
