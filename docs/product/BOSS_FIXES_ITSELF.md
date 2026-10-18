@@ -1230,3 +1230,27 @@ Attempt 10's fix (`stack_deploy.py`, +89 lines, plus +368 lines of tests appende
 - Called from `apply_on_host` after `join_resource_project`, before `retire_own_projects`.
 
 **End state: no real-model fix has been judged VERIFIED by the suite.** Three real-model fixes reached the card and went through approval, install and resume: attempts 5, 6 and 10. Each was rolled back by a harness gap, now fixed. On the corrected harness, all three pass the behaviour oracle outside the suite. Real-attempt spend: $32.81 of the $40 cap (ten attempts, about 2 h 45 min).
+
+**Attempt 11: VERIFIED on a real engine** (`461094fb9`; history: attempts 10 and 9, seeded with attempt 10's diff and its after-install verdict, noted as judged by the faulty harness; per-cause cap 3). Seats as before: Mender (diagnose, test, fix) on claude_code with Opus 5.5; code, regression and consistency seats on claude_code with Sonnet; security on Codex.
+
+| Attempt | Outcome | Cost · time |
+|---|---|---|
+| 11 | Mender read both earlier attempts. Every gate passed (red→green on 290a8215f, affected suites, P0 tier incl. private infrastructure, protected paths, scope, size, `drives_entry_point`, no weakened test, no secret). One repair round (a test-stage add); then all four seats PASS. Tier 3, `host_effect`. Approved through DecisionService, installed (stack ref → `ef7da857d`), BOSS restarted into it, the step resumed: the resumed deploy (plan again, apply) removed only app1 before `compose up` and freed port 8000, with no volume removed and no step failed. **VERIFIED** with outcome `new_cause`: the next real failure, `deploy:unwired:res-db` (Replay B), started its own self-fix. Recommendation `implemented`. **Behaviour oracle: PASS** on all three hosts. The name oracle fails 5/5, as it must for any design but the person's | $4.56 · 21 min 30 s |
+
+The fix (`stack_deploy.py` +90 lines; two new test files, +530 lines): attempt 10's design, refined.
+- `left_shared_projects` reads at apply time. It finds the shared projects this target's earlier releases on this host ran in, never the one the release runs in, nor one another active target on the host claims. For each, it lists the exact directories its services were started from: the target dir, `<dir>/releases/<commit>`, and `<…>/<workdir>`, plain paths only.
+- `leave_resource_projects` removes, one container at a time, only a container that meets all of these:
+  - its project label (read as JSON) is that project;
+  - its labels carry no `boss.resource`;
+  - its service is not `res-…`;
+  - its working dir, compared whole as JSON, is one of those directories.
+
+  It uses `docker rm -f` and exits non-zero on a failed removal. Never `compose rm`, `down` or `-v`.
+- It is wired in before `retire_own_projects`, so that function's guarded refusal (BOSS_NOT_THIS_APPS) still runs first and stops the deploy before anything is removed. This answers attempt 3's BLOCKER.
+
+Real-attempt spend for the feature: $37.37 of the $40 cap, eleven attempts, about 3 h 7 min.
+
+Confirmed after attempt 11:
+- scripted Replay A (full, not FAST): 6 passed;
+- the affected self-fix tests with the P0 private-infrastructure tests: 198 passed;
+- `scripts/test-tier.sh P0`: web 148 passed. API: four shards passed; two shards hung on an advisory-lock wait in their test database and were stopped, and their 42 tests passed when rerun alone. Engine: 482 passed, 1 failed. The failure, `test_a_workflow_follows_a_retry.py::…::test_the_governing_run_is_actually_passed_in`, counts `_successor_attempt(...)` calls in `workflow_capability_runner.py` (4, expects 3). It fails the same way at `d3bc9e4fe`, before this work; that file was changed by the earlier phase commits on this branch, not by these.
