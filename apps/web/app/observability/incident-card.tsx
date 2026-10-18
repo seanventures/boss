@@ -11,22 +11,26 @@
  *                         POST /tickets  GET /tickets/{id}
  *   CUSTOMER REPORTS      3 reports from support-desk  [T-1042] [T-1043]
  *   ROOT CAUSE            <statement>  (basis · confidence)
- *   RESPONSE              Run ↗  ● Investigate ● Build ● CI ○ Run report …   (or Respond + Respond automatically)
+ *   RESPONSE              Run ↗  ● Investigate ● Build ● CI ○ Run report …
+ *                         (or Respond · "Error rate responds automatically" · Alerts ↗)
  *   VERIFICATION          <summary>
  *   REPORT                View · Download .md · .json
  *
  * Each section only when it has data. The status chip is derived from the data
  * (incidentStatus), never sent. Respond starts the catalogue's Incident Response with the
  * view's own `respond_input`; a 409 consent_required opens the consent sheet and re-sends.
+ * Responding by itself is PER RULE, never per app (BOSSAPP-598): the card says which of the
+ * app's rules respond automatically and links to the Alerts tab (`atab=alerts`), where each is
+ * switched. There is no app-wide switch here.
  */
 import React, { useState } from "react";
 
 import { GatedButton } from "../../components/gated";
 import { usePolled } from "../../lib/factory-floor";
 import {
-  AUTO_RESPOND, RESPONSE_POLL_MS, RESPONSE_POLL_RUNNING_MS, STATUS_WORDS, basisWords, evidenceOf, incidentReportUrl,
+  RESPONSE_POLL_MS, RESPONSE_POLL_RUNNING_MS, STATUS_WORDS, basisWords, evidenceOf, incidentReportUrl,
   incidentResponseUrl, incidentRunHref, incidentStatus, parseIncidentResponse, pullRequestUrl, reportGroups,
-  responseRunning, responseStrip, sha7, stepTone, toldLine, type IncidentResponse,
+  autoRespondLine, responseRunning, responseStrip, sha7, stepTone, toldLine, type IncidentResponse,
 } from "../../lib/incident-response";
 import { useLocalTime } from "../../lib/local-time";
 import { pct } from "../../lib/obs-view";
@@ -37,6 +41,7 @@ import { showToast } from "../client-forms";
 import { ago, plainClick, useNow } from "../agents/live-util";
 import { post } from "../workflows/delivery-api";
 import { Dot, DrawerSection } from "../infra/kit";
+import { areaHref } from "../factory/cockpit-util";
 import { obsRead, obsWrite } from "./obs-write";
 import { leaveTo } from "./obs-util";
 
@@ -49,13 +54,14 @@ function Fact({ label, children, tip }: { label: string; children: React.ReactNo
   );
 }
 
-const AUTO_TIP = "Starts Incident Response by itself when an alert fires. Acts on your standing grant.";
+const AUTO_TIP = "A rule with Respond automatically on starts Incident Response by itself when it fires. Switch it per rule on the Alerts tab.";
 const VERIFY_TIP = "Judged by BOSS's monitor, not by the fixing agent";
 
 /** The card's body from one response view: pure render, so a fixture draws every section. */
-export function IncidentCardView({ projectId, r, now, busy, onRespond, onAuto, onTell, report, onView }: {
-  projectId: string; r: IncidentResponse; now: number | null; busy?: "respond" | "auto" | "tell" | null;
-  onRespond?: () => void; onAuto?: () => void; onTell?: () => void;
+export function IncidentCardView({ projectId, r, now, busy, onRespond, onAlerts, onTell, report, onView }: {
+  projectId: string; r: IncidentResponse; now: number | null; busy?: "respond" | "tell" | null;
+  /** Open the app's Alerts tab in place (the drawer); without it the link navigates. */
+  onRespond?: () => void; onAlerts?: () => void; onTell?: () => void;
   /** The report's markdown when View was pressed (null: not open; "": loading). */
   report?: string | null; onView?: () => void;
 }) {
@@ -73,6 +79,10 @@ export function IncidentCardView({ projectId, r, now, busy, onRespond, onAuto, o
   const runHref = run ? incidentRunHref(run.id) : null;
   const reportOpen = report !== null && report !== undefined;
   const confidence = typeof rca?.payload.confidence === "number" ? rca.payload.confidence : null;
+  const alertsHref = r.app?.targetId ? areaHref({ area: "observability", app: r.app.targetId, atab: "alerts" }) : null;
+  const autoTip = r.autoRespondRules.length
+    ? r.autoRespondRules.map((x) => (x.onBehalfOf ? `${x.label}: on ${x.onBehalfOf}'s standing grant` : x.label)).join("\n")
+    : AUTO_TIP;
 
   return (
     <DrawerSection label="INCIDENT" testId="obs-incident-card"
@@ -189,11 +199,12 @@ export function IncidentCardView({ projectId, r, now, busy, onRespond, onAuto, o
                          title="Start Incident Response: investigate, fix, ship, verify" onClick={onRespond}>
               {busy === "respond" ? "Starting…" : "Respond"}
             </GatedButton>
-            <span className="obs-inc-auto">
-              <GatedButton permission="integration:manage" type="button" role="switch" aria-checked={!!r.autoRespond?.enabled}
-                           aria-label="Respond automatically" className="obs-switch" data-testid="obs-incident-auto"
-                           disabled={!!busy} title={AUTO_TIP} onClick={onAuto} />
-              <span title={AUTO_TIP}>Respond automatically</span>
+            <span className="obs-inc-auto" data-testid="obs-incident-auto" data-rules={r.autoRespondRules.map((x) => x.kind).join(" ")}>
+              <span className={r.autoRespondRules.length ? undefined : "inf-faint"} title={autoTip}>{autoRespondLine(r.autoRespondRules)}</span>
+              {alertsHref ? (
+                <a className="inf-link" href={alertsHref} data-testid="obs-incident-alerts" title={AUTO_TIP}
+                   onClick={(e) => { if (onAlerts && plainClick(e)) { e.preventDefault(); onAlerts(); } }}>Alerts ↗</a>
+              ) : null}
             </span>
           </span>
         )}
@@ -230,11 +241,13 @@ export function IncidentCardView({ projectId, r, now, busy, onRespond, onAuto, o
 }
 
 /** The card, live: polls the response view (faster while a response runs) and does the writes. */
-export function IncidentCard({ projectId, actor, incidentId }: { projectId: string; actor: string; incidentId: string }) {
+export function IncidentCard({ projectId, actor, incidentId, onAlerts }: {
+  projectId: string; actor: string; incidentId: string; onAlerts?: () => void;
+}) {
   const polled = usePolled(projectId && incidentId ? incidentResponseUrl(projectId, incidentId) : null, parseIncidentResponse,
                            (d) => (d && responseRunning(d) ? RESPONSE_POLL_RUNNING_MS : RESPONSE_POLL_MS));
   const now = useNow(30_000);
-  const [busy, setBusy] = useState<"respond" | "auto" | "tell" | null>(null);
+  const [busy, setBusy] = useState<"respond" | "tell" | null>(null);
   const [report, setReport] = useState<string | null>(null);
   // A start refused for what the project lacks: the checklist and "Respond anyway" (one drawing, StartRefusal).
   const [refusal, setRefusal] = useState<PendingRefusal | null>(null);
@@ -269,23 +282,6 @@ export function IncidentCard({ projectId, actor, incidentId }: { projectId: stri
     }
     showToast("error", !res.ok && typeof res.error === "string" && res.error ? res.error : "Could not start the response");
   };
-  const toggleAuto = async () => {
-    if (busy) return;
-    setBusy("auto");
-    const sub = r.autoRespond;
-    const res = sub
-      ? await obsWrite(`/v1/event-subscriptions/${encodeURIComponent(sub.subscriptionId)}`,
-                       { project_id: projectId, enabled: !sub.enabled, actor }, { scope: "obs:auto-respond", label: "Respond automatically" }, "PATCH")
-      : await obsWrite("/v1/event-subscriptions", { project_id: projectId, ...AUTO_RESPOND, actor },
-                       { scope: "obs:auto-respond", label: "Respond automatically" });
-    setBusy(null);
-    if (res.ok) {
-      showToast("success", sub?.enabled ? "Automatic response off" : "Automatic response on");
-      polled.refresh();
-    } else {
-      showToast("error", res.error ?? "Could not change it");
-    }
-  };
   const tellAgain = async () => {
     if (busy) return;
     setBusy("tell");
@@ -309,7 +305,7 @@ export function IncidentCard({ projectId, actor, incidentId }: { projectId: stri
 
   return (
     <>
-      <IncidentCardView projectId={projectId} r={r} now={now} busy={busy} onRespond={() => void respond()} onAuto={toggleAuto}
+      <IncidentCardView projectId={projectId} r={r} now={now} busy={busy} onRespond={() => void respond()} onAlerts={onAlerts}
                         onTell={() => void tellAgain()}
                         report={report} onView={view} />
       {refusal ? <StartRefusal refusal={refusal} projectId={projectId} busy={busy === "respond"} onDismiss={() => setRefusal(null)} /> : null}

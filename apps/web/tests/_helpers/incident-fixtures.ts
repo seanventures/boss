@@ -42,7 +42,7 @@ export function incidentResponseWire(over: Record<string, unknown> = {}) {
                 steps: [{ step_id: "investigate", status: "succeeded" }, { step_id: "build", status: "succeeded" },
                         { step_id: "ci", status: "succeeded" }, { step_id: "report", status: "succeeded" },
                         { step_id: "deploy", status: "running" }] },
-    auto_respond: null,
+    auto_respond_rules: [],
     report_ready: true,
     respond_input: { incident_id: "inc_1", extends_run_id: "wfr_build_1", title: "helpdesk: 12.5% of requests failing",
                      directive: "Respond to the incident: helpdesk: 12.5% of requests failing." },

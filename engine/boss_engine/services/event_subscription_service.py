@@ -114,6 +114,16 @@ def event_type_matches(pattern: str, event_type: str) -> bool:
     return pattern == event_type
 
 
+def refuse_per_rule_only(sink_kind: str, sink_ref: str) -> None:
+    """A workflow sink may not start Incident Response (BOSSAPP-598: per rule, never per app).
+    Said at setup, not only at dispatch: a subscription that can never start anything must not
+    be saved as if it would."""
+    from .event_dispatch import PER_RULE_ONLY, PER_RULE_WORD
+
+    if sink_kind == "workflow" and sink_ref.strip() in PER_RULE_ONLY:
+        raise ValueError(PER_RULE_WORD + ".")
+
+
 def _row(row) -> dict[str, Any]:
     return {
         "id": row["id"],
@@ -285,6 +295,7 @@ def create_event_subscription(
     normalized_boundary = normalize_data_boundary(data_boundary)
     if not sink_ref.strip():
         raise ValueError("sink_ref must not be empty.")
+    refuse_per_rule_only(normalized_sink_kind, sink_ref)
     if normalized_sink_kind == "job" and authorize:
         # C-2: a job sink queues that kind of job on every matching event, so setting one up
         # needs the kind's own permission (and step-up) — `integration:manage` alone never
@@ -390,6 +401,17 @@ def update_event_subscription(
         assignments.append("config = CAST(:config AS JSONB)")
         params["config"] = json.dumps(config)
 
+    if sink_kind is not None or sink_ref is not None or enabled is True:
+        # Re-pointing or re-enabling a sink: the same refusal as creating it. A retired
+        # app-wide Respond automatically stays off; its row is kept for history.
+        current = connection.execute(text(
+            "SELECT sink_kind, sink_ref, enabled FROM event_subscriptions "
+            "WHERE id = :subscription_id AND project_id = :project_id"), params).mappings().first()
+        if current is not None:
+            will_be_on = enabled if enabled is not None else bool(current["enabled"])
+            if will_be_on:
+                refuse_per_rule_only(params.get("sink_kind", current["sink_kind"]),
+                                     params.get("sink_ref", current["sink_ref"]))
     if assignments:
         changed_fields = [item.split(" =", 1)[0] for item in assignments]
         assignments.append("updated_at = now()")
@@ -495,6 +517,7 @@ def ensure_event_subscription(
     enabled: bool = True,
     config: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
+    refuse_per_rule_only(validate_sink_kind(sink_kind), sink_ref)
     row = connection.execute(
         text(
             """

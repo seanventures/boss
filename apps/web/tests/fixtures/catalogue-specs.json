@@ -1536,7 +1536,7 @@
             "incident_id": {
               "type": "string",
               "title": "Incident",
-              "description": "The incident to respond to (Observability › the app's alert). An app's alert starts this for you when Respond automatically is on.",
+              "description": "The incident to respond to (Observability › the app's alert). An alert rule starts this for you when its Respond automatically is on (the app's Alerts tab).",
               "examples": [
                 "inc_0123456789ab"
               ]

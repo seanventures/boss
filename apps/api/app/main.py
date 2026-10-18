@@ -1440,6 +1440,19 @@ async def lifespan(_: FastAPI):
             print(f"[lifespan] orphaned deploy requests closed: {orphans}")
     except Exception as exc:  # noqa: BLE001 — never block boot on a repair
         print(f"[lifespan] refused-plan repair skipped: {exc}")
+    # INCIDENT RESPONSE STARTS PER RULE, NEVER PER APP (BOSSAPP-598). An app-wide "Respond
+    # automatically" subscription left from before becomes Respond automatically on the rules
+    # it answered, on the same person's grant, audited; then it is disabled (row kept).
+    try:
+        from boss_engine.services.app_alerts import retire_app_wide_response
+
+        with begin(engine) as connection:
+            retired = retire_app_wide_response(connection)
+        for r in retired:
+            print(f"[lifespan] app-wide Respond automatically {r['subscription_id']} moved onto "
+                  f"{len(r['rules'])} alert rule(s)")
+    except Exception as exc:  # noqa: BLE001 — never block boot on a migration
+        print(f"[lifespan] app-wide response retirement skipped: {type(exc).__name__}")
     # CONSOLIDATE THE LOGS. Everything BOSS writes about where time went — the sandbox's
     # per-command durations, the queueing-vs-work split, why a preview refused — went to a
     # container log an operator cannot open. From here it also lands in `app_logs`, which the

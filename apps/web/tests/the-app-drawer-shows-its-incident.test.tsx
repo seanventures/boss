@@ -2,15 +2,14 @@
 /**
  * The app drawer's Incident card (D2): an app's own alert, answered. The status chip is derived
  * from the response view (never sent); each section draws only when it has data; Respond starts
- * the catalogue's Incident Response with the view's own `respond_input`; Respond automatically
- * makes (or turns off) the `incident.opened` → `incident_response` subscription, asking for
- * consent when the API answers 409 consent_required; the report is viewable and downloadable.
+ * the catalogue's Incident Response with the view's own `respond_input`; the card says which of
+ * the app's rules respond automatically (per rule, never per app) and links to the Alerts tab,
+ * with no app-wide switch; the report is viewable and downloadable.
  */
 import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { IncidentCardView } from "../app/observability/incident-card";
-import { CONSENT_EVENT, type ConsentRequest } from "../lib/identity/consent";
 import { incidentStatus, parseIncidentResponse, responseStrip } from "../lib/incident-response";
 import { INCIDENT_NOW, incidentResponseWire } from "./_helpers/incident-fixtures";
 import { $, $$, click, mount, settle, unmount } from "./_helpers/live-render";
@@ -105,10 +104,10 @@ describe("the card", () => {
     expect($("[data-testid='obs-incident-report']")).toBeNull();
     expect(text($("[data-testid='obs-incident-reports']"))).toContain("3 reports from support-desk");
     expect(text($("[data-testid='obs-incident-respond']"))).toBe("Respond");
-    const auto = $("[data-testid='obs-incident-auto']");
-    expect(auto?.getAttribute("role")).toBe("switch");
-    expect(auto?.getAttribute("aria-checked")).toBe("false");
-    expect(auto?.getAttribute("title")).toContain("standing grant");
+    // no app-wide switch: which rules respond, and where to change that
+    expect($("[role='switch']")).toBeNull();
+    expect(text($("[data-testid='obs-incident-auto'] > span"))).toBe("No rule responds automatically");
+    expect($("[data-testid='obs-incident-alerts']")?.getAttribute("href")).toContain("atab=alerts");
   });
 
   it("says what each reporting app was told, and a failed call offers Send again (D2: two 404s went unsaid)", async () => {
@@ -163,46 +162,29 @@ describe("in the drawer", () => {
                                   input: incidentResponseWire().respond_input });
   });
 
-  it("Respond automatically subscribes, asking for consent when the API needs a standing grant", async () => {
-    let posts = 0;
-    const consent = { error: "consent_required", scope: "workflow_run", task: "Incident Response", task_run_id: null,
-                      agents: [{ id: "agt_sre", name: "SRE", role_key: "sre" }], permissions: ["workflow_run:start"], projects: ["p1"],
-                      durations: [{ kind: "standing", label: "Standing", days: 30 }], max_days: 30 };
-    const asked: ConsentRequest[] = [];
-    const onConsent = (e: Event) => { const d = (e as CustomEvent<ConsentRequest>).detail; asked.push(d); d.onDecided?.("dlg_1"); };
-    window.addEventListener(CONSENT_EVENT, onConsent);
-    try {
-      const rec = await openObs("?view=apps&app=t_down", { incident: incidentResponseWire(NO_RESPONSE) });
-      const fetchFn = globalThis.fetch as unknown as (i: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
-      vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-        if (String(input) === "/v1/event-subscriptions" && init?.method === "POST" && posts++ === 0) {
-          rec.writes.push({ url: String(input), method: "POST", body: JSON.parse(String(init.body)) });
-          return new Response(JSON.stringify(consent), { status: 409, headers: { "content-type": "application/json" } });
-        }
-        return fetchFn(input, init);
-      }));
-      await click($("[data-testid='obs-incident-auto']"));
-      await settle();
-      expect(asked.map((a) => a.task)).toEqual(["Incident Response"]);
-      const subs = rec.writes.filter((w) => w.url === "/v1/event-subscriptions");
-      expect(subs).toHaveLength(2);
-      expect(subs[1].body).toEqual({ project_id: "p1", event_type: "incident.opened", sink_kind: "workflow",
-                                     sink_ref: "incident_response", actor: "ceo" });
-    } finally {
-      window.removeEventListener(CONSENT_EVENT, onConsent);
-    }
+  it("says which rules respond automatically and links to the Alerts tab — no app-wide switch", async () => {
+    const rec = await openObs("?view=apps&app=t_down", {
+      incident: incidentResponseWire({ ...NO_RESPONSE, auto_respond_rules: [
+        { rule_id: "arule_er", kind: "error_rate", alert: "AppErrorRate", label: "Error rate", on_behalf_of: "Param" },
+        { rule_id: "arule_lat", kind: "latency_p95", alert: "AppLatencyP95", label: "p95 latency", on_behalf_of: "Param" }] }),
+    });
+    const card = $("[data-testid='obs-incident-card']");
+    expect(card?.querySelector("[role='switch']")).toBeNull();
+    expect(text($("[data-testid='obs-incident-auto']"))).toContain("Error rate and p95 latency respond automatically");
+    expect($("[data-testid='obs-incident-auto']")?.getAttribute("data-rules")).toBe("error_rate latency_p95");
+    const link = $("[data-testid='obs-incident-alerts']") as HTMLAnchorElement | null;
+    expect(link?.getAttribute("href")).toContain("atab=alerts");
+    expect(link?.getAttribute("href")).toContain("app=t_down");
+    await click(link);
+    await settle();
+    expect($("[data-testid='obs-app-tab-alerts']")?.getAttribute("aria-selected")).toBe("true");
+    expect(rec.writes.filter((w) => w.url.includes("event-subscriptions"))).toEqual([]);
   });
 
-  it("an existing subscription is turned off with a PATCH", async () => {
-    const rec = await openObs("?view=apps&app=t_down", {
-      incident: incidentResponseWire({ ...NO_RESPONSE, auto_respond: { subscription_id: "esub_1", enabled: true, on_behalf_of: "usr_1" } }),
-    });
-    expect($("[data-testid='obs-incident-auto']")?.getAttribute("aria-checked")).toBe("true");
-    await click($("[data-testid='obs-incident-auto']"));
-    await settle();
-    const w = rec.writes.find((x) => x.url === "/v1/event-subscriptions/esub_1");
-    expect(w?.method).toBe("PATCH");
-    expect(w?.body).toEqual({ project_id: "p1", enabled: false, actor: "ceo" });
+  it("says plainly when no rule responds by itself", async () => {
+    await openObs("?view=apps&app=t_down", { incident: incidentResponseWire(NO_RESPONSE) });
+    expect(text($("[data-testid='obs-incident-auto']"))).toContain("No rule responds automatically");
+    expect($("[data-testid='obs-incident-respond']")).not.toBeNull();
   });
 
   it("Send again posts the incident to its reporters once more", async () => {

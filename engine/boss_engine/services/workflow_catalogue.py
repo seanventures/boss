@@ -473,10 +473,11 @@ CATALOGUE: list[dict[str, Any]] = [
         ]),
     },
     {
-        # AN APP'S OWN ALERT, ANSWERED (services/incident_response.py). Started by the
-        # `incident.opened` event an app's error-rate alert emits (an event subscription the
-        # operator turns on) or by Respond on the incident; its input is the event's data:
-        # incident_id, extends_run_id (the app's build lineage), title, directive.
+        # AN APP'S OWN ALERT, ANSWERED (services/incident_response.py). Started by an alert
+        # rule whose Respond automatically is on (per rule, on the app's Alerts tab; never by
+        # an app-wide event subscription — event_dispatch.PER_RULE_ONLY) or by Respond on the
+        # incident; its input: incident_id, extends_run_id (the app's build lineage), title,
+        # directive.
         "key": "incident_response",
         "name": "Incident Response",
         "description": "An app's alert fired. Investigate, fix the root cause with a regression "
@@ -926,8 +927,8 @@ _FIELD_TEXT: dict[str, dict[str, Any]] = {
                                 "attacks its API, only inside the scan's own sandbox."},
     "incident_id": {"type": "string", "title": "Incident",
                     "description": "The incident to respond to (Observability › the app's "
-                                   "alert). An app's alert starts this for you when "
-                                   "Respond automatically is on.",
+                                   "alert). An alert rule starts this for you when its "
+                                   "Respond automatically is on (the app's Alerts tab).",
                     "examples": ["inc_0123456789ab"]},
     "notify_channel": {"type": "string", "title": "Who to tell",
                        "description": "Where the outcome is posted: email:someone@example.com or "

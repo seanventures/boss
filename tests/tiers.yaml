@@ -133,6 +133,7 @@ P1:
     - engine/tests/test_alert_rules_mean_the_same_to_boss_and_prometheus.py
     - engine/tests/test_app_alerts.py
     - engine/tests/test_an_app_incident_is_responded_to.py
+    - engine/tests/test_incident_response_starts_per_rule_never_per_app.py
   api:
     # Approvals
     - apps/api/tests/test_an_approval_shows_what_it_will_send.py

@@ -35,8 +35,9 @@ DISPATCHABLE_EVENT_TYPES = frozenset(
         "github.issue_comment",
         "github.pr_opened",
         "github.pr_review",
-        # An app's own error-rate alert opened / resolved an incident (incident_response):
-        # the door a "respond to incidents" workflow subscription starts from.
+        # An app's alert opened / resolved an incident (incident_response). Any workflow may
+        # follow it EXCEPT Incident Response itself, which only a rule's own Respond
+        # automatically starts (PER_RULE_ONLY below).
         "incident.opened",
         "incident.resolved",
     }
@@ -50,6 +51,17 @@ _BOUNDARY_RANK = {
     "local-only": 4,
 }
 _CACHE_TTL_SECONDS = 5.0
+
+#: INCIDENT RESPONSE STARTS PER RULE, NEVER PER APP (BOSSAPP-598). An app-wide switch (the
+#: incident card's old "Respond automatically", an `incident.opened` workflow subscription)
+#: answered every alert of every app the same way; the person now chooses per alert rule on the
+#: app's Alerts tab. So the only unattended door that may start these workflows is an alert
+#: rule's own Respond automatically (door PER_RULE_DOOR); every other door is refused here, in
+#: the one function every unattended start goes through.
+PER_RULE_ONLY = frozenset({"incident_response"})
+PER_RULE_DOOR = "alert_rule"
+PER_RULE_WORD = ("Incident Response starts per alert rule: turn on Respond automatically for "
+                 "the rule on the app's Alerts tab")
 _subscription_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
 _cache_lock = threading.RLock()
 
@@ -118,6 +130,11 @@ def start_workflow_on_grant(
 
     extra = {"project_id": project_id, "workflow_key": workflow_key, "door": door,
              "door_id": door_id, **(log_extra or {})}
+    if workflow_key in PER_RULE_ONLY and door != PER_RULE_DOOR:
+        logger.warning("event_dispatch.per_rule_only", extra=extra)
+        return {"run_id": None, "lost_reason": None, "word": PER_RULE_WORD,
+                "entry": {"kind": "workflow", "refused": True, "workflow_key": workflow_key,
+                          "reason": "per_rule_only"}}
     active = connection.execute(
         text("SELECT active_version_id FROM workflow_definitions "
              "WHERE project_id = :p AND workflow_key = :k"),

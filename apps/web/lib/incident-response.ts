@@ -20,6 +20,9 @@ export type IncidentStep = { stepId: string; status: string };
 export type IncidentTold = { appName: string; signalId: string | null; status: string; ok: boolean; http: number | null;
                              word: string; at: string | null };
 
+/** One alert rule whose Respond automatically is on (switched on the app's Alerts tab). */
+export type AutoRespondRule = { ruleId: string; kind: string; alert: string; label: string; onBehalfOf: string | null };
+
 export type IncidentResponse = {
   incident: { id: string; title: string; service: string; severity: string; status: string;
               confidence: number | null; firstSeen: string | null; lastSeen: string | null };
@@ -34,7 +37,8 @@ export type IncidentResponse = {
   told: IncidentTold[];
   response: { id: string; status: string; startedAt: string | null; steps: IncidentStep[];
               pullRequestUrl: string | null } | null;
-  autoRespond: { subscriptionId: string; enabled: boolean; onBehalfOf: string | null } | null;
+  /** The app's rules that start Incident Response by themselves (per rule, never per app). */
+  autoRespondRules: AutoRespondRule[];
   reportReady: boolean;
   respondInput: Record<string, unknown>;
 };
@@ -48,7 +52,6 @@ export function parseIncidentResponse(w: unknown): IncidentResponse {
   const rule = a ? obj(a.rule) : {};
   const v = o.verification ? obj(o.verification) : null;
   const r = o.response ? obj(o.response) : null;
-  const auto = o.auto_respond ? obj(o.auto_respond) : null;
   return {
     incident: { id: str(i.id), title: str(i.title), service: str(i.service), severity: str(i.severity), status: str(i.status),
                 confidence: optNum(i.confidence), firstSeen: optStr(i.first_seen), lastSeen: optStr(i.last_seen) },
@@ -75,7 +78,11 @@ export function parseIncidentResponse(w: unknown): IncidentResponse {
     response: r ? { id: str(r.id), status: str(r.status), startedAt: optStr(r.started_at),
                     steps: arr(r.steps).map((x) => { const y = obj(x); return { stepId: str(y.step_id), status: str(y.status) }; }),
                     pullRequestUrl: optStr(r.pull_request_url) } : null,
-    autoRespond: auto ? { subscriptionId: str(auto.subscription_id), enabled: auto.enabled === true, onBehalfOf: optStr(auto.on_behalf_of) } : null,
+    autoRespondRules: arr(o.auto_respond_rules).map((x) => {
+      const y = obj(x);
+      return { ruleId: str(y.rule_id), kind: str(y.kind), alert: str(y.alert), label: str(y.label) || str(y.alert),
+               onBehalfOf: optStr(y.on_behalf_of) };
+    }),
     reportReady: o.report_ready === true,
     respondInput: obj(o.respond_input),
   };
@@ -186,8 +193,13 @@ export const incidentReportUrl = (projectId: string, incidentId: string, format:
 /** The run, opened in Workflows (the console's run page). */
 export const incidentRunHref = (runId: string) => `?area=delivery_workflows&wfr=${enc(runId)}`;
 
-/** The event subscription "Respond automatically" makes (POST /v1/event-subscriptions). */
-export const AUTO_RESPOND = { event_type: "incident.opened", sink_kind: "workflow", sink_ref: "incident_response" } as const;
+/** "Error rate responds automatically" / "Error rate and p95 latency respond automatically" / "No rule responds automatically". */
+export function autoRespondLine(rules: AutoRespondRule[]): string {
+  const names = rules.map((r) => r.label);
+  if (!names.length) return "No rule responds automatically";
+  const list = names.length === 1 ? names[0] : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+  return `${list} respond${names.length === 1 ? "s" : ""} automatically`;
+}
 export const RESPONSE_POLL_MS = 30_000;
 export const RESPONSE_POLL_RUNNING_MS = 10_000;
 

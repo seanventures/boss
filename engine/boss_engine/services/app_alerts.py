@@ -1611,6 +1611,123 @@ def respond_link(connection, project_id: str, rule_name: str) -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------------- #
+# Retiring the app-wide Respond automatically (per rule, never per app)
+# --------------------------------------------------------------------------- #
+#: The audit's reason for a rule the retirement switched on.
+RETIRED_REASON = ("Moved from the app-wide Respond automatically ({sub}), which {who} switched "
+                  "on; it runs on the same standing grant. Incident Response now starts per "
+                  "rule.")
+
+
+def _fed_targets(connection, project_id: str) -> list[dict[str, Any]]:
+    """The apps whose incidents an app-wide subscription answered: every app with an incident
+    the monitor or an alert raised. None on record: every app in the project (what the
+    subscription covered)."""
+    ids = connection.execute(sql(
+        "SELECT DISTINCT t FROM ("
+        " SELECT finalize_ctx->'app'->>'target_id' AS t FROM incidents WHERE project_id = :p"
+        " UNION SELECT a.target_id FROM app_alerts a WHERE a.project_id = :p"
+        "   AND a.incident_id IS NOT NULL) x WHERE t IS NOT NULL"),
+        {"p": project_id}).scalars().all()
+    rows = [dict(r) for r in connection.execute(sql(
+        "SELECT * FROM deployment_targets WHERE project_id = :p "
+        "AND (CAST(:none AS BOOLEAN) OR id = ANY(:ids)) ORDER BY id"),
+        {"p": project_id, "ids": list(ids), "none": not ids}).mappings().all()]
+    return [r for r in rows if r.get("app_name") and r.get("environment")]
+
+
+def _fed_rules(connection, target: dict, rules_now: list[dict[str, Any]]) -> list[dict]:
+    """The app's rules that fed its incidents, and (the subscription followed every
+    `incident.opened`, so it covered them all) every serving rule: error rate, latency, no
+    traffic and any rule in their group. Always the error-rate rule."""
+    fed = set(connection.execute(sql(
+        "SELECT DISTINCT rule_id FROM app_alerts WHERE target_id = :t AND incident_id IS NOT "
+        "NULL AND rule_id IS NOT NULL"), {"t": target["id"]}).scalars().all())
+    return [r for r in rules_now
+            if r["id"] in fed or r["kind"] == "error_rate" or group_of(r) == SERVING]
+
+
+def retire_app_wide_response(connection, *, now: Optional[datetime] = None
+                             ) -> list[dict[str, Any]]:
+    """THE INCIDENT CARD'S APP-WIDE "Respond automatically" BECOMES PER-RULE SWITCHES, without
+    losing what the person chose. Each enabled workflow subscription that starts Incident
+    Response (event_dispatch.PER_RULE_ONLY) is migrated once:
+
+      * the rules that fed its incidents (and every serving rule; at least error rate) of each
+        app it answered get Respond automatically on — triage too, which a response follows —
+        on the SAME person's standing grant the subscription ran on, each change in the rule's
+        audit (app_alert_rule_changes) by `boss`, naming the subscription and the person;
+      * then the subscription is disabled, its row kept for history (`config.retired`).
+
+    Idempotent: a retired subscription is disabled, so it is never migrated twice; a rule
+    already on is left as its owner set it. Returns what moved, per subscription."""
+    from .event_dispatch import PER_RULE_ONLY, invalidate_subscription_cache
+    from .event_subscription_service import event_type_matches
+    from .incident_response import _person
+
+    now = now or _now()
+    subs = [dict(r) for r in connection.execute(sql(
+        "SELECT id, project_id, event_type, on_behalf_of, grant_id FROM event_subscriptions "
+        "WHERE sink_kind = 'workflow' AND sink_ref = ANY(:k) AND enabled ORDER BY created_at"),
+        {"k": sorted(PER_RULE_ONLY)}).mappings().all()]
+    out = []
+    for sub in subs:
+        link = ({"on_behalf_of": sub["on_behalf_of"], "grant_id": sub["grant_id"]}
+                if sub.get("on_behalf_of") else None)
+        who = _person(connection, sub["on_behalf_of"]) if sub.get("on_behalf_of") else "BOSS"
+        moved: list[dict[str, Any]] = []
+        if event_type_matches(sub["event_type"], "incident.opened"):
+            for target in _fed_targets(connection, sub["project_id"]):
+                for rule in _fed_rules(connection, target, ensure_rules(connection, target)):
+                    if rule.get("auto_respond"):
+                        continue
+                    before = _snapshot(rule)
+                    after = {**before, "auto_respond": True, "triage": True}
+                    connection.execute(sql(
+                        "UPDATE app_alert_rules SET auto_respond = true, triage = true, "
+                        " respond_link = CAST(:link AS JSONB), changed_by = 'boss', "
+                        " changed_at = :now WHERE id = :id"),
+                        {"id": rule["id"], "now": now,
+                         "link": json.dumps(link) if link else None})
+                    _audit(connection, rule, "edited", before, after, "boss",
+                           RETIRED_REASON.format(sub=sub["id"], who=who), now)
+                    moved.append({"rule_id": rule["id"], "target_id": target["id"],
+                                  "kind": rule["kind"], "alert": rule["alert"]})
+        retired = {"at": _iso(now), "by": "boss", "rules": [m["rule_id"] for m in moved],
+                   "reason": "Incident Response starts per alert rule now (the app's Alerts "
+                             "tab); this app-wide switch was moved onto its rules."}
+        connection.execute(sql(
+            "UPDATE event_subscriptions SET enabled = false, updated_at = :now, "
+            "config = config || CAST(:c AS JSONB) WHERE id = :i"),
+            {"i": sub["id"], "now": now, "c": json.dumps({"retired": retired})})
+        emit_event(connection, sub["project_id"], "event_subscription.retired", "boss",
+                   "event_subscription", sub["id"],
+                   {"rules": moved, "on_behalf_of": sub.get("on_behalf_of"),
+                    "reason": retired["reason"]})
+        invalidate_subscription_cache(sub["project_id"])
+        out.append({"subscription_id": sub["id"], "project_id": sub["project_id"],
+                    "on_behalf_of": sub.get("on_behalf_of"), "rules": moved})
+    return out
+
+
+def auto_responding(connection, target_id: Optional[str]) -> list[dict[str, Any]]:
+    """The app's rules that start Incident Response by themselves (the incident card says which,
+    and links to the Alerts tab where each is switched)."""
+    if not target_id:
+        return []
+    rows = connection.execute(sql(
+        "SELECT * FROM app_alert_rules WHERE target_id = :t AND enabled AND auto_respond "
+        "ORDER BY array_position(ARRAY['error_rate','latency_p95','health_check','no_traffic',"
+        " 'deploy_health','custom'], kind), created_at"), {"t": target_id}).mappings().all()
+    out = []
+    for r in map(_rule_dict, rows):
+        out.append({"rule_id": r["id"], "kind": r["kind"], "alert": r["alert"],
+                    "label": BUILTIN.get(r["kind"], {}).get("label") or r["alert"],
+                    "on_behalf_of": (r.get("respond_link") or {}).get("on_behalf_of")})
+    return out
+
+
+# --------------------------------------------------------------------------- #
 # Changing rules and silences (audited)
 # --------------------------------------------------------------------------- #
 class RuleRefused(ValueError):
@@ -1820,6 +1937,7 @@ def export_rules(rule_rows: list[dict[str, Any]], group: str = "boss") -> dict[s
 
 
 __all__ = ["BUILTIN", "KINDS", "NO_MODEL_WORD", "RESOLVE_WINDOW", "RUNBOOKS", "RuleRefused",
-           "end_silence", "ensure_rules", "evaluate_rule", "evaluate_target", "export_rules",
-           "fingerprint", "group_of", "incident_key", "local_store", "record_signal", "render",
-           "silence", "sweep", "triage_alert", "triage_pending", "update_rule"]
+           "auto_responding", "end_silence", "ensure_rules", "evaluate_rule", "evaluate_target",
+           "export_rules", "fingerprint", "group_of", "incident_key", "local_store",
+           "record_signal", "render", "retire_app_wide_response", "silence", "sweep",
+           "triage_alert", "triage_pending", "update_rule"]

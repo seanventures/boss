@@ -191,7 +191,7 @@ export function AppDrawer({ projectId, actor, url, go, pulse, targetId, row }: O
           </div>
 
           {d.metrics.alert?.incidentId ? (
-            <IncidentCard projectId={projectId} actor={actor} incidentId={d.metrics.alert.incidentId} />
+            <IncidentCard projectId={projectId} actor={actor} incidentId={d.metrics.alert.incidentId} onAlerts={() => setTab("alerts")} />
           ) : null}
 
           <LatencyChart series={d.series} pins={d.pins} incidents={d.incidents} fromIso={d.window.from} toIso={d.window.to} label={name} />

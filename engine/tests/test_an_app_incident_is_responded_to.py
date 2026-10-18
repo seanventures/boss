@@ -372,13 +372,13 @@ def test_recovery_is_judged_by_the_monitor_and_the_report_keeps_spend_apart(pg, 
 
 # ── The whole path, through the real runner (the D2 plumbing check) ─────────────────────────
 def test_an_alert_is_answered_end_to_end_by_incident_response(pg, app, monkeypatch):
-    """Alert -> incident.opened -> Incident Response (started by the event) -> investigate
-    (metrics x logs x diff) -> the fix built AS THE APP'S NEXT CHANGE with the brief -> CI ->
+    """Alert -> incident -> Incident Response (started by the rule's Respond automatically) ->
+    investigate (metrics x logs x diff) -> the fix built AS THE APP'S NEXT CHANGE with the brief -> CI ->
     a person approves the deploy -> recovery judged from BOSS's own scrapes -> the report.
 
     The build, CI and the deploy are fakes that land finished rows where the runner looks; the
     monitor, the investigation, the recovery check and the report are real."""
-    from boss_engine.services import event_dispatch, event_subscription_service as subs
+    from boss_engine.services import event_dispatch
     from boss_engine.services import workflow_capability_runner as runner
     from boss_engine.services import workflow_catalogue as wc
     from .test_a_failed_step_stops_the_run import _insert_awaited
@@ -468,22 +468,26 @@ def test_an_alert_is_answered_end_to_end_by_incident_response(pg, app, monkeypat
                     "ci_status": "passed"}
         monkeypatch.setattr(runner, "_start_ci_wait", ci_passed)
 
-        # THE ALERT'S OWN EVENT STARTS THE RESPONSE (a subscription; no person in this test)
-        # (this bare test project has no model, repository or release manager: accepted, as an
-        # operator can when setting a subscription up — the readiness refusal is its own test)
-        subs.create_event_subscription(c, pid, "incident.opened", "workflow",
-                                       "incident_response", actor="test",
-                                       config={"start_anyway": ["model", "repository",
-                                                                "role:release_manager"]})
-        event_dispatch.invalidate_subscription_cache(pid)
+        # THE ALERT'S OWN RULE STARTS THE RESPONSE: Respond automatically on the error-rate
+        # rule (per rule, never per app; no person in this test). This bare test project has
+        # no model, repository or release manager: accepted here — the readiness refusal is
+        # its own test.
+        from boss_engine.services import app_alerts as aa
+
         data = c.execute(text("SELECT data FROM events WHERE id = :e"),
                          {"e": fired["alert"]["event_id"]}).scalar()
-        started = event_dispatch.dispatch_event(
-            c, event_id=fired["alert"]["event_id"], project_id=pid,
-            event_type="incident.opened", actor="monitor", entity_type="incident",
-            entity_id=data["incident_id"], data=data)
-        assert any(s.get("run_id") for s in started), started
-        run_id = next(s["run_id"] for s in started if s.get("kind") == "workflow")
+        alert_row = dict(c.execute(text(
+            "SELECT * FROM app_alerts WHERE incident_id = :i AND rule_kind = 'error_rate'"),
+            {"i": data["incident_id"]}).mappings().first())
+        with eng.begin() as switch:   # committed: the scrapes below update the same rule
+            switch.execute(text("UPDATE app_alert_rules SET auto_respond = true WHERE id = :r"),
+                           {"r": alert_row["rule_id"]})
+        real_start = event_dispatch.start_workflow_on_grant
+        monkeypatch.setattr(event_dispatch, "start_workflow_on_grant", lambda conn, **kw: (
+            real_start(conn, **kw, start_anyway=["model", "repository", "role:release_manager"])))
+        got = aa._respond(c, alert_row, data["incident_id"], now - timedelta(minutes=8))
+        assert got and got.get("run_id"), got
+        run_id = got["run_id"]
 
         # recovery: the fixed release serves cleanly, scraped after it shipped
         app.body = orders_page(30, 0, 30)

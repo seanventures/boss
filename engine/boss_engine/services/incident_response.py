@@ -17,7 +17,9 @@ THIS MODULE IS THE MISSING MIDDLE, in five parts:
   * `on_alert`        — when the alert opens: record the serving release (commit, ref, when, by
                         whom), the previous healthy release, the failing routes and the build
                         lineage that owns the app, as incident evidence; emit `incident.opened`
-                        (a dispatchable event: a subscription can start a workflow on it).
+                        (a dispatchable event: a subscription can start a workflow on it —
+                        any but Incident Response, which only a rule's own Respond
+                        automatically starts).
   * `investigate`     — correlate the three things an SRE looks at: the app's own metrics (which
                         routes fail, from when), its logs (read-only, from its containers on its
                         host, redacted), and the release diff (GitHub compare previous..serving).
@@ -951,10 +953,13 @@ def response_view(connection, project_id: str, incident_id: str) -> Optional[dic
                 {"r": run_id}).scalar()
             run = {"id": row["id"], "status": row["status"], "started_at": _iso(row["created_at"]),
                    "steps": steps, "pull_request_url": pr}
-    auto = connection.execute(sql(
-        "SELECT id, enabled, on_behalf_of FROM event_subscriptions WHERE project_id = :p AND "
-        "event_type = :e AND sink_kind = 'workflow' AND sink_ref = :k"),
-        {"p": project_id, "e": EVENT_OPENED, "k": WORKFLOW_KEY}).mappings().first()
+    # WHICH RULES RESPOND BY THEMSELVES: per rule, never per app (BOSSAPP-598). The card says
+    # which, and links to the app's Alerts tab where each is switched.
+    from .app_alerts import auto_responding
+
+    auto = [{**r, "on_behalf_of": _person(connection, r["on_behalf_of"])
+             if r["on_behalf_of"] else None}
+            for r in auto_responding(connection, (ctx.get("app") or {}).get("target_id"))]
     report_ready = bool(connection.execute(sql(
         "SELECT 1 FROM sre_postmortems WHERE incident_id = :i AND "
         "payload->>'kind' = 'incident_report'"), {"i": incident_id}).first())
@@ -967,8 +972,7 @@ def response_view(connection, project_id: str, incident_id: str) -> Optional[dic
         "reported_only": bool(ctx.get("reported_only")),
         "evidence": evidence, "reports": reports, "told": _told(connection, incident_id),
         "response": run,
-        "auto_respond": {"subscription_id": auto["id"], "enabled": bool(auto["enabled"]),
-                         "on_behalf_of": auto["on_behalf_of"]} if auto else None,
+        "auto_respond_rules": auto,
         "report_ready": report_ready,
         "respond_input": {"incident_id": incident_id,
                           "extends_run_id": (ctx.get("deploy") or {}).get("extends_run_id"),
