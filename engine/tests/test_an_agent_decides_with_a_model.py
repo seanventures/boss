@@ -169,7 +169,7 @@ def test_a_captain_sentence_is_decided_by_a_model_and_a_command_word_is_not():
 
     assert mc.decide_free_text(None, SETTINGS, "p", "overwatch",
                                mc.interpret_turn("overwatch"))["intent"] == "overwatch"
-    said = "the login page should be fixed"
+    said = "fix the login page"
     parsed = mc.interpret_turn(said)
     assert parsed["intent"] == "act", "the keyword reading, a hint"
     got = mc.decide_free_text(None, SETTINGS, "p", said, parsed,
