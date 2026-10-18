@@ -414,6 +414,12 @@ class Replay:
         else:
             monkeypatch.setenv(scripted_engine.ENABLE_ENV, "1")
             monkeypatch.setenv("BOSS_SCRIPTED_SELF_FIX", f"good_fix:{FIXTURE}")
+        cap = (os.environ.get("BOSS_SELF_FIX_REPLAY_ATTEMPTS_CAP") or "").strip()
+        if cap:
+            # An operator who raised the per-cause cap (a setting, not a gate) so that a cause
+            # with recorded attempts may be tried again.
+            self.settings = self.settings.model_copy(
+                update={"self_fix_attempts_per_signature": int(cap)})
         test_db = os.environ.get("BOSS_TEST_DATABASE_URL")
         if test_db:
             monkeypatch.setenv("BOSS_SELF_FIX_TEST_DATABASE_URL", test_db)
