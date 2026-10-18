@@ -518,7 +518,13 @@ def told_reporters(connection, incident_id: str) -> list[dict[str, Any]]:
                     "signal_id": p.get("signal_id"), "status": p.get("status"),
                     "ok": bool(p.get("ok")), "http": p.get("http"), "word": p.get("word"),
                     "refs": p.get("refs"), "at": r["created_at"].isoformat()})
-    return out
+    # A call recorded before calls were addressed per signal (no signal_id) is superseded by any
+    # later call to the same app: it is the same report, told again (D2: the 404 line stayed
+    # beside the "Told" one after Send again).
+    latest = {}
+    for t in out:
+        latest[t["target_id"]] = max(latest.get(t["target_id"], ""), t["at"])
+    return [t for t in out if t["signal_id"] or t["at"] >= latest[t["target_id"]]]
 
 
 def tell_reporters_again(connection, settings: Any, project_id: str,

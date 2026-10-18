@@ -507,3 +507,8 @@ def test_an_alert_is_answered_end_to_end_by_incident_response(pg, app, monkeypat
     assert rep["kind"] == "incident_report" and rep["root_cause"]["suspect_commit"] == "b" * 40
     kinds = [t["kind"] for t in rep["timeline"]]
     assert {"alert", "deployment", "rca_hypothesis", "verification", "deploy"} <= set(kinds)
+    # the person's release approval is in the timeline, with who (D2: only "Step approve
+    # succeeded" was, and an independent check read the fix deploy as unapproved)
+    approvals = [t["what"] for t in rep["timeline"] if t["kind"] == "approval"]
+    assert any(w.startswith("Approve the release") and w.endswith("approved by ceo")
+               for w in approvals), approvals

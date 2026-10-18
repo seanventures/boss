@@ -776,10 +776,19 @@ def _timeline(connection, inc: dict, workflow_run_id: Optional[str]) -> list[dic
             items.append({"at": _iso(e["created_at"]), "kind": e["kind"], "what": words()})
     if workflow_run_id:
         for s in connection.execute(sql(
-                "SELECT step_id, status, output, created_at, updated_at FROM workflow_step_runs "
-                "WHERE workflow_run_id = :w AND status IN ('succeeded', 'failed') "
-                "ORDER BY updated_at"), {"w": workflow_run_id}).mappings().all():
+                "SELECT s.step_id, s.status, s.output, s.created_at, s.updated_at, "
+                "       d.approved_by, d.approved_at, d.question "
+                "FROM workflow_step_runs s LEFT JOIN decisions d ON d.id = s.decision_id "
+                "WHERE s.workflow_run_id = :w AND s.status IN ('succeeded', 'failed') "
+                "ORDER BY s.updated_at"), {"w": workflow_run_id}).mappings().all():
             out = _json(s["output"]) or {}
+            if s["approved_at"] and s["approved_by"]:
+                # WHO APPROVED IS THE FACT. A person's gate on the response (the release approval)
+                # is the approval of what it deploys; "Step approve succeeded" did not say who
+                # (D2: the independent check could not tell the fix deploy was approved).
+                items.append({"at": _iso(s["approved_at"]), "kind": "approval",
+                              "what": f"{(s['question'] or s['step_id']).split(' — ')[0]} approved by "
+                                      f"{_person(connection, s['approved_by'])}"})
             what = f"Step {s['step_id']} {s['status']}"
             if out.get("pull_request_url"):
                 what += f" — {out['pull_request_url']}"

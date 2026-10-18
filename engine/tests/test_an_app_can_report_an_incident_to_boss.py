@@ -300,3 +300,11 @@ def test_the_resolution_and_root_cause_go_back_to_the_reporter(pg, desk):
         again = sig.tell_reporters_again(c, get_settings(), pid, got["incident_id"])
         said = sig.told_reporters(c, got["incident_id"])
     assert again[0]["ok"] and [t["ok"] for t in said] == [True]
+    # a call recorded before calls named the signal is superseded by a later one to that app
+    with eng.begin() as c:
+        c.execute(text("INSERT INTO incident_evidence (id, incident_id, kind, ref, payload, created_at) "
+                       "VALUES (:id, :i, 'reporter_notified', :t, CAST(:p AS JSONB), now() - interval '1 hour')"),
+                  {"id": "ev_legacy_" + uuid4().hex[:6], "i": got["incident_id"], "t": helpdesk,
+                   "p": json.dumps({"ok": False, "http": 404, "status": "resolved", "refs": 1})})
+        said = sig.told_reporters(c, got["incident_id"])
+    assert [(t["signal_id"], t["ok"]) for t in said] == [("r-1", True)]
