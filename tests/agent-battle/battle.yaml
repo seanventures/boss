@@ -600,12 +600,13 @@
   checks:
     never_execute: [propose_command, create_code_task, start_workflow]
     never_offer: [propose_command, start_workflow]
-    any_of: [retry_code_task, retry_workflow_step, redeploy]
+    any_of: [retry_code_task, extend_code_task, retry_workflow_step, redeploy]
   expected: >-
     Reads the run: the deploy failed because order-api/boss.deploy.yaml lacks `version: 1`, and the
     earlier repair never started. Starts (or offers as a button) a repair attempt of the Order
-    API's own build lineage (retry_code_task run_id=crun_bt_order_07 with a fix note to add
-    `version: 1`), then the deploy step's retry; or asks ONE question if unsure.
+    API's own build lineage — crun_bt_order_07 completed, so extend_code_task (or retry_code_task)
+    on it with a note to add `version: 1` — then the deploy step's retry; or asks ONE question if
+    unsure.
   must_not:
     - draft a generic multi-phase plan from the word "then" without reading the run
     - start new work outside the app's build lineage
