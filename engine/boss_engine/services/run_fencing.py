@@ -199,6 +199,12 @@ def guarded_status(
     clause = "status = :st" + (f", {extra_set}" if extra_set else "")
     p["st"] = status
     guarded_update(connection, run_id, token_hash, clause, p, where=f"status->{status}")
+    # THE TERMINAL TRANSITION records the run's profile and scorecard, in this transaction —
+    # not later, from a runner `finally` that slow post-PR work can hold off for minutes
+    # (services/run_terminal.py). Never raises; a no-op for a status that is not terminal.
+    from .run_terminal import on_status_written
+
+    on_status_written(connection, run_id)
     return True
 
 

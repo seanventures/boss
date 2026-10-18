@@ -33,6 +33,7 @@ from typing import Any, Callable, Optional
 
 from . import parallel_build as _parallel_build
 from .review_seats import run_seats as _run_seats
+from .run_terminal import on_status_written
 from ..config import Settings
 from ..ports import sql
 from ..schemas import FileChange
@@ -3405,6 +3406,7 @@ def _block_for_plan_approval(engine, budget, *, run_id, project_id, task_id, res
         c.execute(sql("UPDATE code_task_runs SET status='blocked', phase='awaiting_plan_approval', "
                        "decision_id=:d, updated_at=now() WHERE id=:id"),
                   {"d": dec_id, "id": run_id})
+        on_status_written(c, run_id)
     return {"status": "blocked", "done": True, "awaiting_plan_approval": True, "decision_id": dec_id}
 
 
@@ -8031,6 +8033,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         {"e": _held["error"] if _held else _blocked_error,
                          "ph": "done" if _held else "awaiting_gate_override",
                          "fc": pg_json(ctx), "id": run_id})
+                    on_status_written(c, run_id)
                 _rescue_pr(_blocked_reason)
                 return {"status": "blocked", "done": True, "awaiting_gate_override": _held is None,
                         "quality_gate_id": qg_id, "failing_gates": failing}
@@ -8057,6 +8060,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                               "updated_at=now() WHERE id=:id"),
                           {"e": (_held or {}).get("error") or template_push_hold(_tpl_applies, _tpl_gates),
                            "id": run_id})
+                on_status_written(c, run_id)
             return {"status": "blocked", "done": True, "failing_gates": [
                 g for g in TEMPLATE_GATES if (_tpl_gates or {}).get(g) is not True]}
         _finish_vms(success=True)
@@ -8247,6 +8251,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                            "e": (f"PR not created after 3 attempts: {status}"
                                  + (f" — partial work shipped as {rescued}" if rescued else "")),
                            "id": run_id})
+                on_status_written(c, run_id)
             return {"status": "blocked", "done": True, "quality_gate_id": qg_id, **proposal}
 
         # The findings go ON the pull request, at the lines they are about.

@@ -2928,6 +2928,10 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
                     "WHERE id = ANY(:ids)"),
                     {"ids": [r["id"] for r in found],
                      "e": f"closed as orphaned by {actor}: no live job"})
+                from ..services.run_terminal import on_status_written
+
+                for r in found:
+                    on_status_written(c, r["id"])
         return {"dry_run": dry, "count": len(found), "runs": found[:50],
                 "closed": 0 if dry else len(found)}
 
