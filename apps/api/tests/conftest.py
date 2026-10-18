@@ -470,15 +470,28 @@ def _no_real_cli_model_catalog(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _no_real_recovery_model(monkeypatch):
-    """A failed step's recovery agent (step_recovery) never calls a real model in a test: with
-    no model it answers with BOSS's coded triage, exactly as an install with none connected.
-    A test about the agent's model hands it a stub (monkeypatch `routed_adapter` again)."""
+    """A failed step's recovery agent (step_recovery) never calls a real model in a test. It gets
+    a SCRIPTED model that answers with BOSS's own triage (handed to it as `boss_triage`), so the
+    runner's executors are exercised as a model would drive them. With no model at all the agent
+    does nothing and asks a person — a test about that makes `routed_adapter` raise."""
+    import json
+
     from boss_engine.services import step_recovery
 
-    def no_model(*_a, **_k):
-        raise RuntimeError("no recovery model in tests")
+    class _TriageFollowingModel:
+        def create_chat_completion(self, messages, tools=None, **_k):
+            body = str(messages[1]["content"])
+            at = body.index('"boss_triage":') + len('"boss_triage":')
+            triage, _ = json.JSONDecoder().raw_decode(body[at:].lstrip())
+            choice = {k: v for k, v in triage.items() if k != "suggests"}
+            choice.update({"action": triage.get("suggests"), "confidence": 0.9})
+            return {"content": json.dumps(choice, default=str)}, {"model": "scripted-triage"}
 
-    monkeypatch.setattr(step_recovery, "routed_adapter", no_model)
+    def scripted(*_a, **_k):
+        model = _TriageFollowingModel()
+        return model, model
+
+    monkeypatch.setattr(step_recovery, "routed_adapter", scripted)
 
 
 @pytest.fixture(autouse=True)

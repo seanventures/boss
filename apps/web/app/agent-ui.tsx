@@ -1052,9 +1052,16 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
 
   const acceptAction = useCallback((action: ProposedAction) => {
     startTransition(async () => {
-      const r = await callAction(runAgentActionAction, undefined, "assistant:chat")(
+      const press = () => callAction(runAgentActionAction, undefined, "assistant:chat")(
         projectId, actor, action.tool, action.args, threadId ?? undefined,
         action.id, action.label);
+      let r = await press();
+      // A BUTTON THAT NEEDS YOUR GRANT ASKS FOR IT, the same way a turn does (runTurn): a 409
+      // consent_required opens the consent sheet and, once granted, the same press is sent once
+      // more. Read as a failure it showed "Needs your consent" and started a repair turn.
+      const asked = !r.ok
+        ? consentFromBody((r.data as Record<string, unknown> | undefined)?.consent) : null;
+      if (asked && await askConsent(asked)) r = await press();
       const payload = (r.data ?? {}) as Record<string, unknown>;
       const ok = r.ok && payload?.ok !== false;
       // BOSS CHANGED SOMETHING THE OTHER PANELS ARE SHOWING. Clicking "Create the target" here

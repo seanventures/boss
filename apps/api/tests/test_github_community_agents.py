@@ -265,9 +265,19 @@ def test_github_alias_security_filtering_loop_guard_and_dedupe(
     ).status_code == 503
 
 
+def _decides(monkeypatch, verdict):
+    """A model is connected and decides the triage verdict (agent_decision)."""
+    from boss_engine.services import agent_decision
+
+    monkeypatch.setattr(agent_decision, "decide", lambda *a, **k: agent_decision.AgentDecision(
+        agent_decision.DECIDED, action=verdict(k["message"]) if callable(verdict) else verdict,
+        confidence=0.9, reason="stub"))
+
+
 def test_triage_accept_posts_once_and_approval_dispatches_plan(
     client, engine, monkeypatch
 ):
+    _decides(monkeypatch, "accept")
     settings = get_settings()
     monkeypatch.setattr(settings, "openai_api_key", None)
     fake = FakeGitHub()
@@ -350,7 +360,8 @@ def test_triage_accept_posts_once_and_approval_dispatches_plan(
     assert child_count > 0
 
 
-def test_triage_needs_info_and_bug_paths_post_one_comment_each(engine):
+def test_triage_needs_info_and_bug_paths_post_one_comment_each(engine, monkeypatch):
+    _decides(monkeypatch, lambda m: "needs-info" if "dark mode" in m else "maintainer-review")
     settings = get_settings()
     fake = FakeGitHub()
     agent = GitHubTriageAgent(settings, lambda _: fake)
@@ -540,3 +551,22 @@ def test_community_job_endpoint_rejects_bad_lease(client, engine):
         },
     )
     assert response.status_code == 409
+
+
+def test_with_no_model_an_issue_waits_for_a_maintainer_and_nothing_is_drafted(engine):
+    """No keyword verdict acts: with no model the issue goes to a maintainer, no plan drafted."""
+    from boss_engine.services import agent_decision
+
+    class Down:
+        def create_text_response(self, *_a, **_k):
+            raise RuntimeError("no model")
+
+    agent = GitHubTriageAgent(get_settings())
+    coded = agent._classify(
+        "[Feature] As a maintainer, when reviewing a run, I should be able to see linked "
+        "receipts so that I can verify every external effect before approving the change.", [])
+    assert coded["verdict"] == "accept"
+    with engine.begin() as connection:
+        got = agent._decide(connection, PROJECT_ID, "x", coded, adapter=Down())
+    assert got["verdict"] == "maintainer-review"
+    assert got["decided_by"]["status"] == agent_decision.NO_MODEL

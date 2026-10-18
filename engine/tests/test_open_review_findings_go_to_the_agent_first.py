@@ -120,10 +120,7 @@ def test_a_build_parked_on_open_findings_is_repaired_by_its_agent_then_waived(
         [RecordingTool("create_code_task", {"code_task_run_id": awaited_id})]))
     monkeypatch.setattr(runner, "_preview_missing_for_run", lambda *a, **k: None)
 
-    def no_model(*_a, **_k):
-        raise RuntimeError("no model connected")  # BOSS's coded triage answers
-
-    monkeypatch.setattr(sr, "routed_adapter", no_model)
+    # The conftest's scripted model answers with BOSS's triage (a model following it).
     started: list[dict] = []
 
     def start(connection, ctx, *, project_id, run_id, step_id, build_run_id, note):

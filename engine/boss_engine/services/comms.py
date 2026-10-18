@@ -4,7 +4,7 @@ import hashlib
 import json
 import re
 from datetime import datetime, time, timedelta
-from typing import Optional
+from typing import Any, Optional
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
@@ -879,6 +879,7 @@ class CommsService:
         message_id = make_id("in")
         boundary = normalize_data_boundary(data_boundary)
         parsed = self._parse_inbound_message(channel, subject, body, raw_ref)
+        parsed = self.decide_reply(connection, project_id, parsed, subject, body)
         parsed["channel"] = channel
         parsed["ingested_at"] = now_utc().isoformat()
         connection.execute(
@@ -1393,8 +1394,11 @@ class CommsService:
         if decision_match:
             parsed["decision_id"] = decision_match.group(1)
         if action_match:
+            # A HINT, NOT THE ANSWER. The first of these words used to BE the action, so
+            # "I don't approve dec_x, reject it" approved it. The reply's meaning is decided by
+            # a model in `decide_reply`; this word is evidence it is shown.
             raw_action = action_match.group(1).lower()
-            parsed["action"] = {
+            parsed["action_hint"] = {
                 "approved": "approve",
                 "rejected": "reject",
                 "revision": "revise",
@@ -1407,9 +1411,68 @@ class CommsService:
         )
         if delegate_match:
             parsed["delegate_to"] = delegate_match.group(1)
-        if "decision_id" not in parsed or "action" not in parsed:
+        if "decision_id" not in parsed:
             parsed["parse_error"] = "decision_reply_missing_id_or_action"
             parsed["remediation"] = self._command_remediation(is_email)
+        return parsed
+
+    #: What a reply to a decision can do, as the decision model is offered it.
+    _REPLY_ACTIONS = {
+        "approve": "approve the decision as recommended",
+        "reject": "reject the decision",
+        "revise": "send it back asking for a revision",
+        "execute": "mark an approved decision as executed",
+        "delegate": "delegate the decision to someone else (named in the reply)",
+        "none": "the reply does not answer the decision (a question, a comment, an "
+                "out-of-office, or unclear)",
+    }
+
+    def decide_reply(self, connection: Connection, project_id: str, parsed: dict,
+                     subject: Optional[str], body: str, *, adapter: Any = None) -> dict:
+        """What a person's emailed or chatted reply to a decision MEANS, decided by a model.
+
+        The reply, the decision it answers (its question and options) and the keyword hint go
+        to `agent_decision.decide`. Below the confidence bar, or with no model, NOTHING is
+        transitioned: the reply is parked with the question to answer instead."""
+        from . import agent_decision
+
+        if parsed.get("kind") != "decision_reply" or parsed.get("parse_error") \
+                or not parsed.get("decision_id"):
+            return parsed
+        row = None
+        try:
+            with connection.begin_nested():
+                row = connection.execute(text(
+                    "SELECT id, question, options, status, recommendation FROM decisions "
+                    "WHERE id = :d AND project_id = :p"),
+                    {"d": parsed["decision_id"], "p": project_id}).mappings().first()
+        except Exception:  # noqa: BLE001 — the decision is context; the API checks it again
+            row = None
+        context: dict[str, Any] = {}
+        if row is not None:
+            context["the decision"] = {
+                "id": row["id"], "question": row["question"], "status": row["status"],
+                "options": row["options"]}
+        hints = ([f"the first decision word in the reply is '{parsed['action_hint']}'"]
+                 if parsed.get("action_hint") else [])
+        verdict = agent_decision.decide(
+            connection, self.settings, project_id,
+            situation=("A person replied by " + str(parsed.get("source_channel") or "message")
+                       + " to a decision BOSS asked them. Decide what the reply does to it."),
+            message="\n".join(x for x in (subject or "", body or "") if x),
+            context=context, hints=hints, agent="BOSS inbox",
+            ref=f"inbox:{parsed['decision_id']}", adapter=adapter,
+            candidates=[agent_decision.Candidate(k, v) for k, v in self._REPLY_ACTIONS.items()])
+        parsed["decided_by"] = verdict.to_dict()
+        if verdict.decided and verdict.action != "none":
+            parsed["action"] = verdict.action
+        elif verdict.status == agent_decision.NO_MODEL:
+            parsed["parse_error"] = "decision_reply_needs_a_model"
+            parsed["remediation"] = agent_decision.NO_MODEL_REPLY
+        else:
+            parsed["parse_error"] = "decision_reply_unclear"
+            parsed["remediation"] = (verdict.question or
+                                     "Reply with what you want done to the decision.")
         return parsed
 
     _COMMAND_TOKEN_RE = re.compile(

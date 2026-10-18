@@ -43,6 +43,30 @@ def _strip_fences(text: str) -> str:
     return t.strip()
 
 
+def _unwrapped_final(text: str) -> str:
+    """A tool-less reply that came back in the tool protocol's JSON, as the plain answer."""
+    stripped = _strip_fences(str(text or "")).strip()
+    if not (stripped.startswith("{") and stripped.endswith("}")):
+        return text
+    obj = _first_json_object(stripped)
+    if not isinstance(obj, dict):
+        # Malformed protocol JSON (a misplaced brace): its final or thought is still the answer.
+        for key in ("final", "thought"):
+            found = re.search(r'"%s"\s*:\s*"((?:[^"\\]|\\.)*)"' % key, stripped)
+            if found and stripped.startswith('{"thought"'):
+                try:
+                    return json.loads(f'"{found.group(1)}"')
+                except ValueError:
+                    return found.group(1)
+        return text
+    if not ({"final", "tool_calls", "tool_call"} & set(obj)):
+        return text
+    final = obj.get("final")
+    if isinstance(final, str) and final.strip():
+        return final
+    return str(obj.get("thought") or "").strip() or text
+
+
 def _first_json_object(text: str) -> Optional[dict]:
     """Best-effort extraction of the first balanced {...} JSON object."""
     s = _strip_fences(text)
@@ -242,19 +266,26 @@ class CliChatBrain:
         result_text = data.get("result") or ""
 
         if not tools:
+            # THE ANSWER, NOT THE PROTOCOL. On the last step of a tool loop (no tools offered)
+            # the model often keeps the shape the conversation taught it and answers
+            # {"thought": …, "tool_calls": […]} or {"thought": …, "final": …} — and that JSON
+            # reached the person as the reply (battle test, retry-existing-step). Its "final"
+            # is the answer; a call it can no longer make is dropped and its thought kept.
+            text_out = _unwrapped_final(result_text)
             return (
-                {"content": result_text, "tool_calls": None,
-                 "raw": {"role": "assistant", "content": result_text}},
+                {"content": text_out, "tool_calls": None,
+                 "raw": {"role": "assistant", "content": text_out}},
                 usage,
             )
 
         obj = _first_json_object(result_text)
         if not isinstance(obj, dict):
             # Could not parse an action — treat the text as a final answer so the
-            # loop terminates gracefully rather than spinning.
+            # loop terminates gracefully rather than spinning (never the raw protocol JSON).
+            text_out = _unwrapped_final(result_text)
             return (
-                {"content": result_text, "tool_calls": None,
-                 "raw": {"role": "assistant", "content": result_text}},
+                {"content": text_out, "tool_calls": None,
+                 "raw": {"role": "assistant", "content": text_out}},
                 usage,
             )
 

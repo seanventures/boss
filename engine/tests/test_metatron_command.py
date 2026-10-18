@@ -109,9 +109,10 @@ def test_command_kinds_are_known_actions():
 
 def test_interpret_theater_and_reprioritize():
     assert interpret_turn("theater")["intent"] == "theater"
-    assert interpret_turn("reprioritize official")["intent"] == "theater"
-    assert interpret_turn("staff captains")["intent"] == "theater"
-    assert interpret_turn("assign more resources")["intent"] == "theater"
-    assert interpret_turn("command the fleet")["intent"] == "theater"
+    # Free text that reads like a theater order is a HINT; a model decides (decide_free_text).
+    assert interpret_turn("reprioritize official")["intent"] == "theater_inferred"
+    assert interpret_turn("staff captains")["intent"] == "theater_inferred"
+    assert interpret_turn("assign more resources")["intent"] == "theater_inferred"
+    assert interpret_turn("command the fleet")["intent"] == "theater_inferred"
     # Generic prioritize still exists for non-fleet language.
     assert interpret_turn("prioritize the deadletter queue")["intent"] == "prioritize"

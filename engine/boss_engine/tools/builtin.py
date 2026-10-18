@@ -274,6 +274,10 @@ def _register_read_tools(reg: ToolRegistry) -> None:
         if not row:
             return {"ok": False, "error": f"no code task run {run_id}"}
         out = {"run": _json_safe(dict(row))}
+        with ctx.begin() as c:
+            step = _workflow_step_of(c, project_id, run_id)
+        if step:
+            out["part_of_workflow_run"] = step
         # The one state every surface says (factory spec §4.4): the Floor, the cockpit and
         # this tool read the same derivation.
         try:
@@ -1090,7 +1094,9 @@ def _register_write_tools(reg: ToolRegistry) -> None:
         "Can also SWITCH THE PROFILE for the new attempt (e.g. profile='lean' to re-run "
         "the same work faster). Prefer this over create_code_task whenever the work "
         "already has a run: it reuses the branch, the existing code and the approved plan. "
-        "To ADD to an app that completed successfully, use extend_code_task instead.",
+        "To ADD to an app that completed successfully, use extend_code_task instead. If the "
+        "run is a STEP of a workflow run (get_code_task says part_of_workflow_run), retry the "
+        "step with retry_workflow_step instead, or the run never follows the new attempt.",
         _obj(
             {
                 "run_id": {"type": "string"},
@@ -3966,6 +3972,32 @@ def _existing_app_branch(conn, project_id: str, task_id: str) -> tuple:
     return (f"boss/code/{root}", root) if root else (None, None)
 
 
+def _workflow_step_of(c, project_id: str, run_id: str) -> "_Optional[dict]":
+    """The workflow run step this build is, if it is one — so a retry goes to THE STEP.
+
+    Asked to "rerun the build step on the Order API run", the agent found the build
+    (crun_…) and offered retry_code_task on it: a new attempt outside the run, which the run
+    never follows, while the step stayed failed (battle test, retry-existing-step)."""
+    try:
+        with c.begin_nested():
+            row = c.execute(_text(
+                "SELECT workflow_run_id, step_id, status FROM workflow_step_runs "
+                "WHERE project_id = :p AND (output->>'build_run_id' = :r "
+                "OR output->>'run_id' = :r) ORDER BY updated_at DESC LIMIT 1"),
+                {"p": project_id, "r": run_id}).mappings().first()
+    except Exception:  # noqa: BLE001 — the link is extra; the run is the answer
+        return None
+    if not row:
+        return None
+    return {"workflow_run_id": row["workflow_run_id"], "step_id": row["step_id"],
+            "step_status": row["status"],
+            "retry_with": (f"retry_workflow_step(run_id={row['workflow_run_id']}, "
+                           f"step_id={row['step_id']})"),
+            "note": ("This build is a step of a workflow run. Retry or resume THE STEP "
+                     "(retry_workflow_step) so the run follows it; retry_code_task would start "
+                     "an attempt the run never picks up.")}
+
+
 def _slim_run(r: dict) -> dict:
     # "pr_url" is not a key on a run — the column is pull_request_url. So the PR link this
     # tool's own description promises ("with status, phase, title and PR link") was ALWAYS
@@ -5431,7 +5463,17 @@ def _register_diagnosis_tools(reg: ToolRegistry) -> None:
         # it as a button and the operator is one click from done.
         resolution = None
         status = str(run["status"] or "")
-        if status in ("cancelled", "failed", "blocked", "error"):
+        with ctx.begin() as c:
+            owning_step = _workflow_step_of(c, project_id, run_id)
+        if status in ("cancelled", "failed", "blocked", "error") and owning_step:
+            resolution = {
+                "tool": "retry_workflow_step",
+                "args": {"run_id": owning_step["workflow_run_id"],
+                         "step_id": owning_step["step_id"]},
+                "label": f"Retry the {owning_step['step_id']} step",
+                "why": owning_step["note"],
+            }
+        elif status in ("cancelled", "failed", "blocked", "error"):
             resolution = {
                 "tool": "retry_code_task",
                 "args": {"run_id": run_id},

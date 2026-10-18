@@ -225,8 +225,51 @@ ALTER TABLE metatron_watch_ticks ADD COLUMN IF NOT EXISTS applied JSONB NOT NULL
 """
 
 
+#: Intents interpret_turn reaches only by READING FREE TEXT (a verb somewhere in a sentence),
+#: not from a typed command. A model decides those (`decide_free_text`); the reading is a hint.
+INFERRED = frozenset({"act", "prioritize", "status", "theater_inferred"})
+
+_FREE_TEXT_CANDIDATES = {
+    "status": "report how the fleet stands; change nothing",
+    "act": "start governed work for what they describe (a build, fix or change)",
+    "prioritize": "change the priority of queued work as they describe",
+    "theater": "command the fleet: reprioritise and staff captains automatically",
+    "drive": "propose the next move without executing it",
+}
+
+
+def decide_free_text(connection: Connection, settings: Any, project_id: str, message: str,
+                     parsed: dict[str, Any], *, adapter: Any = None) -> dict[str, Any]:
+    """A captain turn that is not a typed command is decided by a model, never by its words.
+
+    "fix" anywhere in a sentence made `act` (governed work); "prioritize" or "p1" made
+    `prioritize`. Now those readings are hints to agent_decision; unsure is ONE question; no
+    model means nothing is done and the captain says so."""
+    if parsed.get("intent") not in INFERRED:
+        return parsed
+    from . import agent_decision
+
+    hint = "theater" if parsed["intent"] == "theater_inferred" else parsed["intent"]
+    verdict = agent_decision.decide(
+        connection, settings, project_id,
+        situation="A person typed this to the Metatron captain console (not a command word).",
+        message=message, hints=[f"a keyword reading suggests '{hint}'"], agent="Metatron",
+        ref=f"captain:{project_id}", adapter=adapter,
+        candidates=[agent_decision.Candidate(k, v, acts=k not in ("status", "drive"))
+                    for k, v in _FREE_TEXT_CANDIDATES.items()])
+    if verdict.status == agent_decision.NO_MODEL:
+        return {"intent": "no_model", "text": message, "reply": agent_decision.NO_MODEL_REPLY}
+    if verdict.status == agent_decision.CLARIFY:
+        return {"intent": "clarify", "text": message, "reply": verdict.question}
+    out = {"intent": verdict.action, "text": message, "decided_by": verdict.to_dict()}
+    if verdict.action == "theater":
+        out["auto"] = True
+    return out
+
+
 def interpret_turn(message: str) -> dict[str, Any]:
-    """Deterministic captain intent. Never invents a tool from reviewer prose."""
+    """The captain's typed COMMANDS (exact words: overwatch, watch, go, remember …). Free text
+    falls to an INFERRED intent that `decide_free_text` hands to a model."""
     raw = (message or "").strip()
     lowered = raw.lower()
     if not raw:
@@ -235,11 +278,13 @@ def interpret_turn(message: str) -> dict[str, Any]:
         return {"intent": "help", "text": raw}
     if lowered in {"overwatch", "run overwatch", "overwatch now", "keep watch"}:
         return {"intent": "overwatch", "text": raw}
-    if lowered in {"theater", "command", "fleet", "command theater"} or re.search(
+    if lowered in {"theater", "command", "fleet", "command theater"}:
+        return {"intent": "theater", "text": raw, "auto": True}
+    if re.search(
         r"\b(reprioritize|prioriti[sz]e official|staff captains?|assign (more )?resources|command the fleet)\b",
         lowered,
     ):
-        return {"intent": "theater", "text": raw, "auto": True}
+        return {"intent": "theater_inferred", "text": raw, "auto": True}
     if lowered in {"watch", "scan", "tick"}:
         return {"intent": "watch", "text": raw}
     if lowered in {"measure", "score", "how are we doing"}:
@@ -663,6 +708,7 @@ ACTION_KINDS = frozenset({
     "escalate_decision", "propose_deadletter_review", "propose",
     "build_process", "start_process", "list_processes",
     "theater", "reprioritize_official", "staff_captain", "loop_playbook",
+    "no_model", "clarify",
 })
 
 # Mutating intents that must pass validation before session_turn runs them.
@@ -922,7 +968,8 @@ class MetatronCaptain:
             surface=CAPTAIN_SURFACE,
             external_ref=CAPTAIN_EXTERNAL_REF,
         )
-        parsed = interpret_turn(message)
+        parsed = decide_free_text(connection, self.settings, project_id, message,
+                                  interpret_turn(message))
         self.agents.append_message(connection, thread_id=thread["id"], role="user", content=message.strip() or parsed["intent"])
         actions: list[dict[str, Any]] = []
         reply = ""
@@ -966,7 +1013,9 @@ class MetatronCaptain:
                 "messages": self.agents.list_messages(connection, thread["id"])[-20:],
                 "assistant_message_id": assistant.get("id"),
             }
-        if parsed["intent"] == "help":
+        if parsed["intent"] in ("no_model", "clarify"):
+            reply = parsed["reply"]
+        elif parsed["intent"] == "help":
             reply = HELP_REPLY
         elif parsed["intent"] == "remember":
             mem = self.remember(connection, project_id=project_id, thread_id=thread["id"],
