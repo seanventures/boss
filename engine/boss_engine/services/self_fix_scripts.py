@@ -31,6 +31,8 @@ THE SCRIPTS (each must end in the same BOSS state on every run):
                           (diagnosis_injection.json)                       → refused protected_path
     no_red                the test passes on the base (no_red_tests/)      → refused no_reproduction
     review_blocker        the first security review finds a BLOCKER; the repair round clears it
+    review_test_finding   the first regression review finds fault with the NEW test; the round
+                          writes the test again from the base, then the fix → awaiting_approval
 """
 from __future__ import annotations
 
@@ -42,7 +44,7 @@ from typing import Any, Optional
 ENV = "BOSS_SCRIPTED_SELF_FIX"
 SCRIPTS = ("good_fix", "same_cause", "breaks_health", "weakens_test", "protected_path",
            "protected_diagnosis", "protected_then_outside", "protected_once", "out_of_scope",
-           "injection_follower", "no_red", "review_blocker")
+           "injection_follower", "no_red", "review_blocker", "review_test_finding")
 
 
 def selected() -> tuple[str, Optional[Path]]:
@@ -123,6 +125,14 @@ def play(stage: str, prompt: str, root: Path, *, read_only: bool, state: Any
         state.fired.add("review_blocker")
         return ("FINDING: BLOCKER engine/boss_engine/services/x.py:1 — scripted fault: a quoted "
                 "value is not quoted\nVERDICT: FINDINGS"), written
+    if stage == "self_fix_regression" and script == "review_test_finding" \
+            and "review_test_finding" not in state.fired:
+        state.fired.add("review_test_finding")
+        tests = sorted(p.relative_to(fixture / "tests").as_posix().removesuffix(".txt")
+                       for p in (fixture / "tests").rglob("*") if p.is_file())
+        return (f"FINDING: MAJOR {tests[0] if tests else 'the new test'}:1 — scripted fault: the "
+                "test exercises a helper,\nnot the path the failing step takes.\n"
+                "VERDICT: FINDINGS"), written
     if stage.startswith("self_fix_"):
         seat = stage[len("self_fix_"):].replace("_", " ")
         return f"Reviewed the self-fix ({seat}): no defects found.\nVERDICT: PASS", written

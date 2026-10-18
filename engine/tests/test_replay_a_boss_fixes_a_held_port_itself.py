@@ -28,7 +28,10 @@ Oracle: c56bd88a3's own tests are run against BOSS's installed fix and reported.
 ON A REAL ENGINE (the live matrix, spec §9): BOSS_SELF_FIX_REPLAY_ENGINE=<harness key> (e.g.
 claude_code) makes Mender that engine — no scripted fixture, no scripted engine: the model writes
 the diagnosis, the red test and the fix itself, and BOSS decides everything else exactly as on
-the scripted engine. BOSS_SELF_FIX_REPLAY_MODEL picks the model where the harness takes one. A
+the scripted engine. BOSS_SELF_FIX_REPLAY_MODEL picks the harness's default model;
+BOSS_SELF_FIX_REPLAY_BUILD_MODEL / _REVIEW_MODEL / _SECURITY_MODEL pick Mender's stages', the review
+seats' and the security seat's (BOSS_SELF_FIX_REPLAY_REVIEW_ENGINE puts the security seat on a
+second engine). A
 build that does not reach the card is REPORTED (refusal class, detail, cost, time) before the
 test fails: a real engine not producing a fix is a quality result, not something to hide.
 """
@@ -245,6 +248,15 @@ class Replay:
             monkeypatch.setenv("BOSS_SELF_FIX_REVIEW_ENGINE",
                                os.environ.get("BOSS_SELF_FIX_REPLAY_REVIEW_ENGINE")
                                or self.real_engine)
+            # A model per lane (spec §17.1): Mender's stages, the review seats, the security seat.
+            for lane, env in (("BUILD_MODEL", "BOSS_SELF_FIX_MODEL"),
+                              ("REVIEW_MODEL", "BOSS_SELF_FIX_REVIEW_MODEL"),
+                              ("SECURITY_MODEL", "BOSS_SELF_FIX_SECURITY_MODEL")):
+                value = (os.environ.get(f"BOSS_SELF_FIX_REPLAY_{lane}") or "").strip()
+                if value:
+                    monkeypatch.setenv(env, value)
+                else:
+                    monkeypatch.delenv(env, raising=False)
             update = {}
             model = (os.environ.get("BOSS_SELF_FIX_REPLAY_MODEL") or "").strip()
             if model:
@@ -491,6 +503,16 @@ def _run_replay(r: Replay, monkeypatch, *, layout: dict) -> dict:
         host.close()
 
 
+def _seats(sfx: dict) -> dict:
+    """Who did what (engine and model per stage and seat), the reviewers' verdicts, and whether
+    the entry-point gate applied: the real-engine matrix's columns."""
+    review = sfx.get("review") or {}
+    return {"lanes": review.get("lanes"),
+            "verdicts": {k: {"verdict": v.get("verdict"), "open": v.get("open")}
+                         for k, v in (review.get("seats") or {}).items()},
+            "entry_gate": ((sfx.get("gates") or {}).get("drives_entry_point") or {}).get("detail")}
+
+
 def _report_build(r: Replay, sfx: dict, built: dict) -> None:
     """A build that stopped before the card, said in full (the real-engine matrix's row)."""
     path = os.environ.get("BOSS_SELF_FIX_REPLAY_REPORT")
@@ -505,7 +527,7 @@ def _report_build(r: Replay, sfx: dict, built: dict) -> None:
              "red": (sfx.get("red_green") or {}).get("base"),
              "green": (sfx.get("red_green") or {}).get("head"),
              "test_files": (sfx.get("red_green") or {}).get("test_files"),
-             "progress": sfx.get("progress")}
+             "progress": sfx.get("progress"), **_seats(sfx)}
     existing = json.loads(Path(path).read_text()) if Path(path).exists() else []
     Path(path).write_text(json.dumps(existing + [entry], indent=1, default=str))
 
@@ -528,7 +550,7 @@ def _report(r: Replay, name: str, result: dict) -> None:
              "events": result["events"], "self_fixes": result["self_fixes"],
              "recommendation_status": [x["status"] for x in result["recommendation"]],
              "diff_stat": row["diff_stat"], "commit": row["fix_commit_sha"],
-             "diagnosis_rejected": row["diagnosis"].get("rejected")}
+             "diagnosis_rejected": row["diagnosis"].get("rejected"), **_seats(row)}
     existing = json.loads(Path(path).read_text()) if Path(path).exists() else []
     Path(path).write_text(json.dumps(existing + [entry], indent=1, default=str))
 

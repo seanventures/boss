@@ -134,6 +134,29 @@ def test_open_review_findings_get_one_repair_round(harness):
     assert row["status"] == sf.AWAITING_APPROVAL and row["repair_rounds"] == 1
 
 
+def test_a_finding_about_the_new_test_writes_the_test_again_from_the_base(harness):
+    """The real-engine Replay A, third run: a reviewer's MAJOR was about Mender's own test (it
+    drove a path the failing step never takes), which a fix that may not edit its test can never
+    answer. The round goes back to RED: the test is written again on the base (red again, every
+    gate again), then the fix; the finding reached Mender word for word."""
+    from boss_engine.services import scripted_engine
+
+    row = _build(harness, "review_test_finding")["row"]
+    assert row["status"] == sf.AWAITING_APPROVAL, (row["refusal"], row["refusal_detail"])
+    assert row["repair_rounds"] == 1
+    with harness.eng.begin() as c:
+        said = [r[0] for r in c.execute(text(
+            "SELECT data->>'sentence' FROM events WHERE event_type = 'self_fix.progress' "
+            "AND data->>'self_fix_id' = :i"), {"i": row["id"]}).all()]
+    assert any("writing it again from BOSS as it is" in (s or "") for s in said), said
+    calls = scripted_engine.run_state(row["id"]).calls
+    rewrites = [c for c in calls if c["stage"] == "self_fix_write_test"]
+    assert len(rewrites) == 2, [c["stage"] for c in calls]
+    assert "test exercises a helper,\nnot the path the failing step takes." in \
+        rewrites[1]["prompt_head"], "the finding reached Mender word for word"
+    assert row["review"]["lanes"]["diagnose"]["engine"] == "scripted"
+
+
 def test_the_same_script_ends_the_same_way_twice(harness):
     first = _build(harness, "good_fix")["row"]
     with harness.eng.begin() as c:

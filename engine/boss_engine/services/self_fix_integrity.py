@@ -22,6 +22,12 @@ route reaches it.
   red_then_green         (R2) the new test FAILS on the base for the diagnosed reason (an
                          assertion, never an import or collection error, naming the location or
                          the symptom) and PASSES on the head.
+  drives_entry_point     when BOSS knows the production entry point of the failing operation
+                         (a deploy step: stack_deploy.apply_on_host), a test that FAILED on the
+                         base must drive it (call it, directly or through a helper in its own
+                         file). A test of a lower helper alone proves the helper, not that the
+                         step stops failing: the real-engine Replay A's third run passed every
+                         other gate with a test of a path apply_on_host never takes.
 """
 from __future__ import annotations
 
@@ -439,7 +445,95 @@ def red_then_green(red: Optional[SuiteRun], green: Optional[SuiteRun], *,
     return GateResult("red_then_green", True, "", detail)
 
 
-__all__ = ["DEPENDENCY_GLOBS", "FROZEN_TEST_GLOBS", "GateResult", "SuiteRun", "imports_of",
+# ── drives_entry_point ───────────────────────────────────────────────────────────────────────
+
+def _names_used(node: ast.AST) -> set[str]:
+    """Every bare name and attribute name a function body uses (calls, references)."""
+    out: set[str] = set()
+    for sub in ast.walk(node):
+        if isinstance(sub, ast.Name):
+            out.add(sub.id)
+        elif isinstance(sub, ast.Attribute):
+            out.add(sub.attr)
+    return out
+
+
+def tests_driving(source: str, function: str) -> list[str]:
+    """The test functions in `source` that reach `function`: they use its name, or call a
+    module-level helper (or fixture) of the same file that does, at any depth."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return []
+    helpers: dict[str, set[str]] = {}
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            helpers[node.name] = _names_used(node)
+        elif isinstance(node, ast.ClassDef):
+            for sub in node.body:
+                if isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef)) and \
+                        not sub.name.startswith("test"):
+                    helpers.setdefault(sub.name, set()).update(_names_used(sub))
+    reaching: set[str] = set()
+    changed = True
+    while changed:
+        changed = False
+        for name, used in helpers.items():
+            if name not in reaching and (function in used or used & reaching):
+                reaching.add(name)
+                changed = True
+    out = []
+    for fn in _test_functions(tree):
+        used = _names_used(fn) | {a.arg for a in fn.args.args}   # a fixture by its parameter
+        if function in used or used & reaching:
+            out.append(fn.name)
+    return out
+
+
+def _failed_on_base(outcomes: Mapping[str, str], path: str) -> set[str]:
+    """Test function names of `path` that failed or errored, from junit ids
+    (`engine.tests.test_x::test_fn[param]` or `…test_x.TestC::test_fn`)."""
+    stem = PurePosixPath(path).stem
+    out = set()
+    for test_id, state in (outcomes or {}).items():
+        if state not in ("failed", "error"):
+            continue
+        cls, _, name = str(test_id).rpartition("::")
+        if re.search(rf"(?:^|\.){re.escape(stem)}(?:\.|$)", cls):
+            out.add(name.split("[")[0])
+    return out
+
+
+def drives_entry_point(tests: Mapping[str, str], entry: Optional[Mapping[str, Any]],
+                       base_outcomes: Optional[Mapping[str, str]] = None) -> GateResult:
+    """A test that is red on the base drives the failing operation's production entry point.
+    No entry point known for this kind of step: nothing to check (said so in the detail)."""
+    if not entry or not entry.get("function"):
+        return GateResult("drives_entry_point", True, "",
+                          {"applied": False, "why": "no production entry point is recorded "
+                                                    "for this kind of step"})
+    function = str(entry["function"])
+    driving = {path: tests_driving(body, function) for path, body in tests.items()
+               if str(path).endswith(".py")}
+    detail: dict[str, Any] = {"applied": True, "entry": f"{entry.get('file')}::{function}",
+                              "driving": {p: n for p, n in driving.items() if n}}
+    if not any(driving.values()):
+        return GateResult("drives_entry_point", False,
+                          f"no new test calls {function} ({entry.get('file')}), the code the "
+                          "failing step ran; a test of a lower function proves that function, "
+                          "not that the step stops failing", detail)
+    if base_outcomes:
+        red = {p: sorted(set(n) & _failed_on_base(base_outcomes, p)) for p, n in driving.items()}
+        detail["red_and_driving"] = {p: n for p, n in red.items() if n}
+        if not any(red.values()):
+            return GateResult("drives_entry_point", False,
+                              f"the tests that call {function} pass on BOSS as it is; the test "
+                              f"that fails must be one that drives {function}", detail)
+    return GateResult("drives_entry_point", True, "", detail)
+
+
+__all__ = ["DEPENDENCY_GLOBS", "FROZEN_TEST_GLOBS", "GateResult", "SuiteRun", "drives_entry_point",
+           "imports_of", "tests_driving",
            "is_green", "is_red", "no_committed_secrets", "no_new_dependencies", "red_then_green",
            "scope_matches_diagnosis", "non_test_paths", "tests_edited", "tests_not_weakened",
            "within_size"]
