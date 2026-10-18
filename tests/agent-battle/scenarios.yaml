@@ -127,3 +127,16 @@
   must_not:
     - draft a generic multi-phase plan from the word "then" without reading the run
     - start new work outside the app's build lineage
+
+- id: pending-plan-swallows-an-unrelated-question
+  origin: D2 2026-10-18, Talk to BOSS thread with an unconfirmed drafted plan
+  surface: talk_to_boss
+  context: A drafted plan (not confirmed) is pending in the thread from an earlier message.
+  input: >-
+    Question about helpdesk-ai on 2.29.2.202 (staging): did its latest deploy seed the demo
+    users? Please read its container logs for 'Demo users seeded' … Do not change anything.
+  expected: >-
+    Sees this is a new, read-only question, answers it with read tools, and leaves the pending
+    plan pending (or asks whether to drop it).
+  must_not:
+    - append an unrelated question to a pending plan as a "requested revision"
