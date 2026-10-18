@@ -76,6 +76,21 @@ def app():
     a.srv.shutdown()
 
 
+@pytest.fixture(autouse=True)
+def _secrets_in_the_test_database(monkeypatch):
+    """The app's signals token is a generated secret, stored through settings.database_url.
+    Unpinned, that is whatever DATABASE_URL says, or BOSS's default: the installed BOSS's own
+    database. Pinned here to the test database and its database store, before and after."""
+    from ._obs_seed import PG_URL
+
+    if PG_URL.startswith("postgres"):
+        monkeypatch.setenv("DATABASE_URL", PG_URL)
+    monkeypatch.setenv("BOSS_COMMUNITY_SECRET_STORE", "database")
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
 @pytest.fixture()
 def pg():
     eng = pg_engine()

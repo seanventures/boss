@@ -758,7 +758,7 @@ def _timeline(connection, inc: dict, workflow_run_id: Optional[str]) -> list[dic
     items: list[dict[str, Any]] = []
     for e in connection.execute(sql(
             "SELECT kind, ref, payload, created_at FROM incident_evidence "
-            "WHERE incident_id = :i ORDER BY created_at"), {"i": inc["id"]}).mappings().all():
+            "WHERE incident_id = :i ORDER BY created_at, seq"), {"i": inc["id"]}).mappings().all():
         p = _json(e["payload"]) or {}
         words = {
             "alert": lambda: (f"Alert fired: {round(float(p.get('error_rate') or 0) * 100, 1)}% "
@@ -838,7 +838,7 @@ def report(connection, project_id: str, incident_id: str, *,
     workflow_run_id = workflow_run_id or (ctx.get("response") or {}).get("workflow_run_id")
     hyp = _json(connection.execute(sql(
         "SELECT payload FROM incident_evidence WHERE incident_id = :i AND kind = 'rca_hypothesis' "
-        "ORDER BY created_at DESC LIMIT 1"), {"i": incident_id}).scalar()) or {}
+        "ORDER BY created_at DESC, seq DESC LIMIT 1"), {"i": incident_id}).scalar()) or {}
     timeline = _timeline(connection, inc, workflow_run_id)
     cost = response_cost(connection, workflow_run_id)
     ver = ctx.get("verification") or {}
@@ -915,7 +915,7 @@ def response_view(connection, project_id: str, incident_id: str) -> Optional[dic
     evidence = [{"kind": e["kind"], "ref": e["ref"], "at": _iso(e["created_at"]),
                  "payload": _json(e["payload"])} for e in connection.execute(sql(
                      "SELECT kind, ref, payload, created_at FROM incident_evidence "
-                     "WHERE incident_id = :i ORDER BY created_at"),
+                     "WHERE incident_id = :i ORDER BY created_at, seq"),
                      {"i": incident_id}).mappings().all()]
     reports = [{"reporter_target_id": r["reporter_target_id"], "via": r["via"],
                 "at": _iso(r["received_at"]), **(_json(r["payload"]) or {})}

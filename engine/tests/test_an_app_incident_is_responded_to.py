@@ -207,7 +207,7 @@ def test_the_alert_records_the_release_and_says_so_once(pg, app):
         inc = c.execute(text("SELECT id, finalize_ctx FROM incidents WHERE dedupe_key = :k"),
                         {"k": app_metrics.INCIDENT_PREFIX + tid}).mappings().one()
         kinds = [r[0] for r in c.execute(text(
-            "SELECT kind FROM incident_evidence WHERE incident_id = :i ORDER BY created_at"),
+            "SELECT kind FROM incident_evidence WHERE incident_id = :i ORDER BY created_at, seq"),
             {"i": inc["id"]}).all()]
         event = c.execute(text("SELECT data FROM events WHERE id = :e"),
                           {"e": fired["alert"]["event_id"]}).scalar()
@@ -378,7 +378,16 @@ def test_an_alert_is_answered_end_to_end_by_incident_response(pg, app, monkeypat
     from boss_engine.services import workflow_catalogue as wc
     from .test_a_failed_step_stops_the_run import _insert_awaited
     from .test_every_template_runs_end_to_end import FakeTool, Registry, _drive
-    from .test_workflow_capability_runner import Ctx, _publish, _steps
+    from .test_workflow_capability_runner import Ctx, _publish
+    from boss_engine.services.workflow_step_order import in_declared_order
+
+    def _steps(c, run_id):
+        # A run's step rows are created in one statement and tie on created_at: read them in
+        # the order the workflow declares, as the product does (workflow_step_order).
+        rows = c.execute(text(
+            "SELECT step_id, status, output, last_error FROM workflow_step_runs "
+            "WHERE workflow_run_id = :r ORDER BY created_at"), {"r": run_id}).mappings().all()
+        return {r["step_id"]: dict(r) for r in in_declared_order(c, run_id, rows)}
 
     eng, pid = pg
     now = datetime.now(timezone.utc).replace(microsecond=0)

@@ -506,7 +506,7 @@ def told_reporters(connection, incident_id: str) -> list[dict[str, Any]]:
     rows = connection.execute(sql(
         "SELECT DISTINCT ON (ref, COALESCE(payload->>'signal_id', '')) ref, payload, created_at "
         "FROM incident_evidence WHERE incident_id = :i AND kind = 'reporter_notified' "
-        "ORDER BY ref, COALESCE(payload->>'signal_id', ''), created_at DESC"),
+        "ORDER BY ref, COALESCE(payload->>'signal_id', ''), created_at DESC, seq DESC"),
         {"i": incident_id}).mappings().all()
     names = {r["id"]: r["app_name"] for r in connection.execute(sql(
         "SELECT id, app_name FROM deployment_targets WHERE id = ANY(:t)"),

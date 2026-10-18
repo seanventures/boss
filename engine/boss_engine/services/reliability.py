@@ -259,7 +259,7 @@ class ReliabilityService:
         ).mappings().all()
         evidence = connection.execute(
             text("SELECT kind, ref, payload, created_at FROM incident_evidence "
-                 "WHERE incident_id = :id ORDER BY created_at"),
+                 "WHERE incident_id = :id ORDER BY created_at, seq"),
             {"id": incident_id},
         ).mappings().all()
         remediations = connection.execute(
@@ -357,7 +357,7 @@ class ReliabilityService:
             return None
         hyp = connection.execute(
             text("SELECT payload FROM incident_evidence WHERE incident_id = :id AND kind = 'rca_hypothesis' "
-                 "ORDER BY created_at DESC LIMIT 1"),
+                 "ORDER BY created_at DESC, seq DESC LIMIT 1"),
             {"id": incident_id},
         ).mappings().first()
         hypothesis = (hyp["payload"] if hyp else None) or {}

@@ -161,6 +161,8 @@ export const WRITE_OPS: Readonly<Record<string, Readonly<Record<string, WriteGat
     // The incident card's "Respond automatically": POST creates, PATCH …/{id} turns it on/off.
     "/v1/event-subscriptions": "integration:manage",
     "/v1/event-subscriptions/": "integration:manage",
+    // The incident card's "Tell reporters": POST …/incidents/{id}/tell-reporters.
+    "/v1/reliability/incidents/": "reliability:respond",
   },
 };
 
