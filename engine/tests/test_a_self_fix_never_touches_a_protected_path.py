@@ -179,7 +179,14 @@ def test_the_policy_and_the_tests_that_hold_it_are_never():
                  "engine/boss_engine/services/self_fix_policy.py",
                  "engine/tests/test_a_self_fix_never_touches_a_protected_path.py",
                  "engine/tests/test_protected_symbols_still_exist.py",
-                 "scripts/install/self_fix.sh", "scripts/install/upgrade.sh"):
+                 "scripts/install/self_fix.sh", "scripts/install/upgrade.sh",
+                 # Phase 3–4: the upstream path, the denylist it checks sends against, the
+                 # labeler that sorts agent PRs, and how BOSS counts what it solved itself.
+                 "engine/boss_engine/services/self_fix_upstream.py",
+                 "engine/boss_engine/services/private_infra.py",
+                 "engine/boss_engine/services/autonomy_metric.py",
+                 ".github/workflows/boss-agent-labels.yml",
+                 ".github/PULL_REQUEST_TEMPLATE/boss-self-fix.md"):
         assert not sp.classify([_edit(path)], POLICY).ok, path
 
 

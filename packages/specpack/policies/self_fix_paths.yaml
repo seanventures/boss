@@ -28,6 +28,8 @@ never:            # never self-fixable in v1; a fix that needs these is a recomm
   - engine/boss_engine/services/improve_allowlist.py
   - engine/boss_engine/services/share_scrub.py
   - engine/boss_engine/services/redaction.py
+  - engine/boss_engine/services/private_infra.py  # the denylist every upstream send is checked against
+  - engine/boss_engine/services/autonomy_metric.py # how BOSS counts what it solved by itself
   - engine/boss_engine/services/agent_baseline.py  # agent redaction and baseline grants
   - engine/boss_engine/services/skill_runtime.py   # allowed_callers / role_skills enforcement
   - engine/boss_engine/services/budget*.py

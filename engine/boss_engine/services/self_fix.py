@@ -158,6 +158,10 @@ DEFAULTS: dict[str, Any] = {
 #: Auto-install (§8.3) is OFF by default and exists only as a recorded policy here: no code path
 #: installs without a person's approval in v1.
 AUTO_INSTALL_POLICY = "off"
+AUTO_INSTALL_WHY = ("A person approves every install in this version. Installing without asking "
+                    "may come later, only on a one-person developer box, for small tier-2 fixes "
+                    "that passed every gate the first time; it turns itself off when a second "
+                    "person joins.")
 
 
 class SelfFixError(RuntimeError):
@@ -537,6 +541,9 @@ _JSON = ("confidence_reasons", "evidence", "diagnosis", "flags", "paths", "diff_
 
 def _row(row: Mapping[str, Any]) -> dict[str, Any]:
     out = dict(row)
+    # The fix commit as a git bundle is binary and only the host self-installer and the upstream
+    # send read it (`bundle_of`): never in a record a page or a tool is handed.
+    out["has_bundle"] = bool(out.pop("bundle", None))
     for key in _JSON:
         value = out.get(key)
         if isinstance(value, str):
@@ -547,9 +554,25 @@ def _row(row: Mapping[str, Any]) -> dict[str, Any]:
     for key, value in list(out.items()):
         if isinstance(value, datetime):
             out[key] = value.isoformat()
-    out["chip"] = CHIPS.get(str(out.get("status")), "Building")
+    out["chip"] = chip_of(out)
     out["stage"] = _STAGE_OF.get(str(out.get("status")))
     return out
+
+
+def chip_of(sfx: Mapping[str, Any]) -> str:
+    """The PRD's status chip (§9). A verified fix the person sent is "Sent upstream"; one the
+    release now holds (merged upstream, or dropped from the stack because the release has it) is
+    "In release"; otherwise the status decides."""
+    status = str(sfx.get("status") or "")
+    upstream = str(sfx.get("upstream_state") or "")
+    if status == SUPERSEDED or upstream == "merged" or sfx.get("stack_state") == \
+            "dropped_upstream":
+        return "In release"
+    if status == VERIFIED and upstream == "sent":
+        return "Sent upstream"
+    if status in (INSTALLED, VERIFYING, VERIFIED) and sfx.get("stack_state") == "removed":
+        return "Rolled back"  # a person removed it from the box
+    return CHIPS.get(status, "Building")
 
 
 def get(connection: Connection, sfx_id: str, *, lock: bool = False) -> Optional[dict[str, Any]]:
@@ -557,6 +580,12 @@ def get(connection: Connection, sfx_id: str, *, lock: bool = False) -> Optional[
         text("SELECT * FROM self_fixes WHERE id = :i" + (" FOR UPDATE" if lock else "")),
         {"i": sfx_id}).mappings().first()
     return _row(row) if row else None
+
+
+def bundle_of(connection: Connection, sfx_id: str) -> Optional[bytes]:
+    value = connection.execute(text("SELECT bundle FROM self_fixes WHERE id = :i"),
+                               {"i": sfx_id}).scalar()
+    return bytes(value) if value else None
 
 
 def list_self_fixes(connection: Connection, *, project_id: Optional[str] = None,
@@ -690,7 +719,23 @@ def transition(connection: Connection, sfx_id: str, to: str, *, actor: str, sent
                                        if isinstance(v, (str, int, bool, float))}})
     if to in TERMINAL or to == NOT_RESOLVED:
         _ended(connection, sfx, to, actor=actor, sentence=sentence)
+    refresh_step_views(connection, sfx)
     return sfx
+
+
+def refresh_step_views(connection: Connection, sfx: Mapping[str, Any]) -> None:
+    """Every step that shows this self-fix (its own, and steps waiting on it) shows it as it is
+    NOW: one place, on every move, so a strip can never say "Install" over a verified fix."""
+    view = {k: v for k, v in step_view(sfx).items() if k != "waiting_on"}
+    try:
+        with connection.begin_nested():
+            connection.execute(text(
+                "UPDATE workflow_step_runs SET output = jsonb_set(output, '{self_fix}', "
+                "COALESCE(output->'self_fix', '{}'::jsonb) || CAST(:v AS JSONB)), "
+                "updated_at = now() WHERE output->'self_fix'->>'id' = :i"),
+                {"i": str(sfx["id"]), "v": json.dumps(view, default=str)})
+    except Exception as error:  # noqa: BLE001 — no workflow tables (an engine-only test)
+        log.debug("self-fix %s step views not refreshed: %s", sfx.get("id"), error)
 
 
 def say(connection: Connection, sfx_id: str, sentence: str, *, stage: Optional[str] = None
@@ -705,6 +750,7 @@ def say(connection: Connection, sfx_id: str, sentence: str, *, stage: Optional[s
     update(connection, sfx_id, progress=progress)
     emit(connection, sfx, "progress", actor=ACTOR_AGENT, sentence=sentence,
          data={"stage": progress["stage"]})
+    refresh_step_views(connection, {**sfx, "progress": progress})
 
 
 def refuse(connection: Connection, sfx_id: str, refusal: str, detail: str, *,
@@ -1139,8 +1185,26 @@ def settle_verification(connection: Connection, settings: Any, sfx_id: str
                                   "stays installed and is checked on the next run.",
                          data={"outcome": "inconclusive"},
                          verification={**verification, "outcome": "inconclusive"})
+    if out and out.get("status") == VERIFIED:
+        add_label(connection, sfx_id, VERIFIED_LABEL)
+        out = get(connection, sfx_id) or out
     release_budget(connection, settings, out, f"self-fix {outcome}")
     return out
+
+
+VERIFIED_LABEL = "verified:local"
+
+
+def add_label(connection: Connection, sfx_id: str, label: str) -> None:
+    """A label on the local PR record (R10): `verified:local` once the parked step proved it."""
+    sfx = get(connection, sfx_id)
+    if not sfx:
+        return
+    pr = dict(sfx.get("pr") or {})
+    labels = [str(x) for x in pr.get("labels") or []]
+    if label not in labels:
+        pr["labels"] = [*labels, label]
+        update(connection, sfx_id, pr=pr)
 
 
 def settle_run(connection: Connection, settings: Any, *, run_id: str) -> list[dict[str, Any]]:
@@ -1194,21 +1258,162 @@ def lineage(connection: Connection, sfx_id: str) -> Optional[dict[str, Any]]:
     return {"self_fix": {**sfx, "pr": pr}, "events": events, "tickets": tickets,
             "waiters": waiters(connection, sfx_id),
             "stages": [{"stage": s, "done": STAGES.index(s) < STAGES.index(sfx["stage"])
-                        if sfx.get("stage") in STAGES else False} for s in STAGES]}
+                        if sfx.get("stage") in STAGES else False} for s in STAGES],
+            "lineage": lineage_steps(sfx, events)}
 
 
-def step_view(sfx: Mapping[str, Any]) -> dict[str, Any]:
+LINEAGE = (("problem", "Problem"), ("diagnosis", "Diagnosis"), ("fix", "Fix"),
+           ("tests", "Tests"), ("review", "Review"), ("approved", "Approved"),
+           ("installed", "Installed"), ("resumed", "Resumed"), ("upstream", "Upstream"))
+#: How far along the lineage each status is: the index of the step it is AT (§10.3).
+_LINEAGE_AT = {PROPOSED: 1, CLAIMED: 1, DIAGNOSING: 1, REPRODUCING: 2, FIXING: 2, CHECKING: 3,
+               REVIEWING: 4, AWAITING_APPROVAL: 5, APPROVED: 6, INSTALLING: 6,
+               HEALTH_WINDOW: 6, INSTALLED: 7, VERIFYING: 7, VERIFIED: 8, SUPERSEDED: 9}
+#: Where an ending that did not hold stopped the lineage.
+_LINEAGE_FAILED = {REJECTED: 5, INSTALL_FAILED: 6, ROLLING_BACK: 7, ROLLED_BACK: 7,
+                   NOT_RESOLVED: 7}
+_REFUSED_AT = {"protected_path": 1, "diagnosis": 1, "api_suite": 1, "no_source": 1,
+               "no_reproduction": 2, "tests": 3, "tests_weakened": 3, "scope": 3,
+               "dependencies": 3, "too_big": 3, "secrets": 3, "review": 4}
+_UPSTREAM_WORDS = {"local_only": "not sent", "previewed": "previewed, not sent",
+                   "sent": "sent", "merged": "merged upstream", "closed": "closed upstream",
+                   "duplicate_of": "a duplicate of an upstream fix"}
+
+
+def lineage_steps(sfx: Mapping[str, Any], events: Iterable[Mapping[str, Any]] = ()
+                  ) -> list[dict[str, Any]]:
+    """Problem → diagnosis → fix → tests → review → approved → installed → resumed → upstream,
+    each {key, label, state: done|now|next|failed|skipped, at, detail} (§10.3). BOSS decides
+    the words; the page only draws them."""
+    status = str(sfx.get("status") or "")
+    at_of: dict[str, str] = {}
+    for e in events or []:
+        name = str(e.get("event_type") or "").removeprefix(EVENT_PREFIX)
+        at_of.setdefault(name, str(e.get("created_at") or ""))
+    diagnosis = sfx.get("diagnosis") or {}
+    stat = sfx.get("diff_stat") or {}
+    red_green = sfx.get("red_green") or {}
+    review = (sfx.get("review") or {}).get("seats") or {}
+    verification = sfx.get("verification") or {}
+    files = len(stat.get("files") or [])
+    detail = {
+        "problem": f"{sfx.get('signature')} · run {sfx.get('run_id') or '—'} step "
+                   f"{sfx.get('step_id') or '—'}",
+        "diagnosis": " · ".join(x for x in (
+            str(diagnosis.get("hypothesis") or "")[:200], f"confidence {sfx.get('confidence')}",
+            "first guess rejected" if diagnosis.get("rejected") else "") if x),
+        "fix": " · ".join(x for x in (
+            str(sfx.get("branch") or ""), f"{files} file(s)" if files else "",
+            f"+{stat.get('added', 0)} −{stat.get('removed', 0)}" if files else "") if x),
+        "tests": (f"✗→✓ {len(red_green.get('tests') or [])} new regression test(s)"
+                  if red_green.get("tests") else ""),
+        "review": " ".join(f"{seat.replace('_check', '').replace('_', ' ')} "
+                           f"{'✓' if (v or {}).get('ok') else '✗'}"
+                           for seat, v in review.items() if isinstance(v, Mapping)),
+        "approved": f"decision {sfx.get('decision_id')}" if sfx.get("decision_id") else "",
+        "installed": (f"stack head {str(sfx.get('installed_stack_head'))[:12]}"
+                      if sfx.get("installed_stack_head") else ""),
+        "resumed": {"passed": "the step passed", "new_cause":
+                    f"got past it; new cause {verification.get('next_signature')}",
+                    "same_cause": "failed the same way: rolled back",
+                    "inconclusive": f"inconclusive: {verification.get('why') or ''}"}.get(
+                        str(verification.get("outcome") or ""), ""),
+        "upstream": _UPSTREAM_WORDS.get(str(sfx.get("upstream_state") or "local_only"), ""),
+    }
+    when = {"problem": sfx.get("created_at"), "diagnosis": at_of.get("reproduced"),
+            "fix": at_of.get("checking"), "tests": at_of.get("reviewed"),
+            "review": at_of.get("awaiting_approval"), "approved": at_of.get("approved"),
+            "installed": sfx.get("installed_at"), "resumed": sfx.get("resumed_at"),
+            "upstream": at_of.get("upstream_sent")}
+    if status in _LINEAGE_FAILED:
+        reached, failed = _LINEAGE_FAILED[status], True
+    elif status in (REFUSED, CANCELLED):
+        # Where it stopped: the stage its refusal class belongs to (a stop by a person or the
+        # switch, at the diagnosis unless the record says it had a fix).
+        failed = True
+        reached = _REFUSED_AT.get(str(sfx.get("refusal") or ""),
+                                  4 if sfx.get("fix_commit_sha") else 1)
+    else:
+        reached, failed = _LINEAGE_AT.get(status, 1), False
+    upstream = str(sfx.get("upstream_state") or "local_only")
+    out = []
+    for i, (key, label) in enumerate(LINEAGE):
+        if i < reached:
+            state = "done"
+        elif i == reached:
+            state = "failed" if failed else "now"
+        else:
+            state = "skipped" if failed else "next"
+        if key == "upstream" and status in (VERIFIED, SUPERSEDED):
+            state = "done" if upstream in ("sent", "merged", "duplicate_of") or \
+                status == SUPERSEDED else "now"
+        if key == "problem":
+            state = "done"
+        out.append({"key": key, "label": label, "state": state,
+                    "at": str(when.get(key)) if when.get(key) and state == "done" else None,
+                    "detail": detail.get(key) or ""})
+    if status in (REFUSED, CANCELLED) and failed:
+        stop = next((o for o in out if o["state"] == "failed"), None)
+        if stop is not None:
+            stop["detail"] = refusal_words(str(sfx.get("refusal") or ""),
+                                           str(sfx.get("refusal_detail") or "")) \
+                if status == REFUSED else "stopped by a person or the switch"
+    return out
+
+
+def step_view(sfx: Mapping[str, Any], *, waiting_on: bool = False) -> dict[str, Any]:
     """What the parked step shows (§10.1): "Fixing BOSS", the strip of stages with where it is,
-    the live line, and the way to the self-fix. The run page reads it from the step's output."""
+    the live line, the facts under it (files, tests added, cost of its budget, minutes), and the
+    way to the self-fix. The run page reads it from the step's output."""
     stage = _STAGE_OF.get(str(sfx.get("status") or ""))
     at = STAGES.index(stage) if stage in STAGES else -1
-    return {"id": sfx.get("id"), "status": sfx.get("status"), "chip": CHIPS.get(
-                str(sfx.get("status")), "Building"),
+    if str(sfx.get("status")) == VERIFIED:
+        at = len(STAGES)  # every stage done
+    return {"id": sfx.get("id"), "status": sfx.get("status"), "chip": chip_of(sfx),
             "label": "Fixing BOSS", "stage": stage,
             "stages": [{"stage": s, "state": "done" if i < at else "now" if i == at else "next"}
                        for i, s in enumerate(STAGES)],
             "line": step_line(sfx), "needs_you": sfx.get("status") == AWAITING_APPROVAL,
-            "decision_id": sfx.get("decision_id")}
+            "decision_id": sfx.get("decision_id"), "facts": step_facts(sfx),
+            **({"waiting_on": True} if waiting_on else {})}
+
+
+def _minutes_since(value: Any) -> int:
+    if not value:
+        return 0
+    try:
+        start = value if isinstance(value, datetime) else datetime.fromisoformat(str(value))
+        return max(0, int((now_utc() - start).total_seconds() // 60))
+    except (TypeError, ValueError):
+        return 0
+
+
+def step_facts(sfx: Mapping[str, Any]) -> dict[str, Any]:
+    """The strip's facts line: `stack_deploy.py · 1 test added · $1.84 of $10 · 6 min`."""
+    stat = sfx.get("diff_stat") or {}
+    red_green = sfx.get("red_green") or {}
+    files = []
+    for f in stat.get("files") or []:
+        path = f.get("path") if isinstance(f, Mapping) else f
+        if path and not str(path).startswith(("engine/tests/", "apps/api/tests/",
+                                              "apps/web/tests/")):
+            files.append(Path(str(path)).name)
+    if not files:
+        loc = str(sfx.get("location") or "").split("::")[0]
+        files = [Path(loc).name] if loc else []
+    end = sfx.get("verified_at") or sfx.get("rolled_back_at") or None
+    start = sfx.get("started_at") or sfx.get("created_at")
+    minutes = _minutes_since(start)
+    if end and start:
+        try:
+            minutes = max(0, int((datetime.fromisoformat(str(end)) - datetime.fromisoformat(
+                str(start))).total_seconds() // 60))
+        except (TypeError, ValueError):
+            pass
+    return {"files": files[:4], "tests_added": len(red_green.get("tests") or []),
+            "cost_usd": round(int(sfx.get("cost_micros") or 0) / 1e6, 2),
+            "budget_usd": round(int(sfx.get("budget_usd_micros") or 0) / 1e6, 2),
+            "minutes": minutes}
 
 
 def step_line(sfx: Mapping[str, Any]) -> str:

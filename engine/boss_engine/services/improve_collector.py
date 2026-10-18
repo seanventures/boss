@@ -243,8 +243,11 @@ def share(connection, payload: Any, *, ip: str = "") -> dict[str, Any]:
 
     if not isinstance(payload, dict) or payload.get("v") != 1:
         raise CollectorError(422, "unsupported_version")
-    clean, _ = allow.sanitize(payload, allow.SHARE)
-    if not clean.get("install_id") or not clean.get("bundle"):
+    self_fix = payload.get("kind") == "self_fix"
+    clean, _ = allow.sanitize(payload, allow.SELF_FIX if self_fix else allow.SHARE)
+    if not clean.get("install_id") or not (
+            (clean.get("patch") and clean.get("class_signature")) if self_fix
+            else clean.get("bundle")):
         raise CollectorError(422, "invalid_share")
     if not IP_LIMIT.allow(ip_key(ip)) or not INSTALL_LIMIT.allow("share:" + clean["install_id"]):
         raise CollectorError(429, "rate_limited")
@@ -441,7 +444,29 @@ def dashboard(connection) -> dict[str, Any]:
         "by": {k: v[:12] for k, v in by.items()},
         "errors": [{"key": k, "n": n} for k, n in errors.most_common(12)],
         "installer": None,  # installer step failures are not reported (install.sh is unchanged)
+        "self_fixes": self_fix_counts(connection),
     }
+
+
+def self_fix_counts(connection, *, limit: int = 50) -> list[dict[str, Any]]:
+    """R17, spec §7.7: incoming BOSS self-fixes counted per class signature — how many shares,
+    from how many installs, how many verified on the box, on which versions and engines — most
+    installs first, so the cause hitting the most installs is on top."""
+    rows = connection.execute(text("""
+        SELECT body->>'class_signature' AS sig, COUNT(*) AS n,
+               COUNT(DISTINCT install_id) AS installs,
+               COUNT(*) FILTER (WHERE (body->>'verified_local')::boolean) AS verified,
+               array_agg(DISTINCT body->'context'->>'version') AS versions,
+               array_agg(DISTINCT body->>'engine') AS engines,
+               max(received_at) AS last_at
+        FROM tm_shares WHERE body->>'kind' = 'self_fix' AND body->>'class_signature' IS NOT NULL
+        GROUP BY 1 ORDER BY installs DESC, n DESC LIMIT :n"""), {"n": limit}).mappings().all()
+    return [{"signature": r["sig"], "n": int(r["n"]), "installs": int(r["installs"]),
+             "verified": int(r["verified"]),
+             "verified_rate": round(int(r["verified"]) / int(r["n"]), 3) if r["n"] else None,
+             "versions": sorted(v for v in (r["versions"] or []) if v),
+             "engines": sorted(e for e in (r["engines"] or []) if e),
+             "last_at": r["last_at"].isoformat() if r["last_at"] else None} for r in rows]
 
 
 def csv_export(connection) -> str:

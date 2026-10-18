@@ -9217,3 +9217,28 @@ CREATE TABLE IF NOT EXISTS self_fix_stack (
   installed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (release_ref, position)
 );
+
+-- BOSS FIXES ITSELF, UPSTREAM (BOSSAPP-571 spec §7, R9 R11 R18): the EXACT bytes a person
+-- previewed for the BOSS team, and what happened when they sent them. `body_gz` is the payload
+-- (title, labels, diff, body, evidence, trailers, machine block, target) gzipped; Send sends
+-- these bytes and nothing else (the sha256 binds them). `meta` holds what BOSS found while
+-- making the preview: the privacy check of the diff (checked, never masked), the scrub counts of
+-- the prose, the dedupe search and the channel it chose. Channels: github_pr (from the person's
+-- fork), github_comment (evidence on an open upstream PR for the same cause), collector (the
+-- Improve-BOSS collector), patch_export (offline, or no way to send).
+CREATE TABLE IF NOT EXISTS self_fix_upstream_sends (
+  id TEXT PRIMARY KEY,                                   -- sfu_…
+  self_fix_id TEXT NOT NULL REFERENCES self_fixes(id) ON DELETE CASCADE,
+  channel TEXT NOT NULL,                                 -- github_pr|github_comment|collector|patch_export
+  body_gz BYTEA NOT NULL,
+  body_sha256 TEXT NOT NULL,
+  meta JSONB NOT NULL DEFAULT '{}'::jsonb,
+  checked_by TEXT,
+  checked_at TIMESTAMPTZ,
+  status TEXT NOT NULL,                                  -- previewed|sent|blocked|exported|failed|superseded
+  result JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_by TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_self_fix_upstream_sends_fix ON self_fix_upstream_sends (self_fix_id, created_at);

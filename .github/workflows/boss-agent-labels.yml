@@ -1,0 +1,56 @@
+# Labels a pull request by WHO WROTE IT (BOSSAPP-571, docs/product/BOSS_FIXES_ITSELF.md §7.5, F11).
+#
+# A BOSS self-fix arrives from a person's fork and cannot label this repository itself, and a
+# label per cause signature would make thousands. So this workflow reads ONLY the PR's body (the
+# `<!-- boss-self-fix v1 {...} -->` machine block BOSS writes) and labels it:
+#   source:boss-agent, boss:self-fix, area:<area>, engine:<family>, verified:local (when verified)
+# and every other PR source:user. The signature stays a body marker and a commit trailer.
+#
+# SAFE ON pull_request_target BY CONSTRUCTION: it never checks out the PR's code, runs nothing
+# from it, holds no secret but the default token, and only reads the body text; the label names
+# it applies come from fixed lists, never from the PR. It needs the BOSS team's approval to merge
+# (it is CI on the public repository).
+name: Label BOSS agent PRs
+
+on:
+  pull_request_target:
+    types: [opened, edited, reopened, synchronize]
+
+permissions:
+  pull-requests: write
+  issues: write
+
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Label by author kind
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const AREAS = ["deploy", "build", "preview", "review", "workflow", "console", "install", "engine"];
+            const ENGINES = ["claude", "codex", "openrouter", "ollama", "scripted", "other"];
+            const pr = context.payload.pull_request;
+            const body = pr.body || "";
+            const m = body.match(/<!--\s*boss-self-fix v1\s+(\{[\s\S]*?\})\s*-->/);
+            let block = null;
+            if (m) { try { block = JSON.parse(m[1]); } catch (e) { block = null; } }
+            const labels = [];
+            if (block && typeof block.class_signature === "string" && block.class_signature) {
+              labels.push("source:boss-agent", "boss:self-fix");
+              if (AREAS.includes(block.area)) labels.push(`area:${block.area}`);
+              if (ENGINES.includes(block.engine_family)) labels.push(`engine:${block.engine_family}`);
+              if (block.verified_local === true) labels.push("verified:local");
+            } else {
+              labels.push("source:user");
+            }
+            const current = (pr.labels || []).map((l) => l.name);
+            // Only the author kind is ever taken off (an edited body can change it); area and
+            // engine labels a maintainer set by hand are left alone.
+            for (const name of current.filter((n) => n.startsWith("source:") && !labels.includes(n))) {
+              await github.rest.issues.removeLabel({ ...context.repo, issue_number: pr.number, name });
+            }
+            const add = labels.filter((n) => !current.includes(n));
+            if (add.length) {
+              await github.rest.issues.addLabels({ ...context.repo, issue_number: pr.number, labels: add });
+            }
