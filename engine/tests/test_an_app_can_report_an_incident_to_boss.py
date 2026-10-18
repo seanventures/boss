@@ -49,7 +49,9 @@ class FakeHelpDesk:
                 raw = self.rfile.read(int(self.headers.get("Content-Length") or 0))
                 me.callbacks.append(({k.lower(): v for k, v in self.headers.items()},
                                      {"path": self.path, "raw": raw}))
-                self.send_response(204)
+                # like the real help desk: a callback names one of ITS suspected incidents
+                mine = {str(x.get("id")) for x in me.signals}
+                self.send_response(204 if self.path.rsplit("/", 1)[-1] in mine else 404)
                 self.end_headers()
 
             def log_message(self, *a):
@@ -185,12 +187,15 @@ def test_reports_open_one_incident_the_alert_then_owns(pg, app, desk):
         "a report never starts a response by itself"
     # the help desk was told its tickets are linked, signed with its own token
     headers, call = desk.callbacks[-1]
-    assert call["path"] == f"/boss/incidents/{inc}"
+    # ...at the id IT reported under (D2: BOSS used its own incident id; the help desk answered
+    # 404 to both calls and the root cause never reached a ticket)
+    assert call["path"] == "/boss/incidents/cluster-checkout-1"
     assert sig.verify_signature(desk.token, headers["x-boss-timestamp"], call["raw"],
                                 headers["x-boss-signature"])
     told = json.loads(call["raw"])
     assert told["status"] == "investigating" and told["refs"] == ["T-100", "T-101", "T-102",
                                                                  "T-103"]
+    assert told["incident_id"] == inc and told["signal_id"] == "cluster-checkout-1"
     # the same suspected incident read again is the same signal
     again = sig.poll_target(eng, get_settings(), _target_row(eng, helpdesk),
                             {"path": "/boss/signals"}, now=now + timedelta(seconds=40))
@@ -262,6 +267,7 @@ def test_the_resolution_and_root_cause_go_back_to_the_reporter(pg, desk):
         helpdesk = _target(c, pid, "helpdesk-ai", desk.origin + "/",
                            {"signals": {"path": "/boss/signals", "callback": "/boss/incidents"}})
     desk.token = sig.channel_token(eng, get_settings(), project_id=pid, target_id=helpdesk)
+    desk.signals = [_ticket_signal(sid="r-1")]
     with eng.begin() as c:
         got = sig.ingest(c, _target_row(eng, helpdesk), _ticket_signal(sid="r-1"), via="push")
     before = len(desk.callbacks)
@@ -273,7 +279,24 @@ def test_the_resolution_and_root_cause_go_back_to_the_reporter(pg, desk):
         ev = c.execute(text("SELECT payload FROM incident_evidence WHERE incident_id = :i AND "
                             "kind = 'reporter_notified'"), {"i": got["incident_id"]}).scalar()
     assert told and told[0]["ok"] and told[0]["status"] == "resolved"
+    assert desk.callbacks[before][1]["path"] == "/boss/incidents/r-1"
     body = json.loads(desk.callbacks[before][1]["raw"])
     assert body["status"] == "resolved" and body["pull_request_url"].endswith("/pull/9")
     assert "pricing.py" in body["root_cause"] and body["refs"][0] == "T-100"
     assert ev["http"] == 204 and desk.token not in json.dumps(ev)
+
+    # A REPORTER THAT WAS NOT TOLD IS SAID, AND A PERSON CAN SEND IT AGAIN (D2: the help desk
+    # answered 404 to both calls; only an evidence row knew)
+    desk.signals = []                                   # the app no longer knows that id: 404
+    with eng.begin() as c:
+        sig.notify_reporters(c, get_settings(), pid, got["incident_id"], rep)
+        said = sig.told_reporters(c, got["incident_id"])
+        view = ir.response_view(c, pid, got["incident_id"])
+    assert [(t["signal_id"], t["ok"], t["http"]) for t in said] == [("r-1", False, 404)]
+    assert said[0]["app_name"] == "helpdesk-ai" and "404" in said[0]["word"]
+    assert view["told"] == said
+    desk.signals = [_ticket_signal(sid="r-1")]
+    with eng.begin() as c:
+        again = sig.tell_reporters_again(c, get_settings(), pid, got["incident_id"])
+        said = sig.told_reporters(c, got["incident_id"])
+    assert again[0]["ok"] and [t["ok"] for t in said] == [True]

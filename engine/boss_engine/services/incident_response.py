@@ -193,6 +193,18 @@ def on_alert(connection, target: dict, incident_id: str, *, action: str, window:
         alert = {"fired_at": _iso(now), "rule": rule,
                  "error_rate": window.get("error_rate"), "requests": window.get("requests"),
                  "errors": window.get("errors"), "routes": (window.get("routes") or [])[:8]}
+        running = _response_in_flight(connection, project_id, incident_id)
+        if running:
+            # One response per incident at a time: an alert firing again while the fix is being
+            # built is the same problem, not a second one. It is evidence, and nothing more: the
+            # occurrence, the response and its verification stay the ones in flight (D2: a
+            # re-fire mid-fix reset the opening, and the report said 4.5 min for an 11.7 min fix).
+            _evidence(connection, incident_id, "alert", ref=str(rule.get("error_rate_percent")),
+                      payload=alert, at=now)
+            _evidence(connection, incident_id, "note", ref=running,
+                      payload={"text": "Alert fired again while response "
+                                       f"{running} is in flight; no second response."}, at=now)
+            return None
         # A REOPENED incident is a new occurrence: the response, the verification and the
         # report of the last one must not be read as this one's.
         # An incident an app reported first keeps its reports (they are about this same
@@ -210,14 +222,6 @@ def on_alert(connection, target: dict, incident_id: str, *, action: str, window:
         if deploy:
             _evidence(connection, incident_id, "deployment",
                       ref=str(deploy.get("commit_sha") or ""), payload=deploy, at=now)
-        running = _response_in_flight(connection, project_id, incident_id)
-        if running:
-            # One response per incident at a time: a reopen while the fix is being built is
-            # the same problem, not a second one to fix in parallel.
-            _evidence(connection, incident_id, "note", ref=running,
-                      payload={"text": "Alert fired again while response "
-                                       f"{running} is in flight; no second response."}, at=now)
-            return None
         pct = round(float(window.get("error_rate") or 0) * 100.0, 1)
         title = (f"{target.get('app_name')} ({target.get('environment')}): {pct}% of requests "
                  f"failing")
@@ -403,7 +407,7 @@ def _suffix_match(path: str, files: list[str]) -> Optional[str]:
 
 
 def hypothesis(deploy: dict, alert: dict, signatures: list[dict], diff: dict, *,
-               onset: Optional[datetime]) -> dict[str, Any]:
+               onset: Optional[datetime], onset_was: str = "the alert fired") -> dict[str, Any]:
     """The root cause the evidence supports, with its basis and confidence. Pure.
 
     high    the failing frame is in a file the serving release changed, and the release went
@@ -430,7 +434,7 @@ def hypothesis(deploy: dict, alert: dict, signatures: list[dict], diff: dict, *,
         confidence, basis = 0.3, "no_release_near_onset"
     parts = []
     if near:
-        parts.append(f"Release {commit[:7]} went out {lag} min before the alert fired")
+        parts.append(f"Release {commit[:7]} went out {lag} min before {onset_was}")
     if top:
         parts.append(f"the app logs {top['count']}x {top['exc_type']}"
                      + (f" at {top['location']}" if top.get("location") else "")
@@ -562,7 +566,15 @@ def investigate(connection, settings: Any, project_id: str, incident_id: str, *,
         except Exception:  # noqa: BLE001 — the diff is optional evidence
             github = None
     diff = release_diff(github, deploy.get("previous_commit_sha"), deploy.get("commit_sha"))
-    hyp = hypothesis(deploy, alert, signatures, diff, onset=onset)
+    # NAME THE ONSET FOR WHAT IT IS. An incident a customer reported first starts at the first
+    # report, not at the alert (D2: "0.8 min before the alert fired" — the alert came 6.9 min
+    # after the release; the first report 0.8 min after).
+    reported_first = bool(connection.execute(sql(
+        "SELECT 1 FROM incident_evidence WHERE incident_id = :i AND kind = 'customer_reports' "
+        "AND created_at <= :t LIMIT 1"), {"i": incident_id, "t": onset}).first())
+    hyp = hypothesis(deploy, alert, signatures, diff, onset=onset,
+                     onset_was=("the first customer report" if reported_first
+                                else "the alert fired"))
     brief = fix_brief(inc, ctx, hyp, signatures, diff, logs.get("word") or "")
 
     _evidence(connection, incident_id, "logs", ref=deploy.get("compose_project") or "",
@@ -879,6 +891,12 @@ def report_markdown(d: dict[str, Any]) -> str:
     return "\n".join(out)
 
 
+def _told(connection, incident_id: str) -> list[dict[str, Any]]:
+    from .incident_signals import told_reporters
+
+    return told_reporters(connection, incident_id)
+
+
 def response_view(connection, project_id: str, incident_id: str) -> Optional[dict[str, Any]]:
     """Everything the console's incident card shows, in one read."""
     inc = _incident(connection, incident_id)
@@ -930,7 +948,8 @@ def response_view(connection, project_id: str, incident_id: str) -> Optional[dic
         "app": ctx.get("app"), "deploy": ctx.get("deploy"), "alert": ctx.get("alert"),
         "verification": ctx.get("verification"),
         "reported_only": bool(ctx.get("reported_only")),
-        "evidence": evidence, "reports": reports, "response": run,
+        "evidence": evidence, "reports": reports, "told": _told(connection, incident_id),
+        "response": run,
         "auto_respond": {"subscription_id": auto["id"], "enabled": bool(auto["enabled"]),
                          "on_behalf_of": auto["on_behalf_of"]} if auto else None,
         "report_ready": report_ready,

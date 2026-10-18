@@ -16,6 +16,9 @@ export type IncidentEvidence = { kind: string; ref: string; at: string | null; p
 export type IncidentReport = { reporterTargetId: string; at: string | null; id: string; title: string; refs: string[]; count: number };
 export type IncidentRoute = { route: string; requests: number; errors: number; errorRate: number | null };
 export type IncidentStep = { stepId: string; status: string };
+/** What a reporting app was last told about this incident, and whether it took it. */
+export type IncidentTold = { appName: string; signalId: string | null; status: string; ok: boolean; http: number | null;
+                             word: string; at: string | null };
 
 export type IncidentResponse = {
   incident: { id: string; title: string; service: string; severity: string; status: string;
@@ -28,6 +31,7 @@ export type IncidentResponse = {
   reportedOnly: boolean;
   evidence: IncidentEvidence[];
   reports: IncidentReport[];
+  told: IncidentTold[];
   response: { id: string; status: string; startedAt: string | null; steps: IncidentStep[];
               pullRequestUrl: string | null } | null;
   autoRespond: { subscriptionId: string; enabled: boolean; onBehalfOf: string | null } | null;
@@ -62,6 +66,11 @@ export function parseIncidentResponse(w: unknown): IncidentResponse {
       const y = obj(x);
       return { reporterTargetId: str(y.reporter_target_id), at: optStr(y.at), id: str(y.id), title: str(y.title),
                refs: arr(y.refs).filter((s): s is string => typeof s === "string" && !!s), count: num(y.count, 1) || 1 };
+    }),
+    told: arr(o.told).map((x) => {
+      const y = obj(x);
+      return { appName: str(y.app_name), signalId: optStr(y.signal_id), status: str(y.status), ok: y.ok === true,
+               http: optNum(y.http), word: str(y.word), at: optStr(y.at) };
     }),
     response: r ? { id: str(r.id), status: str(r.status), startedAt: optStr(r.started_at),
                     steps: arr(r.steps).map((x) => { const y = obj(x); return { stepId: str(y.step_id), status: str(y.status) }; }),
@@ -181,3 +190,9 @@ export const incidentRunHref = (runId: string) => `?area=delivery_workflows&wfr=
 export const AUTO_RESPOND = { event_type: "incident.opened", sink_kind: "workflow", sink_ref: "incident_response" } as const;
 export const RESPONSE_POLL_MS = 30_000;
 export const RESPONSE_POLL_RUNNING_MS = 10_000;
+
+/** "Told helpdesk-ai: resolved" or "Could not tell helpdesk-ai (404)". A failed call is said, never hidden. */
+export function toldLine(t: IncidentTold): string {
+  if (t.ok) return `Told ${t.appName}: ${t.status === "resolved" ? "root cause and fix" : t.status || "linked"}`;
+  return `Could not tell ${t.appName}${t.http ? ` (${t.http})` : ""}`;
+}

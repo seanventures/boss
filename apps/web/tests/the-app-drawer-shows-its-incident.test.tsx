@@ -111,6 +111,18 @@ describe("the card", () => {
     expect(auto?.getAttribute("title")).toContain("standing grant");
   });
 
+  it("says what each reporting app was told, and a failed call offers Send again (D2: two 404s went unsaid)", async () => {
+    const told = [
+      { target_id: "t_desk", app_name: "support-desk", signal_id: "s1", status: "resolved", ok: true, http: 204, word: "OK", at: null },
+      { target_id: "t_desk", app_name: "support-desk", signal_id: "s2", status: "resolved", ok: false, http: 404,
+        word: "The app answered 404", at: null },
+    ];
+    await mount(<IncidentCardView projectId="p1" now={NOW} r={view({ told })} onTell={() => undefined} />);
+    const lines = $$("[data-testid='obs-incident-told']").map((el) => text(el.querySelector("span")));
+    expect(lines).toEqual(["Told support-desk: root cause and fix", "Could not tell support-desk (404)"]);
+    expect($$("[data-testid='obs-incident-tell']").map((b) => text(b))).toEqual(["Send again"]);
+  });
+
   it("a resolved incident says Resolved and offers no Respond", async () => {
     await mount(<IncidentCardView projectId="p1" now={NOW} r={view({
       incident: incident({ status: "resolved" }),
@@ -191,6 +203,19 @@ describe("in the drawer", () => {
     const w = rec.writes.find((x) => x.url === "/v1/event-subscriptions/esub_1");
     expect(w?.method).toBe("PATCH");
     expect(w?.body).toEqual({ project_id: "p1", enabled: false, actor: "ceo" });
+  });
+
+  it("Send again posts the incident to its reporters once more", async () => {
+    const rec = await openObs("?view=apps&app=t_down", {
+      incident: incidentResponseWire({ told: [{ target_id: "t_desk", app_name: "support-desk", signal_id: "s1", status: "resolved",
+                                                ok: false, http: 404, word: "The app answered 404", at: null }] }),
+      writes: { "/tell-reporters": { body: { told: [{ ok: true, word: "OK" }] } } },
+    });
+    await click($("[data-testid='obs-incident-tell']"));
+    await settle();
+    const w = rec.writes.find((x) => x.url.endsWith("/v1/reliability/incidents/inc_1/tell-reporters"));
+    expect(w?.method).toBe("POST");
+    expect(w?.body).toEqual({ project_id: "p1" });
   });
 
   it("View reads the report into the drawer", async () => {

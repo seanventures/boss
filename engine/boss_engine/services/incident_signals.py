@@ -41,6 +41,7 @@ import json
 import time
 import urllib.error
 import urllib.request
+from urllib.parse import quote
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
@@ -447,12 +448,17 @@ def notify_reporters(connection, settings: Any, project_id: str, incident_id: st
                      rep: Optional[dict[str, Any]], *, only_target: Optional[str] = None
                      ) -> list[dict[str, Any]]:
     """POST the incident's state to every app that reported it and declares a callback.
-    `rep` is the incident report (resolved, root cause, fix) or None (linked: investigating)."""
+    `rep` is the incident report (resolved, root cause, fix) or None (linked: investigating).
+
+    ADDRESSED BY THE APP'S OWN ID: one call per suspected incident the app reported, at
+    `<callback>/<the id it reported under>`, with BOSS's incident id in the body. D2: BOSS posted
+    to `<callback>/<BOSS's incident id>`, an id the help desk never saw, and both calls (linked,
+    resolved) were answered 404 — the root cause never reached the tickets."""
     from . import app_metrics, incident_response as ir
 
     receipts = connection.execute(sql(
-        "SELECT reporter_target_id, array_agg(payload) AS signals FROM app_signal_receipts "
-        "WHERE incident_id = :i GROUP BY reporter_target_id"), {"i": incident_id}).mappings().all()
+        "SELECT reporter_target_id, signal_id, payload FROM app_signal_receipts "
+        "WHERE incident_id = :i ORDER BY received_at"), {"i": incident_id}).mappings().all()
     inc = ir._incident(connection, incident_id) or {}
     told: list[dict[str, Any]] = []
     for r in receipts:
@@ -465,9 +471,10 @@ def notify_reporters(connection, settings: Any, project_id: str, incident_id: st
         token = read_token(connection, settings, project_id, tid)
         if not spec.get("callback") or not origin or not token:
             continue
-        refs = sorted({x for s in (r["signals"] or [])
-                       for x in ((s if isinstance(s, dict) else json.loads(s)).get("refs") or [])})
-        body = {"incident_id": incident_id, "title": inc.get("title"),
+        signal = r["payload"] if isinstance(r["payload"], dict) else json.loads(r["payload"] or "{}")
+        refs = list(signal.get("refs") or [])
+        body = {"incident_id": incident_id, "signal_id": r["signal_id"],
+                "title": inc.get("title"),
                 "status": "resolved" if rep and rep.get("resolved_at") else
                 ("investigating" if rep is None else inc.get("status")),
                 "refs": refs}
@@ -478,17 +485,52 @@ def notify_reporters(connection, settings: Any, project_id: str, incident_id: st
                          "minutes_to_recover": rep.get("minutes_to_recover")})
         raw = json.dumps(body, default=str).encode()
         ts = str(int(time.time()))
-        status, _resp, word = _call("POST", f"{origin}{spec['callback']}/{incident_id}",
+        path = f"{spec['callback']}/{quote(str(r['signal_id']), safe='')}"
+        status, _resp, word = _call("POST", f"{origin}{path}",
                                     headers={"Content-Type": "application/json",
                                              "X-BOSS-Timestamp": ts,
                                              "X-BOSS-Signature": sign(token, ts, raw)},
                                     body=raw)
-        receipt = {"target_id": tid, "status": body["status"], "http": status,
-                   "ok": bool(status and 200 <= status < 300), "word": word,
+        receipt = {"target_id": tid, "signal_id": r["signal_id"], "status": body["status"],
+                   "http": status, "ok": bool(status and 200 <= status < 300), "word": word,
                    "refs": len(refs)}
         ir._evidence(connection, incident_id, "reporter_notified", ref=tid, payload=receipt)
         told.append(receipt)
     return told
+
+
+def told_reporters(connection, incident_id: str) -> list[dict[str, Any]]:
+    """What each reporting app was last told, per suspected incident it reported: status,
+    whether it took it, and BOSS's word for the answer. A callback that failed is SAID (D2: the
+    help desk answered 404 twice and only an evidence row knew)."""
+    rows = connection.execute(sql(
+        "SELECT DISTINCT ON (ref, COALESCE(payload->>'signal_id', '')) ref, payload, created_at "
+        "FROM incident_evidence WHERE incident_id = :i AND kind = 'reporter_notified' "
+        "ORDER BY ref, COALESCE(payload->>'signal_id', ''), created_at DESC"),
+        {"i": incident_id}).mappings().all()
+    names = {r["id"]: r["app_name"] for r in connection.execute(sql(
+        "SELECT id, app_name FROM deployment_targets WHERE id = ANY(:t)"),
+        {"t": [r["ref"] for r in rows]}).mappings().all()} if rows else {}
+    out = []
+    for r in rows:
+        p = r["payload"] if isinstance(r["payload"], dict) else json.loads(r["payload"] or "{}")
+        out.append({"target_id": r["ref"], "app_name": names.get(r["ref"]) or r["ref"],
+                    "signal_id": p.get("signal_id"), "status": p.get("status"),
+                    "ok": bool(p.get("ok")), "http": p.get("http"), "word": p.get("word"),
+                    "refs": p.get("refs"), "at": r["created_at"].isoformat()})
+    return out
+
+
+def tell_reporters_again(connection, settings: Any, project_id: str,
+                         incident_id: str) -> list[dict[str, Any]]:
+    """A person sends the incident's current state to the apps that reported it once more —
+    the root cause and fix when the response has resolved it, else that it is being handled."""
+    stored = connection.execute(sql(
+        "SELECT payload FROM sre_postmortems WHERE incident_id = :i AND project_id = :p AND "
+        "payload->>'kind' = 'incident_report'"), {"i": incident_id, "p": project_id}).scalar()
+    rep = stored if isinstance(stored, dict) else (json.loads(stored) if stored else None)
+    return notify_reporters(connection, settings, project_id, incident_id,
+                            rep if rep and rep.get("resolved_at") else None)
 
 
 SIGNALS_STANDARD = """
@@ -513,8 +555,10 @@ Never log it, never return it, never put it in a client bundle.
    "severity": "warning", "refs": ["<your record ids, e.g. ticket ids>"], "count": 4,
    "first_seen": "<ISO>", "last_seen": "<ISO>"}]}` — only suspected incidents that are still
    open on your side; the same `id` while it is the same problem (BOSS deduplicates by it and keeps its refs and count current).
-2. `POST /boss/incidents/<incident id>` — BOSS tells you what happened, JSON
-   `{"incident_id", "title", "status": "investigating"|"resolved", "refs": [...],
+2. `POST /boss/incidents/<your id>` — `<your id>` is the `id` YOU reported the suspected
+   incident under in (1), never BOSS's. BOSS tells you what happened, JSON
+   `{"incident_id": "<BOSS's id>", "signal_id": "<your id>", "title",
+   "status": "investigating"|"resolved", "refs": [...],
    "root_cause"?, "pull_request_url"?, "resolved_at"?}` with headers `X-BOSS-Timestamp` and
    `X-BOSS-Signature: v1=<hex HMAC-SHA256(token, "<timestamp>.<raw body>")>`. Verify the
    signature over the RAW body before parsing, refuse a timestamp more than 300 s old, and

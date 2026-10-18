@@ -26,7 +26,7 @@ import { usePolled } from "../../lib/factory-floor";
 import {
   AUTO_RESPOND, RESPONSE_POLL_MS, RESPONSE_POLL_RUNNING_MS, STATUS_WORDS, basisWords, evidenceOf, incidentReportUrl,
   incidentResponseUrl, incidentRunHref, incidentStatus, parseIncidentResponse, pullRequestUrl, reportGroups,
-  responseRunning, responseStrip, sha7, stepTone, type IncidentResponse,
+  responseRunning, responseStrip, sha7, stepTone, toldLine, type IncidentResponse,
 } from "../../lib/incident-response";
 import { useLocalTime } from "../../lib/local-time";
 import { pct } from "../../lib/obs-view";
@@ -53,9 +53,9 @@ const AUTO_TIP = "Starts Incident Response by itself when an alert fires. Acts o
 const VERIFY_TIP = "Judged by BOSS's monitor, not by the fixing agent";
 
 /** The card's body from one response view: pure render, so a fixture draws every section. */
-export function IncidentCardView({ projectId, r, now, busy, onRespond, onAuto, report, onView }: {
-  projectId: string; r: IncidentResponse; now: number | null; busy?: "respond" | "auto" | null;
-  onRespond?: () => void; onAuto?: () => void;
+export function IncidentCardView({ projectId, r, now, busy, onRespond, onAuto, onTell, report, onView }: {
+  projectId: string; r: IncidentResponse; now: number | null; busy?: "respond" | "auto" | "tell" | null;
+  onRespond?: () => void; onAuto?: () => void; onTell?: () => void;
   /** The report's markdown when View was pressed (null: not open; "": loading). */
   report?: string | null; onView?: () => void;
 }) {
@@ -137,6 +137,18 @@ export function IncidentCardView({ projectId, r, now, busy, onRespond, onAuto, r
                   {g.refs.slice(0, 8).map((ref) => <span key={ref} className="obs-chip inf-mono" data-copy="data">{ref}</span>)}
                   {g.refs.length > 8 ? <span className="inf-faint" title={g.refs.slice(8).join(", ")}>+{g.refs.length - 8}</span> : null}
                 </span>
+              ) : null}
+            </span>
+          ))}
+          {r.told.map((t) => (
+            <span key={`${t.appName}:${t.signalId ?? ""}`} className="obs-line" data-testid="obs-incident-told">
+              <span className={t.ok ? "inf-faint" : "inf-error"} title={t.word || undefined}>{toldLine(t)}</span>
+              {!t.ok && onTell ? (
+                <GatedButton permission="reliability:respond" type="button" className="ag-btn" data-testid="obs-incident-tell"
+                             disabled={!!busy} aria-busy={busy === "tell" || undefined} onClick={onTell}
+                             title={`Send ${t.appName} what BOSS knows about this incident again`}>
+                  {busy === "tell" ? "Sending…" : "Send again"}
+                </GatedButton>
               ) : null}
             </span>
           ))}
@@ -222,7 +234,7 @@ export function IncidentCard({ projectId, actor, incidentId }: { projectId: stri
   const polled = usePolled(projectId && incidentId ? incidentResponseUrl(projectId, incidentId) : null, parseIncidentResponse,
                            (d) => (d && responseRunning(d) ? RESPONSE_POLL_RUNNING_MS : RESPONSE_POLL_MS));
   const now = useNow(30_000);
-  const [busy, setBusy] = useState<"respond" | "auto" | null>(null);
+  const [busy, setBusy] = useState<"respond" | "auto" | "tell" | null>(null);
   const [report, setReport] = useState<string | null>(null);
   // A start refused for what the project lacks: the checklist and "Respond anyway" (one drawing, StartRefusal).
   const [refusal, setRefusal] = useState<PendingRefusal | null>(null);
@@ -274,6 +286,18 @@ export function IncidentCard({ projectId, actor, incidentId }: { projectId: stri
       showToast("error", res.error ?? "Could not change it");
     }
   };
+  const tellAgain = async () => {
+    if (busy) return;
+    setBusy("tell");
+    const res = await obsWrite<{ told?: { ok?: unknown; word?: unknown }[] }>(
+      `/v1/reliability/incidents/${encodeURIComponent(incidentId)}/tell-reporters`, { project_id: projectId },
+      { scope: "obs:tell-reporters", label: "Send again" });
+    setBusy(null);
+    const told: { ok?: unknown; word?: unknown }[] = res.ok ? res.body?.told ?? [] : [];
+    if (res.ok && told.length && told.every((t) => t.ok === true)) showToast("success", "Sent");
+    else showToast("error", res.ok ? String(told.find((t) => t.ok !== true)?.word ?? "Not taken") : res.error ?? "Could not send it");
+    polled.refresh();
+  };
   const view = async () => {
     if (report !== null) { setReport(null); return; }
     setReport("");
@@ -286,6 +310,7 @@ export function IncidentCard({ projectId, actor, incidentId }: { projectId: stri
   return (
     <>
       <IncidentCardView projectId={projectId} r={r} now={now} busy={busy} onRespond={() => void respond()} onAuto={toggleAuto}
+                        onTell={() => void tellAgain()}
                         report={report} onView={view} />
       {refusal ? <StartRefusal refusal={refusal} projectId={projectId} busy={busy === "respond"} onDismiss={() => setRefusal(null)} /> : null}
     </>

@@ -151,6 +151,10 @@ def test_the_hypothesis_says_its_basis_and_never_more():
     assert hot["suspect_file"] == "order-api/app/pricing.py"
     assert hot["suspect_commit"] == "f" * 40 and hot["minutes_after_release"] == 5.0
     assert "POST /orders carries the failures (60.0%" in hot["root_cause"]
+    assert "went out 5.0 min before the alert fired" in hot["root_cause"]
+    told = ir.hypothesis(deploy, alert, sigs, diff, onset=onset,
+                         onset_was="the first customer report")
+    assert "went out 5.0 min before the first customer report" in told["root_cause"]
     cold = ir.hypothesis(deploy, alert, sigs, {"files": [{"filename": "README.md"}]},
                          onset=onset)
     assert cold["basis"] == "release_before_onset" and cold["suspect_file"] is None
@@ -219,8 +223,6 @@ def test_the_alert_records_the_release_and_says_so_once(pg, app):
 
     # a response is in flight: the alert firing again starts no second one
     with eng.begin() as c:
-        c.execute(text("UPDATE incidents SET status = 'resolved' WHERE id = :i"),
-                  {"i": inc["id"]})
         c.execute(text(
             "INSERT INTO workflow_definitions (id, project_id, workflow_key, name, created_by) "
             "VALUES (:d, :p, :k, 'x', 't')"), {"d": "wfd_" + tid, "p": pid, "k": "ir_" + tid})
@@ -234,9 +236,27 @@ def test_the_alert_records_the_release_and_says_so_once(pg, app):
             " 'running', CAST(:i AS jsonb))"),
             {"r": "wfr_" + tid, "p": pid, "d": "wfd_" + tid, "v": "wfv_" + tid,
              "i": json.dumps({"incident_id": inc["id"]})})
-    app.body = orders_page(160, 60, 220)
-    again = _scrape(eng, tid, t0 + timedelta(seconds=120))
+    # ...and a dip under the threshold mid-fix is not recovery: the response's verify step
+    # closes the incident, not the monitor (D2: resolved at 07:12:43 mid-fix, reopened 07:13:04)
+    app.body = orders_page(400, 30, 460)
+    dip = _scrape(eng, tid, t0 + timedelta(seconds=120))
+    assert dip["alert"]["verdict"] == "ok" and dip["alert"]["action"] is None
+    with eng.begin() as c:
+        assert c.execute(text("SELECT status FROM incidents WHERE id = :i"),
+                         {"i": inc["id"]}).scalar() == "open"
+    # a person closed it meanwhile; it fires again while the fix is still in flight: evidence
+    # only — the occurrence, the alert and the response it reports on stay the first ones
+    with eng.begin() as c:
+        c.execute(text("UPDATE incidents SET status = 'resolved' WHERE id = :i"),
+                  {"i": inc["id"]})
+    app.body = orders_page(430, 90, 520)
+    again = _scrape(eng, tid, t0 + timedelta(seconds=180))
     assert again["alert"]["action"] == "reopened" and again["alert"]["event_id"] is None
+    with eng.begin() as c:
+        after = c.execute(text("SELECT finalize_ctx FROM incidents WHERE id = :i"),
+                          {"i": inc["id"]}).scalar()
+    assert after.get("occurrence") == ctx.get("occurrence")
+    assert after["alert"]["fired_at"] == ctx["alert"]["fired_at"]
 
 
 class FakeHost:

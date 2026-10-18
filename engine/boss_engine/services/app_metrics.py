@@ -790,6 +790,16 @@ def _incident(connection, project_id: str, target_id: str) -> Optional[dict]:
 _CLOSED = ("resolved", "dismissed")
 
 
+def _being_answered(connection, project_id: str, incident_id: str) -> bool:
+    """Is an Incident Response running on this incident? Then IT closes the incident, by its
+    verify step, on the pre-incident baseline over a stable window. A dip under the threshold
+    is not recovery: D2's monitor resolved the incident mid-fix at 07:12:43 and reopened it at
+    07:13:04, and the reopen reset the incident's opening time in the report."""
+    from .incident_response import _response_in_flight
+
+    return bool(_response_in_flight(connection, project_id, incident_id))
+
+
 def evaluate_alert(connection, target: dict, spec: dict, now: datetime) -> dict[str, Any]:
     """Open (or reopen) the app's error-rate incident when the rule fires; resolve it once the
     rate is back under the threshold on enough traffic. Too little traffic HOLDS the current
@@ -841,7 +851,8 @@ def evaluate_alert(connection, target: dict, spec: dict, now: datetime) -> dict[
              "count": int(window["errors"] or 0),
              "sample": json.dumps({"target_id": target["id"], "window": window, "rule": rule}),
              "now": now})
-    elif verdict in ("ok", "off") and is_open and alerted:
+    elif verdict in ("ok", "off") and is_open and alerted and not _being_answered(
+            connection, target["project_id"], inc["id"]):
         connection.execute(sql(
             "UPDATE incidents SET status = 'resolved', last_seen = :now WHERE id = :id"),
             {"id": inc["id"], "now": now})

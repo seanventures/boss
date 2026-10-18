@@ -7,6 +7,8 @@
   cost of a response, exportable.
 * ``GET /v1/reliability/incidents/{id}/response`` — what the console's incident card shows: the
   app, the serving release, the evidence, the reports, the response run and its verification.
+* ``POST /v1/reliability/incidents/{id}/tell-reporters`` — a person sends the incident's state
+  (the root cause and fix, once resolved) to the apps that reported it, again.
 """
 from __future__ import annotations
 
@@ -15,6 +17,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, PlainTextResponse
+from pydantic import BaseModel
 from sqlalchemy import text
 
 from boss_engine.identity import P, PublicReason, Scope, permit, public
@@ -95,6 +98,30 @@ def incident_response_view(incident_id: str, project_id: str = Query(...)) -> An
     if view is None:
         raise HTTPException(status_code=404, detail="incident not found")
     return JSONResponse(content=jsonable_encoder(view))
+
+
+class TellReportersRequest(BaseModel):
+    project_id: str
+
+
+@router.post("/v1/reliability/incidents/{incident_id}/tell-reporters")
+@permit(P.RELIABILITY_RESPOND, scope=Scope.project(body="project_id"))
+def tell_reporters(incident_id: str, payload: TellReportersRequest) -> Any:
+    """Send the incident's state to its reporters once more; answers what each one said."""
+    from boss_engine.config import get_settings
+
+    with begin(get_engine()) as connection:
+        found = connection.execute(
+            text("SELECT 1 FROM incidents WHERE id = :i AND project_id = :p"),
+            {"i": incident_id, "p": payload.project_id}).first()
+        if not found:
+            raise HTTPException(status_code=404, detail="incident not found")
+        told = incident_signals.tell_reporters_again(connection, get_settings(),
+                                                     payload.project_id, incident_id)
+    if not told:
+        return JSONResponse(status_code=409, content={
+            "detail": "No app that reported this incident declares a callback BOSS can reach."})
+    return JSONResponse(content=jsonable_encoder({"told": told}))
 
 
 __all__ = ["router"]
