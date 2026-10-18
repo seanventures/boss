@@ -527,6 +527,7 @@ def _report_build(r: Replay, sfx: dict, built: dict) -> None:
              "red": (sfx.get("red_green") or {}).get("base"),
              "green": (sfx.get("red_green") or {}).get("head"),
              "test_files": (sfx.get("red_green") or {}).get("test_files"),
+             "red_attempts": (sfx.get("red_green") or {}).get("attempts"),
              "progress": sfx.get("progress"), **_seats(sfx)}
     existing = json.loads(Path(path).read_text()) if Path(path).exists() else []
     Path(path).write_text(json.dumps(existing + [entry], indent=1, default=str))

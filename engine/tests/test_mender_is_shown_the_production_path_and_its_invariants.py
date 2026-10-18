@@ -138,6 +138,7 @@ def test_mender_sees_the_production_path_and_the_invariants_in_bosss_own_words(t
     diagnosis = {"hypothesis": "h", "location": LOCATION}
     test = b.write_test_prompt(SFX, diagnosis, work=work)
     assert "must CALL apply_on_host" in test and "drives_entry_point" in test
+    assert "put `stack_deploy` or `retire` in the failing assertion's message" in test
     assert "SAFETY INVARIANTS" in test and "THE PRODUCTION PATH" in test
     fix = b.implement_prompt(SFX, diagnosis, red_output="F", work=work)
     assert "NEVER WIDEN WHAT A HOST COMMAND REMOVES" in fix and "SAFETY INVARIANTS" in fix

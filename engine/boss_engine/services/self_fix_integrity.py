@@ -418,8 +418,10 @@ def is_red(run: SuiteRun, *, location: Mapping[str, Any], symptom: str = "") -> 
         return True, ""
     if any(w in text for w in _symptom_words(symptom)):
         return True, ""
+    named = " or ".join(f"`{n}`" for n in names if n)
     return False, ("the new test fails, but not for the diagnosed reason (its failure names "
-                   "neither the diagnosed code nor the symptom)")
+                   "neither the diagnosed code nor the symptom): the failure output must contain "
+                   f"{named or 'the diagnosed location'}, e.g. in the assertion's message")
 
 
 def is_green(run: SuiteRun) -> tuple[bool, str]:

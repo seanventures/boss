@@ -419,7 +419,10 @@ def write_test_prompt(sfx: Mapping[str, Any], diagnosis: Mapping[str, Any],
         "test functions to an existing file; never edit or remove an existing test;\n"
         "- it must FAIL on this checkout because of the bug, by an assertion that names the "
         "diagnosed behaviour; it must import only what exists now (an import error proves "
-        "nothing);\n" + _entry_rule(entry) +
+        "nothing). BOSS checks the failure output names the diagnosed code: put "
+        + " or ".join(f"`{n}`" for n in (Path(str(loc.get('file') or 'x')).stem,
+                                         str(loc.get('function') or '').split('.')[-1]) if n)
+        + " in the failing assertion's message;\n" + _entry_rule(entry) +
         "- it also asserts that what must NOT be removed or changed stays so (the invariants "
         "below), so a fix that widens what BOSS does on a host fails it;\n"
         "- neutral fixtures only: example-app, example.com, RFC 5737 addresses (192.0.2.x, "
@@ -832,6 +835,10 @@ class Build:
                          "Making it pass.")
                 return tests
             feedback = why + (f"\nIts output:\n{run.output[-2000:]}" if run.output else "")
+            # Said on the record, so a build that ends here shows what it tried.
+            tried = list(((self.sfx().get("red_green") or {}).get("attempts")) or [])
+            self.write(red_green={"attempts": tried + [{
+                "why": why, "base": run.as_dict(), "test_files": src.snapshot(work, new)}]})
             if attempt + 1 < MAX_RED_TRIES:
                 # Back to the base, not deleted: the test may have been appended to an existing
                 # file, which must stay as it is.
