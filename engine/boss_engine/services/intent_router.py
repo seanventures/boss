@@ -1667,9 +1667,7 @@ class IntentRouter:
         # create_code_task still go to the agent when a model exists. Discovery,
         # meetings, PRDs, and phased commands stay on the governed path.
         name, arguments = self._deterministic_intent(latest)
-        model_configured = bool(
-            self.settings.openai_api_key or self.settings.azure_openai_key
-        )
+        model_configured = self._a_model_can_answer(connection, project_id)
         if name is None or (model_configured and name == "create_code_task"):
             return self._answer(connection, project_id, messages, actor=actor, external_ref=external_ref,
                                 mode=mode,
@@ -3452,10 +3450,13 @@ class IntentRouter:
         # the turn to the agent instead of guessing here. The agent now holds every tool,
         # including create_code_task, so it can still choose to write code when that is the
         # real answer — with the run in front of it, which this regex does not have.
+        # A RUN, ITS STEPS AND RETRYING THEM are operated too: "retry the Build step of
+        # wfr_…" names work that exists; it is never a request for new work (crun_61720b80).
         operational_subject = re.search(
             r"\b(deploy(ment|ed|s)?|redeploy|rollback|rolled back|preview|health check|"
             r"job|queue|worker|gate|decision|approval|stuck|orphan(ed)?|priority|"
-            r"container|host|infra(structure)?)\b", lowered)
+            r"container|host|infra(structure)?|retry|retried|re-?run|step|wfr_\w+|crun_\w+)\b",
+            lowered)
         if re.search(r"\b(fix|implement|build|change|refactor|add|remove|update)\b", lowered) and (
                 not lead_question) and not operational_subject:
             return "create_code_task", {
@@ -3463,6 +3464,32 @@ class IntentRouter:
                 "instructions": message,
             }
         return None, {}
+
+    def _a_model_can_answer(self, connection: Connection, project_id: str) -> bool:
+        """Whether the agent has a model to route this turn with — ANY model this project
+        connected, not only an OpenAI or Azure key.
+
+        Checking the two keys alone put the keyword layer in charge on every install whose model
+        is Anthropic, a Claude or Codex subscription, or a local model: on the D2 laptop
+        "please retry the Build step of the Order API run (wfr_…)" matched "build" and became a
+        NEW governed code task titled with the sentence (crun_61720b80), reported as started,
+        when the operator asked for one step to be retried."""
+        if self.settings.openai_api_key or self.settings.azure_openai_key:
+            return True
+        if self._answer_adapter is not None:
+            return True
+        try:
+            from . import model_routing
+
+            point = connection.begin_nested() if hasattr(connection, "begin_nested") else None
+            try:
+                adapter = model_routing.project_chat_adapter(connection, self.settings, project_id)
+            finally:
+                if point is not None:
+                    point.rollback()
+            return adapter is not None
+        except Exception:  # noqa: BLE001 — no model is the answer; the keyword path stands
+            return False
 
     def classify_message(self, message: str) -> tuple[Optional[str], dict[str, Any]]:
         """Classify text without actuating the selected capability.
