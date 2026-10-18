@@ -463,7 +463,17 @@ def test_an_alert_is_answered_end_to_end_by_incident_response(pg, app, monkeypat
                         {"i": data["incident_id"]}).scalar()
         rep = c.execute(text("SELECT payload FROM sre_postmortems WHERE incident_id = :i"),
                         {"i": data["incident_id"]}).scalar()
+        # The card lists the steps in the order the person lives them, not by row time. D2: rows
+        # created together tie on created_at, and the card put "approve" after "Write-up".
+        # Make creation time disagree with the workflow outright, so only the declared order wins.
+        c.execute(text("UPDATE workflow_step_runs SET created_at = now() - "
+                       "(CASE step_id WHEN 'approve' THEN interval '0 s' ELSE "
+                       " interval '1 min' * ascii(step_id) END) WHERE workflow_run_id = :r"),
+                  {"r": run_id})
+        view = ir.response_view(c, pid, data["incident_id"])
 
+    assert [s["step_id"] for s in view["response"]["steps"]] == [
+        "investigate", "build", "ci", "report", "approve", "deploy", "verify", "incident_report"]
     unfinished = {k: (v["status"], v["last_error"]) for k, v in steps.items()
                   if v["status"] != "succeeded"}
     assert status == "completed" and not unfinished, (status, unfinished)

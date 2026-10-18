@@ -904,11 +904,12 @@ def response_view(connection, project_id: str, incident_id: str) -> Optional[dic
             "SELECT id, status, created_at, updated_at FROM workflow_runs WHERE id = :r"),
             {"r": run_id}).mappings().first()
         if row:
+            from .workflow_step_order import in_declared_order
             steps = [{"step_id": s["step_id"], "status": s["status"]}
-                     for s in connection.execute(sql(
+                     for s in in_declared_order(connection, run_id, connection.execute(sql(
                          "SELECT step_id, status FROM workflow_step_runs WHERE "
-                         "workflow_run_id = :r ORDER BY created_at"),
-                         {"r": run_id}).mappings().all()]
+                         "workflow_run_id = :r ORDER BY created_at, iteration"),
+                         {"r": run_id}).mappings().all())]
             pr = connection.execute(sql(
                 "SELECT pull_request_url FROM code_task_runs WHERE finalize_ctx->>'workflow_run_id'"
                 " = :r AND pull_request_url IS NOT NULL ORDER BY created_at DESC LIMIT 1"),

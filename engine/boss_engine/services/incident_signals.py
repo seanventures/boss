@@ -231,21 +231,44 @@ def _rate_refusal(connection, reporter_id: str, now: datetime) -> Optional[str]:
     return None
 
 
+def _refresh(connection, seen: dict, signal: dict, now: datetime) -> dict[str, Any]:
+    """The same problem, reported again: the app keeps one id while its cluster grows.
+
+    The receipt takes the union of refs, the larger count and the later last_seen, so every
+    ticket the app linked gets the RCA and the card counts them all. Nothing new is opened and
+    the rate limit is not spent: it is one report, kept current. Unchanged: a duplicate."""
+    old = seen["payload"] if isinstance(seen["payload"], dict) else json.loads(seen["payload"] or "{}")
+    refs = list(dict.fromkeys([*(old.get("refs") or []), *(signal.get("refs") or [])]))
+    merged = {**old, **signal, "refs": refs,
+              "count": max(int(old.get("count") or 0), int(signal.get("count") or 0), len(refs)),
+              "first_seen": old.get("first_seen") or signal.get("first_seen") or "",
+              "last_seen": max(str(old.get("last_seen") or ""), str(signal.get("last_seen") or ""))}
+    out = {"incident_id": seen["incident_id"], "signal_id": signal["id"]}
+    if merged == old:
+        return {"action": "duplicate", **out}
+    connection.execute(sql(
+        "UPDATE app_signal_receipts SET payload = CAST(:p AS JSONB) WHERE id = :id"),
+        {"p": json.dumps(merged), "id": seen["id"]})
+    connection.execute(sql("UPDATE incidents SET last_seen = :now WHERE id = :i"),
+                       {"i": seen["incident_id"], "now": now})
+    return {"action": "updated", **out}
+
+
 def ingest(connection, reporter: dict, raw: Any, *, via: str,
            now: Optional[datetime] = None) -> dict[str, Any]:
     """Take one signal from `reporter` (a deployment target): create or link the incident.
 
-    Returns {action: linked|opened|duplicate, incident_id, signal_id}. Raises SignalRefused."""
+    Returns {action: linked|opened|updated|duplicate, incident_id, signal_id}. Raises SignalRefused."""
     from . import app_metrics, incident_response as ir
 
     now = now or _now()
     signal = validate(raw)
     project_id = reporter["project_id"]
     seen = connection.execute(sql(
-        "SELECT incident_id FROM app_signal_receipts WHERE reporter_target_id = :t "
-        "AND signal_id = :s"), {"t": reporter["id"], "s": signal["id"]}).scalar()
+        "SELECT id, incident_id, payload FROM app_signal_receipts WHERE reporter_target_id = :t "
+        "AND signal_id = :s"), {"t": reporter["id"], "s": signal["id"]}).mappings().first()
     if seen:
-        return {"action": "duplicate", "incident_id": seen, "signal_id": signal["id"]}
+        return _refresh(connection, seen, signal, now)
     refused = _rate_refusal(connection, reporter["id"], now)
     if refused:
         raise SignalRefused("rate_limited", refused)
@@ -489,7 +512,7 @@ Never log it, never return it, never put it in a client bundle.
    "summary": "...", "affects": "<the failing app's name, e.g. order-api>",
    "severity": "warning", "refs": ["<your record ids, e.g. ticket ids>"], "count": 4,
    "first_seen": "<ISO>", "last_seen": "<ISO>"}]}` — only suspected incidents that are still
-   open on your side; the same `id` while it is the same problem (BOSS deduplicates by it).
+   open on your side; the same `id` while it is the same problem (BOSS deduplicates by it and keeps its refs and count current).
 2. `POST /boss/incidents/<incident id>` — BOSS tells you what happened, JSON
    `{"incident_id", "title", "status": "investigating"|"resolved", "refs": [...],
    "root_cause"?, "pull_request_url"?, "resolved_at"?}` with headers `X-BOSS-Timestamp` and

@@ -22,7 +22,7 @@ from ._obs_seed import pg_engine, project
 from .test_an_app_incident_is_responded_to import FakeApp, _scrape, orders_page
 from .test_an_app_reports_its_own_traffic import BASE
 from boss_engine.config import get_settings
-from boss_engine.services import app_metrics, incident_signals as sig
+from boss_engine.services import app_metrics, incident_response as ir, incident_signals as sig
 from boss_engine.services.app_deploy_manifest import ManifestError, load_manifest
 
 
@@ -195,6 +195,20 @@ def test_reports_open_one_incident_the_alert_then_owns(pg, app, desk):
     again = sig.poll_target(eng, get_settings(), _target_row(eng, helpdesk),
                             {"path": "/boss/signals"}, now=now + timedelta(seconds=40))
     assert again["taken"][0]["action"] == "duplicate"
+    # ...and as its cluster grows under the same id, BOSS keeps every ticket (D2: the help desk
+    # clustered 7 tickets while BOSS held the first 3, so the RCA would have reached 3 of 7)
+    desk.signals = [_ticket_signal(n=7)]
+    grew = sig.poll_target(eng, get_settings(), _target_row(eng, helpdesk),
+                           {"path": "/boss/signals"}, now=now + timedelta(seconds=70))
+    assert grew["taken"][0]["action"] == "updated"
+    assert grew["taken"][0]["incident_id"] == inc, "a grown cluster is the same incident"
+    with eng.begin() as c:
+        kept = c.execute(text("SELECT payload FROM app_signal_receipts WHERE incident_id = :i"),
+                         {"i": inc}).scalars().all()
+        view = ir.response_view(c, pid, inc)
+    assert len(kept) == 1 and kept[0]["count"] == 7
+    assert kept[0]["refs"] == [f"T-{100 + i}" for i in range(7)]
+    assert [len(r["refs"]) for r in view["reports"]] == [7]
 
     # a quiet monitor does not close what it did not raise
     app.status, app.body = 200, orders_page(100, 0, 100)
