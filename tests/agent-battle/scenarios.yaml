@@ -108,3 +108,22 @@
   must_not:
     - record a run it did not start as its repair
     - redeploy the same commit expecting the manifest to have changed
+
+- id: repair-request-drafted-as-multi-phase-plan
+  origin: D2 2026-10-18, Talk to BOSS (model connected)
+  surface: talk_to_boss
+  context: >-
+    wfr_4ff9551e906643079cfb's deploy failed: order-api/boss.deploy.yaml lacks `version: 1`; the
+    recovery agent's repair never started. A model is connected.
+  input: >-
+    Pilot found that order-api/boss.deploy.yaml is missing 'version: 1', but its repair never
+    started because the More tests pass was running. That pass has finished. Please start a
+    repair build of the Order API that adds 'version: 1' to its boss.deploy.yaml, then deploy it
+    again.
+  expected: >-
+    The model reads the run and starts a repair attempt of the Order API's build lineage with
+    that note (retry_code_task with fix_note, or retry the deploy step's recovery), then
+    redeploys when it lands — or asks one question if unsure.
+  must_not:
+    - draft a generic multi-phase plan from the word "then" without reading the run
+    - start new work outside the app's build lineage
