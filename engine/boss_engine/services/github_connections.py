@@ -1416,9 +1416,31 @@ class GitHubConnectionService:
         #
         # `_custom_secret_resolver` is the thing actually being asked about: did the caller
         # inject a resolver, or is this our own?
-        if self._custom_secret_resolver is None:
+        credential = None
+        if self._custom_secret_resolver is None and github_connection.get("auth_method") != "github_app":
+            # THE APP FIRST, THE CONNECTION'S CREDENTIAL AS THE FALLBACK — the order repo_token
+            # and token_for_repository already follow. When the Setup App is connected, push with
+            # ITS token for THIS binding's repository and permissions (control_plane_token: one
+            # repository, `workflows: write` while that repository opted in). This adapter read
+            # the connection's credential first: on the laptop a fine-grained PAT without the
+            # Workflows permission, so a finished Order API build was refused 403 on
+            # .github/workflows/order-api.yml at every delivery and redelivery (D2,
+            # crun_4eec9642) while the App's installation granted workflows. When the reference
+            # IS the App (`identity_github:app`) resolving it would mint one token for every
+            # repository from a fixed set, which is wider than the work. None here (no Setup
+            # App, or it does not cover the repository): the connection's credential, as before.
+            owner, _, name = str(binding.get("full_name") or "").partition("/")
+            if owner and name:
+                try:
+                    from boss_engine.identity import github_setup
+
+                    with connection.begin_nested():
+                        credential = github_setup.control_plane_token(connection, owner, name)
+                except Exception:  # noqa: BLE001 — the connection's credential still works
+                    credential = None
+        if not credential and self._custom_secret_resolver is None:
             credential = self._resolve_secret(secret_ref, connection)
-        else:
+        elif not credential:
             credential = self.secret_resolver(secret_ref)
         if not credential:
             raise GitHubConnectionStateError(

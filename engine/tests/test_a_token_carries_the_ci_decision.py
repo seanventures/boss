@@ -92,3 +92,59 @@ def test_a_held_delivery_says_what_the_token_asked_for_and_what_github_grants():
     assert g._perm_words(None) == "nothing recorded"
     src = __import__("inspect").getsource(g.hold_delivery)
     assert "delivery_credential_facts" in src and '"credential": credential' in src
+
+
+def test_a_setup_app_binding_pushes_with_its_own_repositorys_token(monkeypatch):
+    """crun_4eec9642, third 403: the factory's adapter pushed with the connection's fine-grained
+    PAT (no Workflows permission) while the Setup App, which grants workflows, was connected.
+    The App's one-repository token comes first; the connection's credential is the fallback."""
+    from boss_engine.identity import github_setup
+    from boss_engine.services import github_connections as gc
+
+    svc = gc.GitHubConnectionService.__new__(gc.GitHubConnectionService)
+    svc._custom_secret_resolver = None
+    svc._credential_ref = lambda c, p, i: "database:PROJECT_GITHUB_PAT"
+    svc.secret_refs = type("S", (), {"require_usable": lambda self, c, **k: {"ref": "x"}})()
+    svc._resolve_secret = lambda ref, c: "wide-all-repos-token"
+    svc.settings = type("Settings", (), {"model_copy": lambda self, update: self})()
+    asked = []
+    monkeypatch.setattr(github_setup, "control_plane_token",
+                        lambda db, owner, repo: asked.append((owner, repo)) or "one-repo-token")
+
+    class Conn:
+        def begin_nested(self):
+            return __import__("contextlib").nullcontext()
+
+    made = {}
+    svc.adapter_factory = lambda settings, **k: made.update(k) or k
+    svc._make_adapter(Conn(), project_id="p", github_connection={
+        "id": "c1", "auth_method": "pat", "app_id": None, "installation_id": None,
+        "api_base_url": "https://api.github.com"},
+        binding={"full_name": "acme/shop", "owner": "acme", "name": "shop"})
+    assert asked == [("acme", "shop")]
+    assert made.get("token") == "one-repo-token", made
+
+
+def test_without_a_setup_app_the_connection_credential_is_used(monkeypatch):
+    from boss_engine.identity import github_setup
+    from boss_engine.services import github_connections as gc
+
+    svc = gc.GitHubConnectionService.__new__(gc.GitHubConnectionService)
+    svc._custom_secret_resolver = None
+    svc._credential_ref = lambda c, p, i: "database:PROJECT_GITHUB_PAT"
+    svc.secret_refs = type("S", (), {"require_usable": lambda self, c, **k: {"ref": "x"}})()
+    svc._resolve_secret = lambda ref, c: "pat-token"
+    svc.settings = object()
+    monkeypatch.setattr(github_setup, "control_plane_token", lambda db, owner, repo: None)
+
+    class Conn:
+        def begin_nested(self):
+            return __import__("contextlib").nullcontext()
+
+    made = {}
+    svc.adapter_factory = lambda settings, **k: made.update(k) or k
+    svc._make_adapter(Conn(), project_id="p", github_connection={
+        "id": "c1", "auth_method": "personal_access_token", "app_id": None,
+        "installation_id": None, "api_base_url": "https://api.github.com"},
+        binding={"full_name": "acme/shop", "owner": "acme", "name": "shop"})
+    assert made["token"] == "pat-token"
