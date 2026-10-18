@@ -307,6 +307,20 @@ CAPABILITIES: dict[str, Capability] = {
             is_gate=True,
         ),
         _cap(
+            key="release_approval",
+            # whether this change may ship now
+            captain="release_manager",
+            label="Approve the release",
+            summary="A person reads what is about to ship (the change, its checks, why it is "
+                    "needed) and approves it, whatever the environment's deploy policy would "
+                    "allow without asking. For releases a person must own, like an incident fix.",
+            tool=None,
+            risk_tier=2,
+            optional_inputs=("approver_role",),
+            produces=("decision_id",),
+            is_gate=True,
+        ),
+        _cap(
             key="security_review",
             # the lens the step exists for
             captain="security_reviewer",

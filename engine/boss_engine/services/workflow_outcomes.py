@@ -226,6 +226,7 @@ VERDICTS: dict[str, Callable[[Mapping[str, Any], Mapping[str, Any]], Verdict]] =
     "retry_build": awaited_work,
     "spec_review": answered_gate,
     "ux_review": answered_gate,
+    "release_approval": answered_gate,
     "security_review": answered_gate,
     "review": observed,
     "test": observed,

@@ -467,8 +467,8 @@ def test_an_alert_is_answered_end_to_end_by_incident_response(pg, app, monkeypat
     unfinished = {k: (v["status"], v["last_error"]) for k, v in steps.items()
                   if v["status"] != "succeeded"}
     assert status == "completed" and not unfinished, (status, unfinished)
-    assert list(steps) == ["investigate", "build", "ci", "report", "deploy", "verify",
-                           "incident_report"]
+    assert list(steps) == ["investigate", "build", "ci", "report", "approve", "deploy",
+                           "verify", "incident_report"]
     brief = builds[0]["instructions"]
     assert brief.startswith("INCIDENT FIX") and "pricing.py" in brief
     assert builds[0].get("extends_run_id") == "crun_root", builds[0]

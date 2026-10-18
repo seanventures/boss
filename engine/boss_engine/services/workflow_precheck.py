@@ -139,6 +139,7 @@ CAPABILITY_PRECHECKS: dict[str, CapabilityPrecheck] = {
                                    "preview.serves_build"), app_env="preview",
                                   on_refusal="skips"),
     "ux_review": NO_CHECKS("a person's sign-off"),
+    "release_approval": NO_CHECKS("a person's sign-off"),
     "security_review": NO_CHECKS("a person's sign-off"),
     "security_scan": CapabilityPrecheck(("authority.consent", "github.access", "sandbox.worker",
                                          "sandbox.disk")),

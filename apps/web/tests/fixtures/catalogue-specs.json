@@ -1422,7 +1422,7 @@
               "inputs": {}
             },
             "next": [
-              "deploy"
+              "approve"
             ],
             "max_attempts": 3,
             "approval": {
@@ -1431,6 +1431,25 @@
               "risk_tier": 0,
               "forced_manual": false
             }
+          },
+          {
+            "id": "approve",
+            "kind": "capability",
+            "binding": {
+              "capability": "release_approval",
+              "inputs": {}
+            },
+            "next": [
+              "deploy"
+            ],
+            "approval": {
+              "mode": "manual",
+              "on_timeout": "block",
+              "approver_role": "release_manager",
+              "risk_tier": 2,
+              "forced_manual": true
+            },
+            "max_attempts": 3
           },
           {
             "id": "deploy",

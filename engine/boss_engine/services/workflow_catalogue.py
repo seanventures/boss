@@ -490,6 +490,10 @@ CATALOGUE: list[dict[str, Any]] = [
             _step("build", "build", _build_inputs()),
             _step("ci", "wait_for_ci", {"pull_request_url": _from("build", "pull_request_url")}),
             _step("report", "report"),
+            # A PERSON OWNS AN INCIDENT FIX'S RELEASE (D2: "require CI success and operator
+            # approval before deployment"), whatever the environment's policy lets a deploy do
+            # unasked — on the laptop staging ships without asking, set 2026-10-12.
+            _step("approve", "release_approval", approver_role="release_manager"),
             _step("deploy", "deploy", {"run_id": _from("build", "code_task_run_id")},
                   approver_role="release_manager"),
             _step("verify", "verify_recovery", {"incident_id": _in("incident_id")}),
