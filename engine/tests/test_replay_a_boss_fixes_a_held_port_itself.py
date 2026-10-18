@@ -268,28 +268,25 @@ stack_deploy.apply_on_host(engine, settings, deployment_id=dep["id"], apply_toke
                            dedupe_key="dk")
 
 # 3. THE MODEL OF THE REAL HOST: the old app container holds 8000 in the resources' project.
-db = os.path.join(work, "containers.txt")
-with open(db, "w") as f:
-    for cid, (proj, wd) in layout.items():
-        f.write(f"{cid} {proj} {wd}\n")
-removed = os.path.join(work, "removed.txt")
+# The Docker CLI is modelled by tests/e2e/fixtures/self-fix/fake_docker.py: real-shaped ids,
+# labels, ps filters and inspect templates, so a fix is judged by what it would do on a host,
+# whichever (correct) docker commands it chooses.
+import hashlib
+containers = [{"id": hashlib.sha256(name.encode()).hexdigest(), "name": name,
+               "labels": {"com.docker.compose.project": proj,
+                          "com.docker.compose.project.working_dir": wd,
+                          "com.docker.compose.service": name.rstrip("0123456789")},
+               "ports": [8000] if name == "app1" else [], "state": "running"}
+              for name, (proj, wd) in layout.items()]
+state = os.path.join(work, "docker-state.json")
+with open(state, "w") as f:
+    json.dump({"containers": containers, "log": []}, f)
 bin_dir = os.path.join(work, "bin")
 os.makedirs(bin_dir, exist_ok=True)
-FAKE = r"""#!/bin/sh
-DB=@DB@; RM=@RM@
-case "$1" in
-  ps) proj=$(echo "$@" | sed -n 's/.*com.docker.compose.project=\([^ ]*\).*/\1/p')
-      awk -v p="$proj" '$2==p {print $1}' "$DB" ;;
-  inspect) id=$(eval echo \${$#})
-      case "$3" in *Name*) echo "/$id" ;; *) awk -v i="$id" '$1==i {print $3}' "$DB" ;; esac ;;
-  rm) id=$(eval echo \${$#}); echo "$id" >> "$RM"; echo "$id" ;;
-  *) : ;;
-esac
-"""
 with open(os.path.join(bin_dir, "docker"), "w") as f:
-    f.write(FAKE.replace("@DB@", db).replace("@RM@", removed))
+    f.write(f"#!/bin/sh\nexec {sys.executable} {os.environ['REPLAY_FAKE_DOCKER']} \"$@\"\n")
 os.chmod(os.path.join(bin_dir, "docker"), 0o755)
-env = {**os.environ, "PATH": bin_dir + ":" + os.environ["PATH"]}
+env = {**os.environ, "PATH": bin_dir + ":" + os.environ["PATH"], "FAKE_DOCKER_STATE": state}
 names = []
 for step in captured["rendered"]["install"]:
     names.append(step["name"])
@@ -297,8 +294,10 @@ for step in captured["rendered"]["install"]:
         break
     subprocess.run(["bash", "-c", step["run"]], env=env, capture_output=True, text=True,
                    timeout=60)
-gone = open(removed).read().split() if os.path.exists(removed) else []
+log = json.load(open(state))["log"]
+gone = [e["name"] for e in log if e["op"].startswith(("rm", "compose down"))]
 print(json.dumps({"steps": names, "removed": gone, "port_free": "app1" in gone,
+                  "volumes": any("-v" in e["op"].split() for e in log), "log": log,
                   "planned": sorted(k for k in dep["manifest"] if k != "steps")}))
 '''
 
@@ -338,7 +337,9 @@ def _resumed_outcome(stack_worktree: Path, layout: dict, tmp: Path, *, eng, proj
     work.mkdir()
     target_id = _seed_host(eng, project_id)
     env = {**os.environ, "PYTHONPATH": f"{stack_worktree}{os.pathsep}{stack_worktree / 'engine'}",
-           "REPLAY_PROBE_DATABASE_URL": eng.url.render_as_string(hide_password=False)}
+           "REPLAY_PROBE_DATABASE_URL": eng.url.render_as_string(hide_password=False),
+           "REPLAY_FAKE_DOCKER": str(ROOT / "tests" / "e2e" / "fixtures" / "self-fix" /
+                                     "fake_docker.py")}
     env.pop("BOSS_SCRIPTED_SELF_FIX", None)
     done = subprocess.run([sys.executable, "-c", PROBE, SHARED, TARGET_DIR, project_id,
                            target_id, json.dumps(layout), str(work)], capture_output=True,
@@ -745,5 +746,6 @@ def test_the_probe_judges_a_plan_time_fix_fairly(eng, project, tmp_path, commit,
     assert out["port_free"] is freed, out
     assert out["removed"] == (["app1"] if freed else []), \
         "res-db and another app's container are never touched"
+    assert not out["volumes"], "never a volume"
     if freed:
         assert "retire_app_in" in out["planned"], "decided at plan time, read back at apply"
