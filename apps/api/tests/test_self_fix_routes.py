@@ -164,3 +164,82 @@ def test_a_ticket_is_signed_with_the_installs_key_and_the_host_verifies_it(clien
     tampered = token.rsplit(".", 1)[0][:-2] + "AA." + token.rsplit(".", 1)[1]
     with pytest.raises(host.Refused):
         host.verify_ticket(tampered, jwks)
+
+
+def _verified_row(engine) -> str:
+    import json as _json
+
+    sfx_id = f"sfx_{uuid4().hex[:20]}"
+    diff = ("diff --git a/engine/x.py b/engine/x.py\n--- a/engine/x.py\n+++ b/engine/x.py\n"
+            "@@ -1 +1 @@\n-a = 1\n+a = 2  # 203.0.113.10\n")
+    with engine.begin() as c:
+        c.execute(text(
+            "INSERT INTO self_fixes (id, project_id, signature, class_signature, area, status, "
+            "confidence, base_sha, fix_commit_sha, fix_tree_sha, branch, location, engine, "
+            "created_by, pr, red_green, diagnosis, evidence) VALUES (:i, :p, "
+            "'deploy:port_held:8000', 'deploy:port_held', 'deploy', 'verified', 'high', :b, :f, "
+            ":t, :br, 'engine/x.py::plan', 'scripted', 'boss_maintainer', CAST(:pr AS JSONB), "
+            "CAST(:rg AS JSONB), CAST(:d AS JSONB), CAST(:e AS JSONB))"),
+            {"i": sfx_id, "p": HOME, "b": "a" * 40, "f": "b" * 40, "t": "c" * 40,
+             "br": f"boss/self-fix/{sfx_id}-x",
+             "pr": _json.dumps({"title": "fix(deploy): x", "diff": diff, "labels": []}),
+             "rg": _json.dumps({"tests": ["engine/tests/test_x.py"]}),
+             "d": _json.dumps({"hypothesis": "x"}), "e": _json.dumps({"symptom": "port held"})})
+    return sfx_id
+
+
+def test_send_to_boss_team_is_previewed_ticked_and_exportable(client, engine, monkeypatch):
+    """The upstream routes (R9): preview stores the exact send, Send refuses without the tick,
+    a patch export is a download, and with telemetry off the preview offers only the export."""
+    from boss_engine.services import self_fix_upstream as up
+
+    monkeypatch.setenv("BOSS_TELEMETRY", "off")
+    monkeypatch.setattr(api_main.settings, "telemetry", "off", raising=False)
+    monkeypatch.setattr(up, "_names", lambda c, p: [])
+    sfx_id = _verified_row(engine)
+    try:
+        assert client.get(f"/v1/self-fixes/{sfx_id}/upstream", params={"project_id": HOME}
+                          ).json() == {"send": None, "telemetry_off": "BOSS_TELEMETRY=off"}
+        got = client.post(f"/v1/self-fixes/{sfx_id}/upstream/preview",
+                          json={"project_id": HOME, "actor": "ceo"})
+        assert got.status_code == 200, got.text
+        send = got.json()
+        assert send["channel"] == "patch_export" and send["check"]["ok"] is True
+        assert send["sha256"] and send["checked"] is False
+        refused = client.post(f"/v1/self-fixes/{sfx_id}/upstream/send",
+                              json={"project_id": HOME, "actor": "ceo",
+                                    "send_id": send["send_id"], "checked": False})
+        assert refused.status_code == 409 and "I checked this" in refused.text
+        edited = client.put(f"/v1/self-fixes/{sfx_id}/upstream/preview",
+                            json={"project_id": HOME, "actor": "ceo", "send_id": send["send_id"],
+                                  "body": "my words"}).json()
+        assert edited["send_id"] != send["send_id"] and edited["checked"] is False
+        patch = client.get(f"/v1/self-fixes/{sfx_id}/patch", params={"project_id": HOME})
+        assert patch.status_code == 200 and patch.content[:2] == b"\x1f\x8b"
+        assert "attachment" in patch.headers["content-disposition"]
+    finally:
+        with engine.begin() as c:
+            c.execute(text("DELETE FROM self_fixes WHERE id = :i"), {"i": sfx_id})
+
+
+def test_removal_and_autonomy_routes(client, engine):
+    sfx_id = _verified_row(engine)
+    try:
+        nothing = client.post(f"/v1/self-fixes/{sfx_id}/remove",
+                              json={"project_id": HOME, "actor": "ceo"})
+        assert nothing.status_code == 409 and "not on the local stack" in nothing.text
+        assert client.post("/v1/self-fixes/remove-all", json={"project_id": HOME, "actor": "ceo"}
+                           ).status_code == 409
+        report = client.get("/v1/autonomy", params={"project_id": HOME, "window": "7d"}).json()
+        assert {"totals", "boss_side", "trend", "runs", "window"} <= set(report)
+        one = client.get("/v1/autonomy/runs/wfr_none", params={"project_id": HOME}).json()
+        assert one["sentence"] == "No problems" and one["counts"]["problems"] == 0
+        settings = client.get("/v1/self-fix/settings", params={"project_id": HOME}).json()
+        assert settings["auto_install"] == "off" and settings["auto_install_why"]
+        assert {"last_seen_at", "watching"} <= set(settings["installer"])
+        one_fix = client.get(f"/v1/self-fixes/{sfx_id}", params={"project_id": HOME}).json()
+        assert [s["key"] for s in one_fix["lineage"]][0] == "problem"
+        assert "bundle" not in one_fix["self_fix"]
+    finally:
+        with engine.begin() as c:
+            c.execute(text("DELETE FROM self_fixes WHERE id = :i"), {"i": sfx_id})

@@ -283,6 +283,68 @@ def _register_read_tools(reg: ToolRegistry) -> None:
             pass
         return out
 
+    # ── BOSS fixes itself (BOSSAPP-571): read the self-fixes and the autonomy metric ─────────
+    # Read only. No tool starts, approves, installs, removes or sends a self-fix: those are a
+    # person's acts in the console (and approval is the decisions API), never an agent's.
+    @reg.tool(
+        "list_self_fixes",
+        "BOSS's self-fixes (newest first): bugs in BOSS's own code that BOSS diagnosed, fixed "
+        "with a regression test and its reviewers, and installed after a person approved — "
+        "with status chip, cause, area, run, upstream state and the one-line progress.",
+        _obj({"project_id": {"type": "string"}, "status": {"type": "string"},
+              "limit": _LIMIT}), permission="improvement:read")
+    def list_self_fixes(ctx, *, project_id, actor, args):
+        sf = services_module("self_fix")
+        pid = args.get("project_id") or project_id
+        with ctx.begin() as c:
+            items = sf.list_self_fixes(c, project_id=pid, status=args.get("status") or None,
+                                       limit=int(args.get("limit") or 25))
+        keep = ("id", "status", "chip", "stage", "area", "signature", "class_signature",
+                "run_id", "step_id", "confidence", "tier", "refusal", "upstream_state",
+                "upstream_url", "created_at", "updated_at")
+        return {"count": len(items), "self_fixes": [
+            {**{k: _json_safe(i.get(k)) for k in keep},
+             "title": (i.get("pr") or {}).get("title"), "line": sf.step_line(i)} for i in items]}
+
+    @reg.tool(
+        "get_self_fix",
+        "One BOSS self-fix by id (sfx_…) with its lineage: problem → diagnosis (and the "
+        "rejected hypothesis) → fix → tests (red then green) → review → approval → install → "
+        "resumed step → upstream, its events, and the approval card while it waits for one.",
+        _obj({"self_fix_id": {"type": "string"}}, ["self_fix_id"]),
+        permission="improvement:read")
+    def get_self_fix(ctx, *, project_id, actor, args):
+        sf = services_module("self_fix")
+        si = services_module("self_fix_install")
+        sfx_id = str(args["self_fix_id"])
+        with ctx.begin() as c:
+            found = sf.get(c, sfx_id)
+            if found is None or found.get("project_id") != project_id:
+                return {"ok": False, "error": f"no self-fix {sfx_id} in this project"}
+            out = sf.lineage(c, sfx_id) or {}
+            if found.get("status") == sf.AWAITING_APPROVAL:
+                out["card"] = si.card(found)
+        (out.get("self_fix") or {}).pop("bundle", None)
+        out["line"] = sf.step_line(found)
+        return _json_safe(out)
+
+    @reg.tool(
+        "autonomy_report",
+        "The autonomy metric: of the problems runs hit, how many BOSS's agents solved end to "
+        "end, how many a person solved, how many an outside coding agent solved, how many are "
+        "open — per run (run_id) or for the project over a window (7d, 30d, 90d) with a "
+        "weekly trend and the BOSS-side cut.",
+        _obj({"project_id": {"type": "string"}, "run_id": {"type": "string"},
+              "window": {"type": "string", "enum": ["7d", "30d", "90d"]}}),
+        permission="improvement:read")
+    def autonomy_report(ctx, *, project_id, actor, args):
+        am = services_module("autonomy_metric")
+        pid = args.get("project_id") or project_id
+        with ctx.begin() as c:
+            if args.get("run_id"):
+                return _json_safe(am.run_report(c, project_id=pid, run_id=str(args["run_id"])))
+            return _json_safe(am.report(c, project_id=pid, window=args.get("window") or "30d"))
+
     @reg.tool(
         "list_running_work",
         "Everything actively running in the background right now — running code "

@@ -3,7 +3,7 @@
 # One line per operation: its declaration, then the built-in roles allowed
 # (O owner, A admin, P operator, V viewer, U auditor; '-' none). Every other role is denied
 # 403, or 404 when the operation names an object the role cannot even read.
-# 1553 operations.
+# 1563 operations.
 "GET /.well-known/boss-jwks.json": ["public:jwks", "OAPVU"]
 "GET /docs": ["public:api_description", "OAPVU"]
 "GET /docs/oauth2-redirect": ["public:api_description", "OAPVU"]
@@ -250,6 +250,8 @@
 "POST /v1/auth/step-up": ["authenticated:self", "OAPVU"]
 "POST /v1/auth/webauthn/options": ["public:auth_endpoint", "OAPVU"]
 "POST /v1/auth/webauthn/verify": ["public:auth_endpoint", "OAPVU"]
+"GET /v1/autonomy": ["permit improvement:read @ project(query=project_id)", "OAPVU"]
+"GET /v1/autonomy/runs/{run_id}": ["permit improvement:read @ project(query=project_id)", "OAPVU"]
 "GET /v1/autoscaler/plans": ["permit infra:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/autoscaler/plans": ["permit infra:provision @ project(body=project_id)", "OA"]
 "POST /v1/aws/metal/classify": ["permit infra:read @ org", "OAPVU"]
@@ -1330,6 +1332,7 @@
 "GET /v1/self-fixes": ["permit improvement:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/self-fixes": ["permit improvement:manage @ project(body=project_id)", "OA"]
 "GET /v1/self-fixes/health": ["permit self_fix:ticket_read @ org", "-"]
+"POST /v1/self-fixes/remove-all": ["permit improvement:manage @ project(body=project_id)", "OA"]
 "POST /v1/self-fixes/stack-report": ["permit self_fix:ticket_report @ org", "-"]
 "GET /v1/self-fixes/tickets": ["permit self_fix:ticket_read @ org", "-"]
 "POST /v1/self-fixes/tickets/reissue": ["permit self_fix:ticket_read @ org", "-"]
@@ -1339,6 +1342,13 @@
 "POST /v1/self-fixes/{self_fix_id}/build": ["permit worker:lease @ org", "-"]
 "POST /v1/self-fixes/{self_fix_id}/cancel": ["permit improvement:manage @ project(body=project_id)", "OA"]
 "GET /v1/self-fixes/{self_fix_id}/diff": ["permit improvement:read @ project(query=project_id)", "OAPVU"]
+"GET /v1/self-fixes/{self_fix_id}/patch": ["permit improvement:read @ project(query=project_id)", "OAPVU"]
+"POST /v1/self-fixes/{self_fix_id}/remove": ["permit improvement:manage @ project(body=project_id)", "OA"]
+"GET /v1/self-fixes/{self_fix_id}/upstream": ["permit improvement:read @ project(query=project_id)", "OAPVU"]
+"POST /v1/self-fixes/{self_fix_id}/upstream/fork": ["permit improvement:manage @ project(body=project_id)", "OA"]
+"POST /v1/self-fixes/{self_fix_id}/upstream/preview": ["permit improvement:manage @ project(body=project_id)", "OA"]
+"PUT /v1/self-fixes/{self_fix_id}/upstream/preview": ["permit improvement:manage @ project(body=project_id)", "OA"]
+"POST /v1/self-fixes/{self_fix_id}/upstream/send": ["permit improvement:manage @ project(body=project_id)", "OA"]
 "GET /v1/self/diagnostics": ["permit system:read @ org", "OAPVU"]
 "POST /v1/self/host-sample": ["permit system:operate @ org", "OA"]
 "POST /v1/self/host-stall": ["permit worker:lease @ org", "-"]

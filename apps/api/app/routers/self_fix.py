@@ -15,6 +15,7 @@ from __future__ import annotations
 from typing import Any, Callable, Optional
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import Response
 from pydantic import BaseModel
 
 from boss_engine.db import begin
@@ -42,6 +43,17 @@ class SettingsBody(Body):
 
 class TakeBody(BaseModel):
     pass
+
+
+class PreviewEditBody(Body):
+    send_id: str
+    body: Optional[str] = None
+    evidence: Optional[str] = None
+
+
+class SendBody(Body):
+    send_id: str
+    checked: bool = False
 
 
 class ReportBody(BaseModel):
@@ -77,8 +89,10 @@ def build_self_fix_router(
     require_worker: Callable[[], None],
     jobs: Any = None,
 ) -> APIRouter:
+    from boss_engine.services import autonomy_metric
     from boss_engine.services import self_fix as sf
     from boss_engine.services import self_fix_install as si
+    from boss_engine.services import self_fix_upstream as up
 
     router = APIRouter(tags=["self-fix"])
 
@@ -112,6 +126,7 @@ def build_self_fix_router(
     def list_tickets() -> dict:
         require_self_installer()
         with begin(engine) as c:
+            si.seen_installer(c)
             return {"tickets": si.pending_tickets(c, settings())}
 
     @router.post("/v1/self-fixes/tickets/reissue")
@@ -225,10 +240,14 @@ def build_self_fix_router(
             state = sf.switch(c)
             values = {k: sf.setting(c, settings(), k) for k in sf.DEFAULTS}
             stack = si.stack(c)
+            spent = sf.month_spent(c)
+            installer = si.installer_seen(c)
         ok, why = sf.install_capable(settings())
         return {"switch": state, "settings": values, "auto_install": sf.AUTO_INSTALL_POLICY,
+                "auto_install_why": sf.AUTO_INSTALL_WHY,
                 "can_install": ok, "why_not": why, "stack": stack,
-                "env_off": sf.env_off()}
+                "env_off": sf.env_off(), "month_spent_usd": round(spent / 1e6, 2),
+                "installer": installer}
 
     @router.put("/v1/self-fix/settings")
     @permit(P.IMPROVEMENT_MANAGE, scope=Scope.project(body="project_id"))
@@ -255,6 +274,126 @@ def build_self_fix_router(
                 return si.upgrade_plan(c, settings(), to_ref=to)
             except Exception as error:  # noqa: BLE001 — a plan BOSS cannot make says why
                 raise HTTPException(status_code=409, detail=f"no plan: {error}") from error
+
+    # ── removing installed fixes (a person's decision; the host runs the ticket) ─────────────
+    @router.post("/v1/self-fixes/remove-all")
+    @permit(P.IMPROVEMENT_MANAGE, scope=Scope.project(body="project_id"))
+    def remove_all_self_fixes(payload: Body) -> dict:
+        pid = _pid(payload.project_id)
+        with begin(engine) as c:
+            actor = require_write_actor(c, pid, payload.actor, "workflow_manage")
+            try:
+                return si.request_removal(c, settings(), project_id=pid, actor=actor)
+            except si.InstallRefused as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
+
+    @router.post("/v1/self-fixes/{self_fix_id}/remove")
+    @permit(P.IMPROVEMENT_MANAGE, scope=Scope.project(body="project_id"))
+    def remove_self_fix(self_fix_id: str, payload: Body) -> dict:
+        pid = _pid(payload.project_id)
+        with begin(engine) as c:
+            actor = require_write_actor(c, pid, payload.actor, "workflow_manage")
+            _own(c, self_fix_id, pid)
+            try:
+                return si.request_removal(c, settings(), project_id=pid, actor=actor,
+                                          sfx_id=self_fix_id)
+            except si.InstallRefused as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
+
+    # ── Send to BOSS team (R9 R11 R18): preview → edit → send, or export ───────────────────
+    @router.get("/v1/self-fixes/{self_fix_id}/upstream")
+    @permit(P.IMPROVEMENT_READ, scope=Scope.project(query="project_id"))
+    def get_upstream(self_fix_id: str, project_id: str) -> dict:
+        pid = _pid(project_id)
+        with begin(engine) as c:
+            require_reader(c, pid)
+            _own(c, self_fix_id, pid)
+            return {"send": up.latest(c, self_fix_id),
+                    "telemetry_off": up.telemetry_off(settings())}
+
+    @router.post("/v1/self-fixes/{self_fix_id}/upstream/preview")
+    @permit(P.IMPROVEMENT_MANAGE, scope=Scope.project(body="project_id"))
+    def preview_upstream(self_fix_id: str, payload: Body) -> dict:
+        pid = _pid(payload.project_id)
+        with begin(engine) as c:
+            actor = require_write_actor(c, pid, payload.actor, "workflow_manage")
+            _own(c, self_fix_id, pid)
+            try:
+                return up.preview(c, settings(), self_fix_id, actor=actor)
+            except up.UpstreamRefused as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
+
+    @router.put("/v1/self-fixes/{self_fix_id}/upstream/preview")
+    @permit(P.IMPROVEMENT_MANAGE, scope=Scope.project(body="project_id"))
+    def edit_upstream(self_fix_id: str, payload: PreviewEditBody) -> dict:
+        pid = _pid(payload.project_id)
+        with begin(engine) as c:
+            actor = require_write_actor(c, pid, payload.actor, "workflow_manage")
+            _own(c, self_fix_id, pid)
+            try:
+                return up.edit(c, settings(), self_fix_id, payload.send_id, actor=actor,
+                               body=payload.body, evidence=payload.evidence)
+            except up.UpstreamRefused as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
+
+    @router.post("/v1/self-fixes/{self_fix_id}/upstream/send")
+    @permit(P.IMPROVEMENT_MANAGE, scope=Scope.project(body="project_id"))
+    def send_upstream(self_fix_id: str, payload: SendBody) -> dict:
+        pid = _pid(payload.project_id)
+        with begin(engine) as c:
+            actor = require_write_actor(c, pid, payload.actor, "workflow_manage")
+            _own(c, self_fix_id, pid)
+        # Its own transaction: a refused or failed send still records what happened to it.
+        try:
+            with begin(engine) as c:
+                return up.send(c, settings(), self_fix_id, payload.send_id, actor=actor,
+                               checked=payload.checked)
+        except up.UpstreamRefused as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+
+    @router.post("/v1/self-fixes/{self_fix_id}/upstream/fork")
+    @permit(P.IMPROVEMENT_MANAGE, scope=Scope.project(body="project_id"))
+    def fork_upstream(self_fix_id: str, payload: Body) -> dict:
+        pid = _pid(payload.project_id)
+        with begin(engine) as c:
+            actor = require_write_actor(c, pid, payload.actor, "workflow_manage")
+            _own(c, self_fix_id, pid)
+            try:
+                return up.create_fork(c, settings(), self_fix_id, actor=actor)
+            except up.UpstreamRefused as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
+
+    @router.get("/v1/self-fixes/{self_fix_id}/patch")
+    @permit(P.IMPROVEMENT_READ, scope=Scope.project(query="project_id"))
+    def export_patch(self_fix_id: str, project_id: str, actor: Optional[str] = None
+                     ) -> Response:
+        pid = _pid(project_id)
+        with begin(engine) as c:
+            require_reader(c, pid)
+            _own(c, self_fix_id, pid)
+            try:
+                body, name = up.export(c, settings(), self_fix_id, actor=actor or "a person")
+            except up.UpstreamRefused as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
+        return Response(content=body, media_type="application/gzip",
+                        headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+    # ── the autonomy metric (R15) ──────────────────────────────────────────────────────────
+    @router.get("/v1/autonomy")
+    @permit(P.IMPROVEMENT_READ, scope=Scope.project(query="project_id"))
+    def autonomy(project_id: str, window: str = "30d") -> dict:
+        pid = _pid(project_id)
+        with begin(engine) as c:
+            require_reader(c, pid)
+            return autonomy_metric.report(c, project_id=pid, window=window)
+
+    @router.get("/v1/autonomy/runs/{run_id}")
+    @permit(P.IMPROVEMENT_READ, scope=Scope.project(query="project_id"))
+    def run_autonomy(run_id: str, project_id: str) -> dict:
+        pid = _pid(project_id)
+        with begin(engine) as c:
+            require_reader(c, pid)
+            return autonomy_metric.run_report(c, project_id=pid, run_id=run_id)
 
     # ── the worker ──────────────────────────────────────────────────────────────────────────
     @router.post("/v1/self-fixes/{self_fix_id}/build")
