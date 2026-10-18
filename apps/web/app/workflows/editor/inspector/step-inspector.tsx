@@ -35,8 +35,9 @@ function kitLabel(abilities: Ability[] | null, id: string): string {
   return asSkill !== id ? asSkill : itemLabel(abilities, "mcp", id);
 }
 import {
-  AGENTED, APPROVABLE, STEP_ID, approvalMode, approvalOf, blockOf, declaredInputs, forcedApproval,
-  formFields, instructionsOf, isAgentTask, producesOf, scopedMcp, scopedSkills, sourceOf, usesOf,
+  AGENTED, APPROVABLE, STEP_ID, approvalMode, approvalOf, blockOf, declaredInputs, followsPolicy,
+  forcedApproval, formFields, instructionsOf, isAgentTask, isDeploy, producesOf, scopedMcp,
+  scopedSkills, sourceOf, usesOf,
 } from "./step-facts";
 
 const TYPE_LABEL: Record<StepView["type"], string> = {
@@ -424,13 +425,22 @@ function ApprovalSection({ step, palette, problems, onPatch }: {
   const [more, setMore] = useState(false);
   const onTimeout = String(approval.on_timeout ?? "block");
   const sla = approval.sla_hours;
+  // A DEPLOY'S PROMISE IS ITS OWN SETTING (deploy_policy): a person, whatever the environment's
+  // policy — or, ticked, the policy decides. The lock says which, so it never promises a person
+  // a policy would replace.
+  const deploy = isDeploy(step);
+  const byPolicy = followsPolicy(step);
+  const lockTitle = !forced ? undefined
+    : byPolicy ? "Asks a person unless this environment's deploy policy ships without asking"
+    : deploy ? `Risk ${risk} — always needs a person, whatever the environment's deploy policy`
+    : `Risk ${risk} — always needs a person`;
   return (
     <Section label="Approval" testId="wf-sec-approval">
-      <div className="wf-switch-row" title={forced ? `Risk ${risk} — always needs a person` : undefined}
+      <div className="wf-switch-row" title={lockTitle}
              data-testid="wf-approval-row">
         <button type="button" role="switch" aria-checked={on} className="wf-switch"
                 disabled={forced} data-testid="wf-approval-switch" aria-label="Needs approval"
-                title={forced ? `Risk ${risk} — always needs a person` : undefined}
+                title={lockTitle}
                 onClick={() => onPatch({ approval: on ? "auto" : "manual" })}>
           <span className="wf-switch-knob" />
         </button>
@@ -442,6 +452,14 @@ function ApprovalSection({ step, palette, problems, onPatch }: {
                   onClick={() => setMore((m) => !m)}>More</button>
         ) : null}
       </div>
+      {deploy ? (
+        <label className="wf-switch-row" data-testid="wf-approval-policy"
+               title="Ticked, the environment's deploy policy (Infra) may ship this without asking, and the plan says so. Unticked, a person approves it, whatever the policy.">
+          <input type="checkbox" checked={byPolicy} data-testid="wf-approval-policy-box"
+                 onChange={(e) => onPatch({ approvalMore: { follows_policy: e.target.checked ? true : "" } })} />
+          <span>Let the environment&apos;s deploy policy decide</span>
+        </label>
+      ) : null}
       <FieldError problems={problems} field="approval" />
       {on && more ? (
         <div className="wf-approval-more" data-testid="wf-approval-more">

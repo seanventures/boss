@@ -1655,8 +1655,12 @@ def plan_stack_deploy(engine, settings: Settings, *, project_id: str, target_id:
                       workflow_step_id: Optional[str] = None,
                       manifest_path: Optional[str] = None,
                       approval_decision_id: Optional[str] = None,
-                      retire_projects: Optional[list[str]] = None) -> dict[str, Any]:
+                      retire_projects: Optional[list[str]] = None,
+                      person_required: bool = False) -> dict[str, Any]:
     """Record a deployment of `repository@ref` to a stack target, held for approval.
+
+    `person_required`: a workflow step that promised a person started it — only a person's
+    answer approves it, never the environment's policy (deploy_policy.pre_approval).
 
     `retire_projects`: this app's own earlier compose projects to take down before it comes up
     (step_recovery's clean_and_retry; `retire_own_projects`, guarded on the host). Part of what
@@ -1908,7 +1912,8 @@ def plan_stack_deploy(engine, settings: Settings, *, project_id: str, target_id:
         from .deploy_policy import pre_approval
 
         approval = pre_approval(connection, project_id, target.get("environment"),
-                                gate_decision_id=approval_decision_id)
+                                gate_decision_id=approval_decision_id,
+                                person_required=person_required)
         if approval and rp.required_approvers_for_changeset(connection, changeset["id"]):
             approval = None
         if approval:
@@ -3004,8 +3009,12 @@ def plan_for_workflow_step(engine, settings: Settings, *, project_id: str, actor
                            step_id: Optional[str] = None,
                            approval_decision_id: Optional[str] = None,
                            commit: Optional[str] = None,
-                           retire_projects: Optional[list[str]] = None) -> dict[str, Any]:
+                           retire_projects: Optional[list[str]] = None,
+                           person_required: bool = False) -> dict[str, Any]:
     """Plan the build's pull-request head onto a stack target; the step waits on it.
+
+    `person_required`: the step promised a person (deploy_policy.promises_a_person), so the
+    environment's policy may not approve this deployment.
 
     `commit`: ship exactly this commit of the pull request instead of its head — pass 1's deploy
     ships the head pass 1 left (pinned when pass 2 started), never what pass 2 pushed beside it.
@@ -3069,7 +3078,8 @@ def plan_for_workflow_step(engine, settings: Settings, *, project_id: str, actor
             run_id=run_id, workflow_run_id=workflow_run_id, approver_role=approver_role,
             workflow_step_id=step_id,
             manifest_path=None if is_stack_target(target) else target.get("manifest_path"),
-            approval_decision_id=approval_decision_id, retire_projects=retire_projects)
+            approval_decision_id=approval_decision_id, retire_projects=retire_projects,
+            person_required=person_required)
     except StackDeployError as exc:
         refused: dict[str, Any] = {"capability": "deploy", "tool": None, "status": "failed",
                                    "error": f"{exc.headline} {exc.action}"}

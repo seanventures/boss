@@ -14,6 +14,20 @@ Two ways a deploy runs without opening a decision of its own, and no others:
 Either way the deployment still goes through its ChangeSet, reservation and receipt; only the
 person's card is skipped, and who answered is recorded: the gate's approver, or
 "policy:<policy id>" with the person who set the policy.
+
+A PROMISE OUTRANKS A POLICY (D2, 2026-10-18). A HelpDesk "Add a feature" run said "Deploy —
+Ships only when you say yes" and "Nothing deploys without your approval", and the staging
+policy (set 2026-10-12 to ship without asking) deployed it with nobody asked. The words and the
+behaviour came from two places. Now both come from here:
+
+  * A workflow's Deploy step PROMISES A PERSON — the risk floor makes it manual, and the builder,
+    the plan and the composer all say a person approves it. The environment's policy never
+    answers for such a step: not at its gate, and not on the deployment it starts
+    (`person_required`).
+  * Only a step that says so — `approval.follows_policy: true` — lets the environment's policy
+    decide, and then every surface says what the policy will do (`step_answer().says`): "Ships
+    automatically under your staging policy" when it will, "Ships only when you say yes" when it
+    asks. A deploy nobody promised anything about (a chat or Infra deploy) follows the policy.
 """
 from __future__ import annotations
 
@@ -24,6 +38,19 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from .core import emit_event, now_utc
+
+
+#: The step-level opt-in to the environment's policy (`approval.follows_policy`). Absent means
+#: the step promises a person, which is what every surface already says about a Deploy step.
+FOLLOWS_POLICY = "follows_policy"
+
+#: What a surface says about a deploy a person approves.
+PERSON_SAYS = "Ships only when you say yes"
+
+
+def policy_says(environment: Any) -> str:
+    """What a surface says about a deploy the environment's policy ships without asking."""
+    return f"Ships automatically under your {_environment(environment) or 'environment'} policy"
 
 
 def _environment(environment: Any) -> str:
@@ -112,14 +139,68 @@ def _gate_approval(connection: Connection, project_id: str,
             "approved_by": str(row["approved_by"] or "unknown")}
 
 
+def _is_deploy(spec_step: Any) -> bool:
+    binding = spec_step.get("binding") if isinstance(spec_step, dict) else None
+    return isinstance(binding, dict) and binding.get("capability") == "deploy"
+
+
+def follows_policy(spec_step: Any) -> bool:
+    """This Deploy step said the environment's policy may answer for it."""
+    if not _is_deploy(spec_step):
+        return False
+    approval = spec_step.get("approval") if isinstance(spec_step.get("approval"), dict) else {}
+    return approval.get(FOLLOWS_POLICY) is True
+
+
+def promises_a_person(spec_step: Any) -> bool:
+    """A Deploy step a person approves, whatever the environment's policy allows."""
+    return _is_deploy(spec_step) and not follows_policy(spec_step)
+
+
+def step_environment(spec_step: Any, run_input: Any = None) -> str:
+    """Where a deploy step ships: its own literal `environment`, the run's, else staging (the
+    deploy tool's own default)."""
+    binding = (spec_step.get("binding") if isinstance(spec_step, dict) else None) or {}
+    wired = (binding.get("inputs") or {}).get("environment")
+    if isinstance(wired, str) and wired.strip():
+        return wired.strip()
+    if isinstance(run_input, dict) and str(run_input.get("environment") or "").strip():
+        return str(run_input["environment"]).strip()
+    return "staging"
+
+
+def step_answer(connection: Connection, project_id: str, spec_step: Any,
+                run_input: Any = None) -> dict[str, Any]:
+    """WHO ANSWERS FOR THIS DEPLOY STEP, and the words for it — the one answer the runner acts
+    on and every surface shows. {who: "you" | "policy", environment, policy_id, says}."""
+    env = step_environment(spec_step, run_input)
+    policy: dict[str, Any] = {}
+    if follows_policy(spec_step):
+        try:
+            policy = deploy_policy(connection, project_id, env)
+        except Exception:  # noqa: BLE001 — unknown means ask
+            policy = {}
+    ships = bool(policy.get("policy_id")) and policy.get("requires_approval") is False
+    return {"who": "policy" if ships else "you", "environment": _environment(env),
+            "policy_id": policy.get("policy_id") if ships else None,
+            "promised": promises_a_person(spec_step),
+            "says": policy_says(env) if ships else PERSON_SAYS}
+
+
 def pre_approval(connection: Connection, project_id: str, environment: Any, *,
-                 gate_decision_id: Optional[str] = None) -> Optional[dict[str, Any]]:
+                 gate_decision_id: Optional[str] = None,
+                 person_required: bool = False) -> Optional[dict[str, Any]]:
     """How this deploy is already approved — {source, decision_id, approved_by, policy?} — or
-    None, when a person must be asked. The gate first (it is a person's answer), then policy."""
+    None, when a person must be asked. The gate first (it is a person's answer), then policy.
+
+    `person_required`: the workflow step that started this deploy promised a person
+    (promises_a_person), so only a person's answer counts — never the environment's policy."""
     if gate_decision_id:
         found = _gate_approval(connection, project_id, str(gate_decision_id))
         if found:
             return found
+    if person_required:
+        return None
     policy = deploy_policy(connection, project_id, environment)
     if policy["requires_approval"] or not policy["policy_id"]:
         return None

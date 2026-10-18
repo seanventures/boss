@@ -34,6 +34,7 @@ from . import (agent_acts, change_record, deploy_repair, step_agents,
                step_recovery, workflows)
 from . import workflow_custom_steps as custom_steps
 from .core import emit_event, now_utc
+from .deploy_policy import promises_a_person
 # Named import so "who approved this" is compared against one constant rather than a
 # string literal repeated wherever the question is asked.
 from .decisions import SYSTEM_ACTOR as DECISION_SYSTEM_ACTOR
@@ -1831,24 +1832,35 @@ def _is_advisory_preview_row(connection: Connection, run_id: str) -> bool:
 
 
 def deploy_environment(spec_step: dict[str, Any], run_input: Any) -> str:
-    """Where a deploy step ships: its own literal `environment`, the run's, else staging (the
-    deploy tool's own default)."""
-    wired = ((spec_step.get("binding") or {}).get("inputs") or {}).get("environment")
-    if isinstance(wired, str) and wired.strip():
-        return wired.strip()
-    if isinstance(run_input, dict) and str(run_input.get("environment") or "").strip():
-        return str(run_input["environment"]).strip()
-    return "staging"
+    """Where a deploy step ships (deploy_policy.step_environment)."""
+    from .deploy_policy import step_environment
+
+    return step_environment(spec_step, run_input)
 
 
 def policy_ships_without_asking(connection: Connection, project_id: str,
                                 environment: str) -> bool:
-    """The environment's policy, set by a person, says a deploy there asks nobody."""
+    """The environment's policy, set by a person, says a deploy there asks nobody. Says nothing
+    about a STEP: whether a step may ship on it is `policy_answers_for_step`."""
     from .deploy_policy import pre_approval
 
     try:
         return bool((pre_approval(connection, project_id, environment) or {}).get(
             "source") == "policy")
+    except Exception:  # noqa: BLE001 — unknown means ask
+        return False
+
+
+def policy_answers_for_step(connection: Connection, project_id: str,
+                            spec_step: dict[str, Any], run_input: Any) -> bool:
+    """THE ONE ANSWER for a Deploy step (deploy_policy.step_answer): the environment's policy
+    answers only for a step that said it may (`approval.follows_policy`). A step that promised a
+    person is asked, whatever the policy says — the words every surface shows come from the
+    same function, so the promise and the behaviour cannot disagree."""
+    from .deploy_policy import step_answer
+
+    try:
+        return step_answer(connection, project_id, spec_step, run_input)["who"] == "policy"
     except Exception:  # noqa: BLE001 — unknown means ask
         return False
 
@@ -1867,7 +1879,8 @@ def _seen_live_by_policy(connection: Connection, project_id: str,
         if binding.get("capability") == "deploy" and not (binding.get("inputs") or {}).get(
                 "pass_2_of"):
             env = deploy_environment(spec_step, context.get("input"))
-            return env if policy_ships_without_asking(connection, project_id, env) else None
+            return env if policy_answers_for_step(connection, project_id, spec_step,
+                                                  context.get("input")) else None
     return None
 
 
@@ -3208,6 +3221,9 @@ def _perform_capability(
                 step_id=step_id or None,
                 # ONE APPROVAL PER DEPLOY: the gate a person already answered, passed on.
                 approval_decision_id=str(context.get("approval_decision_id") or "") or None,
+                # A PROMISED PERSON: the stack deployment's own decision is this step's gate,
+                # so the environment's policy may not answer it either.
+                person_required=promises_a_person(step),
                 # Pass 1's deploy ships the head pass 1 left; "Deploy again" ships pass 2's.
                 commit=(None if (pass_2_of or redeploy) else
                         pinned_pass_one_commit(connection, run_id)),
@@ -3457,6 +3473,10 @@ def _perform_capability(
             # ONE APPROVAL PER DEPLOY: the step's released gate goes to the deploy explicitly,
             # so the deployment runs under it instead of asking a second time.
             inputs = {**inputs, "approval_decision_id": str(context["approval_decision_id"])}
+        if key == "deploy" and promises_a_person(step):
+            # The step promised a person: the deployment it starts may not run on the
+            # environment's policy, whatever happened to the gate on the way here.
+            inputs = {**inputs, "person_required": True}
         output = _invoke_tool(ctx, capability.tool, project_id, step_actor, inputs)
     result = {"capability": key, "tool": capability.tool, **output,
               "ran_as": {**ran_as, "tool": capability.tool,
@@ -5754,11 +5774,12 @@ def _gate_subject(
         if pass_2_of and pass_two_redeploy_refusal(
                 connection, str(context.get("run_id") or ""), spec_step, pass_2_of):
             return None
-        # THE ENVIRONMENT'S POLICY, ON THE STEP AS ON THE DEPLOYMENT: a person who set an
-        # environment to deploy without asking (deploy_policy) is not asked at the step either.
-        # The deployment then runs on that policy and records whose it was.
-        if policy_ships_without_asking(connection, project_id,
-                                       deploy_environment(spec_step, context.get("input"))):
+        # THE ENVIRONMENT'S POLICY, ON THE STEP AS ON THE DEPLOYMENT — FOR A STEP THAT LET IT.
+        # A step with `approval.follows_policy` is not asked where a person set the environment
+        # to deploy without asking; the deployment then runs on that policy and records whose
+        # it was. A step that PROMISED a person (every other Deploy step) is asked, whatever
+        # the policy says (D2, 2026-10-18: "Ships only when you say yes", shipped unasked).
+        if policy_answers_for_step(connection, project_id, spec_step, context.get("input")):
             return None
     capability = get_capability(key)
     if capability.is_gate:

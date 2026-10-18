@@ -118,7 +118,25 @@ describe("approval", () => {
     const sw = q<HTMLButtonElement>(el, "wf-approval-switch")!;
     expect(sw.disabled).toBe(true);
     expect(sw.getAttribute("aria-checked")).toBe("true");
-    expect(sw.title).toBe("Risk 3 — always needs a person");
+    expect(sw.title).toBe("Risk 3 — always needs a person, whatever the environment's deploy policy");
+  });
+
+  it("a deploy says whether its environment's policy may answer, and the box sets it in one PATCH", async () => {
+    const el = await mount("deploy");
+    const box_ = q<HTMLInputElement>(el, "wf-approval-policy-box")!;
+    expect(box_.checked).toBe(false);
+    await click(box_);
+    expect(box.actions).toEqual([{ type: "PATCH_STEP", id: "deploy",
+                                   patch: { approvalMore: { follows_policy: true } } }]);
+    expect(step("deploy").approval).toMatchObject({ mode: "manual", follows_policy: true });
+    // The lock no longer promises a person the policy could replace.
+    expect(q<HTMLButtonElement>(el, "wf-approval-switch")!.title)
+      .toBe("Asks a person unless this environment's deploy policy ships without asking");
+  });
+
+  it("only a deploy step offers the policy box", async () => {
+    const el = await mount("research");
+    expect(q(el, "wf-approval-policy")).toBeNull();
   });
 
   it("a free step toggles with one PATCH_STEP", async () => {

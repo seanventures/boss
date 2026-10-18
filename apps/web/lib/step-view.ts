@@ -200,6 +200,7 @@ export function stepView(step: SpecStep, palette: Palette): StepView {
     badges: {
       approval: isGateStep(step, palette) || forced || approval.mode === "manual",
       forced,
+      byPolicy: binding.capability === "deploy" && approval.follows_policy === true,
       inputs: new Set([...Object.keys(inputs), ...required]).size,
       unwired: required.filter(unset),
       skills: type === "agent" ? strings(binding.skills).length : 0,

@@ -27,6 +27,8 @@ P0:
     # Workflow runner core: gates, retry/skip, one approval per deploy
     - engine/tests/test_an_approved_gate_releases_the_work.py
     - engine/tests/test_one_approval_per_deploy.py
+    # A deploy that promises a person always asks one, whatever the environment policy (D2)
+    - engine/tests/test_a_promised_approval_is_always_asked.py
     - engine/tests/test_a_workflow_follows_a_retry.py
     # Governed deploy + health
     - engine/tests/test_an_app_is_deployed_the_way_it_says.py
@@ -129,6 +131,7 @@ P1:
     - apps/api/tests/test_an_agent_step_runs_on_the_connected_subscription.py
     - apps/api/tests/test_agents_activity_folds_tool_calls.py
   web:
+    - apps/web/tests/a-promised-deploy-is-always-asked.test.ts
     # Workflows and run card
     - apps/web/tests/a-step-panel-leads-with-the-run.test.tsx
     - apps/web/tests/a-chain-says-each-actor-once-and-fits-its-card.test.tsx

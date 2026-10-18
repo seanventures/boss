@@ -1081,6 +1081,10 @@ def effective_approval(
         resolved["approver_role"] = str(approval["approver_role"])
     if approval.get("sla_hours") is not None:
         resolved["sla_hours"] = float(approval["sla_hours"])
+    # A DEPLOY THAT LETS THE ENVIRONMENT'S POLICY ANSWER says so, and keeps saying so: without
+    # it the step promises a person, and no policy answers for it (deploy_policy).
+    if capability_key == "deploy" and approval.get("follows_policy") is True:
+        resolved["follows_policy"] = True
     resolved["risk_tier"] = capability.risk_tier
     resolved["forced_manual"] = capability.risk_tier >= MANUAL_APPROVAL_RISK_FLOOR
     return resolved

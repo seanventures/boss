@@ -117,7 +117,11 @@ def _step(
     nxt: Optional[list[str]] = None,
     approval: Optional[str] = None,
     approver_role: Optional[str] = None,
+    follows_policy: bool = False,
 ) -> dict[str, Any]:
+    """One catalogue step. `follows_policy` (a Deploy step only): the environment's deploy
+    policy may answer for it (deploy_policy). Without it a Deploy step PROMISES A PERSON, and
+    every surface says so — only a workflow whose words promise nobody at the release opts in."""
     step: dict[str, Any] = {
         "id": step_id,
         "kind": "capability",
@@ -126,12 +130,16 @@ def _step(
     }
     if capability in DEFAULT_STEP_AGENTS:
         _set_default_captain(step, DEFAULT_STEP_AGENTS[capability])
-    if approval or approver_role:
+    if approval or approver_role or follows_policy:
         step["approval"] = {}
         if approval:
             step["approval"]["mode"] = approval
         if approver_role:
             step["approval"]["approver_role"] = approver_role
+        if follows_policy:
+            if capability != "deploy":
+                raise ValueError("only a Deploy step can follow the environment's policy")
+            step["approval"]["follows_policy"] = True
     return step
 
 
@@ -268,7 +276,10 @@ def _increments(count: int) -> list[dict[str, Any]]:
                       "title": f"Increment {k} · Build"})
         steps.append({**_step(f"inc{k}_deploy", "deploy",
                               {"run_id": _from(f"inc{k}_build", "code_task_run_id")},
-                              nxt=[after_deploy], approver_role="release_manager"),
+                              nxt=[after_deploy], approver_role="release_manager",
+                              # "deploys them, then improves in steps": each increment goes
+                              # live as the environment's policy says, and the plan says so.
+                              follows_policy=True),
                       "title": f"Increment {k} · Deploy"})
     steps.append(_step("report", "report", nxt=["notify"]))
     steps.append(_step("notify", "notify", _notify_inputs()))
@@ -290,7 +301,9 @@ def _increments(count: int) -> list[dict[str, Any]]:
 # reporting its verdict through its result, not the outer loop second-guessing it.
 #
 # A PR means there is something to look at, so `preview` follows automatically. `deploy` is the
-# one thing a person still decides: not every app that builds should ship.
+# one thing a person still decides: not every app that builds should ship. A Deploy step
+# promises that person unless it says `follows_policy` (deploy_policy), and only workflows whose
+# words promise nobody at the release say it — test_a_promised_approval_is_always_asked.
 CATALOGUE: list[dict[str, Any]] = [
     {
         "key": "standard_product_delivery",
@@ -494,8 +507,10 @@ CATALOGUE: list[dict[str, Any]] = [
             # approval before deployment"), whatever the environment's policy lets a deploy do
             # unasked — on the laptop staging ships without asking, set 2026-10-12.
             _step("approve", "release_approval", approver_role="release_manager"),
+            # THE PERSON IS THE GATE ABOVE, so this step follows the environment's policy
+            # rather than asking the same person the same question twice.
             _step("deploy", "deploy", {"run_id": _from("build", "code_task_run_id")},
-                  approver_role="release_manager"),
+                  approver_role="release_manager", follows_policy=True),
             _step("verify", "verify_recovery", {"incident_id": _in("incident_id")}),
             _step("incident_report", "incident_report", {"incident_id": _in("incident_id")}),
         ]),
@@ -550,7 +565,9 @@ CATALOGUE: list[dict[str, Any]] = [
             # report is assembled on demand for any run, at any point, from the same evidence.
             _step("report", "report"),
             _step("deploy", "deploy", {"run_id": _from("build", "code_task_run_id")},
-                  approver_role="release_manager"),
+                  approver_role="release_manager",
+                  # Nothing here promises a person at the release: the policy decides.
+                  follows_policy=True),
             _step("monitor", "monitor"),
             _step("document", "document", {"title": _in("title")}),
         ]),
@@ -773,7 +790,9 @@ CATALOGUE: list[dict[str, Any]] = [
             # report is assembled on demand for any run, at any point, from the same evidence.
             _step("report", "report"),
             _step("deploy", "deploy", {"run_id": _from("build", "code_task_run_id")},
-                  approver_role="release_manager"),
+                  approver_role="release_manager",
+                  # Nothing here promises a person at the release: the policy decides.
+                  follows_policy=True),
             _step("monitor", "monitor"),
         ]),
     },
@@ -818,7 +837,9 @@ CATALOGUE: list[dict[str, Any]] = [
             # is exactly how `plrr` spent its whole life.
             _step("report", "report", nxt=["deploy"]),
             _step("deploy", "deploy", {"run_id": _from("build", "code_task_run_id")},
-                  nxt=["document"], approver_role="release_manager"),
+                  nxt=["document"], approver_role="release_manager",
+                  # Nothing here promises a person at the release: the policy decides.
+                  follows_policy=True),
             _step("document", "document", {"title": _in("title")}),
         ],
     },
@@ -1164,11 +1185,17 @@ def catalogue_summary(prd_auto_approve: Optional[bool] = None) -> list[dict[str,
         def _capability(step: dict[str, Any]) -> str:
             return str((step.get("binding") or {}).get("capability") or "")
 
-        gates = [s["id"] for s in manual
-                 if _capability(s) not in CAPABILITIES
-                 or stops_for_a_person(_capability(s), (s.get("approval") or {}).get("mode"),
-                                       prd_auto_approve=prd_auto_approve)]
-        automatic = [s["id"] for s in manual if s["id"] not in gates]
+        # A DEPLOY THAT FOLLOWS THE ENVIRONMENT'S POLICY is nobody's gate until a project's
+        # policy says (GET /v1/delivery-workflows/asks reads it): listed apart, never promised.
+        from .deploy_policy import follows_policy
+
+        policy_decides = [s["id"] for s in manual if follows_policy(s)]
+        gates = [s["id"] for s in manual if s["id"] not in policy_decides
+                 and (_capability(s) not in CAPABILITIES
+                      or stops_for_a_person(_capability(s), (s.get("approval") or {}).get("mode"),
+                                            prd_auto_approve=prd_auto_approve))]
+        automatic = [s["id"] for s in manual if s["id"] not in gates
+                     and s["id"] not in policy_decides]
         needs = needs_of(spec)
         out.append({
             "key": entry["key"],
@@ -1183,6 +1210,7 @@ def catalogue_summary(prd_auto_approve: Optional[bool] = None) -> list[dict[str,
             ],
             "gates": gates,
             "automatic_approvals": automatic,
+            "policy_decides": policy_decides,
             "requires_project": sorted(project_requirements(spec)),
             # EVERYTHING it needs from a project, including a model and the agents its gates
             # name — the same keys the start preflight checks, with their labels.

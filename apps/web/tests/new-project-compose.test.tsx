@@ -549,6 +549,37 @@ describe("the walk's findings, as checks", () => {
     expect($('[data-testid="np-cost"]')?.textContent).toContain("you approve 3 times");
   });
 
+  // D2 (2026-10-18): "Ships only when you say yes" and "Nothing deploys without your approval"
+  // were drawn beside a deploy the staging policy shipped unasked. The words are the server's
+  // answer now (deploy_policy.step_answer), so a policy-shipped deploy says so, everywhere.
+  it("a deploy the staging policy ships is said as the policy's, and the note stops promising", async () => {
+    asks = { prd_auto_approve: true, workflows: {
+      minor_feature: [{ step_id: "build", kind: "merge", who: "you" },
+                      { step_id: "deploy", kind: "gate", who: "boss", policy: "staging",
+                        says: "Ships automatically under your staging policy" }] },
+      routes: {} };
+    await mount({ mode: "add" });
+    const deploy = steps().find((s) => s.id === "deploy")!;
+    expect(deploy.who).not.toBe("you");
+    expect(deploy.text).toContain("Ships automatically under your staging policy");
+    expect(deploy.text).not.toContain("say yes");
+    const note = $('[data-testid="np-deploy-note"]')!;
+    expect(note.textContent).toBe("Ships automatically under your staging policy.");
+    expect(note.getAttribute("data-asks")).toBe("policy");
+  });
+
+  it("a deploy the server says you approve keeps its promise", async () => {
+    asks = { prd_auto_approve: true, workflows: {
+      minor_feature: [{ step_id: "build", kind: "merge", who: "you" },
+                      { step_id: "deploy", kind: "gate", who: "you", says: "Ships only when you say yes",
+                        promised: true }] },
+      routes: {} };
+    await mount({ mode: "add" });
+    expect(steps().find((s) => s.id === "deploy")?.who).toBe("you");
+    expect(steps().find((s) => s.id === "deploy")?.text).toContain("Ships only when you say yes");
+    expect($('[data-testid="np-deploy-note"]')?.textContent).toBe("Nothing deploys without your approval.");
+  });
+
   it("Start sits at the foot of How it's built: the reason above it, the deploy promise below", async () => {
     await mount({ mode: "add" });
     const foot = $('.np-plan .np-foot')!;

@@ -305,8 +305,13 @@ def test_a_deploy_asks_as_its_environment_says_and_never_waits_for_pass_2(eng, p
         assert runner._gate_subject(c, project, spec["ship"], context) is not None
         set_approval_policy(c, project_id=project, environment="staging",
                             requires_approval=False, actor="usr_owner")
-        # Staging by policy: nobody is asked, at the step either.
-        assert runner._gate_subject(c, project, spec["ship"], context) is None
+        # A Deploy step PROMISES A PERSON: the staging policy does not answer for it (D2,
+        # test_a_promised_approval_is_always_asked)…
+        assert runner._gate_subject(c, project, spec["ship"], context) is not None
+        # …unless the step lets the policy decide: then nobody is asked, at the step either.
+        opted = {**spec["ship"], "approval": {**(spec["ship"].get("approval") or {}),
+                                              "follows_policy": True}}
+        assert runner._gate_subject(c, project, opted, context) is None
         # A Deploy again that will ship nothing asks nobody and says why when it runs.
         assert runner._gate_subject(c, project, spec["ship_again"], context) is None
         c.execute(text("DELETE FROM deployment_environment_policies WHERE project_id=:p"),

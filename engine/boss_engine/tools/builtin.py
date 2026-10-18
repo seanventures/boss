@@ -2368,7 +2368,10 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
                                          "project has more than one verified host"},
               "approval_decision_id": {"type": "string",
                                        "description": "set by a workflow's Deploy step only; "
-                                                      "leave empty"}},
+                                                      "leave empty"},
+              "person_required": {"type": "boolean",
+                                  "description": "set by a workflow's Deploy step only; "
+                                                 "leave empty"}},
              required=["run_id", "environment"]),
         kind="write",
         reversibility="safe", permission="deployment:create")
@@ -2387,6 +2390,9 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
             # (deploy_policy.pre_approval).
             approval_decision_id=(str(args["approval_decision_id"])
                                   if args.get("approval_decision_id") else None),
+            # A Deploy step that promised a person: no environment policy answers for it. Only
+            # ever makes a deploy stricter, so a model setting it can only add a question.
+            person_required=args.get("person_required") is True,
         )
 
     @reg.tool(

@@ -226,10 +226,13 @@ export function StepNode(p: {
         <span className="wf-node-badges">
           {b.approval ? (
             <span className="wf-badge" data-kind={b.forced ? "forced" : "approval"} data-testid="wf-badge-approval"
-                  data-tip={b.forced
+                  data-tip={b.byPolicy
+                    ? "Asks a person unless this environment's deploy policy ships without asking."
+                    : b.forced
                     ? `${detail?.risk != null ? `Risk ${detail.risk}` : "Risk"} — always needs a person.`
                     : "Needs approval before it continues."}
-                  aria-label={b.forced ? "Always needs a person" : "Needs approval"}>
+                  aria-label={b.byPolicy ? "Asks unless the deploy policy decides"
+                    : b.forced ? "Always needs a person" : "Needs approval"}>
               {b.forced ? <LockSimple size={12} weight="fill" aria-hidden /> : <Lock size={12} weight="bold" aria-hidden />}
             </span>
           ) : null}

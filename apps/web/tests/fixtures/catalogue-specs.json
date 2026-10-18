@@ -1470,6 +1470,7 @@
               "mode": "manual",
               "on_timeout": "block",
               "approver_role": "release_manager",
+              "follows_policy": true,
               "risk_tier": 2,
               "forced_manual": true
             },
@@ -1909,6 +1910,7 @@
               "mode": "manual",
               "on_timeout": "block",
               "approver_role": "release_manager",
+              "follows_policy": true,
               "risk_tier": 2,
               "forced_manual": true
             },
@@ -1991,6 +1993,7 @@
               "mode": "manual",
               "on_timeout": "block",
               "approver_role": "release_manager",
+              "follows_policy": true,
               "risk_tier": 2,
               "forced_manual": true
             },
@@ -3916,6 +3919,7 @@
               "mode": "manual",
               "on_timeout": "block",
               "approver_role": "release_manager",
+              "follows_policy": true,
               "risk_tier": 2,
               "forced_manual": true
             },
@@ -3974,6 +3978,7 @@
               "mode": "manual",
               "on_timeout": "block",
               "approver_role": "release_manager",
+              "follows_policy": true,
               "risk_tier": 2,
               "forced_manual": true
             },
@@ -4240,6 +4245,7 @@
               "mode": "manual",
               "on_timeout": "block",
               "approver_role": "release_manager",
+              "follows_policy": true,
               "risk_tier": 2,
               "forced_manual": true
             },
@@ -4302,6 +4308,7 @@
               "mode": "manual",
               "on_timeout": "block",
               "approver_role": "release_manager",
+              "follows_policy": true,
               "risk_tier": 2,
               "forced_manual": true
             },
@@ -4550,6 +4557,7 @@
               "mode": "manual",
               "on_timeout": "block",
               "approver_role": "release_manager",
+              "follows_policy": true,
               "risk_tier": 2,
               "forced_manual": true
             },
@@ -4592,6 +4600,7 @@
               "mode": "manual",
               "on_timeout": "block",
               "approver_role": "release_manager",
+              "follows_policy": true,
               "risk_tier": 2,
               "forced_manual": true
             },
@@ -4751,6 +4760,7 @@
               "mode": "manual",
               "on_timeout": "block",
               "approver_role": "release_manager",
+              "follows_policy": true,
               "risk_tier": 2,
               "forced_manual": true
             },
@@ -4793,6 +4803,7 @@
               "mode": "manual",
               "on_timeout": "block",
               "approver_role": "release_manager",
+              "follows_policy": true,
               "risk_tier": 2,
               "forced_manual": true
             },
@@ -4952,6 +4963,7 @@
               "mode": "manual",
               "on_timeout": "block",
               "approver_role": "release_manager",
+              "follows_policy": true,
               "risk_tier": 2,
               "forced_manual": true
             },
@@ -4994,6 +5006,7 @@
               "mode": "manual",
               "on_timeout": "block",
               "approver_role": "release_manager",
+              "follows_policy": true,
               "risk_tier": 2,
               "forced_manual": true
             },
@@ -5153,6 +5166,7 @@
               "mode": "manual",
               "on_timeout": "block",
               "approver_role": "release_manager",
+              "follows_policy": true,
               "risk_tier": 2,
               "forced_manual": true
             },
@@ -5195,6 +5209,7 @@
               "mode": "manual",
               "on_timeout": "block",
               "approver_role": "release_manager",
+              "follows_policy": true,
               "risk_tier": 2,
               "forced_manual": true
             },

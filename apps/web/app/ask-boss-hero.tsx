@@ -2199,7 +2199,7 @@ export function AskBossHero({
                     <li>Convene a panel of roles to argue the shape of it</li>
                     <li>Write a PRD — <strong>you approve it</strong> before any code</li>
                     <li>Build, review and test it, then open a pull request</li>
-                    {deploymentAvailable ? <li>Deploy it when you approve the release</li>
+                    {deploymentAvailable ? <li>Deploy it, asking you first unless the plan says your deploy policy decides</li>
                       : <li>Review the release; SSH host deployment is paused in Community</li>}
                   </ol>
                 </section>

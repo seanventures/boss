@@ -758,7 +758,11 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
                    automatic: entry?.automatic_approvals ?? null, mode, app: appName,
                    asks: asks?.workflows?.[flowKey] ?? null });
   const total = counts(timeline);
-  const deploysOnlyWithYou = !timeline.some((s) => s.id === "deploy" && s.who.kind !== "you");
+  // EVERY DEPLOY STEP, by what the server says will answer it (deploy_policy.step_answer):
+  // "Nothing deploys without your approval" only when no deploy on this path ships unasked.
+  const unaskedDeploy = timeline.find((s) => s.deploy && s.who.kind !== "you");
+  const deploysOnlyWithYou = !unaskedDeploy;
+  const deployNote = unaskedDeploy ? `${unaskedDeploy.line}.` : "Nothing deploys without your approval.";
   const cost = costRange(costs[costKey(adding ? addPath : draft.workflowKey)]);
 
   // `??` WAS WRONG HERE AND IT COST A RUN: "" is "nothing blocking", and `??` never looks past
@@ -1650,7 +1654,9 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
             const code = mapRepoNames("code").length;
             return <span className="np-chip" data-testid="np-cost-several">{code} {code === 1 ? "repository" : "repositories"} · {code} linked {code === 1 ? "PR" : "PRs"} · you approve once</span>;
           })() : <span className="np-chip">{total.steps} steps · {youApproveWord(total.approvals)}</span>}
-          <HelpTip label="Cost" text="Starting spends model budget. It stops and asks before it deploys anything." />
+          <HelpTip label="Cost" text={deploysOnlyWithYou
+            ? "Starting spends model budget. It stops and asks before it deploys anything."
+            : "Starting spends model budget. A deploy your environment's policy ships on its own does not stop to ask."} />
         </span>
         <StackWarning state={stackCheck} testId="np-stack-warning" />
         {blocked && !(adding && proposal?.proposal) ? (
@@ -1661,8 +1667,9 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
                 onClick={primaryGate.guard(() => void primary())}>
           {startLabel}<span className="np-kbd" aria-hidden>⌘↵</span>{primaryGate.sr}
         </button>
-        {deploysOnlyWithYou && !formOnly ? (
-          <span className="np-deploy-note" data-testid="np-deploy-note">Nothing deploys without your approval.</span>
+        {!formOnly ? (
+          <span className="np-deploy-note" data-testid="np-deploy-note"
+                data-asks={deploysOnlyWithYou ? "you" : "policy"}>{deployNote}</span>
         ) : null}
         <span className="np-actions">
           {/* NOT THE DEFAULT, STILL HERE: talk it through with the planner first (a PRD, then the
