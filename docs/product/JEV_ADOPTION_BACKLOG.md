@@ -23,10 +23,10 @@ Jev is the right tool when **all four** of these are true:
 
 | Use | Where | Live? |
 |---|---|---|
-| Workflow `typed_decision` step | `typed_decisions.run_step`, `workflow_capability_runner.py:2400` | Held by BOSS-451. No shipped template uses it. |
-| Model-router tier classifier (also asks the rigor questions) | `model_router/classifier.py:311`, `:381` | Held. Shows *Jev · paused* and uses the rules instead. |
+| Workflow `typed_decision` step | `typed_decisions.run_step`, `workflow_capability_runner.py:2400` | Live on the governed path (`TypedDecisionSpend`) when a key is held. No shipped template uses it. |
+| Model-router tier classifier (also asks the rigor questions) | `model_router/classifier.py:311`, `:381` | Held by default; `BOSS_ROUTER_JEV_LIVE=true` lifts it onto the governed path (`store.GovernedJevDecider`, BOSSAPP-579). Held, it shows *Jev · paused* and uses the rules. |
 | Rigor/sensitivity questions | `pipeline_profiles.model_risk_tier` | **Written but not wired in.** The build pipeline still calls the keyword `infer_risk_tier` (`governed_code_task_service.py:3558`). |
-| Key proof in setup | `setup_service.py:1013` | Held. |
+| Key proof in setup | `setup_service.py:1013` | Live on the governed path (`store_decision_key`, no fallback). |
 
 ## Rules for every ticket
 
@@ -49,13 +49,17 @@ Jev is the right tool when **all four** of these are true:
 
 ## P0: groundwork (without these, nothing below is live)
 
-### JEV-0a: Lift the BOSS-451 hold for governed typed decisions
-**Why:** Every live Jev call is paused (`typed_decisions.GOVERNANCE_HOLD`). The spend path is
-already built in `typed_decision_spend.py` (reservation, lease, receipt, settlement). What is
-left is finishing the BOSS-451 key-proof work and switching it on. Until then, every ticket
-below runs only on its keyword fallback.
-**Done when:** a governed typed decision reserves, calls, settles and records a receipt end to
-end, and the UI no longer shows *Jev · paused* on an install that holds a key.
+### JEV-0a: Lift the BOSS-451 hold for governed typed decisions (BOSSAPP-579)
+**Why:** Every live Jev call was paused (`typed_decisions.GOVERNANCE_HOLD`). The spend path is
+built in `typed_decision_spend.py` (reservation, lease, receipt, settlement); the workflow step
+and the key proof already ran on it. The router's Jev classifier was the one caller that would
+have used a bare client, so it stayed held.
+**Shipped:** `TypedDecisionBatchSpend` carries several questions about one context through the
+same envelope, `store.GovernedJevDecider` puts the router's call on it, and the hold lifts for
+the router behind `BOSS_ROUTER_JEV_LIVE` (off by default). One test per condition in
+`engine/tests/test_a_router_jev_call_is_governed.py`.
+**Still to do:** set the switch on an install that holds a key and run the agent battle-test set
+(BOSSAPP-578) against it; the UI then stops showing *Jev · paused* there.
 
 ### JEV-0b: Check in the decision eval (`evals/task_rigor`) and add Jev to it
 **Why:** `pipeline_profiles.py:317` and `config.py:135` cite an eval saying that keyword lists
