@@ -1178,13 +1178,17 @@ def sweep(engine, settings: Any, targets: list[dict], *, now: Optional[datetime]
     raises. Prometheus is asked (outside any transaction) when its recorded check, refreshed
     here when stale, says it answers."""
     from ..db import begin
-    from .observability_stack import check_endpoint
+    from .observability_stack import check_endpoint, prometheus_base
 
     now = now or _now()
     evaluated = failed = 0
     try:
         for pid in sorted({t["project_id"] for t in targets}):
-            for kind in ("prometheus", "grafana"):
+            # Only a stack BOSS deployed is asked (its registered source); a host that never ran
+            # one is not probed on every sweep.
+            with begin(engine) as c:
+                registered = prometheus_base(c, pid) is not None
+            for kind in ("prometheus", "grafana") if registered else ():
                 try:
                     check_endpoint(engine, pid, kind, only_if_stale=True)
                 except Exception:  # noqa: BLE001
