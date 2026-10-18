@@ -108,6 +108,95 @@ def _resolve_use_microvm(settings, spec: dict) -> bool:
     return (settings.governed_sandbox_provider or "local").lower() in ("microvm", "firecracker")
 
 
+#: How long an auto-preview's app may take to answer before the preview is recorded failed.
+#: The operator's Run preview button keeps the full window (a Java build's 600 s); a preview
+#: nobody asked for does not hold a sandbox and a worker's attention that long.
+AUTO_PREVIEW_READY_SECONDS = 180.0
+
+
+def auto_preview_after_pr(engine, settings: Settings, *, project_id: str, run_id: str,
+                          accumulated: Optional[list[str]] = None) -> Optional[threading.Thread]:
+    """Start a browsable app's preview once its PR is recorded — in a background thread, so it
+    never holds the build's job. Returns the thread (None when nothing was started).
+
+    AUTO-PREVIEW FOR APPS. Operator: previews matter for an APP — a service can be exercised by
+    its tests or a container deploy in CI/CD instead. A browsable app whose PR just opened should
+    already be running when the operator looks at it, rather than requiring a click and a
+    ~1 minute build first.
+
+    The distinction is made from what the run BUILT, not from the task's wording: only a build
+    whose files include something a browser opens (.html/.jsx/.tsx/.vue/.svelte) is previewed.
+
+    A PREVIEW NEVER HOLDS THE BUILD. This ran inline on the code.task job: crun_16c5e245 was
+    written `completed` at 19:31:42 and its job stayed "running" until 19:41:48 while the
+    preview polled an app answering 404 at `/` — the build's settle, its follow-up task and,
+    behind its worker slot, other work all waited for a page nobody had asked for. The preview
+    now runs on its own thread, bounded by AUTO_PREVIEW_READY_SECONDS; its outcome, failure
+    included, is recorded (app_previews row, app_preview.failed, code_task.auto_preview) and
+    nothing about the build waits for it.
+    """
+    if not getattr(settings, "auto_preview_apps", True):
+        return None
+    try:
+        # Ask the SAME source the preview resolver uses, not a different one. This first read
+        # `accumulated`, which on the local substrate holds only what _checkpoint pushed — test
+        # files — so a stock trading app with web-stock/index.html was classified a service and
+        # never previewed. Its state.impl_files had the html all along.
+        from .preview_service import lineage_impl_files as _lineage_files
+        try:
+            with _transaction(engine) as _c:
+                _row = _c.execute(sql(
+                    "SELECT state, finalize_ctx, id FROM code_task_runs WHERE id=:i"),
+                    {"i": run_id}).mappings().first()
+            _built = _lineage_files(engine, dict(_row)) if _row else []
+        except Exception:  # noqa: BLE001
+            _log_caught(logger)
+            _built = []
+        if not _built:
+            _built = [pth for pth in (accumulated or []) if not _is_test_path(pth)]
+        if not any(pth.endswith((".html", ".jsx", ".tsx", ".vue", ".svelte")) for pth in _built):
+            with _transaction(engine) as c:
+                emit_event(c, project_id, "code_task.auto_preview_skipped", "boss",
+                           "code_task_run", run_id,
+                           {"why": "service/library build — no browsable entrypoint; "
+                                   "exercise it via tests or a container deploy in CI/CD"})
+            return None
+    except Exception as exc:  # noqa: BLE001 — never let a preview affect the PR
+        _record_auto_preview_failure(engine, project_id, run_id, exc)
+        return None
+
+    def _preview() -> None:
+        try:
+            from .preview_service import start_preview_for_run
+            _pv = start_preview_for_run(engine, settings, run_id, ttl_minutes=120,
+                                        ready_timeout=AUTO_PREVIEW_READY_SECONDS)
+            with _transaction(engine) as c:
+                emit_event(c, project_id, "code_task.auto_preview", "boss", "code_task_run",
+                           run_id, {"status": _pv.get("status"), "url": _pv.get("url"),
+                                    "preview_id": _pv.get("id"),
+                                    **({"error": str(_pv.get("error"))[:300]}
+                                       if _pv.get("error") else {})})
+        except Exception as exc:  # noqa: BLE001 — a thread's exception reaches nobody else
+            _record_auto_preview_failure(engine, project_id, run_id, exc)
+
+    import contextvars
+
+    thread = threading.Thread(target=contextvars.copy_context().run, args=(_preview,),
+                              name=f"boss-auto-preview-{run_id[-12:]}", daemon=True)
+    thread.start()
+    return thread
+
+
+def _record_auto_preview_failure(engine, project_id: str, run_id: str, exc: BaseException) -> None:
+    _log_caught(logger)
+    try:
+        with _transaction(engine) as c:
+            emit_event(c, project_id, "code_task.auto_preview_failed", "boss",
+                       "code_task_run", run_id, {"error": f"{type(exc).__name__}: {exc}"[:200]})
+    except Exception:  # noqa: BLE001
+        logger.warning("auto-preview failure not recorded for %s", run_id, exc_info=True)
+
+
 def _is_test_path(path: str) -> bool:
     # Recognize test files across languages — NOT just Python. Previously a JS/TS/Go/…
     # project's tests (e.g. foo.test.ts, foo.spec.tsx, __tests__/…) were not matched, so
@@ -8302,58 +8391,10 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             _log_caught(logger)
             logger.warning("retrospective not recorded for %s", run_id, exc_info=True)
 
-        # AUTO-PREVIEW FOR APPS. Operator: previews matter for an APP — a service can be
-        # exercised by its tests or a container deploy in CI/CD instead. A browsable app whose
-        # PR just opened should already be running when the operator looks at it, rather than
-        # requiring a click and a ~1 minute build first.
-        #
-        # The distinction is made from what the run BUILT, not from the task's wording:
-        # resolve_app_entry returns "static"/"node" for something a browser can open, and "py"
-        # for a server-shaped entrypoint. Only the former is auto-previewed. Deliberately
-        # best-effort and AFTER the PR is recorded — a preview failure must never affect the
-        # delivery, and the operator can still press Run preview for anything skipped.
-        try:
-            if getattr(settings, "auto_preview_apps", True) and not fctx.get("is_followup"):
-                # Ask the SAME source the preview resolver uses, not a different one.
-                # This first read `accumulated`, which on the local substrate holds only what
-                # _checkpoint pushed — test files — so a stock trading app with
-                # web-stock/index.html was classified a service and never previewed. Its
-                # state.impl_files had the html all along. One source of truth about "what did
-                # this task build", or the two answers drift. Again.
-                from .preview_service import lineage_impl_files as _lineage_files
-                try:
-                    with _transaction(engine) as _c:
-                        _row = _c.execute(sql(
-                            "SELECT state, finalize_ctx, id FROM code_task_runs WHERE id=:i"),
-                            {"i": run_id}).mappings().first()
-                    _built = _lineage_files(engine, dict(_row)) if _row else []
-                except Exception:  # noqa: BLE001
-                    _log_caught(logger)
-                    _built = []
-                if not _built:
-                    _built = [pth for pth in accumulated if not _is_test_path(pth)]
-                _is_browsable = any(
-                    pth.endswith((".html", ".jsx", ".tsx", ".vue", ".svelte")) for pth in _built)
-                if _is_browsable:
-                    from .preview_service import start_preview_for_run
-                    _pv = start_preview_for_run(engine, settings, run_id, ttl_minutes=120)
-                    with _transaction(engine) as c:
-                        emit_event(c, project_id, "code_task.auto_preview", "boss",
-                                   "code_task_run", run_id,
-                                   {"status": _pv.get("status"), "url": _pv.get("url"),
-                                    "preview_id": _pv.get("id")})
-                else:
-                    with _transaction(engine) as c:
-                        emit_event(c, project_id, "code_task.auto_preview_skipped", "boss",
-                                   "code_task_run", run_id,
-                                   {"why": "service/library build — no browsable entrypoint; "
-                                           "exercise it via tests or a container deploy in CI/CD"})
-        except Exception as _pvexc:  # noqa: BLE001 — never let a preview affect the PR
-            _log_caught(logger)
-            with _transaction(engine) as c:
-                emit_event(c, project_id, "code_task.auto_preview_failed", "boss",
-                           "code_task_run", run_id,
-                           {"error": f"{type(_pvexc).__name__}: {_pvexc}"[:200]})
+        # AUTO-PREVIEW FOR APPS — in the background, never on this job (auto_preview_after_pr).
+        if not fctx.get("is_followup"):
+            auto_preview_after_pr(engine, settings, project_id=project_id, run_id=run_id,
+                                  accumulated=accumulated)
         # DEFERRED FINDINGS → their own task on the shipped branch. After the PR exists, so a
         # bookkeeping failure can never cost the delivery; guarded so follow-ups don't recurse.
         followup_run_id = None

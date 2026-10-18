@@ -109,7 +109,10 @@ _SIGNATURES: list[tuple[int, tuple[str, ...]]] = [
                       # of fault as one that never built: the repair is in the BUILD, not in a
                       # retry. Without these it fell through to the generic buckets below and
                       # would have been prescribed an infrastructure retry that cannot add a UI.
-                      "no page at the site root", "no_page_at_root")),
+                      "no page at the site root", "no_page_at_root",
+                      # The same fault for an app that declares its health path: it bound, and
+                      # the route it named is not there.
+                      "no health route at the path it declares", "no_health_route")),
     # After the preview's own phrases, before INFRASTRUCTURE: an app BOSS started to check it
     # that exited is a property of the build (its own stderr says why), never a platform retry.
     (APP_START_FAILED, ("before it answered http", "before serving http",

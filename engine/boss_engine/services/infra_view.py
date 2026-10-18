@@ -93,6 +93,7 @@ WORDS: dict[str, dict[str, Word]] = {
         "boot_crash": {"word": "Crashed on boot", "tone": "red"},
         "port_timeout": {"word": "Port never opened", "tone": "red"},
         "no_page_at_root": {"word": "No page at /", "tone": "red"},
+        "no_health_route": {"word": "No health route", "tone": "red"},
     },
     "band": {
         "ok": {"word": "OK", "tone": "green"},
