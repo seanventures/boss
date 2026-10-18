@@ -414,7 +414,7 @@ def _register_read_tools(reg: ToolRegistry) -> None:
     @reg.tool(
         "list_previews",
         "App previews with their open URLs AND, for the failed ones, why they failed: "
-        "`failure_kind` (port_timeout / no_page_at_root / clone_failed / command_missing / "
+        "`failure_kind` (port_timeout / no_page_at_root / no_health_route / clone_failed / command_missing / "
         "boot_crash) and the error, which usually names the real fault — a build error, a "
         "missing entry file, a port the app did not honour, or an app that started correctly "
         "and serves no page at '/' because the build produced only an API. Read "
@@ -2928,6 +2928,10 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
                     "WHERE id = ANY(:ids)"),
                     {"ids": [r["id"] for r in found],
                      "e": f"closed as orphaned by {actor}: no live job"})
+                from ..services.run_terminal import on_status_written
+
+                for r in found:
+                    on_status_written(c, r["id"])
         return {"dry_run": dry, "count": len(found), "runs": found[:50],
                 "closed": 0 if dry else len(found)}
 

@@ -442,6 +442,9 @@ def revoke_cascade(trigger: CascadeTrigger, target_id: str, *, actor: AuthContex
                     db.execute(text("UPDATE code_task_runs SET status = 'cancelled', error = :why, updated_at = now() "
                                     "WHERE id = :id AND status = 'running' AND phase = 'queued'"),
                                {"id": crun, "why": why})
+                    from ..services.run_terminal import on_status_written
+
+                    on_status_written(db, crun)
                     db.execute(text("RELEASE SAVEPOINT identity_crun"))
                 except Exception:  # noqa: BLE001 — the stop request above still stops it
                     db.execute(text("ROLLBACK TO SAVEPOINT identity_crun"))

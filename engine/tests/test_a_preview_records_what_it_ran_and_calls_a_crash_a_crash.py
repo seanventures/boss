@@ -69,8 +69,7 @@ def test_every_row_that_starts_or_fails_an_app_records_its_command():
 
 
 def test_the_host_launch_hands_the_command_and_the_exit_to_the_failure():
-    launch = SOURCE.index("port = _discover_working_port(log_path, port_hint, timeout=preview_start_timeout(workdir)")
-    assert "proc=proc," in SOURCE[launch:][:200]
+    assert "port = _discover_working_port(log_path, port_hint, timeout=window, proc=proc," in SOURCE
     assert 'return _fail(why, command=" ".join(command), exited=exit_code is not None)' in SOURCE
 
 

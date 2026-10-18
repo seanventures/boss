@@ -31,6 +31,7 @@ from typing import Any, Optional
 from ..config import Settings
 from ..ports import get_engine_ports, sql
 from .code_agent import CodeTaskSpec, RepoContext, make_code_agent
+from .run_terminal import on_status_written
 from .jobs import JOB_PRIORITY_BACKGROUND, JOB_PRIORITY_REQUESTED
 from .core import emit_event
 from .core import emit_event, make_id
@@ -1304,6 +1305,7 @@ def _finalize_cancel(connection, run_id: str, project_id: str, *, actor: str, re
         {"id": run_id, "e": reason[:2000], "p": project_id, "a": actor, "t": stamp,
          "ph": phase or ""},
     )
+    on_status_written(connection, run_id)
     # A STOPPED BUILD TAKES ITS PLAN QUESTION WITH IT. The plan gate no longer times out (it
     # holds its build), so a build stopped at its plan must close the question itself, or
     # "Approve the plan?" would wait in Needs you for a build that is gone.
@@ -3115,6 +3117,7 @@ def _run_code_task(engine, settings: Settings, jobs, run_id: str,
                          "decision_id=:d, error=:e, updated_at=now() WHERE id=:id"),
                     {"d": proposal.get("decision_id"), "e": f"PR not created: {status}", "id": run_id},
                 )
+                on_status_written(c, run_id)
             return {"status": "blocked", "done": True, **proposal}
 
         with _transaction(engine) as c:
