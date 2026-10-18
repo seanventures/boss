@@ -104,11 +104,29 @@ def test_a_protected_first_answer_is_asked_again_for_a_fix_outside_it(harness):
     assert any("looking for a fix outside" in (s or "") for s in said), said
 
 
+def test_a_fix_that_touched_protected_code_is_undone_and_asked_once_more(harness):
+    """The real-engine Replay A finding (second run): the diagnosis and the red test were right,
+    and the fix ALSO edited the recovery classifier. The protected edit is undone and Mender is
+    asked once more; a fix that edits protected code again is refused (script protected_path)."""
+    row = _build(harness, "protected_once")["row"]
+    assert row["status"] == sf.AWAITING_APPROVAL, (row["refusal"], row["refusal_detail"])
+    assert row["repair_rounds"] == 1
+    assert not any(p["path"].startswith("engine/boss_engine/identity/") for p in row["paths"])
+    with harness.eng.begin() as c:
+        said = [r[0] for r in c.execute(text(
+            "SELECT data->>'sentence' FROM events WHERE event_type = 'self_fix.progress' "
+            "AND data->>'self_fix_id' = :i"), {"i": row["id"]}).all()]
+    assert any("that edit was undone" in (s or "") for s in said), said
+
+
 def test_the_diagnosis_prompt_names_what_is_protected():
     prompt = self_fix_build.diagnose_prompt({"signature": "deploy:port_held:8000",
                                              "evidence": {}})
     assert "PROTECTED" in prompt and "engine/boss_engine/services/step_recovery.py" in prompt
     assert "OUTSIDE" in prompt
+    fix = self_fix_build.implement_prompt({}, {"hypothesis": "h", "location": {}},
+                                          red_output="F")
+    assert "PROTECTED" in fix, "the implementer is told too"
 
 
 def test_open_review_findings_get_one_repair_round(harness):

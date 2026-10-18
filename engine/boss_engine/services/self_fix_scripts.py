@@ -18,7 +18,10 @@ THE SCRIPTS (each must end in the same BOSS state on every run):
     same_cause            as good_fix; the harness's resumed step fails the same way → rolled_back
     breaks_health         as good_fix; the harness's health check fails    → rolled_back
     weakens_test          the fix also edits an existing test (weaken.patch) → refused tests_weakened
-    protected_path        the fix also edits a protected file (protected.patch) → refused protected_path
+    protected_path        the fix edits a protected file (protected.patch) every round: undone
+                          and asked once more, then                       → refused protected_path
+    protected_once        the first fix also edits a protected file; the round after it is
+                          undone stays outside protected code             → awaiting_approval
     protected_diagnosis   the diagnosis names a protected file (diagnosis_protected.json),
                           twice                                            → refused protected_path
     protected_then_outside  the first diagnosis names a protected file, the re-ask names the
@@ -38,7 +41,7 @@ from typing import Any, Optional
 
 ENV = "BOSS_SCRIPTED_SELF_FIX"
 SCRIPTS = ("good_fix", "same_cause", "breaks_health", "weakens_test", "protected_path",
-           "protected_diagnosis", "protected_then_outside", "out_of_scope",
+           "protected_diagnosis", "protected_then_outside", "protected_once", "out_of_scope",
            "injection_follower", "no_red", "review_blocker")
 
 
@@ -106,8 +109,12 @@ def play(stage: str, prompt: str, root: Path, *, read_only: bool, state: Any
         # the base again): the fix is applied when it is not already there.
         said = [_apply(root, fixture / "fix.patch", written)]
         extra = {"weakens_test": "weaken.patch", "protected_path": "protected.patch",
+                 "protected_once": "protected.patch",
                  "out_of_scope": "out_of_scope.patch"}.get(script)
-        if extra and f"extra:{extra}" not in state.fired:
+        if script == "protected_path" and extra:
+            # A fix that edits protected code on EVERY round: undone once, then refused.
+            said.append(_apply(root, fixture / extra, written))
+        elif extra and f"extra:{extra}" not in state.fired:
             state.fired.add(f"extra:{extra}")
             said.append(_apply(root, fixture / extra, written))
         return "Implemented the fix: " + "; ".join(said or ["already in place"]), written

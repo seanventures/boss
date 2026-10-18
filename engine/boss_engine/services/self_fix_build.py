@@ -210,6 +210,7 @@ def implement_prompt(sfx: Mapping[str, Any], diagnosis: Mapping[str, Any], *, re
         f"named with a reason); at most {limits.max_files} files and {limits.max_diff_lines} "
         "changed lines; no new dependency, image or compose change; no secret; never weaken a "
         "check, a guard or a validator.",
+        _protected_note(),
         f"The new test's failure on BOSS as it is:\n{red_output[-4000:]}",
         f"What to change this round: {note}" if note else "",
         "Reply with a short summary of the change.") if p)
@@ -288,6 +289,8 @@ class Build:
     note: str = ""
     policy: sp.Policy = field(default_factory=sp.load)
     cost_micros: int = 0
+    #: A fix that edited protected code is undone and asked once more, outside it (below).
+    protected_retried: bool = False
 
     # -- the record -------------------------------------------------------------------------
     def sfx(self) -> dict[str, Any]:
@@ -573,6 +576,21 @@ class Build:
         self.write(paths=verdict.paths, tier=verdict.tier, flags=verdict.flags,
                    gates=record)
         if not verdict.ok:
+            touched = [str(n["path"]) for n in verdict.never]
+            if not self.protected_retried and not any(sp.is_test_path(t) for t in touched):
+                # ONE MORE ROUND, OUTSIDE PROTECTED CODE (the real-engine Replay A finding,
+                # second run: the diagnosis and the red test were right, and the fix also edited
+                # the recovery classifier). The protected edit is undone first; the gate runs
+                # again on the next round's diff, and a second protected edit refuses. A test or
+                # fixture edit is never retried: that is a weakening attempt, a signal.
+                self.protected_retried = True
+                src.discard(work, touched, base_sha)
+                self.say(f"{sf.AGENT_NAME}: the fix touched protected code ({touched[0]}); "
+                         "that edit was undone, fixing it outside BOSS's protected code.")
+                return si.GateResult(
+                    "protected_paths", False,
+                    f"{verdict.reason()}. That edit was undone. Make the fix without changing "
+                    f"{', '.join(touched)}, in the code outside BOSS's protected areas.")
             return si.GateResult("protected_paths", False, verdict.reason(), final=True)
         sources = {c.path: c.after or "" for c in changes if c.after}
         for path in _neighbours(work, sp.norm(location.get("file"))):
