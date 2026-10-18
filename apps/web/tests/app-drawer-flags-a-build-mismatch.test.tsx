@@ -51,7 +51,7 @@ describe("the app drawer", () => {
     expect(inc.querySelector(".obs-errfull")).toBeNull();
     await click(inc.querySelector("[data-testid='obs-incident-show-error']"));
     expect(text(inc.querySelector(".obs-errfull"))).toContain("ECONNREFUSED");
-    expect(text($("[data-testid='obs-app-dashboard']"))).toBe("No dashboard");
+    expect(text($("[data-testid='obs-app-dashboard-why']"))).toBe("No dashboard");
     expect($("[data-testid='obs-app-logs']")?.getAttribute("href")).toBe("?area=activity&src=deployment&subject=t_down");
   });
 

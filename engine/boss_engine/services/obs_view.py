@@ -611,6 +611,15 @@ def pulse(connection: Any, settings: Any, project_id: str, *, win: str = "24h",
             spend, estimated = _spend_24h(connection, project_id)
     except Exception:  # noqa: BLE001
         partial.append("spend")
+    firing = 0
+    try:
+        with connection.begin_nested():
+            # The Alerts tab's count: alerts firing now and not held back (app_alerts).
+            firing = int(connection.execute(text(
+                "SELECT count(*) FROM app_alerts WHERE project_id = :p AND state = 'firing' "
+                "AND inhibited_by IS NULL AND silenced_by IS NULL"), {"p": project_id}).scalar() or 0)
+    except Exception:  # noqa: BLE001
+        partial.append("alerts")
     body: Pulse = {
         "counts": counts, "rows": rows, "not_watched": not_watched,
         "window": _window_wire(w),
@@ -618,6 +627,7 @@ def pulse(connection: Any, settings: Any, project_id: str, *, win: str = "24h",
         "spend_24h_micros": spend, "spend_24h_estimated": estimated,
         # Observability's header link: shown only when BOSS checked that Grafana answers.
         "grafana": _grafana_wire(grafana),
+        "alerts_firing": firing,
         "partial": partial,
     }
     return _sealed(body)  # type: ignore[return-value]

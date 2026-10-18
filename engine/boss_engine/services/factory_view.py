@@ -2823,6 +2823,7 @@ class AppDeploy(TypedDict):
     env: str
     ok: bool
     word: str                      # "dev ✓" | "prod —" | "Failed · dev"
+    target_id: Optional[str]       # where it is deployed: Observability's app (⋯ › Alerts)
 
 
 class AppRow(TypedDict, total=False):
@@ -2959,7 +2960,8 @@ def apps(connection: Any, project_id: str, *, viewer: Optional[str] = None,
             deploys.append({"env": env, "ok": good,
                             "word": f"{env} ✓" if good else
                             (f"Failed · {env}" if str(d.get("status") or "") in DEPLOY_BAD
-                             else f"{env} —")})
+                             else f"{env} —"),
+                            "target_id": d.get("deployment_target_id")})
         # THE APP'S PR AND WHAT IT COST (the old card's foot): the newest attempt that opened
         # a PR, and the metered spend of every build of the app.
         with_pr = next((r for r in group if _pr_number(r)), None)

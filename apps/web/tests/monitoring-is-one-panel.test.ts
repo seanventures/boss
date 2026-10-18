@@ -24,6 +24,7 @@ import { codeOnly } from "./_helpers/source";
 // pinned in the source so they cannot be split apart again.
 const PULSE = codeOnly("app/observability/pulse.tsx");
 const DRAWER = codeOnly("app/observability/app-drawer.tsx");
+const GRAFANA = codeOnly("app/observability/grafana-link.tsx");
 const SOURCES = codeOnly("app/observability/sources.tsx");
 const OBS_VIEW = codeOnly("lib/obs-view.ts");
 const LEGACY = codeOnly("app/legacy-areas.ts");
@@ -34,7 +35,10 @@ describe("one panel, not two", () => {
     // Health and graphs are one record per app now: the Pulse row opens a drawer whose facts
     // carry the dashboard, joined by the server (lib/obs-view.ts facts.dashboard_url).
     expect(OBS_VIEW).toContain("dashboardUrl: optStr(f.dashboard_url)");
-    expect(DRAWER).toContain('data-testid="obs-app-dashboard">Dashboard ↗</a>');
+    // ...through ONE component that links only once BOSS checked that Grafana answers.
+    expect(DRAWER).toContain("<DashboardLink g={d.facts.grafana} url={d.facts.dashboardUrl}");
+    expect(GRAFANA).toContain('data-testid="obs-app-dashboard"');
+    expect(GRAFANA).toContain("Dashboard ↗</a>");
   });
 
   it("the stack is not a second card on the Apps screen", () => {

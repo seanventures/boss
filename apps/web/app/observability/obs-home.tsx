@@ -25,6 +25,8 @@ import {
 import type { Polled } from "../../lib/factory-floor";
 import { AreaHead, FindBox, NeedsYou, PartialLine, useUrlState, writeUrl } from "../infra/kit";
 import { AppsTab, ObsAskBoss } from "./pulse";
+import { AlertsTab } from "./alerts";
+import { GrafanaHeaderLink } from "./grafana-link";
 import { ModelsTab } from "./models";
 import { SystemTab } from "./system";
 import { SourcesTab } from "./sources";
@@ -67,7 +69,7 @@ export function ObsHome({ projectId, actor, orgId }: { projectId: string; actor:
   const system = usePolled(projectId ? systemUrl(projectId) : null, parseSystem,
                            () => (onSystem.current ? SYSTEM_FOREGROUND_MS : SYSTEM_BACKGROUND_MS));
 
-  const setTab = (key: string) => go({ view: key === "apps" ? null : key, app: null, model: null }, "push");
+  const setTab = (key: string) => go({ view: key === "apps" ? null : key, app: null, model: null, atab: null }, "push");
   const setWin = (w: Win) => go({ win: w === "24h" ? null : w }, "replace");
   // Installs is the collector's dashboard: its tab exists only in Collector mode (read once).
   const sharing = usePolledRead<SharingView>({
@@ -79,14 +81,17 @@ export function ObsHome({ projectId, actor, orgId }: { projectId: string; actor:
   const sys = system.data;
   const tabs = OBS_TABS.filter((t) => t.key !== "installs" || collector).map((t) => ({
     ...t,
-    count: t.key === "apps" && pulse.data ? pulse.data.rows.length || undefined : undefined,
+    count: t.key === "apps" && pulse.data ? pulse.data.rows.length || undefined
+      : t.key === "alerts" && pulse.data ? pulse.data.alertsFiring || undefined : undefined,
     dot: t.key === "system" && sys && sys.state !== "ok"
       ? { tone: (sys.state === "critical" ? "red" : "amber") as "red" | "amber", tip: `BOSS's machine: ${sys.reason ?? sys.state}` }
-      : t.key === "apps" && c && c.down > 0 ? { tone: "red" as const, tip: `${c.down} down` } : null,
+      : t.key === "apps" && c && c.down > 0 ? { tone: "red" as const, tip: `${c.down} down` }
+      : t.key === "alerts" && pulse.data?.alertsFiring ? { tone: "red" as const, tip: `${pulse.data.alertsFiring} firing` } : null,
   }));
   const props: ObsTabProps = { projectId, actor, orgId: orgId ?? null, url, go, query, pulse, system };
   const panel: Record<ObsTab, React.ReactNode> = {
     apps: <AppsTab {...props} />,
+    alerts: <AlertsTab {...props} />,
     models: <ModelsTab {...props} />,
     system: <SystemTab {...props} />,
     sources: <SourcesTab {...props} />,
@@ -115,7 +120,7 @@ export function ObsHome({ projectId, actor, orgId }: { projectId: string; actor:
                     ) : null}
                   </>
                 ) : null}>
-        {url.view !== "sources" && url.view !== "scorecards" && url.view !== "installs" ? (
+        {url.view !== "sources" && url.view !== "scorecards" && url.view !== "installs" && url.view !== "alerts" ? (
           <span className="inf-seg" role="radiogroup" aria-label="Window" data-testid="obs-window">
             {WINDOWS.map((w) => (
               <button key={w} type="button" role="radio" aria-checked={url.win === w} className="inf-seg-btn"
@@ -123,6 +128,7 @@ export function ObsHome({ projectId, actor, orgId }: { projectId: string; actor:
             ))}
           </span>
         ) : null}
+        {pulse.data ? <GrafanaHeaderLink g={pulse.data.grafana} projectId={projectId} actor={actor} onChecked={pulse.refresh} /> : null}
         <FindBox value={query} onChange={(v) => { setQuery(v); writeUrl({ q: v || null }, "replace"); }} label="Find" testId="obs-find" />
         <ObsAskBoss {...props} />
       </AreaHead>

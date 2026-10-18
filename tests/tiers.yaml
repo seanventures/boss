@@ -128,6 +128,11 @@ P1:
     - engine/tests/test_autonomy_counts_every_problem_once.py
     - engine/tests/test_self_fixes_page_lineage.py
     - engine/tests/test_self_fixes_can_be_read_by_an_agent_never_moved.py
+    # App alerts (BOSSAPP-598): PromQL rules that mean the same to BOSS and Prometheus, the
+    # Alertmanager-style record, model triage, the D2 backfill; and the incident they open
+    - engine/tests/test_alert_rules_mean_the_same_to_boss_and_prometheus.py
+    - engine/tests/test_app_alerts.py
+    - engine/tests/test_an_app_incident_is_responded_to.py
   api:
     # Approvals
     - apps/api/tests/test_an_approval_shows_what_it_will_send.py
@@ -158,6 +163,8 @@ P1:
     - apps/api/tests/test_agents_activity_folds_tool_calls.py
     # BOSS fixes itself: the routes for people, the host self-installer, upstream and the metric
     - apps/api/tests/test_self_fix_routes.py
+    # App alerts: rules, silences, history, token rotation, Grafana linked only when it answers
+    - apps/api/tests/test_app_alerts_api.py
   web:
     - apps/web/tests/a-promised-deploy-is-always-asked.test.ts
     # Workflows and run card
@@ -193,3 +200,7 @@ P1:
     - apps/web/tests/self-fix/govern-self-fix-is-the-switch-and-the-caps.test.tsx
     - apps/web/tests/self-fix/a-run-says-who-solved-its-problems.test.tsx
     - apps/web/tests/self-fix/the-self-fix-proxy-reaches-only-named-routes.test.ts
+    # App alerts: the drawer's Alerts tab and sheets, Observability › Alerts, Factory ⋯ › Alerts
+    - apps/web/tests/the-app-drawer-shows-its-alerts.test.tsx
+    - apps/web/tests/observability-alerts-shows-every-app.test.tsx
+    - apps/web/tests/factory-app-menu-links-to-its-alerts.test.tsx

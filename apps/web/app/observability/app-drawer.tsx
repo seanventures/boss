@@ -12,6 +12,10 @@
  *   INCIDENTS  start · duration (Ongoing) · first error · deploy before it ↗
  *   [Probe now] Open app ↗  Dashboard ↗  Logs ↗  [Ask BOSS]
  *
+ * Two tabs, [Overview | Alerts] (`atab=alerts`, which Factory ⋯ › Alerts links to): Alerts is
+ * this app's rules, signal sources and alert history (alerts-tab.tsx). `Dashboard ↗` shows only
+ * once BOSS has checked that Grafana answers; otherwise it says why, with Check and Deploy stack.
+ *
  * `Probe now` probes THIS app only (operator decision §11.5) and kicks both polls; the toast is
  * `Probed · <word>`. The `Serving <v>` chip appears only when the app reports a build other than
  * the one last deployed — the server says so (`serving_mismatch`); nothing is compared here.
@@ -27,6 +31,8 @@ import { notifyChanged } from "../changed";
 import { ago, plainClick, useNow } from "../agents/live-util";
 import type { ObsTabProps } from "./obs-home";
 import { IncidentCard } from "./incident-card";
+import { AppAlertsTab } from "./alerts-tab";
+import { DashboardLink } from "./grafana-link";
 import { LatencyChart } from "./latency-chart";
 import { obsWrite } from "./obs-write";
 import { dur, leaveTo, obsAsks } from "./obs-util";
@@ -103,7 +109,9 @@ export function AppDrawer({ projectId, actor, url, go, pulse, targetId, row }: O
   const now = useNow(30_000);
   const [busy, setBusy] = useState(false);
   const [shown, setShown] = useState<Set<number>>(new Set());
-  const close = () => go({ app: null }, "push");
+  const close = () => go({ app: null, atab: null }, "push");
+  const tab = url.atab;
+  const setTab = (t: "overview" | "alerts") => go({ atab: t === "alerts" ? "alerts" : null }, "replace");
   const name = d ? `${d.app} · ${d.env}` : row ? `${row.app} · ${row.env}` : targetId;
   const word = d ? { word: d.word, tone: d.tone } : row ? { word: row.word, tone: row.tone } : null;
   const since = d?.since ?? row?.since ?? null;
@@ -144,9 +152,21 @@ export function AppDrawer({ projectId, actor, url, go, pulse, targetId, row }: O
     </span>
   );
 
+  const tabs = (
+    <span className="inf-seg obs-dtabs" role="tablist" aria-label={`${name} views`} data-testid="obs-app-tabs">
+      {([["overview", "Overview", "Health, traffic and incidents"], ["alerts", "Alerts", "Rules, signal sources and alert history"]] as const).map(([k, label, tip]) => (
+        <button key={k} type="button" role="tab" aria-selected={tab === k} className="inf-seg-btn" title={tip}
+                data-testid={`obs-app-tab-${k}`} onClick={() => setTab(k)}>{label}</button>
+      ))}
+    </span>
+  );
+
   return (
     <Drawer label={`${name} health`} testId="obs-app-drawer" width={880} expandable onClose={close} head={head}>
-      {!d ? (detail.error ? <span className="inf-error" title={detail.error}>Can&apos;t load this app</span> : <Skeleton testId="obs-app-loading" />) : (
+      {tabs}
+      {tab === "alerts" ? (
+        <AppAlertsTab projectId={projectId} actor={actor} targetId={targetId} onIncident={() => setTab("overview")} />
+      ) : !d ? (detail.error ? <span className="inf-error" title={detail.error}>Can&apos;t load this app</span> : <Skeleton testId="obs-app-loading" />) : (
         <>
           <div className="obs-facts" data-testid="obs-app-facts">
             <Fact label="Uptime 24h">{pct(d.facts.uptime24h, 2)}</Fact>
@@ -217,9 +237,9 @@ export function AppDrawer({ projectId, actor, url, go, pulse, targetId, row }: O
             {d.facts.openUrl ? (
               <a className="inf-link" href={d.facts.openUrl} target="_blank" rel="noreferrer noopener" data-testid="obs-app-open" title={d.facts.openUrl}>Open app ↗</a>
             ) : <span className="inf-faint" data-testid="obs-app-open" title="Not serving yet">Not deployed</span>}
-            {d.facts.dashboardUrl ? (
-              <a className="inf-link" href={d.facts.dashboardUrl} target="_blank" rel="noreferrer noopener" data-testid="obs-app-dashboard">Dashboard ↗</a>
-            ) : <span className="inf-faint" data-testid="obs-app-dashboard" title="Deploy the monitoring stack in Sources">No dashboard</span>}
+            <DashboardLink g={d.facts.grafana} url={d.facts.dashboardUrl} reason={d.facts.dashboardReason} projectId={projectId} actor={actor}
+                           onChecked={() => { detail.refresh(); pulse.refresh(); }}
+                           onDeploy={() => go({ view: "sources", app: null, atab: null }, "push")} />
             <a className="inf-link" href={logsHref("deployment", targetId)} data-testid="obs-app-logs"
                onClick={(e) => { if (plainClick(e)) { e.preventDefault(); leaveTo(logsHref("deployment", targetId)); } }}>Logs ↗</a>
             <span className="ag-spacer" />
