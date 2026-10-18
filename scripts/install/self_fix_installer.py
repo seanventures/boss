@@ -9,6 +9,10 @@ and the Docker socket is never mounted into one). `boss self-fix …` runs it.
     enroll                     mint this installer's own key (sys_self_installer), kept 0600
     watch [--once]             poll BOSS for tickets every 10 s and run them (opt-in service)
     install SFX                run that self-fix's install now (the "run this command" fallback)
+    remove SFX                 run an approved removal of one installed fix (a rebuild without it)
+    remove-all                 run an approved removal of every local fix (the plain release)
+    watch --install-service    run `watch` as a user service (launchd on macOS, systemd --user on
+                               Linux), started now and at login; --remove-service undoes it
     status                     what is installed on the local stack
     plan-upgrade --to REF      each installed fix against a release: dropped, carried, rework
     restack --to REF           after an upgrade to REF: re-apply the carried fixes on it
@@ -601,6 +605,95 @@ def run_rollback_ticket(host: Host, claims: dict[str, Any]) -> None:
              trigger=str(claims.get("trigger") or "BOSS asked for a rollback"))
 
 
+def _cherry_pick(host: Host, commit: str, wt: Path) -> Optional[str]:
+    """Apply one fix commit on the stack worktree; None, or why it did not apply."""
+    done = subprocess.run(["git", "-c", "core.hooksPath=/dev/null", "cherry-pick",
+                           "--allow-empty", commit], cwd=str(wt), capture_output=True, text=True,
+                          env={**os.environ, "GIT_COMMITTER_NAME": "BOSS",
+                               "GIT_COMMITTER_EMAIL": "boss@boss.invalid"})
+    if done.returncode == 0:
+        return None
+    subprocess.run(["git", "cherry-pick", "--abort"], cwd=str(wt), capture_output=True)
+    return (done.stderr or done.stdout).strip()[-300:] or "it does not apply"
+
+
+def remove(host: Host, claims: dict[str, Any]) -> str:
+    """A `remove` / `remove_all` ticket (spec §6.5): rebuild the stack WITHOUT the fixes it names
+    (all of them: the plain release), on the same phases as an install — backup, apply (the new
+    stack on the worktree, the stack ref moved with compare-and-swap), build (the running images
+    kept as :prev), start, health, done — and the current build put back if start or health
+    fails. Returns the new stack head."""
+    ticket_id = claims["ticket_id"]
+    ref = claims["stack_ref"]
+    release = host.release_sha()
+    current = host.stack_head(ref)
+    fixes = stack_fixes(host, ref)
+    if claims["kind"] == "remove_all":
+        keep: list[dict[str, Any]] = []
+    else:
+        targets = {str(x) for x in claims.get("remove") or [claims["sfx_id"]]}
+        if not any(f["self_fix_id"] in targets for f in fixes):
+            raise Refused("the fix this ticket removes is not on the local stack")
+        keep = [f for f in fixes if f["self_fix_id"] not in targets]
+    if not fixes:
+        raise Refused("no local fixes are installed; there is nothing to remove")
+    backup = os.environ.get("BOSS_SELF_FIX_BACKUP")
+    argv = shlex.split(backup) if backup else ["bash", str(host.dir / "scripts/install/backup.sh"),
+                                               "--dir", str(host.dir)]
+    code, said = host.run(argv, timeout=1800)
+    host.report(ticket_id, "backup", code == 0, said.strip().splitlines()[-1] if said.strip()
+                else "")
+    if code != 0:
+        raise PhaseFailed("backup", said[-300:])
+    # APPLY: the release, then every fix that stays, in their order.
+    host.checkout_stack(release)
+    wt = host.worktree()
+    for fix in keep:
+        why = _cherry_pick(host, fix["commit"], wt)
+        if why:
+            host.checkout_stack(current)
+            host.report(ticket_id, "apply", False, f"{fix['self_fix_id']} does not apply "
+                                                   f"without the removed fix: {why}")
+            raise PhaseFailed("apply", why)
+    new_head = host.git("rev-parse", "HEAD", cwd=wt) if keep else release
+    previous_ref = host.git("rev-parse", "-q", "--verify", ref, check=False)
+    host.git("update-ref", "-m", f"self-fix {claims['kind']} {claims['sfx_id']}", ref, new_head,
+             previous_ref or "0" * 40)
+    host.report(ticket_id, "apply", True, f"{ref} → {new_head[:12]} ({len(keep)} fix(es) stay)")
+    try:
+        host.keep_previous()
+        code, said = host.compose("build", compose_file=wt / "scripts/install/community-compose.yml",
+                                  project_dir=wt / "scripts/install",
+                                  env={"BOSS_SOURCE_SHA": release, "BOSS_STACK_HEAD": new_head})
+        if code != 0:
+            raise PhaseFailed("build", said[-600:])
+    except PhaseFailed as error:
+        _restore_ref(host, ref, previous_ref)
+        host.checkout_stack(current)
+        host.report(ticket_id, "build", False, error.detail)
+        raise
+    host.report(ticket_id, "build", True)
+    host.set_env(host.env_file, {"BOSS_STACK_HEAD": new_head})
+    code, said = host.compose("up", "-d", "--no-build", env={"BOSS_STACK_HEAD": new_head})
+    if code != 0:
+        host.report(ticket_id, "start", False, said[-300:])
+        rollback(host, claims, previous_head=current, previous_ref=previous_ref,
+                 trigger=f"start failed: {said[-200:]}")
+        raise PhaseFailed("start", said[-300:])
+    host.report(ticket_id, "start", True, stack_head=new_head)
+    try:
+        host.healthy(new_head, minutes=float(claims.get("health_minutes") or 10))
+    except PhaseFailed as error:
+        host.report(ticket_id, "health", False, error.detail)
+        rollback(host, claims, previous_head=current, previous_ref=previous_ref,
+                 trigger=f"health: {error.detail}")
+        raise
+    host.report(ticket_id, "health", True, stack_head=new_head)
+    host.record(ref, new_head)
+    host.report(ticket_id, "done", True, stack_head=new_head)
+    return new_head
+
+
 def run_ticket(host: Host, ticket: dict[str, Any], jwks: dict[str, Any]) -> str:
     """One ticket, end to end. Returns what happened, in a word."""
     try:
@@ -616,7 +709,10 @@ def run_ticket(host: Host, ticket: dict[str, Any], jwks: dict[str, Any]) -> str:
         if claims["kind"] == "rollback":
             run_rollback_ticket(host, claims)
             return "rolled_back"
-        raise Refused(f"{claims['kind']} tickets are not supported by this installer yet")
+        if claims["kind"] in ("remove", "remove_all"):
+            remove(host, claims)
+            return "removed"
+        raise Refused(f"{claims['kind']} tickets are not supported by this installer")
     except Refused as error:
         host.report(claims["ticket_id"], "apply", False, str(error))
         return "refused"
@@ -759,6 +855,152 @@ def cmd_install(host: Host, sfx: str) -> int:
     return 0 if all(o in ("installed", "rolled_back") for o in outcomes) else 1
 
 
+def cmd_remove(host: Host, sfx: Optional[str]) -> int:
+    """Run an APPROVED removal now (the "run this command" fallback of the watcher). The removal
+    is asked for, and approved, in the console; this only runs its ticket."""
+    if sfx is not None and not re.fullmatch(r"sfx_[0-9a-f]{6,40}", sfx):
+        host.out("Name a self-fix (sfx_…).")
+        return 2
+    kind = "remove" if sfx else "remove_all"
+    tickets = [t for t in host.call("GET", "/v1/self-fixes/tickets").get("tickets") or []
+               if t.get("kind") == kind and (sfx is None or t.get("self_fix_id") == sfx)]
+    if not tickets:
+        host.out("No approved removal is waiting. Ask for it on the Self-fixes page "
+                 f"({'Remove' if sfx else 'Govern › Self-fix › Remove all local fixes'}); once "
+                 "it is approved, the watcher or this command runs it.")
+        return 1
+    jwks = host.call("GET", "/.well-known/boss-jwks.json", auth=False)
+    outcomes = [run_ticket(host, t, jwks) for t in tickets]
+    return 0 if all(o == "removed" for o in outcomes) else 1
+
+
+# ── the watcher as a user service ───────────────────────────────────────────────────────────
+
+SERVICE_LABEL = "org.boss.self-fix-watch"
+SYSTEMD_UNIT = "boss-self-fix-watch.service"
+
+
+def _platform() -> str:
+    return (os.environ.get("BOSS_SELF_FIX_PLATFORM") or sys.platform).lower()
+
+
+def _service_dir() -> Path:
+    override = os.environ.get("BOSS_SELF_FIX_SERVICE_DIR")
+    if override:
+        return Path(override)
+    if _platform().startswith("darwin"):
+        return Path.home() / "Library" / "LaunchAgents"
+    return Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "systemd" / "user"
+
+
+def _ctl(argv: list[str]) -> tuple[int, str]:
+    """launchctl / systemctl — or the test's stand-in (BOSS_SELF_FIX_SERVICE_CTL)."""
+    stand_in = os.environ.get("BOSS_SELF_FIX_SERVICE_CTL")
+    full = [*shlex.split(stand_in), *argv] if stand_in else argv
+    try:
+        done = subprocess.run(full, capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        return 127, str(error)
+    return done.returncode, (done.stdout + done.stderr).strip()[-400:]
+
+
+def service_files(host: Host) -> tuple[Path, str]:
+    """(the unit file, its text): runs this installer's `watch` for this install, logs beside
+    the install, restarts when it stops. Nothing in it is a secret: the key stays in its file."""
+    script = Path(__file__).resolve()
+    python = sys.executable or "/usr/bin/python3"
+    log = host.dir / ".boss" / "self-fix-watch.log"
+    args = [python, str(script), "--dir", str(host.dir)]
+    if host._api:
+        args += ["--api", host._api]
+    args.append("watch")
+    if _platform().startswith("darwin"):
+        from xml.sax.saxutils import escape
+
+        items = "".join(f"\n    <string>{escape(a)}</string>" for a in args)
+        body = f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>{SERVICE_LABEL}</string>
+  <key>ProgramArguments</key>
+  <array>{items}
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>30</integer>
+  <key>StandardOutPath</key><string>{escape(str(log))}</string>
+  <key>StandardErrorPath</key><string>{escape(str(log))}</string>
+</dict>
+</plist>
+"""
+        return _service_dir() / f"{SERVICE_LABEL}.plist", body
+    command = " ".join(shlex.quote(a) for a in args)
+    body = f"""[Unit]
+Description=BOSS self-installer: installs the BOSS self-fixes a person approved
+After=default.target
+
+[Service]
+Type=simple
+ExecStart={command}
+Restart=always
+RestartSec=30
+StandardOutput=append:{log}
+StandardError=append:{log}
+
+[Install]
+WantedBy=default.target
+"""
+    return _service_dir() / SYSTEMD_UNIT, body
+
+
+def cmd_service(host: Host, action: str) -> int:
+    """install / remove / status of the watcher's user service (opt-in, spec §6.5)."""
+    path, body = service_files(host)
+    darwin = _platform().startswith("darwin")
+    uid = str(os.getuid()) if hasattr(os, "getuid") else "0"
+    if action == "status":
+        if not path.exists():
+            host.out("The self-installer is not set up as a service (run `boss self-fix watch "
+                     "--install-service`).")
+            return 1
+        code, said = (_ctl(["launchctl", "print", f"gui/{uid}/{SERVICE_LABEL}"]) if darwin
+                      else _ctl(["systemctl", "--user", "is-active", SYSTEMD_UNIT]))
+        host.out(f"The self-installer service is {'running' if code == 0 else 'not running'} "
+                 f"({path}).")
+        return 0 if code == 0 else 1
+    if action == "remove":
+        if darwin:
+            _ctl(["launchctl", "bootout", f"gui/{uid}/{SERVICE_LABEL}"])
+        else:
+            _ctl(["systemctl", "--user", "disable", "--now", SYSTEMD_UNIT])
+        path.unlink(missing_ok=True)
+        if not darwin:
+            _ctl(["systemctl", "--user", "daemon-reload"])
+        host.out("The self-installer service is removed; approved fixes now wait for "
+                 "`boss self-fix install SFX`.")
+        return 0
+    host.key()  # refused before anything is written when this host was never enrolled
+    path.parent.mkdir(parents=True, exist_ok=True)
+    (host.dir / ".boss").mkdir(exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(body, encoding="utf-8")
+    os.chmod(tmp, 0o644)
+    tmp.replace(path)
+    if darwin:
+        _ctl(["launchctl", "bootout", f"gui/{uid}/{SERVICE_LABEL}"])
+        code, said = _ctl(["launchctl", "bootstrap", f"gui/{uid}", str(path)])
+    else:
+        _ctl(["systemctl", "--user", "daemon-reload"])
+        code, said = _ctl(["systemctl", "--user", "enable", "--now", SYSTEMD_UNIT])
+    if code != 0:
+        host.out(f"Wrote {path}, but the service did not start: {said}")
+        return 1
+    host.out(f"The self-installer now runs as a service ({path}); it installs the fixes you "
+             "approve and nothing else.")
+    return 0
+
+
 def cmd_status(host: Host) -> int:
     ref = (host.env_value("BOSS_STACK_REF") or "")
     try:
@@ -882,8 +1124,15 @@ def main(argv: Optional[list[str]] = None) -> int:
     sub.add_parser("seed")
     watch = sub.add_parser("watch")
     watch.add_argument("--once", action="store_true")
+    mode = watch.add_mutually_exclusive_group()
+    mode.add_argument("--install-service", action="store_true")
+    mode.add_argument("--remove-service", action="store_true")
+    mode.add_argument("--service-status", action="store_true")
     inst = sub.add_parser("install")
     inst.add_argument("sfx")
+    rem = sub.add_parser("remove")
+    rem.add_argument("sfx")
+    sub.add_parser("remove-all")
     sub.add_parser("status")
     plan = sub.add_parser("plan-upgrade")
     plan.add_argument("--to", required=True)
@@ -897,9 +1146,20 @@ def main(argv: Optional[list[str]] = None) -> int:
     if args.cmd == "seed":
         return cmd_seed(host)
     if args.cmd == "watch":
+        if args.install_service or args.remove_service or args.service_status:
+            try:
+                return cmd_service(host, "install" if args.install_service else
+                                   "remove" if args.remove_service else "status")
+            except Refused as error:
+                host.out(str(error))
+                return 1
         return cmd_watch(host, args.once)
     if args.cmd == "install":
         return cmd_install(host, args.sfx)
+    if args.cmd == "remove":
+        return cmd_remove(host, args.sfx)
+    if args.cmd == "remove-all":
+        return cmd_remove(host, None)
     if args.cmd == "status":
         return cmd_status(host)
     if args.cmd == "plan-upgrade":

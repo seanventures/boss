@@ -57,8 +57,10 @@ Commands:
   self-fix COMMAND    BOSS fixes itself: install the fixes you approved (scripts/install/
                       self_fix_installer.py). seed (mirror BOSS's source for its fixes),
                       enroll (this host's installer key, kept 0600, never printed),
-                      watch [--once] (poll for approved installs), install SFX (run one
-                      now), status, plan-upgrade --to REF
+                      watch [--once] (poll for approved installs; --install-service runs
+                      it at login, --remove-service stops that), install SFX (run one
+                      now), remove SFX / remove-all (run an approved removal), status,
+                      plan-upgrade --to REF
   update              Re-apply configuration on the installed release: rerun the installer
                       so newly exported model keys and flags take effect. Does not change
                       the release. Accepts installer flags such as --web or --connect-found.
@@ -1264,7 +1266,7 @@ cmd_connect() {
 # The self-installer runs on THIS host (never in a container), with python3 and nothing else.
 cmd_self_fix() {
   need_install
-  [[ $# -gt 0 ]] || die "self-fix needs a command: seed, enroll, watch, install SFX, status, plan-upgrade --to REF"
+  [[ $# -gt 0 ]] || die "self-fix needs a command: seed, enroll, watch [--install-service], install SFX, remove SFX, remove-all, status, plan-upgrade --to REF"
   command -v python3 >/dev/null 2>&1 || die "python3 is needed on this machine for the self-installer"
   case "$1" in
     enroll)

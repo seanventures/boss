@@ -104,6 +104,9 @@ CARRIED_OUT_ON_APPROVAL = frozenset({
     # Approving a BOSS self-fix issues its signed, single-use install ticket for the host
     # self-installer (services/self_fix_install.on_approved).
     "self_fix.install",
+    # Approving the removal of installed self-fixes issues the signed `remove` / `remove_all`
+    # ticket (services/self_fix_install.on_remove_approved).
+    "self_fix.remove",
 })
 
 #: "Request changes" DOES SOMETHING ONLY FOR THESE: DecisionService._handle_non_approved_follow_on

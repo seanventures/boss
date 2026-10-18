@@ -47,6 +47,11 @@ from .core import make_id, now_utc
 log = logging.getLogger(__name__)
 
 ACTION = "self_fix.install"
+#: Remove one installed self-fix (a rebuild of the stack without it), or every local fix (back
+#: to the plain release): a person's decision, like the install (spec §6.5 "same install path,
+#: same approval rules"); the host self-installer runs the `remove` / `remove_all` ticket.
+REMOVE_ACTION = "self_fix.remove"
+PERSON_ACTIONS = (ACTION, REMOVE_ACTION)
 TICKET_TYP = "boss-self-fix-ticket+jwt"
 TICKET_TTL = timedelta(hours=1)
 DECISION_TTL = timedelta(hours=72)
@@ -133,6 +138,7 @@ def card(sfx: Mapping[str, Any]) -> dict[str, Any]:
     flag_detail = ((gates.get("protected_paths") or {}).get("detail") or {}).get(
         "flag_detail") or {}
     return {
+        "self_fix_id": sfx.get("id"),
         "title": (sfx.get("pr") or {}).get("title"),
         "tier": tier, "flags": list(sfx.get("flags") or []),
         "what_broke": evidence.get("symptom"),
@@ -141,18 +147,24 @@ def card(sfx: Mapping[str, Any]) -> dict[str, Any]:
         "confidence": {"level": sfx.get("confidence"),
                        "reasons": [r.get("words") for r in sfx.get("confidence_reasons") or []
                                    if isinstance(r, Mapping)]},
-        "change": {"files": stat.get("files") or [], "added": stat.get("added"),
+        "change": {"files": [str(f.get("path") if isinstance(f, Mapping) else f)
+                             for f in stat.get("files") or []], "added": stat.get("added"),
                    "removed": stat.get("removed"),
                    "host_effect": flag_detail.get(sp_flag()) or []},
         "tests": {"new": red_green.get("tests") or [], "red_on_base": True,
                   "green_with_fix": True, "affected": affected.get("tests", 0),
                   "p0": p0.get("tests", 0), "none_weakened":
                       bool((gates.get("tests_not_weakened") or {}).get("ok"))},
-        "review": {k: {"verdict": (v or {}).get("verdict"), "engine": (v or {}).get("engine")}
+        "review": {k: {"verdict": (v or {}).get("verdict"), "engine": (v or {}).get("engine"),
+                       "ok": bool((v or {}).get("ok")),
+                       "findings": [f"{f.get('severity', '')} {f.get('what', '')}".strip()[:200]
+                                    for f in (v or {}).get("findings") or []
+                                    if isinstance(f, Mapping)][:3]}
                    for k, v in (review.get("seats") or {}).items()},
         "security_on_another_engine": bool(review.get("security_on_another_engine")),
         "review_note": review.get("note") or "",
         "cost_usd": round(int(sfx.get("cost_micros") or 0) / 1e6, 2),
+        "minutes": _build_minutes(sfx),
         "engine": sfx.get("engine"),
         "on_approve": ("Builds BOSS with this fix, restarts it (about two minutes of "
                        "downtime), checks its health, then resumes the step."),
@@ -162,6 +174,22 @@ def card(sfx: Mapping[str, Any]) -> dict[str, Any]:
                    "it one here." if tier >= 3 else "One person holding the approver seat."),
         "command": MANUAL_COMMAND.format(sfx=sfx.get("id")),
     }
+
+
+def _build_minutes(sfx: Mapping[str, Any]) -> int:
+    """How long Mender took to reach the card: from the start to the moment it asked."""
+    from datetime import datetime
+
+    start = sfx.get("started_at") or sfx.get("created_at")
+    asked = (sfx.get("progress") or {}).get("at") if sfx.get("status") == sf.AWAITING_APPROVAL \
+        else None
+    try:
+        if start and asked:
+            return max(0, int((datetime.fromisoformat(str(asked)) - datetime.fromisoformat(
+                str(start))).total_seconds() // 60))
+    except (TypeError, ValueError):
+        pass
+    return int(sf.step_facts(sfx)["minutes"])
 
 
 def sp_flag() -> str:
@@ -221,12 +249,91 @@ def refuse_policy_approval(row: Mapping[str, Any], *, system_policy: bool, actor
             rec = json.loads(rec)
         except ValueError:
             rec = {}
-    if (rec or {}).get("action") != ACTION:
+    if (rec or {}).get("action") not in PERSON_ACTIONS:
         return
     if system_policy or actor in (sf.SYSTEM_ACTOR, "system", sf.ACTOR_AGENT) \
             or str(actor).startswith(("agt_", "sys_")):
-        raise InstallRefused("A person approves every BOSS self-fix install; no policy, agent "
-                             "or system account can.")
+        raise InstallRefused("A person approves every BOSS self-fix install and removal; no "
+                             "policy, agent or system account can.")
+
+
+# ── removing installed fixes (spec §6.5) ─────────────────────────────────────────────────────
+
+def request_removal(connection: Connection, settings: Any, *, project_id: str, actor: str,
+                    sfx_id: Optional[str] = None) -> dict[str, Any]:
+    """A person asks to take one self-fix (`sfx_id`), or every local fix, off this one-box. The
+    ask is a tier-2 decision a person approves; approving it issues the signed `remove` /
+    `remove_all` ticket. Refused when there is nothing installed to remove."""
+    installed = stack(connection)
+    if sfx_id:
+        target = next((f for f in installed if f["self_fix_id"] == sfx_id), None)
+        if target is None:
+            raise InstallRefused("this self-fix is not on the local stack; there is nothing to "
+                                 "remove")
+        anchor = sfx_id
+        title = f"Remove the BOSS self-fix “{target.get('title') or sfx_id}”?"
+        effect = ("Rebuilds BOSS without this fix (the other local fixes stay), restarts it, "
+                  "and checks its health; puts the current build back if health drops.")
+        kind = "remove"
+    else:
+        if not installed:
+            raise InstallRefused("no local self-fixes are installed; BOSS runs its release as "
+                                 "it is")
+        anchor = str(installed[-1]["self_fix_id"])
+        title = f"Remove all {len(installed)} local BOSS self-fix(es)?"
+        effect = ("Puts the plain release back (no local fixes), restarts BOSS and checks its "
+                  "health; puts the current build back if health drops.")
+        kind = "remove_all"
+    open_one = connection.execute(text(
+        "SELECT id FROM decisions WHERE status IN ('pending', 'delegated') AND "
+        "recommendation->>'action' = :a AND COALESCE(recommendation->>'self_fix_id', '') = :i"),
+        {"a": REMOVE_ACTION, "i": sfx_id or ""}).scalar()
+    if open_one:
+        return {"decision_id": str(open_one), "kind": kind, "existing": True}
+    decision_id = make_id("dec")
+    recommendation = {"action": REMOVE_ACTION, "self_fix_id": sfx_id, "anchor": anchor,
+                      "kind": kind, "title": title, "reason_code": "self_fix_remove",
+                      "why": effect, "stack": [f["self_fix_id"] for f in installed],
+                      "requested_by": actor}
+    connection.execute(text(
+        "INSERT INTO decisions (id, project_id, task_id, question, recommendation, options, "
+        "risk_tier, cost_summary, deadline_at, default_action, status) VALUES (:id, :p, NULL, "
+        ":q, CAST(:r AS JSONB), CAST(:o AS JSONB), 2, '{}'::jsonb, :d, 'hold', 'pending')"),
+        {"id": decision_id, "p": project_id, "q": title[:500],
+         "r": json.dumps(recommendation, default=str),
+         "o": json.dumps([{"action": "approve", "label": "Remove"},
+                          {"action": "reject", "label": "Keep it"}]),
+         "d": now_utc() + DECISION_TTL})
+    from .core import emit_event
+
+    emit_event(connection, project_id, "decision.created", actor, "decision", decision_id,
+               {"reason": "self_fix_remove", "risk_tier": 2, "self_fix_id": sfx_id,
+                "default_action": "hold"})
+    sfx = sf.get(connection, anchor)
+    if sfx:
+        sf.emit(connection, sfx, "removal_requested", actor=actor,
+                sentence=(f"{actor} asked to "
+                          f"{'remove this fix' if sfx_id else 'remove every local fix'}; "
+                          "waiting for the approval."),
+                data={"decision_id": decision_id, "kind": kind})
+    return {"decision_id": decision_id, "kind": kind}
+
+
+def on_remove_approved(connection: Connection, settings: Any, row: Mapping[str, Any],
+                       actor: str) -> dict[str, Any]:
+    rec = row.get("recommendation") or {}
+    if isinstance(rec, str):
+        rec = json.loads(rec)
+    kind = "remove" if rec.get("kind") == "remove" else "remove_all"
+    anchor = str(rec.get("anchor") or rec.get("self_fix_id") or "")
+    if kind == "remove" and not any(f["self_fix_id"] == anchor for f in stack(connection)):
+        raise InstallRefused("this self-fix is no longer on the local stack")
+    if kind == "remove_all" and not stack(connection):
+        raise InstallRefused("no local self-fixes are installed any more")
+    return issue_ticket(connection, settings, anchor, kind=kind, approved_by=actor,
+                        trigger=f"{actor} approved removing "
+                                f"{'this fix' if kind == 'remove' else 'every local fix'}",
+                        decision_id=str(row.get("id") or ""))
 
 
 # ── the decision's answers ───────────────────────────────────────────────────────────────────
@@ -295,7 +402,8 @@ def _release_ref() -> str:
 
 
 def issue_ticket(connection: Connection, settings: Any, sfx_id: str, *, kind: str,
-                 approved_by: Optional[str] = None, trigger: str = "") -> dict[str, Any]:
+                 approved_by: Optional[str] = None, trigger: str = "",
+                 decision_id: Optional[str] = None) -> dict[str, Any]:
     """Sign one single-use ticket for the host self-installer. Without a signing key nothing is
     issued: the self-fix stays approved and says why (fail closed)."""
     if kind not in KINDS:
@@ -311,12 +419,15 @@ def issue_ticket(connection: Connection, settings: Any, sfx_id: str, *, kind: st
     release = _release_ref()
     claims = {
         "iss": "boss", "typ": "self_fix_ticket", "ticket_id": ticket_id, "kind": kind,
-        "sfx_id": sfx_id, "decision_id": sfx.get("decision_id"),
+        "sfx_id": sfx_id, "decision_id": decision_id or sfx.get("decision_id"),
         "base_sha": sfx.get("base_sha"), "fix_commit_sha": sfx.get("fix_commit_sha"),
         "fix_tree_sha": sfx.get("fix_tree_sha"), "branch": sfx.get("branch"),
         "release": release, "stack_ref": f"refs/boss/stack/{release}",
         "approved_by": approved_by, "trigger": trigger[:300],
         "health_minutes": sf._int_setting(connection, settings, "self_fix_health_minutes"),
+        **({"remove": [sfx_id] if kind == "remove" else [f["self_fix_id"] for f in
+                                                         stack(connection)]}
+           if kind in ("remove", "remove_all") else {}),
         "iat": int(now.timestamp()), "exp": int(expires.timestamp()),
         "nonce": base64.urlsafe_b64encode(os.urandom(12)).decode().rstrip("="),
     }
@@ -337,6 +448,11 @@ def issue_ticket(connection: Connection, settings: Any, sfx_id: str, *, kind: st
     sf.emit(connection, sfx, "ticket_issued", actor=sf.SYSTEM_ACTOR,
             sentence=(f"Install ticket ready: the self-installer installs it, or run "
                       f"`{command}` on the host." if kind == "install" else
+                      f"Removal ticket ready: the self-installer rebuilds BOSS without "
+                      f"{'this fix' if kind == 'remove' else 'its local fixes'}, or run "
+                      f"`boss self-fix {kind.replace('_', '-')}"
+                      f"{' ' + sfx_id if kind == 'remove' else ''}` on the host."
+                      if kind in ("remove", "remove_all") else
                       f"Rollback ticket ready ({trigger})."),
             data={"ticket_id": ticket_id, "kind": kind, "command": command})
     sf.audit(connection, "self_fix.ticket_issued", actor=approved_by or sf.SYSTEM_ACTOR, sfx=sfx,
@@ -483,13 +599,8 @@ def report(connection: Connection, settings: Any, ticket_id: str, *, phase: str,
         _install_phase(connection, settings, sfx, ticket_id, phase, ok, clean, stack_head)
     elif row["kind"] == "rollback":
         _rollback_phase(connection, sfx, ticket_id, phase, ok, clean)
-    elif row["kind"] in ("remove", "remove_all") and phase == "done":
-        _finish(connection, ticket_id, "done" if ok else "failed")
-        if ok:
-            _unstack(connection, sfx_id)
-            connection.execute(text("UPDATE self_fixes SET stack_state = 'removed' WHERE id = :i"),
-                               {"i": sfx_id})
-            sf.audit(connection, "self_fix.removed", actor=sf.INSTALLER_ACTOR, sfx=sfx)
+    elif row["kind"] in ("remove", "remove_all"):
+        _removal_phase(connection, sfx, ticket_id, str(row["kind"]), phase, ok, clean)
     out = sf.get(connection, sfx_id)
     return {"self_fix_id": sfx_id, "was": status, "status": out["status"]}
 
@@ -564,6 +675,38 @@ def _rollback_phase(connection: Connection, sfx: dict[str, Any], ticket_id: str,
     _incident(connection, sfx, detail)
 
 
+def _removal_phase(connection: Connection, sfx: Mapping[str, Any], ticket_id: str, kind: str,
+                   phase: str, ok: bool, detail: str) -> None:
+    """A removal's phases. `done`: the fixes it named are off the stack (their status stays —
+    they were verified — and their stack state says removed). A failed start or health puts the
+    current build back (the self-installer's `rollback`), and nothing is removed."""
+    body = connection.execute(text("SELECT body FROM self_fix_tickets WHERE id = :i"),
+                              {"i": ticket_id}).scalar() or {}
+    if isinstance(body, str):
+        body = json.loads(body)
+    removed = [str(x) for x in (body or {}).get("remove") or [sfx["id"]]]
+    if phase == "done" and ok:
+        _finish(connection, ticket_id, "done")
+        for sfx_id in removed:
+            _unstack(connection, sfx_id)
+            connection.execute(text("UPDATE self_fixes SET stack_state = 'removed', updated_at "
+                                    "= now() WHERE id = :i"), {"i": sfx_id})
+            one = sf.get(connection, sfx_id) or {"id": sfx_id, "project_id": sfx["project_id"]}
+            sf.emit(connection, one, "removed", actor=sf.INSTALLER_ACTOR,
+                    sentence="Removed from this one-box: BOSS was rebuilt without it.",
+                    data={"ticket_id": ticket_id, "kind": kind})
+            sf.audit(connection, "self_fix.removed", actor=sf.INSTALLER_ACTOR, sfx=one,
+                     details={"kind": kind})
+        return
+    if phase == "rollback":
+        _finish(connection, ticket_id, "rolled_back" if ok else "failed")
+        if not ok:
+            _incident(connection, sfx, detail)
+        return
+    if not ok and phase in ("backup", "apply", "build"):
+        _finish(connection, ticket_id, "failed")
+
+
 def _incident(connection: Connection, sfx: Mapping[str, Any], detail: str) -> None:
     decision_id = make_id("dec")
     connection.execute(text(
@@ -625,6 +768,47 @@ def rebase_stale(connection: Connection, settings: Any) -> list[str]:
         sf.enqueue_build(connection, sfx, round_note="rebase onto the running stack")
         moved.append(sfx_id)
     return moved
+
+
+INSTALLER_SEEN_KEY = "self_fix_installer"
+#: The watcher polls every 10 s: seen within a minute is "watching".
+WATCHING_SECONDS = 60
+
+
+def seen_installer(connection: Connection) -> None:
+    """The host self-installer asked for tickets: Govern › Self-fix says it is watching."""
+    try:
+        with connection.begin_nested():
+            connection.execute(text(
+                "INSERT INTO system_state (key, value, updated_at) VALUES (:k, CAST(:v AS JSONB), "
+                "now()) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = "
+                "now()"), {"k": INSTALLER_SEEN_KEY,
+                           "v": json.dumps({"last_seen_at": now_utc().isoformat()})})
+    except Exception:  # noqa: BLE001 — a status line, never a reason to refuse tickets
+        log.debug("self-installer sighting not recorded")
+
+
+def installer_seen(connection: Connection) -> dict[str, Any]:
+    """{last_seen_at, watching}: when the host self-installer last asked for tickets."""
+    from datetime import datetime
+
+    try:
+        with connection.begin_nested():
+            value = connection.execute(text("SELECT value FROM system_state WHERE key = :k"),
+                                       {"k": INSTALLER_SEEN_KEY}).scalar()
+    except Exception:  # noqa: BLE001
+        value = None
+    if isinstance(value, str):
+        value = json.loads(value)
+    at = (value or {}).get("last_seen_at") if isinstance(value, dict) else None
+    watching = False
+    if at:
+        try:
+            watching = (now_utc() - datetime.fromisoformat(str(at))).total_seconds() \
+                <= WATCHING_SECONDS
+        except (TypeError, ValueError):
+            watching = False
+    return {"last_seen_at": at, "watching": watching}
 
 
 def store_bundle(connection: Connection, sfx_id: str, bundle: bytes) -> None:
@@ -745,7 +929,8 @@ def record_upgrade(connection: Connection, plan: list[Mapping[str, Any]], *,
     return out
 
 
-__all__ = ["ACTION", "IdentitySigner", "InstallRefused", "KINDS", "MANUAL_COMMAND", "PHASES",
+__all__ = ["ACTION", "IdentitySigner", "PERSON_ACTIONS", "REMOVE_ACTION", "installer_seen",
+           "on_remove_approved", "request_removal", "seen_installer", "InstallRefused", "KINDS", "MANUAL_COMMAND", "PHASES",
            "TICKET_TYP", "card", "content_hash", "expire_tickets", "health_report",
            "issue_rollback", "issue_ticket", "on_approved", "on_rejected", "on_revise",
            "pending_tickets", "rebase_stale", "record_upgrade", "refuse_policy_approval",

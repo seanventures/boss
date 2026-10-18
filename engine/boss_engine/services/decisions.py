@@ -982,6 +982,15 @@ class DecisionService:
                 approve_self_fix(connection, self.settings, row, actor)
             except InstallRefused as refused:
                 raise InvalidDecisionTransitionError(str(refused)) from refused
+        elif action == "self_fix.remove":
+            # A person approved taking installed self-fixes off this one-box: the signed
+            # `remove` / `remove_all` ticket for the host self-installer.
+            from .self_fix_install import InstallRefused, on_remove_approved
+
+            try:
+                on_remove_approved(connection, self.settings, row, actor)
+            except InstallRefused as refused:
+                raise InvalidDecisionTransitionError(str(refused)) from refused
         elif action == "deploy_stack":
             # A stack deployment held for approval: approving it approves its ChangeSet and
             # queues the apply as a durable worker job (services/stack_deploy.py).
@@ -2264,7 +2273,7 @@ def approve_by_policy(connection: Connection, decision_id: str, *, project_id: s
         {"id": decision_id, "p": project_id}).mappings().first()
     if row is None or row["status"] != "pending":
         return False
-    if row.get("action") in ("review_architecture", "self_fix.install"):
+    if row.get("action") in ("review_architecture", "self_fix.install", "self_fix.remove"):
         # An architecture, and a BOSS self-fix install, are approved by a person, never by a
         # setting (architecture_docs, self_fix_install; auto-install is off in v1).
         return False
