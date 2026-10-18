@@ -208,12 +208,18 @@ def _fenced(value: Any) -> str:
 
 #: The production entry point of a failing step, by step kind: the function BOSS was running
 #: when the step failed. A deploy step's host work is the stack deployment's apply.
-ENTRY_POINTS: dict[str, dict[str, str]] = {
+ENTRY_POINTS: dict[str, dict[str, Any]] = {
     "deploy": {"file": "engine/boss_engine/services/stack_deploy.py", "function": "apply_on_host",
                "what": "a deploy step's host work. It renders the release's install and update "
                        "steps (rendered['install'] / rendered['update']: {name, run, "
                        "timeout_seconds}) and sends each step's `run` shell to the host, in "
-                       "order"},
+                       "order",
+               # A deploy step that resumes PLANS AGAIN first: what the plan records (the
+               # manifest summary) is what the apply reads back.
+               "also": [{"function": "plan_stack_deploy",
+                         "what": "the resumed step plans again before it applies: it reads the "
+                                 "target and its earlier releases and records the manifest "
+                                 "summary (stack_deployments.manifest) the apply reads back"}]},
 }
 
 #: A shell fragment that REMOVES something on a host (containers, projects, volumes, files).
@@ -362,7 +368,11 @@ def _entry_rule(entry: Optional[Mapping[str, str]]) -> str:
             "would do on the host, the steps and shell it sends (run that shell against a fake "
             "`docker` when it removes anything). A test of a lower helper alone is refused "
             "(drives_entry_point): the test that fails must be one that calls "
-            f"{entry['function']};\n")
+            f"{entry['function']};\n"
+            + "".join(f"- {a['what']}: a fix that changes {a['function']} is tested by calling "
+                      f"{a['function']} too (stub its edges the same way) and handing what it "
+                      f"records to {entry['function']}; BOSS checks that a test calls every one "
+                      "of these the fix changes;\n" for a in entry.get("also") or []))
 
 
 def diagnose_prompt(sfx: Mapping[str, Any], feedback: str = "",
@@ -686,6 +696,10 @@ class Build:
                 note = f"The {gate.name} gate failed: {gate.why}"
                 self.move(sf.FIXING, f"{sf.AGENT_NAME}: {gate.name} failed; fixing again "
                                      f"(round {rounds}).", repair_rounds=rounds)
+                if gate.detail.get("ask_test"):
+                    # Only the test stage writes tests: it adds the one that calls it.
+                    tests = self.add_tests(work, base_sha, diagnosis, tests, note=note)
+                    red = (self.sfx().get("red_green") or {}).get("base") or {}
                 continue
             findings = self.review(work, base_sha, diagnosis)
             if findings:
@@ -1029,6 +1043,17 @@ class Build:
             if not drives.ok:
                 self.write(gates=record)
                 return si.GateResult(drives.name, False, drives.why, drives.detail, final=True)
+            # ...AND EVERY PART OF THE PRODUCTION PATH THE FIX CHANGES (the real-engine Replay A,
+            # attempt 4: the fix decided at plan time, its test wrote the plan's record by hand
+            # and called only the apply, and the reviewers rightly held that nothing pinned the
+            # plan). Not final: the test stage adds the test that calls it.
+            unpinned = _unpinned_path(entry_point(self.sfx(), clean), changes, tests)
+            if unpinned:
+                record["drives_entry_point"] = {**drives.as_dict(), "ok": False,
+                                                "why": unpinned["why"]}
+                self.write(gates=record)
+                return si.GateResult(drives.name, False, unpinned["why"],
+                                     {**drives.detail, "ask_test": unpinned["function"]})
             # AFFECTED SUITES: nothing that passed on the base fails with the fix.
             changed_code = [c.path for c in changes if not sp.is_test_path(c.path)]
             affected, uncovered = src.affected_tests(clean, changed_code)
@@ -1198,6 +1223,39 @@ _ASKS_FOR_TEST = re.compile(r"\badd (?:a |an |one )?(?:new )?(?:regression|test)
                             r"\bhas no (?:regression )?test|\buntested\b|\btest(?:s)? "
                             r"(?:covering|that covers|for this)|\bregression (?:test )?covering",
                             re.I)
+
+
+def _edited_functions(changes: list[sp.FileChange], file: str) -> set[str]:
+    """Top-level functions of `file` whose body the change edits (a removed line in its old
+    span or an added line in its new one)."""
+    out: set[str] = set()
+    for change in changes:
+        if change.path != file or change.before is None or change.after is None:
+            continue
+        removed, added = sp.changed_lines(change.before, change.after)
+        for source, lines in ((change.before, removed), (change.after, added)):
+            for name, (first, last) in sp.symbol_spans(source).items():
+                if any(first <= n <= last for n in lines):
+                    out.add(name.split(".")[0])
+    return out
+
+
+def _unpinned_path(entry: Optional[Mapping[str, Any]], changes: list[sp.FileChange],
+                   tests: Mapping[str, str]) -> Optional[dict[str, str]]:
+    """The first further entry point of the production path (`also`) that the fix edits and
+    no new test calls."""
+    if not entry:
+        return None
+    edited = _edited_functions(changes, str(entry.get("file") or ""))
+    for also in entry.get("also") or []:
+        fn = str(also.get("function") or "")
+        if fn in edited and not any(si.tests_driving(body, fn) for path, body in tests.items()
+                                    if str(path).endswith(".py")):
+            return {"function": fn,
+                    "why": f"the fix changes {fn} ({also.get('what')}), and no new test calls "
+                           f"it: add a test that calls {fn} and hands what it records to "
+                           f"{entry.get('function')}"}
+    return None
 
 
 def test_round(findings: list[dict[str, Any]], tests: Mapping[str, str]) -> Optional[str]:

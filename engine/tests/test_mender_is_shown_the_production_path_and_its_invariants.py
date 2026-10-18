@@ -219,3 +219,28 @@ def test_the_environment_names_each_lane(monkeypatch):
     assert lanes["fix"] == {"engine": "engine_a", "model": "m1"}
     assert lanes["review_code"] == {"engine": "engine_a", "model": "m2"}
     assert lanes["security_check"] == {"engine": "engine_b", "model": "default"}
+
+
+def test_a_fix_that_changes_the_plan_needs_a_test_that_calls_the_plan():
+    """The real-engine Replay A, attempt 4: the fix decided at plan time, its test wrote what the
+    plan records by hand and called only the apply; the reviewers rightly held that nothing
+    pinned the plan. A further entry point the fix edits must be called by a new test."""
+    from boss_engine.services.self_fix_policy import FileChange
+
+    before = ("def plan_stack_deploy(engine):\n    return {}\n\n\n"
+              "def apply_on_host(engine):\n    return 1\n")
+    after = before.replace("return {}", "return {'left': 'p'}")
+    changes = [FileChange(path=ENTRY["file"], status="M", before=before, after=after)]
+    entry = b.ENTRY_POINTS["deploy"]
+    assert b._edited_functions(changes, ENTRY["file"]) == {"plan_stack_deploy"}
+    only_apply = {"engine/tests/test_new.py": DRIVES}
+    out = b._unpinned_path(entry, changes, only_apply)
+    assert out and out["function"] == "plan_stack_deploy"
+    both = {"engine/tests/test_new.py": DRIVES.replace(
+        "    return stack_deploy.apply_on_host(",
+        "    stack_deploy.plan_stack_deploy(None)\n    return stack_deploy.apply_on_host(")}
+    assert b._unpinned_path(entry, changes, both) is None
+    apply_only_fix = [FileChange(path=ENTRY["file"], status="M", before=before,
+                                 after=before.replace("return 1", "return 2"))]
+    assert b._unpinned_path(entry, apply_only_fix, only_apply) is None, \
+        "a fix of the apply alone needs no test of the plan"
