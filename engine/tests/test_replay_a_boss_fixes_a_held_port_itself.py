@@ -287,17 +287,20 @@ with open(os.path.join(bin_dir, "docker"), "w") as f:
     f.write(f"#!/bin/sh\nexec {sys.executable} {os.environ['REPLAY_FAKE_DOCKER']} \"$@\"\n")
 os.chmod(os.path.join(bin_dir, "docker"), 0o755)
 env = {**os.environ, "PATH": bin_dir + ":" + os.environ["PATH"], "FAKE_DOCKER_STATE": state}
-names = []
+names, failed_steps = [], []
 for step in captured["rendered"]["install"]:
     names.append(step["name"])
     if step["name"] == "compose up" or ("compose" in step["run"] and " up" in step["run"]):
         break
-    subprocess.run(["bash", "-c", step["run"]], env=env, capture_output=True, text=True,
-                   timeout=60)
+    ran = subprocess.run(["bash", "-c", step["run"]], env=env, capture_output=True, text=True,
+                         timeout=60)
+    if ran.returncode != 0:
+        failed_steps.append(step["name"])
 log = json.load(open(state))["log"]
 gone = [e["name"] for e in log if e["op"].startswith(("rm", "compose down"))]
 print(json.dumps({"steps": names, "removed": gone, "port_free": "app1" in gone,
                   "volumes": any("-v" in e["op"].split() for e in log), "log": log,
+                  "failed_steps": failed_steps,
                   "planned": sorted(k for k in dep["manifest"] if k != "steps")}))
 '''
 
@@ -520,6 +523,47 @@ def _tick(r: Replay, times: int = 1) -> None:
             runner.tick(c, Worker(r.eng, r.settings), project_id=r.project)
 
 
+#: THE BEHAVIOUR ORACLE's hosts: what c56bd88a3's own tests pinned, as behaviour on a host
+#: rather than as its function names. Each: (layout, the containers that must go).
+ORACLE_HOSTS = {
+    # The real run: the app's old container holds 8000 in the resources' project, beside res-db.
+    "the real host": (
+        {"app1": (SHARED, f"{TARGET_DIR}/releases/0f3c/example-app"),
+         "resdb": (SHARED, "/opt/boss-infra/example-app/deploy"),
+         "otherapp": ("bossapp-other-deploy", "/opt/boss-apps/other/releases/9")}, ["app1"]),
+    # A look-alike directory (example-app-two) in the same project, and another app.
+    "a look-alike and another app": (
+        {"app1": (SHARED, f"{TARGET_DIR}/releases/0f3c/example-app"),
+         "resdb": (SHARED, "/opt/boss-infra/example-app/deploy"),
+         "lookalike": (SHARED, "/opt/boss-apps/example-app-two/releases/1"),
+         "otherapp": ("bossapp-other-deploy", "/opt/boss-apps/other/releases/9")}, ["app1"]),
+    # Nothing of the app is left in the shared project: nothing happens, and nothing fails.
+    "nothing of the app left": (
+        {"resdb": (SHARED, "/opt/boss-infra/example-app/deploy")}, []),
+}
+
+
+def behaviour_oracle(stack_worktree: Path, *, eng, project_id: str, tmp: Path) -> dict:
+    """c56bd88a3's tests as BEHAVIOUR, run by the corrected probe (plan again, apply, a model of
+    the Docker CLI) against the installed code: at the next release the earlier shared project
+    is retired of this app's container BEFORE compose up, so the port is free; only that
+    container goes; res-db, a look-alike directory, another app and every volume are
+    untouched; with nothing of the app there nothing is removed and no step fails."""
+    cases = {}
+    for name, (layout, must_go) in ORACLE_HOSTS.items():
+        out = _resumed_outcome(stack_worktree, layout, tmp, eng=eng, project_id=project_id)
+        checks = {
+            "retired before compose up": sorted(out["removed"]) == sorted(must_go),
+            "port freed": (out["port_free"] or "app1" not in layout),
+            "nothing else touched": not (set(out["removed"]) - set(must_go)),
+            "no volume": not out["volumes"],
+            "no step failed": not out.get("failed_steps"),
+        }
+        cases[name] = {"ok": all(checks.values()), "checks": checks,
+                       "removed": out["removed"], "steps": out["steps"]}
+    return {"ok": all(c["ok"] for c in cases.values()), "cases": cases}
+
+
 def _oracle(stack_worktree: Path) -> dict:
     """c56bd88a3's own tests (a person's), run against BOSS's installed fix."""
     rel = "engine/tests/test_a_new_release_retires_the_app_from_its_old_shared_project.py"
@@ -623,7 +667,12 @@ def _run_replay(r: Replay, monkeypatch, *, layout: dict) -> dict:
         outcome = outcomes[0]
         r.mark(f"the resumed deploy on the installed code: removed {outcome['removed']} before "
                f"compose up; port free: {outcome['port_free']}")
-        oracle = _oracle(host.dir / ".boss" / "stack-worktree")
+        oracle = behaviour_oracle(host.dir / ".boss" / "stack-worktree", eng=r.eng,
+                                  project_id=r.project, tmp=r.root)
+        r.mark(f"behaviour oracle: {'PASS' if oracle['ok'] else 'FAIL'} "
+               f"{ {k: v['ok'] for k, v in oracle['cases'].items()} }")
+        # c56bd88a3's own tests, as written (they name its functions), kept for the record.
+        oracle["name_oracle"] = _oracle(host.dir / ".boss" / "stack-worktree")
         with r.eng.begin() as c:
             sfx = sf.get(c, sfx_id)
         result = {"self_fix": sfx_id, "status_after_resume": sfx["status"],
@@ -714,6 +763,7 @@ def test_replay_a_end_to_end(replay, monkeypatch):
     _report(replay, "A: port held → verified", result)
     assert result["outcome"]["port_free"] and result["outcome"]["removed"] == ["app1"]
     assert result["final_status"] == sf.VERIFIED
+    assert result["oracle"]["ok"], result["oracle"]
     assert result["verification"]["outcome"] == "new_cause"
     assert result["verification"]["next_signature"] == "deploy:unwired:res-db"
     assert result["recommendation"][0]["status"] == "implemented"
@@ -759,3 +809,20 @@ def test_the_probe_judges_a_plan_time_fix_fairly(eng, project, tmp_path, commit,
     assert not out["volumes"], "never a volume"
     if freed:
         assert "retire_app_in" in out["planned"], "decided at plan time, read back at apply"
+
+
+@pytest.mark.parametrize("commit, passes", [(HUMAN_FIX, True), (BASE, False)])
+def test_the_behaviour_oracle_passes_the_person_s_fix_and_fails_the_base(eng, project,
+                                                                         tmp_path, commit,
+                                                                         passes):
+    tree = tmp_path / "tree"
+    git(ROOT, "worktree", "add", "-q", "--detach", str(tree), commit)
+    try:
+        out = behaviour_oracle(tree, eng=eng, project_id=project, tmp=tmp_path)
+    finally:
+        git(ROOT, "worktree", "remove", "--force", str(tree))
+        with eng.begin() as c:
+            for table in ("stack_deployments", "deployment_targets", "deployment_hosts"):
+                c.execute(text(f"DELETE FROM {table} WHERE project_id = :p"),  # noqa: S608
+                          {"p": project})
+    assert out["ok"] is passes, out
