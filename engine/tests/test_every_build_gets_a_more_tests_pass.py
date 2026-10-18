@@ -57,13 +57,21 @@ def _its_more_tests(spec, build_id):
 
 BUILDERS = [e for e in CATALOGUE if any(_cap(s) == "build" for s in e["steps"])]
 
+#: The catalogue workflows that build with NO pass 2, each with its reason. Opting out is a
+#: decision a template states (`"more_tests": False`), never an accident.
+OPTED_OUT = {
+    # Users are failing now: the fix's own criteria demand the regression test and its gates run
+    # the whole existing suite; a second pass and its second deploy would hold the recovery.
+    "incident_response",
+}
+
 
 def test_the_catalogue_workflows_that_build_are_the_ones_expected():
     assert {e["key"] for e in BUILDERS} == {
         "standard_product_delivery", "minor_feature", "major_feature", "fast_fix",
         "backend_service_setup", "ux_certification", "security_hardening", "data_migration",
         "compliance_release", "third_party_integration", "deprecation_sunset",
-        "incremental_build"}
+        "incremental_build", "incident_response"}
 
 
 def _the_rule_holds(spec, key):
@@ -93,7 +101,16 @@ def _the_rule_holds(spec, key):
             assert join
 
 
-@pytest.mark.parametrize("entry", BUILDERS, ids=lambda e: e["key"])
+def test_only_the_named_templates_opt_out_and_the_opt_out_holds_at_run_time():
+    assert {e["key"] for e in CATALOGUE if e.get("more_tests") is False} == OPTED_OUT
+    for entry in CATALOGUE:
+        if entry["key"] in OPTED_OUT:
+            run_spec = workflows._published_spec(entry_spec(entry))
+            assert not [s for s in run_spec["steps"] if _cap(s) == "more_tests"], entry["key"]
+
+
+@pytest.mark.parametrize("entry", [e for e in BUILDERS if e["key"] not in OPTED_OUT],
+                         ids=lambda e: e["key"])
 def test_every_catalogue_build_gets_pass_2_and_nothing_waits_for_it(entry):
     for spec in (entry_spec(entry), workflows._published_spec(entry_spec(entry))):
         _the_rule_holds(spec, entry["key"])
@@ -288,8 +305,13 @@ def test_a_deploy_asks_as_its_environment_says_and_never_waits_for_pass_2(eng, p
         assert runner._gate_subject(c, project, spec["ship"], context) is not None
         set_approval_policy(c, project_id=project, environment="staging",
                             requires_approval=False, actor="usr_owner")
-        # Staging by policy: nobody is asked, at the step either.
-        assert runner._gate_subject(c, project, spec["ship"], context) is None
+        # A Deploy step PROMISES A PERSON: the staging policy does not answer for it (D2,
+        # test_a_promised_approval_is_always_asked)…
+        assert runner._gate_subject(c, project, spec["ship"], context) is not None
+        # …unless the step lets the policy decide: then nobody is asked, at the step either.
+        opted = {**spec["ship"], "approval": {**(spec["ship"].get("approval") or {}),
+                                              "follows_policy": True}}
+        assert runner._gate_subject(c, project, opted, context) is None
         # A Deploy again that will ship nothing asks nobody and says why when it runs.
         assert runner._gate_subject(c, project, spec["ship_again"], context) is None
         c.execute(text("DELETE FROM deployment_environment_policies WHERE project_id=:p"),

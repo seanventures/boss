@@ -19,6 +19,7 @@ import subprocess as _subprocess
 from typing import Any, Optional as _Optional
 
 from .._compat import services_module
+from ..services.workflow_step_order import in_declared_order as _in_declared_order
 # Drafting a workflow from a described sequence is shared with the console's Describe (the
 # `/v1/delivery-workflows/draft` endpoint), so it lives in a service and the tool imports it.
 from ..services.workflow_drafting import (
@@ -2367,7 +2368,10 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
                                          "project has more than one verified host"},
               "approval_decision_id": {"type": "string",
                                        "description": "set by a workflow's Deploy step only; "
-                                                      "leave empty"}},
+                                                      "leave empty"},
+              "person_required": {"type": "boolean",
+                                  "description": "set by a workflow's Deploy step only; "
+                                                 "leave empty"}},
              required=["run_id", "environment"]),
         kind="write",
         reversibility="safe", permission="deployment:create")
@@ -2386,6 +2390,9 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
             # (deploy_policy.pre_approval).
             approval_decision_id=(str(args["approval_decision_id"])
                                   if args.get("approval_decision_id") else None),
+            # A Deploy step that promised a person: no environment policy answers for it. Only
+            # ever makes a deploy stricter, so a model setting it can only add a question.
+            person_required=args.get("person_required") is True,
         )
 
     @reg.tool(
@@ -4974,10 +4981,10 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
                 # NAME WHAT IS THERE. A step is addressed by id ('meeting'), and the console
                 # shows its LABEL ('Convene a panel') — so the obvious guess is the wrong one,
                 # and "step not found" sends the reader hunting for a typo they did not make.
-                available = c.execute(
+                available = _in_declared_order(c, run_id, c.execute(
                     _text("SELECT step_id, status FROM workflow_step_runs "
                           " WHERE workflow_run_id=:r AND project_id=:p ORDER BY created_at"),
-                    {"r": run_id, "p": pid}).mappings().all()
+                    {"r": run_id, "p": pid}).mappings().all())
                 return {"ok": False,
                         "error": f"no step {step_id!r} on {run_id}",
                         "steps_on_this_run": [
@@ -5043,10 +5050,10 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
                     reason=reason)
             except _workflows.WorkflowError as error:
                 if isinstance(error, _workflows.WorkflowNotFoundError):
-                    available = c.execute(
+                    available = _in_declared_order(c, run_id, c.execute(
                         _text("SELECT step_id, status FROM workflow_step_runs "
                               " WHERE workflow_run_id=:r AND project_id=:p ORDER BY created_at"),
-                        {"r": run_id, "p": pid}).mappings().all()
+                        {"r": run_id, "p": pid}).mappings().all())
                     return {"ok": False, "error": str(error),
                             "steps_on_this_run": [
                                 {"step_id": s["step_id"], "status": s["status"]}

@@ -164,6 +164,35 @@ def _fakes(c, project_id: str) -> dict[str, FakeTool]:
         ("run_security_scan", security_scan))}
 
 
+def _incident(c, project_id: str, monkeypatch) -> str:
+    """An app incident as its own monitor opens one (incident_response.on_alert's record), for
+    the template that starts from one. The investigation's outside reads find nothing (no host
+    key, no GitHub) and say so; recovery is judged clear at once."""
+    from boss_engine.services import incident_response
+
+    target, inc = f"dt_{uuid.uuid4().hex[:10]}", f"inc_{uuid.uuid4().hex[:10]}"
+    c.execute(text("INSERT INTO deployment_targets (id, project_id, app_name, repo, environment, "
+                   " target_kind, target_ref, status, created_by) VALUES (:t, :p, 'order-api', "
+                   " 'acme/app', 'staging', 'stack', 'order-api', 'active', 'test')"),
+              {"t": target, "p": project_id})
+    c.execute(text("INSERT INTO stack_deployments (id, project_id, target_id, repository, ref, "
+                   " commit_sha, manifest, status, created_by) VALUES (:i, :p, :t, 'acme/app', "
+                   " 'main', 'c0ffee', CAST(:m AS JSONB), 'healthy', 'test')"),
+              {"i": f"sd_{uuid.uuid4().hex[:8]}", "p": project_id, "t": target,
+               "m": json.dumps({"metrics": {"path": "/metrics"}})})
+    ctx = {"app": {"target_id": target, "app_name": "order-api", "environment": "staging"},
+           "deploy": {"commit_sha": "c0ffee"},
+           "alert": {"error_rate": 0.2, "requests": 100, "rule": {"error_rate_percent": 5}},
+           "occurrence": "2026-10-18T10:00:00+00:00"}
+    c.execute(text("INSERT INTO incidents (id, project_id, dedupe_key, title, service, status, "
+                   " finalize_ctx) VALUES (:i, :p, :k, 'order-api: 20% failing', 'order-api', "
+                   " 'open', CAST(:f AS JSONB))"),
+              {"i": inc, "p": project_id, "k": "app_error_rate:" + target, "f": json.dumps(ctx)})
+    monkeypatch.setattr(incident_response, "judge_recovery", lambda *a, **k: "clear")
+    monkeypatch.setattr(incident_response, "DEFAULT_STABLE_MINUTES", 0)
+    return inc
+
+
 def _drive(eng, c, project_id: str, run_id: str, ticks: int = 40) -> None:
     """Tick the real runner, answering every gate a person answers and ending any wait."""
     for _ in range(ticks):
@@ -202,10 +231,21 @@ def test_every_catalogue_template_runs_to_its_last_step(eng, project, monkeypatc
                   {"v": version["id"],
                    "extra": json.dumps({"input_schema": spec["input_schema"],
                                         "objective": spec["objective"],
-                                        "workflow_name": spec["workflow_name"]})})
+                                        "workflow_name": spec["workflow_name"],
+                                        **({"more_tests": spec["more_tests"]}
+                                           if "more_tests" in spec else {})})})
+        # WAITING FOR CI: the pull request's checks pass (a finished wait, as ci_gate records).
+        def _ci_passed(_c, _p, _ctx, _inputs):
+            wait_id = f"ciw_{uuid.uuid4().hex[:10]}"
+            _insert_awaited(c, project, "ci_waits", wait_id, "passed")
+            return {"capability": "wait_for_ci", "tool": None, "status": "awaiting",
+                    "await": {"kind": "ci_wait", "id": wait_id}, "ci_wait_id": wait_id}
+        monkeypatch.setattr(runner, "_start_ci_wait", _ci_passed)
         # ONLY WHAT START WOULD REQUIRE — the form's required fields and nothing else.
         brief = {"title": TITLE, "directive": wc.example_for(key)["directive"],
                  "notify_channel": "mattermost:announcements", "app_key": "swap-board"}
+        if "incident_id" in spec["input_schema"]["required"]:
+            brief["incident_id"] = _incident(c, project, monkeypatch)
         run_input = {name: brief[name] for name in spec["input_schema"]["required"]}
         run = _start(c, project, version["id"], run_input)
         _drive(eng, c, project, run["id"])

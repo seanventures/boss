@@ -106,7 +106,9 @@ export type StepView = { id: string; title: string;
   /** A capability key, or the type fallback. */
   icon: string;
   agent: { kind: "named" | "auto" | "you" | "person"; role_key?: string; label: string; tip: string };
-  badges: { approval: boolean; forced: boolean; inputs: number; unwired: string[]; skills: number;
+  badges: { approval: boolean; forced: boolean;
+    /** A Deploy step the environment's deploy policy may answer (approval.follows_policy). */
+    byPolicy?: boolean; inputs: number; unwired: string[]; skills: number;
             mcp: number; lacks: string[] } };
 
 /* ── Editor store (S1 implements; S2/S3 dispatch) ─────────────────────────────────── */

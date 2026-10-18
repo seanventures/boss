@@ -1325,6 +1325,269 @@
       }
     },
     {
+      "workflow_key": "incident_response",
+      "name": "Incident Response",
+      "description": "An app's alert fired. Investigate, fix the root cause with a regression test, have someone approve the release, ship it, and prove recovery from the monitor.",
+      "spec": {
+        "entry_step": "investigate",
+        "steps": [
+          {
+            "id": "investigate",
+            "kind": "capability",
+            "binding": {
+              "capability": "investigate_incident",
+              "inputs": {
+                "incident_id": {
+                  "from_input": "incident_id"
+                }
+              }
+            },
+            "next": [
+              "build"
+            ],
+            "captain": "sre",
+            "default_captain": "sre",
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 0,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "build",
+            "kind": "capability",
+            "binding": {
+              "capability": "build",
+              "inputs": {
+                "title": {
+                  "from_input": "title"
+                },
+                "instructions": {
+                  "from_input": "directive"
+                },
+                "repository": {
+                  "from_input": "repository"
+                },
+                "acceptance_criteria": {
+                  "from_input": "acceptance_criteria"
+                },
+                "reference_links": {
+                  "from_input": "reference_links"
+                }
+              }
+            },
+            "next": [
+              "ci"
+            ],
+            "captain": "engineering_captain",
+            "default_captain": "engineering_captain",
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "ci",
+            "kind": "capability",
+            "binding": {
+              "capability": "wait_for_ci",
+              "inputs": {
+                "pull_request_url": {
+                  "from_step": "build",
+                  "field": "pull_request_url"
+                }
+              }
+            },
+            "next": [
+              "report"
+            ],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 0,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "report",
+            "kind": "capability",
+            "binding": {
+              "capability": "report",
+              "inputs": {}
+            },
+            "next": [
+              "approve"
+            ],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 0,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "approve",
+            "kind": "capability",
+            "binding": {
+              "capability": "release_approval",
+              "inputs": {}
+            },
+            "next": [
+              "deploy"
+            ],
+            "approval": {
+              "mode": "manual",
+              "on_timeout": "block",
+              "approver_role": "release_manager",
+              "risk_tier": 2,
+              "forced_manual": true
+            },
+            "max_attempts": 3
+          },
+          {
+            "id": "deploy",
+            "kind": "capability",
+            "binding": {
+              "capability": "deploy",
+              "inputs": {
+                "run_id": {
+                  "from_step": "build",
+                  "field": "code_task_run_id"
+                }
+              }
+            },
+            "next": [
+              "verify"
+            ],
+            "approval": {
+              "mode": "manual",
+              "on_timeout": "block",
+              "approver_role": "release_manager",
+              "follows_policy": true,
+              "risk_tier": 2,
+              "forced_manual": true
+            },
+            "max_attempts": 3
+          },
+          {
+            "id": "verify",
+            "kind": "capability",
+            "binding": {
+              "capability": "verify_recovery",
+              "inputs": {
+                "incident_id": {
+                  "from_input": "incident_id"
+                }
+              }
+            },
+            "next": [
+              "incident_report"
+            ],
+            "captain": "sre",
+            "default_captain": "sre",
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 0,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "incident_report",
+            "kind": "capability",
+            "binding": {
+              "capability": "incident_report",
+              "inputs": {
+                "incident_id": {
+                  "from_input": "incident_id"
+                }
+              }
+            },
+            "next": [],
+            "captain": "sre",
+            "default_captain": "sre",
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          }
+        ],
+        "objective": "An app BOSS deployed is failing in front of users, and its own monitor raised the alarm. Find the root cause from the evidence — the app's metrics, its logs and the release that was serving — fix exactly that with a regression test that fails on the faulty release, and restore service. A person approves the release; recovery is judged by BOSS's monitor, not by the fix's author. If the evidence does not support a root cause, say so and stop rather than guess.",
+        "workflow_name": "Incident Response",
+        "input_schema": {
+          "type": "object",
+          "required": [
+            "incident_id",
+            "title",
+            "directive"
+          ],
+          "properties": {
+            "incident_id": {
+              "type": "string",
+              "title": "Incident",
+              "description": "The incident to respond to (Observability › the app's alert). An app's alert starts this for you when Respond automatically is on.",
+              "examples": [
+                "inc_0123456789ab"
+              ]
+            },
+            "title": {
+              "type": "string",
+              "title": "Name",
+              "description": "A short name for this piece of work. It names the run, the app it builds and the written record.",
+              "examples": [
+                "Shift swap board"
+              ]
+            },
+            "directive": {
+              "type": "string",
+              "format": "textarea",
+              "title": "Which incident?",
+              "description": "Started from an app's alert: the incident names the app, the release that was serving and what failed.",
+              "examples": [
+                "Respond to the incident: Order API (staging): 18% of requests failing."
+              ]
+            },
+            "repository": {
+              "type": "string",
+              "title": "Repository (optional)",
+              "description": "owner/name of the GitHub repository to build in. Leave blank for this project's primary repository."
+            },
+            "acceptance_criteria": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "title": "How you will know it works (optional)",
+              "description": "Each line becomes a check the build is held to. Leave blank and the panel proposes them."
+            },
+            "reference_links": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "format": "uri"
+              },
+              "title": "Links to read first (optional)",
+              "description": "Docs, designs or tickets the builder should read."
+            }
+          }
+        },
+        "more_tests": false,
+        "output_schema": {},
+        "step_agent_rules": 2
+      }
+    },
+    {
       "workflow_key": "research_led_discovery",
       "name": "Research-Led Discovery",
       "description": "Find out whether it is worth building at all. Ends in a decision and a document, not in code.",
@@ -1647,6 +1910,7 @@
               "mode": "manual",
               "on_timeout": "block",
               "approver_role": "release_manager",
+              "follows_policy": true,
               "risk_tier": 2,
               "forced_manual": true
             },
@@ -1729,6 +1993,7 @@
               "mode": "manual",
               "on_timeout": "block",
               "approver_role": "release_manager",
+              "follows_policy": true,
               "risk_tier": 2,
               "forced_manual": true
             },
@@ -3654,6 +3919,7 @@
               "mode": "manual",
               "on_timeout": "block",
               "approver_role": "release_manager",
+              "follows_policy": true,
               "risk_tier": 2,
               "forced_manual": true
             },
@@ -3712,6 +3978,7 @@
               "mode": "manual",
               "on_timeout": "block",
               "approver_role": "release_manager",
+              "follows_policy": true,
               "risk_tier": 2,
               "forced_manual": true
             },
@@ -3978,6 +4245,7 @@
               "mode": "manual",
               "on_timeout": "block",
               "approver_role": "release_manager",
+              "follows_policy": true,
               "risk_tier": 2,
               "forced_manual": true
             },
@@ -4040,6 +4308,7 @@
               "mode": "manual",
               "on_timeout": "block",
               "approver_role": "release_manager",
+              "follows_policy": true,
               "risk_tier": 2,
               "forced_manual": true
             },
@@ -4288,6 +4557,7 @@
               "mode": "manual",
               "on_timeout": "block",
               "approver_role": "release_manager",
+              "follows_policy": true,
               "risk_tier": 2,
               "forced_manual": true
             },
@@ -4330,6 +4600,7 @@
               "mode": "manual",
               "on_timeout": "block",
               "approver_role": "release_manager",
+              "follows_policy": true,
               "risk_tier": 2,
               "forced_manual": true
             },
@@ -4489,6 +4760,7 @@
               "mode": "manual",
               "on_timeout": "block",
               "approver_role": "release_manager",
+              "follows_policy": true,
               "risk_tier": 2,
               "forced_manual": true
             },
@@ -4531,6 +4803,7 @@
               "mode": "manual",
               "on_timeout": "block",
               "approver_role": "release_manager",
+              "follows_policy": true,
               "risk_tier": 2,
               "forced_manual": true
             },
@@ -4690,6 +4963,7 @@
               "mode": "manual",
               "on_timeout": "block",
               "approver_role": "release_manager",
+              "follows_policy": true,
               "risk_tier": 2,
               "forced_manual": true
             },
@@ -4732,6 +5006,7 @@
               "mode": "manual",
               "on_timeout": "block",
               "approver_role": "release_manager",
+              "follows_policy": true,
               "risk_tier": 2,
               "forced_manual": true
             },
@@ -4891,6 +5166,7 @@
               "mode": "manual",
               "on_timeout": "block",
               "approver_role": "release_manager",
+              "follows_policy": true,
               "risk_tier": 2,
               "forced_manual": true
             },
@@ -4933,6 +5209,7 @@
               "mode": "manual",
               "on_timeout": "block",
               "approver_role": "release_manager",
+              "follows_policy": true,
               "risk_tier": 2,
               "forced_manual": true
             },

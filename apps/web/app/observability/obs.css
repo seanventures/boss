@@ -278,3 +278,20 @@
   .obs-calls .obs-call > :nth-child(4), .obs-calls .obs-call > :nth-child(5), .obs-calls .obs-call > :nth-child(8) { display: none; }
   .obs-prow-name, .obs-go, .obs .ag-link, .obs .inf-link, .obs-dropchip select, .obs-legend-item { min-height: 44px; }
 }
+
+/* ── the app drawer's Incident card (incident-card.tsx) ───────────────────────────────────── */
+.obs-inc-title { font-weight: 650; color: var(--ink); min-width: 0; overflow-wrap: anywhere; }
+.obs-inc-part { display: flex; flex-direction: column; gap: 4px; padding-top: 8px; min-width: 0; }
+.obs-inc-text { font-size: 0.84rem; color: var(--ink); overflow-wrap: anywhere; }
+.obs-inc-text[data-tone="green"] { color: var(--green); }
+.obs-inc-text[data-tone="red"] { color: var(--red); }
+.obs-inc-steps { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; margin: 0; padding: 0; list-style: none; font-size: 0.78rem; color: var(--muted); }
+.obs-inc-steps > li { display: inline-flex; align-items: center; gap: 5px; }
+.obs-inc-steps > li[data-status="running"], .obs-inc-steps > li[data-status="waiting"] { color: var(--ink); font-weight: 600; }
+.obs-inc-auto { display: inline-flex; align-items: center; gap: 6px; font-size: 0.8rem; color: var(--muted); }
+.obs-switch { position: relative; width: 30px; height: 18px; flex: none; border-radius: 999px; border: 1px solid var(--border-strong); background: var(--bg); cursor: pointer; padding: 0; }
+.obs-switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: var(--muted); transition: transform 0.15s; }
+.obs-switch[aria-checked="true"] { background: var(--accent); border-color: var(--accent); }
+.obs-switch[aria-checked="true"]::after { transform: translateX(12px); background: var(--accent-ink); }
+.obs-switch:disabled, .obs-switch[aria-disabled="true"] { opacity: 0.4; cursor: not-allowed; }
+.obs-inc-md { max-height: 360px; overflow: auto; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface-2); font-size: 0.82rem; }

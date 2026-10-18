@@ -470,6 +470,53 @@ def demo_login_values(c, *, org_id: str, project_id: str, app_key: str, env: str
             for r in rows if is_demo_login_name(r["name"])}
 
 
+def deploy_target_demo_logins(c, settings, *, project_id: str, app_key: str) -> list[dict]:
+    """The demo login passwords this app's DEPLOY TARGETS actually run with, when a stack deploy
+    generated them from the app's own boss.deploy.yaml (`DEMO_PASSWORD: {generate: password}`):
+    the target secret `stack/<manifest name>/<KEY>` (stack_deploy.ensure_generated_secret), one
+    row per target, labelled by its environment.
+
+    demo_login_values(env="deploy") reads the app's secret BINDINGS only, so on the laptop
+    Setup › Demo login showed the Preview password alone: HelpDesk AI's staging deploy had
+    generated its DEMO_PASSWORD as a target secret, which no row reached, and nobody could sign
+    in as the demo customer (D2). Same rule as every value here: only a value BOSS generated, only
+    a demo login name, never a value a person set."""
+    from ..app_links.service import resolve_app_key
+    from ..services.secret_backends import resolve_secret_ref
+    from ..services.secrets_service import ref_key_for
+    from ..services.stack_deploy import _find_secret_ref, _generated_secret_name
+    from .run_env import is_demo_login_name
+
+    out: list[dict] = []
+    targets = c.execute(text(
+        "SELECT t.id, t.app_name, t.environment, s.manifest FROM deployment_targets t "
+        "JOIN LATERAL (SELECT manifest FROM stack_deployments WHERE target_id = t.id "
+        "  AND status = 'healthy' ORDER BY created_at DESC LIMIT 1) s ON TRUE "
+        "WHERE t.project_id = :p AND t.status = 'active' ORDER BY t.environment, t.id"),
+        {"p": project_id}).mappings().all()
+    for t in targets:
+        try:
+            key = resolve_app_key(c, project_id, str(t["app_name"] or ""))
+        except Exception:  # noqa: BLE001 — a target no app claims is not this app's
+            key = None
+        if key != app_key:
+            continue
+        manifest = t["manifest"] if isinstance(t["manifest"], dict) else json.loads(t["manifest"] or "{}")
+        stack = str(manifest.get("name") or "")
+        for name in manifest.get("generated_env_keys") or []:
+            if not stack or not is_demo_login_name(str(name)):
+                continue
+            ref = _find_secret_ref(c, project_id, [ref_key_for(t["id"], _generated_secret_name(stack, name))])
+            if not ref:
+                continue
+            value = resolve_secret_ref(c, ref, settings)
+            if value:
+                env_word = str(t["environment"] or "deploy")
+                out.append({"name": str(name), "value": value, "target_id": t["id"],
+                            "label": env_word[:1].upper() + env_word[1:]})
+    return out
+
+
 def ensure_deploy_generated(c, *, org_id: str, project_id: str, app_key: str,
                             actor_id: Optional[str] = None) -> list[str]:
     """A secret BOSS generates for build and preview (test_default=generated, e.g. a session

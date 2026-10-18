@@ -3,7 +3,7 @@
 # One line per operation: its declaration, then the built-in roles allowed
 # (O owner, A admin, P operator, V viewer, U auditor; '-' none). Every other role is denied
 # 403, or 404 when the operation names an object the role cannot even read.
-# 1536 operations.
+# 1542 operations.
 "GET /.well-known/boss-jwks.json": ["public:jwks", "OAPVU"]
 "GET /docs": ["public:api_description", "OAPVU"]
 "GET /docs/oauth2-redirect": ["public:api_description", "OAPVU"]
@@ -189,6 +189,7 @@
 "GET /v1/apps/{app_key}/templates": ["permit project:read @ project(query=project_id)", "OAPVU"]
 "GET /v1/apps/{app_key}/test-users": ["permit project:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/apps/{app_key}/test-users/reveal": ["permit app_secret:write @ project(body=project_id)", "OAP"]
+"POST /v1/apps/{target_id}/signals": ["public:hmac_signed_webhook", "OAPVU"]
 "GET /v1/architecture-reviews": ["permit workflow:read @ project(query=project_id)", "OAPVU"]
 "GET /v1/architecture-reviews/{review_id}": ["permit workflow:read @ project(query=project_id)", "OAPVU"]
 "GET /v1/artifacts": ["permit artifact:read @ project(query=project_id)", "OAPVU"]
@@ -256,6 +257,8 @@
 "GET /v1/aws/metal/types": ["permit infra:read @ org", "OAPVU"]
 "GET /v1/bakeoff/{batch_id}/report": ["permit assurance:read @ bakeoff_batch(path=batch_id)", "OAPVU"]
 "POST /v1/bootstrap/seed": ["permit owner:assign @ org", "O"]
+"GET /v1/boss-recommendations": ["permit improvement:read @ project(query=project_id)", "OAPVU"]
+"GET /v1/boss-recommendations.md": ["permit improvement:read @ project(query=project_id)", "OAPVU"]
 "GET /v1/break-glass/grants": ["permit role_binding:read @ org", "OAU"]
 "POST /v1/break-glass/grants": ["permit role_binding:assign @ project(body=project_id)", "OA"]
 "POST /v1/break-glass/grants/{grant_id}/revoke": ["permit role_binding:assign @ break_glass_grant(path=grant_id)", "OA"]
@@ -1241,6 +1244,9 @@
 "GET /v1/reliability/incidents/{incident_id}/postmortem": ["permit reliability:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/reliability/incidents/{incident_id}/postmortem": ["permit reliability:respond @ project(body=project_id)", "OAP"]
 "POST /v1/reliability/incidents/{incident_id}/remediate": ["permit reliability:respond @ project(body=project_id)", "OAP"]
+"GET /v1/reliability/incidents/{incident_id}/report": ["permit reliability:read @ project(query=project_id)", "OAPVU"]
+"GET /v1/reliability/incidents/{incident_id}/response": ["permit reliability:read @ project(query=project_id)", "OAPVU"]
+"POST /v1/reliability/incidents/{incident_id}/tell-reporters": ["permit reliability:respond @ project(body=project_id)", "OAP"]
 "POST /v1/reliability/incidents/{incident_id}/verify": ["permit reliability:respond @ project(body=project_id)", "OAP"]
 "GET /v1/reliability/learning": ["permit reliability:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/reliability/meta-eval": ["permit reliability:read @ org", "OAPVU"]

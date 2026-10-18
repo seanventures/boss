@@ -143,6 +143,9 @@ export type CatalogueEntry = {
   gates: string[];
   /** Approvals answered without a person — the PRD approval, by the panel's own decision. */
   automatic_approvals?: string[];
+  /** Deploy steps the environment's policy decides (approval.follows_policy): no one's gate
+   *  until a project's policy is read (GET /v1/delivery-workflows/asks). */
+  policy_decides?: string[];
   requires_project: string[];
   /** Everything it needs from a project, in the start preflight's words. */
   needs?: { key: string; label: string }[];
@@ -171,7 +174,10 @@ export type Installed = {
    *  what it does, so the only way to find out was to open the editor. */
   steps?: { id: string; label: string; kind: string; mine: boolean; approval: string;
             /** WHO RUNS IT. Empty means different things by kind — see the card. */
-            captain?: string; agent_work?: boolean }[];
+            captain?: string; agent_work?: boolean; capability?: string | null;
+            /** A Deploy step's words and the environment whose policy ships it unasked
+             *  (approval "policy"), from deploy_policy.step_answer. */
+            says?: string; policy?: string }[];
   active_version?: number | null;
   /** What starting it will ask for. Every catalogue template declares one; absent only on a
    *  workflow somebody made without inputs. */
@@ -3283,7 +3289,7 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
   const asked = !!previewStarting && previewStarting === buildRunId;
   useEffect(() => { if (!asked) setFreshFrom(undefined); }, [asked]);
   const starting = asked && (freshFrom !== undefined ? previewHref === freshFrom : !previewHref);
-  const approval = step.approval as { mode?: string; approver_role?: string };
+  const approval = step.approval as { mode?: string; approver_role?: string; follows_policy?: boolean };
   // A manual gate that has not been answered. The one condition under which "waiting" and
   // "gate · <role>" are the same sentence twice.
   const gateWaiting = approval?.mode === "manual" && step.status === "waiting";
@@ -3375,9 +3381,14 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
         {approval?.mode === "manual" ? (
           <span className="dw-gate" data-tone={gateWaiting ? "waiting" : undefined}
                 data-testid="dw-step-gate"
-                title="Requires a person">
+                // A DEPLOY THAT FOLLOWS ITS ENVIRONMENT'S POLICY is not promised to a person:
+                // the policy may ship it unasked (deploy_policy), and the chip says so.
+                title={approval.follows_policy && !gateWaiting
+                  ? "Asks a person unless this environment's deploy policy ships without asking"
+                  : "Requires a person"}>
             {gateWaiting
               ? `needs ${approval.approver_role || "a person"}`
+              : approval.follows_policy ? "gate · or by policy"
               : `gate${approval.approver_role ? ` · ${approval.approver_role}` : ""}`}
           </span>
         ) : null}

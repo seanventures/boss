@@ -23,7 +23,7 @@ const MODES = [
 const GATES: { key: keyof Policy & string; label: string; tip: string }[] = [
   { key: "requires_change_set", label: "Needs a change", tip: "A reviewed change in Cloud before it applies" },
   { key: "requires_budget_reservation", label: "Needs a budget hold", tip: "Spend is reserved before it runs" },
-  { key: "requires_approval", label: "Needs approval", tip: "On: a person approves each deploy. Off: deploys here run without asking" },
+  { key: "requires_approval", label: "Needs approval", tip: "On: a person approves each deploy. Off: no asking, unless its step promised you" },
   { key: "requires_health_check", label: "Needs health check", tip: "It is live only after its check passes" },
   { key: "requires_rollback_plan", label: "Needs rollback plan", tip: "A way back is recorded first" },
 ];

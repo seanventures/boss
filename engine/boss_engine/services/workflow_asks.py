@@ -8,7 +8,10 @@ the same rules the runtime acts on:
 
 - spec  — the panel's PRD decision (a `meeting` step, adopted by `spec_review` when there is
           one). BOSS answers it when the PRD is auto-approved, else you (prd_auto_approved).
-- gate  — a step a person answers (stops_for_a_person), e.g. the door to production.
+- gate  — a step a person answers (stops_for_a_person), e.g. the door to production. A Deploy
+          step is a gate for you unless it follows the environment's policy AND that policy
+          ships without asking (deploy_policy.step_answer — the answer the runner acts on);
+          then it is listed as BOSS's, with the policy named, and `says` carries the words.
 - merge — the pull request a build opens. Always you: the merge decision is raised with
           `no_auto_merge: True` and nothing in BOSS approves it on anyone's behalf. Every
           build-like step of one run writes the SAME branch and PR, and a later attempt's merge
@@ -17,7 +20,7 @@ the same rules the runtime acts on:
 """
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
@@ -66,8 +69,15 @@ def _effective_steps(spec: dict[str, Any],
 
 
 def asks_for_spec(spec: dict[str, Any], *, prd_auto_approve: bool,
-                  roster: Optional[frozenset[str]] = None) -> list[dict[str, Any]]:
-    """The asks one workflow version will raise, in run order."""
+                  roster: Optional[frozenset[str]] = None,
+                  deploy_answer: Optional[Callable[[dict[str, Any]], dict[str, Any]]] = None,
+                  ) -> list[dict[str, Any]]:
+    """The asks one workflow version will raise, in run order.
+
+    `deploy_answer(step)` is deploy_policy.step_answer bound to the project; without one (no
+    project to read a policy from) every Deploy step is asked, as it is where no policy is set.
+    """
+    from .deploy_policy import PERSON_SAYS, promises_a_person
     steps = _effective_steps(spec, roster)
     keys = [_capability(s) for s in steps]
     has_spec_review = "spec_review" in keys
@@ -77,7 +87,17 @@ def asks_for_spec(spec: dict[str, Any], *, prd_auto_approve: bool,
     for index, step in enumerate(steps):
         key = keys[index]
         mode = (step.get("approval") or {}).get("mode")
-        if key == "spec_review" or (key == "meeting" and not has_spec_review):
+        if key == "deploy":
+            answer = deploy_answer(step) if deploy_answer else {"who": "you",
+                                                                 "says": PERSON_SAYS}
+            ask = {"step_id": step["id"], "label": _label(step), "kind": "gate",
+                   "who": "you" if answer.get("who") != "policy" else "boss",
+                   "says": answer.get("says") or PERSON_SAYS,
+                   "promised": promises_a_person(step)}
+            if answer.get("who") == "policy":
+                ask["policy"] = answer.get("environment")
+            out.append(ask)
+        elif key == "spec_review" or (key == "meeting" and not has_spec_review):
             out.append({"step_id": step["id"], "label": SPEC_LABEL, "kind": "spec",
                         "who": spec_who})
         elif mode == "manual" and (key not in CAPABILITIES
@@ -108,6 +128,7 @@ def project_asks(connection: Connection, settings: Any, project_id: str,
                  *, prd_auto_approve: Optional[bool] = None) -> dict[str, Any]:
     """GET /v1/delivery-workflows/asks: every workflow the project can run, by the version
     that runs (the active one), plus the two non-workflow routes."""
+    from .deploy_policy import step_answer
     from .workflows import project_roster, running_version
 
     auto = prd_auto_approved(settings) if prd_auto_approve is None else bool(prd_auto_approve)
@@ -129,6 +150,8 @@ def project_asks(connection: Connection, settings: Any, project_id: str,
                 spec = json.loads(spec)
             except ValueError:
                 spec = {}
-        workflows[str(key)] = asks_for_spec(spec, prd_auto_approve=auto, roster=roster)
+        workflows[str(key)] = asks_for_spec(
+            spec, prd_auto_approve=auto, roster=roster,
+            deploy_answer=lambda step: step_answer(connection, project_id, step))
     return {"project_id": project_id, "prd_auto_approve": auto, "workflows": workflows,
             "routes": route_asks(prd_auto_approve=auto)}

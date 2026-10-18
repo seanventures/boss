@@ -307,6 +307,20 @@ CAPABILITIES: dict[str, Capability] = {
             is_gate=True,
         ),
         _cap(
+            key="release_approval",
+            # whether this change may ship now
+            captain="release_manager",
+            label="Approve the release",
+            summary="A person reads what is about to ship (the change, its checks, why it is "
+                    "needed) and approves it, whatever the environment's deploy policy would "
+                    "allow without asking. For releases a person must own, like an incident fix.",
+            tool=None,
+            risk_tier=2,
+            optional_inputs=("approver_role",),
+            produces=("decision_id",),
+            is_gate=True,
+        ),
+        _cap(
             key="security_review",
             # the lens the step exists for
             captain="security_reviewer",
@@ -545,6 +559,55 @@ CAPABILITIES: dict[str, Capability] = {
             optional_inputs=("interval_minutes", "thresholds"),
             produces=("monitor_id",),
             typical_minutes=3,
+        ),
+        # ── INCIDENT RESPONSE (incident_response.py) ─────────────────────────────────────
+        # Three steps around the ordinary fix build: what happened, did the fix hold, and the
+        # record. None needs a model — the investigation correlates evidence any operator could
+        # read; the fix itself is a normal governed build.
+        _cap(
+            key="investigate_incident",
+            family="monitor",
+            # owns what the monitor saw and what it means
+            captain="sre",
+            label="Investigate the incident",
+            summary="Correlate the app's metrics, its logs and the serving release's diff into "
+                    "a root-cause hypothesis and the brief the fix is built from.",
+            tool=None,
+            risk_tier=0,
+            required_inputs=("incident_id",),
+            produces=("incident_brief", "title", "root_cause", "suspect_commit",
+                      "extends_run_id"),
+            typical_minutes=1,
+        ),
+        _cap(
+            key="verify_recovery",
+            family="monitor",
+            captain="sre",
+            label="Verify recovery",
+            summary="Wait until BOSS's own monitor shows the app's error rate back at its "
+                    "pre-incident baseline on real traffic, for a stability window. Fails on "
+                    "timeout. Never takes the fixing agent's word for it.",
+            tool=None,
+            risk_tier=0,
+            required_inputs=("incident_id",),
+            optional_inputs=("stable_minutes", "timeout_minutes"),
+            produces=("recovery_check_id", "recovery_status", "recovery_summary"),
+            typical_minutes=5,
+            is_async=True,
+        ),
+        _cap(
+            key="incident_report",
+            family="monitor",
+            captain="sre",
+            label="Write the incident report",
+            summary="The timeline, the root cause and what this response cost (billed and "
+                    "subscription-included kept apart), exportable as Markdown and JSON; tells "
+                    "the apps that reported it.",
+            tool=None,
+            risk_tier=1,
+            required_inputs=("incident_id",),
+            produces=("report_markdown", "minutes_to_recover", "cost_billed_usd"),
+            typical_minutes=1,
         ),
         _cap(
             key="notify",
@@ -1018,6 +1081,10 @@ def effective_approval(
         resolved["approver_role"] = str(approval["approver_role"])
     if approval.get("sla_hours") is not None:
         resolved["sla_hours"] = float(approval["sla_hours"])
+    # A DEPLOY THAT LETS THE ENVIRONMENT'S POLICY ANSWER says so, and keeps saying so: without
+    # it the step promises a person, and no policy answers for it (deploy_policy).
+    if capability_key == "deploy" and approval.get("follows_policy") is True:
+        resolved["follows_policy"] = True
     resolved["risk_tier"] = capability.risk_tier
     resolved["forced_manual"] = capability.risk_tier >= MANUAL_APPROVAL_RISK_FLOOR
     return resolved

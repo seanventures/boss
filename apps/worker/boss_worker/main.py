@@ -89,21 +89,34 @@ def configure_logging() -> None:
     )
 
 
+#: How often the background thread asks the API to sweep. The sweep itself is due-gated per
+#: target (health every 120 s, metrics at the app's declared interval, 15 s at the least), so
+#: this only has to be shorter than the shortest interval an app may declare.
+HEALTH_SWEEP_INTERVAL_SECONDS = 10
+_last_health_sweep_monotonic = 0.0
+
+
 def _sweep_deployment_health(client: ControlPlaneClient) -> None:
-    """Take health samples for deployed apps, on the worker's idle path.
+    """Take health samples and metrics scrapes of deployed apps, on the background thread.
 
     Monitoring reported every app as "unknown" because nothing ever probed one: the sweep was
     written, its docstring said "runs on the worker's idle path", and no caller was ever added.
     A monitoring feature that only samples when a human presses a button is not monitoring —
     uptime, latency and incidents all need a series, and a series needs a clock.
 
-    Idle path, not a timer: the worker is here because it has no job to run, so a probe costs
-    nothing that mattered. The sweep decides for itself which targets are DUE, so calling it
-    every poll interval does not mean probing every poll interval.
+    NOT the idle path any more. On the idle path it stopped whenever the worker was busy — a
+    build is forty-five minutes of busy — which is exactly when a release is going out and an
+    app's error rate is worth watching. And a second copy on every lease slot's idle branch
+    (runner.run_worker_cycle) ran it three times at once. One caller, one thread, busy or idle.
 
     Swallows everything. A stale dashboard is a small problem; a worker that dies taking health
     samples is a large one.
     """
+    global _last_health_sweep_monotonic
+    now = time.monotonic()
+    if now - _last_health_sweep_monotonic < HEALTH_SWEEP_INTERVAL_SECONDS:
+        return
+    _last_health_sweep_monotonic = now
     try:
         client.sweep_deployment_health()
     except Exception:  # noqa: BLE001
@@ -498,6 +511,7 @@ def _run_background_sweeps(settings) -> None:
             try:
                 _advance_delivery_workflows(client, settings)
                 _watch_running_tasks(client)
+                _sweep_deployment_health(client)
             except Exception:  # noqa: BLE001 — a sweep must never take the worker down
                 LOGGER.debug("background_sweep_failed", exc_info=True)
             for _ in range(5):
@@ -702,13 +716,12 @@ def main() -> None:
             if _STOPPING:
                 break
             if not ran_job:
-                _sweep_deployment_health(client)
                 _run_shepherd_autopilot(client, settings)
                 _sweep_qa_benchmark_evaluations(client)
                 _prune_activity_log(client)
-                # _advance_delivery_workflows and _watch_running_tasks now run on their own
-                # thread — see _run_background_sweeps. Leaving them here too would double every
-                # call for no benefit.
+                # _advance_delivery_workflows, _watch_running_tasks and
+                # _sweep_deployment_health run on their own thread — see
+                # _run_background_sweeps. Leaving them here too would double every call.
                 # Interruptible sleep: an idle worker that is asked to stop should not hold the
                 # deploy open for a full poll interval doing nothing.
                 late = observe_idle_wait(_stalls, float(settings.poll_interval_seconds))

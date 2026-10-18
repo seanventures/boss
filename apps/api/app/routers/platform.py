@@ -79,6 +79,12 @@ def mount_platform_routers(app: FastAPI) -> None:
     except ImportError:
         pass
 
+    # Incident response: an app's own signals door, the incident card, the report export.
+    # Imported unguarded: a door that silently fails to mount is an app that cannot report.
+    from .incident_response import router as incident_response_router
+
+    app.include_router(incident_response_router)
+
     # Deterministic SRE bench (no vendors)
     try:
         from .sre_bench import router as sre_bench_router

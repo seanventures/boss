@@ -16,6 +16,7 @@ import { LedgerStrip } from "./memory-ui";
 import { apiWrite } from "../lib/api-write";
 
 import { callAction } from "../lib/call-action";
+import { askConsent, consentFromBody } from "../lib/identity/consent";
 import { GatedButton, useGate } from "../components/gated";
 // Agent World (S-runs): the agent's face, its live state, and the work it cites.
 import { CitedActs, citedIds, DockAgentHead, DockGutterFace, dockFaceKey, dockRoleKey, useDockSpeech } from "./agents/dock-agent";
@@ -838,7 +839,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
       // still held four messages — while the console showed a turn in flight.
       let r: Awaited<ReturnType<typeof askBossAction>> | typeof stalled;
       try {
-        r = await Promise.race([
+        const turn = () => Promise.race([
         // NOT agentChatAction: that one calls revalidatePath("/"), so the transition stays
         // pending while the entire 8 MB console re-renders. The answer painted and the
         // "Working…" bubble kept spinning for another 15 seconds underneath it. Nothing on the
@@ -848,6 +849,13 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
         new Promise<typeof stalled>((res) =>
           window.setTimeout(() => res(stalled), AGENT_STALL_SECONDS * 1000)),
         ]);
+        r = await turn();
+        // THE AGENT ACTS ON YOUR BEHALF, SO IT ASKS FIRST. A turn that needs a grant the
+        // person does not hold yet comes back as a consent request (actions.ts postJsonReturn):
+        // open the consent sheet, and once granted send the same turn once more.
+        const asked = r !== stalled && !r.ok
+          ? consentFromBody((r.data as Record<string, unknown> | undefined)?.consent) : null;
+        if (asked && await askConsent(asked)) r = await turn();
       } catch (e) {
         setMessages((m) => [...m, { role: "assistant", content:
           "That message did not reach BOSS — " + String((e as Error)?.message ?? e)

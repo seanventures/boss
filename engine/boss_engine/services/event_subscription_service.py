@@ -130,7 +130,36 @@ def _row(row) -> dict[str, Any]:
         "updated_at": row["updated_at"].isoformat()
         if hasattr(row["updated_at"], "isoformat")
         else row["updated_at"],
+        # Whose standing grant a workflow sink runs on (None: started as BOSS itself).
+        "on_behalf_of": row.get("on_behalf_of") if hasattr(row, "get") else None,
+        "grant_id": row.get("grant_id") if hasattr(row, "get") else None,
     }
+
+
+def _workflow_link(connection: Connection, project_id: str, workflow_key: str,
+                   event_type: str) -> dict[str, Any]:
+    """A WORKFLOW SINK RUNS UNATTENDED, so it runs on a standing grant — the schedule's rule
+    (consent.require_for_schedule). In a person's session this returns the link to store, or
+    raises ConsentRequired (409 consent_required: the console asks for the grant). Outside one
+    (BOSS's own setup, an API key) it is {} and the sink starts runs as BOSS itself, as before."""
+    from ..identity import consent as _consent
+
+    spec = connection.execute(text(
+        "SELECT v.spec FROM workflow_definitions d "
+        "JOIN workflow_versions v ON v.id = d.active_version_id "
+        "WHERE d.project_id = :p AND d.workflow_key = :k"),
+        {"p": project_id, "k": workflow_key}).scalar()
+    if spec is None:
+        return {}
+    return _consent.require_for_schedule(
+        connection, project_id=project_id, spec=spec, input_data={},
+        name=f"When {event_type} happens: {workflow_key}") or {}
+
+
+def _store_link(connection: Connection, subscription_id: str, link: dict[str, Any]) -> None:
+    connection.execute(text(
+        "UPDATE event_subscriptions SET on_behalf_of = :o, grant_id = :g WHERE id = :i"),
+        {"o": link.get("on_behalf_of"), "g": link.get("grant_id"), "i": subscription_id})
 
 
 def _with_readiness(connection: Connection, subscription: dict[str, Any]) -> dict[str, Any]:
@@ -187,7 +216,7 @@ def list_event_subscriptions(
 ) -> list[dict[str, Any]]:
     query = """
         SELECT id, project_id, event_type, sink_kind, sink_ref, data_boundary,
-               enabled, config, created_at, updated_at
+               enabled, config, created_at, updated_at, on_behalf_of, grant_id
         FROM event_subscriptions
         WHERE project_id = :project_id
     """
@@ -298,6 +327,12 @@ def create_event_subscription(
         raise ValueError(
             "The event subscription conflicts with an existing subscription or project."
         ) from exc
+    if normalized_sink_kind == "workflow" and authorize:
+        link = _workflow_link(connection, project_id, sink_ref.strip(), normalized_event_type)
+        if link:
+            _store_link(connection, subscription_id, link)
+            row = {**row, "on_behalf_of": link.get("on_behalf_of"),
+                   "grant_id": link.get("grant_id")}
     _invalidate(project_id)
     emit_event(
         connection,
@@ -397,6 +432,13 @@ def update_event_subscription(
             "WHERE id = :subscription_id AND project_id = :project_id"),
             {"by": _authorizer(actor), "subscription_id": subscription_id,
              "project_id": project_id})
+    if row["sink_kind"] == "workflow" and (sink_kind is not None or sink_ref is not None
+                                           or enabled is True):
+        # Re-pointed or re-enabled ("Renew authority"): on the grant of whoever did it now.
+        link = _workflow_link(connection, project_id, str(row["sink_ref"]),
+                              str(row["event_type"]))
+        if link:
+            _store_link(connection, subscription_id, link)
     _invalidate(project_id)
     emit_event(
         connection,

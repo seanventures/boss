@@ -76,8 +76,8 @@ def test_every_shipped_workflow_validates():
 
 def test_there_are_twelve_and_each_has_a_stable_key():
     keys = [e["key"] for e in catalogue.CATALOGUE]
-    assert len(keys) == 14
-    assert len(set(keys)) == 14, "duplicate workflow key"
+    assert len(keys) == 15
+    assert len(set(keys)) == 15, "duplicate workflow key"
     for key in keys:
         assert key.replace("_", "").isalnum(), key
 
@@ -152,8 +152,8 @@ def test_seeding_installs_every_workflow_as_read_only_product(eng, project):
     with eng.begin() as c:
         result = catalogue.seed(c, project)
         rows = workflows.list_definitions(c, project, namespace="product")
-    assert result["count"] == 14
-    assert len(rows) == 14
+    assert result["count"] == 15
+    assert len(rows) == 15
     for row in rows:
         assert row["namespace"] == "product"
         assert row["is_catalogue"] is True, f"{row['workflow_key']} is editable in place"
@@ -169,8 +169,8 @@ def test_seeding_twice_does_not_create_a_second_copy(eng, project):
         versions = c.execute(
             text("SELECT count(*) FROM workflow_versions WHERE project_id=:p"), {"p": project}
         ).scalar()
-    assert len(definitions) == 14
-    assert versions == 14, f"re-seeding published {versions - 14} redundant versions"
+    assert len(definitions) == 15
+    assert versions == 15, f"re-seeding published {versions - 15} redundant versions"
 
 
 def test_a_seeded_workflow_cannot_be_edited_in_place(eng, project):

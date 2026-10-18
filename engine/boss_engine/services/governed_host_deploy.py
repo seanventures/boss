@@ -406,10 +406,12 @@ def plan_host_deployment(rp, connection: Connection, *, project_id: str, target:
                          commit_ref: Optional[str], release_packet: dict,
                          release_artifact_id: Optional[str], ownership_guard: dict,
                          actor: str,
-                         approval_decision_id: Optional[str] = None) -> dict[str, Any]:
+                         approval_decision_id: Optional[str] = None,
+                         person_required: bool = False) -> dict[str, Any]:
     """Record a deployment of `target` at `commit_ref`, held for a person's approval — or run
     under one it already has (deploy_policy.pre_approval: the workflow gate's decision, passed
-    in as `approval_decision_id`, or the environment's policy).
+    in as `approval_decision_id`, or the environment's policy — never the policy when the step
+    that started it promised a person, `person_required`).
 
     Called by ResourcePlaneService.plan_deployment_run for ssh/container targets once the
     environment policy and the surface lease have passed. Returns the deployment run.
@@ -505,7 +507,8 @@ def plan_host_deployment(rp, connection: Connection, *, project_id: str, target:
     from .deploy_policy import pre_approval
 
     approval = pre_approval(connection, project_id, environment,
-                            gate_decision_id=approval_decision_id)
+                            gate_decision_id=approval_decision_id,
+                            person_required=person_required)
     if approval and rp.required_approvers_for_changeset(connection, changeset["id"]):
         approval = None      # dual control is two people's answer; a policy cannot give it
     if approval:

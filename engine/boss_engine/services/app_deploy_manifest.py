@@ -170,6 +170,7 @@ class DeployManifest:
     compose_file: Optional[str] = None
     compose_project: Optional[str] = None
     metrics: Optional[dict[str, Any]] = None
+    signals: Optional[dict[str, Any]] = None   # incident signals (services/incident_signals.py)
     resources: tuple[Any, ...] = ()        # platform.contract.ResourceRequest, in file order
     source_text: str = field(default="", repr=False, compare=False)
 
@@ -203,6 +204,9 @@ class DeployManifest:
             # The scrape declaration travels on the deploy record (stack_deployments.manifest),
             # which is where the monitor reads it: the HEALTHY deploy's declaration counts.
             "metrics": dict(self.metrics) if self.metrics else None,
+            # Where BOSS reads the app's suspected incidents and tells it how they ended
+            # (incident_signals); the token it authenticates with is BOSS_SIGNALS_TOKEN.
+            "signals": dict(self.signals) if self.signals else None,
             "resources": [{"name": r.name, "capability": r.capability, "mode": r.mode.value,
                            "provider": r.provider, "public": r.public} for r in self.resources],
         }
@@ -428,9 +432,42 @@ def _metrics(raw: Any) -> Optional[dict[str, Any]]:
     return out
 
 
+def _app_path(raw: Any, where: str) -> str:
+    path = str(raw or "").strip()
+    if not path.startswith("/") or path.startswith("//") or "://" in path:
+        raise ManifestError(f"{where} {path!r} must be a path on the app starting with '/' — no "
+                            "scheme or host: BOSS reaches the app where its health probe does.")
+    if not re.match(r"^/[A-Za-z0-9._~/%-]*$", path) or ".." in path.split("/"):
+        raise ManifestError(f"{where} {path!r} may hold only letters, digits and . _ ~ / % - "
+                            "(no query, spaces or '..').")
+    return path.rstrip("/") or "/"
+
+
+def _signals(raw: Any) -> Optional[dict[str, Any]]:
+    """`signals: {path: /boss/signals, callback: /boss/incidents}`, validated.
+
+    `path`      GET, bearer BOSS_SIGNALS_TOKEN: the suspected incidents the app has seen (BOSS
+                reads it on the monitor's cadence; an app may instead POST them to BOSS).
+    `callback`  POST <callback>/<incident id>, HMAC-signed with the same token: BOSS tells the
+                app what became of an incident it reported (linked, resolved, the root cause).
+    Both are PATHS on the app's own origin, for the same reason metrics.path is."""
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ManifestError("signals must be {path: /boss/signals} (optionally callback).")
+    unknown = set(raw) - {"path", "callback"}
+    if unknown:
+        raise ManifestError(f"signals has unknown field(s) {sorted(unknown)}; known: callback, "
+                            "path.")
+    out = {"path": _app_path(raw.get("path"), "signals.path")}
+    if raw.get("callback") is not None:
+        out["callback"] = _app_path(raw.get("callback"), "signals.callback")
+    return out
+
+
 _TOP_LEVEL = frozenset({
     "version", "name", "kind", "compose", "env", "install", "update", "health", "open",
-    "teardown", "requires", "dir", "metrics", "resources",
+    "teardown", "requires", "dir", "metrics", "resources", "signals",
 })
 
 
@@ -536,6 +573,7 @@ def parse_manifest(data: Any, *, source_text: str = "") -> DeployManifest:
         open_url=open_url, teardown=teardown, requires_sudo=requires_sudo,
         requires_docker=requires_docker, compose_file=compose_file,
         compose_project=compose_project, metrics=_metrics(data.get("metrics")),
+        signals=_signals(data.get("signals")),
         resources=_resources(data.get("resources")), source_text=source_text,
     )
 

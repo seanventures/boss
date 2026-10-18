@@ -197,7 +197,15 @@ def explain_version(
         # while the panel's decision approves it automatically by default (boss-1: approved_by
         # auto_approval twenty seconds after the panel). Not counted as one of your approvals.
         by_panel = spec_of.get("answered_by") == "panel"
-        if (effective == "manual" or spec_of.get("is_gate")) and not by_panel:
+        # A DEPLOY STEP: who answers is deploy_policy.step_answer — the runner's own answer — so
+        # the plan cannot promise a person the policy would replace, or the reverse.
+        deploy = None
+        if cap_key == "deploy":
+            from .deploy_policy import step_answer
+
+            deploy = step_answer(connection, project_id, step)
+        by_policy = bool(deploy and deploy["who"] == "policy")
+        if (effective == "manual" or spec_of.get("is_gate")) and not by_panel and not by_policy:
             gates += 1
 
         captain = str(step.get("captain") or spec_of.get("captain") or "")
@@ -236,9 +244,18 @@ def explain_version(
             # WHO ANSWERS FOR IT. "any agents associated" — the captain was already decided by
             # the capability and simply never shown.
             "agent": captain or None,
-            "approval": "automatic" if by_panel else effective,
-            "approval_is_forced": forced and not by_panel,
+            "approval": "automatic" if by_panel else "policy" if by_policy else effective,
+            "approval_is_forced": forced and not by_panel and not by_policy,
             "approval_note": (
+                f"{deploy['says']}: this step follows the {deploy['environment']} deploy "
+                "policy, which a person set to ship without asking."
+                if by_policy else
+                f"A person approves it ({deploy['says'].lower()}); it follows the "
+                f"{deploy['environment']} deploy policy, which asks."
+                if deploy and not deploy["promised"] else
+                "A person approves it, whatever the environment's deploy policy allows "
+                "(risk tier at or above the manual-approval floor)."
+                if deploy else
                 "Approved automatically when the panel's PRD is approved "
                 "(BOSS_MEETING_PRD_AUTO_APPROVE; unset, it is off when identity is enforced, "
                 "so a person with the ceo seat signs it on the Approvals page)."

@@ -54,7 +54,10 @@ export function pathCards(mode: ComposeMode, installed: readonly string[]): Path
 
 /** A step as the installed list carries it (delivery-workflows-ui `Installed.steps`). */
 export type InstalledStep = { id: string; label?: string; kind?: string; approval?: string;
-                              captain?: string; agent_work?: boolean };
+                              captain?: string; agent_work?: boolean; capability?: string | null;
+                              /** A Deploy step's words, from the server's one answer
+                               *  (deploy_policy.step_answer) — never written here. */
+                              says?: string; policy?: string };
 
 /** Who does a step: an agent (its captain), BOSS's own machinery, or you at a gate. */
 export type Who = { kind: "agent"; role: string } | { kind: "boss" } | { kind: "you" };
@@ -66,11 +69,16 @@ export type TimelineStep = { id: string; name: string; line: string; who: Who;
                              merge?: boolean;
                              /** Another question asked between steps (a spec approval on a
                              *  workflow with no spec_review step). Counted, not numbered. */
-                             ask?: boolean };
+                             ask?: boolean;
+                             /** A Deploy step (any id: deploy, deploy_again, inc2_deploy). */
+                             deploy?: boolean };
 
 /** One time the operator will be asked, as GET /v1/delivery-workflows/asks lists it — the one
  *  source the cards, the timeline and the footer count from. */
-export type Ask = { step_id: string; label?: string; kind: "gate" | "spec" | "merge"; who: "you" | "boss" };
+export type Ask = { step_id: string; label?: string; kind: "gate" | "spec" | "merge"; who: "you" | "boss";
+                    /** A Deploy step's words and, when the environment's policy ships it
+                     *  unasked, that environment — the runner's own answer (deploy_policy). */
+                    says?: string; policy?: string; promised?: boolean };
 export type Asks = { prd_auto_approve?: boolean; workflows?: Record<string, Ask[]>;
                      routes?: Record<string, Ask[]> };
 
@@ -85,7 +93,11 @@ const WORDS: Record<string, [string, string]> = {
   preview: ["Preview", "A running copy you can click"],
   plrr: ["Launch check", "Production-readiness review"],
   report: ["Report", "What was built, what it cost"],
+  // A DEPLOY'S LINE IS THE SERVER'S (ask.says / step.says, deploy_policy.step_answer): the
+  // promise and the behaviour come from one function. These two are only for a plan drawn
+  // with no server answer at all, and neither promises what a policy could take away.
   deploy: ["Deploy", "Ships only when you say yes"],
+  "deploy@auto": ["Deploy", "Your environment's deploy policy decides"],
   monitor: ["Watch", "Keeps an eye on it after launch"],
   notify: ["Notify", "Tells the channel it is live"],
   ux_review: ["UX sign-off", "You use the preview and sign off"],
@@ -150,9 +162,18 @@ export function timelineOf(o: { steps: readonly InstalledStep[]; gates?: readonl
     const specAfter = ask?.kind === "spec" && s.id !== "spec_review" ? ask : undefined;
     const gate = o.asks ? (ask?.who === "you" && !specAfter) : stopsForYou(s, o.gates, o.automatic);
     // A PRD approval the panel answers is not yours: said as what it is, not "Approve the spec".
-    const [name, line] = (!gate && words[`${s.id}@auto`]) || words[s.id] || [s.label || s.id, ""];
+    const [name, wordsLine] = (!gate && words[`${s.id}@auto`]) || words[s.id] || [s.label || s.id, ""];
+    // A DEPLOY SAYS WHAT THE SERVER SAYS IT WILL DO (deploy_policy.step_answer). "Ships only
+    // when you say yes" beside a step the staging policy shipped unasked was the D2 promise
+    // nobody kept (2026-10-18).
+    const isDeploy = s.capability === "deploy" || s.id === "deploy";
+    // "You say yes" exactly when you are asked; otherwise the policy's own words, or that the
+    // policy decides when no project answer names it.
+    const line = !isDeploy ? wordsLine
+      : gate ? WORDS.deploy[1]
+      : (ask?.who === "boss" && ask.says) || (s.policy && s.says) || WORDS["deploy@auto"][1];
     out.push({ id: s.id, name: s.label && !words[s.id] ? s.label : name, line,
-               who: gate ? { kind: "you" } : whoDoes(s) });
+               who: gate ? { kind: "you" } : whoDoes(s), ...(isDeploy ? { deploy: true } : {}) });
     if (specAfter?.who === "you") {
       out.push({ id: `spec-${s.id}`, name: "Approve the spec", line: "You read the spec before any code",
                  who: { kind: "you" }, ask: true });

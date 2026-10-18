@@ -327,3 +327,53 @@ def test_a_production_deploy_flags_an_app_that_refuses_its_demo_password(db):
         refused = misfit("production")
         assert refused and "DEMO_PASSWORD in production" in refused[0] and "ALLOW_DEMO_SEED" in refused[1]
         assert misfit("staging") is None
+
+
+# ── D2: a second app in a shared repository gets its own target ─────────────────────────────
+
+def test_a_second_app_in_the_repository_never_ships_to_the_first_apps_stack_target(db):
+    """paramg/boss-sandbox holds HelpDesk AI's stack target. Order API, built in the same
+    repository, matched it as "the one stack target for this repository" and its first deploy
+    would have been planned onto HelpDesk's target. A target is the app's own: its manifest, its
+    lineage's deploys, or its name."""
+    with db.engine.begin() as c:
+        helpdesk = _target(c, db.project, db.host, "HelpDesk AI", 8000)
+        c.execute(text("UPDATE deployment_targets SET target_kind = 'stack', repo = "
+                       "'acme/boss-sandbox', manifest_path = 'helpdesk-ai/boss.deploy.yaml' "
+                       "WHERE id = :t"), {"t": helpdesk})
+        orders = _build(c, db.project, ["order-api/boss.deploy.yaml", "order-api/app/main.py"],
+                        app="Order API")
+        first = stack_target_for_deploy(c, db.project, {"run_id": orders, "host_id": db.host})
+        assert first and first.get("pending_create"), first
+        assert first["manifest_path"] == "order-api/boss.deploy.yaml"
+        made = stack_target_for_deploy(c, db.project, {"run_id": orders, "host_id": db.host},
+                                       create=True)
+        assert made["id"] != helpdesk and made["app_name"] == "Order API"
+        c.execute(text("UPDATE deployment_targets SET target_kind = 'stack', repo = "
+                       "'acme/boss-sandbox', manifest_path = 'order-api/boss.deploy.yaml' "
+                       "WHERE id = :t"), {"t": made["id"]})
+        # its next deploy — and HelpDesk's — each find their own
+        again = stack_target_for_deploy(c, db.project, {"run_id": orders})
+        hd_build = _build(c, db.project, ["helpdesk-ai/boss.deploy.yaml"], app="HelpDesk AI")
+        hd = stack_target_for_deploy(c, db.project, {"run_id": hd_build})
+    assert again["id"] == made["id"]
+    assert hd["id"] == helpdesk
+
+
+def test_a_target_shipped_from_its_manifest_is_found_as_such(db):
+    """D2: the Order API's target (made by its first deploy) stays `ssh` by kind; its next release
+    from Infra must still ship from the app's manifest, not as one guessed container."""
+    from boss_engine.services.stack_deploy import shipped_from_manifest
+
+    with db.engine.begin() as c:
+        tid = _target(c, db.project, db.host, "Order API", 8001)
+        assert shipped_from_manifest(c, tid) is None
+        c.execute(text("INSERT INTO stack_deployments (id, project_id, target_id, repository, ref, "
+                       " commit_sha, manifest, status, created_by) VALUES (:i, :p, :t, "
+                       " 'acme/boss-sandbox', 'main', 'c0a16f9', CAST(:m AS JSONB), 'healthy', 't')"),
+                  {"i": f"sd_{uuid.uuid4().hex[:8]}", "p": db.project, "t": tid,
+                   "m": json.dumps({"manifest_path": "order-api/boss.deploy.yaml"})})
+        got = shipped_from_manifest(c, tid)
+        c.execute(text("DELETE FROM stack_deployments WHERE target_id = :t"), {"t": tid})
+    assert got == {"manifest_path": "order-api/boss.deploy.yaml",
+                   "repository": "acme/boss-sandbox"}

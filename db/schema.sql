@@ -2106,6 +2106,9 @@ CREATE TABLE IF NOT EXISTS app_metrics_scrapes (
 );
 CREATE INDEX IF NOT EXISTS idx_app_metrics_scrapes_target
   ON app_metrics_scrapes(deployment_target_id, scraped_at DESC);
+-- Per-route requests/errors in the window since the previous good scrape ({"POST /orders":
+-- {requests, errors}}): which endpoint is failing, not only how much.
+ALTER TABLE app_metrics_scrapes ADD COLUMN IF NOT EXISTS route_deltas JSONB;
 
 -- Generalized customer-app rollout state reuses the existing deployment_rollouts
 -- ledger while linking each new rollout to its ProviderOps DeploymentRun.
@@ -2716,6 +2719,10 @@ CREATE INDEX IF NOT EXISTS idx_event_subscriptions_match
 -- rc6: who passed the job-kind check for a job sink (C-2). NULL on a sink created before the
 -- check existed: dispatch holds it until a person who holds the kind's permission re-saves it.
 ALTER TABLE event_subscriptions ADD COLUMN IF NOT EXISTS kind_authorized_by TEXT;
+-- A workflow sink runs UNATTENDED, so like a schedule it runs on the standing grant of the person
+-- who set it up (consent.require_for_schedule): the link, stored server-side, never in config.
+ALTER TABLE event_subscriptions ADD COLUMN IF NOT EXISTS on_behalf_of TEXT;
+ALTER TABLE event_subscriptions ADD COLUMN IF NOT EXISTS grant_id TEXT;
 
 CREATE TABLE IF NOT EXISTS webhook_endpoints (
   id TEXT PRIMARY KEY,
@@ -4972,6 +4979,60 @@ CREATE TABLE IF NOT EXISTS remediations (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_remediations_incident ON remediations(incident_id, created_at DESC);
+
+-- Has an app recovered after its incident's fix shipped? Judged by BOSS's own scrapes of the
+-- app's /metrics (incident_response.look_at_recovery), never by what the fixing agent says:
+-- `status` waiting -> recovered | timed_out once the error rate has stayed at the pre-incident
+-- `baseline` on enough traffic for `stable_minutes`. A workflow's verify_recovery step parks on
+-- the row like a CI wait.
+CREATE TABLE IF NOT EXISTS incident_recovery_checks (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  incident_id TEXT NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+  target_id TEXT NOT NULL,
+  workflow_run_id TEXT,
+  since TIMESTAMPTZ NOT NULL,
+  deadline TIMESTAMPTZ NOT NULL,
+  stable_minutes DOUBLE PRECISION NOT NULL DEFAULT 3,
+  baseline JSONB NOT NULL DEFAULT '{}'::jsonb,
+  rule JSONB NOT NULL DEFAULT '{}'::jsonb,
+  status TEXT NOT NULL DEFAULT 'waiting'
+    CHECK (status IN ('waiting', 'recovered', 'timed_out', 'failed')),
+  summary TEXT NOT NULL DEFAULT '',
+  checks INTEGER NOT NULL DEFAULT 0,
+  first_clear_at TIMESTAMPTZ,
+  last_window JSONB,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_incident_recovery_checks_incident
+  ON incident_recovery_checks(incident_id, created_at DESC);
+
+-- An app's reports of a suspected incident (incident_signals): one row per signal the app sent
+-- or BOSS read, deduplicated by the app's own id, linked to the incident it created or joined.
+-- `received_at` is also the per-app rate limit's clock.
+CREATE TABLE IF NOT EXISTS app_signal_receipts (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  reporter_target_id TEXT NOT NULL,
+  signal_id TEXT NOT NULL,
+  incident_id TEXT REFERENCES incidents(id) ON DELETE CASCADE,
+  via TEXT NOT NULL CHECK (via IN ('pull', 'push')),
+  payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+  received_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (reporter_target_id, signal_id)
+);
+CREATE INDEX IF NOT EXISTS idx_app_signal_receipts_incident
+  ON app_signal_receipts(incident_id);
+CREATE INDEX IF NOT EXISTS idx_app_signal_receipts_rate
+  ON app_signal_receipts(reporter_target_id, received_at DESC);
+-- When BOSS last read an app's signals page and what it found, in words.
+CREATE TABLE IF NOT EXISTS app_signal_channels (
+  target_id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  last_polled_at TIMESTAMPTZ,
+  last_word TEXT NOT NULL DEFAULT ''
+);
 
 -- Evidence-only AI SRE postmortems (not break-glass). One artifact per incident.
 CREATE TABLE IF NOT EXISTS sre_postmortems (

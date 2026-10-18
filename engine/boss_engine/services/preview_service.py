@@ -1733,14 +1733,41 @@ HEALTH_DECLARATION_FILE = "boss.preview.health"
 
 
 def preview_health_path(workdir: Optional[Path]) -> str:
-    """The path a preview's health check asks for: `/`, or the one line of boss.preview.health
-    (an API with nothing at `/`, e.g. a Dropwizard service: `/hello`)."""
+    """The path a preview's health check asks for: the one line of boss.preview.health, else the
+    health check the app's own boss.deploy.yaml declares, else `/`.
+
+    ONE DECLARATION OF HEALTH, NOT TWO. An API with nothing at `/` (a JSON order service, a
+    Dropwizard `/hello`) declares `health: [{url: http://127.0.0.1:8000/health}]` for its deploy
+    and was then failed by its preview as "no page at the site root — check that the build
+    produced a UI and not only an API", because the preview only read its own file. The deploy
+    manifest is the app saying where it is healthy; the preview asks the same path."""
     try:
         line = (Path(workdir) / HEALTH_DECLARATION_FILE).read_text(errors="ignore").strip()
     except (OSError, TypeError):
-        return "/"
+        line = ""
     line = line.splitlines()[0].strip() if line else ""
-    return line if line.startswith("/") and "://" not in line and len(line) < 300 else "/"
+    if line.startswith("/") and "://" not in line and len(line) < 300:
+        return line
+    return _declared_deploy_health_path(workdir) or "/"
+
+
+def _declared_deploy_health_path(workdir: Optional[Path]) -> Optional[str]:
+    """The path of the first health check in the app's boss.deploy.yaml, or None."""
+    from urllib.parse import urlsplit
+
+    from .app_deploy_manifest import DEFAULT_MANIFEST_PATH, ManifestError, load_manifest
+
+    if workdir is None:
+        return None
+    try:
+        manifest = load_manifest(Path(workdir) / DEFAULT_MANIFEST_PATH)
+    except (OSError, TypeError, ValueError, ManifestError):
+        return None
+    for check in manifest.health:
+        path = urlsplit(str(check.url or "")).path
+        if path.startswith("/") and len(path) < 300 and "{" not in path:
+            return path
+    return None
 
 
 def preview_start_timeout(workdir: Optional[Path], default: float = 180.0, *,

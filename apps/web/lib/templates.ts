@@ -397,10 +397,13 @@ export const templatesApi = {
   /** The demo login passwords BOSS generated for this app's `env` (never a value a person set). */
   demoLogins: async (projectId: string, appKey: string, env: string): Promise<DemoLogin[]> =>
     arr(obj(await idGet(`/v1/apps/${enc(appKey)}/demo-logins?${q({ project_id: projectId, env })}`)).demo_logins)
-      .map((d) => { const o = obj(d); return { name: String(o.name ?? ""), value: String(o.value ?? ""), env }; })
+      .map((d) => { const o = obj(d); return { name: String(o.name ?? ""), value: String(o.value ?? ""), env,
+        // A deploy TARGET's own value (a stack-generated secret): which target, and its word ("Staging").
+        ...(typeof o.label === "string" && o.label ? { label: o.label } : {}),
+        ...(typeof o.target_id === "string" && o.target_id ? { targetId: o.target_id } : {}) }; })
       .filter((d) => d.name && d.value),
 };
-export type DemoLogin = { name: string; value: string; env: string };
+export type DemoLogin = { name: string; value: string; env: string; label?: string; targetId?: string };
 
 /** An app's key from any of its handles (a run id, its name), for an API older than the factory
  *  rows' `app_key`: the links route resolves the same way the engine files apps. */

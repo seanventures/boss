@@ -71,3 +71,34 @@ def test_http_scan_diagnose_remediate(client):
     got = client.get(f"/v1/reliability/incidents/{inc_id}", params={"project_id": PID})
     assert got.json()["status"] == "remediating"
     assert got.json()["remediations"][0]["code_task_run_id"] == body["code_task_run_id"]
+
+
+def test_an_app_incident_is_fixed_as_that_apps_next_change(engine, monkeypatch):
+    """D2: the incident an app's own monitor raised names the build lineage that owns the app.
+    The fix continues it (start_followup_task: the app's branch, repo and identity) instead of
+    a fresh task under a new title-derived app identity against the default repository."""
+    import json as _json
+    from sqlalchemy import text as _text
+    from boss_engine.services import code_task_service
+
+    called = {}
+
+    def followup(connection, **kw):
+        called.update(kw)
+        return {"run_id": "crun_followup_fix"}
+
+    monkeypatch.setattr(code_task_service, "start_followup_task", followup)
+    with begin(engine) as c:
+        inc_id = "inc_app_" + __import__("uuid").uuid4().hex[:8]
+        c.execute(_text("INSERT INTO incidents (id, project_id, dedupe_key, title, service, "
+                        "status, finalize_ctx) VALUES (:i, :p, :k, 'order-api: 9% failing', "
+                        "'order-api', 'diagnosing', CAST(:f AS JSONB))"),
+                  {"i": inc_id, "p": PID, "k": "app_error_rate:" + inc_id,
+                   "f": _json.dumps({"deploy": {"extends_run_id": "crun_app_root"}})})
+        out = RS.remediate(c, PID, inc_id, jobs=JOBS)
+        detail = RS.get_incident(c, PID, inc_id)
+    assert called["parent_run_id"] == "crun_app_root"
+    assert "BUG REPORT" in called["instructions"]
+    assert called["finalize_extra"] == {"source": "reliability", "incident_id": inc_id}
+    assert out["code_task_run_id"] == "crun_followup_fix"
+    assert detail["status"] == "remediating"

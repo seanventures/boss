@@ -533,6 +533,23 @@ def sweep_control_plane_tokens(*, everything: bool = False) -> int:
     return len(due)
 
 
+def control_plane_permissions(db: Any, full_name: str) -> dict[str, str]:
+    """The control plane's permissions for one repository: CONTROL_PLANE_PERMISSIONS, plus
+    `workflows: write` while that repository has "Builds may change CI workflows" on.
+
+    The opt-in raised the build's grant and its builder's ceiling, but the token that PUSHES a
+    finished build is this one, minted from the fixed set — so with the opt-in on and
+    `workflows: write` accepted on the installation, the Order API build's push of
+    .github/workflows/order-api.yml was refused 403 three times (crun_4eec9642, D2). Read live:
+    turning the opt-in off withdraws it at the next mint; an unreadable opt-in never widens."""
+    from ..services.github_app_adapter import _workflows_opted_in
+
+    perms = dict(CONTROL_PLANE_PERMISSIONS)
+    if _workflows_opted_in(full_name, db):
+        perms.update(WORKFLOWS_PERMISSION)
+    return perms
+
+
 def control_plane_token(db: Any, owner: str, repo: str) -> Optional[str]:
     """The credential the WORKER uses for one repo when the operator connected GitHub in Setup ›
     GitHub access: an installation token of the Setup-created App (1 hour, this repo only), else
@@ -542,7 +559,8 @@ def control_plane_token(db: Any, owner: str, repo: str) -> Optional[str]:
     cfg = app_config(db)
     if cfg["source"] == "setup" and app_ready(db):
         try:
-            tok = github_app.mint_installation_token([full], CONTROL_PLANE_PERMISSIONS, db=db)
+            tok = github_app.mint_installation_token([full], control_plane_permissions(db, full),
+                                                     db=db)
             _account_for(replace(tok, kind=github_app.CONTROL_PLANE_KIND))
             return tok.token
         except github_app.GitHubRefused:
