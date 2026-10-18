@@ -574,3 +574,33 @@ def test_a_grafana_link_only_after_it_answered(pg, monkeypatch):
         None, "No dashboard for this app yet: deploy the stack again")
     url = os_.explore_url(up["url"], 'up{app="x"}', 1000, 2000)
     assert url.startswith("http://203.0.113.20:3006/explore?") and "up%7Bapp" in url
+
+
+def test_boss_deploy_yaml_alerts_are_validated_and_start_the_rules(pg):
+    from boss_engine.services.app_deploy_manifest import ManifestError
+    from boss_engine.services.app_deploy_manifest import load_manifest as parse_manifest
+
+    base = ("version: 1\nname: order-api\nkind: compose\n"
+            "compose: {file: docker-compose.yml, project: order-api}\n"
+            "metrics: {path: /metrics}\n")
+    good = parse_manifest(base + (
+        "alerts:\n  latency_p95: {threshold: 500, severity: critical, for: 2m}\n"
+        "  no_traffic: {enabled: true}\n"
+        "  rules:\n    - {alert: CheckoutSlow, expr: 'sum(rate(x[5m])) > 2', for: 1m,\n"
+        "       labels: {severity: critical}, annotations: {summary: Checkout is slow}}\n"))
+    summary = good.summary()["alerts"]
+    assert summary["latency_p95"] == {"threshold": 500, "severity": "critical", "for_seconds": 120}
+    for bad, why in (("alerts: {latency_p95: {threshold: 0}}", "between"),
+                     ("alerts: {latncy: {}}", "unknown field"),
+                     ("alerts: {rules: [{alert: X, expr: 'sum(rate(x[5m])'}]}", "not valid PromQL")):
+        with pytest.raises(ManifestError, match=why):
+            parse_manifest(base + bad + "\n")
+    eng, pid = pg
+    with eng.begin() as c:
+        t = _app(c, pid, manifest={"metrics": {"path": "/metrics"}, "alerts": summary})
+        rules = {r["kind"] if r["kind"] != "custom" else r["alert"]: r for r in aa.ensure_rules(c, t)}
+    assert rules["latency_p95"]["params"]["threshold"] == 500
+    assert rules["latency_p95"]["for_seconds"] == 120 and rules["latency_p95"]["source"] == "yaml"
+    assert rules["latency_p95"]["labels"]["severity"] == "critical"
+    assert rules["no_traffic"]["enabled"] is True
+    assert rules["CheckoutSlow"]["for_seconds"] == 60 and rules["CheckoutSlow"]["source"] == "yaml"

@@ -322,6 +322,11 @@ def yaml_values(manifest: dict[str, Any]) -> dict[str, dict[str, Any]]:
         for k in ("enabled", "severity", "runbook_url", "for_seconds"):
             if k in spec:
                 got[k] = spec[k]
+        if "for" in spec and "for_seconds" not in spec:
+            try:
+                got["for_seconds"] = _for_seconds(spec["for"])
+            except pq.PromQLError:
+                pass
     if isinstance(alerts.get("rules"), list):
         out["custom"] = {"rules": [r for r in alerts["rules"] if isinstance(r, dict)]}
     return out

@@ -23,6 +23,12 @@ So the application declares it, at the root of its repository:
     teardown: ["docker compose down"]
     requires: {sudo: false, docker: true}
     metrics: {path: /metrics}          # optional: BOSS scrapes it after deploy (app_metrics)
+    alerts:                            # optional: the alert rules' starting values (app_alerts)
+      latency_p95: {threshold: 500, window_minutes: 5, severity: critical}
+      no_traffic: {enabled: true}
+      rules:                           # your own, in the Prometheus alerting-rule shape
+        - {alert: CheckoutSlow, expr: 'histogram_quantile(0.99, ...) > 2', for: 2m,
+           labels: {severity: critical}, annotations: {runbook_url: docs/runbooks/checkout.md}}
     resources:                         # optional: infrastructure by capability (boss.plugin/v1)
       db: {capability: database.relational, engine: postgres, backups: true, public: false}
       legacy: {capability: database.relational, mode: attached,
@@ -171,6 +177,7 @@ class DeployManifest:
     compose_project: Optional[str] = None
     metrics: Optional[dict[str, Any]] = None
     signals: Optional[dict[str, Any]] = None   # incident signals (services/incident_signals.py)
+    alerts: Optional[dict[str, Any]] = None    # alert rules' starting values (services/app_alerts.py)
     resources: tuple[Any, ...] = ()        # platform.contract.ResourceRequest, in file order
     source_text: str = field(default="", repr=False, compare=False)
 
@@ -207,6 +214,8 @@ class DeployManifest:
             # Where BOSS reads the app's suspected incidents and tells it how they ended
             # (incident_signals); the token it authenticates with is BOSS_SIGNALS_TOKEN.
             "signals": dict(self.signals) if self.signals else None,
+            # The alert rules' starting values; the console's edits win (app_alerts).
+            "alerts": dict(self.alerts) if self.alerts else None,
             "resources": [{"name": r.name, "capability": r.capability, "mode": r.mode.value,
                            "provider": r.provider, "public": r.public} for r in self.resources],
         }
@@ -465,9 +474,80 @@ def _signals(raw: Any) -> Optional[dict[str, Any]]:
     return out
 
 
+def _alerts(raw: Any) -> Optional[dict[str, Any]]:
+    """`alerts:` — the starting values of the app's alert rules (app_alerts), validated here so a
+    typo fails the deploy's plan, not the monitor at three in the morning.
+
+    One key per built-in rule (error_rate, latency_p95, health_check, no_traffic, deploy_health):
+    its settings (within the bounds the console enforces), `enabled`, `severity` (warning |
+    critical), `runbook_url`, `for` (a duration). `rules:` adds rules of your own in the
+    Prometheus alerting-rule shape (alert, expr, for, labels.severity, annotations)."""
+    if raw is None:
+        return None
+    from . import app_alerts as aa
+
+    if not isinstance(raw, dict):
+        raise ManifestError("alerts must be a mapping of rule names (error_rate, latency_p95, "
+                            "...) and rules: [...].")
+    unknown = set(raw) - set(aa.KINDS) - {"rules"}
+    if unknown:
+        raise ManifestError(f"alerts has unknown field(s) {sorted(unknown)}; known: "
+                            f"{', '.join(aa.KINDS)}, rules.")
+    out: dict[str, Any] = {}
+    for kind in aa.KINDS:
+        spec = raw.get(kind)
+        if spec is None:
+            continue
+        if not isinstance(spec, dict):
+            raise ManifestError(f"alerts.{kind} must be a mapping of its settings.")
+        allowed = set(aa.PARAM_BOUNDS[kind]) | {"enabled", "severity", "runbook_url", "for"}
+        bad = set(spec) - allowed
+        if bad:
+            raise ManifestError(f"alerts.{kind} has unknown field(s) {sorted(bad)}; known: "
+                                f"{', '.join(sorted(allowed))}.")
+        got: dict[str, Any] = {}
+        for key, (lo, hi) in aa.PARAM_BOUNDS[kind].items():
+            if key in spec:
+                value = spec[key]
+                if isinstance(value, bool) or not isinstance(value, (int, float)) \
+                        or not lo <= float(value) <= hi:
+                    raise ManifestError(f"alerts.{kind}.{key} must be a number between "
+                                        f"{aa.num(lo)} and {aa.num(hi)}, not {value!r}.")
+                got[key] = value
+        if "enabled" in spec:
+            got["enabled"] = _bool(spec["enabled"], f"alerts.{kind}.enabled")
+        if "severity" in spec:
+            if spec["severity"] not in aa.SEVERITIES:
+                raise ManifestError(f"alerts.{kind}.severity must be warning or critical.")
+            got["severity"] = spec["severity"]
+        if "runbook_url" in spec:
+            got["runbook_url"] = str(spec["runbook_url"])[:500]
+        if "for" in spec:
+            try:
+                got["for_seconds"] = aa._for_seconds(spec["for"])
+            except ValueError as exc:
+                raise ManifestError(f"alerts.{kind}.for: {exc}") from None
+        out[kind] = got
+    if raw.get("rules") is not None:
+        if not isinstance(raw["rules"], list):
+            raise ManifestError("alerts.rules must be a list of rules.")
+        rules = []
+        for i, rule in enumerate(raw["rules"]):
+            if not isinstance(rule, dict):
+                raise ManifestError(f"alerts.rules[{i}] must be a rule (alert, expr, ...).")
+            try:
+                aa.validate_custom(rule)
+            except ValueError as exc:
+                raise ManifestError(f"alerts.rules[{i}]: {exc}") from None
+            rules.append({k: rule[k] for k in ("alert", "expr", "for", "labels", "annotations")
+                          if k in rule})
+        out["rules"] = rules
+    return out or None
+
+
 _TOP_LEVEL = frozenset({
     "version", "name", "kind", "compose", "env", "install", "update", "health", "open",
-    "teardown", "requires", "dir", "metrics", "resources", "signals",
+    "teardown", "requires", "dir", "metrics", "resources", "signals", "alerts",
 })
 
 
@@ -573,7 +653,7 @@ def parse_manifest(data: Any, *, source_text: str = "") -> DeployManifest:
         open_url=open_url, teardown=teardown, requires_sudo=requires_sudo,
         requires_docker=requires_docker, compose_file=compose_file,
         compose_project=compose_project, metrics=_metrics(data.get("metrics")),
-        signals=_signals(data.get("signals")),
+        signals=_signals(data.get("signals")), alerts=_alerts(data.get("alerts")),
         resources=_resources(data.get("resources")), source_text=source_text,
     )
 
