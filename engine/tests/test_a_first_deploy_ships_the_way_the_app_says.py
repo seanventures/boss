@@ -358,3 +358,22 @@ def test_a_second_app_in_the_repository_never_ships_to_the_first_apps_stack_targ
         hd = stack_target_for_deploy(c, db.project, {"run_id": hd_build})
     assert again["id"] == made["id"]
     assert hd["id"] == helpdesk
+
+
+def test_a_target_shipped_from_its_manifest_is_found_as_such(db):
+    """D2: the Order API's target (made by its first deploy) stays `ssh` by kind; its next release
+    from Infra must still ship from the app's manifest, not as one guessed container."""
+    from boss_engine.services.stack_deploy import shipped_from_manifest
+
+    with db.engine.begin() as c:
+        tid = _target(c, db.project, db.host, "Order API", 8001)
+        assert shipped_from_manifest(c, tid) is None
+        c.execute(text("INSERT INTO stack_deployments (id, project_id, target_id, repository, ref, "
+                       " commit_sha, manifest, status, created_by) VALUES (:i, :p, :t, "
+                       " 'acme/boss-sandbox', 'main', 'c0a16f9', CAST(:m AS JSONB), 'healthy', 't')"),
+                  {"i": f"sd_{uuid.uuid4().hex[:8]}", "p": db.project, "t": tid,
+                   "m": json.dumps({"manifest_path": "order-api/boss.deploy.yaml"})})
+        got = shipped_from_manifest(c, tid)
+        c.execute(text("DELETE FROM stack_deployments WHERE target_id = :t"), {"t": tid})
+    assert got == {"manifest_path": "order-api/boss.deploy.yaml",
+                   "repository": "acme/boss-sandbox"}

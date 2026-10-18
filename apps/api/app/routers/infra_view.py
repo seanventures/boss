@@ -182,13 +182,24 @@ def build_infra_router(
         # deployment:production for a production target: the declaration's production= rule,
         # decided by the guard from the target's own row before this handler runs.
         route = infra_view.target_kind_route(target)
+        # SHIPPED FROM ITS MANIFEST BEFORE, SHIPPED FROM IT AGAIN: a target its app's first deploy
+        # made is still `ssh` by kind, and its releases are stack deploys of the app's manifest.
+        from boss_engine.services.stack_deploy import shipped_from_manifest
+
+        with begin(engine) as connection:
+            shipped = shipped_from_manifest(connection, target_id)
+        declared = (shipped or {}).get("manifest_path")
+        if route == "app" and declared:
+            route = "stack"
         if route == "stack":
             from boss_engine.services.stack_deploy import StackDeployError, plan_stack_deploy
 
             try:
                 deployment = plan_stack_deploy(
-                    engine, settings(), project_id=pid, target_id=target_id, repository=None,
-                    ref=(body.ref or "").strip() or "main", actor=actor)
+                    engine, settings(), project_id=pid, target_id=target_id,
+                    repository=(shipped or {}).get("repository") or None,
+                    ref=(body.ref or "").strip() or "main", actor=actor,
+                    **({"manifest_path": declared} if declared else {}))
             except StackDeployError as exc:
                 raise _stack_error(exc)
             return {"ref": f"stack:{deployment['id']}", "kind": "stack",

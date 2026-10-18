@@ -1119,6 +1119,31 @@ def _set(connection: Connection, deployment_id: str, **fields: Any) -> None:
 
 # ── Stack targets ────────────────────────────────────────────────────────────────────────────
 
+def shipped_from_manifest(connection: Connection, target_id: str) -> Optional[dict[str, str]]:
+    """{manifest_path, repository} of the target's newest stack deployment, or None."""
+    row = connection.execute(text(
+        "SELECT manifest->>'manifest_path' AS path, repository FROM stack_deployments "
+        "WHERE target_id = :t AND COALESCE(manifest->>'manifest_path', '') <> '' "
+        "ORDER BY created_at DESC LIMIT 1"), {"t": target_id}).mappings().first()
+    if not row or not row["path"]:
+        return None
+    return {"manifest_path": str(row["path"]), "repository": str(row["repository"] or "")}
+
+
+def declared_manifest_of_target(connection: Connection, target_id: str) -> Optional[str]:
+    """The boss.deploy.yaml a target is shipped from, when BOSS has stack-deployed it: the
+    manifest path recorded on its newest stack deployment. None for a target that never was.
+
+    A target made by an app's first deploy keeps `target_kind = 'ssh'` and no manifest_path, yet
+    every deploy of it is a stack deploy from the app's manifest. Asking only `target_kind`, the
+    Infra Deploy button sent the Order API's next release down the one-container path (D2)."""
+    row = connection.execute(text(
+        "SELECT manifest->>'manifest_path' AS path FROM stack_deployments WHERE target_id = :t "
+        "AND COALESCE(manifest->>'manifest_path', '') <> '' ORDER BY created_at DESC LIMIT 1"),
+        {"t": target_id}).first()
+    return str(row[0]) if row and row[0] else None
+
+
 def is_stack_target(target: Optional[dict]) -> bool:
     return bool(target) and str(target.get("target_kind") or "").lower() == TARGET_KIND
 
