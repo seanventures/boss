@@ -1468,7 +1468,7 @@ class CommsService:
             parsed["action"] = verdict.action
         elif verdict.status == agent_decision.NO_MODEL:
             parsed["parse_error"] = "decision_reply_needs_a_model"
-            parsed["remediation"] = agent_decision.NO_MODEL_REPLY
+            parsed["remediation"] = agent_decision.no_model_reply(verdict)
         else:
             parsed["parse_error"] = "decision_reply_unclear"
             parsed["remediation"] = (verdict.question or

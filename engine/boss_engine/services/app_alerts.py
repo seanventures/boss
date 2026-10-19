@@ -897,11 +897,24 @@ def evaluate_rule(rule: dict, target: dict, now: datetime, *, store: Optional[pq
     try:
         if m["value_expr"]:
             got = run(m["value_expr"])
-            value = got[0].value if got else None
-            if not got or math.isnan(got[0].value):
-                quiet = "no_data"
-            elif m["guard_expr"] and not run(m["guard_expr"]) and not results:
-                quiet = "too_little"
+            guard_passed = bool(run(m["guard_expr"])) if m["guard_expr"] else False
+            if not got:
+                # PromQL's sum() over an EMPTY vector returns no series at all, not zero — a
+                # 5xx counter that has never been incremented does not exist, so an error-rate
+                # ratio over it is empty, not "0". The guard already answers "was there
+                # traffic to judge this on": when it did, zero results here IS the answer —
+                # zero errors — not "no data" (a SEV1 error-rate rule read "No data" with real,
+                # healthy traffic and zero failures).
+                if guard_passed:
+                    value, quiet = 0.0, "ok"
+                else:
+                    value, quiet = None, "no_data"
+            elif math.isnan(got[0].value):
+                value, quiet = None, "no_data"
+            else:
+                value = got[0].value
+                if m["guard_expr"] and not guard_passed and not results:
+                    quiet = "too_little"
     except Exception:  # noqa: BLE001 — the measure is for words; the result is what counts
         pass
     if value is not None and (math.isnan(value) or math.isinf(value)):
@@ -1651,6 +1664,18 @@ def record_signal(connection, *, reporter: dict, affected: dict, signal: dict,
 NO_MODEL_WORD = "Not triaged: no model is answering"
 
 
+def _no_model_word(decision) -> str:
+    """NO_MODEL_WORD, or — when the provider's own words say plainly that the account is out
+    of credit — that said up front, with the provider named, instead of a generic sentence
+    that reads as "nothing is connected" (BOSSAPP-604)."""
+    from . import provider_limits
+
+    if provider_limits.credit_exhausted(getattr(decision, "error", "")):
+        who = getattr(decision, "provider", "") or "its provider"
+        return f"Not triaged: credit balance too low on {who}"
+    return NO_MODEL_WORD
+
+
 def _claim(engine, project_ids: Optional[set[str]], limit: int) -> list[str]:
     from ..db import begin
 
@@ -1994,7 +2019,7 @@ def triage_alert(engine, settings: Any, alert_id: str, *, adapter: Any = None,
         _lock(c, alert.get("subject_id") or alert["target_id"])
         alert = _alert(c, alert_id) or alert
         if decision.status == ad.NO_MODEL:
-            record.update(outcome=None, word=NO_MODEL_WORD)
+            record.update(outcome=None, word=_no_model_word(decision))
             _write_triage(c, alert_id, record, "no_model")
             return record
         if decision.status == ad.CLARIFY or decision.action == "ask":

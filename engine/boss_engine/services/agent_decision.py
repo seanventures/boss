@@ -42,11 +42,28 @@ from typing import Any, Mapping, Optional, Sequence
 
 log = logging.getLogger(__name__)
 
-#: Said whenever an agent cannot reach a model. Honest, specific, and names where to fix it.
+#: Said whenever an agent cannot reach a model AND BOSS cannot tell why. Honest, specific, and
+#: names where to fix it. When the provider's own words say it is specifically out of credit,
+#: `no_model_reply` says THAT instead (BOSSAPP-604): "no model is answering" reads as "nothing
+#: is connected" and sends a person to re-check a connection that was never the problem.
 NO_MODEL_REPLY = (
     "BOSS needs a connected model to understand this, and none is answering right now, so I "
     "have not done anything. Connect one in Repo and models (a subscription, an API key or a "
     "local model), then ask again.")
+
+
+def no_model_reply(decision: "AgentDecision") -> str:
+    """What to tell a person when `decision.status == NO_MODEL`: the generic NO_MODEL_REPLY,
+    unless the provider's own words said plainly that the account is out of credit — then
+    exactly that, with the provider named when it is known, up front rather than buried in a
+    truncated error nobody reads."""
+    from . import provider_limits
+
+    if not provider_limits.credit_exhausted(decision.error):
+        return NO_MODEL_REPLY
+    who = decision.provider or "its provider"
+    return (f"BOSS could not get an answer: credit balance too low on {who}. Add credit there "
+            "(or connect a different model in Repo and models), then ask again.")
 
 #: Below this confidence the agent asks ONE question instead of acting. An operator can lower
 #: or raise it per install (`agent_decision_confidence`).
@@ -93,6 +110,9 @@ class AgentDecision:
     by: dict = field(default_factory=dict)
     cost_usd_micros: int = 0
     error: str = ""
+    #: The provider BOSS tried to reach (its engine name), when status is no_model and that is
+    #: known — so a credit message can name it instead of saying "the model's provider".
+    provider: str = ""
 
     @property
     def decided(self) -> bool:
@@ -297,6 +317,14 @@ def _routed(connection: Any, settings: Any, project_id: str, ref: str, text: str
         return raw, raw
 
 
+def _provider_name(adapter: Any) -> str:
+    """The engine `project_chat_adapter` routed to (model_routing.project_chat_adapter stamps
+    `_boss_choice` on every adapter it returns), or "" when none was resolved — the exception
+    happened before routing picked one."""
+    choice = getattr(adapter, "_boss_choice", None)
+    return str(getattr(choice, "engine", "") or "").strip()
+
+
 def _ask_model(adapter: Any, system: str, prompt: str) -> dict:
     result = adapter.create_text_response(prompt, system_prompt=system)
     if isinstance(result, tuple):
@@ -352,7 +380,8 @@ def decide(connection: Any, settings: Any, project_id: str, *, situation: str, m
                 got = again
     except Exception as exc:  # noqa: BLE001 — no model is an answer, never a crash
         log.info("agent decision had no model: %s", exc)
-        return AgentDecision(NO_MODEL, error=f"{type(exc).__name__}: {exc}"[:300])
+        return AgentDecision(NO_MODEL, error=f"{type(exc).__name__}: {exc}"[:300],
+                             provider=_provider_name(adapter))
 
     raw = got.get("raw")
     by, cost = dict(got.get("by") or {}), int(got.get("cost") or 0)

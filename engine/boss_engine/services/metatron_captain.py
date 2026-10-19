@@ -258,7 +258,8 @@ def decide_free_text(connection: Connection, settings: Any, project_id: str, mes
         candidates=[agent_decision.Candidate(k, v, acts=k not in ("status", "drive"))
                     for k, v in _FREE_TEXT_CANDIDATES.items()])
     if verdict.status == agent_decision.NO_MODEL:
-        return {"intent": "no_model", "text": message, "reply": agent_decision.NO_MODEL_REPLY}
+        return {"intent": "no_model", "text": message,
+                "reply": agent_decision.no_model_reply(verdict)}
     if verdict.status == agent_decision.CLARIFY:
         return {"intent": "clarify", "text": message, "reply": verdict.question}
     out = {"intent": verdict.action, "text": message, "decided_by": verdict.to_dict()}

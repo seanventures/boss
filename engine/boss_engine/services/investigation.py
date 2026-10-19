@@ -194,5 +194,16 @@ def model_verdict(connection: Any, settings: Any, project_id: str, *, incident: 
             "root_cause": (chosen or {}).get("root_cause") if chosen else (
                 "unknown" if decision.decided else None),
             "reason": decision.reason, "confidence": decision.confidence, "by": decision.by,
-            "word": ("No model is answering: no verdict, only BOSS's statistical guesses"
-                     if decision.status == ad.NO_MODEL else decision.reason)}
+            "word": (_no_model_word(decision) if decision.status == ad.NO_MODEL
+                     else decision.reason)}
+
+
+def _no_model_word(decision) -> str:
+    """No verdict, only BOSS's statistical guesses — or, when the provider's own words say
+    it is specifically out of credit, that plainly, with the provider named (BOSSAPP-604)."""
+    from . import provider_limits
+
+    if provider_limits.credit_exhausted(decision.error):
+        return (f"Credit balance too low on {decision.provider or 'its provider'}: no verdict, "
+                "only BOSS's statistical guesses.")
+    return "No model is answering: no verdict, only BOSS's statistical guesses"

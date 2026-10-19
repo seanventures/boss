@@ -1694,7 +1694,7 @@ class IntentRouter:
                                      role=role, depth=depth)
         verdict = decision.to_dict()
         if decision.status == agent_decision.NO_MODEL:
-            return RouterTurn(reply=agent_decision.NO_MODEL_REPLY, decision=verdict)
+            return RouterTurn(reply=agent_decision.no_model_reply(decision), decision=verdict)
         if decision.status == agent_decision.CLARIFY and decision.action in _AGENT_ACTIONS:
             # UNSURE IS ONE QUESTION, NEVER A GUESSED ACTION — but an INFORMED question. The
             # decision model could not tell "fix order api deploy" apart as a retry, a repair of

@@ -44,6 +44,27 @@ _EXHAUSTED = (
     "hit your session limit",
 )
 
+#: The subset of `_EXHAUSTED` that means "you are out of MONEY on this account", not "wait
+#: for a window to reopen". A rate limit or a weekly/session cap clears on its own; this does
+#: not — it needs a person to add credit or switch providers, and saying only "no model is
+#: answering" (BOSSAPP-604) hid that distinction behind a sentence that reads as "nothing is
+#: connected", sending someone to re-check a connection that was never the problem.
+_CREDIT_EXHAUSTED = (
+    "insufficient_quota",
+    "out of credits",
+    "credit balance is too low",
+    "exceeded your current quota",
+)
+
+
+def credit_exhausted(error: Optional[str]) -> bool:
+    """True when the provider's own words say plainly that the account is out of credit —
+    never guessed from a generic failure, only from the provider's own billing phrases."""
+    if not error:
+        return False
+    lowered = str(error).lower()
+    return any(phrase in lowered for phrase in _CREDIT_EXHAUSTED)
+
 #: "try again at Sep 22nd, 2026 10:06 PM" — codex's phrasing, and the most useful field in the
 #: whole message: it is the answer to "when can I run this again".
 _RETRY_AT = re.compile(
