@@ -34,6 +34,7 @@ import type { RoleFeedItem } from "../lib/roles";
 import type { TaskFeedItem } from "../lib/tasks";
 import { ChangeSetApproval, isChangeSetDecision } from "./multirepo/change-set-approval";
 import { SelfFixCard, cardOf, isSelfFixDecision } from "./self-fix/approval-card";
+import { MonitoringPackCard, monitoringPackOf } from "./workflows/monitoring-pack";
 
 function formatMicros(amount: unknown): string {
   if (typeof amount !== "number") {
@@ -874,6 +875,8 @@ function DecisionInboxRow({
             </p>
           )}
           {preview && !refusal ? <ActionPreview preview={preview} /> : null}
+          {/* THE RELEASE'S MONITORING PACK (engine monitoring_pack): approved with it. */}
+          {monitoringPackOf(rec.monitoring_pack) ? <MonitoringPackCard pack={monitoringPackOf(rec.monitoring_pack)!} onCard /> : null}
           {subject ? (
             <details className="decision-plan-details">
               <summary>

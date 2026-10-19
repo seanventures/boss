@@ -79,6 +79,8 @@ export type AlertRule = {
   summary: string | null; description: string | null; runbook: Runbook;
   enabled: boolean; triage: boolean; autoRespond: boolean; respondOnBehalfOf: string | null; notify: string;
   source: string; sourceWord: string; changedBy: string | null; changedAt: string | null;
+  /** "code": declared in the repo's boss.deploy.yaml (repo-managed, D4). */
+  managedBy: string;
   state: string | null; stateWord: string; stateTone: Tone; stateTip: string | null;
   value: number | null; valueWord: string | null; evaluatedAt: string | null; evaluatedBy: string | null;
   silence: { id: string; endsAt: string; reason: string; by: string | null } | null;
@@ -106,6 +108,7 @@ export function parseRule(w: unknown): AlertRule {
     enabled: o.enabled !== false, triage: o.triage !== false, autoRespond: o.auto_respond === true,
     respondOnBehalfOf: optStr(o.respond_on_behalf_of), notify: str(o.notify, "console"),
     source: str(o.source), sourceWord: str(o.source_word), changedBy: optStr(o.changed_by), changedAt: optStr(o.changed_at),
+    managedBy: str(o.managed_by, str(o.source) === "yaml" ? "code" : "builtin"),
     state: optStr(o.state), stateWord: str(o.state_word, "Not evaluated yet"), stateTone: toneOf(o.state_tone),
     stateTip: optStr(o.state_tip), value: optNum(o.value), valueWord: optStr(o.value_word),
     evaluatedAt: optStr(o.evaluated_at), evaluatedBy: optStr(o.evaluated_by),

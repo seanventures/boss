@@ -70,6 +70,7 @@ function RuleRow({ r, busy, onEdit, onSilence, onRespond, onEndSilence, severiti
         <span className="obs-strong" title={r.description ?? r.summary ?? undefined}>{r.label}</span>
         <SevFlag sev={r.severity} catalog={severities} />
         {r.sample ? <span className="obs-chip" data-testid="obs-rule-sample" title="A labelled sample rule: Remove samples deletes it">Sample</span> : null}
+        {r.managedBy === "code" ? <span className="obs-chip" data-testid="obs-rule-repo" title="Declared in the app's boss.deploy.yaml: versioned and reviewed in its pull requests. Change it there.">Repo-managed</span> : null}
       </span>
       <span className="inf-muted obs-arule-cond" title={r.expr} data-copy="data">{r.condition}</span>
       <span className="obs-arule-state">

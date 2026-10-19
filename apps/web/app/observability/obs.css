@@ -438,3 +438,14 @@ a.obs-who:hover .obs-who-name { text-decoration: underline; }
   .obs-crew-found { grid-column: 1 / -1; white-space: normal; }
   .obs-responder-head { flex-wrap: wrap; }
 }
+
+/* Set up monitoring's pack (app/workflows/monitoring-pack.tsx). */
+.mp-pack { display: grid; gap: 6px; }
+.mp-rules { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.mp-rules > li { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; min-width: 0; }
+.mp-alert { font-weight: 600; overflow-wrap: anywhere; }
+.mp-threshold { color: var(--muted, inherit); overflow-wrap: anywhere; }
+.mp-expr { flex-basis: 100%; }
+.mp-expr > summary { cursor: pointer; font-size: 0.85em; color: var(--muted, inherit); }
+.mp-expr code { display: block; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 0.85em; padding: 4px 0; }
+.mp-foot { flex-wrap: wrap; gap: 6px 12px; }

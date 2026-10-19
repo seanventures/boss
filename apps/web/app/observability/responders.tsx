@@ -57,7 +57,7 @@ export function whoWords(w: ResponderWho | null): { name: string; role: string }
   return { name: w.role || "BOSS", role: w.onBehalfOf ? `for ${w.onBehalfOf}` : "" };
 }
 
-function Who({ w, testId }: { w: ResponderWho | null; testId?: string }) {
+export function Who({ w, testId }: { w: ResponderWho | null; testId?: string }) {
   const { name, role } = whoWords(w);
   const face = w?.kind === "agent" ? (
     <RunFace roleKey={w.roleKey} size={24} />
