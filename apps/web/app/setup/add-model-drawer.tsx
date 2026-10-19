@@ -187,6 +187,33 @@ export function AddModelPanel({ initialTile, initialProvider, onDone, replaceSou
     ready = ready && !!model.trim() && (provider === "ollama" || !!baseUrl.trim());
   }
 
+  // WHEN CONNECT IS DISABLED, SAY WHY: the button used to keep the same tooltip ("Saves it,
+  // then asks one tiny question…") whether or not anything had been typed, so a key pasted but
+  // not yet tested, or no key at all, looked identical and silent (boss-1 rc10.9).
+  const whyNotReady = (): string => {
+    if (busy || ready) return "";
+    if (held.length) return "Release the hold first";
+    if (needsConsent && !consent) return "Accept to continue first";
+    if (tile === "subscription") {
+      if (onServerOnly || notOnServer) return "Install and sign in on the BOSS server first";
+      if (!signedIn) return provider === "codex" ? "Drop auth.json first" : "Paste a token first";
+      return "";
+    }
+    if (tile === "api_key") {
+      if (provider === "custom") {
+        if (!baseUrl.trim()) return "Add the base URL first";
+        if (!model.trim()) return "Name the model first";
+        return "";
+      }
+      if (!secret.trim()) return "Paste a key first";
+      if (fields.includes("model") && !model.trim()) return "Name the model first";
+      return "";
+    }
+    if (!model.trim()) return "Name the model first";
+    if (provider !== "ollama" && !baseUrl.trim()) return "Add the URL first";
+    return "";
+  };
+
   const connect = async () => {
     setBusy(true);
     setRefusal(null);
@@ -334,8 +361,8 @@ export function AddModelPanel({ initialTile, initialProvider, onDone, replaceSou
         <div className="su-line">
           <GatedButton permission="model_provider:manage" type="button" className="su-btn su-btn-primary" disabled={!ready}
                   data-testid="su-model-connect"
-                  title="Saves it, then asks one tiny question. Budgeted and receipted."
-                  data-tip="Saves it, then asks one tiny question. Budgeted and receipted."
+                  title={whyNotReady() || "Saves it, then asks one tiny question. Budgeted and receipted."}
+                  data-tip={whyNotReady() || "Saves it, then asks one tiny question. Budgeted and receipted."}
                   onClick={connect}>
             {busy ? "Checking…" : "Connect"}
           </GatedButton>

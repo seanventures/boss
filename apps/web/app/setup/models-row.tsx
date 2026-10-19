@@ -56,14 +56,21 @@ function DefaultModel({ entry, onDone }: { entry: ModelEntry; onDone: () => void
   );
 }
 
-function ModelLine({ entry, menuOpen, onReplace }: {
+function ModelLine({ entry, menuOpen, onReplace, replacing }: {
   entry: ModelEntry; menuOpen: boolean; onReplace: (provider: string, sourceId: string) => void;
+  /** The Add model drawer is open to paste this row a new key. Its last check no longer
+   *  describes anything — a stale "Paused · budget" sat there while the operator typed a
+   *  fresh key that had not been tested yet (boss-1 rc10.9, Setup > Add a model). */
+  replacing: boolean;
 }) {
   const { projectId, apply, checking, setChecking } = useBoard();
   const key = `model:${entry.source_id}`;
   const busy = checking.has(key) || checking.has("all");
   const pill = busy ? { state: "checking", tone: "busy" as const, label: "Checking…",
-                        tip: "Asking one tiny question. Budgeted." } : entry.pill;
+                        tip: "Asking one tiny question. Budgeted." }
+             : replacing ? { state: "editing", tone: "grey" as const, label: "Editing…",
+                             tip: "Testing a new key. The old check no longer applies." }
+             : entry.pill;
   const [picking, setPicking] = useState(false);
   const [confirm, setConfirm] = useState<string[] | null>(null);
   const test = async () => {
@@ -204,6 +211,7 @@ export const ModelsRow = forwardRef<HTMLElement, {
       <div className="su-stack">
         {view.models.map((entry) => (
           <ModelLine key={entry.source_id} entry={entry} menuOpen={source === entry.source_id}
+                     replacing={!!drawer?.sourceId && drawer.sourceId === entry.source_id}
                      onReplace={(provider, sourceId) => setDrawer({ provider, sourceId })} />
         ))}
         <GatedButton permission="model_provider:manage" type="button" className="su-link su-add" data-testid="su-add-model-open"
