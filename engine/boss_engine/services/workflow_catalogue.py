@@ -72,6 +72,8 @@ DEFAULT_STEP_AGENTS: dict[str, str] = {
     "plrr": "sre",
     "more_tests": "qa",
     "monitor": "sre",
+    # SET UP MONITORING, before the release (monitoring_pack): Beacon writes the pack.
+    "monitoring_pack": "sre",
     "document": "docs_writer",
     "investigate_incident": "sre",
     "verify_recovery": "sre",
@@ -890,6 +892,21 @@ def _two_pass_builds() -> None:
 _two_pass_builds()
 
 
+def _monitoring_before_release() -> None:
+    """SET UP MONITORING IN FRONT OF EVERY SECOND DEPLOY (monitoring_pack, BOSSAPP-601): every
+    catalogue workflow that deploys twice gets Beacon's pack after pass 2 and before the
+    release, so the release is approved with its rules. Applied once, at import, after pass 2
+    is wired, like `_two_pass_builds`."""
+    from . import monitoring_pack
+
+    for entry in CATALOGUE:
+        entry["steps"] = monitoring_pack.with_monitoring_step(
+            {"steps": entry["steps"]}, captain=DEFAULT_STEP_AGENTS["monitoring_pack"])["steps"]
+
+
+_monitoring_before_release()
+
+
 # ── What Start asks for ────────────────────────────────────────────────────────────────────────
 #
 # WHY EVERY TEMPLATE DECLARES ITS INPUTS NOW. No catalogue entry had an input_schema, so the
@@ -1141,6 +1158,9 @@ def entry_spec(entry: dict[str, Any]) -> dict[str, Any]:
     # pass and a second deploy to the template that had said no.
     if entry.get("more_tests") is False:
         spec["more_tests"] = False
+    # `monitoring_gate`: block (the default) or warn (monitoring_pack.gate_mode).
+    if entry.get("monitoring_gate"):
+        spec["monitoring_gate"] = entry["monitoring_gate"]
     return spec
 
 

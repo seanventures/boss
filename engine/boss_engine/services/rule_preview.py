@@ -16,10 +16,11 @@ from . import promql_lite as pq
 WINDOW = timedelta(hours=24)
 
 
-def _replay(present_at, now: datetime, hold_ms: int, step_s: int) -> tuple[int, Optional[str]]:
+def _replay(present_at, now: datetime, hold_ms: int, step_s: int,
+            window: timedelta = WINDOW) -> tuple[int, Optional[str]]:
     """Fires and the final state, through THE lifecycle the evaluator uses."""
     state, active, fired = None, None, 0
-    t = now - WINDOW
+    t = now - window
     while t <= now:
         ms = int(t.timestamp() * 1000)
         nxt = aa.lifecycle(state, active, present_at(ms), ms, hold_ms)
@@ -34,10 +35,16 @@ def _replay(present_at, now: datetime, hold_ms: int, step_s: int) -> tuple[int, 
     return fired, state
 
 
+def _span(window: timedelta) -> str:
+    hours = window.total_seconds() / 3600
+    return "hour" if hours == 1 else f"{hours:g} h"
+
+
 def _words(fired: int, state: Optional[str], by: str, peak: int, now_series: int,
-           note: str = "") -> dict[str, Any]:
+           note: str = "", window: timedelta = WINDOW) -> dict[str, Any]:
     return {"fired": fired, "series_peak": peak, "series_now": now_series,
-            "word": (f"Would have fired {fired} time{'s' if fired != 1 else ''} in the last 24 h"
+            "word": (f"Would have fired {fired} time{'s' if fired != 1 else ''} in the last "
+                     f"{_span(window)}"
                      + ("; firing now" if state == "firing" else
                         "; pending now" if state == "pending" else "") + note),
             "evaluated_by": by}
@@ -45,8 +52,10 @@ def _words(fired: int, state: Optional[str], by: str, peak: int, now_series: int
 
 def preview(connection, subject: dict, expr: str, for_: Any = 0, *,
             now: Optional[datetime] = None, step_s: int = 60, prometheus: Any = None,
-            scope: Optional[dict[str, str]] = None) -> dict[str, Any]:
-    """`prometheus` (the subject's datasource, as the evaluator picks it): the expression is
+            scope: Optional[dict[str, str]] = None,
+            window: timedelta = WINDOW) -> dict[str, Any]:
+    """`window`: how far back to replay (24 h in the editor; the last hour for Set up
+    monitoring's pack). `prometheus` (the subject's datasource, as the evaluator picks it): the expression is
     replayed over Prometheus' range query, scoped like every query BOSS sends it. Otherwise over
     BOSS's own records. A construct BOSS's evaluator does not know is named in words."""
     now = now or datetime.now(timezone.utc)
@@ -63,7 +72,7 @@ def preview(connection, subject: dict, expr: str, for_: Any = 0, *,
             raise ValueError(f"BOSS can't scope {unsupported} to this project on a shared "
                              "Prometheus, so it won't send it")
         try:
-            rows = prometheus.query_range(q, now - WINDOW, now, step_s)
+            rows = prometheus.query_range(q, now - window, now, step_s)
         except pq.PromQLError as exc:
             raise ValueError(f"Prometheus refused it: {exc}") from None
         except Exception as exc:  # noqa: BLE001
@@ -76,15 +85,17 @@ def preview(connection, subject: dict, expr: str, for_: Any = 0, *,
         if peak > aa.MAX_SERIES:
             raise ValueError(f"Returns {peak:,} series; aggregate by fewer labels "
                              f"(at most {aa.MAX_SERIES:,})")
-        fired, state = _replay(lambda ms: counts.get(ms // 1000, 0) > 0, now, hold_ms, step_s)
+        fired, state = _replay(lambda ms: counts.get(ms // 1000, 0) > 0, now, hold_ms, step_s,
+                               window)
         return _words(fired, state, "Prometheus", peak,
-                      counts.get(int(now.timestamp()) // step_s * step_s, 0) if state else 0)
+                      counts.get(int(now.timestamp()) // step_s * step_s, 0) if state else 0,
+                      window=window)
     if node is None:
         return {"fired": None, "series_now": None, "evaluated_by": "BOSS's own records",
                 "word": f"BOSS's own evaluator does not do {unsupported}; only Prometheus "
                         "evaluates it, and none answers here, so there is no preview"}
     rng = aa._max_range_ms(spec["expr"])
-    store = aa.local_store(connection, subject, now, int(WINDOW.total_seconds() * 1000) + rng)
+    store = aa.local_store(connection, subject, now, int(window.total_seconds() * 1000) + rng)
     peak = 0
     results: dict[int, int] = {}
 
@@ -101,7 +112,7 @@ def preview(connection, subject: dict, expr: str, for_: Any = 0, *,
         results[ms] = len(got)
         return bool(got)
 
-    fired, state = _replay(present, now, hold_ms, step_s)
+    fired, state = _replay(present, now, hold_ms, step_s, window)
     wanted = set()
     try:
         wanted = pq.selected_metrics(spec["expr"]) - store.names()
@@ -109,7 +120,8 @@ def preview(connection, subject: dict, expr: str, for_: Any = 0, *,
         pass
     note = (f"; BOSS's own records hold no {', '.join(sorted(wanted))}" if wanted else "")
     return _words(fired, state, "BOSS's own records", peak,
-                  results.get(max(results), 0) if results and state else 0, note)
+                  results.get(max(results), 0) if results and state else 0, note,
+                  window=window)
 
 
 __all__ = ["preview"]

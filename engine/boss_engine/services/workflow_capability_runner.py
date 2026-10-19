@@ -2018,6 +2018,10 @@ def pass_two_redeploy_refusal(connection: Connection, run_id: str, step: dict[st
         return ("No redeploy: the More tests pass did not finish, so what is deployed is the "
                 "first pass's build.")
     if summary["changed"] is False:
+        from .monitoring_pack import landed
+
+        if landed(connection, run_id, step):
+            return None            # the monitoring pack is new on the branch: release it
         return "No redeploy: the More tests pass changed nothing."
     return None
 
@@ -2792,6 +2796,32 @@ def _investigate_incident(connection: Connection, ctx: Any, project_id: str,
             "note": f"{got['logs_word']}; {got['diff_word']}. {got['root_cause']}"}
 
 
+def _set_up_monitoring(connection: Connection, ctx: Any, project_id: str,
+                       context: dict[str, Any], step: dict[str, Any],
+                       inputs: dict[str, Any]) -> dict[str, Any]:
+    """`monitoring_pack`: the SRE agent's pack before the release. No pack fails the step under
+    `monitoring_gate: block` (the release cannot ship without one) and is said, without
+    failing the run, under `warn`."""
+    from . import monitoring_pack
+
+    run_id = str(context.get("run_id") or "")
+    gate = monitoring_pack.run_gate(connection, run_id)
+    try:
+        return {**monitoring_pack.run_step(
+            connection, getattr(ctx, "settings", None) or _settings(), project_id,
+            run_id=run_id, step_id=str(step.get("id") or ""), inputs=inputs, gate=gate),
+            "gate": gate}
+    except monitoring_pack.PackRefused as refused:
+        if gate == monitoring_pack.WARN:
+            return {"capability": "monitoring_pack", "tool": None, "status": "not_applicable",
+                    "gate": gate,
+                    "note": f"No monitoring pack: {refused}. The workflow's monitoring_gate is "
+                            "warn, so the release goes on without one."}
+        raise SettledCapabilityError(
+            f"No monitoring pack: {refused}. The release cannot ship without one "
+            "(monitoring_gate: block).") from refused
+
+
 def _settings() -> Any:
     from ..config import get_settings
 
@@ -2951,6 +2981,9 @@ def _perform_toolless(
     # what is recorded; the recovery check parks on BOSS's own monitor like a CI wait.
     if key == "investigate_incident":
         return _investigate_incident(connection, ctx, project_id, context, inputs)
+    # SET UP MONITORING (services/monitoring_pack.py): Beacon's pack, written on the branch.
+    if key == "monitoring_pack":
+        return _set_up_monitoring(connection, ctx, project_id, context, step, inputs)
     if key == "verify_recovery":
         return _settle_started_work(
             capability, key, _start_recovery_check(connection, project_id, context, inputs))
@@ -3008,6 +3041,7 @@ def _perform_capability(
     inputs = dict(inputs or {})
     advisory_preview = key == "preview" and bool(inputs.pop("advisory", False))
     pass_2_of = str(inputs.pop("pass_2_of", "") or "") if key == "deploy" else ""
+    monitoring_step = str(inputs.pop("monitoring_step", "") or "") if key == "deploy" else ""
     extend = key == "build" and bool(inputs.pop("extend", False))
     increment = inputs.pop("increment", None) if key == "build" else None
     if increment:
@@ -3027,6 +3061,16 @@ def _perform_capability(
         if why_not:
             return {"capability": key, "tool": None, "status": "not_applicable",
                     "pass_2_of": pass_2_of, "note": why_not}
+    if monitoring_step:
+        # THE RELEASE CARRIES ITS MONITORING PACK (monitoring_pack): under `block` it does not
+        # ship without one, in words, before anything is planned.
+        from . import monitoring_pack
+
+        run_id = str(context.get("run_id") or "")
+        refused = monitoring_pack.release_refusal(connection, run_id, step,
+                                                  monitoring_pack.run_gate(connection, run_id))
+        if refused:
+            raise SettledCapabilityError(refused)
     if extend or capability.tool is None:
         # EVERY IN-PROCESS DISPATCH RUNS UNDER THE RUN'S RECORDED AUTHORITY, like a tool step.
         # These returned from here bare, as whoever advanced the run (the worker), so under
@@ -5883,6 +5927,13 @@ def _gate_subject(
         if pass_2_of and pass_two_redeploy_refusal(
                 connection, str(context.get("run_id") or ""), spec_step, pass_2_of):
             return None
+        # A RELEASE WITHOUT ITS REQUIRED MONITORING PACK ASKS NOBODY: it is refused, in words.
+        from . import monitoring_pack
+
+        if monitoring_pack.release_refusal(
+                connection, str(context.get("run_id") or ""), spec_step,
+                monitoring_pack.run_gate(connection, str(context.get("run_id") or ""))):
+            return None
         # THE ENVIRONMENT'S POLICY, ON THE STEP AS ON THE DEPLOYMENT — FOR A STEP THAT LET IT.
         # A step with `approval.follows_policy` is not asked where a person set the environment
         # to deploy without asking; the deployment then runs on that policy and records whose
@@ -6082,6 +6133,14 @@ def _open_gate(
         subject = {**subject, "summary": (f"{subject['summary']} Ships the More tests pass on "
                                           f"top of what is deployed. "
                                           f"{pass_two_sentence(found)}")}
+    if capability_key == "deploy":
+        # THE PACK IS APPROVED WITH THE RELEASE (monitoring_pack): rules, PromQL, SEV,
+        # thresholds, the last hour's preview and the runbooks, on this card.
+        from .monitoring_pack import card_for
+
+        pack = card_for(connection, run["id"], spec_step)
+        if pack:
+            recommendation_extra["monitoring_pack"] = pack
     if capability_key == "security_decide":
         # Where the checklist is: App › Security draws the recommendations as the choice this
         # approval records (approving without opening it takes the P0/P1 pre-ticks).

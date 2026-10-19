@@ -1900,6 +1900,9 @@ def plan_stack_deploy(engine, settings: Settings, *, project_id: str, target_id:
             # decision is that gate. So it carries the step's approver and where it came
             # from, and approving it here is approving the release (one approval, not two).
             **({"approver_role": approver_role} if approver_role else {}),
+            # THE MONITORING PACK THIS RELEASE CARRIES (monitoring_pack): approved with it.
+            **({"monitoring_pack": pack} if (pack := _monitoring_pack_card(
+                connection, workflow_run_id, workflow_step_id)) else {}),
             # The infrastructure plan (resources, bindings by name, ports, public access,
             # destructive actions, cost) IS part of what is approved: the decision preview shows
             # it and its content hash is pinned like any approved content (action_preview).
@@ -3000,6 +3003,13 @@ def _first_target(connection: Connection, project_id: str, run: Mapping[str, Any
     if not made.get("ok"):
         return None
     return _target(connection, str(made["target_id"]))
+
+
+def _monitoring_pack_card(connection: Connection, run_id: Optional[str],
+                          step_id: Optional[str]) -> Optional[dict[str, Any]]:
+    from .monitoring_pack import card_for_step_id
+
+    return card_for_step_id(connection, run_id, step_id)
 
 
 def plan_for_workflow_step(engine, settings: Settings, *, project_id: str, actor: str,

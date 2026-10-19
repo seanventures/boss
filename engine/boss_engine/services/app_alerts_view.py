@@ -586,6 +586,9 @@ def _rule_wire(connection, r: dict, target: dict, silences: dict[str, dict],
         "respond_on_behalf_of": _person(connection, link.get("on_behalf_of")),
         "notify": r.get("notify") or "console",
         "source": r["source"], "source_word": _SOURCE_WORDS.get(r["source"], r["source"]),
+        # D4: a rule declared in the repo's boss.deploy.yaml (Set up monitoring writes them) is
+        # repo-managed: versioned and reviewed in the app's pull requests.
+        "managed_by": r.get("managed_by") or ("code" if r["source"] == "yaml" else "builtin"),
         "changed_by": _person(connection, r.get("changed_by")),
         "changed_at": _iso(r.get("changed_at")),
         "state": st, "state_word": "Silenced" if sil and st in ("firing", "pending") else

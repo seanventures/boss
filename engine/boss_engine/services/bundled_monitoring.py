@@ -168,9 +168,11 @@ def _panel(pid: int, title: str, kind: str, grid: dict, targets: list[tuple[str,
     return p
 
 
-def render_dashboard(app: str, env: str) -> str:
+def render_dashboard(app: str, env: str, extra: Optional[list[dict[str, Any]]] = None) -> str:
     """One dashboard per app: requests, error rate, p50/p95 latency, health, alerts — with the
-    app's alerts drawn as annotations. Panels say "No data" honestly before any arrives."""
+    app's alerts drawn as annotations. Panels say "No data" honestly before any arrives.
+    `extra`: the app's own panels from its boss.deploy.yaml `dashboard:` (Set up monitoring
+    writes them), drawn below, two to a row."""
     from .app_alerts import quote
     from .observability_stack import dashboard_uid
 
@@ -211,6 +213,12 @@ def render_dashboard(app: str, env: str) -> str:
                  "{{sev}} {{alertname}}")], None,
                {"fieldConfig": {"defaults": {"custom": {"drawStyle": "bars"}}, "overrides": []}}),
     ]
+    for i, p in enumerate(extra or []):
+        panels.append(_panel(10 + i, str(p.get("title") or "Panel"),
+                             "stat" if p.get("kind") == "stat" else "timeseries",
+                             {"h": 8, "w": 12, "x": 12 * (i % 2), "y": 29 + 8 * (i // 2)},
+                             [(str(p.get("expr") or ""), str(p.get("title") or ""))],
+                             str(p.get("unit") or "") or None))
     annotations = {"list": [
         {"builtIn": 1, "datasource": {"type": "grafana", "uid": "-- Grafana --"},
          "enable": True, "hide": True, "iconColor": "rgba(0, 211, 255, 1)",
@@ -237,17 +245,21 @@ def write_dashboards(connection, settings: Any) -> list[str]:
     folder = str(getattr(settings, "monitoring_dashboards_dir", "") or "")
     if not folder or not os.path.isdir(folder):
         return []
+    from .app_alerts import _manifest
+
     rows = connection.execute(sql(
-        "SELECT DISTINCT app_name, environment FROM deployment_targets WHERE status = 'active' "
-        "AND app_name IS NOT NULL ORDER BY app_name, environment")).all()
+        "SELECT DISTINCT ON (app_name, environment) id, app_name, environment "
+        "FROM deployment_targets WHERE status = 'active' "
+        "AND app_name IS NOT NULL ORDER BY app_name, environment, created_at")).all()
     wrote: list[str] = []
     seen: set[str] = set()
-    for app, env in rows:
+    for tid, app, env in rows:
         uid = dashboard_uid(str(app))
         if uid in seen:          # one dashboard per app name (the uid the links use)
             continue
         seen.add(uid)
-        body = render_dashboard(str(app), str(env or ""))
+        extra = ((_manifest(connection, str(tid)).get("dashboard") or {}).get("panels")) or []
+        body = render_dashboard(str(app), str(env or ""), extra)
         path = os.path.join(folder, f"{uid}.json")
         try:
             with open(path, encoding="utf-8") as f:

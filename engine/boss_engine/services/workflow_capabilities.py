@@ -477,7 +477,10 @@ CAPABILITIES: dict[str, Capability] = {
             # verified host / ask at deploy time). The target is created at the first deploy.
             # `pass_2_of`: "Deploy again" — ship the More tests pass where that deploy step
             # shipped pass 1, as a new deploy under the same policy (two_pass).
-            optional_inputs=("environment", "target_id", "host_id", "pass_2_of"),
+            # `monitoring_step`: the Set up monitoring step whose pack this release carries
+            # (monitoring_pack); under `monitoring_gate: block` it cannot ship without one.
+            optional_inputs=("environment", "target_id", "host_id", "pass_2_of",
+                             "monitoring_step"),
             produces=("deployment_id", "deployed_url"),
             requires_project=("deployment_target",),
             typical_minutes=8,
@@ -548,11 +551,31 @@ CAPABILITIES: dict[str, Capability] = {
             is_async=False,
         ),
         _cap(
+            key="monitoring_pack",
+            family="monitor",
+            # THE SRE WRITES THE MONITORING PACK BEFORE THE RELEASE (monitoring_pack.py).
+            captain="sre",
+            label="Set up monitoring",
+            summary="Read the app's code, its series on its first environment and the pull "
+                    "request, then write SEV-rated PromQL rules, a runbook per rule and "
+                    "dashboard panels into boss.deploy.yaml on the same branch, previewed "
+                    "against the last hour. The release is approved with the pack.",
+            tool=None,
+            risk_tier=1,
+            required_inputs=("run_id",),
+            optional_inputs=("first_deploy",),
+            produces=("pack", "commit_sha"),
+            typical_minutes=3,
+            needs_model=True,
+        ),
+        _cap(
             key="monitor",
             family="monitor",
             # owns whether anyone would notice it break
             captain="infra_steward",
-            label="Set up monitoring",
+            # "Set up monitoring" is the pack before the release (monitoring_pack); this step
+            # confirms BOSS is probing the app once it is live.
+            label="Watch the app",
             summary="Register health checks so the app is watched after it ships.",
             tool=None,
             risk_tier=1,
