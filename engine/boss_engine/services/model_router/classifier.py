@@ -401,8 +401,9 @@ CLASSIFIER = Classifier()
 
 
 def jev_state(settings: Any) -> str:
-    """ready | held | absent. Held while BOSS-451's governance hold stands and the install has
-    not opted the router into live Jev calls (`BOSS_ROUTER_JEV_LIVE`, for when the hold lifts)."""
+    """ready | held | absent. Held until the install lifts BOSS-451's governance hold for the
+    router with `BOSS_ROUTER_JEV_LIVE` (off by default). Ready means every call goes through
+    the governed typed-decision path (store.GovernedJevDecider), never a bare client."""
     try:
         from .. import typed_decisions
 

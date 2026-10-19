@@ -53,7 +53,8 @@ class DecisionBatch:
 GOVERNANCE_HOLD = (
     "Typed decision model calls stay paused (BOSS-451) unless this attempt already has a "
     "committed budget reservation, active model lease, deduplicated receipt, and cost "
-    "settlement. Key proof is still paused."
+    "settlement. A workflow step and a key proof carry those through TypedDecisionSpend; the "
+    "model router's Jev calls carry them too, behind BOSS_ROUTER_JEV_LIVE (off by default)."
 )
 
 

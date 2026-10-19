@@ -28,7 +28,7 @@ from .model_gateway import (
     ModelGatewayLeaseError,
 )
 from .typed_decisions import (
-    DecisionBatch, Question, TypeSafeAuthenticationRefused, _step_output,
+    Decision, DecisionBatch, Question, TypeSafeAuthenticationRefused, _step_output,
 )
 
 
@@ -381,7 +381,7 @@ class TypedDecisionSpend:
                 "typed decision cost is uncertain and needs reconciliation"
             ) from reason
         try:
-            output = _step_output(binding["typed_decision"], batch)
+            output = self._output(binding, batch)
         except RuntimeError as error:
             reason = error
             try:
@@ -756,6 +756,11 @@ class TypedDecisionSpend:
         context = state if isinstance(state, str) else json.dumps(state, default=str)
         return decider.decide(context, [question])
 
+    def _output(self, binding: dict, batch: DecisionBatch) -> dict:
+        """What the receipt keeps and the caller gets back. A RuntimeError here means no usable
+        answer: the attempt settles as failed with whatever it cost."""
+        return _step_output(binding["typed_decision"], batch)
+
     def _settle_success(
         self, connection, authority: _Authority, batch: DecisionBatch, output: dict,
     ) -> dict:
@@ -983,6 +988,102 @@ def _merge_opinions(binding: dict, first: dict, second: dict) -> dict:
         confidence is not None and float(confidence) >= float(floor)
     )
     return merged
+
+
+class TypedDecisionBatchSpend(TypedDecisionSpend):
+    """Several questions about one context on one governed attempt.
+
+    The workflow step asks one question and gets one answer. The model router's classifier
+    asks the tier question and the rigor questions together, because they share one context
+    and the context is what costs. The envelope is the step's, unchanged: a committed budget
+    reservation, a job lease and a model lease, one receipt per attempt, settlement with the
+    actual cost. The receipt keeps every answer, so the same questions about the same context
+    replay from it without a second call, and an attempt that failed is followed by the next
+    numbered attempt (its `typed_decision.retry` event is the visible retry) rather than by a
+    permanent "already failed" for a task the router will see again.
+
+    No fallback to another model and no second opinion: the caller has its own (the router
+    falls back to its rules). The first question is the one the caller needs; an attempt that
+    does not answer it is settled as failed with whatever it cost.
+    """
+
+    stage = "typed_decision_batch"
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._questions: list[Question] = []
+
+    def decide(self, settings: Settings, context: str, questions: list[Question]) -> DecisionBatch:
+        if not questions:
+            raise TypedDecisionSpendError("a typed decision batch needs at least one question")
+        self._questions = list(questions)
+        binding = {"typed_decision": {
+            "question": {q.key: q.instructions for q in questions},
+            "options": {q.key: dict(q.options) for q in questions},
+        }}
+        identity = _identity(self.project_id, self.run_id, self.step_id, binding, context)
+        return self._batch_of(self._attempt(settings, binding, context, identity, "primary"))
+
+    def _prepare(self, connection, settings, binding, state, identity: str, role: str,
+                 source_id: Optional[str] = None) -> _Authority:
+        self.attempt = max(self.attempt, self._failed_attempts(connection, identity) + 1)
+        return super()._prepare(connection, settings, binding, state, identity, role, source_id)
+
+    def _failed_attempts(self, connection, identity: str) -> int:
+        rows = self.receipts.list_by_dedupe_prefix(
+            connection, self._scope(connection)["org_id"],
+            model_receipt_dedupe(self.project_id, identity),
+        )
+        return sum(1 for row in rows if row.get("status") == "failed")
+
+    def _call(self, decider, binding, state) -> DecisionBatch:
+        return decider.decide(state, list(self._questions))
+
+    def _output(self, binding: dict, batch: DecisionBatch) -> dict:
+        answers: dict[str, dict] = {}
+        for q in self._questions:
+            d = batch.decisions.get(q.key)
+            answers[q.key] = {
+                "answer": d.answer if d else None,
+                "confidence": d.confidence if d else None,
+                "reason": (d.reason if d else "")[:300],
+                "error": d.error if d else "nothing returned",
+            }
+        lead = answers[self._questions[0].key]
+        if lead["answer"] is None:
+            raise RuntimeError("the decision model gave no usable answer "
+                               f"({lead['error'] or 'nothing returned'}).")
+        return {
+            "kind": "typed_decision_batch",
+            "answer": lead["answer"], "confidence": lead["confidence"],
+            "answers": answers,
+            "backend": batch.backend, "model": batch.model,
+            "latency_ms": batch.latency_ms, "cost_usd_micros": batch.cost_usd_micros,
+        }
+
+    def _batch_of(self, output: dict) -> DecisionBatch:
+        """The stored answers as the DecisionBatch a Decider returns, fresh or replayed."""
+        answers = output.get("answers") or {}
+        decisions: dict[str, Decision] = {}
+        for q in self._questions:
+            given = answers.get(q.key) or {}
+            answer = given.get("answer")
+            if answer not in q.options:
+                decisions[q.key] = Decision(None, None, error=str(given.get("error") or "no answer"))
+                continue
+            confidence = given.get("confidence")
+            decisions[q.key] = Decision(
+                answer, float(confidence) if confidence is not None else None,
+                reason=str(given.get("reason") or ""),
+            )
+        cost = output.get("cost_usd_micros")
+        return DecisionBatch(
+            decisions=decisions, backend=str(output.get("backend") or "typesafe"),
+            model=str(output.get("model") or ""), latency_ms=int(output.get("latency_ms") or 0),
+            cost_usd_micros=cost if isinstance(cost, int) and not isinstance(cost, bool) else None,
+            usage={"receipt_id": output.get("receipt_id"),
+                   "reservation_id": output.get("reservation_id"), "attempt": self.attempt},
+        )
 
 
 def resolve_reconciliation_decisions(connection, project_id: str, receipt_id: str,
