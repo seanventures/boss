@@ -34,6 +34,15 @@ import { RuleSheet } from "./rule-sheet";
 import { RuleFacts } from "./rule-facts";
 import { SevFlag, StatusChip } from "./severity";
 import { SilenceSheet } from "./silence-sheet";
+import { RunFace, nameOf } from "../agents/run-face";
+import { agentPageHref } from "./responders";
+
+/** The triaging agent's callsign ("Beacon"), else its role. */
+function triageAgentName(t: { agent: { roleKey: string; role: string } | null }): string {
+  if (!t.agent) return "";
+  const f = nameOf(t.agent.roleKey);
+  return f.callsign || t.agent.role || f.name;
+}
 
 const RESPOND_TIP = "Starts Incident Response when the agent keeps this alert in an incident";
 
@@ -167,11 +176,21 @@ function AlertDetail({ a, targetId, projectId, actor, onDone }: { a: Alert; targ
       </span>
       {book && a.runbook.markdown ? <div className="obs-inc-md" data-testid="obs-alert-runbook-md"><Markdown text={a.runbook.markdown} /></div> : null}
       <div className="obs-adetail-row" data-testid="obs-alert-triage">
-        <span className="obs-fact-k">Agent</span>
+        <span className="obs-fact-k">Triage</span>
+        {a.triage.agent ? (
+          <a className="obs-who" href={agentPageHref(a.triage.agent.roleKey)} data-testid="obs-alert-triage-agent"
+             title={`${triageAgentName(a.triage)}, the ${a.triage.agent.role}: its page in Agent Studio`}>
+            <RunFace roleKey={a.triage.agent.roleKey} size={20} />
+            <span className="obs-who-name">{triageAgentName(a.triage)}</span>
+            <span className="obs-who-role">{a.triage.agent.role}</span>
+          </a>
+        ) : null}
         <span className="obs-strong">{a.triage.word}</span>
-        {a.triage.reason ? <span className="obs-inc-text" data-user-text>{a.triage.reason}</span> : null}
+        {a.triage.confidence !== null && a.triage.agent ? <span className="inf-faint inf-num" title="How sure the agent was">{Math.round(a.triage.confidence * 100)}% sure</span> : null}
+        {a.triage.reason ? <q className="obs-words" data-user-text data-testid="obs-alert-triage-words">{a.triage.reason}</q> : null}
         {a.triage.question ? <span className="obs-inc-text" data-user-text data-testid="obs-alert-question">{a.triage.question}</span> : null}
-        {a.triage.by ? <span className="inf-faint" title="Who decided" data-copy="data">{a.triage.by}</span> : null}
+        {a.triage.agent ? (a.triage.model ? <span className="inf-faint" title="The model the agent thought with" data-copy="data">{a.triage.model}</span> : null)
+          : a.triage.by ? <span className="inf-faint" title="Who decided" data-copy="data">{a.triage.by}</span> : null}
         {a.triage.state === "no_model" && a.state === "firing" ? (
           <GatedButton permission="observability:manage" type="button" className="ag-btn ag-btn-sm" data-testid="obs-alert-triage-again"
                        disabled={busy} title="Connect a model in Repo and models, then ask again" onClick={again}>Ask again</GatedButton>
@@ -266,7 +285,8 @@ export function AlertRow({ a, targetId, projectId, actor, onDone, showApp, onApp
         {a.thresholdWord ? <span className="inf-faint">(rule {a.thresholdWord})</span> : null}
         {a.release?.sha7 ? <span className="inf-mono inf-faint" title={`Release ${a.release.ref ?? ""} was serving`} data-copy="data">{a.release.sha7}</span> : null}
         <span className="obs-chip" data-testid="obs-alert-triage-word" data-tone={a.triage.state === "no_model" ? "amber" : undefined}
-              title={a.triage.reason ? "The agent's words are in the details" : a.triage.word}>Agent: {a.triage.word}</span>
+              title={a.triage.reason ? "The agent's words are in the details" : a.triage.word}>
+          {a.triage.agent ? `${triageAgentName(a.triage)}: ` : "Agent: "}{a.triage.word}</span>
         {a.incident ? (
           <button type="button" className="inf-link" data-testid="obs-alert-incident" title={a.incident.title}
                   onClick={onIncident}>{a.incident.word}</button>

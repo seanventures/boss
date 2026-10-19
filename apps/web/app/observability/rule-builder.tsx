@@ -63,6 +63,18 @@ export function buildExpr(o: { name: string; type?: string; agg: Agg; window: st
   return `${lhs} ${o.op} ${t}`;
 }
 
+/** BOSS's own runbooks (app_alerts.RUNBOOKS), or none. */
+export const RUNBOOKS: { url: string; label: string }[] = [
+  { url: "boss:runbook/app-serving", label: "BOSS · The app is serving badly" },
+  { url: "boss:runbook/app-down", label: "BOSS · The app is down" },
+  { url: "", label: "None" },
+];
+
+/** An HTTP series (requests, durations) is the app serving: its runbook by default. */
+export function defaultRunbook(metric: string): string {
+  return /^http_|_requests?_|_duration_/.test(metric) ? RUNBOOKS[0].url : "";
+}
+
 /** orders_created_total → OrdersCreatedTotalHigh: a Prometheus alert name. */
 export function suggestName(metric: string, op: Op): string {
   const base = metric.split(/[^A-Za-z0-9]+/).filter(Boolean).map((p) => p[0].toUpperCase() + p.slice(1)).join("");
@@ -92,6 +104,10 @@ export function RuleBuilder({ targetId, apps, projectId, actor, severities = SEV
   const [alert, setAlert] = useState("");
   const [named, setNamed] = useState(false);
   const [summary, setSummary] = useState("");
+  // THE RUNBOOK THE AGENTS FOLLOW: a rule on the app's own HTTP series is "the app is serving
+  // badly" unless the person picks otherwise; the alert, the incident and its investigation name it.
+  const [book, setBook] = useState<string | null>(null);
+  const runbook = book ?? defaultRunbook(metricName);
   const [expert, setExpert] = useState(false);
   const [raw, setRaw] = useState("");
   const [preview, setPreview] = useState<{ word: string; bad: boolean } | null>(null);
@@ -124,7 +140,8 @@ export function RuleBuilder({ targetId, apps, projectId, actor, severities = SEV
     setBusy(true);
     setError(null);
     const change = { alert: name, expr, for: forWord(forS), keep_firing_for: "0m", labels: { severity: sev },
-                     annotations: { summary: summary || `${name} on ${apps?.find((a) => a.targetId === app)?.app ?? "the app"}` },
+                     annotations: { summary: summary || `${name} on ${apps?.find((a) => a.targetId === app)?.app ?? "the app"}`,
+                                    ...(runbook ? { runbook_url: runbook } : {}) },
                      enabled: true, triage: true, auto_respond: false };
     const r = await obsWrite(rulesPutPath(app), { project_id: projectId, actor, reason: "New alert rule", rules: [change] },
                              { scope: `obs:rule-new:${app}`, label: "Add rule" }, "PUT");
@@ -235,6 +252,13 @@ export function RuleBuilder({ targetId, apps, projectId, actor, severities = SEV
           <span>Summary</span>
           <input value={summary} data-testid="obs-builder-summary" autoComplete="off" onChange={(e) => setSummary(e.target.value)}
                  title="What a person reads when it fires" />
+        </label>
+        <label className="inf-field">
+          <span>Runbook</span>
+          <select value={runbook} data-testid="obs-builder-runbook" title="The steps an agent and a person follow when it fires"
+                  onChange={(e) => setBook(e.target.value)}>
+            {RUNBOOKS.map((r) => <option key={r.url} value={r.url}>{r.label}</option>)}
+          </select>
         </label>
         <div className="obs-adetail-row">
           <span className="obs-fact-k" title="The query BOSS evaluates">PromQL</span>

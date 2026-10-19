@@ -132,10 +132,12 @@ def _triage_wire(alert: dict) -> dict[str, Any]:
     st = alert.get("triage_state")
     if st == "no_model":
         return {"state": "no_model", "word": aa.NO_MODEL_WORD, "reason": None, "question": None,
-                "outcome": None, "by": None, "at": t.get("at"), "confidence": None}
+                "outcome": None, "by": None, "at": t.get("at"), "confidence": None,
+                "agent": None, "model": None}
     if st == "off":
         return {"state": "off", "word": "Triage off for this rule", "reason": None,
-                "question": None, "outcome": None, "by": None, "at": None, "confidence": None}
+                "question": None, "outcome": None, "by": None, "at": None, "confidence": None,
+                "agent": None, "model": None}
     if st in ("pending", "skipped") or not t:
         held = alert.get("inhibited_by") or alert.get("silenced_by")
         word = ("Not triaged: held back" if alert.get("inhibited_by") else
@@ -143,7 +145,8 @@ def _triage_wire(alert: dict) -> dict[str, Any]:
                 "Waiting for the agent" if st == "pending" and alert.get("state") == "firing"
                 else "Not triaged")
         return {"state": "held" if held else st or "none", "word": word, "reason": None,
-                "question": None, "outcome": None, "by": None, "at": None, "confidence": None}
+                "question": None, "outcome": None, "by": None, "at": None, "confidence": None,
+                "agent": None, "model": None}
     outcome = t.get("outcome")
     word = {"opened": "Opened an incident", "joined": "Joined the incident",
             "split": "Opened its own incident", "noise": "Noise", "asked": "Asks you",
@@ -153,6 +156,10 @@ def _triage_wire(alert: dict) -> dict[str, Any]:
     return {"state": "done", "word": word, "outcome": outcome, "reason": t.get("reason") or None,
             "question": t.get("question") or None,
             "by": by.get("word") or by.get("model") or by.get("backend") or None,
+            # The agent that decided (role), apart from the model it thought with.
+            "agent": ({"role_key": by["role_key"], "role": by.get("role") or by["role_key"]}
+                      if by.get("role_key") else None),
+            "model": by.get("model") or None,
             "at": t.get("at"), "confidence": t.get("confidence")}
 
 
@@ -338,8 +345,9 @@ def incident_states(connection, project_id: str, *, subject_id: Optional[str] = 
         elif int(r["pending"] or 0):
             word = "Pending: an alert is waiting out its `for`"
         elif int(r["alerts"] or 0):
-            word = ("Recovered at " + r["last_cleared"].strftime("%H:%M") if r["last_cleared"]
-                    else "Recovered") + (
+            # The clock is the viewer's: the time travels as `recovered_at`, never baked into
+            # the words in UTC beside a list that reads in local time (22:46 next to 15:46).
+            word = "Recovered" + (
                 "; a response is waiting on you" if run_status == "waiting" else
                 "; a response is still running" if run else "; the incident is still open")
         else:
@@ -365,7 +373,9 @@ def incident_states(connection, project_id: str, *, subject_id: Optional[str] = 
                     "firing": firing, "happening": bool(firing),
                     "subject_id": r["subject_id"], "urgency": r["urgency"],
                     "acked": bool(r["acked_by"]), "response_run_id": run,
-                    "response_status": run_status, "word": word})
+                    "response_status": run_status, "word": word,
+                    "recovered_at": (_iso(r["last_cleared"]) if not firing and not int(
+                        r["pending"] or 0) and int(r["alerts"] or 0) else None)})
     return sorted(out, key=lambda x: (not x["happening"], x["since"] or ""))
 
 

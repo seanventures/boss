@@ -49,7 +49,10 @@ function IncidentRow({ i, onOpen, severities }: { i: OpenIncident; onOpen: (() =
       <StatusChip status={i.chip} testId="obs-incident-status"
                   extraTip={i.ackedBy ? `Acknowledged by ${i.ackedBy}` : null} />
       <span className="obs-strong obs-alert-what" data-user-text title={i.title}>{i.title}</span>
-      <span className="inf-muted" data-testid="obs-incident-word" data-copy="data">{i.word}</span>
+      <span className="inf-muted" data-testid="obs-incident-word" data-copy="data"
+            title={i.recoveredAt ? `Recovered at ${lt.full(i.recoveredAt)}` : undefined}>
+        {i.recoveredAt && i.word.startsWith("Recovered") ? `Recovered at ${whenWord(i.recoveredAt, lt)}${i.word.slice("Recovered".length)}` : i.word}
+      </span>
       {i.urgency === "low" ? <span className="obs-chip" title="Low urgency: never pages">Low urgency</span> : null}
       <span className="ag-spacer" />
       {i.since ? <span className="inf-faint inf-num" title={lt.full(i.since)}>{whenWord(i.since, lt)}</span> : null}

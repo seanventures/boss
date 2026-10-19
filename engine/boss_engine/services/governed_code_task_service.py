@@ -39,7 +39,7 @@ from ..ports import sql
 from ..schemas import FileChange
 from ..templates import run_env as _run_env
 from . import agent_acts, ci_gate, design_prompts, plane_sync, review_comments, verification_target
-from . import review_input
+from . import red_first, review_input
 from .bakeoff import (
     fixture_for_run as bakeoff_fixture_for_run,
     stage_fixture as stage_bakeoff_fixture,
@@ -5817,6 +5817,27 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 # (the repair loop restores them before re-invoking the implementer).
                 tests_orig = {p: (root / p).read_text(errors="ignore") for p in test_files
                               if (root / p).exists()}
+                # RED FIRST (red_first): the tree is the faulty code plus QA's new tests, and
+                # nothing of the fix exists yet. A brief that says the regression test FAILS
+                # on the faulty release is proven here, never taken on trust.
+                if (red_first.demanded(criteria) and not _is_repair
+                        and not getattr(sandbox, "resumed_from_checkpoint", False)):
+                    try:
+                        _rf = red_first.record(_run_verify(record=False),
+                                               [p for p in test_files
+                                                if p not in _placed_tpl_tests])
+                        with _transaction(engine) as c:
+                            c.execute(sql(
+                                "UPDATE code_task_runs SET state=jsonb_set(COALESCE(state,"
+                                "'{}'::jsonb), '{red_first}', CAST(:t AS JSONB)), "
+                                "updated_at=now() WHERE id=:id"),
+                                {"t": json.dumps(_rf), "id": run_id})
+                            emit_event(c, project_id, "code_task.red_first", "boss",
+                                       "code_task_run", run_id,
+                                       {k: _rf[k] for k in ("failed", "reproduces", "failing",
+                                                            "word", "exit_code")})
+                    except Exception:  # noqa: BLE001 — unproven, never a failed build
+                        _log_caught(logger)
 
         # STEP implement — with an optional evidence-fed REPAIR LOOP (VAG Phase 3).
         # The verification bar is FROZEN: QA's tests are never edited, and the frontier

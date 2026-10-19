@@ -409,3 +409,32 @@
 @media (max-width: 639px) {
   .obs-attention { min-height: 44px; }
 }
+
+/* ── WHO DID WHAT: the incident card's responders (responders.tsx) ─────────────────────────── */
+.obs-responders { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.obs-responder { display: flex; flex-direction: column; gap: 3px; padding: 8px 0 8px 10px; border-left: 2px solid var(--border); min-width: 0; }
+.obs-responder[data-status="succeeded"] { border-left-color: var(--green); }
+.obs-responder[data-status="waiting"], .obs-responder[data-status="running"] { border-left-color: var(--accent); }
+.obs-responder[data-status="failed"] { border-left-color: var(--red); }
+.obs-responder-head { flex-wrap: nowrap; min-width: 0; }
+.obs-who { display: inline-flex; align-items: center; gap: 7px; min-width: 0; color: var(--ink); text-decoration: none; }
+a.obs-who:hover .obs-who-name { text-decoration: underline; }
+.obs-who-name { font-weight: 650; white-space: nowrap; }
+.obs-who-role { color: var(--muted); font-size: 0.8rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.obs-responder-step { font-size: 0.8rem; font-weight: 600; color: var(--ink); white-space: nowrap; }
+.obs-responder-job { font-size: 0.76rem; color: var(--faint); padding-left: 31px; }
+.obs-responder-did { display: flex; flex-direction: column; gap: 2px; padding-left: 31px; font-size: 0.84rem; min-width: 0; }
+.obs-words { color: var(--muted); font-style: italic; overflow-wrap: anywhere; }
+.obs-responder > .obs-line, .obs-responder > .obs-evidence, .obs-responder > .obs-crew, .obs-responder > .obs-inc-md { margin-left: 31px; }
+.obs-evidence, .obs-crew { list-style: none; margin: 2px 0 0; padding: 0; display: flex; flex-direction: column; gap: 3px; font-size: 0.8rem; min-width: 0; }
+.obs-evidence > li, .obs-crew > li { display: grid; grid-template-columns: 6.5rem minmax(0, 1fr); gap: 8px; align-items: baseline; min-width: 0; }
+.obs-crew > li { grid-template-columns: 7.5rem 6.5rem auto minmax(0, 1fr); }
+.obs-ev-k, .obs-crew-stage { color: var(--muted); font-weight: 600; }
+.obs-crew-who { display: inline-flex; align-items: center; gap: 5px; color: var(--ink); text-decoration: none; white-space: nowrap; }
+.obs-crew-found { color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.obs-redgreen { font-size: 0.8rem; }
+@media (max-width: 640px) {
+  .obs-crew > li { grid-template-columns: 6rem minmax(0, 1fr); }
+  .obs-crew-found { grid-column: 1 / -1; white-space: normal; }
+  .obs-responder-head { flex-wrap: wrap; }
+}

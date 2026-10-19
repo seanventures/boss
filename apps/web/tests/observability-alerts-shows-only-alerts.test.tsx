@@ -41,7 +41,8 @@ const BUILD_CARD = {
 const RECOVERED = {
   id: "inc_rec", title: "invoice (prod): p95 slow", status: "open", lifecycle: "recovered", since: "2026-10-04T10:00:00.000Z",
   firing: 0, happening: false, subject_id: "t_live", urgency: "high", acked: null, response_run_id: "wfr_9",
-  response_status: "waiting", word: "Recovered at 22:46; a response is waiting on you",
+  response_status: "waiting", word: "Recovered; a response is waiting on you",
+  recovered_at: new Date(Date.now() - 3600_000).toISOString(),
 };
 
 describe("Observability › Alerts shows only alerts and incidents", () => {
@@ -60,7 +61,9 @@ describe("Observability › Alerts shows only alerts and incidents", () => {
   it("an open incident with nothing firing shows its recovered word, never as failing", async () => {
     await openObs("?view=alerts", { alerts: () => allAlertsWire([], { counts: { firing: 0, pending: 0 }, incidents: [RECOVERED] }) });
     const row = $("[data-testid='obs-incident-inc_rec']")!;
-    expect(text(row.querySelector("[data-testid='obs-incident-word']"))).toBe("Recovered at 22:46; a response is waiting on you");
+    // the recovery time is drawn in the viewer's clock (it was baked into the words in UTC)
+    const hhmm = new Date(Date.parse(RECOVERED.recovered_at)).toTimeString().slice(0, 5);
+    expect(text(row.querySelector("[data-testid='obs-incident-word']"))).toBe(`Recovered at ${hhmm}; a response is waiting on you`);
     expect(row.querySelector(".obs-adot")?.getAttribute("data-tone")).toBe("grey");
     expect(text(row)).not.toMatch(/fail/i);
     expect(text($("[data-testid='obs-alerts-empty']"))).toBe("Nothing firing");

@@ -127,7 +127,9 @@ const parseSource = (w: unknown): SignalSource => {
 };
 
 export type Triage = { state: string; word: string; outcome: string | null; reason: string | null; question: string | null;
-  by: string | null; at: string | null; confidence: number | null };
+  by: string | null; at: string | null; confidence: number | null;
+  /** The agent that decided (its role), apart from the model it thought with. */
+  agent: { roleKey: string; role: string } | null; model: string | null };
 export type Alert = {
   id: string; targetId: string; app: string; env: string; ruleId: string | null; kind: string; label: string; alertname: string;
   summary: string; description: string | null; severity: Sev; state: "firing" | "pending" | "resolved";
@@ -179,7 +181,10 @@ export function parseAlert(w: unknown): Alert {
     incident: inc ? { id: str(inc.id), title: str(inc.title), status: str(inc.status), word: str(inc.word) } : null,
     heldBack: held ? { by: str(held.by), word: str(held.word) } : null,
     triage: { state: str(t.state, "none"), word: str(t.word, "Not triaged"), outcome: optStr(t.outcome), reason: optStr(t.reason),
-              question: optStr(t.question), by: optStr(t.by), at: optStr(t.at), confidence: optNum(t.confidence) },
+              question: optStr(t.question), by: optStr(t.by), at: optStr(t.at), confidence: optNum(t.confidence),
+              agent: t.agent && typeof t.agent === "object" && str(obj(t.agent).role_key)
+                ? { roleKey: str(obj(t.agent).role_key), role: str(obj(t.agent).role) } : null,
+              model: optStr(t.model) },
     response: resp ? { runId: optStr(resp.run_id), word: str(resp.word) } : null,
     runbook: parseRunbook(o.runbook), exploreUrl: optStr(o.explore_url), exploreReason: optStr(o.explore_reason),
     sourceKind: o.source_kind === "signal" ? "signal" : "rule",
@@ -220,6 +225,8 @@ export type OpenIncident = {
   id: string; title: string; status: string; lifecycle: string; since: string | null; firing: number; happening: boolean;
   subjectId: string | null; urgency: "high" | "low"; acked: boolean; responseRunId: string | null; responseStatus: string | null;
   word: string; sev: Sev; chip: Status; ackedBy: string | null;
+  /** When it recovered (nothing firing), for the viewer's own clock. */
+  recoveredAt: string | null;
 };
 export type AlertsView = {
   alerts: Alert[]; counts: { firing: number; pending: number; needsAttention: number }; severities: SevInfo[];
@@ -245,7 +252,8 @@ export function parseAlertsView(w: unknown): AlertsView {
                urgency: x.urgency === "low" ? "low" : "high", acked: Boolean(x.acked), responseRunId: optStr(x.response_run_id),
                responseStatus: optStr(x.response_status), word: str(x.word), sev: sevOf(x.sev, x.severity),
                chip: parseStatus(x.status_chip, x.happening === true ? (x.acked ? "acknowledged" : "firing") : "recovered"),
-               ackedBy: optStr(x.acked_by) ?? (typeof x.acked === "string" ? x.acked : null) } as OpenIncident;
+               ackedBy: optStr(x.acked_by) ?? (typeof x.acked === "string" ? x.acked : null),
+               recoveredAt: optStr(x.recovered_at) } as OpenIncident;
     }),
   };
 }

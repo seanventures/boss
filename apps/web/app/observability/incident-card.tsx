@@ -11,7 +11,8 @@
  *                         POST /tickets  GET /tickets/{id}
  *   CUSTOMER REPORTS      3 reports from support-desk  [T-1042] [T-1043]
  *   ROOT CAUSE            <statement>  (basis · confidence)
- *   RESPONSE              Run ↗  ● Investigate ● Build ● CI ○ Run report …
+ *   RESPONSE              Run ↗  Pull request ↗   (the step dots only before anyone is named)
+ *   WHO DID WHAT          each part's agent, its role and job, what it did (responders.tsx)
  *                         (or Respond · "Error rate responds automatically" · Alerts ↗)
  *   VERIFICATION          <summary>
  *   REPORT                View · Download .md · .json
@@ -44,6 +45,7 @@ import { Dot, DrawerSection } from "../infra/kit";
 import { areaHref } from "../factory/cockpit-util";
 import { obsRead, obsWrite } from "./obs-write";
 import { leaveTo } from "./obs-util";
+import { Responders } from "./responders";
 
 function Fact({ label, children, tip }: { label: string; children: React.ReactNode; tip?: string }) {
   return (
@@ -181,13 +183,13 @@ export function IncidentCardView({ projectId, r, now, busy, onRespond, onAlerts,
           <span className="obs-line">
             <a className="inf-link" href={runHref} data-testid="obs-incident-run" title="Open the Incident Response run"
                onClick={(e) => { if (plainClick(e)) { e.preventDefault(); leaveTo(runHref); } }}>Run ↗</a>
-            <ol className="obs-inc-steps" aria-label="Response steps" data-testid="obs-incident-steps">
+            {r.responders.length ? null : <ol className="obs-inc-steps" aria-label="Response steps" data-testid="obs-incident-steps">
               {responseStrip(run.steps).map((s) => (
                 <li key={s.id} data-step={s.id} data-status={s.status ?? "not_started"} title={`${s.label}: ${s.status ?? "not started"}`}>
                   <Dot tone={stepTone(s.status)} />{s.label}
                 </li>
               ))}
-            </ol>
+            </ol>}
             {pr ? <a className="inf-link" href={pr} target="_blank" rel="noreferrer noopener" data-testid="obs-incident-pr" title={pr}>Pull request ↗</a> : null}
           </span>
         ) : status === "resolved" ? (
@@ -209,6 +211,8 @@ export function IncidentCardView({ projectId, r, now, busy, onRespond, onAlerts,
           </span>
         )}
       </div>
+
+      <Responders rows={r.responders} onReport={onView} />
 
       {v && v.summary ? (
         <div className="obs-inc-part" data-testid="obs-incident-verification">

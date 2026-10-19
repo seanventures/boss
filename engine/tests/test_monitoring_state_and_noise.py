@@ -315,7 +315,9 @@ def test_an_open_incident_that_recovered_is_never_carded_as_failing(pg):
         items = system_doctor.card_items(c, pid)
     assert listed["counts"]["firing"] == 0
     state = next(s for s in listed["incidents"] if s["id"] == inc)
-    assert not state["happening"] and state["word"].startswith("Recovered at")
+    # the time travels as recovered_at, for the viewer's clock — never baked in UTC
+    assert not state["happening"] and state["word"].startswith("Recovered")
+    assert state["recovered_at"] and " at " not in state["word"]
     assert "requests failing" not in card["title"] and "recovered" in card["title"]
     assert all(i.get("area") in ("factory", "observability") for i in items), \
         "every card says which area owns it"
