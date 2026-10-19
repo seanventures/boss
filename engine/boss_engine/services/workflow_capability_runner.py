@@ -48,6 +48,22 @@ log = logging.getLogger(__name__)
 #: which dies does not strand the step for long. The runtime reclaims an expired lease.
 LEASE_SECONDS = 120
 
+#: The longest lease a step that works inside its call may hold (a crashed runner strands it
+#: no longer than this).
+MAX_INLINE_LEASE_SECONDS = 900
+
+
+def lease_for(spec_step: dict[str, Any]) -> int:
+    """How long a claimed step's lease must last: LEASE_SECONDS, or three times the typical
+    minutes of a capability that thinks with a model inside the call (not one that starts work
+    and parks on it), capped at MAX_INLINE_LEASE_SECONDS."""
+    key = str(((spec_step or {}).get("binding") or {}).get("capability") or "")
+    cap = workflow_capabilities.CAPABILITIES.get(key)
+    if not cap or cap.is_async or not cap.needs_model or cap.tool:
+        return LEASE_SECONDS
+    return max(LEASE_SECONDS, min(MAX_INLINE_LEASE_SECONDS, int(cap.typical_minutes or 0) * 180))
+
+
 #: Per tick. The point is steady progress across many runs, not draining one to completion
 #: while the others wait.
 MAX_STEPS_PER_TICK = 10
@@ -6708,6 +6724,16 @@ def tick(
                 continue
 
             spec_step = spec_steps.get(claimed["step_id"]) or {}
+            # A STEP THAT THINKS IN THE CALL HOLDS ITS LEASE FOR AS LONG AS IT THINKS. Set up
+            # monitoring asks a model, previews every rule and may retune: minutes, in the
+            # call. With the two-minute lease its completion was refused ("lease has expired")
+            # and it ran again from the start, three times (Order API, 2026-10-19).
+            lease = lease_for(spec_step)
+            if lease > LEASE_SECONDS:
+                phase = f"hold the lease for {claimed['step_id']}"
+                claimed = {**claimed, **workflows.heartbeat_step(
+                    connection, project_id=project_id, step_run_id=claimed["id"],
+                    worker_id=worker_id, lease_seconds=lease)}
             phase = f"execute {claimed['step_id']}"
             # A FAILED STEP MUST LEAVE THE CONNECTION USABLE, OR ITS FAILURE CANNOT BE RECORDED.
             #
