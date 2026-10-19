@@ -405,3 +405,21 @@ def test_a_written_pack_is_a_succeeded_step_and_no_pack_is_not():
     assert wo.VERDICTS["monitoring_pack"](warn, {}).outcome == wo.SUCCEEDED
     empty = {"capability": "monitoring_pack", "status": "succeeded", "pack": {"rules": []}}
     assert wo.VERDICTS["monitoring_pack"](empty, {}).outcome == wo.FAILED
+    # A pack already on the branch (a retry, or a feature whose pack covers it) wrote nothing.
+    kept = {"capability": "monitoring_pack", "status": "succeeded", "commit_sha": None,
+            "pack": {"rules": [{"alert": "OrdersPostFailing", "new": False}], "adding": True}}
+    assert wo.VERDICTS["monitoring_pack"](kept, {}).outcome == wo.SUCCEEDED
+
+
+def test_set_up_monitoring_holds_its_lease_while_it_thinks():
+    """Its completion was refused 'lease has expired' three times: it thinks for minutes inside
+    the call and held the two-minute lease every step holds."""
+    from boss_engine.services import workflow_capability_runner as runner
+
+    step = {"binding": {"capability": "monitoring_pack"}}
+    assert runner.lease_for(step) >= 3 * 60 * 3
+    assert runner.lease_for(step) <= runner.MAX_INLINE_LEASE_SECONDS
+    # a tool call, or work that starts and parks, keeps the ordinary lease
+    assert runner.lease_for({"binding": {"capability": "deploy"}}) == runner.LEASE_SECONDS
+    assert runner.lease_for({"binding": {"capability": "build"}}) == runner.LEASE_SECONDS
+    assert runner.lease_for({}) == runner.LEASE_SECONDS

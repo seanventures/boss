@@ -142,15 +142,18 @@ def investigated(result: Mapping[str, Any], inputs: Mapping[str, Any]) -> Verdic
 
 
 def packed(result: Mapping[str, Any], inputs: Mapping[str, Any]) -> Verdict:
-    """monitoring_pack: done when the pack was written (it has rules and a commit), or when the
-    workflow's monitoring_gate is warn and the step said why there is none."""
+    """monitoring_pack: done when the release carries a pack (it has rules, written now or
+    already on the branch), or when monitoring_gate is warn and the step said why there is none."""
     refused = _refused(result)
     if refused:
         return refused
     if _status(result) == "not_applicable":
         return Verdict(SUCCEEDED)
+    # The pack's rules are what the release ships. A commit is not required: a retry, or an
+    # "Add a feature" run whose pack already covers the app, finds nothing new to write and
+    # its pack is on the branch already (wfr_723213d8 deadlettered on exactly that).
     pack = result.get("pack") if isinstance(result.get("pack"), Mapping) else {}
-    if pack.get("rules") and result.get("commit_sha"):
+    if pack.get("rules"):
         return Verdict(SUCCEEDED)
     return Verdict(FAILED, _reason(result) or "no monitoring pack was written")
 
