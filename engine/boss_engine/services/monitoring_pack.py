@@ -39,8 +39,9 @@ import copy
 import json
 import logging
 import re
+import time
 from datetime import datetime, timedelta, timezone
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from sqlalchemy import text
 
@@ -59,6 +60,10 @@ MAX_RULES = 12
 MAX_PANELS = 8
 RUNBOOK_DIR = "runbooks"
 MANIFEST = "boss.deploy.yaml"
+#: How long the step will wait, bounded, to learn whether its own commit broke the app's CI —
+#: never an open-ended wait: past this it ships unconfirmed rather than hold the release.
+CI_CHECK_POLLS = 6
+CI_CHECK_INTERVAL_S = 5.0
 #: What the model writes in a selector, replaced with the app's own labels.
 SELECTOR = "SELECTOR"
 #: How much of the app's code reaches the model.
@@ -377,24 +382,31 @@ def validate(raw: dict[str, Any], *, app: str, env: str,
     existing = existing or {}
     have_alerts = existing.get("alerts") or {}
     refused: list[str] = []
-    runbooks: dict[str, dict[str, str]] = {}
+    # Model-authored runbooks, keyed by the name THIS call gave them — only used to look up
+    # the text a rule in this same response points at via `spec["runbook"]`. Never the file
+    # name: the model rewords titles between calls, and a path keyed on that drifted on every
+    # retry (18 runbook files for ~15 rules — one retry, one new name, the old one orphaned).
+    authored: dict[str, dict[str, str]] = {}
     for book in raw.get("runbooks") or []:
         if not isinstance(book, dict) or not str(book.get("markdown") or "").strip():
             continue
         name = slug(book.get("name") or book.get("title") or "")
-        runbooks[name] = {"name": name, "title": str(book.get("title") or name)[:120],
-                          "markdown": str(book["markdown"]).strip()[:6000] + "\n",
-                          "path": f"{RUNBOOK_DIR}/{name}.md"}
+        authored[name] = {"title": str(book.get("title") or name)[:120],
+                          "markdown": str(book["markdown"]).strip()[:6000] + "\n"}
+    runbooks: dict[str, dict[str, str]] = {}
 
-    def runbook_of(spec: dict[str, Any], fallback_title: str, fallback_text: str) -> str:
-        name = slug(spec.get("runbook") or "")
-        if name in runbooks:
-            return runbooks[name]["path"]
-        name = slug(fallback_title)
-        runbooks.setdefault(name, {
-            "name": name, "title": fallback_title[:120], "path": f"{RUNBOOK_DIR}/{name}.md",
-            "markdown": f"# {fallback_title}\n\n{fallback_text.strip()}\n"})
-        return runbooks[name]["path"]
+    def runbook_of(identity: str, spec: dict[str, Any], fallback_title: str,
+                   fallback_text: str) -> str:
+        """The runbook's path, keyed by `identity` — the rule's own stable name (its alert
+        name, or its built-in kind) — so the same rule's runbook is the same file on every
+        pack, retry after retry, instead of a new one each time the model rewords it."""
+        stable = slug(identity)
+        book = authored.get(slug(spec.get("runbook") or ""))
+        title = str(book["title"] if book else fallback_title)[:120]
+        markdown = book["markdown"] if book else f"# {fallback_title}\n\n{fallback_text.strip()}\n"
+        runbooks[stable] = {"name": stable, "title": title,
+                            "path": f"{RUNBOOK_DIR}/{stable}.md", "markdown": markdown}
+        return runbooks[stable]["path"]
 
     builtins: dict[str, dict[str, Any]] = {}
     for kind, spec in (raw.get("builtins") or {}).items():
@@ -419,7 +431,7 @@ def validate(raw: dict[str, Any], *, app: str, env: str,
             got["enabled"] = bool(spec["enabled"])
         got["severity"] = sev.level(spec.get("severity") or aa.BUILTIN[kind]["severity"])
         label = aa.BUILTIN[kind]["label"]
-        got["runbook_url"] = runbook_of(spec, f"{app}: {label}",
+        got["runbook_url"] = runbook_of(kind, spec, f"{app}: {label}",
                                         str(spec.get("why") or aa.BUILTIN[kind]["label"]))
         builtins[kind] = {**got, "_why": str(spec.get("why") or "")[:300]}
 
@@ -457,7 +469,8 @@ def validate(raw: dict[str, Any], *, app: str, env: str,
         names.add(rule["alert"])
         exprs.add(_norm_expr(rule["expr"]))
         rule["annotations"]["runbook_url"] = runbook_of(
-            spec, f"{app}: {rule['annotations'].get('summary') or rule['alert']}",
+            rule["alert"], spec,
+            f"{app}: {rule['annotations'].get('summary') or rule['alert']}",
             str(spec.get("description") or spec.get("why") or ""))
         hold = str(spec.get("for") or "").strip()
         rules.append({**rule, "for": hold if rule["for_seconds"] else "",
@@ -632,6 +645,39 @@ def manifest_with_pack(manifest_text: str, pack: dict[str, Any], existing: dict[
     return out
 
 
+def ci_failure(github: Any, commit_sha: Optional[str], *, polls: int = CI_CHECK_POLLS,
+              interval: float = CI_CHECK_INTERVAL_S,
+              sleep: Callable[[float], None] = time.sleep) -> Optional[str]:
+    """The app's own CI's verdict on this commit, briefly and boundedly polled: the checks that
+    FAILED, named, or None (every check passed, there were none, or CI had not finished in the
+    time BOSS waited — this never becomes an open-ended wait that holds up the release).
+
+    Set up monitoring writes straight to the branch (no PR review of its own): the app's own
+    test suite, run by its CI on the commit, is the only thing that catches a pack that breaks
+    it (BOSSAPP-603: a pack that added `alerts:` broke the app's test_deploy_manifest)."""
+    if not commit_sha:
+        return None
+    checker = getattr(github, "commit_checks", None)
+    if not callable(checker):
+        return None
+    for _ in range(max(1, polls)):
+        try:
+            checks = checker(commit_sha) or []
+        except Exception as exc:  # noqa: BLE001 — cannot confirm either way; never block on it
+            log.info("monitoring pack: could not read CI for %s: %s", commit_sha[:12], exc)
+            return None
+        done = [c for c in checks if c.get("status") == "completed"]
+        failed = [c for c in done
+                 if c.get("conclusion") not in (None, "success", "neutral", "skipped")]
+        if failed:
+            return "; ".join(f"{c.get('name') or 'check'}: {c.get('conclusion')}"
+                             for c in failed)
+        if checks and len(done) == len(checks):
+            return None
+        sleep(interval)
+    return None
+
+
 def write_pack(github: Any, branch: str, path: str, manifest_text: str, new_text: str,
                runbooks: dict[str, dict[str, str]], app: str) -> dict[str, Any]:
     """Commit the manifest and every runbook that changed, on the build's branch."""
@@ -744,6 +790,33 @@ def run_step(connection, settings: Any, project_id: str, *, run_id: str, step_id
     new_text = manifest_with_pack(manifest_text, pack, existing)
     wrote = write_pack(github, branch, path, manifest_text, new_text, pack["runbooks"],
                        target["app_name"])
+    # THE APP'S OWN TESTS MUST STILL PASS. One repair in this same step: tell the model what
+    # its pack broke and let it rewrite; if that still breaks CI, the step fails with the
+    # test output instead of shipping a release the app's own suite would catch.
+    failure = ci_failure(github, wrote["commit_sha"])
+    if failure:
+        try:
+            fixed = _ask(adapter, tune_prompt(first_prompt, rows) + (
+                f"\n\nThe app's own tests failed on the commit this pack produced: {failure}\n"
+                "Rewrite the pack (adjust or drop whatever caused it) so the app's existing "
+                "tests still pass."))
+            pack2 = validate(fixed["pack"], app=target["app_name"], env=target["environment"],
+                             existing=existing)
+            rows2 = preview_rows(connection, target, rule_rows(pack2, target, existing),
+                                 prometheus=prom, scope=scope, now=now)
+        except PackRefused as exc:
+            log.info("monitoring pack: repair after a failing test refused: %s", exc)
+        else:
+            if rows2:
+                pack, rows = pack2, rows2
+                new_text = manifest_with_pack(manifest_text, pack, existing)
+                wrote = write_pack(github, branch, path, manifest_text, new_text,
+                                   pack["runbooks"], target["app_name"])
+                failure = ci_failure(github, wrote["commit_sha"])
+        if failure:
+            raise PackRefused(
+                f"the pack broke the app's own tests, and the repair in this step did not "
+                f"fix it: {failure}")
     card = {
         "by": {"role_key": CAPTAIN, "role": "Site Reliability Engineer"},
         "app": target["app_name"], "environment": target["environment"],
