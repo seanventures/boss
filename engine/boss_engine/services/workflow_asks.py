@@ -68,6 +68,31 @@ def _effective_steps(spec: dict[str, Any],
         return steps
 
 
+def spec_ask_step_ids(steps: list[dict[str, Any]]) -> frozenset[str]:
+    """The steps that carry a workflow's "Approve the spec" ask: its `spec_review` steps, or,
+    in a workflow without one, its `meeting` steps (the panel's own PRD decision is the ask).
+
+    THE ONE SOURCE for both the promise and the behaviour. `asks_for_spec` lists these as the
+    spec ask the start form shows ("Approve the spec — you read the spec before any code"), and
+    the runner holds a `meeting` step listed here until its PRD decision is approved
+    (`holds_for_spec`). Before this, the promise was made here and nothing kept it: Minor
+    Feature v6 (meeting → build) told the operator they would read the spec first, its panel's
+    PRD decision sat pending, and the build had already started (wfr_723213d8, 2026-10-19)."""
+    keys = [_capability(s) for s in steps]
+    wanted = "spec_review" if "spec_review" in keys else "meeting"
+    return frozenset(str(s.get("id")) for s, key in zip(steps, keys) if key == wanted)
+
+
+def holds_for_spec(steps: list[dict[str, Any]], step_id: str) -> bool:
+    """Whether this step is a `meeting` that carries the spec ask, so it completes only once
+    the panel's PRD decision is approved (by a person, or by BOSS when the PRD is
+    auto-approved — the same decision either way)."""
+    for step in steps:
+        if str(step.get("id")) == str(step_id):
+            return _capability(step) == "meeting" and str(step_id) in spec_ask_step_ids(steps)
+    return False
+
+
 def asks_for_spec(spec: dict[str, Any], *, prd_auto_approve: bool,
                   roster: Optional[frozenset[str]] = None,
                   deploy_answer: Optional[Callable[[dict[str, Any]], dict[str, Any]]] = None,
@@ -80,7 +105,7 @@ def asks_for_spec(spec: dict[str, Any], *, prd_auto_approve: bool,
     from .deploy_policy import PERSON_SAYS, promises_a_person
     steps = _effective_steps(spec, roster)
     keys = [_capability(s) for s in steps]
-    has_spec_review = "spec_review" in keys
+    spec_asks = spec_ask_step_ids(steps)
     last_build = max((i for i, k in enumerate(keys) if k in BUILD_CAPABILITIES), default=-1)
     spec_who = "boss" if prd_auto_approve else "you"
     out: list[dict[str, Any]] = []
@@ -97,7 +122,7 @@ def asks_for_spec(spec: dict[str, Any], *, prd_auto_approve: bool,
             if answer.get("who") == "policy":
                 ask["policy"] = answer.get("environment")
             out.append(ask)
-        elif key == "spec_review" or (key == "meeting" and not has_spec_review):
+        elif str(step.get("id")) in spec_asks:
             out.append({"step_id": step["id"], "label": SPEC_LABEL, "kind": "spec",
                         "who": spec_who})
         elif mode == "manual" and (key not in CAPABILITIES

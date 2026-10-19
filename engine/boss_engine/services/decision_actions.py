@@ -396,6 +396,19 @@ def allowed_actions(decision: Mapping[str, Any]) -> list[dict[str, Any]]:
                     "on its own."),
             _delegate(),
         ]
+    skipped = _rec(decision).get("spec_gate_skipped")
+    if kind != "refusal" and isinstance(skipped, dict):
+        # A SPEC ITS WORKFLOW DID NOT WAIT FOR (spec_gate.mark_gate_skipped): the build is
+        # already running, so approving cannot mean "build it" — and must not start another.
+        build = str(skipped.get("build_run_id") or "the run's build")
+        return [
+            _action("approve", "Acknowledge", "approve",
+                    f"Records that you accept this spec. Starts nothing: {build} is already "
+                    "building it."),
+            _action("reject", "Reject", "reject",
+                    f"Records that you do not accept this spec. {build} is not stopped by this "
+                    "card; cancel it in Factory if it should not go on."),
+        ]
     if kind == "refusal":
         return [_action(
             "reject", "Dismiss", "neutral",

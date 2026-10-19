@@ -279,8 +279,19 @@ function DeployDestination({ recommendation, projectId }: {
   );
 }
 
+/** The engine's sentence for a PRD its workflow did not wait for (engine spec_gate.py): the
+ *  build is already running, so approving starts nothing. */
+export function specGateSkipped(recommendation: Record<string, unknown>): string {
+  const skipped = recommendation.spec_gate_skipped as { said?: unknown } | undefined;
+  return skipped && typeof skipped.said === "string" ? skipped.said : "";
+}
+
 function approvalEffectLabel(recommendation: Record<string, unknown>): string {
   const action = typeof recommendation.action === "string" ? recommendation.action : "";
+  // A SPEC THE WORKFLOW DID NOT WAIT FOR: "starts a governed project" would promise a second
+  // build of work already building.
+  const skipped = specGateSkipped(recommendation);
+  if (skipped) return skipped;
   // A workflow gate has no `action`; before this it landed on the default below, which says
   // the opposite of what approving a Deploy gate does.
   const gate = workflowGateEffect(recommendation);
@@ -1058,8 +1069,9 @@ export function DecisionActions({ decision, projectId, actorId }: {
   const delegate = offers.find((a) => a.action === "delegate");
   const runId = typeof decision.recommendation.workflow_run_id === "string"
     ? decision.recommendation.workflow_run_id : "";
-  const startsWork = decision.recommendation.start_code_task === true
-    || decision.recommendation.tool === "publish_document";
+  const startsWork = !specGateSkipped(decision.recommendation)
+    && (decision.recommendation.start_code_task === true
+        || decision.recommendation.tool === "publish_document");
   const dismiss = direct.find((a) => a.action === "reject")?.label === "Dismiss";
   // THE CONTENT THIS APPROVAL IS OF. The engine refuses the approval if the preview has moved
   // on since this card was drawn, so nobody approves an email they did not read.

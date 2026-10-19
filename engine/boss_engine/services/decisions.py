@@ -1169,6 +1169,29 @@ class DecisionService:
         task_id = row.get("task_id")
         if not is_prd_publish or not task_id:
             return
+        # A WORKFLOW THAT CONVENED THIS PANEL BUILDS ITS SPEC ITSELF (spec_gate). Starting one
+        # here as well was a second build of the same spec, racing the first on the same branch
+        # (dec_eb911c56 / wfr_723213d8). The approval attaches to the run: its Build step starts
+        # once the panel's step sees the approval, or is already running if it did not wait.
+        from . import spec_gate
+
+        governed = spec_gate.workflow_build_for_prd(connection, str(row["id"]), str(task_id))
+        if governed:
+            build = governed.get("build")
+            if build:
+                emit_event(connection, row["project_id"], "code_task.already_started", actor,
+                           "code_task_run", build["id"],
+                           {"decision_id": row["id"], "task_id": task_id,
+                            "workflow_run_id": governed["workflow_run_id"],
+                            "reason": "the_workflow_builds_it"})
+            else:
+                emit_event(connection, row["project_id"], "code_task.not_started", actor,
+                           "task", task_id,
+                           {"decision_id": row["id"], "reason": "the_workflow_builds_it",
+                            "workflow_run_id": governed["workflow_run_id"],
+                            "detail": "The workflow that convened this panel builds the "
+                                      "approved spec in its own Build step."})
+            return
         # WHICH APP THIS PANEL SPECCED A FEATURE FOR, if any — structured first, the old text
         # marker only for rows written before it was structured (see extend_run_of_prd).
         extend_run_id = extend_run_of_prd(connection, row, recommendation)

@@ -137,6 +137,8 @@ THE_RULE = "engine/boss_engine/services/decision_actions.py"
 #: (file, function) -> why it may name decision statuses itself. None of these tells the
 #: operator what is waiting on them.
 NOT_READERS = {
+    ("engine/boss_engine/services/spec_gate.py", "mark_gate_skipped"):
+        "a writer: marks a still-open PRD card whose workflow's build is already running",
     ("engine/boss_engine/services/checks_failing.py", "flag_existing_decision"):
         "a writer: tells a parked build's still-open merge card that its checks are failing",
     ("engine/boss_engine/services/self_fix_install.py", "request_approval"):
