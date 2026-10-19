@@ -86,7 +86,7 @@ export type AttentionItem = {
   preview?: string;
   riskTier?: number;
   /** Readiness: where it is fixed; `focus` lands on the Repo and models row (`?focus=`). */
-  fix?: { area: string; label: string; focus?: string };
+  fix?: { area: string; label: string; focus?: string; view?: string };
   at?: string;
   /** The build this is about, when its subject is a code task (factory spec §4.2.1, §6.5). */
   build?: AttentionBuild;
@@ -250,7 +250,8 @@ export function parseAttention(w: unknown): AttentionItem {
     decideInline: o.decide_inline === true,
     contentHash: opt(o.content_hash), preview: opt(o.preview),
     riskTier: optNum(o.risk_tier),
-    fix: fix ? { area: str(fix.area), label: str(fix.label), ...(opt(fix.focus) ? { focus: opt(fix.focus) } : {}) } : undefined,
+    fix: fix ? { area: str(fix.area), label: str(fix.label), ...(opt(fix.focus) ? { focus: opt(fix.focus) } : {}),
+                 ...(opt(fix.view) ? { view: opt(fix.view) } : {}) } : undefined,
     at: opt(o.at),
     build: o.build ? parseAttentionBuild(o.build) : undefined,
     ...(opt(o.source) ? { source: opt(o.source) } : {}),

@@ -20,7 +20,7 @@ import React, { useState } from "react";
 
 import { GatedButton } from "../../components/gated";
 import {
-  HISTORY_WINS, alertDuration, durationWord, endSilencePath, removeSamplesPath, rotatePath, rulesPutPath, triagePath, useHistory,
+  HISTORY_WINS, alertDuration, durationWord, removeSamplesPath, rotatePath, triagePath, useHistory,
   useRules, type Alert, type AlertRule, type HistoryWin, type SevInfo, type SignalSource,
 } from "../../lib/app-alerts";
 import { useLocalTime } from "../../lib/local-time";
@@ -31,6 +31,7 @@ import { Markdown } from "../markdown";
 import { obsWrite } from "./obs-write";
 import { RuleBuilder } from "./rule-builder";
 import { RuleSheet } from "./rule-sheet";
+import { RESPOND_TIP, RuleOfAlert, endRuleSilence, toggleRule } from "./rule-quick";
 import { RuleFacts } from "./rule-facts";
 import { SevFlag, StatusChip } from "./severity";
 import { SilenceSheet } from "./silence-sheet";
@@ -44,13 +45,11 @@ function triageAgentName(t: { agent: { roleKey: string; role: string } | null })
   return f.callsign || t.agent.role || f.name;
 }
 
-const RESPOND_TIP = "Starts Incident Response when the agent keeps this alert in an incident";
-
 function Dot({ tone }: { tone: string }) {
   return <span className="obs-adot" data-tone={tone} aria-hidden />;
 }
 
-export function whenWord(iso: string | null, lt: ReturnType<typeof useLocalTime>, now = Date.now()): string {
+export function whenWord(iso: string | null, lt: ReturnType<typeof useLocalTime>, now = lt.now()): string {
   if (!iso) return "—";
   const t = Date.parse(iso);
   if (!Number.isFinite(t)) return "—";
@@ -70,7 +69,7 @@ function RuleRow({ r, busy, onEdit, onSilence, onRespond, onEndSilence, severiti
         <span className="obs-strong" title={r.description ?? r.summary ?? undefined}>{r.label}</span>
         <SevFlag sev={r.severity} catalog={severities} />
         {r.sample ? <span className="obs-chip" data-testid="obs-rule-sample" title="A labelled sample rule: Remove samples deletes it">Sample</span> : null}
-        {r.managedBy === "code" ? <span className="obs-chip" data-testid="obs-rule-repo" title="Declared in the app's boss.deploy.yaml: versioned and reviewed in its pull requests. Change it there.">Repo-managed</span> : null}
+        {r.managedBy === "code" ? <span className="obs-chip" data-testid="obs-rule-repo" title="Declared in the app's boss.deploy.yaml: change it in a pull request">Repo-managed</span> : null}
       </span>
       <span className="inf-muted obs-arule-cond" title={r.expr} data-copy="data">{r.condition}</span>
       <span className="obs-arule-state">
@@ -260,6 +259,7 @@ export function AlertRow({ a, targetId, projectId, actor, onDone, showApp, onApp
 }) {
   const lt = useLocalTime();
   const [open, setOpen] = useState(false);
+  const [ruleOpen, setRuleOpen] = useState(false);
   const fired = a.firedAt ?? a.activeAt;
   const isOpen = a.status.key !== "resolved";
   return (
@@ -275,13 +275,25 @@ export function AlertRow({ a, targetId, projectId, actor, onDone, showApp, onApp
         <span className="obs-alert-times" data-testid="obs-alert-times">
           <span className="inf-num obs-alert-time" data-testid="obs-alert-fired"
                 title={`${a.firedAt ? "Fired" : "Breached"} at ${lt.full(fired)}`}>{whenWord(fired, lt)}</span>
-          {isOpen ? <span className="inf-num" data-testid="obs-alert-duration" title="Open this long, and still open">open {durationWord(alertDuration(a))}</span> : null}
+          {isOpen ? (
+            // ONE STATE PER ROW: a pending alert has waited this long; only a firing one is "open".
+            <span className="inf-num" data-testid="obs-alert-duration"
+                  title={a.state === "pending" ? "Breached this long, waiting out its For" : "Firing this long, and still open"}>
+              {a.state === "pending" ? "pending" : "open"} {durationWord(alertDuration(a))}</span>
+          ) : null}
         </span>
         {showApp ? (
           <button type="button" className="inf-link obs-strong" data-testid="obs-alert-app" title={`${a.app} · ${a.env}: its Alerts tab`}
                   onClick={onApp}>{a.app}</button>
         ) : null}
-        <span className="obs-strong obs-alert-what" title={a.description ?? a.summary} data-user-text>{a.label}</span>
+        {/* THE RULE IT CAME FROM, one press away: its switches (Respond automatically, Triage),
+            Silence and Edit. Its alert name shows when the label alone could be two rules. */}
+        {a.ruleId && a.sourceKind === "rule" ? (
+          <button type="button" className="inf-link obs-strong obs-alert-what" data-testid="obs-alert-rule"
+                  title={`${a.alertname}: its rule (Respond automatically, Triage, Silence, Edit)`} onClick={() => setRuleOpen(true)}>
+            {a.label}</button>
+        ) : <span className="obs-strong obs-alert-what" title={a.description ?? a.summary} data-user-text>{a.label}</span>}
+        {a.alertname && a.alertname !== a.label ? <span className="inf-mono inf-faint" data-testid="obs-alert-rulename" data-copy="data">{a.alertname}</span> : null}
         <span className="inf-num" data-copy="data">{a.valueWord}</span>
         {a.thresholdWord ? <span className="inf-faint">(rule {a.thresholdWord})</span> : null}
         {a.release?.sha7 ? <span className="inf-mono inf-faint" title={`Release ${a.release.ref ?? ""} was serving`} data-copy="data">{a.release.sha7}</span> : null}
@@ -289,8 +301,9 @@ export function AlertRow({ a, targetId, projectId, actor, onDone, showApp, onApp
               title={a.triage.reason ? "The agent's words are in the details" : a.triage.word}>
           {a.triage.agent ? `${triageAgentName(a.triage)}: ` : "Agent: "}{a.triage.word}</span>
         {a.incident ? (
-          <button type="button" className="inf-link" data-testid="obs-alert-incident" title={a.incident.title}
-                  onClick={onIncident}>{a.incident.word}</button>
+          // The row's state is its status chip alone: the link names the incident, its status is in the tip.
+          <button type="button" className="inf-link" data-testid="obs-alert-incident" title={`${a.incident.title} · ${a.incident.word}`}
+                  onClick={onIncident}>Incident</button>
         ) : null}
         <AlertBadges a={a} />
         <span className="ag-spacer" />
@@ -303,6 +316,8 @@ export function AlertRow({ a, targetId, projectId, actor, onDone, showApp, onApp
                 onClick={() => setOpen((v) => !v)}>{open ? "▾" : "▸"}</button>
       </span>
       {open ? <AlertDetail a={a} targetId={targetId || a.targetId} projectId={projectId} actor={actor} onDone={onDone} /> : null}
+      {ruleOpen ? <RuleOfAlert ruleId={a.ruleId} alertname={a.alertname} targetId={targetId || a.subjectId || a.targetId} projectId={projectId}
+                               actor={actor} onClose={() => { setRuleOpen(false); onDone(); }} /> : null}
     </li>
   );
 }
@@ -321,22 +336,20 @@ export function AppAlertsTab({ projectId, actor, targetId, onIncident }: {
   const [busy, setBusy] = useState<string | null>(null);
   const refresh = () => { rules.refresh(); history.refresh(); notifyChanged("observability", { target_id: targetId }); };
 
+  const ctx = { projectId, actor, targetId };
   const respond = async (r: AlertRule) => {
     if (busy) return;
     setBusy(r.id);
-    const res = await obsWrite(rulesPutPath(targetId), { project_id: projectId, actor, rules: [{ id: r.id, auto_respond: !r.autoRespond }] },
-                               { scope: `obs:rule-respond:${r.id}`, label: "Respond automatically" }, "PUT");
+    const ok = await toggleRule(ctx, r, "respond");
     setBusy(null);
-    if (res.ok) { showToast("success", r.autoRespond ? "Responds only when you ask" : "Responds automatically"); refresh(); }
-    else showToast("error", res.error ?? "Not changed");
+    if (ok) refresh();
   };
   const endSilence = async (r: AlertRule) => {
     if (!r.silence || busy) return;
     setBusy(r.id);
-    const res = await obsWrite(endSilencePath(targetId, r.silence.id), { project_id: projectId, actor },
-                               { scope: `obs:unsilence:${r.silence.id}`, label: "End silence" });
+    const ok = await endRuleSilence(ctx, r);
     setBusy(null);
-    if (res.ok) { showToast("success", "Silence ended"); refresh(); } else showToast("error", res.error ?? "Not ended");
+    if (ok) refresh();
   };
 
   const removeSamples = async () => {

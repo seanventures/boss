@@ -360,9 +360,10 @@ export function durationWord(seconds: number | null): string {
 }
 
 /** An alert's open time, from the wire's duration or its own timestamps. */
-export function alertDuration(a: Pick<Alert, "durationS" | "firedAt" | "activeAt" | "clearedAt">, now = Date.now()): number | null {
+export function alertDuration(a: Pick<Alert, "durationS" | "firedAt" | "activeAt" | "clearedAt"> & { state?: Alert["state"] }, now = Date.now()): number | null {
   if (a.durationS !== null) return a.durationS;
-  const start = Date.parse(a.firedAt ?? a.activeAt);
+  // Pending counts from when it went pending (a re-pended alert keeps its first fired_at).
+  const start = Date.parse(a.state === "pending" ? a.activeAt : a.firedAt ?? a.activeAt);
   if (!Number.isFinite(start)) return null;
   const end = a.clearedAt ? Date.parse(a.clearedAt) : now;
   return Number.isFinite(end) ? Math.max(0, (end - start) / 1000) : null;

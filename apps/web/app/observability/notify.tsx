@@ -253,14 +253,14 @@ function PolicySheet({ projectId, actor, policy, parent, cps, onClose, onSaved }
           <legend className="obs-rlabel">Tell</legend>
           {cps.length === 0 ? <span className="inf-faint">Add a contact point first</span> : cps.map((c) => (
             <label key={c.id} className="obs-rcheck" title={!c.verified && c.kind !== "console" ? VERIFY_TIP : undefined}>
-              <input type="checkbox" checked={picked.has(c.id)}
+              <input type="checkbox" aria-label={`Tell ${c.name}`} checked={picked.has(c.id)}
                      onChange={(e) => setPicked((s) => { const x = new Set(s); if (e.target.checked) x.add(c.id); else x.delete(c.id); return x; })} />
               <span>{c.name}{!c.verified && c.kind !== "console" ? " (unverified)" : ""}</span>
             </label>
           ))}
         </fieldset>
         <div className="obs-rrow"><span className="obs-rlabel" title="Alerts with the same values of these labels go in one message">Group by</span>
-          <input value={groupBy} onChange={(e) => setGroupBy(e.target.value)} data-testid="obs-policy-groupby" placeholder="alertname, service" spellCheck={false} /></div>
+          <input aria-label="Group by" value={groupBy} onChange={(e) => setGroupBy(e.target.value)} data-testid="obs-policy-groupby" placeholder="alertname, service" spellCheck={false} /></div>
         <div className="obs-rrow"><span className="obs-rlabel">Timing (s)</span>
           <span className="obs-rbody">
             <input type="number" min={0} className="obs-rnum" value={wait} onChange={(e) => setWait(e.target.value)} aria-label="Group wait"
@@ -486,10 +486,10 @@ function WindowAdd({ projectId, actor, onClose, onSaved }: Zone & { onClose: () 
           </span>
         ) : null}
         <div className="obs-rrow"><span className="obs-rlabel">Starts</span>
-          <input type="datetime-local" value={start} onChange={(e) => setStart(e.target.value)} data-testid="obs-win-start"
+          <input type="datetime-local" aria-label="Starts" value={start} onChange={(e) => setStart(e.target.value)} data-testid="obs-win-start"
                  title={`Your time zone: ${localZone()}`} /></div>
         <div className="obs-rrow"><span className="obs-rlabel">For (min)</span>
-          <input type="number" min={1} className="obs-rnum" value={duration} onChange={(e) => setDuration(e.target.value)} data-testid="obs-win-duration" /></div>
+          <input type="number" aria-label="Lasts, in minutes" min={1} className="obs-rnum" value={duration} onChange={(e) => setDuration(e.target.value)} data-testid="obs-win-duration" /></div>
         <div className="obs-rrow"><span className="obs-rlabel">During it</span>
           <span className="obs-rbody">
             <label className="obs-rcheck" title="Alerts are recorded; nobody is told"><input type="radio" name="obs-win-mode" checked={mode === "mute"}

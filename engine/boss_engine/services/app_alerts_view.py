@@ -173,8 +173,11 @@ def _minutes(seconds: Optional[float]) -> str:
 
 
 def duration_s(a: dict, now: Optional[datetime] = None) -> Optional[int]:
-    """How long it has been (or was) open: fired (else active) to cleared (else now)."""
-    start = a.get("fired_at") or a.get("active_at")
+    """How long it has been (or was) open: fired (else active) to cleared (else now). A pending
+    alert counts from when it went pending: an alert that fired, cleared and is pending again
+    keeps its first `fired_at`, and "pending 39 min" from it was a time it never waited."""
+    start = (a.get("active_at") if a.get("state") == "pending" else None) \
+        or a.get("fired_at") or a.get("active_at")
     if not start:
         return None
     end = a.get("cleared_at") or now or datetime.now(timezone.utc)
@@ -310,6 +313,79 @@ def _incidents(connection, ids: list[str]) -> dict[str, dict]:
         {"i": ids}).mappings().all()}
 
 
+def _driver_candidates(rows: list[dict[str, Any]], now: datetime) -> list[dict[str, Any]]:
+    """The alerts that are driving an incident NOW: firing ones; else pending ones; else the
+    latest episode (the most recently fired alert and any still open when it fired). An
+    incident row is reused, so an old error-rate alert must not name (or rate) a latency one."""
+    firing = [r for r in rows if r["state"] == "firing"]
+    if firing:
+        return firing
+    pending = [r for r in rows if r["state"] == "pending"]
+    if pending:
+        return pending
+    started = [r.get("fired_at") or r["active_at"] for r in rows]
+    if not started:
+        return []
+    latest = max(started)
+    return [r for r in rows if (r.get("cleared_at") or now) >= latest]
+
+
+def driver_title(subject: dict, d: dict[str, Any]) -> str:
+    """'api (prod): p95 latency 1.2 s · AppLatencyP95': the app, what fired, its value, and the
+    alert's own name (two rules can share a label)."""
+    word = d["label"] + (f" {d['value_word']}" if d.get("value_word") not in (None, "—") else "")
+    named = word if d["alertname"] in (d["label"], "") else f"{word} · {d['alertname']}"
+    return f"{subject.get('app_name') or 'An app'} ({subject.get('environment') or '—'}): {named}"[:200]
+
+
+def drivers(connection, project_id: str, incident_ids: list[str],
+            now: Optional[datetime] = None) -> dict[str, dict[str, Any]]:
+    """THE ALERT DRIVING EACH INCIDENT, and so its label, title and SEV: the worst of the
+    alerts firing now (else pending, else the latest episode). An incident opened by AppErrorRate
+    at SEV1 that a SEV3 p95-latency alert later fired into reads as that latency alert, at SEV3,
+    not "Errors · SEV1"."""
+    if not incident_ids:
+        return {}
+    now = now or datetime.now(timezone.utc)
+    rows = [dict(r) for r in connection.execute(sql(
+        "SELECT a.incident_id, a.id, a.alertname, a.rule_kind, a.source_kind, a.labels, a.state, "
+        " a.value, a.unit, a.active_at, a.fired_at, a.cleared_at, "
+        " COALESCE(a.subject_id, a.target_id) AS subject_id FROM app_alerts a "
+        "WHERE a.incident_id = ANY(:i) ORDER BY COALESCE(a.fired_at, a.active_at) DESC"),
+        {"i": list(incident_ids)}).mappings().all()]
+    by: dict[str, list[dict[str, Any]]] = {}
+    for r in rows:
+        by.setdefault(r["incident_id"], []).append(r)
+    subjects = _subjects(connection, project_id, sorted({r["subject_id"] for r in rows
+                                                         if r["subject_id"]}))
+    out: dict[str, dict[str, Any]] = {}
+    for iid, alerts_of in by.items():
+        cands = _driver_candidates(alerts_of, now)
+        if not cands:
+            continue
+        # Worst level first; among equals, the one that fired last.
+        best = min(cands, key=lambda r: (sev.LEVELS.index(sev.level(_json(r["labels"], {}) or {})),
+                                         -(r.get("fired_at") or r["active_at"]).timestamp()))
+        kind = best["rule_kind"]
+        d = {"alert_id": best["id"], "alertname": best["alertname"], "kind": kind,
+             "label": aa.BUILTIN.get(kind, {}).get("label") or (
+                 "Reported" if best["source_kind"] == "signal" else best["alertname"]),
+             "sev": sev.level(_json(best["labels"], {}) or {}), "state": best["state"],
+             "value_word": value_word(best.get("value"), best.get("unit") or "")
+             if best.get("value") is not None else None}
+        d["title"] = driver_title(subjects.get(best["subject_id"] or "", {}), d)
+        out[iid] = d
+    return out
+
+
+def incident_title(stored: str, d: Optional[dict[str, Any]]) -> str:
+    """The stored title while it is about the driving alert, else the driver's own words."""
+    if not d:
+        return stored
+    about = d["alertname"] in stored or (d["kind"] == "error_rate" and "requests failing" in stored)
+    return stored if about else d["title"]
+
+
 def incident_states(connection, project_id: str, *, subject_id: Optional[str] = None,
                     incident_ids: Optional[list[str]] = None) -> list[dict[str, Any]]:
     """THE ONE ANSWER to "is this incident's problem happening now?", read from its alerts:
@@ -333,7 +409,9 @@ def incident_states(connection, project_id: str, *, subject_id: Optional[str] = 
         params["ids"] = list(incident_ids)
     q += " GROUP BY i.id"
     out = []
-    for r in connection.execute(sql(q), params).mappings().all():
+    found = [dict(r) for r in connection.execute(sql(q), params).mappings().all()]
+    driving = drivers(connection, project_id, [r["id"] for r in found])
+    for r in found:
         if subject_id and r["subject_id"] != subject_id:
             continue
         firing = int(r["firing"] or 0)
@@ -352,7 +430,10 @@ def incident_states(connection, project_id: str, *, subject_id: Optional[str] = 
                 "; a response is still running" if run else "; the incident is still open")
         else:
             word = "Reported; no alert of BOSS's is firing"
-        level = sev.worst(r["sevs"] or []) or sev.level(r["severity"])
+        # The SEV and the title are the DRIVING alert's (drivers): never the worst alert the
+        # incident ever held (a SEV3 latency alert read SEV1 from a morning's error alert).
+        d = driving.get(r["id"])
+        level = d["sev"] if d else (sev.worst(r["sevs"] or []) or sev.level(r["severity"]))
         acked_by = (_person(connection, r["acked_by"]) or r["acked_by"]) if r["acked_by"] \
             else None
         if firing and acked_by:
@@ -367,8 +448,10 @@ def incident_states(connection, project_id: str, *, subject_id: Optional[str] = 
         else:
             chip = {"key": "recovered", "tone": "green", "word": "Recovered",
                     "tip": "Nothing fires now; the incident is still open until it is closed"}
-        out.append({"id": r["id"], "title": r["title"], "status": r["status"],
+        out.append({"id": r["id"], "title": incident_title(r["title"], d), "status": r["status"],
                     "sev": level, "status_chip": chip, "acked_by": acked_by,
+                    "driver": ({k: d[k] for k in ("alert_id", "alertname", "kind", "label",
+                                                  "value_word")} if d else None),
                     "lifecycle": r["lifecycle"], "since": _iso(r["first_seen"]),
                     "firing": firing, "happening": bool(firing),
                     "subject_id": r["subject_id"], "urgency": r["urgency"],
@@ -693,4 +776,5 @@ def app_alerts_tab(connection, settings: Any, project_id: str, target_id: str, *
     }
 
 
-__all__ = ["alerts", "app_alerts_tab", "incident_states", "value_word"]
+__all__ = ["alerts", "app_alerts_tab", "drivers", "incident_states", "incident_title",
+           "value_word"]

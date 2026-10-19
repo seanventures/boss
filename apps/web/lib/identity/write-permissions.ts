@@ -158,6 +158,10 @@ export const WRITE_OPS: Readonly<Record<string, Readonly<Record<string, WriteGat
     "/v1/observability/stack/deploy": "observability:manage",
     "/v1/observability-suite/health-check": "observability:manage",
     "/v1/observability/apps/": "observability:manage",
+    // The rule sheet: the PromQL dry run is a read (observability:read, which opening Observability
+    // needs); PUT /v1/alert-rules/{id}/notify is a change.
+    "/v1/alert-rules/preview": "self",
+    "/v1/alert-rules/": "observability:manage",
     // The incident card's "Tell reporters": POST …/incidents/{id}/tell-reporters.
     "/v1/reliability/incidents/": "reliability:respond",
   },

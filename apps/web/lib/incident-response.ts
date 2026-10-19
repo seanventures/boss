@@ -31,6 +31,9 @@ export type IncidentResponse = {
   alert: { firedAt: string | null; errorRatePercent: number | null; windowMinutes: number | null; minRequests: number | null;
            errorRate: number | null; requests: number | null; errors: number | null; routes: IncidentRoute[] } | null;
   verification: { state: string; summary: string; at: string | null; independent: string | null } | null;
+  /** The alert driving it now (or last): its label, title and SEV come from this, not from the
+   *  alert that first opened a reused incident. null on an older API. */
+  driver: { alertId: string; alertname: string; kind: string; label: string; sev: string; state: string; valueWord: string | null } | null;
   reportedOnly: boolean;
   evidence: IncidentEvidence[];
   reports: IncidentReport[];
@@ -119,6 +122,8 @@ export function parseIncidentResponse(w: unknown): IncidentResponse {
       routes: arr(a.routes).map((x) => { const y = obj(x); return { route: str(y.route), requests: num(y.requests), errors: num(y.errors), errorRate: optNum(y.error_rate) }; }),
     } : null,
     verification: v ? { state: str(v.state), summary: str(v.summary), at: optStr(v.at), independent: optStr(v.independent) } : null,
+    driver: o.driver ? (() => { const x = obj(o.driver); return { alertId: str(x.alert_id), alertname: str(x.alertname), kind: str(x.kind),
+      label: str(x.label), sev: str(x.sev), state: str(x.state), valueWord: optStr(x.value_word) }; })() : null,
     reportedOnly: o.reported_only === true,
     evidence: arr(o.evidence).map((x) => { const y = obj(x); return { kind: str(y.kind), ref: str(y.ref), at: optStr(y.at), payload: obj(y.payload) }; }),
     reports: arr(o.reports).map((x) => {

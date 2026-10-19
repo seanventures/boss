@@ -376,13 +376,18 @@ def self_check(connection, settings: Any, now: datetime) -> dict[str, bool]:
             "SELECT count(*) FROM rule_groups WHERE project_id = :p AND (last_lag_ms > "
             " 2000 * interval_s OR next_eval_at < :now - make_interval(secs => 2 * interval_s))"),
             {"p": pid, "now": now}).scalar()
+        # A message nothing is configured to send (notify.not_configured) is a setup prompt on
+        # Observability (obs_view), not a backlog: only a send that actually failed pages.
+        from .notify import UNCONFIGURED_SQL
+
         backlog = connection.execute(sql(
             "SELECT count(*) FROM notifications WHERE project_id = :p AND status IN ('pending', "
-            " 'failed') AND created_at < :since"),
+            " 'failed') AND created_at < :since AND NOT " + UNCONFIGURED_SQL),
             {"p": pid, "since": now - timedelta(minutes=5)}).scalar()
         dead = connection.execute(sql(
             "SELECT count(*) FROM notifications WHERE project_id = :p AND status = 'dead' "
-            "AND created_at > :since"), {"p": pid, "since": now - timedelta(days=1)}).scalar()
+            "AND created_at > :since AND NOT " + UNCONFIGURED_SQL),
+            {"p": pid, "since": now - timedelta(days=1)}).scalar()
         refused = connection.execute(sql(
             "SELECT COALESCE(sum(c.refused), 0) FROM signal_source_counts c JOIN signal_sources s "
             " ON s.id = c.source_id WHERE s.project_id = :p AND c.hour >= :h"),
@@ -401,7 +406,7 @@ def self_check(connection, settings: Any, now: datetime) -> dict[str, bool]:
                                  "evaluating late (more than twice their interval)"),
             "BossOutboxBacklog": (int(backlog or 0) > 0 or int(dead or 0) > 0,
                                   f"{int(backlog or 0)} notification(s) waiting over 5 minutes, "
-                                  f"{int(dead or 0)} undeliverable in the last day"),
+                                  f"{int(dead or 0)} failed to send in the last day"),
             "BossIngestRefusals": (int(refused or 0) > 100, f"{int(refused or 0)} ingest "
                                    "requests refused in the last hour"),
             "BossModelNotAnswering": (int(no_model or 0) > 0, "Alerts could not be triaged: no "
