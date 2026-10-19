@@ -141,6 +141,20 @@ def investigated(result: Mapping[str, Any], inputs: Mapping[str, Any]) -> Verdic
     return Verdict(FAILED, _reason(result) or "the investigation produced no brief")
 
 
+def packed(result: Mapping[str, Any], inputs: Mapping[str, Any]) -> Verdict:
+    """monitoring_pack: done when the pack was written (it has rules and a commit), or when the
+    workflow's monitoring_gate is warn and the step said why there is none."""
+    refused = _refused(result)
+    if refused:
+        return refused
+    if _status(result) == "not_applicable":
+        return Verdict(SUCCEEDED)
+    pack = result.get("pack") if isinstance(result.get("pack"), Mapping) else {}
+    if pack.get("rules") and result.get("commit_sha"):
+        return Verdict(SUCCEEDED)
+    return Verdict(FAILED, _reason(result) or "no monitoring pack was written")
+
+
 def incident_reported(result: Mapping[str, Any], inputs: Mapping[str, Any]) -> Verdict:
     """incident_report: done when the report exists (it is stored with the incident)."""
     refused = _refused(result)
@@ -249,6 +263,7 @@ VERDICTS: dict[str, Callable[[Mapping[str, Any], Mapping[str, Any]], Verdict]] =
     "investigate_incident": investigated,
     "verify_recovery": awaited_work,
     "incident_report": incident_reported,
+    "monitoring_pack": packed,
 }
 
 

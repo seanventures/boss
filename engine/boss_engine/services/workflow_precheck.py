@@ -176,6 +176,10 @@ CAPABILITY_PRECHECKS: dict[str, CapabilityPrecheck] = {
                                       "and its release diff; what it cannot read it says"),
     "verify_recovery": NO_CHECKS("waits on BOSS's own monitor of the deployed app"),
     "incident_report": NO_CHECKS("writes the report from what the response recorded"),
+    # Set up monitoring (monitoring_pack): a model proposes the pack, BOSS commits it to the
+    # build's branch. The model and GitHub are what it needs; it runs no build sandbox.
+    "monitoring_pack": CapabilityPrecheck(("authority.consent", "github.access", "sandbox.model",
+                                           "budget.run_cost")),
 }
 
 #: Which route a capability's agent takes (engine_startup): the build pipeline's stages, the

@@ -391,3 +391,17 @@ def test_the_step_fails_under_block_and_goes_on_under_warn(monkeypatch):
     out = runner._set_up_monitoring(None, ctx, "p", {"run_id": "wfr_1"}, {"id": "monitoring"},
                                     {})
     assert out["status"] == "not_applicable" and "goes on without one" in out["note"]
+
+
+def test_a_written_pack_is_a_succeeded_step_and_no_pack_is_not():
+    """The step's own result is judged by workflow_outcomes (a missing verdict was a KeyError
+    on every real run: Order API, 2026-10-19, wfr_723213d8 deadlettered at Set up monitoring)."""
+    from boss_engine.services import workflow_outcomes as wo
+
+    ok = {"capability": "monitoring_pack", "status": "succeeded", "commit_sha": "abc123",
+          "pack": {"rules": [{"alert": "OrdersPostFailing"}]}}
+    assert wo.VERDICTS["monitoring_pack"](ok, {}).outcome == wo.SUCCEEDED
+    warn = {"capability": "monitoring_pack", "status": "not_applicable", "note": "No pack: warn"}
+    assert wo.VERDICTS["monitoring_pack"](warn, {}).outcome == wo.SUCCEEDED
+    empty = {"capability": "monitoring_pack", "status": "succeeded", "pack": {"rules": []}}
+    assert wo.VERDICTS["monitoring_pack"](empty, {}).outcome == wo.FAILED

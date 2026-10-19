@@ -86,6 +86,9 @@ INTERNAL = {
     # could not be written is a failed step, never a green one.
     "investigate_incident": "_investigate_incident",
     "incident_report": "_write_the_incident_report",
+    # Set up monitoring (services/monitoring_pack.py): no pack under monitoring_gate: block
+    # fails the step, so the release cannot ship without one.
+    "monitoring_pack": "_set_up_monitoring",
 }
 
 #: Tool-less capabilities that commission NOTHING. They are honest no-ops that say so
