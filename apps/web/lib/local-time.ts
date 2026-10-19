@@ -24,6 +24,8 @@ export type LocalTime = {
   monthDay: (ms: number) => string;
   /** The full local date and time, for a tooltip. Accepts ms, an ISO string or nothing. */
   full: (v: number | string | null | undefined) => string;
+  /** The viewer's clock, read only after mount (0 before: "now" never paints on the server). */
+  now: () => number;
 };
 
 const toMs = (v: number | string | null | undefined): number =>
@@ -37,10 +39,11 @@ export const LOCAL: LocalTime = {
   weekday: (ms) => (Number.isFinite(ms) ? new Date(ms).toLocaleDateString("en-US", { weekday: "long" }) : ""),
   monthDay: (ms) => (Number.isFinite(ms) ? new Date(ms).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : ""),
   full: (v) => { const ms = toMs(v); return Number.isFinite(ms) ? new Date(ms).toLocaleString() : ""; },
+  now: () => Date.now(),
 };
 
 export const NOT_YET: LocalTime = { ready: false, hhmm: () => "", day: () => "", dayHour: () => "", weekday: () => "",
-  monthDay: () => "", full: () => "" };
+  monthDay: () => "", full: () => "", now: () => 0 };
 
 export function useLocalTime(): LocalTime {
   const [ready, setReady] = useState(false);

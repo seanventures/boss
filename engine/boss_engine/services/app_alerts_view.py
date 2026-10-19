@@ -173,8 +173,11 @@ def _minutes(seconds: Optional[float]) -> str:
 
 
 def duration_s(a: dict, now: Optional[datetime] = None) -> Optional[int]:
-    """How long it has been (or was) open: fired (else active) to cleared (else now)."""
-    start = a.get("fired_at") or a.get("active_at")
+    """How long it has been (or was) open: fired (else active) to cleared (else now). A pending
+    alert counts from when it went pending: an alert that fired, cleared and is pending again
+    keeps its first `fired_at`, and "pending 39 min" from it was a time it never waited."""
+    start = (a.get("active_at") if a.get("state") == "pending" else None) \
+        or a.get("fired_at") or a.get("active_at")
     if not start:
         return None
     end = a.get("cleared_at") or now or datetime.now(timezone.utc)

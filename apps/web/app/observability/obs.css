@@ -308,11 +308,17 @@
   grid-template-columns: minmax(8rem, 1fr) minmax(9rem, 1.3fr) minmax(6rem, auto) auto auto;
   grid-template-areas: "name cond state respond acts" "facts facts facts facts facts";
 }
-.obs-arule-name { grid-area: name; display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
+/* A RULE ROW NEVER OVERPRINTS: every cell wraps inside its own grid area and its chips keep their
+   size, so a long name with SEV + Sample + Repo-managed flows onto a second line instead of
+   spilling across the condition beside it ("SEV4 Custom PromQL Sample" drawn on top of each other). */
+.obs-arule > * { min-width: 0; }
+.obs-arule-name { grid-area: name; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; }
+.obs-arule-name > .obs-strong { min-width: 0; overflow-wrap: anywhere; }
+.obs-arule-name > .obs-sev, .obs-arule-name > .obs-chip, .obs-arule-name > .obs-adot { flex: none; }
 .obs-arule-cond { grid-area: cond; min-width: 0; overflow-wrap: anywhere; }
-.obs-arule-state { grid-area: state; display: inline-flex; align-items: center; gap: 6px; }
-.obs-arule-respond { grid-area: respond; }
-.obs-arule-acts { grid-area: acts; display: inline-flex; align-items: center; gap: 10px; justify-content: flex-end; }
+.obs-arule-state { grid-area: state; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
+.obs-arule-respond { grid-area: respond; flex-wrap: wrap; }
+.obs-arule-acts { grid-area: acts; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; justify-content: flex-end; }
 .obs-arule[data-state="off"] .obs-strong { color: var(--muted); }
 .obs-arule-source { display: inline-flex; flex-wrap: wrap; gap: 0 2px; padding-top: 4px; font-size: 0.76rem; }
 .obs-alert { padding: 2px 0; }

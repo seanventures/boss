@@ -58,7 +58,7 @@ function SourceLine({ s, projectId, actor, onDone, onToken }: {
           {s.lastSeenAt ? `last ${whenWord(s.lastSeenAt, lt)}` : "nothing yet"}
         </span>
         <span className="inf-faint inf-num" title="Accepted / refused in the last 24 hours">
-          {s.accepted24h.toLocaleString()} in{s.refused24h ? ` / ${s.refused24h.toLocaleString()} refused` : ""} · 24h
+          {s.accepted24h.toLocaleString("en-US")} in{s.refused24h ? ` / ${s.refused24h.toLocaleString("en-US")} refused` : ""} · 24h
         </span>
         {!s.connected && s.enabled ? <span className="obs-chip" data-tone="amber" title="Nothing has arrived recently">Not connected</span> : null}
         {!s.enabled ? <span className="obs-chip">Off</span> : null}
