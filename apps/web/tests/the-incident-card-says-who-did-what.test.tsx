@@ -116,3 +116,51 @@ describe("an alert's triage", () => {
     expect(parseAlert({ id: "a2", triage: { state: "done", word: "Opened an incident" } }).triage.agent).toBeNull();
   });
 });
+
+describe("answering the agent", () => {
+  const ASKING = {
+    step_id: "triage:alrt_9", kind: "triage", label: "Triage", job: "Decide what the alert is and what BOSS does with it",
+    status: "waiting", started_at: "2026-10-19T07:59:05Z", ended_at: "2026-10-19T07:59:30Z",
+    who: { ...agent("sre", "Site Reliability Engineer"), how: "on_call" }, did: "Asked you",
+    words: "84s after the release 1.2 deploy.",
+    detail: { alert: "AppErrorRate", alert_id: "alrt_9", target_id: "t_live", severity: "sev1", confidence: 0.62,
+              question: "I'm not sure enough to act alone. Should I open its own incident, or page someone now?",
+              options: [{ action: "split", label: "Open its own incident" }, { action: "page_now", label: "Page someone now" }] },
+  };
+
+  it("an asking triage shows its question and one button per option, and a press answers it", async () => {
+    const calls: { url: string; body: Record<string, unknown> }[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      calls.push({ url: String(url), body: JSON.parse(String(init?.body ?? "{}")) });
+      return new Response(JSON.stringify({ outcome: "split", response: { word: "Responding" } }), { status: 200 });
+    }));
+    const r = parseIncidentResponse(incidentResponseWire({ responders: [ASKING] }));
+    await mount(<IncidentCardView projectId="p1" r={r} now={Date.parse(INCIDENT_NOW)}
+                                  answer={{ projectId: "p1", actor: "usr_1" }} />);
+    expect($("[data-testid='obs-answer-question']")?.textContent).toContain("Should I open its own incident");
+    const buttons = $$("[data-testid='obs-answer-option']");
+    expect(buttons.map((b) => b.textContent)).toEqual(["Open its own incident", "Page someone now"]);
+    await click(buttons[0]);
+    const call = calls.find((c) => c.url.includes("/triage/answer"));
+    expect(call?.url).toContain("/v1/apps/t_live/alerts/alrt_9/triage/answer");
+    expect(call?.body).toMatchObject({ project_id: "p1", actor: "usr_1", action: "split" });
+    vi.unstubAllGlobals();
+  });
+
+  it("an answered triage names who answered", async () => {
+    const answered = { ...ASKING, status: "succeeded", did: "Asked; Seed Owner answered: Open its own incident",
+                       detail: { ...ASKING.detail, question: null, options: [], answered: { name: "Seed Owner", action: "split", at: null } } };
+    await mount(<IncidentCardView projectId="p1" r={parseIncidentResponse(incidentResponseWire({ responders: [answered] }))}
+                                  now={Date.parse(INCIDENT_NOW)} />);
+    expect($("[data-testid='obs-answer-agent']")).toBeNull();
+    expect($("[data-testid='obs-responder-triage']")?.textContent).toContain("Seed Owner answered: Open its own incident");
+  });
+
+  it("the alert's triage carries its options and the answer", async () => {
+    const { parseAlert } = await import("../lib/app-alerts");
+    const a = parseAlert({ id: "a1", state: "firing", triage: { state: "done", word: "Asks you", outcome: "asked",
+                                                                options: [{ action: "split", label: "Open its own incident" }] } });
+    expect(a.triage.options).toEqual([{ action: "split", label: "Open its own incident" }]);
+    expect(parseAlert({ id: "a2", triage: { state: "done", answered: { name: "Seed Owner", action: "split" } } }).triage.answered?.name).toBe("Seed Owner");
+  });
+});

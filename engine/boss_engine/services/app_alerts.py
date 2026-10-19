@@ -1219,6 +1219,37 @@ def _incident_row(connection, project_id: str, key: str) -> Optional[dict[str, A
 _CLOSED = ("resolved", "dismissed")
 
 
+def _sha(v: Any) -> str:
+    return str(v or "").strip().lower()
+
+
+def _release_key(connection, project_id: str, key: str, alert: dict) -> str:
+    """The incident key a newly firing alert groups under.
+
+    A NEW RELEASE'S BREACH IS ITS OWN INCIDENT. The group key alone kept one incident per app
+    group for as long as anything in it fired: a p95 alert that never cleared kept the Order
+    API's serving incident open for hours, and the error-rate breach of the next release joined
+    it — with the old release, the old root cause and the old response (2026-10-19, release
+    1.2: the triaging agent itself said the alert was "distinct in symptom and route from the
+    pre-existing incident it was auto-grouped with").
+
+    So when the group's open incident was opened against a different serving release than the
+    one this alert fired on, the alert opens (or joins) the incident of ITS release, keyed
+    `<group key>:release:<sha12>`. Same release, no release recorded, or no open incident: the
+    group key, exactly as before.
+    """
+    rel = _sha((_json(alert.get("release"), {}) or {}).get("commit_sha"))
+    if not rel:
+        return key
+    inc = _incident_row(connection, project_id, key)
+    if not inc or inc["status"] in _CLOSED:
+        return key
+    was = _sha(((inc["finalize_ctx"] or {}).get("deploy") or {}).get("commit_sha"))
+    if not was or was[:12] == rel[:12]:
+        return key
+    return f"{key}:release:{rel[:12]}"
+
+
 def _alert_payload(alert: dict, rule: Optional[dict], window: dict) -> dict[str, Any]:
     """The legacy rule shape incident_response reads (error_rate_percent ...) plus the alert."""
     params = (rule or {}).get("params") or {}
@@ -1267,7 +1298,8 @@ def _group(connection, target: dict, now: datetime, rules_by_id: dict[str, dict]
                             now), now)
     for a in rows:
         rule = rules_by_id.get(a.get("rule_id") or "")
-        key = incident_key(target["id"], a["group_key"] or SERVING)
+        key = _release_key(connection, pid, incident_key(target["id"], a["group_key"] or SERVING),
+                           a)
         inc = _incident_row(connection, pid, key)
         alerted = bool(inc and (inc["finalize_ctx"].get("alert") not in (None, {})))
         window = _window_for(connection, target["id"], rule, now)
@@ -1814,28 +1846,34 @@ def _candidates(alert: dict, ctx: dict) -> list:
 
     own = alert.get("incident_id")
     out = [Candidate("page_now", "It needs a person now: notify at once, whatever holds it "
-                                 "back (a deploy window, quiet hours)"),
+                                 "back (a deploy window, quiet hours)", label="Page someone now"),
            Candidate(f"hold:{HOLD_MINUTES}", f"Not sure yet: hold it {HOLD_MINUTES} minutes "
-                                             "and look again with more data", acts=False)]
+                                             "and look again with more data", acts=False,
+                     label=f"Wait {HOLD_MINUTES} min and look again")]
     if own:
         first = not ctx["alerts_in_its_group"]
         out.append(Candidate("open_incident" if first else "join_incident",
                              ("It is a real problem: keep it in the incident BOSS opened for it"
                               if first else "It is the same problem as the other alerts in its "
-                              "incident: keep it there")))
+                              "incident: keep it there"),
+                             label="Keep it in this incident"))
     for inc in ctx["open_incidents"]:
         if inc["id"] == own:
             continue
         out.append(Candidate(f"join:{inc['id']}", f"It is the same problem as the open incident "
-                                                  f"'{inc['title']}': move it there"))
+                                                  f"'{inc['title']}': move it there",
+                             label=f"Move it to '{str(inc['title'])[:60]}'"))
     if own and ctx["alerts_in_its_group"]:
         out.append(Candidate("split", "It is a different problem from the other alerts in its "
-                                      "incident: open a new incident for it alone"))
+                                      "incident: open a new incident for it alone",
+                             label="Open its own incident"))
     if not own:
-        out.append(Candidate("open_incident", "It is a real problem: open an incident for it"))
+        out.append(Candidate("open_incident", "It is a real problem: open an incident for it",
+                             label="Open an incident"))
     out.append(Candidate("noise", "It is noise (a blip, a restart, a test): mark it noise with "
-                                  "the reason and open nothing"))
-    out.append(Candidate("ask", "Ask the person one question before deciding", acts=False))
+                                  "the reason and open nothing", label="Mark it noise"))
+    out.append(Candidate("ask", "Ask the person one question before deciding", acts=False,
+                         label="Ask a person"))
     return out
 
 
@@ -1866,9 +1904,53 @@ def on_call_agent(connection, project_id: str) -> Optional[dict[str, str]]:
     return {"role_key": ON_CALL_ROLE, "role": str(name)} if name else None
 
 
+def triage_options(cands: list) -> list[dict[str, str]]:
+    """The buttons a person answers an asking triage with: every candidate that acts."""
+    return [{"action": c.key, "label": c.label or c.means.split(": ")[-1][:80]}
+            for c in cands if c.acts and c.available]
+
+
+class AnswerRefused(ValueError):
+    """A person's answer to a triage question that cannot be applied, in words."""
+
+
+def answer_triage(engine, settings: Any, alert_id: str, *, action: str, actor: str
+                  ) -> dict[str, Any]:
+    """A person answers the on-call agent's question: their pick runs through the SAME path as
+    an agent's decision (triage_alert), recorded as the person's answer with who and when, so
+    Respond automatically starts exactly as if the agent had decided."""
+    from . import agent_decision as ad
+    from .incident_response import _person
+
+    with engine.connect() as c:
+        alert = _alert(c, alert_id)
+        name = _person(c, actor) if actor else "A person"
+    if not alert:
+        raise AnswerRefused("No such alert")
+    if alert["state"] != "firing":
+        raise AnswerRefused("The alert is no longer firing; there is nothing to answer")
+    asked = alert.get("triage") or {}
+    if alert.get("triage_state") != "done" or asked.get("outcome") != "asked":
+        raise AnswerRefused("The agent is not asking anything about this alert")
+    offered = {o["action"]: o["label"] for o in asked.get("options") or []}
+    if offered and action not in offered:
+        raise AnswerRefused(f"'{action}' is not one of the options the agent offered")
+    decision = ad.AgentDecision(
+        ad.DECIDED, action=action, confidence=1.0,
+        reason=f"{name} answered: {offered.get(action, action)}.",
+        by={"backend": "person", "person_id": actor, "word": f"{name}'s answer"})
+    return triage_alert(engine, settings, alert_id, answered=decision,
+                        asked={k: asked.get(k) for k in ("reason", "question", "confidence",
+                                                         "options", "by", "action", "at")})
+
+
 def triage_alert(engine, settings: Any, alert_id: str, *, adapter: Any = None,
-                 decider: Any = None) -> dict[str, Any]:
-    """One alert's triage by a model, recorded word for word. Never closes an alert silently."""
+                 decider: Any = None, answered: Any = None,
+                 asked: Optional[dict] = None) -> dict[str, Any]:
+    """One alert's triage by a model, recorded word for word. Never closes an alert silently.
+
+    `answered`: a person's answer to the agent's question (answer_triage) — the same path, the
+    decision is theirs."""
     from ..db import begin
     from . import agent_decision as ad
 
@@ -1880,7 +1962,9 @@ def triage_alert(engine, settings: Any, alert_id: str, *, adapter: Any = None,
         cands = _candidates(alert, ctx)
         target = subject(c, alert.get("subject_id") or alert["target_id"]) or {}
         on_call = on_call_agent(c, alert["project_id"])
-        decision = ad.decide(
+        if answered is not None and answered.action not in {x.key for x in cands}:
+            raise AnswerRefused(f"'{answered.action}' is no longer an option for this alert")
+        decision = answered if answered is not None else ad.decide(
             c, settings, alert["project_id"],
             situation=(f"An alert fired on {target.get('app_name')} "
                        f"({target.get('environment')}), "
@@ -1894,7 +1978,14 @@ def triage_alert(engine, settings: Any, alert_id: str, *, adapter: Any = None,
             ref=alert_id, adapter=adapter, decider=decider)
     at = _now()
     record: dict[str, Any] = {**decision.to_dict(), "at": at.isoformat()}
-    if on_call:
+    if answered is not None:
+        # THE PERSON'S ANSWER, beside what the agent said when it asked.
+        record["answered"] = {"by": (answered.by or {}).get("person_id"),
+                              "name": str((answered.by or {}).get("word") or "").removesuffix(
+                                  "'s answer"),
+                              "at": at.isoformat(), "action": answered.action}
+        record["asked"] = asked or {}
+    elif on_call:
         # WHICH AGENT DECIDED, not only which model: the card names it, links its loadout,
         # and the report credits it.
         record["by"] = {**(record.get("by") or {}), "role_key": on_call["role_key"],
@@ -1907,7 +1998,9 @@ def triage_alert(engine, settings: Any, alert_id: str, *, adapter: Any = None,
             _write_triage(c, alert_id, record, "no_model")
             return record
         if decision.status == ad.CLARIFY or decision.action == "ask":
-            record.update(outcome="asked", word="Asks you")
+            # THE QUESTION CARRIES ITS ANSWERS: every acting option as a button (answer_triage).
+            record.update(outcome="asked", word="Asks you", options=triage_options(cands),
+                          proposed=decision.action if decision.action != "ask" else None)
             _write_triage(c, alert_id, record, "done")
             _note(c, alert.get("incident_id"), f"Agent asks: {decision.question}", alert_id, at)
             return record
@@ -1951,7 +2044,8 @@ def triage_alert(engine, settings: Any, alert_id: str, *, adapter: Any = None,
         record["word"] = {"opened": "Opened an incident", "joined": "Joined the incident",
                           "split": "Opened its own incident"}.get(record.get("outcome"), "")
         _write_triage(c, alert_id, record, "done")
-        _note(c, inc_id, f"Agent triage ({alert['alertname']}): {decision.reason}", alert_id, at)
+        _note(c, inc_id, ("Answered" if answered is not None else "Agent triage")
+              + f" ({alert['alertname']}): {decision.reason}", alert_id, at)
         response = _respond(c, alert, inc_id, at)
         if response:
             c.execute(sql("UPDATE app_alerts SET response_run_id = :r, response_word = :w "
@@ -1997,7 +2091,33 @@ def _new_incident(connection, target: dict, alert: dict, at: datetime, *,
                              {"p": alert["project_id"], "k": key}).scalar()
     connection.execute(sql("UPDATE app_alerts SET incident_id = :i WHERE id = :a"),
                        {"i": got, "a": alert["id"]})
+    if split:
+        _seed_split(connection, target, alert, str(got), at)
     return str(got)
+
+
+def _seed_split(connection, target: dict, alert: dict, incident_id: str, at: datetime) -> None:
+    """An incident split off for one alert starts with what the monitor saw, as one the monitor
+    opened does (incident_response.on_alert): the app, the serving release and the alert as
+    its occurrence — or Incident Response's investigation has nothing to read."""
+    from . import incident_response as ir
+
+    tid = alert.get("subject_id") or alert["target_id"]
+    deploy = ir.deploy_context(connection, tid) if not is_service(target) else {}
+    fired = alert.get("fired_at") or alert.get("active_at") or at
+    seen = {"fired_at": _iso(fired), "alert_id": alert["id"], "name": alert["alertname"],
+            "value": alert.get("value"), "threshold": alert.get("threshold"),
+            "rule": {"alert": alert["alertname"], "kind": alert.get("rule_kind")},
+            "source": alert.get("source_kind")}
+    ir._merge_ctx(connection, incident_id, {
+        "app": {"target_id": tid, "app_name": target.get("app_name"),
+                "environment": target.get("environment")},
+        "deploy": deploy, "alert": seen, "occurrence": _iso(fired), "verification": None,
+        "response": None, "reported_only": False})
+    ir._evidence(connection, incident_id, "alert", ref=alert["alertname"], payload=seen, at=at)
+    if deploy:
+        ir._evidence(connection, incident_id, "deployment",
+                     ref=str(deploy.get("commit_sha") or ""), payload=deploy, at=at)
 
 
 def _closable(connection, incident_id: str) -> bool:

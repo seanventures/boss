@@ -164,7 +164,8 @@ def _triage(connection, roles: dict[str, str], incident_id: str,
     out = []
     rows = connection.execute(sql(
         "SELECT id, alertname, labels, annotations, triage, triage_state, fired_at, active_at, "
-        "       created_at FROM app_alerts WHERE incident_id = :i "
+        "       created_at, state, COALESCE(subject_id, target_id) AS target_id "
+        "FROM app_alerts WHERE incident_id = :i "
         # An alert goes pending before it fires (its For), so it may predate the occurrence.
         "  AND (CAST(:s AS timestamptz) IS NULL OR COALESCE(fired_at, created_at) >= "
         "       CAST(:s AS timestamptz) - interval '15 minutes') "
@@ -174,7 +175,9 @@ def _triage(connection, roles: dict[str, str], incident_id: str,
         t = _json(a["triage"]) or {}
         if a["triage_state"] != "done" or not t:
             continue
-        by = t.get("by") or {}
+        answered = t.get("answered") if isinstance(t.get("answered"), dict) else None
+        # Answered: the agent that ASKED is who triaged; the person's answer is what was done.
+        by = ((t.get("asked") or {}).get("by") if answered else None) or t.get("by") or {}
         if by.get("role_key"):
             who = _agent(roles, str(by["role_key"]), "on_call")
             who["model"] = by.get("model")
@@ -186,13 +189,26 @@ def _triage(connection, roles: dict[str, str], incident_id: str,
                 "split": "Opened its own incident", "noise": "Called it noise",
                 "asked": "Asked you", "page": "Paged now"}.get(
             str(t.get("outcome") or ""), str(t.get("word") or "Triaged"))
+        asking = t.get("outcome") == "asked" and a["state"] == "firing"
+        words = ((t.get("asked") or {}).get("reason") if answered else t.get("reason")) or None
+        if answered:
+            options = {o.get("action"): o.get("label") for o in
+                       ((t.get("asked") or {}).get("options") or t.get("options") or [])}
+            word = (f"Asked; {answered.get('name') or 'a person'} answered: "
+                    f"{options.get(answered.get('action')) or word}")
         out.append({
             "step_id": f"triage:{a['id']}", "kind": "triage", "label": "Triage",
-            "job": JOBS["triage"], "status": "succeeded",
+            "job": JOBS["triage"], "status": "waiting" if asking else "succeeded",
             "started_at": _iso(a["fired_at"] or a["active_at"]), "ended_at": t.get("at"),
-            "who": who, "did": word, "words": str(t.get("reason") or "") or None,
-            "detail": {"alert": a["alertname"], "severity": labels.get("severity"),
-                       "confidence": t.get("confidence")},
+            "who": who, "did": word, "words": str(words) if words else None,
+            "detail": {"alert": a["alertname"], "alert_id": a["id"],
+                       "target_id": a["target_id"], "severity": labels.get("severity"),
+                       "confidence": ((t.get("asked") or {}).get("confidence") if answered
+                                      else t.get("confidence")),
+                       # THE QUESTION AND ITS BUTTONS, while the agent waits for a person.
+                       "question": t.get("question") if asking else None,
+                       "options": (t.get("options") or []) if asking else [],
+                       "answered": answered},
         })
     return out
 

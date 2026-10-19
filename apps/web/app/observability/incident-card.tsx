@@ -60,12 +60,14 @@ const AUTO_TIP = "A rule with Respond automatically on starts Incident Response 
 const VERIFY_TIP = "Judged by BOSS's monitor, not by the fixing agent";
 
 /** The card's body from one response view: pure render, so a fixture draws every section. */
-export function IncidentCardView({ projectId, r, now, busy, onRespond, onAlerts, onTell, report, onView }: {
+export function IncidentCardView({ projectId, r, now, busy, onRespond, onAlerts, onTell, report, onView, answer }: {
   projectId: string; r: IncidentResponse; now: number | null; busy?: "respond" | "tell" | null;
   /** Open the app's Alerts tab in place (the drawer); without it the link navigates. */
   onRespond?: () => void; onAlerts?: () => void; onTell?: () => void;
   /** The report's markdown when View was pressed (null: not open; "": loading). */
   report?: string | null; onView?: () => void;
+  /** Answer the agent's question in place (the live card). */
+  answer?: { projectId: string; actor: string; onDone?: () => void };
 }) {
   const lt = useLocalTime();
   const status = incidentStatus(r);
@@ -218,7 +220,7 @@ export function IncidentCardView({ projectId, r, now, busy, onRespond, onAlerts,
         )}
       </div>
 
-      <Responders rows={r.responders} onReport={onView} />
+      <Responders rows={r.responders} onReport={onView} answer={answer} />
 
       {v && v.summary ? (
         <div className="obs-inc-part" data-testid="obs-incident-verification">
@@ -317,7 +319,8 @@ export function IncidentCard({ projectId, actor, incidentId, onAlerts }: {
     <>
       <IncidentCardView projectId={projectId} r={r} now={now} busy={busy} onRespond={() => void respond()} onAlerts={onAlerts}
                         onTell={() => void tellAgain()}
-                        report={report} onView={view} />
+                        report={report} onView={view}
+                        answer={{ projectId, actor, onDone: () => polled.refresh() }} />
       {refusal ? <StartRefusal refusal={refusal} projectId={projectId} busy={busy === "respond"} onDismiss={() => setRefusal(null)} /> : null}
     </>
   );

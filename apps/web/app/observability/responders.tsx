@@ -28,6 +28,7 @@ import { useLocalTime } from "../../lib/local-time";
 import { RunFace, nameOf } from "../agents/run-face";
 import { consoleHref } from "../agents/org-shared";
 import { Markdown } from "../markdown";
+import { AnswerAgent } from "./answer-agent";
 
 /** The agent's page in Agent Studio, on its skills (its Loadout). */
 export function agentPageHref(roleKey: string): string {
@@ -156,7 +157,11 @@ function Investigation({ r }: { r: Responder }) {
   );
 }
 
-export function Responders({ rows, onReport }: { rows: Responder[]; onReport?: () => void }) {
+export function Responders({ rows, onReport, answer }: {
+  rows: Responder[]; onReport?: () => void;
+  /** Answering the agent's question in place (the live card has a project and an actor). */
+  answer?: { projectId: string; actor: string; onDone?: () => void };
+}) {
   const lt = useLocalTime();
   if (!rows.length) return null;
   return (
@@ -187,6 +192,13 @@ export function Responders({ rows, onReport }: { rows: Responder[]; onReport?: (
                   {r.did ? <span className="obs-strong" data-copy="data">{r.did}</span> : null}
                   {r.words ? <q className="obs-words" data-user-text data-testid="obs-responder-words">{r.words}</q> : null}
                 </span>
+              ) : null}
+              {r.options.length && r.alertId && r.targetId ? (
+                answer ? (
+                  <AnswerAgent question={r.question} options={r.options} projectId={answer.projectId} actor={answer.actor}
+                               targetId={r.targetId} alertId={r.alertId} onDone={answer.onDone}
+                               agent={whoWords(r.who).name} />
+                ) : <span className="obs-answer-q" data-testid="obs-answer-question">{r.question}</span>
               ) : null}
               {r.kind === "investigate_incident" ? <Investigation r={r} /> : null}
               {r.crew.length ? <Crew crew={r.crew} /> : null}

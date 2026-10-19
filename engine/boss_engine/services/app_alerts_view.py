@@ -133,11 +133,13 @@ def _triage_wire(alert: dict) -> dict[str, Any]:
     if st == "no_model":
         return {"state": "no_model", "word": aa.NO_MODEL_WORD, "reason": None, "question": None,
                 "outcome": None, "by": None, "at": t.get("at"), "confidence": None,
-                "agent": None, "model": None}
+                "agent": None, "model": None,
+                "options": [], "answered": None}
     if st == "off":
         return {"state": "off", "word": "Triage off for this rule", "reason": None,
                 "question": None, "outcome": None, "by": None, "at": None, "confidence": None,
-                "agent": None, "model": None}
+                "agent": None, "model": None,
+                "options": [], "answered": None}
     if st in ("pending", "skipped") or not t:
         held = alert.get("inhibited_by") or alert.get("silenced_by")
         word = ("Not triaged: held back" if alert.get("inhibited_by") else
@@ -146,21 +148,34 @@ def _triage_wire(alert: dict) -> dict[str, Any]:
                 else "Not triaged")
         return {"state": "held" if held else st or "none", "word": word, "reason": None,
                 "question": None, "outcome": None, "by": None, "at": None, "confidence": None,
-                "agent": None, "model": None}
+                "agent": None, "model": None,
+                "options": [], "answered": None}
     outcome = t.get("outcome")
     word = {"opened": "Opened an incident", "joined": "Joined the incident",
             "split": "Opened its own incident", "noise": "Noise", "asked": "Asks you",
             "page": "Page now", "storm": t.get("word") or "Storm"}.get(
         outcome or "", t.get("word") or "Triaged")
-    by = t.get("by") or {}
-    return {"state": "done", "word": word, "outcome": outcome, "reason": t.get("reason") or None,
+    answered = t.get("answered") if isinstance(t.get("answered"), dict) else None
+    asked = (t.get("asked") or {}) if answered else {}
+    by = (asked.get("by") if answered else None) or t.get("by") or {}
+    if answered:
+        labels = {o.get("action"): o.get("label") for o in asked.get("options") or []}
+        word = (f"{answered.get('name') or 'A person'} answered: "
+                f"{labels.get(answered.get('action')) or word}")
+    asking = outcome == "asked" and alert.get("state") == "firing"
+    return {"state": "done", "word": word, "outcome": outcome,
+            "reason": (asked.get("reason") if answered else t.get("reason")) or None,
             "question": t.get("question") or None,
             "by": by.get("word") or by.get("model") or by.get("backend") or None,
             # The agent that decided (role), apart from the model it thought with.
             "agent": ({"role_key": by["role_key"], "role": by.get("role") or by["role_key"]}
                       if by.get("role_key") else None),
             "model": by.get("model") or None,
-            "at": t.get("at"), "confidence": t.get("confidence")}
+            "at": t.get("at"),
+            "confidence": (asked.get("confidence") if answered else t.get("confidence")),
+            # The buttons a person answers with, while the agent is asking.
+            "options": (t.get("options") or []) if asking else [],
+            "answered": answered}
 
 
 def _minutes(seconds: Optional[float]) -> str:

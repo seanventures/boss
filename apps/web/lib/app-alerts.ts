@@ -132,7 +132,14 @@ const parseSource = (w: unknown): SignalSource => {
 export type Triage = { state: string; word: string; outcome: string | null; reason: string | null; question: string | null;
   by: string | null; at: string | null; confidence: number | null;
   /** The agent that decided (its role), apart from the model it thought with. */
-  agent: { roleKey: string; role: string } | null; model: string | null };
+  agent: { roleKey: string; role: string } | null; model: string | null;
+  /** While the agent asks: the options a person answers with (one button each). */
+  options: TriageOption[];
+  /** A person's answer to the agent's question: who, when, which option. */
+  answered: { name: string; at: string | null; action: string } | null };
+export type TriageOption = { action: string; label: string };
+export const parseTriageOptions = (v: unknown): TriageOption[] =>
+  arr(v).map((x) => { const o = obj(x); return { action: str(o.action), label: str(o.label) || str(o.action) }; }).filter((o) => o.action);
 export type Alert = {
   id: string; targetId: string; app: string; env: string; ruleId: string | null; kind: string; label: string; alertname: string;
   summary: string; description: string | null; severity: Sev; state: "firing" | "pending" | "resolved";
@@ -187,7 +194,9 @@ export function parseAlert(w: unknown): Alert {
               question: optStr(t.question), by: optStr(t.by), at: optStr(t.at), confidence: optNum(t.confidence),
               agent: t.agent && typeof t.agent === "object" && str(obj(t.agent).role_key)
                 ? { roleKey: str(obj(t.agent).role_key), role: str(obj(t.agent).role) } : null,
-              model: optStr(t.model) },
+              model: optStr(t.model), options: parseTriageOptions(t.options),
+              answered: t.answered && typeof t.answered === "object"
+                ? { name: str(obj(t.answered).name, "A person"), at: optStr(obj(t.answered).at), action: str(obj(t.answered).action) } : null },
     response: resp ? { runId: optStr(resp.run_id), word: str(resp.word) } : null,
     runbook: parseRunbook(o.runbook), exploreUrl: optStr(o.explore_url), exploreReason: optStr(o.explore_reason),
     sourceKind: o.source_kind === "signal" ? "signal" : "rule",
@@ -309,6 +318,8 @@ export const rulesPutPath = (targetId: string) => `${appPath(targetId)}/alert-ru
 export const silencePath = (targetId: string, ruleId: string) => `${appPath(targetId)}/alert-rules/${encodeURIComponent(ruleId)}/silence`;
 export const endSilencePath = (targetId: string, silenceId: string) => `${appPath(targetId)}/alert-silences/${encodeURIComponent(silenceId)}/end`;
 export const triagePath = (targetId: string, alertId: string) => `${appPath(targetId)}/alerts/${encodeURIComponent(alertId)}/triage`;
+/** A person answers the agent's question (POST {project_id, actor, action}). */
+export const answerPath = (targetId: string, alertId: string) => `${triagePath(targetId, alertId)}/answer`;
 export const rotatePath = (targetId: string, sourceId: string) => `${appPath(targetId)}/signal-sources/${encodeURIComponent(sourceId)}/rotate`;
 export const GRAFANA_CHECK_PATH = "/v1/observability/grafana/check";
 export const removeSamplesPath = (targetId: string) => `${appPath(targetId)}/alert-rules/samples/remove`;

@@ -9,6 +9,7 @@
   a reason; ``POST /v1/apps/{target_id}/alert-silences/{silence_id}/end`` ends it early.
 * ``GET  /v1/apps/{target_id}/alerts`` — the app's alert history; ``GET /v1/alerts`` — every app's.
 * ``POST /v1/apps/{target_id}/alerts/{alert_id}/triage`` — ask the agent again (after no model).
+* ``POST /v1/apps/{target_id}/alerts/{alert_id}/triage/answer`` — a person answers the agent.
 * ``POST /v1/apps/{target_id}/signal-sources/{source_id}/rotate`` — a new signals token for a
   reporting app; the value is never shown.
 * ``POST /v1/observability/grafana/check`` — ask Grafana (and Prometheus) now; a Grafana link is
@@ -47,6 +48,11 @@ class SilenceBody(BaseModel):
 class ProjectBody(BaseModel):
     project_id: str
     actor: Optional[str] = None
+
+
+class AnswerBody(ProjectBody):
+    #: One of the options the agent offered (its triage record's `options`).
+    action: str
 
 
 def build_app_alerts_router(
@@ -228,6 +234,30 @@ def build_app_alerts_router(
             raise HTTPException(status_code=409,
                                 detail="Only a firing alert the agent has not triaged")
         record = aa.triage_alert(engine, settings(), alert_id)
+        return jsonable_encoder(record)
+
+    @router.post("/v1/apps/{target_id}/alerts/{alert_id}/triage/answer")
+    @permit(P.RELIABILITY_RESPOND, scope=Scope.project(body="project_id"))
+    def answer_triage(target_id: str, alert_id: str, payload: AnswerBody):
+        """A person answers the on-call agent's question about an alert with one of the options
+        it offered. Runs the same path as the agent deciding (app_alerts.answer_triage)."""
+        from sqlalchemy import text
+
+        pid = reader_project(payload.project_id)
+        with begin(engine) as connection:
+            actor = require_write_actor(connection, pid, payload.actor, "providerops_manage")
+            _target(connection, pid, target_id)
+            mine = connection.execute(text(
+                "SELECT 1 FROM app_alerts WHERE id = :a AND project_id = :p AND "
+                "(target_id = :t OR subject_id = :t)"),
+                {"a": alert_id, "p": pid, "t": target_id}).first()
+        if not mine:
+            raise HTTPException(status_code=404, detail="No such alert on this app")
+        try:
+            record = aa.answer_triage(engine, settings(), alert_id, action=payload.action,
+                                      actor=actor)
+        except aa.AnswerRefused as refused:
+            raise HTTPException(status_code=409, detail=str(refused)) from None
         return jsonable_encoder(record)
 
     @router.post("/v1/apps/{target_id}/signal-sources/{source_id}/rotate")

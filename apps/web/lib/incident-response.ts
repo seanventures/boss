@@ -65,6 +65,10 @@ export type Responder = {
   evidence: { kind: string; word: string }[];
   confidence: number | null; alert: string | null; severity: string | null;
   pullRequestUrl: string | null; crew: CrewMember[]; tests: RedGreen | null;
+  /** Triage: the alert it is about, and — while the agent asks — its question and the buttons. */
+  alertId: string | null; targetId: string | null; question: string | null;
+  options: { action: string; label: string }[];
+  answered: { name: string; action: string; at: string | null } | null;
 };
 
 function parseWho(w: unknown): ResponderWho | null {
@@ -89,6 +93,10 @@ export function parseResponder(w: unknown): Responder {
     evidence: arr(d.evidence).map((x) => { const y = obj(x); return { kind: str(y.kind), word: str(y.word) }; }).filter((e) => e.word),
     confidence: optNum(d.confidence), alert: optStr(d.alert), severity: optStr(d.severity),
     pullRequestUrl: optStr(d.pull_request_url),
+    alertId: optStr(d.alert_id), targetId: optStr(d.target_id), question: optStr(d.question),
+    options: arr(d.options).map((x) => { const y = obj(x); return { action: str(y.action), label: str(y.label) || str(y.action) }; }).filter((o) => o.action),
+    answered: d.answered && typeof d.answered === "object"
+      ? { name: str(obj(d.answered).name, "A person"), action: str(obj(d.answered).action), at: optStr(obj(d.answered).at) } : null,
     crew: arr(d.crew).map((x) => {
       const y = obj(x);
       return { stage: str(y.stage), label: str(y.label), job: str(y.job), status: str(y.status),

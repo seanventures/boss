@@ -53,7 +53,7 @@ NO_MODEL_REPLY = (
 DEFAULT_THRESHOLD = 0.7
 
 #: The decision a person gets when the model is unsure and wrote no question of its own.
-_FALLBACK_QUESTION = "Before I do anything: do you want me to {first}, or {second}?"
+_FALLBACK_QUESTION = "I'm not sure enough to act alone. Should I {first}, or {second}?"
 
 SKILL_ID = "model.agent_decision"
 ROUTE_KIND = "agent"
@@ -77,6 +77,9 @@ class Candidate:
     #: into something) is taken even below the confidence bar: there is no action to guess,
     #: and asking "did you want me to answer or to look?" helps nobody.
     acts: bool = True
+    #: A short verb phrase for a button and a question ("Open its own incident"). The question
+    #: the agent asks is built from these, never from `means` pasted mid-sentence.
+    label: str = ""
 
 
 @dataclass
@@ -233,10 +236,19 @@ def _question_for(candidates: Sequence[Candidate], first: Optional[str], given: 
     if len(given) >= 8:
         return given[:600]
     keys = [c for c in candidates if c.key == first] + [c for c in candidates if c.key != first]
+    keys = [c for c in keys if c.acts and c.available] or keys
     if len(keys) >= 2:
-        return _FALLBACK_QUESTION.format(first=keys[0].means.rstrip("."),
-                                         second=keys[1].means.rstrip("."))
+        return _FALLBACK_QUESTION.format(first=_phrase(keys[0]), second=_phrase(keys[1]))
     return "Before I do anything: what exactly do you want done?"
+
+
+def _phrase(c: Candidate) -> str:
+    """A candidate as the tail of "should I …": its label, lower-cased; else its `means` from
+    after the reason ("It is noise (…): mark it noise" → "mark it noise")."""
+    text = (c.label or c.means).strip().rstrip(".")
+    if not c.label and ": " in text:
+        text = text.split(": ", 1)[1]
+    return text[:1].lower() + text[1:] if text else c.key
 
 
 # ── The backends ──────────────────────────────────────────────────────────────────────────────

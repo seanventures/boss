@@ -403,7 +403,15 @@ def _triage_line(a: Mapping[str, Any]) -> str:
         return TRIAGE_WORDS["no_model"]
     if st != "done" or not t:
         return TRIAGE_WORDS[None]
-    return f"Agent's triage: {t.get('word') or t.get('outcome')}. {t.get('reason') or ''}".strip()
+    line = f"Agent's triage: {t.get('word') or t.get('outcome')}. {t.get('reason') or ''}".strip()
+    if t.get("outcome") == "asked":
+        # THE QUESTION AND ITS ANSWERS, so the person can answer from the message's link.
+        opts = " · ".join(o.get("label") or o.get("action") for o in t.get("options") or [])
+        line += (f"\n  The agent asks: {t.get('question') or 'what should BOSS do?'}"
+                 + (f"\n  Answer in BOSS: {opts}" if opts else ""))
+    if t.get("answered"):
+        line += f"\n  Answered by {t['answered'].get('name') or 'a person'}."
+    return line
 
 
 def _alert_lines(a: Mapping[str, Any], names: Mapping[str, str]) -> list[str]:
@@ -496,11 +504,19 @@ def _names(connection, project_id: str) -> dict[str, str]:
     return out
 
 
+#: Triage outcomes that end a hold: the agent decided it is real, or asked a person.
+RELEASES_HOLD = ("page", "asked", "opened", "joined", "split")
+
+
 def _held(a: Mapping[str, Any], now: datetime) -> Optional[datetime]:
     """A hold (deploy window, maintenance `hold`) delays the message until the agent says page
     or the hold ends; mute never reaches here (silenced alerts are skipped)."""
     triage = _json(a.get("triage"), {}) or {}
-    if triage.get("outcome") == "page":
+    # The hold waits for the agent's verdict, never for a person: once the agent has said it is
+    # real (page, opened, joined, split) or ASKED a person (2026-10-19: release 1.2's SEV1 sat
+    # "Held for the agent" while the agent's question waited, and nobody was told), the hold
+    # ends. Only noise or the agent's own "hold and look again" keeps it.
+    if triage.get("outcome") in RELEASES_HOLD:
         return None
     holds = [x for x in (_json(a.get("suppressed_by"), []) or []) if x.get("mode") == "hold"]
     if not holds:
