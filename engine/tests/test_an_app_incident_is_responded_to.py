@@ -320,6 +320,33 @@ def test_the_investigation_correlates_metrics_logs_and_the_release(pg, app):
     assert {"logs", "release_diff", "rca_hypothesis"} <= kinds and status == "diagnosing"
 
 
+def test_investigate_ignores_a_customer_report_from_an_older_occurrence(pg, app):
+    """A reused incident row carries a `customer_reports` evidence row from a PRIOR occurrence
+    that already resolved. Before this, investigate() blamed the CURRENT occurrence's release
+    on that old report ('created_at <= onset' is true of anything in the past) — it must read
+    only evidence from this occurrence (its own `occurrence` boundary), and say the alert fired
+    first for a re-fire that has no report of its own."""
+    eng, pid = pg
+    t0 = datetime.now(timezone.utc).replace(microsecond=0)
+    tid, inc = _fired_incident(eng, pid, app, t0=t0)
+    with eng.begin() as c:
+        ctx = c.execute(text("SELECT finalize_ctx FROM incidents WHERE id = :i"),
+                        {"i": inc}).scalar()
+        # A customer report from a PRIOR occurrence, long before this one began — evidence of
+        # the old, already-resolved incident, not of this one.
+        c.execute(text(
+            "INSERT INTO incident_evidence (id, incident_id, kind, ref, payload, created_at) "
+            "VALUES (:id, :i, 'customer_reports', 'old', '{}'::jsonb, :at)"),
+            {"id": f"ev_{uuid4().hex[:10]}", "i": inc, "at": t0 - timedelta(days=3)})
+    host = FakeHost('{"level":"error","method":"POST","route":"/orders","status":500,'
+                    '"exc_type":"TypeError","location":"/app/app/pricing.py:41"}\n' * 5)
+    with eng.begin() as c:
+        got = ir.investigate(c, get_settings(), pid, inc, host_access=host, github=FakeGitHub())
+    assert "before the alert fired" in got["root_cause"]
+    assert "before the first customer report" not in got["root_cause"]
+    assert ctx["occurrence"] is not None
+
+
 def test_recovery_is_judged_by_the_monitor_and_the_report_keeps_spend_apart(pg, app):
     eng, pid = pg
     t0 = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(minutes=30)

@@ -579,9 +579,20 @@ def investigate(connection, settings: Any, project_id: str, incident_id: str, *,
     # NAME THE ONSET FOR WHAT IT IS. An incident a customer reported first starts at the first
     # report, not at the alert (D2: "0.8 min before the alert fired" — the alert came 6.9 min
     # after the release; the first report 0.8 min after).
+    #
+    # THIS OCCURRENCE ONLY. An incident row is reused across occurrences: resolved, then
+    # fired again later by the alert alone, with no new report. Without the lower bound, a
+    # customer_reports row from a PRIOR, already-closed occurrence — always "created_at <=
+    # onset" simply by being in the past — made every later, alert-only re-fire say "the
+    # first customer report" too, blaming the wrong release on a report about the old one
+    # (Order API, 2026-10-18). `since` is when THIS occurrence began (ingest() and
+    # open_or_reopen both set it from the very moment that opened it), so a report only
+    # counts here when it is no older than that.
+    since = _occurrence(ctx)
     reported_first = bool(connection.execute(sql(
         "SELECT 1 FROM incident_evidence WHERE incident_id = :i AND kind = 'customer_reports' "
-        "AND created_at <= :t LIMIT 1"), {"i": incident_id, "t": onset}).first())
+        "AND created_at <= :t AND (CAST(:s AS timestamptz) IS NULL OR created_at >= :s) "
+        "LIMIT 1"), {"i": incident_id, "t": onset, "s": since}).first())
     hyp = hypothesis(deploy, alert, signatures, diff, onset=onset,
                      onset_was=("the first customer report" if reported_first
                                 else "the alert fired"))
