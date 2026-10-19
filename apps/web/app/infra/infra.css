@@ -101,9 +101,13 @@
 .inf-drawer[data-width="520"] { width: min(520px, 100%); }
 .inf-drawer[data-width="560"] { width: min(560px, 100%); }
 .inf-drawer[data-width="880"] { width: min(880px, 100%); }
-/* Expand: the drawer takes the page's width (an app's health reads as a page). */
-.inf-drawer[data-expanded] { width: min(var(--page-max, 1120px), 100%); }
+/* Expand: the drawer is the whole screen under the shell header (an app's health reads as a page). */
+.inf-drawer-back[data-expanded] { top: var(--shell-head, 62px); }
+.inf-drawer[data-expanded] { width: 100%; border-left: 0; }
 .inf-drawer-head { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 12px 16px; border-bottom: 1px solid var(--border); }
+/* The head's own content gives way; Expand and × keep their size and never overlap. */
+.inf-drawer-head > :first-child { min-width: 0; }
+.inf-drawer-head > .inf-drawer-expand, .inf-drawer-head > .ag-act-close { flex: none; white-space: nowrap; }
 .inf-drawer-body { display: flex; flex-direction: column; gap: 18px; padding: 14px 16px 24px; overflow-y: auto; }
 .inf-dsec { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .inf-dsec-head { display: flex; align-items: center; gap: 8px; }
