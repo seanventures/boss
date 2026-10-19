@@ -20,8 +20,8 @@ import React, { useState } from "react";
 
 import { GatedButton } from "../../components/gated";
 import {
-  HISTORY_WINS, endSilencePath, rotatePath, rulesPutPath, triagePath, useHistory, useRules,
-  type Alert, type AlertRule, type HistoryWin, type SignalSource,
+  HISTORY_WINS, alertDuration, durationWord, endSilencePath, removeSamplesPath, rotatePath, rulesPutPath, triagePath, useHistory,
+  useRules, type Alert, type AlertRule, type HistoryWin, type SevInfo, type SignalSource,
 } from "../../lib/app-alerts";
 import { useLocalTime } from "../../lib/local-time";
 import { showToast } from "../client-forms";
@@ -29,11 +29,13 @@ import { notifyChanged } from "../changed";
 import { DrawerSection, Skeleton } from "../infra/kit";
 import { Markdown } from "../markdown";
 import { obsWrite } from "./obs-write";
+import { RuleBuilder } from "./rule-builder";
 import { RuleSheet } from "./rule-sheet";
+import { RuleFacts } from "./rule-facts";
+import { SevFlag, StatusChip } from "./severity";
 import { SilenceSheet } from "./silence-sheet";
 
 const RESPOND_TIP = "Starts Incident Response when the agent keeps this alert in an incident";
-const SEVERITY_WORD = { critical: "High", warning: "Low" } as const;
 
 function Dot({ tone }: { tone: string }) {
   return <span className="obs-adot" data-tone={tone} aria-hidden />;
@@ -46,8 +48,9 @@ export function whenWord(iso: string | null, lt: ReturnType<typeof useLocalTime>
   return now - t < 20 * 3600_000 ? lt.hhmm(t) : lt.day(t);
 }
 
-function RuleRow({ r, busy, onEdit, onSilence, onRespond, onEndSilence }: {
+function RuleRow({ r, busy, onEdit, onSilence, onRespond, onEndSilence, severities }: {
   r: AlertRule; busy: boolean; onEdit: () => void; onSilence: () => void; onRespond: () => void; onEndSilence: () => void;
+  severities?: SevInfo[];
 }) {
   const lt = useLocalTime();
   const tone = r.silence ? "grey" : r.stateTone;
@@ -56,9 +59,8 @@ function RuleRow({ r, busy, onEdit, onSilence, onRespond, onEndSilence }: {
       <span className="obs-arule-name">
         <Dot tone={tone} />
         <span className="obs-strong" title={r.description ?? r.summary ?? undefined}>{r.label}</span>
-        <span className="obs-chip" title={`Severity ${SEVERITY_WORD[r.severity]}`} data-tone={r.severity === "critical" ? "red" : undefined}>
-          {SEVERITY_WORD[r.severity]}
-        </span>
+        <SevFlag sev={r.severity} catalog={severities} />
+        {r.sample ? <span className="obs-chip" data-testid="obs-rule-sample" title="A labelled sample rule: Remove samples deletes it">Sample</span> : null}
       </span>
       <span className="inf-muted obs-arule-cond" title={r.expr} data-copy="data">{r.condition}</span>
       <span className="obs-arule-state">
@@ -68,6 +70,7 @@ function RuleRow({ r, busy, onEdit, onSilence, onRespond, onEndSilence }: {
         </span>
         {r.valueWord && !r.silence ? <span className="inf-faint inf-num" data-copy="data">{r.valueWord}</span> : null}
       </span>
+      <RuleFacts r={r} severities={severities} />
       <span className="obs-inc-auto obs-arule-respond">
         <GatedButton permission="observability:manage" type="button" role="switch" aria-checked={r.autoRespond}
                      aria-label={`Respond automatically to ${r.label}`} className="obs-switch" data-testid="obs-rule-respond"
@@ -195,12 +198,6 @@ export function AlertBadges({ a }: { a: Alert }) {
           Flapping
         </span>
       ) : null}
-      {a.acked ? (
-        <span className="obs-chip" data-tone="green" data-testid="obs-alert-acked"
-              title={`Acked by ${a.acked.by} at ${lt.full(a.acked.at)}. Repeats stop; it is not silenced.`}>
-          Acked{a.acked.until ? ` until ${whenWord(a.acked.until, lt)}` : ""}
-        </span>
-      ) : null}
       {a.suppressed.map((x) => (
         <span key={`${x.kind}:${x.id}`} className="obs-chip" data-testid="obs-alert-suppressed"
               title={[x.reason, x.until ? `until ${lt.full(x.until)}` : null].filter(Boolean).join(" · ") || x.word}>{x.word}</span>
@@ -223,24 +220,43 @@ export function AlertBadges({ a }: { a: Alert }) {
   );
 }
 
-export function AlertRow({ a, targetId, projectId, actor, onDone, showApp, onApp, onIncident, selected, onSelect, onAck }: {
-  a: Alert; targetId: string; projectId: string; actor: string; onDone: () => void;
+/** The status chip with its times: Resolved 07:11 · 6 min; Acknowledged · Param (until 16:00). */
+export function AlertStatus({ a }: { a: Alert }) {
+  const lt = useLocalTime();
+  const dur = durationWord(alertDuration(a));
+  if (a.status.key === "resolved") {
+    return <StatusChip status={a.status} extra={a.clearedAt ? `${whenWord(a.clearedAt, lt)} · ${dur}` : dur}
+                       extraTip={[a.clearedAt ? `Resolved at ${lt.full(a.clearedAt)}` : null, `open ${dur}`, a.clearedWord].filter(Boolean).join(", ")} />;
+  }
+  const ackTip = a.acked ? `Acknowledged by ${a.acked.by} at ${lt.full(a.acked.at)}${a.acked.until ? `, until ${lt.full(a.acked.until)}` : ""}` : null;
+  return <StatusChip status={a.status} extraTip={ackTip} />;
+}
+
+export function AlertRow({ a, targetId, projectId, actor, onDone, showApp, onApp, onIncident, selected, onSelect, onAck, severities }: {
+  a: Alert; targetId: string; projectId: string; actor: string; onDone: () => void; severities?: SevInfo[];
   showApp?: boolean; onApp?: () => void; onIncident?: () => void;
   /** Observability › Alerts: select-many for Ack selected, and a per-row Ack. */
   selected?: boolean; onSelect?: (on: boolean) => void; onAck?: () => void;
 }) {
   const lt = useLocalTime();
   const [open, setOpen] = useState(false);
-  const tone = a.state === "firing" ? (a.heldBack || a.acked ? "amber" : "red") : a.state === "pending" ? "amber" : "grey";
+  const fired = a.firedAt ?? a.activeAt;
+  const isOpen = a.status.key !== "resolved";
   return (
-    <li className="obs-alert" data-testid={`obs-alert-${a.id}`} data-state={a.state}>
+    <li className="obs-alert" data-testid={`obs-alert-${a.id}`} data-state={a.state} data-open={isOpen ? "1" : "0"}
+        data-attention={a.needsAttention ? "1" : undefined}>
       <span className="obs-line">
         {onSelect ? (
           <input type="checkbox" checked={Boolean(selected)} aria-label={`Select ${a.label} on ${a.app}`} data-testid="obs-alert-select"
                  onChange={(e) => onSelect(e.target.checked)} />
         ) : null}
-        <Dot tone={tone} />
-        <span className="inf-num obs-alert-time" title={lt.full(a.firedAt ?? a.activeAt)}>{whenWord(a.firedAt ?? a.activeAt, lt)}</span>
+        <SevFlag sev={a.severity} catalog={severities} />
+        <AlertStatus a={a} />
+        <span className="obs-alert-times" data-testid="obs-alert-times">
+          <span className="inf-num obs-alert-time" data-testid="obs-alert-fired"
+                title={`${a.firedAt ? "Fired" : "Breached"} at ${lt.full(fired)}`}>{whenWord(fired, lt)}</span>
+          {isOpen ? <span className="inf-num" data-testid="obs-alert-duration" title="Open this long, and still open">open {durationWord(alertDuration(a))}</span> : null}
+        </span>
         {showApp ? (
           <button type="button" className="inf-link obs-strong" data-testid="obs-alert-app" title={`${a.app} · ${a.env}: its Alerts tab`}
                   onClick={onApp}>{a.app}</button>
@@ -257,7 +273,6 @@ export function AlertRow({ a, targetId, projectId, actor, onDone, showApp, onApp
         ) : null}
         <AlertBadges a={a} />
         <span className="ag-spacer" />
-        <span className="inf-faint">{a.state === "resolved" ? (a.clearedWord ?? "Resolved") : a.stateWord}</span>
         {onAck && a.state !== "resolved" && !a.acked ? (
           <GatedButton permission="observability:manage" type="button" className="inf-link" data-testid="obs-alert-ack"
                        title="Stops repeat notifications for 4 hours. It does not silence the alert." onClick={onAck}>Ack</GatedButton>
@@ -278,7 +293,9 @@ export function AppAlertsTab({ projectId, actor, targetId, onIncident }: {
   const rules = useRules(projectId, targetId);
   const [win, setWin] = useState<HistoryWin>("24h");
   const history = useHistory(projectId, targetId, win);
-  const [edit, setEdit] = useState<AlertRule | "new" | null>(null);
+  const [edit, setEdit] = useState<AlertRule | null>(null);
+  const [building, setBuilding] = useState(false);
+  const [sureSamples, setSureSamples] = useState(false);
   const [silenceOf, setSilenceOf] = useState<AlertRule | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const refresh = () => { rules.refresh(); history.refresh(); notifyChanged("observability", { target_id: targetId }); };
@@ -301,19 +318,38 @@ export function AppAlertsTab({ projectId, actor, targetId, onIncident }: {
     if (res.ok) { showToast("success", "Silence ended"); refresh(); } else showToast("error", res.error ?? "Not ended");
   };
 
+  const removeSamples = async () => {
+    if (!sureSamples) { setSureSamples(true); return; }
+    setBusy("samples");
+    const res = await obsWrite<{ removed?: number; word?: string }>(removeSamplesPath(targetId), { project_id: projectId, actor },
+                                                                   { scope: `obs:samples:${targetId}`, label: "Remove samples" });
+    setBusy(null);
+    setSureSamples(false);
+    if (res.ok) { showToast("success", res.body?.word ?? `Removed ${res.body?.removed ?? 0} sample rules`); refresh(); }
+    else showToast("error", res.error ?? "Not removed");
+  };
+
   const d = rules.data;
   const newest = d?.rules.filter((r) => r.changedAt).sort((a, b) => Date.parse(b.changedAt!) - Date.parse(a.changedAt!))[0];
   const sourceWord = d ? [...new Set(d.rules.map((r) => r.sourceWord))].join(" · ") : "";
   return (
     <div className="obs-alerts-tab" data-testid="obs-app-alerts">
       <DrawerSection label="RULES" testId="obs-app-rules" actions={
-        <GatedButton permission="observability:manage" type="button" className="inf-link" data-testid="obs-rule-add"
-                     title="A rule of your own, in PromQL" onClick={() => setEdit("new")}>+ Add rule</GatedButton>}>
+        <span className="obs-chips">
+          {d?.hasSamples ? (
+            <GatedButton permission="observability:manage" type="button" className={sureSamples ? "ag-btn ag-btn-sm" : "inf-link"}
+                         data-testid="obs-rules-remove-samples" disabled={busy === "samples"}
+                         title={sureSamples ? "Deletes every rule labelled sample on this app" : "Delete the sample rules"}
+                         onClick={() => void removeSamples()}>{sureSamples ? "Confirm remove" : "Remove samples"}</GatedButton>
+          ) : null}
+          <GatedButton permission="observability:manage" type="button" className="inf-link" data-testid="obs-rule-add"
+                       title="Pick a metric this app reports; BOSS writes the PromQL" onClick={() => setBuilding(true)}>+ New alert rule</GatedButton>
+        </span>}>
         {!d ? (rules.error ? <span className="inf-error" title={rules.error}>Can&apos;t load rules</span> : <Skeleton testId="obs-rules-loading" />) : (
           <>
             <ul className="obs-list obs-arules">
               {d.rules.map((r) => (
-                <RuleRow key={r.id} r={r} busy={busy === r.id} onEdit={() => setEdit(r)} onSilence={() => setSilenceOf(r)}
+                <RuleRow key={r.id} r={r} busy={busy === r.id} severities={d.severities} onEdit={() => setEdit(r)} onSilence={() => setSilenceOf(r)}
                          onRespond={() => void respond(r)} onEndSilence={() => void endSilence(r)} />
               ))}
             </ul>
@@ -348,12 +384,15 @@ export function AppAlertsTab({ projectId, actor, targetId, onIncident }: {
           ) : (
             <ul className="obs-list obs-alerts">
               {history.data.alerts.map((a) => <AlertRow key={a.id} a={a} targetId={targetId} projectId={projectId} actor={actor}
+                                                        severities={history.data?.severities}
                                                         onDone={refresh} onIncident={onIncident} />)}
             </ul>
           )}
       </DrawerSection>
 
-      {edit ? <RuleSheet rule={edit === "new" ? null : edit} targetId={targetId} projectId={projectId} actor={actor}
+      {building ? <RuleBuilder targetId={targetId} projectId={projectId} actor={actor} severities={d?.severities}
+                               onClose={() => setBuilding(false)} onSaved={() => { setBuilding(false); refresh(); }} /> : null}
+      {edit ? <RuleSheet rule={edit} severities={d?.severities} targetId={targetId} projectId={projectId} actor={actor}
                          onClose={() => setEdit(null)} onSaved={() => { setEdit(null); refresh(); }} /> : null}
       {silenceOf ? <SilenceSheet rule={silenceOf} targetId={targetId} projectId={projectId} actor={actor}
                                  onClose={() => setSilenceOf(null)} onSaved={() => { setSilenceOf(null); refresh(); }} /> : null}

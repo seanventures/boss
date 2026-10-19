@@ -11,7 +11,7 @@
 import React, { act } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { FIRING_ALERT, SIGNAL_ALERT, allAlertsWire } from "./_helpers/alerts-fixtures";
+import { ACKED_ALERT, FIRING_ALERT, NOISE_ALERT, SIGNAL_ALERT, allAlertsWire } from "./_helpers/alerts-fixtures";
 import { ATTENTION_APP_DOWN, pulseWire } from "./_helpers/obs-fixtures";
 import { $, $$, click, settle, unmount } from "./_helpers/live-render";
 import { openObs, params, text } from "./_helpers/obs-render";
@@ -99,6 +99,62 @@ describe("Observability › Alerts shows only alerts and incidents", () => {
   });
 });
 
+describe("SEV1–SEV4 and status at a glance", () => {
+  it("leads with Needs attention, which is also the filter", async () => {
+    const rec = await openObs("?view=alerts", { alerts: () => allAlertsWire([FIRING_ALERT, ACKED_ALERT], { counts: { firing: 2, pending: 0, needs_attention: 1 } }) });
+    const lead = $("[data-testid='obs-alerts-attention']")!;
+    const zone = $("[data-testid='obs-alerts']")!;
+    expect(zone.firstElementChild?.contains(lead)).toBe(true);
+    expect(text($("[data-testid='obs-alerts-attention-n']"))).toBe("1");
+    expect(lead.getAttribute("title")).toMatch(/nobody has acknowledged/);
+    expect(lead.getAttribute("aria-pressed")).toBe("false");
+    await click(lead);
+    await settle();
+    expect(params().get("aatt")).toBe("1");
+    expect($("[data-testid='obs-alerts-attention']")?.getAttribute("aria-pressed")).toBe("true");
+    expect(rec.calls.some((u) => u.startsWith("/v1/alerts?") && u.includes("attention=true"))).toBe(true);
+    await click($("[data-testid='obs-alerts-attention']"));
+    expect(params().get("aatt")).toBeNull();
+  });
+
+  it("every row carries its SEV flag (with what it means) and a status chip saying whether it is open", async () => {
+    await openObs("?view=alerts", { alerts: () => allAlertsWire([FIRING_ALERT, ACKED_ALERT, NOISE_ALERT, SIGNAL_ALERT]) });
+    const row = (id: string) => $(`[data-testid='obs-alert-${id}']`)!;
+    const sev = (id: string) => row(id).querySelector("[data-testid='obs-sev']")!;
+    const status = (id: string) => row(id).querySelector("[data-testid='obs-status']")!;
+    expect(sev("alrt_err").getAttribute("data-sev")).toBe("sev1");
+    expect(sev("alrt_err").getAttribute("title")).toBe("SEV1 Critical: Customer-facing outage. Pages: high urgency, notifies at once, ignores quiet hours");
+    expect(sev("alrt_ack").getAttribute("data-sev")).toBe("sev2");
+    // An older answer (no sev): the warning label reads as SEV3.
+    expect(sev("alrt_sig").getAttribute("data-sev")).toBe("sev3");
+    expect(text(status("alrt_err"))).toBe("Firing");
+    expect(status("alrt_err").getAttribute("data-tone")).toBe("red");
+    expect(row("alrt_err").getAttribute("data-attention")).toBe("1");
+    expect(text(row("alrt_err").querySelector("[data-testid='obs-alert-duration']"))).toBe("open 12 min");
+    expect(text(status("alrt_ack"))).toBe("Acknowledged · Param");
+    expect(status("alrt_ack").getAttribute("data-tone")).toBe("amber");
+    expect(status("alrt_ack").getAttribute("title")).toMatch(/Acknowledged by Param/);
+    expect(row("alrt_ack").getAttribute("data-attention")).toBeNull();
+    expect(text(status("alrt_lat"))).toMatch(/^Resolved .+ · 6 min$/);
+    expect(status("alrt_lat").getAttribute("data-tone")).toBe("green");
+    expect(row("alrt_lat").getAttribute("data-open")).toBe("0");
+    expect(row("alrt_lat").querySelector("[data-testid='obs-alert-fired']")).not.toBeNull();
+    expect(row("alrt_lat").querySelector("[data-testid='obs-alert-duration']")).toBeNull();
+    // the severity filter offers SEV1–SEV4
+    const opts = [...document.querySelectorAll<HTMLOptionElement>("[data-testid='obs-alerts-severity'] option")].map((o) => o.value);
+    expect(opts).toEqual(["", "sev1", "sev2", "sev3", "sev4"]);
+  });
+
+  it("an incident card shows its SEV and status chip, saying who acknowledged it", async () => {
+    const inc = { ...RECOVERED, id: "inc_ack", firing: 1, happening: true, sev: "sev2", acked: true, acked_by: "Param",
+                  status_chip: { key: "acknowledged", word: "Acknowledged · Param", tone: "amber", tip: "Acknowledged: someone is on it" } };
+    await openObs("?view=alerts", { alerts: () => allAlertsWire([], { incidents: [inc] }) });
+    const row = $("[data-testid='obs-incident-inc_ack']")!;
+    expect(row.querySelector("[data-testid='obs-sev']")?.getAttribute("data-sev")).toBe("sev2");
+    expect(text(row.querySelector("[data-testid='obs-incident-status']"))).toBe("Acknowledged · Param");
+  });
+});
+
 describe("Connect an app", () => {
   it("asks how it talks, shows the values once, then what arrived", async () => {
     const rec = await openObs("?view=alerts", {
@@ -170,5 +226,25 @@ describe("Notify", () => {
     await click($("[data-testid='obs-route-go']"));
     expect(text($("[data-testid='obs-route-word']"))).toBe("Goes to Checkout after 30 s");
     expect(text($("[data-testid='obs-route-cp']"))).toBe("On-call: skipped, not verified");
+  });
+
+  it("recent sends carry the SEV of what they told", async () => {
+    await openObs("?view=notify", {
+      gets: {
+        "/v1/contact-points": () => ({ contact_points: [{ id: "cp_console", name: "Console", kind: "console", shows: "", verified: true }] }),
+        "/v1/notification-policies": () => ({ policies: [] }),
+        "/v1/silences": () => ({ silences: [], windows: [], inhibit_rules: [] }),
+        "/v1/notifications": () => ({ notifications: [
+          { id: "n1", kind: "firing", status: "sent", contact_point: "Console", subject: "[SEV1 FIRING] api error rate", attempts: 1,
+            sent_at: "2026-10-04T11:50:00.000Z", sev: "sev1" },
+          { id: "n2", kind: "test", status: "sent", contact_point: "Console", subject: "Test", attempts: 1, sent_at: "2026-10-04T11:40:00.000Z", sev: null },
+        ] }),
+      },
+    });
+    await click($("[data-testid='obs-sends-toggle']"));
+    await settle();
+    const rows = $$("[data-testid='obs-send']");
+    expect(rows[0].querySelector("[data-testid='obs-sev']")?.getAttribute("data-sev")).toBe("sev1");
+    expect(rows[1].querySelector("[data-testid='obs-sev']")).toBeNull();
   });
 });

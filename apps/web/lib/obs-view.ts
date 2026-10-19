@@ -13,7 +13,7 @@
 import { arr, num, obj, opt, str, usePolled, type Polled } from "./factory-floor";
 import { parseAttention, type AttentionItem } from "./agents-live-board";
 import { parseWord, toneOf, type Tone, type Word } from "./infra-view";
-import { ALERT_SOURCES, parseGrafana, type AlertSource, type Grafana } from "./app-alerts";
+import { ALERT_SOURCES, parseGrafana, type AlertSource, type Grafana, type Sev } from "./app-alerts";
 
 const optNum = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
 const optStr = (v: unknown): string | null => (typeof v === "string" && v ? v : null);
@@ -347,11 +347,13 @@ export const OBS_TABS: { key: ObsTab; label: string; tip: string }[] = [
   { key: "installs", label: "Installs", tip: "Installs reporting to this collector" },
 ];
 /** `atab=alerts` opens the app drawer on its Alerts tab (Factory ⋯ › Alerts links there);
- *  `aapp`, `astate`, `asev`, `asrc`, `aflap`, `aack` are Observability › Alerts' filters. */
+ *  `aapp`, `astate`, `asev`, `asrc`, `aflap`, `aack`, `aatt` are Observability › Alerts' filters. */
 export type DrawerTab = "overview" | "alerts";
 export type ObsUrl = { view: ObsTab; win: Win; group: Group; metric: Metric; app: string | null; model: string | null; q: string;
-  atab: DrawerTab; aapp: string | null; astate: "firing" | "resolved" | "all"; asev: "warning" | "critical" | null;
-  asrc: AlertSource | null; aflap: boolean | null; aack: boolean | null };
+  atab: DrawerTab; aapp: string | null; astate: "firing" | "resolved" | "all"; asev: Sev | null;
+  asrc: AlertSource | null; aflap: boolean | null; aack: boolean | null;
+  /** `aatt=1`: Needs attention only (firing and not acknowledged). */
+  aatt: boolean };
 const ALERT_SOURCE_KEYS = new Set<string>(ALERT_SOURCES.map((s) => s.key));
 const triOf = (v: string | null): boolean | null => (v === "true" ? true : v === "false" ? false : null);
 const OBS_TAB_KEYS = new Set<string>(OBS_TABS.map((t) => t.key));
@@ -366,9 +368,9 @@ export function readObsUrl(search: string): ObsUrl {
     metric: metricOf(p.get("metric")), app: p.get("app"), model: p.get("model"), q: p.get("q") ?? "",
     atab: p.get("atab") === "alerts" ? "alerts" : "overview", aapp: p.get("aapp"),
     astate: p.get("astate") === "resolved" || p.get("astate") === "all" ? (p.get("astate") as "resolved" | "all") : "firing",
-    asev: p.get("asev") === "warning" || p.get("asev") === "critical" ? (p.get("asev") as "warning" | "critical") : null,
+    asev: /^sev[1-4]$/.test(p.get("asev") ?? "") ? (p.get("asev") as Sev) : null,
     asrc: ALERT_SOURCE_KEYS.has(p.get("asrc") ?? "") ? (p.get("asrc") as AlertSource) : null,
-    aflap: triOf(p.get("aflap")), aack: triOf(p.get("aack")),
+    aflap: triOf(p.get("aflap")), aack: triOf(p.get("aack")), aatt: p.get("aatt") === "1",
   };
 }
 

@@ -7,7 +7,8 @@
  *     Fire when    errors (5xx) are above [ 5 ]% of requests
  *     Over         [ 5 ] min, with at least [ 20 ] requests
  *     Hold         [ 0 ] min before it fires          (Prometheus `for`)
- *     Severity     ( ) Low  (•) High
+ *     Keep firing  [ 0 ] min after it clears       (Prometheus `keep_firing_for`)
+ *     Severity     ( ) SEV1 (•) SEV2 ( ) SEV3 ( ) SEV4
  *     When it fires  [x] An agent triages it   [x] Respond automatically (asks your consent once)
  *     Notify       [x] Console [x] On-call email [ ] #ops Slack     (PUT /v1/alert-rules/{id}/notify)
  *     Runbook      [ boss:runbook/app-serving ]
@@ -21,11 +22,13 @@
 import React, { useState } from "react";
 
 import { GatedButton } from "../../components/gated";
-import { forWord, rulesPutPath, type AlertRule, type RuleKind } from "../../lib/app-alerts";
+import { SEVERITIES, forWord, rulesPutPath, type AlertRule, type RuleKind, type Sev, type SevInfo } from "../../lib/app-alerts";
 import { showToast } from "../client-forms";
 import { Sheet } from "../infra/kit";
 import { obsWrite } from "./obs-write";
 import { useContactPoints, usePolicies } from "../../lib/monitoring";
+import { RuleFacts } from "./rule-facts";
+import { SevFlag, sevTip } from "./severity";
 
 type Field = { key: string; before: string; after: string; tip: string };
 /** Each built-in's settings, as the sentence the mockup reads. */
@@ -63,14 +66,16 @@ function NumberField({ f, value, bounds, onChange }: { f: Field; value: string; 
   );
 }
 
-export function RuleSheet({ rule, targetId, projectId, actor, onClose, onSaved }: {
+export function RuleSheet({ rule, targetId, projectId, actor, onClose, onSaved, severities = SEVERITIES }: {
   rule: AlertRule | null; targetId: string; projectId: string; actor: string; onClose: () => void; onSaved: () => void;
+  severities?: SevInfo[];
 }) {
   const custom = !rule || rule.kind === "custom";
   const [params, setParams] = useState<Record<string, string>>(
     Object.fromEntries(Object.entries(rule?.params ?? {}).map(([k, v]) => [k, String(v)])));
   const [hold, setHold] = useState(String(Math.round((rule?.forSeconds ?? 0) / 60)));
-  const [severity, setSeverity] = useState<"warning" | "critical">(rule?.severity ?? "warning");
+  const [keep, setKeep] = useState(String(Math.round((rule?.facts.keepFiringForS ?? 0) / 60)));
+  const [severity, setSeverity] = useState<Sev>(rule?.severity ?? "sev3");
   const [triage, setTriage] = useState(rule?.triage ?? true);
   const [respond, setRespond] = useState(rule?.autoRespond ?? false);
   const [enabled, setEnabled] = useState(rule?.enabled ?? true);
@@ -101,10 +106,10 @@ export function RuleSheet({ rule, targetId, projectId, actor, onClose, onSaved }
     setError(null);
     const holdMin = Number(hold) || 0;
     const change: Record<string, unknown> = custom
-      ? { alert, expr, for: forWord(holdMin * 60), labels: { severity }, annotations: { summary, ...(runbook ? { runbook_url: runbook } : {}) },
+      ? { alert, expr, for: forWord(holdMin * 60), keep_firing_for: forWord((Number(keep) || 0) * 60), labels: { severity }, annotations: { summary, ...(runbook ? { runbook_url: runbook } : {}) },
           enabled, triage, auto_respond: respond }
       : { params: Object.fromEntries(Object.entries(params).map(([k, v]) => [k, Number(v)])), for: forWord(holdMin * 60),
-          severity, enabled, triage, auto_respond: respond, runbook_url: runbook };
+          keep_firing_for: forWord((Number(keep) || 0) * 60), severity, enabled, triage, auto_respond: respond, runbook_url: runbook };
     if (rule) change.id = rule.id;
     const r = await obsWrite(rulesPutPath(targetId), { project_id: projectId, actor, reason, rules: [change] },
                              { scope: `obs:rule:${rule?.id ?? "new"}`, label: "Save rule" }, "PUT");
@@ -157,19 +162,26 @@ export function RuleSheet({ rule, targetId, projectId, actor, onClose, onSaved }
           </>
         ) : null}
         <div className="obs-rrow">
-          <span className="obs-rlabel" title="Prometheus' for: how long it must stay breached">Hold</span>
+          <span className="obs-rlabel" title="Prometheus' for: how long it must stay breached">For</span>
           <span className="obs-rbody">
             <NumberField f={{ key: "for", before: "", after: "min before it fires", tip: "0 fires on the first breach" }}
                          value={hold} bounds={[0, 1440]} onChange={setHold} />
           </span>
         </div>
+        <div className="obs-rrow">
+          <span className="obs-rlabel" title="Prometheus' keep_firing_for: stays firing this long after it clears">Keep firing</span>
+          <span className="obs-rbody">
+            <NumberField f={{ key: "keep_firing_for", before: "", after: "min after it clears", tip: "0 resolves on the first clear check" }}
+                         value={keep} bounds={[0, 1440]} onChange={setKeep} />
+          </span>
+        </div>
         <div className="obs-rrow" role="radiogroup" aria-label="Severity">
           <span className="obs-rlabel">Severity</span>
           <span className="obs-rbody">
-            {(["warning", "critical"] as const).map((s) => (
-              <label key={s} className="obs-rcheck">
-                <input type="radio" name="severity" checked={severity === s} onChange={() => setSeverity(s)} data-testid={`obs-rule-sev-${s}`} />
-                <span>{s === "critical" ? "High" : "Low"}</span>
+            {severities.map((s) => (
+              <label key={s.key} className="obs-rcheck" title={sevTip(s.key, severities)}>
+                <input type="radio" name="severity" checked={severity === s.key} onChange={() => setSeverity(s.key)} data-testid={`obs-rule-sev-${s.key}`} />
+                <SevFlag sev={s.key} catalog={severities} />
               </label>
             ))}
           </span>
@@ -215,10 +227,11 @@ export function RuleSheet({ rule, targetId, projectId, actor, onClose, onSaved }
           <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} data-testid="obs-rule-enabled" />
           <span>Rule on</span>
         </label>
-        {rule && !custom ? (
-          <div className="obs-adetail-row">
-            <span className="obs-fact-k" title="Follows the settings above when saved">PromQL</span>
-            <code className="obs-promql" data-copy="data" data-testid="obs-rule-promql">{rule.expr}</code>
+        {rule ? (
+          <div className="obs-adetail-row" data-testid="obs-rule-promql-facts">
+            <span className="obs-fact-k" title="As saved; follows the settings above when you save">Now</span>
+            {!custom ? <code className="obs-promql" data-copy="data" data-testid="obs-rule-promql">{rule.expr}</code> : null}
+            <RuleFacts r={rule} severities={severities} />
           </div>
         ) : null}
         <label className="inf-field">

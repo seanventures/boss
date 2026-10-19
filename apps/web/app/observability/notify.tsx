@@ -28,6 +28,7 @@ import { Empty, Sheet, Skeleton, ZoneHead } from "../infra/kit";
 import { whenWord } from "./alerts-tab";
 import { obsWrite } from "./obs-write";
 import type { ObsTabProps } from "./obs-home";
+import { SevFlag } from "./severity";
 
 const VERIFY_TIP = "Unverified: high-urgency alerts skip it until it is verified with the code BOSS sent";
 const localZone = () => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"; } catch { return "UTC"; } };
@@ -184,6 +185,7 @@ function ContactPoints({ projectId, actor, cps, refresh }: Zone & { cps: ReturnT
               <li key={n.id} className="obs-line" data-testid="obs-send">
                 <span className="obs-adot" data-tone={n.status === "sent" ? "green" : n.status === "failed" || n.status === "dead" ? "red" : "grey"} aria-hidden />
                 <span className="inf-num inf-faint" title={lt.full(n.sentAt ?? n.createdAt)}>{whenWord(n.sentAt ?? n.createdAt, lt)}</span>
+                {n.sev ? <SevFlag sev={n.sev} /> : null}
                 <span className="obs-strong obs-alert-what" data-user-text>{n.subject || n.kind}</span>
                 {n.contactPoint ? <span className="inf-muted">{n.contactPoint}</span> : null}
                 <span className="ag-spacer" />

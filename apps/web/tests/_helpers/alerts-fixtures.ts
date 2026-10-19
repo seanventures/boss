@@ -43,6 +43,11 @@ export function ruleWire(kind: string, over: Record<string, unknown> = {}) {
     summary: `${b.label} on api`, description: b.condition, runbook: RUNBOOK, enabled: true, triage: true, auto_respond: false,
     respond_on_behalf_of: null, notify: "console", changed_by: null, changed_at: null, state_tip: null, value: null, value_word: null,
     evaluated_at: NOW, evaluated_by: "BOSS's own monitoring", silence: null, editable: "params",
+    sev: b.severity === "critical" ? "sev1" : "sev3", sample: false,
+    facts: { expr: kind === "error_rate" ? ERROR_EXPR : `x{${SEL}}`, interval_s: 60, window: kind === "deploy_health" ? null : "5m",
+             for_s: 0, keep_firing_for_s: 0, threshold: kind === "error_rate" ? "> 5" : null,
+             min_requests: kind === "error_rate" || kind === "latency_p95" ? 20 : null, routing: "Console · On-call email",
+             routing_tip: "Default policy: console, then email to the owner", datasource: "BOSS's own records" },
     ...b, ...over,
   };
 }
@@ -55,7 +60,7 @@ export function rulesWire(targetId = "t_down", over: Record<string, unknown> = {
                 reports_today: 7, last_poll_at: iso(NOW_MS - MIN), last_word: "No signals",
                 token: { minted: true, minted_at: iso(NOW_MS - 30 * 24 * 3600_000), rotated_at: null } }],
     changes: [{ rule_id: "arule_error_rate", change: "edited", reason: "checkout matters", by: "Param", at: iso(NOW_MS - 3 * 3600_000) }],
-    evaluator: "BOSS's own monitoring", evaluator_tip: "Prometheus isn't answering on its host",
+    evaluator: "BOSS's own monitoring", evaluator_tip: "Prometheus isn't answering on its host", has_samples: false,
     export: { groups: [] }, grafana: { state: "answering", reason: null }, etag: `"rules-${targetId}"`,
     ...over,
   };
@@ -75,10 +80,14 @@ export const FIRING_ALERT = {
   response: { run_id: "wfr_1", word: "Responding" }, runbook: RUNBOOK,
   explore_url: "http://grafana.local/explore?schemaVersion=1&orgId=1&panes=x", explore_reason: null,
   source_kind: "rule", reporter: null, backfilled: false,
+  sev: "sev1", status: { key: "firing", word: "Firing", tone: "red", tip: "Firing: needs attention" }, open: true,
+  needs_attention: true, duration_s: 720,
 };
 export const SIGNAL_ALERT = {
   ...FIRING_ALERT, id: "alrt_sig", rule_id: null, kind: "signal", label: "Reported", alertname: "AppSignal",
   summary: "HelpDesk AI: 7 checkout complaints", description: null, severity: "warning", value: 7, value_word: "7 reports",
+  // No `sev` and no `status`: an older API's answer, read from the severity label (warning → SEV3).
+  sev: undefined, status: undefined, duration_s: undefined,
   threshold: null, threshold_word: null, expr: null, fire_count: 1, active_at: iso(NOW_MS - 17 * MIN), fired_at: iso(NOW_MS - 17 * MIN),
   triage: { state: "done", word: "Joined the incident", outcome: "joined", reason: "The same checkout failure, seen by customers.",
             question: null, by: "claude-sonnet-4-5", at: iso(NOW_MS - 16 * MIN), confidence: 0.88 },
@@ -92,6 +101,14 @@ export const NOISE_ALERT = {
   triage: { state: "done", word: "Noise", outcome: "noise", reason: "A deploy restart; it cleared on its own in six minutes.",
             question: null, by: "claude-sonnet-4-5", at: iso(NOW_MS - 26 * 3600_000), confidence: 0.9 },
   explore_url: null, explore_reason: "Grafana isn't answering on its host",
+  sev: "sev3", status: { key: "resolved", word: "Resolved", tone: "green", tip: "Resolved: it is closed" }, open: false,
+  needs_attention: false, duration_s: 360,
+};
+/** Firing, but someone is on it: amber, with who. */
+export const ACKED_ALERT = {
+  ...FIRING_ALERT, id: "alrt_ack", sev: "sev2", needs_attention: false,
+  status: { key: "acknowledged", word: "Acknowledged · Param", tone: "amber", tip: "Acknowledged: someone is on it" },
+  acked: { by: "Param", at: iso(NOW_MS - 5 * MIN), until: iso(NOW_MS + 4 * 3600_000) },
 };
 export const NO_MODEL_ALERT = {
   ...FIRING_ALERT, id: "alrt_nomodel", incident: null, response: null,
@@ -101,7 +118,7 @@ export const NO_MODEL_ALERT = {
 
 export function historyWire(alerts: unknown[] = [FIRING_ALERT, SIGNAL_ALERT, NOISE_ALERT], over: Record<string, unknown> = {}) {
   return { project_id: "p1", target_id: "t_down", state: "all", since: "24h", severity: null,
-           counts: { firing: 2, pending: 0 }, alerts, apps: [{ target_id: "t_down", app: "api", env: "prod" }],
+           counts: { firing: 2, pending: 0, needs_attention: 1 }, alerts, apps: [{ target_id: "t_down", app: "api", env: "prod" }],
            grafana: { state: "answering", reason: null }, etag: "\"history\"", ...over };
 }
 

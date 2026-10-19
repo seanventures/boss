@@ -306,7 +306,7 @@
 .obs-arule {
   display: grid; align-items: center; gap: 4px 12px; min-height: 40px; padding: 6px 2px; font-size: 0.84rem;
   grid-template-columns: minmax(8rem, 1fr) minmax(9rem, 1.3fr) minmax(6rem, auto) auto auto;
-  grid-template-areas: "name cond state respond acts";
+  grid-template-areas: "name cond state respond acts" "facts facts facts facts facts";
 }
 .obs-arule-name { grid-area: name; display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
 .obs-arule-cond { grid-area: cond; min-width: 0; overflow-wrap: anywhere; }
@@ -337,10 +337,10 @@
 .obs-rcheck { display: inline-flex; align-items: center; gap: 6px; font-size: 0.84rem; color: var(--ink); cursor: pointer; }
 .obs-rcheck input { accent-color: var(--accent); }
 @media (max-width: 1023px) {
-  .obs-arule { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "name state" "cond cond" "respond acts"; }
+  .obs-arule { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "name state" "cond cond" "facts facts" "respond acts"; }
 }
 @media (max-width: 639px) {
-  .obs-arule { grid-template-columns: minmax(0, 1fr); grid-template-areas: "name" "state" "cond" "respond" "acts"; }
+  .obs-arule { grid-template-columns: minmax(0, 1fr); grid-template-areas: "name" "state" "cond" "facts" "respond" "acts"; }
   .obs-arule-acts { justify-content: flex-start; }
   .obs-rrow { grid-template-columns: minmax(0, 1fr); }
   .obs-adetail { margin-left: 0; }
@@ -360,3 +360,52 @@
 .obs-policy[data-depth="4"] { padding-inline-start: 72px; }
 .obs-srcline { gap: 2px; padding: 4px 2px; }
 .obs-rform pre.obs-promql { margin: 0; max-height: 16rem; overflow: auto; }
+
+/* ── SEV1–SEV4 and status chips (BOSSAPP-598 feedback 5, 6). Built from the theme tokens. ── */
+:root {
+  --obs-sev1: var(--red);
+  --obs-sev2: color-mix(in srgb, var(--red) 55%, var(--amber));
+  --obs-sev3: var(--amber);
+  --obs-sev4: var(--accent-text);
+}
+.obs-sev, .obs-status {
+  display: inline-flex; align-items: center; gap: 4px; padding: 1px 7px; border: 1px solid var(--border); border-radius: 999px;
+  font-size: 0.72rem; font-weight: 650; white-space: nowrap; cursor: help; fill: currentColor; stroke: currentColor;
+}
+.obs-sev-glyph { flex: none; }
+.obs-sev-glyph path:not(.obs-sev-ring), .obs-sev-glyph rect { stroke: none; }
+.obs-sev-ring { fill: none; }
+.obs-sev[data-sev="sev1"] { color: var(--obs-sev1); background: color-mix(in srgb, var(--obs-sev1) 16%, transparent); border-color: color-mix(in srgb, var(--obs-sev1) 45%, transparent); }
+.obs-sev[data-sev="sev2"] { color: var(--obs-sev2); background: color-mix(in srgb, var(--obs-sev2) 14%, transparent); border-color: color-mix(in srgb, var(--obs-sev2) 40%, transparent); }
+.obs-sev[data-sev="sev3"] { color: var(--obs-sev3); background: color-mix(in srgb, var(--obs-sev3) 12%, transparent); border-color: color-mix(in srgb, var(--obs-sev3) 35%, transparent); }
+.obs-sev[data-sev="sev4"] { color: var(--obs-sev4); background: color-mix(in srgb, var(--obs-sev4) 10%, transparent); border-color: color-mix(in srgb, var(--obs-sev4) 30%, transparent); }
+.obs-status[data-tone="red"] { color: var(--red); background: var(--red-soft); border-color: color-mix(in srgb, var(--red) 45%, transparent); }
+.obs-status[data-tone="amber"] { color: var(--amber); background: var(--amber-soft); border-color: color-mix(in srgb, var(--amber) 40%, transparent); }
+.obs-status[data-tone="green"] { color: var(--green); background: var(--green-soft); border-color: color-mix(in srgb, var(--green) 35%, transparent); }
+.obs-status[data-tone="grey"] { color: var(--muted); background: var(--surface-2); }
+.obs-status[data-tone="muted"] { color: var(--faint); background: transparent; border-style: dashed; }
+.obs-alert[data-open="0"] { opacity: 0.86; }
+.obs-alert[data-attention="1"] { box-shadow: inset 3px 0 0 var(--red); padding-left: 8px; }
+.obs-alert-times { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; font-size: 0.76rem; color: var(--muted); }
+.obs-attention {
+  display: inline-flex; align-items: center; gap: 8px; min-height: 36px; padding: 4px 12px; border: 1px solid var(--border);
+  border-radius: var(--r); background: var(--surface-2); color: var(--ink); font: inherit; font-size: 0.86rem; cursor: pointer;
+}
+.obs-attention[data-n="0"] { color: var(--muted); }
+.obs-attention:not([data-n="0"]) { border-color: color-mix(in srgb, var(--red) 55%, transparent); background: var(--red-soft); }
+.obs-attention[aria-pressed="true"] { outline: 2px solid var(--accent-text); outline-offset: 1px; }
+.obs-attention-n { font-size: 1.1rem; font-weight: 750; font-variant-numeric: tabular-nums; }
+.obs-attention:not([data-n="0"]) .obs-attention-n { color: var(--red); }
+.obs-alerts-lead { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.obs-rfacts { grid-area: facts; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.obs-facts { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; margin: 0; font-size: 0.76rem; min-width: 0; }
+.obs-fact { display: inline-flex; align-items: baseline; gap: 4px; min-width: 0; cursor: help; }
+.obs-fact dt { color: var(--faint); font-weight: 650; }
+.obs-fact dd { margin: 0; color: var(--ink-soft); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.obs-builder-pick { display: flex; flex-wrap: wrap; gap: 8px 12px; min-width: 0; }
+.obs-builder-pick > .inf-field { flex: 1 1 9rem; min-width: 0; }
+.obs-builder-pick select, .obs-builder-pick input { max-width: 100%; }
+.obs-builder-preview { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; min-height: 30px; font-size: 0.84rem; }
+@media (max-width: 639px) {
+  .obs-attention { min-height: 44px; }
+}

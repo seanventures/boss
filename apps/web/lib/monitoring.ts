@@ -11,6 +11,7 @@
  * Every write body carries {project_id, actor}; reads take ?project_id=.
  */
 import { arr, num, obj, str, usePolled, type Polled } from "./factory-floor";
+import { sevOf, type Sev } from "./app-alerts";
 
 const optNum = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
 const optStr = (v: unknown): string | null => (typeof v === "string" && v ? v : null);
@@ -184,13 +185,15 @@ export function parseLabelLines(text: string): Record<string, string> {
 // ── notifications (the outbox) ──────────────────────────────────────────────────────────────
 
 export type Notification = { id: string; kind: string; status: string; contactPoint: string | null; channel: string | null;
-  subject: string; attempts: number; errorWord: string | null; sentAt: string | null; createdAt: string | null };
+  subject: string; attempts: number; errorWord: string | null; sentAt: string | null; createdAt: string | null;
+  /** SEV1–SEV4 of what it told, when the API says (null for a test message). */
+  sev: Sev | null };
 export const parseNotifications = (w: unknown): Notification[] => arr(obj(w).notifications).map((x) => {
   const o = obj(x);
   const cp = o.contact_point && typeof o.contact_point === "object" ? optStr(obj(o.contact_point).name) : optStr(o.contact_point);
   return { id: str(o.id), kind: str(o.kind), status: str(o.status), contactPoint: cp, channel: optStr(o.channel),
            subject: str(o.subject), attempts: num(o.attempts), errorWord: optStr(o.error_word), sentAt: optStr(o.sent_at),
-           createdAt: optStr(o.created_at) };
+           createdAt: optStr(o.created_at), sev: o.sev || o.severity ? sevOf(o.sev, o.severity) : null };
 });
 
 // ── silences, maintenance windows, inhibit rules ────────────────────────────────────────────
