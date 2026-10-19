@@ -380,6 +380,22 @@ def allowed_actions(decision: Mapping[str, Any]) -> list[dict[str, Any]]:
     if status not in _OPEN and not reopenable(decision):
         return []
     kind = kind_of(decision)
+    from .release_scope import needs_reason as _release_needs_reason
+
+    if kind != "refusal" and _release_needs_reason(decision.get("recommendation")):
+        # A RELEASE CARRYING REJECTED OR UNREVIEWED COMMITS (release_scope): shipping it is a
+        # person's stated decision. The approval needs a reason and is sent forced, as a merge
+        # with checks failing is; decisions.transition refuses anything else.
+        return [
+            _action("approve", "Ship with unreviewed commits", "reject",
+                    "Ships every commit the card lists, including those from rejected or "
+                    "unreviewed runs. Say why: your reason is recorded with the release.",
+                    needs="note"),
+            _action("reject", "Don't ship", "reject",
+                    "Nothing ships. Rebuild the fix from the serving commit to release it "
+                    "on its own."),
+            _delegate(),
+        ]
     if kind == "refusal":
         return [_action(
             "reject", "Dismiss", "neutral",

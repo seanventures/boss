@@ -343,6 +343,8 @@ class GitHubAdapter:
                 if info.get("message") else "",
                 "author": str((info.get("author") or {}).get("name") or "")[:100],
                 "date": (info.get("author") or {}).get("date"),
+                # Its trailers name the BOSS run that made it (release_scope.attribute).
+                "full_message": str(info.get("message") or "")[:4000],
             })
         files = []
         for item in (payload.get("files") or [])[:300]:
@@ -691,7 +693,8 @@ class GitHubAdapter:
     supports_draft_pull_requests = True
 
     def create_pull_request(
-        self, branch_name: str, title: str, body: str, draft: Optional[bool] = None
+        self, branch_name: str, title: str, body: str, draft: Optional[bool] = None,
+        base: Optional[str] = None,
     ) -> PullRequestResult:
         """Open (or refresh) the PR for this head. ``draft`` None follows BOSS_OPEN_PR_AS_DRAFT;
         True opens a draft (a build whose checks still fail, checks_failing.py). An already-open
@@ -725,7 +728,9 @@ class GitHubAdapter:
             {
                 "title": title,
                 "head": branch_name,
-                "base": default_branch,
+                # A release fix's PR is opened against the serving commit's branch
+                # (release_scope), so it shows only its own diff.
+                "base": base or default_branch,
                 "body": body,
                 "draft": (self.settings.open_pr_as_draft if draft is None else bool(draft)),
                 "maintainer_can_modify": False,

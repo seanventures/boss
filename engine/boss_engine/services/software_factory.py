@@ -1697,8 +1697,12 @@ class SoftwareFactoryService:
         quality_gate_id: Optional[str] = None,
         run_id: Optional[str] = None,
         checks_failing: Optional[dict] = None,
+        pr_base: Optional[str] = None,
     ) -> dict:
         """Open the change's pull request and its merge decision.
+
+        ``pr_base``: the branch the PR is opened against, when not the default branch — a
+        release fix's base at the serving commit (release_scope), so its PR shows only its diff.
 
         ``checks_failing`` (services/checks_failing.py): the build's checks still fail after
         its repair rounds. The pull request is then a draft where the host has drafts, carries
@@ -1850,12 +1854,14 @@ class SoftwareFactoryService:
                     review_text,
                 ]
             )
+            _base = {"base": pr_base} if pr_base else {}
             if checks_failing and getattr(self.github, "supports_draft_pull_requests", False):
                 # A DRAFT where the host has drafts: GitHub itself then refuses a merge until
                 # it is marked ready, which BOSS does only for a person's approved merge.
-                pr = self.github.create_pull_request(branch_name, title, pr_body, draft=True)
+                pr = self.github.create_pull_request(branch_name, title, pr_body, draft=True,
+                                                     **_base)
             else:
-                pr = self.github.create_pull_request(branch_name, title, pr_body)
+                pr = self.github.create_pull_request(branch_name, title, pr_body, **_base)
         except IntegrationConfigurationError as error:
             self.receipts.mark_failed(
                 connection, pr_receipt["id"], {"message": str(error)}

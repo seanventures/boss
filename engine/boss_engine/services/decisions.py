@@ -480,6 +480,26 @@ class DecisionService:
                                         system_policy=system_policy, force=force)
             except ci_gate.CiGateRefused as refused:
                 raise InvalidDecisionTransitionError(refused.message) from refused
+            # A RELEASE CARD IS APPROVED AS SHOWN (release_scope): only with the hash of the
+            # commit list it showed, and — when that list carries commits from rejected or
+            # unreviewed runs — only with the person's stated reason (force + note, as a merge
+            # with checks failing). Before anything is recorded.
+            from . import release_scope
+
+            try:
+                release_scope.refuse_approval(row.get("recommendation"),
+                                              content_hash=content_hash, force=force, note=note)
+            except release_scope.ReleaseApprovalRefused as refused:
+                raise InvalidDecisionTransitionError(str(refused)) from refused
+            if force and release_scope.needs_reason(row.get("recommendation")):
+                _card = release_scope.of_decision(row.get("recommendation")) or {}
+                emit_event(connection, row["project_id"], release_scope.FORCED_EVENT, actor,
+                           "decision", row["id"],
+                           {"reason": (note or "").strip()[:500],
+                            "head_sha": _card.get("head_sha"),
+                            "rejected_runs": _card.get("rejected_runs") or [],
+                            "unreviewed_runs": _card.get("unreviewed_runs") or [],
+                            "unattributed": _card.get("unattributed") or 0})
             # AN APPROVAL OF WHAT THE APPROVER SAW. A gated step's decision carries a preview of
             # what it will send and a hash of that content; the console sends back the hash it
             # showed. If the preview has moved on since (an upstream step was re-run), this

@@ -824,6 +824,7 @@ def _build_onto_existing_app(ctx, cts, pid: str, actor: str, args: dict, extends
                 reference_links=args.get("reference_links") or None,
                 workflow_run_id=finalize_ctx.get("workflow_run_id"),
                 finalize_extra={"origin": finalize_ctx.get("origin"), "agent": agent},
+                release_base_sha=str(args.get("release_base_sha") or "").strip() or None,
             )
         except ValueError as exc:  # a simulated or vanished parent: say so, start nothing
             return {"ok": False, "error": str(exc)}
@@ -1000,6 +1001,13 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                                    "existing tests must still pass. `repository` and "
                                    "`base_branch` are ignored — the app decides both.",
                 },
+                "release_base_sha": {
+                    "type": "string",
+                    "description": "with extends_run_id: this change targets a release (an "
+                                   "incident's fix). It is built on a branch of its own cut "
+                                   "from this serving commit, never on the app's shared "
+                                   "branch, and its PR shows only its own diff.",
+                },
                 "preview_id": {
                     "type": "string",
                     "description": "with extends_run_id: the running preview (prev_...) the "
@@ -1047,6 +1055,19 @@ def _register_write_tools(reg: ToolRegistry) -> None:
             return multi
         if extends:
             return _build_onto_existing_app(ctx, cts, pid, actor, args, extends, finalize_ctx)
+        release_base = str(args.get("release_base_sha") or "").strip()
+        if release_base:
+            # A RELEASE FIX WITH NO BUILD LINEAGE is still cut from the serving commit, on a
+            # branch of its own (release_scope) — never from the default branch's head.
+            rs = services_module("release_scope")
+            try:
+                rb = rs.release_branch(str(finalize_ctx.get("workflow_run_id")
+                                           or services_module("core").make_id("rel")),
+                                       release_base)
+            except rs.ReleaseBranchError as exc:
+                return {"ok": False, "error": str(exc)}
+            finalize_ctx = {**finalize_ctx, rs.FCTX_KEY: rb}
+            base_branch = rb["branch"]
         risk_tier = args.get("risk_tier")
         extended_from = None
         rr = services_module("repo_registry")

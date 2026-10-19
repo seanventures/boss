@@ -3820,7 +3820,20 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
     # the clone) is a FRESH build of the same brief: its tree holds no work of this app, so the
     # repair paths (augment the existing suite, cross-run repair prompts) have nothing to act on.
     _is_repair = root_run != run_id and not fctx.get("fresh_build")
-    if root_run != run_id and sf.github.branch_exists(work_branch):
+    # A FIX THAT TARGETS A RELEASE IS BUILT ON ITS OWN BRANCH, cut from the serving commit —
+    # never on the lineage branch, whose open PR may carry other runs' unreleased (even
+    # rejected) commits (release_scope, the D2 case). Its PR is opened against a base at the
+    # serving commit, so it shows only its own diff. No fall back to the shared branch.
+    from . import release_scope as _release_scope
+
+    _release = _release_scope.of_run(fctx)
+    if _release is not None:
+        try:
+            work_branch = _release_scope.prepare_branch(sf.github, _release)
+        except _release_scope.ReleaseBranchError as exc:
+            raise RuntimeError(f"release branch: {exc}") from exc
+        base_branch = work_branch
+    elif root_run != run_id and sf.github.branch_exists(work_branch):
         base_branch = work_branch  # prior attempt's code is present in the clone
     app = GitHubAppAdapter(settings)
     # Shared decision — see repo_token. Prefer the bound MC adapter's token when the
@@ -4561,7 +4574,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     files=([FileChange(path=p, content=content)
                             for p, content in accumulated.items()]
                            if use_microvm else sandbox.diff()),
-                    created_by_job_id=job_id, actual_usd_micros=cost)
+                    created_by_job_id=job_id, actual_usd_micros=cost,
+                    **({"pr_base": _release["pr_base"]} if _release else {}))
                 if pr.get("status") in ("created", "succeeded"):
                     url = pr.get("pull_request_url") or pr.get("url")
                     c.execute(sql("UPDATE code_task_runs SET pull_request_url=:u, updated_at=now() "
@@ -8265,6 +8279,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 files=_pr_files,
                 created_by_job_id=job_id, actual_usd_micros=cost,
                 evidence=evidence, quality_gate_id=qg_id, run_id=run_id,
+                **({"pr_base": _release["pr_base"]} if _release else {}),
                 **({"checks_failing": _checks} if _checks else {}))
 
         status = proposal.get("status")
@@ -8314,6 +8329,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         files=_pr_files,
                         created_by_job_id=job_id, actual_usd_micros=cost,
                         evidence=evidence, quality_gate_id=qg_id, run_id=run_id,
+                        **({"pr_base": _release["pr_base"]} if _release else {}),
                         **({"checks_failing": _checks} if _checks else {}))
                     status = proposal.get("status")
                 except Exception as exc:  # noqa: BLE001

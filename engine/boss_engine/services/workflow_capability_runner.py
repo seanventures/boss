@@ -39,7 +39,7 @@ from .deploy_policy import promises_a_person
 # string literal repeated wherever the question is asked.
 from .decisions import SYSTEM_ACTOR as DECISION_SYSTEM_ACTOR
 from .run_decisions import open_step_decision
-from . import security_review_steps, workflow_capabilities, workflow_outcomes
+from . import release_scope, security_review_steps, workflow_capabilities, workflow_outcomes
 from .workflow_capabilities import CAPABILITY_KEYS, get as get_capability
 
 log = logging.getLogger(__name__)
@@ -1064,6 +1064,26 @@ def _build_run_id(context: dict[str, Any]) -> Optional[str]:
                 return value.strip()
     value = (context.get("input") or {}).get("adopt_code_task_run_id")
     return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def release_base_for(connection: Connection, context: dict[str, Any]) -> Optional[str]:
+    """The serving commit a release-targeting build is cut from, or None for any other build:
+    the run input's `release_base_sha`, else, for an incident's run, the commit its
+    investigation found serving (or the incident's own record of it)."""
+    run_input = context.get("input") or {}
+    named = str(run_input.get("release_base_sha") or "").strip()
+    if named:
+        return named
+    incident_id = str(run_input.get("incident_id") or "").strip()
+    if not incident_id:
+        return None
+    found = str(_from_any_step(context, "serving_commit_sha") or "").strip()
+    if found:
+        return found
+    row = connection.execute(text(
+        "SELECT finalize_ctx->'deploy'->>'commit_sha' FROM incidents WHERE id = :i"),
+        {"i": incident_id}).scalar()
+    return str(row).strip() if row else None
 
 
 def _from_any_step(context: dict[str, Any], field: str) -> Any:
@@ -2792,6 +2812,7 @@ def _investigate_incident(connection: Connection, ctx: Any, project_id: str,
     return {"capability": "investigate_incident", "tool": None, "status": "succeeded",
             **{k: got[k] for k in ("incident_id", "title", "incident_brief", "root_cause",
                                    "suspect_commit", "extends_run_id")},
+            "serving_commit_sha": got.get("serving_commit_sha"),
             "basis": got["hypothesis"]["basis"], "confidence": got["hypothesis"]["confidence"],
             "note": f"{got['logs_word']}; {got['diff_word']}. {got['root_cause']}"}
 
@@ -3269,8 +3290,11 @@ def _perform_capability(
                 # so the environment's policy may not answer it either.
                 person_required=promises_a_person(step),
                 # Pass 1's deploy ships the head pass 1 left; "Deploy again" ships pass 2's.
+                # A release a person approved from its card ships exactly the head that card
+                # listed (release_scope), never a head that moved after.
                 commit=(None if (pass_2_of or redeploy) else
-                        pinned_pass_one_commit(connection, run_id)),
+                        (release_scope.approved_head(connection, run_id)
+                         or pinned_pass_one_commit(connection, run_id))),
                 retire_projects=retire or None)
             if redeploy:
                 planned = {**planned, deploy_repair.FIXES_KEY: fixes,
@@ -3383,6 +3407,12 @@ def _perform_capability(
             preview = str((context.get("input") or {}).get("preview_id") or "").strip()
             if preview:
                 inputs = {**inputs, "preview_id": preview}
+            # A FIX THAT TARGETS A RELEASE (an incident's, or a run started for one) is cut
+            # from the commit serving on the target, on a branch of its own — never built on
+            # the app's open PR branch, which may carry other runs' rejected commits (D2).
+            serving = release_base_for(connection, context)
+            if serving:
+                inputs = {**inputs, "release_base_sha": serving}
 
     # WHAT THE PANEL IS BEING CONVENED FOR.
     #
@@ -6141,6 +6171,17 @@ def _open_gate(
         pack = card_for(connection, run["id"], spec_step)
         if pack:
             recommendation_extra["monitoring_pack"] = pack
+    if capability_key in {"release_approval", "deploy"}:
+        # WHAT THE RELEASE WOULD SHIP beyond the serving commit (release_scope): every commit,
+        # its run, that run's approval and whether it was reviewed, bound by its hash. The D2
+        # card showed one line of a fifteen-commit release.
+        card = _release_card(connection, project_id, run["id"], run_context)
+        if card:
+            from . import release_scope
+
+            recommendation_extra = release_scope.attach(
+                recommendation_extra, card, step_label=str(subject["label"]))
+            subject = {**subject, "summary": f"{subject['summary']} {card['sentence']}"}
     if capability_key == "security_decide":
         # Where the checklist is: App › Security draws the recommendations as the choice this
         # approval records (approving without opening it takes the P0/P1 pre-ticks).
@@ -6234,6 +6275,28 @@ def _open_gate(
         "workflow_step_run", step_row["id"],
         {"capability": subject["key"], "step_id": step_row["step_id"]},
     )
+
+def _release_card(connection: Connection, project_id: str, run_id: str,
+                  context: dict[str, Any]) -> Optional[dict[str, Any]]:
+    """The release card for this run's build, or None (no build, nothing serving yet)."""
+    from . import release_scope
+
+    build = _build_run_id(context)
+    if not build:
+        return None
+    point = connection.begin_nested()
+    try:
+        serving = release_scope.serving_for_run(connection, context.get("input"), build)
+        card = release_scope.card_for_build(
+            connection, _settings(), project_id, build_run_id=build, serving_sha=serving,
+            workflow_run_id=run_id)
+    except Exception as error:  # noqa: BLE001 — logged; the card then carries no list
+        point.rollback()
+        log.warning("release card for %s: %s", run_id, error)
+        return None
+    point.commit()
+    return card
+
 
 def _park_for_decision(
     connection: Connection, project_id: str, run: dict[str, Any], step_row: dict[str, Any],
