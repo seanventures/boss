@@ -805,8 +805,10 @@ def build_monitoring_router(
             subj = aa.subject(c, payload.subject_id)
             if not subj or subj["project_id"] != pid:
                 raise HTTPException(status_code=404, detail="No such app or service")
+            prom, scope = aa.datasource_for(c, settings(), subj)
             try:
-                return jsonable_encoder(rp.preview(c, subj, payload.expr, payload.for_))
+                return jsonable_encoder(rp.preview(c, subj, payload.expr, payload.for_,
+                                                   prometheus=prom, scope=scope))
             except ValueError as exc:
                 raise HTTPException(status_code=422, detail=str(exc)) from exc
 

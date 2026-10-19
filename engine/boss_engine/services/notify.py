@@ -319,7 +319,10 @@ def preview(connection, project_id: str, labels: Mapping[str, str],
     tree = policies(connection, project_id)
     labels = {str(k): str(v) for k, v in labels.items()}
     labels.setdefault("severity", "warning")
-    urgency = labels.get("urgency") or ("high" if labels["severity"] == "critical" else "low")
+    from . import severity as sev
+
+    labels.setdefault("sev", sev.level(labels))
+    urgency = labels.get("urgency") or sev.urgency(labels)
     out = []
     for eff in route(tree, labels):
         cps = []
@@ -389,7 +392,10 @@ def _triage_line(a: Mapping[str, Any]) -> str:
 def _alert_lines(a: Mapping[str, Any], names: Mapping[str, str]) -> list[str]:
     ann = _json(a.get("annotations"), {}) or {}
     value = a.get("value")
-    out = [f"• {names.get(a.get('subject_id') or '', '')}: {ann.get('summary') or a['alertname']}"
+    from . import severity as sev
+
+    out = [f"• {sev.label(_json(a.get('labels'), {}) or {})} "
+           f"{names.get(a.get('subject_id') or '', '')}: {ann.get('summary') or a['alertname']}"
            + (" (flapping)" if a.get("flapping") else "")]
     if a.get("expr"):
         out.append(f"  Query: {a['expr']}")
@@ -416,7 +422,12 @@ def _render(kind: str, alerts: list[dict], names: Mapping[str, str], incident: O
            or alerts[0]["alertname"])) if alerts else "BOSS"
     tag = {"firing": "FIRING", "resolved": "RESOLVED", "flapping": "FLAPPING",
            "triage": "UPDATE", "meta": "BOSS SELF-CHECK"}.get(kind, kind.upper())
-    subject = f"[{tag}{':' + str(len(firing)) if kind == 'firing' and len(firing) > 1 else ''}] " \
+    from . import severity as sev
+
+    # The worst level leads the subject: "[SEV1 FIRING:2] …" (meta self-checks carry none).
+    worst = sev.worst([_json(a.get("labels"), {}) or {} for a in alerts]) if alerts else None
+    level = f"{sev.label(worst)} " if worst and kind != "meta" else ""
+    subject = f"[{level}{tag}{':' + str(len(firing)) if kind == 'firing' and len(firing) > 1 else ''}] " \
               f"{head}"[:200]
     lines = []
     if kind == "resolved":
@@ -743,12 +754,26 @@ def deliver_due(engine, settings: Any, *, now: Optional[datetime] = None,
 
 
 def outbox(connection, project_id: str, limit: int = 50) -> list[dict[str, Any]]:
-    return [{**{k: (mon.iso(v) if isinstance(v, datetime) else v) for k, v in dict(r).items()
-                if k not in ("body", "payload", "dedupe_key")}}
-            for r in connection.execute(sql(
-                "SELECT n.*, c.name AS contact_point, c.kind AS channel FROM notifications n "
-                "LEFT JOIN contact_points c ON c.id = n.contact_point_id WHERE n.project_id = :p "
-                "ORDER BY n.created_at DESC LIMIT :n"), {"p": project_id, "n": limit}).mappings()]
+    """The notifications BOSS sent (or holds), newest first, each with the worst SEV level of
+    the alerts it carried (`sev`, null for BOSS's own self-checks)."""
+    from . import severity as sev
+
+    rows = [dict(r) for r in connection.execute(sql(
+        "SELECT n.*, c.name AS contact_point, c.kind AS channel FROM notifications n "
+        "LEFT JOIN contact_points c ON c.id = n.contact_point_id WHERE n.project_id = :p "
+        "ORDER BY n.created_at DESC LIMIT :n"), {"p": project_id, "n": limit}).mappings()]
+    ids = sorted({str(i) for r in rows for i in (_json(r.get("alert_ids"), []) or [])})
+    labels = {r["id"]: (_json(r["labels"], {}) or {}) for r in connection.execute(sql(
+        "SELECT id, labels FROM app_alerts WHERE id = ANY(:i)"), {"i": ids}).mappings()} \
+        if ids else {}
+    out = []
+    for r in rows:
+        got = [labels[i] for i in (_json(r.get("alert_ids"), []) or []) if i in labels
+               and labels[i].get("boss_meta") != "true"]
+        out.append({**{k: (mon.iso(v) if isinstance(v, datetime) else v) for k, v in r.items()
+                       if k not in ("body", "payload", "dedupe_key")},
+                    "sev": sev.worst(got)})
+    return out
 
 
 __all__ = ["CONTACT_KINDS", "contact_point_view", "create_contact_point", "deliver",

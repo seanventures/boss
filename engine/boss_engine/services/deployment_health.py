@@ -313,6 +313,9 @@ def sweep(engine, settings: Settings, *, project_id: Optional[str] = None,
             probed += 1
             if not sample["ok"]:
                 failed += 1
+            from .bundled_monitoring import forward_probe
+
+            forward_probe(settings, t, bool(sample["ok"]), sample["latency_ms"], now)
 
         if probed:
             with begin(engine) as c:

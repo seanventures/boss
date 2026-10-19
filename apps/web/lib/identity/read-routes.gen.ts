@@ -72,6 +72,7 @@ export const READ_ROUTES: ReadonlyArray<readonly [string, Permission]> = [
   ["apps/{}/consent", "repository:read"],
   ["apps/{}/demo-logins", "app_secret:write"],
   ["apps/{}/links", "project:read"],
+  ["apps/{}/metric-names", "observability:read"],
   ["apps/{}/secrets", "app_secret:read_metadata"],
   ["apps/{}/setup-guide", "project:read"],
   ["apps/{}/sign-in-with-boss", "project:read"],

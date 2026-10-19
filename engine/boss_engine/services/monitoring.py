@@ -641,6 +641,10 @@ def alert_labels(alert: Mapping[str, Any], subject: Optional[Mapping[str, Any]] 
     labels["urgency"] = str(alert.get("urgency") or "high")
     labels["source"] = str(alert.get("source_kind") or "rule")
     labels.setdefault("severity", "warning")
+    from . import severity as sev
+
+    # Routing matches on the normalised level: sev="sev1" whatever word the rule used.
+    labels["sev"] = sev.level(labels)
     return labels
 
 

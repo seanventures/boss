@@ -13,9 +13,15 @@ from typing import Any, Optional
 
 from ..ports import sql
 from . import app_alerts as aa
+from . import severity as sev
 
 #: History windows the tab offers.
 SINCE = {"24h": timedelta(hours=24), "7d": timedelta(days=7), "30d": timedelta(days=30)}
+#: Firing, and nobody has it: not acknowledged (or the ack expired), not silenced, not held back.
+NEEDS_ATTENTION_SQL = (
+    "(a.acked_at IS NULL OR a.ack_expires_at <= now()) AND a.silenced_by IS NULL "
+    "AND a.inhibited_by IS NULL "
+    "AND (a.suppressed_by IS NULL OR a.suppressed_by IN ('[]'::jsonb, 'null'::jsonb))")
 
 _STATE_WORDS = {"firing": "Firing", "pending": "Pending", "ok": "OK", "no_data": "No data",
                 "too_little": "Too little traffic", "off": "Off", "silenced": "Silenced",
@@ -117,7 +123,7 @@ def _explore(grafana: dict, alert: dict) -> tuple[Optional[str], Optional[str]]:
         return None, grafana.get("reason") or "Grafana isn't answering"
     start = (alert.get("fired_at") or alert.get("active_at")) - timedelta(minutes=10)
     end = alert.get("cleared_at") or datetime.now(timezone.utc)
-    return explore_url(grafana["base_url"], alert["expr"], int(start.timestamp() * 1000),
+    return explore_url(grafana.get("public_url") or grafana["base_url"], alert["expr"], int(start.timestamp() * 1000),
                        int(end.timestamp() * 1000)), None
 
 
@@ -150,6 +156,59 @@ def _triage_wire(alert: dict) -> dict[str, Any]:
             "at": t.get("at"), "confidence": t.get("confidence")}
 
 
+def _minutes(seconds: Optional[float]) -> str:
+    if seconds is None:
+        return ""
+    m = int(round(seconds / 60))
+    if m < 1:
+        return f"{int(seconds)} s"
+    return f"{m} min" if m < 90 else f"{m // 60} h {m % 60} min"
+
+
+def duration_s(a: dict, now: Optional[datetime] = None) -> Optional[int]:
+    """How long it has been (or was) open: fired (else active) to cleared (else now)."""
+    start = a.get("fired_at") or a.get("active_at")
+    if not start:
+        return None
+    end = a.get("cleared_at") or now or datetime.now(timezone.utc)
+    return max(0, int((end - start).total_seconds()))
+
+
+def alert_status(a: dict, acked_by: Optional[str], now: Optional[datetime] = None
+                 ) -> dict[str, Any]:
+    """THE status chip, one answer for every row: is it still open, and who has it?
+
+    firing (red: needs attention) · acknowledged (amber, says who) · pending (grey: waiting out
+    `for`) · resolved (green, with time and duration) · silenced / maintenance (muted: open, but
+    nobody is told)."""
+    now = now or datetime.now(timezone.utc)
+    dur = duration_s(a, now)
+    if a["state"] == "resolved":
+        at = a.get("cleared_at")
+        return {"key": "resolved", "tone": "green", "word": "Resolved",
+                "tip": (f"Resolved at {at.strftime('%H:%M')} UTC" if at else "Resolved")
+                       + (f", open {_minutes(dur)}" if dur is not None else "")}
+    kinds = {x.get("kind") for x in (_json(a.get("suppressed_by"), []) or [])}
+    if "maintenance" in kinds:
+        return {"key": "maintenance", "tone": "muted", "word": "Maintenance",
+                "tip": "Open, in a maintenance window: nobody is told until it ends"}
+    if a.get("silenced_by") or "silence" in kinds:
+        return {"key": "silenced", "tone": "muted", "word": "Silenced",
+                "tip": "Open but silenced: it is still evaluated, nobody is told"}
+    if a.get("inhibited_by") or "inhibit" in kinds:
+        return {"key": "silenced", "tone": "muted", "word": "Held back",
+                "tip": "Open, held back while its cause (health or deploy) fires"}
+    if a["state"] == "pending":
+        return {"key": "pending", "tone": "grey", "word": "Pending",
+                "tip": "Breached, not firing yet: it must stay true for its `for`"}
+    if acked_by:
+        return {"key": "acknowledged", "tone": "amber", "word": f"Acknowledged · {acked_by}",
+                "tip": f"{acked_by} is on it: repeats stopped, it is still firing"}
+    return {"key": "firing", "tone": "red", "word": "Firing",
+            "tip": "Firing and nobody has acknowledged it: needs attention"
+                   + (f" (open {_minutes(dur)})" if dur is not None else "")}
+
+
 def _alert_wire(connection, a: dict, *, target: dict, grafana: dict,
                 incidents: dict[str, dict], names: dict[str, str]) -> dict[str, Any]:
     labels = _json(a.get("labels"), {}) or {}
@@ -162,6 +221,10 @@ def _alert_wire(connection, a: dict, *, target: dict, grafana: dict,
     label = aa.BUILTIN.get(kind, {}).get("label") or (
         "Reported" if a["source_kind"] == "signal" else a["alertname"])
     unit = a.get("unit") or ""
+    acked_now = bool(a.get("acked_at") and (a.get("ack_expires_at") is None
+                                           or a["ack_expires_at"] > datetime.now(timezone.utc)))
+    acked_by = (_person(connection, a["acked_by"]) or a["acked_by"]) if acked_now else None
+    status = alert_status(a, acked_by)
     summary = ann.get("summary") or a["alertname"]
     if a["source_kind"] == "signal":
         summary = f"{names.get(a.get('reporter_target_id') or '', 'An app')}: {summary}"
@@ -170,7 +233,10 @@ def _alert_wire(connection, a: dict, *, target: dict, grafana: dict,
         "env": target.get("environment"), "rule_id": a.get("rule_id"), "kind": kind,
         "label": label, "alertname": a["alertname"], "summary": summary,
         "description": ann.get("description") or None,
-        "severity": labels.get("severity") or "warning", "state": a["state"],
+        "severity": labels.get("severity") or "warning", "sev": sev.level(labels),
+        "status": status, "open": a["state"] != "resolved",
+        "needs_attention": status["key"] == "firing", "duration_s": duration_s(a),
+        "state": a["state"],
         "state_word": {"firing": "Firing", "pending": "Pending",
                        "resolved": "Resolved"}[a["state"]],
         "active_at": _iso(a["active_at"]), "fired_at": _iso(a.get("fired_at")),
@@ -207,11 +273,8 @@ def _alert_wire(connection, a: dict, *, target: dict, grafana: dict,
         "flapping": bool(a.get("flapping")),
         "flap_score": a.get("flap_score"),
         "flap_tuning": ((a.get("triage") or {}).get("flap_tuning") or None),
-        "acked": ({"by": _person(connection, a["acked_by"]) or a["acked_by"],
-                   "at": _iso(a["acked_at"]), "until": _iso(a.get("ack_expires_at"))}
-                  if a.get("acked_at") and (a.get("ack_expires_at") is None
-                                            or a["ack_expires_at"] > datetime.now(timezone.utc))
-                  else None),
+        "acked": ({"by": acked_by, "at": _iso(a["acked_at"]),
+                   "until": _iso(a.get("ack_expires_at"))} if acked_now else None),
         "no_data_since": _iso(a.get("no_data_since")),
         "keep_firing_since": _iso(a.get("missing_since")),
         "suppressed": [{"kind": x.get("kind"), "id": x.get("id"), "until": x.get("until"),
@@ -249,7 +312,8 @@ def incident_states(connection, project_id: str, *, subject_id: Optional[str] = 
     from .incident_response import _response_in_flight
 
     q = ("SELECT i.id, i.title, i.status, i.lifecycle, i.first_seen, i.acked_by, i.urgency, "
-         " i.finalize_ctx, "
+         " i.finalize_ctx, i.severity, "
+         " array_agg(a.labels->>'severity') FILTER (WHERE a.id IS NOT NULL) AS sevs, "
          " count(a.id) FILTER (WHERE a.state = 'firing' AND a.inhibited_by IS NULL) AS firing, "
          " count(a.id) FILTER (WHERE a.state = 'pending') AS pending, "
          " count(a.id) AS alerts, max(a.cleared_at) AS last_cleared, "
@@ -280,7 +344,23 @@ def incident_states(connection, project_id: str, *, subject_id: Optional[str] = 
                 "; a response is still running" if run else "; the incident is still open")
         else:
             word = "Reported; no alert of BOSS's is firing"
+        level = sev.worst(r["sevs"] or []) or sev.level(r["severity"])
+        acked_by = (_person(connection, r["acked_by"]) or r["acked_by"]) if r["acked_by"] \
+            else None
+        if firing and acked_by:
+            chip = {"key": "acknowledged", "tone": "amber", "word": f"Acknowledged · {acked_by}",
+                    "tip": f"{acked_by} is on it; its alerts still fire"}
+        elif firing:
+            chip = {"key": "firing", "tone": "red", "word": "Firing",
+                    "tip": "Still happening and nobody has acknowledged it"}
+        elif int(r["pending"] or 0):
+            chip = {"key": "pending", "tone": "grey", "word": "Pending",
+                    "tip": "An alert is breached, waiting out its `for`"}
+        else:
+            chip = {"key": "recovered", "tone": "green", "word": "Recovered",
+                    "tip": "Nothing fires now; the incident is still open until it is closed"}
         out.append({"id": r["id"], "title": r["title"], "status": r["status"],
+                    "sev": level, "status_chip": chip, "acked_by": acked_by,
                     "lifecycle": r["lifecycle"], "since": _iso(r["first_seen"]),
                     "firing": firing, "happening": bool(firing),
                     "subject_id": r["subject_id"], "urgency": r["urgency"],
@@ -306,7 +386,7 @@ def _subjects(connection, project_id: str, ids: list[str]) -> dict[str, dict]:
 def alerts(connection, project_id: str, *, target_id: Optional[str] = None,
            state: str = "all", since: str = "7d", severity: Optional[str] = None,
            limit: int = 100, source: Optional[str] = None, flapping: Optional[bool] = None,
-           acked: Optional[bool] = None) -> dict[str, Any]:
+           acked: Optional[bool] = None, attention: bool = False) -> dict[str, Any]:
     """Alerts, newest first. state firing (open now: pending + firing) | resolved | all.
     Filters: an app or service (target_id: either id), severity, source kind (rule, external,
     synthetic, heartbeat, signal), flapping, acked."""
@@ -326,6 +406,9 @@ def alerts(connection, project_id: str, *, target_id: Optional[str] = None,
         where.append("(a.acked_at IS NOT NULL AND (a.ack_expires_at IS NULL OR "
                      "a.ack_expires_at > now()))" if acked else
                      "(a.acked_at IS NULL OR a.ack_expires_at <= now())")
+    if attention:
+        state = "firing"
+        where.append("a.state = 'firing' AND " + NEEDS_ATTENTION_SQL)
     if state == "firing":
         where.append("a.state IN ('pending', 'firing')")
     else:
@@ -334,9 +417,11 @@ def alerts(connection, project_id: str, *, target_id: Optional[str] = None,
         params["since"] = now - SINCE.get(since, SINCE["7d"])
         where.append("(a.state IN ('pending', 'firing') OR a.active_at >= :since "
                      "OR a.cleared_at >= :since)")
-    if severity in aa.SEVERITIES:
-        where.append("a.labels->>'severity' = :sev")
-        params["sev"] = severity
+    if severity and sev.accepted(severity):
+        words = [w for w in sev.ACCEPTED + tuple(sev._ALIASES) if sev.level(w) ==
+                 sev.level(severity)]
+        where.append("COALESCE(lower(a.labels->>'severity'), 'warning') = ANY(:sevs)")
+        params["sevs"] = sorted(set(words))
     rows = [dict(r) for r in connection.execute(sql(
         "SELECT a.* FROM app_alerts a WHERE " + " AND ".join(where)
         + " ORDER BY (a.state <> 'resolved') DESC, COALESCE(a.fired_at, a.active_at) DESC "
@@ -350,7 +435,9 @@ def alerts(connection, project_id: str, *, target_id: Optional[str] = None,
     grafana = _grafana(connection, project_id)
     counts = connection.execute(sql(
         "SELECT count(*) FILTER (WHERE state = 'firing') AS firing, "
-        "       count(*) FILTER (WHERE state = 'pending') AS pending "
+        "       count(*) FILTER (WHERE state = 'pending') AS pending, "
+        "       count(*) FILTER (WHERE state = 'firing' AND " + NEEDS_ATTENTION_SQL.replace(
+            "a.", "") + ") AS attention "
         "FROM app_alerts WHERE project_id = :p" + (" AND subject_id = :t" if target_id else "")),
         {"p": project_id, **({"t": target_id} if target_id else {})}).mappings().first()
     apps = [{"target_id": t["id"], "app": t["app_name"], "env": t["environment"]}
@@ -366,7 +453,9 @@ def alerts(connection, project_id: str, *, target_id: Optional[str] = None,
     return {
         "project_id": project_id, "target_id": target_id, "state": state, "since": since,
         "severity": severity,
-        "counts": {"firing": int(counts["firing"] or 0), "pending": int(counts["pending"] or 0)},
+        "counts": {"firing": int(counts["firing"] or 0), "pending": int(counts["pending"] or 0),
+                   "needs_attention": int(counts["attention"] or 0)},
+        "attention": bool(attention), "severities": sev.catalog(),
         "alerts": [_alert_wire(connection, r, target=targets.get(r["subject_id"] or
                                                                r["target_id"], {}),
                                grafana=grafana, incidents=incidents, names=names) for r in rows],
@@ -378,7 +467,90 @@ def alerts(connection, project_id: str, *, target_id: Optional[str] = None,
     }
 
 
-def _rule_wire(connection, r: dict, target: dict, silences: dict[str, dict]) -> dict[str, Any]:
+_CMP = (">", ">=", "<", "<=", "==", "!=")
+
+
+def _threshold(expr: str) -> tuple[Optional[str], Optional[float]]:
+    """("> 5", min requests) read from the rule's PromQL: the comparison against a number at its
+    top, and the `and … >= N` guard when it has one."""
+    from . import promql_lite as pq
+
+    try:
+        node = pq.parse(expr)
+    except pq.PromQLError:
+        return None, None
+    guard = None
+    while isinstance(node, pq.Bin) and node.op in ("and", "unless"):
+        rhs = node.rhs
+        if (node.op == "and" and isinstance(rhs, pq.Bin) and rhs.op in (">=", ">")
+                and isinstance(rhs.rhs, pq.Num)):
+            guard = rhs.rhs.value
+        node = node.lhs
+    if isinstance(node, pq.Bin) and node.op in _CMP and isinstance(node.rhs, pq.Num):
+        return f"{node.op} {aa.num(node.rhs.value)}", guard
+    if isinstance(node, pq.Call) and node.func in ("absent", "absent_over_time"):
+        return "absent", guard
+    return None, guard
+
+
+def _routing(connection, r: dict, target: dict) -> tuple[str, Optional[str]]:
+    """Who an alert from this rule is told, from THE router (notify.preview): its words."""
+    from . import monitoring as mon
+    from . import notify
+
+    labels = mon.alert_labels({"labels": r.get("labels") or {}, "alertname": r["alert"],
+                               "rule_id": r["id"], "subject_id": target.get("id"),
+                               "urgency": aa.urgency_of(r), "source_kind": "rule"}, target)
+    point = connection.begin_nested()
+    try:
+        got = notify.preview(connection, target["project_id"], labels)
+        point.commit()
+    except Exception:  # noqa: BLE001 — routing words are for reading; never fail the tab
+        point.rollback()
+        return "Console", None
+    names: list[str] = []
+    for route in got.get("routes") or []:
+        for c in route.get("contact_points") or []:
+            if not c.get("skipped") and c.get("name") not in names:
+                names.append(str(c.get("name")))
+    urg = "high urgency" if got.get("urgency") == "high" else "low urgency"
+    return (" · ".join(names) or "Console") + f" ({urg})", got.get("word") or None
+
+
+def rule_facts(connection, r: dict, target: dict, interval_s: int) -> dict[str, Any]:
+    """A rule as a query, plainly: its PromQL, how often it is checked, its window, `for`,
+    `keep_firing_for`, threshold, min requests, routing and the datasource that evaluates it."""
+    from . import promql_lite as pq
+
+    rng = aa._max_range_ms(r["expr"])
+    threshold, guard = _threshold(r["expr"])
+    params = r.get("params") or {}
+    if r["kind"] != "custom":
+        p = {**aa.BUILTIN.get(r["kind"], {}).get("params", {}), **params}
+        guard = p.get("min_requests", guard)
+    routing, routing_tip = _routing(connection, r, target)
+    return {"expr": r["expr"], "interval_s": int(interval_s),
+            "window": pq.format_duration(rng) if rng else None,
+            "for_s": int(r.get("for_seconds") or 0),
+            "keep_firing_for_s": int(r.get("keep_firing_for_s") or 0),
+            "threshold": threshold, "min_requests": guard,
+            "routing": routing, "routing_tip": routing_tip,
+            "datasource": {"prometheus": "Prometheus", "boss": "BOSS's own records"}.get(
+                r.get("last_source") or "", "Not evaluated yet")}
+
+
+def is_sample(r: dict) -> bool:
+    return str((r.get("labels") or {}).get("sample") or "").lower() == "true"
+
+
+def _interval(connection, subject_id: str) -> int:
+    return int(connection.execute(sql(
+        "SELECT interval_s FROM rule_groups WHERE subject_id = :s ORDER BY created_at LIMIT 1"),
+        {"s": subject_id}).scalar() or 60)
+
+
+def _rule_wire(connection, r: dict, target: dict, silences: dict[str, dict],
+               interval_s: int = 60) -> dict[str, Any]:
     kind = r["kind"]
     b = aa.BUILTIN.get(kind, {})
     st = r.get("last_state") if r["enabled"] else "off"
@@ -394,6 +566,8 @@ def _rule_wire(connection, r: dict, target: dict, silences: dict[str, dict]) -> 
         "params": r["params"] if kind != "custom" else {},
         "bounds": {k: list(v) for k, v in aa.PARAM_BOUNDS.get(kind, {}).items()},
         "severity": (r.get("labels") or {}).get("severity") or "warning",
+        "sev": sev.level(r.get("labels") or {}), "sample": is_sample(r),
+        "facts": rule_facts(connection, r, target, interval_s),
         "labels": r.get("labels") or {}, "summary": (r.get("annotations") or {}).get("summary"),
         "description": (r.get("annotations") or {}).get("description"),
         "runbook": _runbook((r.get("annotations") or {}).get("runbook_url") or "", target),
@@ -486,9 +660,14 @@ def app_alerts_tab(connection, settings: Any, project_id: str, target_id: str, *
     from .observability_stack import endpoint_state
 
     prom = endpoint_state(connection, project_id, "prometheus")
+    interval = _interval(connection, target_id)
+    by_prom = any(r.get("last_source") == "prometheus" for r in rule_rows if r["enabled"])
+    if by_prom:
+        prom = {"state": "answering", "reason": ""}
     return {
         "target_id": target_id, "app": target["app_name"], "env": target["environment"],
-        "rules": [_rule_wire(connection, r, target, silences) for r in rule_rows],
+        "rules": [_rule_wire(connection, r, target, silences, interval) for r in rule_rows],
+        "severities": sev.catalog(), "has_samples": any(is_sample(r) for r in rule_rows),
         "evaluator": ("Prometheus" if prom["state"] == "answering"
                       else "BOSS's own monitoring"),
         "evaluator_tip": (None if prom["state"] == "answering" else

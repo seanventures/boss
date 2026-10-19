@@ -87,7 +87,8 @@ def build_app_alerts_router(
     def _rules_body(connection, pid: str, target_id: str) -> dict:
         tab = view.app_alerts_tab(connection, settings(), pid, target_id, state="firing")
         return {k: tab[k] for k in ("target_id", "app", "env", "rules", "sources", "changes",
-                                    "evaluator", "evaluator_tip", "export", "grafana")}
+                                    "evaluator", "evaluator_tip", "export", "grafana",
+                                    "severities", "has_samples")}
 
     @router.get("/v1/apps/{target_id}/alert-rules")
     @permit(P.OBSERVABILITY_READ, scope=Scope.project(query="project_id"))
@@ -163,12 +164,51 @@ def build_app_alerts_router(
     def all_alerts(project_id: str, request: Request, response: Response,
                    app: Optional[str] = None, state: str = "firing", since: str = "7d",
                    severity: Optional[str] = None, source: Optional[str] = None,
-                   flapping: Optional[bool] = None, acked: Optional[bool] = None):
+                   flapping: Optional[bool] = None, acked: Optional[bool] = None,
+                   attention: bool = False):
         """Every app's and service's alerts (filters: app or service, state, severity, source
         kind, flapping, acked), with the open incidents in the same words every card uses."""
         return _read(project_id, request, response, lambda c, pid: view.alerts(
             c, pid, target_id=app or None, state=state, since=since, severity=severity,
-            source=source or None, flapping=flapping, acked=acked))
+            source=source or None, flapping=flapping, acked=acked, attention=attention))
+
+    @router.get("/v1/apps/{target_id}/metric-names")
+    @permit(P.OBSERVABILITY_READ, scope=Scope.project(query="project_id"))
+    def metric_names(target_id: str, project_id: str, request: Request, response: Response):
+        """The app's ACTUAL series names, from what BOSS scraped or was sent (the New alert rule
+        builder's metric picker), with the selector its rules use."""
+        from boss_engine.services import alert_samples
+
+        def build(c, pid):
+            return alert_samples.metric_names(c, _target(c, pid, target_id))
+        return _read(project_id, request, response, build)
+
+    @router.post("/v1/apps/{target_id}/alert-rules/samples")
+    @permit(P.OBSERVABILITY_MANAGE, scope=Scope.project(body="project_id"))
+    def add_sample_rules(target_id: str, payload: ProjectBody):
+        """Seed the clearly labelled SAMPLE rules for this app (labels.sample="true"); idempotent."""
+        from boss_engine.services import alert_samples
+
+        pid = reader_project(payload.project_id)
+        with begin(engine) as connection:
+            actor = require_write_actor(connection, pid, payload.actor, "providerops_manage")
+            target = _target(connection, pid, target_id)
+            aa.ensure_rules(connection, target)
+            got = alert_samples.seed(connection, target, actor=actor)
+        return jsonable_encoder(got)
+
+    @router.post("/v1/apps/{target_id}/alert-rules/samples/remove")
+    @permit(P.OBSERVABILITY_MANAGE, scope=Scope.project(body="project_id"))
+    def remove_sample_rules(target_id: str, payload: ProjectBody):
+        """Remove every SAMPLE rule of this app (their alert history stays, marked sample)."""
+        from boss_engine.services import alert_samples
+
+        pid = reader_project(payload.project_id)
+        with begin(engine) as connection:
+            actor = require_write_actor(connection, pid, payload.actor, "providerops_manage")
+            target = _target(connection, pid, target_id)
+            got = alert_samples.remove(connection, target, actor=actor)
+        return jsonable_encoder(got)
 
     @router.post("/v1/apps/{target_id}/alerts/{alert_id}/triage")
     @permit(P.OBSERVABILITY_MANAGE, scope=Scope.project(body="project_id"))

@@ -486,6 +486,9 @@ def tick(engine, settings: Any, *, now: Optional[datetime] = None,
         out["enqueued"] = planned
     guard("plan", plan)
     out["delivery"] = guard("deliver", lambda: notify.deliver_due(engine, settings, now=now))
+    from . import bundled_monitoring
+
+    out["bundled"] = guard("bundled", lambda: bundled_monitoring.tick(engine, settings, now))
     return out
 
 

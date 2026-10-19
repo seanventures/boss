@@ -237,7 +237,11 @@ LABEL io.boss.recovery-guard="boss-recovery-hold/v1" \
     org.opencontainers.image.revision=$BOSS_SOURCE_SHA
 ENV BOSS_SOURCE_SHA=$BOSS_SOURCE_SHA \
     BOSS_BUILT_AT=$BOSS_BUILT_AT
-RUN chown -R boss:boss /app /var/lib/boss/artifacts /var/lib/boss/identity
+# The bundled Grafana's per-app dashboards: BOSS writes them, Grafana reads them (a volume).
+RUN mkdir -p /var/lib/boss/grafana-dashboards \
+    && chown -R boss:boss /app /var/lib/boss/artifacts /var/lib/boss/identity \
+       /var/lib/boss/grafana-dashboards \
+    && chmod 755 /var/lib/boss/grafana-dashboards
 # The code a sandboxed build reads (it runs BOSS's own verify on BOSS's tree) but never writes.
 RUN chmod -R go-w /app
 USER boss

@@ -726,9 +726,25 @@ if [[ "$SECRET_STORE_EXPLICIT" -eq 0 && -f "$INSTALL_DIR/.env" ]]; then
   esac
 fi
 
+# THE BUNDLED PROMETHEUS AND GRAFANA come up with Mission Control (compose `web` profile):
+# BOSS forwards every app's scraped series to Prometheus, and the console's Grafana and
+# Dashboard links open the bundled Grafana on the loopback. Headless (--no-web) they are not
+# started and BOSS's Postgres floor evaluates everything, so no address is written for them.
+GRAFANA_PORT="${BOSS_GRAFANA_PORT:-$(grep -m 1 '^BOSS_GRAFANA_PORT=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2- || true)}"
+GRAFANA_PORT="${GRAFANA_PORT:-3300}"
+MON_PROMETHEUS_URL=""
+MON_GRAFANA_URL=""
+MON_GRAFANA_PUBLIC_URL=""
 if [[ "$WITH_WEB" -eq 1 ]]; then
   COMPOSE_PROFILES="--profile web"
   ui_ok "Mission Control: yes (port $WEB_PORT)"
+  MON_PROMETHEUS_URL="http://prometheus:9090"
+  MON_GRAFANA_URL="http://grafana:3000"
+  MON_GRAFANA_PUBLIC_URL="http://localhost:${GRAFANA_PORT}"
+  ui_ok "Monitoring: bundled Prometheus and Grafana (Grafana on port $GRAFANA_PORT)"
+  if port_in_use "$GRAFANA_PORT" && ! docker ps --format '{{.Names}}' 2>/dev/null | grep -q 'grafana'; then
+    ui_warn "Port $GRAFANA_PORT is already in use — set BOSS_GRAFANA_PORT to another port and re-run if Grafana does not start."
+  fi
 else
   ui_ok "Mission Control: skipped"
 fi
@@ -1162,6 +1178,11 @@ BOSS_API_BIND=${API_BIND}
 BOSS_WEB_PORT=${WEB_PORT}
 BOSS_POSTGRES_PORT=${PG_PORT}
 BOSS_COMMUNITY_WEB_ENABLED=${WITH_WEB}
+# The bundled Prometheus and Grafana (with Mission Control); empty when it is skipped.
+BOSS_GRAFANA_PORT=${GRAFANA_PORT}
+BOSS_MONITORING_PROMETHEUS_URL=${MON_PROMETHEUS_URL}
+BOSS_MONITORING_GRAFANA_URL=${MON_GRAFANA_URL}
+BOSS_MONITORING_GRAFANA_PUBLIC_URL=${MON_GRAFANA_PUBLIC_URL}
 BOSS_COMMUNITY_SECRET_STORE=${SECRET_STORE}
 BOSS_BIND_ADDRESS=${BIND_ADDRESS}
 BOSS_CONSOLE_PUBLIC_ORIGIN=${CONSOLE_ORIGIN}

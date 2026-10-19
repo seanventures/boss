@@ -69,6 +69,7 @@ from typing import Any, Optional
 
 from ..ports import sql
 from . import promql_lite as pq
+from . import severity as sev
 from .core import emit_event, make_id
 
 log = logging.getLogger(__name__)
@@ -124,7 +125,8 @@ PARAM_BOUNDS: dict[str, dict[str, tuple[float, float]]] = {
     "no_traffic": {"window_minutes": (1, 1440), "expected_hours": (1, 168)},
     "deploy_health": {},
 }
-SEVERITIES = ("warning", "critical")
+#: sev1..sev4, plus the older Prometheus words (severity.level maps them).
+SEVERITIES = sev.ACCEPTED
 
 RUNBOOKS: dict[str, dict[str, str]] = {
     "app-serving": {
@@ -606,9 +608,11 @@ def validate_custom(spec: dict[str, Any]) -> dict[str, Any]:
     except pq.PromQLError as exc:
         raise ValueError(f"for: {exc}") from None
     labels = {str(k): str(v) for k, v in (spec.get("labels") or {}).items()}
-    labels.setdefault("severity", "warning")
-    if labels["severity"] not in SEVERITIES:
-        raise ValueError(f"labels.severity must be one of {list(SEVERITIES)}")
+    labels.setdefault("severity", "sev3")
+    if not sev.accepted(labels["severity"]):
+        raise ValueError("labels.severity must be sev1, sev2, sev3 or sev4 (or critical, "
+                         "warning, info)")
+    labels["severity"] = labels["severity"].strip().lower()
     ann = {str(k): str(v)[:2000] for k, v in (spec.get("annotations") or {}).items()
            if k in ("summary", "description", "runbook_url")}
     return {"alert": alert, "expr": expr, "for_seconds": for_seconds, "labels": labels,
@@ -772,13 +776,38 @@ def boss_only(expr: str) -> bool:
 class Prometheus:
     """The deployed stack's Prometheus: an instant query, as /api/v1/query answers it."""
 
-    def __init__(self, base_url: str, timeout: float = 4.0):
+    def __init__(self, base_url: str, timeout: float = 4.0,
+                 scope: Optional[dict[str, str]] = None):
         self.base_url, self.timeout = base_url.rstrip("/"), timeout
+        self.scope = dict(scope or {})
+
+    def _scoped(self, expr: str) -> str:
+        return pq.inject_scope(expr, self.scope) if self.scope else expr
+
+    def query_range(self, expr: str, start: datetime, end: datetime, step_s: int
+                    ) -> list[tuple[dict[str, str], list[tuple[int, float]]]]:
+        """/api/v1/query_range: [(labels, [(ms, value)])]."""
+        import urllib.parse
+        import urllib.request
+
+        url = (f"{self.base_url}/api/v1/query_range?" + urllib.parse.urlencode(
+            {"query": self._scoped(expr), "start": f"{start.timestamp():.3f}",
+             "end": f"{end.timestamp():.3f}", "step": str(int(step_s))}))
+        with urllib.request.urlopen(url, timeout=self.timeout * 3) as r:   # noqa: S310
+            body = json.loads(r.read(8_000_000).decode("utf-8", "replace"))
+        if body.get("status") != "success":
+            raise pq.PromQLError(str(body.get("error") or "Prometheus refused the query"))
+        out = []
+        for row in (body.get("data") or {}).get("result") or []:
+            out.append((dict(row.get("metric") or {}),
+                        [(int(float(t) * 1000), float(v)) for t, v in row.get("values") or []]))
+        return out
 
     def query(self, expr: str, at: datetime) -> list[pq.Sample]:
         import urllib.parse
         import urllib.request
 
+        expr = self._scoped(expr)
         url = (f"{self.base_url}/api/v1/query?" + urllib.parse.urlencode(
             {"query": expr, "time": f"{at.timestamp():.3f}"}))
         with urllib.request.urlopen(url, timeout=self.timeout) as r:   # noqa: S310
@@ -799,8 +828,15 @@ def prometheus_for(connection, project_id: str) -> Optional[Prometheus]:
     """The project's Prometheus, only when BOSS's recorded check says it answers."""
     from .observability_stack import endpoint_state
 
+    from .observability_stack import _bundled
+
     state = endpoint_state(connection, project_id, "prometheus")
-    return Prometheus(state["base_url"]) if state["state"] == "answering" else None
+    if state["state"] != "answering":
+        return None
+    if state["base_url"] == _bundled("prometheus"):
+        # The bundled one is shared by every project: never asked unscoped (spec §9.4).
+        return Prometheus(state["base_url"], scope={"project": project_id})
+    return Prometheus(state["base_url"])
 
 
 # --------------------------------------------------------------------------- #
@@ -923,8 +959,7 @@ def urgency_of(rule: Optional[dict]) -> str:
     """High notifies at once and ignores quiet hours; low respects them (spec §7)."""
     if rule and rule.get("urgency") in ("high", "low"):
         return rule["urgency"]
-    sev = ((rule or {}).get("labels") or {}).get("severity")
-    return "high" if sev == "critical" else "low"
+    return sev.urgency((rule or {}).get("labels") or {})
 
 
 def _flap(connection, row: dict, present: bool, now: datetime) -> None:
@@ -1247,8 +1282,7 @@ def _group(connection, target: dict, now: datetime, rules_by_id: dict[str, dict]
                 {"id": inc_id, "p": pid, "k": key, "title": title,
                  "sid": _sid(connection, target), "urg": a.get("urgency") or "high",
                  "svc": target.get("app_name") or "",
-                 "sev": "critical" if (_json(a["labels"], {}) or {}).get("severity")
-                 == "critical" else "warning", "now": now})
+                 "sev": sev.legacy(_json(a["labels"], {}) or {}), "now": now})
             action = "opened"
         else:
             inc_id = inc["id"]
@@ -1927,8 +1961,8 @@ def _new_incident(connection, target: dict, alert: dict, at: datetime, *,
         " status = 'triaged', last_seen = EXCLUDED.last_seen RETURNING id"),
         {"id": inc_id, "p": alert["project_id"], "k": key,
          "svc": target.get("app_name") or "",
-         "sev": "critical" if (alert.get("labels") or {}).get("severity") == "critical"
-         else "warning", "at": at, "title": _incident_title(target, alert)})
+         "sev": sev.legacy(alert.get("labels") or {}), "at": at,
+         "title": _incident_title(target, alert)})
     got = connection.execute(sql("SELECT id FROM incidents WHERE project_id = :p "
                                  "AND dedupe_key = :k"),
                              {"p": alert["project_id"], "k": key}).scalar()
@@ -2242,7 +2276,8 @@ def update_rule(connection, target: dict, rule_id: Optional[str], change: dict[s
                                              {"i": rid}).mappings().first())
         _audit(connection, rule, "created", None, _snapshot(rule), actor, reason, now)
         rule_id, change = rid, {k: v for k, v in change.items()
-                                if k in ("auto_respond", "triage")}
+                                if k in ("auto_respond", "triage", "keep_firing_for", "no_data",
+                                         "urgency")}
         if not change:
             return rule
     row = connection.execute(sql("SELECT * FROM app_alert_rules WHERE id = :i AND subject_id = :t"),
@@ -2278,9 +2313,10 @@ def update_rule(connection, target: dict, rule_id: Optional[str], change: dict[s
             except pq.PromQLError as exc:
                 raise RuleRefused(f"for: {exc}") from None
         if "severity" in change:
-            if change["severity"] not in SEVERITIES:
-                raise RuleRefused(f"severity must be one of {list(SEVERITIES)}")
-            new["labels"] = {**rule["labels"], "severity": change["severity"]}
+            if not sev.accepted(change["severity"]):
+                raise RuleRefused("severity must be sev1, sev2, sev3 or sev4")
+            new["labels"] = {**rule["labels"],
+                             "severity": str(change["severity"]).strip().lower()}
         if "runbook_url" in change:
             new["annotations"] = {**new["annotations"],
                                   "runbook_url": str(change["runbook_url"] or "")[:500]
@@ -2658,14 +2694,16 @@ def record_heartbeat(connection, source: dict, now: datetime) -> dict[str, Any]:
 # One subject, one evaluation (the monitor scheduler's unit of work)
 # --------------------------------------------------------------------------- #
 def datasource_for(connection, settings: Any, subj: dict) -> tuple[Optional[Prometheus], dict]:
-    """(Prometheus or None, label scope). A deployed app: its host's Prometheus when BOSS's check
-    says it answers (T1, v1). A service BOSS did not deploy: the bundled Prometheus (T2) when
-    configured and answering, scoped to the project; else the Postgres floor (T0)."""
-    if not is_service(subj):
-        return prometheus_for(connection, subj["project_id"]), {}
+    """(Prometheus or None, label scope). The bundled Prometheus (T2) first, when configured and
+    answering, scoped to the project: BOSS forwards every deployed app's scrapes and probes to
+    it, so it holds the app's own series (what custom rules read). Else, for a deployed app,
+    its host's Prometheus when BOSS's check says it answers (T1, v1); else the Postgres floor
+    (T0)."""
     url = str(getattr(settings, "monitoring_prometheus_url", "") or "")
     if url and _bundled_answers(url):
         return Prometheus(url), {"project": subj["project_id"]}
+    if not is_service(subj):
+        return prometheus_for(connection, subj["project_id"]), {}
     return None, {}
 
 

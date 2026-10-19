@@ -1,0 +1,12 @@
+# Provisioned by BOSS: one dashboard per app, written by BOSS into a shared volume.
+apiVersion: 1
+providers:
+  - name: boss
+    orgId: 1
+    folder: BOSS
+    type: file
+    disableDeletion: true
+    allowUiUpdates: false
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/boss/grafana-dashboards
