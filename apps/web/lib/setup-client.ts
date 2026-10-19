@@ -7,6 +7,7 @@
  */
 import { apiWrite } from "./api-write";
 import { askConsent, consentFromBody } from "./identity/consent";
+import { identityRefusal, identitySentence } from "./identity/guarded-action";
 import type { SetupRefusal, SetupView, TokenFound } from "./setup-types";
 
 export class SetupFailure extends Error {
@@ -20,9 +21,27 @@ export class SetupFailure extends Error {
   }
 }
 
+/** The short pill word for an identity refusal — "Confirm it's you" names the sheet it still
+ *  needs; never the raw "step_up_required" the API answered with. */
+function identityHeadline(error: "step_up_required" | "forbidden" | "unauthenticated"): string {
+  if (error === "step_up_required") return "Confirm it's you";
+  if (error === "unauthenticated") return "Signed out";
+  return "Not allowed";
+}
+
 async function read<T>(r: Response): Promise<T> {
   const data = await r.json().catch(() => ({}));
   if (!r.ok) {
+    // THE REAL REASON, NEVER A RAW CODE: apiWrite already opened "Confirm it's you" and
+    // retried once (lib/api-write.ts); a step_up_required that still reaches here is a
+    // decline, a cancel, or no mirror to ask through — the operator is told that in words,
+    // not left reading the API's bare `step_up_required` (boss-1 rc10.9, Setup > Add a model).
+    const identity = identityRefusal(r.status, data);
+    if (identity) {
+      const fix = identitySentence(identity);
+      throw new SetupFailure(r.status, fix,
+        { state: "failed", headline: identityHeadline(identity.error), fix });
+    }
     const refusal = (data as { refusal?: SetupRefusal }).refusal ?? null;
     throw new SetupFailure(r.status, refusal?.headline
       || String((data as { error?: string }).error || `HTTP ${r.status}`), refusal);

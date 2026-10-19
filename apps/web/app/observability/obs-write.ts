@@ -5,11 +5,17 @@
  */
 import { apiWrite } from "../../lib/api-write";
 import { askConsent, consentFromBody } from "../../lib/identity/consent";
+import { identityRefusal, identitySentence } from "../../lib/identity/guarded-action";
 
 export type WriteResult<T = Record<string, unknown>> = { ok: boolean; status: number; body: T | null; error: string | null };
 
-/** The API's own sentence, never its raw code. */
+/** The API's own sentence, never its raw code. apiWrite already opened "Confirm it's you" and
+ *  retried once for a step_up_required (lib/api-write.ts); one that still reaches here was
+ *  declined, cancelled, or had no mirror to ask through, and is said in words — not the bare
+ *  `step_up_required`/`forbidden` code the API answered with. */
 function said(body: unknown, status: number): string {
+  const identity = identityRefusal(status, body);
+  if (identity) return identitySentence(identity);
   const o = (body && typeof body === "object" ? body : {}) as { detail?: unknown; error?: unknown };
   const d = typeof o.detail === "string" ? o.detail : typeof o.error === "string" ? o.error : "";
   if (d === "consent_required") return "Needs your consent";
