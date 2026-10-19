@@ -263,7 +263,7 @@ export function RuleBuilder({ targetId, apps, projectId, actor, severities = SEV
         <div className="obs-adetail-row">
           <span className="obs-fact-k" title="The query BOSS evaluates">PromQL</span>
           {expert ? (
-            <textarea value={raw} rows={4} spellCheck={false} className="obs-promql-edit" data-testid="obs-builder-expr"
+            <textarea value={raw} rows={4} aria-label="PromQL" spellCheck={false} className="obs-promql-edit" data-testid="obs-builder-expr"
                       onChange={(e) => setRaw(e.target.value)} />
           ) : (
             <code className="obs-promql" data-copy="data" data-testid="obs-builder-promql">{built || "Pick a metric"}</code>
