@@ -737,6 +737,8 @@ def _key_proof(connection: Connection, settings: Any, project_id: str, provider:
         proof.update(ok=False, state="paused_budget")
     elif proof.get("job_deferred"):
         proof.update(ok=False, state="job_deferred")
+    elif proof.get("legacy_hold"):
+        proof.update(ok=False, state="legacy_hold")
     proof.setdefault("state", "working" if proof.get("ok") else "failed")
     proof["model"] = details["model"]
     proof["base_url"] = details["base_url"]
@@ -758,6 +760,8 @@ def _subscription_proof(connection: Connection, settings: Any, project_id: str, 
         proof["state"] = "paused_budget"
     elif proof.get("job_deferred"):
         proof["state"] = "job_deferred"
+    elif proof.get("legacy_hold"):
+        proof["state"] = "legacy_hold"
     else:
         proof["state"] = setup_checks.classify_model_failure(
             0 if "could not reach" in str(proof.get("error") or "").lower() else -1,
@@ -772,7 +776,8 @@ def _subscription_proof(connection: Connection, settings: Any, project_id: str, 
 
 
 def _failure(provider: str, state: str, model: Optional[str] = None,
-             host: Optional[str] = None, summary: str = "") -> SetupActionError:
+             host: Optional[str] = None, summary: str = "",
+             decision_id: str = "") -> SetupActionError:
     from .setup_pills import LOGIN_FIX, DEFAULT_LOGIN_FIX, MODEL, pill
 
     state = state if state in MODEL else "failed"
@@ -782,11 +787,16 @@ def _failure(provider: str, state: str, model: Optional[str] = None,
     # actual period in words (budget.py's own "this month's budget is …").
     shown = pill("model", state, model=model or "That model", host=host or "the provider",
                  provider_fix=LOGIN_FIX.get(provider, DEFAULT_LOGIN_FIX), time="", age="",
-                 cap_name="Budget cap")
+                 cap_name="Budget cap", decision_id=decision_id)
     # THE PROVIDER'S OWN REASON FIRST ("Anthropic refused: credit balance too low"), then ours.
     fix = f"{summary} {shown['tip']}".strip() if summary else shown["tip"]
-    return SetupActionError(422, state, shown["label"], fix,
-                            {"summary": summary} if summary else None)
+    extra: dict[str, Any] = {}
+    if summary:
+        extra["summary"] = summary
+    if decision_id:
+        extra["decision_id"] = decision_id
+        extra["href"] = shown.get("fix_url")
+    return SetupActionError(422, state, shown["label"], fix, extra or None)
 
 
 def connect_model(connection: Connection, settings: Any, project_id: str, *, provider: str,
@@ -1017,7 +1027,8 @@ def _connect_key(connection: Connection, settings: Any, project_id: str, provide
     keep = proof.get("ok") or proof.get("state") in ("rate_limited", "unreachable")
     if not keep:
         raise _failure(provider, str(proof.get("state") or "failed"), proof.get("model"),
-                       proof.get("host"), str(proof.get("summary") or ""))
+                       proof.get("host"), str(proof.get("summary") or ""),
+                       str(proof.get("decision_id") or ""))
     from .setup_service import api_source_provider, last_check_broken
 
     spec = PROVIDERS.get(provider) or {}

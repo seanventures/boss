@@ -78,6 +78,10 @@ class _Authority:
     #: caller that only reads `message` cannot tell a budget cap from a deferred job apart —
     #: connection_spend.py used to call both "budget_refused" (boss-1 rc10.9).
     refusal_kind: Optional[str] = None
+    #: The decision a "reconciliation_required" / "legacy_reconciliation_required" refusal
+    #: asks a person to resolve (budget.py's `reserve()` already names it). A refusal the
+    #: Setup pill can point at, rather than only describe.
+    refusal_decision_id: Optional[str] = None
     reservation_id: Optional[str] = None
     job_id: Optional[str] = None
     job_lease_token: Optional[str] = None
@@ -471,6 +475,7 @@ class TypedDecisionSpend:
                 # "reconciliation_required", "legacy_reconciliation_required"); carried through
                 # rather than collapsed, so only an actual cap gets called a budget refusal.
                 refusal_kind=str(reserved.get("refusal") or "budget_cap"),
+                refusal_decision_id=reserved.get("decision_id"),
                 invocation_dedupe=dedupe,
                 role=role,
             )

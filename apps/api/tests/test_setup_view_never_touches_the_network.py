@@ -183,6 +183,34 @@ def test_a_deferred_job_is_not_shown_as_a_budget_refusal(client, monkeypatch, of
     assert refusal.get("summary") == "queue_full"
 
 
+def test_a_legacy_exposure_hold_names_and_links_its_decision(client, monkeypatch, offline):
+    """POST /v1/setup/models, end to end, when historical unresolved model exposure holds all
+    paid work (BudgetGovernor.legacy_model_reconciliation) — nothing a budget cap would fix.
+    It used to come back as "Paused · budget" with a "Raise it or wait for reset" fix, which
+    named the wrong problem and nowhere to act on the real one (boss-1 rc10.9)."""
+    as_ceo(monkeypatch)
+    fakes(monkeypatch)
+    offline()
+    from boss_engine.services.budget import BudgetGovernor
+
+    hold = {"status": "denied", "refusal": "legacy_reconciliation_required", "transient": False,
+            "decision_id": "dec_legacy123", "budget_state": "unknown",
+            "legacy_exposure": {}, "message": "Paid work is held for historical unresolved "
+            "model exposure. Reconcile the recorded attempt; raising a cap or resolving this "
+            "decision alone does not authorize new spend."}
+    monkeypatch.setattr(BudgetGovernor, "legacy_model_reconciliation",
+                        lambda self, connection, project_id: hold)
+    refused = connect_key(client)
+    assert refused.status_code == 422, refused.text
+    refusal = refused.json()["detail"]
+    assert refusal["headline"] == "Needs review"
+    assert refusal["headline"] != "Paused · budget"
+    assert "reconcile the recorded attempt" in refusal["fix"]
+    assert "Raise it or wait for reset" not in refusal["fix"]
+    assert refusal.get("decision_id") == "dec_legacy123"
+    assert refusal.get("href") == "/?area=decisions&decision=dec_legacy123"
+
+
 @pytest.mark.parametrize("state", ["rate_limited", "unreachable"])
 def test_a_check_github_did_not_answer_is_not_ready(client, engine, monkeypatch, offline, state):
     """READY MEANS PROVEN: "Repository and model checked" is false over a busy or unreachable

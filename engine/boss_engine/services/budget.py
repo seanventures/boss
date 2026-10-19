@@ -268,12 +268,21 @@ class BudgetGovernor:
             "AND e.event_type='typed_decision.attempt_failed' AND e.entity_type='typed_decision_attempt' "
             "AND e.entity_id=i.dedupe_key AND e.data->>'receipt_id'=i.receipt_id "
             # Only the new owner's exact structured proof, persisted atomically in
-            # both canonical errors and this event, establishes a TypeSafe 401 refusal.
-            "AND NOT COALESCE(i.error->'typed_decision_nonacceptance'=jsonb_build_object("
+            # both canonical errors and this event, establishes a TypeSafe 401 refusal — OR a
+            # row recorded before that structured proof existed, with the provider's own
+            # 401/403 auth rejection as free text ("TypeSafe 401: …authentication_error…", the
+            # legacy owner's only record of it). No spend happened either way: a provider's
+            # auth rejection is non-acceptance whether it was written down in the new shape or
+            # the old one (boss-1 rc10.9 — this exact row blocked every paid connect for good).
+            "AND NOT (COALESCE(i.error->'typed_decision_nonacceptance'=jsonb_build_object("
             "'version',1,'project_id',r.project_id,'invocation_id',i.id,'receipt_id',i.receipt_id,"
             "'reservation_id',r.id,'kind','provider_auth_rejected','provider','typesafe','http_status',401) "
             "AND receipt.error->'typed_decision_nonacceptance'=i.error->'typed_decision_nonacceptance' "
-            "AND e.data->'typed_decision_nonacceptance'=i.error->'typed_decision_nonacceptance',false)))) "
+            "AND e.data->'typed_decision_nonacceptance'=i.error->'typed_decision_nonacceptance',false) "
+            "OR (COALESCE(i.error->>'reason', i.error->>'message', receipt.error->>'reason', "
+            "receipt.error->>'message', '') ~* '40[13]' "
+            "AND COALESCE(i.error->>'reason', i.error->>'message', receipt.error->>'reason', "
+            "receipt.error->>'message', '') ~* 'auth'))))) "
             "AND NOT EXISTS (SELECT 1 FROM cost_receipts c "
             "WHERE c.project_id=r.project_id AND c.reservation_id=r.id AND c.receipt_id=i.receipt_id) LIMIT 1")
         row = connection.execute(query, {"p": project_id}).mappings().first()
@@ -1559,6 +1568,70 @@ class BudgetGovernor:
         if rows:
             emit_event(connection, project_id, 'budget.reservation_reconciled', 'budget_governor',
                        'budget_reservation', reservation_id, {"decision_ids": list(rows), "reason": reason})
+
+    def resolve_legacy_exposure(self, connection: Connection, project_id: str, decision_id: str,
+                                *, settle_at: str, actor: str) -> dict[str, Any]:
+        """Give a 'reconcile_legacy_model_exposure' / 'reconcile_legacy_provider_exposure'
+        decision a REAL ACTION. These never resolve themselves: _resolve_reconciliation only
+        watches 'verify_provider_outcome_*' decisions, which close when a worker later settles
+        or releases their reservation in the ordinary course of work. A legacy-exposure
+        decision's reservation is ALREADY expired or released — nothing will ever settle or
+        release it again — so without this the decision (and the admission block with it)
+        reopened on every paid attempt forever (boss-1 rc10.9).
+
+        Writes the cost_receipts row the recorded attempt never got — `settle_at="zero"`: the
+        provider refused, nothing was spent; `settle_at="estimate"`: the original estimate
+        stands, its outcome could not be confirmed either way — and resolves the decision.
+        Idempotent: a second call against an already-resolved decision raises, a cost_receipts
+        row already written for this reservation+receipt is reused rather than duplicated."""
+        if settle_at not in ("zero", "estimate"):
+            raise ValueError('settle_at must be "zero" or "estimate".')
+        decision = connection.execute(text(
+            "SELECT id, status, recommendation FROM decisions WHERE id=:id AND project_id=:p"),
+            {"id": decision_id, "p": project_id}).mappings().first()
+        if not decision:
+            raise ValueError("No such decision.")
+        rec = decision["recommendation"]
+        rec = rec if isinstance(rec, dict) else (json.loads(rec) if rec else {})
+        action = str(rec.get("action") or "")
+        if action not in ("reconcile_legacy_model_exposure", "reconcile_legacy_provider_exposure"):
+            raise ValueError("This decision is not a legacy-exposure reconciliation.")
+        if decision["status"] not in ("pending", "delegated"):
+            raise ValueError(f"Decision is already {decision['status']}.")
+        reservation_id = str(rec.get("reservation_id") or "")
+        receipt_id = str(rec.get("receipt_id") or "")
+        estimate = int(rec.get("original_estimate_usd_micros") or 0)
+        if not reservation_id or not receipt_id:
+            raise ValueError("Decision is missing its reservation or receipt.")
+        actual = 0 if settle_at == "zero" else estimate
+        existing = connection.execute(text(
+            "SELECT id FROM cost_receipts WHERE project_id=:p AND reservation_id=:r "
+            "AND receipt_id=:rc"), {"p": project_id, "r": reservation_id, "rc": receipt_id}
+        ).first()
+        if existing is None:
+            cost_receipt_id = make_id("cost")
+            connection.execute(text(
+                "INSERT INTO cost_receipts (id, project_id, reservation_id, receipt_id, "
+                "category, skill_or_model_id, estimated_usd_micros, actual_usd_micros, status, "
+                "equivalent_usd_micros, included_in_subscription, created_at) "
+                "VALUES (:id, :p, :r, :rc, 'model_gateway', 'legacy_reconciliation', :est, "
+                ":act, 'actual', NULL, false, clock_timestamp())"),
+                {"id": cost_receipt_id, "p": project_id, "r": reservation_id, "rc": receipt_id,
+                 "est": estimate, "act": actual})
+        else:
+            cost_receipt_id = existing[0]
+        note = (f"Settled at {'the estimate' if settle_at == 'estimate' else '$0 (provider refused)'} "
+               f"by {actor}.")
+        connection.execute(text(
+            "UPDATE decisions SET status='resolved', resolution_note=:note, "
+            "updated_at=clock_timestamp() WHERE id=:id"), {"id": decision_id, "note": note})
+        emit_event(connection, project_id, "budget.legacy_exposure_resolved", actor,
+                   "budget_reservation", reservation_id,
+                   {"decision_id": decision_id, "receipt_id": receipt_id,
+                    "cost_receipt_id": cost_receipt_id, "settle_at": settle_at,
+                    "actual_usd_micros": actual, "action": action})
+        return {"decision_id": decision_id, "cost_receipt_id": cost_receipt_id,
+               "actual_usd_micros": actual, "settle_at": settle_at}
 
     def consume(
         self,

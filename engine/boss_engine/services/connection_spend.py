@@ -290,6 +290,12 @@ class ConnectionSpend(TypedDecisionSpend):
                     self.capacity_denied or self.intent_conflict
                 ),
                 "job_deferred": kind == "job_deferred",
+                # A HOLD ON HISTORICAL EXPOSURE, NAMED AND LINKED — never "Paused · budget": no
+                # cap would fix this, and the operator could not tell what to do (boss-1
+                # rc10.9). `decision_id` is the one `BudgetGovernor.resolve_legacy_exposure`
+                # settles.
+                "legacy_hold": kind == "legacy_reconciliation_required",
+                "decision_id": authority.refusal_decision_id if kind else None,
                 "capacity_refused": self.capacity_denied,
                 "intent_conflict": self.intent_conflict,
             }
