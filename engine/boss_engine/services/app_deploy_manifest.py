@@ -178,6 +178,7 @@ class DeployManifest:
     metrics: Optional[dict[str, Any]] = None
     signals: Optional[dict[str, Any]] = None   # incident signals (services/incident_signals.py)
     alerts: Optional[dict[str, Any]] = None    # alert rules' starting values (services/app_alerts.py)
+    dashboard: Optional[dict[str, Any]] = None  # extra Grafana panels (bundled_monitoring)
     resources: tuple[Any, ...] = ()        # platform.contract.ResourceRequest, in file order
     source_text: str = field(default="", repr=False, compare=False)
 
@@ -216,6 +217,9 @@ class DeployManifest:
             "signals": dict(self.signals) if self.signals else None,
             # The alert rules' starting values; the console's edits win (app_alerts).
             "alerts": dict(self.alerts) if self.alerts else None,
+            # The app's own dashboard panels (Set up monitoring writes them), drawn below the
+            # standard ones on its Grafana dashboard.
+            "dashboard": dict(self.dashboard) if self.dashboard else None,
             "resources": [{"name": r.name, "capability": r.capability, "mode": r.mode.value,
                            "provider": r.provider, "public": r.public} for r in self.resources],
         }
@@ -547,8 +551,31 @@ def _alerts(raw: Any) -> Optional[dict[str, Any]]:
 
 _TOP_LEVEL = frozenset({
     "version", "name", "kind", "compose", "env", "install", "update", "health", "open",
-    "teardown", "requires", "dir", "metrics", "resources", "signals", "alerts",
+    "teardown", "requires", "dir", "metrics", "resources", "signals", "alerts", "dashboard",
 })
+
+
+def _dashboard(raw: Any) -> Optional[dict[str, Any]]:
+    """`dashboard: {panels: [{title, expr, unit, kind}]}` — the app's own Grafana panels."""
+    if raw is None:
+        return None
+    if not isinstance(raw, dict) or set(raw) - {"panels"}:
+        raise ManifestError("dashboard must be {panels: [{title, expr, unit, kind}]}.")
+    panels = raw.get("panels") or []
+    if not isinstance(panels, list):
+        raise ManifestError("dashboard.panels must be a list.")
+    out = []
+    for i, p in enumerate(panels):
+        if not isinstance(p, dict) or not str(p.get("title") or "").strip() \
+                or not str(p.get("expr") or "").strip():
+            raise ManifestError(f"dashboard.panels[{i}] needs a title and an expr.")
+        if set(p) - {"title", "expr", "unit", "kind"}:
+            raise ManifestError(f"dashboard.panels[{i}] has unknown field(s) "
+                                f"{sorted(set(p) - {'title', 'expr', 'unit', 'kind'})}.")
+        out.append({"title": str(p["title"])[:80], "expr": str(p["expr"])[:2000],
+                    "unit": str(p.get("unit") or "short")[:20],
+                    "kind": "stat" if p.get("kind") == "stat" else "timeseries"})
+    return {"panels": out[:20]} if out else None
 
 
 def _resources(raw: Any) -> tuple[Any, ...]:
@@ -654,6 +681,7 @@ def parse_manifest(data: Any, *, source_text: str = "") -> DeployManifest:
         requires_docker=requires_docker, compose_file=compose_file,
         compose_project=compose_project, metrics=_metrics(data.get("metrics")),
         signals=_signals(data.get("signals")), alerts=_alerts(data.get("alerts")),
+        dashboard=_dashboard(data.get("dashboard")),
         resources=_resources(data.get("resources")), source_text=source_text,
     )
 

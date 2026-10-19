@@ -401,6 +401,8 @@ export type ObsBodies = {
   writes?: Record<string, { status?: number; body: unknown }>;
   /** App alerts (alerts-fixtures.ts): an app's rules, its history (by `url`), every app's. */
   rules?: (targetId: string) => unknown; history?: (url: URL) => unknown; alerts?: (url: URL) => unknown;
+  /** Any other GET by exact path (monitoring: /v1/contact-points, /v1/monitoring/services/x/live, …). */
+  gets?: Record<string, (url: URL) => unknown>;
 };
 export type Recorded = { url: string; method: string; body: unknown };
 
@@ -428,6 +430,7 @@ export function mockObsFetch(bodies: ObsBodies = {}) {
       if (path.endsWith("/observability-suite/health-check")) return json(HEALTH_CHECK_WIRE);
       return json({ ok: true });
     }
+    if (bodies.gets?.[path]) return json(bodies.gets[path](u));
     if (/^\/v1\/apps\/[^/]+\/alert-rules$/.test(path)) {
       const id = decodeURIComponent(path.split("/")[3] ?? "");
       return json(bodies.rules ? bodies.rules(id) : rulesWire(id));

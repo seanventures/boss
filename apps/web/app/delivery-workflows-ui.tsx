@@ -42,6 +42,7 @@ import { viewOf } from "./workflows/flow/node-facts";
 import type { Act, StepSpend } from "../lib/agent-world-types";
 import { browserHref } from "../lib/browser-links";
 import { StackDeployStep, stackDeployOf, type StepStackDeploy } from "./workflow-stack-deploy-step";
+import { MonitoringPackCard, packForStep, type MonitoringPack } from "./workflows/monitoring-pack";
 import { DefineStepForm } from "./workflows/define-step-form";
 import { CaptainCanRunIt } from "./workflows/captain-can-run-it";
 import { Library, type Schedule } from "./workflows/library";
@@ -2232,6 +2233,10 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onSkipStep, 
           previewStarting={previewStarting}
           busy={busy}
           panelBuild={buildStageOf(steps)}
+          monitoringPack={packForStep(run.steps, current, (id) => {
+            const spec = laneSpec.steps.find((x) => x.id === id) as { next?: unknown } | undefined;
+            return Array.isArray(spec?.next) ? spec.next.map(String) : [];
+          })}
         />
         {pinnedOutput(current.output) ? (
           <p className="detail" data-testid="dw-step-pinned">
@@ -3152,8 +3157,11 @@ export function buildStageOf(steps: Array<Pick<RunStep, "capability" | "status">
 function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onRetry, onSkip,
                      actions, actor = "", act = null, approval: gateAnswer = null, planned,
                      onSetTarget, onPrepareTarget, onRunPreview, onBound, projectId, buildRunId,
-                     workflowRunId, previewStarting, busy, panelBuild, spend = null }: {
+                     workflowRunId, previewStarting, busy, panelBuild, spend = null,
+                     monitoringPack = null }: {
   projectId: string;
+  /** Set up monitoring's pack: on its own step, and on the release that carries it. */
+  monitoringPack?: MonitoringPack | null;
   /** What this step spent over every attempt (chain.steps). */
   spend?: StepSpend | null;
   /** The run's build step, as the panel step's "Build" stage shows it. */
@@ -3805,6 +3813,8 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
         {typeof (step.output || {}).document_id === "string" ? (
           <ChangeRecord documentId={String((step.output as Record<string, unknown>).document_id)} />
         ) : null}
+
+        {monitoringPack ? <MonitoringPackCard pack={monitoringPack} onCard={step.capability === "deploy" && step.status === "waiting"} /> : null}
 
         <StepOutputFacts facts={output.facts} details={output.details} />
         </>) : undefined}

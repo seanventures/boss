@@ -119,6 +119,61 @@ services:
       # Loopback for the same reason. The operator needs the UI; the internet does not.
       - "127.0.0.1:${INFISICAL_PORT:-8080}:8080"
 
+  # THE BUNDLED PROMETHEUS AND GRAFANA (BOSSAPP-598, decision D1, topology T2). They come up
+  # with Mission Control (the `web` profile; `monitoring` alone brings them without the
+  # console). BOSS forwards every app's scrapes, health probes and open alerts here by remote
+  # write, and what apps send it by OTLP or remote write; rules are evaluated over them,
+  # scoped to each project. install.sh sets BOSS_MONITORING_* in .env when the web profile is
+  # on; without them BOSS's Postgres floor (T0) holds and evaluates everything.
+  # Prometheus is not published on the host. Official images, pinned.
+  prometheus:
+    image: prom/prometheus:v3.10.0
+    profiles: ["web", "monitoring"]
+    restart: unless-stopped
+    mem_limit: 512m
+    command:
+      - --config.file=/etc/prometheus/boss.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+      # Bounded on disk too: a laptop is not a metrics warehouse.
+      - --storage.tsdb.retention.size=2GB
+      - --web.enable-otlp-receiver
+      - --web.enable-remote-write-receiver
+    volumes:
+      - boss_community_prometheus:/prometheus
+      - ./monitoring/prometheus.yml:/etc/prometheus/boss.yml:ro
+
+  # Read-only for whoever reaches it: anonymous Viewer, no login form, no admin user at all.
+  # Published on the loopback only, like the console; its dashboards are files BOSS writes.
+  grafana:
+    image: grafana/grafana:12.4.0
+    profiles: ["web", "monitoring"]
+    restart: unless-stopped
+    mem_limit: 384m
+    depends_on:
+      - prometheus
+    environment:
+      GF_SERVER_ROOT_URL: ${BOSS_MONITORING_GRAFANA_PUBLIC_URL:-http://localhost:3300}/
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_AUTH_BASIC_ENABLED: "false"
+      GF_SECURITY_DISABLE_INITIAL_ADMIN_CREATION: "true"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      # Explore (an alert's "Explore ↗") is open to viewers; nothing a viewer edits is saved.
+      GF_USERS_VIEWERS_CAN_EDIT: "true"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES: "false"
+      GF_PLUGINS_PREINSTALL_DISABLED: "true"
+      GF_NEWS_NEWS_FEED_ENABLED: "false"
+    volumes:
+      - boss_community_grafana:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - boss_community_grafana_dashboards:/var/lib/boss/grafana-dashboards:ro
+    ports:
+      - "127.0.0.1:${BOSS_GRAFANA_PORT:-3300}:3000"
+
   api:
     build:
       context: ../..
@@ -193,6 +248,10 @@ services:
       # be able to check it. The public origin binds cookies, passkeys and every emailed link.
       BOSS_CONSOLE_PASSWORD: ${BOSS_CONSOLE_PASSWORD:-}
       BOSS_PUBLIC_URL: ${BOSS_PUBLIC_URL:-${BOSS_CONSOLE_PUBLIC_ORIGIN:-}}
+      BOSS_MONITORING_PROMETHEUS_URL: ${BOSS_MONITORING_PROMETHEUS_URL:-}
+      BOSS_MONITORING_GRAFANA_URL: ${BOSS_MONITORING_GRAFANA_URL:-}
+      BOSS_MONITORING_GRAFANA_PUBLIC_URL: ${BOSS_MONITORING_GRAFANA_PUBLIC_URL:-}
+      BOSS_MONITORING_DASHBOARDS_DIR: /var/lib/boss/grafana-dashboards
       # The console's real port, for links printed before any public origin is bound (the claim
       # link of a laptop install): identity/authn_support.local_console_origin.
       BOSS_WEB_PORT: ${BOSS_WEB_PORT:-3000}
@@ -330,6 +389,8 @@ services:
       - boss_community_recovery:/var/lib/boss/recovery:ro
       - boss_community_artifacts:/var/lib/boss/artifacts
       - boss_community_identity:/var/lib/boss/identity
+      # The bundled Grafana's per-app dashboards (bundled_monitoring.write_dashboards).
+      - boss_community_grafana_dashboards:/var/lib/boss/grafana-dashboards
       # Per-project Maven/Gradle downloads the build sandbox keeps between runs (toolchains).
       - boss_community_toolchain_cache:/var/lib/boss/toolchain-cache
       # BOSS's own source for self-fix builds, read-only (`boss self-fix seed` fills it on the
@@ -458,6 +519,10 @@ services:
       BOSS_MASTER_KEY_FILE: ${BOSS_MASTER_KEY_FILE:-/var/lib/boss/identity/master.key}
       BOSS_IDENTITY_SERVER_KEY: ${BOSS_IDENTITY_SERVER_KEY:-}
       BOSS_PUBLIC_URL: ${BOSS_PUBLIC_URL:-${BOSS_CONSOLE_PUBLIC_ORIGIN:-}}
+      BOSS_MONITORING_PROMETHEUS_URL: ${BOSS_MONITORING_PROMETHEUS_URL:-}
+      BOSS_MONITORING_GRAFANA_URL: ${BOSS_MONITORING_GRAFANA_URL:-}
+      BOSS_MONITORING_GRAFANA_PUBLIC_URL: ${BOSS_MONITORING_GRAFANA_PUBLIC_URL:-}
+      BOSS_MONITORING_DASHBOARDS_DIR: /var/lib/boss/grafana-dashboards
       # The console's real port, for links printed before any public origin is bound (the claim
       # link of a laptop install): identity/authn_support.local_console_origin.
       BOSS_WEB_PORT: ${BOSS_WEB_PORT:-3000}
@@ -505,6 +570,8 @@ services:
       - boss_community_recovery:/var/lib/boss/recovery:ro
       - boss_community_artifacts:/var/lib/boss/artifacts
       - boss_community_identity:/var/lib/boss/identity
+      # The bundled Grafana's per-app dashboards (bundled_monitoring.write_dashboards).
+      - boss_community_grafana_dashboards:/var/lib/boss/grafana-dashboards
       # Per-project Maven/Gradle downloads the build sandbox keeps between runs (toolchains).
       - boss_community_toolchain_cache:/var/lib/boss/toolchain-cache
       # BOSS's own source for self-fix builds, read-only (`boss self-fix seed` fills it on the
@@ -673,6 +740,9 @@ volumes:
   boss_community_grok_home:
   boss_community_infisical_redis:
   boss_community_pg:
+  boss_community_prometheus:
+  boss_community_grafana:
+  boss_community_grafana_dashboards:
   boss_community_artifacts:
   boss_community_identity:
   boss_community_toolchain_cache:

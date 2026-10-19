@@ -42,12 +42,12 @@ describe("Observability › Alerts", () => {
     const rec = await openObs("?view=alerts", { alerts: (u) => allAlertsWire(u.searchParams.get("state") === "all" ? [FIRING_ALERT, NOISE_ALERT] : [FIRING_ALERT]) });
     await choose($("[data-testid='obs-alerts-app']") as HTMLSelectElement, "t_down");
     await choose($("[data-testid='obs-alerts-state']") as HTMLSelectElement, "all");
-    await choose($("[data-testid='obs-alerts-severity']") as HTMLSelectElement, "critical");
+    await choose($("[data-testid='obs-alerts-severity']") as HTMLSelectElement, "sev1");
     expect(params().get("aapp")).toBe("t_down");
     expect(params().get("astate")).toBe("all");
-    expect(params().get("asev")).toBe("critical");
+    expect(params().get("asev")).toBe("sev1");
     await settle();
-    expect(rec.calls.some((u) => u.includes("/v1/alerts?project_id=p1&app=t_down&state=all&severity=critical&since=7d"))).toBe(true);
+    expect(rec.calls.some((u) => u.includes("/v1/alerts?project_id=p1&app=t_down&state=all&severity=sev1&since=7d"))).toBe(true);
   });
 
   it("an app's name opens its drawer on the Alerts tab", async () => {

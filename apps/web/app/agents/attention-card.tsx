@@ -466,10 +466,10 @@ export function AttentionCard({ item, projectId, actor, density = "card", focusK
           <span className="ag-att-done" role="status" data-testid="ag-att-done" data-user-text>{done}</span>
         ) : null}
         {item.kind === "readiness" ? (
-          <a className="ag-btn" data-testid="ag-att-fix" href={linkTo({ area: item.fix?.area || "setup", view: null, role: null }, orgId)}
+          <a className="ag-btn" data-testid="ag-att-fix" href={linkTo({ area: item.fix?.area || "setup", view: item.fix?.view ?? null, role: null }, orgId)}
              title={item.whatToDo || undefined}
-             onClick={(e) => { if (plainClick(e)) { e.preventDefault(); navigate({ area: item.fix?.area || "setup", view: null, role: null }); } }}>
-            Fix ↗
+             onClick={(e) => { if (plainClick(e)) { e.preventDefault(); navigate({ area: item.fix?.area || "setup", view: item.fix?.view ?? null, role: null }); } }}>
+            {item.fix?.view && item.fix.label ? `${item.fix.label} ↗` : "Fix ↗"}
           </a>
         ) : null}
         <button type="button" className="ag-link ag-att-more" aria-expanded={open} data-testid="ag-att-details"

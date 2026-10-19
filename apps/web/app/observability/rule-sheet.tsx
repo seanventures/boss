@@ -7,11 +7,13 @@
  *     Fire when    errors (5xx) are above [ 5 ]% of requests
  *     Over         [ 5 ] min, with at least [ 20 ] requests
  *     Hold         [ 0 ] min before it fires          (Prometheus `for`)
- *     Severity     ( ) Low  (•) High
+ *     Keep firing  [ 0 ] min after it clears       (Prometheus `keep_firing_for`)
+ *     Severity     ( ) SEV1 (•) SEV2 ( ) SEV3 ( ) SEV4
  *     When it fires  [x] An agent triages it   [x] Respond automatically (asks your consent once)
- *     Notify       Console   (Email, Slack and paging: coming later)
+ *     Notify       [x] Console [x] On-call email [ ] #ops Slack     (PUT /v1/alert-rules/{id}/notify)
  *     Runbook      [ boss:runbook/app-serving ]
  *     PromQL       100 * sum(increase(http_requests_total{…}[5m])) / … > 5 and …   (read only)
+ *                  a rule of your own: [Preview] → "Would have fired 2 times in the last 24 h"
  *                                                          [ Cancel ]  [ Save rule ]
  *
  * A built-in rule is changed by its settings (its PromQL follows them); a rule of your own is
@@ -20,10 +22,13 @@
 import React, { useState } from "react";
 
 import { GatedButton } from "../../components/gated";
-import { forWord, rulesPutPath, type AlertRule, type RuleKind } from "../../lib/app-alerts";
+import { SEVERITIES, forWord, rulesPutPath, type AlertRule, type RuleKind, type Sev, type SevInfo } from "../../lib/app-alerts";
 import { showToast } from "../client-forms";
 import { Sheet } from "../infra/kit";
 import { obsWrite } from "./obs-write";
+import { useContactPoints, usePolicies } from "../../lib/monitoring";
+import { RuleFacts } from "./rule-facts";
+import { SevFlag, sevTip } from "./severity";
 
 type Field = { key: string; before: string; after: string; tip: string };
 /** Each built-in's settings, as the sentence the mockup reads. */
@@ -61,14 +66,16 @@ function NumberField({ f, value, bounds, onChange }: { f: Field; value: string; 
   );
 }
 
-export function RuleSheet({ rule, targetId, projectId, actor, onClose, onSaved }: {
+export function RuleSheet({ rule, targetId, projectId, actor, onClose, onSaved, severities = SEVERITIES }: {
   rule: AlertRule | null; targetId: string; projectId: string; actor: string; onClose: () => void; onSaved: () => void;
+  severities?: SevInfo[];
 }) {
   const custom = !rule || rule.kind === "custom";
   const [params, setParams] = useState<Record<string, string>>(
     Object.fromEntries(Object.entries(rule?.params ?? {}).map(([k, v]) => [k, String(v)])));
   const [hold, setHold] = useState(String(Math.round((rule?.forSeconds ?? 0) / 60)));
-  const [severity, setSeverity] = useState<"warning" | "critical">(rule?.severity ?? "warning");
+  const [keep, setKeep] = useState(String(Math.round((rule?.facts.keepFiringForS ?? 0) / 60)));
+  const [severity, setSeverity] = useState<Sev>(rule?.severity ?? "sev3");
   const [triage, setTriage] = useState(rule?.triage ?? true);
   const [respond, setRespond] = useState(rule?.autoRespond ?? false);
   const [enabled, setEnabled] = useState(rule?.enabled ?? true);
@@ -79,6 +86,18 @@ export function RuleSheet({ rule, targetId, projectId, actor, onClose, onSaved }
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const cps = useContactPoints(projectId);
+  const policies = usePolicies(rule ? projectId : "");
+  const current = policies.data?.find((p) => p.ruleId === rule?.id)?.contactPointIds ?? null;
+  const [notify, setNotify] = useState<Set<string> | null>(null);
+  const told = notify ?? new Set(current ?? []);
+  const [preview, setPreview] = useState<{ word: string; bad: boolean } | null>(null);
+  const runPreview = async () => {
+    setPreview(null);
+    const r = await obsWrite<{ word?: string }>("/v1/alert-rules/preview", { project_id: projectId, subject_id: targetId, expr,
+      for: forWord((Number(hold) || 0) * 60) }, { scope: `obs:rule-preview:${targetId}`, label: "Preview" });
+    setPreview(r.ok ? { word: r.body?.word ?? "No answer", bad: false } : { word: r.error ?? "No preview", bad: true });
+  };
   const spec = rule && rule.kind !== "custom" ? FIELDS[rule.kind] : null;
   const title = spec ? spec.head : rule ? `${rule.alert} alert` : "Add a rule";
 
@@ -87,15 +106,24 @@ export function RuleSheet({ rule, targetId, projectId, actor, onClose, onSaved }
     setError(null);
     const holdMin = Number(hold) || 0;
     const change: Record<string, unknown> = custom
-      ? { alert, expr, for: forWord(holdMin * 60), labels: { severity }, annotations: { summary, ...(runbook ? { runbook_url: runbook } : {}) },
+      ? { alert, expr, for: forWord(holdMin * 60), keep_firing_for: forWord((Number(keep) || 0) * 60), labels: { severity }, annotations: { summary, ...(runbook ? { runbook_url: runbook } : {}) },
           enabled, triage, auto_respond: respond }
       : { params: Object.fromEntries(Object.entries(params).map(([k, v]) => [k, Number(v)])), for: forWord(holdMin * 60),
-          severity, enabled, triage, auto_respond: respond, runbook_url: runbook };
+          keep_firing_for: forWord((Number(keep) || 0) * 60), severity, enabled, triage, auto_respond: respond, runbook_url: runbook };
     if (rule) change.id = rule.id;
     const r = await obsWrite(rulesPutPath(targetId), { project_id: projectId, actor, reason, rules: [change] },
                              { scope: `obs:rule:${rule?.id ?? "new"}`, label: "Save rule" }, "PUT");
     setBusy(false);
-    if (r.ok) { showToast("success", rule ? "Rule saved" : "Rule added"); onSaved(); } else setError(r.error ?? "Not saved");
+    if (!r.ok) { setError(r.error ?? "Not saved"); return; }
+    if (rule && notify) {
+      setBusy(true);
+      const n = await obsWrite(`/v1/alert-rules/${encodeURIComponent(rule.id)}/notify`, { project_id: projectId, actor, contact_point_ids: [...notify] },
+                               { scope: `obs:rule-notify:${rule.id}`, label: "Notify" }, "PUT");
+      setBusy(false);
+      if (!n.ok) { setError(`Rule saved, but who is told was not: ${n.error ?? "refused"}`); return; }
+    }
+    showToast("success", rule ? (notify ? `Rule saved; ${notify.size ? `tells ${notify.size} contact point${notify.size === 1 ? "" : "s"}` : "tells the console only"}` : "Rule saved") : "Rule added");
+    onSaved();
   };
 
   return (
@@ -119,9 +147,14 @@ export function RuleSheet({ rule, targetId, projectId, actor, onClose, onSaved }
             </label>
             <label className="inf-field">
               <span>PromQL</span>
-              <textarea value={expr} onChange={(e) => setExpr(e.target.value)} data-testid="obs-rule-expr" rows={4} spellCheck={false}
+              <textarea value={expr} onChange={(e) => { setExpr(e.target.value); setPreview(null); }} data-testid="obs-rule-expr" rows={4} spellCheck={false}
                         className="obs-promql-edit" placeholder='sum(rate(http_requests_total{status=~"5.."}[5m])) > 1' />
             </label>
+            <span className="obs-line">
+              <button type="button" className="ag-btn ag-btn-sm" data-testid="obs-rule-preview" disabled={!expr.trim()}
+                      title="Run it over the last 24 hours: how often would it have fired?" onClick={() => void runPreview()}>Preview</button>
+              {preview ? <span className={preview.bad ? "inf-error" : "obs-strong"} data-testid="obs-rule-preview-word" data-copy="data">{preview.word}</span> : null}
+            </span>
             <label className="inf-field">
               <span>Summary</span>
               <input value={summary} onChange={(e) => setSummary(e.target.value)} data-testid="obs-rule-summary" autoComplete="off" />
@@ -129,19 +162,26 @@ export function RuleSheet({ rule, targetId, projectId, actor, onClose, onSaved }
           </>
         ) : null}
         <div className="obs-rrow">
-          <span className="obs-rlabel" title="Prometheus' for: how long it must stay breached">Hold</span>
+          <span className="obs-rlabel" title="Prometheus' for: how long it must stay breached">For</span>
           <span className="obs-rbody">
             <NumberField f={{ key: "for", before: "", after: "min before it fires", tip: "0 fires on the first breach" }}
                          value={hold} bounds={[0, 1440]} onChange={setHold} />
           </span>
         </div>
+        <div className="obs-rrow">
+          <span className="obs-rlabel" title="Prometheus' keep_firing_for: stays firing this long after it clears">Keep firing</span>
+          <span className="obs-rbody">
+            <NumberField f={{ key: "keep_firing_for", before: "", after: "min after it clears", tip: "0 resolves on the first clear check" }}
+                         value={keep} bounds={[0, 1440]} onChange={setKeep} />
+          </span>
+        </div>
         <div className="obs-rrow" role="radiogroup" aria-label="Severity">
           <span className="obs-rlabel">Severity</span>
           <span className="obs-rbody">
-            {(["warning", "critical"] as const).map((s) => (
-              <label key={s} className="obs-rcheck">
-                <input type="radio" name="severity" checked={severity === s} onChange={() => setSeverity(s)} data-testid={`obs-rule-sev-${s}`} />
-                <span>{s === "critical" ? "High" : "Low"}</span>
+            {severities.map((s) => (
+              <label key={s.key} className="obs-rcheck" title={sevTip(s.key, severities)}>
+                <input type="radio" name="severity" checked={severity === s.key} onChange={() => setSeverity(s.key)} data-testid={`obs-rule-sev-${s.key}`} />
+                <SevFlag sev={s.key} catalog={severities} />
               </label>
             ))}
           </span>
@@ -164,8 +204,18 @@ export function RuleSheet({ rule, targetId, projectId, actor, onClose, onSaved }
         <div className="obs-rrow">
           <span className="obs-rlabel">Notify</span>
           <span className="obs-rbody">
-            <span className="obs-chip">Console</span>
-            <span className="inf-faint" title="Paging will be added here without a redesign">Email, Slack, paging: later</span>
+            {!rule ? <span className="inf-faint" title="A new rule follows the notification policies">Save the rule first, then choose who is told</span>
+              : !cps.data ? <span className="inf-faint" data-testid="obs-rule-notify-none"
+                                  title={cps.error ? "Contact points could not be loaded" : undefined}>{cps.error ? "Console (contact points not loaded)" : "Loading…"}</span>
+              : cps.data.length === 0 ? <span className="inf-faint" data-testid="obs-rule-notify-none" title="Add one in Observability › Notify">Console only: no contact points yet</span>
+              : cps.data.map((c) => (
+                <label key={c.id} className="obs-rcheck" data-testid={`obs-rule-notify-${c.id}`}
+                       title={!c.verified && c.kind !== "console" ? "Unverified: high-urgency alerts skip it until it is verified" : `Tell ${c.name}`}>
+                  <input type="checkbox" checked={told.has(c.id)}
+                         onChange={(e) => { const x = new Set(told); if (e.target.checked) x.add(c.id); else x.delete(c.id); setNotify(x); }} />
+                  <span>{c.name}</span>
+                </label>
+              ))}
           </span>
         </div>
         <label className="inf-field">
@@ -177,10 +227,11 @@ export function RuleSheet({ rule, targetId, projectId, actor, onClose, onSaved }
           <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} data-testid="obs-rule-enabled" />
           <span>Rule on</span>
         </label>
-        {rule && !custom ? (
-          <div className="obs-adetail-row">
-            <span className="obs-fact-k" title="Follows the settings above when saved">PromQL</span>
-            <code className="obs-promql" data-copy="data" data-testid="obs-rule-promql">{rule.expr}</code>
+        {rule ? (
+          <div className="obs-adetail-row" data-testid="obs-rule-promql-facts">
+            <span className="obs-fact-k" title="As saved; follows the settings above when you save">Now</span>
+            {!custom ? <code className="obs-promql" data-copy="data" data-testid="obs-rule-promql">{rule.expr}</code> : null}
+            <RuleFacts r={rule} severities={severities} />
           </div>
         ) : null}
         <label className="inf-field">

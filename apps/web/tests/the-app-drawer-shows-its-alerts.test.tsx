@@ -163,17 +163,18 @@ describe("the edit-rule sheet", () => {
     expect(sheet.getAttribute("aria-label")).toBe("Error rate alert");
     expect(text(sheet)).toContain("errors (5xx) are above");
     expect(text(sheet.querySelector("[data-testid='obs-rule-promql']"))).toBe(FIRING_ALERT.expr);
-    expect(text(sheet)).toContain("Email, Slack, paging: later");
+    // Notify: who is told is chosen from the contact points (Observability › Notify adds them).
+    expect(text(sheet.querySelector("[data-testid='obs-rule-notify-none']"))).toMatch(/^Console/);
     await type(sheet.querySelector("[data-testid='obs-rule-threshold']"), "3");
     await type(sheet.querySelector("[data-testid='obs-rule-reason']"), "checkout matters");
-    await click(sheet.querySelector("[data-testid='obs-rule-sev-warning']"));
+    await click(sheet.querySelector("[data-testid='obs-rule-sev-sev3']"));
     await click(sheet.querySelector("[data-testid='obs-rule-save']"));
     await settle();
     const put = rec.writes.find((w) => w.method === "PUT");
     expect(put?.url).toBe("/v1/apps/t_down/alert-rules");
     expect(put?.body).toEqual({
       project_id: "p1", actor: "ceo", reason: "checkout matters",
-      rules: [{ id: "arule_error_rate", params: { threshold: 3, window_minutes: 5, min_requests: 20 }, for: "0m", severity: "warning",
+      rules: [{ id: "arule_error_rate", params: { threshold: 3, window_minutes: 5, min_requests: 20 }, for: "0m", keep_firing_for: "0m", severity: "sev3",
                 enabled: true, triage: true, auto_respond: true, runbook_url: "boss:runbook/app-serving" }],
     });
     expect($("[data-testid='obs-rule-sheet']")).toBeNull();
@@ -191,24 +192,121 @@ describe("the edit-rule sheet", () => {
     expect($("[data-testid='obs-rule-sheet']")).not.toBeNull();
   });
 
-  it("+ Add rule writes a rule of your own in the Prometheus shape", async () => {
-    const rec = await openObs("?view=apps&app=t_down&atab=alerts");
-    await click($("[data-testid='obs-rule-add']"));
+  it("shows SEV1–SEV4 to choose from, each with what it means", async () => {
+    await openObs("?view=apps&app=t_down&atab=alerts");
+    await click($("[data-testid='obs-rule-error_rate'] [data-testid='obs-rule-edit']"));
     const sheet = $("[data-testid='obs-rule-sheet']")!;
-    expect(sheet.querySelector<HTMLButtonElement>("[data-testid='obs-rule-save']")?.disabled).toBe(true);
-    await type(sheet.querySelector("[data-testid='obs-rule-alert']"), "CheckoutSlow");
-    await type(sheet.querySelector("[data-testid='obs-rule-expr']"), "histogram_quantile(0.99, sum by (le) (rate(x_bucket[5m]))) > 2");
-    await type(sheet.querySelector("[data-testid='obs-rule-summary']"), "Checkout is slow");
-    await type(sheet.querySelector("[data-testid='obs-rule-for']"), "2");
-    await click(sheet.querySelector("[data-testid='obs-rule-sev-critical']"));
-    await click(sheet.querySelector("[data-testid='obs-rule-save']"));
-    await settle();
-    expect(rec.writes.find((w) => w.method === "PUT")?.body).toEqual({
-      project_id: "p1", actor: "ceo", reason: "",
-      rules: [{ alert: "CheckoutSlow", expr: "histogram_quantile(0.99, sum by (le) (rate(x_bucket[5m]))) > 2", for: "2m",
-                labels: { severity: "critical" }, annotations: { summary: "Checkout is slow" }, enabled: true, triage: true,
-                auto_respond: false }],
+    expect(["sev1", "sev2", "sev3", "sev4"].map((k) => !!sheet.querySelector(`[data-testid='obs-rule-sev-${k}']`))).toEqual([true, true, true, true]);
+    expect((sheet.querySelector("[data-testid='obs-rule-sev-sev1']") as HTMLInputElement).checked).toBe(true);
+    expect(sheet.querySelector("[data-testid='obs-rule-keep_firing_for']")).not.toBeNull();
+    expect(sheet.querySelector("[data-testid='obs-rule-facts']")).not.toBeNull();
+  });
+});
+
+const METRICS = {
+  selector: 'app="api",environment="prod"', word: "12 series names from the last scrape", evaluator: "Prometheus (bundled)",
+  metrics: [
+    { name: "orders_created_total", type: "counter", labels: ["result"], help: "Orders created" },
+    { name: "http_request_duration_seconds", type: "histogram", labels: ["method", "route"], help: null },
+    { name: "app_uptime_seconds", type: "gauge", labels: [], help: null },
+  ],
+};
+
+describe("New alert rule (the builder)", () => {
+  const wait = () => new Promise((r) => setTimeout(r, 700));
+
+  it("picks a metric the app reports, writes the PromQL, previews 24 h, and saves a rule of your own", async () => {
+    const rec = await openObs("?view=apps&app=t_down&atab=alerts", {
+      gets: { "/v1/apps/t_down/metric-names": () => METRICS },
+      writes: { "/alert-rules/preview": { body: { fired: 3, word: "Would have fired 3 times in the last 24 h", series_now: 0 } } },
     });
+    await click($("[data-testid='obs-rule-add']"));
+    const sheet = $("[data-testid='obs-rule-builder']")!;
+    expect(sheet.getAttribute("aria-label")).toBe("New alert rule");
+    expect(rec.calls.some((u) => u.startsWith("/v1/apps/t_down/metric-names?project_id=p1"))).toBe(true);
+    expect(sheet.querySelectorAll("#obs-builder-metrics option")).toHaveLength(3);
+    await type(sheet.querySelector("[data-testid='obs-builder-metric']"), "orders_created_total");
+    expect(text(sheet.querySelector("[data-testid='obs-builder-type']"))).toBe("counter");
+    await type(sheet.querySelector("[data-testid='obs-builder-filter']"), 'result="error"');
+    await type(sheet.querySelector("[data-testid='obs-builder-threshold']"), "0.5");
+    expect(text(sheet.querySelector("[data-testid='obs-builder-promql']")))
+      .toBe('sum(rate(orders_created_total{app="api",environment="prod",result="error"}[5m])) > 0.5');
+    expect((sheet.querySelector("[data-testid='obs-builder-name']") as HTMLInputElement).value).toBe("OrdersCreatedTotalHigh");
+    await wait();
+    await settle();
+    expect(text(sheet.querySelector("[data-testid='obs-builder-preview-word']"))).toBe("Would have fired 3 times in the last 24 h");
+    const pv = rec.writes.filter((w) => w.url === "/v1/alert-rules/preview").at(-1)!;
+    expect(pv.body).toMatchObject({ project_id: "p1", subject_id: "t_down", for: "2m",
+                                    expr: 'sum(rate(orders_created_total{app="api",environment="prod",result="error"}[5m])) > 0.5' });
+    await click(sheet.querySelector("[data-testid='obs-builder-sev-sev2']"));
+    await click(sheet.querySelector("[data-testid='obs-builder-save']"));
+    await settle();
+    const put = rec.writes.find((w) => w.method === "PUT")!;
+    expect(put.url).toBe("/v1/apps/t_down/alert-rules");
+    expect((put.body as { rules: unknown[] }).rules[0]).toMatchObject({
+      alert: "OrdersCreatedTotalHigh", for: "2m", labels: { severity: "sev2" }, enabled: true,
+      expr: 'sum(rate(orders_created_total{app="api",environment="prod",result="error"}[5m])) > 0.5' });
+  });
+
+  it("offers p95 for a histogram, and Edit PromQL hands the query to an expert", async () => {
+    const rec = await openObs("?view=apps&app=t_down&atab=alerts", {
+      gets: { "/v1/apps/t_down/metric-names": () => METRICS },
+      writes: { "/alert-rules/preview": { status: 422, body: { detail: "Only Prometheus evaluates predict_linear" } } },
+    });
+    await click($("[data-testid='obs-rule-add']"));
+    const sheet = $("[data-testid='obs-rule-builder']")!;
+    await type(sheet.querySelector("[data-testid='obs-builder-metric']"), "http_request_duration_seconds");
+    const aggs = [...sheet.querySelectorAll<HTMLOptionElement>("[data-testid='obs-builder-agg'] option")].map((o) => o.value);
+    expect(aggs).toEqual(["p95", "rate"]);
+    await type(sheet.querySelector("[data-testid='obs-builder-threshold']"), "0.8");
+    expect(text(sheet.querySelector("[data-testid='obs-builder-promql']")))
+      .toBe('histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{app="api",environment="prod"}[5m]))) > 0.8');
+    await click(sheet.querySelector("[data-testid='obs-builder-expert']"));
+    const ta = sheet.querySelector("[data-testid='obs-builder-expr']") as HTMLTextAreaElement;
+    expect(ta.value).toContain("histogram_quantile(0.95");
+    expect(sheet.querySelector("[data-testid='obs-builder-metric']")).toBeNull();
+    await type(ta, 'predict_linear(x{app="api"}[1h], 3600) > 1');
+    await wait();
+    await settle();
+    expect(text(sheet.querySelector("[data-testid='obs-builder-preview-word']"))).toBe("Only Prometheus evaluates predict_linear");
+    expect(rec.writes.filter((w) => w.url === "/v1/alert-rules/preview").at(-1)?.body)
+      .toMatchObject({ expr: 'predict_linear(x{app="api"}[1h], 3600) > 1' });
+  });
+});
+
+describe("rules as queries", () => {
+  it("every rule shows its PromQL and what decides when it fires, labelled with tooltips", async () => {
+    await openObs("?view=apps&app=t_down&atab=alerts");
+    const er = $("[data-testid='obs-rule-error_rate']")!;
+    expect(text(er.querySelector("[data-testid='obs-rule-query']"))).toBe(FIRING_ALERT.expr);
+    const f = (id: string) => er.querySelector(`[data-testid='obs-fact-${id}']`)!;
+    expect(text(f("every"))).toBe("Every1 min");
+    expect(f("every").getAttribute("title")).toMatch(/how often/i);
+    expect(text(f("window"))).toBe("Window5m");
+    expect(text(f("for"))).toBe("Fornone");
+    expect(f("for").getAttribute("title")).toMatch(/stay true before it fires/);
+    expect(text(f("keep"))).toBe("Keep firingnone");
+    expect(text(f("threshold"))).toBe("Threshold> 5");
+    expect(text(f("minreq"))).toBe("Min req20");
+    expect(text(f("routes"))).toBe("Routes toConsole · On-call email");
+    expect(f("sev").querySelector("[data-sev='sev1']")).not.toBeNull();
+  });
+
+  it("a sample rule says so, and Remove samples asks once more before deleting them", async () => {
+    const rec = await openObs("?view=apps&app=t_down&atab=alerts", {
+      rules: (id) => rulesWire(id, { has_samples: true, rules: [ruleWire("error_rate"),
+        ruleWire("latency_p95", { kind: "custom", alert: "SampleP95Latency", label: "SampleP95Latency", sample: true, sev: "sev3" })] }),
+      writes: { "/samples/remove": { body: { removed: 1, word: "Removed 1 sample rule" } } },
+    });
+    expect($("[data-testid='obs-rule-SampleP95Latency'] [data-testid='obs-rule-sample']")).not.toBeNull();
+    expect($("[data-testid='obs-rule-error_rate'] [data-testid='obs-rule-sample']")).toBeNull();
+    const btn = () => $("[data-testid='obs-rules-remove-samples']");
+    await click(btn());
+    expect(text(btn())).toBe("Confirm remove");
+    expect(rec.writes).toHaveLength(0);
+    await click(btn());
+    await settle();
+    expect(rec.writes[0]).toMatchObject({ url: "/v1/apps/t_down/alert-rules/samples/remove", body: { project_id: "p1", actor: "ceo" } });
   });
 });
 

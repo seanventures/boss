@@ -2047,13 +2047,37 @@ def _serialized(connection: Connection, rows: list[dict[str, Any]], *,
     live = _live_cost(connection, [r["act_id"] for r in rows if r.get("ended_at") is None])
     included = _included_cost(connection, [r["act_id"] for r in rows])
     verbs = verbs_for(connection, rows)
+    names = _person_names(connection, {str(r["handed_by_id"]) for r in rows
+                                       if r.get("handed_by_kind") == "person"
+                                       and r.get("handed_by_id")})
     out = []
     for r in rows:
         wire = serialize(r, live.get(r["act_id"]), viewer=viewer,
                          included=included.get(r["act_id"], 0))
         wire["verb"] = verbs.get(str(r["act_id"]), wire["verb"])
+        # A PERSON BY NAME: an agent's Work list showed "usr_wsw5h4jk…" beside every step a
+        # person's run handed it (Beacon's page, D2 operations video).
+        name = names.get(str(r.get("handed_by_id") or ""))
+        if name and wire["handed_by"]["kind"] == "person":
+            wire["handed_by"]["name"] = name
         out.append(wire)
     return out
+
+
+def _person_names(connection: Connection, ids: set[str]) -> dict[str, str]:
+    """principal id -> display name, for the ids that have one. Never fails a read."""
+    if not ids:
+        return {}
+    point = connection.begin_nested()
+    try:
+        rows = connection.execute(text(
+            "SELECT id, display_name FROM identity_principals WHERE id = ANY(:i)"),
+            {"i": sorted(ids)}).mappings().all()
+        point.commit()
+    except Exception:  # noqa: BLE001 — an id is still the fact
+        point.rollback()
+        return {}
+    return {str(r["id"]): str(r["display_name"]) for r in rows if r["display_name"]}
 
 
 def get_act(connection: Connection, project_id: str, act_id: str, *,

@@ -668,10 +668,12 @@ def scrape_target(engine, settings: Any, target: dict, decl: dict, *,
     took_ms = int((time.monotonic() - started) * 1000)
 
     snapshot = None
+    samples: list = []
     word = got.get("word") or ""
     if "body" in got:
         try:
-            snapshot = extract(parse_exposition(got["body"]))
+            samples = parse_exposition(got["body"])
+            snapshot = extract(samples)
             word = "Scraped"
         except MetricsFormatError as exc:
             word = f"Metrics page is not usable: {exc}"[:200]
@@ -715,6 +717,21 @@ def scrape_target(engine, settings: Any, target: dict, decl: dict, *,
                       "AND scraped_at < :cut"),
                   {"t": target["id"], "cut": now - timedelta(days=RETENTION_DAYS)})
         alert = evaluate_alert(c, target, decl["spec"], now)
+        if ok:
+            # What the app exports, by name, for the New alert rule builder (never fails it).
+            from .alert_samples import record_families
+
+            point = c.begin_nested()
+            try:
+                record_families(c, target["id"], got["body"])
+                point.commit()
+            except Exception:  # noqa: BLE001
+                point.rollback()
+    if ok:
+        # The same series, raw, to the bundled Prometheus (best effort; the floor holds ours).
+        from .bundled_monitoring import forward_scrape
+
+        forward_scrape(settings, target, samples, now)
     return {"ok": ok, "word": word, "route": got.get("route"), "url": got.get("url"),
             "requests": delta["requests"], "errors": delta["errors"],
             "reset": bool(delta["reset"]), "alert": alert}

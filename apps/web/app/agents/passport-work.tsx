@@ -102,7 +102,10 @@ function From({ row, actor }: { row: Row; actor: string }) {
   if (kind === "agent" && id) {
     return <span className="ag-from" title={identityOf(id).name}><AgFace roleKey={id} size={20} decorative /></span>;
   }
-  if (kind === "person") return <span className="ag-from-word">{id === actor || !id ? "You" : id}</span>;
+  if (kind === "person") {
+    const name = row.from ? undefined : row.handedBy.name;
+    return <span className="ag-from-word" title={id}>{id === actor || !id ? "You" : name ?? id}</span>;
+  }
   return <span className="ag-from-word">BOSS</span>;
 }
 

@@ -302,10 +302,37 @@
             ],
             "success_policy": "all",
             "next": [
-              "deploy_again"
+              "monitoring"
             ],
             "max_attempts": 3,
             "binding": {}
+          },
+          {
+            "id": "monitoring",
+            "kind": "capability",
+            "title": "Set up monitoring",
+            "binding": {
+              "capability": "monitoring_pack",
+              "inputs": {
+                "run_id": {
+                  "from_step": "more_tests",
+                  "field": "code_task_run_id"
+                },
+                "first_deploy": "deploy"
+              }
+            },
+            "next": [
+              "deploy_again"
+            ],
+            "captain": "sre",
+            "default_captain": "sre",
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
           },
           {
             "id": "deploy_again",
@@ -318,7 +345,8 @@
                   "from_step": "more_tests",
                   "field": "code_task_run_id"
                 },
-                "pass_2_of": "deploy"
+                "pass_2_of": "deploy",
+                "monitoring_step": "monitoring"
               }
             },
             "next": [],
@@ -603,10 +631,37 @@
             ],
             "success_policy": "all",
             "next": [
-              "deploy_again"
+              "monitoring"
             ],
             "max_attempts": 3,
             "binding": {}
+          },
+          {
+            "id": "monitoring",
+            "kind": "capability",
+            "title": "Set up monitoring",
+            "binding": {
+              "capability": "monitoring_pack",
+              "inputs": {
+                "run_id": {
+                  "from_step": "more_tests",
+                  "field": "code_task_run_id"
+                },
+                "first_deploy": "deploy"
+              }
+            },
+            "next": [
+              "deploy_again"
+            ],
+            "captain": "sre",
+            "default_captain": "sre",
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
           },
           {
             "id": "deploy_again",
@@ -619,7 +674,8 @@
                   "from_step": "more_tests",
                   "field": "code_task_run_id"
                 },
-                "pass_2_of": "deploy"
+                "pass_2_of": "deploy",
+                "monitoring_step": "monitoring"
               }
             },
             "next": [],
@@ -965,10 +1021,37 @@
             ],
             "success_policy": "all",
             "next": [
-              "deploy_again"
+              "monitoring"
             ],
             "max_attempts": 3,
             "binding": {}
+          },
+          {
+            "id": "monitoring",
+            "kind": "capability",
+            "title": "Set up monitoring",
+            "binding": {
+              "capability": "monitoring_pack",
+              "inputs": {
+                "run_id": {
+                  "from_step": "more_tests",
+                  "field": "code_task_run_id"
+                },
+                "first_deploy": "deploy"
+              }
+            },
+            "next": [
+              "deploy_again"
+            ],
+            "captain": "sre",
+            "default_captain": "sre",
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
           },
           {
             "id": "deploy_again",
@@ -981,7 +1064,8 @@
                   "from_step": "more_tests",
                   "field": "code_task_run_id"
                 },
-                "pass_2_of": "deploy"
+                "pass_2_of": "deploy",
+                "monitoring_step": "monitoring"
               }
             },
             "next": [],
@@ -1232,10 +1316,37 @@
             ],
             "success_policy": "all",
             "next": [
-              "deploy_again"
+              "monitoring"
             ],
             "max_attempts": 3,
             "binding": {}
+          },
+          {
+            "id": "monitoring",
+            "kind": "capability",
+            "title": "Set up monitoring",
+            "binding": {
+              "capability": "monitoring_pack",
+              "inputs": {
+                "run_id": {
+                  "from_step": "more_tests",
+                  "field": "code_task_run_id"
+                },
+                "first_deploy": "deploy"
+              }
+            },
+            "next": [
+              "deploy_again"
+            ],
+            "captain": "sre",
+            "default_captain": "sre",
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
           },
           {
             "id": "deploy_again",
@@ -1248,7 +1359,8 @@
                   "from_step": "more_tests",
                   "field": "code_task_run_id"
                 },
-                "pass_2_of": "deploy"
+                "pass_2_of": "deploy",
+                "monitoring_step": "monitoring"
               }
             },
             "next": [],
@@ -1969,10 +2081,37 @@
             ],
             "success_policy": "all",
             "next": [
-              "deploy_again"
+              "monitoring"
             ],
             "max_attempts": 3,
             "binding": {}
+          },
+          {
+            "id": "monitoring",
+            "kind": "capability",
+            "title": "Set up monitoring",
+            "binding": {
+              "capability": "monitoring_pack",
+              "inputs": {
+                "run_id": {
+                  "from_step": "more_tests",
+                  "field": "code_task_run_id"
+                },
+                "first_deploy": "deploy"
+              }
+            },
+            "next": [
+              "deploy_again"
+            ],
+            "captain": "sre",
+            "default_captain": "sre",
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
           },
           {
             "id": "deploy_again",
@@ -1985,7 +2124,8 @@
                   "from_step": "more_tests",
                   "field": "code_task_run_id"
                 },
-                "pass_2_of": "deploy"
+                "pass_2_of": "deploy",
+                "monitoring_step": "monitoring"
               }
             },
             "next": [],
@@ -2277,10 +2417,37 @@
             ],
             "success_policy": "all",
             "next": [
-              "deploy_again"
+              "monitoring"
             ],
             "max_attempts": 3,
             "binding": {}
+          },
+          {
+            "id": "monitoring",
+            "kind": "capability",
+            "title": "Set up monitoring",
+            "binding": {
+              "capability": "monitoring_pack",
+              "inputs": {
+                "run_id": {
+                  "from_step": "more_tests",
+                  "field": "code_task_run_id"
+                },
+                "first_deploy": "deploy"
+              }
+            },
+            "next": [
+              "deploy_again"
+            ],
+            "captain": "sre",
+            "default_captain": "sre",
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
           },
           {
             "id": "deploy_again",
@@ -2293,7 +2460,8 @@
                   "from_step": "more_tests",
                   "field": "code_task_run_id"
                 },
-                "pass_2_of": "deploy"
+                "pass_2_of": "deploy",
+                "monitoring_step": "monitoring"
               }
             },
             "next": [],
@@ -2609,10 +2777,37 @@
             ],
             "success_policy": "all",
             "next": [
-              "deploy_again"
+              "monitoring"
             ],
             "max_attempts": 3,
             "binding": {}
+          },
+          {
+            "id": "monitoring",
+            "kind": "capability",
+            "title": "Set up monitoring",
+            "binding": {
+              "capability": "monitoring_pack",
+              "inputs": {
+                "run_id": {
+                  "from_step": "more_tests",
+                  "field": "code_task_run_id"
+                },
+                "first_deploy": "deploy"
+              }
+            },
+            "next": [
+              "deploy_again"
+            ],
+            "captain": "sre",
+            "default_captain": "sre",
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
           },
           {
             "id": "deploy_again",
@@ -2625,7 +2820,8 @@
                   "from_step": "more_tests",
                   "field": "code_task_run_id"
                 },
-                "pass_2_of": "deploy"
+                "pass_2_of": "deploy",
+                "monitoring_step": "monitoring"
               }
             },
             "next": [],
@@ -3239,10 +3435,37 @@
             ],
             "success_policy": "all",
             "next": [
-              "deploy_again"
+              "monitoring"
             ],
             "max_attempts": 3,
             "binding": {}
+          },
+          {
+            "id": "monitoring",
+            "kind": "capability",
+            "title": "Set up monitoring",
+            "binding": {
+              "capability": "monitoring_pack",
+              "inputs": {
+                "run_id": {
+                  "from_step": "more_tests",
+                  "field": "code_task_run_id"
+                },
+                "first_deploy": "deploy"
+              }
+            },
+            "next": [
+              "deploy_again"
+            ],
+            "captain": "sre",
+            "default_captain": "sre",
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
           },
           {
             "id": "deploy_again",
@@ -3255,7 +3478,8 @@
                   "from_step": "more_tests",
                   "field": "code_task_run_id"
                 },
-                "pass_2_of": "deploy"
+                "pass_2_of": "deploy",
+                "monitoring_step": "monitoring"
               }
             },
             "next": [],
@@ -3617,10 +3841,37 @@
             ],
             "success_policy": "all",
             "next": [
-              "deploy_again"
+              "monitoring"
             ],
             "max_attempts": 3,
             "binding": {}
+          },
+          {
+            "id": "monitoring",
+            "kind": "capability",
+            "title": "Set up monitoring",
+            "binding": {
+              "capability": "monitoring_pack",
+              "inputs": {
+                "run_id": {
+                  "from_step": "more_tests",
+                  "field": "code_task_run_id"
+                },
+                "first_deploy": "deploy"
+              }
+            },
+            "next": [
+              "deploy_again"
+            ],
+            "captain": "sre",
+            "default_captain": "sre",
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
           },
           {
             "id": "deploy_again",
@@ -3633,7 +3884,8 @@
                   "from_step": "more_tests",
                   "field": "code_task_run_id"
                 },
-                "pass_2_of": "deploy"
+                "pass_2_of": "deploy",
+                "monitoring_step": "monitoring"
               }
             },
             "next": [],
@@ -3954,10 +4206,37 @@
             ],
             "success_policy": "all",
             "next": [
-              "deploy_again"
+              "monitoring"
             ],
             "max_attempts": 3,
             "binding": {}
+          },
+          {
+            "id": "monitoring",
+            "kind": "capability",
+            "title": "Set up monitoring",
+            "binding": {
+              "capability": "monitoring_pack",
+              "inputs": {
+                "run_id": {
+                  "from_step": "more_tests",
+                  "field": "code_task_run_id"
+                },
+                "first_deploy": "deploy"
+              }
+            },
+            "next": [
+              "deploy_again"
+            ],
+            "captain": "sre",
+            "default_captain": "sre",
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
           },
           {
             "id": "deploy_again",
@@ -3970,7 +4249,8 @@
                   "from_step": "more_tests",
                   "field": "code_task_run_id"
                 },
-                "pass_2_of": "deploy"
+                "pass_2_of": "deploy",
+                "monitoring_step": "monitoring"
               }
             },
             "next": [],
@@ -4284,10 +4564,37 @@
             ],
             "success_policy": "all",
             "next": [
-              "deploy_again"
+              "monitoring"
             ],
             "max_attempts": 3,
             "binding": {}
+          },
+          {
+            "id": "monitoring",
+            "kind": "capability",
+            "title": "Set up monitoring",
+            "binding": {
+              "capability": "monitoring_pack",
+              "inputs": {
+                "run_id": {
+                  "from_step": "more_tests",
+                  "field": "code_task_run_id"
+                },
+                "first_deploy": "deploy"
+              }
+            },
+            "next": [
+              "deploy_again"
+            ],
+            "captain": "sre",
+            "default_captain": "sre",
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
           },
           {
             "id": "deploy_again",
@@ -4300,7 +4607,8 @@
                   "from_step": "more_tests",
                   "field": "code_task_run_id"
                 },
-                "pass_2_of": "deploy"
+                "pass_2_of": "deploy",
+                "monitoring_step": "monitoring"
               }
             },
             "next": [],
@@ -4574,10 +4882,37 @@
             ],
             "success_policy": "all",
             "next": [
-              "inc1_deploy_again"
+              "inc1_monitoring"
             ],
             "max_attempts": 3,
             "binding": {}
+          },
+          {
+            "id": "inc1_monitoring",
+            "kind": "capability",
+            "title": "Increment 1 · Set up monitoring",
+            "binding": {
+              "capability": "monitoring_pack",
+              "inputs": {
+                "run_id": {
+                  "from_step": "inc1_more_tests",
+                  "field": "code_task_run_id"
+                },
+                "first_deploy": "inc1_deploy"
+              }
+            },
+            "next": [
+              "inc1_deploy_again"
+            ],
+            "captain": "sre",
+            "default_captain": "sre",
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
           },
           {
             "id": "inc1_deploy_again",
@@ -4590,7 +4925,8 @@
                   "from_step": "inc1_more_tests",
                   "field": "code_task_run_id"
                 },
-                "pass_2_of": "inc1_deploy"
+                "pass_2_of": "inc1_deploy",
+                "monitoring_step": "inc1_monitoring"
               }
             },
             "next": [
@@ -4777,10 +5113,37 @@
             ],
             "success_policy": "all",
             "next": [
-              "inc2_deploy_again"
+              "inc2_monitoring"
             ],
             "max_attempts": 3,
             "binding": {}
+          },
+          {
+            "id": "inc2_monitoring",
+            "kind": "capability",
+            "title": "Increment 2 · Set up monitoring",
+            "binding": {
+              "capability": "monitoring_pack",
+              "inputs": {
+                "run_id": {
+                  "from_step": "inc2_more_tests",
+                  "field": "code_task_run_id"
+                },
+                "first_deploy": "inc2_deploy"
+              }
+            },
+            "next": [
+              "inc2_deploy_again"
+            ],
+            "captain": "sre",
+            "default_captain": "sre",
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
           },
           {
             "id": "inc2_deploy_again",
@@ -4793,7 +5156,8 @@
                   "from_step": "inc2_more_tests",
                   "field": "code_task_run_id"
                 },
-                "pass_2_of": "inc2_deploy"
+                "pass_2_of": "inc2_deploy",
+                "monitoring_step": "inc2_monitoring"
               }
             },
             "next": [
@@ -4980,10 +5344,37 @@
             ],
             "success_policy": "all",
             "next": [
-              "inc3_deploy_again"
+              "inc3_monitoring"
             ],
             "max_attempts": 3,
             "binding": {}
+          },
+          {
+            "id": "inc3_monitoring",
+            "kind": "capability",
+            "title": "Increment 3 · Set up monitoring",
+            "binding": {
+              "capability": "monitoring_pack",
+              "inputs": {
+                "run_id": {
+                  "from_step": "inc3_more_tests",
+                  "field": "code_task_run_id"
+                },
+                "first_deploy": "inc3_deploy"
+              }
+            },
+            "next": [
+              "inc3_deploy_again"
+            ],
+            "captain": "sre",
+            "default_captain": "sre",
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
           },
           {
             "id": "inc3_deploy_again",
@@ -4996,7 +5387,8 @@
                   "from_step": "inc3_more_tests",
                   "field": "code_task_run_id"
                 },
-                "pass_2_of": "inc3_deploy"
+                "pass_2_of": "inc3_deploy",
+                "monitoring_step": "inc3_monitoring"
               }
             },
             "next": [
@@ -5183,10 +5575,37 @@
             ],
             "success_policy": "all",
             "next": [
-              "inc4_deploy_again"
+              "inc4_monitoring"
             ],
             "max_attempts": 3,
             "binding": {}
+          },
+          {
+            "id": "inc4_monitoring",
+            "kind": "capability",
+            "title": "Increment 4 · Set up monitoring",
+            "binding": {
+              "capability": "monitoring_pack",
+              "inputs": {
+                "run_id": {
+                  "from_step": "inc4_more_tests",
+                  "field": "code_task_run_id"
+                },
+                "first_deploy": "inc4_deploy"
+              }
+            },
+            "next": [
+              "inc4_deploy_again"
+            ],
+            "captain": "sre",
+            "default_captain": "sre",
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
           },
           {
             "id": "inc4_deploy_again",
@@ -5199,7 +5618,8 @@
                   "from_step": "inc4_more_tests",
                   "field": "code_task_run_id"
                 },
-                "pass_2_of": "inc4_deploy"
+                "pass_2_of": "inc4_deploy",
+                "monitoring_step": "inc4_monitoring"
               }
             },
             "next": [

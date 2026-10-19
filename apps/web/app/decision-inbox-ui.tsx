@@ -34,6 +34,7 @@ import type { RoleFeedItem } from "../lib/roles";
 import type { TaskFeedItem } from "../lib/tasks";
 import { ChangeSetApproval, isChangeSetDecision } from "./multirepo/change-set-approval";
 import { SelfFixCard, cardOf, isSelfFixDecision } from "./self-fix/approval-card";
+import { MonitoringPackCard, monitoringPackOf } from "./workflows/monitoring-pack";
 
 function formatMicros(amount: unknown): string {
   if (typeof amount !== "number") {
@@ -278,8 +279,19 @@ function DeployDestination({ recommendation, projectId }: {
   );
 }
 
+/** The engine's sentence for a PRD its workflow did not wait for (engine spec_gate.py): the
+ *  build is already running, so approving starts nothing. */
+export function specGateSkipped(recommendation: Record<string, unknown>): string {
+  const skipped = recommendation.spec_gate_skipped as { said?: unknown } | undefined;
+  return skipped && typeof skipped.said === "string" ? skipped.said : "";
+}
+
 function approvalEffectLabel(recommendation: Record<string, unknown>): string {
   const action = typeof recommendation.action === "string" ? recommendation.action : "";
+  // A SPEC THE WORKFLOW DID NOT WAIT FOR: "starts a governed project" would promise a second
+  // build of work already building.
+  const skipped = specGateSkipped(recommendation);
+  if (skipped) return skipped;
   // A workflow gate has no `action`; before this it landed on the default below, which says
   // the opposite of what approving a Deploy gate does.
   const gate = workflowGateEffect(recommendation);
@@ -874,6 +886,8 @@ function DecisionInboxRow({
             </p>
           )}
           {preview && !refusal ? <ActionPreview preview={preview} /> : null}
+          {/* THE RELEASE'S MONITORING PACK (engine monitoring_pack): approved with it. */}
+          {monitoringPackOf(rec.monitoring_pack) ? <MonitoringPackCard pack={monitoringPackOf(rec.monitoring_pack)!} onCard /> : null}
           {subject ? (
             <details className="decision-plan-details">
               <summary>
@@ -1047,12 +1061,17 @@ export function DecisionActions({ decision, projectId, actorId }: {
   // AN APPROVAL THAT NEEDS A REASON (a merge with checks failing): drawn open, never behind
   // "More", with the reason box; sent as the forced merge the engine requires.
   const reasoned = offers.find((a) => a.action === "approve" && a.needs === "note");
+  // …or a release that ships commits from rejected or unreviewed runs (engine release_scope).
+  const shipsUnreviewed = Boolean(
+    (decision.recommendation.release_commits as { needs_reason?: unknown } | undefined)
+      ?.needs_reason);
   const revise = offers.find((a) => a.action === "revise");
   const delegate = offers.find((a) => a.action === "delegate");
   const runId = typeof decision.recommendation.workflow_run_id === "string"
     ? decision.recommendation.workflow_run_id : "";
-  const startsWork = decision.recommendation.start_code_task === true
-    || decision.recommendation.tool === "publish_document";
+  const startsWork = !specGateSkipped(decision.recommendation)
+    && (decision.recommendation.start_code_task === true
+        || decision.recommendation.tool === "publish_document");
   const dismiss = direct.find((a) => a.action === "reject")?.label === "Dismiss";
   // THE CONTENT THIS APPROVAL IS OF. The engine refuses the approval if the preview has moved
   // on since this card was drawn, so nobody approves an email they did not read.
@@ -1084,11 +1103,15 @@ export function DecisionActions({ decision, projectId, actorId }: {
         <div className="dq-reasoned" data-testid="decision-reasoned-approve">
           <input type="hidden" name="force" value="true" />
           <textarea
-            aria-label={`Why merge ${decision.id} with its checks failing`}
+            aria-label={shipsUnreviewed
+              ? `Why ship ${decision.id} with commits from rejected or unreviewed runs`
+              : `Why merge ${decision.id} with its checks failing`}
             className="textarea decision-note"
             name="note"
             rows={2}
-            placeholder="Why merge it with its checks failing? Recorded with the merge."
+            placeholder={shipsUnreviewed
+              ? "Why ship commits from rejected or unreviewed runs? Recorded with the release."
+              : "Why merge it with its checks failing? Recorded with the merge."}
             data-testid="decision-reason"
           />
           <SubmitButton permission="decision:approve" className="dq-btn reject" name="action"

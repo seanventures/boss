@@ -124,7 +124,8 @@ def test_a_system_card_is_drawn_once(seeded, monkeypatch):
     from boss_engine.services import infra_view, system_doctor
 
     eng, pid = seeded
-    card = {"id": "system:sf_x", "kind": "system_health", "finding_id": "sf_x", "title": "Disk nearly full"}
+    card = {"id": "system:sf_x", "kind": "system_health", "finding_id": "sf_x", "title": "Disk nearly full",
+            "area": "observability"}   # card_items names the owning area (BOSSAPP-598)
     monkeypatch.setattr(system_doctor, "card_items", lambda c, p: [card, dict(card)])
     with eng.connect() as c:
         infra_kinds = {i.get("kind") for i in infra_view.attention(c, get_settings(), pid)}

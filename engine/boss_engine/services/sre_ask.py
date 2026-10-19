@@ -1,8 +1,13 @@
-"""NL observability question → query *plan* only.
+"""NL observability question → a query *plan*, written by a MODEL (BOSSAPP-598, spec §8.3, G8).
 
-Deterministic keyword map. No LLM. Never executes PromQL, Datadog, or any
-live connector. Unmapped questions return status=unknown with a reason —
-never a fabricated query.
+THE KEYWORD MAP IS A HINT, NEVER THE DECIDER. People do not ask the same question the same way;
+the map below matched words ("latency", "5xx") to canned queries and answered with whichever
+rule hit first. Now a model reads the question and writes the plan (connector, query, window) as
+JSON; the keyword reading is passed to it as "BOSS's guess", which it may ignore. BOSS then
+checks what the model wrote: a PromQL query must parse, and is scoped to the project ON THE
+PARSED QUERY (promql_lite.inject_scope) — a query that reads another project's series cannot be
+written. With no model the answer says so (status `no_model`) and there is no keyword fallback.
+Never executes the plan.
 """
 from __future__ import annotations
 
@@ -112,11 +117,96 @@ def _specialize(kind: str, query: str, service: Optional[str]) -> str:
     return query
 
 
-def plan_query(project_id: str, question: str) -> dict[str, Any]:
-    """Translate a natural-language question into a connector query plan.
+PLAN_SYSTEM = (
+    "You turn an observability question into ONE query plan. Answer with ONLY a JSON object: "
+    '{"status": "planned" | "unknown", "connector_kind": "prometheus" | "loki" | "datadog" | '
+    '"grafana" | "splunk" | "pagerduty" | "cloudwatch", "capability": "metrics" | "logs" | '
+    '"alerts", "query": "<the query in that connector\'s language>", "window": "5m" | "15m" | '
+    '"1h" | "6h" | "24h" | "7d", "service": "<service or empty>", "reason": "<one sentence>"}. '
+    "Use status unknown, with a reason, when the question is not about the system's "
+    "telemetry. Never invent a metric the question does not need. BOSS's keyword guess is a "
+    "hint you may ignore.")
+_WINDOWS = ("5m", "15m", "1h", "6h", "24h", "7d")
+_KINDS = tuple(sorted({k for _w, k in _CONNECTOR_KEYWORDS} | set(_DEFAULT_QUERY)))
 
-    Never executes the plan. Unknown questions stay unknown.
-    """
+
+def _project_adapter(connection, settings, project_id: str, question: str):
+    from .agent_decision import _routed
+
+    adapter, _raw = _routed(connection, settings, project_id, "sre_ask", question)
+    return adapter
+
+
+def plan_query(project_id: str, question: str, *, connection: Any = None, settings: Any = None,
+               adapter: Any = None) -> dict[str, Any]:
+    """A natural-language question as a connector query plan, written by a model and checked
+    by BOSS. Never executes the plan. No model: `no_model`, said plainly."""
+    import json as _json
+
+    from .agent_decision import NO_MODEL_REPLY
+
+    def parse(text_out: str):
+        import re as _re
+
+        for cand in [text_out] + _re.findall(r"\{.*\}", text_out or "", _re.S):
+            try:
+                got = _json.loads(cand)
+            except ValueError:
+                continue
+            if isinstance(got, dict):
+                return got
+        return None
+
+    pid = str(project_id or "").strip()
+    raw_question = str(question or "").strip()
+    guess = keyword_guess(pid, raw_question)
+    base = {"project_id": pid, "question": raw_question, "executed": False, "public_ga": False,
+            "boss_guess": {k: guess.get(k) for k in ("status", "connector_kind",
+                                                      "suggested_query", "window")}}
+    try:
+        if adapter is None:
+            adapter = _project_adapter(connection, settings, pid, raw_question)
+        prompt = (f"QUESTION:\n<<<\n{raw_question[:2000]}\n>>>\n\nBOSS'S KEYWORD GUESS (a hint): "
+                  + _json.dumps(base["boss_guess"]))
+        out = adapter.create_text_response(prompt, system_prompt=PLAN_SYSTEM)
+        text_out = out[1] if isinstance(out, tuple) and len(out) > 1 else str(out or "")
+        answer = parse(str(text_out or ""))
+    except Exception:  # noqa: BLE001 — no model is an answer, never a crash
+        answer = None
+    if not isinstance(answer, dict) or not answer.get("status"):
+        return {**base, "status": "no_model", "reason": NO_MODEL_REPLY, "connector_kind": None,
+                "suggested_query": None, "window": None}
+    if answer.get("status") != "planned":
+        return {**base, "status": "unknown", "reason": str(answer.get("reason") or
+                                                          "not an observability question")[:300],
+                "connector_kind": None, "suggested_query": None, "window": None}
+    kind = str(answer.get("connector_kind") or "")
+    query = str(answer.get("query") or "").strip()[:2000]
+    if kind not in _KINDS or not query:
+        return {**base, "status": "unknown", "reason": "The model's plan named no connector "
+                "BOSS reads, or no query", "connector_kind": None, "suggested_query": None,
+                "window": None}
+    if kind in ("prometheus", "grafana"):
+        from . import promql_lite as pq
+
+        try:
+            query = pq.inject_scope(query, {"project": pid}) if pid else pq.format_expr(query)
+        except pq.PromQLError as exc:
+            return {**base, "status": "unknown", "reason": f"The model wrote PromQL BOSS "
+                    f"cannot check ({exc}); nothing is suggested", "connector_kind": kind,
+                    "suggested_query": None, "window": None}
+    window = str(answer.get("window") or "1h")
+    return {**base, "status": "planned", "connector_kind": kind,
+            "capability": str(answer.get("capability") or _DEFAULT_QUERY.get(kind, ("metrics",
+                                                                                   ""))[0]),
+            "suggested_query": query,
+            "window": {"duration": window if window in _WINDOWS else "1h", "source": "model"},
+            "service": str(answer.get("service") or "") or None,
+            "reason": str(answer.get("reason") or "")[:300], "decided_by": "model"}
+
+
+def keyword_guess(project_id: str, question: str) -> dict[str, Any]:
+    """BOSS's keyword reading of the question: a HINT for the model, never the answer."""
     pid = str(project_id or "").strip()
     raw_question = str(question or "").strip()
     hay = _haystack(raw_question)

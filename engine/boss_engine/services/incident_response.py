@@ -606,6 +606,8 @@ def investigate(connection, settings: Any, project_id: str, incident_id: str, *,
             "root_cause": hyp["root_cause"], "hypothesis": hyp,
             "suspect_commit": hyp.get("suspect_commit"),
             "extends_run_id": deploy.get("extends_run_id"), "signatures": signatures,
+            # The fix is cut from THIS commit, on a branch of its own (release_scope).
+            "serving_commit_sha": deploy.get("commit_sha"),
             "logs_word": logs.get("word"), "diff_word": diff.get("word"),
             "target_id": app.get("target_id")}
 
@@ -766,9 +768,12 @@ def response_cost(connection, workflow_run_id: Optional[str]) -> dict[str, Any]:
 
 def _timeline(connection, inc: dict, workflow_run_id: Optional[str]) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
+    since = _occurrence(inc.get("finalize_ctx") or {})
     for e in connection.execute(sql(
             "SELECT kind, ref, payload, created_at FROM incident_evidence "
-            "WHERE incident_id = :i ORDER BY created_at, seq"), {"i": inc["id"]}).mappings().all():
+            "WHERE incident_id = :i AND (CAST(:s AS timestamptz) IS NULL "
+            "  OR created_at >= CAST(:s AS timestamptz)) ORDER BY created_at, seq"),
+            {"i": inc["id"], "s": since}).mappings().all():
         p = _json(e["payload"]) or {}
         words = {
             "alert": lambda: (f"Alert fired: {round(float(p.get('error_rate') or 0) * 100, 1)}% "
@@ -869,6 +874,10 @@ def report(connection, project_id: str, incident_id: str, *,
         "root_cause": hyp, "pull_request_url": pr, "verification": ver, "timeline": timeline,
         "cost": cost, "workflow_run_id": workflow_run_id,
     }
+    from .incident_responders import responders
+
+    data["responders"] = responders(connection, project_id, incident_id, workflow_run_id,
+                                    since=_occurrence(ctx))
     data["markdown"] = report_markdown(data)
     if persist:
         connection.execute(sql(
@@ -898,7 +907,12 @@ def report_markdown(d: dict[str, Any]) -> str:
            str(ver.get("summary") or "Not verified yet.")
            + (" Judged by BOSS's own scrapes of the app, not by the agent that fixed it."
               if ver else ""), "",
-           "## Timeline (UTC)", ""]
+           ]
+    if d.get("responders"):
+        from .incident_responders import who_did_what_markdown
+
+        out += who_did_what_markdown(d["responders"])
+    out += ["## Timeline (UTC)", ""]
     for t in d.get("timeline") or []:
         out.append(f"- {t['at']} — {t['what']}")
     out += ["", "## Cost of this response", "",
@@ -916,23 +930,36 @@ def _told(connection, incident_id: str) -> list[dict[str, Any]]:
     return told_reporters(connection, incident_id)
 
 
+def _occurrence(ctx: dict[str, Any]) -> Optional[datetime]:
+    """When this occurrence of the incident began (finalize_ctx.occurrence), or None."""
+    return _dt((ctx or {}).get("occurrence"))
+
+
 def response_view(connection, project_id: str, incident_id: str) -> Optional[dict[str, Any]]:
     """Everything the console's incident card shows, in one read."""
+    from .incident_responders import responders
+
     inc = _incident(connection, incident_id)
     if not inc or inc["project_id"] != project_id:
         return None
     ctx = inc["finalize_ctx"]
+    # THIS OCCURRENCE ONLY. An incident row is reused when its alert fires again after it
+    # resolved; the card read every occurrence's evidence and reports as this one's (Order API,
+    # 2026-10-18: a re-fire at 18:43 showed the morning's ten HelpDesk reports and its RCA).
+    since = _occurrence(ctx)
     evidence = [{"kind": e["kind"], "ref": e["ref"], "at": _iso(e["created_at"]),
                  "payload": _json(e["payload"])} for e in connection.execute(sql(
                      "SELECT kind, ref, payload, created_at FROM incident_evidence "
-                     "WHERE incident_id = :i ORDER BY created_at, seq"),
-                     {"i": incident_id}).mappings().all()]
+                     "WHERE incident_id = :i AND (CAST(:s AS timestamptz) IS NULL "
+                     "  OR created_at >= CAST(:s AS timestamptz)) ORDER BY created_at, seq"),
+                     {"i": incident_id, "s": since}).mappings().all()]
     reports = [{"reporter_target_id": r["reporter_target_id"], "via": r["via"],
                 "at": _iso(r["received_at"]), **(_json(r["payload"]) or {})}
                for r in connection.execute(sql(
                    "SELECT reporter_target_id, via, payload, received_at FROM "
-                   "app_signal_receipts WHERE incident_id = :i ORDER BY received_at"),
-                   {"i": incident_id}).mappings().all()]
+                   "app_signal_receipts WHERE incident_id = :i AND (CAST(:s AS timestamptz) "
+                   "  IS NULL OR received_at >= CAST(:s AS timestamptz)) ORDER BY received_at"),
+                   {"i": incident_id, "s": since}).mappings().all()]
     run_id = (ctx.get("response") or {}).get("workflow_run_id") or \
         _response_in_flight(connection, project_id, incident_id)
     run = None
@@ -963,15 +990,28 @@ def response_view(connection, project_id: str, incident_id: str) -> Optional[dic
     report_ready = bool(connection.execute(sql(
         "SELECT 1 FROM sre_postmortems WHERE incident_id = :i AND "
         "payload->>'kind' = 'incident_report'"), {"i": incident_id}).first())
+    # WHAT DROVE IT (app_alerts_view.drivers): the card's label, title and SEV are the alert
+    # firing now (or last), not the one that first opened a reused incident row.
+    from .app_alerts_view import drivers, incident_title
+
+    driver = drivers(connection, project_id, [incident_id]).get(incident_id)
+    head = {k: (_iso(inc[k]) if k in ("first_seen", "last_seen") else inc[k])
+            for k in ("id", "title", "service", "severity", "status", "confidence",
+                      "first_seen", "last_seen")}
+    head["title"] = incident_title(inc["title"], driver)
     return {
-        "incident": {k: (_iso(inc[k]) if k in ("first_seen", "last_seen") else inc[k])
-                     for k in ("id", "title", "service", "severity", "status", "confidence",
-                               "first_seen", "last_seen")},
+        "incident": head,
+        "driver": ({k: driver[k] for k in ("alert_id", "alertname", "kind", "label", "sev",
+                                           "state", "value_word")} if driver else None),
         "app": ctx.get("app"), "deploy": ctx.get("deploy"), "alert": ctx.get("alert"),
         "verification": ctx.get("verification"),
         "reported_only": bool(ctx.get("reported_only")),
         "evidence": evidence, "reports": reports, "told": _told(connection, incident_id),
         "response": run,
+        # WHO DID WHAT (incident_responders): every part of the response with its agent, the
+        # agent's role and job, and what it did — triage, investigation, the build's crew, the
+        # person who approved, the deploy, the verification and the report.
+        "responders": responders(connection, project_id, incident_id, run_id, since=since),
         "auto_respond_rules": auto,
         "report_ready": report_ready,
         "respond_input": {"incident_id": incident_id,

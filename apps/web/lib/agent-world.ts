@@ -185,6 +185,7 @@ export function toAct(w: unknown): Act & { from?: { kind: string; id?: string; r
     handedBy: {
       kind: (str(handed.kind ?? o.handed_by_kind, "boss") as "person" | "agent" | "boss"),
       id: opt(handed.id ?? o.handed_by_id),
+      name: opt(handed.name),
     },
     how: str(o.how, "named") as ActHow,
     // THE API'S LABEL, NEVER OURS: edge_label() is the single source (spec §9, test 13).

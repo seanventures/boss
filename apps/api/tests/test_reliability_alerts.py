@@ -4,6 +4,8 @@ import hashlib
 import hmac
 import json
 
+from sqlalchemy import text
+
 from apps.api.app.config import get_settings
 from apps.api.app.db import begin
 from apps.api.app.services.reliability import ReliabilityService
@@ -93,7 +95,31 @@ def test_http_alert_requires_valid_signature(client, monkeypatch):
     r2 = client.post("/v1/reliability/alert", content=body,
                      headers={"X-Reliability-Signature": _sign(body)})
     assert r2.status_code == 202, r2.text
-    assert r2.json()["incident_id"].startswith("inc_")
+    # the deprecated door is the ONE pipeline (BOSSAPP-598): an alert record in an incident
+    got = r2.json()
+    assert got["alert_id"].startswith("alrt_") and "deprecated" in got
+    with begin(api_main.engine) as c:
+        inc = c.execute(text("SELECT incident_id FROM app_alerts WHERE id = :a"),
+                        {"a": got["alert_id"]}).scalar()
+    assert inc and inc.startswith("inc_")
+
+
+def test_http_alert_takes_a_source_token_and_the_project_comes_from_it(client):
+    from apps.api.app import main as api_main
+    from boss_engine.services import monitoring as mon
+
+    with begin(api_main.engine) as c:
+        made = mon.create_source(c, PID, kind="generic", name="alias-test", actor=ACTOR)
+    body = json.dumps({"alertname": "TokenAlert", "service": "al-tok"}).encode()
+    r = client.post("/v1/reliability/alert", content=body,
+                    headers={"Authorization": f"Bearer {made['token']}"})
+    assert r.status_code == 202, r.text
+    other = json.dumps({"alertname": "X", "service": "s", "project_id": "p_not_mine"}).encode()
+    r2 = client.post("/v1/reliability/alert", content=other,
+                     headers={"Authorization": f"Bearer {made['token']}"})
+    assert r2.status_code == 403 and "project comes from" in r2.json()["detail"]
+    r3 = client.post("/v1/reliability/alert", content=body)
+    assert r3.status_code == 401 and "token" in r3.json()["detail"]
 
 
 def test_http_sources_roundtrip(client):

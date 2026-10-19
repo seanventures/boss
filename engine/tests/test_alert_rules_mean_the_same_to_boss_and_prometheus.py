@@ -62,7 +62,9 @@ def test_histogram_quantile_and_comparisons_filter():
 
 
 def test_what_boss_cannot_evaluate_is_said_never_guessed():
-    for expr in ("sum(rate(c[5m])) / on(app) sum(rate(d[5m]))", "c offset 5m",
+    # `on(...)`, `ignoring(...)`, `offset` and absent_over_time are evaluated since P1 (their
+    # agreement cases are in test_monitoring_promql_agrees_with_prometheus); these are not.
+    for expr in ("sum(rate(c[5m])) / on(app) group_left sum(rate(d[5m]))", "c @ 100",
                  "max_over_time(c[10m:1m])", "topk(3, c)", "predict_linear(c[1h], 60)"):
         with pytest.raises(pq.PromQLUnsupported):
             pq.parse(expr)

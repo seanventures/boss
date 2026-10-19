@@ -7,6 +7,7 @@ import {
 import { hasSessionCookie, isPreviewCapabilityPath } from "./lib/identity/forward";
 import { machineRequest, protocolKind } from "./lib/identity/protocol-proxy";
 import { isOidcPath } from "./lib/oidc-proxy";
+import { monitoringPath, oddMonitoringSpelling } from "./lib/monitoring-proxy";
 import { isPublicConsolePath, PATH_HEADER } from "./lib/identity/pages";
 import { githubWebOrigins, HANDOFF_PATH } from "./lib/identity/github-manifest";
 import { INTENT_HEADER, intentFromActionBody } from "./lib/api-write";
@@ -62,6 +63,13 @@ export async function middleware(request: NextRequest) {
   // Another install's heartbeat to this collector: a machine POST, no session, no Origin
   // (lib/console-session.ts collectorMachinePost). Straight to the /v1 proxy, which adds no key.
   if (collectorMachinePost(request)) return NextResponse.next();
+  // Monitoring's machine routes (lib/monitoring-proxy.ts): the plain spellings skip middleware
+  // (the matcher below); any that reach here pass to the /v1 route, which adds nothing to them.
+  // Any other spelling of the two prefixes is refused.
+  if (monitoringPath(path)) return NextResponse.next();
+  if (oddMonitoringSpelling(path)) {
+    return NextResponse.json({ detail: "not_found" }, { status: 404, headers: { Connection: "close", "Cache-Control": "no-store" } });
+  }
   if (!secureConsoleTransport(request) && !networkTrustedConsole()) {
     return NextResponse.json({ error: "The console requires HTTPS for remote access." },
       { status: 426, headers: { "Cache-Control": "no-store" } });
@@ -247,9 +255,13 @@ export function contentSecurityPolicy(nonce: string, dev = process.env.NODE_ENV 
  * middleware — buffering it whatever the middleware does — so a 150 MB POST to the collector
  * cost this process ~200 MB before the route's own cap could refuse it (re-check item 3). Those
  * three paths need nothing from middleware: no session (another install has none), no CSRF
- * check (they carry no credential: the /v1 proxy attaches no key to them).
+ * check (they carry no credential: the /v1 proxy attaches no key to them). Monitoring's machine
+ * routes too (lib/monitoring-proxy.ts): 4 MB ingest bodies and an email's ack link, plain
+ * spellings only — the route checks the same pattern and forwards the sender's own credential.
  */
-export const config = { matcher: ["/((?!v1/telemetry/(?:ingest|delete|share)/*$).*)"] };
+export const config = {
+  matcher: ["/((?!v1/telemetry/(?:ingest|delete|share)/*$|v1/ingest(?:/[A-Za-z0-9_~-][A-Za-z0-9._~-]*)+$|v1/alert-actions/[A-Za-z0-9_~-][A-Za-z0-9._~-]*$).*)"],
+};
 
 /** The spellings the matcher above excludes — the same pattern, anchored. */
 const PLAIN_COLLECTOR = /^\/v1\/telemetry\/(?:ingest|delete|share)\/*$/;

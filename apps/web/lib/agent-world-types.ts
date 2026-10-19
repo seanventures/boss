@@ -47,7 +47,7 @@ export type ActKind = "run" | "step" | "stage" | "seat" | "chat" | "approval" | 
 export type ActStatus = "pending" | "active" | "awaiting_input" | "complete" | "error" | "stale" | "skipped";
 export type Act = {
   actId: string; roleKey: string | null; kind: ActKind;
-  status: ActStatus; parentActId?: string; rootActId: string; handedBy: { kind: "person" | "agent" | "boss"; id?: string };
+  status: ActStatus; parentActId?: string; rootActId: string; handedBy: { kind: "person" | "agent" | "boss"; id?: string; name?: string };
   how: ActHow; edgeLabel: string; why?: string; considered: string[]; scope: { skills: string[]; mcp: string[] };
   scopeOk?: boolean; accountable: string; label: string; links: Record<string, string>;
   artifacts: { kind: string; ref: string; url?: string }[];

@@ -752,12 +752,40 @@ CHECK_TIMEOUT_SECONDS = 3.0
 _KIND_NAMES = {"grafana": "Grafana", "prometheus": "Prometheus"}
 
 
+def _bundled(kind: str) -> str:
+    """The Grafana or Prometheus bundled with BOSS on this install (spec D1, T2), or ''."""
+    from ..config import get_settings
+
+    s = get_settings()
+    return str((s.monitoring_grafana_url if kind == "grafana" else s.monitoring_prometheus_url)
+               or "").rstrip("/")
+
+
+def public_url(base: Optional[str]) -> Optional[str]:
+    """Where a BROWSER opens this Grafana. The bundled one is asked inside the compose network
+    (http://grafana:3000) and opened on the loopback it is published on; any other is opened
+    where it is asked."""
+    from ..config import get_settings
+
+    if not base:
+        return base
+    s = get_settings()
+    if s.monitoring_grafana_url and base.rstrip("/") == s.monitoring_grafana_url.rstrip("/"):
+        return str(s.monitoring_grafana_public_url or base).rstrip("/")
+    return base
+
+
 def grafana_base(connection, project_id: str) -> Optional[str]:
-    """Where this project's Grafana is: the registered boss-prometheus source's host (the stack
-    BOSS deployed), else the address of the host its first active target deploys to. None when
-    BOSS knows no host. ONE answer for every caller: the stack endpoint and the Observability
-    views used to derive it two different ways."""
+    """Where this project's Grafana is: the Grafana bundled with BOSS when this install has one
+    (it holds every app's series, forwarded by BOSS), else the registered boss-prometheus
+    source's host (the stack BOSS deployed), else the address of the host its first active
+    target deploys to. None when BOSS knows no host. ONE answer for every caller: the stack
+    endpoint and the Observability views used to derive it two different ways."""
     from urllib.parse import urlparse
+
+    bundled = _bundled("grafana")
+    if bundled:
+        return bundled
 
     row = connection.execute(sql(
         "SELECT config FROM telemetry_sources WHERE project_id = :p AND kind = 'prometheus' "
@@ -781,7 +809,11 @@ def grafana_base(connection, project_id: str) -> Optional[str]:
 
 
 def prometheus_base(connection, project_id: str) -> Optional[str]:
-    """The registered boss-prometheus source's URL, or None when the stack was never deployed."""
+    """The bundled Prometheus when this install has one, else the registered boss-prometheus
+    source's URL, or None when the stack was never deployed."""
+    bundled = _bundled("prometheus")
+    if bundled:
+        return bundled
     row = connection.execute(sql(
         "SELECT config FROM telemetry_sources WHERE project_id = :p AND kind = 'prometheus' "
         "AND name = 'boss-prometheus' AND enabled"), {"p": project_id}).mappings().first()
@@ -930,7 +962,8 @@ def endpoint_state(connection, project_id: str, kind: str = "grafana") -> dict[s
                 "dashboards": None, "why": None}
     detail = last.get("detail") or {}
     answering = last["state"] == "answering"
-    return {"state": last["state"], "url": base if answering else None, "base_url": base,
+    return {"state": last["state"], "url": public_url(base) if answering else None,
+            "base_url": base, "public_url": public_url(base),
             "reason": "" if answering else (last.get("reason") or f"{name} isn't answering"),
             "checked_at": last["checked_at"].isoformat() if last.get("checked_at") else None,
             "dashboards": detail.get("dashboards"), "why": detail.get("why")}
@@ -944,7 +977,7 @@ def dashboard_link(state: dict[str, Any], app: str) -> tuple[Optional[str], Opti
     known = state.get("dashboards")
     if known is not None and dashboard_uid(app) not in set(known):
         return None, "No dashboard for this app yet: deploy the stack again"
-    return grafana_url(state["base_url"], app), None
+    return grafana_url(state.get("public_url") or state["base_url"], app), None
 
 
 def explore_url(base: str, expr: str, start_ms: int, end_ms: int) -> str:

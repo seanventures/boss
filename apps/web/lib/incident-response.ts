@@ -31,6 +31,9 @@ export type IncidentResponse = {
   alert: { firedAt: string | null; errorRatePercent: number | null; windowMinutes: number | null; minRequests: number | null;
            errorRate: number | null; requests: number | null; errors: number | null; routes: IncidentRoute[] } | null;
   verification: { state: string; summary: string; at: string | null; independent: string | null } | null;
+  /** The alert driving it now (or last): its label, title and SEV come from this, not from the
+   *  alert that first opened a reused incident. null on an older API. */
+  driver: { alertId: string; alertname: string; kind: string; label: string; sev: string; state: string; valueWord: string | null } | null;
   reportedOnly: boolean;
   evidence: IncidentEvidence[];
   reports: IncidentReport[];
@@ -41,7 +44,71 @@ export type IncidentResponse = {
   autoRespondRules: AutoRespondRule[];
   reportReady: boolean;
   respondInput: Record<string, unknown>;
+  /** WHO DID WHAT: triage, every step of the response, with its agent, person or BOSS. */
+  responders: Responder[];
 };
+
+/** Who did a part of the response: an agent (by role), a person (by name), or BOSS itself. */
+export type ResponderWho = {
+  kind: "agent" | "person" | "boss"; roleKey: string | null; role: string; name: string | null;
+  how: string; skills: string[]; onBehalfOf: string | null; model: string | null;
+};
+export type CrewMember = { stage: string; label: string; job: string; status: string; who: ResponderWho;
+                           finding: string | null; verdict: string | null };
+export type RedGreen = { files: string[]; red: { ran: boolean; failed: boolean; failing: string[]; word: string } | null;
+                         green: boolean | null; suite: string };
+export type Responder = {
+  stepId: string; kind: string; label: string; job: string; status: string;
+  startedAt: string | null; endedAt: string | null; who: ResponderWho | null; did: string; words: string | null;
+  /** Investigation: runbook + evidence + root cause. Build: PR, crew, tests. Triage: alert, confidence. */
+  runbook: { title: string; url: string; kind: string; markdown: string | null } | null;
+  evidence: { kind: string; word: string }[];
+  confidence: number | null; alert: string | null; severity: string | null;
+  pullRequestUrl: string | null; crew: CrewMember[]; tests: RedGreen | null;
+  /** Triage: the alert it is about, and — while the agent asks — its question and the buttons. */
+  alertId: string | null; targetId: string | null; question: string | null;
+  options: { action: string; label: string }[];
+  answered: { name: string; action: string; at: string | null } | null;
+};
+
+function parseWho(w: unknown): ResponderWho | null {
+  if (!w || typeof w !== "object") return null;
+  const o = obj(w);
+  const kind = o.kind === "agent" || o.kind === "person" ? o.kind : "boss";
+  return { kind, roleKey: optStr(o.role_key), role: str(o.role), name: optStr(o.name), how: str(o.how),
+           skills: arr(o.skills).filter((x): x is string => typeof x === "string"), onBehalfOf: optStr(o.on_behalf_of),
+           model: optStr(o.model) };
+}
+
+export function parseResponder(w: unknown): Responder {
+  const o = obj(w);
+  const d = obj(o.detail);
+  const rb = d.runbook ? obj(d.runbook) : null;
+  const t = d.tests ? obj(d.tests) : null;
+  const red = t?.red ? obj(t.red) : null;
+  return {
+    stepId: str(o.step_id), kind: str(o.kind), label: str(o.label), job: str(o.job), status: str(o.status),
+    startedAt: optStr(o.started_at), endedAt: optStr(o.ended_at), who: parseWho(o.who), did: str(o.did), words: optStr(o.words),
+    runbook: rb ? { title: str(rb.title), url: str(rb.url), kind: str(rb.kind), markdown: optStr(rb.markdown) } : null,
+    evidence: arr(d.evidence).map((x) => { const y = obj(x); return { kind: str(y.kind), word: str(y.word) }; }).filter((e) => e.word),
+    confidence: optNum(d.confidence), alert: optStr(d.alert), severity: optStr(d.severity),
+    pullRequestUrl: optStr(d.pull_request_url),
+    alertId: optStr(d.alert_id), targetId: optStr(d.target_id), question: optStr(d.question),
+    options: arr(d.options).map((x) => { const y = obj(x); return { action: str(y.action), label: str(y.label) || str(y.action) }; }).filter((o) => o.action),
+    answered: d.answered && typeof d.answered === "object"
+      ? { name: str(obj(d.answered).name, "A person"), action: str(obj(d.answered).action), at: optStr(obj(d.answered).at) } : null,
+    crew: arr(d.crew).map((x) => {
+      const y = obj(x);
+      return { stage: str(y.stage), label: str(y.label), job: str(y.job), status: str(y.status),
+               who: parseWho(y.who) ?? { kind: "boss", roleKey: null, role: "BOSS", name: null, how: "", skills: [], onBehalfOf: null, model: null },
+               finding: optStr(y.finding), verdict: optStr(y.verdict) };
+    }),
+    tests: t ? { files: arr(t.files).filter((x): x is string => typeof x === "string"),
+                 red: red ? { ran: red.ran === true, failed: red.failed === true, word: str(red.word),
+                              failing: arr(red.failing).filter((x): x is string => typeof x === "string") } : null,
+                 green: typeof t.green === "boolean" ? t.green : null, suite: str(t.suite) } : null,
+  };
+}
 
 export function parseIncidentResponse(w: unknown): IncidentResponse {
   const o = obj(w);
@@ -63,6 +130,8 @@ export function parseIncidentResponse(w: unknown): IncidentResponse {
       routes: arr(a.routes).map((x) => { const y = obj(x); return { route: str(y.route), requests: num(y.requests), errors: num(y.errors), errorRate: optNum(y.error_rate) }; }),
     } : null,
     verification: v ? { state: str(v.state), summary: str(v.summary), at: optStr(v.at), independent: optStr(v.independent) } : null,
+    driver: o.driver ? (() => { const x = obj(o.driver); return { alertId: str(x.alert_id), alertname: str(x.alertname), kind: str(x.kind),
+      label: str(x.label), sev: str(x.sev), state: str(x.state), valueWord: optStr(x.value_word) }; })() : null,
     reportedOnly: o.reported_only === true,
     evidence: arr(o.evidence).map((x) => { const y = obj(x); return { kind: str(y.kind), ref: str(y.ref), at: optStr(y.at), payload: obj(y.payload) }; }),
     reports: arr(o.reports).map((x) => {
@@ -85,6 +154,7 @@ export function parseIncidentResponse(w: unknown): IncidentResponse {
     }),
     reportReady: o.report_ready === true,
     respondInput: obj(o.respond_input),
+    responders: arr(o.responders).map(parseResponder),
   };
 }
 

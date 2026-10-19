@@ -11,7 +11,8 @@
  *                         POST /tickets  GET /tickets/{id}
  *   CUSTOMER REPORTS      3 reports from support-desk  [T-1042] [T-1043]
  *   ROOT CAUSE            <statement>  (basis · confidence)
- *   RESPONSE              Run ↗  ● Investigate ● Build ● CI ○ Run report …
+ *   RESPONSE              Run ↗  Pull request ↗   (the step dots only before anyone is named)
+ *   WHO DID WHAT          each part's agent, its role and job, what it did (responders.tsx)
  *                         (or Respond · "Error rate responds automatically" · Alerts ↗)
  *   VERIFICATION          <summary>
  *   REPORT                View · Download .md · .json
@@ -44,6 +45,7 @@ import { Dot, DrawerSection } from "../infra/kit";
 import { areaHref } from "../factory/cockpit-util";
 import { obsRead, obsWrite } from "./obs-write";
 import { leaveTo } from "./obs-util";
+import { Responders } from "./responders";
 
 function Fact({ label, children, tip }: { label: string; children: React.ReactNode; tip?: string }) {
   return (
@@ -58,12 +60,14 @@ const AUTO_TIP = "A rule with Respond automatically on starts Incident Response 
 const VERIFY_TIP = "Judged by BOSS's monitor, not by the fixing agent";
 
 /** The card's body from one response view: pure render, so a fixture draws every section. */
-export function IncidentCardView({ projectId, r, now, busy, onRespond, onAlerts, onTell, report, onView }: {
+export function IncidentCardView({ projectId, r, now, busy, onRespond, onAlerts, onTell, report, onView, answer }: {
   projectId: string; r: IncidentResponse; now: number | null; busy?: "respond" | "tell" | null;
   /** Open the app's Alerts tab in place (the drawer); without it the link navigates. */
   onRespond?: () => void; onAlerts?: () => void; onTell?: () => void;
   /** The report's markdown when View was pressed (null: not open; "": loading). */
   report?: string | null; onView?: () => void;
+  /** Answer the agent's question in place (the live card). */
+  answer?: { projectId: string; actor: string; onDone?: () => void };
 }) {
   const lt = useLocalTime();
   const status = incidentStatus(r);
@@ -98,16 +102,22 @@ export function IncidentCardView({ projectId, r, now, busy, onRespond, onAlerts,
         ) : null}
       </span>
 
-      {a || d ? (
+      {a || d || r.driver ? (
         <div className="obs-inc-part" data-testid="obs-incident-monitor">
           <span className="obs-fact-k">What the monitor saw</span>
           <div className="obs-facts">
-            {a ? (
+            {/* WHAT DROVE IT: the alert firing now (or last). Error facts only for an error-rate
+                driver: a recovered latency incident is never labelled "Errors". */}
+            {r.driver && r.driver.kind !== "error_rate" ? (
+              <Fact label={r.driver.label} tip={`${r.driver.alertname}: the alert driving this incident`}>
+                <span data-testid="obs-incident-driver">{r.driver.valueWord ?? r.driver.alertname}</span>
+              </Fact>
+            ) : a ? (
               <Fact label="Errors" tip={`5xx share over ${a.windowMinutes ?? 5} min when the alert fired`}>
                 {pct(a.errorRate, 1)}{a.requests !== null ? ` of ${a.requests.toLocaleString("en-US")}` : ""}
               </Fact>
             ) : null}
-            {a && a.errorRatePercent !== null ? (
+            {a && a.errorRatePercent !== null && (!r.driver || r.driver.kind === "error_rate") ? (
               <Fact label="Alert above" tip={`Fires once ${a.minRequests ?? 0}+ requests were seen in the window`}>
                 {`${a.errorRatePercent}% / ${a.windowMinutes ?? 5} min`}
               </Fact>
@@ -123,7 +133,7 @@ export function IncidentCardView({ projectId, r, now, busy, onRespond, onAlerts,
               </Fact>
             ) : null}
           </div>
-          {a && a.routes.length ? (
+          {a && a.routes.length && (!r.driver || r.driver.kind === "error_rate") ? (
             <span className="obs-chips" data-testid="obs-incident-routes">
               {[...a.routes].sort((x, y) => y.errors - x.errors).slice(0, 3).map((rt) => (
                 <span key={rt.route} className="obs-chip" data-tone="red" data-copy="data"
@@ -181,13 +191,13 @@ export function IncidentCardView({ projectId, r, now, busy, onRespond, onAlerts,
           <span className="obs-line">
             <a className="inf-link" href={runHref} data-testid="obs-incident-run" title="Open the Incident Response run"
                onClick={(e) => { if (plainClick(e)) { e.preventDefault(); leaveTo(runHref); } }}>Run ↗</a>
-            <ol className="obs-inc-steps" aria-label="Response steps" data-testid="obs-incident-steps">
+            {r.responders.length ? null : <ol className="obs-inc-steps" aria-label="Response steps" data-testid="obs-incident-steps">
               {responseStrip(run.steps).map((s) => (
                 <li key={s.id} data-step={s.id} data-status={s.status ?? "not_started"} title={`${s.label}: ${s.status ?? "not started"}`}>
                   <Dot tone={stepTone(s.status)} />{s.label}
                 </li>
               ))}
-            </ol>
+            </ol>}
             {pr ? <a className="inf-link" href={pr} target="_blank" rel="noreferrer noopener" data-testid="obs-incident-pr" title={pr}>Pull request ↗</a> : null}
           </span>
         ) : status === "resolved" ? (
@@ -209,6 +219,8 @@ export function IncidentCardView({ projectId, r, now, busy, onRespond, onAlerts,
           </span>
         )}
       </div>
+
+      <Responders rows={r.responders} onReport={onView} answer={answer} />
 
       {v && v.summary ? (
         <div className="obs-inc-part" data-testid="obs-incident-verification">
@@ -307,7 +319,8 @@ export function IncidentCard({ projectId, actor, incidentId, onAlerts }: {
     <>
       <IncidentCardView projectId={projectId} r={r} now={now} busy={busy} onRespond={() => void respond()} onAlerts={onAlerts}
                         onTell={() => void tellAgain()}
-                        report={report} onView={view} />
+                        report={report} onView={view}
+                        answer={{ projectId, actor, onDone: () => polled.refresh() }} />
       {refusal ? <StartRefusal refusal={refusal} projectId={projectId} busy={busy === "respond"} onDismiss={() => setRefusal(null)} /> : null}
     </>
   );

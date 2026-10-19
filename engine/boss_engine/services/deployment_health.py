@@ -313,6 +313,9 @@ def sweep(engine, settings: Settings, *, project_id: Optional[str] = None,
             probed += 1
             if not sample["ok"]:
                 failed += 1
+            from .bundled_monitoring import forward_probe
+
+            forward_probe(settings, t, bool(sample["ok"]), sample["latency_ms"], now)
 
         if probed:
             with begin(engine) as c:
@@ -331,14 +334,10 @@ def sweep(engine, settings: Settings, *, project_id: Optional[str] = None,
     from . import incident_signals
 
     signals = incident_signals.sweep(engine, settings, targets, now=now)
-    # ...and every app's alert rules are evaluated over what was just recorded (health check,
-    # deploy health and the metrics rules of apps that were not scraped this time), then what
-    # fired is triaged (app_alerts: never raises).
-    from . import app_alerts
-
-    alerts = app_alerts.sweep(engine, settings, targets, now=now)
-    return {"probed": probed, "skipped": skipped, "failed": failed, **scraped, **signals,
-            **alerts}
+    # ALERT RULES ARE NOT EVALUATED HERE ANY MORE (BOSSAPP-598, R1.9): the monitor scheduler
+    # (monitor_scheduler.tick, on its own clock and leases) evaluates every rule group. This
+    # sweep only probes and scrapes, so a slow probe never delays an alert and vice versa.
+    return {"probed": probed, "skipped": skipped, "failed": failed, **scraped, **signals}
 
 
 # --------------------------------------------------------------------------- #

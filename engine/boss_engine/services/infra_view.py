@@ -2941,12 +2941,27 @@ def _apps_erroring(connection: Any, project_id: str) -> list[dict[str, Any]]:
                  "WHERE i.project_id = :p AND i.dedupe_key LIKE 'app_error_rate:%' "
                  "AND i.status NOT IN ('resolved', 'dismissed') AND t.status <> 'retired'",
                  {"p": project_id})
-    return [_infra_item(id_=f"infra:app_errors:{r['id']}", infra_kind="app_errors",
-                        title=f"{r['app_name']} requests failing", detail=r["title"],
-                        area="observability",
-                        open_=f"?area=observability&view=apps&app={r['id']}",
-                        answers=[{"key": "open", "label": "Open", "enabled": True}],
-                        at=r["first_seen"]) for r in rows]
+    # WHETHER IT IS FAILING NOW comes from the incident's alerts (app_alerts_view.
+    # incident_states), the same answer the Alerts list gives: an open incident that recovered
+    # is not "requests failing" (the card said so over a list reading "Nothing firing").
+    from .app_alerts_view import incident_states
+
+    states = {s_["id"]: s_ for s_ in incident_states(
+        connection, project_id, incident_ids=[r["incident_id"] for r in rows])} if rows else {}
+    out = []
+    for r in rows:
+        st = states.get(r["incident_id"]) or {}
+        failing = st.get("happening", True)
+        out.append(_infra_item(
+            id_=f"infra:app_errors:{r['id']}", infra_kind="app_errors",
+            title=(f"{r['app_name']} requests failing" if failing
+                   else f"{r['app_name']} recovered · incident open"),
+            detail=(r["title"] if failing else f"{st.get('word')}. Was: {r['title']}"),
+            area="observability",
+            open_=f"?area=observability&view=apps&app={r['id']}",
+            answers=[{"key": "open", "label": "Open", "enabled": True}],
+            at=r["first_seen"]))
+    return out
 
 
 def _hosts_unreachable(connection: Any, project_id: str) -> list[dict[str, Any]]:

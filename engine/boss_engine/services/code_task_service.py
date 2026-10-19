@@ -1031,8 +1031,13 @@ def start_followup_task(
     reference_links: Optional[list[str]] = None,
     workflow_run_id: Optional[str] = None,
     finalize_extra: Optional[dict] = None,
+    release_base_sha: Optional[str] = None,
 ) -> dict:
     """Continue work on an app that already exists, from the run that built it.
+
+    ``release_base_sha``: this change targets a release (an incident's fix) and is built on a
+    branch of its own cut from that serving commit — never on the app's lineage branch, whose
+    open PR may carry other runs' unreleased commits (release_scope).
 
     ``workflow_run_id`` names the workflow run that governs this change when a workflow step
     started it, so no second outer run is opened for it; ``finalize_extra`` carries what that
@@ -1115,6 +1120,14 @@ def start_followup_task(
             child_fctx[k] = v
     if workflow_run_id:
         child_fctx["workflow_run_id"] = str(workflow_run_id)
+    base_branch = work_branch_for(run)
+    if release_base_sha:
+        from . import release_scope
+
+        rb = release_scope.release_branch(str(workflow_run_id or make_id("rel")),
+                                          release_base_sha)
+        child_fctx[release_scope.FCTX_KEY] = rb
+        base_branch = rb["branch"]
     model_config = spec.get("model_config")
     engine_name = str(engine or "").strip().lower()
     if engine_name:
@@ -1150,8 +1163,9 @@ def start_followup_task(
         ]),
         test_commands=test_commands or spec.get("test_commands") or [],
         owner=spec.get("owner"), repo=spec.get("repo"),
-        # THE point of this function: start from the app's own branch, not from base.
-        base_branch=work_branch_for(run),
+        # THE point of this function: start from the app's own branch, not from base (or,
+        # for a release fix, from the serving commit on a branch of its own).
+        base_branch=base_branch,
         finalize_ctx=child_fctx,
         jobs=jobs, profile=profile or spec.get("profile"),
         risk_tier=int(spec.get("risk_tier") or 1),
@@ -1188,7 +1202,7 @@ def start_followup_task(
     except Exception:  # noqa: BLE001 — swarm bind must not drop the factory job
         swarm = None
     return {"run_id": run_id, "root_run_id": root,
-            "base_branch": work_branch_for(run),
+            "base_branch": base_branch,
             "owner": spec.get("owner"), "repo": spec.get("repo"),
             "process_run_id": (swarm or {}).get("id") if isinstance(swarm, dict) else None}
 
@@ -1969,6 +1983,9 @@ def retry_code_task(
                           # design+write_tests+blocking-review pipeline (wrong for a scaffolded app,
                           # and loops on repair). Keep it a lean advisory web build on every attempt.
                           **({"web_app_build": True} if fctx_prev.get("web_app_build") else {}),
+                          # A release fix's retry stays on the fix's own branch (release_scope).
+                          **({"release_branch": dict(fctx_prev["release_branch"])}
+                             if isinstance(fctx_prev.get("release_branch"), dict) else {}),
                           # RESUME: hand the parent's approved design to the next attempt so it
                           # skips standards+spec+plan+review_plan instead of re-deriving a plan
                           # for a task that has not changed. Guarded on a real plan EXISTING,

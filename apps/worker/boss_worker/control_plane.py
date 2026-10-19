@@ -293,6 +293,12 @@ class ControlPlaneClient:
         response.raise_for_status()
         return response.json()
 
+    def monitoring_tick(self) -> dict[str, Any]:
+        """Run the monitor scheduler once (rule groups, synthetics, triage, notifications)."""
+        response = self._client.post("/v1/monitoring/tick")
+        response.raise_for_status()
+        return response.json()
+
     def watch_running_tasks(self) -> dict[str, Any]:
         """Have the shepherd look at in-flight work and act on what is unmistakable.
 

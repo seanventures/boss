@@ -521,6 +521,9 @@ def test_an_alert_is_answered_end_to_end_by_incident_response(pg, app, monkeypat
     brief = builds[0]["instructions"]
     assert brief.startswith("INCIDENT FIX") and "pricing.py" in brief
     assert builds[0].get("extends_run_id") == "crun_root", builds[0]
+    # ITS OWN BRANCH, CUT FROM WHAT IS SERVING (release_scope; D2: the fix rode PR #231's branch
+    # and its release would have shipped two rejected runs' commits with it).
+    assert builds[0].get("release_base_sha") == "b" * 40, builds[0]
     assert any("FAILS on the faulty release" in a for a in builds[0]["acceptance_criteria"])
     assert inc == "resolved"
     assert rep["kind"] == "incident_report" and rep["root_cause"]["suspect_commit"] == "b" * 40
@@ -531,3 +534,20 @@ def test_an_alert_is_answered_end_to_end_by_incident_response(pg, app, monkeypat
     approvals = [t["what"] for t in rep["timeline"] if t["kind"] == "approval"]
     assert any(w.startswith("Approve the release") and w.endswith("approved by ceo")
                for w in approvals), approvals
+    # WHO DID WHAT (incident_responders): every step names its agent, a person or BOSS.
+    who = {r["step_id"]: r["who"] for r in view["responders"]}
+    assert who["investigate"]["kind"] == "agent" and who["investigate"]["role_key"] == "sre"
+    # This bare project has no Engineering Captain: the build ran on Auto, as the run's actor,
+    # and the card says so instead of crediting an agent that never worked on it.
+    assert who["build"]["kind"] == "boss" and who["build"]["on_behalf_of"] == "monitor"
+    assert who["approve"] == {"kind": "person", "role_key": None, "name": "ceo",
+                              "role": "Approver", "how": "approved"}
+    assert who["deploy"]["kind"] == "boss" and who["deploy"]["on_behalf_of"]
+    assert who["verify"]["role_key"] == "sre" and who["incident_report"]["role_key"] == "sre"
+    inv = next(r for r in view["responders"] if r["step_id"] == "investigate")
+    assert inv["detail"]["runbook"]["kind"] == "builtin" and inv["words"]
+    assert {e["kind"] for e in inv["detail"]["evidence"]} >= {"logs", "release"}
+    verify = next(r for r in view["responders"] if r["step_id"] == "verify")
+    assert verify["detail"]["state"] == "recovered"
+    assert "## Who did what" in rep["markdown"] and "**Approve the release** — ceo (person)" \
+        in rep["markdown"]

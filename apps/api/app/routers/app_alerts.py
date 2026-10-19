@@ -9,6 +9,7 @@
   a reason; ``POST /v1/apps/{target_id}/alert-silences/{silence_id}/end`` ends it early.
 * ``GET  /v1/apps/{target_id}/alerts`` — the app's alert history; ``GET /v1/alerts`` — every app's.
 * ``POST /v1/apps/{target_id}/alerts/{alert_id}/triage`` — ask the agent again (after no model).
+* ``POST /v1/apps/{target_id}/alerts/{alert_id}/triage/answer`` — a person answers the agent.
 * ``POST /v1/apps/{target_id}/signal-sources/{source_id}/rotate`` — a new signals token for a
   reporting app; the value is never shown.
 * ``POST /v1/observability/grafana/check`` — ask Grafana (and Prometheus) now; a Grafana link is
@@ -49,6 +50,11 @@ class ProjectBody(BaseModel):
     actor: Optional[str] = None
 
 
+class AnswerBody(ProjectBody):
+    #: One of the options the agent offered (its triage record's `options`).
+    action: str
+
+
 def build_app_alerts_router(
     *,
     engine,
@@ -87,7 +93,8 @@ def build_app_alerts_router(
     def _rules_body(connection, pid: str, target_id: str) -> dict:
         tab = view.app_alerts_tab(connection, settings(), pid, target_id, state="firing")
         return {k: tab[k] for k in ("target_id", "app", "env", "rules", "sources", "changes",
-                                    "evaluator", "evaluator_tip", "export", "grafana")}
+                                    "evaluator", "evaluator_tip", "export", "grafana",
+                                    "severities", "has_samples")}
 
     @router.get("/v1/apps/{target_id}/alert-rules")
     @permit(P.OBSERVABILITY_READ, scope=Scope.project(query="project_id"))
@@ -162,9 +169,52 @@ def build_app_alerts_router(
     @permit(P.OBSERVABILITY_READ, scope=Scope.project(query="project_id"))
     def all_alerts(project_id: str, request: Request, response: Response,
                    app: Optional[str] = None, state: str = "firing", since: str = "7d",
-                   severity: Optional[str] = None):
+                   severity: Optional[str] = None, source: Optional[str] = None,
+                   flapping: Optional[bool] = None, acked: Optional[bool] = None,
+                   attention: bool = False):
+        """Every app's and service's alerts (filters: app or service, state, severity, source
+        kind, flapping, acked), with the open incidents in the same words every card uses."""
         return _read(project_id, request, response, lambda c, pid: view.alerts(
-            c, pid, target_id=app or None, state=state, since=since, severity=severity))
+            c, pid, target_id=app or None, state=state, since=since, severity=severity,
+            source=source or None, flapping=flapping, acked=acked, attention=attention))
+
+    @router.get("/v1/apps/{target_id}/metric-names")
+    @permit(P.OBSERVABILITY_READ, scope=Scope.project(query="project_id"))
+    def metric_names(target_id: str, project_id: str, request: Request, response: Response):
+        """The app's ACTUAL series names, from what BOSS scraped or was sent (the New alert rule
+        builder's metric picker), with the selector its rules use."""
+        from boss_engine.services import alert_samples
+
+        def build(c, pid):
+            return alert_samples.metric_names(c, _target(c, pid, target_id))
+        return _read(project_id, request, response, build)
+
+    @router.post("/v1/apps/{target_id}/alert-rules/samples")
+    @permit(P.OBSERVABILITY_MANAGE, scope=Scope.project(body="project_id"))
+    def add_sample_rules(target_id: str, payload: ProjectBody):
+        """Seed the clearly labelled SAMPLE rules for this app (labels.sample="true"); idempotent."""
+        from boss_engine.services import alert_samples
+
+        pid = reader_project(payload.project_id)
+        with begin(engine) as connection:
+            actor = require_write_actor(connection, pid, payload.actor, "providerops_manage")
+            target = _target(connection, pid, target_id)
+            aa.ensure_rules(connection, target)
+            got = alert_samples.seed(connection, target, actor=actor)
+        return jsonable_encoder(got)
+
+    @router.post("/v1/apps/{target_id}/alert-rules/samples/remove")
+    @permit(P.OBSERVABILITY_MANAGE, scope=Scope.project(body="project_id"))
+    def remove_sample_rules(target_id: str, payload: ProjectBody):
+        """Remove every SAMPLE rule of this app (their alert history stays, marked sample)."""
+        from boss_engine.services import alert_samples
+
+        pid = reader_project(payload.project_id)
+        with begin(engine) as connection:
+            actor = require_write_actor(connection, pid, payload.actor, "providerops_manage")
+            target = _target(connection, pid, target_id)
+            got = alert_samples.remove(connection, target, actor=actor)
+        return jsonable_encoder(got)
 
     @router.post("/v1/apps/{target_id}/alerts/{alert_id}/triage")
     @permit(P.OBSERVABILITY_MANAGE, scope=Scope.project(body="project_id"))
@@ -184,6 +234,30 @@ def build_app_alerts_router(
             raise HTTPException(status_code=409,
                                 detail="Only a firing alert the agent has not triaged")
         record = aa.triage_alert(engine, settings(), alert_id)
+        return jsonable_encoder(record)
+
+    @router.post("/v1/apps/{target_id}/alerts/{alert_id}/triage/answer")
+    @permit(P.RELIABILITY_RESPOND, scope=Scope.project(body="project_id"))
+    def answer_triage(target_id: str, alert_id: str, payload: AnswerBody):
+        """A person answers the on-call agent's question about an alert with one of the options
+        it offered. Runs the same path as the agent deciding (app_alerts.answer_triage)."""
+        from sqlalchemy import text
+
+        pid = reader_project(payload.project_id)
+        with begin(engine) as connection:
+            actor = require_write_actor(connection, pid, payload.actor, "providerops_manage")
+            _target(connection, pid, target_id)
+            mine = connection.execute(text(
+                "SELECT 1 FROM app_alerts WHERE id = :a AND project_id = :p AND "
+                "(target_id = :t OR subject_id = :t)"),
+                {"a": alert_id, "p": pid, "t": target_id}).first()
+        if not mine:
+            raise HTTPException(status_code=404, detail="No such alert on this app")
+        try:
+            record = aa.answer_triage(engine, settings(), alert_id, action=payload.action,
+                                      actor=actor)
+        except aa.AnswerRefused as refused:
+            raise HTTPException(status_code=409, detail=str(refused)) from None
         return jsonable_encoder(record)
 
     @router.post("/v1/apps/{target_id}/signal-sources/{source_id}/rotate")

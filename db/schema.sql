@@ -5049,7 +5049,21 @@ CREATE TABLE IF NOT EXISTS app_signal_channels (
 CREATE TABLE IF NOT EXISTS app_alert_rules (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id),
-  target_id TEXT NOT NULL REFERENCES deployment_targets(id) ON DELETE CASCADE,
+  -- A rule watches a deployment target (v1) or a monitored service BOSS did not deploy (P1).
+  target_id TEXT REFERENCES deployment_targets(id) ON DELETE CASCADE,
+  service_id TEXT,
+  group_id TEXT,
+  -- threshold | absence | heartbeat | synthetic | external_mirror (the rule's kind of check;
+  -- `kind` stays the built-in name or custom).
+  rule_type TEXT NOT NULL DEFAULT 'threshold',
+  keep_firing_for_s INTEGER NOT NULL DEFAULT 0,
+  -- What no data does to a FIRING alert: keep (default: never a false resolution), ok, alert.
+  no_data TEXT NOT NULL DEFAULT 'keep',
+  urgency TEXT,
+  -- builtin | code (boss.deploy.yaml) | console | slo.
+  managed_by TEXT NOT NULL DEFAULT 'builtin',
+  -- Pre-approved tier-1 actions (Phase 1b) and who granted them.
+  response_policy JSONB NOT NULL DEFAULT '{}'::jsonb,
   kind TEXT NOT NULL,
   alert TEXT NOT NULL,
   expr TEXT NOT NULL,
@@ -5080,12 +5094,22 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_app_alert_rules_builtin
   ON app_alert_rules(target_id, kind) WHERE kind <> 'custom';
 CREATE INDEX IF NOT EXISTS idx_app_alert_rules_project ON app_alert_rules(project_id, target_id);
 
--- Who changed a rule, when, from what to what, and why. Never updated, never deleted.
-CREATE TABLE IF NOT EXISTS app_alert_rule_changes (
+-- Who changed a rule (or any monitoring object: a source, a contact point, a policy, a silence,
+-- a maintenance window, an inhibit rule), when, from what to what, and why. Never updated,
+-- never deleted. Was app_alert_rule_changes (a view by that name reads the rule rows).
+DO $$ BEGIN
+  IF to_regclass('app_alert_rule_changes') IS NOT NULL AND to_regclass('monitoring_changes') IS NULL
+     AND (SELECT relkind FROM pg_class WHERE oid = to_regclass('app_alert_rule_changes')) = 'r' THEN
+    ALTER TABLE app_alert_rule_changes RENAME TO monitoring_changes;
+  END IF;
+END $$;
+CREATE TABLE IF NOT EXISTS monitoring_changes (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL,
-  rule_id TEXT NOT NULL,
-  target_id TEXT NOT NULL,
+  object_kind TEXT NOT NULL DEFAULT 'rule',
+  object_id TEXT,
+  rule_id TEXT,
+  target_id TEXT,
   change TEXT NOT NULL,                     -- edited | created | deleted | silenced | unsilenced
   before JSONB,
   after JSONB,
@@ -5093,8 +5117,17 @@ CREATE TABLE IF NOT EXISTS app_alert_rule_changes (
   changed_by TEXT NOT NULL,
   changed_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE monitoring_changes ADD COLUMN IF NOT EXISTS object_kind TEXT NOT NULL DEFAULT 'rule';
+ALTER TABLE monitoring_changes ADD COLUMN IF NOT EXISTS object_id TEXT;
+ALTER TABLE monitoring_changes ALTER COLUMN rule_id DROP NOT NULL;
+ALTER TABLE monitoring_changes ALTER COLUMN target_id DROP NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_app_alert_rule_changes_rule
-  ON app_alert_rule_changes(rule_id, changed_at DESC);
+  ON monitoring_changes(rule_id, changed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_monitoring_changes_project
+  ON monitoring_changes(project_id, changed_at DESC);
+CREATE OR REPLACE VIEW app_alert_rule_changes AS
+  SELECT id, project_id, rule_id, target_id, change, before, after, reason, changed_by, changed_at
+  FROM monitoring_changes WHERE object_kind = 'rule';
 
 -- A person silenced a rule until `ends_at`, with a reason. `expired_at` when ended early.
 CREATE TABLE IF NOT EXISTS app_alert_silences (
@@ -5122,10 +5155,34 @@ CREATE INDEX IF NOT EXISTS idx_app_alert_silences_rule ON app_alert_silences(rul
 CREATE TABLE IF NOT EXISTS app_alerts (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL,
-  target_id TEXT NOT NULL,
+  target_id TEXT,
+  service_id TEXT,
+  -- signal_sources.id for an external alert (Alertmanager, PagerDuty-shaped, ...) or a heartbeat.
+  source_id TEXT,
+  -- The source's own key (Alertmanager fingerprint, dedup_key, AlarmArn): mirrored by it.
+  external_ref TEXT,
+  external_last_at TIMESTAMPTZ,
+  links JSONB NOT NULL DEFAULT '[]'::jsonb,
   rule_id TEXT,
   rule_kind TEXT NOT NULL,
-  source_kind TEXT NOT NULL DEFAULT 'rule' CHECK (source_kind IN ('rule', 'signal')),
+  source_kind TEXT NOT NULL DEFAULT 'rule'
+    CHECK (source_kind IN ('rule', 'signal', 'external', 'synthetic', 'heartbeat')),
+  -- keep_firing_for: when the series went missing while firing (held firing until it ends).
+  missing_since TIMESTAMPTZ,
+  -- no data while firing, under the rule's no_data policy `keep`: still firing, said so.
+  no_data_since TIMESTAMPTZ,
+  flapping BOOLEAN NOT NULL DEFAULT false,
+  flap_score DOUBLE PRECISION NOT NULL DEFAULT 0,
+  -- the last 21 evaluations' presence (1/0), newest last: what flap_score is computed from.
+  flap_history TEXT NOT NULL DEFAULT '',
+  flap_tuning_asked_at TIMESTAMPTZ,
+  acked_by TEXT,
+  acked_at TIMESTAMPTZ,
+  ack_expires_at TIMESTAMPTZ,
+  urgency TEXT NOT NULL DEFAULT 'high',
+  notified_at TIMESTAMPTZ,
+  -- every reason a notification is held: [{kind: silence|maintenance|deploy_hold|inhibit, id}]
+  suppressed_by JSONB NOT NULL DEFAULT '[]'::jsonb,
   reporter_target_id TEXT,
   fingerprint TEXT NOT NULL,
   alertname TEXT NOT NULL,
@@ -9596,3 +9653,354 @@ CREATE TABLE IF NOT EXISTS self_fix_upstream_sends (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_self_fix_upstream_sends_fix ON self_fix_upstream_sends (self_fix_id, created_at);
+
+-- ══ Monitoring and alerting, Phase 1a (BOSSAPP-598; docs/product/MONITORING_ALERTING_SPEC.md) ══
+-- The v1 alert tables grow: a rule or alert belongs to a deployment target OR a monitored
+-- service BOSS did not deploy. `subject_id` is the one key every per-app query reads.
+ALTER TABLE app_alert_rules ALTER COLUMN target_id DROP NOT NULL;
+ALTER TABLE app_alerts ALTER COLUMN target_id DROP NOT NULL;
+ALTER TABLE app_alert_rules ADD COLUMN IF NOT EXISTS subject_id TEXT
+  GENERATED ALWAYS AS (COALESCE(target_id, service_id)) STORED;
+ALTER TABLE app_alerts ADD COLUMN IF NOT EXISTS subject_id TEXT
+  GENERATED ALWAYS AS (COALESCE(target_id, service_id)) STORED;
+DO $$ BEGIN
+  ALTER TABLE app_alerts DROP CONSTRAINT IF EXISTS app_alerts_source_kind_check;
+  ALTER TABLE app_alerts ADD CONSTRAINT app_alerts_source_kind_check
+    CHECK (source_kind IN ('rule', 'signal', 'external', 'synthetic', 'heartbeat'));
+END $$;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_app_alert_rules_service_builtin
+  ON app_alert_rules(service_id, kind) WHERE target_id IS NULL AND kind <> 'custom';
+CREATE INDEX IF NOT EXISTS idx_app_alert_rules_subject ON app_alert_rules(subject_id);
+CREATE INDEX IF NOT EXISTS idx_app_alerts_subject ON app_alerts(subject_id, active_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_app_alerts_open_external
+  ON app_alerts(source_id, external_ref) WHERE state IN ('pending', 'firing')
+  AND external_ref IS NOT NULL;
+-- The incident lifecycle people see (status stays the back-compat projection).
+ALTER TABLE incidents ADD COLUMN IF NOT EXISTS service_id TEXT;
+ALTER TABLE incidents ADD COLUMN IF NOT EXISTS urgency TEXT NOT NULL DEFAULT 'high';
+ALTER TABLE incidents ADD COLUMN IF NOT EXISTS lifecycle TEXT NOT NULL DEFAULT 'detected';
+ALTER TABLE incidents ADD COLUMN IF NOT EXISTS acked_by TEXT;
+ALTER TABLE incidents ADD COLUMN IF NOT EXISTS acked_at TIMESTAMPTZ;
+ALTER TABLE incidents ADD COLUMN IF NOT EXISTS mitigated_at TIMESTAMPTZ;
+ALTER TABLE incidents ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMPTZ;
+
+-- A thing BOSS watches, deployed by BOSS or not. A deployment target gets one automatically.
+-- `dialect` is how its HTTP metrics are named (boss: the platform standard; otel: OTel stable
+-- semconv; otel_legacy: the pre-1.20 semconv names), detected from the first data.
+CREATE TABLE IF NOT EXISTS monitored_services (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  name TEXT NOT NULL,
+  environment TEXT NOT NULL DEFAULT 'production',
+  deployment_target_id TEXT REFERENCES deployment_targets(id) ON DELETE CASCADE,
+  owner TEXT,
+  labels JSONB NOT NULL DEFAULT '{}'::jsonb,
+  dialect TEXT NOT NULL DEFAULT 'boss',
+  -- {paths: [otlp, remote_write, scrape, synthetic, alertmanager, ...], first_data_at,
+  --  last_data_at, series, recognised, scrape_url}
+  onboarding JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_by TEXT NOT NULL DEFAULT 'boss',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (project_id, name, environment)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_monitored_services_target
+  ON monitored_services(deployment_target_id) WHERE deployment_target_id IS NOT NULL;
+
+-- Everything that sends to BOSS, each with its OWN token: the project comes from the token,
+-- never from the payload. Only a hash is kept (and a 2-character hint). A rotated token stays
+-- valid for an hour (prev_*). An HMAC-signing source keeps its key in the secret store
+-- (`signing_secret_ref`), never here.
+CREATE TABLE IF NOT EXISTS signal_sources (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  service_id TEXT REFERENCES monitored_services(id) ON DELETE SET NULL,
+  name TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('otlp', 'remote_write', 'alertmanager', 'grafana',
+    'pagerduty_v2', 'sentry', 'datadog', 'cloudwatch_sns', 'generic', 'heartbeat')),
+  token_hash TEXT NOT NULL,
+  token_hint TEXT NOT NULL DEFAULT '',
+  prev_token_hash TEXT,
+  prev_valid_until TIMESTAMPTZ,
+  -- The token is HMAC(server key, id + salt): BOSS can re-derive it to check a signature, a
+  -- database read alone cannot. Rotation is a new salt.
+  token_salt TEXT NOT NULL DEFAULT '',
+  prev_token_salt TEXT,
+  require_signature BOOLEAN NOT NULL DEFAULT false,
+  mapping JSONB NOT NULL DEFAULT '{}'::jsonb,
+  heartbeat_every_s INTEGER,
+  last_seen_at TIMESTAMPTZ,
+  last_refusal_word TEXT,
+  last_refusal_at TIMESTAMPTZ,
+  enabled BOOLEAN NOT NULL DEFAULT true,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  rotated_at TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_signal_sources_token ON signal_sources(token_hash);
+CREATE INDEX IF NOT EXISTS idx_signal_sources_project ON signal_sources(project_id, kind);
+-- Accepted and refused counts per source per hour (the console's 24 h numbers).
+CREATE TABLE IF NOT EXISTS signal_source_counts (
+  source_id TEXT NOT NULL REFERENCES signal_sources(id) ON DELETE CASCADE,
+  hour TIMESTAMPTZ NOT NULL,
+  accepted INTEGER NOT NULL DEFAULT 0,
+  refused INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (source_id, hour)
+);
+-- A signed body seen in the last 10 minutes (replay refusal) and an event already applied
+-- (idempotency on source, dedup_key, action, timestamp).
+CREATE TABLE IF NOT EXISTS signal_receipts (
+  source_id TEXT NOT NULL,
+  receipt_key TEXT NOT NULL,
+  alert_id TEXT,
+  seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (source_id, receipt_key)
+);
+CREATE INDEX IF NOT EXISTS idx_signal_receipts_seen ON signal_receipts(seen_at);
+
+-- THE POSTGRES FLOOR (T0): metrics pushed (OTLP, remote write) or scraped from a /metrics URL
+-- or measured by a synthetic check, stamped with the project and service, kept 7 days. The
+-- bundled Prometheus (T2) holds the same series when it is configured; this floor is what a
+-- laptop install evaluates.
+CREATE TABLE IF NOT EXISTS metric_series (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  service_id TEXT,
+  name TEXT NOT NULL,
+  labels JSONB NOT NULL,
+  labels_hash TEXT NOT NULL,
+  last_value DOUBLE PRECISION,
+  last_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (project_id, labels_hash)
+);
+CREATE INDEX IF NOT EXISTS idx_metric_series_service ON metric_series(project_id, service_id, name);
+CREATE TABLE IF NOT EXISTS metric_points (
+  series_id TEXT NOT NULL REFERENCES metric_series(id) ON DELETE CASCADE,
+  t TIMESTAMPTZ NOT NULL,
+  v DOUBLE PRECISION NOT NULL,
+  PRIMARY KEY (series_id, t)
+);
+CREATE INDEX IF NOT EXISTS idx_metric_points_t ON metric_points(t);
+
+-- Rule groups: the evaluation unit (Prometheus' model). One per watched app or service; a worker
+-- claims a due group with FOR UPDATE SKIP LOCKED and a lease of twice the interval.
+CREATE TABLE IF NOT EXISTS rule_groups (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  subject_id TEXT NOT NULL UNIQUE,
+  subject_kind TEXT NOT NULL CHECK (subject_kind IN ('target', 'service')),
+  name TEXT NOT NULL,
+  interval_s INTEGER NOT NULL DEFAULT 60 CHECK (interval_s >= 15),
+  datasource TEXT NOT NULL DEFAULT 'auto',
+  next_eval_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  lease_owner TEXT,
+  lease_until TIMESTAMPTZ,
+  last_eval_at TIMESTAMPTZ,
+  last_duration_ms INTEGER,
+  last_lag_ms INTEGER,
+  last_error TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_rule_groups_due ON rule_groups(next_eval_at);
+
+-- Append-only: every state change of every alert, with why and who.
+CREATE TABLE IF NOT EXISTS alert_transitions (
+  id TEXT PRIMARY KEY,
+  alert_id TEXT NOT NULL,
+  project_id TEXT NOT NULL,
+  at TIMESTAMPTZ NOT NULL,
+  from_state TEXT,
+  to_state TEXT NOT NULL,
+  value DOUBLE PRECISION,
+  reason TEXT NOT NULL DEFAULT '',
+  actor TEXT NOT NULL DEFAULT 'evaluator'
+);
+CREATE INDEX IF NOT EXISTS idx_alert_transitions_alert ON alert_transitions(alert_id, at);
+
+-- Label-matcher silences (Alertmanager's). kind manual | maintenance | deploy_hold. A silence
+-- mutes NOTIFICATION and triage, never evaluation. The v1 per-rule silence is the matcher
+-- {alert_rule_id="<id>"}.
+CREATE TABLE IF NOT EXISTS silences (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  matchers JSONB NOT NULL,
+  starts_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  ends_at TIMESTAMPTZ NOT NULL,
+  reason TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'manual' CHECK (kind IN ('manual', 'maintenance', 'deploy_hold')),
+  source_ref TEXT,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  expired_at TIMESTAMPTZ,
+  expired_by TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_silences_active ON silences(project_id, ends_at);
+INSERT INTO silences (id, project_id, matchers, starts_at, ends_at, reason, kind, created_by,
+                      created_at, expired_at, expired_by)
+SELECT id, project_id, jsonb_build_array(jsonb_build_object('name', 'alert_rule_id', 'op', '=',
+       'value', rule_id)), starts_at, ends_at, reason, 'manual', created_by, created_at,
+       expired_at, expired_by
+FROM app_alert_silences ON CONFLICT (id) DO NOTHING;
+
+-- Recurring maintenance (an RRULE subset: FREQ=DAILY|WEEKLY, BYDAY, BYHOUR, BYMINUTE). mode
+-- mute: notifications held; hold: alerts go to the agent first (a deploy window's rule).
+CREATE TABLE IF NOT EXISTS maintenance_windows (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  matchers JSONB NOT NULL DEFAULT '[]'::jsonb,
+  rrule TEXT NOT NULL DEFAULT '',
+  starts_at TIMESTAMPTZ NOT NULL,
+  duration_min INTEGER NOT NULL CHECK (duration_min BETWEEN 1 AND 10080),
+  timezone TEXT NOT NULL DEFAULT 'UTC',
+  mode TEXT NOT NULL DEFAULT 'mute' CHECK (mode IN ('mute', 'hold')),
+  enabled BOOLEAN NOT NULL DEFAULT true,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Declarative inhibition: while an alert matching `source_matchers` fires, alerts matching
+-- `target_matchers` with the same `equal` labels are held back. project_id NULL: BOSS's own.
+CREATE TABLE IF NOT EXISTS inhibit_rules (
+  id TEXT PRIMARY KEY,
+  project_id TEXT,
+  name TEXT NOT NULL,
+  source_matchers JSONB NOT NULL,
+  target_matchers JSONB NOT NULL,
+  equal JSONB NOT NULL DEFAULT '[]'::jsonb,
+  origin TEXT NOT NULL DEFAULT 'console' CHECK (origin IN ('builtin', 'code', 'console')),
+  enabled BOOLEAN NOT NULL DEFAULT true,
+  created_by TEXT NOT NULL DEFAULT 'boss',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+INSERT INTO inhibit_rules (id, project_id, name, source_matchers, target_matchers, equal, origin)
+VALUES ('inh_builtin_availability', NULL, 'Down holds back its symptoms',
+        '[{"name": "layer", "op": "=", "value": "availability"}]'::jsonb,
+        '[{"name": "layer", "op": "=", "value": "symptom"}]'::jsonb,
+        '["boss_subject"]'::jsonb, 'builtin')
+ON CONFLICT (id) DO NOTHING;
+
+-- Where people are told. kind console | email | slack_webhook | mattermost | webhook. Secrets
+-- (a webhook URL, a signing token) are in the secret store by `secret_ref`; `config` holds only
+-- what may be shown (an address, a host). A contact point is verified (its test message was
+-- acknowledged) before a high-urgency policy may use it.
+CREATE TABLE IF NOT EXISTS contact_points (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('console', 'email', 'slack_webhook', 'mattermost', 'webhook')),
+  config JSONB NOT NULL DEFAULT '{}'::jsonb,
+  secret_ref TEXT,
+  verified_at TIMESTAMPTZ,
+  verify_token_hash TEXT,
+  rate_per_minute INTEGER NOT NULL DEFAULT 20,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- The routing tree (Alertmanager's): depth first, first match unless `continue`, children
+-- inherit. A root per project (parent_id NULL) is made on first use: console + email to the
+-- project owner. The rule sheet's Notify column writes a one-level child (`rule_id`).
+CREATE TABLE IF NOT EXISTS notification_policies (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  parent_id TEXT REFERENCES notification_policies(id) ON DELETE CASCADE,
+  position INTEGER NOT NULL DEFAULT 0,
+  name TEXT NOT NULL DEFAULT '',
+  matchers JSONB NOT NULL DEFAULT '[]'::jsonb,
+  continue_matching BOOLEAN NOT NULL DEFAULT false,
+  group_by JSONB,
+  group_wait_s INTEGER,
+  group_interval_s INTEGER,
+  repeat_interval_s INTEGER,
+  contact_point_ids JSONB,
+  -- {start: "22:00", end: "07:00", timezone: "Europe/London"}; high urgency ignores it.
+  quiet_hours JSONB,
+  rule_id TEXT,
+  created_by TEXT NOT NULL DEFAULT 'boss',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_notification_policies_root
+  ON notification_policies(project_id) WHERE parent_id IS NULL;
+
+-- One row per (group, contact point): what was last sent and when, so group_interval and
+-- repeat_interval apply and an incident is ONE thread.
+CREATE TABLE IF NOT EXISTS notification_groups (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  policy_id TEXT NOT NULL,
+  contact_point_id TEXT NOT NULL,
+  group_key TEXT NOT NULL,
+  incident_id TEXT,
+  first_seen_at TIMESTAMPTZ NOT NULL,
+  last_sent_at TIMESTAMPTZ,
+  last_digest TEXT,
+  thread_ref TEXT,
+  UNIQUE (contact_point_id, group_key)
+);
+
+-- THE OUTBOX: every message, before it is sent, with its receipt after. A dead channel never
+-- blocks another channel or the evaluator; 6 attempts with backoff, then `dead` (a meta-alert).
+CREATE TABLE IF NOT EXISTS notifications (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  group_key TEXT NOT NULL,
+  policy_id TEXT,
+  contact_point_id TEXT NOT NULL,
+  alert_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+  incident_id TEXT,
+  kind TEXT NOT NULL CHECK (kind IN ('firing', 'resolved', 'ack', 'flapping', 'triage',
+                                     'digest', 'test', 'meta')),
+  urgency TEXT NOT NULL DEFAULT 'high',
+  dedupe_key TEXT NOT NULL UNIQUE,
+  subject TEXT NOT NULL DEFAULT '',
+  body TEXT NOT NULL DEFAULT '',
+  payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+  status TEXT NOT NULL DEFAULT 'pending'
+    CHECK (status IN ('pending', 'sent', 'failed', 'dead', 'held')),
+  attempts INTEGER NOT NULL DEFAULT 0,
+  next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  error_word TEXT,
+  receipt TEXT,
+  sent_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_notifications_due ON notifications(status, next_attempt_at);
+CREATE INDEX IF NOT EXISTS idx_notifications_project ON notifications(project_id, created_at DESC);
+
+-- Signed single-use links in an email (ack, resolve), valid 24 h. Only the hash is kept.
+CREATE TABLE IF NOT EXISTS alert_action_tokens (
+  token_hash TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  alert_id TEXT,
+  incident_id TEXT,
+  action TEXT NOT NULL CHECK (action IN ('ack', 'resolve')),
+  contact_point_id TEXT,
+  expires_at TIMESTAMPTZ NOT NULL,
+  used_at TIMESTAMPTZ,
+  used_by TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Synthetic checks: BOSS asks a URL (HTTP), a port (TCP) or a name (DNS) on an interval, and
+-- writes blackbox-exporter-named series (probe_success, probe_duration_seconds, ...) to the
+-- floor, so one rule works on every topology.
+CREATE TABLE IF NOT EXISTS synthetic_checks (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  service_id TEXT NOT NULL REFERENCES monitored_services(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL CHECK (kind IN ('http', 'tcp', 'dns')),
+  target TEXT NOT NULL,
+  method TEXT NOT NULL DEFAULT 'GET',
+  expect JSONB NOT NULL DEFAULT '{}'::jsonb,
+  interval_s INTEGER NOT NULL DEFAULT 60 CHECK (interval_s >= 30),
+  headers_secret_ref TEXT,
+  enabled BOOLEAN NOT NULL DEFAULT true,
+  next_run_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_run_at TIMESTAMPTZ,
+  last_ok BOOLEAN,
+  last_word TEXT,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);

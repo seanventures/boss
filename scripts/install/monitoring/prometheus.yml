@@ -1,0 +1,13 @@
+# The Prometheus bundled with BOSS (BOSSAPP-598, spec D1). It scrapes nothing itself: BOSS
+# scrapes every app it monitors and forwards the samples here by remote write (and apps may
+# send OTLP or remote write through BOSS's authenticated ingest). Rules are evaluated by BOSS.
+global:
+  scrape_interval: 60s
+  evaluation_interval: 60s
+storage:
+  tsdb:
+    # Scrapes from two BOSS sweeps can land a few seconds out of order.
+    out_of_order_time_window: 10m
+otlp:
+  promote_resource_attributes: [service.name, deployment.environment, deployment.environment.name]
+scrape_configs: []

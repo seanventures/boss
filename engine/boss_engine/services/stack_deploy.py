@@ -209,6 +209,22 @@ class GitHubSource:
                                    "Check the ref and try again.")
         return sha
 
+    def compare(self, owner: str, repo: str, base: str, head: str) -> dict[str, Any]:
+        """The commits `head` has beyond `base`, oldest first (release_scope's ship list)."""
+        response = self._get(f"/repos/{owner}/{repo}/compare/"
+                             f"{quote(base, safe='')}...{quote(head, safe='')}")
+        if response.status_code != 200:
+            raise self._refused(response, f"{base[:12]}...{head[:12]} in {owner}/{repo}")
+        payload = response.json() or {}
+        return {"behind_by": int(payload.get("behind_by") or 0),
+                "commits": [{"sha": str(c.get("sha") or ""),
+                             "message": str((c.get("commit") or {}).get("message") or "")
+                             .splitlines()[0][:200] if (c.get("commit") or {}).get("message")
+                             else "",
+                             "full_message": str((c.get("commit") or {}).get("message")
+                                                 or "")[:4000]}
+                            for c in (payload.get("commits") or [])[-250:]]}
+
     def read_file(self, owner: str, repo: str, path: str, commit: str) -> Optional[str]:
         response = self._get(
             f"/repos/{owner}/{repo}/contents/{quote(path.lstrip('/'))}?ref={commit}",
@@ -1725,6 +1741,21 @@ def plan_stack_deploy(engine, settings: Settings, *, project_id: str, target_id:
             # workflow step or two operators at once must not queue a second install.
             return {**get_stack_deployment(connection, running["id"]), "reused": True}
 
+    # WHAT THIS RELEASE SHIPS BEYOND WHAT IS SERVING (release_scope): every commit, the run it
+    # came from, that run's approval and whether it was reviewed — on the card, bound to it.
+    release_card = None
+    if run_id and callable(getattr(github, "compare", None)):
+        from . import release_scope
+
+        with engine.begin() as connection:
+            serving = release_scope.serving_of_target(connection, target_id)
+            if serving:
+                release_card = release_scope.ship_list(
+                    connection, lambda base, head: github.compare(owner, repo, base, head),
+                    serving_sha=serving, head_sha=commit, own_workflow_run_id=workflow_run_id,
+                    own_run_ids=(run_id,), repository=f"{owner}/{repo}",
+                    project_id=project_id)
+
     path = str(target.get("manifest_path") or declared or DEFAULT_MANIFEST_PATH)
     manifest_text = github.read_file(owner, repo, path, commit)
     if manifest_text is None:
@@ -1900,11 +1931,22 @@ def plan_stack_deploy(engine, settings: Settings, *, project_id: str, target_id:
             # decision is that gate. So it carries the step's approver and where it came
             # from, and approving it here is approving the release (one approval, not two).
             **({"approver_role": approver_role} if approver_role else {}),
+            # THE MONITORING PACK THIS RELEASE CARRIES (monitoring_pack): approved with it.
+            **({"monitoring_pack": pack} if (pack := _monitoring_pack_card(
+                connection, workflow_run_id, workflow_step_id)) else {}),
             # The infrastructure plan (resources, bindings by name, ports, public access,
             # destructive actions, cost) IS part of what is approved: the decision preview shows
             # it and its content hash is pinned like any approved content (action_preview).
             **({"infra_plan": infra_doc, "action_preview": _infra_preview(infra_doc)}
                if infra_doc else {})}
+        if release_card:
+            from . import release_scope
+
+            # In place: the card keeps its `deploy_stack` action, only gaining the list.
+            recommendation.update(release_scope.attach(recommendation, release_card,
+                                                       step_label="Deploy"))
+            if release_card.get("needs_reason"):
+                question += " It carries commits from rejected or unreviewed runs."
         cost = {"expected_cost_usd_micros": 0, "reservation_id": reservation["reservation_id"],
                 "cost_confidence": "no_provider_spend"}
         # ALREADY APPROVED? The workflow gate's decision (passed explicitly) or the
@@ -1916,6 +1958,18 @@ def plan_stack_deploy(engine, settings: Settings, *, project_id: str, target_id:
                                 person_required=person_required)
         if approval and rp.required_approvers_for_changeset(connection, changeset["id"]):
             approval = None
+        if approval and release_card and release_card.get("needs_reason"):
+            # NO POLICY SHIPS REJECTED OR UNREVIEWED COMMITS: only a person's approval of a
+            # release card that listed exactly this head (and, needing one, gave a reason).
+            from . import release_scope
+
+            gate = None
+            if approval.get("decision_id"):
+                gate = release_scope.of_decision(connection.execute(
+                    text("SELECT recommendation FROM decisions WHERE id = :d"),
+                    {"d": approval["decision_id"]}).scalar())
+            if not (gate and gate.get("head_sha") == commit):
+                approval = None
         if approval:
             decision_id = approval["decision_id"]
             recommendation["approval"] = {k: approval[k]
@@ -3000,6 +3054,13 @@ def _first_target(connection: Connection, project_id: str, run: Mapping[str, Any
     if not made.get("ok"):
         return None
     return _target(connection, str(made["target_id"]))
+
+
+def _monitoring_pack_card(connection: Connection, run_id: Optional[str],
+                          step_id: Optional[str]) -> Optional[dict[str, Any]]:
+    from .monitoring_pack import card_for_step_id
+
+    return card_for_step_id(connection, run_id, step_id)
 
 
 def plan_for_workflow_step(engine, settings: Settings, *, project_id: str, actor: str,

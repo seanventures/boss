@@ -141,6 +141,23 @@ def investigated(result: Mapping[str, Any], inputs: Mapping[str, Any]) -> Verdic
     return Verdict(FAILED, _reason(result) or "the investigation produced no brief")
 
 
+def packed(result: Mapping[str, Any], inputs: Mapping[str, Any]) -> Verdict:
+    """monitoring_pack: done when the release carries a pack (it has rules, written now or
+    already on the branch), or when monitoring_gate is warn and the step said why there is none."""
+    refused = _refused(result)
+    if refused:
+        return refused
+    if _status(result) == "not_applicable":
+        return Verdict(SUCCEEDED)
+    # The pack's rules are what the release ships. A commit is not required: a retry, or an
+    # "Add a feature" run whose pack already covers the app, finds nothing new to write and
+    # its pack is on the branch already (wfr_723213d8 deadlettered on exactly that).
+    pack = result.get("pack") if isinstance(result.get("pack"), Mapping) else {}
+    if pack.get("rules"):
+        return Verdict(SUCCEEDED)
+    return Verdict(FAILED, _reason(result) or "no monitoring pack was written")
+
+
 def incident_reported(result: Mapping[str, Any], inputs: Mapping[str, Any]) -> Verdict:
     """incident_report: done when the report exists (it is stored with the incident)."""
     refused = _refused(result)
@@ -249,6 +266,7 @@ VERDICTS: dict[str, Callable[[Mapping[str, Any], Mapping[str, Any]], Verdict]] =
     "investigate_incident": investigated,
     "verify_recovery": awaited_work,
     "incident_report": incident_reported,
+    "monitoring_pack": packed,
 }
 
 

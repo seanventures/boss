@@ -45,7 +45,8 @@ describe("the console boundary", () => {
     // not buffer (tee) their bodies. They carry no credential (the /v1 proxy attaches no key to
     // them), and the /v1 route refuses any browser request to them itself
     // (tests/a-browser-cannot-post-to-the-collector.test.ts).
-    expect(middlewareConfig.matcher).toEqual(["/((?!v1/telemetry/(?:ingest|delete|share)/*$).*)"]);
+    // …and monitoring's machine routes, plain spellings only (lib/monitoring-proxy.ts).
+    expect(middlewareConfig.matcher).toEqual(["/((?!v1/telemetry/(?:ingest|delete|share)/*$|v1/ingest(?:/[A-Za-z0-9_~-][A-Za-z0-9._~-]*)+$|v1/alert-actions/[A-Za-z0-9_~-][A-Za-z0-9._~-]*$).*)"]);
     const re = new RegExp(`^${middlewareConfig.matcher[0]}$`);
     for (const p of ["/", "/api/govern", "/v1/projects", "/v1/telemetry/sharing", "/login", "/v1/telemetry/ingest/x",
                      "/v1/Telemetry/ingest", "/v1/telemetry/shared"]) {

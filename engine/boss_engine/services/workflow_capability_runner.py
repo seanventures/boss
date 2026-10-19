@@ -39,7 +39,7 @@ from .deploy_policy import promises_a_person
 # string literal repeated wherever the question is asked.
 from .decisions import SYSTEM_ACTOR as DECISION_SYSTEM_ACTOR
 from .run_decisions import open_step_decision
-from . import security_review_steps, workflow_capabilities, workflow_outcomes
+from . import release_scope, security_review_steps, workflow_capabilities, workflow_outcomes
 from .workflow_capabilities import CAPABILITY_KEYS, get as get_capability
 
 log = logging.getLogger(__name__)
@@ -47,6 +47,22 @@ log = logging.getLogger(__name__)
 #: Long enough for a tool call that talks to GitHub or a sandbox, short enough that a runner
 #: which dies does not strand the step for long. The runtime reclaims an expired lease.
 LEASE_SECONDS = 120
+
+#: The longest lease a step that works inside its call may hold (a crashed runner strands it
+#: no longer than this).
+MAX_INLINE_LEASE_SECONDS = 900
+
+
+def lease_for(spec_step: dict[str, Any]) -> int:
+    """How long a claimed step's lease must last: LEASE_SECONDS, or three times the typical
+    minutes of a capability that thinks with a model inside the call (not one that starts work
+    and parks on it), capped at MAX_INLINE_LEASE_SECONDS."""
+    key = str(((spec_step or {}).get("binding") or {}).get("capability") or "")
+    cap = workflow_capabilities.CAPABILITIES.get(key)
+    if not cap or cap.is_async or not cap.needs_model or cap.tool:
+        return LEASE_SECONDS
+    return max(LEASE_SECONDS, min(MAX_INLINE_LEASE_SECONDS, int(cap.typical_minutes or 0) * 180))
+
 
 #: Per tick. The point is steady progress across many runs, not draining one to completion
 #: while the others wait.
@@ -1066,6 +1082,26 @@ def _build_run_id(context: dict[str, Any]) -> Optional[str]:
     return value.strip() if isinstance(value, str) and value.strip() else None
 
 
+def release_base_for(connection: Connection, context: dict[str, Any]) -> Optional[str]:
+    """The serving commit a release-targeting build is cut from, or None for any other build:
+    the run input's `release_base_sha`, else, for an incident's run, the commit its
+    investigation found serving (or the incident's own record of it)."""
+    run_input = context.get("input") or {}
+    named = str(run_input.get("release_base_sha") or "").strip()
+    if named:
+        return named
+    incident_id = str(run_input.get("incident_id") or "").strip()
+    if not incident_id:
+        return None
+    found = str(_from_any_step(context, "serving_commit_sha") or "").strip()
+    if found:
+        return found
+    row = connection.execute(text(
+        "SELECT finalize_ctx->'deploy'->>'commit_sha' FROM incidents WHERE id = :i"),
+        {"i": incident_id}).scalar()
+    return str(row).strip() if row else None
+
+
 def _from_any_step(context: dict[str, Any], field: str) -> Any:
     """The first step that produced `field`, whatever the step happens to be called.
 
@@ -2018,6 +2054,10 @@ def pass_two_redeploy_refusal(connection: Connection, run_id: str, step: dict[st
         return ("No redeploy: the More tests pass did not finish, so what is deployed is the "
                 "first pass's build.")
     if summary["changed"] is False:
+        from .monitoring_pack import landed
+
+        if landed(connection, run_id, step):
+            return None            # the monitoring pack is new on the branch: release it
         return "No redeploy: the More tests pass changed nothing."
     return None
 
@@ -2788,8 +2828,35 @@ def _investigate_incident(connection: Connection, ctx: Any, project_id: str,
     return {"capability": "investigate_incident", "tool": None, "status": "succeeded",
             **{k: got[k] for k in ("incident_id", "title", "incident_brief", "root_cause",
                                    "suspect_commit", "extends_run_id")},
+            "serving_commit_sha": got.get("serving_commit_sha"),
             "basis": got["hypothesis"]["basis"], "confidence": got["hypothesis"]["confidence"],
             "note": f"{got['logs_word']}; {got['diff_word']}. {got['root_cause']}"}
+
+
+def _set_up_monitoring(connection: Connection, ctx: Any, project_id: str,
+                       context: dict[str, Any], step: dict[str, Any],
+                       inputs: dict[str, Any]) -> dict[str, Any]:
+    """`monitoring_pack`: the SRE agent's pack before the release. No pack fails the step under
+    `monitoring_gate: block` (the release cannot ship without one) and is said, without
+    failing the run, under `warn`."""
+    from . import monitoring_pack
+
+    run_id = str(context.get("run_id") or "")
+    gate = monitoring_pack.run_gate(connection, run_id)
+    try:
+        return {**monitoring_pack.run_step(
+            connection, getattr(ctx, "settings", None) or _settings(), project_id,
+            run_id=run_id, step_id=str(step.get("id") or ""), inputs=inputs, gate=gate),
+            "gate": gate}
+    except monitoring_pack.PackRefused as refused:
+        if gate == monitoring_pack.WARN:
+            return {"capability": "monitoring_pack", "tool": None, "status": "not_applicable",
+                    "gate": gate,
+                    "note": f"No monitoring pack: {refused}. The workflow's monitoring_gate is "
+                            "warn, so the release goes on without one."}
+        raise SettledCapabilityError(
+            f"No monitoring pack: {refused}. The release cannot ship without one "
+            "(monitoring_gate: block).") from refused
 
 
 def _settings() -> Any:
@@ -2951,6 +3018,9 @@ def _perform_toolless(
     # what is recorded; the recovery check parks on BOSS's own monitor like a CI wait.
     if key == "investigate_incident":
         return _investigate_incident(connection, ctx, project_id, context, inputs)
+    # SET UP MONITORING (services/monitoring_pack.py): Beacon's pack, written on the branch.
+    if key == "monitoring_pack":
+        return _set_up_monitoring(connection, ctx, project_id, context, step, inputs)
     if key == "verify_recovery":
         return _settle_started_work(
             capability, key, _start_recovery_check(connection, project_id, context, inputs))
@@ -3008,6 +3078,7 @@ def _perform_capability(
     inputs = dict(inputs or {})
     advisory_preview = key == "preview" and bool(inputs.pop("advisory", False))
     pass_2_of = str(inputs.pop("pass_2_of", "") or "") if key == "deploy" else ""
+    monitoring_step = str(inputs.pop("monitoring_step", "") or "") if key == "deploy" else ""
     extend = key == "build" and bool(inputs.pop("extend", False))
     increment = inputs.pop("increment", None) if key == "build" else None
     if increment:
@@ -3027,6 +3098,16 @@ def _perform_capability(
         if why_not:
             return {"capability": key, "tool": None, "status": "not_applicable",
                     "pass_2_of": pass_2_of, "note": why_not}
+    if monitoring_step:
+        # THE RELEASE CARRIES ITS MONITORING PACK (monitoring_pack): under `block` it does not
+        # ship without one, in words, before anything is planned.
+        from . import monitoring_pack
+
+        run_id = str(context.get("run_id") or "")
+        refused = monitoring_pack.release_refusal(connection, run_id, step,
+                                                  monitoring_pack.run_gate(connection, run_id))
+        if refused:
+            raise SettledCapabilityError(refused)
     if extend or capability.tool is None:
         # EVERY IN-PROCESS DISPATCH RUNS UNDER THE RUN'S RECORDED AUTHORITY, like a tool step.
         # These returned from here bare, as whoever advanced the run (the worker), so under
@@ -3225,8 +3306,11 @@ def _perform_capability(
                 # so the environment's policy may not answer it either.
                 person_required=promises_a_person(step),
                 # Pass 1's deploy ships the head pass 1 left; "Deploy again" ships pass 2's.
+                # A release a person approved from its card ships exactly the head that card
+                # listed (release_scope), never a head that moved after.
                 commit=(None if (pass_2_of or redeploy) else
-                        pinned_pass_one_commit(connection, run_id)),
+                        (release_scope.approved_head(connection, run_id)
+                         or pinned_pass_one_commit(connection, run_id))),
                 retire_projects=retire or None)
             if redeploy:
                 planned = {**planned, deploy_repair.FIXES_KEY: fixes,
@@ -3339,6 +3423,12 @@ def _perform_capability(
             preview = str((context.get("input") or {}).get("preview_id") or "").strip()
             if preview:
                 inputs = {**inputs, "preview_id": preview}
+            # A FIX THAT TARGETS A RELEASE (an incident's, or a run started for one) is cut
+            # from the commit serving on the target, on a branch of its own — never built on
+            # the app's open PR branch, which may carry other runs' rejected commits (D2).
+            serving = release_base_for(connection, context)
+            if serving:
+                inputs = {**inputs, "release_base_sha": serving}
 
     # WHAT THE PANEL IS BEING CONVENED FOR.
     #
@@ -4570,6 +4660,9 @@ def _build_waits_on_a_person(connection: Any, run_id: str) -> bool:
             or str(row["reason"] or "") == "budget_denied")
 
 
+#: The await kind of a meeting step held for its panel's PRD decision (`_hold_for_spec`).
+SPEC_DECISION_KIND = "spec_decision"
+
 #: How to tell whether awaited work is done, per kind: the table, and which statuses are
 #: terminal. Anything not listed is still in flight.
 _AWAIT_TABLES: dict[str, tuple[str, frozenset[str], frozenset[str]]] = {
@@ -4583,6 +4676,12 @@ _AWAIT_TABLES: dict[str, tuple[str, frozenset[str], frozenset[str]]] = {
     "meeting": ("meeting_runs",
                 frozenset({"completed", "succeeded"}),
                 frozenset({"failed", "cancelled"})),
+    # A PANEL'S PRD DECISION, which a meeting step that carries the spec ask waits on once the
+    # panel has finished (`_hold_for_spec`). Approved releases the step with the panel's PRD;
+    # a person's No fails it. Pending, delegated or an expired hold-default are still waiting.
+    SPEC_DECISION_KIND: ("decisions",
+                         frozenset({"approved", "executed", "completed"}),
+                         frozenset({"rejected"})),
     "preview": ("app_previews",
                 frozenset({"running", "verified"}),
                 frozenset({"failed", "stopped", "expired"})),
@@ -4636,7 +4735,7 @@ _AWAIT_TABLES: dict[str, tuple[str, frozenset[str], frozenset[str]]] = {
 _STATUS_COLUMN: dict[str, str] = {"repo_change_sets": "state"}
 
 #: Where a table keeps the reason its run ended, when it is not a column called `error`.
-_REASON_COLUMN: dict[str, str] = {"ci_waits": "summary", "incident_recovery_checks": "summary",
+_REASON_COLUMN: dict[str, str] = {"decisions": "resolution_note", "ci_waits": "summary", "incident_recovery_checks": "summary",
                                   "deployment_runs": "failure_reason",
                                   "stack_deployments": "failure_reason",
                                   "repo_change_sets": "COALESCE(error, blocked_reason)",
@@ -4702,6 +4801,21 @@ def _terminal_evidence(
                 return {}
             return {"discovery_id": awaited_id,
                     "dossier": _dossier_brief(row["title"], row["state"] or {})}
+        if kind == SPEC_DECISION_KIND:
+            # THE PANEL'S PRD, now approved: the same evidence the meeting gives, plus who
+            # approved it, so the build is briefed from the spec a person signed.
+            row = connection.execute(
+                text("SELECT m.id AS meeting_run_id, d.approved_by FROM decisions d "
+                     "LEFT JOIN meeting_runs m ON m.decision_id = d.id WHERE d.id = :d "
+                     "ORDER BY m.created_at DESC LIMIT 1"),
+                {"d": awaited_id},
+            ).mappings().first()
+            if not row:
+                return {}
+            evidence = (_terminal_evidence(connection, "meeting", row["meeting_run_id"])
+                        if row["meeting_run_id"] else {})
+            return {**evidence, "spec_decision_id": awaited_id,
+                    "spec_approved_by": row["approved_by"]}
         if kind == "meeting":
             # WHAT THE PANEL DECIDED, not just that it finished.
             #
@@ -5069,6 +5183,8 @@ def resume_awaited(
         if not row:
             continue
         status = str(row["status"] or "")
+        if kind == "code_task" and not output.get(_SPEC_GATE_CHECKED):
+            _mark_skipped_spec_gate(connection, run_id=run_id, step_run_id=str(step["id"]))
         if kind == "code_task" and status == "blocked" and _build_waits_on_a_person(
                 connection, awaited_id):
             # A BUILD WAITING ON THE OPERATOR HAS NOT FAILED (factory walk). A plan to approve,
@@ -5166,6 +5282,12 @@ def resume_awaited(
             done.append({"run_id": run_id, "step_id": step["step_id"],
                          "outcome": "redeploying", "awaited": kind, "build": awaited_id})
             continue
+        if kind == "meeting" and status in ok_states:
+            held = _hold_for_spec(connection, project_id=project_id, run_id=run_id,
+                                  step=step, output=output, meeting_run_id=awaited_id)
+            if held:
+                done.append(held)
+                continue
         if status in ok_states:
             # `completed` IS the inner pipeline's success. A missing pull request is not a
             # refusal — reviewer refusal lands as `blocked` / `failed`, already handled below.
@@ -5235,6 +5357,9 @@ def resume_awaited(
                                           step=step, output=output, status=status,
                                           why=str(why or ""), done=done):
                 continue
+            if kind == SPEC_DECISION_KIND:
+                why = ("the spec was not approved — the panel's PRD decision was answered no, "
+                       "so nothing was built" + (f": {why}" if why else ""))
             if kind == "stack_deployment" and status == "rejected":
                 # The deployment's decision IS this step's gate (see `_gate_subject`), so a
                 # deployment that was not approved is a release that was not approved.
@@ -5323,8 +5448,9 @@ def resume_awaited(
             # the run context reads succeeded steps only.
             workflows.force_fail_waiting_step(
                 connection, project_id=project_id, step_run_id=step["id"],
-                error=(why if (kind == "code_task"
-                               and handle.get("then") == deploy_repair.THEN_REDEPLOY) else
+                error=(why if (kind == SPEC_DECISION_KIND or (
+                               kind == "code_task"
+                               and handle.get("then") == deploy_repair.THEN_REDEPLOY)) else
                        f"the {kind} it started finished as '{status}' — {why}"
                        if why else f"the {kind} it started finished as '{status}'"),
                 output={"status": "failed", "awaited_status": status,
@@ -5333,7 +5459,7 @@ def resume_awaited(
                         # A person said no. `workflow_run_actions` reads this and never offers
                         # "Skip and proceed" on it: skipping would turn the refusal into a yes.
                         **({REJECTED_BY_APPROVER: True}
-                           if kind in ("stack_deployment", "architecture")
+                           if kind in ("stack_deployment", "architecture", SPEC_DECISION_KIND)
                            and status == "rejected" else {}),
                         **((recovered or {}).get("output") or {})},
             )
@@ -5341,6 +5467,74 @@ def resume_awaited(
                          "outcome": "failed", "awaited": kind, "awaited_status": status,
                          "because": why})
     return done
+
+
+#: Set on a build step's output once its run's open PRD decisions have been checked.
+_SPEC_GATE_CHECKED = "spec_gate_checked"
+
+
+def _mark_skipped_spec_gate(connection: Connection, *, run_id: str, step_run_id: str) -> None:
+    """A BUILD RUNNING WHILE ITS PANEL'S PRD DECISION IS STILL OPEN went past the spec gate (a
+    run started before `_hold_for_spec`). Its card is marked so it says so and offers only
+    Acknowledge or Reject (spec_gate.mark_gate_skipped). Once per build step."""
+    from . import spec_gate
+
+    try:
+        with connection.begin_nested():
+            spec_gate.mark_gate_skipped(connection, run_id=run_id)
+            connection.execute(
+                text("UPDATE workflow_step_runs SET output = COALESCE(output, '{}'::jsonb) "
+                     "|| CAST(:o AS JSONB) WHERE id = :i"),
+                {"i": step_run_id, "o": json.dumps({_SPEC_GATE_CHECKED: True})})
+    except Exception as error:  # noqa: BLE001 — a card's wording never stops the sweep
+        log.warning("spec gate check for %s skipped: %s", run_id, error)
+
+
+def _hold_for_spec(connection: Connection, *, project_id: str, run_id: str,
+                   step: Any, output: dict[str, Any],
+                   meeting_run_id: str) -> Optional[dict[str, Any]]:
+    """Keep a finished panel's step WAITING on its PRD decision, when the step carries the
+    workflow's spec ask and that decision is not approved yet. None lets it complete.
+
+    THE PROMISE AND THE BEHAVIOUR FROM ONE SOURCE (workflow_asks.spec_ask_step_ids). A
+    workflow with no `spec_review` step lists its meeting as "Approve the spec — you read the
+    spec before any code", and the meeting step went green the moment the panel finished, with
+    its PRD decision still pending: Minor Feature v6 on the Order API started build
+    crun_e18a3a67 while dec_eb911c56 waited (wfr_723213d8, 2026-10-19). The step now waits on
+    that decision as its work (`SPEC_DECISION_KIND`), so the build after it starts only once the
+    spec is approved — by a person, or by BOSS where the PRD is auto-approved, which approves
+    this same decision before the panel's run is even marked completed.
+
+    A panel that raised no PRD decision (a security review's) has nothing to hold on.
+    """
+    from .workflow_asks import holds_for_spec
+
+    try:
+        steps = workflows._run_spec(connection, run_id).get("steps") or []
+    except Exception:  # noqa: BLE001 — an unreadable spec keeps the old behaviour
+        return None
+    if not holds_for_spec(steps, str(step["step_id"])):
+        return None
+    row = connection.execute(
+        text("SELECT d.id, d.status FROM meeting_runs m JOIN decisions d ON d.id = m.decision_id "
+             "WHERE m.id = :m"), {"m": meeting_run_id}).mappings().first()
+    if not row:
+        return None
+    ok_states = _AWAIT_TABLES[SPEC_DECISION_KIND][1]
+    if str(row["status"] or "") in ok_states:
+        return None
+    decision_id = str(row["id"])
+    handle = {"kind": SPEC_DECISION_KIND, "id": decision_id, "meeting_run_id": meeting_run_id}
+    connection.execute(
+        text("UPDATE workflow_step_runs SET output = COALESCE(output, '{}'::jsonb) "
+             "|| CAST(:o AS JSONB), updated_at = now() WHERE id = :i AND status = 'waiting'"),
+        {"i": step["id"], "o": json.dumps({
+            "await": handle, "meeting_run_id": meeting_run_id, "spec_decision_id": decision_id,
+            "awaited_note": ("The panel finished. Nothing is built until its spec (the PRD) "
+                             f"is approved: decision {decision_id}.")})})
+    return {"run_id": run_id, "step_id": step["step_id"], "outcome": "holding_for_spec",
+            "awaited": SPEC_DECISION_KIND, "decision_id": decision_id,
+            "meeting_run_id": meeting_run_id}
 
 
 def _finished_agent_step(connection: Connection, project_id: str, run_id: str, step_id: str,
@@ -5883,6 +6077,13 @@ def _gate_subject(
         if pass_2_of and pass_two_redeploy_refusal(
                 connection, str(context.get("run_id") or ""), spec_step, pass_2_of):
             return None
+        # A RELEASE WITHOUT ITS REQUIRED MONITORING PACK ASKS NOBODY: it is refused, in words.
+        from . import monitoring_pack
+
+        if monitoring_pack.release_refusal(
+                connection, str(context.get("run_id") or ""), spec_step,
+                monitoring_pack.run_gate(connection, str(context.get("run_id") or ""))):
+            return None
         # THE ENVIRONMENT'S POLICY, ON THE STEP AS ON THE DEPLOYMENT — FOR A STEP THAT LET IT.
         # A step with `approval.follows_policy` is not asked where a person set the environment
         # to deploy without asking; the deployment then runs on that policy and records whose
@@ -6082,6 +6283,25 @@ def _open_gate(
         subject = {**subject, "summary": (f"{subject['summary']} Ships the More tests pass on "
                                           f"top of what is deployed. "
                                           f"{pass_two_sentence(found)}")}
+    if capability_key == "deploy":
+        # THE PACK IS APPROVED WITH THE RELEASE (monitoring_pack): rules, PromQL, SEV,
+        # thresholds, the last hour's preview and the runbooks, on this card.
+        from .monitoring_pack import card_for
+
+        pack = card_for(connection, run["id"], spec_step)
+        if pack:
+            recommendation_extra["monitoring_pack"] = pack
+    if capability_key in {"release_approval", "deploy"}:
+        # WHAT THE RELEASE WOULD SHIP beyond the serving commit (release_scope): every commit,
+        # its run, that run's approval and whether it was reviewed, bound by its hash. The D2
+        # card showed one line of a fifteen-commit release.
+        card = _release_card(connection, project_id, run["id"], run_context)
+        if card:
+            from . import release_scope
+
+            recommendation_extra = release_scope.attach(
+                recommendation_extra, card, step_label=str(subject["label"]))
+            subject = {**subject, "summary": f"{subject['summary']} {card['sentence']}"}
     if capability_key == "security_decide":
         # Where the checklist is: App › Security draws the recommendations as the choice this
         # approval records (approving without opening it takes the P0/P1 pre-ticks).
@@ -6175,6 +6395,28 @@ def _open_gate(
         "workflow_step_run", step_row["id"],
         {"capability": subject["key"], "step_id": step_row["step_id"]},
     )
+
+def _release_card(connection: Connection, project_id: str, run_id: str,
+                  context: dict[str, Any]) -> Optional[dict[str, Any]]:
+    """The release card for this run's build, or None (no build, nothing serving yet)."""
+    from . import release_scope
+
+    build = _build_run_id(context)
+    if not build:
+        return None
+    point = connection.begin_nested()
+    try:
+        serving = release_scope.serving_for_run(connection, context.get("input"), build)
+        card = release_scope.card_for_build(
+            connection, _settings(), project_id, build_run_id=build, serving_sha=serving,
+            workflow_run_id=run_id)
+    except Exception as error:  # noqa: BLE001 — logged; the card then carries no list
+        point.rollback()
+        log.warning("release card for %s: %s", run_id, error)
+        return None
+    point.commit()
+    return card
+
 
 def _park_for_decision(
     connection: Connection, project_id: str, run: dict[str, Any], step_row: dict[str, Any],
@@ -6649,6 +6891,16 @@ def tick(
                 continue
 
             spec_step = spec_steps.get(claimed["step_id"]) or {}
+            # A STEP THAT THINKS IN THE CALL HOLDS ITS LEASE FOR AS LONG AS IT THINKS. Set up
+            # monitoring asks a model, previews every rule and may retune: minutes, in the
+            # call. With the two-minute lease its completion was refused ("lease has expired")
+            # and it ran again from the start, three times (Order API, 2026-10-19).
+            lease = lease_for(spec_step)
+            if lease > LEASE_SECONDS:
+                phase = f"hold the lease for {claimed['step_id']}"
+                claimed = {**claimed, **workflows.heartbeat_step(
+                    connection, project_id=project_id, step_run_id=claimed["id"],
+                    worker_id=worker_id, lease_seconds=lease)}
             phase = f"execute {claimed['step_id']}"
             # A FAILED STEP MUST LEAVE THE CONNECTION USABLE, OR ITS FAILURE CANNOT BE RECORDED.
             #

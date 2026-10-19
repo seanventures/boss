@@ -517,10 +517,17 @@ def _attention(connection: Any, settings: Any, project_id: str,
         partial.append("attention")
     try:
         with connection.begin_nested():
-            items += system_doctor.card_items(connection, project_id)
+            items += [i for i in system_doctor.card_items(connection, project_id)
+                      if i.get("area") == "observability"]
     except Exception:  # noqa: BLE001
         log.exception("obs_view: system findings failed")
         partial.append("findings")
+    try:
+        with connection.begin_nested():
+            items += notify_setup(connection, project_id)
+    except Exception:  # noqa: BLE001
+        log.exception("obs_view: notify setup check failed")
+        partial.append("attention")
     # ONE CARD PER THING. The system doctor owns the machine's cards; infra_view never raises
     # one, and an id that arrives twice (two readers of one finding) is drawn once.
     seen: set[str] = set()
@@ -532,6 +539,34 @@ def _attention(connection: Any, settings: Any, project_id: str,
         seen.add(key)
         out.append(item)
     return out
+
+
+def notify_setup(connection: Any, project_id: str) -> list[dict[str, Any]]:
+    """SET UP A CONTACT POINT: messages from the last day that nothing is configured to send
+    (notify.not_configured), as one setup card that opens Observability › Notify. It is a setup
+    gap, never an alert; BossOutboxBacklog counts only sends that actually failed."""
+    from .notify import UNCONFIGURED_SQL
+
+    row = connection.execute(text(
+        "SELECT count(*) AS n, (array_agg(error_word ORDER BY created_at DESC))[1] AS why "
+        "FROM notifications WHERE project_id = :p AND status IN ('pending', 'failed', 'dead') "
+        "AND created_at > :since AND " + UNCONFIGURED_SQL),
+        {"p": project_id, "since": datetime.now(timezone.utc) - timedelta(days=1)}
+    ).mappings().first()
+    n = int((row or {}).get("n") or 0)
+    if not n:
+        return []
+    why = str(row.get("why") or "").split(":", 1)[-1].strip()
+    return [{
+        "id": "ready:notify_setup", "kind": "readiness", "area": "observability",
+        "title": "Set up a contact point",
+        "detail": f"{n} message{'s' if n != 1 else ''} not sent: {why}" if why else
+                  f"{n} message{'s' if n != 1 else ''} not sent",
+        "what_to_do": "Add or fix a contact point in Notify, then send a test",
+        "fix": {"area": "observability", "view": "notify", "label": "Notify"},
+        "role_key": None, "actions": [], "answers": [], "decide_inline": False, "at": None,
+        "source": "Notify",
+    }]
 
 
 #: What the system doctor did, in words (≤ 3). A key it adds later reads as its own words.

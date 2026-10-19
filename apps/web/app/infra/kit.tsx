@@ -7,7 +7,8 @@
  * URL writer. Tokens only (`inf-` classes in infra.css); no inline style, no hex.
  */
 import { useSearchParams } from "next/navigation";
-import React, { useEffect, useId, useRef, useState } from "react";
+import React, { useEffect, useId, useRef, useState, useSyncExternalStore } from "react";
+import { createPortal } from "react-dom";
 
 import type { AttentionItem } from "../../lib/agents-live-board";
 import type { Tone, Word } from "../../lib/infra-view";
@@ -227,6 +228,16 @@ function useDialog(onClose: () => void) {
   return ref;
 }
 
+const noSubscribe = () => () => {};
+/** An overlay (Drawer, Sheet) renders at the end of <body>, never inside the tab. A `position: fixed`
+ *  box is fixed to its nearest transformed / filtered ancestor, not the viewport: inside a panel
+ *  that animates in (a transform), a drawer filled the panel, not the screen. The server and the
+ *  hydrating render draw it in place (no mismatch); the next render moves it to <body>. */
+function OnTop({ children }: { children: React.ReactElement }) {
+  const client = useSyncExternalStore(noSubscribe, () => true, () => false);
+  return client ? createPortal(children, document.body) : children;
+}
+
 /** A right drawer over the tab (full screen under 640 px). URL state, so Back closes it. */
 export function Drawer({ label, testId, width = 440, expandable = false, onClose, head, children }: {
   label: string; testId: string; width?: 440 | 520 | 560 | 880; onClose: () => void; head: React.ReactNode; children: React.ReactNode;
@@ -237,7 +248,9 @@ export function Drawer({ label, testId, width = 440, expandable = false, onClose
   const ref = useDialog(onClose);
   const [expanded, setExpanded] = React.useState(false);
   return (
-    <div className="inf-drawer-back" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+    <OnTop>
+    <div className="inf-drawer-back" data-expanded={expanded || undefined}
+         onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <aside ref={ref as React.RefObject<HTMLElement>} className="inf-drawer" data-width={width}
              data-expanded={expanded || undefined} role="dialog"
              aria-modal="true" aria-label={label} data-testid={testId}>
@@ -245,7 +258,7 @@ export function Drawer({ label, testId, width = 440, expandable = false, onClose
           {head}
           <span className="ag-spacer" />
           {expandable ? (
-            <button type="button" className="ag-icon-btn" aria-pressed={expanded} data-testid={`${testId}-expand`}
+            <button type="button" className="inf-link inf-drawer-expand" aria-pressed={expanded} data-testid={`${testId}-expand`}
                     title={expanded ? "Back to the panel" : "Use the whole page"}
                     onClick={() => setExpanded((v) => !v)}>{expanded ? "Collapse" : "Expand"}</button>
           ) : null}
@@ -254,6 +267,7 @@ export function Drawer({ label, testId, width = 440, expandable = false, onClose
         <div className="inf-drawer-body">{children}</div>
       </aside>
     </div>
+    </OnTop>
   );
 }
 
@@ -272,6 +286,7 @@ export function DrawerSection({ label, testId, children, actions }: { label: str
 export function Sheet({ title, testId, onClose, children }: { title: string; testId: string; onClose: () => void; children: React.ReactNode }) {
   const ref = useDialog(onClose);
   return (
+    <OnTop>
     <div className="inf-sheet-back" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <section ref={ref as React.RefObject<HTMLElement>} className="inf-sheet" role="dialog" aria-modal="true"
                aria-label={title} data-testid={testId}>
@@ -282,6 +297,7 @@ export function Sheet({ title, testId, onClose, children }: { title: string; tes
         {children}
       </section>
     </div>
+    </OnTop>
   );
 }
 

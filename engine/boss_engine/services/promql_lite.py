@@ -18,8 +18,9 @@ approximation of it:
   * comparison operators FILTER (and keep the left value) unless `bool`;
   * vector/vector operators match one-to-one on the label set without `__name__`.
 
-What it does not implement (`on`, `ignoring`, `group_left`, `offset`, subqueries, `@`) it refuses
-with `PromQLUnsupported`, naming the construct, so a rule that only Prometheus can evaluate says
+`on(...)` / `ignoring(...)` one-to-one matching, `offset`, `absent_over_time` and `time()` are
+implemented (each with a promtool agreement case). What it does not implement (`group_left`,
+subqueries, `@`) it refuses with `PromQLUnsupported`, naming the construct, so a rule that only Prometheus can evaluate says
 so instead of evaluating to something else. The agreement with real Prometheus is a test:
 `test_alert_rules_mean_the_same_to_boss_and_prometheus` runs `promtool test rules` on the same
 series and expects BOSS's values.
@@ -202,6 +203,7 @@ class Selector:
     name: Optional[str]
     matchers: list[tuple[str, str, str]]       # (label, op, value)
     range_ms: Optional[int] = None
+    offset_ms: int = 0
 
 
 @dataclass
@@ -225,6 +227,8 @@ class Bin:
     lhs: Any
     rhs: Any
     bool_: bool = False
+    #: Vector matching: ("on", [labels]) or ("ignoring", [labels]); None matches every label.
+    matching: Optional[tuple[str, list[str]]] = None
 
 
 @dataclass
@@ -238,7 +242,8 @@ _SUPPORTED_AGGS = {"sum", "avg", "min", "max", "count", "group"}
 _RANGE_FUNCS = {"rate", "increase", "avg_over_time", "min_over_time", "max_over_time",
                 "sum_over_time", "count_over_time", "last_over_time"}
 _FUNCS = _RANGE_FUNCS | {"histogram_quantile", "abs", "clamp_min", "clamp_max", "absent",
-                         "scalar", "vector", "ceil", "floor", "round"}
+                         "absent_over_time", "scalar", "vector", "ceil", "floor", "round",
+                         "time"}
 _CMP = ("==", "!=", ">", "<", ">=", "<=")
 # Prometheus precedence, lowest first.
 _LEVELS = [("or",), ("and", "unless"), _CMP, ("+", "-"), ("*", "/", "%")]
@@ -280,12 +285,14 @@ class _Parser:
             if op in _CMP and self.peek().text == "bool":
                 self.take()
                 bool_ = True
+            matching = None
             if self.peek().text in ("on", "ignoring"):
-                raise PromQLUnsupported(f"'{self.peek().text}(...)' vector matching")
+                kw = self.take().text
+                matching = (kw, self.labels_list())
             if self.peek().text in ("group_left", "group_right"):
                 raise PromQLUnsupported(f"'{self.peek().text}' many-to-one matching")
             rhs = self.level(n + 1)
-            node = Bin(op, node, rhs, bool_)
+            node = Bin(op, node, rhs, bool_, matching)
         return node
 
     def power(self):
@@ -316,7 +323,16 @@ class _Parser:
                 raise PromQLUnsupported("a range on anything but a selector (a subquery)")
             node = Selector(node.name, node.matchers, ms)
         if self.peek().text == "offset":
-            raise PromQLUnsupported("'offset'")
+            self.take()
+            neg = False
+            if self.peek().text == "-":
+                self.take()
+                neg = True
+            t = self.take()
+            ms = parse_duration(t.text)
+            if not isinstance(node, Selector):
+                raise PromQLUnsupported("'offset' on anything but a selector")
+            node = Selector(node.name, node.matchers, node.range_ms, -ms if neg else ms)
         if self.peek().text == "@":
             raise PromQLUnsupported("the '@' modifier")
         return node
@@ -486,6 +502,7 @@ def _select(store: Store, sel: Selector) -> list[Series]:
 
 
 def _instant(store: Store, sel: Selector, t: int) -> Vector:
+    t = t - (sel.offset_ms or 0)
     out = []
     for s in _select(store, sel):
         best = None
@@ -500,6 +517,7 @@ def _instant(store: Store, sel: Selector, t: int) -> Vector:
 
 
 def _range(store: Store, sel: Selector, t: int) -> Matrix:
+    t = t - (sel.offset_ms or 0)
     out = []
     for s in _select(store, sel):
         pts = [(ts, v) for ts, v in s.samples if t - sel.range_ms < ts <= t]
@@ -649,13 +667,14 @@ class _Eval:
         if f in ("rate", "increase"):
             sel, m = self._matrix(args[0] if args else None, f)
             out = []
+            end = self.t - (sel.offset_ms or 0)
             for labels, pts in m.series:
-                v = extrapolated_rate(pts, self.t - sel.range_ms, self.t, is_counter=True,
+                v = extrapolated_rate(pts, end - sel.range_ms, end, is_counter=True,
                                       is_rate=(f == "rate"))
                 if v is not None:
                     out.append(Sample(_no_name(labels), v))
             return Vector(out)
-        if f.endswith("_over_time"):
+        if f.endswith("_over_time") and f != "absent_over_time":
             _sel, m = self._matrix(args[0] if args else None, f)
             out = []
             for labels, pts in m.series:
@@ -721,6 +740,15 @@ class _Eval:
                 labels = {lab: val for lab, op, val in node.matchers
                           if op == "=" and lab != "__name__"}
             return Vector([Sample(labels, 1.0)])
+        if f == "absent_over_time":
+            node = args[0] if args else None
+            _sel, m = self._matrix(node, f)
+            if m.series:
+                return Vector([])
+            return Vector([Sample({lab: val for lab, op, val in node.matchers
+                                   if op == "=" and lab != "__name__"}, 1.0)])
+        if f == "time":
+            return Scalar(self.t / 1000.0)
         if f == "scalar":
             v = self._vector(self.ev(args[0]), f)
             return Scalar(v.samples[0].value if len(v.samples) == 1 else math.nan)
@@ -772,17 +800,18 @@ class _Eval:
         op = n.op
         if isinstance(lhs, Matrix) or isinstance(rhs, Matrix):
             raise PromQLError(f"'{op}' cannot take a range; wrap it in a function such as rate()")
+        key = _matcher(n.matching)
         if op in ("and", "or", "unless"):
             if not (isinstance(lhs, Vector) and isinstance(rhs, Vector)):
                 raise PromQLError(f"'{op}' needs vectors on both sides")
-            right = {_sig(s.labels) for s in rhs.samples}
+            right = {key(s.labels) for s in rhs.samples}
             if op == "and":
-                return Vector([s for s in lhs.samples if _sig(s.labels) in right])
+                return Vector([s for s in lhs.samples if key(s.labels) in right])
             if op == "unless":
-                return Vector([s for s in lhs.samples if _sig(s.labels) not in right])
-            left = {_sig(s.labels) for s in lhs.samples}
+                return Vector([s for s in lhs.samples if key(s.labels) not in right])
+            left = {key(s.labels) for s in lhs.samples}
             return Vector(list(lhs.samples) + [s for s in rhs.samples
-                                               if _sig(s.labels) not in left])
+                                               if key(s.labels) not in left])
         cmp = op in _CMP
         if isinstance(lhs, Scalar) and isinstance(rhs, Scalar):
             if cmp:
@@ -797,28 +826,35 @@ class _Eval:
         assert isinstance(lhs, Vector) and isinstance(rhs, Vector)
         index: dict[tuple, Sample] = {}
         for s in rhs.samples:
-            k = _sig(s.labels)
+            k = key(s.labels)
             if k in index:
                 raise PromQLError(f"'{op}': more than one series on the right match "
                                   f"{dict(k)}; aggregate first (many-to-many)")
             index[k] = s
         out, seen = [], set()
         for s in lhs.samples:
-            k = _sig(s.labels)
+            k = key(s.labels)
             other = index.get(k)
             if other is None:
                 continue
             if k in seen:
                 raise PromQLError(f"'{op}': more than one series on the left match {dict(k)}")
             seen.add(k)
+            # The result keeps the left side's labels, reduced to the matching labels when
+            # matching `on` (Prometheus' resultMetric for one-to-one matching).
+            kept = _no_name(s.labels)
+            if n.matching and n.matching[0] == "on":
+                kept = {k2: v for k2, v in kept.items() if k2 in n.matching[1]}
+            elif n.matching:
+                kept = {k2: v for k2, v in kept.items() if k2 not in n.matching[1]}
             if cmp:
                 hit = _compare(op, s.value, other.value)
                 if n.bool_:
-                    out.append(Sample(_no_name(s.labels), 1.0 if hit else 0.0))
+                    out.append(Sample(kept, 1.0 if hit else 0.0))
                 elif hit:
                     out.append(Sample(dict(s.labels), s.value))
             else:
-                out.append(Sample(_no_name(s.labels), _arith(op, s.value, other.value)))
+                out.append(Sample(kept, _arith(op, s.value, other.value)))
         return Vector(out)
 
     def _vs(self, v: Vector, x: float, op: str, bool_: bool, *, scalar_left: bool) -> Vector:
@@ -834,6 +870,104 @@ class _Eval:
             else:
                 out.append(Sample(_no_name(s.labels), _arith(op, a, b)))
         return Vector(out)
+
+
+def _matcher(matching: Optional[tuple[str, list[str]]]):
+    """The label signature two vector elements are matched on."""
+    if not matching:
+        return _sig
+    kw, labels = matching
+    keep = set(labels)
+    if kw == "on":
+        return lambda lab: tuple(sorted((k, v) for k, v in lab.items() if k in keep))
+    return lambda lab: tuple(sorted((k, v) for k, v in lab.items()
+                                    if k not in keep and k != "__name__"))
+
+
+# --------------------------------------------------------------------------- #
+# Writing PromQL back, and scoping it (tenancy on the parsed query, never on the text)
+# --------------------------------------------------------------------------- #
+def _q(value: str) -> str:
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n") + '"'
+
+
+def _num_text(v: float) -> str:
+    if math.isnan(v):
+        return "NaN"
+    if math.isinf(v):
+        return "Inf" if v > 0 else "-Inf"
+    return str(int(v)) if v == int(v) and abs(v) < 1e15 else repr(v)
+
+
+def format_expr(node) -> str:
+    """The syntax tree as PromQL text that parses back to the same tree."""
+    if isinstance(node, str):
+        node = parse(node)
+    if isinstance(node, Num):
+        return _num_text(node.value)
+    if isinstance(node, Str):
+        return _q(node.value)
+    if isinstance(node, Selector):
+        ms = ",".join(f"{lab}{op}{_q(val)}" for lab, op, val in node.matchers)
+        out = (node.name or "") + ("{" + ms + "}" if ms or not node.name else "")
+        if node.range_ms:
+            out += f"[{format_duration(node.range_ms)}]"
+        if node.offset_ms:
+            out += (" offset -" if node.offset_ms < 0 else " offset ") + format_duration(
+                abs(node.offset_ms))
+        return out
+    if isinstance(node, Call):
+        return f"{node.func}(" + ", ".join(format_expr(a) for a in node.args) + ")"
+    if isinstance(node, Agg):
+        mod = ""
+        if node.by is not None:
+            mod = f" by ({', '.join(node.by)})"
+        elif node.without is not None:
+            mod = f" without ({', '.join(node.without)})"
+        return f"{node.op}{mod} ({format_expr(node.expr)})"
+    if isinstance(node, Bin):
+        mid = node.op + (" bool" if node.bool_ else "")
+        if node.matching:
+            mid += f" {node.matching[0]}({', '.join(node.matching[1])})"
+        return f"({format_expr(node.lhs)}) {mid} ({format_expr(node.rhs)})"
+    if isinstance(node, Neg):
+        return f"-({format_expr(node.expr)})"
+    raise PromQLError(f"cannot write {type(node).__name__}")
+
+
+def inject_scope(expr: str, scope: dict[str, str]) -> str:
+    """`expr` with every selector pinned to `scope` (for example {"project": "p1"}): each
+    scope label is set by `=` on EVERY selector of the parsed query, replacing whatever the
+    query said about it — so a query written to read another project's series reads none.
+    A construct the parser does not know raises PromQLUnsupported: it is refused, never sent
+    unscoped."""
+    node = parse(expr)
+    if not scope:
+        return format_expr(node)
+
+    def walk(n):
+        if isinstance(n, Selector):
+            n.matchers = [m for m in n.matchers if m[0] not in scope] + [
+                (k, "=", str(v)) for k, v in sorted(scope.items())]
+        elif isinstance(n, Call):
+            for a in n.args:
+                walk(a)
+        elif isinstance(n, Agg):
+            walk(n.expr)
+        elif isinstance(n, Bin):
+            walk(n.lhs)
+            walk(n.rhs)
+        elif isinstance(n, Neg):
+            walk(n.expr)
+    walk(node)
+    return format_expr(node)
+
+
+def series_count(expr: str, store: Store, t_ms: int) -> int:
+    """How many series the expression returns (the 1,000-series cap's measure)."""
+    v = evaluate(expr, store, t_ms)
+    return len(v.samples) if isinstance(v, Vector) else (len(v.series) if isinstance(v, Matrix)
+                                                         else 1)
 
 
 def evaluate(expr: Union[str, Any], store: Store, t_ms: int) -> Value:
@@ -853,4 +987,5 @@ def instant_vector(expr: str, store: Store, t_ms: int) -> list[Sample]:
 
 __all__ = ["LOOKBACK_MS", "Matrix", "PromQLError", "PromQLUnsupported", "Sample", "Scalar",
            "Series", "Store", "Vector", "bucket_quantile", "evaluate", "extrapolated_rate",
-           "format_duration", "instant_vector", "parse", "parse_duration", "selected_metrics"]
+           "format_duration", "format_expr", "inject_scope", "instant_vector", "parse",
+           "parse_duration", "selected_metrics", "series_count"]

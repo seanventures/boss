@@ -24,7 +24,7 @@ Pass installer flags after `bash -s --`:
 
 ```bash
 curl -fsSL https://boss.sean.network/install.sh | bash -s -- --yes
-curl -fsSL https://boss.sean.network/install.sh | bash -s -- --ref v1.0-rc10.8 --console-origin https://boss.example.com
+curl -fsSL https://boss.sean.network/install.sh | bash -s -- --ref v1.0-rc10.9 --console-origin https://boss.example.com
 ```
 
 `BOSS_REF=main` (or `--ref main`) installs the development branch instead of a release.
@@ -145,23 +145,23 @@ Install the reviewed RC10.5 source without the website. This uses Git authentica
 (
   set -e
   BOSS_RELEASE_COMMIT=cb278010b4cef68c55a9684c3e9bd74b14c8b520
-  git clone --branch v1.0-rc10.8 https://github.com/seanventures/boss.git boss-rc10.8
-  cd boss-rc10.8
+  git clone --branch v1.0-rc10.9 https://github.com/seanventures/boss.git boss-rc10.9
+  cd boss-rc10.9
   git checkout --detach "$BOSS_RELEASE_COMMIT"
   ./install.sh --dir "$PWD" --ref "$BOSS_RELEASE_COMMIT"
 )
 ```
 
-The `boss-rc10.8` directory must not already exist. Read the script in that checkout before running it if you want to inspect it. This records a pinned commit; a later upgrade needs `boss upgrade --to REF`. Add installer flags to the `./install.sh` line, for example `--console-origin https://boss.example.com`.
+The `boss-rc10.9` directory must not already exist. Read the script in that checkout before running it if you want to inspect it. This records a pinned commit; a later upgrade needs `boss upgrade --to REF`. Add installer flags to the `./install.sh` line, for example `--console-origin https://boss.example.com`.
 
 ### From a local checkout
 
 Clone the release and install it in place:
 
 ```bash
-git clone --branch v1.0-rc10.8 https://github.com/seanventures/boss.git
+git clone --branch v1.0-rc10.9 https://github.com/seanventures/boss.git
 cd boss
-./install.sh --dir "$PWD" --ref v1.0-rc10.8
+./install.sh --dir "$PWD" --ref v1.0-rc10.9
 ```
 
 A checkout at a release tag stays on that release. A checkout on a branch follows `main` unless you pass `--ref`, and the ref is then [recorded](#which-release-and-staying-on-it). From a checkout you already have on the branch you want:

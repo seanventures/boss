@@ -1550,6 +1550,19 @@ class Settings(BaseSettings):
     #: every emailed link come from here (or from the origin bound at the network claim), never
     #: from a request's Host header.
     public_url: str = Field(default="", alias="BOSS_PUBLIC_URL")
+    #: The Prometheus bundled with BOSS (compose `monitoring` profile; spec D1, topology T2):
+    #: ingested metrics are forwarded to it and rules over them are evaluated by it. Unset: the
+    #: Postgres floor (T0) holds and evaluates them.
+    monitoring_prometheus_url: str = Field(default="", alias="BOSS_MONITORING_PROMETHEUS_URL")
+    #: The Grafana bundled with BOSS (with the web profile): where BOSS asks it whether it
+    #: answers (inside the compose network) and where a browser opens it (published on the
+    #: loopback). Unset: Grafana is the deployed host stack's, when there is one.
+    monitoring_grafana_url: str = Field(default="", alias="BOSS_MONITORING_GRAFANA_URL")
+    monitoring_grafana_public_url: str = Field(default="",
+                                               alias="BOSS_MONITORING_GRAFANA_PUBLIC_URL")
+    #: The bundled Grafana's provisioned-dashboards directory (a volume BOSS writes per app).
+    monitoring_dashboards_dir: str = Field(default="",
+                                           alias="BOSS_MONITORING_DASHBOARDS_DIR")
     #: argon2id cost: "default" (m=64 MiB, t=3) or "small" (m=19 MiB, t=2; hosts under 2 GiB).
     argon2_profile: str = Field(default="default", alias="BOSS_ARGON2_PROFILE")
     #: Hosts (comma-separated names or IPs) the identity outbound client may reach on a private

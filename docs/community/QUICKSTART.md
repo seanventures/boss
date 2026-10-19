@@ -19,19 +19,19 @@ For RC10.5, install from its release checkout. You need Git and a GitHub account
 ```bash
 (
   set -e
-  git clone --branch v1.0-rc10.8 https://github.com/seanventures/boss.git boss-rc10.8
-  cd boss-rc10.8
+  git clone --branch v1.0-rc10.9 https://github.com/seanventures/boss.git boss-rc10.9
+  cd boss-rc10.9
   BOSS_RELEASE_COMMIT="$(git rev-parse HEAD)"
   ./install.sh --dir "$PWD" --ref "$BOSS_RELEASE_COMMIT"
 )
 ```
 
-Use a new directory named `boss-rc10.8`; the command stops if cloning fails. Continue from `cd boss-rc10.8` after installation. The installer records the exact checked-out commit. To select a later release deliberately, use `boss upgrade --to REF`.
+Use a new directory named `boss-rc10.9`; the command stops if cloning fails. Continue from `cd boss-rc10.9` after installation. The installer records the exact checked-out commit. To select a later release deliberately, use `boss upgrade --to REF`.
 
 The website installer is updated separately from source releases. Once its RC10.5 parity is verified, the short installation path is:
 
 ```bash
-curl -fsSL https://boss.sean.network/install.sh | bash -s -- --ref v1.0-rc10.8
+curl -fsSL https://boss.sean.network/install.sh | bash -s -- --ref v1.0-rc10.9
 ```
 
 The website path installs into `~/boss`. The only setup question is an optional OpenAI key, asked when no provider key is exported. Exported `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, `XAI_API_KEY`, or `OPENROUTER_API_KEY` values are saved to the private `.env` and never printed.
@@ -127,10 +127,10 @@ Now run the task command a second time. The API rejects the repeated `dedupe_key
 
 ## Install without git
 
-On a machine without a checkout, the website installer does the same thing in one command. It selects the newest published release candidate on a fresh install and keeps reruns on the recorded release. To select `v1.0-rc10.8` explicitly:
+On a machine without a checkout, the website installer does the same thing in one command. It selects the newest published release candidate on a fresh install and keeps reruns on the recorded release. To select `v1.0-rc10.9` explicitly:
 
 ```bash
-curl -fsSL https://boss.sean.network/install.sh | bash -s -- --ref v1.0-rc10.8
+curl -fsSL https://boss.sean.network/install.sh | bash -s -- --ref v1.0-rc10.9
 ```
 
 Pass installer flags after `bash -s --`, for example `| bash -s -- --skip-model-key`.
