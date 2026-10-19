@@ -109,6 +109,28 @@ def test_connected_then_expired_then_budget_red(client, engine, monkeypatch, off
     assert body["verdict"]["label"] != "Budget spent"
 
 
+def test_paused_budget_names_the_cap_that_is_actually_binding(client, engine, monkeypatch, offline):
+    """"Paused · budget" used to say "Monthly cap reached" no matter which cap refused the
+    call. A key tester's monthly cap had room; it was the DAILY cap that was tiny, and the
+    pill still blamed "Monthly" — the operator raised the wrong one. The tip now names
+    whichever cap is actually binding (J8 follow-up, boss-1 rc10.9)."""
+    as_ceo(monkeypatch)
+    fakes(monkeypatch)
+    assert connect_key(client).status_code == 200
+    offline()
+    # The monthly cap stays generous; only the daily cap is tiny, so the DAY period is the one
+    # with no room left — the month is nowhere close.
+    with engine.begin() as c:
+        c.execute(text("UPDATE budget_policies SET daily_cap_usd_micros = 1, "
+                       "monthly_cap_usd_micros = 200000000, version = version + 1 "
+                       "WHERE scope_type = 'project' AND scope_id = :p"), {"p": PROJECT})
+    body = view(client)
+    assert body["budget"]["period"] == "day"
+    pill = body["models"][0]["pill"]
+    assert pill["label"] == "Paused · budget"
+    assert pill["tip"] == "Daily cap reached. Raise it or wait for reset."
+
+
 @pytest.mark.parametrize("state", ["rate_limited", "unreachable"])
 def test_a_check_github_did_not_answer_is_not_ready(client, engine, monkeypatch, offline, state):
     """READY MEANS PROVEN: "Repository and model checked" is false over a busy or unreachable

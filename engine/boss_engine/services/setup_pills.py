@@ -100,8 +100,12 @@ MODEL: dict[str, dict[str, Any]] = {
     "unreachable": {"label": "Can't reach", "tone": "amber",
                     "tip": "The server can't reach {host}.",
                     "action": "test"},
+    # {cap_name} is the cap that is actually binding (Daily cap / Monthly cap / Burst cap) —
+    # never hardcoded to "Monthly": a daily or burst cap can refuse a call while the monthly
+    # one has room left, and a tip naming the wrong cap sends the operator to raise the wrong
+    # one (operator report, boss-1 rc10.9: budget was fine, the pill still said "Monthly").
     "paused_budget": {"label": "Paused · budget", "tone": "amber",
-                      "tip": "Monthly cap reached. Raise it or wait for reset.",
+                      "tip": "{cap_name} reached. Raise it or wait for reset.",
                       "action": "budget"},
     "not_on_server": {"label": "Not on server", "tone": "grey",
                       "tip": "Install and sign in on the BOSS server first."},

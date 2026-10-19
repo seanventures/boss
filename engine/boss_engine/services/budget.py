@@ -40,8 +40,12 @@ BUDGET_TIMEZONE = "UTC"
 #: (cap column, period) in the order a tie is reported: the day first.
 CAP_PERIODS = (("daily_cap_usd_micros", "day"), ("monthly_cap_usd_micros", "month"))
 
-#: How each period is said: (whose budget, the cap's name).
-PERIOD_WORDS = {"day": ("today's", "daily cap"), "month": ("this month's", "monthly cap")}
+#: How each period is said: (whose budget, the cap's name). "burst" is the per-minute
+#: concurrency refusal (connection_spend.py's `refusal: "burst"`) — not a cap period with its
+#: own row in `periods`, but a model's "Paused · budget" pill can still bind on it, so it has
+#: words too (setup_pills.MODEL["paused_budget"]).
+PERIOD_WORDS = {"day": ("today's", "daily cap"), "month": ("this month's", "monthly cap"),
+                "burst": ("this burst", "burst cap")}
 
 
 def budget_period(period: str, now: Optional[datetime] = None) -> dict[str, Any]:
