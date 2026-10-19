@@ -234,12 +234,16 @@ report_capacity() {
 # A COMMIT, NOT A WORKING TREE. `git archive` takes what is committed at $REF, so the host
 # receives something that can be named later. A dirty tree is reported rather than shipped.
 ship_source() {
-  local sha
-  sha="$(git -C "$REPO_ROOT" rev-parse --short "$REF")" || die "no such ref: $REF"
+  local sha sha_short
+  # THE FULL 40-HEX COMMIT, never a short sha and never a tag object: `^{commit}` dereferences
+  # an annotated tag to the commit it points at, so what is written here is always something
+  # `git rev-parse <sha>^{commit}` on the host resolves on its own, unambiguously.
+  sha="$(git -C "$REPO_ROOT" rev-parse "$REF^{commit}")" || die "no such ref: $REF"
+  sha_short="$(git -C "$REPO_ROOT" rev-parse --short "$sha")"
   if [[ -n "$(git -C "$REPO_ROOT" status --porcelain)" ]]; then
-    warn "working tree is dirty — shipping committed $REF ($sha), not your edits"
+    warn "working tree is dirty — shipping committed $REF ($sha_short), not your edits"
   fi
-  say "shipping $REF ($sha) → $HOST:$DIR"
+  say "shipping $REF ($sha_short) → $HOST:$DIR"
   # STAGED AND SWAPPED, NOT EXTRACTED OVER THE TOP.
   #
   # `tar -x` into the existing directory overwrites what the archive contains and leaves
@@ -268,7 +272,7 @@ ship_source() {
          exit 1
        fi" || die "could not swap the new tree into place on $HOST; previous source restored if possible"
   rsh "printf '%s\n' '$sha' > '$DIR/.boss-shipped-commit'"
-  ok "source on host at $sha (tree replaced, not merged)"
+  ok "source on host at $sha_short (tree replaced, not merged)"
 }
 
 # The commands printed for the operator to paste next. They carry --dir: without it a pasted
