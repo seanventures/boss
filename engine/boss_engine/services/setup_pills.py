@@ -107,6 +107,12 @@ MODEL: dict[str, dict[str, Any]] = {
     "paused_budget": {"label": "Paused · budget", "tone": "amber",
                       "tip": "{cap_name} reached. Raise it or wait for reset.",
                       "action": "budget"},
+    # NOT a budget cap: BOSS's own job queue was full for a moment. Used to share
+    # "paused_budget" and send the operator to raise a cap that was never the problem
+    # (boss-1 rc10.9, connection_spend's JobDeferredError).
+    "job_deferred": {"label": "Busy · retry", "tone": "amber",
+                     "tip": "BOSS's own queue is full right now. Press Connect again shortly.",
+                     "action": "test"},
     "not_on_server": {"label": "Not on server", "tone": "grey",
                       "tip": "Install and sign in on the BOSS server first."},
     # A check that failed for a reason none of the above names. Still one pill, still a fix.

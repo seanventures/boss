@@ -735,6 +735,8 @@ def _key_proof(connection: Connection, settings: Any, project_id: str, provider:
         intent=intent, capacity_group=group)
     if proof.get("budget_refused"):
         proof.update(ok=False, state="paused_budget")
+    elif proof.get("job_deferred"):
+        proof.update(ok=False, state="job_deferred")
     proof.setdefault("state", "working" if proof.get("ok") else "failed")
     proof["model"] = details["model"]
     proof["base_url"] = details["base_url"]
@@ -754,6 +756,8 @@ def _subscription_proof(connection: Connection, settings: Any, project_id: str, 
         proof["state"] = "working"
     elif proof.get("budget_refused"):
         proof["state"] = "paused_budget"
+    elif proof.get("job_deferred"):
+        proof["state"] = "job_deferred"
     else:
         proof["state"] = setup_checks.classify_model_failure(
             0 if "could not reach" in str(proof.get("error") or "").lower() else -1,
@@ -772,8 +776,13 @@ def _failure(provider: str, state: str, model: Optional[str] = None,
     from .setup_pills import LOGIN_FIX, DEFAULT_LOGIN_FIX, MODEL, pill
 
     state = state if state in MODEL else "failed"
+    # cap_name: this one-off failure (not an existing model row) has no SetupView budget
+    # period to name precisely, so it says "Budget cap" rather than leaving {cap_name} blank
+    # ("reached. Raise it..." with no subject) — `summary`, ahead of it, already names the
+    # actual period in words (budget.py's own "this month's budget is …").
     shown = pill("model", state, model=model or "That model", host=host or "the provider",
-                 provider_fix=LOGIN_FIX.get(provider, DEFAULT_LOGIN_FIX), time="", age="")
+                 provider_fix=LOGIN_FIX.get(provider, DEFAULT_LOGIN_FIX), time="", age="",
+                 cap_name="Budget cap")
     # THE PROVIDER'S OWN REASON FIRST ("Anthropic refused: credit balance too low"), then ours.
     fix = f"{summary} {shown['tip']}".strip() if summary else shown["tip"]
     return SetupActionError(422, state, shown["label"], fix,
