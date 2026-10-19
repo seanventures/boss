@@ -3826,10 +3826,13 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
     # serving commit, so it shows only its own diff. No fall back to the shared branch.
     from . import release_scope as _release_scope
 
-    _release = _release_scope.of_run(fctx)
-    if _release is not None:
+    # NOT `_release`: that name is the budget's release (imported above), which every exit of
+    # this function calls — shadowing it made every release-scoped fix build crash with
+    # "'dict' object is not callable" (Order API release 1.2 fix, crun_a3074b0f).
+    _release_target = _release_scope.of_run(fctx)
+    if _release_target is not None:
         try:
-            work_branch = _release_scope.prepare_branch(sf.github, _release)
+            work_branch = _release_scope.prepare_branch(sf.github, _release_target)
         except _release_scope.ReleaseBranchError as exc:
             raise RuntimeError(f"release branch: {exc}") from exc
         base_branch = work_branch
@@ -4575,7 +4578,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                             for p, content in accumulated.items()]
                            if use_microvm else sandbox.diff()),
                     created_by_job_id=job_id, actual_usd_micros=cost,
-                    **({"pr_base": _release["pr_base"]} if _release else {}))
+                    **({"pr_base": _release_target["pr_base"]} if _release_target else {}))
                 if pr.get("status") in ("created", "succeeded"):
                     url = pr.get("pull_request_url") or pr.get("url")
                     c.execute(sql("UPDATE code_task_runs SET pull_request_url=:u, updated_at=now() "
@@ -8279,7 +8282,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 files=_pr_files,
                 created_by_job_id=job_id, actual_usd_micros=cost,
                 evidence=evidence, quality_gate_id=qg_id, run_id=run_id,
-                **({"pr_base": _release["pr_base"]} if _release else {}),
+                **({"pr_base": _release_target["pr_base"]} if _release_target else {}),
                 **({"checks_failing": _checks} if _checks else {}))
 
         status = proposal.get("status")
@@ -8329,7 +8332,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         files=_pr_files,
                         created_by_job_id=job_id, actual_usd_micros=cost,
                         evidence=evidence, quality_gate_id=qg_id, run_id=run_id,
-                        **({"pr_base": _release["pr_base"]} if _release else {}),
+                        **({"pr_base": _release_target["pr_base"]} if _release_target else {}),
                         **({"checks_failing": _checks} if _checks else {}))
                     status = proposal.get("status")
                 except Exception as exc:  # noqa: BLE001
