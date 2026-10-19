@@ -521,6 +521,9 @@ def test_an_alert_is_answered_end_to_end_by_incident_response(pg, app, monkeypat
     brief = builds[0]["instructions"]
     assert brief.startswith("INCIDENT FIX") and "pricing.py" in brief
     assert builds[0].get("extends_run_id") == "crun_root", builds[0]
+    # ITS OWN BRANCH, CUT FROM WHAT IS SERVING (release_scope; D2: the fix rode PR #231's branch
+    # and its release would have shipped two rejected runs' commits with it).
+    assert builds[0].get("release_base_sha") == "b" * 40, builds[0]
     assert any("FAILS on the faulty release" in a for a in builds[0]["acceptance_criteria"])
     assert inc == "resolved"
     assert rep["kind"] == "incident_report" and rep["root_cause"]["suspect_commit"] == "b" * 40

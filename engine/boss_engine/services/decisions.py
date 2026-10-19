@@ -480,6 +480,26 @@ class DecisionService:
                                         system_policy=system_policy, force=force)
             except ci_gate.CiGateRefused as refused:
                 raise InvalidDecisionTransitionError(refused.message) from refused
+            # A RELEASE CARD IS APPROVED AS SHOWN (release_scope): only with the hash of the
+            # commit list it showed, and — when that list carries commits from rejected or
+            # unreviewed runs — only with the person's stated reason (force + note, as a merge
+            # with checks failing). Before anything is recorded.
+            from . import release_scope
+
+            try:
+                release_scope.refuse_approval(row.get("recommendation"),
+                                              content_hash=content_hash, force=force, note=note)
+            except release_scope.ReleaseApprovalRefused as refused:
+                raise InvalidDecisionTransitionError(str(refused)) from refused
+            if force and release_scope.needs_reason(row.get("recommendation")):
+                _card = release_scope.of_decision(row.get("recommendation")) or {}
+                emit_event(connection, row["project_id"], release_scope.FORCED_EVENT, actor,
+                           "decision", row["id"],
+                           {"reason": (note or "").strip()[:500],
+                            "head_sha": _card.get("head_sha"),
+                            "rejected_runs": _card.get("rejected_runs") or [],
+                            "unreviewed_runs": _card.get("unreviewed_runs") or [],
+                            "unattributed": _card.get("unattributed") or 0})
             # AN APPROVAL OF WHAT THE APPROVER SAW. A gated step's decision carries a preview of
             # what it will send and a hash of that content; the console sends back the hash it
             # showed. If the preview has moved on since (an upstream step was re-run), this
@@ -1148,6 +1168,29 @@ class DecisionService:
         )
         task_id = row.get("task_id")
         if not is_prd_publish or not task_id:
+            return
+        # A WORKFLOW THAT CONVENED THIS PANEL BUILDS ITS SPEC ITSELF (spec_gate). Starting one
+        # here as well was a second build of the same spec, racing the first on the same branch
+        # (dec_eb911c56 / wfr_723213d8). The approval attaches to the run: its Build step starts
+        # once the panel's step sees the approval, or is already running if it did not wait.
+        from . import spec_gate
+
+        governed = spec_gate.workflow_build_for_prd(connection, str(row["id"]), str(task_id))
+        if governed:
+            build = governed.get("build")
+            if build:
+                emit_event(connection, row["project_id"], "code_task.already_started", actor,
+                           "code_task_run", build["id"],
+                           {"decision_id": row["id"], "task_id": task_id,
+                            "workflow_run_id": governed["workflow_run_id"],
+                            "reason": "the_workflow_builds_it"})
+            else:
+                emit_event(connection, row["project_id"], "code_task.not_started", actor,
+                           "task", task_id,
+                           {"decision_id": row["id"], "reason": "the_workflow_builds_it",
+                            "workflow_run_id": governed["workflow_run_id"],
+                            "detail": "The workflow that convened this panel builds the "
+                                      "approved spec in its own Build step."})
             return
         # WHICH APP THIS PANEL SPECCED A FEATURE FOR, if any — structured first, the old text
         # marker only for rows written before it was structured (see extend_run_of_prd).

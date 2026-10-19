@@ -606,6 +606,8 @@ def investigate(connection, settings: Any, project_id: str, incident_id: str, *,
             "root_cause": hyp["root_cause"], "hypothesis": hyp,
             "suspect_commit": hyp.get("suspect_commit"),
             "extends_run_id": deploy.get("extends_run_id"), "signatures": signatures,
+            # The fix is cut from THIS commit, on a branch of its own (release_scope).
+            "serving_commit_sha": deploy.get("commit_sha"),
             "logs_word": logs.get("word"), "diff_word": diff.get("word"),
             "target_id": app.get("target_id")}
 
