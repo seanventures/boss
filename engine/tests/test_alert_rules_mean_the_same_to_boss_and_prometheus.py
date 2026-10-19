@@ -13,6 +13,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -101,6 +102,27 @@ def test_the_built_in_rules_are_promql_over_the_platform_metrics():
                                  "annotations": {"summary": "x", "runbook_url": "y"}}])
     rule = exported["groups"][0]["rules"][0]
     assert set(rule) == {"alert", "expr", "for", "labels", "annotations"}
+
+
+def test_zero_errors_with_traffic_is_ok_not_no_data():
+    """BOSSAPP-604: a 5xx counter that has never been incremented does not exist in the store
+    at all, so PromQL's sum() over it returns no series — zero errors, not 'no data' — when
+    there WAS enough traffic to judge it on. The SEV1 error-rate rule showed 'No data' for a
+    perfectly healthy app with real, all-2xx traffic."""
+    target = {"app_name": APP, "environment": ENV}
+    params = {"threshold": 5, "window_minutes": 5, "min_requests": 20}
+    rule = {"kind": "error_rate", "params": params,
+           "expr": aa.render("error_rate", params, APP, ENV)["expr"]}
+    # Only 2xx traffic: the 5xx-filtered series was never created, growing steadily — well
+    # over the min_requests guard.
+    healthy = store({("http_requests_total",): [0, 10, 20, 30, 40, 50, 60]})
+    now = datetime.fromtimestamp(6 * MIN / 1000, tz=timezone.utc)
+    ev = aa.evaluate_rule(rule, target, now, store=healthy)
+    assert ev["quiet"] == "ok" and ev["value"] == 0.0 and ev["error"] is None
+
+    # No traffic at all: still honestly "no data" — there is nothing to judge the rate on.
+    ev2 = aa.evaluate_rule(rule, target, now, store=pq.Store())
+    assert ev2["quiet"] == "no_data" and ev2["value"] is None
 
 
 # ── the agreement, through promtool ─────────────────────────────────────────────────────────
