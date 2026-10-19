@@ -990,10 +990,19 @@ def response_view(connection, project_id: str, incident_id: str) -> Optional[dic
     report_ready = bool(connection.execute(sql(
         "SELECT 1 FROM sre_postmortems WHERE incident_id = :i AND "
         "payload->>'kind' = 'incident_report'"), {"i": incident_id}).first())
+    # WHAT DROVE IT (app_alerts_view.drivers): the card's label, title and SEV are the alert
+    # firing now (or last), not the one that first opened a reused incident row.
+    from .app_alerts_view import drivers, incident_title
+
+    driver = drivers(connection, project_id, [incident_id]).get(incident_id)
+    head = {k: (_iso(inc[k]) if k in ("first_seen", "last_seen") else inc[k])
+            for k in ("id", "title", "service", "severity", "status", "confidence",
+                      "first_seen", "last_seen")}
+    head["title"] = incident_title(inc["title"], driver)
     return {
-        "incident": {k: (_iso(inc[k]) if k in ("first_seen", "last_seen") else inc[k])
-                     for k in ("id", "title", "service", "severity", "status", "confidence",
-                               "first_seen", "last_seen")},
+        "incident": head,
+        "driver": ({k: driver[k] for k in ("alert_id", "alertname", "kind", "label", "sev",
+                                           "state", "value_word")} if driver else None),
         "app": ctx.get("app"), "deploy": ctx.get("deploy"), "alert": ctx.get("alert"),
         "verification": ctx.get("verification"),
         "reported_only": bool(ctx.get("reported_only")),

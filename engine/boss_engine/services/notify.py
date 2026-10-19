@@ -44,6 +44,23 @@ CONTACT_KINDS = ("console", "email", "slack_webhook", "mattermost", "webhook")
 DEFAULTS = {"group_by": ["alertname", "service"], "group_wait_s": 30, "group_interval_s": 300,
             "repeat_interval_s": 14400}
 MAX_ATTEMPTS = 6
+
+
+class NotConfigured(RuntimeError):
+    """Nothing is set up to send this message: a setup gap, not a send that failed."""
+
+
+#: Failures that mean NOTHING IS CONFIGURED to send with (the host may not send email, a
+#: contact point's secret is missing, the contact point was removed). They are a setup prompt
+#: ("Set up a contact point" -> Notify), never a page: BossOutboxBacklog fired SEV1 for 4.5 hours
+#: on a host that had never been allowed to send email.
+UNCONFIGURED_ERRORS = ("NotConfigured", "IntegrationConfigurationError")
+UNCONFIGURED_SQL = ("split_part(COALESCE(error_word, ''), ':', 1) IN ("
+                    + ", ".join(f"'{e}'" for e in UNCONFIGURED_ERRORS) + ")")
+
+
+def not_configured(error_word: Optional[str]) -> bool:
+    return str(error_word or "").split(":", 1)[0] in UNCONFIGURED_ERRORS
 TRIAGE_WORDS = {None: "Not triaged yet: the agent's triage follows when it lands",
                 "no_model": "Not triaged: no model is answering (this message did not wait)"}
 
@@ -680,7 +697,7 @@ def deliver(connection, settings: Any, n: Mapping[str, Any]) -> str:
     """Send one message. Returns the receipt; raises with the reason in words."""
     cp = _cp_row(connection, n["project_id"], n["contact_point_id"])
     if not cp:
-        raise RuntimeError("The contact point was removed")
+        raise NotConfigured("The contact point was removed")
     text = f"*{n['subject']}*\n{n['body']}"
     if cp["kind"] == "console":
         return "shown in the console"
@@ -691,7 +708,7 @@ def deliver(connection, settings: Any, n: Mapping[str, Any]) -> str:
                                                    n["subject"], n["body"])
     secret = _secret(connection, settings, cp)
     if not secret:
-        raise RuntimeError("The contact point's webhook is not in the secret store")
+        raise NotConfigured("The contact point's webhook is not in the secret store")
     if cp["kind"] in ("slack_webhook", "mattermost"):
         return _post_json(secret, {"text": text})
     spec = json.loads(secret)

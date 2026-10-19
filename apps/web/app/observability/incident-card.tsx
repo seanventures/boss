@@ -100,16 +100,22 @@ export function IncidentCardView({ projectId, r, now, busy, onRespond, onAlerts,
         ) : null}
       </span>
 
-      {a || d ? (
+      {a || d || r.driver ? (
         <div className="obs-inc-part" data-testid="obs-incident-monitor">
           <span className="obs-fact-k">What the monitor saw</span>
           <div className="obs-facts">
-            {a ? (
+            {/* WHAT DROVE IT: the alert firing now (or last). Error facts only for an error-rate
+                driver: a recovered latency incident is never labelled "Errors". */}
+            {r.driver && r.driver.kind !== "error_rate" ? (
+              <Fact label={r.driver.label} tip={`${r.driver.alertname}: the alert driving this incident`}>
+                <span data-testid="obs-incident-driver">{r.driver.valueWord ?? r.driver.alertname}</span>
+              </Fact>
+            ) : a ? (
               <Fact label="Errors" tip={`5xx share over ${a.windowMinutes ?? 5} min when the alert fired`}>
                 {pct(a.errorRate, 1)}{a.requests !== null ? ` of ${a.requests.toLocaleString("en-US")}` : ""}
               </Fact>
             ) : null}
-            {a && a.errorRatePercent !== null ? (
+            {a && a.errorRatePercent !== null && (!r.driver || r.driver.kind === "error_rate") ? (
               <Fact label="Alert above" tip={`Fires once ${a.minRequests ?? 0}+ requests were seen in the window`}>
                 {`${a.errorRatePercent}% / ${a.windowMinutes ?? 5} min`}
               </Fact>
@@ -125,7 +131,7 @@ export function IncidentCardView({ projectId, r, now, busy, onRespond, onAlerts,
               </Fact>
             ) : null}
           </div>
-          {a && a.routes.length ? (
+          {a && a.routes.length && (!r.driver || r.driver.kind === "error_rate") ? (
             <span className="obs-chips" data-testid="obs-incident-routes">
               {[...a.routes].sort((x, y) => y.errors - x.errors).slice(0, 3).map((rt) => (
                 <span key={rt.route} className="obs-chip" data-tone="red" data-copy="data"
