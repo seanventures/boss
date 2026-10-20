@@ -684,6 +684,10 @@ def _rule_wire(connection, r: dict, target: dict, silences: dict[str, dict],
         "respond_on_behalf_of": _person(connection, link.get("on_behalf_of")),
         "notify": r.get("notify") or "console",
         "source": r["source"], "source_word": _SOURCE_WORDS.get(r["source"], r["source"]),
+        # The latest deploy's boss.deploy.yaml no longer declares it: kept running, said so.
+        "dropped_from_manifest_at": _iso(r.get("dropped_from_manifest_at")),
+        "dropped_word": ("Not in boss.deploy.yaml since the latest deploy — still running"
+                         if r.get("dropped_from_manifest_at") else None),
         # D4: a rule declared in the repo's boss.deploy.yaml (Set up monitoring writes them) is
         # repo-managed: versioned and reviewed in the app's pull requests.
         "managed_by": r.get("managed_by") or ("code" if r["source"] == "yaml" else "builtin"),

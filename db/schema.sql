@@ -10004,3 +10004,7 @@ CREATE TABLE IF NOT EXISTS synthetic_checks (
   created_by TEXT NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- A deploy whose boss.deploy.yaml lost monitoring rules (PR paramg/boss-sandbox#234): the rule
+-- keeps running, is marked with when it went missing, and BOSS raises MonitoringRulesDropped.
+ALTER TABLE app_alert_rules ADD COLUMN IF NOT EXISTS dropped_from_manifest_at TIMESTAMPTZ;

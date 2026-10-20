@@ -501,10 +501,12 @@ def ensure_rules(connection, target: dict) -> list[dict[str, Any]]:
         return ensure_service_rules(connection, target)
     tid, pid = target["id"], target["project_id"]
     svc_id = _sid(connection, target)
-    yaml = yaml_values(_manifest(connection, tid))
+    manifest = _manifest(connection, tid)
+    yaml = yaml_values(manifest)
     rows = {r["kind"]: _rule_dict(r) for r in connection.execute(sql(
         "SELECT * FROM app_alert_rules WHERE subject_id = :t AND kind <> 'custom'"),
         {"t": tid}).mappings().all()}
+    dropped: list[str] = []
     for kind in KINDS:
         want = _builtin_row(kind, target, yaml.get(kind) or {})
         have = rows.get(kind)
@@ -522,6 +524,12 @@ def ensure_rules(connection, target: dict) -> list[dict[str, Any]]:
                  "l": json.dumps(want["labels"]), "an": json.dumps(want["annotations"]),
                  "en": want["enabled"], "src": want["source"],
                  "y": json.dumps(want["yaml_params"]) if want["yaml_params"] else None})
+            continue
+        if (manifest and have["source"] == "yaml" and have.get("yaml_params")
+                and not want["yaml_params"]):
+            # THE DEPLOYED MANIFEST LOST THIS RULE (PR #234): it keeps the values it had and
+            # keeps running, marked, and MonitoringRulesDropped says so — never a silent revert.
+            dropped.append(have["alert"])
             continue
         if have["source"] != "console" and (have.get("yaml_params") or None) != (
                 want["yaml_params"] or None):
@@ -546,10 +554,71 @@ def ensure_rules(connection, target: dict) -> list[dict[str, Any]]:
                                {"e": expr, "id": have["id"], "s": svc_id})
     for spec in (yaml.get("custom") or {}).get("rules") or []:
         _upsert_yaml_custom(connection, target, spec)
+    if manifest:
+        named = {str(r.get("alert") or "") for r in (yaml.get("custom") or {}).get("rules") or []}
+        dropped += [r["alert"] for r in connection.execute(sql(
+            "SELECT alert FROM app_alert_rules WHERE subject_id = :t AND kind = 'custom' "
+            "AND source = 'yaml' ORDER BY created_at"), {"t": tid}).mappings().all()
+            if r["alert"] not in named]
+        _mark_dropped(connection, target, dropped, _now())
     return [_rule_dict(r) for r in connection.execute(sql(
         "SELECT * FROM app_alert_rules WHERE subject_id = :t ORDER BY "
         " array_position(ARRAY['error_rate','latency_p95','health_check','no_traffic',"
         " 'deploy_health','custom'], kind), created_at"), {"t": tid}).mappings().all()]
+
+
+DROPPED_ALERT = "MonitoringRulesDropped"
+
+
+def _mark_dropped(connection, target: dict, dropped: list[str], now: datetime) -> None:
+    """RULES NEVER VANISH SILENTLY. A rule the app's boss.deploy.yaml declared and its latest
+    deploy's manifest no longer does is kept running (the repository lost it; the app did not
+    stop needing it), marked `dropped_from_manifest_at`, and one MonitoringRulesDropped alert
+    per app names them until the manifest has them again or a person removes them."""
+    tid = target["id"]
+    connection.execute(sql(
+        "UPDATE app_alert_rules SET dropped_from_manifest_at = CASE WHEN alert = ANY(:d) "
+        " THEN COALESCE(dropped_from_manifest_at, :now) ELSE NULL END "
+        "WHERE subject_id = :t AND (dropped_from_manifest_at IS NOT NULL OR alert = ANY(:d))"),
+        {"t": tid, "d": list(dropped), "now": now})
+    fp = fingerprint(tid, DROPPED_ALERT, {})
+    open_row = connection.execute(sql(
+        "SELECT id, annotations FROM app_alerts WHERE fingerprint = :f AND state = 'firing'"),
+        {"f": fp}).mappings().first()
+    if not dropped:
+        if open_row:
+            _resolve(connection, open_row["id"], now, "manifest_restored")
+        return
+    names = ", ".join(dropped[:12]) + (f" and {len(dropped) - 12} more" if len(dropped) > 12
+                                       else "")
+    ann = {"summary": f"{len(dropped)} monitoring rule{'s' if len(dropped) != 1 else ''} "
+                      f"dropped from boss.deploy.yaml on {target.get('app_name') or 'the app'}",
+           "description": (f"The latest deploy's boss.deploy.yaml no longer declares: {names}. "
+                           "BOSS keeps them running. Put them back in the manifest, or remove "
+                           "them in the console if they are no longer wanted."),
+           "dropped": list(dropped)}
+    if open_row:
+        if (_json(open_row["annotations"], {}) or {}).get("dropped") != list(dropped):
+            connection.execute(sql(
+                "UPDATE app_alerts SET annotations = CAST(:an AS JSONB), last_eval_at = :now, "
+                " updated_at = :now WHERE id = :id"),
+                {"id": open_row["id"], "an": json.dumps(ann), "now": now})
+        return
+    alert_id = make_id("alrt")
+    connection.execute(sql(
+        "INSERT INTO app_alerts (id, project_id, target_id, service_id, rule_kind, fingerprint, "
+        " alertname, labels, annotations, value, unit, state, active_at, fired_at, last_eval_at, "
+        " release, group_key, triage_state, urgency, flap_history, created_at, updated_at) VALUES "
+        " (:id, :p, :t, :svc, 'monitoring_drift', :f, :a, CAST(:l AS JSONB), CAST(:an AS JSONB), "
+        " :v, 'rules', 'firing', :now, :now, :now, CAST(:rel AS JSONB), 'monitoring', 'pending', "
+        " 'low', '1', :now, :now)"),
+        {"id": alert_id, "p": target["project_id"], "t": _tid(target),
+         "svc": _sid(connection, target), "f": fp, "a": DROPPED_ALERT,
+         "l": json.dumps({"severity": "sev3", "layer": "cause"}), "an": json.dumps(ann),
+         "v": float(len(dropped)), "now": now,
+         "rel": json.dumps(None if is_service(target) else _release(connection, tid))})
+    emit_event(connection, target["project_id"], "alert_rule.dropped_from_manifest", "boss",
+               "deployment_target", tid, {"rules": list(dropped), "alert_id": alert_id})
 
 
 def _upsert_yaml_custom(connection, target: dict, spec: dict) -> None:

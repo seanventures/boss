@@ -951,6 +951,17 @@ class GitHubAdapter:
 
     # -- the review conversation on a pull request (services/pr_review_post.py) -------------
 
+    def list_paths(self, branch_name: str, *, limit: int = 20000) -> list[str]:
+        """Every file path on a branch (one recursive tree call; GitHub truncates very large
+        trees, and what it returned is what this returns)."""
+        payload = self._request(
+            "GET",
+            f"/repos/{self.repository_full_name}/git/trees/{branch_name}?recursive=1",
+        )
+        tree = payload.get("tree") if isinstance(payload, dict) else None
+        return [str(t.get("path")) for t in (tree or [])
+                if isinstance(t, dict) and t.get("type") == "blob"][:limit]
+
     def pull_request_files(self, pull_number: int, *, limit: int = 3000) -> list[dict]:
         """Every file the pull request changes: {path, status, additions, deletions}. GitHub
         lists at most 3000; a review is told when it was cut."""

@@ -241,7 +241,59 @@ def read_code(github: Any, branch: str, pr_number: Optional[int]) -> dict[str, A
         piece = body[: max(0, CODE_BUDGET - used)]
         used += len(piece)
         texts.append({"path": f["path"], "text": piece})
-    return {"changed": changed, "files": texts}
+    return {"changed": changed, "files": texts, "paths": [f["path"] for f in files]}
+
+
+_TEST_FILE = re.compile(r"(^|/)(test_[^/]*\.py|[^/]*_test\.py|[^/]*\.(test|spec)\.[cm]?[jt]sx?)$")
+#: How many of the app's manifest tests, and how much of each, reach the model.
+MAX_MANIFEST_TESTS = 6
+MANIFEST_TEST_BUDGET = 8_000
+
+
+def manifest_tests(github: Any, branch: str, manifest_path: str,
+                   pr_paths: Optional[list[str]] = None) -> dict[str, str]:
+    """THE APP'S OWN TESTS THAT READ ITS boss.deploy.yaml: {path: text}.
+
+    The pack and those tests must agree (PR paramg/boss-sandbox#234): a test written by an earlier
+    build pinned the manifest's exact top-level keys, the pack added `alerts:`, the test failed,
+    and the next fix build deleted the pack to make it pass. So the model writing the pack sees
+    these tests and returns any it would break, rewritten, in the same change. Test files in the
+    manifest's own app folder that name the manifest; the branch's tree when the host lists it,
+    else the pull request's files."""
+    folder = manifest_path.rsplit("/", 1)[0] + "/" if "/" in manifest_path else ""
+    name = manifest_path.rsplit("/", 1)[-1]
+    paths: list[str] = []
+    lister = getattr(github, "list_paths", None)
+    if callable(lister):
+        try:
+            paths = list(lister(branch) or [])
+        except Exception as exc:  # noqa: BLE001 — fall back to the pull request's files
+            log.info("monitoring pack: tree unreadable: %s", exc)
+    if not paths:
+        paths = list(pr_paths or [])
+    out: dict[str, str] = {}
+    for path in sorted(p for p in paths if p.startswith(folder) and _TEST_FILE.search(p)):
+        if len(out) >= MAX_MANIFEST_TESTS:
+            break
+        try:
+            body = github.read_text_file(branch, path) or ""
+        except Exception:  # noqa: BLE001
+            continue
+        if name in body:
+            out[path] = body[:MANIFEST_TEST_BUDGET]
+    return out
+
+
+def tests_to_write(raw: dict[str, Any], shown: dict[str, str]) -> dict[str, str]:
+    """The manifest tests the model rewrote: only files it was shown, only when changed."""
+    out: dict[str, str] = {}
+    for t in raw.get("tests") or []:
+        if not isinstance(t, dict):
+            continue
+        path, body = str(t.get("path") or ""), t.get("content")
+        if path in shown and isinstance(body, str) and body.strip() and body != shown[path]:
+            out[path] = body if body.endswith("\n") else body + "\n"
+    return out
 
 
 def existing_pack(manifest_text: Optional[str]) -> dict[str, Any]:
@@ -284,14 +336,16 @@ CONTRACT = """Return this JSON object:
     "summary": "...", "description": "...", "runbook": "<runbook name>", "why": "which code path and which series"}
  ],
  "runbooks": [{"name": "kebab-case-name", "title": "...", "markdown": "# Title\\n\\nWhat it means, then 3-6 numbered steps that name the app's real routes, files and dependencies"}],
- "panels": [{"title": "...", "expr": "PromQL with {SELECTOR}", "unit": "short|reqps|percent|ms|s", "kind": "timeseries|stat"}]
+ "panels": [{"title": "...", "expr": "PromQL with {SELECTOR}", "unit": "short|reqps|percent|ms|s", "kind": "timeseries|stat"}],
+ "tests": [{"path": "<one of the APP TESTS shown>", "content": "the whole file, rewritten"}]
 }
 Rules:
 - SELECTOR stands for the app's own labels; write it literally inside braces: {SELECTOR} or {SELECTOR,route="/orders"}.
 - Business rules (orders, payments, sign-ups, an upstream the code calls) only for what the code really does; prefer series the app already emits (listed under SERIES). A rule on a series the app does not emit yet is allowed only when the code clearly emits it on that path, and say so in "why".
 - Every rule (built-in or your own) names a runbook you also return. Runbooks are short and specific to THIS code.
 - Thresholds must not fire on the healthy traffic shown; tune them to the series.
-- At most 8 rules of your own and 6 panels."""
+- At most 8 rules of your own and 6 panels.
+- Your pack adds `alerts:` and `dashboard:` to boss.deploy.yaml. Read the APP TESTS THAT READ boss.deploy.yaml: if one would fail once they are there (it pins the manifest's exact set of keys, or that there is no `alerts:`), return it in "tests", rewritten so it still checks everything else it checked and allows `alerts:` and `dashboard:`. Return only tests that need it ([] when none do); never weaken anything else."""
 
 
 def _object(answer: str) -> Optional[dict[str, Any]]:
@@ -336,7 +390,7 @@ def _ask(adapter: Any, prompt: str) -> dict[str, Any]:
 
 
 def prompt_for(*, app: str, env: str, code: dict, series: dict, existing: dict,
-               adding: bool) -> str:
+               adding: bool, tests: Optional[dict[str, str]] = None) -> str:
     files = "\n\n".join(f"--- {f['path']}\n{f['text']}" for f in code.get("files") or [])
     have = json.dumps(existing, indent=1)[:6000] if (existing.get("alerts")
                                                      or existing.get("panels")) else "none"
@@ -354,6 +408,8 @@ def prompt_for(*, app: str, env: str, code: dict, series: dict, existing: dict,
         "ROUTES it served: " + ", ".join(series.get("routes") or []) or "ROUTES: none seen",
         "PULL REQUEST (files changed):\n" + "\n".join(code.get("changed") or [])[:6000],
         "THE APP'S CODE:\n" + (files or "(none readable)"),
+        "APP TESTS THAT READ boss.deploy.yaml:\n" + ("\n\n".join(
+            f"--- {p}\n{t}" for p, t in (tests or {}).items()) or "none"),
         "</evidence>",
         CONTRACT,
     ]
@@ -679,10 +735,18 @@ def ci_failure(github: Any, commit_sha: Optional[str], *, polls: int = CI_CHECK_
 
 
 def write_pack(github: Any, branch: str, path: str, manifest_text: str, new_text: str,
-               runbooks: dict[str, dict[str, str]], app: str) -> dict[str, Any]:
-    """Commit the manifest and every runbook that changed, on the build's branch."""
+               runbooks: dict[str, dict[str, str]], app: str,
+               tests: Optional[dict[str, str]] = None) -> dict[str, Any]:
+    """Commit the manifest, every runbook that changed and the app's manifest tests the pack
+    would otherwise break, on the build's branch. The tests go first, so no commit of the pack
+    is one those tests fail on."""
     written: list[str] = []
     sha = None
+    for tpath, body in (tests or {}).items():
+        sha = github.upsert_file(branch, tpath, body,
+                                 f"monitoring: {tpath} accepts {app}'s monitoring pack "
+                                 "(Set up monitoring)")
+        written.append(tpath)
     for rb in runbooks.values():
         try:
             before = github.read_text_file(branch, rb["path"])
@@ -747,8 +811,10 @@ def run_step(connection, settings: Any, project_id: str, *, run_id: str, step_id
         set(existing["alerts"] or {}) - {"rules"})
     code = read_code(github, branch, build.get("pull_request_number"))
     series = series_seen(connection, target)
+    shown_tests = manifest_tests(github, branch, path, code.get("paths"))
     first_prompt = prompt_for(app=target["app_name"], env=target["environment"], code=code,
-                              series=series, existing=existing, adding=adding)
+                              series=series, existing=existing, adding=adding,
+                              tests=shown_tests)
     if adapter is None:
         from .agent_decision import _routed
 
@@ -761,6 +827,7 @@ def run_step(connection, settings: Any, project_id: str, *, run_id: str, step_id
     asked = _ask(adapter, first_prompt)
     pack = validate(asked["pack"], app=target["app_name"], env=target["environment"],
                     existing=existing)
+    tests = tests_to_write(asked["pack"], shown_tests)
     prom, scope = aa.datasource_for(connection, settings, target)
     rows = preview_rows(connection, target, rule_rows(pack, target, existing),
                         prometheus=prom, scope=scope, now=now)
@@ -784,12 +851,13 @@ def run_step(connection, settings: Any, project_id: str, *, run_id: str, step_id
                                   "fired_before": was["preview"].get("fired"),
                                   "fired_after": r["preview"].get("fired")})
             pack, rows = retuned, new_rows
+            tests = tests_to_write(again["pack"], shown_tests) or tests
     if not rows:
         raise PackRefused("the model proposed no rule BOSS could accept: "
                           + "; ".join(pack["refused"][:4]))
     new_text = manifest_with_pack(manifest_text, pack, existing)
     wrote = write_pack(github, branch, path, manifest_text, new_text, pack["runbooks"],
-                       target["app_name"])
+                       target["app_name"], tests)
     # THE APP'S OWN TESTS MUST STILL PASS. One repair in this same step: tell the model what
     # its pack broke and let it rewrite; if that still breaks CI, the step fails with the
     # test output instead of shipping a release the app's own suite would catch.
@@ -809,9 +877,10 @@ def run_step(connection, settings: Any, project_id: str, *, run_id: str, step_id
         else:
             if rows2:
                 pack, rows = pack2, rows2
+                tests = tests_to_write(fixed["pack"], shown_tests) or tests
                 new_text = manifest_with_pack(manifest_text, pack, existing)
                 wrote = write_pack(github, branch, path, manifest_text, new_text,
-                                   pack["runbooks"], target["app_name"])
+                                   pack["runbooks"], target["app_name"], tests)
                 failure = ci_failure(github, wrote["commit_sha"])
         if failure:
             raise PackRefused(
@@ -831,6 +900,7 @@ def run_step(connection, settings: Any, project_id: str, *, run_id: str, step_id
         "panels": [p["title"] for p in pack["panels"]],
         "tuned": tuned, "refused": pack["refused"], "gate": gate,
         "commit_sha": wrote["commit_sha"], "files_written": wrote["files_written"],
+        "tests_updated": sorted(tests),
         "preview_window": "last hour", "model": asked.get("model") or "",
         "rules_href": f"?area=observability&view=apps&app={target['id']}&atab=alerts",
         "dashboard_uid": _dashboard_uid(target["app_name"]),

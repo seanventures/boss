@@ -1,0 +1,104 @@
+"""P2 regression tests for the boss.deploy.yaml manifest fix.
+
+The deploy agent found that boss.deploy.yaml was missing the required
+`version: 1` manifest line, so BOSS could not parse it and the Order API
+could not deploy. The fix adds `version: 1` as the first line. These tests
+pin that fix and guard its edges: the exact first line, the integer type,
+and that BOSS can still read kind/health/metrics from the parsed manifest.
+"""
+import os
+
+import pytest
+import yaml
+
+MANIFEST = os.path.join(os.path.dirname(os.path.dirname(__file__)), "boss.deploy.yaml")
+
+
+@pytest.fixture(scope="module")
+def raw_text():
+    with open(MANIFEST, "r", encoding="utf-8") as fh:
+        return fh.read()
+
+
+@pytest.fixture(scope="module")
+def manifest(raw_text):
+    return yaml.safe_load(raw_text)
+
+
+def test_first_line_is_version_1(raw_text):
+    # The failure this fix addresses: version line absent / not first.
+    first_line = raw_text.splitlines()[0]
+    assert first_line == "version: 1"
+
+
+def test_version_is_integer_not_string(manifest):
+    # Edge: BOSS expects the YAML integer 1, not the string "1".
+    assert manifest["version"] == 1
+    assert isinstance(manifest["version"], int)
+    assert not isinstance(manifest["version"], bool)
+
+
+def test_manifest_is_valid_yaml_mapping(manifest):
+    assert isinstance(manifest, dict)
+
+
+def test_kind_is_compose(manifest):
+    assert manifest["kind"] == "compose"
+
+
+def test_health_target_preserved(manifest):
+    assert manifest["health"] == [
+        {"url": "{target.public_url}/health", "expect": 200}
+    ]
+
+
+def test_health_is_list_of_one(manifest):
+    assert isinstance(manifest["health"], list)
+    assert len(manifest["health"]) == 1
+
+
+def test_health_expect_is_integer(manifest):
+    expect = manifest["health"][0]["expect"]
+    assert expect == 200
+    assert isinstance(expect, int)
+    assert not isinstance(expect, bool)
+
+
+def test_name_is_order_api(manifest):
+    assert manifest["name"] == "order-api"
+
+
+def test_compose_file_preserved(manifest):
+    assert manifest["compose"] == {"file": "docker-compose.yml"}
+
+
+def test_manifest_top_level_keys(manifest):
+    assert set(manifest.keys()) == {
+        "version",
+        "name",
+        "kind",
+        "compose",
+        "health",
+        "metrics",
+    }
+
+
+def test_metrics_block_preserved(manifest):
+    metrics = manifest["metrics"]
+    assert metrics["path"] == "/metrics"
+    assert metrics["interval"] == 15
+    alert = metrics["alert"]
+    assert alert["error_rate_percent"] == 5
+    assert alert["window_minutes"] == 2
+    assert alert["min_requests"] == 20
+
+
+def test_file_ends_with_single_newline(raw_text):
+    # Edge: the file must still end with exactly one trailing newline.
+    assert raw_text.endswith("\n")
+    assert not raw_text.endswith("\n\n")
+
+
+def test_no_trailing_whitespace_on_lines(raw_text):
+    for line in raw_text.splitlines():
+        assert line == line.rstrip(), f"trailing whitespace on line: {line!r}"

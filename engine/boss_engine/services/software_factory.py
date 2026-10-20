@@ -1698,8 +1698,12 @@ class SoftwareFactoryService:
         run_id: Optional[str] = None,
         checks_failing: Optional[dict] = None,
         pr_base: Optional[str] = None,
+        monitoring_removals: Optional[list[str]] = None,
     ) -> dict:
         """Open the change's pull request and its merge decision.
+
+        ``monitoring_removals``: the monitoring entries (monitoring_guard.entries names) a
+        change about monitoring removes ON PURPOSE. Any other removal is undone.
 
         ``pr_base``: the branch the PR is opened against, when not the default branch — a
         release fix's base at the serving commit (release_scope), so its PR shows only its diff.
@@ -1838,6 +1842,22 @@ class SoftwareFactoryService:
 
         try:
             self.github.ensure_branch(branch_name)
+            # A CHANGE NEVER SILENTLY DROPS MONITORING (monitoring_guard; PR #234): a manifest
+            # that lost `alerts:` / `dashboard:` entries the change did not name gets them back
+            # from the branch's own version before anything is written.
+            from . import monitoring_guard
+
+            _read = getattr(self.github, "read_text_file", None)
+            monitoring_kept: list[dict] = []
+            if callable(_read):
+                files, monitoring_kept = monitoring_guard.guard_files(
+                    files, lambda p: _read(branch_name, p), allowed=monitoring_removals)
+            if monitoring_kept:
+                summary = summary + "\n\n" + monitoring_guard.pr_section(monitoring_kept)
+                self.events.emit(
+                    connection, project_id, "software_factory.monitoring_kept",
+                    "coding_worker", "receipt", pr_receipt["id"],
+                    {"kept": monitoring_kept, "branch": branch_name})
             commit_shas = [
                 self.github.upsert_file(
                     branch_name,
