@@ -10004,3 +10004,9 @@ CREATE TABLE IF NOT EXISTS synthetic_checks (
   created_by TEXT NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Email invites: what happened to the last send (sent | failed | not_configured) and the server's
+-- reason, so the console can say why an invitation did not arrive. Never the token or a credential.
+ALTER TABLE identity_invitations ADD COLUMN IF NOT EXISTS delivery_status TEXT;
+ALTER TABLE identity_invitations ADD COLUMN IF NOT EXISTS delivery_error TEXT;
+ALTER TABLE identity_invitations ADD COLUMN IF NOT EXISTS delivered_at TIMESTAMPTZ;

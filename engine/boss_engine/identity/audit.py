@@ -54,7 +54,7 @@ EVENT_TYPES: frozenset[str] = frozenset({
     "mfa.removed", "recovery_codes.generated", "recovery_code.used", "passkey.added",
     "passkey.removed", "passkey.counter_regressed",
     # admin
-    "user.invited", "user.updated", "user.disabled", "user.enabled", "user.deleted",
+    "user.invited", "user.invite_resent", "user.updated", "user.disabled", "user.enabled", "user.deleted",
     "user.mfa_reset", "user.email_verified", "group.created", "group.updated", "group.deleted", "group.member_added",
     "group.member_removed", "access_role.created", "access_role.updated", "access_role.deleted",
     "role_binding.added", "role_binding.removed", "owner.added", "owner.removed",
@@ -85,7 +85,7 @@ EVENT_TYPES: frozenset[str] = frozenset({
     # approvals and seats (§6.13)
     "decision.approval_recorded", "decision.approval_voided", "approval_seat.changed",
     # notices (who was told what; never the content)
-    "notice.mfa_reset", "notice.grant_expiring",
+    "notice.mfa_reset", "notice.grant_expiring", "notice.invitation",
     # policy and system
     "policy.changed", "bootstrap.claimed", "identity.setup_link_issued", "owner.recovered_by_host", "banner.acknowledged", "legacy.password_used",
     "legacy.api_key_used", "legacy.network_used", "legacy.claimed_actor_ignored",

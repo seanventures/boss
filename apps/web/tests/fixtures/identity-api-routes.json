@@ -103,6 +103,7 @@
   "POST /v1/identity/introspect",
   "GET /v1/identity/invitations",
   "DELETE /v1/identity/invitations/{invitation_id}",
+  "POST /v1/identity/invitations/{invitation_id}/resend",
   "GET /v1/identity/legacy",
   "POST /v1/identity/legacy/{path}/extend",
   "POST /v1/identity/legacy/{path}/retire",

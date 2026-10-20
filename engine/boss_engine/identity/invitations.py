@@ -241,3 +241,87 @@ def accept(db: Any, inv: Invitation, *, display_name: str, password_hash: Option
     except NotImplementedError:
         pass
     return pid
+
+
+# ---- delivery (services/mail_transport.py, services/mail_templates.py) ---------------------------
+
+def _role_names(db: Any, org_id: str, bindings: list[dict[str, Any]]) -> list[str]:
+    keys = sorted({b["role_key"] for b in bindings})
+    names = {r[0]: r[1] for r in db.execute(text(
+        "SELECT key, name FROM identity_access_roles WHERE key = ANY(:k) AND (org_id IS NULL OR "
+        "org_id = :o) ORDER BY org_id NULLS FIRST"), {"k": keys, "o": org_id})} if keys else {}
+    out = []
+    for b in bindings:
+        name = names.get(b["role_key"], b["role_key"])
+        out.append(name if b["scope_type"] == "org" else f"{name} on {b.get('scope_id')}")
+    return out
+
+
+def deliver(db: Any, inv: Invitation, token: str) -> dict[str, Any]:
+    """Email the invitation and record what happened. Returns {status, reason, via, emailed,
+    link?}: the link is returned ONLY when the person did not get it by email, to hand over once."""
+    from ..services import mail_templates, mail_transport
+    from . import links as auth_links
+    from .authn_support import deliver_mail, public_origin
+
+    origin = public_origin(db)
+    link = auth_links.url("invite", origin or "", token)
+    if not origin:
+        # H2 (F3): no emailed link without a BOUND public origin; the inviter hands it over.
+        outcome = mail_transport.Delivery(
+            "not_configured", "BOSS has no public URL yet, so it emails no links. Set it in Setup.")
+    else:
+        org_name = db.execute(text("SELECT name FROM orgs WHERE id = :o"), {"o": inv.org_id}).scalar()
+        inviter = users.load_principal(db, inv.invited_by)
+        chosen = mail_transport.route()
+        rendered = mail_templates.invitation(
+            inviter=(inviter.display_name if inviter else "") or "A BOSS admin",
+            org=org_name or "", roles=_role_names(db, inv.org_id, list(inv.bindings)), link=link,
+            expires_at=inv.expires_at, from_address=chosen.settings.email_from_address or "")
+        outcome = deliver_mail(inv.email, rendered)
+    # M1: only mail that left for the person's own mailbox proves it. The dev inbox (Mailpit)
+    # catches every address on this machine, so accepting from it verifies nothing.
+    proved = outcome.sent and outcome.source != "dev_inbox"
+    db.execute(text("UPDATE identity_invitations SET emailed = :e, delivery_status = :s, "
+                    "delivery_error = :r, delivered_at = CASE WHEN :sent THEN now() END "
+                    "WHERE id = :id"),
+               {"e": proved, "s": outcome.status, "r": outcome.reason or None,
+                "sent": outcome.sent, "id": inv.id})
+    emit(db, org_id=inv.org_id, event_type="notice.invitation",
+         outcome=Outcome.SUCCESS if outcome.sent else Outcome.FAILURE,
+         actor_principal_id=inv.invited_by, target_type="invitation", target_id=inv.id,
+         details={"status": outcome.status, "via": outcome.source,
+                  "reason": (outcome.reason or "")[:300] or None})
+    answer: dict[str, Any] = {"status": outcome.status, "reason": outcome.reason or None,
+                              "via": outcome.source, "emailed": proved}
+    if outcome.source == "dev_inbox":
+        answer["inbox_url"] = mail_transport.route().settings.email_dev_inbox_url or None
+    if not outcome.sent:
+        answer["link"] = link
+    return answer
+
+
+def delivery_of(db: Any, invitation_id: str) -> dict[str, Any]:
+    """The last send of an invitation, for the list: {delivery: {status, reason}} or nothing."""
+    r = db.execute(text("SELECT delivery_status, delivery_error, emailed FROM identity_invitations "
+                        "WHERE id = :id"), {"id": invitation_id}).first()
+    if r is None or not r.delivery_status:
+        return {}
+    return {"emailed": bool(r.emailed),
+            "delivery": {"status": r.delivery_status, "reason": r.delivery_error}}
+
+
+def reissue(db: Any, *, actor: AuthContext, invitation_id: str) -> Optional[tuple[Invitation, str]]:
+    """Resend: a NEW token (the old link stops working) and a fresh 7 days, same person and roles.
+    None when there is no open invitation by that id in the actor's org."""
+    token = random_token("binv_")
+    r = db.execute(text("UPDATE identity_invitations SET token_hash = :th, expires_at = :exp, "
+                        "emailed = false WHERE id = :id AND org_id = :o AND accepted_at IS NULL AND "
+                        "revoked_at IS NULL RETURNING *"),
+                   {"th": sha256_hex(token), "exp": utcnow() + timedelta(days=TTL_DAYS),
+                    "id": invitation_id, "o": actor.principal.org_id}).first()
+    if r is None:
+        return None
+    emit(db, org_id=actor.principal.org_id, event_type="user.invite_resent", outcome=Outcome.SUCCESS,
+         ctx=actor, target_type="invitation", target_id=invitation_id)
+    return _row(r), token
