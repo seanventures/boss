@@ -362,7 +362,7 @@ export function StepDoneBy({ act, approval, output, phase, status, planned, view
   /** The Ask's tooltip when no agent has the step: the caller's, since the caller owns the door
    *  (it opens the dock through openDockAbout). */
   askBossTip?: string;
-  /** "Started 18:02Z", "Attempt 2". */
+  /** "Started 18:02" (local), "Attempt 2". */
   facts: string[];
   /** Why a skipped step did not apply. */
   skipped?: string;
@@ -546,10 +546,12 @@ export function StepSection({ title, testId, children, empty }: {
   );
 }
 
-/** "Started 18:01Z · Attempt 2": when it began and whether it is a retry. */
+/** "Started 18:01 · Attempt 2": when it began (the reader's own local time, like every other
+ *  clock in the console — see lib/log-time) and whether it is a retry. No "Z": `clock()` is
+ *  local, not UTC, and a trailing "Z" mislabelled it as UTC (BOSSAPP-615). */
 export function stepFacts(step: { started_at?: string | null; attempt?: number }): string[] {
   const out: string[] = [];
-  if (step.started_at && clock(step.started_at)) out.push(`Started ${clock(step.started_at)}Z`);
+  if (step.started_at && clock(step.started_at)) out.push(`Started ${clock(step.started_at)}`);
   if ((step.attempt ?? 0) > 1) out.push(`Attempt ${step.attempt}`);
   return out;
 }

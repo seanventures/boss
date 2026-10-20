@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 
 import { clock, dayLabel, utcTitle } from "../lib/log-time";
 import { clock as riverClock, dayLabel as riverDay } from "../app/agents/activity-river";
-import { clock as stepClock } from "../app/workflows/step-run";
+import { clock as stepClock, stepFacts } from "../app/workflows/step-run";
 
 const AT = "2026-10-04T18:02:41.512Z";
 
@@ -19,6 +19,14 @@ describe("one instant reads the same everywhere", () => {
     expect(riverClock(AT)).toBe(hm);
     expect(stepClock(AT)).toBe(hm);
     expect(clock(AT, { seconds: false })).toBe(hm);
+  });
+
+  it("a step card's 'Started' time is local, and never claims to be UTC (BOSSAPP-615)", () => {
+    const local = new Date(AT);
+    const hm = `${String(local.getHours()).padStart(2, "0")}:${String(local.getMinutes()).padStart(2, "0")}`;
+    const [facts] = [stepFacts({ started_at: AT })];
+    expect(facts).toEqual([`Started ${hm}`]);
+    expect(facts[0]).not.toMatch(/Z$/);
   });
 
   it("the tooltip is the UTC instant", () => {

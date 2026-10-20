@@ -971,13 +971,20 @@ def endpoint_state(connection, project_id: str, kind: str = "grafana") -> dict[s
 
 def dashboard_link(state: dict[str, Any], app: str) -> tuple[Optional[str], Optional[str]]:
     """(the app's dashboard URL, or None and why). A link only when the recorded check says
-    Grafana answers and — when it could list them — has this app's dashboard."""
+    Grafana answers and — when it could list them — has this app's dashboard.
+
+    Always routed through `public_url()` here, on `base_url` — never on a `public_url` field
+    the caller may or may not have forwarded. A caller that trims `endpoint_state`'s dict down
+    to a handful of keys (obs_view's header projection did exactly this) used to drop
+    `public_url` silently, and the link fell back to the docker-internal `base_url`
+    (http://grafana:3000) — unreachable from a browser. Deriving it here instead of trusting a
+    pass-through means every caller gets the browser-reachable link with no way to opt out."""
     if state.get("state") != "answering" or not state.get("base_url"):
         return None, state.get("reason") or "Grafana isn't answering"
     known = state.get("dashboards")
     if known is not None and dashboard_uid(app) not in set(known):
         return None, "No dashboard for this app yet: deploy the stack again"
-    return grafana_url(state.get("public_url") or state["base_url"], app), None
+    return grafana_url(public_url(state["base_url"]), app), None
 
 
 def explore_url(base: str, expr: str, start_ms: int, end_ms: int) -> str:

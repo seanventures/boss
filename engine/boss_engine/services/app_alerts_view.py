@@ -115,7 +115,7 @@ def _grafana(connection, project_id: str) -> dict[str, Any]:
 def _explore(grafana: dict, alert: dict) -> tuple[Optional[str], Optional[str]]:
     """Grafana Explore for the breach window (10 minutes before it fired to when it cleared, or
     now), or None and why."""
-    from .observability_stack import explore_url
+    from .observability_stack import explore_url, public_url
 
     if alert.get("source_kind") == "signal" or not alert.get("expr"):
         return None, None
@@ -123,7 +123,9 @@ def _explore(grafana: dict, alert: dict) -> tuple[Optional[str], Optional[str]]:
         return None, grafana.get("reason") or "Grafana isn't answering"
     start = (alert.get("fired_at") or alert.get("active_at")) - timedelta(minutes=10)
     end = alert.get("cleared_at") or datetime.now(timezone.utc)
-    return explore_url(grafana.get("public_url") or grafana["base_url"], alert["expr"], int(start.timestamp() * 1000),
+    # Routed through public_url() on base_url, not a forwarded public_url field — see
+    # observability_stack.dashboard_link for why that field cannot be trusted.
+    return explore_url(public_url(grafana["base_url"]), alert["expr"], int(start.timestamp() * 1000),
                        int(end.timestamp() * 1000)), None
 
 
