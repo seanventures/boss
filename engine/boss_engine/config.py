@@ -423,6 +423,11 @@ class Settings(BaseSettings):
     email_from_name: Optional[str] = Field(
         default=None, alias="BOSS_EMAIL_FROM_NAME"
     )
+    #: The dev inbox (host:port), e.g. the bundled Mailpit at mailpit:1025. Used only when no
+    #: provider is configured; nothing sent to it leaves the machine (services/mail_transport.py).
+    email_dev_inbox: str = Field(default="", alias="BOSS_EMAIL_DEV_INBOX")
+    #: Where a browser opens the dev inbox (Mailpit's UI), for the console's "Open inbox".
+    email_dev_inbox_url: str = Field(default="", alias="BOSS_EMAIL_DEV_INBOX_URL")
     require_api_auth: bool = Field(default=False, alias="BOSS_REQUIRE_API_AUTH")
     # BOSS IDENTITY ENFORCEMENT (docs/product/IDENTITY.md §6.6, IDENTITY_BUILD.md §2.4).
     # off | shadow | enforce. ENFORCE BY DEFAULT: a deny is refused. Shadow (evaluate, record the

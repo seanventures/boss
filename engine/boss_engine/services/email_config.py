@@ -116,6 +116,9 @@ def save(
     )
     # The event carries the host, never the password — an event stream is read by more people
     # and kept longer than anybody expects.
+    from .mail_transport import forget_cached
+
+    forget_cached()
     emit_event(connection, project_id, "email.smtp_configured", actor,
                "project_configuration", CONFIG_KEY,
                {"host": host, "port": port, "from_address": from_address})
