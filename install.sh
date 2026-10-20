@@ -735,6 +735,12 @@ GRAFANA_PORT="${GRAFANA_PORT:-3300}"
 MON_PROMETHEUS_URL=""
 MON_GRAFANA_URL=""
 MON_GRAFANA_PUBLIC_URL=""
+# THE DEV INBOX (Mailpit, compose `web` profile): mail lands there until a provider is set in
+# Settings › Email, so invitations work on a fresh install with no mail account (docs EMAIL.md).
+MAILPIT_PORT="${BOSS_MAILPIT_PORT:-$(grep -m 1 '^BOSS_MAILPIT_PORT=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2- || true)}"
+MAILPIT_PORT="${MAILPIT_PORT:-8025}"
+MAIL_DEV_INBOX=""
+MAIL_DEV_INBOX_URL=""
 if [[ "$WITH_WEB" -eq 1 ]]; then
   COMPOSE_PROFILES="--profile web"
   ui_ok "Mission Control: yes (port $WEB_PORT)"
@@ -742,6 +748,9 @@ if [[ "$WITH_WEB" -eq 1 ]]; then
   MON_GRAFANA_URL="http://grafana:3000"
   MON_GRAFANA_PUBLIC_URL="http://localhost:${GRAFANA_PORT}"
   ui_ok "Monitoring: bundled Prometheus and Grafana (Grafana on port $GRAFANA_PORT)"
+  MAIL_DEV_INBOX="mailpit:1025"
+  MAIL_DEV_INBOX_URL="http://localhost:${MAILPIT_PORT}"
+  ui_ok "Email: dev inbox (Mailpit on port $MAILPIT_PORT) until you set a provider in Settings › Email"
   if port_in_use "$GRAFANA_PORT" && ! docker ps --format '{{.Names}}' 2>/dev/null | grep -q 'grafana'; then
     ui_warn "Port $GRAFANA_PORT is already in use — set BOSS_GRAFANA_PORT to another port and re-run if Grafana does not start."
   fi
@@ -1183,6 +1192,10 @@ BOSS_GRAFANA_PORT=${GRAFANA_PORT}
 BOSS_MONITORING_PROMETHEUS_URL=${MON_PROMETHEUS_URL}
 BOSS_MONITORING_GRAFANA_URL=${MON_GRAFANA_URL}
 BOSS_MONITORING_GRAFANA_PUBLIC_URL=${MON_GRAFANA_PUBLIC_URL}
+# The dev inbox (Mailpit) catches mail until a provider is set; empty when Mission Control is skipped.
+BOSS_MAILPIT_PORT=${MAILPIT_PORT}
+BOSS_EMAIL_DEV_INBOX=${MAIL_DEV_INBOX}
+BOSS_EMAIL_DEV_INBOX_URL=${MAIL_DEV_INBOX_URL}
 BOSS_COMMUNITY_SECRET_STORE=${SECRET_STORE}
 BOSS_BIND_ADDRESS=${BIND_ADDRESS}
 BOSS_CONSOLE_PUBLIC_ORIGIN=${CONSOLE_ORIGIN}
