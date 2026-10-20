@@ -185,8 +185,14 @@ def seed_accounts(run_host: RunHost, owner_email: str, out: Path, *, org: str = 
     """`seed-test-accounts` as the claimed Owner. With `copy_out` (a compose stack) the file is
     written inside the container, copied to `out` (0600) and removed there."""
     inner = str(out) if copy_out is None else f"/tmp/seed-{os.getpid()}.json"
-    done = run_host(["-m", "boss_engine.identity.cli", "seed-test-accounts", "--org", org,
-                     "--owner-email", owner_email, "--out", inner])
+    # The `seed-test-accounts` CLI command left the runtime (8bf0581b7: contributor QA tools are
+    # not shipped); the seeding function is still there, so the harness calls it directly.
+    done = run_host(["-c", (
+        "import sys\nfrom boss_engine.db import begin\n"
+        "from boss_engine.identity.seed_accounts import seed_test_accounts\n"
+        "with begin() as db:\n"
+        "    seed_test_accounts(db, org_id=sys.argv[1], owner_email=sys.argv[2], out=sys.argv[3])\n"),
+        org, owner_email, inner])
     if done.returncode != 0:
         raise IdentitySetupError("seed-test-accounts failed: " + (done.stderr or done.stdout).strip()[-400:])
     if copy_out is not None:
