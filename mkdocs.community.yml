@@ -74,6 +74,7 @@ nav:
   - People and access:
       - People and access: PEOPLE_AND_ACCESS.md
       - Sign-in setup: SIGN_IN_SETUP.md
+      - Email: EMAIL.md
       - Agents and access: AGENTS_AND_ACCESS.md
       - Build sandbox: SANDBOX.md
       - Architecture approval and spending: ARCHITECTURE_GOVERNANCE.md

@@ -2698,11 +2698,10 @@ def _notify(
     kind = channel.split(":", 1)[0].lower()
     try:
         if kind == "email":
-            from .email_adapter import EmailAdapter
-            from .email_config import settings_for
+            from .mail_transport import send
 
-            receipt = EmailAdapter(settings_for(connection, settings, project_id)).send_message(
-                channel, subject, body)
+            receipt = send(channel, subject, body, connection=connection, settings=settings,
+                           project_id=project_id)
         elif kind == "mattermost":
             from .mattermost_adapter import MattermostAdapter
 

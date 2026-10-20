@@ -529,18 +529,14 @@ def check(connection: Connection, settings: Any, project_id: str, key: str
         return False, ("this project has no verified deployment host, no active target and no "
                        "stack target")
     if key == "email":
-        from .email_config import settings_for
+        from .mail_transport import route
 
-        effective = settings_for(connection, settings, project_id) if settings else None
-        host = getattr(effective, "email_smtp_host", None) if effective else None
-        sender = getattr(effective, "email_from_address", None) if effective else None
-        allowed = bool(getattr(effective, "email_real_send_allowed", False)) if effective else False
-        if host and sender and allowed:
-            return True, f"sends through {host} as {sender}"
-        if host and sender:
-            return False, ("SMTP is set in the environment but BOSS_EMAIL_REAL_SEND_ALLOWED is "
-                           "false, so nothing would be sent")
-        return False, "no SMTP server is configured for this project"
+        if not settings:
+            return False, "no SMTP server is configured for this project"
+        chosen = route(connection, settings, project_id)
+        if chosen.ready:
+            return True, f"sends through {chosen.detail}"
+        return False, chosen.detail.rstrip(".")
     if key == "mattermost":
         # CONNECTED IN SKILLS & MCP › Team chat (tested when saved), or the environment.
         from .kit_connections import TEAM_CHAT_KEY, _config

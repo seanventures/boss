@@ -19,7 +19,8 @@ from .core import (
     now_utc,
 )
 from .receipts import ReceiptService
-from .email_adapter import EmailAdapter
+from . import mail_transport
+from .email_adapter import recipient_from_channel
 from .slack_adapter import SlackAdapter
 from .mattermost_adapter import MattermostAdapter
 from .github_adapter import IntegrationConfigurationError
@@ -44,7 +45,6 @@ class CommsService:
         self.receipts = ReceiptService()
         self.slack = SlackAdapter(settings)
         self.mattermost = MattermostAdapter(settings)
-        self.email = EmailAdapter(settings)
 
     def list_channel_policies(
         self,
@@ -684,7 +684,8 @@ class CommsService:
         self._set_outbox_status(connection, message_id, "sending", receipt["id"])
         try:
             provider_ref = self._send_message(
-                provider, message["channel"], message.get("subject"), message["body"]
+                provider, message["channel"], message.get("subject"), message["body"],
+                connection=connection, project_id=project_id,
             )
         except IntegrationConfigurationError as error:
             self.receipts.mark_failed(connection, receipt["id"], {"message": str(error)})
@@ -837,12 +838,16 @@ class CommsService:
         return None
 
     def _send_message(
-        self, provider: dict[str, str], channel: str, subject: Optional[str], body: str
+        self, provider: dict[str, str], channel: str, subject: Optional[str], body: str,
+        *, connection: Optional[Connection] = None, project_id: Optional[str] = None,
     ) -> str:
         if provider["key"] == "slack":
             return self.slack.post_message(channel, subject, body)
         if provider["key"] == "email":
-            return self.email.send_message(channel, subject, body)
+            # The one transport: this project's saved server, the environment, the dev inbox.
+            recipient_from_channel(channel)
+            return mail_transport.send(channel, subject, body, connection=connection,
+                                       settings=self.settings, project_id=project_id)
         if provider["key"] == "mattermost":
             return self.mattermost.post_message(channel, subject, body)
         raise RuntimeError(f"Unsupported provider key: {provider['key']}")

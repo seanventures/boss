@@ -25,7 +25,7 @@ from boss_engine.identity import api_keys, invitations, recovery, service_accoun
 from boss_engine.identity import links as auth_links
 from boss_engine.identity.audit import Outcome
 from boss_engine.identity.authn import AuthnError
-from boss_engine.identity.authn_support import emit, public_origin, send_mail, smtp_configured
+from boss_engine.identity.authn_support import emit, public_origin, send_mail
 from boss_engine.identity.principal import AuthContext
 
 from .identity_auth import current_context, error, refusal
@@ -158,6 +158,20 @@ def _bump(db: Any, ctx: AuthContext) -> None:
 
 
 
+def _delivered(status: int, inv: invitations.Invitation, delivery: dict[str, Any]) -> JSONResponse:
+    """An invitation's answer: what happened to the email, and the link ONLY when it was not
+    emailed — shown once to the authenticated inviter to hand over (H2, F3)."""
+    link = delivery.pop("link", None)
+    body: dict[str, Any] = {"invitation_id": inv.id, "email": inv.email,
+                            "emailed": bool(delivery.get("emailed")),
+                            "expires_at": inv.expires_at.isoformat(), "delivery": delivery}
+    headers = None
+    if link:
+        body.update({"link": link, "shown_once": True})
+        headers = {"Cache-Control": "no-store"}
+    return JSONResponse(status_code=status, content=body, headers=headers)
+
+
 def build_identity_people_router() -> APIRouter:
     router = APIRouter(tags=["identity-admin"])
 
@@ -212,21 +226,7 @@ def build_identity_people_router() -> APIRouter:
                 ctx = current_context(request, db)
                 inv, token = invitations.create(db, inviter=ctx, email=body.email, bindings=body.bindings,
                                                 group_ids=body.group_ids)
-                link = auth_links.url("invite", public_origin(db) or "", token)
-                # H2 (F3): an invitation is emailed only on the BOUND public origin; without one the
-                # link is shown once to the inviter instead. M1: an emailed invitation proves the
-                # mailbox, so accepting it verifies the address (identity_invitations.emailed).
-                if smtp_configured() and public_origin(db):
-                    db.execute(text("UPDATE identity_invitations SET emailed = true WHERE id = :id"),
-                               {"id": inv.id})
-                    send_mail(inv.email, "You are invited to BOSS",
-                              f"{ctx.principal.display_name} invited you to BOSS. Accept within 7 days:\n\n{link}")
-                    return JSONResponse(status_code=201, content={
-                        "invitation_id": inv.id, "emailed": True, "expires_at": inv.expires_at.isoformat()})
-                # No SMTP: shown ONCE to the authenticated inviter, to hand over out of band.
-                return JSONResponse(status_code=201, content={
-                    "invitation_id": inv.id, "emailed": False, "link": link, "shown_once": True,
-                    "expires_at": inv.expires_at.isoformat()}, headers={"Cache-Control": "no-store"})
+                return _delivered(201, inv, invitations.deliver(db, inv, token))
         except invitations.InvitationRefused as exc:
             return error(exc.status, exc.code, **exc.detail)
         except AuthnError as exc:
@@ -240,8 +240,24 @@ def build_identity_people_router() -> APIRouter:
                 ctx = current_context(request, db)
                 return JSONResponse({"invitations": [
                     {"id": i.id, "email": i.email, "bindings": i.bindings, "group_ids": i.group_ids,
-                     "invited_by": i.invited_by, "expires_at": i.expires_at.isoformat()}
+                     "invited_by": i.invited_by, "expires_at": i.expires_at.isoformat(),
+                     **invitations.delivery_of(db, i.id)}
                     for i in invitations.list_open(db, ctx.principal.org_id)]})
+        except AuthnError as exc:
+            return refusal(exc)
+
+    @router.post("/v1/identity/invitations/{invitation_id}/resend")
+    @permit(P.USER_INVITE)
+    def resend_invitation(invitation_id: str, request: Request):
+        """A new link (the old one stops working), a fresh 7 days, and another send."""
+        try:
+            with begin() as db:
+                ctx = current_context(request, db)
+                found = invitations.reissue(db, actor=ctx, invitation_id=invitation_id)
+                if found is None:
+                    return error(404, "not_found")
+                inv, token = found
+                return _delivered(200, inv, invitations.deliver(db, inv, token))
         except AuthnError as exc:
             return refusal(exc)
 

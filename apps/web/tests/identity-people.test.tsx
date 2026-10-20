@@ -239,6 +239,33 @@ describe("the invite sheet and the denied page, against the API's bodies", () =>
     ]);
   });
 
+  it("shows a failed send with the server's reason, the link to copy, and Resend", async () => {
+    const { el, fetchSpy } = await mount(<InviteSheet roles={F.roles(NOW)} onClose={() => undefined} />);
+    const failed = { invitation_id: "inv_1", emailed: false, link: "https://boss.example.com/invite#t=abc", shown_once: true,
+      delivery: { status: "failed", reason: "smtp.example.com:587 refused the recipient (550 no such user).", via: "console" } };
+    const sent = { invitation_id: "inv_1", emailed: true, delivery: { status: "sent", reason: null, via: "console" } };
+    fetchSpy.mockImplementation((async (url: string) => new Response(JSON.stringify(String(url).endsWith("/resend") ? sent : failed),
+      { status: String(url).endsWith("/resend") ? 200 : 201 })) as never);
+    const box = el.ownerDocument.querySelector<HTMLTextAreaElement>("#invite-emails")!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(box, "ana@acme.dev");
+      box.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => { (el.ownerDocument.querySelector("[data-testid='invite-send']") as HTMLButtonElement).click(); });
+    for (let i = 0; i < 4; i += 1) await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+    const sheet = el.ownerDocument.querySelector("[data-testid='invite-links']")!;
+    expect(sheet.querySelector("[data-testid='invite-status']")!.textContent).toContain("Failed");
+    expect(sheet.querySelector("[data-testid='invite-reason']")!.textContent).toContain("550 no such user");
+    expect(sheet.textContent).toContain("https://boss.example.com/invite#t=abc");
+    expect(sheet.textContent).toContain("Copy link");
+    await act(async () => { (sheet.querySelector("[data-testid='invite-resend']") as HTMLButtonElement).click(); });
+    for (let i = 0; i < 4; i += 1) await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+    const posts = (fetchSpy.mock.calls as unknown as [string, RequestInit][]).filter(([, init]) => init?.method === "POST");
+    expect(posts.map(([u]) => u)).toEqual(["/v1/identity/users", "/v1/identity/invitations/inv_1/resend"]);
+    expect(sheet.querySelector("[data-testid='invite-status']")!.textContent).toContain("Sent");
+    expect(sheet.textContent).not.toContain("#t=abc");
+  });
+
   it("asks for access with the API's fields only (permission, reason)", async () => {
     const { el, fetchSpy } = await mount(<AccessDenied permission="audit:read" page="Audit" />, "viewer");
     await act(async () => { (el.querySelector("[data-testid='request-access']") as HTMLButtonElement).click(); });

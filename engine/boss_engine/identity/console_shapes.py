@@ -64,18 +64,10 @@ def active_people(org_id: str, *, db: Any) -> int:
 
 
 def smtp_configured(db: Any, settings: Any = None) -> bool:
-    if settings is None:
-        from ..config import get_settings
-        settings = get_settings()
-    if getattr(settings, "email_smtp_host", None):
-        return True
-    try:
-        from ..services import email_config
-        project = getattr(settings, "default_project_id", None) or "boss-dogfood"
-        with db.begin_nested():
-            return bool(email_config.describe(db, project).get("host"))
-    except Exception:  # noqa: BLE001 — no table, no row: no SMTP
-        return False
+    """The same answer identity mail acts on (services/mail_transport.py, the one resolver)."""
+    from ..services import mail_transport
+
+    return mail_transport.route(db, settings).ready
 
 
 def network_mode(org_id: str, *, db: Any, now: Optional[datetime] = None) -> dict[str, Any]:

@@ -338,12 +338,16 @@ def view(connection: Connection, settings: Any, project_id: str, ability: dict[s
             fields["security"] = ("ssl" if stored.get("use_ssl") else "starttls"
                                   if stored.get("use_tls") else "none")
             acts_as = stored.get("from_address")
-        elif getattr(settings, "email_smtp_host", None):
-            # Configured the old way (environment). It works; say so, and show where.
-            provider, connected = "smtp", True
-            fields = {"host": str(settings.email_smtp_host),
-                      "from_address": str(getattr(settings, "email_from_address", "") or "")}
-            acts_as = getattr(settings, "email_from_address", None)
+        else:
+            from .mail_transport import route
+
+            chosen = route(connection, settings, project_id)
+            if chosen.source == "env":
+                # Configured the old way (environment). It works; say so, and show where.
+                provider, connected = "smtp", True
+                fields = {"host": str(chosen.settings.email_smtp_host),
+                          "from_address": str(chosen.settings.email_from_address or "")}
+                acts_as = chosen.settings.email_from_address
     elif key == "file_tickets":
         row = kit_tracker(connection, project_id)
         if row is not None:
@@ -666,7 +670,7 @@ def smtp_security(values: dict[str, Any]) -> str:
 
 
 def _smtp_send(settings: Any, values: dict[str, Any], to: str) -> dict[str, Any]:
-    from .email_adapter import EmailAdapter
+    from .mail_transport import send_with
 
     started = time.monotonic()
     try:
@@ -683,8 +687,8 @@ def _smtp_send(settings: Any, values: dict[str, Any], to: str) -> dict[str, Any]
         "email_real_send_allowed": True,
     })
     try:
-        EmailAdapter(scoped).send_message(
-            f"email:{to}", "BOSS connected ✓",
+        send_with(
+            scoped, to, "BOSS connected ✓",
             "BOSS can send email from this address. Nothing to do.")
     except Exception as error:  # noqa: BLE001
         said = _said(error)
@@ -789,12 +793,13 @@ def run_test(begin: Begin, settings: Any, project_id: str, ability: dict[str, An
                                                     row["provider_key"], row["configuration"])
             return _tracker_test(settings, row["provider_key"], config)
         if test == "smtp_send":
-            from .email_config import settings_for
+            from .mail_transport import route
 
             with begin() as connection:
-                scoped = settings_for(connection, settings, project_id)
-            if not scoped.email_smtp_host:
-                return result(False, error="No mail server set", started=started)
+                chosen = route(connection, settings, project_id)
+            if not chosen.ready:
+                return result(False, error=chosen.detail, started=started)
+            scoped = chosen.settings
             values = {"host": scoped.email_smtp_host, "port": scoped.email_smtp_port,
                       "username": scoped.email_smtp_username,
                       "password": scoped.email_smtp_password,
@@ -879,8 +884,9 @@ def _connect_email(begin: Begin, settings: Any, project_id: str, fields: dict[st
     if not values.get("password"):
         # NOT RETYPED: the test uses the password already stored, which is what Save keeps.
         with begin() as connection:
-            values["password"] = email_config.settings_for(
-                connection, settings, project_id).email_smtp_password
+            from .mail_transport import route
+
+            values["password"] = route(connection, settings, project_id).settings.email_smtp_password
     outcome = _smtp_send(settings, values, actor_email or str(values.get("from_address")))
     _fail(outcome)
     with begin() as connection:

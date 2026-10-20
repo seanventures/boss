@@ -14,14 +14,19 @@ import { GatedButton } from "../components/gated";
 import React, { useEffect, useState } from "react";
 
 import { apiWrite } from "../lib/api-write";
+import { kitApi } from "../lib/kit-api";
 
 type Described = {
   configured?: boolean; host?: string; port?: number; username?: string;
   from_address?: string; from_name?: string; has_password?: boolean;
+  /** Where mail goes right now (services/mail_transport.py). */
+  route?: { ready: boolean; source: string; detail: string; inbox_url?: string | null };
 };
 
-export function EmailSetup({ projectId, compact = false, onSaved }: {
+export function EmailSetup({ projectId, compact = false, onSaved, actor = "executive_console" }: {
   projectId: string;
+  /** Who presses Send test (the Kit test runs as them and mails them). */
+  actor?: string;
   /** Inline on a checklist: no heading, fewer words. */
   compact?: boolean;
   onSaved?: () => void;
@@ -55,6 +60,17 @@ export function EmailSetup({ projectId, compact = false, onSaved }: {
     })();
     return () => { alive = false; };
   }, [projectId]);
+
+  const [testing, setTesting] = useState(false);
+  const sendTest = async () => {
+    setTesting(true);
+    setNote(null);
+    const r = await kitApi.test(projectId, actor, "email");
+    setTesting(false);
+    if (!r.ok) { setNote({ text: `Test not sent — ${r.error}`, bad: true }); return; }
+    setNote(r.data.ok ? { text: `Test sent · ${r.data.fact ?? ""}`.trim(), bad: false }
+                      : { text: `Test failed — ${r.data.error ?? "no reason given"}`, bad: true });
+  };
 
   const save = async () => {
     setBusy(true);
@@ -101,28 +117,41 @@ export function EmailSetup({ projectId, compact = false, onSaved }: {
             shown again.
             {current?.configured
               ? ` Configured: ${current.host} as ${current.from_address}.`
-              : " Nothing is configured yet, so those steps cannot send."}
+              : current?.route?.source === "dev_inbox"
+                ? " No provider yet: mail goes to the dev inbox on this machine."
+                : current?.route?.source === "env"
+                  ? ` Sending through ${current.route.detail} (environment).`
+                  : " Nothing is configured yet, so those steps cannot send."}
+            {!current?.configured && current?.route?.inbox_url ? (
+              <> <a href={current.route.inbox_url} target="_blank" rel="noreferrer"
+                    data-testid="email-setup-inbox" title="Mailpit: every email BOSS sent">Open inbox</a></>
+            ) : null}
           </p>
         </>
       )}
+      <p className="detail email-setup-hint" data-testid="email-setup-hint">
+        Brevo or any SMTP: host (e.g. <code>smtp-relay.brevo.com</code>), port 587 STARTTLS,
+        your SMTP login and SMTP key — not the account password — and a From address on your own
+        verified domain (docs: Email).
+      </p>
       <div className="email-setup-grid">
-        <label>SMTP host
+        <label title="Your provider's SMTP relay, e.g. smtp-relay.brevo.com">SMTP host
           <input value={host} onChange={(e) => setHost(e.target.value)}
                  placeholder="smtp.example.com" data-testid="email-setup-host" />
         </label>
-        <label>Port
+        <label title="587 = STARTTLS (usual); 465 = SSL">Port
           <input value={port} onChange={(e) => setPort(e.target.value)} inputMode="numeric"
                  data-testid="email-setup-port" />
         </label>
-        <label>Send as
+        <label title="An address on a domain you verified with the provider (SPF + DKIM)">Send as
           <input value={fromAddress} onChange={(e) => setFromAddress(e.target.value)}
                  placeholder="boss@example.com" data-testid="email-setup-from" />
         </label>
-        <label>Username
+        <label title="The SMTP login your provider shows (Brevo: SMTP & API › SMTP)">Login
           <input value={username} onChange={(e) => setUsername(e.target.value)}
                  autoComplete="off" data-testid="email-setup-username" />
         </label>
-        <label>Password
+        <label title="The SMTP key, not your account password. Kept in the secret store.">SMTP key
           <input type="password" value={password} onChange={(e) => setPassword(e.target.value)}
                  autoComplete="new-password"
                  placeholder={current?.has_password ? "unchanged" : ""}
@@ -133,6 +162,11 @@ export function EmailSetup({ projectId, compact = false, onSaved }: {
               disabled={busy || !host.trim() || !fromAddress.trim()}
               onClick={() => void save()}>
         {busy ? "Saving…" : "Save mail server"}
+      </GatedButton>
+      <GatedButton permission="skill:invoke" type="button" className="cap-btn ghost" data-testid="email-setup-test"
+              disabled={testing || !(current?.configured || current?.route?.ready)} title="Sends a test email to you"
+              onClick={() => void sendTest()}>
+        {testing ? "Sending…" : "Send test"}
       </GatedButton>
       {note ? (
         <p className={note.bad ? "dw-new-error" : "detail"} data-testid="email-setup-note">

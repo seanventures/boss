@@ -718,10 +718,10 @@ def deliver(connection, settings: Any, n: Mapping[str, Any]) -> str:
     if cp["kind"] == "console":
         return "shown in the console"
     if cp["kind"] == "email":
-        from .email_adapter import EmailAdapter
+        from .mail_transport import send
 
-        return EmailAdapter(settings).send_message("email:" + cp["config"]["address"],
-                                                   n["subject"], n["body"])
+        return send(cp["config"]["address"], n["subject"], n["body"], connection=connection,
+                    settings=settings, project_id=n["project_id"])
     secret = _secret(connection, settings, cp)
     if not secret:
         raise NotConfigured("The contact point's webhook is not in the secret store")

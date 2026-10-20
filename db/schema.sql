@@ -10008,3 +10008,9 @@ CREATE TABLE IF NOT EXISTS synthetic_checks (
 -- A deploy whose boss.deploy.yaml lost monitoring rules (PR paramg/boss-sandbox#234): the rule
 -- keeps running, is marked with when it went missing, and BOSS raises MonitoringRulesDropped.
 ALTER TABLE app_alert_rules ADD COLUMN IF NOT EXISTS dropped_from_manifest_at TIMESTAMPTZ;
+
+-- Email invites: what happened to the last send (sent | failed | not_configured) and the server's
+-- reason, so the console can say why an invitation did not arrive. Never the token or a credential.
+ALTER TABLE identity_invitations ADD COLUMN IF NOT EXISTS delivery_status TEXT;
+ALTER TABLE identity_invitations ADD COLUMN IF NOT EXISTS delivery_error TEXT;
+ALTER TABLE identity_invitations ADD COLUMN IF NOT EXISTS delivered_at TIMESTAMPTZ;

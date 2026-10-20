@@ -232,7 +232,7 @@ def install(monkeypatch, world: World) -> None:
     monkeypatch.setattr(settings, "identity_server_key", TEST_SERVER_KEY)
     monkeypatch.setattr(signin, "DELAY_ENABLED", False)
     monkeypatch.setattr(email_signin, "UNIFORM_FLOOR_SECONDS", 0.05)
-    monkeypatch.setattr(authn_support, "MAIL_TRANSPORT", lambda to, s, b: world.mail.append((to, s, b)))
+    monkeypatch.setattr(authn_support, "MAIL_TRANSPORT", lambda to, s, b, **_kw: world.mail.append((to, s, b)))
     monkeypatch.setattr(email_signin, "DELIVER", lambda to, s, b: world.mail.append((to, s, b)))
     monkeypatch.setattr(authn_support, "smtp_configured", lambda: world.smtp)
     monkeypatch.setattr(email_signin, "available", lambda: world.smtp)

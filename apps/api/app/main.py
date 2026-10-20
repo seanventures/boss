@@ -24758,12 +24758,14 @@ def raise_workflow_error(error: workflow_runtime.WorkflowError) -> None:
 @app.get("/v1/email/config")
 @permit(P.COMMS_READ, scope=Scope.project(query="project_id"))
 def get_email_config(project_id: str, actor: str = "executive_console") -> dict:
-    """How this project sends email. Never returns the password — only whether one is set."""
-    from boss_engine.services import email_config
+    """How this project sends email. Never returns the password — only whether one is set.
+    `route` is where mail actually goes now (saved server, environment, dev inbox or nowhere)."""
+    from boss_engine.services import email_config, mail_transport
 
     with begin(engine) as connection:
         require_project_actor(connection, project_id, actor, "integration_manage")
-        return email_config.describe(connection, project_id)
+        return {**email_config.describe(connection, project_id),
+                "route": mail_transport.route(connection, get_settings(), project_id).describe()}
 
 
 @app.post("/v1/email/config")
@@ -24801,8 +24803,8 @@ def set_email_config(payload: open_bodies.EmailConfigBody) -> dict:
 @permit(P.COMMS_MANAGE, scope=Scope.project(body="project_id"))
 def test_email_config(payload: EmailTestRequest) -> dict:
     """Send a test through the governed outbox, with a receipt and a budget reservation."""
-    from boss_engine.services import email_config
     from boss_engine.services.comms import CommsService
+    from boss_engine.services.email_adapter import recipient_from_channel
     from boss_engine.services.github_adapter import IntegrationConfigurationError
 
     project_id = payload.project_id
@@ -24817,10 +24819,10 @@ def test_email_config(payload: EmailTestRequest) -> dict:
     effect_key = f"email-test-delivery:{project_id}:{dedupe_key}"
     with begin(engine) as connection:
         require_project_actor(connection, project_id, actor, "comms_manage")
-        scoped_settings = email_config.settings_for(connection, get_settings(), project_id)
-        delivery = CommsService(scoped_settings)
+        # The server is resolved where it is sent (services/mail_transport.py), like every send.
+        delivery = CommsService(get_settings())
         try:
-            recipient = delivery.email._recipient_from_channel(
+            recipient = recipient_from_channel(
                 to if to.startswith("email:") else f"email:{to}")
         except IntegrationConfigurationError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
@@ -24888,7 +24890,7 @@ def test_email_config(payload: EmailTestRequest) -> dict:
 
         reservation = delivery.budget.reserve(
             connection, project_id, "comms",
-            scoped_settings.comms_message_budget_usd_micros,
+            delivery.settings.comms_message_budget_usd_micros,
             "Send one SMTP configuration test message", 15,
         )
         if reservation["status"] != "reserved":
