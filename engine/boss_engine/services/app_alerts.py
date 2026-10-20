@@ -1386,6 +1386,21 @@ def _group(connection, target: dict, now: datetime, rules_by_id: dict[str, dict]
         alerted = bool(inc and (inc["finalize_ctx"].get("alert") not in (None, {})))
         window = _window_for(connection, target["id"], rule, now)
         title = _incident_title(target, a, window, rule)
+        if inc is not None and inc["status"] in _CLOSED:
+            until = incident_response.settling_until(inc, rule)
+            if until and now < until:
+                # SETTLING (BOSSAPP-613): the fix was verified, but this rule's own window
+                # still holds samples from before it. The firing JOINS the occurrence that just
+                # ended — evidence once, nothing reset — and is HELD: only if it still fires once
+                # the window has fully elapsed past the fix is it a new occurrence.
+                _settle(connection, inc["id"], a, rule, window, until, now)
+                actions.append({"alert_id": a["id"], "incident_id": inc["id"],
+                                "action": "settling", "event_id": None,
+                                "kind": a["rule_kind"]})
+                continue
+            if not incident_response._response_in_flight(connection, pid, inc["id"]):
+                # A genuinely new occurrence: the last one's record is kept, never erased.
+                incident_response.archive_occurrence(connection, inc["id"], now=now)
         if inc is None:
             inc_id = make_id("inc")
             connection.execute(sql(
@@ -1456,6 +1471,27 @@ def _group(connection, target: dict, now: datetime, rules_by_id: dict[str, dict]
         actions.append({"alert_id": a["id"], "incident_id": inc_id, "action": action,
                         "event_id": event_id, "kind": a["rule_kind"]})
     return actions
+
+
+def _settle(connection, incident_id: str, a: dict, rule: Optional[dict], window: dict,
+            until: datetime, now: datetime) -> None:
+    """A lagging firing inside a resolved incident's settle window: attached to that incident
+    and recorded once as evidence. The incident stays resolved with its record intact."""
+    from . import incident_response
+
+    connection.execute(sql("UPDATE app_alerts SET incident_id = :i WHERE id = :id"),
+                       {"i": incident_id, "id": a["id"]})
+    if connection.execute(sql(
+            "SELECT 1 FROM incident_evidence WHERE incident_id = :i AND kind = 'alert' "
+            "AND payload->>'settling_alert_id' = :a AND created_at >= :since LIMIT 1"),
+            {"i": incident_id, "a": a["id"],
+             "since": until - incident_response.rule_settle_window(rule)}).first():
+        return
+    incident_response._evidence(connection, incident_id, "alert", ref=a["alertname"], payload={
+        "fired_at": _iso(now), "settling_alert_id": a["id"], "settle_until": _iso(until),
+        "note": "Fired inside the fix's settle window on samples from before the fix; joined "
+                "to this occurrence, held until the rule's window has passed.",
+        **_alert_payload(a, rule, window), "value": a.get("value")}, at=now)
 
 
 def _still_firing(connection, target: dict, now: datetime) -> list[dict[str, Any]]:
