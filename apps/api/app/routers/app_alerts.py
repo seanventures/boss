@@ -5,6 +5,11 @@
 * ``PUT  /v1/apps/{target_id}/alert-rules`` — change rules (or add a custom PromQL one); the
   console's edit wins over boss.deploy.yaml and is audited. Respond automatically asks for the
   person's standing grant (409 consent_required, the console asks once).
+* ``POST /v1/apps/{target_id}/alert-rules/{rule_id}/tune-preview`` — Tune: would the rule have
+  fired in the last 24 h, as it is and with the edited values (nothing is saved).
+* ``POST /v1/apps/{target_id}/alert-rules/{rule_id}/propose`` — Tune a rule the repo owns
+  (boss.deploy.yaml): opens a pull request that changes only that rule's lines; the rule's row
+  is left as it is until the merged change deploys. A console rule is saved with the PUT.
 * ``POST /v1/apps/{target_id}/alert-rules/{rule_id}/silence`` — silence a rule for a time, with
   a reason; ``POST /v1/apps/{target_id}/alert-silences/{silence_id}/end`` ends it early.
 * ``GET  /v1/apps/{target_id}/alerts`` — the app's alert history; ``GET /v1/alerts`` — every app's.
@@ -36,6 +41,14 @@ class RulesBody(BaseModel):
     #: [{id?, params?, severity?, for?, enabled?, triage?, auto_respond?, runbook_url?} | a
     #: custom rule {alert, expr, for, labels, annotations} without an id].
     rules: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class TuneBody(BaseModel):
+    project_id: str
+    actor: Optional[str] = None
+    reason: str = ""
+    #: {params?: {threshold, window_minutes, ...}, for?, severity?, expr? (a custom rule)}.
+    change: dict[str, Any] = Field(default_factory=dict)
 
 
 class SilenceBody(BaseModel):
@@ -126,6 +139,52 @@ def build_app_alerts_router(
                 raise HTTPException(status_code=422, detail=str(invalid)) from invalid
             body = _rules_body(connection, pid, target_id)
         return jsonable_encoder(body)
+
+    def _rule(connection, target: dict, rule_id: str) -> dict:
+        from sqlalchemy import text
+
+        row = connection.execute(text(
+            "SELECT * FROM app_alert_rules WHERE id = :i AND subject_id = :t"),
+            {"i": rule_id, "t": target["id"]}).mappings().first()
+        if not row:
+            raise HTTPException(status_code=404, detail="No such rule for this app")
+        return aa._rule_dict(row)
+
+    @router.post("/v1/apps/{target_id}/alert-rules/{rule_id}/tune-preview")
+    @permit(P.OBSERVABILITY_READ, scope=Scope.project(body="project_id"), readonly_post=True)
+    def tune_preview(target_id: str, rule_id: str, payload: TuneBody):
+        """Would it have fired in the last 24 h — as it is, and with the edited values."""
+        from boss_engine.services import rule_tuning as rt
+
+        pid = reader_project(payload.project_id)
+        with begin(engine) as connection:
+            require_reader(connection, pid)
+            target = _target(connection, pid, target_id)
+            rule = _rule(connection, target, rule_id)
+            try:
+                got = rt.preview_change(connection, settings(), target, rule, payload.change)
+            except rt.TuneRefused as refused:
+                raise HTTPException(status_code=422, detail=str(refused)) from refused
+        return jsonable_encoder(got)
+
+    @router.post("/v1/apps/{target_id}/alert-rules/{rule_id}/propose")
+    @permit(P.OBSERVABILITY_MANAGE, scope=Scope.project(body="project_id"))
+    def propose_tuning(target_id: str, rule_id: str, payload: TuneBody):
+        """Tune a rule the repo owns: a pull request to its boss.deploy.yaml, only its lines."""
+        from boss_engine.services import rule_tuning as rt
+
+        pid = reader_project(payload.project_id)
+        with begin(engine) as connection:
+            actor = require_write_actor(connection, pid, payload.actor, "providerops_manage")
+            target = _target(connection, pid, target_id)
+            try:
+                got = rt.propose(connection, settings(), target, rule_id, payload.change,
+                                 actor=actor, reason=payload.reason)
+            except rt.TuneRefused as refused:
+                raise HTTPException(status_code=422, detail=str(refused)) from refused
+            except LookupError as error:
+                raise HTTPException(status_code=404, detail=str(error)) from error
+        return jsonable_encoder(got)
 
     @router.post("/v1/apps/{target_id}/alert-rules/{rule_id}/silence")
     @permit(P.OBSERVABILITY_MANAGE, scope=Scope.project(body="project_id"))

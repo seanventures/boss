@@ -660,7 +660,8 @@ def _interval(connection, subject_id: str) -> int:
 
 
 def _rule_wire(connection, r: dict, target: dict, silences: dict[str, dict],
-               interval_s: int = 60) -> dict[str, Any]:
+               interval_s: int = 60, where: Optional[dict] = None) -> dict[str, Any]:
+    from . import rule_tuning
     kind = r["kind"]
     b = aa.BUILTIN.get(kind, {})
     st = r.get("last_state") if r["enabled"] else "off"
@@ -693,6 +694,9 @@ def _rule_wire(connection, r: dict, target: dict, silences: dict[str, dict],
         # D4: a rule declared in the repo's boss.deploy.yaml (Set up monitoring writes them) is
         # repo-managed: versioned and reviewed in the app's pull requests.
         "managed_by": r.get("managed_by") or ("code" if r["source"] == "yaml" else "builtin"),
+        # Tune: a repo rule is proposed as a pull request to its manifest (path:line here);
+        # every other rule is saved in the console, audited.
+        "tune_via": rule_tuning.via(r), "where": where,
         "changed_by": _person(connection, r.get("changed_by")),
         "changed_at": _iso(r.get("changed_at")),
         "state": st, "state_word": "Silenced" if sil and st in ("firing", "pending") else
@@ -778,12 +782,16 @@ def app_alerts_tab(connection, settings: Any, project_id: str, target_id: str, *
 
     prom = endpoint_state(connection, project_id, "prometheus")
     interval = _interval(connection, target_id)
+    from .rule_tuning import where as rule_homes
+
+    lives = rule_homes(connection, target, rule_rows)
     by_prom = any(r.get("last_source") == "prometheus" for r in rule_rows if r["enabled"])
     if by_prom:
         prom = {"state": "answering", "reason": ""}
     return {
         "target_id": target_id, "app": target["app_name"], "env": target["environment"],
-        "rules": [_rule_wire(connection, r, target, silences, interval) for r in rule_rows],
+        "rules": [_rule_wire(connection, r, target, silences, interval, lives.get(r["id"]))
+                  for r in rule_rows],
         "severities": sev.catalog(), "has_samples": any(is_sample(r) for r in rule_rows),
         "evaluator": ("Prometheus" if prom["state"] == "answering"
                       else "BOSS's own monitoring"),

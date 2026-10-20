@@ -5,7 +5,7 @@
  * alert that fired, in one place.
  *
  *   RULES                                                                    [+ Add rule]
- *    ● Error rate    > 5% for 5 min (≥ 20 req)   Firing   Respond automatically ◉   Edit  Silence
+ *    ● Error rate    > 5% for 5 min (≥ 20 req)   Firing   Respond automatically ◉   Tune  Silence
  *    Evaluated by BOSS's own monitoring · from boss.deploy.yaml · changed by Param, Oct 18
  *   SIGNAL SOURCES
  *    ● HelpDesk AI   signed reports · last 07:00 · 7 today                   Rotate token
@@ -13,14 +13,15 @@
  *    07:05  Error rate 14.4% (rule 5%)  6bf2673  Agent: Opened an incident  Resolved   ▸
  *           ▾ PromQL · value at breach · Explore ↗ · Runbook · the agent's words
  *
- * Rules are edited in the side sheet (rule-sheet.tsx) and silenced in silence-sheet.tsx. Every
+ * Rules are tuned in the side sheet (rule-sheet.tsx: a repo rule becomes a pull request, any
+ * other is saved and audited) and silenced in silence-sheet.tsx. Every alert from a rule has Tune. Every
  * write goes through obsWrite: one press, one effect; Respond automatically asks for consent once.
  */
 import React, { useState } from "react";
 
 import { GatedButton } from "../../components/gated";
 import {
-  HISTORY_WINS, alertDuration, durationWord, removeSamplesPath, rotatePath, triagePath, useHistory,
+  HISTORY_WINS, alertDuration, durationWord, removeSamplesPath, rotatePath, triagePath, tuneTip, useHistory, whereWord,
   useRules, type Alert, type AlertRule, type HistoryWin, type SevInfo, type SignalSource,
 } from "../../lib/app-alerts";
 import { useLocalTime } from "../../lib/local-time";
@@ -70,7 +71,7 @@ function RuleRow({ r, busy, onEdit, onSilence, onRespond, onEndSilence, severiti
         <span className="obs-strong" title={r.description ?? r.summary ?? undefined}>{r.label}</span>
         <SevFlag sev={r.severity} catalog={severities} />
         {r.sample ? <span className="obs-chip" data-testid="obs-rule-sample" title="A labelled sample rule: Remove samples deletes it">Sample</span> : null}
-        {r.managedBy === "code" ? <span className="obs-chip" data-testid="obs-rule-repo" title="Declared in the app's boss.deploy.yaml: change it in a pull request">Repo-managed</span> : null}
+        {r.managedBy === "code" ? <span className="obs-chip" data-testid="obs-rule-repo" title={`Declared in ${r.where ? `${whereWord(r.where)}` : "the app's boss.deploy.yaml"}: Tune proposes a pull request`}>Repo-managed</span> : null}
       </span>
       <span className="inf-muted obs-arule-cond" title={r.expr} data-copy="data">{r.condition}</span>
       <span className="obs-arule-state">
@@ -90,7 +91,7 @@ function RuleRow({ r, busy, onEdit, onSilence, onRespond, onEndSilence, severiti
       </span>
       <span className="obs-arule-acts">
         <GatedButton permission="observability:manage" type="button" className="inf-link" data-testid="obs-rule-edit"
-                     title="Change this rule" onClick={onEdit}>Edit</GatedButton>
+                     title={tuneTip(r)} onClick={onEdit}>Tune</GatedButton>
         {r.silence ? (
           <GatedButton permission="observability:manage" type="button" className="inf-link" data-testid="obs-rule-unsilence"
                        title={`Silenced until ${lt.full(r.silence.endsAt)}: ${r.silence.reason}`} onClick={onEndSilence}>End silence</GatedButton>
@@ -265,7 +266,7 @@ export function AlertRow({ a, targetId, projectId, actor, onDone, showApp, onApp
 }) {
   const lt = useLocalTime();
   const [open, setOpen] = useState(false);
-  const [ruleOpen, setRuleOpen] = useState(false);
+  const [ruleOpen, setRuleOpen] = useState<false | "switches" | "tune">(false);
   const fired = a.firedAt ?? a.activeAt;
   const isOpen = a.status.key !== "resolved";
   return (
@@ -296,7 +297,7 @@ export function AlertRow({ a, targetId, projectId, actor, onDone, showApp, onApp
             Silence and Edit. Its alert name shows when the label alone could be two rules. */}
         {a.ruleId && a.sourceKind === "rule" ? (
           <button type="button" className="inf-link obs-strong obs-alert-what" data-testid="obs-alert-rule"
-                  title={`${a.alertname}: its rule (Respond automatically, Triage, Silence, Edit)`} onClick={() => setRuleOpen(true)}>
+                  title={`${a.alertname}: its rule (Respond automatically, Triage, Silence, Edit)`} onClick={() => setRuleOpen("switches")}>
             {a.label}</button>
         ) : <span className="obs-strong obs-alert-what" title={a.description ?? a.summary} data-user-text>{a.label}</span>}
         {a.alertname && a.alertname !== a.label ? <span className="inf-mono inf-faint" data-testid="obs-alert-rulename" data-copy="data">{a.alertname}</span> : null}
@@ -314,6 +315,15 @@ export function AlertRow({ a, targetId, projectId, actor, onDone, showApp, onApp
                   onClick={onIncident}>Incident</button>
         ) : null}
         <AlertBadges a={a} />
+        {a.ruleId && a.sourceKind === "rule" ? (
+          // TUNE, on the alert itself: loudest on a flapping or noise-marked alert.
+          <GatedButton permission="observability:manage" type="button" className="inf-link" data-testid="obs-alert-tune"
+                       data-tone={a.flapping || a.triage.outcome === "noise" ? "amber" : undefined}
+                       title={a.flapping ? `Flapping: change its threshold or For${a.flapTuning ? ` (suggested: ${a.flapTuning.action})` : ""}`
+                         : a.triage.outcome === "noise" ? "Marked noise: change its threshold so it stops"
+                         : "Change its threshold, with a 24 h preview"}
+                       onClick={() => setRuleOpen("tune")}>Tune</GatedButton>
+        ) : null}
         <span className="ag-spacer" />
         {onAck && a.state !== "resolved" && !a.acked ? (
           <GatedButton permission="observability:manage" type="button" className="inf-link" data-testid="obs-alert-ack"
@@ -325,7 +335,7 @@ export function AlertRow({ a, targetId, projectId, actor, onDone, showApp, onApp
       </span>
       {open ? <AlertDetail a={a} targetId={targetId || a.targetId} projectId={projectId} actor={actor} onDone={onDone} /> : null}
       {ruleOpen ? <RuleOfAlert ruleId={a.ruleId} alertname={a.alertname} targetId={targetId || a.subjectId || a.targetId} projectId={projectId}
-                               actor={actor} onClose={() => { setRuleOpen(false); onDone(); }} /> : null}
+                               actor={actor} start={ruleOpen} onClose={() => { setRuleOpen(false); onDone(); }} /> : null}
     </li>
   );
 }
