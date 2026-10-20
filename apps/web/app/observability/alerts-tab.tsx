@@ -72,6 +72,7 @@ function RuleRow({ r, busy, onEdit, onSilence, onRespond, onEndSilence, severiti
         <SevFlag sev={r.severity} catalog={severities} />
         {r.sample ? <span className="obs-chip" data-testid="obs-rule-sample" title="A labelled sample rule: Remove samples deletes it">Sample</span> : null}
         {r.managedBy === "code" ? <span className="obs-chip" data-testid="obs-rule-repo" title={`Declared in ${r.where ? `${whereWord(r.where)}` : "the app's boss.deploy.yaml"}: Tune proposes a pull request`}>Repo-managed</span> : null}
+        {r.droppedWord ? <span className="obs-chip" data-tone="amber" data-testid="obs-rule-dropped" title={`${r.droppedWord}. Put it back in the manifest, or remove it here`}>Dropped from yaml</span> : null}
       </span>
       <span className="inf-muted obs-arule-cond" title={r.expr} data-copy="data">{r.condition}</span>
       <span className="obs-arule-state">

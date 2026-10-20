@@ -81,6 +81,8 @@ export type AlertRule = {
   source: string; sourceWord: string; changedBy: string | null; changedAt: string | null;
   /** "code": declared in the repo's boss.deploy.yaml (repo-managed, D4). */
   managedBy: string;
+  /** The latest deploy's boss.deploy.yaml no longer declares it; BOSS keeps it running. */
+  droppedWord: string | null;
   /** Tune: a repo rule is proposed as a pull request to its manifest; any other is saved here. */
   tuneVia: "pull_request" | "console";
   /** Where a repo rule lives: the manifest's path and the lines of its rule. */
@@ -113,6 +115,7 @@ export function parseRule(w: unknown): AlertRule {
     respondOnBehalfOf: optStr(o.respond_on_behalf_of), notify: str(o.notify, "console"),
     source: str(o.source), sourceWord: str(o.source_word), changedBy: optStr(o.changed_by), changedAt: optStr(o.changed_at),
     managedBy: str(o.managed_by, str(o.source) === "yaml" ? "code" : "builtin"),
+    droppedWord: optStr(o.dropped_word) ?? null,
     tuneVia: o.tune_via === "pull_request" ? "pull_request" : "console",
     where: o.where && typeof o.where === "object" && str(obj(o.where).path)
       ? { path: str(obj(o.where).path), line: num(obj(o.where).line), endLine: num(obj(o.where).end_line, num(obj(o.where).line)),
