@@ -1,7 +1,8 @@
 """Knowledge graph routes (KNOWLEDGE_GRAPH_SPEC.md §3.3, §5; Phase 1).
 
 Phase 1 needs only the worker's two calls: run one leased `knowledge.index` job here, where the
-parsers and the repository cache are, and queue the scheduled passes that are due. The public
+parsers and the repository cache are, and queue the scheduled passes that are due. Phase 2's tick
+also distils the runs, reviews and incidents that finished since the last one (the Archivist). The public
 search / why / blast-radius API (with `knowledge:read` and `knowledge:manage`) is Phase 3; agents
 already reach the same answers through the kg_* MCP tools.
 """
@@ -52,8 +53,12 @@ def build_knowledge_router() -> APIRouter:
         from .identity_guard import require_worker_principal
 
         require_worker_principal()
-        engine, _ = _engine_settings()
+        engine, settings = _engine_settings()
         with engine.begin() as c:
-            return {"queued": enqueue_due(c)}
+            queued = enqueue_due(c)
+        # Phase 2: distil the runs, reviews and incidents that finished since the last tick.
+        from boss_engine.services.knowledge.archivist import distil_due
+
+        return {"queued": queued, "distil": distil_due(engine, settings)}
 
     return router

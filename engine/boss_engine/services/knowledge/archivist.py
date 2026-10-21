@@ -246,3 +246,41 @@ class Archivist:
 
 
 __all__ = ["Archivist", "KINDS", "load_source"]
+
+
+def distil_due(engine: Any, settings: Any, *, limit: int = 5, days: int = 7) -> dict:
+    """The scheduled half: distil finished runs, their reviews, and resolved incidents not yet ingested.
+
+    Called from the knowledge tick (the worker, every 10 minutes). Each record is ingested in its own
+    transaction, so one failure cannot roll back the others; a failure is logged as `failed` and is
+    not retried automatically (a forget, or deleting its log row, re-queues it).
+    """
+    with engine.begin() as c:
+        rows = c.execute(text(
+            """SELECT * FROM (
+                 SELECT r.project_id, k.kind, r.id, r.updated_at AS at FROM code_task_runs r
+                 CROSS JOIN (VALUES ('run'), ('review')) AS k(kind)
+                 WHERE r.status IN ('completed', 'failed') AND r.updated_at > now() - make_interval(days => :d)
+                 UNION ALL
+                 SELECT i.project_id, 'incident', i.id, i.last_seen FROM incidents i
+                 WHERE i.status = 'resolved' AND i.last_seen > now() - make_interval(days => :d)) s
+               WHERE NOT EXISTS (SELECT 1 FROM kg_ingest_log l WHERE l.project_id = s.project_id
+                                 AND l.source_kind = s.kind AND l.source_id = s.id)
+               ORDER BY at LIMIT :n"""), {"d": days, "n": limit}).all()
+    out = {"distilled": 0, "structure_only": 0, "failed": 0}
+    archivist = Archivist(settings)
+    for r in rows:
+        scope = Scope(r.project_id)
+        try:
+            with engine.begin() as c:
+                if r.kind == "review" and not (_json(load_source(c, scope, "review", r.id) or "") or {}).get("review"):
+                    Archivist._log(c, scope, "review", r.id, "structure_only", 0, 0, {}, "no review findings")
+                    out["structure_only"] += 1
+                    continue
+                res = archivist.ingest(c, scope, r.kind, r.id)
+            out[res["mode"]] = out.get(res["mode"], 0) + 1
+        except Exception as exc:  # noqa: BLE001 - one bad record never stops the tick
+            with engine.begin() as c:
+                Archivist._log(c, scope, r.kind, r.id, "failed", 0, 0, {}, type(exc).__name__)
+            out["failed"] += 1
+    return out

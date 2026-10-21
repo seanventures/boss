@@ -29,7 +29,7 @@ _SECRET_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("AWS_KEY", re.compile(r"\bAKIA[0-9A-Z]{16}\b")),
     (
         "SECRET",
-        re.compile(r"\b(?:sk|pk|rk|ghp|gho|xox[baprs])[-_][A-Za-z0-9]{16,}\b"),
+        re.compile(r"\b(?:sk|pk|rk|whsec|ghp|gho|xox[baprs])[-_](?:(?:live|test|proj)[-_])?[A-Za-z0-9]{16,}\b"),
     ),
     (
         "BEARER",

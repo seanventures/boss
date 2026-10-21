@@ -25,6 +25,13 @@ def available(c: Connection) -> bool:
     return bool(c.execute(text("SELECT to_regclass('kg_embeddings')")).scalar())
 
 
+def _vs(c: Connection) -> str:
+    """The schema pgvector is installed in, quoted: its type, operator and opclass are qualified
+    with it, so queries do not depend on the search_path."""
+    name = c.execute(text("SELECT extnamespace::regnamespace::text FROM pg_extension WHERE extname = 'vector'")).scalar()
+    return name or "public"
+
+
 def text_hash(value: str) -> str:
     return hashlib.sha256(value.encode()).hexdigest()
 
@@ -37,9 +44,10 @@ def ensure_index(c: Connection, model: str, dims: int) -> str:
     """The HNSW index for one (model, dimension); DDL cannot bind, so the model is quoted here."""
     dims = int(dims)
     name = f"idx_kg_emb_hnsw_{hashlib.sha1(model.encode()).hexdigest()[:10]}_{dims}"
-    quoted = model.replace("'", "''")
+    quoted, vs = model.replace("'", "''"), _vs(c)
     c.execute(text(f"CREATE INDEX IF NOT EXISTS {name} ON kg_embeddings USING hnsw "
-                   f"((embedding::vector({dims})) vector_cosine_ops) WHERE model = '{quoted}' AND dims = {dims}"))
+                   f"((embedding::{vs}.vector({dims})) {vs}.vector_cosine_ops) "
+                   f"WHERE model = '{quoted}' AND dims = {dims}"))
     return name
 
 
@@ -73,13 +81,13 @@ def store(c: Connection, scope: Scope, embedder: Embedder, owner_kind: str, item
     if todo:
         for (oid, _), vec in zip(todo, embedder.embed([t for _, t in todo])):
             cached[hashes[oid]] = _literal(vec)
-    dims = None
+    dims, vs = None, _vs(c)
     for oid, _ in items:
         v = cached[hashes[oid]]
         dims = v.count(",") + 1
         c.execute(text(
             "INSERT INTO kg_embeddings (project_id, owner_kind, owner_id, model, dims, content_hash, embedding) "
-            "VALUES (:p, :k, :o, :m, :d, :h, CAST(:v AS vector)) ON CONFLICT (project_id, owner_kind, owner_id, model) "
+            f"VALUES (:p, :k, :o, :m, :d, :h, CAST(:v AS {vs}.vector)) ON CONFLICT (project_id, owner_kind, owner_id, model) "
             "DO UPDATE SET content_hash = EXCLUDED.content_hash, embedding = EXCLUDED.embedding, dims = EXCLUDED.dims"),
             {"p": scope.project_id, "k": owner_kind, "o": oid, "m": embedder.model, "d": dims,
              "h": hashes[oid], "v": v})
@@ -92,9 +100,9 @@ def nearest(c: Connection, scope: Scope, model: str, vector: list[float], *, own
             k: int = 5, exclude: Optional[str] = None) -> list[str]:
     if not available(c):
         return []
-    dims = len(vector)
+    dims, vs = len(vector), _vs(c)
     return [r[0] for r in c.execute(text(
         f"SELECT owner_id FROM kg_embeddings WHERE project_id = :p AND owner_kind = :ok AND model = :m "
         f"AND dims = {dims} AND owner_id <> COALESCE(:x, '') "
-        f"ORDER BY embedding::vector({dims}) <=> CAST(:v AS vector({dims})) LIMIT :k"),
+        f"ORDER BY embedding::{vs}.vector({dims}) OPERATOR({vs}.<=>) CAST(:v AS {vs}.vector({dims})) LIMIT :k"),
         {"p": scope.project_id, "ok": owner_kind, "m": model, "x": exclude, "v": _literal(vector), "k": k})]

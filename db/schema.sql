@@ -4975,21 +4975,26 @@ CREATE TABLE IF NOT EXISTS kg_ingest_log (
 -- (model, dimension) is created on demand (knowledge/embeddings.py). Needs pgvector: an install
 -- still on the old database image keeps the facts and runs without embeddings.
 DO $kg_vec$
+DECLARE vs TEXT;
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_available_extensions WHERE name = 'vector') THEN
     CREATE EXTENSION IF NOT EXISTS vector;
-    CREATE TABLE IF NOT EXISTS kg_embeddings (
-      id BIGSERIAL PRIMARY KEY,
-      project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-      owner_kind TEXT NOT NULL CHECK (owner_kind IN ('fact', 'node')),
-      owner_id TEXT NOT NULL,
-      model TEXT NOT NULL,
-      dims INTEGER NOT NULL,
-      content_hash TEXT NOT NULL,
-      embedding vector NOT NULL,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-      UNIQUE (project_id, owner_kind, owner_id, model)
-    );
+    -- The type lives in whichever schema the extension was installed into: qualify it, so a
+    -- search_path without that schema still works.
+    SELECT extnamespace::regnamespace::text INTO vs FROM pg_extension WHERE extname = 'vector';
+    EXECUTE format($ddl$
+      CREATE TABLE IF NOT EXISTS kg_embeddings (
+        id BIGSERIAL PRIMARY KEY,
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        owner_kind TEXT NOT NULL CHECK (owner_kind IN ('fact', 'node')),
+        owner_id TEXT NOT NULL,
+        model TEXT NOT NULL,
+        dims INTEGER NOT NULL,
+        content_hash TEXT NOT NULL,
+        embedding %s.vector NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        UNIQUE (project_id, owner_kind, owner_id, model)
+      )$ddl$, vs);
     CREATE INDEX IF NOT EXISTS idx_kg_embeddings_hash ON kg_embeddings(model, content_hash);
   END IF;
 END

@@ -25,7 +25,7 @@ from boss_engine.services.knowledge.archivist import Archivist
 from boss_engine.services.knowledge.facts import FactStore, Origin
 
 SECRETS = ["AKIAQWERTYUIOPASDFGH", "ghp_Zx9Yw8Vu7Ts6Rq5Po4Nm3Lk2Jh1Gf0EdCbA", "hunter2-Prod-Db",
-           "ops.lead@example.com", "203.0.113.77", "4111 1111 1111 1111"]
+           "ops.lead@example.com", "203.0.113.77", "4111 1111 1111 1111", "sk_live_4eC39HqLyjWDarjtT1zdp7dc"]
 
 
 class ScriptedModel:
@@ -95,11 +95,12 @@ FACT = {"subject": "size_band", "predicate": "treats", "object": "15+ items as l
 def test_no_secret_or_pii_reaches_the_store_even_when_the_model_echoes_it(engine, scope):
     leaky = [{**FACT, "statement": f"Deploy uses key {SECRETS[0]} and token {SECRETS[1]}.",
               "evidence": [f"password={SECRETS[2]}", f"mail {SECRETS[3]} from {SECRETS[4]}"]},
-             {**FACT, "subject": "billing", "statement": f"Refunds went to card {SECRETS[5]}.", "kind": "risk"}]
+             {**FACT, "subject": "billing", "statement": f"Refunds went to card {SECRETS[5]} via {SECRETS[6]}.",
+              "kind": "risk"}]
     model = ScriptedModel(leaky)
     with begin(engine) as c:
         rid = _run(c, scope, {"spec": {"instructions": f"key {SECRETS[0]} token {SECRETS[1]} password={SECRETS[2]}"},
-                              "state": {"notes": f"ping {SECRETS[3]} at {SECRETS[4]}, card {SECRETS[5]}"}})
+                              "state": {"notes": f"ping {SECRETS[3]} at {SECRETS[4]}, card {SECRETS[5]}, stripe {SECRETS[6]}"}})
         out = _archivist(model).ingest(c, scope, "run", rid)
         stored = _everything_stored(c, scope)
     assert out["mode"] == "distilled" and out["facts"] == 2
@@ -259,3 +260,24 @@ def test_embeddings_are_cached_by_content_hash_with_the_model_on_every_row(engin
     assert first == {"embedded": 2, "cached": 0} and again == {"embedded": 0, "cached": 1}
     assert len(calls) == 1 and [r.model for r in rows] == ["scripted-embed"] * 3 and {r.dims for r in rows} == {8}
     assert "vector(8)" in index and near == ["f3"]
+
+
+def test_the_tick_distils_finished_runs_once_and_skips_unfinished_ones(engine, scope, monkeypatch):
+    from boss_engine.services.knowledge import archivist as arch
+
+    model = ScriptedModel([FACT])
+    real_init = Archivist.__init__
+    monkeypatch.setattr(arch.Archivist, "__init__",
+                        lambda self, settings, **kw: real_init(self, settings, adapter_factory=lambda *a: model))
+    with begin(engine) as c:
+        done = _run(c, scope, {"state": {"review_findings": [{"text": "size_band misses 15"}]}})
+        running = _run(c, scope, {})
+        c.execute(text("UPDATE code_task_runs SET status = 'running' WHERE id = :r"), {"r": running})
+    first = arch.distil_due(engine, _settings(), limit=50)
+    again = arch.distil_due(engine, _settings(), limit=50)
+    with begin(engine) as c:
+        logged = {(r.source_kind, r.source_id) for r in c.execute(text(
+            "SELECT source_kind, source_id FROM kg_ingest_log WHERE project_id = :p"), {"p": scope.project_id})}
+    assert ("run", done) in logged and ("review", done) in logged
+    assert not any(sid == running for _, sid in logged)
+    assert first["distilled"] >= 2 and again == {"distilled": 0, "structure_only": 0, "failed": 0}
