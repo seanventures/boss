@@ -158,6 +158,37 @@ done, what is next, and how to resume.
    `decisions.cited_fact_ids`, and the console shows "based on".
 3. The blind TypeScript check on a fresh non-Medusa repository. Commit the answer key first.
 4. The 10M benchmark.
+5. **Stage knowledge scopes** (operator, 2026-10-21; do this before item 4). The code graph is large, so which layers a stage may read must be enforced in the data layer, not left to the prompt.
+   - **Layers.** Tag every node and fact with a `layer`:
+     - `code`: files, symbols, calls, imports, endpoints, tables, queues, config keys;
+     - `lifecycle`: spec, PR, decision, review finding, release;
+     - `ops`: service, deployment, incident, root cause, alert rule, runbook, signal;
+     - `knowledge`: distilled facts and topics.
+
+     Add partial indexes per layer. Partition the code layer by repository, so a query on other layers never touches code rows. Prove it with a test where the latency of an ops query does not change as the code graph grows from 0 to 1M nodes.
+   - **Stage policy is declared, not inferred.** Each workflow step kind declares `knowledge: {layers, tools, budget_tokens, code_seed, max_hops, max_nodes}`. It is editable in the workflow editor, and the defaults are:
+
+     | Stage | Layers | Code access |
+     |---|---|---|
+     | triage (alert / Beacon) | `ops`, `lifecycle`, `knowledge` | **none** |
+     | investigate / RCA | `ops`, `lifecycle`, `knowledge`, `code` | **seeded only**, from the incident's evidence (failing route → endpoint → handler symbols; the release diff's changed symbols); `max_hops` 2, `max_nodes` 200; never a whole-graph scan |
+     | design / implement | `code`, `lifecycle`, `knowledge` | seeded from the plan or diff (touched symbols), bounded |
+     | review | `code` (changed symbols ± 1 hop), `lifecycle`, `knowledge` | the diff only |
+     | jev / decide | `lifecycle`, `knowledge`, `ops` | none |
+
+     Replace the role/stage-name matching in `recipe_for` with this declared policy. A step without a declaration gets its kind's default. The role is only a fallback.
+   - **Enforced where data is read.** The `Reader` carries the stage policy, the same way it carries the Passport.
+     - Every `KnowledgeStore` query adds `layer = ANY(:layers)`, plus the seed and hop bounds for `code`.
+     - MCP tools outside the stage's layers are not offered in that stage. If one is called anyway, it refuses in words, for example: "Code isn't available while triaging; it opens in Investigate."
+     - The injected pack is built under the same policy, so every engine sees the same scope.
+   - **Escalation is a step change, never a bypass.** If a triage agent reasons that it needs code, it asks to move the run to Investigate, through Jev or a decision. Nothing widens the scope inside a step.
+   - **Tests:**
+     - a triage pack has 0 code-layer items, and the tool call is refused;
+     - an RCA pack contains the implicated symbols and nothing outside the hop or node bounds;
+     - a review pack is limited to the diff ± 1 hop;
+     - a policy edit is audited;
+     - the ops-latency-vs-code-size test above.
+
 
 ## How to resume
 
