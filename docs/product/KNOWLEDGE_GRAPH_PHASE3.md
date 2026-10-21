@@ -10,9 +10,9 @@ done, what is next, and how to resume.
 |---|---|
 | Hybrid retrieval (graph + vector + full text + trusted, RRF, optional reranker gated by budget) | **done**: `services/knowledge/retrieval.py` |
 | `knowledge_pack(role, stage, task, budget_tokens)` with the spec's four recipes; hard budget; logs ids | **done** |
-| Passport-scoped reads in retrieval (project, org, team, Passport ceiling) | **done** in the store layer; wiring to the API and tools: see below |
+| Passport-scoped reads in retrieval (project, org, team, Passport ceiling) | **done**, in every generator, the tools and the API |
 | MCP tools `kg_search`, `kg_precedent`; pack injection for engines without tools | **done**: `delivery.py`, `knowledge_tools.py`, hook in `code_agent._invoke` |
-| `knowledge:read` / `knowledge:manage` and the HTTP API from spec §5 | next |
+| `knowledge:read` / `knowledge:manage` and the HTTP API from spec §5 | **done**: `packages/identity/catalogue.yaml` (regenerated), `routes_knowledge.py`, `test_knowledge_api.py` |
 | Branch overlay (per run, in memory, never stored) | **done**: `overlay.py` |
 | Jev citations, TS blind check, latency benchmark | only if budget remains |
 
@@ -76,6 +76,27 @@ done, what is next, and how to resume.
   flagged `stale_in_this_build`. It lives only in memory for the run and is never stored;
   `discard(run_id)` drops it. **Next:** call `hold` after each implement stage and `discard`
   when the run ends.
+
+## Permissions and API (item 5)
+
+- **`knowledge:read`** (project scope, delegable) is held by owner, admin, operator, viewer and
+  auditor, and by every Passport preset. It gates every kg tool; `kg_precedent` also needs
+  `decision:read`.
+  - An existing agent whose ceiling is a preset gains it through `passports._grow_to_preset`.
+  - **An agent with a hand-set (custom) ceiling does not.** Its kg tools refuse until a person adds
+    the permission. This is an open decision for the operator.
+- **`knowledge:manage`** (project scope, step-up, not delegable) is held by owner and admin. It
+  gates promote, reject and forget, and the settings write.
+- **Routes:**
+  - `GET /v1/knowledge/search`: facts, or a pack when `budget_tokens` is given;
+  - `GET /v1/knowledge/nodes/{id}`, with `why` and the node's facts;
+  - `GET /v1/knowledge/blast-radius`;
+  - `POST /v1/knowledge/facts/{id}/promote|reject|forget`. Promote and reject need a person, not an
+    agent token;
+  - `GET /v1/knowledge/graph-status`: ingest lag, sizes, cost and caps;
+  - `GET` / `PUT /v1/knowledge/settings`.
+- **Deviation from spec §5:** `/v1/knowledge/status` already exists (BOSS-356's pack-context
+  probe), so the graph status is at `/v1/knowledge/graph-status`. This is an open decision.
 
 ## How to resume
 

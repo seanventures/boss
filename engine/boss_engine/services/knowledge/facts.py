@@ -247,6 +247,26 @@ class FactStore:
             self._event(c, scope, fact_id, "approved", person, {})
         return {"id": fact_id, "approved": bool(n)}
 
+    def reject(self, c: Connection, scope: Scope, fact_id: str, *, person: str, actor_kind: str) -> dict:
+        """A person rejects a current fact: it is closed (kept for audit, never retrieved again)."""
+        if actor_kind != "human":
+            raise PermissionError("only a person can reject a fact")
+        n = c.execute(text("UPDATE kg_facts SET valid_to = now(), updated_at = now() WHERE id = :i AND project_id = :p "
+                           "AND valid_to IS NULL AND tier IN ('inferred', 'observed')"),
+                      {"i": fact_id, "p": scope.project_id}).rowcount
+        if n:
+            self._event(c, scope, fact_id, "rejected", person, {})
+        return {"id": fact_id, "rejected": bool(n)}
+
+    def forget_fact(self, c: Connection, scope: Scope, fact_id: str, *, actor: str) -> dict:
+        """Delete one fact, its sources and its embeddings. Logged, without the content."""
+        exists = c.execute(text("SELECT 1 FROM kg_facts WHERE id = :i AND project_id = :p"),
+                           {"i": fact_id, "p": scope.project_id}).first()
+        if exists:
+            self._delete(c, scope, [fact_id])
+            self._event(c, scope, None, "forgot_fact", actor, {"fact": fact_id})
+        return {"id": fact_id, "forgotten": bool(exists)}
+
     # -- forget and retention -------------------------------------------------------------------
     def forget_source(self, c: Connection, scope: Scope, source_kind: str, source_id: str, *, actor: str) -> dict:
         """Right to forget: every fact derived only from this source is deleted with its embeddings;
