@@ -207,6 +207,14 @@ class FactStore:
             "VALUES (:f, :p, :k, :s, :e) ON CONFLICT DO NOTHING"),
             {"f": fid, "p": scope.project_id, "k": origin.source_kind, "s": origin.source_id,
              "e": "; ".join(evidence)[:2000]})
+        # A FACT CARRIES THE SCOPE OF ITS MOST RESTRICTIVE SOURCE (spec §3.5): a reader needs every
+        # permission any of its sources needs (retrieval.SOURCE_PERMISSION).
+        from .retrieval import SOURCE_PERMISSION
+
+        need = SOURCE_PERMISSION.get(origin.source_kind, "repository:read")
+        c.execute(text("UPDATE kg_facts SET read_permissions = ARRAY(SELECT DISTINCT unnest(read_permissions || "
+                       "CAST(:n AS TEXT[])) ORDER BY 1) WHERE id = :f AND NOT (:need = ANY(read_permissions))"),
+                  {"f": fid, "n": [need], "need": need})
 
     @staticmethod
     def _event(c, scope, fid: Optional[str], action: str, actor: str, detail: dict) -> None:

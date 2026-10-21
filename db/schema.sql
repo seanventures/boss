@@ -10185,6 +10185,39 @@ CREATE TABLE IF NOT EXISTS synthetic_checks (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Knowledge Graph Phase 3: retrieval (KNOWLEDGE_GRAPH_SPEC.md §3.5). Stored tsvectors with GIN
+-- indexes for full-text candidates, the scope a fact carries (the Passport permissions its sources
+-- need, and a team), and the log of what every pack and tool answer included (§3.7).
+ALTER TABLE kg_facts ADD COLUMN IF NOT EXISTS search tsvector
+  GENERATED ALWAYS AS (to_tsvector('simple', subject || ' ' || predicate || ' ' || object || ' ' || statement)) STORED;
+CREATE INDEX IF NOT EXISTS idx_kg_facts_search ON kg_facts USING gin (search);
+ALTER TABLE kg_facts ADD COLUMN IF NOT EXISTS read_permissions TEXT[] NOT NULL DEFAULT '{}';
+ALTER TABLE kg_facts ADD COLUMN IF NOT EXISTS team_id TEXT;
+CREATE INDEX IF NOT EXISTS idx_kg_facts_node ON kg_facts(subject_node_id) WHERE valid_to IS NULL;
+ALTER TABLE kg_nodes ADD COLUMN IF NOT EXISTS search tsvector
+  GENERATED ALWAYS AS (to_tsvector('simple', name || ' ' || node_key)) STORED;
+CREATE INDEX IF NOT EXISTS idx_kg_nodes_search ON kg_nodes USING gin (search);
+CREATE INDEX IF NOT EXISTS idx_kg_nodes_name ON kg_nodes(project_id, name) WHERE valid_to IS NULL;
+CREATE TABLE IF NOT EXISTS kg_pack_log (
+  id BIGSERIAL PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  run_id TEXT,
+  step TEXT,
+  role TEXT NOT NULL DEFAULT '',
+  stage TEXT NOT NULL DEFAULT '',
+  via TEXT NOT NULL DEFAULT 'pack',          -- pack (injected) | tool (kg_search, kg_precedent)
+  fact_ids TEXT[] NOT NULL DEFAULT '{}',
+  node_ids TEXT[] NOT NULL DEFAULT '{}',
+  decision_ids TEXT[] NOT NULL DEFAULT '{}',
+  tokens INTEGER NOT NULL DEFAULT 0,
+  budget_tokens INTEGER NOT NULL DEFAULT 0,
+  at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_kg_pack_log_run ON kg_pack_log(project_id, run_id, at);
+CREATE INDEX IF NOT EXISTS idx_decisions_search ON decisions
+  USING gin (to_tsvector('simple', question || ' ' || COALESCE(resolution_note, '')));
+ALTER TABLE decisions ADD COLUMN IF NOT EXISTS cited_fact_ids TEXT[] NOT NULL DEFAULT '{}';
+
 -- The knowledge ingest queue's triggers (kg_ingest_queue): here, after both tables exist.
 DO $$ BEGIN
   IF to_regclass('code_task_runs') IS NOT NULL AND NOT EXISTS (
