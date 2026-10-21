@@ -5,20 +5,20 @@ decisions open for Phase 0: Graphiti (A) or a native build (B), and AGE as the s
 or a projection. This report answers both with numbers. Every number can be reproduced with the
 scripts named in each section.
 
-## Recommendations
+## Decisions (operator, 2026-10-21)
 
-1. **Option B (native).** It uses about 14× fewer model tokens per episode, which is 7.6× cheaper
+1. **Approved: option B (native).** It uses about 14× fewer model tokens per episode, which is 7.6× cheaper
    on Sonnet 5 and 12× cheaper on qwen3-32b. It makes one model call instead of two or more. It handles supersession equally well and is about 114 lines of BOSS code
    on the KnowledgeStore. Option A needs a Postgres/AGE driver for Graphiti (about 3,000–3,500
-   lines, judged by its existing drivers) plus retrofits for governance. Precision is
-   **pending**: no model key was available, see §1.4.
-2. **`kg_nodes`/`kg_edges` stay the system of record, and traversal uses recursive CTEs.** At
+   lines, judged by its existing drivers) plus retrofits for governance. graphiti-core is not a BOSS dependency: option A's spike code has been removed, and Graphiti's telemetry is never enabled. Precision was **pending** (no model key). The governed precision run (§1.4) is now **Phase 2's acceptance test**.
+2. **Approved: `kg_nodes`/`kg_edges` stay the system of record, and traversal uses recursive CTEs.** At
    1M nodes and 5M edges, the CTE answers 2–4 hop questions in milliseconds. AGE's
    variable-length MATCH takes seconds to tens of seconds (§2). Keep AGE installed and
    optional, as a projection for ad-hoc Cypher. It goes on no hot path.
-3. **Operator decision: the AGE version.** AGE 1.8.x does not exist for PostgreSQL 16. The
-   newest PG16 release is 1.6.0, which is what the image ships. 1.8.0 exists only for PG 15,
-   18 and 19 (§3).
+3. **Approved: PostgreSQL 16 with AGE 1.6.0.** No move to PostgreSQL 18. AGE 1.8.x does not
+   exist for PostgreSQL 16; 1.8.0 exists only for PG 15, 18 and 19 (§3).
+4. **The case-study smoke stage is not approved yet.** It runs after Phases 1–3, on the
+   open-model engine (E2) first.
 
 ## 1. Graphiti spike: A vs B
 
@@ -38,9 +38,10 @@ scripts named in each section.
 - **Option B** (`option_b.py`): one extraction call per episode, schema-validated, then
   exact-key resolution. A fact with the same (subject, predicate) supersedes the old one by
   closing its validity. Writes go through `PostgresKnowledgeStore`.
-- **Option A** (`option_a.py`): graphiti-core 0.31.2 with a `GatewayLLMClient` and a
-  `GatewayEmbedder` that route every call to the BOSS adapter. It ingests into Neo4j because
-  Graphiti has no Postgres driver.
+- **Option A** (removed after the decision): graphiti-core 0.31.2 with gateway LLM and
+  embedder clients that routed every call to the BOSS adapter. It ingested into a throwaway
+  Neo4j, because Graphiti has no Postgres driver. Its numbers below are the record of what was
+  compared; the code is no longer in the tree.
 
 ### 1.1 Results (200 episodes)
 
@@ -99,26 +100,20 @@ No model key was available to this session. The brief allows only the spike's sm
 extraction set as paid work, and without a key the scripted engine stands in. An oracle is
 right by construction, so it says nothing about precision.
 
-To finish, rerun `run_spike.py` with the oracle replaced by `model_routing.governed(...)` on a
-real engine, both options, 200 episodes:
-- B costs about $0.31 on Sonnet 5;
-- A costs at least $2.36;
-- a model judge over both options' outputs costs about $1.
-
-**About $5 in total.** The scorer is ready: token-overlap matching to the 50 labels, with any
-non-durable "fact" counted as an error. The gate is Phase 2's ≥ 85%. B stays the
-recommendation unless A beats it on precision by enough to justify about 8× the cost and a
-driver.
+In Phase 2 (its acceptance test), rerun `run_spike.py` with the oracle replaced by
+`model_routing.governed(...)` on a real engine, over the same 200 episodes. B costs about $0.31
+on Sonnet 5, and a model judge over its output about $1. The budget is about $5 with
+re-runs. The scorer is ready: token-overlap matching to the 50 labels, with any
+non-durable "fact" counted as an error. The gate is Phase 2's ≥ 85%.
 
 Reproduce:
 
 ```sh
-GRAPHITI_TELEMETRY_ENABLED=false python scripts/knowledge/spike/run_spike.py \
-  --pg postgresql+psycopg://USER:PASS@127.0.0.1:5432/kgspike \
-  --neo4j bolt://127.0.0.1:7687 --neo4j-password <throwaway> --out spike_results.json
+python scripts/knowledge/spike/run_spike.py \
+  --pg postgresql+psycopg://USER:PASS@127.0.0.1:5432/kgspike --out spike_results.json
 ```
 
-The run above is `scripts/knowledge/spike/results/spike_results.json`.
+The Phase 0 run of both options is `scripts/knowledge/spike/results/spike_results.json`.
 
 ## 2. AGE vs recursive CTE at 1M nodes / 5M edges
 
@@ -188,9 +183,7 @@ The run above is `scripts/knowledge/results/bench_1m.json`.
   | 18 | 1.8.0 |
   | 19 | 1.8.0 |
 
-  The spec's "1.8.x for PG16" does not exist. Getting 1.8 means PostgreSQL 18. That is a major
-  upgrade, but the dump/restore path below already performs one, so it costs little extra.
-  **Operator decision.**
+  The spec's "1.8.x for PG16" does not exist. **Decided: stay on PostgreSQL 16 with AGE 1.6.0.**
 - **Collation.** The hazard is real. Opening the Alpine (musl) data directory under glibc made
   `amcheck` report "high key invariant violated" on a text unique index
   (`test_opening_an_alpine_directory_under_glibc_corrupts_text_indexes`).

@@ -88,7 +88,9 @@ If the primary criteria fail, the feature does not ship as on-by-default. The re
 
 ## 6. Staged execution (to fit the budget)
 
-1. **Smoke (≈$60).** E1 only, T1–T4, arms A and B, once each. This proves the harness, the hidden suites and ingestion.
+1. **Smoke.** T1–T4, arms A and B, once each. This proves the harness, the hidden suites and ingestion.
+   - **Operator decision, 2026-10-21:** not approved yet. It runs after Phases 1–3 (arm B needs the knowledge switch).
+   - It runs on the open-model engine E2 first (≈$5–15). The Sonnet 5 smoke on E1 (≈$48–80) comes after.
 2. **Learning core (≈$150).** E1 and E2, T3→T7 and T4→T9 pairs, arms A and B, plus 3 repeats of T7 and T9. This is the cheapest test of "it learns".
 3. **Full (remaining).** All 12 tasks on both engines. Run when budget allows (BOSSAPP-600's token savings lower the cost of every stage).
 

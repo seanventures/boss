@@ -78,7 +78,7 @@ class FakeBoss:
 
 
 def _args(tmp_path, **overrides):
-    base = dict(stage="smoke", arm="A", engine="E1", tasks="T1..T4", repeat=1, resume=False, approved_by="operator",
+    base = dict(stage="smoke_e1", arm="A", engine="E1", tasks="T1..T4", repeat=1, resume=False, approved_by="operator",
                 boss_url="http://127.0.0.1:8000", project_id="northpeak", saleor_dir=str(tmp_path / "saleor"),
                 fulfilment_dir=str(tmp_path / "fulfilment"), out=str(tmp_path / "out"))
     base.update(overrides)
@@ -102,9 +102,13 @@ def test_tasks_t1_to_t4_have_a_brief_a_hidden_suite_and_compile():
     assert patch.startswith("diff --git a/saleor/warehouse/management.py") and patch.count("\n@@ ") == 1
 
 
-def test_the_smoke_estimate_matches_the_case_study():
-    est = run_py.estimate(run_py.load_config(), "smoke")
-    assert est["builds"] == 8 and (est["usd_low"], est["usd_high"]) == (48.0, 80.0)
+def test_the_smoke_runs_on_the_open_model_first_and_the_sonnet_estimate_matches_the_case_study():
+    config = run_py.load_config()
+    assert config["stages"]["smoke"]["engines"] == ["E2"]          # operator decision 2026-10-21
+    est = run_py.estimate(config, "smoke")
+    assert est["builds"] == 8 and (est["usd_low"], est["usd_high"], est["ceiling_usd"]) == (4.8, 15.2, 24.0)
+    e1 = run_py.estimate(config, "smoke_e1")
+    assert e1["builds"] == 8 and (e1["usd_low"], e1["usd_high"], e1["ceiling_usd"]) == (48.0, 80.0, 120.0)
 
 
 def test_no_spend_without_an_approved_stage_and_nothing_outside_it(tmp_path):
@@ -114,7 +118,7 @@ def test_no_spend_without_an_approved_stage_and_nothing_outside_it(tmp_path):
     with pytest.raises(run_py.HarnessError, match="does not cover"):
         _run(tmp_path, boss, tasks="T5")
     with pytest.raises(run_py.HarnessError, match="does not cover"):
-        _run(tmp_path, boss, engine="E2")
+        _run(tmp_path, boss, engine="E2")          # smoke_e1 is Sonnet only
     assert boss.calls == []
 
 

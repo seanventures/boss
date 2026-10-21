@@ -16,7 +16,8 @@ This folder runs it. Phase 0 delivers tasks T1–T4; T5–T12 follow the same la
 
 ## Before any spend
 ```sh
-python3 run.py estimate --stage smoke            # 8 builds, $48–80, ceiling $120
+python3 run.py estimate --stage smoke            # open model (E2): 8 builds, ~$5–15, ceiling $24
+python3 run.py estimate --stage smoke_e1         # Sonnet 5 (E1): 8 builds, $48–80, ceiling $120
 python3 run.py validate-suites --saleor-dir ../northpeak-saleor --pytest-cmd ".venv/bin/pytest -q --create-db"
 ```
 The validation proves each hidden suite without spending anything:
@@ -25,9 +26,12 @@ The validation proves each hidden suite without spending anything:
 - the T1 suite is proven by `scripts/tests/test_case_study_harness.py` against `selftest/`.
 
 ## A stage (only after the operator approves its spend)
+
+Operator decision, 2026-10-21: no stage is approved yet. The smoke runs after Phases 1–3, on
+the open-model engine (`smoke`) first; the Sonnet 5 smoke (`smoke_e1`) comes after.
 ```sh
 export BOSS_CASE_STUDY_API_KEY=...                # a BOSS API key scoped to the case-study project
-python3 run.py run --stage smoke --arm A --engine E1 --tasks T1..T4 --approved-by "<operator>" \
+python3 run.py run --stage smoke --arm A --engine E2 --tasks T1..T4 --approved-by "<operator>" \
     --project-id <project> --saleor-dir ../northpeak-saleor --fulfilment-dir ../northpeak-fulfilment --resume
 python3 report.py artifacts/case-study/knowledge/<date>
 ```
