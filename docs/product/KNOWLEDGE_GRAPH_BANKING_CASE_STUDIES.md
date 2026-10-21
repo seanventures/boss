@@ -12,7 +12,7 @@ The pattern we keep hearing from people in these sectors:
 
 These sectors want this more than most, for three reasons:
 - **Decisions must be explained.** Regulators ask *why* a change shipped, *why* an alert was closed, *why* a claim was paid.
-- **Institutional knowledge is fragile.** Business rules live in decades-old code and in a few senior people's heads.
+- **Institutional knowledge is fragile.** Business rules live in a large, ageing Java monolith and in a few senior people's heads.
 - **Rework is expensive.** The same investigation is done again because the last one's reasoning was never captured.
 
 BOSS's knowledge graph is built for exactly this, because BOSS **records the governed history itself**: who decided, on what evidence, with which sign-off. Other tools have to reconstruct it afterwards.
@@ -27,7 +27,7 @@ Every case lists what BOSS has, what it must add, and how we would **prove** it,
 
 ## Case 1 · Core-banking modernisation without losing the business rules
 
-**The problem.** A bank is moving an ageing core (COBOL, or an old Java monolith) to services. The interest, fee and posting rules are buried in code that nobody fully understands. Migrations break things that matter quietly: rounding, day-count conventions, the order of operations at end of day.
+**The problem.** A bank is breaking an ageing core-banking **Java monolith** into services. The interest, fee and posting rules are buried in code that nobody fully understands. Migrations break things that matter quietly: rounding, day-count conventions, the order of operations at end of day.
 
 **How BOSS runs it.**
 - **Juno's panel** scopes each slice: one product, one rule family.
@@ -38,7 +38,7 @@ Every case lists what BOSS has, what it must add, and how we would **prove** it,
 - **A person signs** each cut-over.
 
 **What enters the graph.**
-- *Code:* programs and copybooks, or classes, plus tables and batch jobs.
+- *Code:* packages, classes and methods, plus tables and batch jobs.
 - *Lifecycle:* which slice moved which rule, and the reviewer findings.
 - *Learned:* each extracted **business invariant**, for example "savings interest uses ACT/365, rounds half-even at posting", linked to the old and new code that implement it. Each one is `governed` once a person signs it.
 
@@ -52,9 +52,8 @@ Every case lists what BOSS has, what it must add, and how we would **prove** it,
 **BOSS today and gaps.**
 - *Today:* workflows, crew, reviews, sign-offs, the code graph (Java), the lifecycle graph.
 - *Gaps:*
-  - a COBOL parser for the indexer (tree-sitter has community COBOL grammars, to evaluate);
   - "characterisation test" as a step kind;
-  - invariant extraction from legacy code (Archivist recipe).
+  - invariant extraction from the monolith's code (Archivist recipe).
 
 **How we prove it (open code).** Use **[Apache Fineract](https://github.com/apache/fineract)** (Apache-2.0, Java, an open-source core-banking platform) as "the legacy core".
 - Tasks: extract the loan-interest and fee rules into a new service, slice by slice. Each slice has hidden tests comparing old and new on generated loan schedules.
@@ -251,7 +250,6 @@ Approved closure rationales become `governed` precedent. Agent-drafted links sta
 
 | Capability | Needed by | Where it fits |
 |---|---|---|
-| COBOL in the code indexer | 1 | Phase 1 follow-up |
 | Data-field lineage edges | 2 | Phase 1 follow-up |
 | Document ingestion (regulation texts, policy wordings, guidelines) | 2, 5 | Phase 5 |
 | **Domain-graph layer** (non-code entities) with its own permissions | 4, 5 | New: after Phase 4, on the same store and tiers |
