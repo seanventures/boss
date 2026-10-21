@@ -118,4 +118,4 @@ A 10–12 minute film in the existing demo style (Kokoro narration, the console 
 
 - The implementing agent (cloud) builds Phase 0 and the harness, then runs the **smoke** stage only after the operator approves the spend.
 - Every stage's spend is reserved through BOSS's budget, and the operator approves each stage.
-- Reports go to the Plane epic as comments, with the `report.md` link.
+- Reports go in the PR description and the final message; the operator copies them to Plane.

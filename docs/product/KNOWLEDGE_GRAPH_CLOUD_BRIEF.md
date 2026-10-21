@@ -30,7 +30,7 @@ You are picking up the BOSS Knowledge Graph epic.
 - No installs on the operator's machines. Do not approve decisions. Open a PR; do not merge it.
 - Keep reports short: what was built, the numbers, open decisions.
 
-## Report back (as a comment on the Plane epic)
+## Report back (in your final message and in the PR description; you have no access to Plane)
 - the PR link;
 - the spike recommendation (A or B) with its numbers;
 - the AGE vs CTE numbers;
