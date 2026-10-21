@@ -123,15 +123,15 @@ FACT_COLS = ("f.id, f.subject, f.predicate, f.object, f.statement, f.kind, f.tie
 def seed_nodes(c: Connection, reader: Reader, touched: Sequence[str], *, overlay: Any = None) -> list[str]:
     """Node ids for the task's touched symbols and files: exact key, exact name, or the file's path."""
     names = [t for t in dict.fromkeys(str(x).strip() for x in touched or ()) if t]
+    if overlay is not None:
+        # the build's own changed files and symbols seed the query even when the plan names none
+        names += [n for n in overlay.seed_names() if n not in names]
     if not names:
         return []
     where, params = _node_filter(reader)
-    ids = [r[0] for r in c.execute(text(
+    return [r[0] for r in c.execute(text(
         f"SELECT n.id FROM kg_nodes n WHERE {where} AND (n.node_key = ANY(:t) OR n.name = ANY(:t) OR n.path = ANY(:t)) "
         f"LIMIT 200"), {**params, "t": names})]
-    if overlay is not None:
-        ids += [i for i in overlay.seed_ids(names) if i not in ids]
-    return ids
 
 
 def neighbourhood(c: Connection, reader: Reader, seeds: Sequence[str], *, depth: int = 2,

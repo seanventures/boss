@@ -11,9 +11,10 @@ done, what is next, and how to resume.
 | Hybrid retrieval (graph + vector + full text + trusted, RRF, optional reranker gated by budget) | **done**: `services/knowledge/retrieval.py` |
 | `knowledge_pack(role, stage, task, budget_tokens)` with the spec's four recipes; hard budget; logs ids | **done** |
 | Passport-scoped reads in retrieval (project, org, team, Passport ceiling) | **done** in the store layer; wiring to the API and tools: see below |
-| MCP tools `kg_search`, `kg_precedent`; pack injection for engines without tools | next |
+| MCP tools `kg_search`, `kg_precedent`; pack injection for engines without tools | **done**: `delivery.py`, `knowledge_tools.py`, hook in `code_agent._invoke` |
 | `knowledge:read` / `knowledge:manage` and the HTTP API from spec §5 | next |
-| Branch overlay, Jev citations, TS blind check, latency benchmark | only if budget remains |
+| Branch overlay (per run, in memory, never stored) | **done**: `overlay.py` |
+| Jev citations, TS blind check, latency benchmark | only if budget remains |
 
 ## What was built
 
@@ -52,6 +53,29 @@ done, what is next, and how to resume.
   - the Passport, project, org and team filters;
   - source permissions;
   - precedent.
+
+## Delivery (item 4)
+
+- `kg_search(query, touched, role, stage, budget_tokens)` returns the same `Pack` that
+  `delivery.inject` puts into a CLI harness stage. Both go through `delivery.pack`.
+  - A CLI harness has no BOSS kg tools (BOSS's MCP server is not among a harness's servers), so
+    `code_agent._invoke` always injects. The pack goes after the shared TASK CONTEXT block, so the
+    cached prefix is unchanged.
+  - The engine-native agent loop holds the tools through `knowledge.read`.
+  - Test: `test_the_tool_and_the_injected_pack_are_the_same`.
+- `kg_precedent(situation, k)` needs `decision:read` and logs the decision ids it returned.
+- The reader is the acting agent's: a run token's scope, else its Passport ceiling
+  (`identity_agent_ceilings`), else unfiltered for a person or BOSS. See `delivery.reader_for`.
+- What the stage sets in the LLM-call context (`set_llm_context`) feeds the injected pack: `role_key`,
+  `stage`, `touched`, `knowledge_budget_tokens`. **Next:** the pipeline should set `touched` from
+  the plan or diff. Today it is empty unless a caller sets it, so a pack without it leans on full
+  text and trusted facts.
+- **Branch overlay** (`overlay.py`): `hold(build(c, project, run_id, {path: bytes|None}))`, or
+  `from_worktree`. The overlay seeds the query with the build's changed files and symbols and
+  marks symbols changed or new in the module map. A fact about a symbol the build deleted is
+  flagged `stale_in_this_build`. It lives only in memory for the run and is never stored;
+  `discard(run_id)` drops it. **Next:** call `hold` after each implement stage and `discard`
+  when the run ends.
 
 ## How to resume
 

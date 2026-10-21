@@ -231,3 +231,98 @@ def test_precedent_returns_similar_past_decisions_with_outcomes(engine, world):
         got = rt.precedent(c, rt.Reader(s), "Should we ship the VAT rounding change?")
     assert got[0]["id"] == "dec-a-" + s.project_id and got[0]["outcome"] == "failed"
     assert got[0]["decided"] == "approved" and got[0]["by"] == "ops-lead"
+
+
+# ── delivery: the same pack by tool and by injection (Phase 3 item 4) ────────────────────────
+
+def _tool(name):
+    from boss_engine.tools.builtin import build_default_registry
+
+    return build_default_registry().get(name)
+
+
+def _ctx(engine):
+    from boss_engine.config import get_settings
+    from boss_engine.context import EngineContext
+
+    return EngineContext(settings=get_settings(), engine=engine)
+
+
+def test_the_tool_and_the_injected_pack_are_the_same(engine, world):
+    from boss_engine.services.knowledge import delivery
+    from boss_engine.services.llm_telemetry import clear_llm_context, set_llm_context
+
+    s = world["scope"]
+    by_tool = _tool("kg_search").handler(_ctx(engine), project_id=s.project_id, actor="forge", args={
+        "query": TASK["text"], "touched": TASK["touched"], "role": "software_engineer", "stage": "implement",
+        "budget_tokens": 400})
+    shared = ("=== TASK CONTEXT (shared verbatim across all pipeline stages) ===\n"
+              f"TASK: {TASK['text']}\n\nACCEPTANCE CRITERIA:\n- works\n=== END TASK CONTEXT ===\n\n")
+    set_llm_context(db_engine=engine, project_id=s.project_id, stage="implement", role_key="software_engineer",
+                    touched=TASK["touched"], knowledge_budget_tokens=400)
+    try:
+        injected = delivery.inject("Implement it.", has_kg_tools=False, task_source=shared)
+        untouched = delivery.inject("Implement it.", has_kg_tools=True, task_source=shared)
+    finally:
+        clear_llm_context()
+    assert by_tool["text"] and by_tool["fact_ids"]
+    assert injected == by_tool["text"] + "\nImplement it."      # same content, ahead of the stage's own text
+    assert untouched == "Implement it."                           # an engine with the tools calls them instead
+    with begin(engine) as c:
+        vias = [r[0] for r in c.execute(text("SELECT via FROM kg_pack_log WHERE project_id = :p ORDER BY id"),
+                                        {"p": s.project_id})]
+    assert vias[-2:] == ["tool", "pack"]
+
+
+def test_injection_never_fails_a_stage(engine):
+    from boss_engine.services.knowledge import delivery
+    from boss_engine.services.llm_telemetry import clear_llm_context, set_llm_context
+
+    assert delivery.inject("x", has_kg_tools=False) == "x"                 # no context
+    set_llm_context(db_engine=engine, project_id="no-such-project")
+    try:
+        assert delivery.inject("x", has_kg_tools=False) == "x"             # unknown project: refused, unchanged
+    finally:
+        clear_llm_context()
+
+
+def test_kg_precedent_and_kg_search_are_knowledge_read_tools(engine, world):
+    from boss_engine.services import agent_baseline as ab
+
+    assert {"kg_search", "kg_precedent"} <= set(ab.KNOWLEDGE_TOOLS)
+    s = world["scope"]
+    out = _tool("kg_precedent").handler(_ctx(engine), project_id=s.project_id, actor="jev",
+                                        args={"situation": "ship the VAT rounding change", "run_id": "crun-x"})
+    assert out["precedent"][0]["outcome"] == "failed"
+    with begin(engine) as c:
+        row = c.execute(text("SELECT decision_ids FROM kg_pack_log WHERE project_id = :p AND step = 'kg_precedent'"),
+                        {"p": s.project_id}).scalar()
+    assert row[0] == "dec-a-" + s.project_id
+
+
+# ── the branch overlay ───────────────────────────────────────────────────────────────────────
+
+def test_the_branch_overlay_shows_the_builds_own_diff_for_that_run_only(engine, world):
+    from boss_engine.services.knowledge import delivery, overlay
+
+    s = world["scope"]
+    run = "crun-ovl-" + uuid.uuid4().hex[:6]
+    src = b"def total(cart):\n    return 1\n\ndef refund_total(cart):\n    return 0\n"
+    with begin(engine) as c:
+        c.execute(text("UPDATE kg_nodes SET name = 'total' WHERE id = :n"), {"n": world["nodes"]["checkout"]})
+        ov = overlay.hold(overlay.build(c, s.project_id, run, {"shop/checkout.py": src}))
+        assert ov.added_names() == ["refund_total"]
+        # the plan names nothing; the overlay seeds the build's own changed file
+        with_ov = delivery.pack(c, s.project_id, "software_engineer", "implement", {"text": "anything"},
+                                budget_tokens=2000, run_id=run, reader=rt.Reader(s))
+        without = delivery.pack(c, s.project_id, "software_engineer", "implement", {"text": "anything"},
+                                budget_tokens=2000, run_id="crun-other", reader=rt.Reader(s))
+        stored = c.execute(text("SELECT count(*) FROM kg_nodes WHERE project_id = :p AND name = 'refund_total'"),
+                           {"p": s.project_id}).scalar()
+    assert "[new in this build]" in with_ov.text and "refund_total" in with_ov.text
+    assert "[changed in this build]" in with_ov.text
+    assert world["ids"]["graph"] in with_ov.fact_ids        # reached through the overlay's seeds
+    assert "refund_total" not in without.text               # another run does not see it
+    assert stored == 0                                      # never written into the stored graph
+    overlay.discard(run)
+    assert overlay.for_run(run) is None

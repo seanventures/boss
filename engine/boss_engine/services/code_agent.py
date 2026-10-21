@@ -1177,7 +1177,12 @@ class ClaudeCodeAgent:
             # and the whole command is then rejected before the process starts — measured on the
             # chat path as `OSError: [Errno 7] Argument list too long: 'nice'`. Over the limit
             # the prompt goes on stdin; under it, nothing changes.
-            body = (own_prompt + _PARALLEL_TOOLS_RULE
+            # THE KNOWLEDGE PACK, for a harness without BOSS's kg tools (KNOWLEDGE_GRAPH_SPEC.md §3.5):
+            # the same pack kg_search returns, after the shared block so the cached prefix holds.
+            from .knowledge.delivery import inject as _inject_knowledge
+
+            stage_prompt = _inject_knowledge(own_prompt, has_kg_tools=False, task_source=shared_ctx or prompt)
+            body = (stage_prompt + _PARALLEL_TOOLS_RULE
                     + ("" if read_only else _WRITING_RULE + sandbox_facts())
                     + (sub_agent_rule(fan_out) if fan_out else ""))
             if len(body.encode("utf-8", "ignore")) > 96_000:

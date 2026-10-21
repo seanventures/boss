@@ -106,6 +106,50 @@ def register_knowledge_tools(reg: ToolRegistry) -> None:
             return {"facts": FactStore().current(c, scope, subject=args.get("subject"), kind=args.get("kind"),
                                                  include_inferred=args.get("include_inferred", True))}
 
+    # Phase 3: retrieval. kg_search returns the SAME pack a stage without tools gets injected
+    # (services/knowledge/delivery.py), so behaviour is identical across engines.
+    @reg.tool(
+        "kg_search",
+        "Search the knowledge graph for what matters to your task: invariants, couplings, decisions, past "
+        "review findings, known causes, runbooks and the module map around the code you touch, fused from "
+        "the graph, full text and embeddings, ranked by trust. Name your role and stage to get the pack "
+        "for them; it never exceeds budget_tokens. Facts tagged 'inferred, unconfirmed' are not binding.",
+        _obj({"query": {"type": "string", "description": "what the task is"},
+              "touched": {"type": "array", "items": {"type": "string"},
+                          "description": "symbols or files the plan or diff touches"},
+              "role": {"type": "string"}, "stage": {"type": "string"},
+              "budget_tokens": {"type": "integer", "minimum": 50, "maximum": 8000},
+              "run_id": {"type": "string"}, "project_id": _PROJECT}, ["query"]),
+        kind="read", permission="repository:read")
+    def kg_search(ctx, *, project_id, actor, args):
+        from ..services.knowledge import delivery
+
+        pid = args.get("project_id") or project_id
+        with ctx.begin() as c:
+            p = delivery.pack(c, pid, str(args.get("role") or ""), str(args.get("stage") or ""),
+                              {"text": args["query"], "touched": list(args.get("touched") or [])},
+                              budget_tokens=int(args.get("budget_tokens") or delivery.DEFAULT_STAGE_BUDGET),
+                              run_id=args.get("run_id"), via="tool")
+            return p.as_dict()
+
+    @reg.tool(
+        "kg_precedent",
+        "Past decisions most like this situation: what was asked, what was decided and by whom, why, and "
+        "how it turned out (the runs it started). Use it before you decide; cite the ids you relied on.",
+        _obj({"situation": {"type": "string"}, "k": {"type": "integer", "minimum": 1, "maximum": 10},
+              "run_id": {"type": "string"}, "project_id": _PROJECT}, ["situation"]),
+        kind="read", permission="decision:read")
+    def kg_precedent(ctx, *, project_id, actor, args):
+        from ..services.knowledge import delivery, retrieval
+
+        pid = args.get("project_id") or project_id
+        with ctx.begin() as c:
+            reader = delivery.reader_for(c, pid)
+            found = retrieval.precedent(c, reader, args["situation"], k=int(args.get("k") or 5))
+            retrieval.log_tool_answer(c, reader, "kg_precedent", run_id=args.get("run_id"),
+                                      decision_ids=[d["id"] for d in found])
+            return {"precedent": found}
+
     @reg.tool(
         "kg_propose_fact",
         "Propose a fact you learned (subject, predicate, object, statement, kind, evidence). It is stored "
