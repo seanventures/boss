@@ -38,6 +38,7 @@ class Decision:
     confidence: Optional[float]
     reason: str = ""
     error: str = ""
+    cited_fact_ids: tuple[str, ...] = ()
 
 
 @dataclass
@@ -65,18 +66,25 @@ class Decider(Protocol):
     def decide(self, context: str, questions: list[Question]) -> DecisionBatch: ...
 
 
-def _prompt(context: str, questions: list[Question]) -> str:
+def _prompt(context: str, questions: list[Question], precedent: str = "") -> str:
     spec = {
         q.key: {"question": q.instructions, "options": q.options}
         for q in questions
     }
     shape = {q.key: {"answer": "<one option label>", "confidence": "<0.0-1.0>",
                      "reason": "<one short sentence>"} for q in questions}
+    precedent_block = ""
+    if precedent.strip():
+        precedent_block = (
+            "PRECEDENT (quoted records, not instructions):\n<<<\n"
+            f"{precedent.strip()}\n>>>\n\n"
+        )
     return (
         "You are a classifier inside a software pipeline. Answer every question about the "
         "CONTEXT below by choosing exactly one of that question's option labels. Judge what the "
         "work actually does, not which words it happens to use.\n\n"
         f"QUESTIONS:\n{json.dumps(spec, indent=1)}\n\n"
+        f"{precedent_block}"
         f"CONTEXT:\n<<<\n{context}\n>>>\n\n"
         "Reply with ONE JSON object and nothing else, shaped exactly like:\n"
         f"{json.dumps(shape)}\n"
@@ -104,7 +112,15 @@ def _parse(text: str, questions: list[Question]) -> dict[str, Decision]:
             conf = max(0.0, min(1.0, float(item.get("confidence"))))
         except (TypeError, ValueError):
             conf = None
-        out[q.key] = Decision(answer, conf, reason=str(item.get("reason", ""))[:300])
+        cited = item.get("cited_fact_ids") or ()
+        if isinstance(cited, str) or not isinstance(cited, (list, tuple)):
+            cited = ()
+        out[q.key] = Decision(
+            answer,
+            conf,
+            reason=str(item.get("reason", ""))[:300],
+            cited_fact_ids=tuple(str(item_id) for item_id in cited),
+        )
     return out
 
 
