@@ -1,0 +1,249 @@
+{
+  "symbols": 30,
+  "correct": 30,
+  "accuracy": 1.0,
+  "micro_precision": 1.0,
+  "micro_recall": 1.0,
+  "rows": [
+    {
+      "symbol": "saleor/graphql/checkout/mutations/checkout_create.py::CheckoutCreateInput",
+      "correct": true,
+      "precision": 1.0,
+      "recall": 1.0,
+      "missed": [],
+      "extra": []
+    },
+    {
+      "symbol": "saleor/plugins/openid_connect/dataclasses.py::OpenIDConnectConfig",
+      "correct": true,
+      "precision": 1.0,
+      "recall": 1.0,
+      "missed": [],
+      "extra": []
+    },
+    {
+      "symbol": "saleor/graphql/channel/mutations/channel_delete.py::ChannelDelete",
+      "correct": true,
+      "precision": 1.0,
+      "recall": 1.0,
+      "missed": [],
+      "extra": []
+    },
+    {
+      "symbol": "saleor/graphql/core/enums.py::OrderDirection",
+      "correct": true,
+      "precision": 1.0,
+      "recall": 1.0,
+      "missed": [],
+      "extra": []
+    },
+    {
+      "symbol": "saleor/graphql/translations/mutations/product_media_translate.py::ProductMediaTranslate",
+      "correct": true,
+      "precision": 1.0,
+      "recall": 1.0,
+      "missed": [],
+      "extra": []
+    },
+    {
+      "symbol": "saleor/graphql/order/enums.py::OrderStatusFilter",
+      "correct": true,
+      "precision": 1.0,
+      "recall": 1.0,
+      "missed": [],
+      "extra": []
+    },
+    {
+      "symbol": "saleor/graphql/translations/mutations/promotion_rule_translate.py::PromotionRuleTranslate",
+      "correct": true,
+      "precision": 1.0,
+      "recall": 1.0,
+      "missed": [],
+      "extra": []
+    },
+    {
+      "symbol": "saleor/core/exceptions.py::GiftCardNotApplicable",
+      "correct": true,
+      "precision": 1.0,
+      "recall": 1.0,
+      "missed": [],
+      "extra": []
+    },
+    {
+      "symbol": "saleor/graphql/plugins/filters.py::PluginFilterInput",
+      "correct": true,
+      "precision": 1.0,
+      "recall": 1.0,
+      "missed": [],
+      "extra": []
+    },
+    {
+      "symbol": "saleor/translations/error_codes.py::ProductTranslateErrorCode",
+      "correct": true,
+      "precision": 1.0,
+      "recall": 1.0,
+      "missed": [],
+      "extra": []
+    },
+    {
+      "symbol": "saleor/graphql/core/federation/resolvers.py::resolve_federation_references",
+      "correct": true,
+      "precision": 1.0,
+      "recall": 1.0,
+      "missed": [],
+      "extra": []
+    },
+    {
+      "symbol": "saleor/graphql/meta/mutations/utils.py::update_metadata",
+      "correct": true,
+      "precision": 1.0,
+      "recall": 1.0,
+      "missed": [],
+      "extra": []
+    },
+    {
+      "symbol": "saleor/checkout/webhooks/exclude_shipping.py::excluded_shipping_methods_for_checkout",
+      "correct": true,
+      "precision": 1.0,
+      "recall": 1.0,
+      "missed": [],
+      "extra": []
+    },
+    {
+      "symbol": "saleor/graphql/discount/utils.py::get_variants_for_catalogue_predicate",
+      "correct": true,
+      "precision": 1.0,
+      "recall": 1.0,
+      "missed": [],
+      "extra": []
+    },
+    {
+      "symbol": "saleor/order/utils.py::get_total_order_discount_excluding_shipping",
+      "correct": true,
+      "precision": 1.0,
+      "recall": 1.0,
+      "missed": [],
+      "extra": []
+    },
+    {
+      "symbol": "saleor/page/search.py::update_pages_search_vector",
+      "correct": true,
+      "precision": 1.0,
+      "recall": 1.0,
+      "missed": [],
+      "extra": []
+    },
+    {
+      "symbol": "saleor/order/notifications.py::get_custom_order_payload",
+      "correct": true,
+      "precision": 1.0,
+      "recall": 1.0,
+      "missed": [],
+      "extra": []
+    },
+    {
+      "symbol": "saleor/webhook/transport/utils.py::prepare_deferred_payload_data",
+      "correct": true,
+      "precision": 1.0,
+      "recall": 1.0,
+      "missed": [],
+      "extra": []
+    },
+    {
+      "symbol": "saleor/graphql/meta/mutations/utils.py::get_valid_metadata_instance",
+      "correct": true,
+      "precision": 1.0,
+      "recall": 1.0,
+      "missed": [],
+      "extra": []
+    },
+    {
+      "symbol": "saleor/graphql/core/utils/__init__.py::from_global_id_or_none",
+      "correct": true,
+      "precision": 1.0,
+      "recall": 1.0,
+      "missed": [],
+      "extra": []
+    },
+    {
+      "symbol": "saleor/webhook/payloads.py::generate_fulfillment_payload",
+      "correct": true,
+      "precision": 1.0,
+      "recall": 1.0,
+      "missed": [],
+      "extra": []
+    },
+    {
+      "symbol": "saleor/warehouse/management.py::delete_stocks",
+      "correct": true,
+      "precision": 1.0,
+      "recall": 1.0,
+      "missed": [],
+      "extra": []
+    },
+    {
+      "symbol": "saleor/account/throttling.py::get_cache_key_blocked_ip",
+      "correct": true,
+      "precision": 1.0,
+      "recall": 1.0,
+      "missed": [],
+      "extra": []
+    },
+    {
+      "symbol": "saleor/discount/utils/voucher.py::get_products_voucher_discount",
+      "correct": true,
+      "precision": 1.0,
+      "recall": 1.0,
+      "missed": [],
+      "extra": []
+    },
+    {
+      "symbol": "saleor/checkout/fetch.py::CheckoutInfo.valid_pick_up_points",
+      "correct": true,
+      "precision": 1.0,
+      "recall": 1.0,
+      "missed": [],
+      "extra": []
+    },
+    {
+      "symbol": "saleor/core/models.py::ModelWithMetadata.get_value_from_private_metadata",
+      "correct": true,
+      "precision": 1.0,
+      "recall": 1.0,
+      "missed": [],
+      "extra": []
+    },
+    {
+      "symbol": "saleor/checkout/models.py::Checkout.is_checkout_locked",
+      "correct": true,
+      "precision": 1.0,
+      "recall": 1.0,
+      "missed": [],
+      "extra": []
+    },
+    {
+      "symbol": "saleor/checkout/fetch.py::CheckoutInfo.get_delivery_method_info",
+      "correct": true,
+      "precision": 1.0,
+      "recall": 1.0,
+      "missed": [],
+      "extra": []
+    },
+    {
+      "symbol": "saleor/graphql/core/mutations.py::BaseMutation.handle_errors",
+      "correct": true,
+      "precision": 1.0,
+      "recall": 1.0,
+      "missed": [],
+      "extra": []
+    },
+    {
+      "symbol": "saleor/graphql/order/bulk_mutations/order_bulk_create.py::OrderBulkCreateData.all_discounts",
+      "correct": true,
+      "precision": 1.0,
+      "recall": 1.0,
+      "missed": [],
+      "extra": []
+    }
+  ]
+}

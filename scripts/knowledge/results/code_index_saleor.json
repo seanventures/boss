@@ -1,0 +1,199 @@
+{
+  "repo": "saleor/saleor",
+  "base": "a31848549f5dc5843fe9e66422bf34a915559ee5",
+  "head": "9ae360ae76b4777c7101215d8b3348022fcd3683",
+  "full": {
+    "mode": "full",
+    "commit": "a31848549f5dc5843fe9e66422bf34a915559ee5",
+    "files": 4359,
+    "parsed": 4359,
+    "symbols": 28363,
+    "nodes": 38209,
+    "edges": 130424,
+    "closed": {
+      "nodes": 0,
+      "edges": 0
+    },
+    "parse_seconds": 4.6,
+    "seconds": 25.4,
+    "wall_seconds": 25.5
+  },
+  "incremental": [
+    {
+      "mode": "incremental",
+      "from": "a31848549f5dc5843fe9e66422bf34a915559ee5",
+      "commit": "419ddefeb171761feabad92178008ef6a49fbb17",
+      "changed": 21,
+      "deleted": 0,
+      "reresolved": 1472,
+      "nodes": 5709,
+      "edges": 6500,
+      "closed": {
+        "nodes": 0,
+        "edges": 0
+      },
+      "seconds": 2.37,
+      "wall_seconds": 2.4,
+      "subject": "feat(seo): add translatable full descriptions to categories and collections (#19"
+    },
+    {
+      "mode": "incremental",
+      "from": "419ddefeb171761feabad92178008ef6a49fbb17",
+      "commit": "925b69959a97c9deda7cdc85092494896d0aa1f4",
+      "changed": 26,
+      "deleted": 0,
+      "reresolved": 1616,
+      "nodes": 9595,
+      "edges": 23396,
+      "closed": {
+        "nodes": 0,
+        "edges": 2
+      },
+      "seconds": 5.15,
+      "wall_seconds": 5.22,
+      "subject": "feat: add per-channel availability toggle for product variants (#19795) (#19911)"
+    },
+    {
+      "mode": "incremental",
+      "from": "925b69959a97c9deda7cdc85092494896d0aa1f4",
+      "commit": "23ee3fd5bd63c506cb0bcfbe28e1976047b2ed7d",
+      "changed": 12,
+      "deleted": 0,
+      "reresolved": 28,
+      "nodes": 1460,
+      "edges": 4915,
+      "closed": {
+        "nodes": 1,
+        "edges": 2
+      },
+      "seconds": 1.59,
+      "wall_seconds": 1.61,
+      "subject": "Add sizeRounding argument to thumbnail fields, default to UP (#19913)"
+    },
+    {
+      "mode": "incremental",
+      "from": "23ee3fd5bd63c506cb0bcfbe28e1976047b2ed7d",
+      "commit": "52de41769a9497ddb97956378b6573f7b3bd34a5",
+      "changed": 3,
+      "deleted": 0,
+      "reresolved": 4,
+      "nodes": 156,
+      "edges": 544,
+      "closed": {
+        "nodes": 0,
+        "edges": 0
+      },
+      "seconds": 0.93,
+      "wall_seconds": 0.95,
+      "subject": "Add externalReference filter to products where input (#19904)"
+    },
+    {
+      "mode": "incremental",
+      "from": "52de41769a9497ddb97956378b6573f7b3bd34a5",
+      "commit": "dfa97c976418c4760ffd63d34b5e13698dfd85e8",
+      "changed": 0,
+      "deleted": 0,
+      "reresolved": 0,
+      "nodes": 0,
+      "edges": 0,
+      "closed": {
+        "nodes": 0,
+        "edges": 0
+      },
+      "seconds": 0.6,
+      "wall_seconds": 0.63,
+      "subject": "feat(build): cache DB across workflow runs (#19900)"
+    },
+    {
+      "mode": "incremental",
+      "from": "dfa97c976418c4760ffd63d34b5e13698dfd85e8",
+      "commit": "3dd4bf79a46132ed2f8e6225a9863f5ef8dc243b",
+      "changed": 20,
+      "deleted": 0,
+      "reresolved": 1478,
+      "nodes": 6049,
+      "edges": 6236,
+      "closed": {
+        "nodes": 0,
+        "edges": 1
+      },
+      "seconds": 2.45,
+      "wall_seconds": 2.48,
+      "subject": "Add per-webhook payloadGeneration to opt out of deferred payloads (#19916) (#199"
+    },
+    {
+      "mode": "incremental",
+      "from": "3dd4bf79a46132ed2f8e6225a9863f5ef8dc243b",
+      "commit": "0c0e2697cc72aa999f7786ae8aeda7665bd4285f",
+      "changed": 13,
+      "deleted": 1,
+      "reresolved": 116,
+      "nodes": 4006,
+      "edges": 18625,
+      "closed": {
+        "nodes": 101,
+        "edges": 583
+      },
+      "seconds": 4.17,
+      "wall_seconds": 4.21,
+      "subject": "fix: dev dependencies required to run HTTP server (#19923)"
+    },
+    {
+      "mode": "incremental",
+      "from": "0c0e2697cc72aa999f7786ae8aeda7665bd4285f",
+      "commit": "013a66f2cc7bfd03eb96d8ae5178ebf57468c774",
+      "changed": 0,
+      "deleted": 0,
+      "reresolved": 0,
+      "nodes": 0,
+      "edges": 0,
+      "closed": {
+        "nodes": 0,
+        "edges": 0
+      },
+      "seconds": 0.42,
+      "wall_seconds": 0.44,
+      "subject": "chore: bump Pillow to v13.0.0 (#19930)"
+    },
+    {
+      "mode": "incremental",
+      "from": "013a66f2cc7bfd03eb96d8ae5178ebf57468c774",
+      "commit": "343ac59f0de2ffd11e0f2c82ac6df609a6789b66",
+      "changed": 0,
+      "deleted": 0,
+      "reresolved": 0,
+      "nodes": 0,
+      "edges": 0,
+      "closed": {
+        "nodes": 0,
+        "edges": 0
+      },
+      "seconds": 0.45,
+      "wall_seconds": 0.46,
+      "subject": "chore: bump certifi 2026.10.18 (#19939)"
+    },
+    {
+      "mode": "incremental",
+      "from": "343ac59f0de2ffd11e0f2c82ac6df609a6789b66",
+      "commit": "9ae360ae76b4777c7101215d8b3348022fcd3683",
+      "changed": 0,
+      "deleted": 0,
+      "reresolved": 0,
+      "nodes": 0,
+      "edges": 0,
+      "closed": {
+        "nodes": 0,
+        "edges": 0
+      },
+      "seconds": 0.47,
+      "wall_seconds": 0.49,
+      "subject": "chore: bump certifi to 2026.10.19 (#19944)"
+    }
+  ],
+  "graph": {
+    "current_nodes": 38381,
+    "current_edges": 131085,
+    "closed_nodes": 102,
+    "closed_edges": 588
+  }
+}

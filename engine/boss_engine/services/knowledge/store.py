@@ -47,6 +47,8 @@ EDGE_KINDS = (
     "defines", "calls", "imports", "reads", "writes", "publishes", "subscribes", "exposes", "tests",
     "specifies", "implements", "changed", "reviewed", "found_in", "shipped", "fired_on", "fixed_by",
     "decided_by", "approved_by", "about", "supersedes", "evidenced_by",
+    # Phase 1: a non-call use of a symbol (type, base class, value) — blast radius needs it too.
+    "references",
 )
 MAX_TRAVERSAL_DEPTH = 6
 RRF_K = 60
@@ -289,6 +291,116 @@ class PostgresKnowledgeStore:
             return False
         return True
 
+    # --- bulk writes (code index) ----------------------------------------------------
+    def upsert_nodes_bulk(self, connection: Connection, scope: Scope, rows: Sequence[dict], *, seen_at: datetime,
+                          source: str, layer: str = "deterministic", chunk: int = 5000) -> dict[tuple[str, str], str]:
+        """Upsert many nodes in a few statements; returns {(kind, node_key): id}.
+
+        Each row: kind, key, name, attrs, repo, path. A node seen again is refreshed and, if its
+        validity had been closed, reopened from ``seen_at`` — the code says it exists again.
+        """
+        self.require_scope(connection, scope)
+        unknown = {r["kind"] for r in rows} - set(self.node_kinds)
+        if unknown:
+            raise ValueError(f"unknown node kinds {sorted(unknown)}")
+        ids: dict[tuple[str, str], str] = {}
+        for start in range(0, len(rows), chunk):
+            part = rows[start:start + chunk]
+            result = connection.execute(text(
+                """
+                INSERT INTO kg_nodes (id, project_id, kind, node_key, name, attrs, layer, source, confidence,
+                                      valid_from, first_seen, last_seen, repo, path)
+                SELECT u.id, :p, u.kind, u.key, u.name, CAST(u.attrs AS JSONB), :layer, :source, 1.0,
+                       :seen, :seen, :seen, u.repo, u.path
+                FROM unnest(CAST(:ids AS TEXT[]), CAST(:kinds AS TEXT[]), CAST(:keys AS TEXT[]),
+                            CAST(:names AS TEXT[]), CAST(:attrs AS TEXT[]), CAST(:repos AS TEXT[]),
+                            CAST(:paths AS TEXT[])) AS u(id, kind, key, name, attrs, repo, path)
+                ON CONFLICT (project_id, kind, node_key) DO UPDATE SET
+                    name = EXCLUDED.name, attrs = EXCLUDED.attrs, repo = EXCLUDED.repo, path = EXCLUDED.path,
+                    source = EXCLUDED.source, layer = EXCLUDED.layer, last_seen = EXCLUDED.last_seen,
+                    valid_from = CASE WHEN kg_nodes.valid_to IS NOT NULL THEN EXCLUDED.last_seen
+                                      ELSE COALESCE(kg_nodes.valid_from, EXCLUDED.valid_from) END,
+                    valid_to = NULL
+                RETURNING id, kind, node_key
+                """),
+                {"p": scope.project_id, "layer": layer, "source": source, "seen": seen_at,
+                 "ids": [make_id("kgn") for _ in part], "kinds": [r["kind"] for r in part],
+                 "keys": [r["key"] for r in part], "names": [r.get("name") or r["key"] for r in part],
+                 "attrs": [json.dumps(r.get("attrs") or {}) for r in part], "repos": [r.get("repo") for r in part],
+                 "paths": [r.get("path") for r in part]})
+            ids.update({(row.kind, row.node_key): row.id for row in result})
+        return ids
+
+    def upsert_edges_bulk(self, connection: Connection, scope: Scope, rows: Sequence[dict], *, seen_at: datetime,
+                          source: str, layer: str = "deterministic", chunk: int = 5000) -> int:
+        """Upsert many edges (src, dst, kind, attrs, confidence) between nodes of this scope.
+
+        Callers pass node ids they got from this store for this scope; the statement re-checks
+        that both ends belong to the project, so a foreign id writes nothing.
+        """
+        self.require_scope(connection, scope)
+        unknown = {r["kind"] for r in rows} - set(self.edge_kinds)
+        if unknown:
+            raise ValueError(f"unknown edge kinds {sorted(unknown)}")
+        written = 0
+        for start in range(0, len(rows), chunk):
+            part = rows[start:start + chunk]
+            written += connection.execute(text(
+                """
+                INSERT INTO kg_edges (id, project_id, src_id, dst_id, kind, attrs, layer, source, confidence,
+                                      valid_from, first_seen, last_seen)
+                SELECT u.id, :p, u.src, u.dst, u.kind, CAST(u.attrs AS JSONB), :layer, :source, u.conf,
+                       :seen, :seen, :seen
+                FROM unnest(CAST(:ids AS TEXT[]), CAST(:srcs AS TEXT[]), CAST(:dsts AS TEXT[]),
+                            CAST(:kinds AS TEXT[]), CAST(:attrs AS TEXT[]), CAST(:confs AS FLOAT8[]))
+                     AS u(id, src, dst, kind, attrs, conf)
+                JOIN kg_nodes s ON s.id = u.src AND s.project_id = :p
+                JOIN kg_nodes d ON d.id = u.dst AND d.project_id = :p
+                ON CONFLICT (project_id, src_id, dst_id, kind) DO UPDATE SET
+                    attrs = EXCLUDED.attrs, confidence = EXCLUDED.confidence, source = EXCLUDED.source,
+                    last_seen = EXCLUDED.last_seen,
+                    valid_from = CASE WHEN kg_edges.valid_to IS NOT NULL THEN EXCLUDED.last_seen
+                                      ELSE COALESCE(kg_edges.valid_from, EXCLUDED.valid_from) END,
+                    valid_to = NULL
+                """),
+                {"p": scope.project_id, "layer": layer, "source": source, "seen": seen_at,
+                 "ids": [make_id("kge") for _ in part], "srcs": [r["src"] for r in part],
+                 "dsts": [r["dst"] for r in part], "kinds": [r["kind"] for r in part],
+                 "attrs": [json.dumps(r.get("attrs") or {}) for r in part],
+                 "confs": [float(r.get("confidence", 1.0)) for r in part]}).rowcount
+        return written
+
+    def close_unseen(self, connection: Connection, scope: Scope, *, repo: str, source: str, before: datetime,
+                     paths: Sequence[str] | None = None) -> dict[str, int]:
+        """Close (never delete) what an index run of ``repo`` did not see again.
+
+        Nodes from the given files (all of the repo's files when ``paths`` is None) and the edges
+        leaving them that were last seen before ``before`` get ``valid_to = before``.
+        """
+        self.require_scope(connection, scope)
+        path_clause = "" if paths is None else " AND n.path = ANY(:paths)"
+        params = {"p": scope.project_id, "repo": repo, "source": source, "before": before}
+        if paths is not None:
+            params["paths"] = list(paths)
+        edges = connection.execute(text(
+            f"""UPDATE kg_edges e SET valid_to = :before
+                FROM kg_nodes n
+                WHERE e.src_id = n.id AND n.project_id = :p AND n.repo = :repo{path_clause}
+                  AND e.project_id = :p AND e.source = :source AND e.valid_to IS NULL AND e.last_seen < :before"""),
+            params).rowcount
+        nodes = connection.execute(text(
+            f"""UPDATE kg_nodes n SET valid_to = :before
+                WHERE n.project_id = :p AND n.repo = :repo{path_clause}
+                  AND n.source = :source AND n.valid_to IS NULL AND n.last_seen < :before"""),
+            params).rowcount
+        # Edges INTO a node that just closed are no longer true either.
+        into = connection.execute(text(
+            """UPDATE kg_edges e SET valid_to = :before
+               FROM kg_nodes n
+               WHERE e.dst_id = n.id AND n.project_id = :p AND n.repo = :repo AND n.valid_to = :before
+                 AND e.project_id = :p AND e.valid_to IS NULL"""), params).rowcount
+        return {"nodes": nodes, "edges": edges + into}
+
     # --- reads --------------------------------------------------------------------
     def traverse(self, connection: Connection, scope: Scope, query: Pattern | str) -> dict[str, Any]:
         """Nodes reachable from the seeds within depth, with the hop count that first reached them.
@@ -328,7 +440,7 @@ class PostgresKnowledgeStore:
                 WHERE w.depth < :depth
             ),
             reached AS (SELECT id, MIN(depth) AS depth FROM walk GROUP BY id)
-            SELECT n.id, n.kind, n.node_key, n.name, n.layer, n.confidence, r.depth
+            SELECT n.id, n.kind, n.node_key, n.name, n.layer, n.confidence, n.repo, n.path, r.depth
             FROM reached r JOIN kg_nodes n ON n.id = r.id AND n.project_id = :p
             ORDER BY r.depth, n.id
             LIMIT :limit

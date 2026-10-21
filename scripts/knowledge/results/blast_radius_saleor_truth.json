@@ -1,0 +1,174 @@
+{
+  "repo": "saleor/saleor",
+  "commit": "9ae360ae76b4777c7101215d8b3348022fcd3683",
+  "question": "Which files depend directly on this symbol (depth 1), other than the file that defines it?",
+  "rules": [
+    "A file counts when its Python code imports or uses THIS symbol: an import, a call, a type annotation, a base class, a value reference (wraps=..., registries).",
+    "Not counted: GraphQL query strings and schema.graphql (they name the API type, not the Python class); mock.patch target strings; comments and docstrings; other definitions with the same name (local test helpers, a same-named module, a graphene enum built from a Python enum).",
+    "Candidates came from `git grep -w NAME`; every matching line was read and judged by hand."
+  ],
+  "selection": "30 symbols drawn by seeded random sample (seed 20261021) from non-test, non-migration symbols whose short name is defined once in the repo and appears in 3-20 files: 14 functions, 10 classes, 6 methods.",
+  "symbols": {
+    "saleor/graphql/checkout/mutations/checkout_create.py::CheckoutCreateInput": [],
+    "saleor/plugins/openid_connect/dataclasses.py::OpenIDConnectConfig": [
+      "saleor/plugins/openid_connect/plugin.py",
+      "saleor/plugins/openid_connect/utils.py"
+    ],
+    "saleor/graphql/channel/mutations/channel_delete.py::ChannelDelete": [
+      "saleor/graphql/channel/mutations/__init__.py",
+      "saleor/graphql/channel/schema.py"
+    ],
+    "saleor/graphql/core/enums.py::OrderDirection": [
+      "saleor/graphql/account/tests/queries/test_customer_types.py",
+      "saleor/graphql/core/connection.py",
+      "saleor/graphql/core/types/sort_input.py",
+      "saleor/graphql/plugins/sorters.py",
+      "saleor/graphql/product/tests/queries/test_product_variants_query.py",
+      "saleor/graphql/utils/sorting.py"
+    ],
+    "saleor/graphql/translations/mutations/product_media_translate.py::ProductMediaTranslate": [
+      "saleor/graphql/product/schema.py",
+      "saleor/graphql/translations/mutations/__init__.py"
+    ],
+    "saleor/graphql/order/enums.py::OrderStatusFilter": [
+      "saleor/graphql/order/filters.py"
+    ],
+    "saleor/graphql/translations/mutations/promotion_rule_translate.py::PromotionRuleTranslate": [
+      "saleor/graphql/discount/schema.py",
+      "saleor/graphql/translations/mutations/__init__.py"
+    ],
+    "saleor/core/exceptions.py::GiftCardNotApplicable": [
+      "saleor/checkout/checkout_cleaner.py",
+      "saleor/checkout/complete_checkout.py",
+      "saleor/checkout/tests/test_checkout_cleaner.py",
+      "saleor/giftcard/tests/test_utils.py",
+      "saleor/giftcard/utils.py",
+      "saleor/graphql/checkout/mutations/order_create_from_checkout.py"
+    ],
+    "saleor/graphql/plugins/filters.py::PluginFilterInput": [
+      "saleor/graphql/plugins/schema.py"
+    ],
+    "saleor/translations/error_codes.py::ProductTranslateErrorCode": [
+      "saleor/graphql/core/enums.py"
+    ],
+    "saleor/graphql/core/federation/resolvers.py::resolve_federation_references": [
+      "saleor/graphql/account/types.py",
+      "saleor/graphql/app/types.py",
+      "saleor/graphql/core/federation/__init__.py",
+      "saleor/graphql/order/types.py",
+      "saleor/graphql/page/types.py",
+      "saleor/graphql/product/types/categories.py",
+      "saleor/graphql/product/types/products.py"
+    ],
+    "saleor/graphql/meta/mutations/utils.py::update_metadata": [
+      "saleor/graphql/meta/mutations/update_metadata.py",
+      "saleor/graphql/order/mutations/utils.py"
+    ],
+    "saleor/checkout/webhooks/exclude_shipping.py::excluded_shipping_methods_for_checkout": [
+      "saleor/checkout/delivery_context.py",
+      "saleor/checkout/tests/webhooks/test_exclude_shipping.py",
+      "saleor/graphql/shipping/tests/mutations/test_delivery_options_calculate.py"
+    ],
+    "saleor/graphql/discount/utils.py::get_variants_for_catalogue_predicate": [
+      "saleor/discount/tasks.py",
+      "saleor/graphql/discount/mutations/sale/sale_base_catalogue.py",
+      "saleor/graphql/discount/mutations/sale/sale_update.py",
+      "saleor/graphql/discount/tests/mutations/test_promotion_rule_update.py",
+      "saleor/graphql/discount/tests/mutations/test_sale_update.py",
+      "saleor/graphql/discount/tests/test_utils.py",
+      "saleor/product/utils/variants.py"
+    ],
+    "saleor/order/utils.py::get_total_order_discount_excluding_shipping": [
+      "saleor/order/tests/test_order_utils.py",
+      "saleor/plugins/avatax/__init__.py"
+    ],
+    "saleor/page/search.py::update_pages_search_vector": [
+      "saleor/graphql/page/tests/queries/test_pages_search.py",
+      "saleor/page/tasks.py",
+      "saleor/page/tests/fixtures/page.py",
+      "saleor/page/tests/test_search.py"
+    ],
+    "saleor/order/notifications.py::get_custom_order_payload": [
+      "saleor/core/notification/validation.py",
+      "saleor/order/tests/test_notifications.py"
+    ],
+    "saleor/webhook/transport/utils.py::prepare_deferred_payload_data": [
+      "saleor/graphql/webhook/mutations/webhook_trigger.py",
+      "saleor/webhook/transport/asynchronous/transport.py"
+    ],
+    "saleor/graphql/meta/mutations/utils.py::get_valid_metadata_instance": [
+      "saleor/graphql/meta/mutations/base.py",
+      "saleor/graphql/meta/mutations/delete_metadata.py",
+      "saleor/graphql/meta/mutations/delete_private_metadata.py",
+      "saleor/graphql/meta/mutations/update_metadata.py",
+      "saleor/graphql/meta/mutations/update_private_metadata.py"
+    ],
+    "saleor/graphql/core/utils/__init__.py::from_global_id_or_none": [
+      "saleor/plugins/admin_email/tasks.py",
+      "saleor/plugins/user_email/tasks.py"
+    ],
+    "saleor/webhook/payloads.py::generate_fulfillment_payload": [
+      "saleor/plugins/webhook/plugin.py",
+      "saleor/webhook/tests/test_webhook_sample_payloads.py"
+    ],
+    "saleor/warehouse/management.py::delete_stocks": [
+      "saleor/graphql/product/bulk_mutations/product_variant_bulk_update.py",
+      "saleor/graphql/product/bulk_mutations/product_variant_stocks_delete.py"
+    ],
+    "saleor/account/throttling.py::get_cache_key_blocked_ip": [
+      "saleor/account/tests/test_throttling.py",
+      "saleor/graphql/account/tests/mutations/authentication/test_token_create.py",
+      "saleor/tests/e2e/account/account/test_login_throttling.py",
+      "saleor/tests/e2e/account/account/test_should_not_be_able_to_login_with_invalid_credentials.py"
+    ],
+    "saleor/discount/utils/voucher.py::get_products_voucher_discount": [
+      "saleor/checkout/utils.py",
+      "saleor/order/tests/fixtures/order.py"
+    ],
+    "saleor/checkout/fetch.py::CheckoutInfo.valid_pick_up_points": [
+      "saleor/checkout/delivery_context.py",
+      "saleor/graphql/checkout/mutations/checkout_delivery_method_update.py",
+      "saleor/graphql/checkout/tests/mutations/test_checkout_complete_with_payment.py",
+      "saleor/graphql/checkout/tests/mutations/test_checkout_complete_with_transactions.py",
+      "saleor/graphql/checkout/tests/mutations/test_order_create_from_checkout.py"
+    ],
+    "saleor/core/models.py::ModelWithMetadata.get_value_from_private_metadata": [
+      "saleor/graphql/meta/tests/mutations/test_delete_private_metadata.py",
+      "saleor/graphql/meta/tests/mutations/test_update_private_metadata.py",
+      "saleor/order/delivery_context.py",
+      "saleor/payment/utils.py",
+      "saleor/plugins/openid_connect/utils.py"
+    ],
+    "saleor/checkout/models.py::Checkout.is_checkout_locked": [
+      "saleor/graphql/payment/mutations/payment/checkout_payment_create.py",
+      "saleor/graphql/payment/mutations/transaction/transaction_initialize.py",
+      "saleor/graphql/payment/mutations/transaction/transaction_process.py"
+    ],
+    "saleor/checkout/fetch.py::CheckoutInfo.get_delivery_method_info": [
+      "saleor/checkout/base_calculations.py",
+      "saleor/checkout/checkout_cleaner.py",
+      "saleor/checkout/complete_checkout.py",
+      "saleor/checkout/tests/test_checkout.py",
+      "saleor/checkout/tests/test_delivery_context.py",
+      "saleor/checkout/utils.py",
+      "saleor/graphql/checkout/mutations/checkout_lines_add.py",
+      "saleor/graphql/checkout/mutations/checkout_shipping_address_update.py",
+      "saleor/graphql/checkout/tests/mutations/test_checkout_complete_with_payment.py",
+      "saleor/graphql/checkout/tests/mutations/test_checkout_complete_with_transactions.py",
+      "saleor/graphql/checkout/tests/mutations/test_order_create_from_checkout.py",
+      "saleor/plugins/avatax/__init__.py",
+      "saleor/plugins/tests/sample_plugins.py"
+    ],
+    "saleor/graphql/core/mutations.py::BaseMutation.handle_errors": [
+      "saleor/graphql/meta/mutations/base.py",
+      "saleor/graphql/payment/mutations/stored_payment_methods/payment_gateway_initialize_tokenization.py",
+      "saleor/graphql/payment/mutations/stored_payment_methods/payment_method_intialize_tokenization.py",
+      "saleor/graphql/payment/mutations/stored_payment_methods/payment_method_process_tokenization.py",
+      "saleor/graphql/payment/mutations/stored_payment_methods/payment_method_request_delete.py"
+    ],
+    "saleor/graphql/order/bulk_mutations/order_bulk_create.py::OrderBulkCreateData.all_discounts": []
+  },
+  "corrections": [
+    "get_cache_key_blocked_ip: the first hand-check missed three importing files because the evidence listing was truncated; the tool found them, each was verified by reading its import, and the list was corrected before any indexer change."
+  ]
+}
