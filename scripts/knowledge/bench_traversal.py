@@ -62,7 +62,8 @@ def timed(cur, sql, params=None):
         rows = cur.fetchall()
         return (time.perf_counter() - t) * 1000, rows
     except psycopg.errors.QueryCanceled:
-        cur.connection.rollback()
+        if not cur.connection.autocommit:
+            cur.connection.rollback()
         return None, None
 
 
@@ -203,7 +204,8 @@ def main() -> None:
             seeds = seeds_for(conn, direction, args.seeds)
             for depth in depths:
                 # A fresh session per series, so AGE's first-call graph load is measured each time.
-                with psycopg.connect(args.dsn) as fresh:
+                # Autocommit: a timed-out query must not roll back the session's LOAD/search_path.
+                with psycopg.connect(args.dsn, autocommit=True) as fresh:
                     results.append(run(fresh, direction, depth, seeds, args.timeout))
                 print(json.dumps(results[-1]), flush=True)
         report["results"] = results
