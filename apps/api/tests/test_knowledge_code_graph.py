@@ -268,6 +268,44 @@ def test_kg_why_joins_specs_prs_decisions_findings_and_incidents_to_code(engine,
     assert any(f["key"] == "pull_request:acme/shop#7" for f in why["fixes"])
 
 
+MONOREPO = {
+    "package.json": '{"name": "root", "private": true, "workspaces": ["packages/*"]}',
+    "packages/utils/package.json": '{"name": "@acme/utils", "main": "dist/index.js"}',
+    "packages/utils/src/index.ts": 'export * from "./pg"\nexport * as Http from "./http"\n',
+    "packages/utils/src/pg/index.ts": "export function parseConn(s: string) { return s }\n",
+    "packages/utils/src/http/index.ts": 'export * from "./role"\n',
+    "packages/utils/src/http/role.ts": "export interface RoleResponse { id: string }\n",
+    "packages/framework/package.json":
+        '{"name": "@acme/framework", "exports": {"./utils": "./dist/utils/index.js", "./types": {"types": "./dist/types/index.d.ts"}}}',
+    "packages/framework/src/utils/index.ts": 'export * from "@acme/utils"\n',
+    "packages/cli/src/create.ts": """
+        import { parseConn, Http } from "@acme/framework/utils"
+        export function create(s: string): Http.RoleResponse { return { id: parseConn(s) } }
+        """,
+    "apps/web/tsconfig.json": '{\n  // comments are allowed\n  "compilerOptions": {"paths": {"@/*": ["./src/*"],},},\n}\n',
+    "apps/web/src/lib/modal.tsx": "export function useModal() { return 1 }\n",
+    "apps/web/src/lib/index.ts": 'export { useModal as useDialog } from "./modal"\n',
+    "apps/web/src/page.tsx": 'import { useDialog } from "@/lib"\nexport const Page = () => useDialog()\n',
+}
+
+
+def test_a_typescript_monorepo_resolves_workspace_packages_aliases_and_re_exports(engine, scope, tmp_path):
+    """`@acme/framework/utils` -> package exports (dist -> src) -> `export *` chains -> the definition;
+    `Http.RoleResponse` through `export * as`; `@/lib` through tsconfig paths and a renamed re-export."""
+    root = tmp_path / "mono"
+    root.mkdir()
+    _git(root, "init", "-q")
+    _write(root, MONOREPO)
+    with begin(engine) as c:
+        CodeIndexer(workers=1).index_full(c, scope, REPO, root)
+        deps = {sym: Q.direct_dependent_files(c, scope, k(path, sym)) for path, sym in (
+            ("packages/utils/src/pg/index.ts", "parseConn"), ("packages/utils/src/http/role.ts", "RoleResponse"),
+            ("apps/web/src/lib/modal.tsx", "useModal"))}
+    assert "packages/cli/src/create.ts" in deps["parseConn"]
+    assert "packages/cli/src/create.ts" in deps["RoleResponse"]
+    assert deps["useModal"] == {"apps/web/src/lib/index.ts", "apps/web/src/page.tsx"}
+
+
 def test_the_mcp_tools_answer_through_the_registry(engine, scope, shop):
     from boss_engine.config import get_settings
     from boss_engine.context import EngineContext

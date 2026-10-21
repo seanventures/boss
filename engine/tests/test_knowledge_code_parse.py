@@ -223,3 +223,22 @@ def test_a_method_called_on_an_expression_is_recorded_for_the_unique_name_rule()
     assert ("f", ("?", "not_expired"), True) in refs
     assert ("f", ("?", "calculate_total"), True) in refs
     assert ("f", ("Reservation", "objects", "filter"), True) in refs
+
+
+def test_typescript_re_exports_scoped_packages_and_namespace_types():
+    """`export ... from` re-exports, an npm scope's @ kept, and a type reached through a namespace."""
+    src = (b'export { userLoader as loader } from "./loader"\n'
+           b'export * from "./pg"\n'
+           b'export * as OrderWorkflow from "./order"\n'
+           b'import { HttpTypes } from "@medusajs/types"\n'
+           b'export function f(m: Match<HttpTypes.AdminRole>): OrderWorkflow.Input { return m }\n'
+           b'export function g() { const xs: HttpTypes.AdminPrice[] = []; return xs }\n')
+    f = parse_file("pkg/src/index.ts", src)
+    imports = {(i.alias, i.module, i.name) for i in f.imports}
+    assert ("loader", "pkg/src/loader", "userLoader") in imports
+    assert ("*", "pkg/src/pg", "*") in imports
+    assert ("OrderWorkflow", "pkg/src/order", None) in imports
+    assert ("HttpTypes", "@medusajs/types", "HttpTypes") in imports
+    refs = {(r.src, r.chain) for r in f.refs}
+    assert ("f", ("HttpTypes", "AdminRole")) in refs and ("f", ("OrderWorkflow", "Input")) in refs
+    assert ("g", ("HttpTypes", "AdminPrice")) in refs           # a variable's type annotation

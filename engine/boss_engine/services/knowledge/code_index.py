@@ -21,7 +21,9 @@ Nothing is deleted: a symbol that disappears gets `valid_to`, as every fact in t
 """
 from __future__ import annotations
 
+import json
 import os
+import re
 import subprocess
 import time
 from collections import defaultdict
@@ -41,6 +43,7 @@ from .store import PostgresKnowledgeStore, Scope
 SOURCE = "code_index"
 SKIP_DIRS = ("node_modules/", "vendor/", "dist/", "build/", ".git/", "__pycache__/", "third_party/")
 GO_LIKE = ("go", "java", "csharp")       # a module (package/namespace) spans several files
+JS_FAMILY = ("javascript", "typescript", "tsx")
 PARSE_CHUNK = 64
 
 
@@ -117,13 +120,149 @@ def names_of(f: FileFacts) -> list[str]:
     return sorted(n for n in names if n)
 
 
+# --- how a JS/TS repository names its own code ----------------------------------------------------
+JS_EXT = re.compile(r"(?:\.d)?\.(?:[cm]?[jt]sx?)$")
+JSONC_NOISE = re.compile(r'("(?:\\.|[^"\\])*")|//[^\n]*|/\*.*?\*/', re.S)
+
+
+def _jsonc(raw: str) -> dict:
+    """tsconfig.json allows comments and trailing commas."""
+    stripped = JSONC_NOISE.sub(lambda m: m.group(1) or "", raw)
+    try:
+        value = json.loads(re.sub(r",(\s*[}\]])", r"\1", stripped))
+    except ValueError:
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _norm(path: str) -> str:
+    parts: list[str] = []
+    for part in path.split("/"):
+        if part == "..":
+            if parts:
+                parts.pop()
+        elif part not in ("", "."):
+            parts.append(part)
+    return "/".join(parts)
+
+
+def _strings(value: Any) -> list[str]:
+    """Every path in a package.json `exports` entry (a string, or nested conditions)."""
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        return [s for v in value.values() for s in _strings(v)]
+    if isinstance(value, list):
+        return [s for v in value for s in _strings(v)]
+    return []
+
+
+class JsWorkspace:
+    """Workspace package names (each package.json's `name`) and tsconfig/jsconfig `paths` aliases,
+    so `@acme/utils`, `@acme/framework/utils` and `@/lib/x` resolve to the repository's own modules.
+    A package's published entry (`dist/...`) maps back to its source (`src/...`)."""
+
+    def __init__(self, packages: dict[str, tuple[str, dict]] | None = None,
+                 aliases: list[tuple[str, str, list[str]]] | None = None):
+        self.packages = packages or {}                 # name -> (directory, package.json)
+        self.aliases = sorted(aliases or [], key=lambda a: -len(a[0]))   # (config dir, pattern, targets)
+
+    @classmethod
+    def load(cls, root: Path) -> JsWorkspace:
+        proc = subprocess.run(["git", "ls-files", "-z"], cwd=root, capture_output=True)
+        paths = [p for p in proc.stdout.decode("utf-8", "replace").split("\0")
+                 if p and not any(f"/{d}" in f"/{p}" for d in SKIP_DIRS)]
+        packages: dict[str, tuple[str, dict]] = {}
+        aliases: list[tuple[str, str, list[str]]] = []
+        for path in paths:
+            name = path.rsplit("/", 1)[-1]
+            directory = path.rsplit("/", 1)[0] if "/" in path else ""
+            if name == "package.json":
+                try:
+                    meta = json.loads((root / path).read_text(errors="replace"))
+                except (OSError, ValueError):
+                    continue
+                if isinstance(meta, dict) and isinstance(meta.get("name"), str):
+                    packages.setdefault(meta["name"], (directory, meta))
+            elif name in ("jsconfig.json",) or (name.startswith("tsconfig") and name.endswith(".json")):
+                try:
+                    options = _jsonc((root / path).read_text(errors="replace")).get("compilerOptions") or {}
+                except OSError:
+                    continue
+                base = _norm(f"{directory}/{options.get('baseUrl') or '.'}")
+                for pattern, targets in (options.get("paths") or {}).items():
+                    if isinstance(targets, list):
+                        aliases.append((directory, pattern, [_norm(f"{base}/{t}") for t in targets if isinstance(t, str)]))
+        return cls(packages, aliases)
+
+    def module_for(self, spec: str, importer: str, modules: dict[str, str]) -> str | None:
+        """The repository module an import specifier names, or None (a third-party package)."""
+        if not spec or spec in modules:
+            return None
+        for directory, pattern, targets in self.aliases:
+            if directory and not importer.startswith(directory + "/"):
+                continue
+            head, star, tail = pattern.partition("*")
+            if star:
+                if not (spec.startswith(head) and spec.endswith(tail) and len(spec) >= len(head) + len(tail)):
+                    continue
+                captured = spec[len(head):len(spec) - len(tail)]
+            elif spec != pattern:
+                continue
+            else:
+                captured = ""
+            for target in targets:
+                hit = self._module(target.replace("*", captured), modules)
+                if hit:
+                    return hit
+        name = max((n for n in self.packages if spec == n or spec.startswith(n + "/")), key=len, default=None)
+        if name is None:
+            return None
+        directory, meta = self.packages[name]
+        sub = spec[len(name):].lstrip("/")
+        exports = meta.get("exports")
+        entries: list[str] = []
+        if isinstance(exports, dict):
+            key = f"./{sub}" if sub else "."
+            if key in exports:
+                entries += _strings(exports[key])
+            elif sub:
+                for pat, value in exports.items():
+                    head, star, tail = pat.partition("*")
+                    if star and key.startswith(head) and key.endswith(tail):
+                        entries += [v.replace("*", key[len(head):len(key) - len(tail)]) for v in _strings(value)]
+        elif isinstance(exports, str) and not sub:
+            entries.append(exports)
+        if sub:
+            entries += [f"src/{sub}", sub, f"lib/{sub}"]
+        else:
+            entries += [meta[k] for k in ("source", "types", "typings", "module", "main") if isinstance(meta.get(k), str)]
+            entries += ["src/index", "index", "lib/index"]
+        for entry in entries:
+            hit = self._module(_norm(f"{directory}/{entry}"), modules)
+            if hit:
+                return hit
+        return None
+
+    @staticmethod
+    def _module(path: str, modules: dict[str, str]) -> str | None:
+        stem = JS_EXT.sub("", path).removesuffix("/index")
+        for cand in (stem, *(re.sub(rf"(^|/){d}(/|$)", r"\1src\2", stem, count=1) for d in ("dist", "lib", "build"))):
+            cand = cand.removesuffix("/index")
+            if cand in modules:
+                return cand
+        return None
+
+
 # --- the repository-wide index -------------------------------------------------------------------
 class RepoIndex:
     """What every module defines, imports and exports, for resolving one file's names."""
 
-    def __init__(self, repo: str, files: Iterable[FileFacts], go_prefix: str | None = None):
+    def __init__(self, repo: str, files: Iterable[FileFacts], go_prefix: str | None = None,
+                 js: JsWorkspace | None = None):
         self.repo = repo
         self.go_prefix = go_prefix
+        self.js = js or JsWorkspace()
         self.module_of: dict[str, str] = {}
         self.lang_of: dict[str, str] = {}
         self.defs: dict[str, dict[str, str]] = defaultdict(dict)          # module -> qualname -> key
@@ -132,8 +271,32 @@ class RepoIndex:
         self.exports: dict[str, dict[str, Import]] = defaultdict(dict)    # module -> alias -> Import
         self.by_name: dict[str, list[str]] = defaultdict(list)
         self.module_path: dict[str, str] = {}
+        self.star_exports: dict[str, list[str]] = defaultdict(list)       # module -> re-exported modules
+        self._imports: dict[str, list[Import]] = {}
+        files = list(files)
         for f in files:
             self.add(f)
+        for f in files:                       # exports need every module known, to map package names
+            self.add_exports(f)
+
+    def imports_of(self, f: FileFacts) -> list[Import]:
+        """The file's imports, with JS/TS package names and path aliases mapped onto repository modules."""
+        if f.lang not in JS_FAMILY:
+            return f.imports
+        got = self._imports.get(f.path)
+        if got is None:
+            got = self._imports[f.path] = [
+                Import(i.alias, self.js.module_for(i.module, f.path, self.module_path) or i.module, i.name)
+                for i in f.imports]
+        return got
+
+    def add_exports(self, f: FileFacts) -> None:
+        if f.lang in ("python", *JS_FAMILY):
+            for imp in self.imports_of(f):
+                if imp.alias and imp.alias != "*":
+                    self.exports[f.module][imp.alias] = imp
+                elif f.lang in JS_FAMILY and imp.alias == "*" and imp.name == "*":
+                    self.star_exports[f.module].append(imp.module)
 
     def add(self, f: FileFacts) -> None:
         self.module_of[f.path] = f.module
@@ -147,10 +310,6 @@ class RepoIndex:
             self.def_kind[key] = d.kind
             if d.kind in ("function", "method", "property"):
                 self.by_name[d.qualname.rsplit(".", 1)[-1]].append(key)
-        if f.lang in ("python", "javascript", "typescript", "tsx"):
-            for imp in f.imports:
-                if imp.alias and imp.alias != "*":
-                    self.exports[f.module][imp.alias] = imp
 
     @property
     def modules(self) -> dict[str, dict[str, str]]:
@@ -176,8 +335,14 @@ class RepoIndex:
 
     def via_import(self, imp: Import, rest: Sequence[str], lang: str, depth: int = 0) -> str | None:
         module = self.internal(imp.module, lang)
-        if module is None or depth > 3:
+        if module is None or depth > 8:
             return None
+        if lang in JS_FAMILY:
+            if imp.name is None:
+                return self.lookup(module, tuple(rest), lang, depth + 1) if rest else None
+            if imp.name == "default":
+                return self._default(module, imp, rest)
+            return self.lookup(module, (imp.name, *rest), lang, depth + 1)
         if imp.name in (None, "*"):
             cur, i = module, 0
             while i <= len(rest):
@@ -206,6 +371,33 @@ class RepoIndex:
             return self.via_import(Import(name, f"{module}.{name}", None), rest, lang, depth + 1)
         return None
 
+    def lookup(self, module: str, chain: tuple[str, ...], lang: str, depth: int = 0,
+               seen: frozenset[str] = frozenset()) -> str | None:
+        """A JS/TS module's member: its own definition, a named re-export, or one of its `export *`."""
+        if depth > 8 or module in seen:
+            return None
+        hit = self.longest(self.defs.get(module, {}), chain)
+        if hit:
+            return hit
+        again = self.exports.get(module, {}).get(chain[0])
+        if again is not None:
+            hit = self.via_import(again, chain[1:], lang, depth + 1)
+            if hit:
+                return hit
+        for star in self.star_exports.get(module, ()):
+            inner = self.internal(star, lang)
+            if inner:
+                hit = self.lookup(inner, chain, lang, depth + 1, seen | {module})
+                if hit:
+                    return hit
+        return None
+
+    def _default(self, module: str, imp: Import, rest: Sequence[str]) -> str | None:
+        defs = self.defs.get(module, {})
+        top = [q for q in defs if "." not in q]
+        name = imp.alias if imp.alias in defs else (top[0] if len(top) == 1 else None)
+        return self.longest(defs, (name, *rest)) if name else None
+
 
 def symbol_key(repo: str, path: str, qualname: str) -> str:
     return f"{repo}:{path}::{qualname}"
@@ -228,7 +420,7 @@ class Resolver:
         self.local = index.defs.get(f.module, {}) if f.lang in GO_LIKE else index.file_defs.get(f.path, {})
         self.aliases: dict[str, Import] = {}
         self.stars: list[Import] = []
-        for imp in f.imports:
+        for imp in index.imports_of(f):
             if imp.alias == "*" or imp.name == "*":
                 self.stars.append(imp)
             elif imp.alias:
@@ -254,7 +446,8 @@ class Resolver:
         for star in self.stars:
             module = self.ix.internal(star.module, lang)
             if module:
-                hit = self.ix.longest(self.ix.defs.get(module, {}), chain)
+                hit = (self.ix.lookup(module, tuple(chain), lang) if lang in JS_FAMILY
+                       else self.ix.longest(self.ix.defs.get(module, {}), chain))
                 if hit:
                     return hit, 0.9
         return self._unique(ref)
@@ -265,7 +458,8 @@ class Resolver:
         attribute read only a property, since that is how a property is used."""
         if len(ref.chain) < 2:
             return None
-        cands = [k for k in self.ix.by_name.get(ref.chain[-1], ()) if self.ix.lang_of.get(_path_of(k)) == self.f.lang]
+        family = _family(self.f.lang)
+        cands = [k for k in self.ix.by_name.get(ref.chain[-1], ()) if _family(self.ix.lang_of.get(_path_of(k))) == family]
         if len(cands) != 1 or (not ref.call and self.ix.def_kind.get(cands[0]) != "property"):
             return None
         return cands[0], 0.5
@@ -279,6 +473,10 @@ class Resolver:
                 return key
             parts.pop()
         return file_key(self.ix.repo, self.f.path)
+
+
+def _family(lang: str | None) -> str | None:
+    return "js" if lang in JS_FAMILY else lang
 
 
 def _path_of(key: str) -> str:
@@ -319,7 +517,7 @@ def graph_for(index: RepoIndex, files: Iterable[FileFacts]) -> tuple[list[dict],
                       {"symbol_kind": d.kind, "line": d.line, "end_line": d.end_line, "lang": f.lang,
                        "module": f.module}, path=f.path)
             edge(fk, sk, "defines", d.line)
-        for imp in f.imports:
+        for imp in index.imports_of(f):
             module = index.internal(imp.module, f.lang)
             if module is None:
                 continue
@@ -453,7 +651,7 @@ class CodeIndexer:
             c.execute(text("DELETE FROM kg_code_files WHERE project_id = :p AND repo = :r AND path = ANY(:g)"),
                       {"p": scope.project_id, "r": repo, "g": gone})
         files = {**{p: f for p, f in cached.items() if p in hashes}, **{f.path: f for f in parsed}}
-        index = RepoIndex(repo, files.values(), _go_prefix(root))
+        index = RepoIndex(repo, files.values(), _go_prefix(root), JsWorkspace.load(root))
         wrote = self._write(c, scope, index, list(files.values()), seen_at)
         closed = self.store.close_unseen(c, scope, repo=repo, source=SOURCE, before=seen_at)
         run = {"mode": "full", "commit": commit, "files": len(files), "parsed": len(parsed),
@@ -486,8 +684,10 @@ class CodeIndexer:
             after = {d.qualname for d in new_by_path[path].defs} if path in new_by_path else set()
             for qual in before ^ after:
                 touched_names.update(qual.split("."))
-            if (path in old) != (path in new_by_path) or (path in old and path in new_by_path
-                                                         and old[path].module != new_by_path[path].module):
+            # A module that appears, disappears, moves, or changes what it imports (and so what it
+            # re-exports) changes the edges of the files that import it.
+            if (path in old) != (path in new_by_path) or (path in old and path in new_by_path and (
+                    old[path].module != new_by_path[path].module or old[path].imports != new_by_path[path].imports)):
                 for f in (old.get(path), new_by_path.get(path)):
                     if f is not None:
                         touched_names.update({f.module, f.module.rsplit(".", 1)[-1].rsplit("/", 1)[-1]})
@@ -500,7 +700,7 @@ class CodeIndexer:
             {"p": scope.project_id, "r": repo, "n": sorted(touched_names)})]
         slice_paths = sorted(set(affected) | set(changed))
         everything = self._cached(c, scope, repo, full_facts=False)
-        index = RepoIndex(repo, everything.values(), _go_prefix(root))
+        index = RepoIndex(repo, everything.values(), _go_prefix(root), JsWorkspace.load(root))
         slice_files = {**self._cached(c, scope, repo, slice_paths), **{f.path: f for f in parsed}}
         wrote = self._write(c, scope, index, list(slice_files.values()), seen_at)
         closed = self.store.close_unseen(c, scope, repo=repo, source=SOURCE, before=seen_at,

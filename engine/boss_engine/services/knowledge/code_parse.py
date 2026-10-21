@@ -142,7 +142,9 @@ def _string_value(node) -> str | None:
         if t == "string" and node.children and node.children[0].type == "string_start":
             raw = "".join(_text(c) for c in node.children if c.type == "string_content")
             return raw
-        return raw.strip("`\"'@").strip("\"'")
+        if t == "verbatim_string_literal":
+            raw = raw.removeprefix("@")                  # C# @"..." (an npm scope's @ is content)
+        return raw.strip("`\"'")
     return None
 
 
@@ -467,6 +469,32 @@ class _JavaScript(_Extractor):
 
     def on_node(self, node):
         t = node.type
+        if t == "export_statement" and node.child_by_field_name("source") is not None:
+            # A re-export: `export { a as b } from "m"`, `export * from "m"`, `export * as ns from "m"`.
+            # Recorded as imports; the index treats a module's imports as what it re-exports.
+            source = _string_value(node.child_by_field_name("source"))
+            if source is None:
+                return True
+            mod = self._resolve(source)
+            clause = next((c for c in node.named_children if c.type == "export_clause"), None)
+            ns = next((c for c in node.named_children if c.type == "namespace_export"), None)
+            if clause is not None:
+                for spec in clause.named_children:
+                    name, alias = spec.child_by_field_name("name"), spec.child_by_field_name("alias")
+                    if name is not None:
+                        self.f.imports.append(Import(_text(alias or name), mod, _text(name)))
+            elif ns is not None:
+                ident = next((x for x in ns.named_children if x.type in ("identifier", "string")), None)
+                if ident is not None:
+                    self.f.imports.append(Import(_text(ident).strip("\"'"), mod, None))
+            else:
+                self.f.imports.append(Import("*", mod, "*"))
+            return True
+        if t == "nested_type_identifier":
+            # A type reached through a namespace: `HttpTypes.AdminOrder`, `OrderWorkflow.Input`.
+            self.f.refs.append(Ref(self.src, tuple(_text(node).replace(" ", "").split(".")), False,
+                                   node.start_point[0] + 1))
+            return True
         if t == "import_statement":
             source = _string_value(node.child_by_field_name("source"))
             if source is None:
@@ -488,6 +516,9 @@ class _JavaScript(_Extractor):
             return True
         if t == "variable_declarator":
             name, value = node.child_by_field_name("name"), node.child_by_field_name("value")
+            annotation = node.child_by_field_name("type")       # TS: `const x: HttpTypes.Order[] = ...`
+            if annotation is not None:
+                self.walk(annotation)
             if value is not None and value.type in ("arrow_function", "function_expression", "function") \
                     and name is not None and name.type == "identifier":
                 qual = f"{self.src}.{_text(name)}" if self.scope else _text(name)

@@ -1,0 +1,153 @@
+{
+  "symbols": 15,
+  "correct": 6,
+  "accuracy": 0.4,
+  "micro_precision": 1.0,
+  "micro_recall": 0.605,
+  "rows": [
+    {
+      "symbol": "packages/admin/dashboard/src/routes/users/user-detail/loader.ts::userLoader",
+      "correct": false,
+      "precision": 1.0,
+      "recall": 0.5,
+      "missed": [
+        "packages/admin/dashboard/src/routes/users/user-detail/index.ts"
+      ],
+      "extra": []
+    },
+    {
+      "symbol": "packages/core/utils/src/pg/index.ts::parseConnectionString",
+      "correct": false,
+      "precision": 1.0,
+      "recall": 0.5,
+      "missed": [
+        "packages/medusa/src/commands/db/create.ts"
+      ],
+      "extra": []
+    },
+    {
+      "symbol": "packages/admin/dashboard/src/hooks/table/query/use-customer-table-query.tsx::useCustomerTableQuery",
+      "correct": true,
+      "precision": 1.0,
+      "recall": 1.0,
+      "missed": [],
+      "extra": []
+    },
+    {
+      "symbol": "packages/admin/dashboard/src/lib/table/cell-renderers.tsx::defineCellRenderer",
+      "correct": false,
+      "precision": 1.0,
+      "recall": 0.875,
+      "missed": [
+        "packages/admin/dashboard/src/exports/lib.ts"
+      ],
+      "extra": []
+    },
+    {
+      "symbol": "packages/modules/providers/search-postgres/src/utils/plan.ts::tableNameForIndex",
+      "correct": false,
+      "precision": 0.0,
+      "recall": 0.0,
+      "missed": [
+        "packages/modules/providers/search-postgres/src/services/postgres-search.ts",
+        "packages/modules/providers/search-postgres/src/utils/__tests__/utils.spec.ts"
+      ],
+      "extra": []
+    },
+    {
+      "symbol": "www/packages/docs-ui/src/providers/Modal/index.tsx::ModalProvider.closeModal",
+      "correct": false,
+      "precision": 0.0,
+      "recall": 0.0,
+      "missed": [
+        "www/packages/docs-ui/src/components/Modal/Header/index.tsx",
+        "www/packages/docs-ui/src/components/Modal/index.tsx",
+        "www/packages/docs-ui/src/providers/Modal/__tests__/index.test.tsx"
+      ],
+      "extra": []
+    },
+    {
+      "symbol": "www/packages/build-scripts/src/retrieve-mdx-pages.ts::retrieveMdxPages",
+      "correct": false,
+      "precision": 1.0,
+      "recall": 0.5,
+      "missed": [
+        "www/apps/cloud/app/sitemap.ts"
+      ],
+      "extra": []
+    },
+    {
+      "symbol": "packages/core/types/src/http/product-type/common.ts::BaseProductTypeListParams",
+      "correct": true,
+      "precision": 1.0,
+      "recall": 1.0,
+      "missed": [],
+      "extra": []
+    },
+    {
+      "symbol": "packages/core/types/src/http/product/common.ts::BaseProductOptionListParams",
+      "correct": true,
+      "precision": 1.0,
+      "recall": 1.0,
+      "missed": [],
+      "extra": []
+    },
+    {
+      "symbol": "packages/core/types/src/http/price-list/admin/payloads.ts::AdminUpdatePriceListPrice",
+      "correct": false,
+      "precision": 0.0,
+      "recall": 0.0,
+      "missed": [
+        "packages/admin/dashboard/src/routes/price-lists/common/utils.ts"
+      ],
+      "extra": []
+    },
+    {
+      "symbol": "packages/core/types/src/workflow/order/items.ts::OrderClaimItemWorkflowInput",
+      "correct": false,
+      "precision": 0.0,
+      "recall": 0.0,
+      "missed": [
+        "packages/core/core-flows/src/order/workflows/claim/claim-item.ts"
+      ],
+      "extra": []
+    },
+    {
+      "symbol": "packages/core/types/src/http/rbac/admin/responses.ts::AdminRbacRoleResponse",
+      "correct": false,
+      "precision": 0.0,
+      "recall": 0.0,
+      "missed": [
+        "packages/admin/dashboard/src/dashboard-app/routes/get-route.map.tsx",
+        "packages/admin/dashboard/src/hooks/api/rbac-roles.tsx",
+        "packages/admin/dashboard/src/routes/roles/role-detail/breadcrumb.tsx",
+        "packages/core/js-sdk/src/admin/rbac-role.ts"
+      ],
+      "extra": []
+    },
+    {
+      "symbol": "packages/modules/order/src/services/order-module-service.ts::OrderModuleService.createOrderLineItemTaxLines",
+      "correct": true,
+      "precision": 1.0,
+      "recall": 1.0,
+      "missed": [],
+      "extra": []
+    },
+    {
+      "symbol": "packages/modules/order/src/services/order-module-service.ts::OrderModuleService.listAndCountOrders",
+      "correct": true,
+      "precision": 1.0,
+      "recall": 1.0,
+      "missed": [],
+      "extra": []
+    },
+    {
+      "symbol": "packages/modules/fulfillment/src/services/fulfillment-module-service.ts::FulfillmentModuleService.upsertShippingOptionTypes",
+      "correct": true,
+      "precision": 1.0,
+      "recall": 1.0,
+      "missed": [],
+      "extra": []
+    }
+  ]
+}

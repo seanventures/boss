@@ -1,0 +1,199 @@
+{
+  "repo": "medusajs/medusa",
+  "base": "d50942d64db3915d081ea2a565238d3da7dde00b",
+  "head": "020565398e436a2bc65777a3b1ad347b4735d6df",
+  "full": {
+    "mode": "full",
+    "commit": "d50942d64db3915d081ea2a565238d3da7dde00b",
+    "files": 11956,
+    "parsed": 11956,
+    "symbols": 16767,
+    "nodes": 40831,
+    "edges": 89473,
+    "closed": {
+      "nodes": 0,
+      "edges": 0
+    },
+    "parse_seconds": 6.1,
+    "seconds": 40.5,
+    "wall_seconds": 40.6
+  },
+  "incremental": [
+    {
+      "mode": "incremental",
+      "from": "d50942d64db3915d081ea2a565238d3da7dde00b",
+      "commit": "7227ff2c048ec4d6582080080102e9430206c5ef",
+      "changed": 4,
+      "deleted": 0,
+      "reresolved": 4,
+      "nodes": 8,
+      "edges": 0,
+      "closed": {
+        "nodes": 0,
+        "edges": 0
+      },
+      "seconds": 2.62,
+      "wall_seconds": 2.66,
+      "subject": "docs: document Kapa top questions for 2026-08-01 [automated] (#17012)"
+    },
+    {
+      "mode": "incremental",
+      "from": "7227ff2c048ec4d6582080080102e9430206c5ef",
+      "commit": "ba13ef8d9518eb1bd4ef3169059b8691f4444bda",
+      "changed": 0,
+      "deleted": 0,
+      "reresolved": 0,
+      "nodes": 0,
+      "edges": 0,
+      "closed": {
+        "nodes": 0,
+        "edges": 0
+      },
+      "seconds": 2.37,
+      "wall_seconds": 2.4,
+      "subject": "docs: address Kapa coverage gaps for 2026-08-01 [automated] (#17011)"
+    },
+    {
+      "mode": "incremental",
+      "from": "ba13ef8d9518eb1bd4ef3169059b8691f4444bda",
+      "commit": "8c2839a4f62ba2c1b3ce0e1237a2921dfa1b25c3",
+      "changed": 0,
+      "deleted": 0,
+      "reresolved": 0,
+      "nodes": 0,
+      "edges": 0,
+      "closed": {
+        "nodes": 0,
+        "edges": 0
+      },
+      "seconds": 2.47,
+      "wall_seconds": 2.53,
+      "subject": "chore: allow selecting branch"
+    },
+    {
+      "mode": "incremental",
+      "from": "8c2839a4f62ba2c1b3ce0e1237a2921dfa1b25c3",
+      "commit": "7054b05d1fa2bebfd168766737bdebc9ef1a15a3",
+      "changed": 1,
+      "deleted": 0,
+      "reresolved": 1,
+      "nodes": 3,
+      "edges": 2,
+      "closed": {
+        "nodes": 0,
+        "edges": 0
+      },
+      "seconds": 2.28,
+      "wall_seconds": 2.32,
+      "subject": "fix(workflow-engine-redis): nest RedisWorkflowsOptions under redis in the module"
+    },
+    {
+      "mode": "incremental",
+      "from": "7054b05d1fa2bebfd168766737bdebc9ef1a15a3",
+      "commit": "62a520014886df3838aa9f31f2990afecae38333",
+      "changed": 3,
+      "deleted": 0,
+      "reresolved": 3,
+      "nodes": 6,
+      "edges": 0,
+      "closed": {
+        "nodes": 0,
+        "edges": 0
+      },
+      "seconds": 2.36,
+      "wall_seconds": 2.38,
+      "subject": "docs: document usage credits and searchable branch picker in Cloud [automated] ("
+    },
+    {
+      "mode": "incremental",
+      "from": "62a520014886df3838aa9f31f2990afecae38333",
+      "commit": "9e73f2d5daad4a0ac586dbada31a56386be2a946",
+      "changed": 0,
+      "deleted": 0,
+      "reresolved": 0,
+      "nodes": 0,
+      "edges": 0,
+      "closed": {
+        "nodes": 0,
+        "edges": 0
+      },
+      "seconds": 2.56,
+      "wall_seconds": 2.59,
+      "subject": "chore: combine release actions + fix snapshot releases (#17041)"
+    },
+    {
+      "mode": "incremental",
+      "from": "9e73f2d5daad4a0ac586dbada31a56386be2a946",
+      "commit": "ad019d920e385cd8c3c633ae8276e534ee5b539a",
+      "changed": 0,
+      "deleted": 0,
+      "reresolved": 0,
+      "nodes": 0,
+      "edges": 0,
+      "closed": {
+        "nodes": 0,
+        "edges": 0
+      },
+      "seconds": 2.41,
+      "wall_seconds": 2.45,
+      "subject": "chore: re-add snapshot comment (#17042)"
+    },
+    {
+      "mode": "incremental",
+      "from": "ad019d920e385cd8c3c633ae8276e534ee5b539a",
+      "commit": "41d8204e67dc02f600b74b2002f74860ee764fb5",
+      "changed": 5,
+      "deleted": 0,
+      "reresolved": 5,
+      "nodes": 26,
+      "edges": 56,
+      "closed": {
+        "nodes": 0,
+        "edges": 0
+      },
+      "seconds": 2.47,
+      "wall_seconds": 2.5,
+      "subject": "fix: Disallow expanding beyond index fields on search endpoint (#17044)"
+    },
+    {
+      "mode": "incremental",
+      "from": "41d8204e67dc02f600b74b2002f74860ee764fb5",
+      "commit": "8ce6563f2fed904c1317f65eab3e6b4ee59969a9",
+      "changed": 0,
+      "deleted": 0,
+      "reresolved": 0,
+      "nodes": 0,
+      "edges": 0,
+      "closed": {
+        "nodes": 0,
+        "edges": 0
+      },
+      "seconds": 2.45,
+      "wall_seconds": 2.49,
+      "subject": "chore: update CLAUDE.md (#17043)"
+    },
+    {
+      "mode": "incremental",
+      "from": "8ce6563f2fed904c1317f65eab3e6b4ee59969a9",
+      "commit": "020565398e436a2bc65777a3b1ad347b4735d6df",
+      "changed": 0,
+      "deleted": 0,
+      "reresolved": 0,
+      "nodes": 0,
+      "edges": 0,
+      "closed": {
+        "nodes": 0,
+        "edges": 0
+      },
+      "seconds": 2.28,
+      "wall_seconds": 2.31,
+      "subject": "Chore: Release (#16929)"
+    }
+  ],
+  "graph": {
+    "current_nodes": 40833,
+    "current_edges": 89475,
+    "closed_nodes": 0,
+    "closed_edges": 0
+  }
+}

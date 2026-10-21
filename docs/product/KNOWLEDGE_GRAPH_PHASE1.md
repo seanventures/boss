@@ -51,6 +51,47 @@ was committed (b31d5fcd) before the tool ran; every evidence line was read in fu
   (`manager.calculate_checkout_subtotal = Mock(...)`): a non-call use of a non-property name. It is
   left alone; linking every attribute write by name would cost precision.
 
+## Second language: TypeScript (Medusa `v2.21.2`, `020565398e43`)
+
+Medusa is a TypeScript monorepo with 115 packages: 11,956 JS/TS files and 1.2M lines (MIT, apart
+from its Enterprise Edition folders; it is only read). Same machine.
+
+| Measure | Result |
+|---|---|
+| Full index | **40.5 s** (6.1 s parsing; 16,767 symbols, 40,831 nodes, 89,473 edges) |
+| Incremental, 10 consecutive commits | **≤ 2.7 s** (median 2.5 s); converges with the full index |
+| Blast radius, 15 symbols, **blind** (indexer as committed) | **6/15 (40%)**, precision 1.00, recall 0.61 |
+| Blast radius, same 15, after the fixes below (not blind) | **14/15 (93.3%)**, precision 1.00, recall 0.92 |
+
+The sample was drawn with `sample_symbols.py --lang typescript --seed 20261021` (7 functions,
+5 interfaces/classes, 3 methods). Its answer key,
+[`blast_radius_medusa_blind_truth.json`](../../scripts/knowledge/results/blast_radius_medusa_blind_truth.json),
+was committed (88bc0c75) before Medusa was indexed at all.
+
+The blind run failed because TypeScript monorepos name their own code in ways the indexer did
+not model. Each was fixed as a class, with a test that failed first:
+
+- **`export … from` re-exports** were not parsed: `export { a as b } from`, `export * from`,
+  `export * as NS from`. Barrel files (`index.ts`) are how almost every package exposes its code.
+- **Workspace package names.** `@medusajs/framework/utils` is now resolved through that package's
+  `package.json`: its `exports`, `main` and `types`, with `dist/` mapped back to `src/`.
+- **tsconfig/jsconfig `paths` aliases**, such as `@/lib`. The nearest config above the importing
+  file wins, and comments and trailing commas in tsconfig are accepted.
+- **`export *` chains** are followed (cycle-safe, depth 8). `@medusajs/framework/utils` goes to
+  `export * from "@medusajs/utils"`, then to `export * from "./pg"`, then to the definition.
+- **A type reached through a namespace** (`HttpTypes.AdminOrder`) is now a reference, including in
+  a variable's type annotation, which was not walked before.
+- **A bug that hit every scoped npm package**: the string reader stripped C#'s verbatim `@`
+  from all strings, so `"@medusajs/types"` became `medusajs/types`.
+- The unique-name rule treats TS, TSX and JS as one language family.
+
+**The remaining miss** is `ModalProvider.closeModal`. Callers get it from a React context
+(`const { closeModal } = useModal()`), and seeing that would need data-flow analysis. It is left
+as a known limit.
+
+**Saleor after these changes:** 30/30 on the first sample and 29/30 on the blind sample, the same
+as before. There is no regression.
+
 Reproduce:
 
 ```sh
