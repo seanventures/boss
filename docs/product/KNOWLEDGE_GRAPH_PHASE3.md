@@ -14,7 +14,10 @@ done, what is next, and how to resume.
 | MCP tools `kg_search`, `kg_precedent`; pack injection for engines without tools | **done**: `delivery.py`, `knowledge_tools.py`, hook in `code_agent._invoke` |
 | `knowledge:read` / `knowledge:manage` and the HTTP API from spec §5 | **done**: `packages/identity/catalogue.yaml` (regenerated), `routes_knowledge.py`, `test_knowledge_api.py` |
 | Branch overlay (per run, in memory, never stored) | **done**: `overlay.py` |
-| Jev citations, TS blind check, latency benchmark | only if budget remains |
+| Latency benchmark | **done** at 1M nodes / 5M edges / 500k facts (below); not at the 10M target |
+| Precedent battle scenarios on the scripted decider | **done**: 83% (below) |
+| Jev citations wired into `intent_router` / `typed_decisions`, console "based on" | **not done**. `decisions.cited_fact_ids` exists and precedent returns it; nothing writes it yet |
+| Fresh blind TypeScript check (15 symbols, non-Medusa repo) | **not done**: no score to report |
 
 ## What was built
 
@@ -97,6 +100,64 @@ done, what is next, and how to resume.
   - `GET` / `PUT /v1/knowledge/settings`.
 - **Deviation from spec §5:** `/v1/knowledge/status` already exists (BOSS-356's pack-context
   probe), so the graph status is at `/v1/knowledge/graph-status`. This is an open decision.
+
+## Phase 3 numbers
+
+**Latency** (`scripts/knowledge/bench_retrieval.py`, local Postgres 16 + pgvector, 200 queries,
+3 touched symbols each, 1,200-token packs, no embedder):
+
+| Graph | search p50 / p95 | pack p50 / p95 | packs over budget |
+|---|---|---|---|
+| 100k nodes, 500k edges, 50k facts | 45 / 61 ms | 61 / 80 ms | 0 |
+| 1M nodes, 5M edges, 500k facts | **46 / 58 ms** | **49 / 62 ms** | **0** |
+
+- **This is not the spec's scale target** (10M nodes, 50M edges, 5M facts). Building that needs
+  about an hour and more disk than this session had. The 1M run is a tenth of the target.
+- p95 stayed flat from 100k to 1M once three planner traps were fixed. Each was an OR over
+  columns, or a missing `(project_id, node_key)` index. The fixes are new indexes in
+  `db/schema.sql`.
+- Full-text candidate ranking is the term that grows with the corpus. Re-run the script at
+  `--nodes 10000000` before signing off on the < 300 ms criterion.
+- The vector generator was not exercised: no embedder was configured, and none may be called.
+
+**Precedent battle test, scripted** (`tests/agent-battle/precedent.yaml`, 6 scenarios;
+`test_knowledge_precedent_battle.py`):
+- **5 of 6 correct (83%; the bar is 80%), and the expected precedent was cited 6 of 6 times.**
+- The miss (`dependency-bump-passed`) is the scripted decider's word-overlap tie-break. The pack
+  had the right precedent and outcome.
+- The decider reads only Jev's pack. So this measures retrieval, not a model's judgement.
+
+**Real-agent battle-test cost (not run, not approved):**
+- The set is 18 scenarios and 129 cases today, plus these 6 precedent scenarios (about 30 cases):
+  roughly 160 cases in all.
+- At about 3 agent calls per case (about 24k tokens in, 1.5k out) on claude-sonnet-5 ($2 / $10
+  per Mtok), plus a qwen3-32b judge call, the estimate is:
+  - **about $0.065 per case**;
+  - **about $10 for the full set**;
+  - **about $2 for the precedent scenarios alone**.
+- Prompt caching would lower both.
+
+## Open decisions
+
+1. **The real-model precision run (Phase 2).** It is approved but blocked: this session had no
+   `GROQ_API_KEY` or `ANTHROPIC_API_KEY`, and the AWS credentials were rejected by Bedrock. $0 spent.
+2. **The real-agent battle-test run** (about $10 for the full set, about $2 for the precedent
+   scenarios alone).
+3. **Status route.** The graph status is at `/v1/knowledge/graph-status`, because
+   `/v1/knowledge/status` is BOSS-356's. Rename one of them?
+4. **Agents with a custom (hand-set) Passport ceiling** do not gain `knowledge:read` on upgrade,
+   so their kg tools refuse. Grant it in a migration?
+5. **The scale-target benchmark** (10M nodes) needs a bigger box.
+
+## Next (in order)
+
+1. Pipeline wiring:
+   - set `touched` (from the plan or diff) and `role_key` in the LLM context per stage;
+   - `overlay.hold` after implement, and `overlay.discard` at run end.
+2. Jev citations: the intent router's decision step reads the jev pack, writes
+   `decisions.cited_fact_ids`, and the console shows "based on".
+3. The blind TypeScript check on a fresh non-Medusa repository. Commit the answer key first.
+4. The 10M benchmark.
 
 ## How to resume
 

@@ -129,9 +129,13 @@ def seed_nodes(c: Connection, reader: Reader, touched: Sequence[str], *, overlay
     if not names:
         return []
     where, params = _node_filter(reader)
+    # Three indexed lookups, not one OR (which the planner can only answer with a scan).
     return [r[0] for r in c.execute(text(
-        f"SELECT n.id FROM kg_nodes n WHERE {where} AND (n.node_key = ANY(:t) OR n.name = ANY(:t) OR n.path = ANY(:t)) "
-        f"LIMIT 200"), {**params, "t": names})]
+        f"""SELECT id FROM (
+              (SELECT n.id FROM kg_nodes n WHERE {where} AND n.node_key = ANY(:t) LIMIT 200)
+              UNION (SELECT n.id FROM kg_nodes n WHERE {where} AND n.name = ANY(:t) LIMIT 200)
+              UNION (SELECT n.id FROM kg_nodes n WHERE {where} AND n.repo IS NOT NULL AND n.path = ANY(:t) LIMIT 200)
+            ) s LIMIT 200"""), {**params, "t": names})]
 
 
 def neighbourhood(c: Connection, reader: Reader, seeds: Sequence[str], *, depth: int = 2,
@@ -162,11 +166,13 @@ def graph_candidates(c: Connection, reader: Reader, near: dict[str, int], touche
     if not near and not touched:
         return []
     where, params = _fact_filter(reader)
+    kinds_sql = " AND (CAST(:kinds AS TEXT[]) IS NULL OR f.kind = ANY(CAST(:kinds AS TEXT[])))"
     rows = c.execute(text(
-        f"""SELECT f.id, f.subject_node_id, f.tier, f.confidence FROM kg_facts f
-            WHERE {where} AND (f.subject_node_id = ANY(:ids) OR lower(f.subject) = ANY(:names))
-              AND (CAST(:kinds AS TEXT[]) IS NULL OR f.kind = ANY(CAST(:kinds AS TEXT[])))
-            LIMIT 500"""),
+        f"""SELECT * FROM (
+              (SELECT f.id, f.subject_node_id, f.tier, f.confidence FROM kg_facts f
+               WHERE {where} AND f.subject_node_id = ANY(:ids){kinds_sql} LIMIT 500)
+              UNION (SELECT f.id, f.subject_node_id, f.tier, f.confidence FROM kg_facts f
+               WHERE {where} AND lower(f.subject) = ANY(:names){kinds_sql} LIMIT 500)) s LIMIT 500"""),
         {**params, "ids": list(near), "names": [str(t).lower() for t in touched or ()],
          "kinds": list(kinds) if kinds else None}).all()
     rows = sorted(rows, key=lambda r: (near.get(r.subject_node_id, 0), -TIER_WEIGHT.get(r.tier, 0),
@@ -217,7 +223,7 @@ def trusted_candidates(c: Connection, reader: Reader, kinds: Optional[Sequence[s
     return [r[0] for r in c.execute(text(
         f"""SELECT f.id FROM kg_facts f WHERE {where} AND f.tier IN ('governed', 'approved')
               AND (CAST(:kinds AS TEXT[]) IS NULL OR f.kind = ANY(CAST(:kinds AS TEXT[])))
-            ORDER BY f.tier = 'governed' DESC, f.confidence DESC, f.valid_from DESC LIMIT 20"""),
+            ORDER BY f.confidence DESC, f.valid_from DESC LIMIT 20"""),   # idx_kg_facts_trusted; tier weighs later
         {**params, "kinds": list(kinds) if kinds else None})]
 
 

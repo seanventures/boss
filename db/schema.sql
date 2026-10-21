@@ -10194,6 +10194,11 @@ CREATE INDEX IF NOT EXISTS idx_kg_facts_search ON kg_facts USING gin (search);
 ALTER TABLE kg_facts ADD COLUMN IF NOT EXISTS read_permissions TEXT[] NOT NULL DEFAULT '{}';
 ALTER TABLE kg_facts ADD COLUMN IF NOT EXISTS team_id TEXT;
 CREATE INDEX IF NOT EXISTS idx_kg_facts_node ON kg_facts(subject_node_id) WHERE valid_to IS NULL;
+CREATE INDEX IF NOT EXISTS idx_kg_facts_lsubject ON kg_facts(project_id, lower(subject)) WHERE valid_to IS NULL;
+CREATE INDEX IF NOT EXISTS idx_kg_facts_trusted ON kg_facts(project_id, confidence DESC, valid_from DESC)
+  WHERE valid_to IS NULL AND tier IN ('governed', 'approved');
+CREATE INDEX IF NOT EXISTS idx_kg_nodes_path ON kg_nodes(project_id, path) WHERE valid_to IS NULL AND repo IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_kg_nodes_key ON kg_nodes(project_id, node_key) WHERE valid_to IS NULL;
 ALTER TABLE kg_nodes ADD COLUMN IF NOT EXISTS search tsvector
   GENERATED ALWAYS AS (to_tsvector('simple', name || ' ' || node_key)) STORED;
 CREATE INDEX IF NOT EXISTS idx_kg_nodes_search ON kg_nodes USING gin (search);
