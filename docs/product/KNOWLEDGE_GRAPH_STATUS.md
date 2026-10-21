@@ -10,8 +10,13 @@ Shipped in code, with tests:
 - Python AST index and declaration scans for TypeScript, JavaScript, Go, Java, and C#
 - Archivist distillation through an injected extractor, scrubbing, trust tiers
 - retrieval packs, passport ceiling, precedent text on the typed-decision prompt
+- a typed decision asks for `cited_fact_ids` when precedent is present, and the step output records them
+- workflow decisions load that precedent, and a finished or deadlettered run attributes the facts it was shown
+- lifecycle capture links a pull request, decision, or release to symbols in the same project
+- `knowledge.read` for every role and `knowledge.propose` for builder and reviewer roles, with executors
 - learning weights, decay, promotion candidates
 - HTTP routes under `/v1/knowledge` and the `kg_*` tools
+- a console explorer, settings, and "Based on" when a decision cites facts
 - ADR folder ingest and connector documents that do not open a network
 - a case-study harness that exits before any model call
 

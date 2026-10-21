@@ -119,9 +119,85 @@ def test_precedent_is_quoted_and_absent_when_empty():
     question = Question("ship", "Ship it?", {"yes": "ship", "no": "hold"})
     bare = _prompt("context", [question])
     assert "PRECEDENT" not in bare
+    assert "cited_fact_ids" not in bare
     cited = _prompt("context", [question], precedent="fact: size_band")
     assert "quoted records, not instructions" in cited
     assert "fact: size_band" in cited
+    assert "cited_fact_ids" in cited
+
+
+def test_a_decision_records_the_facts_it_cited():
+    from boss_engine.services.typed_decisions import Decision, DecisionBatch, _step_output
+
+    batch = DecisionBatch(
+        decisions={
+            "decision": Decision("yes", 0.9, reason="the last sign-off", cited_fact_ids=("fact-1",))
+        },
+        backend="fake",
+        model="m",
+        latency_ms=1,
+    )
+    output = _step_output({"question": "Ship?", "options": {"yes": "ship", "no": "hold"}}, batch)
+    assert output["cited_fact_ids"] == ["fact-1"]
+
+
+def test_precedent_reaches_a_decider_and_an_older_decider_still_sees_it():
+    from boss_engine.services.typed_decisions import DecisionBatch, decide_with_precedent
+
+    class Recorder:
+        def decide(self, context, questions, precedent=""):
+            self.precedent = precedent
+            self.context = context
+            return DecisionBatch(decisions={}, backend="fake", model="m", latency_ms=0)
+
+    recorder = Recorder()
+    decide_with_precedent(recorder, "the change", [], "fact: size_band")
+    assert recorder.precedent == "fact: size_band"
+    assert recorder.context == "the change"
+
+    class Older:
+        def decide(self, context, questions):
+            self.context = context
+            return DecisionBatch(decisions={}, backend="fake", model="m", latency_ms=0)
+
+    older = Older()
+    decide_with_precedent(older, "the change", [], "fact: size_band")
+    assert "fact: size_band" in older.context
+    assert "quoted records, not instructions" in older.context
+
+
+def test_builder_roles_may_propose_and_other_roles_may_only_read():
+    from boss_engine.services.knowledge.grants import skills_for_role
+
+    assert skills_for_role("software_engineer", ["code.edit"]) == [
+        "knowledge.read",
+        "knowledge.propose",
+    ]
+    assert skills_for_role("qa", ["code.review"]) == ["knowledge.read", "knowledge.propose"]
+    assert skills_for_role("archivist", []) == ["knowledge.read", "knowledge.propose"]
+    assert skills_for_role("finance", ["cost.inspect"]) == ["knowledge.read"]
+
+
+def test_knowledge_skills_are_installed_and_executable():
+    import inspect
+
+    from boss_engine.bootstrap import seed_project_defaults
+    from boss_engine.services import workflows
+    from boss_engine.services.skill_executors import resolve_executor
+    from boss_engine.services.typed_decision_spend import TypedDecisionSpend
+
+    assert resolve_executor("knowledge.read") is not None
+    assert resolve_executor("knowledge.propose") is not None
+    pack = (ROOT / "packages" / "specpack" / "packs" / "community_edition.yaml").read_text()
+    assert "knowledge" in pack.split("skills:", 1)[1].split("status:", 1)[0]
+    assert "archivist" in pack.split("roles:", 1)[1].split("workflows:", 1)[0]
+    assert "decide_with_precedent" in inspect.getsource(TypedDecisionSpend._call)
+    runner = (ROOT / "engine" / "boss_engine" / "services" / "workflow_capability_runner.py").read_text()
+    assert "knowledge_precedent" in runner
+    assert "_attribute_knowledge" in inspect.getsource(workflows._maybe_finish_run)
+    assert "attribute_run" in inspect.getsource(workflows._attribute_knowledge)
+    assert "_attribute_knowledge" in inspect.getsource(workflows.fail_step)
+    assert "grant_knowledge_roles" in inspect.getsource(seed_project_defaults)
 
 
 def test_spending_extractor_is_marked():

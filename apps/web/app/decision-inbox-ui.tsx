@@ -2,6 +2,7 @@
 
 import React, { useEffect, useMemo, useState } from "react";
 
+import { BasedOn } from "./knowledge-console";
 import { createDecisionDigestAction } from "./actions";
 import { identityKey } from "./app-identity";
 import { ClientRelativeTime } from "./client-relative-time";
@@ -734,6 +735,11 @@ function DecisionInboxRow({
                 reason {decision.reason}
               </span>
             ) : null}
+            <BasedOn
+              factIds={Array.isArray(rec.cited_fact_ids)
+                ? rec.cited_fact_ids.filter((item): item is string => typeof item === "string")
+                : []}
+            />
             {estimatedCost != null ? (
               <span className="dq-ev">{formatMicros(estimatedCost)}</span>
             ) : null}

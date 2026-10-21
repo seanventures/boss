@@ -649,7 +649,10 @@ class TypedDecisionSpend:
         options = {str(key): str(value) for key, value in spec["options"].items()}
         question = Question("decision", str(spec["question"]), options)
         context = state if isinstance(state, str) else json.dumps(state, default=str)
-        return decider.decide(context, [question])
+        from .typed_decisions import decide_with_precedent
+
+        precedent = str(getattr(self, "knowledge_precedent", "") or "")
+        return decide_with_precedent(decider, context, [question], precedent)
 
     def _settle_success(
         self, connection, authority: _Authority, batch: DecisionBatch, output: dict,

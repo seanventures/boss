@@ -11,7 +11,9 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from boss_engine.db import ensure_schema
 from boss_engine.services.knowledge.archivist import ScriptedExtractor, SpendingExtractor, distil
+from boss_engine.services.knowledge.capture import capture_lifecycle
 from boss_engine.services.knowledge.code_index import index_files
+from boss_engine.services.knowledge.grants import grant_knowledge_roles
 from boss_engine.services.knowledge.service import KnowledgeService
 from boss_engine.services.knowledge.sources import accept_connector_document, ingest_adr_dir
 from boss_engine.services.knowledge.store import PostgresKnowledgeStore
@@ -246,3 +248,189 @@ def test_cross_project_symbol_is_invisible_and_adr_ingest_replays(connection, tm
     ).scalar_one()
     assert "ada@example.com" not in stored
     assert datetime.now(timezone.utc)
+
+
+def _index_stock(connection):
+    index_files(
+        connection,
+        STORE,
+        project_id="proj_a",
+        files=[{
+            "path": "stock.py",
+            "language": "python",
+            "source": "def reserve():\n    return 1\n",
+        }],
+    )
+
+
+def test_a_pull_request_links_the_symbol_it_changed_and_drops_mail(connection):
+    _projects(connection)
+    _index_stock(connection)
+    record = {
+        "kind": "pull_request",
+        "source_id": "pr-9",
+        "title": "Reserve before commit",
+        "body": "Discussed with ada@example.com",
+        "symbol_names": ["reserve", "missing"],
+    }
+    first = capture_lifecycle(connection, STORE, project_id="proj_a", record=record)
+    node = STORE.find_by_key(
+        connection, project_id="proj_a", kind="pull_request", node_key="pull_request:pr-9"
+    )
+    assert node is not None
+    assert "ada@example.com" not in node["body"]
+    assert "[EMAIL]" in node["body"]
+    linked = STORE.neighbors(
+        connection, project_id="proj_a", node_id=node["id"], kind="changed", direction="out"
+    )
+    assert [row["name"] for row in linked] == ["reserve"]
+    second = capture_lifecycle(connection, STORE, project_id="proj_a", record=record)
+    assert first["replayed"] is False
+    assert second["replayed"] is True
+    again = STORE.neighbors(
+        connection, project_id="proj_a", node_id=node["id"], kind="changed", direction="out"
+    )
+    assert len(again) == 1
+    index_files(
+        connection, STORE, project_id="proj_b",
+        files=[{"path": "other.py", "language": "python", "source": "def reserve():\n    return 2\n"}],
+    )
+    foreign = capture_lifecycle(
+        connection, STORE, project_id="proj_a",
+        record={
+            "kind": "pull_request",
+            "source_id": "pr-other",
+            "title": "Other",
+            "body": "no link",
+            "symbol_names": ["not_in_this_project"],
+        },
+    )
+    foreign_node = STORE.find_by_key(
+        connection, project_id="proj_a", kind="pull_request", node_key="pull_request:pr-other"
+    )
+    assert foreign["id"] == foreign_node["id"]
+    assert STORE.neighbors(
+        connection, project_id="proj_a", node_id=foreign_node["id"], kind="changed", direction="out"
+    ) == []
+
+
+def test_a_person_decision_is_governed_and_names_only_an_id(connection):
+    _projects(connection)
+    _index_stock(connection)
+    capture_lifecycle(
+        connection, STORE, project_id="proj_a",
+        record={
+            "kind": "decision",
+            "source_id": "dec-1",
+            "title": "Auth needs security sign-off",
+            "body": "Signed by the security owner",
+            "actor_ref": "person-7",
+            "symbol_names": ["reserve"],
+        },
+    )
+    node = STORE.find_by_key(
+        connection, project_id="proj_a", kind="decision", node_key="decision:dec-1"
+    )
+    assert node["trust_tier"] == "governed"
+    people = STORE.neighbors(
+        connection, project_id="proj_a", node_id=node["id"], kind="decided_by", direction="out"
+    )
+    assert people[0]["node_key"] == "person:person-7"
+    assert people[0]["body"] == ""
+    about = STORE.neighbors(
+        connection, project_id="proj_a", node_id=node["id"], kind="about", direction="out"
+    )
+    assert [row["name"] for row in about] == ["reserve"]
+
+
+def test_attribute_run_counts_the_facts_a_run_was_shown(connection):
+    _projects(connection)
+    proposed = SERVICE.propose_fact(
+        connection, project_id="proj_a",
+        statement="running frontend checks first catches review rounds",
+        subject="frontend_checks", predicate="catch", obj="review_rounds", kind="lesson",
+    )
+    fact_id = proposed["fact_ids"][0]
+    for index in range(3):
+        SERVICE.log_pack(
+            connection, project_id="proj_a", run_id=f"shown-{index}", step="review", fact_ids=[fact_id]
+        )
+        SERVICE.attribute_run(connection, project_id="proj_a", run_id=f"shown-{index}", success=True)
+    status = SERVICE.status(connection, project_id="proj_a")
+    assert fact_id in {item["id"] for item in status["promotion_candidates"]}
+    assert status["retention_years"] == 1
+    assert status["embedding_model"] is None
+    assert status["vector_index"] == "not_created"
+    assert status["ship_gate"] == "case_study_primary_not_run"
+
+
+def test_every_role_can_read_and_only_builders_can_propose(connection):
+    _projects(connection)
+    connection.execute(
+        text(
+            """
+            INSERT INTO roles (id, project_id, role_key, display_name, spec) VALUES
+            ('role_fin', 'proj_a', 'finance', 'Finance', CAST(:finance AS JSONB)),
+            ('role_eng', 'proj_a', 'software_engineer', 'Engineer', CAST(:engineer AS JSONB))
+            """
+        ),
+        {
+            "finance": '{"permissions": {"allowed_skills": ["cost.inspect"]}}',
+            "engineer": '{"permissions": {"allowed_skills": ["code.edit"]}}',
+        },
+    )
+    granted = grant_knowledge_roles(connection, project_id="proj_a", actor="test")
+    assert granted["unavailable_count"] == 0
+    rows = connection.execute(
+        text(
+            "SELECT role_key, skill_id FROM role_skills WHERE project_id = 'proj_a' "
+            "ORDER BY role_key, skill_id"
+        )
+    ).all()
+    assert ("finance", "knowledge.read") in rows
+    assert ("finance", "knowledge.propose") not in rows
+    assert ("software_engineer", "knowledge.read") in rows
+    assert ("software_engineer", "knowledge.propose") in rows
+
+
+def test_the_sre_graph_captures_a_lifecycle_record(connection):
+    from boss_engine.services.knowledge_graph import KnowledgeGraphService
+
+    _projects(connection)
+    _index_stock(connection)
+    graph = KnowledgeGraphService()
+    captured = graph.capture_lifecycle(
+        connection, "proj_a",
+        {
+            "kind": "release",
+            "source_id": "rel-1",
+            "title": "Stock release",
+            "body": "Shipped reserve",
+            "symbol_names": ["reserve"],
+        },
+    )
+    found = graph.search_knowledge(connection, "proj_a", "reserve")
+    assert captured["id"]
+    assert any(hit["node_id"] == captured["id"] or "reserve" in str(hit.get("body") or hit.get("name") or "") for hit in found["hits"])
+
+
+def test_the_read_skill_searches_and_the_propose_skill_stays_inferred(connection):
+    from boss_engine.config import get_settings
+    from boss_engine.services.skill_executors import SkillExecutorContext, resolve_executor
+
+    _projects(connection)
+    _index_stock(connection)
+    context = SkillExecutorContext(
+        settings=get_settings(), connection=connection, project_id="proj_a", actor="archivist"
+    )
+    found = resolve_executor("knowledge.read", context=context)({"action": "symbol", "name": "reserve"})
+    assert found["found"] is True
+    proposed = resolve_executor("knowledge.propose", context=context)({
+        "statement": "reserve runs before commit",
+        "subject": "reserve",
+        "predicate": "precedes",
+        "object": "commit",
+        "kind": "invariant",
+        "trust_tier": "governed",
+    })
+    assert proposed["trust_tier"] == "inferred"

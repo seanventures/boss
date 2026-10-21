@@ -12,6 +12,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from .archivist import distil, forget_source as forget_source_lineage
+from .capture import capture_lifecycle as capture_lifecycle_record
 from .learning import apply_learning
 from .retrieval import blast_radius, knowledge_pack, precedent_section, rank_hits
 from .store import PostgresKnowledgeStore
@@ -42,7 +43,12 @@ class KnowledgeService:
             )
             if node is None:
                 continue
-            enriched.append({**hit, "trust_tier": node["trust_tier"], "body": node["body"]})
+            enriched.append({
+                **hit,
+                "name": node["name"],
+                "trust_tier": node["trust_tier"],
+                "body": node["body"],
+            })
         return {"hits": rank_hits(enriched)}
 
     def why(
@@ -90,6 +96,20 @@ class KnowledgeService:
                 connection, project_id=project_id, node_id=node_id, kind="calls", direction="in"
             )
         }
+
+    def capture_lifecycle(
+        self, connection: Connection, *, project_id: str, record: dict[str, Any]
+    ) -> dict[str, Any]:
+        return capture_lifecycle_record(
+            connection, self.store, project_id=project_id, record=record
+        )
+
+    def attribute_run(
+        self, connection: Connection, *, project_id: str, run_id: str, success: bool
+    ) -> list[str]:
+        return self.store.record_outcome(
+            connection, project_id=project_id, run_id=run_id, success=success
+        )
 
     def propose_fact(
         self,
@@ -276,6 +296,10 @@ class KnowledgeService:
             "ship_gate": "case_study_primary_not_run",
             "ingest_lag_seconds": None,
             "cost_usd": None,
+            "retention_years": 1,
+            "embedding_model": None,
+            "vector_index": "not_created",
+            "sources": ["adr folder", "connector document"],
         }
 
     def log_pack(

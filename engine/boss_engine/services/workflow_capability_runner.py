@@ -36,6 +36,49 @@ from .workflow_capabilities import CAPABILITY_KEYS, get as get_capability
 
 log = logging.getLogger(__name__)
 
+
+def _knowledge_precedent(
+    connection: Connection,
+    project_id: str,
+    state: Any,
+    run_id: str,
+    step_id: str,
+    actor: str,
+) -> str:
+    """Quoted precedent for one decision. A lookup failure does not stop the decision."""
+    query = state if isinstance(state, str) else ""
+    if not query.strip():
+        return ""
+    try:
+        from .knowledge.service import KnowledgeService
+
+        service = KnowledgeService()
+        found = service.precedent(connection, project_id=project_id, query=query[:500])
+        fact_ids = [str(item) for item in (found.get("cited_fact_ids") or [])]
+        if fact_ids:
+            service.log_pack(
+                connection,
+                project_id=project_id,
+                run_id=run_id,
+                step=step_id,
+                fact_ids=fact_ids,
+            )
+        return str(found.get("section") or "")
+    except Exception as error:
+        try:
+            emit_event(
+                connection,
+                project_id,
+                "knowledge.precedent_failed",
+                actor or "system",
+                "workflow_run",
+                run_id,
+                {"error": type(error).__name__},
+            )
+        except Exception:
+            return ""
+        return ""
+
 #: Long enough for a tool call that talks to GitHub or a sandbox, short enough that a runner
 #: which dies does not strand the step for long. The runtime reclaims an expired lease.
 LEASE_SECONDS = 120
@@ -1300,6 +1343,9 @@ def execute_step(
                 attempt=int(context.get("step_attempt") or 1),
                 actor=actor,
                 worker_id=str(context.get("worker_id") or actor),
+            )
+            spend.knowledge_precedent = _knowledge_precedent(
+                connection, project_id, state, str(context["run_id"]), str(step["id"]), actor
             )
         try:
             return typed_decisions.run_step(settings, binding, state, spend=spend)

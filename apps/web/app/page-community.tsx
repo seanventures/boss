@@ -228,6 +228,7 @@ import { fetchObservabilitySuiteFeed } from "../lib/observability-suite";
 import { ObservabilitySuitePanel } from "./observability-suite-ui";
 import { fetchKnowledgeGraphFeed } from "../lib/knowledge-graph";
 import { KnowledgeGraphPanel } from "./knowledge-graph-ui";
+import { KnowledgeExplorer, KnowledgeSettings } from "./knowledge-console";
 import { KnowledgePromotionQueue } from "./knowledge-promotion-ui";
 import { fetchCICDCatalog, fetchCICDStatus } from "../lib/cicd-pipelines";
 import { CICDPipelinesPanel } from "./cicd-pipelines-ui";
@@ -5879,6 +5880,13 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             initialFilter={requestedDecisionFilter}
           />
           <KnowledgePromotionQueue projectId={activeProjectId} actorId={activeActorId} />
+        </section>
+        ) : null}
+
+        {shows("knowledge") ? (
+        <section data-area="knowledge" aria-label="Knowledge">
+          <KnowledgeExplorer projectId={activeProjectId} actorId={activeActorId} />
+          <KnowledgeSettings projectId={activeProjectId} actorId={activeActorId} />
         </section>
         ) : null}
 
