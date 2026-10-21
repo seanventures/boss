@@ -139,7 +139,37 @@ The run above is `scripts/knowledge/spike/results/spike_results.json`.
   4 vCPU and 15 GB RAM, `shared_buffers` 1 GB.
 - **Every AGE answer matched the CTE answer** (0 mismatches), so no method wins by being wrong.
 
-AGE_RESULTS_TABLE
+Latency is p50 / p95 in milliseconds.
+
+| Question | Hops | Nodes reached (mean / max) | **CTE** | AGE fixed patterns | AGE variable-length | AGE VLE timeouts (≥ 30 s) |
+|---|---|---|---|---|---|---|
+| Dependencies (out) | 2 | 30 / 30 | **1.4 / 1.8** | 2.4 / 3.4 | 4,597 / 4,748 | 0 of 20 |
+| Dependencies (out) | 3 | 153 / 155 | **2.9 / 3.6** | 82 / 124 | 23,294 / 23,807 | 1 of 20 |
+| Dependencies (out) | 4 | 758 / 772 | **8.1 / 11.3** | 520 / 588 | — | **20 of 20** |
+| Blast radius (in) | 2 | 70 / 241 | **1.9 / 4.5** | 3.1 / 9.1 | 6,161 / 14,984 | 2 of 20 |
+| Blast radius (in) | 3 | 336 / 1,251 | **4.5 / 10.5** | 12 / 19 | 17,875 / 27,285 | 12 of 20 |
+
+- **The recursive CTE wins everywhere.** It is 1.6–64× faster than AGE's best form (fixed patterns)
+  and 3,000× or more faster than variable-length MATCH. Its 4-hop p95 is 11 ms, well inside the
+  §3.8 retrieval budget of p95 < 300 ms. It also applies the validity window and project
+  filter on every hop, which the AGE queries here do not.
+- **AGE's variable-length MATCH is not usable at this scale.** It enumerates paths, not nodes.
+  The first call in a session also builds AGE's in-memory graph context, which took 16 s here.
+  Fixed patterns are reasonable at 2 hops, but the gap grows with depth: 64× at 4 hops.
+- **Storage:** relational tables and indexes take 838 MB; the AGE projection takes 716 MB. A
+  projection roughly doubles graph storage.
+- **Decision:** `kg_nodes`/`kg_edges` stay the system of record, and `traverse` stays on the
+  CTE. AGE stays in the image as an optional projection for ad-hoc Cypher (console exploration,
+  analyst queries). Product hot paths never depend on it. This also keeps the provenance and
+  temporal fields in one place, with no sync job between two stores.
+
+Reproduce:
+
+```sh
+python3 scripts/knowledge/bench_traversal.py --dsn postgresql://USER:PASS@127.0.0.1:5432/kgbench --seeds 20 --timeout 30
+```
+
+The run above is `scripts/knowledge/results/bench_1m.json`.
 
 ## 3. Database image and upgrade (Phase 0 item 1, for the record)
 

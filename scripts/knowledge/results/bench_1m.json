@@ -1,0 +1,156 @@
+{
+  "nodes": 1000000,
+  "edges": 5000000,
+  "out_degree": 5,
+  "skew": 3.0,
+  "seeds": 20,
+  "timeout_s": 30,
+  "server": "PostgreSQL 16.10, AGE 1.6.0 (BOSS DB image)",
+  "storage_mb": {
+    "relational": 838,
+    "age": 716
+  },
+  "results": [
+    {
+      "direction": "out",
+      "depth": 2,
+      "seeds": 20,
+      "cte": {
+        "p50_ms": 1.4,
+        "p95_ms": 1.8,
+        "mean_ms": 1.6
+      },
+      "age_fixed": {
+        "p50_ms": 2.4,
+        "p95_ms": 3.4,
+        "mean_ms": 2.6
+      },
+      "age": {
+        "p50_ms": 4596.5,
+        "p95_ms": 4747.8,
+        "mean_ms": 4610.0
+      },
+      "age_first_call_ms": 16225.0,
+      "reached_mean": 30,
+      "reached_max": 30,
+      "timeouts": {
+        "cte": 0,
+        "age": 0,
+        "age_fixed": 0
+      },
+      "answer_mismatches": 0
+    },
+    {
+      "direction": "out",
+      "depth": 3,
+      "seeds": 20,
+      "cte": {
+        "p50_ms": 2.9,
+        "p95_ms": 3.6,
+        "mean_ms": 3.0
+      },
+      "age_fixed": {
+        "p50_ms": 82.2,
+        "p95_ms": 124.3,
+        "mean_ms": 86.5
+      },
+      "age": {
+        "p50_ms": 23294.0,
+        "p95_ms": 23807.0,
+        "mean_ms": 23316.4
+      },
+      "age_first_call_ms": null,
+      "reached_mean": 153,
+      "reached_max": 155,
+      "timeouts": {
+        "cte": 0,
+        "age": 1,
+        "age_fixed": 0
+      },
+      "answer_mismatches": 0
+    },
+    {
+      "direction": "out",
+      "depth": 4,
+      "seeds": 20,
+      "cte": {
+        "p50_ms": 8.1,
+        "p95_ms": 11.3,
+        "mean_ms": 8.2
+      },
+      "age_fixed": {
+        "p50_ms": 520.3,
+        "p95_ms": 587.5,
+        "mean_ms": 528.5
+      },
+      "age": null,
+      "age_first_call_ms": null,
+      "reached_mean": 758,
+      "reached_max": 772,
+      "timeouts": {
+        "cte": 0,
+        "age": 20,
+        "age_fixed": 0
+      },
+      "answer_mismatches": 0
+    },
+    {
+      "direction": "in",
+      "depth": 2,
+      "seeds": 20,
+      "cte": {
+        "p50_ms": 1.9,
+        "p95_ms": 4.5,
+        "mean_ms": 2.3
+      },
+      "age_fixed": {
+        "p50_ms": 3.1,
+        "p95_ms": 9.1,
+        "mean_ms": 4.1
+      },
+      "age": {
+        "p50_ms": 6160.5,
+        "p95_ms": 14984.3,
+        "mean_ms": 8176.4
+      },
+      "age_first_call_ms": null,
+      "reached_mean": 70,
+      "reached_max": 241,
+      "timeouts": {
+        "cte": 0,
+        "age": 2,
+        "age_fixed": 0
+      },
+      "answer_mismatches": 0
+    },
+    {
+      "direction": "in",
+      "depth": 3,
+      "seeds": 20,
+      "cte": {
+        "p50_ms": 4.5,
+        "p95_ms": 10.5,
+        "mean_ms": 6.3
+      },
+      "age_fixed": {
+        "p50_ms": 12.2,
+        "p95_ms": 19.3,
+        "mean_ms": 13.8
+      },
+      "age": {
+        "p50_ms": 17875.1,
+        "p95_ms": 27285.1,
+        "mean_ms": 18745.6
+      },
+      "age_first_call_ms": null,
+      "reached_mean": 336,
+      "reached_max": 1251,
+      "timeouts": {
+        "cte": 0,
+        "age": 12,
+        "age_fixed": 0
+      },
+      "answer_mismatches": 0
+    }
+  ]
+}
