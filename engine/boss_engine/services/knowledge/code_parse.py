@@ -199,6 +199,16 @@ class _Extractor:
         """A method read as an attribute (no call), e.g. Python's @property."""
         return False
 
+    def _annotated(self, name_node) -> str:
+        """The definition an annotation/attribute belongs to. Annotations sit inside the definition,
+        so the walk is usually already in its scope."""
+        if name_node is None:
+            return self.src
+        name = _text(name_node)
+        if self.scope and self.scope[-1] == name:
+            return self.src
+        return f"{self.src}.{name}" if self.scope else name
+
     def on_node(self, node) -> bool:
         """Handle a node; True means its children were handled too."""
         return False
@@ -653,8 +663,7 @@ class _Java(_Extractor):
                 route = re.search(r"\"([^\"]*)\"", _text(node))
                 target = node.parent.parent if node.parent is not None else None
                 tname = target.child_by_field_name("name") if target is not None else None
-                src = (f"{self.src}.{_text(tname)}" if self.scope else _text(tname)) if tname is not None else self.src
-                self.f.endpoints.append((src, verb, route.group(1) if route else "/"))
+                self.f.endpoints.append((self._annotated(tname), verb, route.group(1) if route else "/"))
             return True
         return False
 
@@ -692,8 +701,7 @@ class _CSharp(_Extractor):
                 route = re.search(r"\"([^\"]*)\"", _text(node))
                 target = node.parent.parent if node.parent is not None else None
                 tname = target.child_by_field_name("name") if target is not None else None
-                src = (f"{self.src}.{_text(tname)}" if self.scope else _text(tname)) if tname is not None else self.src
-                self.f.endpoints.append((src, verb or "ANY", route.group(1) if route else "/"))
+                self.f.endpoints.append((self._annotated(tname), verb or "ANY", route.group(1) if route else "/"))
             return True
         return False
 

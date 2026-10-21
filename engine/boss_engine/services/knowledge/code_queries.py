@@ -62,7 +62,7 @@ class KnowledgeQueries:
     def _symbol_row(r) -> dict:
         attrs = r["attrs"] or {}
         return {"key": r["node_key"], "name": r["name"], "repo": r["repo"], "path": r["path"],
-                "line": attrs.get("line"), "end_line": attrs.get("end_line"), "kind": attrs.get("symbol_kind"),
+                "line": attrs.get("line"), "end_line": attrs.get("end_line"), "symbol_kind": attrs.get("symbol_kind"),
                 "lang": attrs.get("lang")}
 
     def resolve(self, c: Connection, scope: Scope, target: str, *, repo: str | None = None) -> dict:
@@ -92,7 +92,7 @@ class KnowledgeQueries:
             "AND path = :path AND (node_key = :k OR node_key LIKE :members)"),
             {"p": scope.project_id, "r": sym["repo"], "path": sym["path"], "k": sym["key"],
              "members": sym["key"].replace("%", r"\%") + ".%"}).scalars().all()
-        return {"kind": "symbol", **sym, "seeds": seeds}
+        return {**sym, "kind": "symbol", "seeds": seeds}
 
     # --- tools ------------------------------------------------------------------------------------
     def symbol(self, c: Connection, scope: Scope, query: str, *, repo: str | None = None) -> dict:
@@ -192,9 +192,10 @@ class KnowledgeQueries:
         decisions = outgoing([r["id"] for r in runs], ("decided_by",))
         findings = incoming(ids, ("found_in",))
         causes = incoming(ids, ("about",))
-        incidents = incoming([x["id"] for x in causes], ("caused_by",))
+        # Incidents this code caused (through a root cause) or whose fix changed it.
+        incidents = list({x["node_key"]: x for x in incoming([x["id"] for x in causes], ("caused_by",))
+                          + incoming(pr_ids, ("fixed_by",)) if x["kind"] == "incident"}.values())
         fixes = outgoing([i["id"] for i in incidents], ("fixed_by",))
-        fixing_prs = incoming(pr_ids, ("fixed_by",))
         return {
             "target": _public(t),
             "pull_requests": [_brief(p) for p in prs],
@@ -202,7 +203,7 @@ class KnowledgeQueries:
             "decisions": [_brief(d) for d in decisions],
             "review_findings": [_brief(f) for f in findings],
             "root_causes": [_brief(x) for x in causes],
-            "incidents": [_brief(i) for i in incidents + fixing_prs],
+            "incidents": [_brief(i) for i in incidents],
             "fixes": [_brief(f) for f in fixes],
         }
 
