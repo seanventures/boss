@@ -1,0 +1,9 @@
+id: T3
+title: Buy 3, pay 2 on a category
+kind: feature
+knowledge: [discount pipeline structure]
+repo: saleor
+evaluate:
+  mode: saleor_pytest
+  suite: hidden_tests/hidden_t3_buy_x_pay_y.py
+  install_as: saleor/graphql/discount/tests/test_hidden_t3_buy_x_pay_y.py

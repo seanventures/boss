@@ -1,0 +1,91 @@
+{
+  "episodes": 200,
+  "labelled_facts": 50,
+  "simulated_latency": {
+    "base_s": 0.25,
+    "per_output_token_s": 0.005
+  },
+  "prices_per_mtok": {
+    "claude-sonnet-5": [
+      2.0,
+      10.0
+    ],
+    "qwen3-32b": [
+      0.29,
+      0.59
+    ]
+  },
+  "embedding_price_per_mtok": 0.02,
+  "B": {
+    "option": "B native",
+    "calls_per_episode": 1.0,
+    "input_tokens_per_episode": 241,
+    "output_tokens_per_episode": 107,
+    "embedding_inputs_per_episode": 0.0,
+    "calls_by_purpose": {
+      "facts": 200
+    },
+    "usd_per_episode_claude-sonnet-5": 0.00155,
+    "usd_per_1000_episodes_claude-sonnet-5": 1.55,
+    "usd_per_episode_qwen3-32b": 0.00013,
+    "usd_per_1000_episodes_qwen3-32b": 0.13,
+    "latency_s_per_episode": {
+      "mean": 0.794,
+      "p95": 1.128
+    },
+    "harness_check_vs_labels": {
+      "extracted": 50,
+      "matching_a_label": 50,
+      "labels_recovered": 50,
+      "precision_vs_labels": 1.0,
+      "recall_vs_labels": 1.0
+    },
+    "temporal": {
+      "supersessions_handled": 4,
+      "of": 4
+    },
+    "precision": "PENDING: needs a governed run with a real model (the oracle is right by construction)",
+    "writes": {
+      "new": 50,
+      "duplicate": 329,
+      "superseded": 4
+    }
+  },
+  "A": {
+    "option": "A graphiti",
+    "calls_per_episode": 2.39,
+    "input_tokens_per_episode": 4800,
+    "output_tokens_per_episode": 221,
+    "embedding_inputs_per_episode": 11.19,
+    "calls_by_purpose": {
+      "ExtractedEntities": 200,
+      "ExtractedEdges": 200,
+      "NodeResolutions": 30,
+      "EdgeDuplicate": 48
+    },
+    "usd_per_episode_claude-sonnet-5": 0.01181,
+    "usd_per_1000_episodes_claude-sonnet-5": 11.81,
+    "usd_per_episode_qwen3-32b": 0.00152,
+    "usd_per_1000_episodes_qwen3-32b": 1.52,
+    "latency_s_per_episode": {
+      "mean": 1.868,
+      "p95": 2.693
+    },
+    "harness_check_vs_labels": {
+      "extracted": 50,
+      "matching_a_label": 50,
+      "labels_recovered": 50,
+      "precision_vs_labels": 1.0,
+      "recall_vs_labels": 1.0
+    },
+    "temporal": {
+      "supersessions_handled": 4,
+      "of": 4
+    },
+    "precision": "PENDING: needs a governed run with a real model (the oracle is right by construction)"
+  },
+  "code": {
+    "option_b_native_lines": 114,
+    "option_a_glue_lines": 88
+  }
+}

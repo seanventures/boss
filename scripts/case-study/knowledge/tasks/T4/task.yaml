@@ -1,0 +1,10 @@
+id: T4
+title: Customers are being oversold (incident)
+kind: incident (Beacon -> fix)
+knowledge: [T1 coupling, reservation invariant]
+repo: saleor
+fault_patch: fault.patch   # applied to the fork and pushed as the "release" before the task starts
+evaluate:
+  mode: saleor_pytest
+  suite: hidden_tests/hidden_t4_no_oversell.py
+  install_as: saleor/warehouse/tests/test_hidden_t4_no_oversell.py
