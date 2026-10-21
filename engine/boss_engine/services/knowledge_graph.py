@@ -20,6 +20,10 @@ confidence filters, and strict project/tenant scope on every read path.
 
 BOSS-357 adds ``compute_retrieval_eval`` coverage metrics + a simple regression alarm
 when coverage drops below a configured threshold relative to the prior snapshot.
+
+Knowledge Graph Phase 0 (KNOWLEDGE_GRAPH_SPEC.md §5): writes and tenant scope now live in the
+``KnowledgeStore`` (``services/knowledge/store.py``); this service is the SRE facade over it and
+keeps its public API and its narrower node/edge kinds unchanged.
 """
 from __future__ import annotations
 
@@ -31,6 +35,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from .core import make_id, now_utc
+from .knowledge.store import PostgresKnowledgeStore, Scope, parse_ts as _parse_ts
 
 NODE_KINDS = ("service", "resource", "repo", "deployment", "datastore", "external",
               "incident", "root_cause")
@@ -65,26 +70,6 @@ CREATE INDEX IF NOT EXISTS idx_kg_nodes_valid
 """
 
 
-def _parse_ts(value: Any) -> Optional[datetime]:
-    """Normalize optional timestamp inputs for SQL binds."""
-    if value is None or value == "":
-        return None
-    if isinstance(value, datetime):
-        return value
-    if isinstance(value, (int, float)):
-        return datetime.fromtimestamp(float(value), tz=None)
-    text_value = str(value).strip()
-    if not text_value:
-        return None
-    # Accept trailing Z
-    if text_value.endswith("Z"):
-        text_value = text_value[:-1] + "+00:00"
-    try:
-        return datetime.fromisoformat(text_value)
-    except ValueError as exc:
-        raise ValueError(f"invalid timestamp: {value!r}") from exc
-
-
 def _iso(value: Any) -> Optional[str]:
     if value is None:
         return None
@@ -114,6 +99,7 @@ class KnowledgeGraphService:
     def __init__(self, settings=None):
         self.settings = settings
         self._schema_ready = False
+        self.store = PostgresKnowledgeStore(node_kinds=NODE_KINDS, edge_kinds=EDGE_KINDS)
 
     def ensure_schema(self, connection: Connection) -> None:
         """Idempotent column/table extras for provenance + eval (BOSS-355/357)."""
@@ -127,39 +113,13 @@ class KnowledgeGraphService:
 
     def _require_project(self, connection: Connection, project_id: str) -> None:
         """Tenant scope: reject unknown project_ids (hard fail, no cross-tenant leak)."""
-        if not project_id or not str(project_id).strip():
-            raise ValueError("project_id is required")
-        exists = connection.execute(
-            text("SELECT 1 FROM projects WHERE id = :p"),
-            {"p": project_id},
-        ).scalar()
-        if not exists:
-            raise LookupError(f"project not found: {project_id}")
+        self.store.require_scope(connection, Scope(project_id))
 
     def _assert_nodes_in_project(
         self, connection: Connection, project_id: str, *node_ids: str
     ) -> None:
         """Ensure every referenced node id belongs to project_id (tenant isolation)."""
-        ids = [nid for nid in node_ids if nid]
-        if not ids:
-            return
-        rows = connection.execute(
-            text(
-                """
-                SELECT id, project_id FROM kg_nodes
-                WHERE id = ANY(:ids)
-                """
-            ),
-            {"ids": list(ids)},
-        ).mappings().all()
-        found = {r["id"]: r["project_id"] for r in rows}
-        for nid in ids:
-            if nid not in found:
-                raise LookupError(f"node not found: {nid}")
-            if found[nid] != project_id:
-                raise PermissionError(
-                    f"node {nid} is not in project {project_id}"
-                )
+        self.store.assert_nodes_in_scope(connection, Scope(project_id), *node_ids)
 
     # --- upserts (idempotent) ------------------------------------------------
     def upsert_node(
@@ -184,57 +144,10 @@ class KnowledgeGraphService:
         validity window when provided.
         """
         self.ensure_schema(connection)
-        self._require_project(connection, project_id)
-        if kind not in NODE_KINDS:
-            raise ValueError(f"unknown node kind {kind!r}")
-        if confidence is None:
-            confidence = 1.0
-        confidence = float(confidence)
-        if confidence < 0.0 or confidence > 1.0:
-            raise ValueError("confidence must be between 0 and 1")
-        vf = _parse_ts(valid_from)
-        vt = _parse_ts(valid_to)
-        if vf is not None and vt is not None and vt < vf:
-            raise ValueError("valid_to must be >= valid_from")
-        node_id = make_id("kgn")
-        row = connection.execute(
-            text(
-                """
-                INSERT INTO kg_nodes (id, project_id, kind, node_key, name, attrs, layer,
-                                      source, confidence, valid_from, valid_to,
-                                      first_seen, last_seen)
-                VALUES (:id, :project_id, :kind, :node_key, :name, CAST(:attrs AS JSONB),
-                        :layer, :source, :confidence, :valid_from, :valid_to, :now, :now)
-                ON CONFLICT (project_id, kind, node_key) DO UPDATE SET
-                    name = COALESCE(EXCLUDED.name, kg_nodes.name),
-                    attrs = kg_nodes.attrs || EXCLUDED.attrs,
-                    -- a deterministic sighting outranks a prior inferred guess
-                    layer = CASE WHEN EXCLUDED.layer = 'deterministic' THEN 'deterministic'
-                                 ELSE kg_nodes.layer END,
-                    confidence = GREATEST(kg_nodes.confidence, EXCLUDED.confidence),
-                    source = EXCLUDED.source,
-                    valid_from = COALESCE(EXCLUDED.valid_from, kg_nodes.valid_from),
-                    valid_to = COALESCE(EXCLUDED.valid_to, kg_nodes.valid_to),
-                    last_seen = EXCLUDED.last_seen
-                RETURNING id
-                """
-            ),
-            {
-                "id": node_id,
-                "project_id": project_id,
-                "kind": kind,
-                "node_key": node_key,
-                "name": name or node_key,
-                "attrs": json.dumps(attrs or {}),
-                "layer": layer,
-                "source": source,
-                "confidence": confidence,
-                "valid_from": vf,
-                "valid_to": vt,
-                "now": now_utc(),
-            },
-        ).scalar_one()
-        return row
+        return self.store.upsert_node(
+            connection, Scope(project_id), kind, node_key, name, attrs=attrs, layer=layer,
+            source=source, confidence=confidence, valid_from=valid_from, valid_to=valid_to,
+        )
 
     def upsert_edge(
         self,
@@ -253,53 +166,10 @@ class KnowledgeGraphService:
     ) -> str:
         """Create-or-merge a directed edge keyed by (project, src, dst, kind). Returns its id."""
         self.ensure_schema(connection)
-        self._require_project(connection, project_id)
-        if kind not in EDGE_KINDS:
-            raise ValueError(f"unknown edge kind {kind!r}")
-        if confidence is None:
-            confidence = 1.0
-        confidence = float(confidence)
-        if confidence < 0.0 or confidence > 1.0:
-            raise ValueError("confidence must be between 0 and 1")
-        self._assert_nodes_in_project(connection, project_id, src_id, dst_id)
-        vf = _parse_ts(valid_from)
-        vt = _parse_ts(valid_to)
-        if vf is not None and vt is not None and vt < vf:
-            raise ValueError("valid_to must be >= valid_from")
-        edge_id = make_id("kge")
-        return connection.execute(
-            text(
-                """
-                INSERT INTO kg_edges (id, project_id, src_id, dst_id, kind, attrs, layer,
-                                      source, confidence, valid_from, valid_to,
-                                      first_seen, last_seen)
-                VALUES (:id, :project_id, :src, :dst, :kind, CAST(:attrs AS JSONB),
-                        :layer, :source, :confidence, :valid_from, :valid_to, :now, :now)
-                ON CONFLICT (project_id, src_id, dst_id, kind) DO UPDATE SET
-                    attrs = kg_edges.attrs || EXCLUDED.attrs,
-                    confidence = GREATEST(kg_edges.confidence, EXCLUDED.confidence),
-                    source = EXCLUDED.source,
-                    valid_from = COALESCE(EXCLUDED.valid_from, kg_edges.valid_from),
-                    valid_to = COALESCE(EXCLUDED.valid_to, kg_edges.valid_to),
-                    last_seen = EXCLUDED.last_seen
-                RETURNING id
-                """
-            ),
-            {
-                "id": edge_id,
-                "project_id": project_id,
-                "src": src_id,
-                "dst": dst_id,
-                "kind": kind,
-                "attrs": json.dumps(attrs or {}),
-                "layer": layer,
-                "source": source,
-                "confidence": confidence,
-                "valid_from": vf,
-                "valid_to": vt,
-                "now": now_utc(),
-            },
-        ).scalar_one()
+        return self.store.upsert_edge(
+            connection, Scope(project_id), src_id, dst_id, kind, attrs=attrs, layer=layer,
+            source=source, confidence=confidence, valid_from=valid_from, valid_to=valid_to,
+        )
 
     # --- reads ---------------------------------------------------------------
     def get_node(
