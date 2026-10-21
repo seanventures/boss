@@ -1380,13 +1380,32 @@ fi
 # stops the database on first start. The SQL holds no secrets; .env stays mode 600.
 if [[ -d scripts/install/initdb ]]; then
   chmod 755 scripts/install/initdb
-  find scripts/install/initdb -type f -name '*.sql' -exec chmod 644 {} +
+  find scripts/install/initdb -type f \( -name '*.sql' -o -name '*.sh' \) -exec chmod 644 {} +
 fi
 
 # BOSS's own source mirror for self-fixes (docs/product/BOSS_FIXES_ITSELF.md §6.1): the
 # directory exists before Compose mounts it, so Docker never creates it as root. Empty until
 # `boss self-fix seed`; nothing in it is secret.
 mkdir -p .boss/selfsrc && chmod 755 .boss .boss/selfsrc
+
+# THE DATABASE IMAGE MOVED FROM ALPINE (musl) TO DEBIAN (glibc) (KNOWLEDGE_GRAPH_SPEC.md §3.1).
+# Text indexes written under musl are out of order under glibc, so an existing install is moved by
+# dump and restore into the new image's own volume, and the copy is proved (row counts, amcheck)
+# before anything starts on it. The recovery backup above was taken first; the old volume and
+# container are kept unchanged, so a rollback to the previous release still finds its data.
+if [[ -f scripts/install/db_image_migrate.py ]]; then
+  # shellcheck disable=SC2086
+  _old_db_container="$(${COMPOSE[@]} -f scripts/install/community-compose.yml --env-file "$ENV_FILE" \
+    $COMPOSE_PROFILES ps --all -q db </dev/null 2>/dev/null || true)"
+  # shellcheck disable=SC2086
+  if ! _db_move="$(${COMPOSE[@]} -f scripts/install/community-compose.yml --env-file "$ENV_FILE" \
+       $COMPOSE_PROFILES config --format json </dev/null 2>/dev/null |
+       python3 scripts/install/db_image_migrate.py --docker-prefix "${DOCKER[*]}" \
+         from-compose --old-db-container "$_old_db_container")"; then
+    die "The database could not be moved to the new image; nothing was started on it. The old database volume is unchanged${_recovery_backup:+ and the recovery backup is $_recovery_backup}. See scripts/install/README.md (database image)."
+  fi
+  [[ "$_db_move" != migrated ]] || ui_ok "Database moved to the Debian image (dump and restore, verified)"
+fi
 
 # Start only the database and API for bootstrap. A fresh worker cannot poll
 # before the default project and its actor memberships exist.

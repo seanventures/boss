@@ -84,7 +84,7 @@ def test_compose_uses_the_installed_tag_for_every_product_role(tmp_path, tag):
         assert resolved[role]["image"] == f"boss-community-{role}:{tag or default}"
     for role in (*RECOVERY_BACKEND_ROLES, "db"):
         assert resolved[role]["pull_policy"] == "missing"
-    assert resolved["db"]["image"] == "postgres:16-alpine"
+    assert resolved["db"]["image"] == f"boss-community-db:{tag or default}"
 
 
 def test_recovery_immutable_images_override_tags_and_never_pull(tmp_path):

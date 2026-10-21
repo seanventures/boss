@@ -513,6 +513,38 @@ All running application writers, including egress, pause during the snapshot and
 > [!WARNING]
 > Keep the backup outside the checkout and protect it like `.env`.
 
+### Database image (Alpine → Debian)
+
+The BOSS database runs PostgreSQL 16 on Debian with the `vector` (pgvector 0.8.1) and `age`
+(Apache AGE 1.6.0) extensions, built from `db-image/Dockerfile` like the other BOSS images.
+Earlier releases ran `postgres:16-alpine`. Alpine uses musl and Debian uses glibc, and the two
+sort text differently, so text indexes written under one are out of order under the other.
+Reopening the old data directory would corrupt them silently.
+
+So the upgrade never reopens it:
+
+1. The installer takes its usual recovery backup.
+2. `db_image_migrate.py` stops the old database. It dumps every role and database with the
+   image that wrote them and restores them into a new volume, `boss_community_pg_debian`,
+   which the Debian image initialises.
+3. The copy is proved before anything starts on it: equal row counts per table, equal index
+   counts, and `amcheck` over every B-tree index. Only then does the new database start.
+4. The old volume `<project>_boss_community_pg` and its container are left unchanged. A rollback
+   to the previous release starts on them as before. After the new release has run for a while,
+   free the space with `docker volume rm boss-community_boss_community_pg`.
+
+The new image refuses to start on a data directory that the Alpine image initialised
+(exit 64, "would corrupt text indexes").
+
+The migration also refuses two cases instead of guessing:
+- **A half-finished copy** (the new volume exists without its completion record). Remove the new
+  volume with `docker volume rm boss-community_boss_community_pg_debian` and rerun the installer.
+- **Old data that changed after the copy** (for example, a rollback ran the previous release and
+  it wrote new data). Decide which data to keep. To migrate the newer data, remove the new volume
+  and rerun.
+
+The move takes about as long as a backup plus a restore, and BOSS is stopped while it runs.
+
 ### Recover an older safe uninstall
 
 Older versions of safe uninstall used `docker compose down`. That removed the database container but kept its named data volume. The current backup refuses to guess which mutable `postgres:16-alpine` image should reopen that data, so if `backup.sh` reports a missing Postgres container, use this recovery path before upgrading.

@@ -96,14 +96,17 @@ refuse_foreign_install() {
     done
     return 0
   fi
-  if [[ ! -f "$STATE/.env" ]] &&
-     "${DOCKER[@]}" volume inspect "${PROJECT}_boss_community_pg" >/dev/null 2>&1; then
-    echo "boss_stack: this host keeps the database volume of an earlier BOSS install" \
-         "(${PROJECT}_boss_community_pg), and this deployment has no credentials for it." >&2
-    echo "boss_stack: restore that install's .env into $STATE, or remove the volume if its" \
-         "data is not needed (docker volume rm ${PROJECT}_boss_community_pg), then deploy again." >&2
-    exit 3
-  fi
+  # The Alpine-era volume and the Debian image's volume (community-compose.yml) alike.
+  local vol
+  for vol in "${PROJECT}_boss_community_pg" "${PROJECT}_boss_community_pg_debian"; do
+    if [[ ! -f "$STATE/.env" ]] && "${DOCKER[@]}" volume inspect "$vol" >/dev/null 2>&1; then
+      echo "boss_stack: this host keeps the database volume of an earlier BOSS install" \
+           "($vol), and this deployment has no credentials for it." >&2
+      echo "boss_stack: restore that install's .env into $STATE, or remove the volume if its" \
+           "data is not needed (docker volume rm $vol), then deploy again." >&2
+      exit 3
+    fi
+  done
 }
 
 # Point install.sh's `boss` launcher at DIR (the stable link) instead of the release it

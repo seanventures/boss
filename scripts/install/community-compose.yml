@@ -8,7 +8,14 @@ name: boss-community
 
 services:
   db:
-    image: ${BOSS_RECOVERY_DB_IMAGE_ID:-postgres:16-alpine}
+    # PostgreSQL 16 on Debian with pgvector and Apache AGE (db-image/Dockerfile; KNOWLEDGE_GRAPH_SPEC.md
+    # §3.1). Its data lives in a NEW volume: an install that ran the earlier Alpine image is moved by
+    # dump and restore (db_image_migrate.py, run by install.sh), never by reopening the old directory,
+    # because musl and glibc sort text differently. The old volume is kept for rollback.
+    build:
+      context: .
+      dockerfile: db-image/Dockerfile
+    image: ${BOSS_RECOVERY_DB_IMAGE_ID:-boss-community-db:${BOSS_COMMUNITY_IMAGE_TAG:-boss-community}}
     pull_policy: ${BOSS_RECOVERY_PULL_POLICY:-missing}
     restart: unless-stopped
     # THE DATABASE IS THE LAST THING THE KERNEL MAY KILL (stability spec §4b.1). Builds run at
@@ -27,7 +34,7 @@ services:
       # 5432 is already taken — on a developer machine it usually is.
       - "127.0.0.1:${BOSS_POSTGRES_PORT:-5432}:5432"
     volumes:
-      - boss_community_pg:/var/lib/postgresql/data
+      - boss_community_pg_debian:/var/lib/postgresql/data
       # Creates the `infisical` database on first init, so the optional secret store shares
       # this server instead of shipping a Postgres of its own.
       - ./initdb:/docker-entrypoint-initdb.d:ro
@@ -739,7 +746,7 @@ volumes:
   boss_community_claude_home:
   boss_community_grok_home:
   boss_community_infisical_redis:
-  boss_community_pg:
+  boss_community_pg_debian:
   boss_community_prometheus:
   boss_community_grafana:
   boss_community_grafana_dashboards:
