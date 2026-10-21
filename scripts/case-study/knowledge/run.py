@@ -236,6 +236,11 @@ def pytest_counts(output: str) -> tuple[int, int]:
     return passed, passed + failed
 
 
+def collection_error(output: str) -> bool:
+    """A suite that cannot even be imported proves nothing: its failure must not count as valid."""
+    return bool(re.search(r"ERROR collecting|ImportError while importing|errors? during collection", output))
+
+
 def evaluate_saleor(task: Task, saleor_dir: Path, *, pytest_cmd: Optional[list[str]] = None) -> dict:
     """Copy the hidden suite into the checked-out fork, run it with Saleor's pytest, remove it."""
     target = saleor_dir / task.evaluate["install_as"]
@@ -243,9 +248,10 @@ def evaluate_saleor(task: Task, saleor_dir: Path, *, pytest_cmd: Optional[list[s
     try:
         cmd = (pytest_cmd or ["uv", "run", "pytest", "-q", "-p", "no:cacheprovider", "--reuse-db"]) + [str(target)]
         proc = subprocess.run(cmd, cwd=saleor_dir, capture_output=True, text=True, timeout=3600)
-        passed, total = pytest_counts(proc.stdout + proc.stderr)
+        output = proc.stdout + proc.stderr
+        passed, total = pytest_counts(output)
         return {"solved": proc.returncode == 0 and total > 0, "tests_passed": passed, "tests_total": total,
-                "tail": (proc.stdout + proc.stderr)[-1500:]}
+                "collection_error": collection_error(output), "tail": output[-1500:]}
     finally:
         target.unlink(missing_ok=True)
 
@@ -387,17 +393,18 @@ def validate_suites(args) -> dict:
                 out[task_id] = "skipped: --saleor-dir not given"
                 continue
             pristine = evaluate_saleor(task, saleor, pytest_cmd=args.pytest_cmd.split() if args.pytest_cmd else None)
-            entry = {"pristine": {k: pristine[k] for k in ("solved", "tests_passed", "tests_total")}}
+            keys = ("solved", "tests_passed", "tests_total", "collection_error")
+            entry = {"pristine": {k: pristine[k] for k in keys}}
             if task.fault_patch:
                 git(saleor, "apply", str(task.fault_patch))
                 try:
                     faulty = evaluate_saleor(task, saleor, pytest_cmd=args.pytest_cmd.split() if args.pytest_cmd else None)
                 finally:
                     git(saleor, "apply", "-R", str(task.fault_patch))
-                entry["with_fault"] = {k: faulty[k] for k in ("solved", "tests_passed", "tests_total")}
-                entry["valid"] = pristine["solved"] and not faulty["solved"]
+                entry["with_fault"] = {k: faulty[k] for k in keys}
+                entry["valid"] = pristine["solved"] and not faulty["solved"] and not faulty["collection_error"]
             else:
-                entry["valid"] = not pristine["solved"]
+                entry["valid"] = not pristine["solved"] and not pristine["collection_error"] and pristine["tests_total"] > 1
             out[task_id] = entry
         else:
             out[task_id] = "proven by scripts/tests/test_case_study_harness.py against selftest/t1_reference.py"

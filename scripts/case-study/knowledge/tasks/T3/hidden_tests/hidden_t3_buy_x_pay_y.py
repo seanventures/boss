@@ -8,8 +8,8 @@ from decimal import Decimal
 
 import graphene
 
-from .....checkout.models import CheckoutLine
-from ....tests.utils import get_graphql_content
+from saleor.checkout.models import CheckoutLine
+from saleor.graphql.tests.utils import get_graphql_content
 
 CREATE = """
 mutation Create($input: PromotionCreateInput!) {
@@ -76,7 +76,7 @@ def test_items_outside_the_category_neither_count_nor_change(
         api_client, staff_api_client, permission_manage_discounts, channel_USD, category, checkout, product_list,
         product_with_single_variant):
     _promotion(staff_api_client, permission_manage_discounts, channel_USD, category)
-    from .....product.models import Category
+    from saleor.product.models import Category
 
     product_with_single_variant.category = Category.objects.create(name="Shoes", slug="hidden-t3-shoes")
     product_with_single_variant.save(update_fields=["category"])

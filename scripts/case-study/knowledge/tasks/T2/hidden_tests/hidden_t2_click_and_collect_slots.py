@@ -8,7 +8,7 @@ from datetime import date, datetime, timedelta, timezone
 
 import graphene
 
-from ....tests.utils import assert_no_permission, get_graphql_content
+from saleor.graphql.tests.utils import assert_no_permission, get_graphql_content
 
 SLOTS = """
 query Slots($warehouseId: ID!, $date: Date!) {
@@ -77,7 +77,7 @@ mutation Place($id: ID!) {
 
 
 def _second_checkout(first, variant):
-    from .....checkout.models import Checkout, CheckoutLine
+    from saleor.checkout.models import Checkout, CheckoutLine
 
     other = Checkout.objects.create(channel=first.channel, email=first.email, currency=first.currency,
                                     billing_address=first.billing_address.get_copy())

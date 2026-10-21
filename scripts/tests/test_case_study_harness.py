@@ -217,3 +217,9 @@ def test_the_t1_hidden_suite_accepts_the_reference_and_catches_a_broken_service(
     finally:
         server.terminate()
         server.wait(timeout=10)
+
+
+def test_a_suite_that_cannot_be_imported_never_counts_as_a_valid_failure():
+    assert run_py.collection_error("ImportError while importing test module '/x/test_hidden_t3.py'.")
+    assert run_py.collection_error("ERROR collecting saleor/x.py")
+    assert not run_py.collection_error("3 failed, 2 passed in 4.1s")

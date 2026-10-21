@@ -6,10 +6,10 @@ setup, after BOSS's fix. On the faulty release (fault.patch) it fails.
 """
 import pytest
 
-from ...core.exceptions import InsufficientStock
-from ...order.fetch import OrderLineInfo
-from ..management import allocate_stocks
-from ..models import Allocation, Stock
+from saleor.core.exceptions import InsufficientStock
+from saleor.order.fetch import OrderLineInfo
+from saleor.warehouse.management import allocate_stocks
+from saleor.warehouse.models import Allocation, Stock
 
 COUNTRY_CODE = "US"
 
