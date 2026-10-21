@@ -16,7 +16,7 @@ What a job does:
 2. Indexes the default branch, incrementally from the last indexed commit, or fully. The graph
    describes the default branch, not unmerged work.
 3. For a push, records which symbols the PR changed: its diff hunks mapped onto definitions.
-   These are stored on the run (`code_task_runs.state.changed_symbols`).
+   These are stored as rows of `kg_change_links`, never on the run record (which is versioned).
 4. Re-syncs the lifecycle graph, so the PR, its spec, decision and changed symbols are joined.
 """
 from __future__ import annotations
@@ -129,6 +129,20 @@ def changed_symbols(root: Path, repo: str, base: str, head: str, *, env: dict | 
     return sorted(out)
 
 
+def record_changes(connection: Connection, scope: Scope, repo: str, pr_number: int, symbol_keys: list[str], *,
+                   run_id: str | None = None, head_ref: str | None = None) -> int:
+    """Record which symbols a PR changed, durably and idempotently (one row per PR and symbol)."""
+    if not symbol_keys:
+        return 0
+    return connection.execute(text(
+        """INSERT INTO kg_change_links (project_id, repo, pr_number, symbol_key, run_id, head_ref)
+           SELECT :p, :r, :n, k, :run, :ref FROM unnest(CAST(:keys AS TEXT[])) AS k
+           ON CONFLICT (project_id, repo, pr_number, symbol_key) DO UPDATE SET
+             run_id = EXCLUDED.run_id, head_ref = EXCLUDED.head_ref, recorded_at = now()"""),
+        {"p": scope.project_id, "r": repo, "n": pr_number, "keys": list(symbol_keys), "run": run_id,
+         "ref": head_ref}).rowcount
+
+
 def run_index_job(engine: Engine, settings: Any, project_id: str, payload: dict) -> dict[str, Any]:
     """Execute one `knowledge.index` job (the worker asks the API to run it here)."""
     from ..github_connections import github_token_for
@@ -150,20 +164,13 @@ def run_index_job(engine: Engine, settings: Any, project_id: str, payload: dict)
         run = (indexer.index_full(c, scope, repo, root, head) if payload.get("mode") == "full"
                else indexer.index_incremental(c, scope, repo, root, head))
     result: dict[str, Any] = {"index": run}
-    if ref and payload.get("run_id"):
+    if ref and payload.get("pr_number"):
         base_ref = f"refs/remotes/origin/kg/{base}" if base else "refs/remotes/origin/HEAD"
         keys = changed_symbols(root, repo, base_ref, f"refs/remotes/origin/kg/{ref}", env=env)
         with engine.begin() as c:
-            c.execute(text("UPDATE code_task_runs SET state = jsonb_set(COALESCE(state, '{}'::jsonb), "
-                           "'{changed_symbols}', CAST(:k AS JSONB)) WHERE id = :r AND project_id = :p"),
-                      {"k": _json(keys), "r": payload["run_id"], "p": project_id})
+            record_changes(c, scope, repo, int(payload["pr_number"]), keys, run_id=payload.get("run_id"), head_ref=ref)
         result["changed_symbols"] = len(keys)
     with engine.begin() as c:
         result["lifecycle"] = LifecycleGraph().sync(c, scope)
     return result
 
-
-def _json(value: Any) -> str:
-    import json
-
-    return json.dumps(value)

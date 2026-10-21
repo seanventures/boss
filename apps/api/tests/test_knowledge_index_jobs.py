@@ -94,10 +94,11 @@ def test_a_job_indexes_the_default_branch_and_links_the_pr_to_the_symbols_it_cha
                        "CAST(:s AS JSONB), '{}'::jsonb, '{}'::jsonb, 3, 'https://github.example.com/acme/shop/pull/3')"),
                   {"r": run_id, "p": project, "s": '{"owner": "acme", "repo": "shop", "instructions": "Triple the price."}'})
     out = index_jobs.run_index_job(engine, get_settings(), project, {
-        "repo": "acme/shop", "mode": "incremental", "ref": "boss/code/run1", "base": "main", "run_id": run_id})
+        "repo": "acme/shop", "mode": "incremental", "ref": "boss/code/run1", "base": "main", "run_id": run_id,
+        "pr_number": 3})
     with begin(engine) as c:
-        changed = c.execute(text("SELECT state->'changed_symbols' FROM code_task_runs WHERE id = :r"),
-                            {"r": run_id}).scalar_one()
+        changed = c.execute(text("SELECT symbol_key FROM kg_change_links WHERE project_id = :p AND repo = 'acme/shop' "
+                                 "AND pr_number = 3 ORDER BY 1"), {"p": project}).scalars().all()
         why = KnowledgeQueries().why(c, Scope(project), "acme/shop:shop/pricing.py::price")
         callers = KnowledgeQueries().callers(c, Scope(project), "price")
     assert out["index"]["mode"] == "full"                       # first index of the repo
@@ -118,3 +119,46 @@ def test_changed_symbols_names_the_innermost_definition(tmp_path):
     (root / "m.py").write_text("class Cart:\n    def add(self, x):\n        return x + 1\n\n    def drop(self, x):\n        return x\n")
     _git(root, "commit", "-qam", "b")
     assert index_jobs.changed_symbols(root, "acme/r", base, "HEAD") == ["acme/r:m.py::Cart.add"]
+
+
+def test_rewriting_the_run_record_keeps_the_pr_to_symbol_links(engine, project):
+    """Derived data lives in its own table: a full rewrite of the versioned run record loses nothing."""
+    from boss_engine.services.knowledge.code_index import CodeIndexer
+    from boss_engine.services.knowledge.lifecycle import LifecycleGraph
+
+    scope, run_id = Scope(project), "run-rw-" + project
+    root = Path(subprocess.run(["mktemp", "-d"], capture_output=True, text=True).stdout.strip())
+    _git(root, "init", "-q", "-b", "main")
+    (root / "m.py").write_text("def price(n):\n    return n\n")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-qm", "a")
+    with begin(engine) as c:
+        CodeIndexer(workers=1).index_full(c, scope, "acme/rw", root)
+        c.execute(text("INSERT INTO code_task_runs (id, project_id, title, status, spec, state, finalize_ctx, "
+                       "pull_request_number) VALUES (:r, :p, 't', 'completed', CAST(:s AS JSONB), '{}'::jsonb, "
+                       "'{}'::jsonb, 9)"), {"r": run_id, "p": project, "s": '{"owner": "acme", "repo": "rw"}'})
+        index_jobs.record_changes(c, scope, "acme/rw", 9, ["acme/rw:m.py::price"], run_id=run_id)
+        # The run record is rewritten wholesale, as the code-task pipeline does, with its version bumped.
+        c.execute(text("UPDATE code_task_runs SET state = CAST(:s AS JSONB), state_version = state_version + 1 "
+                       "WHERE id = :r"), {"s": '{"phase": "rewritten"}', "r": run_id})
+        LifecycleGraph().sync(c, scope)
+        why = KnowledgeQueries().why(c, scope, "acme/rw:m.py::price")
+    assert [p["key"] for p in why["pull_requests"]] == ["pull_request:acme/rw#9"]
+
+
+def test_the_knowledge_package_never_writes_derived_data_onto_a_versioned_record():
+    """The class: no knowledge module UPDATEs a table that carries a state_version column."""
+    import re
+
+    root = Path(__file__).resolve().parents[3]
+    schema = (root / "db/schema.sql").read_text()
+    versioned = {m.group(1) for m in re.finditer(r"CREATE TABLE IF NOT EXISTS (\w+) \((?:(?!\n\);).)*?state_version",
+                                                 schema, re.S)}
+    versioned |= {m.group(1) for m in re.finditer(r"ALTER TABLE (\w+) ADD COLUMN IF NOT EXISTS state_version", schema)}
+    assert "code_task_runs" in versioned
+    offenders = []
+    for path in (root / "engine/boss_engine/services/knowledge").glob("*.py"):
+        for table in versioned:
+            if re.search(rf"UPDATE\s+{table}\b", path.read_text(), re.I):
+                offenders.append(f"{path.name} updates {table}")
+    assert offenders == []

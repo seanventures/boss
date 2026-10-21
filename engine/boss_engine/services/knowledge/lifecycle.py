@@ -6,7 +6,7 @@ one project and writes them into the KnowledgeStore, idempotently. Re-running co
 
 | Record | Node | Edges |
 |---|---|---|
-| `code_task_runs` | `run`, `spec` (the run's instructions), `pull_request` | run/PR `implements` spec; PR `evidenced_by` run; PR `changed` file (and symbols when the push recorded them) |
+| `code_task_runs`, `kg_change_links` | `run`, `spec` (the run's instructions), `pull_request` | run/PR `implements` spec; PR `evidenced_by` run; PR `changed` file, and symbol (from `kg_change_links`) |
 | `decisions` | `decision`, `person` | run/release `decided_by` decision; decision `approved_by` person |
 | review findings (run state) | `review_finding` | finding `found_in` file; finding `evidenced_by` run |
 | `change_set_prs` | `pull_request` | PR `evidenced_by` run |
@@ -117,9 +117,6 @@ class LifecycleGraph:
                     fk = file_key(full_name, path)
                     if fk in existing_code:
                         edge(pr, ("file", fk), "changed")
-                for sym in (state.get("changed_symbols") or []):
-                    if sym in existing_code:
-                        edge(pr, ("symbol", sym), "changed")
             if r["decision_id"]:
                 edge(run, ("decision", f"decision:{r['decision_id']}"), "decided_by")
             for i, f in enumerate(_findings(state, fin)):
@@ -129,6 +126,13 @@ class LifecycleGraph:
                 edge(fnode, run, "evidenced_by")
                 if f.get("path") and full_name and file_key(full_name, f["path"]) in existing_code:
                     edge(fnode, ("file", file_key(full_name, f["path"])), "found_in", {"line": f.get("line")})
+
+        # PR -> changed symbols, from their own durable table (never from the versioned run record).
+        for r in self._rows(c, "SELECT repo, pr_number, symbol_key FROM kg_change_links WHERE project_id = :p", p):
+            if r["symbol_key"] in existing_code:
+                pr = node("pull_request", pr_key(r["repo"], r["pr_number"]), f"{r['repo']}#{r['pr_number']}",
+                          {"repo": r["repo"]})
+                edge(pr, ("symbol", r["symbol_key"]), "changed")
 
         # PRs from change sets --------------------------------------------------------------------
         for r in self._rows(c, "SELECT cp.full_name, cp.pr_number, cp.pr_url, cp.head_sha, cp.merged_sha, "

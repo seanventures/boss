@@ -87,21 +87,20 @@ python3 scripts/knowledge/eval_blast_radius.py --dsn postgresql+psycopg://USER:P
     list of the names each file refers to, so a commit finds the files whose edges it can change;
   - **`kg_code_index_state`**: per repository, the last indexed commit, the last full reconcile,
     and the last run's stats.
+- **`kg_change_links`**: PR → changed-symbol links (repository, PR, symbol, run, head ref), the durable source of the `changed` edges.
 - New edge kind: `references`, for a non-call use of a symbol (a type, a base class, a value).
 - New job kind: `knowledge.index`, mapped to `repository:read`.
 
-## Open decisions
+## Decisions (operator, 2026-10-21)
 
-1. **A `knowledge:read` permission.** The MCP tools use `repository:read`, which every agent
-   preset holds, because what they reveal is the repository's structure and history. Spec §5's
-   `knowledge:read` / `knowledge:manage` arrive with the HTTP API in Phase 3. Adding them to the
-   identity catalogue touches every role and the generated seed.
-2. **The graph describes the default branch.** A push records which symbols its PR changed, but
-   the graph itself moves only when the default branch moves (on the hourly pass after a merge).
-   Indexing PR branches into the graph would need per-branch state.
-3. **Changed symbols are stored on the run** (`code_task_runs.state.changed_symbols`). That write
-   does not bump `state_version`, so a later full rewrite of the run's state can drop it. The
-   only cost is a missing PR → symbol link; the PR → file links survive.
-4. **The unique-name fallback** (confidence 0.5) can link a call on an unknown object to the
-   wrong definition when the repository has only one definition by that name. The
-   blast-radius sample found no case of it.
+1. **Permissions.** The tools keep `repository:read`. `knowledge:read` / `knowledge:manage` arrive with the HTTP API in Phase 3.
+2. **The stored graph describes the default branch only.** Phase 3 adds a per-run branch overlay (spec §3.5): queries during a build see the default branch plus that build's own diff, held only for that run.
+3. **Changed-symbol records, fixed as a class.** Derived data is never stored on a versioned record without a version bump:
+   - PR → changed-symbol links live in their own durable table, `kg_change_links`;
+   - the lifecycle sync turns them into `changed` edges;
+   - a test rewrites the run record and checks that the links survive;
+   - a guard test fails if any knowledge module writes to a table that carries `state_version`.
+
+## Still open
+
+- **The unique-name fallback** (confidence 0.5) can link a call on an unknown object to the wrong definition when the repository has only one definition by that name. No case was found in either blast-radius sample.

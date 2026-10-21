@@ -4894,6 +4894,21 @@ CREATE TABLE IF NOT EXISTS kg_code_files (
 );
 CREATE INDEX IF NOT EXISTS idx_kg_code_files_names ON kg_code_files USING gin (names);
 
+-- PR -> changed-symbol links, recorded by the code index after a BOSS push (Knowledge Graph
+-- Phase 1). Derived data lives in its own durable table, never on a versioned record such as
+-- code_task_runs.state: a later rewrite of the run must not lose it. The lifecycle sync turns each
+-- row into a `changed` edge once the symbol is in the graph.
+CREATE TABLE IF NOT EXISTS kg_change_links (
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  repo TEXT NOT NULL,
+  pr_number INTEGER NOT NULL,
+  symbol_key TEXT NOT NULL,
+  run_id TEXT,
+  head_ref TEXT,
+  recorded_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (project_id, repo, pr_number, symbol_key)
+);
+
 -- One row per indexed repository: the commit the graph reflects, and the last full reconcile.
 CREATE TABLE IF NOT EXISTS kg_code_index_state (
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,

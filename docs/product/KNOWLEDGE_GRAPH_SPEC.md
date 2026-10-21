@@ -159,6 +159,7 @@ Sources ──► Capture (events) ──► Archivist pipeline ──► Store 
   1. **MCP tools on BOSS's MCP server:** `kg_search`, `kg_symbol`, `kg_callers`, `kg_blast_radius`, `kg_why` (facts and decisions behind a symbol or file), `kg_precedent`, `kg_propose_fact` (writes `inferred` only).
   2. **An injected pack** in the stage prompt, for engines without tool use.
 - **Scope.** Every read is filtered by org, project and team *and* by the reading agent's Passport ceiling. Facts carry the scope of their most restrictive source.
+- **Branch overlay (Phase 3; operator decision 2026-10-21).** The stored code graph describes the default branch only. During a build, queries see the default branch **plus that build's own diff**: an overlay derived from the run's working tree, held only for that run and discarded when it ends. It is never written into the stored graph.
 
 ### 3.6 Decisions (Jev and agents)
 
@@ -242,7 +243,7 @@ Sources ──► Capture (events) ──► Archivist pipeline ──► Store 
 | **0 · Spike + baseline** (≈3 d) | New DB image (pgvector + AGE) with a tested Alpine→Debian upgrade; the Graphiti A/B spike (§3.2); the `KnowledgeStore` interface; case-study harness and baseline runs (companion doc §4, arm A only) | The image upgrade test passes on a populated DB; the spike report picks A or B with numbers; baseline numbers are recorded |
 | **1 · Code + lifecycle graph** (≈1 wk) | Tree-sitter indexer (5 languages), incremental on BOSS commits; lifecycle nodes and edges from existing records; `kg_symbol`, `kg_callers`, `kg_blast_radius`, `kg_why` | On Saleor (companion doc): full index ≤ 15 min, incremental ≤ 30 s per commit; blast radius matches a hand-checked 30-symbol set ≥ 90% |
 | **2 · Archivist + trust** (≈1 wk) | Distil, resolve, tiers, scrubbing, retention, forget; Archivist role and avatar | The governed precision run on the Phase 0 spike set (200 episodes, 50 labels, about $5) is recorded; fact precision ≥ 85% on 100 labelled facts; 0 secrets in the store in the leak test; adversarial poisoning test: an inferred fact never outranks a governed one |
-| **3 · Retrieval + decisions** (≈1 wk) | Hybrid search, role and stage packs, MCP tools plus injection, Jev precedent with citations | p95 under 300 ms at the scale target (synthetic load); battle test does not regress, and precedent scenarios are ≥ 80% |
+| **3 · Retrieval + decisions** (≈1 wk) | Hybrid search, role and stage packs, MCP tools plus injection, Jev precedent with citations; the per-run branch overlay (§3.5); the HTTP API with `knowledge:read` / `knowledge:manage` | p95 under 300 ms at the scale target (synthetic load); battle test does not regress, and precedent scenarios are ≥ 80% |
 | **4 · Learning loop + console** (≈1 wk) | Attribution, weights and decay, promotion queue, explorer, "why" on cards | Learning-curve criterion met in the case study (companion doc §5) |
 | **5 · Enterprise sources** (≈1 wk) | MCP ingest from Confluence, Jira, Slack and ADR folders; multi-repo cross edges | One customer-shaped pilot repo set ingests end to end |
 
