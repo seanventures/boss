@@ -17,6 +17,8 @@ Shipped in code, with tests:
 - learning weights, decay, promotion candidates
 - HTTP routes under `/v1/knowledge` and the `kg_*` tools
 - a console explorer, settings, and "Based on" when a decision cites facts
+- a pull-request proposal indexes the files it wrote, links those symbols, and cites matching facts on the approval card
+- an agent turn starts with a budgeted quoted pack, and a completed turn counts the facts it was shown
 - ADR folder ingest and connector documents that do not open a network
 - a case-study harness that exits before any model call
 

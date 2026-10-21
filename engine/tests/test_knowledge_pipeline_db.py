@@ -434,3 +434,87 @@ def test_the_read_skill_searches_and_the_propose_skill_stays_inferred(connection
         "trust_tier": "governed",
     })
     assert proposed["trust_tier"] == "inferred"
+
+
+def test_a_failed_pack_lookup_leaves_the_transaction_usable(connection, monkeypatch):
+    from boss_engine.services.knowledge.runtime import quoted_pack_for_turn
+
+    def boom(self, connection, **_kwargs):
+        connection.execute(text("SELECT * FROM knowledge_runtime_missing"))
+        return {"items": [], "fact_ids": []}
+
+    monkeypatch.setattr(KnowledgeService, "pack", boom)
+    assert quoted_pack_for_turn(
+        connection, project_id="proj_a", query="reserve", run_id="run-1"
+    ) == ""
+    assert connection.execute(text("SELECT 1")).scalar() == 1
+
+
+def test_a_written_pull_request_is_indexed_and_cites_the_fact(connection):
+    from types import SimpleNamespace
+
+    from boss_engine.services.knowledge.runtime import (
+        attribute_shown_facts,
+        quoted_pack_for_turn,
+        remember_written_files,
+    )
+
+    _projects(connection)
+    proposed = SERVICE.propose_fact(
+        connection,
+        project_id="proj_a",
+        statement="reserve needs a sign-off",
+        subject="reserve",
+        predicate="needs",
+        obj="sign-off",
+        kind="lesson",
+    )
+    fact_id = proposed["fact_ids"][0]
+    remembered = remember_written_files(
+        connection,
+        project_id="proj_a",
+        source_id="pr-9",
+        title="checkout",
+        body="Discussed with ada@example.com",
+        files=[
+            SimpleNamespace(path="stock.py", content="def reserve():\n    return 1\n"),
+            SimpleNamespace(path="README.md", content="# notes"),
+        ],
+        run_id="run-pr",
+    )
+    assert fact_id in remembered["cited_fact_ids"]
+    node = STORE.find_by_key(
+        connection, project_id="proj_a", kind="pull_request", node_key="pull_request:pr-9"
+    )
+    assert "ada@example.com" not in node["body"]
+    assert "[EMAIL]" in node["body"]
+    linked = STORE.neighbors(
+        connection, project_id="proj_a", node_id=node["id"], kind="changed", direction="out"
+    )
+    assert [row["name"] for row in linked] == ["reserve"]
+    assert STORE.find_by_key(
+        connection, project_id="proj_a", kind="file", node_key="file:README.md"
+    ) is None
+    again = remember_written_files(
+        connection,
+        project_id="proj_a",
+        source_id="pr-9",
+        title="checkout",
+        body="Discussed with ada@example.com",
+        files=[SimpleNamespace(path="stock.py", content="def reserve():\n    return 1\n")],
+        run_id="run-pr",
+    )
+    assert again["replayed"] is True
+    assert len(STORE.neighbors(
+        connection, project_id="proj_a", node_id=node["id"], kind="changed", direction="out"
+    )) == 1
+    section = quoted_pack_for_turn(
+        connection, project_id="proj_a", query="reserve", run_id="run-agent"
+    )
+    assert "reserve needs a sign-off" in section
+    assert "quoted source material" not in section
+    assert fact_id in section
+    counted = attribute_shown_facts(
+        connection, project_id="proj_a", run_id="run-agent", success=True
+    )
+    assert fact_id in counted
