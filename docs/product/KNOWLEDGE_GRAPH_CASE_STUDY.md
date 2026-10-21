@@ -46,11 +46,17 @@ Each task has:
 
 ## 4. Protocol
 
-- **Arms.**
+- **Arms.** Three in total: A, A′ and B.
   - **A:** BOSS as of the pinned commit, knowledge features off.
   - **B:** the same commit with the knowledge graph on (code graph, lifecycle graph, Archivist, packs, Jev precedent).
 
   Both use the same workflows, gates, reviewers, budgets and approvals. The *person's* approvals are scripted identically, using the same answers file, so a human never biases one arm.
+- **Arm A′ (keyword search, a control):** the same as A, plus a plain BM25 full-text search over the repository as a tool. It answers "does the graph beat simple search?", which vendors do not publish. It runs on the smoke and learning-core stages only.
+- **Ablations, so we know which layer pays** (run on the repeat-class pairs T3→T7 and T4→T9):
+  - **B-code:** code graph only;
+  - **B-life:** code + lifecycle graph;
+  - **B:** everything (code + lifecycle + learned facts + Jev precedent).
+- **The data comes from the study itself.** The lifecycle and learned layers need history, and the 12-task sequence creates it. Arm B starts with only the code index; every spec, review, incident and decision in T1–T11 becomes its knowledge. The repeat-class pairs then measure whether that earned knowledge pays. No pre-existing customer data is needed.
 - **Engines.**
   - **E1:** Claude Code (Sonnet 5).
   - **E2:** an open model via an OpenAI-compatible API key, for example Qwen3-Coder or DeepSeek-Coder, pinned by name and date. E2 tests the "helps open models most" hypothesis.
