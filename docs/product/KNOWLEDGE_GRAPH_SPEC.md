@@ -80,11 +80,11 @@ Sources ──► Capture (events) ──► Archivist pipeline ──► Store 
 ### 3.1 Storage (one Postgres)
 
 - **Image change (risk: high, do first).** The current DB image is `postgres:16` on **Alpine (musl)**, and neither `vector` nor `age` is available (`pg_available_extensions` is empty for both, checked 2026-10-20).
-  - Build a BOSS DB image from the official Debian `postgres:16` with **pgvector** and **Apache AGE 1.8.x** (AGE supports PG 11–18).
+  - Build a BOSS DB image from the official Debian `postgres:16` with **pgvector** and **Apache AGE 1.6.0**. AGE ships per-PostgreSQL branches: 1.6.0 is the newest release for PG16, and 1.8.x exists only for PG15/18/19. **Decided (operator, 2026-10-21): stay on PostgreSQL 16 with AGE 1.6.0; do not move to PostgreSQL 18.**
   - **Collation hazard.** musl and glibc sort text differently, so moving an existing data directory from Alpine to Debian can silently corrupt text indexes. The upgrade must **dump and restore**, or `REINDEX` every text index, under `boss upgrade`'s protected backup. Add a test that proves the upgrade path on a populated database.
   - Fresh installs get the new image directly.
 - **Graph: AGE graph `boss_kg`.** Labels map to node kinds (§4).
-  - Keep `kg_nodes`/`kg_edges` as the **system of record** for provenance and temporal fields, and project into AGE for traversal. Alternatively, make AGE the store with a view for the old API. Decide in Phase 0 by benchmark (§9). Either way, keep `KnowledgeGraphService`'s public API working.
+  - **Decided (Phase 0 benchmark, operator 2026-10-21):** `kg_nodes`/`kg_edges` are the **system of record**, and **traversal uses the recursive CTE** on them (`PostgresKnowledgeStore.traverse`). At 1M nodes and 5M edges the CTE answers 2–4 hops in 1–11 ms at p95. AGE's variable-length MATCH takes seconds or times out ([spike report](KNOWLEDGE_GRAPH_SPIKE.md) §2). **AGE stays installed only for ad-hoc Cypher** (console exploration, analyst queries); no product path depends on it. `KnowledgeGraphService`'s public API keeps working.
   - Known AGE limits to design around:
     - it is an openCypher subset;
     - it has no native vector or full-text index, so pair it with pgvector and `tsvector` columns;
@@ -100,11 +100,11 @@ Sources ──► Capture (events) ──► Archivist pipeline ──► Store 
 - **Providers:** OpenAI, Azure OpenAI, Anthropic, Gemini, and OpenAI-compatible endpoints (Ollama, vLLM).
 - **Backends:** Neo4j, FalkorDB, Neptune, Kuzu (deprecated). **No Postgres or AGE driver.** It has a driver abstraction (`graphiti_core/driver/`: `driver.py`, `graph_operations`, `search_interface`).
 
-**Phase 0 decides between:**
+**Phase 0 compared:**
 - **(A) Adopt Graphiti with a BOSS-written AGE + pgvector driver,** and route its LLM and embedding clients through BOSS's model gateway (custom client classes) so every call is budgeted and receipted. Contribute the driver upstream.
 - **(B) Native implementation** that reuses Graphiti's *data model and extraction approach* (bi-temporal edges, episode provenance, resolution prompts, with Apache-2.0 attribution) inside BOSS services.
 
-**Decide on a spike:** ingest the same 200 episodes (BOSS run records from the case study) both ways. Compare extraction precision on 50 hand-labelled facts, latency, cost per episode, and code size and maintenance burden. **Default lean: (B)**, because BOSS needs every model call governed, strict tenancy and Passport-scoped reads, which would be retrofitted into (A).
+**Decided: (B) native** (operator, 2026-10-21, on the [spike report](KNOWLEDGE_GRAPH_SPIKE.md)). B costs 7.6× less per episode on Sonnet 5, makes one model call instead of two or more, and is about 114 lines on the KnowledgeStore; A needs a 3,000-line driver and governance retrofits. graphiti-core is **not** a BOSS dependency, and its telemetry (PostHog, on by default) is never enabled anywhere. Extraction precision was left pending in Phase 0 (no model key). The governed precision run on the spike's 200 episodes and 50 labels (about $5) is **Phase 2's acceptance test**.
 
 ### 3.3 Capture
 
@@ -241,7 +241,7 @@ Sources ──► Capture (events) ──► Archivist pipeline ──► Store 
 |---|---|---|
 | **0 · Spike + baseline** (≈3 d) | New DB image (pgvector + AGE) with a tested Alpine→Debian upgrade; the Graphiti A/B spike (§3.2); the `KnowledgeStore` interface; case-study harness and baseline runs (companion doc §4, arm A only) | The image upgrade test passes on a populated DB; the spike report picks A or B with numbers; baseline numbers are recorded |
 | **1 · Code + lifecycle graph** (≈1 wk) | Tree-sitter indexer (5 languages), incremental on BOSS commits; lifecycle nodes and edges from existing records; `kg_symbol`, `kg_callers`, `kg_blast_radius`, `kg_why` | On Saleor (companion doc): full index ≤ 15 min, incremental ≤ 30 s per commit; blast radius matches a hand-checked 30-symbol set ≥ 90% |
-| **2 · Archivist + trust** (≈1 wk) | Distil, resolve, tiers, scrubbing, retention, forget; Archivist role and avatar | Fact precision ≥ 85% on 100 labelled facts; 0 secrets in the store in the leak test; adversarial poisoning test: an inferred fact never outranks a governed one |
+| **2 · Archivist + trust** (≈1 wk) | Distil, resolve, tiers, scrubbing, retention, forget; Archivist role and avatar | The governed precision run on the Phase 0 spike set (200 episodes, 50 labels, about $5) is recorded; fact precision ≥ 85% on 100 labelled facts; 0 secrets in the store in the leak test; adversarial poisoning test: an inferred fact never outranks a governed one |
 | **3 · Retrieval + decisions** (≈1 wk) | Hybrid search, role and stage packs, MCP tools plus injection, Jev precedent with citations | p95 under 300 ms at the scale target (synthetic load); battle test does not regress, and precedent scenarios are ≥ 80% |
 | **4 · Learning loop + console** (≈1 wk) | Attribution, weights and decay, promotion queue, explorer, "why" on cards | Learning-curve criterion met in the case study (companion doc §5) |
 | **5 · Enterprise sources** (≈1 wk) | MCP ingest from Confluence, Jira, Slack and ADR folders; multi-repo cross edges | One customer-shaped pilot repo set ingests end to end |
@@ -276,4 +276,6 @@ Sources ──► Capture (events) ──► Archivist pipeline ──► Store 
 
 - 2026-10-20 (operator): one database. Postgres with Apache AGE and pgvector; no Neo4j.
 - 2026-10-20 (operator): build it ourselves; LatentGraph is not a dependency (closed and hosted).
-- Open, decided in Phase 0: Graphiti (A) or native (B); AGE as the system of record or a projection.
+- 2026-10-21 (operator, on the Phase 0 spike): **native (B)**, not Graphiti. No graphiti-core dependency; its telemetry is never enabled. The precision run moves to Phase 2 as its acceptance test.
+- 2026-10-21 (operator, on the Phase 0 benchmark): **PostgreSQL 16 with AGE 1.6.0**; no move to PostgreSQL 18. `kg_nodes`/`kg_edges` are the system of record; traversal uses the recursive CTE; AGE is kept only for ad-hoc Cypher.
+- 2026-10-21 (operator): the case-study **smoke stage is not approved yet**. It runs after Phases 1–3, on the open-model engine (E2) first.

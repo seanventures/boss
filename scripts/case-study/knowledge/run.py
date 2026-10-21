@@ -110,9 +110,12 @@ def stage_builds(config: dict, stage: str) -> list[tuple[str, str, str, int]]:
 
 def estimate(config: dict, stage: str) -> dict:
     builds = stage_builds(config, stage)
-    lo, hi = config["build_estimate_usd"]["low"], config["build_estimate_usd"]["high"]
-    return {"stage": stage, "builds": len(builds), "usd_low": round(len(builds) * lo, 2),
-            "usd_high": round(len(builds) * hi, 2), "ceiling_usd": round(len(builds) * config["build_ceiling_usd"], 2)}
+    engines = config["engines"]
+    lo = sum(engines[e]["build_estimate_usd"]["low"] for e, *_ in builds)
+    hi = sum(engines[e]["build_estimate_usd"]["high"] for e, *_ in builds)
+    ceiling = sum(engines[e]["build_ceiling_usd"] for e, *_ in builds)
+    return {"stage": stage, "builds": len(builds), "usd_low": round(lo, 2), "usd_high": round(hi, 2),
+            "ceiling_usd": round(ceiling, 2)}
 
 
 # --- BOSS's public API --------------------------------------------------------------------------

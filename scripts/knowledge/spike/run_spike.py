@@ -1,21 +1,18 @@
 #!/usr/bin/env python3
-"""Run the Graphiti spike: option A (Graphiti + gateway clients) vs option B (native), same corpus.
+"""Run the extraction spike: option B (native, approved 2026-10-21) on the spike corpus.
 
-    GRAPHITI_TELEMETRY_ENABLED=false python run_spike.py \\
-        --pg postgresql+psycopg://boss:boss@127.0.0.1:55432/kgspike \\
-        --neo4j bolt://127.0.0.1:57687 --neo4j-password <throwaway> --out spike_results.json
+    python run_spike.py --pg postgresql+psycopg://USER:PASS@127.0.0.1:5432/kgspike --out spike_results.json
 
-B writes through BOSS's PostgresKnowledgeStore into a scratch database (kg tables only). A ingests
-into a throwaway Neo4j (Graphiti has no Postgres driver). Both use the metered scripted oracle
-(oracle.py), so no model is called and nothing is spent. Prices are per 1M tokens, from
+B writes through BOSS's PostgresKnowledgeStore into a scratch database (kg tables only), using the
+metered scripted oracle (oracle.py), so no model is called and nothing is spent. Option A
+(Graphiti) was compared in Phase 0 and removed after the decision; its numbers stay in
+results/spike_results.json. Phase 2's acceptance test replaces the oracle with a governed adapter. Prices are per 1M tokens, from
 boss_engine/services/openai_adapter.py PRICE_PER_MTOK.
 """
 from __future__ import annotations
 
 import argparse
-import asyncio
 import json
-import logging
 import re
 import statistics
 import sys
@@ -118,43 +115,6 @@ def run_b(episodes, pg: str, latency: tuple[float, float]) -> dict:
             "statements": [r["statement"] for r in rows]}
 
 
-def run_a(episodes, uri: str, password: str, latency: tuple[float, float]) -> dict:
-    import option_a
-
-    logging.disable(logging.WARNING)
-    meter = oracle.Meter()
-    o = oracle.ScriptedOracle(meter, base_latency_s=latency[0], per_output_token_s=latency[1])
-    walls: list[float] = []
-
-    class Timed(list):
-        pass
-
-    async def go():
-        result = None
-        t0 = time.perf_counter()
-        result = await option_a.ingest(episodes, o, meter, uri, password)
-        return result, time.perf_counter() - t0
-
-    # Per-episode wall time comes from ingest's own loop; measure it by wrapping add_episode.
-    from graphiti_core import Graphiti
-    original = Graphiti.add_episode
-
-    async def timed_add(self, *a, **kw):
-        t = time.perf_counter()
-        try:
-            return await original(self, *a, **kw)
-        finally:
-            walls.append(time.perf_counter() - t)
-
-    Graphiti.add_episode = timed_add
-    try:
-        result, _ = asyncio.run(go())
-    finally:
-        Graphiti.add_episode = original
-    closed = {r["fact"]: bool(r["closed"]) for r in result["facts"]}
-    return {"meter": meter, "walls": walls, "closed": closed, "statements": [r["fact"] for r in result["facts"]]}
-
-
 def summarize(name: str, run: dict, n: int) -> dict:
     walls = sorted(run["walls"])
     return {"option": name, **costs(run["meter"], n),
@@ -169,15 +129,12 @@ def code_size() -> dict:
     def loc(path: Path) -> int:
         return sum(1 for line in path.read_text().splitlines() if line.strip() and not line.strip().startswith("#"))
 
-    return {"option_b_native_lines": loc(HERE / "option_b.py"),
-            "option_a_glue_lines": loc(HERE / "option_a.py")}
+    return {"option_b_native_lines": loc(HERE / "option_b.py")}
 
 
 def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--pg", required=True)
-    p.add_argument("--neo4j", required=True)
-    p.add_argument("--neo4j-password", required=True)
     p.add_argument("--episodes", type=int, default=200)
     p.add_argument("--latency", type=float, nargs=2, default=(0.25, 0.005),
                    help="simulated model latency: base seconds, seconds per output token")
@@ -191,9 +148,6 @@ def main() -> None:
     b = run_b(episodes, args.pg, latency)
     report["B"] = {**summarize("B native", b, len(episodes)), "writes": b["writes"]}
     print(json.dumps(report["B"], indent=1), flush=True)
-    a = run_a(episodes, args.neo4j, args.neo4j_password, latency)
-    report["A"] = summarize("A graphiti", a, len(episodes))
-    print(json.dumps(report["A"], indent=1), flush=True)
     report["code"] = code_size()
     Path(args.out).write_text(json.dumps(report, indent=2))
 

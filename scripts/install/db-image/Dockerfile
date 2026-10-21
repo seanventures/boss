@@ -6,8 +6,9 @@
 # PostgreSQL major on the same Debian release, so this build needs no compiler and no apt.
 # Bump a version by changing one ARG; keep the three bases on one Debian release (glibc ABI).
 #
-# AGE: the newest release for PostgreSQL 16 is 1.6.0. AGE 1.8.0 ships only for PG 15, 18
-# and 19 (see the spike doc); moving to it is an operator decision.
+# AGE: 1.6.0, the newest release for PostgreSQL 16 (1.8.0 ships only for PG 15, 18 and 19).
+# Decided 2026-10-21: stay on PostgreSQL 16 + AGE 1.6.0. Traversal uses recursive CTEs on
+# kg_nodes/kg_edges; AGE is kept only for ad-hoc Cypher (KNOWLEDGE_GRAPH_SPEC.md §3.1, §9).
 ARG PG_BASE=postgres:16-trixie@sha256:ca0bd484cb98bf4b24eb1010e73fb3fcbd6714d240fbc1a10eea5b7dbecb641d
 ARG PGVECTOR_IMAGE=pgvector/pgvector:0.8.1-pg16-trixie@sha256:1e4956185a7fd9306a41ee759a7b4329c4faf9a2bb91a1d01437310c97002433
 ARG AGE_IMAGE=apache/age:release_PG16_1.6.0@sha256:16aa423d20a31aed36a3313244bf7aa00731325862f20ed584510e381f2feaed
