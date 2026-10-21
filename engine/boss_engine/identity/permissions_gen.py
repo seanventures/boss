@@ -7,7 +7,7 @@ from enum import StrEnum
 from .catalogue import AccessRoleMeta, PassportPreset, PermissionMeta, SystemPrincipalMeta
 
 CATALOGUE_VERSION = 1
-CATALOGUE_FINGERPRINT = "f1f4b961111a7b88"
+CATALOGUE_FINGERPRINT = "0c6fecd91f189536"
 
 
 class Permission(StrEnum):
@@ -1038,6 +1038,7 @@ PASSPORT_PRESETS: dict[str, PassportPreset] = {
     "analyst": PassportPreset(key="analyst", name="Analyst", agents=('ledger', 'meter', 'conduit', 'sweep'), permissions=('budget:read', 'model_provider:read', 'infra:read', 'observability:read', 'activity:read', 'spend:reserve', 'workflow_run:read', 'agent:read', 'code_task:read', 'decision:read', 'deployment:read', 'github:read', 'host:read', 'meeting:read', 'memory:read', 'preview:read', 'project:read', 'repository:read', 'sandbox:read', 'skill:read', 'system:read', 'workflow:read'), external_ceiling={}),
     "writer": PassportPreset(key="writer", name="Writer and publisher", agents=('quill', 'herald', 'splice'), permissions=('artifact:read', 'artifact:rebuild', 'discovery:read', 'comms:read', 'comms:send', 'memory:read', 'spend:reserve', 'workflow_run:read', 'agent:read', 'code_task:read', 'decision:read', 'deployment:read', 'github:read', 'host:read', 'meeting:read', 'observability:read', 'preview:read', 'project:read', 'repository:read', 'sandbox:read', 'skill:read', 'system:read', 'workflow:read'), external_ceiling={}),
     "guardian": PassportPreset(key="guardian", name="Guardian", agents=('warden', 'vault', 'halo'), permissions=('agent:read', 'agent_passport:read', 'activity:read', 'policy:read', 'secret:read_metadata', 'workflow_run:read', 'code_task:read', 'decision:read', 'deployment:read', 'github:read', 'host:read', 'meeting:read', 'memory:read', 'observability:read', 'preview:read', 'project:read', 'repository:read', 'sandbox:read', 'skill:read', 'system:read', 'workflow:read'), external_ceiling={}),
+    "archivist": PassportPreset(key="archivist", name="Archivist", agents=('lore',), permissions=('code_task:read', 'decision:read', 'observability:read', 'reliability:read', 'repository:read', 'memory:read', 'spend:reserve', 'workflow_run:read', 'agent:read', 'deployment:read', 'github:read', 'host:read', 'meeting:read', 'preview:read', 'project:read', 'sandbox:read', 'skill:read', 'system:read', 'workflow:read'), external_ceiling={"github": {"contents": "read"}}),
     "baseline": PassportPreset(key="baseline", name="Baseline (every agent)", agents=('nova', 'axiom', 'tempo', 'sage'), permissions=('agent:read', 'code_task:read', 'decision:read', 'deployment:read', 'github:read', 'host:read', 'meeting:read', 'memory:read', 'observability:read', 'preview:read', 'project:read', 'repository:read', 'sandbox:read', 'skill:read', 'system:read', 'workflow:read', 'workflow_run:read'), external_ceiling={}),
 }
 

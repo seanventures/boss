@@ -84,7 +84,29 @@ skills:
       required_permissions: [repo_read]
     policy:
       requires_receipt: false
-      tools: [kg_symbol, kg_callers, kg_blast_radius, kg_why]
+      tools: [kg_symbol, kg_callers, kg_blast_radius, kg_why, kg_facts]
+
+  # PROPOSE A FACT: not in the baseline. Granted through allowed_skills to pm, engineering_captain,
+  # qa, adversarial_reviewer, security_reviewer and sre (operator decision 2026-10-21). What it
+  # writes is always `inferred`: quarantined, scrubbed, forgettable, never above governed facts.
+  - id: knowledge.propose
+    kind: engine_read
+    risk_tier: 0
+    mock_mode: false
+    load: eager
+    description: Propose a fact you learned to the knowledge graph — stored as inferred until a person approves it.
+    data_boundary: internal
+    input_schema:
+      bundle_tool: string
+    output_schema: { result: object }
+    cost: { estimator: fixed, category: tool }
+    retry: { max_attempts: 1, backoff: none }
+    permissions:
+      allowed_callers: [kit_try]
+      required_permissions: [repo_read]
+    policy:
+      requires_receipt: false
+      tools: [kg_propose_fact]
 
   # PROPOSE A FIX: every agent holds this too. The agent proposes a BOSS action with exact
   # arguments; a person approves it (a hold-default decision in a run, a button in chat) and it

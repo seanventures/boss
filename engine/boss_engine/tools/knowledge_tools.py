@@ -12,7 +12,10 @@ from __future__ import annotations
 from typing import Any
 
 from ..services.knowledge import Scope
+from ..services.knowledge.archivist import org_settings
 from ..services.knowledge.code_queries import AmbiguousTarget, KnowledgeQueries
+from ..services.knowledge.facts import KINDS, FactStore, InvalidFact, Origin
+from ..services.knowledge.scrub import scrub
 from .registry import ToolRegistry
 
 _QUERIES = KnowledgeQueries()
@@ -87,3 +90,48 @@ def register_knowledge_tools(reg: ToolRegistry) -> None:
         scope = Scope(args.get("project_id") or project_id)
         with ctx.begin() as c:
             return _answer(lambda: _QUERIES.why(c, scope, args["target"], repo=args.get("repo")))
+
+    # Phase 2: the Archivist's facts. An agent may propose; it can never set the tier.
+    @reg.tool(
+        "kg_facts",
+        "Current knowledge-graph facts (invariants, decisions, lessons, patterns, couplings, ownership, "
+        "risks), optionally about one subject or of one kind. Highest trust first: governed, approved, "
+        "observed, then inferred (quarantined, unconfirmed). Each fact carries its tier.",
+        _obj({"subject": {"type": "string"}, "kind": {"type": "string", "enum": list(KINDS)},
+              "include_inferred": {"type": "boolean"}, "project_id": _PROJECT}, []),
+        kind="read", permission="repository:read")
+    def kg_facts(ctx, *, project_id, actor, args):
+        scope = Scope(args.get("project_id") or project_id)
+        with ctx.begin() as c:
+            return {"facts": FactStore().current(c, scope, subject=args.get("subject"), kind=args.get("kind"),
+                                                 include_inferred=args.get("include_inferred", True))}
+
+    @reg.tool(
+        "kg_propose_fact",
+        "Propose a fact you learned (subject, predicate, object, statement, kind, evidence). It is stored "
+        "as `inferred`: quarantined, never binding, and never above governed or approved facts until a "
+        "person approves it.",
+        _obj({"subject": {"type": "string"}, "predicate": {"type": "string"}, "object": {"type": "string"},
+              "statement": {"type": "string"}, "kind": {"type": "string", "enum": list(KINDS)},
+              "evidence": {"type": "array", "items": {"type": "string"}},
+              "confidence": {"type": "number", "minimum": 0, "maximum": 1}, "project_id": _PROJECT},
+             ["subject", "predicate", "statement", "kind"]),
+        kind="write", reversibility="safe", permission="repository:read")   # quarantined, forgettable
+    def kg_propose_fact(ctx, *, project_id, actor, args):
+        scope = Scope(args.get("project_id") or project_id)
+        who = str(actor or "agent")
+        with ctx.begin() as c:
+            policy = org_settings(c, scope)
+            fields = {}
+            for k in ("subject", "predicate", "object", "statement", "kind", "confidence", "evidence"):
+                v = args.get(k)
+                if isinstance(v, str):
+                    v, _ = scrub(v, policy["pii"])
+                elif isinstance(v, list):
+                    v = [scrub(str(x), policy["pii"])[0] for x in v]
+                fields[k] = v
+            try:
+                # The origin is fixed here: whatever the payload claims, an agent's fact is inferred.
+                return FactStore().write(c, scope, fields, Origin("agent", "agent", who, actor=who))
+            except InvalidFact as exc:
+                return {"error": str(exc)}

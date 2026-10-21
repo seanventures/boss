@@ -4898,6 +4898,135 @@ CREATE INDEX IF NOT EXISTS idx_kg_code_files_names ON kg_code_files USING gin (n
 -- Phase 1). Derived data lives in its own durable table, never on a versioned record such as
 -- code_task_runs.state: a later rewrite of the run must not lose it. The lifecycle sync turns each
 -- row into a `changed` edge once the symbol is in the graph.
+-- Knowledge Graph Phase 2 (KNOWLEDGE_GRAPH_SPEC.md §3.4, §3.8): the Archivist's facts.
+-- A fact is atomic (subject, predicate, object, statement) and of one kind. Its trust tier is set by
+-- the pipeline from where it came from, never by the payload. A contradiction closes the older
+-- fact (valid_to) and links it (superseded_by); nothing is deleted except by retention or a forget.
+CREATE TABLE IF NOT EXISTS kg_facts (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  subject TEXT NOT NULL,
+  subject_node_id TEXT REFERENCES kg_nodes(id) ON DELETE SET NULL,   -- resolved code/lifecycle node
+  predicate TEXT NOT NULL,
+  object TEXT NOT NULL DEFAULT '',
+  statement TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('invariant', 'decision', 'lesson', 'pattern', 'coupling', 'ownership', 'risk')),
+  tier TEXT NOT NULL CHECK (tier IN ('observed', 'governed', 'inferred', 'approved')),
+  confidence DOUBLE PRECISION NOT NULL DEFAULT 0.5 CHECK (confidence >= 0 AND confidence <= 1),
+  content_hash TEXT NOT NULL,                  -- of the normalised statement: duplicates merge on it
+  valid_from TIMESTAMPTZ NOT NULL DEFAULT now(),
+  valid_to TIMESTAMPTZ,
+  superseded_by TEXT REFERENCES kg_facts(id) ON DELETE SET NULL,
+  uses INTEGER NOT NULL DEFAULT 0,             -- times an inferred fact was used successfully
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_kg_facts_current ON kg_facts(project_id, kind, valid_to);
+CREATE INDEX IF NOT EXISTS idx_kg_facts_subject ON kg_facts(project_id, subject) WHERE valid_to IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_kg_facts_current_hash ON kg_facts(project_id, content_hash) WHERE valid_to IS NULL;
+-- Lineage: every source a fact came from. Forgetting a source follows these rows.
+CREATE TABLE IF NOT EXISTS kg_fact_sources (
+  fact_id TEXT NOT NULL REFERENCES kg_facts(id) ON DELETE CASCADE,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  source_kind TEXT NOT NULL,                   -- run|incident|review|decision|agent|person
+  source_id TEXT NOT NULL,
+  evidence TEXT NOT NULL DEFAULT '',           -- a scrubbed pointer or quote
+  recorded_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (fact_id, source_kind, source_id)
+);
+CREATE INDEX IF NOT EXISTS idx_kg_fact_sources_source ON kg_fact_sources(project_id, source_kind, source_id);
+-- Audit: every write, merge, supersession, promotion, forget and retention purge.
+CREATE TABLE IF NOT EXISTS kg_fact_events (
+  id BIGSERIAL PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  fact_id TEXT,
+  action TEXT NOT NULL,
+  actor TEXT NOT NULL DEFAULT 'archivist',
+  detail JSONB NOT NULL DEFAULT '{}'::jsonb,
+  at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_kg_fact_events_project ON kg_fact_events(project_id, at DESC);
+-- Per-org knowledge policy: retention, the knowledge budget's caps, and the PII detector.
+CREATE TABLE IF NOT EXISTS kg_knowledge_settings (
+  org_id TEXT PRIMARY KEY,
+  retention_days INTEGER NOT NULL DEFAULT 365 CHECK (retention_days > 0),  -- after supersession
+  daily_cap_usd_micros BIGINT NOT NULL DEFAULT 2000000,
+  monthly_cap_usd_micros BIGINT NOT NULL DEFAULT 20000000,
+  per_run_ceiling_usd_micros BIGINT NOT NULL DEFAULT 200000,
+  pii JSONB NOT NULL DEFAULT '{"email": true, "phone": true, "ip": true, "card": true, "national_id": true, "custom": []}'::jsonb,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+-- One row per distillation: what it cost, what it produced, what was scrubbed (counts only).
+CREATE TABLE IF NOT EXISTS kg_ingest_log (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  source_kind TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  mode TEXT NOT NULL CHECK (mode IN ('distilled', 'structure_only', 'failed')),
+  cost_usd_micros BIGINT NOT NULL DEFAULT 0,
+  facts_written INTEGER NOT NULL DEFAULT 0,
+  scrubbed JSONB NOT NULL DEFAULT '{}'::jsonb,  -- {label: count}; the spans themselves are never stored
+  reason TEXT NOT NULL DEFAULT '',
+  at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (project_id, source_kind, source_id)
+);
+-- Event-driven ingest (operator decision 2026-10-21): a run, its review, or an incident is queued
+-- here by trigger the moment it finishes, whatever code path finished it. The worker drains the
+-- queue every 30 s (`distil_queued`); the 10-minute sweep (`distil_due`) stays only as a fallback.
+CREATE TABLE IF NOT EXISTS kg_ingest_queue (
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  source_kind TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  finished_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (project_id, source_kind, source_id)
+);
+CREATE OR REPLACE FUNCTION kg_queue_finished_run() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF NEW.status IN ('completed', 'failed') AND OLD.status IS DISTINCT FROM NEW.status THEN
+    INSERT INTO kg_ingest_queue (project_id, source_kind, source_id)
+    VALUES (NEW.project_id, 'run', NEW.id), (NEW.project_id, 'review', NEW.id)
+    ON CONFLICT DO NOTHING;
+  END IF;
+  RETURN NEW;
+END $$;
+CREATE OR REPLACE FUNCTION kg_queue_resolved_incident() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF NEW.status = 'resolved' AND OLD.status IS DISTINCT FROM NEW.status THEN
+    INSERT INTO kg_ingest_queue (project_id, source_kind, source_id)
+    VALUES (NEW.project_id, 'incident', NEW.id) ON CONFLICT DO NOTHING;
+  END IF;
+  RETURN NEW;
+END $$;
+-- Embeddings of distilled facts and node summaries only (never raw logs), cached by content hash,
+-- with the model on every row. The vector column has no fixed dimension; one HNSW index per
+-- (model, dimension) is created on demand (knowledge/embeddings.py). Needs pgvector: an install
+-- still on the old database image keeps the facts and runs without embeddings.
+DO $kg_vec$
+DECLARE vs TEXT;
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_available_extensions WHERE name = 'vector') THEN
+    CREATE EXTENSION IF NOT EXISTS vector;
+    -- The type lives in whichever schema the extension was installed into: qualify it, so a
+    -- search_path without that schema still works.
+    SELECT extnamespace::regnamespace::text INTO vs FROM pg_extension WHERE extname = 'vector';
+    EXECUTE format($ddl$
+      CREATE TABLE IF NOT EXISTS kg_embeddings (
+        id BIGSERIAL PRIMARY KEY,
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        owner_kind TEXT NOT NULL CHECK (owner_kind IN ('fact', 'node')),
+        owner_id TEXT NOT NULL,
+        model TEXT NOT NULL,
+        dims INTEGER NOT NULL,
+        content_hash TEXT NOT NULL,
+        embedding %s.vector NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        UNIQUE (project_id, owner_kind, owner_id, model)
+      )$ddl$, vs);
+    CREATE INDEX IF NOT EXISTS idx_kg_embeddings_hash ON kg_embeddings(model, content_hash);
+  END IF;
+END
+$kg_vec$;
+
 CREATE TABLE IF NOT EXISTS kg_change_links (
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   repo TEXT NOT NULL,
@@ -10055,3 +10184,17 @@ CREATE TABLE IF NOT EXISTS synthetic_checks (
   created_by TEXT NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- The knowledge ingest queue's triggers (kg_ingest_queue): here, after both tables exist.
+DO $$ BEGIN
+  IF to_regclass('code_task_runs') IS NOT NULL AND NOT EXISTS (
+      SELECT 1 FROM pg_trigger WHERE tgname = 'kg_queue_finished_run' AND tgrelid = 'code_task_runs'::regclass) THEN
+    CREATE TRIGGER kg_queue_finished_run AFTER UPDATE OF status ON code_task_runs
+      FOR EACH ROW EXECUTE FUNCTION kg_queue_finished_run();
+  END IF;
+  IF to_regclass('incidents') IS NOT NULL AND NOT EXISTS (
+      SELECT 1 FROM pg_trigger WHERE tgname = 'kg_queue_resolved_incident' AND tgrelid = 'incidents'::regclass) THEN
+    CREATE TRIGGER kg_queue_resolved_incident AFTER UPDATE OF status ON incidents
+      FOR EACH ROW EXECUTE FUNCTION kg_queue_resolved_incident();
+  END IF;
+END $$;

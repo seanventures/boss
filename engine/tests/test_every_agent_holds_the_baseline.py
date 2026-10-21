@@ -60,9 +60,27 @@ def test_every_agent_holds_the_knowledge_graph():
     """KNOWLEDGE_GRAPH_SPEC.md §5: knowledge.read is a fundamental — every role can ask where code
     is, who depends on it, what a change breaks and why it is so."""
     assert "knowledge.read" in ab.BASELINE_SKILLS
-    assert ab.bundles()["knowledge.read"] == ("kg_symbol", "kg_callers", "kg_blast_radius", "kg_why")
+    assert ab.bundles()["knowledge.read"] == ("kg_symbol", "kg_callers", "kg_blast_radius", "kg_why", "kg_facts")
     reg = _registry()
     assert all(reg.get(t).kind == "read" for t in ab.KNOWLEDGE_TOOLS)
+
+
+def test_kg_propose_fact_is_granted_to_exactly_the_six_roles():
+    """Operator decision 2026-10-21: pm, engineering_captain, qa, adversarial_reviewer,
+    security_reviewer and sre hold knowledge.propose; no other role, and not the baseline."""
+    assert "knowledge.propose" not in ab.BASELINE_SKILLS
+    holders = sorted(p.stem for p in (SPECPACK / "roles").glob("*.yaml")
+                     if "knowledge.propose" in (((yaml.safe_load(p.read_text()) or {}).get("permissions") or {})
+                                                .get("allowed_skills") or []))
+    assert holders == sorted(ab.PROPOSE_FACT_ROLES)
+    assert ab.bundles()["knowledge.propose"] == ("kg_propose_fact",)
+    spec = ab.bundle_tool_spec("knowledge.propose", "kg_propose_fact")
+    assert spec is not None and spec.kind == "write" and spec.reversibility == "safe"
+    # no read bundle can reach it
+    assert ab.bundle_tool_spec("knowledge.read", "kg_propose_fact") is None
+    from boss_engine.services.skill_executors import registered_executor_ids
+
+    assert "knowledge.propose" in set(registered_executor_ids())
 
 
 def test_each_baseline_skill_has_an_executor():
@@ -88,7 +106,7 @@ def test_every_fundamental_is_a_registered_read_tool():
     reg = _registry()
     missing = [t for t in ab.FUNDAMENTALS_TOOLS if t not in reg.names() and t not in ab.OPTIONAL_TOOLS]
     assert not missing, f"named but not registered: {missing}"
-    writes = [t for tools in ab.bundles().values() for t in tools
+    writes = [t for skill, tools in ab.bundles().items() if skill not in ab.WRITE_BUNDLES for t in tools
               if t in reg.names() and reg.get(t).kind != "read"]
     assert not writes, f"a baseline bundle may offer reads only: {writes}"
 

@@ -26,11 +26,11 @@
     "flag": "release_manager",
     "beret": "design_critic",
     "quill": "docs_writer",
+    "mortarboard": "teacher_who_simplifies",
     "coins": "finops_sentinel",
     "goggles": "first_principles_researcher",
     "comet": "visionary_founder",
     "headset": "relentless_operator",
-    "mortarboard": "teacher_who_simplifies",
     "clapper": "video_editor"
   },
   "emblems": [
@@ -214,6 +214,15 @@
       "palette": "slate",
       "visor": "glasses",
       "callsign": "Quill"
+    },
+    "archivist": {
+      "kit": "boss-v1",
+      "seed": "archivist",
+      "hat": "mortarboard",
+      "emblem": "key",
+      "palette": "teal",
+      "visor": "glasses",
+      "callsign": "Lore"
     },
     "finops_sentinel": {
       "kit": "boss-v1",

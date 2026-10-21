@@ -50,6 +50,7 @@ export const CAST: readonly CastMember[] = [
   hand("release_manager", "Release Manager", "Pilot", "Ready when the checklist is green.", ["flag", "rocket", "green", "slit"]),
   hand("design_critic", "Design Critic", "Muse", "Would a first-time user get this?", ["beret", "nib", "pink", "band"]),
   hand("docs_writer", "Documentation Writer", "Quill", "If it's not written, it didn't ship.", ["quill", "page", "slate", "glasses"]),
+  hand("archivist", "Archivist", "Lore", "Every fact has a source.", ["mortarboard", "key", "teal", "glasses"]),
   hand("finops_sentinel", "FinOps Sentinel", "Ledger", "What does this cost per run?", ["coins", "dollar", "mint", "grid"]),
   // Archetypes: optional "thinks like" agents.
   hand("first_principles_researcher", "The First-Principles Researcher", "Axiom", "What must be true?", ["goggles", "atom", "purple", "lens"], true),

@@ -1,0 +1,22 @@
+{
+  "records": 25,
+  "labelled_facts": 105,
+  "stored_current": 110,
+  "correct": 105,
+  "precision": 0.955,
+  "closed": 8,
+  "by_label": {
+    "wrong": 5,
+    "correct": 105
+  },
+  "tiers": [
+    "inferred"
+  ],
+  "model_calls": 118,
+  "tokens_in": 31205,
+  "tokens_out": 9596,
+  "real_run_cost_usd": {
+    "claude-sonnet-5": 0.1584,
+    "qwen3-32b": 0.0147
+  }
+}

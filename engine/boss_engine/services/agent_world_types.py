@@ -62,6 +62,8 @@ CANONICAL_ROLE_KEYS: frozenset[str] = frozenset({
     # archetypes, "thinks like" agents (§0.1.3, §8)
     "first_principles_researcher", "visionary_founder", "relentless_operator",
     "teacher_who_simplifies",
+    # Knowledge Graph Phase 2 (KNOWLEDGE_GRAPH_SPEC.md §3.4)
+    "archivist",
 })
 
 #: One namespace (spec §4.4). Keys are lower-cased; resolve() lower-cases and trims its input.
