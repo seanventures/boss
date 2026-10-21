@@ -16,8 +16,8 @@ import json
 import math
 import statistics
 from collections import defaultdict
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable
 
 LEARNING_PAIRS = (("T3", "T7"), ("T4", "T9"))
 
@@ -40,7 +40,7 @@ def sign_test(diffs: Iterable[float]) -> dict:
     n, k = len(diffs), sum(1 for d in diffs if d < 0)
     if n == 0:
         return {"n": 0, "b_cheaper": 0, "p": None}
-    tail = sum(math.comb(n, i) for i in range(0, min(k, n - k) + 1)) / 2 ** n
+    tail = sum(math.comb(n, i) for i in range(min(k, n - k) + 1)) / 2 ** n
     return {"n": n, "b_cheaper": k, "p": round(min(1.0, 2 * tail), 4)}
 
 

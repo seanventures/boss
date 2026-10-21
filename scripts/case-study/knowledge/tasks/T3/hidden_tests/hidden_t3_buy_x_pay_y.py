@@ -7,7 +7,6 @@ On the pinned SHA it fails (no BUY_X_PAY_Y reward type).
 from decimal import Decimal
 
 import graphene
-
 from saleor.checkout.models import CheckoutLine
 from saleor.graphql.tests.utils import get_graphql_content
 

@@ -33,9 +33,10 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any
 
 import yaml
 
@@ -81,7 +82,7 @@ class Task:
     brief: str
     repo: str
     evaluate: dict
-    fault_patch: Optional[Path] = None
+    fault_patch: Path | None = None
     dir: Path = field(default_factory=Path)
 
 
@@ -123,7 +124,7 @@ class BossClient:
         self.key = api_key
         self.timeout = timeout
 
-    def request(self, method: str, path: str, body: Optional[dict] = None, query: Optional[dict] = None) -> Any:
+    def request(self, method: str, path: str, body: dict | None = None, query: dict | None = None) -> Any:
         url = self.base + path + (("?" + urllib.parse.urlencode(query)) if query else "")
         data = json.dumps(body).encode() if body is not None else None
         req = urllib.request.Request(url, data=data, method=method, headers={
@@ -241,7 +242,7 @@ def collection_error(output: str) -> bool:
     return bool(re.search(r"ERROR collecting|ImportError while importing|errors? during collection", output))
 
 
-def evaluate_saleor(task: Task, saleor_dir: Path, *, pytest_cmd: Optional[list[str]] = None) -> dict:
+def evaluate_saleor(task: Task, saleor_dir: Path, *, pytest_cmd: list[str] | None = None) -> dict:
     """Copy the hidden suite into the checked-out fork, run it with Saleor's pytest, remove it."""
     target = saleor_dir / task.evaluate["install_as"]
     shutil.copyfile(task.dir / task.evaluate["suite"], target)
@@ -322,8 +323,8 @@ def check_approval(config: dict, args) -> dict:
     return estimate(config, args.stage)
 
 
-def run(args, *, client: Optional[BossClient] = None, evaluator: Optional[Callable[[Task], dict]] = None,
-        prepare: Optional[Callable[[Task], None]] = None, sleep: Callable[[float], None] = time.sleep) -> list[dict]:
+def run(args, *, client: BossClient | None = None, evaluator: Callable[[Task], dict] | None = None,
+        prepare: Callable[[Task], None] | None = None, sleep: Callable[[float], None] = time.sleep) -> list[dict]:
     config, answers = load_config(), load_answers()
     est = check_approval(config, args)
     client = client or BossClient(args.boss_url, os.environ.get("BOSS_CASE_STUDY_API_KEY") or os.environ["BOSS_API_KEY"])
@@ -411,7 +412,7 @@ def validate_suites(args) -> dict:
     return out
 
 
-def main(argv: Optional[list[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="command", required=True)
     e = sub.add_parser("estimate")

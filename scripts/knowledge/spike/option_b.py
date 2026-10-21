@@ -23,7 +23,7 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 KINDS = ("invariant", "decision", "lesson", "pattern", "coupling", "ownership", "risk")
 
@@ -124,7 +124,7 @@ def store_facts(store: Any, connection: Any, scope: Any, facts: list[ExtractedFa
     return counts
 
 
-def current_facts(connection: Any, scope: Any) -> list[dict[str, Optional[str]]]:
+def current_facts(connection: Any, scope: Any) -> list[dict[str, str | None]]:
     from sqlalchemy import text
 
     rows = connection.execute(text(

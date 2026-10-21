@@ -27,8 +27,8 @@ REPO = HERE.parents[2]
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(REPO / "engine"))
 
-import corpus  # noqa: E402
-import oracle  # noqa: E402
+import corpus
+import oracle
 
 PRICES = {  # USD per 1M tokens (input, output); openai_adapter.PRICE_PER_MTOK
     "claude-sonnet-5": (2.00, 10.00),
@@ -87,10 +87,9 @@ def temporal(closed: dict[str, bool]) -> dict:
 
 
 def run_b(episodes, pg: str, latency: tuple[float, float]) -> dict:
-    from sqlalchemy import create_engine, text
-
     import option_b
     from boss_engine.services.knowledge import PostgresKnowledgeStore, Scope
+    from sqlalchemy import create_engine, text
 
     engine = create_engine(pg, future=True)
     with engine.begin() as c:

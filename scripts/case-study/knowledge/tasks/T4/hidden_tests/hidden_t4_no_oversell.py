@@ -5,7 +5,6 @@ saleor/warehouse/tests/test_hidden_t4_no_oversell.py and runs it with Saleor's o
 setup, after BOSS's fix. On the faulty release (fault.patch) it fails.
 """
 import pytest
-
 from saleor.core.exceptions import InsufficientStock
 from saleor.order.fetch import OrderLineInfo
 from saleor.warehouse.management import allocate_stocks

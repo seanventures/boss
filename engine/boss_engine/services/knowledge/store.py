@@ -24,9 +24,10 @@ is refused, and an edge may only join nodes of its own project.
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Iterable, Literal, Optional, Protocol, Sequence, runtime_checkable
+from typing import Any, Literal, Protocol, runtime_checkable
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
@@ -59,8 +60,8 @@ class NotImplementedInPhase(NotImplementedError):
 class Scope:
     """Who may see what. Phase 0 enforces the project; org, team and Passport ceilings follow."""
     project_id: str
-    org_id: Optional[str] = None
-    team_id: Optional[str] = None
+    org_id: str | None = None
+    team_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -68,7 +69,7 @@ class Pattern:
     """A bounded traversal: from seed node ids, along edge kinds, up to ``depth`` hops."""
     seeds: Sequence[str]
     depth: int = 2
-    edge_kinds: Optional[Sequence[str]] = None
+    edge_kinds: Sequence[str] | None = None
     direction: Literal["out", "in", "both"] = "out"
     valid_at: Any = None          # None: now; validity is always applied to edges walked
     limit: int = 10_000
@@ -79,22 +80,22 @@ class Hit:
     id: str
     score: float
     sources: list[str] = field(default_factory=list)
-    node: Optional[dict[str, Any]] = None
+    node: dict[str, Any] | None = None
 
 
 @runtime_checkable
 class KnowledgeStore(Protocol):
     def upsert_node(self, connection: Connection, scope: Scope, kind: str, node_key: str,
-                    name: Optional[str] = None, **fields: Any) -> str: ...
+                    name: str | None = None, **fields: Any) -> str: ...
 
     def upsert_edge(self, connection: Connection, scope: Scope, src_id: str, dst_id: str, kind: str,
                     **fields: Any) -> str: ...
 
     def close_validity(self, connection: Connection, scope: Scope, element: Literal["node", "edge"],
                        element_id: str, *, valid_to: Any = None,
-                       superseded_by: Optional[str] = None) -> bool: ...
+                       superseded_by: str | None = None) -> bool: ...
 
-    def traverse(self, connection: Connection, scope: Scope, query: "Pattern | str") -> dict[str, Any]: ...
+    def traverse(self, connection: Connection, scope: Scope, query: Pattern | str) -> dict[str, Any]: ...
 
     def vector_search(self, connection: Connection, scope: Scope, embedding: Sequence[float], *,
                       model_id: str, k: int = 20) -> list[Hit]: ...
@@ -102,11 +103,11 @@ class KnowledgeStore(Protocol):
     def text_search(self, connection: Connection, scope: Scope, query: str, *, k: int = 20) -> list[Hit]: ...
 
     def hybrid_search(self, connection: Connection, scope: Scope, query: str, *,
-                      seeds: Sequence[str] = (), embedding: Optional[Sequence[float]] = None,
-                      model_id: Optional[str] = None, k: int = 20) -> list[Hit]: ...
+                      seeds: Sequence[str] = (), embedding: Sequence[float] | None = None,
+                      model_id: str | None = None, k: int = 20) -> list[Hit]: ...
 
 
-def parse_ts(value: Any) -> Optional[datetime]:
+def parse_ts(value: Any) -> datetime | None:
     """Normalize optional timestamp inputs for SQL binds."""
     if value is None or value == "":
         return None
@@ -132,7 +133,7 @@ def _confidence(value: Any) -> float:
     return value
 
 
-def _window(valid_from: Any, valid_to: Any) -> tuple[Optional[datetime], Optional[datetime]]:
+def _window(valid_from: Any, valid_to: Any) -> tuple[datetime | None, datetime | None]:
     vf, vt = parse_ts(valid_from), parse_ts(valid_to)
     if vf is not None and vt is not None and vt < vf:
         raise ValueError("valid_to must be >= valid_from")
@@ -184,7 +185,7 @@ class PostgresKnowledgeStore:
 
     # --- writes -----------------------------------------------------------------
     def upsert_node(self, connection: Connection, scope: Scope, kind: str, node_key: str,
-                    name: Optional[str] = None, *, attrs: Optional[dict] = None,
+                    name: str | None = None, *, attrs: dict | None = None,
                     layer: str = "deterministic", source: str = "manual", confidence: float = 1.0,
                     valid_from: Any = None, valid_to: Any = None) -> str:
         """Create-or-merge a node keyed by (project, kind, node_key). Returns its id.
@@ -226,7 +227,7 @@ class PostgresKnowledgeStore:
         ).scalar_one()
 
     def upsert_edge(self, connection: Connection, scope: Scope, src_id: str, dst_id: str, kind: str, *,
-                    attrs: Optional[dict] = None, layer: str = "deterministic", source: str = "manual",
+                    attrs: dict | None = None, layer: str = "deterministic", source: str = "manual",
                     confidence: float = 1.0, valid_from: Any = None, valid_to: Any = None) -> str:
         """Create-or-merge a directed edge keyed by (project, src, dst, kind). Returns its id."""
         self.require_scope(connection, scope)
@@ -260,7 +261,7 @@ class PostgresKnowledgeStore:
 
     def close_validity(self, connection: Connection, scope: Scope, element: Literal["node", "edge"],
                        element_id: str, *, valid_to: Any = None,
-                       superseded_by: Optional[str] = None) -> bool:
+                       superseded_by: str | None = None) -> bool:
         """End an element's validity (a contradiction supersedes; nothing is deleted).
 
         Returns False when it was already closed. ``superseded_by`` is recorded in attrs.
@@ -289,7 +290,7 @@ class PostgresKnowledgeStore:
         return True
 
     # --- reads --------------------------------------------------------------------
-    def traverse(self, connection: Connection, scope: Scope, query: "Pattern | str") -> dict[str, Any]:
+    def traverse(self, connection: Connection, scope: Scope, query: Pattern | str) -> dict[str, Any]:
         """Nodes reachable from the seeds within depth, with the hop count that first reached them.
 
         A recursive CTE over kg_edges: scoped to the project on every hop, edges valid at
@@ -366,8 +367,8 @@ class PostgresKnowledgeStore:
         return [Hit(id=r["id"], score=float(r["score"]), sources=["text"], node=dict(r)) for r in rows]
 
     def hybrid_search(self, connection: Connection, scope: Scope, query: str, *,
-                      seeds: Sequence[str] = (), embedding: Optional[Sequence[float]] = None,
-                      model_id: Optional[str] = None, k: int = 20) -> list[Hit]:
+                      seeds: Sequence[str] = (), embedding: Sequence[float] | None = None,
+                      model_id: str | None = None, k: int = 20) -> list[Hit]:
         """Fuse what the store can produce today: full text, and the graph neighbourhood of the
         task's seeds. Vector candidates join when ``vector_search`` exists (Phase 3)."""
         ranked: dict[str, Sequence[str]] = {"text": [h.id for h in self.text_search(connection, scope, query, k=k)]}

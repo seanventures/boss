@@ -9,9 +9,6 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from sqlalchemy import text
-
-from apps.api.app.db import begin
 from boss_engine.services.knowledge import (
     KnowledgeStore,
     NotImplementedInPhase,
@@ -21,6 +18,9 @@ from boss_engine.services.knowledge import (
     reciprocal_rank_fusion,
 )
 from boss_engine.services.knowledge_graph import KnowledgeGraphService
+from sqlalchemy import text
+
+from apps.api.app.db import begin
 
 STORE = PostgresKnowledgeStore()
 

@@ -13,8 +13,8 @@ from pathlib import Path
 SPIKE = Path(__file__).resolve().parents[2] / "scripts/knowledge/spike"
 sys.path.insert(0, str(SPIKE))
 
-import corpus  # noqa: E402
-import option_b  # noqa: E402
+import corpus
+import option_b
 
 
 def test_the_corpus_is_200_episodes_over_50_labelled_facts_with_four_supersessions():

@@ -18,7 +18,7 @@ import re
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 from corpus import FACT_BY_ID, Episode
 
@@ -84,7 +84,7 @@ class ScriptedOracle:
         self.meter = meter
         self.base_latency_s = base_latency_s
         self.per_output_token_s = per_output_token_s
-        self.episode: Optional[Episode] = None
+        self.episode: Episode | None = None
         self.expect: Any = None          # set by the Graphiti client: the response model wanted
         self.local = threading.local()
 
@@ -136,7 +136,7 @@ class ScriptedOracle:
         return json.dumps({"duplicate_facts": [i for i, f in candidates if f == new and i < existing_n],
                            "contradicted_facts": [i for i, f in candidates if old and f == old]})
 
-    def create_text_response(self, prompt: str, system_prompt: Optional[str] = None, **_kw):
+    def create_text_response(self, prompt: str, system_prompt: str | None = None, **_kw):
         expect = getattr(self.local, "expect", self.expect)
         if getattr(expect, "__name__", "") == "EdgeDuplicate":
             text = self.answer_edge_duplicate(prompt)

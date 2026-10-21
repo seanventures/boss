@@ -7,7 +7,6 @@ On the pinned SHA it fails (the schema has no pickup slots).
 from datetime import date, datetime, timedelta, timezone
 
 import graphene
-
 from saleor.graphql.tests.utils import assert_no_permission, get_graphql_content
 
 SLOTS = """
