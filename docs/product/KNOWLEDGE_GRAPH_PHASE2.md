@@ -114,17 +114,34 @@ or by the judgement call.
   - avatar in `apps/web/lib/avatar-kit/cast.ts`, with `docs/cast` regenerated;
   - a canonical role key.
 
-## Still open (operator decisions)
+## Operator decisions (2026-10-21), implemented
 
-1. **Approve the real-model precision run** ($0.16 on claude-sonnet-5, or $0.015 on qwen3-32b;
-   suggested cap $0.50).
-2. **Should every role get `kg_propose_fact`?** Today it is registered, but no baseline holds it.
-3. **Ingest lag.** The tick runs every 10 minutes. The spec targets under 5 minutes. Options: halve
-   the tick, or enqueue a distil job when a run finishes.
-4. **Default caps** per org: $2 a day, $20 a month, $0.20 per run, and 365 days of retention after
-   supersession. These were chosen as safe defaults, not decided.
-5. **No console surface yet** for the cost of knowledge, approvals, or forget. That is Phase 3,
-   with the HTTP API and `knowledge:read` / `knowledge:manage`.
+1. **Real-model precision run: approved**, cap $0.50 total, on qwen3-32b and claude-sonnet-5.
+   Results are in the section below once run.
+2. **`kg_propose_fact`** is the `knowledge.propose` skill (kit.yaml), granted through the role
+   specs' `allowed_skills` to pm, engineering_captain, qa, adversarial_reviewer,
+   security_reviewer and sre only (`agent_baseline.PROPOSE_FACT_ROLES`). It is not in the
+   baseline. It is the only bundle allowed to offer a write (`WRITE_BUNDLES`), the tool must declare
+   itself safe to reverse, the model cannot name the project, and what it writes is always
+   `inferred`. Test: `test_kg_propose_fact_is_granted_to_exactly_the_six_roles`.
+3. **Event-driven ingest.** Database triggers queue a run and its review the moment
+   `code_task_runs.status` becomes completed or failed, and an incident the moment it becomes
+   resolved (`kg_ingest_queue`), whatever code path finished it. The worker drains the queue
+   every 30 s (`POST /v1/knowledge/distil/tick`, `distil_queued`). The 10-minute sweep
+   (`distil_due`) stays only as the fallback. Tests:
+   `test_a_finished_run_is_queued_by_trigger_and_ingested_in_under_five_minutes` (the distil
+   plus the worst-case 30 s wait is well under 300 s) and `test_a_resolved_incident_is_queued_by_trigger`.
+4. **Defaults kept:** $2/day, $20/month, $0.20 per run, 365-day retention. Each org edits them at
+   `GET` / `PUT /v1/knowledge/settings` (settings:read / settings:update; Phase 3 moves the write
+   to knowledge:manage). Out-of-range values and unknown keys are refused. Test:
+   `test_the_knowledge_defaults_hold_and_each_org_can_edit_them`.
+
+**A bug found on the way.** `org_settings` selected `w.org_id, s.*`, and `s.org_id` (NULL for an
+org with no settings row) shadowed the org id. The org's spend then summed to 0, so the default
+caps never refused anything for such an org. Fixed;
+`test_the_default_daily_cap_bites_for_an_org_with_no_settings_row` fails before the fix.
+
+Still open: **no console surface yet** for the cost of knowledge, approvals, or forget (Phase 3/4).
 
 ## Handover: where to pick up
 

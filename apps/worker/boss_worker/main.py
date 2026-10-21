@@ -347,6 +347,27 @@ def _tick_knowledge(client: ControlPlaneClient) -> None:
         LOGGER.debug("knowledge_tick_failed", exc_info=True)
 
 
+#: Event-driven ingest (operator decision 2026-10-21): a finished run, review or incident is queued
+#: by a database trigger, and drained this often. The 10-minute tick above is only the fallback.
+#: Matches archivist.QUEUE_POLL_SECONDS; the spec's ingest-lag target is under 5 minutes.
+KNOWLEDGE_DISTIL_INTERVAL_SECONDS = 30
+_last_knowledge_distil_monotonic = 0.0
+
+
+def _tick_knowledge_distil(client: ControlPlaneClient) -> None:
+    """Distil what just finished. Never kill the worker."""
+    global _last_knowledge_distil_monotonic
+    now = time.monotonic()
+    if now - _last_knowledge_distil_monotonic < KNOWLEDGE_DISTIL_INTERVAL_SECONDS:
+        return
+    _last_knowledge_distil_monotonic = now
+    try:
+        out = client.knowledge_distil_tick()
+        LOGGER.info("knowledge_distil %s", (out or {}).get("distil"))
+    except Exception:  # noqa: BLE001
+        LOGGER.debug("knowledge_distil_failed", exc_info=True)
+
+
 #: Improve BOSS and run scorecards (docs/product/RUN_SCORECARDS.md). Every 10 minutes the API
 #: is asked; it does scorecard upkeep at most hourly and the one daily send only when due (a
 #: random time each UTC day). No thread, no retry: a failed send waits for tomorrow.
@@ -750,6 +771,7 @@ def main() -> None:
             _tick_workflow_schedules(client, settings)
             _tick_setup_checks(client, settings)
             _tick_knowledge(client)
+            _tick_knowledge_distil(client)
             _tick_agent_processes(client, settings)
             _tick_process_manager(client, settings)
             _tick_factory_flow(client, settings)

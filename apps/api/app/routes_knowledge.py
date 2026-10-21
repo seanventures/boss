@@ -10,10 +10,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter
+from typing import Optional
+
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
-from boss_engine.identity import P, permit
+from boss_engine.identity import P, Scope, permit
 
 
 class IndexJobRun(BaseModel):
@@ -21,6 +23,16 @@ class IndexJobRun(BaseModel):
     job_id: str = Field(min_length=1)
     project_id: str = Field(min_length=1)
     payload: dict[str, Any]
+
+
+class KnowledgeSettingsBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    project_id: str = Field(min_length=1)
+    daily_cap_usd_micros: Optional[int] = None
+    monthly_cap_usd_micros: Optional[int] = None
+    per_run_ceiling_usd_micros: Optional[int] = None
+    retention_days: Optional[int] = None
+    pii: Optional[dict[str, Any]] = None
 
 
 def _engine_settings():
@@ -60,5 +72,45 @@ def build_knowledge_router() -> APIRouter:
         from boss_engine.services.knowledge.archivist import distil_due
 
         return {"queued": queued, "distil": distil_due(engine, settings)}
+
+    # Worker-invoked, every 30 s: distil what finished since (kg_ingest_queue, fed by triggers).
+    @router.post("/v1/knowledge/distil/tick")
+    @permit(P.WORKER_LEASE)
+    def distil_tick() -> Any:
+        from boss_engine.services.knowledge.archivist import distil_queued
+
+        from .identity_guard import require_worker_principal
+
+        require_worker_principal()
+        engine, settings = _engine_settings()
+        return {"distil": distil_queued(engine, settings)}
+
+    # The org's knowledge budget and retention (defaults: $2/day, $20/month, $0.20/run, 365 days).
+    @router.get("/v1/knowledge/settings")
+    @permit(P.SETTINGS_READ, scope=Scope.project(query="project_id"))
+    def get_settings(project_id: str) -> Any:
+        from boss_engine.services.knowledge.archivist import settings_view
+        from boss_engine.services.knowledge.store import Scope as KScope
+
+        engine, _ = _engine_settings()
+        with engine.begin() as c:
+            return settings_view(c, KScope(project_id))
+
+    @router.put("/v1/knowledge/settings")
+    @permit(P.SETTINGS_UPDATE, scope=Scope.project(body="project_id"))
+    def put_settings(body: KnowledgeSettingsBody) -> Any:
+        from boss_engine.services.knowledge.archivist import update_settings
+        from boss_engine.services.knowledge.store import Scope as KScope
+
+        from .main import current_api_principal
+
+        engine, _ = _engine_settings()
+        actor = str(current_api_principal.get() or "operator")
+        changes = body.model_dump(exclude={"project_id"}, exclude_none=True)
+        try:
+            with engine.begin() as c:
+                return update_settings(c, KScope(body.project_id), changes, actor=actor)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     return router

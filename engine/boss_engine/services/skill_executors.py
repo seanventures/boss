@@ -2514,6 +2514,15 @@ def execute_knowledge_read(context: "SkillExecutorContext", inputs: dict[str, An
     return run_bundled_tool(context, "knowledge.read", inputs)
 
 
+@register_executor("knowledge.propose")
+def execute_knowledge_propose(context: "SkillExecutorContext", inputs: dict[str, Any]) -> dict[str, Any]:
+    """kg_propose_fact: the agent's fact, always stored `inferred`. Granted to the roles in
+    agent_baseline.PROPOSE_FACT_ROLES only."""
+    from .agent_baseline import run_bundled_tool
+
+    return run_bundled_tool(context, "knowledge.propose", inputs)
+
+
 @register_executor("boss.fundamentals")
 def execute_boss_fundamentals(context: "SkillExecutorContext", inputs: dict[str, Any]) -> dict[str, Any]:
     """BOSS's own read tools — logs, runs, infra, schema, catalogue, memory — read-only and

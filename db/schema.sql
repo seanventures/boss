@@ -4970,6 +4970,33 @@ CREATE TABLE IF NOT EXISTS kg_ingest_log (
   at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (project_id, source_kind, source_id)
 );
+-- Event-driven ingest (operator decision 2026-10-21): a run, its review, or an incident is queued
+-- here by trigger the moment it finishes, whatever code path finished it. The worker drains the
+-- queue every 30 s (`distil_queued`); the 10-minute sweep (`distil_due`) stays only as a fallback.
+CREATE TABLE IF NOT EXISTS kg_ingest_queue (
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  source_kind TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  finished_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (project_id, source_kind, source_id)
+);
+CREATE OR REPLACE FUNCTION kg_queue_finished_run() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF NEW.status IN ('completed', 'failed') AND OLD.status IS DISTINCT FROM NEW.status THEN
+    INSERT INTO kg_ingest_queue (project_id, source_kind, source_id)
+    VALUES (NEW.project_id, 'run', NEW.id), (NEW.project_id, 'review', NEW.id)
+    ON CONFLICT DO NOTHING;
+  END IF;
+  RETURN NEW;
+END $$;
+CREATE OR REPLACE FUNCTION kg_queue_resolved_incident() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF NEW.status = 'resolved' AND OLD.status IS DISTINCT FROM NEW.status THEN
+    INSERT INTO kg_ingest_queue (project_id, source_kind, source_id)
+    VALUES (NEW.project_id, 'incident', NEW.id) ON CONFLICT DO NOTHING;
+  END IF;
+  RETURN NEW;
+END $$;
 -- Embeddings of distilled facts and node summaries only (never raw logs), cached by content hash,
 -- with the model on every row. The vector column has no fixed dimension; one HNSW index per
 -- (model, dimension) is created on demand (knowledge/embeddings.py). Needs pgvector: an install
@@ -10157,3 +10184,17 @@ CREATE TABLE IF NOT EXISTS synthetic_checks (
   created_by TEXT NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- The knowledge ingest queue's triggers (kg_ingest_queue): here, after both tables exist.
+DO $$ BEGIN
+  IF to_regclass('code_task_runs') IS NOT NULL AND NOT EXISTS (
+      SELECT 1 FROM pg_trigger WHERE tgname = 'kg_queue_finished_run' AND tgrelid = 'code_task_runs'::regclass) THEN
+    CREATE TRIGGER kg_queue_finished_run AFTER UPDATE OF status ON code_task_runs
+      FOR EACH ROW EXECUTE FUNCTION kg_queue_finished_run();
+  END IF;
+  IF to_regclass('incidents') IS NOT NULL AND NOT EXISTS (
+      SELECT 1 FROM pg_trigger WHERE tgname = 'kg_queue_resolved_incident' AND tgrelid = 'incidents'::regclass) THEN
+    CREATE TRIGGER kg_queue_resolved_incident AFTER UPDATE OF status ON incidents
+      FOR EACH ROW EXECUTE FUNCTION kg_queue_resolved_incident();
+  END IF;
+END $$;

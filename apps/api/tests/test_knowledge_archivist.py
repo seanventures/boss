@@ -281,3 +281,87 @@ def test_the_tick_distils_finished_runs_once_and_skips_unfinished_ones(engine, s
     assert ("run", done) in logged and ("review", done) in logged
     assert not any(sid == running for _, sid in logged)
     assert first["distilled"] >= 2 and again == {"distilled": 0, "structure_only": 0, "failed": 0}
+
+
+def test_a_finished_run_is_queued_by_trigger_and_ingested_in_under_five_minutes(engine, scope, monkeypatch):
+    """Operator decision 2026-10-21: ingest is event-driven. The finish itself queues the run and its
+    review (a trigger, whatever code path finished it); the worker drains the queue every 30 s; the
+    10-minute sweep is only the fallback."""
+    from boss_engine.services.knowledge import archivist as arch
+
+    from apps.worker.boss_worker import main as worker
+
+    model = ScriptedModel([FACT])
+    real_init = Archivist.__init__
+    monkeypatch.setattr(arch.Archivist, "__init__",
+                        lambda self, settings, **kw: real_init(self, settings, adapter_factory=lambda *a: model))
+    with begin(engine) as c:
+        rid = _run(c, scope, {"state": {"review_findings": [{"text": "size_band misses 15"}]}})
+        c.execute(text("UPDATE code_task_runs SET status = 'running' WHERE id = :r"), {"r": rid})
+        assert not c.execute(text("SELECT 1 FROM kg_ingest_queue WHERE source_id = :r"), {"r": rid}).first()
+        c.execute(text("UPDATE code_task_runs SET status = 'completed' WHERE id = :r"), {"r": rid})
+        queued = {r[0] for r in c.execute(text("SELECT source_kind FROM kg_ingest_queue WHERE source_id = :r"),
+                                          {"r": rid})}
+    assert queued == {"run", "review"}
+    out = arch.distil_queued(engine, _settings())
+    assert out["distilled"] >= 2
+    with begin(engine) as c:
+        lag = c.execute(text(
+            "SELECT EXTRACT(EPOCH FROM max(l.at) - r.updated_at) FROM kg_ingest_log l "
+            "JOIN code_task_runs r ON r.id = l.source_id WHERE l.source_id = :r GROUP BY r.updated_at"),
+            {"r": rid}).scalar()
+        assert not c.execute(text("SELECT 1 FROM kg_ingest_queue WHERE source_id = :r"), {"r": rid}).first()
+    # the distil itself plus the worst-case wait for the next poll
+    assert float(lag) + worker.KNOWLEDGE_DISTIL_INTERVAL_SECONDS < 300
+    assert worker.KNOWLEDGE_DISTIL_INTERVAL_SECONDS == arch.QUEUE_POLL_SECONDS
+    # the sweep finds nothing left to do, and the queue path never ingests twice
+    assert arch.distil_due(engine, _settings(), limit=50)["distilled"] == 0
+    assert arch.distil_queued(engine, _settings()) == {"distilled": 0, "structure_only": 0, "failed": 0}
+
+
+def test_a_resolved_incident_is_queued_by_trigger(engine, scope):
+    with begin(engine) as c:
+        iid = "inc-" + uuid.uuid4().hex[:8]
+        c.execute(text("INSERT INTO incidents (id, project_id, title, status, dedupe_key) "
+                       "VALUES (:i, :p, 'checkout 500s', 'open', :i)"), {"i": iid, "p": scope.project_id})
+        c.execute(text("UPDATE incidents SET status = 'resolved' WHERE id = :i"), {"i": iid})
+        assert c.execute(text("SELECT source_kind FROM kg_ingest_queue WHERE source_id = :i"),
+                         {"i": iid}).scalar() == "incident"
+
+
+def test_the_knowledge_defaults_hold_and_each_org_can_edit_them(engine, scope):
+    """Operator decision 2026-10-21: keep $2/day, $20/month, $0.20 per run and 365 days; editable per org."""
+    from boss_engine.services.knowledge import archivist as arch
+
+    with begin(engine) as c:
+        org = arch.org_settings(c, scope)["org_id"]
+        c.execute(text("DELETE FROM kg_knowledge_settings WHERE org_id = :o"), {"o": org})
+        view = arch.settings_view(c, scope)
+        assert (view["daily_cap_usd_micros"], view["monthly_cap_usd_micros"], view["per_run_ceiling_usd_micros"],
+                view["retention_days"]) == (2_000_000, 20_000_000, 200_000, 365)
+        changed = arch.update_settings(c, scope, {"daily_cap_usd_micros": 5_000_000, "retention_days": 90},
+                                       actor="operator")
+        assert changed["daily_cap_usd_micros"] == 5_000_000 and changed["retention_days"] == 90
+        assert changed["monthly_cap_usd_micros"] == 20_000_000      # untouched
+        assert arch.org_settings(c, scope)["daily"] == 5_000_000      # the budget gate reads it
+        for bad in ({"retention_days": 0}, {"daily_cap_usd_micros": -1}, {"tier": "governed"},
+                    {"retention_days": True}):
+            with pytest.raises(ValueError):
+                arch.update_settings(c, scope, bad, actor="operator")
+        c.execute(text("DELETE FROM kg_knowledge_settings WHERE org_id = :o"), {"o": org})
+
+
+def test_the_default_daily_cap_bites_for_an_org_with_no_settings_row(engine, scope):
+    """Regression: org_settings' `s.*` shadowed the org id with NULL when the org had no settings
+    row, so its spend summed to 0 and the default caps never refused anything."""
+    model = ScriptedModel([FACT])
+    with begin(engine) as c:
+        org = c.execute(text("SELECT w.org_id FROM projects p JOIN workspaces w ON w.id = p.workspace_id "
+                             "WHERE p.id = :p"), {"p": scope.project_id}).scalar()
+        c.execute(text("DELETE FROM kg_knowledge_settings WHERE org_id = :o"), {"o": org})
+        c.execute(text("INSERT INTO kg_ingest_log (id, project_id, source_kind, source_id, mode, cost_usd_micros) "
+                       "VALUES (:i, :p, 'run', :i, 'distilled', 2500000)"),
+                  {"i": "spent-" + uuid.uuid4().hex[:6], "p": scope.project_id})
+        out = _archivist(model).ingest(c, scope, "run", _run(c, scope, {}))
+        c.execute(text("DELETE FROM kg_ingest_log WHERE project_id = :p"), {"p": scope.project_id})
+    assert out["mode"] == "structure_only" and model.prompts == []

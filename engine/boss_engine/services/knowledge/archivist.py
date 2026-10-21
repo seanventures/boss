@@ -99,14 +99,65 @@ def load_source(c: Connection, scope: Scope, source_kind: str, source_id: str) -
 
 def org_settings(c: Connection, scope: Scope) -> dict:
     row = c.execute(text(
-        "SELECT w.org_id, s.* FROM projects p JOIN workspaces w ON w.id = p.workspace_id "
+        # s.* would also carry s.org_id, NULL for an org with no settings row, and shadow w.org_id:
+        # the org's spend was then summed for org None (always 0) and its caps never bit.
+        "SELECT w.org_id, s.retention_days, s.daily_cap_usd_micros, s.monthly_cap_usd_micros, "
+        "s.per_run_ceiling_usd_micros, s.pii FROM projects p JOIN workspaces w ON w.id = p.workspace_id "
         "LEFT JOIN kg_knowledge_settings s ON s.org_id = w.org_id WHERE p.id = :p"),
         {"p": scope.project_id}).mappings().first() or {}
     return {"org_id": row.get("org_id"),
             "daily": row.get("daily_cap_usd_micros") or 2_000_000,
             "monthly": row.get("monthly_cap_usd_micros") or 20_000_000,
             "ceiling": row.get("per_run_ceiling_usd_micros") or 200_000,
-            "pii": row.get("pii") or DEFAULT_PII}
+            "pii": row.get("pii") or DEFAULT_PII,
+            "retention_days": row.get("retention_days") or DEFAULTS["retention_days"]}
+
+
+#: The defaults (operator decision 2026-10-21: kept). Every org may change them in settings.
+DEFAULTS = {"daily_cap_usd_micros": 2_000_000, "monthly_cap_usd_micros": 20_000_000,
+            "per_run_ceiling_usd_micros": 200_000, "retention_days": 365}
+_LIMITS = {"daily_cap_usd_micros": (0, 1_000_000_000), "monthly_cap_usd_micros": (0, 10_000_000_000),
+           "per_run_ceiling_usd_micros": (0, 100_000_000), "retention_days": (1, 3650)}
+
+
+def settings_view(c: Connection, scope: Scope) -> dict:
+    """The org's knowledge settings, as the console edits them."""
+    s = org_settings(c, scope)
+    return {"org_id": s["org_id"], "daily_cap_usd_micros": s["daily"], "monthly_cap_usd_micros": s["monthly"],
+            "per_run_ceiling_usd_micros": s["ceiling"], "retention_days": s["retention_days"], "pii": s["pii"],
+            "defaults": dict(DEFAULTS)}
+
+
+def update_settings(c: Connection, scope: Scope, changes: dict, *, actor: str) -> dict:
+    """Change the org's caps, ceiling, retention or PII detector. Unknown keys and out-of-range values
+    are refused; nothing else in the row changes."""
+    org = org_settings(c, scope)["org_id"]
+    if not org:
+        raise ValueError("this project has no org")
+    clean: dict[str, Any] = {}
+    for k, v in changes.items():
+        if k == "pii":
+            if not isinstance(v, dict):
+                raise ValueError("pii must be an object")
+            clean["pii"] = json.dumps(v)
+        elif k in _LIMITS:
+            lo, hi = _LIMITS[k]
+            if not isinstance(v, int) or isinstance(v, bool) or not lo <= v <= hi:
+                raise ValueError(f"{k} must be an integer in [{lo}, {hi}]")
+            clean[k] = v
+        else:
+            raise ValueError(f"unknown knowledge setting {k!r}")
+    if clean:
+        cols = ", ".join(clean)
+        vals = ", ".join(f"CAST(:{k} AS JSONB)" if k == "pii" else f":{k}" for k in clean)
+        sets = ", ".join(f"{k} = EXCLUDED.{k}" for k in clean)
+        c.execute(text(f"INSERT INTO kg_knowledge_settings (org_id, {cols}) VALUES (:o, {vals}) "
+                       f"ON CONFLICT (org_id) DO UPDATE SET {sets}, updated_at = now()"), {"o": org, **clean})
+        from ..core import emit_event
+
+        emit_event(c, scope.project_id, "knowledge.settings_updated", actor, "org", org,
+                   {"changed": sorted(clean)})
+    return settings_view(c, scope)
 
 
 def knowledge_spend(c: Connection, org_id: Optional[str]) -> tuple[int, int]:
@@ -251,7 +302,8 @@ __all__ = ["Archivist", "KINDS", "load_source"]
 def distil_due(engine: Any, settings: Any, *, limit: int = 5, days: int = 7) -> dict:
     """The scheduled half: distil finished runs, their reviews, and resolved incidents not yet ingested.
 
-    Called from the knowledge tick (the worker, every 10 minutes). Each record is ingested in its own
+    The FALLBACK sweep: the finish triggers queue records for `distil_queued`; this catches any
+    they missed. Called from the knowledge tick (the worker, every 10 minutes). Each record is ingested in its own
     transaction, so one failure cannot roll back the others; a failure is logged as `failed` and is
     not retried automatically (a forget, or deleting its log row, re-queues it).
     """
@@ -267,6 +319,11 @@ def distil_due(engine: Any, settings: Any, *, limit: int = 5, days: int = 7) -> 
                WHERE NOT EXISTS (SELECT 1 FROM kg_ingest_log l WHERE l.project_id = s.project_id
                                  AND l.source_kind = s.kind AND l.source_id = s.id)
                ORDER BY at LIMIT :n"""), {"d": days, "n": limit}).all()
+    return _distil_rows(engine, settings, rows)
+
+
+def _distil_rows(engine: Any, settings: Any, rows: Any) -> dict:
+    """Distil each (project_id, kind, id) row in its own transaction, and clear it from the queue."""
     out = {"distilled": 0, "structure_only": 0, "failed": 0}
     archivist = Archivist(settings)
     for r in rows:
@@ -283,4 +340,32 @@ def distil_due(engine: Any, settings: Any, *, limit: int = 5, days: int = 7) -> 
             with engine.begin() as c:
                 Archivist._log(c, scope, r.kind, r.id, "failed", 0, 0, {}, type(exc).__name__)
             out["failed"] += 1
+    with engine.begin() as c:
+        for r in rows:
+            c.execute(text("DELETE FROM kg_ingest_queue WHERE project_id = :p AND source_kind = :k AND source_id = :i"),
+                      {"p": r.project_id, "k": r.kind, "i": r.id})
     return out
+
+
+#: How often the worker drains kg_ingest_queue. The spec's ingest-lag target is under 5 minutes.
+QUEUE_POLL_SECONDS = 30
+
+
+def distil_queued(engine: Any, settings: Any, *, limit: int = 20) -> dict:
+    """The event-driven half: distil what the finish triggers queued (kg_ingest_queue), oldest first.
+
+    A row already in kg_ingest_log (the sweep got there first) is only cleared.
+    """
+    with engine.begin() as c:
+        rows = c.execute(text(
+            """SELECT q.project_id, q.source_kind AS kind, q.source_id AS id FROM kg_ingest_queue q
+               ORDER BY q.finished_at LIMIT :n"""), {"n": limit}).all()
+        done = {(r.project_id, r.kind, r.id) for r in c.execute(text(
+            """SELECT l.project_id, l.source_kind AS kind, l.source_id AS id FROM kg_ingest_log l
+               JOIN kg_ingest_queue q ON q.project_id = l.project_id AND q.source_kind = l.source_kind
+                 AND q.source_id = l.source_id""")).all()}
+        for r in rows:
+            if (r.project_id, r.kind, r.id) in done:
+                c.execute(text("DELETE FROM kg_ingest_queue WHERE project_id = :p AND source_kind = :k "
+                               "AND source_id = :i"), {"p": r.project_id, "k": r.kind, "i": r.id})
+    return _distil_rows(engine, settings, [r for r in rows if (r.project_id, r.kind, r.id) not in done])
