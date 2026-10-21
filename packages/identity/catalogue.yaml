@@ -170,6 +170,17 @@ passport_presets:
                   workflow_run:read,
                   code_task:read, decision:read, deployment:read, github:read, host:read, meeting:read, memory:read, observability:read, preview:read, project:read, repository:read, sandbox:read, skill:read, system:read, workflow:read]
     external_ceiling: {}
+  # The Archivist (KNOWLEDGE_GRAPH_SPEC.md §3.4): reads sources, writes only to the knowledge store.
+  # No code_task:create, github write, deployment or comms: its only write is a fact, and the
+  # pipeline, not the Passport, keeps its facts `inferred`.
+  - key: archivist
+    name: Archivist
+    agents: [lore]
+    permissions: [code_task:read, decision:read, observability:read, reliability:read, repository:read,
+                  memory:read, spend:reserve, workflow_run:read,
+                  agent:read, deployment:read, github:read, host:read, meeting:read, preview:read,
+                  project:read, sandbox:read, skill:read, system:read, workflow:read]
+    external_ceiling: {github: {contents: read}}
   - key: baseline
     name: Baseline (every agent)
     agents: [nova, axiom, tempo, sage]

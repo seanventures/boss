@@ -30,6 +30,7 @@ installs:
     - security_reviewer
     - integration_validator
     - docs_writer
+    - archivist
     # THE AGENT WORLD CAST (agent-world spec §0.1): the roles a build is actually staffed
     # with, each with a voice, the skills it needs and the MCP servers it holds.
     - chief_architect
