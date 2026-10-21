@@ -10,6 +10,9 @@ from boss_engine.tools.registry import ToolError, ToolRegistry, ToolSpec
 #: Every tool the default registry is expected to carry. Present so a count mismatch can name
 #: what changed instead of reporting two integers.
 _EXPECTED_TOOLS: set[str] = {
+    # THE KNOWLEDGE GRAPH (KNOWLEDGE_GRAPH_SPEC.md §3.5, Phase 1): where code is, who depends on
+    # it, what a change can break, and the history behind it. Reads only, for every role.
+    "kg_symbol", "kg_callers", "kg_blast_radius", "kg_why",
     # BOSS FIXES ITSELF (BOSSAPP-571): read the self-fixes and the autonomy metric. Reads only:
     # no tool starts, approves, installs, removes or sends a self-fix.
     "list_self_fixes", "get_self_fix", "autonomy_report",
@@ -220,10 +223,10 @@ def test_default_registry_shape():
     read = {s.name for s in reg.specs(kind="read")}
     write = {s.name for s in reg.specs(kind="write")}
     assert read | write == set(reg.names())
-    assert len(reg.names()) == 131, (
+    assert len(reg.names()) == 135, (
         f"tool set changed: unexpected={sorted(set(reg.names()) - _EXPECTED_TOOLS)}, "
         f"missing={sorted(_EXPECTED_TOOLS - set(reg.names()))}")
-    assert len(read) == 77  # + 3 self-fix reads, + read_app_logs, + my_recent_work, + system_health, + 7 template/security reads, + precheck_workflow
+    assert len(read) == 81  # + kg_symbol, kg_callers, kg_blast_radius, kg_why; + 3 self-fix reads, + read_app_logs, + my_recent_work, + system_health, + 7 template/security reads, + precheck_workflow
     #                        + query_project_data (the agent baseline's fenced row read)
     assert len(write) == 54  # + remove_app, + system_doctor_act, + run_security_scan (F4), + apply_template (F2),
     #                         + review_pull_request_again

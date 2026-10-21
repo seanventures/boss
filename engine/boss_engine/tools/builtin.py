@@ -7515,6 +7515,10 @@ def build_default_registry() -> ToolRegistry:
     from .app_platform_tools import register_app_platform_tools
 
     register_app_platform_tools(reg)
+    # The knowledge graph: code structure and the history behind it (KNOWLEDGE_GRAPH_SPEC.md §3.5).
+    from .knowledge_tools import register_knowledge_tools
+
+    register_knowledge_tools(reg)
     return reg
 
 

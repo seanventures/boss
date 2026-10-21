@@ -2505,6 +2505,15 @@ def _routed(context: Any, step: str, text: Any):
 # The baseline every agent holds (services/agent_baseline.py).                #
 # --------------------------------------------------------------------------- #
 
+@register_executor("knowledge.read")
+def execute_knowledge_read(context: "SkillExecutorContext", inputs: dict[str, Any]) -> dict[str, Any]:
+    """The knowledge graph's read tools — symbol, callers, blast radius, why. See
+    agent_baseline.KNOWLEDGE_TOOLS; every agent holds it."""
+    from .agent_baseline import run_bundled_tool
+
+    return run_bundled_tool(context, "knowledge.read", inputs)
+
+
 @register_executor("boss.fundamentals")
 def execute_boss_fundamentals(context: "SkillExecutorContext", inputs: dict[str, Any]) -> dict[str, Any]:
     """BOSS's own read tools — logs, runs, infra, schema, catalogue, memory — read-only and

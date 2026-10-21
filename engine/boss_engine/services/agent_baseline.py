@@ -40,7 +40,7 @@ import re
 from typing import Any
 
 #: The skills every agent holds. `test_every_agent_holds_the_baseline` fails on a role without.
-BASELINE_SKILLS: tuple[str, ...] = ("boss.fundamentals", "repo.read", "boss.propose_fix")
+BASELINE_SKILLS: tuple[str, ...] = ("boss.fundamentals", "repo.read", "boss.propose_fix", "knowledge.read")
 
 #: The engine read tools `boss.fundamentals` offers, by name — its spec's policy.tools, and
 #: nothing else. Every one must be a `read` tool in the registry (the enforcing test checks).
@@ -74,6 +74,10 @@ OPTIONAL_TOOLS: frozenset[str] = frozenset({"precheck_workflow"})
 #: `boss.propose_fix` offers exactly this.
 PROPOSE_TOOLS: tuple[str, ...] = ("propose_action",)
 
+#: `knowledge.read` offers the knowledge graph (KNOWLEDGE_GRAPH_SPEC.md §3.5): where code is, who
+#: depends on it, what a change can break, and the history behind it. Every role holds it.
+KNOWLEDGE_TOOLS: tuple[str, ...] = ("kg_symbol", "kg_callers", "kg_blast_radius", "kg_why")
+
 #: The input naming which of a bundle's tools a call is (agent_loop sets it). repo.read predates
 #: the bundles and keeps `tool`.
 BUNDLE_TOOL_KEY = "bundle_tool"
@@ -85,7 +89,7 @@ def bundles() -> dict[str, tuple[str, ...]]:
     from .skill_executors import REPO_READ_TOOLS
 
     return {"repo.read": REPO_READ_TOOLS, "boss.fundamentals": FUNDAMENTALS_TOOLS,
-            "boss.propose_fix": PROPOSE_TOOLS}
+            "boss.propose_fix": PROPOSE_TOOLS, "knowledge.read": KNOWLEDGE_TOOLS}
 
 
 # ── THE PRIMER ────────────────────────────────────────────────────────────────────────────────

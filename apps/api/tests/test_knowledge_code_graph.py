@@ -266,3 +266,22 @@ def test_kg_why_joins_specs_prs_decisions_findings_and_incidents_to_code(engine,
     assert [x["key"] for x in why["root_causes"]] == ["rc-paid-twice"]
     assert [x["key"] for x in why["incidents"]] == [f"incident:inc-{p}"]
     assert any(f["key"] == "pull_request:acme/shop#7" for f in why["fixes"])
+
+
+def test_the_mcp_tools_answer_through_the_registry(engine, scope, shop):
+    from boss_engine.config import get_settings
+    from boss_engine.context import EngineContext
+    from boss_engine.tools import build_default_registry
+
+    with begin(engine) as c:
+        CodeIndexer(workers=1).index_full(c, scope, REPO, shop)
+    reg, ctx = build_default_registry(), EngineContext(settings=get_settings(), engine=engine)
+
+    def call(tool, **args):
+        return reg.invoke(tool, ctx, project_id=scope.project_id, actor="kg-test", args=args)
+
+    radius = call("kg_blast_radius", target=k("app/models.py", "Order"), depth=2)
+    assert {e["name"] for e in radius["endpoints"]} == {"POST /orders"}
+    assert call("kg_symbol", name="Reserve")["symbols"][0]["path"] == "internal/stock/stock.go"
+    assert [x["key"] for x in call("kg_callers", target="checkout")["callers"]] == [k("app/api.py", "create")]
+    assert "error" in call("kg_why", target="no_such_symbol")
