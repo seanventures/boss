@@ -21,13 +21,17 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "engine"))
 
+from boss_engine.services.knowledge.code_index import list_files  # noqa: E402
 from boss_engine.services.knowledge.code_parse import language_for, parse_file  # noqa: E402
 
 QUOTA = {"function": 14, "class": 10, "method": 6}
 
 
 def is_test(path: str) -> bool:
-    return "/tests/" in f"/{path}" or Path(path).name.startswith("test_") or "/migrations/" in f"/{path}"
+    name, slashed = Path(path).name, f"/{path}"
+    return (any(d in slashed for d in ("/tests/", "/__tests__/", "/__mocks__/", "/__fixtures__/", "/migrations/",
+                                       "/integration-tests/"))
+            or name.startswith("test_") or ".spec." in name or ".test." in name)
 
 
 def main() -> None:
@@ -41,8 +45,8 @@ def main() -> None:
     args = p.parse_args()
     root = Path(args.repo_dir)
     quota = json.loads(args.quota) if args.quota else QUOTA
-    files = [f for f in subprocess.run(["git", "ls-files"], cwd=root, capture_output=True, text=True).stdout.split()
-             if language_for(f) and (language_for(f) == args.lang or args.lang in ("typescript", "tsx")
+    files = [f for f in list_files(root)
+             if (language_for(f) == args.lang or args.lang in ("typescript", "tsx")
                                      and language_for(f) in ("typescript", "tsx"))]
     defs, names = [], collections.Counter()
     for f in files:
@@ -63,7 +67,7 @@ def main() -> None:
             continue
         if kind not in quota or len(picked[kind]) >= quota[kind]:
             continue
-        hits = subprocess.run(["git", "grep", "-lw", short], cwd=root, capture_output=True, text=True).stdout.split()
+        hits = subprocess.run(["git", "grep", "-lw", short], cwd=root, capture_output=True, text=True).stdout.splitlines()
         if not 3 <= len(hits) <= 20:
             continue
         picked[kind].append(f"{f}::{qual}")
