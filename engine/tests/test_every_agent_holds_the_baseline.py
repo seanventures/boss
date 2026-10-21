@@ -60,7 +60,8 @@ def test_every_agent_holds_the_knowledge_graph():
     """KNOWLEDGE_GRAPH_SPEC.md §5: knowledge.read is a fundamental — every role can ask where code
     is, who depends on it, what a change breaks and why it is so."""
     assert "knowledge.read" in ab.BASELINE_SKILLS
-    assert ab.bundles()["knowledge.read"] == ("kg_symbol", "kg_callers", "kg_blast_radius", "kg_why", "kg_facts")
+    assert ab.bundles()["knowledge.read"] == ("kg_symbol", "kg_callers", "kg_blast_radius", "kg_why", "kg_facts",
+                                              "kg_search", "kg_precedent")
     reg = _registry()
     assert all(reg.get(t).kind == "read" for t in ab.KNOWLEDGE_TOOLS)
 

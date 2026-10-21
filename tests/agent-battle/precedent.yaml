@@ -1,0 +1,60 @@
+# PRECEDENT SCENARIOS (KNOWLEDGE_GRAPH_SPEC.md §3.6, Phase 3). The right answer depends on what
+# happened last time. Each scenario seeds past decisions with their outcomes (the runs they
+# started) and asks a new, similar question with two options.
+#
+# `expect` is the option a decider that reads its precedent should pick, and `cite` is the past
+# decision it should cite. These run today against the scripted decider
+# (apps/api/tests/test_knowledge_precedent_battle.py), which picks from Jev's knowledge pack only.
+# The real-agent run (scripts/agent-battle-test.sh with these scenarios) is NOT approved yet.
+- id: vat-rounding-again
+  past:
+    - {id: p1, question: "Ship the VAT rounding change to checkout on Friday?", status: approved, outcome: failed,
+       note: "shipped Friday; checkout 500s all weekend"}
+    - {id: p2, question: "Ship the VAT rounding change to checkout on Monday with a canary?", status: approved,
+       outcome: completed, note: "canary first, then full"}
+  ask: "Ship the new VAT rounding change to checkout?"
+  options: {a: "ship now, Friday, no canary", b: "ship Monday with a canary"}
+  expect: b
+  cite: p2
+- id: migration-without-backup
+  past:
+    - {id: p1, question: "Run the orders table migration without a fresh backup?", status: approved, outcome: failed,
+       note: "lock timeout, restore took 3 hours"}
+  ask: "Run the payments table migration without a fresh backup?"
+  options: {a: "run it without a backup", b: "take a backup first"}
+  expect: b
+  cite: p1
+- id: dependency-bump-passed
+  past:
+    - {id: p1, question: "Bump the logging library minor version across services?", status: approved,
+       outcome: completed, note: "no issues"}
+  ask: "Bump the logging library patch version across services?"
+  options: {a: "bump it", b: "hold the bump"}
+  expect: a
+  cite: p1
+- id: rejected-vendor
+  past:
+    - {id: p1, question: "Adopt the vendor SMS gateway for login codes?", status: rejected, outcome: none,
+       note: "rejected: no data residency"}
+  ask: "Adopt the vendor SMS gateway for password reset codes?"
+  options: {a: "adopt the vendor gateway", b: "keep the current provider"}
+  expect: b
+  cite: p1
+- id: hotfix-direct-to-main
+  past:
+    - {id: p1, question: "Push the cart hotfix straight to main without review?", status: approved, outcome: failed,
+       note: "broke the build for two hours"}
+    - {id: p2, question: "Push the cart hotfix through a fast-track review?", status: approved, outcome: completed,
+       note: "merged in 20 minutes"}
+  ask: "Push the search hotfix straight to main without review?"
+  options: {a: "push straight to main", b: "fast-track review"}
+  expect: b
+  cite: p1
+- id: scale-down-at-night
+  past:
+    - {id: p1, question: "Scale the reporting workers down to one at night?", status: approved, outcome: completed,
+       note: "saved 40% with no missed jobs"}
+  ask: "Scale the export workers down to one at night?"
+  options: {a: "scale down at night", b: "keep them all running"}
+  expect: a
+  cite: p1

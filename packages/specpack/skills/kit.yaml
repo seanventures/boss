@@ -84,7 +84,7 @@ skills:
       required_permissions: [repo_read]
     policy:
       requires_receipt: false
-      tools: [kg_symbol, kg_callers, kg_blast_radius, kg_why, kg_facts]
+      tools: [kg_symbol, kg_callers, kg_blast_radius, kg_why, kg_facts, kg_search, kg_precedent]
 
   # PROPOSE A FACT: not in the baseline. Granted through allowed_skills to pm, engineering_captain,
   # qa, adversarial_reviewer, security_reviewer and sre (operator decision 2026-10-21). What it
