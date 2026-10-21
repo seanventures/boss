@@ -464,7 +464,7 @@ _SAFE_WRITES = [
     "investigate",
     # Creating a DESTINATION, not shipping to one. It writes a row that can be retired, and an
     # app that already has a target for the environment adopts it rather than growing a second.
-    "create_deployment_target", "deploy_app", "link_run_origin", "mandate_standard", "merge_apps",
+    "create_deployment_target", "deploy_app", "kg_propose_fact", "link_run_origin", "mandate_standard", "merge_apps",
     # Re-queues only steps whose recorded blocker has actually cleared — each one something the
     # operator could have retried by hand from the same screen.
     "recheck_workflow_run",

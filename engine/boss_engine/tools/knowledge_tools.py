@@ -116,7 +116,7 @@ def register_knowledge_tools(reg: ToolRegistry) -> None:
               "evidence": {"type": "array", "items": {"type": "string"}},
               "confidence": {"type": "number", "minimum": 0, "maximum": 1}, "project_id": _PROJECT},
              ["subject", "predicate", "statement", "kind"]),
-        kind="write", permission="repository:read")
+        kind="write", reversibility="safe", permission="repository:read")   # quarantined, forgettable
     def kg_propose_fact(ctx, *, project_id, actor, args):
         scope = Scope(args.get("project_id") or project_id)
         who = str(actor or "agent")
