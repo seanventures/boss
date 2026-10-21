@@ -612,8 +612,9 @@ class GovernedChatAdapter:
 
     def __init__(self, inner: Any, connection: Any, settings: Any, project_id: str, *,
                  skill_id: str, ref: str, estimate_usd_micros: int,
-                 choice: Optional[ModelChoice] = None):
+                 choice: Optional[ModelChoice] = None, category: str = "model"):
         self._inner = inner
+        self._category = category
         self._connection = connection
         self._settings = settings
         self._project_id = project_id
@@ -657,6 +658,14 @@ class GovernedChatAdapter:
     def create_text_response(self, *args: Any, **kwargs: Any):
         return self._governed("create_text_response", args, kwargs, usage_at=2)
 
+    @property
+    def create_embeddings(self) -> Any:
+        """The inner adapter's embeddings call, governed like a turn: `(vectors, usage)`. None when
+        the inner adapter has no embeddings (callers then run without them)."""
+        if not callable(getattr(self._inner, "create_embeddings", None)):
+            return None
+        return lambda *args, **kwargs: self._governed("create_embeddings", args, kwargs, usage_at=1)
+
     def _governed(self, method: str, args: tuple, kwargs: dict, *, usage_at: int):
         held = self._open()
         try:
@@ -680,7 +689,7 @@ class GovernedChatAdapter:
         connection, project_id = self._connection, self._project_id
         budget = BudgetGovernor(self._settings)
         reservation = budget.reserve(
-            connection, project_id, "model", self._estimate,
+            connection, project_id, self._category, self._estimate,
             f"{self._skill_id}: one model turn ({self._ref})", 15)
         if reservation.get("status") != "reserved":
             message = str(reservation.get("message") or "")
@@ -739,14 +748,18 @@ class GovernedChatAdapter:
              **({"included_in_subscription": True,
                  "equivalent_usd_micros": worth} if included else {})})
         BudgetGovernor(self._settings).settle(self._connection, self._project_id,
-                                              reservation_id, receipt_id, "model",
+                                              reservation_id, receipt_id, self._category,
                                               self._skill_id, self._estimate, worth,
                                               included_in_subscription=included)
 
 
 def governed(adapter: Any, connection: Any, settings: Any, project_id: str, *,
-             skill_id: str, ref: str) -> Any:
+             skill_id: str, ref: str, category: str = "model",
+             estimate_usd_micros: Optional[int] = None) -> Any:
     """`adapter` with every call reserved, receipted and settled (GovernedChatAdapter).
+
+    `category` is the budget category spent (the Archivist's is "knowledge"); `estimate_usd_micros`
+    caps what one call reserves (a per-run ceiling), else the source's turn estimate applies.
 
     The estimate follows the source `choose` picks for this project: a metered key reserves
     `agent_turn_budget_usd_micros` per turn, a subscription or local model reserves nothing but
@@ -761,8 +774,9 @@ def governed(adapter: Any, connection: Any, settings: Any, project_id: str, *,
         choice = choose(connection, routed_settings(connection, settings, project_id), project_id)
     return GovernedChatAdapter(adapter, connection, settings, project_id,
                                skill_id=skill_id, ref=ref,
-                               estimate_usd_micros=turn_estimate_usd_micros(choice, settings),
-                               choice=choice)
+                               estimate_usd_micros=(turn_estimate_usd_micros(choice, settings)
+                                                    if estimate_usd_micros is None else estimate_usd_micros),
+                               choice=choice, category=category)
 
 
 # ── Provider-specific capabilities ─────────────────────────────────────────────────────────────

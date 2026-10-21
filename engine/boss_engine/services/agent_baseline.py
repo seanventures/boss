@@ -76,7 +76,7 @@ PROPOSE_TOOLS: tuple[str, ...] = ("propose_action",)
 
 #: `knowledge.read` offers the knowledge graph (KNOWLEDGE_GRAPH_SPEC.md §3.5): where code is, who
 #: depends on it, what a change can break, and the history behind it. Every role holds it.
-KNOWLEDGE_TOOLS: tuple[str, ...] = ("kg_symbol", "kg_callers", "kg_blast_radius", "kg_why")
+KNOWLEDGE_TOOLS: tuple[str, ...] = ("kg_symbol", "kg_callers", "kg_blast_radius", "kg_why", "kg_facts")
 
 #: The input naming which of a bundle's tools a call is (agent_loop sets it). repo.read predates
 #: the bundles and keeps `tool`.

@@ -35,6 +35,16 @@ _SECRET_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
         "BEARER",
         re.compile(r"\bBearer\s+[A-Za-z0-9._\-]{16,}", re.IGNORECASE),
     ),
+    ("GITHUB_TOKEN", re.compile(r"\b(?:github_pat_[A-Za-z0-9_]{22,}|gh[usr]_[A-Za-z0-9]{20,})\b")),
+    ("GOOGLE_KEY", re.compile(r"\bAIza[0-9A-Za-z_\-]{35}\b")),
+    ("SLACK_WEBHOOK", re.compile(r"https://hooks\.slack\.com/services/[A-Za-z0-9/]+")),
+    ("JWT", re.compile(r"\beyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\b")),
+    # Credentials in a URL (scheme://user:password@host): the password part only.
+    ("URL_PASSWORD", re.compile(r"(?<=://)[^/\s:@]+:[^/\s@]{3,}(?=@)")),
+    # An assignment of a secret-named setting: password=..., "api_key": "...", AWS_SECRET_ACCESS_KEY=...
+    ("ASSIGNED_SECRET", re.compile(
+        r"(?i)\b(?:password|passwd|secret|api[_-]?key|access[_-]?key|token|private[_-]?key)"
+        r"[A-Za-z0-9_]*[\"']?\s*[:=]\s*[\"']?[^\s\"',;]{6,}")),
     (
         "PRIVATE_KEY",
         re.compile(

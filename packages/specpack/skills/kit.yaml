@@ -84,7 +84,7 @@ skills:
       required_permissions: [repo_read]
     policy:
       requires_receipt: false
-      tools: [kg_symbol, kg_callers, kg_blast_radius, kg_why]
+      tools: [kg_symbol, kg_callers, kg_blast_radius, kg_why, kg_facts]
 
   # PROPOSE A FIX: every agent holds this too. The agent proposes a BOSS action with exact
   # arguments; a person approves it (a hold-default decision in a run, a button in chat) and it
