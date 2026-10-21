@@ -4837,6 +4837,8 @@ CREATE TABLE IF NOT EXISTS kg_nodes (
   valid_to TIMESTAMPTZ,             -- temporal validity window end (NULL = unbounded)
   first_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
   last_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
+  repo TEXT,                        -- code nodes (Knowledge Graph Phase 1): the repository full name
+  path TEXT,                        -- code nodes: the file the node comes from, for incremental re-index
   UNIQUE (project_id, kind, node_key)
 );
 CREATE INDEX IF NOT EXISTS idx_kg_nodes_project
@@ -4869,6 +4871,55 @@ CREATE INDEX IF NOT EXISTS idx_kg_edges_src ON kg_edges(src_id, kind);
 CREATE INDEX IF NOT EXISTS idx_kg_edges_dst ON kg_edges(dst_id, kind);
 
 -- BOSS-357: knowledge retrieval evaluation snapshots (coverage + regression alarms)
+CREATE INDEX IF NOT EXISTS idx_kg_nodes_repo_path
+  ON kg_nodes(project_id, repo, path) WHERE repo IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_kg_edges_src_valid ON kg_edges(src_id) WHERE valid_to IS NULL;
+
+-- Knowledge Graph Phase 1: the code indexer's per-file cache (services/knowledge/code_index.py).
+-- One row per indexed file: its content hash (unchanged files are never re-parsed), what it
+-- defines and imports, and the names it refers to (GIN-indexed, so a commit finds the other files
+-- whose references it can change). The graph itself stays in kg_nodes / kg_edges.
+CREATE TABLE IF NOT EXISTS kg_code_files (
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  repo TEXT NOT NULL,
+  path TEXT NOT NULL,
+  lang TEXT NOT NULL,
+  module TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  facts JSONB NOT NULL,             -- defs, imports, refs, endpoints, tables, queues, config
+  names TEXT[] NOT NULL DEFAULT '{}',
+  indexed_commit TEXT,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (project_id, repo, path)
+);
+CREATE INDEX IF NOT EXISTS idx_kg_code_files_names ON kg_code_files USING gin (names);
+
+-- PR -> changed-symbol links, recorded by the code index after a BOSS push (Knowledge Graph
+-- Phase 1). Derived data lives in its own durable table, never on a versioned record such as
+-- code_task_runs.state: a later rewrite of the run must not lose it. The lifecycle sync turns each
+-- row into a `changed` edge once the symbol is in the graph.
+CREATE TABLE IF NOT EXISTS kg_change_links (
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  repo TEXT NOT NULL,
+  pr_number INTEGER NOT NULL,
+  symbol_key TEXT NOT NULL,
+  run_id TEXT,
+  head_ref TEXT,
+  recorded_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (project_id, repo, pr_number, symbol_key)
+);
+
+-- One row per indexed repository: the commit the graph reflects, and the last full reconcile.
+CREATE TABLE IF NOT EXISTS kg_code_index_state (
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  repo TEXT NOT NULL,
+  last_commit TEXT,
+  last_full_at TIMESTAMPTZ,
+  last_run JSONB NOT NULL DEFAULT '{}'::jsonb,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (project_id, repo)
+);
+
 CREATE TABLE IF NOT EXISTS kg_eval_snapshots (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,

@@ -8383,6 +8383,20 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 on_status_written(c, run_id)
             return {"status": "blocked", "done": True, "quality_gate_id": qg_id, **proposal}
 
+        # THE KNOWLEDGE GRAPH learns what this push changed (KNOWLEDGE_GRAPH_SPEC.md §3.3): an
+        # index job brings the repository's graph up to date and records the symbols this PR
+        # touched. Best effort — indexing must never stand between a passed run and its PR.
+        try:
+            from .knowledge.index_jobs import enqueue_index
+
+            with _transaction(engine) as c:
+                # The spec's base, not base_branch: a feedback iteration points that at the work branch.
+                enqueue_index(c, project_id, f"{owner}/{repo}", reason="push", ref=work_branch,
+                              base=spec.get("base_branch") or None, run_id=run_id,
+                              pr_number=proposal.get("pull_request_number"))
+        except Exception:  # noqa: BLE001 — the graph catches up on the hourly pass
+            logger.debug("knowledge index enqueue failed for %s", run_id, exc_info=True)
+
         # The findings go ON the pull request, at the lines they are about.
         evidence["review_comments_posted"] = _post_review_comments_to_pr(
             sf, proposal, evidence, engine, project_id, run_id)

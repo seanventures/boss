@@ -169,6 +169,18 @@ class ControlPlaneClient:
         response.raise_for_status()
         return response.json()
 
+    def run_knowledge_index(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Ask the API container to run one leased `knowledge.index` job (KNOWLEDGE_GRAPH_SPEC.md §3.3)."""
+        response = self._client.post("/v1/knowledge/index/run", json=payload)
+        response.raise_for_status()
+        return response.json()
+
+    def knowledge_tick(self) -> dict[str, Any]:
+        """Ask the API to queue the scheduled index passes that are due (hourly incremental, nightly full)."""
+        response = self._client.post("/v1/knowledge/index/tick", json={})
+        response.raise_for_status()
+        return response.json()
+
     def run_security_scan(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Ask the API container to run one security scan — the scanners live there (F4)."""
         response = self._client.post(f"/v1/security/scans/{payload['scan_id']}/run", json={})

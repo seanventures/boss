@@ -47,13 +47,22 @@ def _registry():
 
 # ── the skills ────────────────────────────────────────────────────────────────────────────────
 
-def test_the_baseline_is_three_skills_shipped_in_the_community_kit():
+def test_the_baseline_skills_ship_in_the_community_kit():
     kit = _kit_skills()
     pack = yaml.safe_load((SPECPACK / "packs" / "community_edition.yaml").read_text())
     assert "kit" in pack["installs"]["skills"]
     for skill in ab.BASELINE_SKILLS:
         assert skill in kit, skill
         assert int(kit[skill]["risk_tier"]) == 0, skill
+
+
+def test_every_agent_holds_the_knowledge_graph():
+    """KNOWLEDGE_GRAPH_SPEC.md §5: knowledge.read is a fundamental — every role can ask where code
+    is, who depends on it, what a change breaks and why it is so."""
+    assert "knowledge.read" in ab.BASELINE_SKILLS
+    assert ab.bundles()["knowledge.read"] == ("kg_symbol", "kg_callers", "kg_blast_radius", "kg_why")
+    reg = _registry()
+    assert all(reg.get(t).kind == "read" for t in ab.KNOWLEDGE_TOOLS)
 
 
 def test_each_baseline_skill_has_an_executor():

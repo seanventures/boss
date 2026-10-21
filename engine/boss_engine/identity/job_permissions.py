@@ -49,6 +49,7 @@ JOB_KIND_PERMISSIONS: dict[str, str] = {
     "code.task": P.CODE_TASK_CREATE,
     "investigation.run": P.HOST_EXEC,
     "security.scan": P.SECURITY_SCAN_RUN,           # F4: scanners in the sandbox, own app only
+    "knowledge.index": P.REPOSITORY_READ,           # KG Phase 1: reads the repo, writes only the derived graph
     # repositories and GitHub
     "docs.update": P.GITHUB_MANAGE,
     "software_factory.propose_pr": P.CODE_TASK_CREATE,   # opens a PR from a build's boss/* branch

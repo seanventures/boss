@@ -31419,6 +31419,9 @@ from .oidc_routes import build_oidc_router  # noqa: E402  (F6, stream S6)
 
 app.include_router(build_templates_router())
 app.include_router(build_security_router())
+from .routes_knowledge import build_knowledge_router  # noqa: E402  (KNOWLEDGE_GRAPH_SPEC.md §3.3)
+
+app.include_router(build_knowledge_router())
 app.include_router(build_links_router())
 app.include_router(build_oidc_router())
 from .routes_multirepo import build_multirepo_router  # noqa: E402  (multi-repo apps)

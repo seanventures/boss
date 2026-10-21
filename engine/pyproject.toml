@@ -20,6 +20,13 @@ dependencies = [
     "markdown>=3.9,<4",
     "openai>=1.93,<2",
     "psycopg[binary]>=3.2,<4",
+    "tree-sitter>=0.26.0,<1",
+    "tree-sitter-python>=0.25.0,<1",
+    "tree-sitter-javascript>=0.25.0,<1",
+    "tree-sitter-typescript>=0.23.2,<1",
+    "tree-sitter-go>=0.25.0,<1",
+    "tree-sitter-java>=0.23.5,<1",
+    "tree-sitter-c-sharp>=0.23.5,<1",
     "pydantic>=2.7,<3",
     # Reading a PDF brief. Pure Python, no system libraries — a customer's title and
     # description arrive as a PDF as often as a Google Doc.

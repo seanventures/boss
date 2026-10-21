@@ -64,6 +64,28 @@ skills:
               describe_workflow, describe_role, list_decisions, precheck_workflow, recall,
               recall_role_experience]
 
+  # KNOWLEDGE: every agent holds this (services/agent_baseline.py, BASELINE_SKILLS). The knowledge
+  # graph's read tools, offered by their own names: where a symbol is, who calls it, what a change
+  # can break, and the PRs, specs, decisions, findings and incidents behind it (KNOWLEDGE_GRAPH_SPEC.md §3.5).
+  - id: knowledge.read
+    kind: engine_read
+    risk_tier: 0
+    mock_mode: false
+    load: eager
+    description: Ask the knowledge graph — where code is defined, who calls it, what a change can break, and why it is the way it is.
+    data_boundary: internal
+    input_schema:
+      bundle_tool: string
+    output_schema: { result: object }
+    cost: { estimator: fixed, category: tool }
+    retry: { max_attempts: 1, backoff: none }
+    permissions:
+      allowed_callers: [kit_try]
+      required_permissions: [repo_read]
+    policy:
+      requires_receipt: false
+      tools: [kg_symbol, kg_callers, kg_blast_radius, kg_why]
+
   # PROPOSE A FIX: every agent holds this too. The agent proposes a BOSS action with exact
   # arguments; a person approves it (a hold-default decision in a run, a button in chat) and it
   # runs under THEIR authority. Proposing runs nothing, so it is tier 0; the decision it raises

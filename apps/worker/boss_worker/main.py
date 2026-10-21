@@ -326,6 +326,27 @@ def _tick_setup_checks(client: ControlPlaneClient, settings) -> None:
         LOGGER.debug("setup_recheck_failed", exc_info=True)
 
 
+#: The knowledge graph's scheduled index passes (KNOWLEDGE_GRAPH_SPEC.md §3.3): every 10 minutes the
+#: API is asked to queue what is due — an hourly incremental pass per indexed repository and a
+#: nightly full reconcile. Idempotent per window on the API side.
+KNOWLEDGE_TICK_INTERVAL_SECONDS = 600
+_last_knowledge_tick_monotonic = 0.0
+
+
+def _tick_knowledge(client: ControlPlaneClient) -> None:
+    """Queue due knowledge index passes. Never kill the worker."""
+    global _last_knowledge_tick_monotonic
+    now = time.monotonic()
+    if now - _last_knowledge_tick_monotonic < KNOWLEDGE_TICK_INTERVAL_SECONDS:
+        return
+    _last_knowledge_tick_monotonic = now
+    try:
+        out = client.knowledge_tick()
+        LOGGER.info("knowledge_tick queued=%s", (out or {}).get("queued"))
+    except Exception:  # noqa: BLE001
+        LOGGER.debug("knowledge_tick_failed", exc_info=True)
+
+
 #: Improve BOSS and run scorecards (docs/product/RUN_SCORECARDS.md). Every 10 minutes the API
 #: is asked; it does scorecard upkeep at most hourly and the one daily send only when due (a
 #: random time each UTC day). No thread, no retry: a failed send waits for tomorrow.
@@ -728,6 +749,7 @@ def main() -> None:
             _tick_focused_agents(client, settings)
             _tick_workflow_schedules(client, settings)
             _tick_setup_checks(client, settings)
+            _tick_knowledge(client)
             _tick_agent_processes(client, settings)
             _tick_process_manager(client, settings)
             _tick_factory_flow(client, settings)
