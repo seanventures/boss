@@ -387,6 +387,9 @@ def capabilities() -> list[str]:
         "docs.update",
         # A security scan (F4): the API runs the scanners in the build sandbox under this lease.
         "security.scan",
+        # The knowledge graph's code index (KNOWLEDGE_GRAPH_SPEC.md §3.3): the API indexes the
+        # repository after a push, hourly and nightly. Declared here or it sits queued.
+        "knowledge.index",
         # Review this PR again (services/pr_review_again.py): the API runs the reviewer on the
         # pull request's real diff and posts the round. Declared here or it sits queued.
         "pull_request.review_again",
@@ -875,6 +878,10 @@ def execute_job(job: LeasedJob, client: ControlPlaneClient) -> dict[str, Any]:
     if job.kind == "pull_request.review_again":
         # The reviewer and the GitHub connection live in the API container.
         return client.run_pr_review_again({"job_id": job.id, **(job.payload or {})})
+    if job.kind == "knowledge.index":
+        # The parsers and the repository cache live in the API container.
+        return client.run_knowledge_index({"job_id": job.id, "project_id": job.project_id,
+                                           "payload": job.payload or {}})
     if job.kind == "security.scan":
         # The scanners and the sandbox helper are in the api image: the API runs the scan. A
         # scan whose tools failed is a recorded result (status failed, with why), not a retry.
