@@ -258,6 +258,11 @@ class _Extractor:
             chain = _chain(fn, self.attr_types, self.ident_types, self.obj_field, self.prop_field) if fn else None
             if chain:
                 self.f.refs.append(Ref(self.src, chain, True, node.start_point[0] + 1))
+            elif fn is not None and fn.type in self.attr_types and fn.child_by_field_name(self.prop_field) is not None:
+                # A method called on an expression (a call's result, an index): x.filter(...).not_expired().
+                # The receiver's type is unknown; "?" lets the resolver try the unique-name rule.
+                prop = _text(fn.child_by_field_name(self.prop_field))
+                self.f.refs.append(Ref(self.src, ("?", prop), True, node.start_point[0] + 1))
             self.on_call(node, chain)
             for child in node.children:
                 if chain and _same(child, fn):

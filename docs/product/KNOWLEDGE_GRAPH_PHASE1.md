@@ -29,8 +29,27 @@ classes and 6 methods. Each has a short name defined once in Saleor and appears 
 - The one real miss was a Python `@property` read without a call (`CheckoutInfo.valid_pick_up_points`).
   Properties are now marked, and an attribute read links to a property when exactly one property
   in the repository has that name.
-- The sample was also used to find that gap, so 30/30 is optimistic. A fresh held-out sample
-  would be the honest next check.
+- The sample was also used to find that gap, so 30/30 is optimistic.
+
+**Blind re-check (30 new symbols, seed 20261022).** Drawn by
+[`sample_symbols.py`](../../scripts/knowledge/sample_symbols.py) straight from the parser, with
+the first 30 excluded. The answer key
+([`blast_radius_saleor_blind_truth.json`](../../scripts/knowledge/results/blast_radius_saleor_blind_truth.json))
+was committed (b31d5fcd) before the tool ran; every evidence line was read in full.
+
+| Run | Correct | Micro precision | Micro recall |
+|---|---|---|---|
+| **Blind, indexer as committed** | **28/30 (93.3%)** | 1.00 | 0.934 |
+| After the fix below (no longer blind) | 29/30 (96.7%) | 1.00 | 0.989 |
+| First sample, after the fix | 30/30 | 1.00 | 1.00 |
+
+- **The two blind misses had one cause:** a method called on an expression of unknown type
+  (`manager.calculate_checkout_subtotal(...)`, `Reservation.objects.not_expired()`) produced no
+  reference at all, so the unique-name rule never saw it. The parser now records such calls with
+  an unknown receiver, and the resolver applies the same unique-name rule (confidence 0.5).
+- **The remaining miss** is a test that replaces the method by assignment
+  (`manager.calculate_checkout_subtotal = Mock(...)`): a non-call use of a non-property name. It is
+  left alone; linking every attribute write by name would cost precision.
 
 Reproduce:
 
@@ -103,4 +122,4 @@ python3 scripts/knowledge/eval_blast_radius.py --dsn postgresql+psycopg://USER:P
 
 ## Still open
 
-- **The unique-name fallback** (confidence 0.5) can link a call on an unknown object to the wrong definition when the repository has only one definition by that name. No case was found in either blast-radius sample.
+- **The unique-name fallback** (confidence 0.5) can link a call on an unknown object to the wrong definition when the repository has only one definition by that name. No false link was found in any of the three samples (precision 1.00 throughout).

@@ -214,3 +214,12 @@ def test_a_file_that_cannot_be_parsed_records_its_error_and_never_raises():
     assert broken.error is None and isinstance(broken.defs, list)     # tree-sitter recovers
     assert module_name("pkg/__init__.py", "python") == "pkg"
     assert module_name("web/src/index.ts", "typescript") == "web/src"
+
+
+def test_a_method_called_on_an_expression_is_recorded_for_the_unique_name_rule():
+    """x.filter(...).not_expired() and Manager(...).run(): the receiver is a call, so its type is unknown."""
+    f = parse_file("m.py", b"def f():\n    Reservation.objects.filter(a=1).not_expired()\n    Manager(p).calculate_total(x)\n")
+    refs = {(r.src, r.chain, r.call) for r in f.refs}
+    assert ("f", ("?", "not_expired"), True) in refs
+    assert ("f", ("?", "calculate_total"), True) in refs
+    assert ("f", ("Reservation", "objects", "filter"), True) in refs
