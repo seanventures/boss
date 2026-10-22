@@ -2128,7 +2128,7 @@ class SoftwareFactoryService:
         sealed_evidence = attach_sealed_evidence(evidence)
         citations: list[str] = []
         try:
-            from .knowledge.runtime import attach_citations, remember_written_files
+            from .knowledge.runtime import remember_written_files
 
             remembered = remember_written_files(
                 connection,
@@ -2155,9 +2155,6 @@ class SoftwareFactoryService:
             except Exception:
                 pass
 
-            def attach_citations(recommendation, _fact_ids):
-                return dict(recommendation or {})
-
         # ONE DECISION FOR A MULTI-REPO CHANGE (multirepo/change_sets.py). A lane of a change set
         # opens its PR and stops: the set asks once, pinned to every PR's head, when all of them
         # (and the cross-repo check) are green. A per-PR merge decision here would let one PR of
@@ -2167,7 +2164,12 @@ class SoftwareFactoryService:
         set_member = _change_sets.member_change_set(connection, run_id) if run_id else None
         from . import checks_failing as _checks_failing
 
-        recommendation = attach_citations(
+        decision_id = None if set_member else self.decisions.create_blocking(
+            connection,
+            project_id,
+            task_id,
+            (f"Checks failing — decide the merge: {title} (PR #{pr.number})"
+             if checks_failing else f"Approve code change: {title} (PR #{pr.number})"),
             {
                 # FIRST, so nothing it carries can replace the action below. Its keys are the
                 # sealed evidence keys (ui/ux/capability_evidence) and collide with none here;
@@ -2215,16 +2217,10 @@ class SoftwareFactoryService:
                     **checks_failing,
                     "draft": bool(getattr(self.github, "supports_draft_pull_requests", False)),
                     "label": _checks_failing.LABEL}} if checks_failing else {}),
+                # The knowledge the card is "based on": facts matched to this change's symbols
+                # (knowledge/runtime.remember_written_files). Empty when none matched.
+                "cited_fact_ids": citations,
             },
-            citations,
-        )
-        decision_id = None if set_member else self.decisions.create_blocking(
-            connection,
-            project_id,
-            task_id,
-            (f"Checks failing — decide the merge: {title} (PR #{pr.number})"
-             if checks_failing else f"Approve code change: {title} (PR #{pr.number})"),
-            recommendation,
             {},
             "merge_decision_required",
         )

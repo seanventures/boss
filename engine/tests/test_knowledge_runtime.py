@@ -71,6 +71,6 @@ def test_the_pull_request_and_the_agent_loop_call_the_knowledge_runtime():
 
     proposal = inspect.getsource(SoftwareFactoryService.propose_pull_request)
     assert "remember_written_files" in proposal
-    assert "attach_citations" in proposal
+    assert "\"cited_fact_ids\": citations" in proposal   # a literal key: the decision-producer scan reads the dict
     assert "quoted_pack_for_turn" in inspect.getsource(run_agent_loop)
     assert "attribute_shown_facts" in inspect.getsource(_drive_run)
