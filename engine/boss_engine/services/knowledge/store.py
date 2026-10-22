@@ -23,6 +23,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from ..core import make_id, now_utc
+from .scopes import StagePolicy
 
 NODE_KINDS = frozenset({
     "service", "resource", "repo", "deployment", "datastore", "external",
@@ -93,6 +94,12 @@ CREATE INDEX IF NOT EXISTS idx_kg_nodes_name ON kg_nodes(project_id, name) WHERE
 CREATE INDEX IF NOT EXISTS idx_kg_edges_src_valid ON kg_edges(src_id) WHERE valid_to IS NULL;
 CREATE INDEX IF NOT EXISTS idx_kg_embeddings_project_model
   ON kg_embeddings(project_id, model_id);
+ALTER TABLE kg_nodes ADD COLUMN IF NOT EXISTS knowledge_layer TEXT
+  GENERATED ALWAYS AS (CASE WHEN kind IN ('config_key', 'endpoint', 'file', 'module', 'queue', 'symbol', 'table') THEN 'code' WHEN kind IN ('agent', 'decision', 'person', 'pull_request', 'release', 'review_finding', 'run', 'spec', 'team') THEN 'lifecycle' WHEN kind IN ('alert_rule', 'datastore', 'deployment', 'external', 'incident', 'repo', 'resource', 'root_cause', 'runbook', 'service') THEN 'ops' ELSE 'knowledge' END) STORED;
+CREATE INDEX IF NOT EXISTS idx_kg_nodes_layer
+  ON kg_nodes(project_id, knowledge_layer, kind) WHERE valid_to IS NULL;
+CREATE INDEX IF NOT EXISTS idx_kg_nodes_search_noncode
+  ON kg_nodes USING GIN (search_tsv) WHERE knowledge_layer <> 'code';
 CREATE TABLE IF NOT EXISTS kg_change_links (
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   source_kind TEXT NOT NULL,
@@ -799,6 +806,94 @@ class PostgresKnowledgeStore:
         ).mappings().all()
         return [dict(row) for row in rows]
 
+    # --- stage knowledge scopes ----------------------------------------------------------------
+    def code_reach(
+        self, connection: Connection, *, project_id: str, policy: StagePolicy
+    ) -> list[str]:
+        """The code nodes a seeded stage may read: its seeds, then at most ``max_hops`` hops
+        between code nodes in either direction, ``max_nodes`` in all. No seeds, no code.
+
+        A hop is a dependency (calls, references, imports, exposes, reads, writes, publishes,
+        subscribes), never ``defines``: a file is not a step from one of its symbols to the rest."""
+        if not policy.reads_code or not policy.seeds:
+            return []
+        reach = [row[0] for row in connection.execute(
+            text(
+                """
+                SELECT id FROM kg_nodes
+                WHERE project_id = :project_id AND id = ANY(:seeds)
+                  AND knowledge_layer = 'code' AND (valid_to IS NULL OR valid_to > now())
+                ORDER BY id
+                """
+            ),
+            {"project_id": project_id, "seeds": list(policy.seeds)},
+        )][: policy.max_nodes]
+        frontier = list(reach)
+        for _hop in range(policy.max_hops):
+            if not frontier or len(reach) >= policy.max_nodes:
+                break
+            rows = connection.execute(
+                text(
+                    """
+                    SELECT DISTINCT n.id, n.node_key FROM kg_edges e
+                    JOIN kg_nodes n ON n.id = CASE WHEN e.src_id = ANY(:ids) THEN e.dst_id ELSE e.src_id END
+                    WHERE e.project_id = :project_id
+                      AND (e.src_id = ANY(:ids) OR e.dst_id = ANY(:ids))
+                      AND e.kind <> 'defines'
+                      AND (e.valid_to IS NULL OR e.valid_to > now())
+                      AND n.project_id = :project_id AND n.knowledge_layer = 'code'
+                      AND (n.valid_to IS NULL OR n.valid_to > now())
+                    ORDER BY n.node_key
+                    """
+                ),
+                {"project_id": project_id, "ids": frontier},
+            ).all()
+            seen = set(reach)
+            frontier = []
+            for node_id, _key in rows:
+                if node_id in seen:
+                    continue
+                if len(reach) >= policy.max_nodes:
+                    break
+                seen.add(node_id)
+                reach.append(node_id)
+                frontier.append(node_id)
+        return reach
+
+    def _scope_sql(
+        self, connection: Connection, project_id: str, policy: Optional[StagePolicy], alias: str = ""
+    ) -> tuple[str, dict[str, Any]]:
+        """The layer filter a stage's reads carry. Empty without a policy (a person, BOSS)."""
+        if policy is None:
+            return "", {}
+        col = f"{alias}." if alias else ""
+        params: dict[str, Any] = {"scope_layers": sorted(policy.layers - {"code"})}
+        if policy.reads_code:
+            params["scope_code_ids"] = self.code_reach(connection, project_id=project_id, policy=policy)
+            return (f" AND ({col}knowledge_layer = ANY(:scope_layers) OR ({col}knowledge_layer = 'code'"
+                    f" AND {col}id = ANY(:scope_code_ids)))", params)
+        # The literal lets the planner use the partial non-code index.
+        return f" AND {col}knowledge_layer <> 'code' AND {col}knowledge_layer = ANY(:scope_layers)", params
+
+    def assert_readable(
+        self, connection: Connection, *, project_id: str, node_id: str, policy: Optional[StagePolicy]
+    ) -> None:
+        """Refuse, in words, a node outside the stage's scope."""
+        if policy is None:
+            return
+        layer = connection.execute(
+            text("SELECT knowledge_layer FROM kg_nodes WHERE id = :id AND project_id = :project_id"),
+            {"id": node_id, "project_id": project_id},
+        ).scalar()
+        if layer is None:
+            return
+        if layer == "code":
+            if not policy.reads_code or node_id not in self.code_reach(
+                    connection, project_id=project_id, policy=policy):
+                raise PermissionError(policy.refusal())
+        elif layer not in policy.layers:
+            raise PermissionError(f"The {layer} layer isn't available in {policy.stage}.")
+
     def text_search(
         self,
         connection: Connection,
@@ -806,25 +901,28 @@ class PostgresKnowledgeStore:
         project_id: str,
         query: str,
         limit: int = 20,
+        policy: Optional[StagePolicy] = None,
     ) -> list[dict[str, Any]]:
         self.ensure_schema(connection)
         self._org_id(connection, project_id, None)
         if not query or not query.strip():
             raise ValueError("query is required")
+        scope_sql, scope_params = self._scope_sql(connection, project_id, policy)
         rows = connection.execute(
             text(
-                """
+                f"""
                 SELECT id AS node_id, node_key,
                        ts_rank(search_tsv, plainto_tsquery('english', :query)) AS rank
                 FROM kg_nodes
                 WHERE project_id = :project_id
                   AND search_tsv @@ plainto_tsquery('english', :query)
-                  AND (valid_to IS NULL OR valid_to > now())
+                  AND (valid_to IS NULL OR valid_to > now()){scope_sql}
                 ORDER BY rank DESC, node_key ASC
                 LIMIT :limit
                 """
             ),
-            {"project_id": project_id, "query": query, "limit": max(1, min(int(limit), 50))},
+            {"project_id": project_id, "query": query, "limit": max(1, min(int(limit), 50)),
+             **scope_params},
         ).mappings().all()
         return [dict(row) for row in rows]
 
@@ -1169,9 +1267,12 @@ class PostgresKnowledgeStore:
         node_id: str,
         kind: Optional[str] = None,
         direction: str = "out",
+        policy: Optional[StagePolicy] = None,
     ) -> list[dict[str, Any]]:
         self.ensure_schema(connection)
         self._node_in_project(connection, project_id, node_id)
+        self.assert_readable(connection, project_id=project_id, node_id=node_id, policy=policy)
+        scope_sql, scope_params = self._scope_sql(connection, project_id, policy, alias="n")
         if direction not in {"out", "in"}:
             raise ValueError("direction must be out or in")
         if kind is not None and kind not in EDGE_KINDS:
@@ -1191,11 +1292,11 @@ class PostgresKnowledgeStore:
                   AND n.project_id = :project_id
                   {kind_sql}
                   AND (e.valid_to IS NULL OR e.valid_to > now())
-                  AND (n.valid_to IS NULL OR n.valid_to > now())
+                  AND (n.valid_to IS NULL OR n.valid_to > now()){scope_sql}
                 ORDER BY n.node_key
                 """
             ),
-            {"node_id": node_id, "project_id": project_id, "kind": kind},
+            {"node_id": node_id, "project_id": project_id, "kind": kind, **scope_params},
         ).mappings().all()
         return [dict(row) for row in rows]
 

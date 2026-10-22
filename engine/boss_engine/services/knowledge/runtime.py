@@ -200,17 +200,20 @@ def quoted_pack_for_turn(
 
 def _quoted_pack(connection: Any, *, project_id: str, query: str, run_id: str, step: str) -> str:
     from .retrieval import precedent_section
+    from .scopes import current_policy
     from .service import KnowledgeService
 
     service = KnowledgeService()
+    policy = current_policy()
     packed = service.pack(
         connection,
         project_id=project_id,
         role=PACK_ROLE,
-        stage=PACK_STAGE,
+        stage=policy.stage if policy is not None else PACK_STAGE,
         query=query,
         budget_tokens=PACK_BUDGET_TOKENS,
         ceiling=PACK_CEILING,
+        policy=policy,
     )
     items = packed.get("items") or []
     if not items:

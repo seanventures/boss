@@ -9,13 +9,12 @@ from __future__ import annotations
 import os
 
 import pytest
-from sqlalchemy import create_engine, text
-from sqlalchemy.exc import SQLAlchemyError
-
 from boss_engine.db import ensure_schema
 from boss_engine.services.knowledge.capture import capture_lifecycle
 from boss_engine.services.knowledge.code_index import index_files, symbol_key
 from boss_engine.services.knowledge.store import PostgresKnowledgeStore
+from sqlalchemy import create_engine, text
+from sqlalchemy.exc import SQLAlchemyError
 
 STORE = PostgresKnowledgeStore()
 A = "def reserve():\n    return 1\n"

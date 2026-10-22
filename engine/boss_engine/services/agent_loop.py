@@ -317,11 +317,16 @@ def _append_bundle_tools(
     tool not registered on this build is skipped, never offered and then failed."""
     from .agent_baseline import bundle_tool_spec, bundles
 
+    from .knowledge.scopes import current_policy, offers_tool
+
     offered_by = bundles()
+    stage_scope = current_policy()
     offered: dict[str, tuple[dict[str, Any], str]] = {}
     for spec in specs:
         skill_id = str(spec.get("id") or "")
         for tool in offered_by.get(skill_id, ()):
+            if skill_id.startswith("knowledge.") and not offers_tool(stage_scope, tool):
+                continue          # outside this stage's knowledge scope: not offered at all
             found = bundle_tool_spec(skill_id, tool, edition="community")
             if found is None:
                 continue

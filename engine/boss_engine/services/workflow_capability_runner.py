@@ -58,10 +58,12 @@ def _knowledge_precedent(
     if not query.strip():
         return ""
     try:
+        from .knowledge.scopes import policy_for
         from .knowledge.service import KnowledgeService
 
         service = KnowledgeService()
-        found = service.precedent(connection, project_id=project_id, query=query[:500])
+        found = service.precedent(connection, project_id=project_id, query=query[:500],
+                                  policy=policy_for(stage="decide"))
         fact_ids = [str(item) for item in (found.get("cited_fact_ids") or [])]
         if fact_ids:
             service.log_pack(

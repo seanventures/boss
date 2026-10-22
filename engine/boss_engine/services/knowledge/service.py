@@ -33,9 +33,10 @@ class KnowledgeService:
         project_id: str,
         query: str,
         limit: int = 20,
+        policy=None,
     ) -> dict[str, Any]:
         hits = self.store.text_search(
-            connection, project_id=project_id, query=query, limit=limit
+            connection, project_id=project_id, query=query, limit=limit, policy=policy
         )
         enriched = []
         for hit in hits:
@@ -53,23 +54,27 @@ class KnowledgeService:
         return {"hits": rank_hits(enriched)}
 
     def why(
-        self, connection: Connection, *, project_id: str, node_id: str
+        self, connection: Connection, *, project_id: str, node_id: str, policy=None
     ) -> dict[str, Any]:
         node = self.store.get_node(connection, project_id=project_id, node_id=node_id)
         if node is None:
             raise LookupError(node_id)
         facts = self.store.neighbors(
-            connection, project_id=project_id, node_id=node_id, kind="about", direction="in"
+            connection, project_id=project_id, node_id=node_id, kind="about", direction="in",
+            policy=policy,
         )
         return {"node": _public_node(node), "why": facts}
 
     def blast(
-        self, connection: Connection, *, project_id: str, node_id: str, max_depth: int = 3
+        self, connection: Connection, *, project_id: str, node_id: str, max_depth: int = 3,
+        policy=None,
     ) -> dict[str, Any]:
+        self.store.assert_readable(connection, project_id=project_id, node_id=node_id, policy=policy)
         return {
             "node_id": node_id,
             "affected": blast_radius(
-                connection, self.store, project_id=project_id, node_id=node_id, max_depth=max_depth
+                connection, self.store, project_id=project_id, node_id=node_id, max_depth=max_depth,
+                policy=policy,
             ),
             "dependent_files": self.dependent_files(connection, project_id=project_id, node_id=node_id),
         }
@@ -99,8 +104,12 @@ class KnowledgeService:
         ).scalars().all()
         return list(rows)
 
-    def symbol(self, connection: Connection, *, project_id: str, name: str) -> dict[str, Any]:
+    def symbol(
+        self, connection: Connection, *, project_id: str, name: str, policy=None
+    ) -> dict[str, Any]:
         self.store._org_id(connection, project_id, None)
+        if policy is not None and not policy.reads_code:
+            raise PermissionError(policy.refusal())
         row = connection.execute(
             text(
                 """
@@ -115,12 +124,16 @@ class KnowledgeService:
         ).mappings().first()
         if row is None:
             return {"found": False, "name": name}
+        self.store.assert_readable(connection, project_id=project_id, node_id=row["id"], policy=policy)
         return {"found": True, **dict(row)}
 
-    def callers(self, connection: Connection, *, project_id: str, node_id: str) -> dict[str, Any]:
+    def callers(
+        self, connection: Connection, *, project_id: str, node_id: str, policy=None
+    ) -> dict[str, Any]:
         return {
             "callers": self.store.neighbors(
-                connection, project_id=project_id, node_id=node_id, kind="calls", direction="in"
+                connection, project_id=project_id, node_id=node_id, kind="calls", direction="in",
+                policy=policy,
             )
         }
 
@@ -266,8 +279,12 @@ class KnowledgeService:
         query: str,
         budget_tokens: int,
         ceiling: str = "governed",
+        policy=None,
     ) -> dict[str, Any]:
-        found = self.search(connection, project_id=project_id, query=query, limit=20)
+        """A budgeted pack, built under the stage's knowledge scope when one is given."""
+        if policy is not None:
+            budget_tokens = min(budget_tokens, policy.budget_tokens)
+        found = self.search(connection, project_id=project_id, query=query, limit=20, policy=policy)
         return knowledge_pack(
             role=role,
             stage=stage,
@@ -277,9 +294,9 @@ class KnowledgeService:
         )
 
     def precedent(
-        self, connection: Connection, *, project_id: str, query: str, limit: int = 5
+        self, connection: Connection, *, project_id: str, query: str, limit: int = 5, policy=None
     ) -> dict[str, Any]:
-        found = self.search(connection, project_id=project_id, query=query, limit=limit)
+        found = self.search(connection, project_id=project_id, query=query, limit=limit, policy=policy)
         decisions = [
             hit for hit in found["hits"]
             if str(hit.get("node_key") or "").startswith("fact:")

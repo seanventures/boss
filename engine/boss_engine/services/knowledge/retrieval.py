@@ -118,8 +118,14 @@ def blast_radius(
     project_id: str,
     node_id: str,
     max_depth: int = 3,
+    policy=None,
 ) -> list[dict]:
-    """Callers and callees. Depth is walked one hop at a time, both directions."""
+    """Callers and callees. Depth is walked one hop at a time, both directions.
+
+    Under a stage policy the walk stays inside the stage's code reach and its ``max_hops``.
+    """
+    if policy is not None:
+        max_depth = min(max_depth, max(policy.max_hops, 0))
     seen = {node_id}
     frontier = [node_id]
     found: list[dict] = []
@@ -133,6 +139,7 @@ def blast_radius(
                     node_id=current,
                     kind="calls",
                     direction=direction,
+                    policy=policy,
                 )
                 for row in rows:
                     if row["node_id"] in seen:

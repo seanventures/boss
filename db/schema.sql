@@ -4949,6 +4949,17 @@ CREATE TABLE IF NOT EXISTS kg_change_links (
   PRIMARY KEY (project_id, source_kind, source_id, symbol_key)
 );
 CREATE INDEX IF NOT EXISTS idx_kg_change_links_symbol ON kg_change_links(project_id, symbol_key);
+-- BOSSAPP-622 stage knowledge scopes (services/knowledge/scopes.py): every node is in one layer
+-- (code, lifecycle, ops, knowledge), generated from its kind so every writer agrees. A stage
+-- reads only its layers; the partial GIN index lets a non-code text search skip code rows, so
+-- its cost does not grow with the code graph. Kept in step with scopes.layer_sql_case() by
+-- test_knowledge_stage_scopes_db.
+ALTER TABLE kg_nodes ADD COLUMN IF NOT EXISTS knowledge_layer TEXT
+  GENERATED ALWAYS AS (CASE WHEN kind IN ('config_key', 'endpoint', 'file', 'module', 'queue', 'symbol', 'table') THEN 'code' WHEN kind IN ('agent', 'decision', 'person', 'pull_request', 'release', 'review_finding', 'run', 'spec', 'team') THEN 'lifecycle' WHEN kind IN ('alert_rule', 'datastore', 'deployment', 'external', 'incident', 'repo', 'resource', 'root_cause', 'runbook', 'service') THEN 'ops' ELSE 'knowledge' END) STORED;
+CREATE INDEX IF NOT EXISTS idx_kg_nodes_layer
+  ON kg_nodes(project_id, knowledge_layer, kind) WHERE valid_to IS NULL;
+CREATE INDEX IF NOT EXISTS idx_kg_nodes_search_noncode
+  ON kg_nodes USING GIN (search_tsv) WHERE knowledge_layer <> 'code';
 -- BOSSAPP-622 capture, usage, and audit. Tenancy is project_id on every row.
 CREATE TABLE IF NOT EXISTS kg_captures (
   id TEXT PRIMARY KEY,
