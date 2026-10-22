@@ -174,10 +174,12 @@ def is_workspace_config(path: str) -> bool:
 
 def repository_paths(root: Path) -> list[str]:
     """Tracked files when ``root`` is a git checkout, else every file below it; never vendored ones."""
+    from ..owned_process import run as owned_run
+
     try:
-        proc = subprocess.run(["git", "ls-files", "-z"], cwd=root, capture_output=True, check=True)
+        proc = owned_run(["git", "ls-files", "-z"], cwd=root, capture_output=True, check=True, timeout=120)
         paths = [p for p in proc.stdout.decode("utf-8", "replace").split("\0") if p]
-    except (OSError, subprocess.CalledProcessError):
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
         paths = []
         for directory, dirs, names in os.walk(root):
             dirs[:] = [d for d in dirs if f"{d}/" not in SKIP_DIRS]
