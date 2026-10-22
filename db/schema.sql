@@ -4949,6 +4949,19 @@ CREATE TABLE IF NOT EXISTS kg_change_links (
   PRIMARY KEY (project_id, source_kind, source_id, symbol_key)
 );
 CREATE INDEX IF NOT EXISTS idx_kg_change_links_symbol ON kg_change_links(project_id, symbol_key);
+-- BOSSAPP-622: the database image carries pgvector and Apache AGE (scripts/install/db-image).
+-- This is the schema step of the upgrade: an existing data directory gets the extensions on its
+-- first boot on the new image. A server without them (a stock postgres image, a test database)
+-- skips this and keeps exact-cosine search and the recursive CTE.
+DO $kg_ext$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_available_extensions WHERE name = 'vector') THEN
+    CREATE EXTENSION IF NOT EXISTS vector;
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_available_extensions WHERE name = 'age') THEN
+    CREATE EXTENSION IF NOT EXISTS age;
+  END IF;
+END $kg_ext$;
 -- BOSSAPP-622 stage knowledge scopes (services/knowledge/scopes.py): every node is in one layer
 -- (code, lifecycle, ops, knowledge), generated from its kind so every writer agrees. A stage
 -- reads only its layers; the partial GIN index lets a non-code text search skip code rows, so

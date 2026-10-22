@@ -38,16 +38,19 @@ def test_extractor_source_does_not_read_the_labelled_facts():
     assert "score_extractor" not in extract
 
 
-def test_opt_in_image_pins_age_1_6_and_compose_stays_on_stock_postgres():
-    dockerfile = (ROOT / "infra/postgres/Dockerfile").read_text()
-    assert "apache-age-1.6.0-src.tar.gz" in dockerfile
-    assert "postgresql-16-pgvector" in dockerfile
+def test_the_one_database_image_is_alpine_with_pgvector_and_age():
+    """Operator decision 2026-10-22: one image, Postgres 16 on Alpine (the base and libc installs
+    already run), pgvector 0.8.x and AGE 1.6.0 compiled in, the default everywhere, pinned by tag."""
+    dockerfile = (ROOT / "scripts/install/db-image/Dockerfile").read_text()
+    assert "ARG PG_IMAGE=postgres:16.12-alpine3.23" in dockerfile
+    assert "PGVECTOR_VERSION=0.8.1" in dockerfile and "AGE_VERSION=1.6.0" in dockerfile
+    assert 'OPTFLAGS=""' in dockerfile                      # no -march=native: portable
     assert "shared_preload_libraries = 'age'" in dockerfile
+    assert "bookworm" not in dockerfile and "debian" not in dockerfile.lower()
+    assert not (ROOT / "infra/postgres/Dockerfile").exists()
     community = (ROOT / "scripts/install/community-compose.yml").read_text()
-    assert "image: postgres:16-alpine" in community
-    assert "boss-postgres-kg" not in community
-    compose_files = list((ROOT / "scripts/install").glob("*compose*.yml"))
-    compose_files += list((ROOT / "infra").glob("*compose*.yml"))
-    assert compose_files
-    for path in compose_files:
-        assert "boss-postgres-kg" not in path.read_text(), path
+    assert "image: ${BOSS_RECOVERY_DB_IMAGE_ID:-boss-community-db:pg16.12-vector0.8.1-age1.6.0}" in community
+    assert "shared_preload_libraries=age" in community
+    assert "image: postgres:16-alpine" not in community
+    schema = (ROOT / "db/schema.sql").read_text()
+    assert "CREATE EXTENSION IF NOT EXISTS vector" in schema and "CREATE EXTENSION IF NOT EXISTS age" in schema

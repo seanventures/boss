@@ -101,14 +101,16 @@ def test_learning_decay_and_promotion_rule():
     assert decay(1.0, 180) == pytest.approx(0.5)
 
 
-def test_populated_upgrade_refuses_an_in_place_copy():
-    plan = plan_upgrade(source_image="postgres:16-alpine", target_image="postgres:16-bookworm", populated=True)
-    assert plan["method"] == "dump_restore"
-    assert plan["in_place_datadir_copy"] is False
+def test_the_database_upgrade_is_an_image_swap_under_a_protected_backup():
+    plan = plan_upgrade(source_image="postgres:16-alpine", target_image="boss-community-db:pg16.12-vector0.8.1-age1.6.0", populated=True)
+    assert plan["method"] == "image_swap" and plan["steps"][0] == "protected_backup"
     assert_no_in_place_copy(plan)
-    fresh = plan_upgrade(source_image="postgres:16-alpine", target_image="postgres:16-bookworm", populated=False)
-    assert fresh["method"] == "fresh_volume"
-
+    assert plan_upgrade(source_image="postgres:16-alpine", target_image="boss-community-db:pg16.12-vector0.8.1-age1.6.0",
+                        populated=False)["method"] == "fresh_volume"
+    with pytest.raises(ValueError, match="libc"):
+        plan_upgrade(source_image="postgres:16-alpine", target_image="postgres:16-bookworm", populated=True)
+    with pytest.raises(ValueError, match="major"):
+        plan_upgrade(source_image="postgres:15-alpine", target_image="boss-community-db:pg16.12-vector0.8.1-age1.6.0", populated=True)
 
 def test_connectors_do_not_open_a_network():
     with pytest.raises(RuntimeError, match="live fetch"):
