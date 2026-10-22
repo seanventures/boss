@@ -41,6 +41,22 @@ _EDGE_FOR_KIND = {
 }
 
 
+def pull_request_source_id(repository: str, number: Any) -> str:
+    """A pull request's source id: ``pr-<owner>/<repo>#<n>`` (operator decision 2026-10-22).
+
+    PR #15 keyed a pull request as ``pr-<n>``, so PR 9 of one repository and PR 9 of another in
+    the same project were one node and one set of change links. GitHub names are
+    case-insensitive, so the repository is lowercased. With no repository name there is nothing
+    to qualify with and the old form is kept (db/schema.sql ``kg_qualify_pr_source_ids`` rewrites
+    those once the project's runs name the repository).
+    """
+    repo = str(repository or "").strip().strip("/").lower()
+    n = str(number).strip()
+    if not n:
+        raise ValueError("a pull request number is required")
+    return f"pr-{repo}#{n}" if repo else f"pr-{n}"
+
+
 def capture_lifecycle(
     connection: Connection,
     store: PostgresKnowledgeStore,

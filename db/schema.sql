@@ -10180,3 +10180,57 @@ BEGIN
       FOR EACH ROW EXECUTE FUNCTION kg_queue_resolved_incident();
   END IF;
 END $$;
+-- BOSSAPP-622 (operator decision 2026-10-22): a pull request's knowledge source id names its
+-- repository, pr-<owner>/<repo>#<n> (knowledge/capture.py pull_request_source_id), so PR 9 of
+-- two repositories in one project are two records. This rewrites the old pr-<n> ids wherever
+-- the project's runs name exactly one repository for that number. A number two repositories
+-- share (the collision itself) is left as it is: nothing says which repository it was. The
+-- renamed nodes get last_seen = now(), so the AGE projection re-projects them on its next sync.
+CREATE OR REPLACE FUNCTION kg_qualify_pr_source_ids() RETURNS INTEGER LANGUAGE plpgsql AS $$
+DECLARE
+  renamed INTEGER := 0;
+  step INTEGER;
+BEGIN
+  CREATE TEMP TABLE IF NOT EXISTS kg_pr_rename (project_id TEXT, old_id TEXT, new_id TEXT) ON COMMIT DROP;
+  DELETE FROM kg_pr_rename;
+  INSERT INTO kg_pr_rename (project_id, old_id, new_id)
+  SELECT m.project_id, 'pr-' || m.n, 'pr-' || min(m.repo) || '#' || m.n
+  FROM (SELECT r.project_id, r.pull_request_number::text AS n,
+               lower(substring(r.pull_request_url from '://[^/]+/([^/]+/[^/]+)/pull/[0-9]+')) AS repo
+        FROM code_task_runs r
+        WHERE r.pull_request_number IS NOT NULL AND r.pull_request_url IS NOT NULL) m
+  WHERE m.repo IS NOT NULL
+  GROUP BY m.project_id, m.n
+  HAVING count(DISTINCT m.repo) = 1;
+
+  UPDATE kg_captures c SET source_id = x.new_id
+  FROM kg_pr_rename x
+  WHERE c.project_id = x.project_id AND c.source_kind = 'pull_request' AND c.source_id = x.old_id
+    AND NOT EXISTS (SELECT 1 FROM kg_captures d WHERE d.project_id = c.project_id
+                      AND d.source_kind = 'pull_request' AND d.source_id = x.new_id
+                      AND d.content_hash = c.content_hash);
+  GET DIAGNOSTICS step = ROW_COUNT;
+  renamed := renamed + step;
+
+  UPDATE kg_change_links l SET source_id = x.new_id
+  FROM kg_pr_rename x
+  WHERE l.project_id = x.project_id AND l.source_kind = 'pull_request' AND l.source_id = x.old_id
+    AND NOT EXISTS (SELECT 1 FROM kg_change_links d WHERE d.project_id = l.project_id
+                      AND d.source_kind = 'pull_request' AND d.source_id = x.new_id
+                      AND d.symbol_key = l.symbol_key);
+  GET DIAGNOSTICS step = ROW_COUNT;
+  renamed := renamed + step;
+
+  UPDATE kg_nodes n SET node_key = 'pull_request:' || x.new_id,
+                        attrs = jsonb_set(n.attrs, '{source_id}', to_jsonb(x.new_id)),
+                        last_seen = now()
+  FROM kg_pr_rename x
+  WHERE n.project_id = x.project_id AND n.kind = 'pull_request'
+    AND n.node_key = 'pull_request:' || x.old_id
+    AND NOT EXISTS (SELECT 1 FROM kg_nodes d WHERE d.project_id = n.project_id
+                      AND d.kind = 'pull_request' AND d.node_key = 'pull_request:' || x.new_id);
+  GET DIAGNOSTICS step = ROW_COUNT;
+  renamed := renamed + step;
+  RETURN renamed;
+END $$;
+SELECT kg_qualify_pr_source_ids();

@@ -2128,12 +2128,14 @@ class SoftwareFactoryService:
         sealed_evidence = attach_sealed_evidence(evidence)
         citations: list[str] = []
         try:
+            from .knowledge.capture import pull_request_source_id
             from .knowledge.runtime import remember_written_files
 
             remembered = remember_written_files(
                 connection,
                 project_id=project_id,
-                source_id=f"pr-{pr.number}",
+                source_id=pull_request_source_id(
+                    getattr(self.github, "repository_full_name", "") or "", pr.number),
                 title=title,
                 body=summary,
                 files=files,
