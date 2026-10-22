@@ -426,6 +426,8 @@ cmd_update() {
     && profiles="--profile secrets"
   rshq "$REMOTE_DOCKER ps --filter name=boss-community-web- -q | grep -q ." \
     && profiles="$profiles --profile web"
+  rshq "$REMOTE_DOCKER ps --filter name=boss-community-mailpit- -q | grep -q ." \
+    && profiles="$profiles --profile mail"
   local update_started
   update_started=$(rshq "date -u +%s")
   local compose_build="$REMOTE_DOCKER compose -f scripts/install/community-compose.yml --env-file $next_env $profiles"
