@@ -176,6 +176,20 @@ def test_budget_refusal_does_not_call_the_model(connection):
     assert result["fact_ids"] == []
 
 
+def test_a_spending_extractor_without_a_budget_grant_never_runs(connection):
+    """The gate closes by default: a caller that forgets budget_allows gets structure only."""
+    _projects(connection)
+    capture = STORE.capture(
+        connection, project_id="proj_a", source_kind="run", source_id="run-3",
+        body="plain", scrub_counts={},
+    )
+    result = distil(
+        connection, STORE, project_id="proj_a", capture_id=capture["id"],
+        text="nothing secret", extractor=SpendingExtractor(),
+    )
+    assert result == {"mode": "structure_only", "fact_ids": [], "scrub_counts": {}}
+
+
 def test_replay_capture_promotion_and_forget(connection):
     _projects(connection)
     first = STORE.capture(

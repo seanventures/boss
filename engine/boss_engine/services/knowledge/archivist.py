@@ -55,8 +55,15 @@ def distil(
     capture_id: str,
     text: str,
     extractor: Extractor,
-    budget_allows: bool = True,
+    budget_allows: bool = False,
 ) -> dict[str, Any]:
+    """Distil one capture into inferred facts.
+
+    A spending extractor runs only when the caller passes ``budget_allows=True`` after the
+    knowledge budget granted it. The default refuses (structure only): a caller that forgets the
+    gate must not spend. The earlier stack (PR #13) found the same class of bug as caps that never
+    bit for an org with no settings row; the fix is the same, the gate closes by default.
+    """
     cleaned, counts = scrub(text)
     if contains_secret_marker(cleaned):
         raise RuntimeError("scrub left a secret shape in the capture")
