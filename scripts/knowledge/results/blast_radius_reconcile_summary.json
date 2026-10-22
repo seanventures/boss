@@ -1,0 +1,31 @@
+{
+  "what": "Depth-1 blast radius on the blind answer keys of PRs #11-#14 (written before the tool ran), for the reconcile of BOSSAPP-622.",
+  "measured": "2026-10-22, local Postgres 16, one rolled-back transaction per run",
+  "answer_keys": {
+    "saleor": "blast_radius_saleor_blind_truth.json (saleor/saleor 9ae360ae76b4777c7101215d8b3348022fcd3683, 30 symbols)",
+    "medusa": "blast_radius_medusa_blind_truth.json (medusajs/medusa v2.21.2, 15 symbols)"
+  },
+  "pr15_as_is": {
+    "how": "index_files of PR #15 on the defining files and the answer-key files (its calls resolve inside one file only, so the rest of the tree cannot change its answer)",
+    "saleor": {"correct": 3, "symbols": 30, "note": "the 3 are the symbols whose answer key is empty; 109 files took 34.8 s to write"},
+    "medusa": {"correct": 0, "symbols": 15}
+  },
+  "reconciled": {
+    "how": "scripts/knowledge/eval_blast_radius.py: index_repository of the whole checkout",
+    "saleor": {"correct": 29, "symbols": 30, "micro_precision": 1.0, "micro_recall": 0.989,
+               "files": 4380, "nodes": 38451, "edges": 132332, "index_seconds": 13.5,
+               "scores": "blast_radius_saleor_blind_scores.json"},
+    "medusa": {"correct": 14, "symbols": 15, "micro_precision": 1.0, "micro_recall": 0.921,
+               "files": 11957, "nodes": 40834, "edges": 89475, "index_seconds": 22.1,
+               "scores": "blast_radius_medusa_blind_scores.json"}
+  },
+  "earlier_stack_after_fix": {"saleor": {"correct": 29, "symbols": 30}, "medusa": {"correct": 14, "symbols": 15}},
+  "python_parser": {
+    "question": "Is the stdlib AST measurably worse than tree-sitter-python on the same 30-symbol blind set?",
+    "ast": {"correct": 29, "symbols": 30, "parse_seconds": 3.1},
+    "tree_sitter_python": {"correct": 29, "symbols": 30, "parse_seconds": 4.8},
+    "same_miss": "saleor/plugins/manager.py::PluginsManager.calculate_checkout_subtotal (a call through a mock in a test file)",
+    "decision": "keep the AST; tree-sitter-python is not ported",
+    "caveat": "the API image runs Python 3.11, which cannot parse PEP 695 syntax; 12 Saleor files use it at this commit and none is in the answer key, so those files are skipped (error = syntax) in production"
+  }
+}

@@ -4851,6 +4851,11 @@ CREATE TABLE IF NOT EXISTS kg_nodes (
   search_tsv TSVECTOR,
   first_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
   last_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
+  -- BOSSAPP-622 code graph: the repository ('' when unnamed) and file a code node comes from,
+  -- so a re-index closes exactly what a file no longer defines. NULL on project-wide nodes
+  -- (tables, queues, config keys), which two repositories share.
+  repo TEXT,
+  path TEXT,
   UNIQUE (project_id, kind, node_key)
 );
 CREATE INDEX IF NOT EXISTS idx_kg_nodes_project
@@ -4893,6 +4898,13 @@ CREATE TABLE IF NOT EXISTS kg_edges (
 );
 CREATE INDEX IF NOT EXISTS idx_kg_edges_src ON kg_edges(src_id, kind);
 CREATE INDEX IF NOT EXISTS idx_kg_edges_dst ON kg_edges(dst_id, kind);
+-- BOSSAPP-622: the lookups the code indexer and the graph reads make (the planner traps the
+-- earlier stack's 1M-node benchmark found: a missing (project_id, node_key) index, and scans of
+-- closed rows).
+CREATE INDEX IF NOT EXISTS idx_kg_nodes_repo_path ON kg_nodes(project_id, repo, path) WHERE repo IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_kg_nodes_key ON kg_nodes(project_id, node_key) WHERE valid_to IS NULL;
+CREATE INDEX IF NOT EXISTS idx_kg_nodes_name ON kg_nodes(project_id, name) WHERE valid_to IS NULL;
+CREATE INDEX IF NOT EXISTS idx_kg_edges_src_valid ON kg_edges(src_id) WHERE valid_to IS NULL;
 
 -- BOSS-357: knowledge retrieval evaluation snapshots (coverage + regression alarms)
 CREATE TABLE IF NOT EXISTS kg_eval_snapshots (

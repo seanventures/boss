@@ -1,0 +1,84 @@
+{
+  "repo": "medusajs/medusa",
+  "commit": "020565398e43 (tag v2.21.2)",
+  "blind": "Answer key written and committed BEFORE the tool was run on Medusa at all; the commit that adds this file precedes the index and the scores.",
+  "question": "Which files depend directly on this symbol (depth 1), other than the file that defines it?",
+  "rules": [
+    "A file counts when its TypeScript/JavaScript code imports or uses THIS symbol: an import (also through a package or barrel), a re-export, a call, a type annotation, an extends clause, a namespace access such as HttpTypes.X or OrderWorkflow.X.",
+    "A method counts when a file calls it on a module-service object (resolved at runtime through the service interface), as Saleor's sample counted calls on objects of unknown type.",
+    "A function returned through React context (ModalProvider.closeModal via useModal()) counts in files that use the real provider; test files that mock useModal do not.",
+    "Not counted: docs (.mdx, .md, llms-full.txt), generated reference JSON and generated files-map.mjs; comments and JSDoc examples; interface method signatures of the same name (IOrderModuleService etc.); a same-named zod schema const (validators.ts AdminUpdatePriceListPrice) and the files that import that const; overloads in the defining file.",
+    "Candidates from `git grep -nw NAME`; every code line of every symbol was read in full and judged by hand."
+  ],
+  "selection": "scripts/knowledge/sample_symbols.py --lang typescript --seed 20261021 --quota '{\"function\": 7, \"class\": 5, \"method\": 3}': symbols drawn from the parser (not the graph), non-test, short name defined once among TS/TSX files, >= 8 characters, in 3-20 files. TS interfaces count as classes.",
+  "symbols": {
+    "packages/admin/dashboard/src/routes/users/user-detail/loader.ts::userLoader": [
+      "packages/admin/dashboard/src/routes/users/user-detail/index.ts",
+      "packages/admin/dashboard/src/routes/users/user-detail/user-detail.tsx"
+    ],
+    "packages/core/utils/src/pg/index.ts::parseConnectionString": [
+      "packages/core/utils/src/pg/integration-tests/__tests__/pg_utils.spec.ts",
+      "packages/medusa/src/commands/db/create.ts"
+    ],
+    "packages/admin/dashboard/src/hooks/table/query/use-customer-table-query.tsx::useCustomerTableQuery": [
+      "packages/admin/dashboard/src/routes/customer-groups/customer-group-add-customers/components/add-customers-form/add-customers-form.tsx",
+      "packages/admin/dashboard/src/routes/customer-groups/customer-group-detail/components/customer-group-customer-section/customer-group-customer-section.tsx",
+      "packages/admin/dashboard/src/routes/customers/customer-list/components/customer-list-table/customer-list-table.tsx"
+    ],
+    "packages/admin/dashboard/src/lib/table/cell-renderers.tsx::defineCellRenderer": [
+      "packages/admin/dashboard/src/app.tsx",
+      "packages/admin/dashboard/src/exports/lib.ts",
+      "packages/admin/dashboard/src/routes/api-key-management/api-key-management-list/components/api-key-management-list-table/api-key-table-renderers.tsx",
+      "packages/admin/dashboard/src/routes/locations/location-list/location-table-renderers.tsx",
+      "packages/admin/dashboard/src/routes/price-lists/price-list-list/components/price-list-list-table/price-list-table-renderers.tsx",
+      "packages/admin/dashboard/src/routes/product-options/product-option-list/components/product-option-list-table/product-option-table-renderers.tsx",
+      "packages/admin/dashboard/src/routes/promotions/promotion-list/components/promotion-list-table/promotion-list-table-renderers.tsx",
+      "packages/admin/dashboard/src/routes/regions/region-list/components/region-list-table/region-list-table-renderers.tsx"
+    ],
+    "packages/modules/providers/search-postgres/src/utils/plan.ts::tableNameForIndex": [
+      "packages/modules/providers/search-postgres/src/services/postgres-search.ts",
+      "packages/modules/providers/search-postgres/src/utils/__tests__/utils.spec.ts"
+    ],
+    "www/packages/docs-ui/src/providers/Modal/index.tsx::ModalProvider.closeModal": [
+      "www/packages/docs-ui/src/components/Modal/Header/index.tsx",
+      "www/packages/docs-ui/src/components/Modal/index.tsx",
+      "www/packages/docs-ui/src/providers/Modal/__tests__/index.test.tsx"
+    ],
+    "www/packages/build-scripts/src/retrieve-mdx-pages.ts::retrieveMdxPages": [
+      "www/apps/cloud/app/sitemap.ts",
+      "www/packages/build-scripts/src/generate-sitemap-urls.ts"
+    ],
+    "packages/core/types/src/http/product-type/common.ts::BaseProductTypeListParams": [
+      "packages/core/types/src/http/product-type/store/queries.ts"
+    ],
+    "packages/core/types/src/http/product/common.ts::BaseProductOptionListParams": [
+      "packages/core/types/src/http/product/admin/queries.ts",
+      "packages/core/types/src/http/product/store/queries.ts"
+    ],
+    "packages/core/types/src/http/price-list/admin/payloads.ts::AdminUpdatePriceListPrice": [
+      "packages/admin/dashboard/src/routes/price-lists/common/utils.ts"
+    ],
+    "packages/core/types/src/workflow/order/items.ts::OrderClaimItemWorkflowInput": [
+      "packages/core/core-flows/src/order/workflows/claim/claim-item.ts"
+    ],
+    "packages/core/types/src/http/rbac/admin/responses.ts::AdminRbacRoleResponse": [
+      "packages/admin/dashboard/src/dashboard-app/routes/get-route.map.tsx",
+      "packages/admin/dashboard/src/hooks/api/rbac-roles.tsx",
+      "packages/admin/dashboard/src/routes/roles/role-detail/breadcrumb.tsx",
+      "packages/core/js-sdk/src/admin/rbac-role.ts"
+    ],
+    "packages/modules/order/src/services/order-module-service.ts::OrderModuleService.createOrderLineItemTaxLines": [
+      "integration-tests/http/__tests__/claims/claims.spec.ts",
+      "integration-tests/http/__tests__/exchanges/exchanges.spec.ts",
+      "integration-tests/http/__tests__/order-edits/order-edits.spec.ts",
+      "packages/core/core-flows/src/order/steps/set-tax-lines-for-items.ts",
+      "packages/modules/order/integration-tests/__tests__/order-items-shipping.spec.ts"
+    ],
+    "packages/modules/order/src/services/order-module-service.ts::OrderModuleService.listAndCountOrders": [
+      "packages/modules/order/integration-tests/__tests__/create-order.spec.ts"
+    ],
+    "packages/modules/fulfillment/src/services/fulfillment-module-service.ts::FulfillmentModuleService.upsertShippingOptionTypes": [
+      "packages/core/core-flows/src/shipping-options/steps/update-shipping-option-types.ts"
+    ]
+  }
+}

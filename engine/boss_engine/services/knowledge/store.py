@@ -35,7 +35,7 @@ NODE_KINDS = frozenset({
 EDGE_KINDS = frozenset({
     "depends_on", "runs_on", "deployed_from", "owns", "emits", "caused_by",
     "correlates_with",
-    "defines", "calls", "imports", "reads", "writes", "publishes", "subscribes",
+    "defines", "calls", "references", "imports", "reads", "writes", "publishes", "subscribes",
     "exposes", "tests",
     "specifies", "implements", "changed", "reviewed", "found_in", "shipped",
     "fired_on", "fixed_by", "decided_by", "approved_by", "about", "supersedes",
@@ -66,6 +66,8 @@ ALTER TABLE kg_nodes ADD COLUMN IF NOT EXISTS content_hash TEXT;
 ALTER TABLE kg_nodes ADD COLUMN IF NOT EXISTS recorded_at TIMESTAMPTZ NOT NULL DEFAULT now();
 ALTER TABLE kg_nodes ADD COLUMN IF NOT EXISTS body TEXT NOT NULL DEFAULT '';
 ALTER TABLE kg_nodes ADD COLUMN IF NOT EXISTS search_tsv TSVECTOR;
+ALTER TABLE kg_nodes ADD COLUMN IF NOT EXISTS repo TEXT;
+ALTER TABLE kg_nodes ADD COLUMN IF NOT EXISTS path TEXT;
 ALTER TABLE kg_edges ADD COLUMN IF NOT EXISTS org_id TEXT;
 ALTER TABLE kg_edges ADD COLUMN IF NOT EXISTS scope TEXT;
 ALTER TABLE kg_edges ADD COLUMN IF NOT EXISTS trust_tier TEXT NOT NULL DEFAULT 'observed';
@@ -85,6 +87,10 @@ CREATE TABLE IF NOT EXISTS kg_embeddings (
   UNIQUE (node_id, model_id, content_hash)
 );
 CREATE INDEX IF NOT EXISTS idx_kg_nodes_search ON kg_nodes USING GIN (search_tsv);
+CREATE INDEX IF NOT EXISTS idx_kg_nodes_repo_path ON kg_nodes(project_id, repo, path) WHERE repo IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_kg_nodes_key ON kg_nodes(project_id, node_key) WHERE valid_to IS NULL;
+CREATE INDEX IF NOT EXISTS idx_kg_nodes_name ON kg_nodes(project_id, name) WHERE valid_to IS NULL;
+CREATE INDEX IF NOT EXISTS idx_kg_edges_src_valid ON kg_edges(src_id) WHERE valid_to IS NULL;
 CREATE INDEX IF NOT EXISTS idx_kg_embeddings_project_model
   ON kg_embeddings(project_id, model_id);
 CREATE TABLE IF NOT EXISTS kg_captures (
@@ -468,6 +474,264 @@ class PostgresKnowledgeStore:
                 kind="supersedes",
                 actor_kind=actor_kind,
             )
+
+    # --- the code graph, in bulk ---------------------------------------------------------------
+    # The code indexer writes thousands of nodes per repository; one statement per chunk, not
+    # three round trips per row. Code nodes are observed and written by the system; a row that a
+    # person governed or approved is never overwritten (ON CONFLICT ... WHERE).
+
+    def upsert_code_nodes(
+        self,
+        connection: Connection,
+        *,
+        project_id: str,
+        rows: list[dict],
+        seen_at,
+        chunk: int = 2000,
+    ) -> dict[tuple[str, str], str]:
+        """Upsert code nodes; returns {(kind, node_key): id}. A node seen again is reopened."""
+        self.ensure_schema(connection)
+        org_id = self._org_id(connection, project_id, None)
+        unknown = {r["kind"] for r in rows} - NODE_KINDS
+        if unknown:
+            raise ValueError(f"unknown node kinds {sorted(unknown)}")
+        ids: dict[tuple[str, str], str] = {}
+        for start in range(0, len(rows), chunk):
+            part = rows[start:start + chunk]
+            result = connection.execute(
+                text(
+                    """
+                    INSERT INTO kg_nodes (
+                      id, project_id, kind, node_key, name, body, attrs, layer, source, confidence,
+                      org_id, scope, trust_tier, weight, created_by, content_hash, recorded_at,
+                      search_tsv, valid_from, first_seen, last_seen, repo, path
+                    )
+                    SELECT u.id, :project_id, u.kind, u.key, u.name, u.body, CAST(u.attrs AS JSONB),
+                           'deterministic', :source, 1.0, :org_id, :project_id, 'observed', 1.0,
+                           'system', u.hash, :seen, to_tsvector('english', u.name || ' ' || u.body),
+                           :seen, :seen, :seen, u.repo, u.path
+                    FROM unnest(
+                      CAST(:ids AS TEXT[]), CAST(:kinds AS TEXT[]), CAST(:keys AS TEXT[]),
+                      CAST(:names AS TEXT[]), CAST(:bodies AS TEXT[]), CAST(:attrs AS TEXT[]),
+                      CAST(:hashes AS TEXT[]), CAST(:repos AS TEXT[]), CAST(:paths AS TEXT[])
+                    ) AS u(id, kind, key, name, body, attrs, hash, repo, path)
+                    ON CONFLICT (project_id, kind, node_key) DO UPDATE SET
+                      name = EXCLUDED.name,
+                      body = EXCLUDED.body,
+                      attrs = EXCLUDED.attrs,
+                      source = EXCLUDED.source,
+                      content_hash = EXCLUDED.content_hash,
+                      search_tsv = EXCLUDED.search_tsv,
+                      repo = EXCLUDED.repo,
+                      path = EXCLUDED.path,
+                      last_seen = EXCLUDED.last_seen,
+                      recorded_at = CASE
+                        WHEN kg_nodes.content_hash IS DISTINCT FROM EXCLUDED.content_hash
+                        THEN EXCLUDED.recorded_at ELSE kg_nodes.recorded_at END,
+                      valid_from = CASE
+                        WHEN kg_nodes.valid_to IS NOT NULL THEN EXCLUDED.last_seen
+                        ELSE kg_nodes.valid_from END,
+                      valid_to = NULL
+                    WHERE kg_nodes.trust_tier IN ('observed', 'inferred')
+                    RETURNING id, kind, node_key
+                    """
+                ),
+                {
+                    "project_id": project_id,
+                    "org_id": org_id,
+                    "source": "code_index",
+                    "seen": seen_at,
+                    "ids": [make_id("kgn") for _ in part],
+                    "kinds": [r["kind"] for r in part],
+                    "keys": [r["key"] for r in part],
+                    "names": [r.get("name") or r["key"] for r in part],
+                    "bodies": [r.get("body") or "" for r in part],
+                    "attrs": [json.dumps(r.get("attrs") or {}, default=str) for r in part],
+                    "hashes": [
+                        _content_hash(r["kind"], r["key"], r.get("name") or r["key"],
+                                      r.get("body") or "", "observed")
+                        for r in part
+                    ],
+                    "repos": [r.get("repo") for r in part],
+                    "paths": [r.get("path") for r in part],
+                },
+            )
+            ids.update({(row.kind, row.node_key): row.id for row in result})
+        return ids
+
+    def upsert_code_edges(
+        self,
+        connection: Connection,
+        *,
+        project_id: str,
+        rows: list[dict],
+        seen_at,
+        chunk: int = 5000,
+    ) -> int:
+        """Upsert code edges between nodes of this project; a foreign id writes nothing."""
+        self.ensure_schema(connection)
+        org_id = self._org_id(connection, project_id, None)
+        unknown = {r["kind"] for r in rows} - EDGE_KINDS
+        if unknown:
+            raise ValueError(f"unknown edge kinds {sorted(unknown)}")
+        written = 0
+        for start in range(0, len(rows), chunk):
+            part = rows[start:start + chunk]
+            written += connection.execute(
+                text(
+                    """
+                    INSERT INTO kg_edges (
+                      id, project_id, src_id, dst_id, kind, attrs, layer, source, confidence,
+                      org_id, scope, trust_tier, weight, created_by, recorded_at, valid_from,
+                      first_seen, last_seen
+                    )
+                    SELECT u.id, :project_id, u.src, u.dst, u.kind, CAST(u.attrs AS JSONB),
+                           'deterministic', :source, u.conf, :org_id, :project_id, 'observed', 1.0,
+                           'system', :seen, :seen, :seen, :seen
+                    FROM unnest(
+                      CAST(:ids AS TEXT[]), CAST(:srcs AS TEXT[]), CAST(:dsts AS TEXT[]),
+                      CAST(:kinds AS TEXT[]), CAST(:attrs AS TEXT[]), CAST(:confs AS FLOAT8[])
+                    ) AS u(id, src, dst, kind, attrs, conf)
+                    JOIN kg_nodes s ON s.id = u.src AND s.project_id = :project_id
+                    JOIN kg_nodes d ON d.id = u.dst AND d.project_id = :project_id
+                    ON CONFLICT (project_id, src_id, dst_id, kind) DO UPDATE SET
+                      attrs = EXCLUDED.attrs,
+                      confidence = EXCLUDED.confidence,
+                      source = EXCLUDED.source,
+                      last_seen = EXCLUDED.last_seen,
+                      valid_from = CASE
+                        WHEN kg_edges.valid_to IS NOT NULL THEN EXCLUDED.last_seen
+                        ELSE kg_edges.valid_from END,
+                      valid_to = NULL
+                    WHERE kg_edges.trust_tier IN ('observed', 'inferred')
+                    """
+                ),
+                {
+                    "project_id": project_id,
+                    "org_id": org_id,
+                    "source": "code_index",
+                    "seen": seen_at,
+                    "ids": [make_id("kge") for _ in part],
+                    "srcs": [r["src"] for r in part],
+                    "dsts": [r["dst"] for r in part],
+                    "kinds": [r["kind"] for r in part],
+                    "attrs": [json.dumps(r.get("attrs") or {}) for r in part],
+                    "confs": [float(r.get("confidence", 1.0)) for r in part],
+                },
+            ).rowcount
+        return written
+
+    def code_node_ids(self, connection: Connection, *, project_id: str, keys: list[str]) -> dict[str, str]:
+        """{node_key: id} for open nodes of this project."""
+        self.ensure_schema(connection)
+        found: dict[str, str] = {}
+        for start in range(0, len(keys), 5000):
+            rows = connection.execute(
+                text(
+                    """
+                    SELECT node_key, id FROM kg_nodes
+                    WHERE project_id = :project_id AND node_key = ANY(:keys) AND valid_to IS NULL
+                    """
+                ),
+                {"project_id": project_id, "keys": list(keys[start:start + 5000])},
+            )
+            found.update({row.node_key: row.id for row in rows})
+        return found
+
+    def code_file_facts(
+        self,
+        connection: Connection,
+        *,
+        project_id: str,
+        repo: str,
+        paths: Optional[list[str]] = None,
+    ) -> list[dict[str, Any]]:
+        """The cached per-file facts of a repository's open file nodes."""
+        self.ensure_schema(connection)
+        self._org_id(connection, project_id, None)
+        path_sql = "" if paths is None else "AND path = ANY(:paths)"
+        rows = connection.execute(
+            text(
+                f"""
+                SELECT path, attrs FROM kg_nodes
+                WHERE project_id = :project_id AND kind = 'file' AND source = 'code_index'
+                  AND repo = :repo AND valid_to IS NULL {path_sql}
+                """
+            ),
+            {"project_id": project_id, "repo": repo, "paths": list(paths or [])},
+        ).mappings().all()
+        return [dict(row) for row in rows]
+
+    def code_repo_attrs(self, connection: Connection, *, project_id: str, node_key: str) -> dict:
+        self.ensure_schema(connection)
+        row = connection.execute(
+            text(
+                """
+                SELECT attrs FROM kg_nodes
+                WHERE project_id = :project_id AND kind = 'repo' AND node_key = :node_key
+                """
+            ),
+            {"project_id": project_id, "node_key": node_key},
+        ).scalar()
+        if isinstance(row, str):
+            return json.loads(row)
+        return dict(row or {})
+
+    def close_unseen_code(
+        self,
+        connection: Connection,
+        *,
+        project_id: str,
+        repo: str,
+        before,
+        paths: Optional[list[str]] = None,
+    ) -> dict[str, int]:
+        """Close (never delete) the code an index run of ``repo`` did not see again.
+
+        Nodes from the given files (every file of the repository when ``paths`` is None), the code
+        edges leaving them, and every observed edge into a node that just closed get
+        ``valid_to = before``.
+        """
+        self.ensure_schema(connection)
+        self._org_id(connection, project_id, None)
+        path_sql = "" if paths is None else "AND n.path = ANY(:paths)"
+        params = {"project_id": project_id, "repo": repo, "before": before, "paths": list(paths or [])}
+        edges = connection.execute(
+            text(
+                f"""
+                UPDATE kg_edges e SET valid_to = :before
+                FROM kg_nodes n
+                WHERE e.src_id = n.id AND n.project_id = :project_id AND n.repo = :repo {path_sql}
+                  AND e.project_id = :project_id AND e.source = 'code_index'
+                  AND e.valid_to IS NULL AND e.last_seen < :before
+                """
+            ),
+            params,
+        ).rowcount
+        nodes = connection.execute(
+            text(
+                f"""
+                UPDATE kg_nodes n SET valid_to = :before
+                WHERE n.project_id = :project_id AND n.repo = :repo {path_sql}
+                  AND n.source = 'code_index' AND n.valid_to IS NULL AND n.last_seen < :before
+                  AND n.trust_tier IN ('observed', 'inferred')
+                """
+            ),
+            params,
+        ).rowcount
+        into = connection.execute(
+            text(
+                """
+                UPDATE kg_edges e SET valid_to = :before
+                FROM kg_nodes n
+                WHERE e.dst_id = n.id AND n.project_id = :project_id AND n.valid_to = :before
+                  AND e.project_id = :project_id AND e.valid_to IS NULL
+                  AND e.trust_tier IN ('observed', 'inferred')
+                """
+            ),
+            params,
+        ).rowcount
+        return {"nodes": int(nodes), "edges": int(edges + into)}
 
     def text_search(
         self,

@@ -71,7 +71,33 @@ class KnowledgeService:
             "affected": blast_radius(
                 connection, self.store, project_id=project_id, node_id=node_id, max_depth=max_depth
             ),
+            "dependent_files": self.dependent_files(connection, project_id=project_id, node_id=node_id),
         }
+
+    def dependent_files(self, connection: Connection, *, project_id: str, node_id: str) -> list[str]:
+        """The files that use this node directly (depth 1): they call it, refer to it, or import
+        it, other than the file that defines it. The measure the blind answer keys score."""
+        node = self.store.get_node(connection, project_id=project_id, node_id=node_id)
+        if node is None:
+            raise LookupError(node_id)
+        rows = connection.execute(
+            text(
+                """
+                SELECT DISTINCT s.path
+                FROM kg_edges e
+                JOIN kg_nodes s ON s.id = e.src_id
+                JOIN kg_nodes d ON d.id = e.dst_id
+                WHERE e.dst_id = :node_id AND e.project_id = :project_id
+                  AND e.kind IN ('calls', 'references', 'imports')
+                  AND (e.valid_to IS NULL OR e.valid_to > now())
+                  AND (s.valid_to IS NULL OR s.valid_to > now())
+                  AND s.path IS NOT NULL AND s.path IS DISTINCT FROM d.path
+                ORDER BY s.path
+                """
+            ),
+            {"node_id": node_id, "project_id": project_id},
+        ).scalars().all()
+        return list(rows)
 
     def symbol(self, connection: Connection, *, project_id: str, name: str) -> dict[str, Any]:
         self.store._org_id(connection, project_id, None)
