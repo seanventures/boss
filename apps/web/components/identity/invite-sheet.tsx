@@ -32,11 +32,11 @@ function statusOf(d: Delivery | null, hasLink: boolean): { label: string; tip: s
   if (!d) return { label: hasLink ? "Not emailed" : "Sent", tip: "", bad: hasLink };
   if (d.status === "sent") {
     return d.via === "dev_inbox"
-      ? { label: "In dev inbox", tip: "No mail provider yet: it went to Mailpit on this machine", bad: false }
+      ? { label: "In test inbox", tip: "Local test inbox (Mailpit) on this machine: not delivered", bad: false }
       : { label: "Sent", tip: "", bad: false };
   }
   if (d.status === "failed") return { label: "Failed", tip: d.reason ?? "", bad: true };
-  return { label: "Not configured", tip: d.reason ?? "Set up mail under Settings › Email", bad: true };
+  return { label: "Not configured", tip: d.reason ?? "Connect Email (SMTP) in Skills & MCP", bad: true };
 }
 
 export function InviteSheet({ roles, groups = [], onClose, onInvited }: {

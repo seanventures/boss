@@ -6,7 +6,13 @@
  * SAVE & TEST IS ATOMIC, server side: the API tests the values typed here and stores them only
  * if the test passes. A failure comes back with the field the provider named, and its short
  * reason lands under that field. A SECRET IS NEVER PREFILLED: a stored one shows as
- * `Set · …a1f3` with `Replace`, and its value never reaches this page.
+ * `Set · …a1f3` with `Replace` (Email's key: `Set` with `Edit`, no part of it), and its value never
+ * reaches this page.
+ *
+ * EMAIL (SMTP) IS A CONNECTOR (docs/community/EMAIL.md): connected, it shows what it sends as, the
+ * last test (the server's own reply) and Edit · Send test · Disconnect. Its form takes one URL, or
+ * the separate fields under "Fields" (`alt`); both store the same config. The URL is sent only
+ * when typed, so saving an edit of the fields never re-reads the shown URL.
  */
 import React, { useEffect, useMemo, useState } from "react";
 import { ArrowSquareOut, CheckCircle, XCircle } from "@phosphor-icons/react";
@@ -72,17 +78,19 @@ function Field({ field, value, stored, error, replacing, onChange, onReplace }: 
     );
   }
   if (field.secret && stored && !replacing) {
+    // "set" is all an Email key ever shows: no last four.
+    const bare = stored === "set";
     return (
       <div className="kit-field" data-testid={id}>
-        <span className="kit-field-label">{field.label}</span>
-        <span className="kit-secret-set" data-testid={`${id}-set`}>Set · {stored}</span>
-        <button type="button" className="kit-link" data-testid={`${id}-replace`} onClick={onReplace}>Replace</button>
+        <span className="kit-field-label" data-tip={field.tip}>{field.label}</span>
+        <span className="kit-secret-set" data-testid={`${id}-set`}>{bare ? "Set" : `Set · ${stored}`}</span>
+        <button type="button" className="kit-link" data-testid={`${id}-replace`} onClick={onReplace}>{bare ? "Edit" : "Replace"}</button>
       </div>
     );
   }
   return (
     <label className="kit-field" data-testid={id}>
-      <span className="kit-field-label">{field.label}</span>
+      <span className="kit-field-label" data-tip={field.tip}>{field.label}</span>
       <input type={field.secret ? "password" : "text"} value={value} autoComplete={field.secret ? "new-password" : "off"}
              spellCheck={false} placeholder={field.placeholder ?? ""} aria-invalid={error ? true : undefined}
              data-testid={`${id}-input`} onChange={(e) => onChange(e.target.value)} />
@@ -109,6 +117,7 @@ export function ConnectionSection({ ability, projectId, actor, onChanged }: {
   ability: Ability; projectId: string; actor: string; onChanged: (a: Ability) => void;
 }) {
   const conn = ability.connection;
+  const email = ability.key === "email";
   const providers: Provider[] = conn?.providers ?? [];
   const [provider, setProvider] = useState<string>(conn?.provider ?? providers[0]?.key ?? "");
   const [values, setValues] = useState<Record<string, string>>({});
@@ -116,6 +125,8 @@ export function ConnectionSection({ ability, projectId, actor, onChanged }: {
   const [error, setError] = useState<{ field: string | null; message: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [confirm, setConfirm] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [testing, setTesting] = useState(false);
 
   useEffect(() => { setProvider(conn?.provider ?? providers[0]?.key ?? ""); }, [conn?.provider]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -157,7 +168,8 @@ export function ConnectionSection({ ability, projectId, actor, onChanged }: {
     const fields: Record<string, string> = {};
     for (const f of chosen.fields) {
       const v = (values[f.name] ?? "").trim();
-      if (f.secret) { if (v) fields[f.name] = v; }
+      // Email's URL goes only when typed: the shown one has no key, and the fields say the same.
+      if (f.secret || (email && f.name === "url")) { if (v) fields[f.name] = v; }
       else fields[f.name] = v || (stored[f.name] ?? optionDefault(f, values, stored));
     }
     const r = await kitApi.connect(projectId, actor, ability.key, chosen.key, fields);
@@ -167,9 +179,20 @@ export function ConnectionSection({ ability, projectId, actor, onChanged }: {
       showToast("error", `Test failed · ${shortError(r.error)}`);
       return;
     }
-    setValues({}); setReplacing({});
+    setValues({}); setReplacing({}); setEditing(false);
     showToast("success", `Connected · ${r.data.last_test?.fact ?? chosen.label}`);
     onChanged(r.data);
+  };
+
+  /** Send test: one message through what is stored; the row below shows the server's reply. */
+  const sendTest = async () => {
+    setTesting(true);
+    const r = await kitApi.test(projectId, actor, ability.key);
+    setTesting(false);
+    if (!r.ok) { showToast("error", shortError(r.error)); return; }
+    onChanged(r.data.ability);
+    if (r.data.ok) showToast("success", `Sent · ${r.data.fact ?? ""}`.trim());
+    else showToast("error", `Test failed · ${shortError(r.data.error)}`);
   };
 
   const disconnect = async () => {
@@ -185,6 +208,19 @@ export function ConnectionSection({ ability, projectId, actor, onChanged }: {
   // picking another provider's tab shows that provider's empty form, not GitHub's result.
   const onStored = conn.provider === chosen?.key;
   const reused = chosen?.reuses === "github";
+  // Email (SMTP), connected: a summary with Edit · Send test · Disconnect; the form on Edit.
+  const summary = email && Boolean(conn.connected) && onStored && !editing;
+  const allFields = chosen?.fields ?? [];
+  const mainFields = allFields.filter((f) => !f.alt);
+  const altFields = allFields.filter((f) => f.alt);
+  const field = (f: ProviderField) => (
+    <Field key={f.name} field={f} value={values[f.name] ?? (f.secret ? "" : (stored[f.name] ?? optionDefault(f, values, stored)))}
+           stored={f.secret ? stored[f.name] : undefined}
+           error={error && (error.field === f.name) ? error.message : null}
+           replacing={Boolean(replacing[f.name])}
+           onReplace={() => setReplacing((r) => ({ ...r, [f.name]: true }))}
+           onChange={(v) => setValues((s) => ({ ...s, [f.name]: v }))} />
+  );
   // Something stored to forget. Keyless Exa with nothing stored is the default, not a
   // connection a person made.
   const canDisconnect = Boolean(conn.connected) && !(
@@ -196,8 +232,10 @@ export function ConnectionSection({ ability, projectId, actor, onChanged }: {
         <div className="kit-seg" role="radiogroup" aria-label="Provider" data-testid="kit-provider">
           {providers.map((p) => (
             <button key={p.key} type="button" role="radio" aria-checked={p.key === chosen?.key}
-                    data-testid={`kit-provider-${p.key}`}
-                    onClick={() => { setProvider(p.key); setError(null); }}>{p.label}</button>
+                    data-testid={`kit-provider-${p.key}`} data-tip={p.tip}
+                    onClick={() => { setProvider(p.key); setError(null); }}>
+              {p.label}{p.local_only ? <span className="kit-chip" data-testid={`kit-provider-${p.key}-local`}>Local only</span> : null}
+            </button>
           ))}
         </div>
       ) : null}
@@ -207,14 +245,19 @@ export function ConnectionSection({ ability, projectId, actor, onChanged }: {
           {ability.status === "needs_repo" ? <a className="kit-link" href={REPO_HREF}>Connect repo ↗</a> : null}
         </div>
       ) : null}
-      {(chosen?.fields ?? []).map((f) => (
-        <Field key={f.name} field={f} value={values[f.name] ?? (f.secret ? "" : (stored[f.name] ?? optionDefault(f, values, stored)))}
-               stored={f.secret ? stored[f.name] : undefined}
-               error={error && (error.field === f.name) ? error.message : null}
-               replacing={Boolean(replacing[f.name])}
-               onReplace={() => setReplacing((r) => ({ ...r, [f.name]: true }))}
-               onChange={(v) => setValues((s) => ({ ...s, [f.name]: v }))} />
-      ))}
+      {summary ? null : mainFields.map(field)}
+      {!summary && altFields.length ? (
+        <details className="kit-alt" data-testid="kit-fields-alt"
+                 open={Boolean(error && altFields.some((f) => f.name === error.field)) || undefined}>
+          <summary data-tip="Host, port, TLS, login and key instead of a URL">Fields</summary>
+          {altFields.map(field)}
+        </details>
+      ) : null}
+      {!summary && chosen?.local_only ? (
+        <div className="kit-row" data-testid="kit-local-only">
+          <span data-tip={chosen.tip}>Local only · nothing is delivered</span>
+        </div>
+      ) : null}
       {error && !(chosen?.fields ?? []).some((f) => f.name === error.field) ? (
         <div className="kit-err" role="alert" data-testid="kit-conn-error" data-tip={error.message}>{shortError(error.message)}</div>
       ) : null}
@@ -232,10 +275,26 @@ export function ConnectionSection({ ability, projectId, actor, onChanged }: {
       ) : null}
       {onStored ? <TestRow test={ability.last_test} /> : null}
       <div className="kit-actions">
-        <GatedButton permission="integration:manage" className="kit-btn kit-btn-primary" disabled={busy || (reused && ability.status === "needs_repo")}
-                data-testid="kit-save-test" onClick={() => void save()}>
-          {busy ? "Testing…" : "Save & test"}
-        </GatedButton>
+        {summary ? (
+          <>
+            <GatedButton permission="integration:manage" className="kit-btn" data-testid="kit-edit"
+                         onClick={() => setEditing(true)}>Edit</GatedButton>
+            <GatedButton permission="skill:invoke" className="kit-btn kit-btn-primary" disabled={testing}
+                         data-testid="kit-send-test" data-tip="Sends a test email; shows the server's reply"
+                         onClick={() => void sendTest()}>
+              {testing ? "Sending…" : "Send test"}
+            </GatedButton>
+          </>
+        ) : (
+          <GatedButton permission="integration:manage" className="kit-btn kit-btn-primary" disabled={busy || (reused && ability.status === "needs_repo")}
+                  data-testid="kit-save-test" data-tip={chosen?.local_only ? chosen.tip : undefined} onClick={() => void save()}>
+            {busy ? "Testing…" : chosen?.local_only ? "Use local test inbox" : "Save & test"}
+          </GatedButton>
+        )}
+        {email && editing ? (
+          <button type="button" className="kit-btn" data-testid="kit-edit-cancel"
+                  onClick={() => { setEditing(false); setValues({}); setError(null); }}>Cancel</button>
+        ) : null}
         {canDisconnect && onStored ? (
           <span className="kit-confirm-wrap">
             <GatedButton permission="integration:manage" className="kit-btn" disabled={busy} data-testid="kit-disconnect"

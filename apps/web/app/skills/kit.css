@@ -139,6 +139,10 @@
 .kit-field textarea, .kit-modal-card textarea { font-family: var(--mono, ui-monospace, monospace); resize: vertical; }
 .kit-field-err { color: var(--red); font: 600 0.75rem var(--sans); }
 .kit-secret-set { font: 600 0.8125rem var(--sans); color: var(--ink-soft); }
+/* Email (SMTP): the separate fields, an alternative to the one URL. */
+.kit-alt { display: grid; gap: 8px; }
+.kit-alt > summary { cursor: pointer; color: var(--muted); font: 600 0.75rem var(--sans); }
+.kit-seg [role="radio"] .kit-chip { margin-left: 6px; }
 .kit-inline { display: flex; gap: 6px; align-items: center; min-width: 0; }
 .kit-inline input { flex: 1 1 auto; }
 .kit-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }

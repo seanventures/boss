@@ -35,7 +35,6 @@ function useOrg(): string | null {
   return org;
 }
 import { isAreaId } from "../lib/area-ids";
-import { EmailSetup } from "./email-setup-ui";
 
 export type ReadinessNeed = {
   key: string;
@@ -118,11 +117,12 @@ export function useWorkflowReadiness(
   return readiness;
 }
 
-export function ReadinessPanel({ readiness, accepted, onAccept, projectId = "" }: {
+export function ReadinessPanel({ readiness, accepted, onAccept }: {
   readiness: Readiness | null;
   accepted: readonly string[];
   onAccept: (keys: string[]) => void;
-  /** Lets an item that can be fixed in place (email) draw its form. */
+  /** Unused since Email became a connector: its item links to Skills & MCP › Email (SMTP), the
+   *  one surface for it, instead of drawing a second form here. Kept so callers need not change. */
   projectId?: string;
 }) {
   const org = useOrg();
@@ -173,11 +173,6 @@ export function ReadinessPanel({ readiness, accepted, onAccept, projectId = "" }
                 <AreaLink area={need.area}>Open setup<span className="sr-only">: {need.label}</span></AreaLink>
               ) : null}
             </span>
-            {/* THE FIX WHERE THE PROBLEM IS. Email is the one need a short form settles, so
-                it is drawn right here rather than sending the operator away from Start. */}
-            {need.key === "email" && projectId ? (
-              <EmailSetup projectId={projectId} compact />
-            ) : null}
           </li>
         ))}
       </ul>
