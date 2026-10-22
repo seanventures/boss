@@ -170,8 +170,10 @@ def _buffers(connection, sql: str, params: dict) -> int:
 
 
 def test_a_non_code_search_does_not_read_the_code_rows(connection):
-    """The ops-latency-vs-code-size check, by buffers rather than milliseconds: the same triage
-    search reads the same pages with 0 and with 20,000 code nodes of the same word."""
+    """The ops-latency-vs-code-size check, by buffers rather than milliseconds: with 20,000 code
+    nodes of the same word added, the triage search reads about the pages it read before (a
+    planner may pick another index after ANALYZE, so a small difference is allowed), while the
+    same search without the scope reads the code rows."""
     triage = scopes.policy_for(stage="triage")
     scope_sql, scope_params = STORE._scope_sql(connection, "proj_sc", triage)
     sql = ("SELECT id FROM kg_nodes WHERE project_id = :p AND search_tsv @@ plainto_tsquery('english', 'ledger') "
@@ -187,6 +189,8 @@ def test_a_non_code_search_does_not_read_the_code_rows(connection):
         "'python ledger', to_tsvector('english', 'ledger ledger') FROM generate_series(1, 20000) g"))
     connection.execute(text("ANALYZE kg_nodes"))
     after = _buffers(connection, sql, params)
-    assert after <= before + 2, (before, after)
+    unscoped = _buffers(connection, sql.replace(scope_sql, ""), {"p": "proj_sc"})
+    assert after <= max(2 * before, before + 10), (before, after)
+    assert unscoped > 10 * after, (after, unscoped)
     found = connection.execute(text(sql), params).scalars().all()
     assert found and not any(i.startswith("kgn_bulk_") for i in found)
