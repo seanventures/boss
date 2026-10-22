@@ -1,0 +1,6 @@
+# Scripted approvals for the NorthPeak study. Hosts are documentation addresses.
+approvals:
+  - id: ship-staging
+    answer: approve
+    host: 203.0.113.10
+    webhook: https://hooks.example.com/orders

@@ -5035,6 +5035,33 @@ def _set_moving_again(
     return str(_run_row(connection, run_id)["status"])
 
 
+def _attribute_knowledge(connection: Connection, project_id: str, run_id: str, *, success: bool) -> None:
+    """Count the facts this run was shown. A knowledge failure must not strand the run.
+
+    The event is the visible record. A connection that cannot store the event either
+    has no audit trail at all, and the run still finishes.
+    """
+    try:
+        from .knowledge.service import KnowledgeService
+
+        KnowledgeService().attribute_run(
+            connection, project_id=project_id, run_id=run_id, success=success
+        )
+    except Exception as error:
+        try:
+            emit_event(
+                connection,
+                project_id,
+                "knowledge.attribution_failed",
+                "system",
+                "workflow_run",
+                run_id,
+                {"error": type(error).__name__, "success": success},
+            )
+        except Exception:
+            return
+
+
 def _maybe_finish_run(connection: Connection, run_id: str) -> None:
     run = _run_row(connection, run_id)
     if run["status"] not in {"running", "waiting"}:
@@ -5118,6 +5145,7 @@ def _maybe_finish_run(connection: Connection, run_id: str) -> None:
 
     withdraw_with_run(connection, run["project_id"], run_id,
                       why=f"its run {run_id} finished without it", actor=run["actor"] or "workflow")
+    _attribute_knowledge(connection, run["project_id"], run_id, success=True)
 
 
 def _refuse_step(
@@ -6369,8 +6397,10 @@ def _fail_attempt(
         # for_each's item stops it at its for_each instead, which is what Retry re-runs.
         if each in spec_steps:
             _fail_for_each_item(connection, row["workflow_run_id"], updated, each, error)
+            _attribute_knowledge(connection, project_id, row["workflow_run_id"], success=False)
         elif not _an_any_join_may_go_on_without(connection, row["workflow_run_id"], updated):
             _stop_run_at(connection, row["workflow_run_id"], updated)
+            _attribute_knowledge(connection, project_id, row["workflow_run_id"], success=False)
         else:
             # Gone on without: the run may now have nothing left to do but finish.
             _maybe_finish_run(connection, row["workflow_run_id"])

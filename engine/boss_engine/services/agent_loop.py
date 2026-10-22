@@ -1849,6 +1849,20 @@ def run_agent_loop(
     a human approval. State is persisted to agent_runs after every step so the
     run survives a crash and can be resumed."""
     run_id = make_id("arun")
+    try:
+        from .knowledge.runtime import append_quoted_pack, quoted_pack_for_turn
+
+        system_prompt = append_quoted_pack(
+            system_prompt,
+            quoted_pack_for_turn(
+                connection,
+                project_id=project_id,
+                query=user_prompt,
+                run_id=run_id,
+            ),
+        ) or None
+    except Exception:
+        pass
     messages: list[dict] = []
     if system_prompt:
         messages.append({"role": "system", "content": system_prompt})
@@ -2789,6 +2803,14 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
         )
 
     _save_run(connection, run_id, project_id, task_id, "completed", messages, transcript, total, finalize_ctx, step=last_step + 1, output_text=final_text)
+    try:
+        from .knowledge.runtime import attribute_shown_facts
+
+        attribute_shown_facts(
+            connection, project_id=project_id, run_id=run_id, success=True
+        )
+    except Exception:
+        pass
     emit_event(connection, project_id, "agent.run_completed", "agent_loop", "agent_run", run_id, {"steps": len(transcript)})
     return {"status": "completed", "run_id": run_id, "output_text": final_text, "usage": total, "transcript": transcript, "tool_calls": len(transcript)}
 

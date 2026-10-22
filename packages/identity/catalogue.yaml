@@ -1401,3 +1401,19 @@ categories:
         roles: [system_self_installer]
         scope: org
         flags: [system_only]
+
+  # ---- Knowledge ---------------------------------------------------------------------------------
+  - category: "Knowledge"
+    permissions:
+      - key: knowledge:read
+        title: "Read knowledge"
+        description: "Search this project's knowledge and read a fact, a symbol, and its precedent."
+        roles: [owner, admin, operator, viewer, auditor]
+        scope: project
+        flags: [delegable]
+      - key: knowledge:manage
+        title: "Manage knowledge"
+        description: "Promote, reject, or forget a fact. Confirmation is required."
+        roles: [owner, admin]
+        scope: project
+        flags: [step_up]

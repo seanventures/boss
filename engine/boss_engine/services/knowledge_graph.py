@@ -881,3 +881,16 @@ class KnowledgeGraphService:
             "snapshot_id": snapshot_id,
             "evaluated_at": _iso(now_utc()),
         }
+
+    def capture_lifecycle(self, connection: Connection, project_id: str, record: dict) -> dict:
+        """Record a lifecycle node through the knowledge store. The SRE methods stay here."""
+        from .knowledge.service import KnowledgeService
+
+        return KnowledgeService().capture_lifecycle(
+            connection, project_id=project_id, record=record
+        )
+
+    def search_knowledge(self, connection: Connection, project_id: str, query: str) -> dict:
+        from .knowledge.service import KnowledgeService
+
+        return KnowledgeService().search(connection, project_id=project_id, query=query)
