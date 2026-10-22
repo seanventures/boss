@@ -4936,6 +4936,19 @@ CREATE TABLE IF NOT EXISTS kg_embeddings (
 CREATE INDEX IF NOT EXISTS idx_kg_embeddings_project_model
   ON kg_embeddings(project_id, model_id);
 
+-- BOSSAPP-622: record -> changed-symbol links, in their own durable table (ported from PR #12).
+-- A pull request names the symbols it changed by their natural keys, not by node ids: a
+-- re-index closes or replaces symbol nodes, and a forget deletes them with their edges, but the
+-- link stays and `changed` edges are derived from it again once the symbol is in the graph.
+CREATE TABLE IF NOT EXISTS kg_change_links (
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  source_kind TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  symbol_key TEXT NOT NULL,
+  recorded_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (project_id, source_kind, source_id, symbol_key)
+);
+CREATE INDEX IF NOT EXISTS idx_kg_change_links_symbol ON kg_change_links(project_id, symbol_key);
 -- BOSSAPP-622 capture, usage, and audit. Tenancy is project_id on every row.
 CREATE TABLE IF NOT EXISTS kg_captures (
   id TEXT PRIMARY KEY,

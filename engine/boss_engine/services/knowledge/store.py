@@ -93,6 +93,15 @@ CREATE INDEX IF NOT EXISTS idx_kg_nodes_name ON kg_nodes(project_id, name) WHERE
 CREATE INDEX IF NOT EXISTS idx_kg_edges_src_valid ON kg_edges(src_id) WHERE valid_to IS NULL;
 CREATE INDEX IF NOT EXISTS idx_kg_embeddings_project_model
   ON kg_embeddings(project_id, model_id);
+CREATE TABLE IF NOT EXISTS kg_change_links (
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  source_kind TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  symbol_key TEXT NOT NULL,
+  recorded_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (project_id, source_kind, source_id, symbol_key)
+);
+CREATE INDEX IF NOT EXISTS idx_kg_change_links_symbol ON kg_change_links(project_id, symbol_key);
 CREATE TABLE IF NOT EXISTS kg_captures (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -688,9 +697,10 @@ class PostgresKnowledgeStore:
     ) -> dict[str, int]:
         """Close (never delete) the code an index run of ``repo`` did not see again.
 
-        Nodes from the given files (every file of the repository when ``paths`` is None), the code
-        edges leaving them, and every observed edge into a node that just closed get
-        ``valid_to = before``.
+        Nodes from the given files (every file of the repository when ``paths`` is None) that were
+        last seen before ``before``, the code edges leaving them, and every observed edge into a
+        node that just closed get ``valid_to = now()``: the transaction's time, so a read later in
+        the same transaction (``valid_to > now()``) already sees them closed.
         """
         self.ensure_schema(connection)
         self._org_id(connection, project_id, None)
@@ -699,7 +709,7 @@ class PostgresKnowledgeStore:
         edges = connection.execute(
             text(
                 f"""
-                UPDATE kg_edges e SET valid_to = :before
+                UPDATE kg_edges e SET valid_to = now()
                 FROM kg_nodes n
                 WHERE e.src_id = n.id AND n.project_id = :project_id AND n.repo = :repo {path_sql}
                   AND e.project_id = :project_id AND e.source = 'code_index'
@@ -711,7 +721,7 @@ class PostgresKnowledgeStore:
         nodes = connection.execute(
             text(
                 f"""
-                UPDATE kg_nodes n SET valid_to = :before
+                UPDATE kg_nodes n SET valid_to = now()
                 WHERE n.project_id = :project_id AND n.repo = :repo {path_sql}
                   AND n.source = 'code_index' AND n.valid_to IS NULL AND n.last_seen < :before
                   AND n.trust_tier IN ('observed', 'inferred')
@@ -722,9 +732,9 @@ class PostgresKnowledgeStore:
         into = connection.execute(
             text(
                 """
-                UPDATE kg_edges e SET valid_to = :before
+                UPDATE kg_edges e SET valid_to = now()
                 FROM kg_nodes n
-                WHERE e.dst_id = n.id AND n.project_id = :project_id AND n.valid_to = :before
+                WHERE e.dst_id = n.id AND n.project_id = :project_id AND n.valid_to = now()
                   AND e.project_id = :project_id AND e.valid_to IS NULL
                   AND e.trust_tier IN ('observed', 'inferred')
                 """
@@ -732,6 +742,62 @@ class PostgresKnowledgeStore:
             params,
         ).rowcount
         return {"nodes": int(nodes), "edges": int(edges + into)}
+
+    # --- durable record -> symbol links -----------------------------------------------------
+    def record_change_links(
+        self,
+        connection: Connection,
+        *,
+        project_id: str,
+        source_kind: str,
+        source_id: str,
+        symbol_keys: list[str],
+    ) -> int:
+        """Remember which symbols a record changed, by natural key. Idempotent."""
+        self.ensure_schema(connection)
+        self._org_id(connection, project_id, None)
+        if not symbol_keys:
+            return 0
+        return connection.execute(
+            text(
+                """
+                INSERT INTO kg_change_links (project_id, source_kind, source_id, symbol_key)
+                SELECT :project_id, :source_kind, :source_id, k FROM unnest(CAST(:keys AS TEXT[])) AS k
+                ON CONFLICT DO NOTHING
+                """
+            ),
+            {"project_id": project_id, "source_kind": source_kind, "source_id": source_id,
+             "keys": list(dict.fromkeys(symbol_keys))},
+        ).rowcount
+
+    def change_links(
+        self,
+        connection: Connection,
+        *,
+        project_id: str,
+        source_kind: Optional[str] = None,
+        source_id: Optional[str] = None,
+    ) -> list[dict[str, Any]]:
+        """Links whose record node and symbol node are both in the graph now, with their ids."""
+        self.ensure_schema(connection)
+        rows = connection.execute(
+            text(
+                """
+                SELECT l.source_kind, l.source_id, l.symbol_key, r.id AS record_id, s.id AS symbol_id
+                FROM kg_change_links l
+                JOIN kg_nodes r ON r.project_id = l.project_id AND r.kind = l.source_kind
+                               AND r.node_key = l.source_kind || ':' || l.source_id
+                JOIN kg_nodes s ON s.project_id = l.project_id AND s.kind = 'symbol'
+                               AND s.node_key = l.symbol_key AND s.valid_to IS NULL
+                WHERE l.project_id = :project_id
+                  AND (CAST(:source_kind AS TEXT) IS NULL OR l.source_kind = :source_kind)
+                  AND (CAST(:source_id AS TEXT) IS NULL OR l.source_id = :source_id)
+                ORDER BY l.symbol_key
+                """
+            ),
+            {"project_id": project_id, "source_kind": source_kind, "source_id": source_id},
+        ).mappings().all()
+        return [dict(row) for row in rows]
 
     def text_search(
         self,

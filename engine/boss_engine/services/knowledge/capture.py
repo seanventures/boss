@@ -2,6 +2,11 @@
 
 Each record is scrubbed, then stored once for a source id and body. Replays
 converge. A symbol that is not in this project is not linked.
+
+A pull request that carries the files it wrote links exactly the symbols those files define,
+through ``kg_change_links`` (natural keys, durable). Its ``changed`` edges are derived from those
+links, again after every re-index (``sync_change_links``), so a symbol that was closed, replaced
+or forgotten gets its link back when it is in the graph again.
 """
 from __future__ import annotations
 
@@ -10,7 +15,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
-from .code_index import index_files
+from .code_index import index_files, symbol_keys_for
 from .scrub import contains_secret_marker, scrub
 from .store import PostgresKnowledgeStore
 
@@ -18,6 +23,9 @@ LIFECYCLE_KINDS = frozenset({
     "spec", "decision", "pull_request", "review_finding", "release",
     "runbook", "alert_rule", "run", "incident",
 })
+
+# Records whose files name exactly the symbols they changed (kg_change_links).
+_CHANGE_KINDS = frozenset({"pull_request"})
 
 # The edge a record draws toward a symbol it names.
 _EDGE_FOR_KIND = {
@@ -52,8 +60,11 @@ def capture_lifecycle(
         raise RuntimeError("scrub left a secret shape in the capture")
     files = record.get("files") or []
     indexed = None
+    changed_keys: list[str] = []
     if files:
         indexed = index_files(connection, store, project_id=project_id, files=list(files))
+        if kind in _CHANGE_KINDS:
+            changed_keys = symbol_keys_for(list(files))
     captured = store.capture(
         connection,
         project_id=project_id,
@@ -81,7 +92,15 @@ def capture_lifecycle(
     )
     linked: list[str] = []
     edge_kind = _EDGE_FOR_KIND.get(kind)
-    if edge_kind:
+    if changed_keys:
+        store.record_change_links(
+            connection, project_id=project_id, source_kind=kind, source_id=source_id,
+            symbol_keys=changed_keys,
+        )
+        linked = sync_change_links(
+            connection, store, project_id=project_id, source_kind=kind, source_id=source_id
+        )
+    elif edge_kind:
         for raw_name in record.get("symbol_names") or []:
             symbol_id = _symbol_in_project(connection, project_id, str(raw_name))
             if symbol_id is None:
@@ -123,6 +142,39 @@ def capture_lifecycle(
         "scrub_counts": counts,
         "indexed": indexed,
     }
+
+
+def sync_change_links(
+    connection: Connection,
+    store: PostgresKnowledgeStore,
+    *,
+    project_id: str,
+    source_kind: str | None = None,
+    source_id: str | None = None,
+) -> list[str]:
+    """Derive ``changed`` edges from the durable links; returns the linked symbol ids.
+
+    An edge the links imply is written, and reopened if a re-index had closed it.
+    """
+    linked: list[str] = []
+    for row in store.change_links(
+        connection, project_id=project_id, source_kind=source_kind, source_id=source_id
+    ):
+        edge_id = store.upsert_edge(
+            connection,
+            project_id=project_id,
+            src_id=row["record_id"],
+            dst_id=row["symbol_id"],
+            kind=_EDGE_FOR_KIND.get(row["source_kind"], "changed"),
+            actor_kind="system",
+        )
+        connection.execute(
+            text("UPDATE kg_edges SET valid_to = NULL WHERE id = :id AND valid_to IS NOT NULL "
+                 "AND trust_tier = 'observed'"),
+            {"id": edge_id},
+        )
+        linked.append(row["symbol_id"])
+    return linked
 
 
 def _symbol_in_project(connection: Connection, project_id: str, name: str) -> str | None:

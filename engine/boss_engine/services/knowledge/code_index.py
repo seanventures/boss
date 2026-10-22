@@ -782,6 +782,13 @@ def _go_prefix(texts: dict[str, str]) -> str | None:
     return None
 
 
+def _relink(connection: Connection, store: PostgresKnowledgeStore, project_id: str) -> None:
+    """Records keep their changed-symbol links across a re-index (knowledge/capture.py)."""
+    from .capture import sync_change_links
+
+    sync_change_links(connection, store, project_id=project_id)
+
+
 def index_repository(
     connection: Connection,
     store: PostgresKnowledgeStore,
@@ -828,6 +835,7 @@ def index_repository(
     wrote = _write(connection, store, project_id=project_id, index=index, files=files, seen_at=seen_at,
                    extra_nodes=[_repo_node(repo, workspace, go_prefix, run)])
     closed = store.close_unseen_code(connection, project_id=project_id, repo=repo or "", before=seen_at)
+    _relink(connection, store, project_id)
     return {**run, **wrote, "closed": closed}
 
 
@@ -878,6 +886,7 @@ def index_files(
     wrote = _write(connection, store, project_id=project_id, index=index, files=slice_files, seen_at=seen_at)
     closed = store.close_unseen_code(connection, project_id=project_id, repo=repo or "", before=seen_at,
                                      paths=[f.path for f in slice_files])
+    _relink(connection, store, project_id)
     return {"indexed": len(changed), "skipped": skipped,
             "symbols": sum(len(f.defs) for f in changed.values()),
             "reresolved": len(slice_files), **wrote, "closed": closed}
