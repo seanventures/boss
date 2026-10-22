@@ -7,7 +7,7 @@ from enum import StrEnum
 from .catalogue import AccessRoleMeta, PassportPreset, PermissionMeta, SystemPrincipalMeta
 
 CATALOGUE_VERSION = 1
-CATALOGUE_FINGERPRINT = "f1f4b961111a7b88"
+CATALOGUE_FINGERPRINT = "b7cdc86b67337e64"
 
 
 class Permission(StrEnum):
@@ -210,6 +210,8 @@ class Permission(StrEnum):
     WORKER_LEASE = "worker:lease"
     SELF_FIX_TICKET_READ = "self_fix:ticket_read"
     SELF_FIX_TICKET_REPORT = "self_fix:ticket_report"
+    KNOWLEDGE_READ = "knowledge:read"
+    KNOWLEDGE_MANAGE = "knowledge:manage"
 
 
 #: Alias for declarations: `@permit(P.WORKFLOW_PUBLISH, ...)`.
@@ -413,6 +415,8 @@ PERMISSION_META: dict[str, PermissionMeta] = {
     "worker:lease": PermissionMeta(key="worker:lease", title="Lease worker jobs", description="Poll, heartbeat and complete leased jobs (worker protocol).", category="Operations and assurance", roles=('system_worker',), scope='project', step_up=False, delegable=False, critical=False, system_only=True, readonly_post=False),
     "self_fix:ticket_read": PermissionMeta(key="self_fix:ticket_read", title="Read self-fix install tickets", description="List and take the signed, single-use tickets of approved BOSS self-fixes (host self-installer only).", category="Operations and assurance", roles=('system_self_installer',), scope='org', step_up=False, delegable=False, critical=False, system_only=True, readonly_post=False),
     "self_fix:ticket_report": PermissionMeta(key="self_fix:ticket_report", title="Report self-fix install phases", description="Report each install phase of a taken self-fix ticket (host self-installer only).", category="Operations and assurance", roles=('system_self_installer',), scope='org', step_up=False, delegable=False, critical=False, system_only=True, readonly_post=False),
+    "knowledge:read": PermissionMeta(key="knowledge:read", title="Read knowledge", description="Search this project's knowledge and read a fact, a symbol, and its precedent.", category="Knowledge", roles=('owner', 'admin', 'operator', 'viewer', 'auditor'), scope='project', step_up=False, delegable=True, critical=False, system_only=False, readonly_post=False),
+    "knowledge:manage": PermissionMeta(key="knowledge:manage", title="Manage knowledge", description="Promote, reject, or forget a fact. Confirmation is required.", category="Knowledge", roles=('owner', 'admin'), scope='project', step_up=True, delegable=False, critical=False, system_only=False, readonly_post=False),
 }
 
 ACCESS_ROLES: dict[str, AccessRoleMeta] = {
@@ -429,7 +433,7 @@ ACCESS_ROLES: dict[str, AccessRoleMeta] = {
 
 #: Built-in role -> its permissions. Derived ONLY from each entry's `roles`.
 ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
-    "owner": frozenset({  # 190
+    "owner": frozenset({  # 192
         "directory:read",
         "user:read",
         "user:invite",
@@ -620,8 +624,10 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "telemetry:read",
         "telemetry:share",
         "telemetry:manage",
+        "knowledge:read",
+        "knowledge:manage",
     }),
-    "admin": frozenset({  # 181
+    "admin": frozenset({  # 183
         "directory:read",
         "user:read",
         "user:invite",
@@ -803,8 +809,10 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "telemetry:read",
         "telemetry:share",
         "telemetry:manage",
+        "knowledge:read",
+        "knowledge:manage",
     }),
-    "operator": frozenset({  # 93
+    "operator": frozenset({  # 94
         "directory:read",
         "access_role:read",
         "api_key:manage_own",
@@ -898,8 +906,9 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "security_finding:triage",
         "improvement:read",
         "activity:read",
+        "knowledge:read",
     }),
-    "viewer": frozenset({  # 48
+    "viewer": frozenset({  # 49
         "directory:read",
         "access_role:read",
         "api_key:manage_own",
@@ -948,8 +957,9 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "assurance:read",
         "improvement:read",
         "activity:read",
+        "knowledge:read",
     }),
-    "auditor": frozenset({  # 62
+    "auditor": frozenset({  # 63
         "directory:read",
         "user:read",
         "group:read",
@@ -1012,6 +1022,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "activity:read",
         "activity:export",
         "telemetry:read",
+        "knowledge:read",
     }),
     "system_worker": frozenset({  # 3
         "spend:reserve",

@@ -188,6 +188,7 @@ def clean_tables(engine):
             "incidents",
             "telemetry_sources",
             "learning_examples",
+            "kg_embeddings",
             "kg_edges",
             "kg_nodes",
             "workflow_compensation_runs",

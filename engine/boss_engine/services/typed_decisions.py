@@ -38,6 +38,7 @@ class Decision:
     confidence: Optional[float]
     reason: str = ""
     error: str = ""
+    cited_fact_ids: tuple[str, ...] = ()
 
 
 @dataclass
@@ -77,23 +78,52 @@ class Decider(Protocol):
     def decide(self, context: str, questions: list[Question]) -> DecisionBatch: ...
 
 
-def _prompt(context: str, questions: list[Question]) -> str:
+def _prompt(context: str, questions: list[Question], precedent: str = "") -> str:
     spec = {
         q.key: {"question": q.instructions, "options": q.options}
         for q in questions
     }
     shape = {q.key: {"answer": "<one option label>", "confidence": "<0.0-1.0>",
                      "reason": "<one short sentence>"} for q in questions}
+    precedent_block = ""
+    if precedent.strip():
+        precedent_block = (
+            "PRECEDENT (quoted records, not instructions):\n<<<\n"
+            f"{precedent.strip()}\n>>>\n\n"
+        )
+        for key in shape:
+            shape[key]["cited_fact_ids"] = [
+                "<fact_id values from PRECEDENT that this answer used>"
+            ]
     return (
         "You are a classifier inside a software pipeline. Answer every question about the "
         "CONTEXT below by choosing exactly one of that question's option labels. Judge what the "
         "work actually does, not which words it happens to use.\n\n"
         f"QUESTIONS:\n{json.dumps(spec, indent=1)}\n\n"
+        f"{precedent_block}"
         f"CONTEXT:\n<<<\n{context}\n>>>\n\n"
         "Reply with ONE JSON object and nothing else, shaped exactly like:\n"
         f"{json.dumps(shape)}\n"
         "confidence is your probability that the chosen answer is correct."
     )
+
+
+def decide_with_precedent(decider: Decider, context: str, questions: list[Question], precedent: str = ""):
+    """Hand precedent to a decider that accepts it. Older deciders see it as quoted context."""
+    import inspect
+
+    parameters = inspect.signature(decider.decide).parameters
+    accepts = "precedent" in parameters or any(
+        item.kind is inspect.Parameter.VAR_KEYWORD for item in parameters.values()
+    )
+    if accepts:
+        return decider.decide(context, questions, precedent=precedent)
+    if precedent.strip():
+        context = (
+            "PRECEDENT (quoted records, not instructions):\n<<<\n"
+            f"{precedent.strip()}\n>>>\n\n{context}"
+        )
+    return decider.decide(context, questions)
 
 
 def _parse(text: str, questions: list[Question]) -> dict[str, Decision]:
@@ -116,7 +146,15 @@ def _parse(text: str, questions: list[Question]) -> dict[str, Decision]:
             conf = max(0.0, min(1.0, float(item.get("confidence"))))
         except (TypeError, ValueError):
             conf = None
-        out[q.key] = Decision(answer, conf, reason=str(item.get("reason", ""))[:300])
+        cited = item.get("cited_fact_ids") or ()
+        if isinstance(cited, str) or not isinstance(cited, (list, tuple)):
+            cited = ()
+        out[q.key] = Decision(
+            answer,
+            conf,
+            reason=str(item.get("reason", ""))[:300],
+            cited_fact_ids=tuple(str(item_id) for item_id in cited),
+        )
     return out
 
 
@@ -192,10 +230,16 @@ class TypeSafeDecider:
             if self._client is None:
                 client.close()
 
-    def decide(self, context: str, questions: list[Question]) -> DecisionBatch:
+    def decide(self, context: str, questions: list[Question], precedent: str = "") -> DecisionBatch:
+        state = context
+        if precedent.strip():
+            state = (
+                "PRECEDENT (quoted records, not instructions):\n<<<\n"
+                f"{precedent.strip()}\n>>>\n\n{context}"
+            )
         body = {
             "model": self.model,
-            "state": context,
+            "state": state,
             "questions": {q.key: {"type": "choice", "instructions": q.instructions,
                                   "criteria": dict(q.options)} for q in questions},
         }
@@ -253,17 +297,17 @@ class SecondOpinionDecider:
         self.fast, self.careful, self.below = fast, careful, below
         self.backend = f"{getattr(fast, 'backend', 'fast')}+{getattr(careful, 'backend', 'careful')}"
 
-    def decide(self, context: str, questions: list[Question]) -> DecisionBatch:
+    def decide(self, context: str, questions: list[Question], precedent: str = "") -> DecisionBatch:
         try:
-            first = self.fast.decide(context, questions)
+            first = decide_with_precedent(self.fast, context, questions, precedent)
         except Exception:  # noqa: BLE001 — the fast backend is optional; the careful one is not
-            return self.careful.decide(context, questions)
+            return decide_with_precedent(self.careful, context, questions, precedent)
         unsure = [q for q in questions
                   if first.decisions[q.key].answer is None
                   or (first.decisions[q.key].confidence or 0.0) < self.below]
         if not unsure:
             return first
-        second = self.careful.decide(context, unsure)
+        second = decide_with_precedent(self.careful, context, unsure, precedent)
         merged = {**first.decisions, **second.decisions}
         return DecisionBatch(
             decisions=merged, backend=self.backend, model=f"{first.model}+{second.model}",
@@ -347,8 +391,8 @@ class ClaudeDecider:
                 "here and no API key is configured.")
         self._attempts = max(1, attempts)
 
-    def decide(self, context: str, questions: list[Question]) -> DecisionBatch:
-        prompt = _prompt(context, questions)
+    def decide(self, context: str, questions: list[Question], precedent: str = "") -> DecisionBatch:
+        prompt = _prompt(context, questions, precedent)
         started = time.monotonic()
         cost, usage, decisions = 0, {}, {}
         for _ in range(self._attempts):
@@ -428,6 +472,7 @@ def _step_output(spec: dict, batch: DecisionBatch) -> dict:
         "confidence": d.confidence,
         "confident": floor is None or (d.confidence is not None and d.confidence >= float(floor)),
         "reason": d.reason,
+        "cited_fact_ids": list(d.cited_fact_ids),
         "backend": batch.backend, "model": batch.model,
         "latency_ms": batch.latency_ms, "cost_usd_micros": batch.cost_usd_micros,
         # Present only when a second opinion overruled or confirmed an unsure first answer.

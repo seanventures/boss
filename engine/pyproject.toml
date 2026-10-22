@@ -30,6 +30,12 @@ dependencies = [
     "reportlab>=4.5,<5",
     "redis>=5.2,<6",
     "SQLAlchemy>=2.0,<3",
+    "tree-sitter>=0.24,<0.26",
+    "tree-sitter-c-sharp>=0.23,<0.26",
+    "tree-sitter-go>=0.23,<0.26",
+    "tree-sitter-java>=0.23,<0.26",
+    "tree-sitter-javascript>=0.23,<0.26",
+    "tree-sitter-typescript>=0.23,<0.26",
     "websockets>=15,<16",
     # identity: passkeys and SAML signatures (docs/product/IDENTITY.md §4.5, §4.8)
     "webauthn>=3.0,<4",

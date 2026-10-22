@@ -7515,6 +7515,9 @@ def build_default_registry() -> ToolRegistry:
     from .app_platform_tools import register_app_platform_tools
 
     register_app_platform_tools(reg)
+    from .knowledge_tools import register_knowledge_tools
+
+    register_knowledge_tools(reg)
     return reg
 
 

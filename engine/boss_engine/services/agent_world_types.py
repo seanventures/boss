@@ -54,7 +54,7 @@ CANONICAL_ROLE_KEYS: frozenset[str] = frozenset({
     "adversarial_reviewer", "cao", "coo", "cto", "deployment_manager", "design_critic",
     "docs_writer", "finops_sentinel", "infra_steward", "integration_validator", "media_publisher",
     "metatron", "model_spend_analyst", "pm", "program_manager", "providerops_manager", "qa",
-    "release_manager", "resource_janitor", "secrets_steward", "security_reviewer",
+    "archivist", "release_manager", "resource_janitor", "secrets_steward", "security_reviewer",
     "software_engineer", "video_editor", "vp_agents",
     # new in Agent World (§0.1 cast, §4.4 chief_architect)
     "chief_architect", "engineering_captain", "backend_engineer", "frontend_engineer",

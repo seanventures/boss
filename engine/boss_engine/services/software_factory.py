@@ -2126,6 +2126,38 @@ class SoftwareFactoryService:
             created_by_job_id=created_by_job_id,
         )
         sealed_evidence = attach_sealed_evidence(evidence)
+        citations: list[str] = []
+        try:
+            from .knowledge.runtime import attach_citations, remember_written_files
+
+            remembered = remember_written_files(
+                connection,
+                project_id=project_id,
+                source_id=f"pr-{pr.number}",
+                title=title,
+                body=summary,
+                files=files,
+                run_id=str(run_id or ""),
+            )
+            citations = [str(item) for item in (remembered.get("cited_fact_ids") or [])]
+        except Exception:
+            citations = []
+            try:
+                self.events.emit(
+                    connection,
+                    project_id,
+                    "knowledge.commit_capture_failed",
+                    "coding_worker",
+                    "task",
+                    task_id or project_id,
+                    {},
+                )
+            except Exception:
+                pass
+
+            def attach_citations(recommendation, _fact_ids):
+                return dict(recommendation or {})
+
         # ONE DECISION FOR A MULTI-REPO CHANGE (multirepo/change_sets.py). A lane of a change set
         # opens its PR and stops: the set asks once, pinned to every PR's head, when all of them
         # (and the cross-repo check) are green. A per-PR merge decision here would let one PR of
@@ -2135,12 +2167,7 @@ class SoftwareFactoryService:
         set_member = _change_sets.member_change_set(connection, run_id) if run_id else None
         from . import checks_failing as _checks_failing
 
-        decision_id = None if set_member else self.decisions.create_blocking(
-            connection,
-            project_id,
-            task_id,
-            (f"Checks failing — decide the merge: {title} (PR #{pr.number})"
-             if checks_failing else f"Approve code change: {title} (PR #{pr.number})"),
+        recommendation = attach_citations(
             {
                 # FIRST, so nothing it carries can replace the action below. Its keys are the
                 # sealed evidence keys (ui/ux/capability_evidence) and collide with none here;
@@ -2189,6 +2216,15 @@ class SoftwareFactoryService:
                     "draft": bool(getattr(self.github, "supports_draft_pull_requests", False)),
                     "label": _checks_failing.LABEL}} if checks_failing else {}),
             },
+            citations,
+        )
+        decision_id = None if set_member else self.decisions.create_blocking(
+            connection,
+            project_id,
+            task_id,
+            (f"Checks failing — decide the merge: {title} (PR #{pr.number})"
+             if checks_failing else f"Approve code change: {title} (PR #{pr.number})"),
+            recommendation,
             {},
             "merge_decision_required",
         )
