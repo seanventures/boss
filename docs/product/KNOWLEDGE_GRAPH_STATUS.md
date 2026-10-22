@@ -1,5 +1,18 @@
 # BOSSAPP-622 status
 
+> **Reconciled 2026-10-22** with the earlier stack (PRs #11–#14). See
+> [KNOWLEDGE_GRAPH_RECONCILE.md](KNOWLEDGE_GRAPH_RECONCILE.md) for what came from each and what
+> was decided. Since then:
+> - the code graph resolves across files: Saleor 29/30 and Medusa 14/15 on the blind keys, and a
+>   full Saleor index in 13.5 s;
+> - the database image is Postgres 16 Alpine with pgvector and AGE by default, upgraded by image
+>   swap;
+> - retrieval fuses text, graph and vector results;
+> - each project has an AGE graph with read-only Cypher;
+> - stage knowledge scopes, event-driven ingest and durable change links are in.
+>
+> Lines below that say otherwise describe PR #15 as opened.
+
 The knowledge plane in this tree is the native path from the Phase 0 spike.
 Graphiti was not adopted. `kg_edges` stays the system of record. Traversal is
 a recursive CTE. Embeddings are `double precision[]`.
