@@ -18,7 +18,7 @@ decision_rights:
   must_escalate:
     - Risk acceptance decisions.
 permissions:
-  allowed_skills: [ci.status, repo.read, coding_pipeline.check_tests, coding_pipeline.run_all_tests, coding_pipeline.consistency_check, coding_pipeline.final_gate, model.generate_code]
+  allowed_skills: [ci.status, repo.read, coding_pipeline.check_tests, coding_pipeline.run_all_tests, coding_pipeline.consistency_check, coding_pipeline.final_gate, model.generate_code, knowledge.propose]
   # The Kit's abilities (packages/specpack/kits): granted on install, and offered.
   abilities: [read_repo, tests_ci, web_research]
   recommended_abilities: [file_tickets]

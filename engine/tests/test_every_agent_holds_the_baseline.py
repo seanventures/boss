@@ -47,13 +47,41 @@ def _registry():
 
 # ── the skills ────────────────────────────────────────────────────────────────────────────────
 
-def test_the_baseline_is_three_skills_shipped_in_the_community_kit():
+def test_the_baseline_skills_ship_in_the_community_kit():
     kit = _kit_skills()
     pack = yaml.safe_load((SPECPACK / "packs" / "community_edition.yaml").read_text())
     assert "kit" in pack["installs"]["skills"]
     for skill in ab.BASELINE_SKILLS:
         assert skill in kit, skill
         assert int(kit[skill]["risk_tier"]) == 0, skill
+
+
+def test_every_agent_holds_the_knowledge_graph():
+    """BOSSAPP-622: knowledge.read is a fundamental. Every role can ask where code is, who depends
+    on it, what a change breaks and why it is so; every tool it offers is a read."""
+    assert "knowledge.read" in ab.BASELINE_SKILLS
+    assert ab.bundles()["knowledge.read"] == ("kg_symbol", "kg_callers", "kg_blast_radius", "kg_why",
+                                              "kg_search", "kg_precedent")
+    reg = _registry()
+    assert all(reg.get(t).kind == "read" for t in ab.KNOWLEDGE_TOOLS)
+
+
+def test_kg_propose_fact_is_granted_to_exactly_the_six_roles():
+    """Operator decision 2026-10-21: pm, engineering_captain, qa, adversarial_reviewer,
+    security_reviewer and sre hold knowledge.propose; no other role, and not the baseline."""
+    assert "knowledge.propose" not in ab.BASELINE_SKILLS
+    holders = sorted(p.stem for p in (SPECPACK / "roles").glob("*.yaml")
+                     if "knowledge.propose" in (((yaml.safe_load(p.read_text()) or {}).get("permissions") or {})
+                                                .get("allowed_skills") or []))
+    assert holders == sorted(ab.PROPOSE_FACT_ROLES)
+    assert ab.bundles()["knowledge.propose"] == ("kg_propose_fact",)
+    spec = ab.bundle_tool_spec("knowledge.propose", "kg_propose_fact")
+    assert spec is not None and spec.kind == "write" and spec.reversibility == "safe"
+    assert all("kg_propose_fact" not in tools for skill, tools in ab.bundles().items()
+               if skill != "knowledge.propose")                               # no other bundle offers it
+    from boss_engine.services.skill_executors import registered_executor_ids
+
+    assert "knowledge.propose" in set(registered_executor_ids())
 
 
 def test_each_baseline_skill_has_an_executor():
@@ -79,7 +107,7 @@ def test_every_fundamental_is_a_registered_read_tool():
     reg = _registry()
     missing = [t for t in ab.FUNDAMENTALS_TOOLS if t not in reg.names() and t not in ab.OPTIONAL_TOOLS]
     assert not missing, f"named but not registered: {missing}"
-    writes = [t for tools in ab.bundles().values() for t in tools
+    writes = [t for skill, tools in ab.bundles().items() if skill not in ab.WRITE_BUNDLES for t in tools
               if t in reg.names() and reg.get(t).kind != "read"]
     assert not writes, f"a baseline bundle may offer reads only: {writes}"
 
@@ -191,7 +219,8 @@ def test_a_harbor_turn_is_offered_the_baseline_tools_by_name():
     _append_skill_tools(schemas, occupied, [])
     names = {s["function"]["name"] for s in schemas}
     reg = _registry()
-    expected = {t for tools in ab.bundles().values() for t in tools if t in reg.names()}
+    # The baseline bundles only: knowledge.propose is granted to six roles, not to Harbor.
+    expected = {t for skill in ab.BASELINE_SKILLS for t in ab.bundles().get(skill, ()) if t in reg.names()}
     assert expected <= names, sorted(expected - names)
     for name, (spec, tool) in offered.items():
         assert tool in ab.bundles()[spec["id"]]

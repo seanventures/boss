@@ -301,7 +301,8 @@ def _append_repo_read_tools(
 
 #: How each bundle reads in the tool list, so the model knows which grant a tool came from.
 _BUNDLE_LABEL = {"repo.read": "Read the repo", "boss.fundamentals": "BOSS fundamentals",
-                 "boss.propose_fix": "Propose a fix"}
+                 "boss.propose_fix": "Propose a fix", "knowledge.read": "Knowledge graph",
+                 "knowledge.propose": "Propose a fact"}
 
 
 def _append_bundle_tools(
@@ -314,21 +315,20 @@ def _append_bundle_tools(
     repo.read, boss.fundamentals, boss.propose_fix); each call is a call of that one skill, so
     the grant, the budget gate and the invocation record are the ordinary skill runtime's. A
     tool not registered on this build is skipped, never offered and then failed."""
-    from ..tools.builtin import build_discuss_read_registry
-    from .agent_baseline import bundles
+    from .agent_baseline import bundle_tool_spec, bundles
 
     offered_by = bundles()
-    registry = build_discuss_read_registry(edition="community")
     offered: dict[str, tuple[dict[str, Any], str]] = {}
     for spec in specs:
         skill_id = str(spec.get("id") or "")
         for tool in offered_by.get(skill_id, ()):
-            if tool not in registry.names():
+            found = bundle_tool_spec(skill_id, tool, edition="community")
+            if found is None:
                 continue
-            found = registry.get(tool)
             name = _unique_tool_name(tool, occupied, f"skill:{skill_id}:{tool}")
             parameters = dict(found.parameters or {"type": "object", "properties": {}})
             properties = dict(parameters.get("properties") or {})
+            properties.pop("project_id", None)   # the run's project, never the model's
             if skill_id == "repo.read" and "repo" in properties:
                 properties["repo"] = {"type": "string",
                                       "description": "owner/name; leave out for this project's repo"}

@@ -108,8 +108,11 @@ def register_knowledge_tools(reg) -> None:
                 parameters=parameters,
                 handler=handler,
                 kind=kind,
+                # kg_propose_fact writes one `inferred` fact: quarantined, never binding, forgettable.
                 reversibility="safe",
                 requires_durable_workspace=True,
-                permission="knowledge:read" if kind == "read" else "knowledge:manage",
+                permission="knowledge:read",
+                # Precedent is past decisions: reading it also needs decision:read.
+                also_requires=("decision:read",) if name == "kg_precedent" else (),
             )
         )

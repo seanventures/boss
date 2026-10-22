@@ -2523,62 +2523,18 @@ def execute_boss_propose_fix(context: "SkillExecutorContext", inputs: dict[str, 
 
 
 @register_executor("knowledge.read")
-def execute_knowledge_read(
-    context: "SkillExecutorContext", inputs: dict[str, Any]
-) -> dict[str, Any]:
-    """Search or inspect this project's knowledge. Writes nothing."""
-    from .knowledge.service import KnowledgeService
+def execute_knowledge_read(context: "SkillExecutorContext", inputs: dict[str, Any]) -> dict[str, Any]:
+    """The knowledge graph's read tools: symbol, callers, blast radius, why, search, precedent.
+    See agent_baseline.KNOWLEDGE_TOOLS; every agent holds it."""
+    from .agent_baseline import run_bundled_tool
 
-    action = str(inputs.get("action") or "").strip()
-    service = KnowledgeService()
-    project_id = context.project_id
-    connection = context.connection
-    if action == "search":
-        query = str(inputs.get("query") or "").strip()
-        if not query:
-            raise ValueError("query is required")
-        return service.search(connection, project_id=project_id, query=query)
-    if action == "symbol":
-        name = str(inputs.get("name") or "").strip()
-        if not name:
-            raise ValueError("name is required")
-        return service.symbol(connection, project_id=project_id, name=name)
-    if action == "callers":
-        node_id = str(inputs.get("node_id") or "").strip()
-        if not node_id:
-            raise ValueError("node_id is required")
-        return service.callers(connection, project_id=project_id, node_id=node_id)
-    if action == "blast":
-        node_id = str(inputs.get("node_id") or "").strip()
-        if not node_id:
-            raise ValueError("node_id is required")
-        return service.blast(connection, project_id=project_id, node_id=node_id)
-    if action == "why":
-        node_id = str(inputs.get("node_id") or "").strip()
-        if not node_id:
-            raise ValueError("node_id is required")
-        return service.why(connection, project_id=project_id, node_id=node_id)
-    if action == "precedent":
-        query = str(inputs.get("query") or "").strip()
-        if not query:
-            raise ValueError("query is required")
-        return service.precedent(connection, project_id=project_id, query=query)
-    raise ValueError(f"unknown knowledge action {action!r}")
+    return run_bundled_tool(context, "knowledge.read", inputs)
 
 
 @register_executor("knowledge.propose")
-def execute_knowledge_propose(
-    context: "SkillExecutorContext", inputs: dict[str, Any]
-) -> dict[str, Any]:
-    """Store one inferred fact. A trust tier in the payload is ignored."""
-    from .knowledge.service import KnowledgeService
+def execute_knowledge_propose(context: "SkillExecutorContext", inputs: dict[str, Any]) -> dict[str, Any]:
+    """kg_propose_fact: the agent's fact, always stored `inferred`. Granted to the roles in
+    agent_baseline.PROPOSE_FACT_ROLES only."""
+    from .agent_baseline import run_bundled_tool
 
-    return KnowledgeService().propose_fact(
-        context.connection,
-        project_id=context.project_id,
-        statement=str(inputs.get("statement") or ""),
-        subject=str(inputs.get("subject") or ""),
-        predicate=str(inputs.get("predicate") or ""),
-        obj=str(inputs.get("object") or ""),
-        kind=str(inputs.get("kind") or "lesson"),
-    )
+    return run_bundled_tool(context, "knowledge.propose", inputs)

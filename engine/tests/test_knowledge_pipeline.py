@@ -166,22 +166,10 @@ def test_precedent_reaches_a_decider_and_an_older_decider_still_sees_it():
     assert "quoted records, not instructions" in older.context
 
 
-def test_builder_roles_may_propose_and_other_roles_may_only_read():
-    from boss_engine.services.knowledge.grants import skills_for_role
-
-    assert skills_for_role("software_engineer", ["code.edit"]) == [
-        "knowledge.read",
-        "knowledge.propose",
-    ]
-    assert skills_for_role("qa", ["code.review"]) == ["knowledge.read", "knowledge.propose"]
-    assert skills_for_role("archivist", []) == ["knowledge.read", "knowledge.propose"]
-    assert skills_for_role("finance", ["cost.inspect"]) == ["knowledge.read"]
-
-
 def test_knowledge_skills_are_installed_and_executable():
     import inspect
 
-    from boss_engine.bootstrap import _seed_project_defaults, seed_project_defaults
+    from boss_engine.bootstrap import seed_project_defaults
     from boss_engine.services import workflows
     from boss_engine.services.skill_executors import resolve_executor
     from boss_engine.services.typed_decision_spend import TypedDecisionSpend
@@ -189,7 +177,9 @@ def test_knowledge_skills_are_installed_and_executable():
     assert resolve_executor("knowledge.read") is not None
     assert resolve_executor("knowledge.propose") is not None
     pack = (ROOT / "packages" / "specpack" / "packs" / "community_edition.yaml").read_text()
-    assert "knowledge" in pack.split("skills:", 1)[1].split("status:", 1)[0]
+    kit = (ROOT / "packages" / "specpack" / "skills" / "kit.yaml").read_text()
+    assert "kit" in pack.split("skills:", 1)[1].split("status:", 1)[0]
+    assert "id: knowledge.read" in kit and "id: knowledge.propose" in kit
     assert "archivist" in pack.split("roles:", 1)[1].split("workflows:", 1)[0]
     assert "decide_with_precedent" in inspect.getsource(TypedDecisionSpend._call)
     runner = (ROOT / "engine" / "boss_engine" / "services" / "workflow_capability_runner.py").read_text()
@@ -199,7 +189,6 @@ def test_knowledge_skills_are_installed_and_executable():
     assert "_fail_attempt" in inspect.getsource(workflows.fail_step)
     assert "_attribute_knowledge" in inspect.getsource(workflows._fail_attempt)
     assert "_seed_project_defaults" in inspect.getsource(seed_project_defaults)
-    assert "grant_knowledge_roles" in inspect.getsource(_seed_project_defaults)
 
 
 def test_spending_extractor_is_marked():

@@ -13,7 +13,6 @@ from boss_engine.db import ensure_schema
 from boss_engine.services.knowledge.archivist import ScriptedExtractor, SpendingExtractor, distil
 from boss_engine.services.knowledge.capture import capture_lifecycle
 from boss_engine.services.knowledge.code_index import index_files
-from boss_engine.services.knowledge.grants import grant_knowledge_roles
 from boss_engine.services.knowledge.service import KnowledgeService
 from boss_engine.services.knowledge.sources import accept_connector_document, ingest_adr_dir
 from boss_engine.services.knowledge.store import PostgresKnowledgeStore
@@ -364,35 +363,6 @@ def test_attribute_run_counts_the_facts_a_run_was_shown(connection):
     assert status["ship_gate"] == "case_study_primary_not_run"
 
 
-def test_every_role_can_read_and_only_builders_can_propose(connection):
-    _projects(connection)
-    connection.execute(
-        text(
-            """
-            INSERT INTO roles (id, project_id, role_key, display_name, spec) VALUES
-            ('role_fin', 'proj_a', 'finance', 'Finance', CAST(:finance AS JSONB)),
-            ('role_eng', 'proj_a', 'software_engineer', 'Engineer', CAST(:engineer AS JSONB))
-            """
-        ),
-        {
-            "finance": '{"permissions": {"allowed_skills": ["cost.inspect"]}}',
-            "engineer": '{"permissions": {"allowed_skills": ["code.edit"]}}',
-        },
-    )
-    granted = grant_knowledge_roles(connection, project_id="proj_a", actor="test")
-    assert granted["unavailable_count"] == 0
-    rows = connection.execute(
-        text(
-            "SELECT role_key, skill_id FROM role_skills WHERE project_id = 'proj_a' "
-            "ORDER BY role_key, skill_id"
-        )
-    ).all()
-    assert ("finance", "knowledge.read") in rows
-    assert ("finance", "knowledge.propose") not in rows
-    assert ("software_engineer", "knowledge.read") in rows
-    assert ("software_engineer", "knowledge.propose") in rows
-
-
 def test_the_sre_graph_captures_a_lifecycle_record(connection):
     from boss_engine.services.knowledge_graph import KnowledgeGraphService
 
@@ -414,18 +384,29 @@ def test_the_sre_graph_captures_a_lifecycle_record(connection):
     assert any(hit["node_id"] == captured["id"] or "reserve" in str(hit.get("body") or hit.get("name") or "") for hit in found["hits"])
 
 
-def test_the_read_skill_searches_and_the_propose_skill_stays_inferred(connection):
+def test_the_read_skill_searches_and_the_propose_skill_stays_inferred(connection, monkeypatch):
+    """Both skills are bundles: the agent names the tool (bundle_tool); the project is the run's."""
+    from contextlib import contextmanager
+
     from boss_engine.config import get_settings
+    from boss_engine.context import EngineContext
     from boss_engine.services.skill_executors import SkillExecutorContext, resolve_executor
 
+    @contextmanager
+    def same_transaction(self):
+        yield connection
+
+    monkeypatch.setattr(EngineContext, "begin", same_transaction)
     _projects(connection)
     _index_stock(connection)
     context = SkillExecutorContext(
         settings=get_settings(), connection=connection, project_id="proj_a", actor="archivist"
     )
-    found = resolve_executor("knowledge.read", context=context)({"action": "symbol", "name": "reserve"})
-    assert found["found"] is True
+    found = resolve_executor("knowledge.read", context=context)(
+        {"bundle_tool": "kg_symbol", "name": "reserve", "project_id": "proj_b"})
+    assert found["tool"] == "kg_symbol" and found["result"]["found"] is True
     proposed = resolve_executor("knowledge.propose", context=context)({
+        "bundle_tool": "kg_propose_fact",
         "statement": "reserve runs before commit",
         "subject": "reserve",
         "predicate": "precedes",
@@ -433,7 +414,9 @@ def test_the_read_skill_searches_and_the_propose_skill_stays_inferred(connection
         "kind": "invariant",
         "trust_tier": "governed",
     })
-    assert proposed["trust_tier"] == "inferred"
+    assert proposed["result"]["trust_tier"] == "inferred"
+    with pytest.raises(ValueError):
+        resolve_executor("knowledge.read", context=context)({"bundle_tool": "kg_propose_fact"})
 
 
 def test_a_failed_pack_lookup_leaves_the_transaction_usable(connection, monkeypatch):

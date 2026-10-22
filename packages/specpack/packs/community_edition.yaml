@@ -71,5 +71,5 @@ installs:
   # can talk to its agents.
   skills: [model_gateway, github, software_factory, model_providers, work_tracker,
            mattermost, youtube, video, meeting_ops, email, agent_code, mobile,
-           kit, slack, deployment, agent_conversation, agent_voice, knowledge]
+           kit, slack, deployment, agent_conversation, agent_voice]
 status: active  # Independent product; Cloud is opt-in via Easy Connect
