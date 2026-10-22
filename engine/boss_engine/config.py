@@ -423,7 +423,8 @@ class Settings(BaseSettings):
     email_from_name: Optional[str] = Field(
         default=None, alias="BOSS_EMAIL_FROM_NAME"
     )
-    #: The dev inbox (host:port), e.g. the bundled Mailpit at mailpit:1025. Used only when no
+    #: The local test inbox: 1 (the bundled Mailpit, mailpit:1025) or host:port. OFF when empty —
+    #: install.sh sets it only with --with-mailpit. Used only when no
     #: provider is configured; nothing sent to it leaves the machine (services/mail_transport.py).
     email_dev_inbox: str = Field(default="", alias="BOSS_EMAIL_DEV_INBOX")
     #: Where a browser opens the dev inbox (Mailpit's UI), for the console's "Open inbox".

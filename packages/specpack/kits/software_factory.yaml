@@ -142,22 +142,35 @@ abilities:
 
   - key: email
     group: coordinate
-    label: Email
-    tip: Send email from your address.
+    # THE EMAIL CONNECTOR (docs/community/EMAIL.md). BOSS ships templates and an SMTP sender;
+    # each install brings its own mail service and domain. One connection URL OR the fields
+    # (`alt: true`, under "Fields") — both store the same config (services/email_config.py).
+    label: Email (SMTP)
+    tip: Your own mail server or service sends BOSS's email.
     icon: EnvelopeSimple
     connection:
       default_provider: smtp
       providers:
-        - {key: smtp, label: SMTP,
-           fields: [{name: host, label: Host, placeholder: smtp.example.com},
-                    {name: port, label: Port, placeholder: "587"},
-                    {name: from_address, label: Send as, placeholder: "you@example.com"},
-                    {name: username, label: User, optional: true},
-                    {name: password, label: Password, secret: true, optional: true},
-                    # A plain relay (port 25/1025, Mailpit, postfix) speaks no TLS; 465 is SSL.
-                    {name: security, label: Security, optional: true,
+        - {key: smtp, label: SMTP, tip: "Brevo, SES, Postal, a company relay or any SMTP",
+           fields: [{name: url, label: URL, optional: true,
+                     placeholder: "smtps://user:key@smtp.example.com:465",
+                     tip: "smtp:// is STARTTLS (587), smtps:// is TLS (465). Percent-encode @ / : # in the user and key."},
+                    {name: from_address, label: From, placeholder: "boss@example.com",
+                     tip: "An address on your own domain, verified with your provider"},
+                    {name: from_name, label: From name, optional: true, placeholder: "BOSS"},
+                    {name: host, label: Host, optional: true, alt: true,
+                     placeholder: smtp.example.com},
+                    {name: port, label: Port, optional: true, alt: true, placeholder: "587"},
+                    # A plain relay (port 25, postfix) speaks no TLS; 465 is SSL.
+                    {name: security, label: TLS, optional: true, alt: true,
                      options: [{value: none, label: None}, {value: starttls, label: STARTTLS},
-                               {value: ssl, label: SSL}]}]}
+                               {value: ssl, label: SSL}]},
+                    {name: username, label: Login, optional: true, alt: true},
+                    {name: password, label: Key, secret: true, optional: true, alt: true,
+                     tip: "Your provider's SMTP key or password. Kept in the secret store."}]}
+        # Offered only when the install turned Mailpit on (install.sh --with-mailpit).
+        - {key: dev_inbox, label: Local test inbox, local_only: true,
+           tip: "Mailpit on this machine. Local only: nothing is delivered.", fields: []}
     skills: [email.send_real_guarded]
     tools:
       - {ref: "skill:email.send_real_guarded", label: Send an email, policy: ask}

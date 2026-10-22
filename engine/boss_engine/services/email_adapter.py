@@ -24,6 +24,8 @@ class EmailAdapter:
 
     def __init__(self, settings: Settings):
         self.settings = settings
+        #: (code, message) the server answered the last message with, once one was sent.
+        self.last_reply: tuple[int, bytes] | None = None
 
     def send_message(self, channel: str, subject: str | None, body: str, *,
                      html: str | None = None,
@@ -105,6 +107,16 @@ class EmailAdapter:
             check_outbound(f"smtp://{getattr(smtp, '_host', '') or self.settings.email_smtp_host}/",
                            {"login": password})
             smtp.login(username, password)
+        # THE SERVER'S OWN REPLY to the message (`250 2.0.0 Ok: queued as …`), kept for a Send
+        # test to show; smtplib's send_message discards it, so DATA's answer is caught on the way.
+        data = smtp.data
+
+        def remember(msg):
+            code, said = data(msg)
+            self.last_reply = (code, said)
+            return code, said
+
+        smtp.data = remember  # type: ignore[method-assign]
         smtp.send_message(message)
 
     def _recipient_from_channel(self, channel: str) -> str:

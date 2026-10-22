@@ -101,7 +101,7 @@ def test_disconnect_and_reconnect_keeps_the_agents(client, engine, monkeypatch):
     assert back.json()["status"] == "ready"
 
 
-def test_smtp_security_is_chosen_and_the_password_shows_its_last_four(client, monkeypatch):
+def test_smtp_security_is_chosen_and_the_password_shows_only_set(client, monkeypatch):
     from boss_engine.services.email_adapter import EmailAdapter
 
     sent = []
@@ -118,5 +118,7 @@ def test_smtp_security_is_chosen_and_the_password_shows_its_last_four(client, mo
     assert r.status_code == 200, r.text
     assert sent == [(False, False)], "a plain relay was sent STARTTLS or SSL"
     fields = r.json()["connection"]["set_fields"]
-    assert fields["password"] == "…a1f3" and fields["security"] == "none"
+    # "set", never any part of the key (operator decision 2026-10-22).
+    assert fields["password"] == "set" and fields["security"] == "none"
+    assert "a1f3" not in r.text
     assert "relay-password" not in r.text

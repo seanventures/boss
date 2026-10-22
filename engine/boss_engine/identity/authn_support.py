@@ -418,7 +418,7 @@ def purge_expired_challenges(db: Any) -> None:
 # ---- identity mail (SMTP only; D26, D30) ----------------------------------------------------------
 #
 # ONE TRANSPORT (services/mail_transport.py): identity mail goes through the same resolver as every
-# other sender — the server saved in the console first, the environment second, the dev inbox
+# other sender — the Email (SMTP) connector first, the environment second, the dev inbox
 # third — so the Email screen and the invite dialog can never disagree about whether mail works.
 
 def smtp_configured() -> bool:

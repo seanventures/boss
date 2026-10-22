@@ -844,7 +844,7 @@ class CommsService:
         if provider["key"] == "slack":
             return self.slack.post_message(channel, subject, body)
         if provider["key"] == "email":
-            # The one transport: this project's saved server, the environment, the dev inbox.
+            # The one transport: the Email (SMTP) connector, the environment, the dev inbox.
             recipient_from_channel(channel)
             return mail_transport.send(channel, subject, body, connection=connection,
                                        settings=self.settings, project_id=project_id)

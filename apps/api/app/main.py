@@ -24759,7 +24759,8 @@ def raise_workflow_error(error: workflow_runtime.WorkflowError) -> None:
 @permit(P.COMMS_READ, scope=Scope.project(query="project_id"))
 def get_email_config(project_id: str, actor: str = "executive_console") -> dict:
     """How this project sends email. Never returns the password — only whether one is set.
-    `route` is where mail actually goes now (saved server, environment, dev inbox or nowhere)."""
+    `route` is where mail actually goes now (the Email (SMTP) connector, environment, dev inbox
+    or nowhere). The console's surface for this is the connector (/v1/kit/email)."""
     from boss_engine.services import email_config, mail_transport
 
     with begin(engine) as connection:
