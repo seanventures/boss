@@ -27,7 +27,7 @@ export function KnowledgePromotionQueue({ projectId, actorId, initial }: Props) 
       return;
     }
     let cancelled = false;
-    const url = `${API_URL}/v1/knowledge/status?project_id=${encodeURIComponent(projectId)}&actor=${encodeURIComponent(actorId)}`;
+    const url = `${API_URL}/v1/knowledge/graph-status?project_id=${encodeURIComponent(projectId)}&actor=${encodeURIComponent(actorId)}`;
     fetch(url, { headers: authHeaders(), cache: "no-store" })
       .then(async (response) => {
         if (!response.ok) throw new Error(String(response.status));

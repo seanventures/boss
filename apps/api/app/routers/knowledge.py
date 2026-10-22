@@ -3,7 +3,7 @@
 GET  /v1/knowledge/search
 GET  /v1/knowledge/nodes/{node_id}
 GET  /v1/knowledge/blast-radius
-GET  /v1/knowledge/status
+GET  /v1/knowledge/graph-status   (/v1/knowledge/status is BOSS-356's pack-context probe)
 POST /v1/knowledge/facts/{fact_id}/promote
 POST /v1/knowledge/facts/{fact_id}/reject
 POST /v1/knowledge/facts/{fact_id}/forget
@@ -102,7 +102,7 @@ def blast(
         raise _http(error) from error
 
 
-@router.get("/status")
+@router.get("/graph-status")
 @permit(P.KNOWLEDGE_READ, scope=Scope.project(query="project_id"))
 def status(project_id: str = Query(...), actor: str = Query(...)) -> dict[str, Any]:
     try:

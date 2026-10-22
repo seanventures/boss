@@ -44,7 +44,7 @@ Not run, so the release ship gate is open:
 - a finished database write of the Saleor tree
 - a customer-shaped Confluence, Jira, and Slack pilot
 
-`ship_gate` on `GET /v1/knowledge/status` stays `case_study_primary_not_run`.
+`ship_gate` on `GET /v1/knowledge/graph-status` stays `case_study_primary_not_run`.
 No model credit was spent. No solve count or dollar figure is recorded.
 
 The tree-sitter parser, the AGE image, the HNSW side table, the Saleor
