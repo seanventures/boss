@@ -6512,9 +6512,6 @@ def build_default_registry() -> ToolRegistry:
     _register_write_tools(reg)
     _register_operations_tools(reg)
     _register_governance_tools(reg)
-    from .knowledge_tools import register_knowledge_tools
-
-    register_knowledge_tools(reg)
     return reg
 
 

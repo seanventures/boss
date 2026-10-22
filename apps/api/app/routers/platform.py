@@ -160,14 +160,6 @@ def mount_platform_routers(app: FastAPI) -> None:
     except ImportError:
         pass
 
-    # BOSSAPP-622 — knowledge graph read and manage surface
-    try:
-        from .knowledge import router as knowledge_router
-
-        app.include_router(knowledge_router)
-    except ImportError:
-        pass
-
     # BOSS-348 — earned autonomy score + value-based schedule preference
     try:
         from .earned_autonomy import router as earned_autonomy_router

@@ -2543,33 +2543,6 @@ def _refresh_frontier(connection: Connection, run_id: str) -> None:
     )
 
 
-def _attribute_knowledge(connection: Connection, project_id: str, run_id: str, *, success: bool) -> None:
-    """Count the facts this run was shown. A knowledge failure must not strand the run.
-
-    The event is the visible record. A connection that cannot store the event either
-    has no audit trail at all, and the run still finishes.
-    """
-    try:
-        from .knowledge.service import KnowledgeService
-
-        KnowledgeService().attribute_run(
-            connection, project_id=project_id, run_id=run_id, success=success
-        )
-    except Exception as error:
-        try:
-            emit_event(
-                connection,
-                project_id,
-                "knowledge.attribution_failed",
-                "system",
-                "workflow_run",
-                run_id,
-                {"error": type(error).__name__, "success": success},
-            )
-        except Exception:
-            return
-
-
 def _maybe_finish_run(connection: Connection, run_id: str) -> None:
     run = _run_row(connection, run_id)
     if run["status"] not in {"running", "waiting"}:
@@ -2633,7 +2606,6 @@ def _maybe_finish_run(connection: Connection, run_id: str) -> None:
         run_id,
         {"status_counts": by_status},
     )
-    _attribute_knowledge(connection, run["project_id"], run_id, success=True)
 
 
 def _refuse_step(
@@ -3245,7 +3217,6 @@ def fail_step(
             ),
             {"id": row["workflow_run_id"], "error": error},
         )
-        _attribute_knowledge(connection, project_id, row["workflow_run_id"], success=False)
     _refresh_frontier(connection, row["workflow_run_id"])
     return _serialize_step(updated)
 

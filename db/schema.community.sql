@@ -4396,20 +4396,6 @@ CREATE TABLE IF NOT EXISTS kg_nodes (
   confidence DOUBLE PRECISION NOT NULL DEFAULT 1.0 CHECK (confidence >= 0 AND confidence <= 1),
   valid_from TIMESTAMPTZ,           -- temporal validity window start (NULL = unbounded)
   valid_to TIMESTAMPTZ,             -- temporal validity window end (NULL = unbounded)
-  -- BOSSAPP-622. Common knowledge fields. trust_tier is enforced by the store
-  -- (an agent cannot write governed or approved). search_tsv is the retrieval
-  -- full-text column; pgvector HNSW waits on the Debian image, so embeddings
-  -- live in kg_embeddings as double precision[].
-  org_id TEXT,
-  scope TEXT,
-  trust_tier TEXT NOT NULL DEFAULT 'observed'
-    CHECK (trust_tier IN ('observed', 'governed', 'inferred', 'approved')),
-  weight DOUBLE PRECISION NOT NULL DEFAULT 1.0,
-  created_by TEXT NOT NULL DEFAULT 'system',
-  content_hash TEXT,
-  recorded_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  body TEXT NOT NULL DEFAULT '',
-  search_tsv TSVECTOR,
   first_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
   last_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (project_id, kind, node_key)
@@ -4422,10 +4408,6 @@ CREATE INDEX IF NOT EXISTS idx_kg_nodes_confidence
   ON kg_nodes(project_id, confidence);
 CREATE INDEX IF NOT EXISTS idx_kg_nodes_valid
   ON kg_nodes(project_id, valid_from, valid_to);
-CREATE INDEX IF NOT EXISTS idx_kg_nodes_project_kind_valid
-  ON kg_nodes(project_id, kind, valid_to);
-CREATE INDEX IF NOT EXISTS idx_kg_nodes_search
-  ON kg_nodes USING GIN (search_tsv);
 
 CREATE TABLE IF NOT EXISTS kg_edges (
   id TEXT PRIMARY KEY,
@@ -4440,14 +4422,6 @@ CREATE TABLE IF NOT EXISTS kg_edges (
   confidence DOUBLE PRECISION NOT NULL DEFAULT 1.0 CHECK (confidence >= 0 AND confidence <= 1),
   valid_from TIMESTAMPTZ,
   valid_to TIMESTAMPTZ,
-  org_id TEXT,
-  scope TEXT,
-  trust_tier TEXT NOT NULL DEFAULT 'observed'
-    CHECK (trust_tier IN ('observed', 'governed', 'inferred', 'approved')),
-  weight DOUBLE PRECISION NOT NULL DEFAULT 1.0,
-  created_by TEXT NOT NULL DEFAULT 'system',
-  content_hash TEXT,
-  recorded_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   first_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
   last_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (project_id, src_id, dst_id, kind)
@@ -4467,63 +4441,6 @@ CREATE TABLE IF NOT EXISTS kg_eval_snapshots (
 );
 CREATE INDEX IF NOT EXISTS idx_kg_eval_snapshots_project
   ON kg_eval_snapshots(project_id, created_at DESC);
-
--- BOSSAPP-622. One embedding space per (model, dimension). HNSW needs pgvector,
--- which the Alpine image does not have; exact cosine over this array is the
--- Phase 0 retrieval path. A later image can add the index without a new table.
-CREATE TABLE IF NOT EXISTS kg_embeddings (
-  id TEXT PRIMARY KEY,
-  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-  node_id TEXT NOT NULL REFERENCES kg_nodes(id) ON DELETE CASCADE,
-  model_id TEXT NOT NULL,
-  dimensions INTEGER NOT NULL CHECK (dimensions > 0),
-  embedding DOUBLE PRECISION[] NOT NULL,
-  content_hash TEXT NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  UNIQUE (node_id, model_id, content_hash)
-);
-CREATE INDEX IF NOT EXISTS idx_kg_embeddings_project_model
-  ON kg_embeddings(project_id, model_id);
-
--- BOSSAPP-622 capture, usage, and audit. Tenancy is project_id on every row.
-CREATE TABLE IF NOT EXISTS kg_captures (
-  id TEXT PRIMARY KEY,
-  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-  source_kind TEXT NOT NULL,
-  source_id TEXT NOT NULL,
-  content_hash TEXT NOT NULL,
-  body TEXT NOT NULL,
-  scrub_counts JSONB NOT NULL DEFAULT '{}'::jsonb,
-  status TEXT NOT NULL DEFAULT 'captured',
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  UNIQUE (project_id, source_kind, source_id, content_hash)
-);
-CREATE TABLE IF NOT EXISTS kg_usage (
-  id TEXT PRIMARY KEY,
-  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-  run_id TEXT NOT NULL,
-  step TEXT NOT NULL,
-  fact_id TEXT NOT NULL REFERENCES kg_nodes(id) ON DELETE CASCADE,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE INDEX IF NOT EXISTS idx_kg_usage_run ON kg_usage(project_id, run_id);
-CREATE TABLE IF NOT EXISTS kg_fact_stats (
-  fact_id TEXT PRIMARY KEY REFERENCES kg_nodes(id) ON DELETE CASCADE,
-  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-  success_count INTEGER NOT NULL DEFAULT 0,
-  failure_count INTEGER NOT NULL DEFAULT 0,
-  last_used_at TIMESTAMPTZ,
-  archived BOOLEAN NOT NULL DEFAULT FALSE
-);
-CREATE TABLE IF NOT EXISTS kg_audit (
-  id TEXT PRIMARY KEY,
-  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-  action TEXT NOT NULL,
-  entity_id TEXT NOT NULL,
-  actor_kind TEXT NOT NULL,
-  detail JSONB NOT NULL DEFAULT '{}'::jsonb,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
 
 -- ── AI SRE reliability pipeline (RB-3/RB-4) ───────────────────────────────────
 -- A telemetry source (a connected observability tool). Scan can also run against an

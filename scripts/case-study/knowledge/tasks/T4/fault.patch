@@ -1,6 +1,0 @@
---- a/reservation.py
-+++ b/reservation.py
-@@ -1,2 +1,2 @@
- def reserve(quantity):
--    return quantity
-+    return quantity + 1

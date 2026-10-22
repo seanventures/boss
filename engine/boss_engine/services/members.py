@@ -232,14 +232,6 @@ class MemberDirectoryService:
         ]
 
         for member in defaults:
-            permissions = list(member["permissions"])
-            if "knowledge:read" not in permissions:
-                permissions.append("knowledge:read")
-            if member["member_id"] in {"ceo", "cto", "executive_console"} and (
-                "knowledge:manage" not in permissions
-            ):
-                permissions.append("knowledge:manage")
-            member["permissions"] = permissions
             # Bootstrap runs again on upgrades. An ordinary upsert would turn an
             # inactive default member back on, or grant back a removed permission.
             # The database conflict clause also makes concurrent seed calls safe.

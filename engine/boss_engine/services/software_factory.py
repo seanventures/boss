@@ -2078,39 +2078,11 @@ class SoftwareFactoryService:
             created_by_job_id=created_by_job_id,
         )
         sealed_evidence = attach_sealed_evidence(evidence)
-        citations: list[str] = []
-        try:
-            from .knowledge.runtime import attach_citations, remember_written_files
-
-            remembered = remember_written_files(
-                connection,
-                project_id=project_id,
-                source_id=f"pr-{pr.number}",
-                title=title,
-                body=summary,
-                files=files,
-                run_id=str(run_id or ""),
-            )
-            citations = [str(item) for item in (remembered.get("cited_fact_ids") or [])]
-        except Exception:
-            citations = []
-            try:
-                self.events.emit(
-                    connection,
-                    project_id,
-                    "knowledge.commit_capture_failed",
-                    "coding_worker",
-                    "task",
-                    task_id or project_id,
-                    {},
-                )
-            except Exception:
-                pass
-
-            def attach_citations(recommendation, _fact_ids):
-                return dict(recommendation or {})
-
-        recommendation = attach_citations(
+        decision_id = self.decisions.create_blocking(
+            connection,
+            project_id,
+            task_id,
+            f"Approve code change: {title} (PR #{pr.number})",
             {
                 "action": "review_pull_request",
                 "summary": (
@@ -2141,14 +2113,6 @@ class SoftwareFactoryService:
                 "no_auto_merge": True,
                 **sealed_evidence,
             },
-            citations,
-        )
-        decision_id = self.decisions.create_blocking(
-            connection,
-            project_id,
-            task_id,
-            f"Approve code change: {title} (PR #{pr.number})",
-            recommendation,
             {},
             "merge_decision_required",
         )
