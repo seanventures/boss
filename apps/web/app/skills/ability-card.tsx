@@ -77,7 +77,8 @@ export function PrimaryAction({ ability, status, onAction, compact, permissions 
   permissions?: CardPermissions;
 }) {
   const action = ACTION_OF[status];
-  const label = BUTTON[status];
+  // Email (SMTP)'s test sends a message, so its button says so.
+  const label = ability.key === "email" && BUTTON[status] === "Test" ? "Send test" : BUTTON[status];
   const cls = `kit-btn${status === "setup" || status === "needs_repo" || status === "failing" || status === "review" ? " kit-btn-primary" : ""}${compact ? " kit-btn-sm" : ""}`;
   if (action === "repo") {
     return <a className={cls} href={REPO_HREF} data-testid={`kit-action-${ability.key}`}

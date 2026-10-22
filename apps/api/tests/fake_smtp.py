@@ -13,10 +13,14 @@ from typing import Optional
 
 
 class FakeSMTP:
-    def __init__(self, *, refuse_rcpt: Optional[str] = None):
+    def __init__(self, *, refuse_rcpt: Optional[str] = None, auth: bool = False):
         self.messages: list[EmailMessage] = []
         self.envelopes: list[tuple[str, list[str]]] = []
         self.refuse_rcpt = refuse_rcpt
+        #: Offer AUTH PLAIN and accept any login (the logins seen are kept, for "the key reached
+        #: the server and nowhere else").
+        self.auth = auth
+        self.logins: list[str] = []
         outer = self
 
         class Handler(socketserver.StreamRequestHandler):
@@ -34,7 +38,12 @@ class FakeSMTP:
                     verb = cmd.split(" ", 1)[0].upper()
                     if verb in ("EHLO", "HELO"):
                         self.reply("250-fake.example.com")
+                        if outer.auth:
+                            self.reply("250-AUTH PLAIN LOGIN")
                         self.reply("250 8BITMIME")
+                    elif verb == "AUTH":
+                        outer.logins.append(cmd)
+                        self.reply("235 2.7.0 Authentication successful")
                     elif verb == "MAIL":
                         sender, rcpts = cmd.split(":", 1)[1].strip(" <>").split(">")[0], []
                         self.reply("250 OK")
@@ -55,7 +64,7 @@ class FakeSMTP:
                         outer.messages.append(
                             message_from_bytes(b"".join(lines), policy=policy.default))
                         outer.envelopes.append((sender, rcpts))
-                        self.reply("250 queued")
+                        self.reply("250 2.0.0 Ok: queued as FAKE123")
                     elif verb == "QUIT":
                         self.reply("221 bye")
                         return

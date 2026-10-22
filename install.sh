@@ -122,6 +122,12 @@ INSTALL_DIR="${BOSS_INSTALL_DIR:-$HOME/boss}"
 BACKUP_DIR=""
 WITH_WEB=1
 WEB_EXPLICIT=0
+# THE LOCAL TEST INBOX (Mailpit) is OFF unless the operator asks: --with-mailpit, or
+# BOSS_EMAIL_DEV_INBOX=1 in the environment. Every install brings its own mail service (EMAIL.md).
+WITH_MAILPIT="${BOSS_EMAIL_DEV_INBOX:-0}"
+case "$WITH_MAILPIT" in 1|true|yes|on) WITH_MAILPIT=1 ;; *) WITH_MAILPIT=0 ;; esac
+MAILPIT_EXPLICIT=0
+[[ -n "${BOSS_EMAIL_DEV_INBOX:-}" ]] && MAILPIT_EXPLICIT=1
 NONINTERACTIVE=0
 SKIP_MODEL_KEY=0
 OPENAI_KEY_PRESET="${OPENAI_API_KEY:-}"
@@ -222,6 +228,8 @@ Options:
   --yes, -y               Never ask a question. Starts without a model key if none is found
   --no-web                Skip Mission Control web console
   --web                   Enable Mission Control on an install previously made without it
+  --with-mailpit          Add a local test inbox (Mailpit): mail stays on this machine. Off by
+                          default; also BOSS_EMAIL_DEV_INBOX=1. --no-mailpit turns it off again
   --public-url URL        Browser-reachable API URL when using a reverse proxy
   --console-origin URL    HTTPS origin for Mission Control (DNS hostname, no path).
                           The web listener stays on 127.0.0.1. See docs/community/hostname.md
@@ -318,6 +326,8 @@ while [[ $# -gt 0 ]]; do
       die "Refusing a secret on the command line. It would be saved in shell history and process listings. Export OPENAI_API_KEY, ANTHROPIC_API_KEY, or BOSS_GITHUB_TOKEN, or paste the OpenAI key at the hidden prompt." ;;
     --no-web) WITH_WEB=0; WEB_EXPLICIT=1; shift ;;
     --web) WITH_WEB=1; WEB_EXPLICIT=1; shift ;;
+    --with-mailpit) WITH_MAILPIT=1; MAILPIT_EXPLICIT=1; shift ;;
+    --no-mailpit) WITH_MAILPIT=0; MAILPIT_EXPLICIT=1; shift ;;
     --public-url) PUBLIC_URL="$2"; PUBLIC_URL_EXPLICIT=1; shift 2 ;;
     --console-origin)
       if [[ $# -lt 2 || -z "${2:-}" ]]; then
@@ -670,6 +680,12 @@ if [[ "$WEB_EXPLICIT" -eq 0 && -f "$INSTALL_DIR/.env" ]]; then
     1) WITH_WEB=1 ;;
   esac
 fi
+# A rerun keeps the test inbox only when the operator opted in before (the marker is written
+# by the opt-in alone; an install that never asked keeps it off).
+if [[ "$MAILPIT_EXPLICIT" -eq 0 && -f "$INSTALL_DIR/.env" ]] &&
+   grep -q '^BOSS_EMAIL_DEV_INBOX_OPTED_IN=1$' "$INSTALL_DIR/.env" 2>/dev/null; then
+  WITH_MAILPIT=1
+fi
 
 OPENAI_KEY="$OPENAI_KEY_PRESET"
 ANTHROPIC_KEY="$ANTHROPIC_KEY_PRESET"
@@ -735,8 +751,8 @@ GRAFANA_PORT="${GRAFANA_PORT:-3300}"
 MON_PROMETHEUS_URL=""
 MON_GRAFANA_URL=""
 MON_GRAFANA_PUBLIC_URL=""
-# THE DEV INBOX (Mailpit, compose `web` profile): mail lands there until a provider is set in
-# Settings › Email, so invitations work on a fresh install with no mail account (docs EMAIL.md).
+# THE LOCAL TEST INBOX (Mailpit, compose `mail` profile), only with --with-mailpit: the Email
+# (SMTP) connector can then choose it, and mail lands there with nothing leaving the machine.
 MAILPIT_PORT="${BOSS_MAILPIT_PORT:-$(grep -m 1 '^BOSS_MAILPIT_PORT=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2- || true)}"
 MAILPIT_PORT="${MAILPIT_PORT:-8025}"
 MAIL_DEV_INBOX=""
@@ -748,14 +764,20 @@ if [[ "$WITH_WEB" -eq 1 ]]; then
   MON_GRAFANA_URL="http://grafana:3000"
   MON_GRAFANA_PUBLIC_URL="http://localhost:${GRAFANA_PORT}"
   ui_ok "Monitoring: bundled Prometheus and Grafana (Grafana on port $GRAFANA_PORT)"
-  MAIL_DEV_INBOX="mailpit:1025"
-  MAIL_DEV_INBOX_URL="http://localhost:${MAILPIT_PORT}"
-  ui_ok "Email: dev inbox (Mailpit on port $MAILPIT_PORT) until you set a provider in Settings › Email"
   if port_in_use "$GRAFANA_PORT" && ! docker ps --format '{{.Names}}' 2>/dev/null | grep -q 'grafana'; then
     ui_warn "Port $GRAFANA_PORT is already in use — set BOSS_GRAFANA_PORT to another port and re-run if Grafana does not start."
   fi
 else
   ui_ok "Mission Control: skipped"
+fi
+
+if [[ "$WITH_MAILPIT" -eq 1 ]]; then
+  COMPOSE_PROFILES="$COMPOSE_PROFILES --profile mail"
+  MAIL_DEV_INBOX="mailpit:1025"
+  MAIL_DEV_INBOX_URL="http://localhost:${MAILPIT_PORT}"
+  ui_ok "Email: local test inbox (Mailpit, port $MAILPIT_PORT) — local only"
+else
+  ui_ok "Email: connect your mail server in Skills & MCP › Email (SMTP)"
 fi
 
 if [[ "$SECRET_STORE" == "infisical" ]]; then
@@ -1192,8 +1214,9 @@ BOSS_GRAFANA_PORT=${GRAFANA_PORT}
 BOSS_MONITORING_PROMETHEUS_URL=${MON_PROMETHEUS_URL}
 BOSS_MONITORING_GRAFANA_URL=${MON_GRAFANA_URL}
 BOSS_MONITORING_GRAFANA_PUBLIC_URL=${MON_GRAFANA_PUBLIC_URL}
-# The dev inbox (Mailpit) catches mail until a provider is set; empty when Mission Control is skipped.
+# The local test inbox (Mailpit): empty unless the operator opted in with --with-mailpit.
 BOSS_MAILPIT_PORT=${MAILPIT_PORT}
+BOSS_EMAIL_DEV_INBOX_OPTED_IN=${WITH_MAILPIT}
 BOSS_EMAIL_DEV_INBOX=${MAIL_DEV_INBOX}
 BOSS_EMAIL_DEV_INBOX_URL=${MAIL_DEV_INBOX_URL}
 BOSS_COMMUNITY_SECRET_STORE=${SECRET_STORE}

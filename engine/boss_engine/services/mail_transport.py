@@ -10,12 +10,13 @@ operator who set up mail on the Email screen still saw invitations "not emailed"
 one setting is a bug waiting for its second report; one resolver cannot disagree with itself.
 
 WHICH SERVER, in order:
-  1. the server saved in the console (Settings › Email) for the project — saving it is the
-     operator's consent to send (email_config.settings_for);
+  1. the Email (SMTP) connector (Skills & MCP) for the project — connecting it is the operator's
+     consent to send (email_config.settings_for). The connector may instead choose the local
+     test inbox, when the install enabled it;
   2. the environment (BOSS_EMAIL_SMTP_*), which sends for real only with
      BOSS_EMAIL_REAL_SEND_ALLOWED=true;
-  3. the dev inbox (BOSS_EMAIL_DEV_INBOX, the bundled Mailpit) — nothing leaves the machine, so
-     no switch is needed, and the operator sees every message without any provider account;
+  3. the dev inbox (BOSS_EMAIL_DEV_INBOX, the bundled Mailpit), ONLY when the install opted in
+     (install.sh --with-mailpit): nothing leaves the machine;
   4. nothing: the caller is told why, in words.
 
 BOSS never ships a sender, a domain or a provider credential: every install sends as itself.
@@ -43,7 +44,7 @@ class MailRoute:
     """Which server a message would go through, and why."""
 
     settings: Settings
-    #: console | env | dev_inbox | none
+    #: connector | env | dev_inbox | none
     source: str
     #: For a screen: "smtp.example.com as boss@example.com", or why nothing is configured.
     detail: str
@@ -55,7 +56,7 @@ class MailRoute:
     @property
     def real(self) -> bool:
         """True when mail leaves this machine (a provider), False for the dev inbox."""
-        return self.source in ("console", "env")
+        return self.source in ("connector", "env")
 
     def describe(self) -> dict[str, Any]:
         out = {"ready": self.ready, "source": self.source, "detail": self.detail,
@@ -82,13 +83,21 @@ class Delivery:
         return {"status": self.status, "reason": self.reason or None, "via": self.source}
 
 
+#: Where the connector's settings live, for every reason that names them.
+CONNECTOR = "Email (SMTP) in Skills & MCP"
+
+
 def _saved_route(connection: Any, settings: Settings, project_id: str) -> Optional[Settings]:
+    """The connector's server (Settings with it applied); the string "dev_inbox" when the
+    connector chose the local test inbox; None when nothing is connected."""
     from . import email_config
 
     row = email_config._row(connection, project_id)
-    if not row or not row.get("host"):
+    if not row:
         return None
-    return email_config.settings_for(connection, settings, project_id)
+    if row.get("mode") == "dev_inbox":
+        return "dev_inbox"  # type: ignore[return-value]
+    return email_config._applied(settings, row, email_config._password(connection, settings, row))
 
 
 def _with_connection(fn, settings: Settings):
@@ -102,10 +111,24 @@ def _with_connection(fn, settings: Settings):
         return None
 
 
+#: BOSS_EMAIL_DEV_INBOX=1 means the bundled Mailpit, at its compose address.
+BUNDLED_MAILPIT = "mailpit:1025"
+_ON = ("1", "true", "yes", "on")
+_OFF = ("0", "false", "no", "off")
+
+
+def dev_inbox_enabled(settings: Settings) -> bool:
+    return _dev_inbox(settings) is not None
+
+
 def _dev_inbox(settings: Settings) -> Optional[Settings]:
+    """The dev inbox, when the install turned it on: BOSS_EMAIL_DEV_INBOX=1 (the bundled Mailpit)
+    or host:port. Empty, 0 or off is off — the default."""
     raw = str(getattr(settings, "email_dev_inbox", "") or "").strip()
-    if not raw:
+    if not raw or raw.lower() in _OFF:
         return None
+    if raw.lower() in _ON:
+        raw = BUNDLED_MAILPIT
     host, _, port = raw.rpartition(":") if ":" in raw else (raw, "", "1025")
     try:
         port_n = int(port)
@@ -134,11 +157,20 @@ def route(connection: Any = None, settings: Optional[Settings] = None,
             saved = None
     else:
         saved = _with_connection(lambda c: _saved_route(c, settings, project_id), settings)
-    if saved is not None:
-        return MailRoute(saved, "console",
+    dev = _dev_inbox(settings)
+    why = f"No mail server is connected. Connect {CONNECTOR}."
+    if saved == "dev_inbox":
+        if dev is not None:
+            return MailRoute(dev, "dev_inbox",
+                             f"the local test inbox at {dev.email_smtp_host}:"
+                             f"{dev.email_smtp_port} — nothing leaves this machine")
+        # Chosen in the connector, then turned off on the install: say so, and keep looking.
+        why = (f"{CONNECTOR} uses the local test inbox, but it is off on this install. "
+               "Connect a mail server, or re-run the installer with --with-mailpit.")
+    elif saved is not None:
+        return MailRoute(saved, "connector",
                          f"{saved.email_smtp_host} as {saved.email_from_address}")
 
-    why = "No mail server is set. Add one under Settings › Email."
     if settings.email_smtp_host and settings.email_from_address:
         if settings.email_real_send_allowed:
             return MailRoute(settings, "env",
@@ -148,7 +180,6 @@ def route(connection: Any = None, settings: Optional[Settings] = None,
     elif settings.email_smtp_host:
         why = "SMTP is set in the environment without a From address (BOSS_EMAIL_FROM_ADDRESS)."
 
-    dev = _dev_inbox(settings)
     if dev is not None:
         return MailRoute(dev, "dev_inbox",
                          f"the dev inbox at {dev.email_smtp_host}:{dev.email_smtp_port} — "
@@ -192,6 +223,19 @@ def send_with(settings: Settings, to: str, subject: Optional[str], text: str, *,
         return adapter.send_message(_channel(to), subject, text, html=html,
                                     inline_images=inline_images)
     return adapter.send_message(_channel(to), subject, text)
+
+
+def send_test(settings: Settings, to: str) -> str:
+    """Send Email (SMTP)'s test message through exactly these settings and return the server's
+    own reply to the message (e.g. `250 2.0.0 Ok: queued as 4ZxY`), scrubbed of the credential.
+    Raises what the server raised; `failure_reason` turns it into words."""
+    adapter = EmailAdapter(settings)
+    adapter.send_message(_channel(to), "BOSS connected ✓",
+                         "BOSS can send email from this address. Nothing to do.")
+    reply = getattr(adapter, "last_reply", None)
+    if not reply:
+        return "accepted"
+    return scrub(_server_said(*reply), settings)[:200]
 
 
 def send(to: str, subject: Optional[str], text: str, *, html: Optional[str] = None,

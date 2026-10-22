@@ -145,12 +145,13 @@ def _no_saved(monkeypatch):
 
 
 def test_the_route_is_env_then_dev_inbox_then_none(monkeypatch):
+    """With nothing connected (the connector-first order: engine/tests/test_email_is_a_connector.py)."""
     _no_saved(monkeypatch)
     base = get_settings().model_copy(update={
         "email_smtp_host": None, "email_from_address": None, "email_real_send_allowed": False,
         "email_dev_inbox": "", "email_dev_inbox_url": ""})
     none = mail_transport.route(None, base)
-    assert none.source == "none" and "Settings › Email" in none.detail
+    assert none.source == "none" and "Email (SMTP)" in none.detail
 
     env_off = base.model_copy(update={"email_smtp_host": "smtp.example.com",
                                       "email_from_address": "boss@example.com"})
@@ -267,7 +268,7 @@ def test_without_a_mail_server_the_invite_says_so_and_shows_the_link(world, engi
     mail(None)
     body = _invite(owner).json()
     assert body["delivery"]["status"] == "not_configured"
-    assert "Settings › Email" in body["delivery"]["reason"] and body["link"]
+    assert "Email (SMTP)" in body["delivery"]["reason"] and body["link"]
 
 
 def test_the_dev_inbox_gets_the_invite_but_does_not_verify_the_address(world, engine, mail):

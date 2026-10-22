@@ -237,6 +237,7 @@ A rerun retains both API credentials and any operator-added API keys, the databa
 - A rerun remembers which release you installed. Without `--ref`, it stays on the ref recorded in `.boss-release`, so changing a setting never moves a release install to `main`: `boss update --install-coding-clis` or `./install.sh --dir "$PWD" --install-coding-clis`.
 - Pasting the installer line again also backs up an existing running install before switching to a newer source revision. A stopped database container is started from its existing image ID for that snapshot, then returned to its stopped state. If that container is missing, cannot start, or backup fails, the source and configuration stay untouched. The backup path is printed; keep it private.
 - For an older headless install, pass `--no-web` once to record that choice; use `--web` to enable the console later.
+- The local test inbox (Mailpit) is off unless you pass `--with-mailpit` (or set `BOSS_EMAIL_DEV_INBOX=1`). A rerun keeps that choice; `--no-mailpit` turns it off. Real mail goes through the Email (SMTP) connector: see [Email](../../docs/community/EMAIL.md).
 - If you choose Infisical and it cannot be provisioned, the installer reports an incomplete install. The next rerun keeps that choice and retries it rather than silently switching to database credential storage.
 
 ### API keys

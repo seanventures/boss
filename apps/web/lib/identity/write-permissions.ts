@@ -175,7 +175,6 @@ export const INLINE_WRITES: Readonly<Record<string, readonly WriteGate[]>> = {
   "app/default-agent-picker.tsx": ["work_item:manage"],            // POST /v1/projects/{id}/agents
   "app/ask-boss-hero.tsx": ["workflow:publish", "workflow_run:start", "discovery:create"], // apply, /api/builds, /api/discoveries
   "app/delivery-workflows-ui.tsx": ["workflow_schedule:manage", "workflow:create", "deployment:create", "deployment_target:manage"],
-  "app/email-setup-ui.tsx": ["comms:manage"],                      // POST /v1/email/config
   "app/factory/legacy-build-parts.tsx": ["deployment:create", "deployment_target:manage"], // /api/app-deploy, retire
   "app/memory-ui.tsx": ["memory:manage"],                          // POST /v1/memory/{id}/{forget|review}
   "app/run-report-ui.tsx": ["workflow_run:control", "workflow:publish"], // POST …/report, apply

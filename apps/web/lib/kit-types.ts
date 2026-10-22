@@ -31,6 +31,10 @@ export type ProviderField = {
   options?: { value: string; label: string }[];
   /** The option chosen when nothing is stored. */
   default?: string;
+  /** A tooltip on the label. */
+  tip?: string;
+  /** An alternative input, drawn under "Fields" (Email: the URL is the main one). */
+  alt?: boolean;
 };
 
 export type Provider = {
@@ -41,6 +45,9 @@ export type Provider = {
   token_url?: string;
   scopes_tip?: string;
   keyless?: boolean;
+  tip?: string;
+  /** Delivers nothing off this machine (Email's local test inbox). */
+  local_only?: boolean;
 };
 
 export type TestResult = {

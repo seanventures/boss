@@ -161,6 +161,8 @@ compose() {
   local profiles=()
   [[ "$(env_value BOSS_COMMUNITY_WEB_ENABLED)" == 0 ]] || profiles+=(--profile web)
   [[ "$(env_value BOSS_COMMUNITY_SECRET_STORE)" != infisical ]] || profiles+=(--profile secrets)
+  # The local test inbox runs only on an install that opted in (install.sh --with-mailpit).
+  [[ -z "$(env_value BOSS_EMAIL_DEV_INBOX)" ]] || profiles+=(--profile mail)
   # The images are tagged with the compose project name (install.sh); without the same
   # default here Compose looks for boss-community-api:local, which was never built.
   COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-boss-community}" \

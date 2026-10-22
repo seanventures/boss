@@ -751,8 +751,8 @@
   {
    "key": "email",
    "group": "coordinate",
-   "label": "Email",
-   "tip": "Send email from your address.",
+   "label": "Email (SMTP)",
+   "tip": "Your own mail server or service sends BOSS's email.",
    "icon": "EnvelopeSimple",
    "provenance": "built_in",
    "essential": true,
@@ -764,37 +764,79 @@
      {
       "key": "smtp",
       "label": "SMTP",
+      "tip": "Brevo, SES, Postal, a company relay or any SMTP",
       "fields": [
+       {
+        "name": "url",
+        "label": "URL",
+        "optional": true,
+        "placeholder": "smtps://user:key@smtp.example.com:465",
+        "tip": "smtp:// is STARTTLS (587), smtps:// is TLS (465). Percent-encode @ / : # in the user and key."
+       },
+       {
+        "name": "from_address",
+        "label": "From",
+        "placeholder": "boss@example.com",
+        "tip": "An address on your own domain, verified with your provider"
+       },
+       {
+        "name": "from_name",
+        "label": "From name",
+        "optional": true,
+        "placeholder": "BOSS"
+       },
        {
         "name": "host",
         "label": "Host",
+        "optional": true,
+        "alt": true,
         "placeholder": "smtp.example.com"
        },
        {
         "name": "port",
         "label": "Port",
+        "optional": true,
+        "alt": true,
         "placeholder": "587"
        },
        {
-        "name": "from_address",
-        "label": "Send as",
-        "placeholder": "you@example.com"
+        "name": "security",
+        "label": "TLS",
+        "optional": true,
+        "alt": true,
+        "options": [
+         {
+          "value": "none",
+          "label": "None"
+         },
+         {
+          "value": "starttls",
+          "label": "STARTTLS"
+         },
+         {
+          "value": "ssl",
+          "label": "SSL"
+         }
+        ]
        },
        {
         "name": "username",
-        "label": "User",
-        "optional": true
+        "label": "Login",
+        "optional": true,
+        "alt": true
        },
        {
         "name": "password",
-        "label": "Password",
+        "label": "Key",
         "secret": true,
-        "optional": true
+        "optional": true,
+        "alt": true,
+        "tip": "Your provider's SMTP key or password. Kept in the secret store."
        }
       ]
      }
     ],
-    "provider": null,
+    "provider": "smtp",
     "set_fields": {},
     "acts_as": null,
     "flow": null,

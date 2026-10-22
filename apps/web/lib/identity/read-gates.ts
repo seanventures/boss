@@ -77,7 +77,6 @@ export const API_READ_OPS: Readonly<Record<string, ApiRead>> = {
   }, "runs"),
   "/api/deployment-hosts": one("deployment-hosts"),
   "/api/deployment-targets": one("deployment-targets"),
-  "/api/email-config": one("email/config"),
   "/api/govern": byView({ limits: "govern", spend: "govern/spend", envelopes: "govern/envelopes", daily: "budget/daily" }, "limits"),
   "/api/hardware/{...}": bySub({ places: "hardware/places", resolve: "hardware/resolve" }),
   "/api/host-advice": one("projects/{}/host-advice"),

@@ -174,13 +174,13 @@ services:
     ports:
       - "127.0.0.1:${BOSS_GRAFANA_PORT:-3300}:3000"
 
-  # THE DEV INBOX (docs/community/EMAIL.md). Until an operator configures a mail provider, every
-  # email BOSS sends — invitations, resets, workflow mail — lands here, and nothing leaves the
-  # machine. The UI is on the loopback only; SMTP is reachable inside the compose network only.
-  # Comes up with Mission Control (web) or alone with `--profile mail`. Official image, pinned.
+  # THE LOCAL TEST INBOX (docs/community/EMAIL.md). OFF BY DEFAULT: only the `mail` profile
+  # starts it, which install.sh adds with --with-mailpit (or BOSS_EMAIL_DEV_INBOX=1). The Email
+  # (SMTP) connector can then choose it, and nothing sent to it leaves the machine. The UI is on
+  # the loopback only; SMTP is reachable inside the compose network only. Official image, pinned.
   mailpit:
     image: axllent/mailpit:v1.31.6
-    profiles: ["web", "mail"]
+    profiles: ["mail"]
     restart: unless-stopped
     mem_limit: 128m
     environment:
@@ -266,8 +266,8 @@ services:
       BOSS_MONITORING_GRAFANA_URL: ${BOSS_MONITORING_GRAFANA_URL:-}
       BOSS_MONITORING_GRAFANA_PUBLIC_URL: ${BOSS_MONITORING_GRAFANA_PUBLIC_URL:-}
       BOSS_MONITORING_DASHBOARDS_DIR: /var/lib/boss/grafana-dashboards
-      # Email (docs/community/EMAIL.md): the dev inbox catches mail until a provider is set in
-      # Settings › Email. install.sh writes these with Mission Control.
+      # Email (docs/community/EMAIL.md): the local test inbox, set only when the operator opted
+      # in (install.sh --with-mailpit); mail otherwise goes through the Email (SMTP) connector.
       BOSS_EMAIL_DEV_INBOX: ${BOSS_EMAIL_DEV_INBOX:-}
       BOSS_EMAIL_DEV_INBOX_URL: ${BOSS_EMAIL_DEV_INBOX_URL:-}
       # The console's real port, for links printed before any public origin is bound (the claim
