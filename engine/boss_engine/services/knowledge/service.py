@@ -15,7 +15,7 @@ from .age import extension_version as age_extension_version
 from .archivist import distil, forget_source as forget_source_lineage
 from .capture import capture_lifecycle as capture_lifecycle_record
 from .learning import apply_learning
-from .retrieval import blast_radius, knowledge_pack, precedent_section, rank_hits
+from .retrieval import blast_radius, fuse_lists, knowledge_pack, precedent_section, rank_hits
 from .store import PostgresKnowledgeStore
 
 READ = "knowledge:read"
@@ -34,12 +34,34 @@ class KnowledgeService:
         query: str,
         limit: int = 20,
         policy=None,
+        embedder=None,
+        seeds: Optional[list[str]] = None,
     ) -> dict[str, Any]:
-        hits = self.store.text_search(
-            connection, project_id=project_id, query=query, limit=limit, policy=policy
+        """Hybrid retrieval: full text, the graph around the seeds (or around the best text hits),
+        and the vector index when an embedder is given, fused by reciprocal rank. Governed and
+        approved facts still rank above inferred ones (rank_hits)."""
+        text_hits = self.store.text_search(
+            connection, project_id=project_id, query=query, limit=max(limit, 20), policy=policy
         )
+        seed_ids = list(seeds or [hit["node_id"] for hit in text_hits[:5]])
+        lists: dict[str, list[dict]] = {
+            "text": text_hits,
+            "graph": self.store.graph_candidates(
+                connection, project_id=project_id, seed_ids=seed_ids, policy=policy),
+        }
+        reason = None
+        if embedder is None:
+            from ...config import get_settings
+            from .embeddings import configured_embedder
+
+            embedder, reason = configured_embedder(get_settings())
+        if embedder is not None:
+            vector = embedder.embed([query])[0]
+            lists["vector"] = self.store.vector_search(
+                connection, project_id=project_id, model_id=embedder.model_id,
+                embedding=list(vector), limit=50, policy=policy)
         enriched = []
-        for hit in hits:
+        for hit in fuse_lists(lists):
             node = self.store.get_node(
                 connection, project_id=project_id, node_id=hit["node_id"]
             )
@@ -51,7 +73,12 @@ class KnowledgeService:
                 "trust_tier": node["trust_tier"],
                 "body": node["body"],
             })
-        return {"hits": rank_hits(enriched)}
+        return {
+            "hits": rank_hits(enriched)[:limit],
+            "retrieval": {"mode": "hybrid" if "vector" in lists else "text+graph",
+                          "lists": {name: len(items) for name, items in lists.items()},
+                          **({"reason": reason} if reason else {})},
+        }
 
     def why(
         self, connection: Connection, *, project_id: str, node_id: str, policy=None
@@ -308,6 +335,12 @@ class KnowledgeService:
         }
 
     def status(self, connection: Connection, *, project_id: str) -> dict[str, Any]:
+        from ...config import get_settings
+        from .embeddings import configured_embedder
+
+        settings = get_settings()
+        embedder, reason = configured_embedder(settings)
+        embedding_model = str(getattr(settings, "knowledge_embedding_model", "") or "")
         counts = self.store.counts(connection, project_id=project_id)
         rows = connection.execute(
             text(
@@ -341,8 +374,11 @@ class KnowledgeService:
             "ingest_lag_seconds": None,
             "cost_usd": None,
             "retention_years": 1,
-            "embedding_model": None,
+            "embedding_model": embedding_model or None,
+            "retrieval": {"mode": "hybrid" if embedder is not None else "text+graph",
+                          **({"reason": reason} if reason else {})},
             "vector_index": self.store.vector_index_kind(connection),
+            "vector_extension": self.store.vector_extension_version(connection),
             "age_extension": age_extension_version(connection),
             "sources": ["adr folder", "connector document"],
         }

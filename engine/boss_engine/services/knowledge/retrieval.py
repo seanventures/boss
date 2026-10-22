@@ -63,6 +63,20 @@ def fuse(text_hits: list[dict], vector_hits: list[dict]) -> list[dict]:
     return rank_hits(list(fused.values()))
 
 
+def fuse_lists(lists: dict[str, list[dict]]) -> list[dict]:
+    """Reciprocal-rank fusion of named candidate lists (text, graph, vector). A node in several
+    lists outranks one in a single list; each hit records which lists found it."""
+    fused: dict[str, dict] = {}
+    for name, hits in lists.items():
+        for rank, hit in enumerate(hits, start=1):
+            slot = fused.setdefault(hit["node_id"], {"node_id": hit["node_id"],
+                                                    "node_key": hit.get("node_key"),
+                                                    "score": 0.0, "via": []})
+            slot["score"] += 1.0 / (RRF_K + rank)
+            slot["via"].append(name)
+    return sorted(fused.values(), key=lambda item: (-item["score"], str(item.get("node_key") or "")))
+
+
 def knowledge_pack(
     *,
     role: str,

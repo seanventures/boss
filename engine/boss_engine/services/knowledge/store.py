@@ -934,6 +934,11 @@ class PostgresKnowledgeStore:
             is not None
         )
 
+    def vector_extension_version(self, connection: Connection) -> Optional[str]:
+        return connection.execute(
+            text("SELECT extversion FROM pg_extension WHERE extname = 'vector'")
+        ).scalar()
+
     def vector_index_kind(self, connection: Connection) -> str:
         self.ensure_schema(connection)
         row = connection.execute(
@@ -1086,10 +1091,12 @@ class PostgresKnowledgeStore:
         model_id: str,
         embedding: list[float],
         limit: int = 20,
+        policy: Optional[StagePolicy] = None,
     ) -> list[dict[str, Any]]:
         self.ensure_schema(connection)
         self._org_id(connection, project_id, None)
         literal = _vector_literal(embedding)
+        scope_sql, scope_params = self._scope_sql(connection, project_id, policy, alias="n")
         span = connection.execute(
             text(
                 """
@@ -1126,7 +1133,7 @@ class PostgresKnowledgeStore:
                       JOIN kg_nodes n
                         ON n.id = e.node_id AND n.content_hash = e.content_hash
                       WHERE n.project_id = :project_id
-                        AND (n.valid_to IS NULL OR n.valid_to > now())
+                        AND (n.valid_to IS NULL OR n.valid_to > now()){scope_sql}
                     ) scored
                     WHERE cosine > 0
                     ORDER BY cosine DESC, node_key ASC
@@ -1137,12 +1144,13 @@ class PostgresKnowledgeStore:
                     "model_id": model_id,
                     "query": _pgvector_literal(embedding),
                     "limit": bound,
+                    **scope_params,
                 },
             ).mappings().all()
             return [dict(row) for row in rows]
         rows = connection.execute(
             text(
-                """
+                f"""
                 SELECT node_id, node_key, cosine FROM (
                   SELECT n.id AS node_id, n.node_key,
                     (
@@ -1160,7 +1168,7 @@ class PostgresKnowledgeStore:
                   WHERE e.project_id = :project_id
                     AND e.model_id = :model_id
                     AND n.project_id = :project_id
-                    AND (n.valid_to IS NULL OR n.valid_to > now())
+                    AND (n.valid_to IS NULL OR n.valid_to > now()){scope_sql}
                 ) scored
                 WHERE cosine > 0
                 ORDER BY cosine DESC, node_key ASC
@@ -1172,7 +1180,44 @@ class PostgresKnowledgeStore:
                 "model_id": model_id,
                 "query": literal,
                 "limit": bound,
+                **scope_params,
             },
+        ).mappings().all()
+        return [dict(row) for row in rows]
+
+    def graph_candidates(
+        self,
+        connection: Connection,
+        *,
+        project_id: str,
+        seed_ids: list[str],
+        policy: Optional[StagePolicy] = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Nodes one hop from the seeds (either direction, not ``defines``), most-linked first:
+        the graph's list for hybrid retrieval (facts about a symbol, the incident a fix closed)."""
+        if not seed_ids:
+            return []
+        scope_sql, scope_params = self._scope_sql(connection, project_id, policy, alias="n")
+        rows = connection.execute(
+            text(
+                f"""
+                SELECT n.id AS node_id, n.node_key, COUNT(*) AS links
+                FROM kg_edges e
+                JOIN kg_nodes n ON n.id = CASE WHEN e.src_id = ANY(:seeds) THEN e.dst_id ELSE e.src_id END
+                WHERE e.project_id = :project_id
+                  AND (e.src_id = ANY(:seeds) OR e.dst_id = ANY(:seeds))
+                  AND e.kind <> 'defines'
+                  AND (e.valid_to IS NULL OR e.valid_to > now())
+                  AND n.project_id = :project_id AND NOT n.id = ANY(:seeds)
+                  AND (n.valid_to IS NULL OR n.valid_to > now()){scope_sql}
+                GROUP BY n.id, n.node_key
+                ORDER BY COUNT(*) DESC, n.node_key
+                LIMIT :limit
+                """
+            ),
+            {"project_id": project_id, "seeds": list(seed_ids), "limit": max(1, min(int(limit), 100)),
+             **scope_params},
         ).mappings().all()
         return [dict(row) for row in rows]
 
