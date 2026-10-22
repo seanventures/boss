@@ -10123,3 +10123,47 @@ CREATE TABLE IF NOT EXISTS synthetic_checks (
   created_by TEXT NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- BOSSAPP-622 event-driven ingest (operator decision 2026-10-21; services/knowledge/ingest.py).
+-- A run is queued the moment its status becomes completed or failed, and an incident the moment
+-- it becomes resolved, whatever code path finished it. The worker drains the queue every 30 s;
+-- every 10 minutes the same call also sweeps for anything the triggers missed.
+CREATE TABLE IF NOT EXISTS kg_ingest_queue (
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  source_kind TEXT NOT NULL CHECK (source_kind IN ('run', 'incident')),
+  source_id TEXT NOT NULL,
+  finished_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  attempts INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT,
+  PRIMARY KEY (project_id, source_kind, source_id)
+);
+CREATE INDEX IF NOT EXISTS idx_kg_ingest_queue_due ON kg_ingest_queue(finished_at) WHERE attempts < 3;
+CREATE OR REPLACE FUNCTION kg_queue_finished_run() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF NEW.status IN ('completed', 'failed') AND OLD.status IS DISTINCT FROM NEW.status THEN
+    INSERT INTO kg_ingest_queue (project_id, source_kind, source_id)
+    VALUES (NEW.project_id, 'run', NEW.id) ON CONFLICT DO NOTHING;
+  END IF;
+  RETURN NEW;
+END $$;
+CREATE OR REPLACE FUNCTION kg_queue_resolved_incident() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF NEW.status = 'resolved' AND OLD.status IS DISTINCT FROM NEW.status THEN
+    INSERT INTO kg_ingest_queue (project_id, source_kind, source_id)
+    VALUES (NEW.project_id, 'incident', NEW.id) ON CONFLICT DO NOTHING;
+  END IF;
+  RETURN NEW;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'kg_queue_finished_run'
+                 AND tgrelid = 'code_task_runs'::regclass) THEN
+    CREATE TRIGGER kg_queue_finished_run AFTER UPDATE OF status ON code_task_runs
+      FOR EACH ROW EXECUTE FUNCTION kg_queue_finished_run();
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'kg_queue_resolved_incident'
+                 AND tgrelid = 'incidents'::regclass) THEN
+    CREATE TRIGGER kg_queue_resolved_incident AFTER UPDATE OF status ON incidents
+      FOR EACH ROW EXECUTE FUNCTION kg_queue_resolved_incident();
+  END IF;
+END $$;

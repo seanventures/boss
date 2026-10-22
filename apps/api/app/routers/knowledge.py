@@ -7,6 +7,7 @@ GET  /v1/knowledge/graph-status   (/v1/knowledge/status is BOSS-356's pack-conte
 POST /v1/knowledge/facts/{fact_id}/promote
 POST /v1/knowledge/facts/{fact_id}/reject
 POST /v1/knowledge/facts/{fact_id}/forget
+POST /v1/knowledge/ingest/tick     (the worker: drain the finish queue, sweep on request)
 
 Manage calls require knowledge:manage and step_up=confirmed. That confirmation
 is explicit in the body. It is not a WebAuthn ceremony.
@@ -142,3 +143,19 @@ def reject(fact_id: str, body: ManageBody) -> dict[str, Any]:
 @permit(P.KNOWLEDGE_MANAGE, scope=Scope.project(body="project_id"))
 def forget(fact_id: str, body: ManageBody) -> dict[str, Any]:
     return _manage(body, _service.forget, fact_id=fact_id)
+
+
+class IngestTickBody(BaseModel):
+    sweep: bool = False
+
+
+@router.post("/ingest/tick")
+@permit(P.WORKER_LEASE)
+def ingest_tick(body: Optional[IngestTickBody] = None) -> dict[str, Any]:
+    """The worker's loop: capture the runs and incidents that just finished (event-driven ingest,
+    services/knowledge/ingest.py). No model is called."""
+    from apps.api.app.main import require_worker_principal
+    from boss_engine.services.knowledge.ingest import tick
+
+    require_worker_principal()
+    return tick(_engine, sweep=bool(body and body.sweep))

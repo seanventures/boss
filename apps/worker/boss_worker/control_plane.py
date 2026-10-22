@@ -360,6 +360,13 @@ class ControlPlaneClient:
         response.raise_for_status()
         return response.json()
 
+    def knowledge_ingest_tick(self, *, sweep: bool = False) -> dict[str, Any]:
+        """Capture the runs and incidents that just finished into the knowledge graph (the API's
+        kg_ingest_queue, filled by database triggers); ``sweep`` also catches what they missed."""
+        response = self._client.post("/v1/knowledge/ingest/tick", json={"sweep": sweep})
+        response.raise_for_status()
+        return response.json()
+
     def improve_tick(self) -> dict[str, Any]:
         """Scorecard upkeep and, once a day, the Improve BOSS / heartbeat send (the API owns
         both; this only knocks). Cheap when nothing is due."""
