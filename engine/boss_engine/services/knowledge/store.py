@@ -1629,6 +1629,9 @@ class PostgresKnowledgeStore:
             text("DELETE FROM kg_nodes WHERE id = :id AND project_id = :project_id"),
             {"id": node_id, "project_id": project_id},
         )
+        from .age import forget_vertex
+
+        forget_vertex(connection, project_id, node_id)     # a forget must not linger in Cypher
 
     def facts_about_source(
         self, connection: Connection, *, project_id: str, source_id: str

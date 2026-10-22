@@ -143,6 +143,7 @@ TOOL_LAYERS: dict[str, frozenset[str]] = {
     "kg_why": frozenset(LAYERS),
     "kg_precedent": frozenset({"lifecycle", "knowledge"}),
     "kg_propose_fact": frozenset({"knowledge"}),
+    "kg_cypher": frozenset(LAYERS),          # the query itself is checked against the scope (age.py)
 }
 
 _DECLARED_KEYS = {"layers", "tools", "budget_tokens", "code_seed", "max_hops", "max_nodes"}

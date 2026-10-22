@@ -8,6 +8,7 @@ POST /v1/knowledge/facts/{fact_id}/promote
 POST /v1/knowledge/facts/{fact_id}/reject
 POST /v1/knowledge/facts/{fact_id}/forget
 POST /v1/knowledge/ingest/tick     (the worker: drain the finish queue, sweep on request)
+POST /v1/knowledge/cypher          (read-only Cypher over the project's AGE projection)
 
 Manage calls require knowledge:manage and step_up=confirmed. That confirmation
 is explicit in the body. It is not a WebAuthn ceremony.
@@ -159,3 +160,30 @@ def ingest_tick(body: Optional[IngestTickBody] = None) -> dict[str, Any]:
 
     require_worker_principal()
     return tick(_engine, sweep=bool(body and body.sweep))
+
+
+class CypherBody(BaseModel):
+    project_id: str
+    actor: str
+    query: str
+    params: Optional[dict[str, Any]] = None
+    columns: Optional[list[str]] = None
+    limit: int = 200
+
+
+@router.post("/cypher")
+@permit(P.KNOWLEDGE_READ, scope=Scope.project(body="project_id"), readonly_post=True)
+def cypher(body: CypherBody) -> dict[str, Any]:
+    """Read-only Cypher over the project's graph: writes refused, 5 s, a row limit. A POST only
+    because a query does not fit a URL; it writes nothing."""
+    try:
+        with begin(_engine) as connection:
+            _actor(connection, body.project_id, body.actor, READ)
+            return _service.cypher(connection, project_id=body.project_id, query=body.query,
+                                   params=body.params, columns=body.columns, limit=body.limit)
+    except TimeoutError as error:
+        raise HTTPException(status_code=408, detail=str(error)) from error
+    except RuntimeError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    except Exception as error:  # noqa: BLE001
+        raise _http(error) from error

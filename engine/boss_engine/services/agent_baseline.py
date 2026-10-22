@@ -78,7 +78,7 @@ PROPOSE_TOOLS: tuple[str, ...] = ("propose_action",)
 #: a change can break, and the history behind it. Every role holds it; what a stage may read of
 #: it is the stage's knowledge scope (services/knowledge/scopes.py).
 KNOWLEDGE_TOOLS: tuple[str, ...] = ("kg_symbol", "kg_callers", "kg_blast_radius", "kg_why",
-                                     "kg_search", "kg_precedent")
+                                     "kg_search", "kg_precedent", "kg_cypher")
 
 #: `knowledge.propose` offers `kg_propose_fact`: the one bundle that writes. What it writes is
 #: always `inferred` (quarantined, forgettable, never above governed or approved), so it is

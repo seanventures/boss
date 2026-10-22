@@ -783,10 +783,13 @@ def _go_prefix(texts: dict[str, str]) -> str | None:
 
 
 def _relink(connection: Connection, store: PostgresKnowledgeStore, project_id: str) -> None:
-    """Records keep their changed-symbol links across a re-index (knowledge/capture.py)."""
+    """Records keep their changed-symbol links across a re-index (knowledge/capture.py), and the
+    AGE projection follows the write (knowledge/age.py)."""
+    from .age import after_write
     from .capture import sync_change_links
 
     sync_change_links(connection, store, project_id=project_id)
+    after_write(connection, project_id)
 
 
 def index_repository(

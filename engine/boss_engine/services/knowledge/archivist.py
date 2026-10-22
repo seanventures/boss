@@ -141,6 +141,9 @@ def distil(
         actor_kind="agent",
         detail={"fact_ids": fact_ids, "scrub_counts": counts, "budget_category": BUDGET_CATEGORY},
     )
+    from .age import after_write
+
+    after_write(connection, project_id)
     return {"mode": "distilled", "fact_ids": fact_ids, "scrub_counts": counts}
 
 

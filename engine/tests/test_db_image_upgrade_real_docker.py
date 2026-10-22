@@ -15,9 +15,8 @@ import time
 import uuid
 
 import pytest
-from sqlalchemy import create_engine, text
-
 from boss_engine.db import ensure_schema
+from sqlalchemy import create_engine, text
 
 OLD = "postgres:16-alpine"
 NEW = "boss-community-db:pg16.12-vector0.8.1-age1.6.0"

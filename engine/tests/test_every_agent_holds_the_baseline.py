@@ -61,7 +61,7 @@ def test_every_agent_holds_the_knowledge_graph():
     on it, what a change breaks and why it is so; every tool it offers is a read."""
     assert "knowledge.read" in ab.BASELINE_SKILLS
     assert ab.bundles()["knowledge.read"] == ("kg_symbol", "kg_callers", "kg_blast_radius", "kg_why",
-                                              "kg_search", "kg_precedent")
+                                              "kg_search", "kg_precedent", "kg_cypher")
     reg = _registry()
     assert all(reg.get(t).kind == "read" for t in ab.KNOWLEDGE_TOOLS)
 

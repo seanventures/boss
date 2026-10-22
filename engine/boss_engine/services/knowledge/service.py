@@ -12,6 +12,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from .age import extension_version as age_extension_version
+from .age import projection_counts
 from .archivist import distil, forget_source as forget_source_lineage
 from .capture import capture_lifecycle as capture_lifecycle_record
 from .learning import apply_learning
@@ -237,6 +238,9 @@ class KnowledgeService:
             actor_kind=actor_kind,
             detail={},
         )
+        from .age import after_write
+
+        after_write(connection, project_id)
         return {"id": fact_id, "trust_tier": "approved"}
 
     def reject(
@@ -257,6 +261,9 @@ class KnowledgeService:
             actor_kind=actor_kind,
             detail={},
         )
+        from .age import after_write
+
+        after_write(connection, project_id)
         return {"id": fact_id, "closed": True}
 
     def forget(
@@ -380,6 +387,9 @@ class KnowledgeService:
             "vector_index": self.store.vector_index_kind(connection),
             "vector_extension": self.store.vector_extension_version(connection),
             "age_extension": age_extension_version(connection),
+            "cypher": {"graph": "one per project", "available": age_extension_version(connection) != "not_installed",
+                       "projection": projection_counts(connection, project_id)
+                       if age_extension_version(connection) != "not_installed" else None},
             "sources": ["adr folder", "connector document"],
         }
 
@@ -397,6 +407,24 @@ class KnowledgeService:
         )
 
 
+    def cypher(
+        self,
+        connection: Connection,
+        *,
+        project_id: str,
+        query: str,
+        params: Optional[dict] = None,
+        columns: Optional[list[str]] = None,
+        limit: int = 200,
+        policy=None,
+    ) -> dict[str, Any]:
+        """Read-only Cypher over the project's AGE projection (knowledge/age.py run_cypher)."""
+        from .age import run_cypher
+
+        self.store._org_id(connection, project_id, None)
+        return run_cypher(connection, project_id=project_id, query=query, params=params,
+                          columns=columns, policy=policy, row_limit=limit)
+
 def _public_node(node: dict) -> dict:
     return {
         "id": node["id"],
@@ -412,3 +440,4 @@ def _public_node(node: dict) -> dict:
 def require_confirmation(step_up: str | None) -> None:
     if step_up != "confirmed":
         raise PermissionError("knowledge:manage requires step_up=confirmed")
+

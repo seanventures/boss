@@ -135,6 +135,9 @@ def capture_lifecycle(
             kind="decided_by",
             actor_kind="person",
         )
+    from .age import after_write
+
+    after_write(connection, project_id)
     return {
         "id": node_id,
         "replayed": bool(captured["replayed"]),

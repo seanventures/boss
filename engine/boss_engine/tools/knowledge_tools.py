@@ -90,6 +90,22 @@ def _precedent(ctx, *, project_id, actor, args, policy=None):
         return _SERVICE.precedent(connection, project_id=project_id, query=query, policy=policy)
 
 
+def _cypher(ctx, *, project_id, actor, args, policy=None):
+    query = str(args.get("query") or "").strip()
+    if not query:
+        return {"error": "query is required"}
+    columns = args.get("columns") or None
+    if columns is not None and not isinstance(columns, list):
+        return {"error": "columns must be a list of names, one per RETURN item"}
+    with ctx.begin() as connection:
+        try:
+            return _SERVICE.cypher(connection, project_id=project_id, query=query,
+                                   params=args.get("params") if isinstance(args.get("params"), dict) else None,
+                                   columns=columns, limit=int(args.get("limit") or 50), policy=policy)
+        except (ValueError, LookupError, TimeoutError, RuntimeError) as error:
+            return {"error": str(error)}
+
+
 def _propose(ctx, *, project_id, actor, args, policy=None):
     # The payload cannot choose a tier. The service stores inferred.
     with ctx.begin() as connection:
@@ -112,6 +128,20 @@ def register_knowledge_tools(reg) -> None:
         ("kg_blast_radius", "Walk call edges out from a symbol.", _props("node_id"), _blast, "read"),
         ("kg_why", "Facts that cite a node.", _props("node_id"), _why, "read"),
         ("kg_precedent", "Similar past facts for a decision, with ids to cite.", _props("query"), _precedent, "read"),
+        (
+            "kg_cypher",
+            "Read-only Cypher over this project's knowledge graph (Apache AGE). Vertex labels are the "
+            "layers Code, Lifecycle, Ops and Knowledge; edge labels are kinds (calls, about, changed...). "
+            "Name one column per RETURN item. Writes are refused; 5 s and a row limit apply.",
+            {"type": "object", "properties": {
+                "query": {"type": "string"},
+                "columns": {"type": "array", "items": {"type": "string"}},
+                "params": {"type": "object"},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 1000}},
+             "required": ["query"], "additionalProperties": False},
+            _cypher,
+            "read",
+        ),
         (
             "kg_propose_fact",
             "Propose an inferred fact. Governed and approved tiers are refused.",

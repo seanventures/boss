@@ -4,7 +4,8 @@ A database trigger queues a code-task run the moment its status becomes complete
 and an incident the moment it becomes resolved (``kg_ingest_queue``), whatever code path
 finished it. The worker drains the queue every ``QUEUE_POLL_SECONDS`` through
 POST /v1/knowledge/ingest/tick; every ``SWEEP_SECONDS`` the same call also sweeps the last
-``SWEEP_DAYS`` for anything the triggers missed (a record finished before the trigger existed).
+``SWEEP_DAYS`` for anything the triggers missed (a record finished before the trigger existed),
+and reconciles each project's AGE projection with the tables (knowledge/age.py).
 
 Each record becomes a lifecycle node through ``capture_lifecycle`` (scrubbed, stored once per
 body). No model is called: the structure is captured, and distilling facts from it is the
@@ -139,4 +140,24 @@ def tick(engine: Any, *, sweep: bool = False) -> dict[str, Any]:
     out: dict[str, Any] = {"queued": ingest_queued(engine)}
     if sweep:
         out["sweep"] = ingest_due(engine)
+        out["projection"] = reconcile_projections(engine)
+    return out
+
+
+def reconcile_projections(engine: Any) -> dict[str, int]:
+    """Rebuild any project's AGE projection whose counts drifted from the tables."""
+    from .age import available, reconcile
+
+    out = {"current": 0, "rebuilt": 0, "failed": 0}
+    with engine.begin() as connection:
+        if not available(connection):
+            return out
+        projects = connection.execute(text("SELECT DISTINCT project_id FROM kg_nodes")).scalars().all()
+    for project_id in projects:
+        try:
+            with engine.begin() as connection:
+                done = reconcile(connection, project_id)
+            out["current" if done.get("mode") == "current" else "rebuilt"] += 1
+        except Exception:  # noqa: BLE001 - one project never blocks the others
+            out["failed"] += 1
     return out
