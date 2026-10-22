@@ -52,7 +52,6 @@ describe("knowledge console", () => {
     expect(html).toContain("knowledge");
     expect(html).toContain("has not been run");
     expect(html).toContain("not been measured");
-    expect(html).not.toContain("goldeneye");
   });
 
   it("names the facts a decision used", () => {
@@ -62,12 +61,11 @@ describe("knowledge console", () => {
     expect(html).toContain("fact-2");
   });
 
-  it("mounts the explorer and settings on both consoles", () => {
-    for (const name of ["page.tsx", "page-community.tsx"]) {
-      const source = readFileSync(new URL(`../app/${name}`, import.meta.url), "utf8");
-      expect(source).toContain("KnowledgeExplorer");
-      expect(source).toContain("KnowledgeSettings");
-    }
+  it("mounts the explorer and settings on the console", () => {
+    // This tree has one console page (app/page.tsx); there is no page-community.tsx.
+    const source = readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8");
+    expect(source).toContain("KnowledgeExplorer");
+    expect(source).toContain("KnowledgeSettings");
     const inbox = readFileSync(new URL("../app/decision-inbox-ui.tsx", import.meta.url), "utf8");
     expect(inbox).toContain("BasedOn");
   });

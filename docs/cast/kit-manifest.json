@@ -379,6 +379,14 @@
       "emblem": "key",
       "palette": "amber",
       "visor": "shield"
+    },
+    "archivist": {
+      "kit": "boss-v1",
+      "seed": "archivist",
+      "hat": "dome",
+      "emblem": "page",
+      "palette": "slate",
+      "visor": "glasses"
     }
   }
 }
