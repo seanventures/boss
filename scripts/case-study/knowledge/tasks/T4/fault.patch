@@ -1,6 +1,13 @@
---- a/reservation.py
-+++ b/reservation.py
-@@ -1,2 +1,2 @@
- def reserve(quantity):
--    return quantity
-+    return quantity + 1
+diff --git a/saleor/warehouse/management.py b/saleor/warehouse/management.py
+index 71ad543..510fd76 100644
+--- a/saleor/warehouse/management.py
++++ b/saleor/warehouse/management.py
+@@ -329,7 +329,7 @@ def _create_allocations(
+         quantity_available_in_stock -= stocks_reservations.get(stock_data.pk, 0)
+ 
+         quantity_to_allocate = min(
+-            (quantity - quantity_allocated), quantity_available_in_stock
++            (quantity - quantity_allocated), quantity_available_in_stock + 1
+         )
+         if quantity_to_allocate > 0:
+             allocations.append(

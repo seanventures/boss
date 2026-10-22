@@ -515,3 +515,22 @@ def test_a_written_pull_request_is_indexed_and_cites_the_fact(connection):
         connection, project_id="proj_a", run_id="run-agent", success=True
     )
     assert fact_id in counted
+
+
+def test_the_knowledge_switch_off_gives_an_agent_no_pack_and_a_pr_no_citations(connection):
+    """The case study's control arm: knowledge_graph = off. Capture and indexing go on."""
+    from types import SimpleNamespace
+
+    from boss_engine.services.knowledge.runtime import quoted_pack_for_turn, remember_written_files
+
+    _projects(connection)
+    SERVICE.propose_fact(connection, project_id="proj_a", statement="reserve needs a sign-off",
+                         subject="reserve", predicate="needs", obj="sign-off", kind="lesson")
+    assert "reserve" in quoted_pack_for_turn(connection, project_id="proj_a", query="reserve sign-off")
+    connection.execute(text(
+        "INSERT INTO project_settings (project_id, key, value) VALUES ('proj_a', 'knowledge_graph', '\"off\"')"))
+    assert quoted_pack_for_turn(connection, project_id="proj_a", query="reserve sign-off") == ""
+    remembered = remember_written_files(
+        connection, project_id="proj_a", source_id="pr-off", title="reserve", body="change",
+        files=[SimpleNamespace(path="stock.py", content="def reserve():\n    return 1\n")])
+    assert remembered["cited_fact_ids"] == [] and remembered["linked"]

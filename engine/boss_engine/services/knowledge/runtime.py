@@ -47,6 +47,18 @@ def files_for_index(files: list) -> list[dict[str, str]]:
     return prepared
 
 
+def knowledge_enabled(connection: Any, project_id: str) -> bool:
+    """The project's `knowledge_graph` switch (project_settings); on unless set to off."""
+    try:
+        from ...config import get_settings
+        from ..project_settings import effective
+
+        value = effective(connection, project_id, get_settings(), "knowledge_graph")
+    except Exception:  # noqa: BLE001 - an unreadable switch leaves the default
+        return True
+    return str(value or "on").strip().lower() != "off"
+
+
 def append_quoted_pack(prompt: str | None, section: str) -> str:
     """Add a pack the model must treat as quoted records."""
     base = prompt or ""
@@ -139,6 +151,11 @@ def _remember_written_files(
             "symbol_names": list(dict.fromkeys(names)),
         },
     )
+    if not knowledge_enabled(connection, project_id):
+        indexed = captured.get("indexed")
+        return {"id": captured.get("id"), "replayed": bool(captured.get("replayed")),
+                "linked": list(captured.get("linked") or []), "cited_fact_ids": [],
+                "indexed": indexed if isinstance(indexed, dict) else {}}
     # The title and each symbol are separate queries. One plainto_tsquery AND
     # across the whole summary drops a fact that only shares the symbol name.
     queries: list[str] = []
@@ -182,6 +199,8 @@ def quoted_pack_for_turn(
     """Budgeted pack text for one turn. Empty when there is nothing to quote."""
     text = str(query or "").strip()
     if not text or not str(project_id or "").strip():
+        return ""
+    if not knowledge_enabled(connection, project_id):
         return ""
     try:
         return _within_savepoint(

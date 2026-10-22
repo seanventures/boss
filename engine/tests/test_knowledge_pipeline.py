@@ -208,20 +208,28 @@ def test_registry_has_the_knowledge_tools():
 
 
 def test_case_study_refuses_without_making_a_model_call():
-    result = subprocess.run(
-        [sys.executable, str(HARNESS), "--arm", "A", "--engine", "E1", "--tasks", "T1"],
-        check=False,
-        capture_output=True,
-        text=True,
+    """No stage is approved: a run without --approved-by, or outside its stage, starts nothing."""
+    unapproved = subprocess.run(
+        [sys.executable, str(HARNESS), "run", "--stage", "smoke", "--arm", "A", "--engine", "E2",
+         "--tasks", "T1", "--project-id", "proj_x"],
+        check=False, capture_output=True, text=True,
     )
-    assert result.returncode == 2
-    assert "No model call was made" in result.stdout
-    approved = subprocess.run(
-        [sys.executable, str(HARNESS), "--arm", "B", "--engine", "E2", "--tasks", "T1", "--approve-spend"],
-        check=False,
-        capture_output=True,
-        text=True,
+    assert unapproved.returncode == 2
+    assert "Nothing was started" in unapproved.stderr
+    outside = subprocess.run(
+        [sys.executable, str(HARNESS), "run", "--stage", "smoke", "--arm", "B", "--engine", "E1",
+         "--tasks", "T1", "--project-id", "proj_x", "--approved-by", "nobody"],
+        check=False, capture_output=True, text=True,
     )
-    assert approved.returncode == 2
-    assert "does not execute the smoke stage" in approved.stdout
-    assert "No model call was made" in approved.stdout
+    assert outside.returncode == 2
+    assert "nothing was started" in outside.stderr
+
+
+def test_the_knowledge_switch_is_a_project_setting_the_harness_turns():
+    from boss_engine.services import project_settings as ps
+
+    assert ps.coerce("knowledge_graph", "OFF") == "off"
+    with pytest.raises(ValueError):
+        ps.coerce("knowledge_graph", "maybe")
+    harness = HARNESS.read_text()
+    assert 'KNOWLEDGE_SETTING = "knowledge_graph"' in harness
