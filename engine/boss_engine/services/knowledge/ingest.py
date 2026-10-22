@@ -104,17 +104,19 @@ def _drain(engine: Any, rows) -> dict[str, int]:
     return out
 
 
-def ingest_queued(engine: Any, *, limit: int = 20) -> dict[str, int]:
+def ingest_queued(engine: Any, *, limit: int = 20, project_id: str | None = None) -> dict[str, int]:
     """The event-driven half: what the finish triggers queued, oldest first."""
     with engine.begin() as connection:
         rows = connection.execute(text(
             "SELECT project_id, source_kind, source_id FROM kg_ingest_queue "
-            "WHERE attempts < :max ORDER BY finished_at LIMIT :n"),
-            {"max": MAX_ATTEMPTS, "n": limit}).all()
+            "WHERE attempts < :max AND (CAST(:p AS TEXT) IS NULL OR project_id = :p) "
+            "ORDER BY finished_at LIMIT :n"),
+            {"max": MAX_ATTEMPTS, "n": limit, "p": project_id}).all()
     return _drain(engine, [tuple(r) for r in rows])
 
 
-def ingest_due(engine: Any, *, limit: int = 20, days: int = SWEEP_DAYS) -> dict[str, int]:
+def ingest_due(engine: Any, *, limit: int = 20, days: int = SWEEP_DAYS,
+               project_id: str | None = None) -> dict[str, int]:
     """The fallback sweep: finished runs and resolved incidents with no capture yet."""
     with engine.begin() as connection:
         rows = connection.execute(text(
@@ -126,25 +128,27 @@ def ingest_due(engine: Any, *, limit: int = 20, days: int = SWEEP_DAYS) -> dict[
               SELECT i.project_id, 'incident', i.id, i.last_seen FROM incidents i
               WHERE i.status = 'resolved' AND i.last_seen > now() - make_interval(days => :d)
             ) s
-            WHERE NOT EXISTS (SELECT 1 FROM kg_captures c WHERE c.project_id = s.project_id
+            WHERE (CAST(:p AS TEXT) IS NULL OR s.project_id = :p)
+              AND NOT EXISTS (SELECT 1 FROM kg_captures c WHERE c.project_id = s.project_id
                                 AND c.source_kind = s.kind AND c.source_id = s.id)
               AND NOT EXISTS (SELECT 1 FROM kg_ingest_queue q WHERE q.project_id = s.project_id
                                 AND q.source_kind = s.kind AND q.source_id = s.id)
             ORDER BY at LIMIT :n
-            """), {"d": days, "n": limit}).all()
+            """), {"d": days, "n": limit, "p": project_id}).all()
     return _drain(engine, [(r[0], r[1], r[2]) for r in rows])
 
 
-def tick(engine: Any, *, sweep: bool = False) -> dict[str, Any]:
-    """The worker's call: drain the queue; on a sweep tick, also catch what the triggers missed."""
-    out: dict[str, Any] = {"queued": ingest_queued(engine)}
+def tick(engine: Any, *, sweep: bool = False, project_id: str | None = None) -> dict[str, Any]:
+    """The worker's call: drain the queue; on a sweep tick, also catch what the triggers missed.
+    ``project_id`` narrows it to one project (every project when None)."""
+    out: dict[str, Any] = {"queued": ingest_queued(engine, project_id=project_id)}
     if sweep:
-        out["sweep"] = ingest_due(engine)
-        out["projection"] = reconcile_projections(engine)
+        out["sweep"] = ingest_due(engine, project_id=project_id)
+        out["projection"] = reconcile_projections(engine, project_id=project_id)
     return out
 
 
-def reconcile_projections(engine: Any) -> dict[str, int]:
+def reconcile_projections(engine: Any, *, project_id: str | None = None) -> dict[str, int]:
     """Rebuild any project's AGE projection whose counts drifted from the tables."""
     from .age import available, reconcile
 
@@ -152,7 +156,8 @@ def reconcile_projections(engine: Any) -> dict[str, int]:
     with engine.begin() as connection:
         if not available(connection):
             return out
-        projects = connection.execute(text("SELECT DISTINCT project_id FROM kg_nodes")).scalars().all()
+        projects = [project_id] if project_id else connection.execute(
+            text("SELECT DISTINCT project_id FROM kg_nodes")).scalars().all()
     for project_id in projects:
         try:
             with engine.begin() as connection:

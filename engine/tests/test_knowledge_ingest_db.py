@@ -90,21 +90,21 @@ def test_a_finished_run_and_a_resolved_incident_are_queued_by_trigger_and_captur
     connection.execute(text("UPDATE code_task_runs SET title = 'Hold stock' WHERE id = 'ctr_1'"))  # no re-queue
     assert _queued(connection) == {("run", "ctr_1"), ("incident", "inc_1")}
 
-    out = ingest.tick(_Same(connection))
+    out = ingest.tick(_Same(connection), project_id="proj_in")
     assert out["queued"] == {"captured": 2, "gone": 0, "failed": 0}
     assert _queued(connection) == set()
     run = STORE.find_by_key(connection, project_id="proj_in", kind="run", node_key="run:ctr_1")
     incident = STORE.find_by_key(connection, project_id="proj_in", kind="incident", node_key="incident:inc_1")
     assert run is not None and incident is not None
     assert "reserve before commit" in run["body"] and "AKIAIOSFODNN7EXAMPLE" not in run["body"]
-    assert ingest.tick(_Same(connection), sweep=True)["sweep"] == {"captured": 0, "gone": 0, "failed": 0}
+    assert ingest.tick(_Same(connection), sweep=True, project_id="proj_in")["sweep"] == {"captured": 0, "gone": 0, "failed": 0}
 
 
 def test_the_sweep_catches_a_record_the_triggers_missed(connection):
     _run(connection, "ctr_old", status="failed")            # inserted finished: no UPDATE, no trigger
     assert _queued(connection) == set()
-    assert ingest.tick(_Same(connection))["queued"]["captured"] == 0
-    assert ingest.tick(_Same(connection), sweep=True)["sweep"]["captured"] == 1
+    assert ingest.tick(_Same(connection), project_id="proj_in")["queued"]["captured"] == 0
+    assert ingest.tick(_Same(connection), sweep=True, project_id="proj_in")["sweep"]["captured"] == 1
     assert STORE.find_by_key(connection, project_id="proj_in", kind="run", node_key="run:ctr_old")
 
 
@@ -120,7 +120,7 @@ def test_a_bad_record_stays_queued_with_its_error_and_the_rest_are_captured(conn
         return real(conn, project_id, kind, source_id)
 
     monkeypatch.setattr(ingest, "record_for", flaky)
-    assert ingest.tick(_Same(connection))["queued"] == {"captured": 1, "gone": 0, "failed": 1}
+    assert ingest.tick(_Same(connection), project_id="proj_in")["queued"] == {"captured": 1, "gone": 0, "failed": 1}
     row = connection.execute(text(
         "SELECT attempts, last_error FROM kg_ingest_queue WHERE source_id = 'ctr_a'")).one()
     assert row.attempts == 1 and "unreadable" in row.last_error
