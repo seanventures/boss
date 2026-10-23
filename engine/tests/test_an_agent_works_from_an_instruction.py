@@ -174,19 +174,24 @@ def test_one_candidate_needs_no_judgement(db):
     assert picked["how"] == "only_candidate"
 
 
-@needs_db
-def test_choosing_falls_back_to_something_rather_than_refusing(db):
-    """A project with no model configured must still be able to run a workflow.
+def test_choosing_without_a_model_says_what_to_do_rather_than_guessing(monkeypatch):
+    """REWRITTEN FOR BOSSAPP-759. This pinned a word-overlap fallback ("a project with no model
+    must still run a workflow"). The pick is now a turn through the one agent pipeline, and the
+    operator's mandate is that a decision is a model's — "it cannot / should not work just on
+    keywords". With no model, nobody is picked by shared words: the step says to name the agent
+    on it (which needs no model) or to connect one."""
+    from boss_engine.services import model_routing
 
-    Worse than a judgement, and honest about being worse: `how` says which happened, so an
-    operator reading a surprising choice can see it was word overlap and not reasoning.
-    """
-    picked = agent_steps.choose_agent(
-        db, Settings(), PROJECT,
-        instructions="publish the finished video to the channel")
-    assert picked["role_key"]
-    assert picked["how"] in {"model", "word_overlap", "only_candidate"}
-    assert picked["why"]
+    def no_model(*_a, **_k):
+        raise RuntimeError("no model is connected")
+
+    monkeypatch.setattr(model_routing, "project_chat_adapter", no_model)
+    pool = [{"role_key": "video_editor", "mission": "cuts video", "holds": ["video.trim"]},
+            {"role_key": "media_publisher", "mission": "publishes", "holds": ["publish_youtube"]}]
+    with pytest.raises(agent_steps.AgentStepError) as failed:
+        agent_steps.choose_agent(None, Settings(), PROJECT, pool=pool,
+                                 instructions="publish the finished video to the channel")
+    assert "Name the agent on the step" in str(failed.value)
 
 
 @needs_db

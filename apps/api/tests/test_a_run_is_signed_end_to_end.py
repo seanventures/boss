@@ -97,15 +97,26 @@ def _live(client) -> dict[str, str]:
 def test_a_run_is_one_connected_chain_with_truthful_edges_and_cost_on_the_right_agent(
         client, engine, monkeypatch):
     wf.install_model(monkeypatch)
-    from boss_engine.services import agent_steps
 
     qa_skill, skill = _unheld_skills(client, 2)
     wf.grant_skill(client, "qa", qa_skill)
     pick_a = wf.new_agent(client, wf.key("pick_a"), holds=(skill,))
     pick_b = wf.new_agent(client, wf.key("pick_b"), holds=(skill,))
     engineer = wf.new_agent(client, wf.key("engineer"))
-    monkeypatch.setattr(agent_steps, "_ask_the_model", lambda *_a, **_k: json.dumps(
-        {"role_key": pick_b, "why": "it reads like pick_b's work"}))
+    # Which agent runs the unnamed step is a turn through the one pipeline (AgentService.decide);
+    # the scripted decision picks pick_b, and any other decision goes on as it would.
+    from boss_engine.services import agent_decision
+
+    real_decide = agent_decision.decide
+
+    def picks_b(connection, settings, project_id, **kwargs):
+        if pick_b in {c.key for c in kwargs.get("candidates") or []}:
+            return agent_decision.AgentDecision(agent_decision.DECIDED, action=pick_b,
+                                                confidence=0.9,
+                                                reason="it reads like pick_b's work")
+        return real_decide(connection, settings, project_id, **kwargs)
+
+    monkeypatch.setattr(agent_decision, "decide", picks_b)
     build = _stand_in_for_the_build(monkeypatch, engine)
 
     spec = {

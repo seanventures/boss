@@ -73,11 +73,23 @@ ALLOWED: dict[str, tuple[str, str]] = {
                  "floor claim, settled receipt). The pipeline's turn neither streams nor "
                  "accepts a caller's envelope, so it cannot move without that redesign (the "
                  "doc's design note)"),
+    "engine/boss_engine/services/agent_loop.py": (
+        WORKER, "carries out a workflow agent step's instruction (and the factory's plan) with "
+                "only the step agent's granted skills and servers, each call re-checked by "
+                "SkillRuntimeService.invoke; the runner, not the loop, decides what the run "
+                "does next"),
+    "engine/boss_engine/services/agent_steps.py": (
+        WORKER, "runs a workflow agent step's instruction through agent_loop (the worker); "
+                "WHICH agent runs it is a turn through the pipeline (choose_agent → "
+                "AgentService.decide)"),
     # ── still outside the pipeline ──────────────────────────────────────────────────────────
-    "engine/boss_engine/services/agent_loop.py": (MIGRATE, "workflow agent step's own tool loop"),
-    "engine/boss_engine/services/agent_steps.py": (MIGRATE, "workflow agent step: picks a role, "
-                                                   "then agent_loop"),
-    "engine/boss_engine/services/step_recovery.py": (MIGRATE, "a failed step's recovery agent"),
+    "engine/boss_engine/services/step_recovery.py": (
+        MIGRATE, "a failed step's recovery agent. Its decision carries per-action arguments "
+                 "(a fix note, the projects to clean, a boss_fix), comes after a read-tool "
+                 "phase, and is validated against the evidence it cites with one re-ask, "
+                 "inside the step's recovery budget. The pipeline's decision is "
+                 "{action, confidence, reason, question} with no tool phase, so it cannot move "
+                 "without that redesign (the doc's design note)"),
 }
 
 #: These may never decide on their own again: Metatron's router and the captain's service were
@@ -184,6 +196,12 @@ MIGRATED = {
     "engine/boss_engine/services/focused_agents.py": "the focused agents' duty loop",
 }
 
+#: Moved too, but the module still holds a worker (ALLOWED says which): its decision is the
+#: pipeline's, its execution stays a worker.
+MIGRATED_BESIDE_A_WORKER = {
+    "engine/boss_engine/services/agent_steps.py": "which agent runs a workflow agent step",
+}
+
 
 def _calls_the_domain_turn(path: str) -> bool:
     tree = ast.parse((ROOT / path).read_text())
@@ -199,6 +217,11 @@ def test_every_migrated_entry_point_takes_its_turn_through_the_pipeline():
     for path, what in MIGRATED.items():
         assert path not in deciders, (what, sorted(deciders[path]))
         assert path not in ALLOWED, what
+        assert _calls_the_domain_turn(path), f"{what} ({path}) does not call AgentService.decide"
+    for path, what in MIGRATED_BESIDE_A_WORKER.items():
+        assert ALLOWED[path][0] == WORKER, what
+        # Only the worker's sign is left: no decision model, router or one-shot model call.
+        assert deciders.get(path, set()) <= {"run_agent_loop"}, (what, deciders.get(path))
         assert _calls_the_domain_turn(path), f"{what} ({path}) does not call AgentService.decide"
 
 

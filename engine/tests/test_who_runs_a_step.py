@@ -69,8 +69,13 @@ def _route_with(monkeypatch, adapter):
                                     pool=[dict(a) for a in POOL])
 
 
+def _picks(role: str, why: str = "") -> str:
+    """The one pipeline's decision contract (agent_decision): the pick is an action."""
+    return json.dumps({"action": role, "confidence": 0.9, "reason": why, "question": ""})
+
+
 def test_the_model_is_actually_asked_and_its_answer_used(monkeypatch):
-    adapter = _Answers(json.dumps({"role_key": "media_publisher", "why": "it publishes"}))
+    adapter = _Answers(_picks("media_publisher", "it publishes"))
     picked = _route_with(monkeypatch, adapter)
     assert picked == {"role_key": "media_publisher", "why": "it publishes", "how": "model"}
     assert adapter.asked and "publish the short" in adapter.asked[0]
@@ -78,43 +83,50 @@ def test_the_model_is_actually_asked_and_its_answer_used(monkeypatch):
     assert "video.trim" in adapter.asked[0] and "publish_youtube" in adapter.asked[0]
 
 
+def test_the_pick_is_a_turn_through_the_one_pipeline(monkeypatch):
+    """BOSSAPP-759: choose_agent asks AgentService.decide — the router's one decision — with the
+    pool as its choices, not a routing prompt of its own."""
+    from boss_engine.services.agent_service import AgentService
+
+    seen: list[dict] = []
+    real = AgentService.decide
+
+    def spy(self, connection, **kwargs):
+        seen.append(kwargs)
+        return real(self, connection, **kwargs)
+
+    monkeypatch.setattr(AgentService, "decide", spy)
+    _route_with(monkeypatch, _Answers(_picks("video_editor", "it cuts")))
+    assert [c.key for c in seen[0]["choices"]] == ["video_editor", "media_publisher"]
+    assert seen[0]["message"] == "publish the short" and seen[0]["min_confidence"] == 0.0
+
+
 def test_an_adapter_with_only_complete_is_not_how_the_model_is_asked(monkeypatch):
     """The regression, pinned: had choose_agent still called .complete(), this stub would have
-    answered and `how` would read "model"."""
-    picked = _route_with(monkeypatch, _OnlyComplete())
-    assert picked["how"] == "word_overlap"
-    assert "AttributeError" in picked["why"]
+    answered and the pick would read "model"."""
+    with pytest.raises(agent_steps.AgentStepError, match="AttributeError"):
+        _route_with(monkeypatch, _OnlyComplete())
 
 
 def test_a_model_failure_is_reported_as_what_it_was(monkeypatch):
     """Not "no model was available" — the sentence that was false on every install it showed."""
-    picked = _route_with(monkeypatch, _Answers(RuntimeError("usage limit reached")))
-    assert picked["how"] == "word_overlap"
-    assert "usage limit reached" in picked["why"]
-    assert "no model was available" not in picked["why"]
+    with pytest.raises(agent_steps.AgentStepError) as failed:
+        _route_with(monkeypatch, _Answers(RuntimeError("usage limit reached")))
+    assert "usage limit reached" in str(failed.value)
+    assert "no model was available" not in str(failed.value)
 
 
 def test_a_model_naming_somebody_outside_the_pool_is_not_obeyed(monkeypatch):
-    picked = _route_with(monkeypatch, _Answers(json.dumps({"role_key": "cto", "why": "x"})))
-    assert picked["how"] == "word_overlap"
-    assert "named 'cto'" in picked["why"]
-    # And the fallback is the agent whose skills share a word with the instruction.
-    assert picked["role_key"] == "media_publisher"
-    assert "publish" in picked["why"]
+    with pytest.raises(agent_steps.AgentStepError, match="'cto'"):
+        _route_with(monkeypatch, _Answers(_picks("cto", "seniority")))
 
 
-def test_the_fallback_says_when_nothing_matched_and_is_stable(monkeypatch):
-    from boss_engine.services import claude_cli_adapter, model_routing  # noqa: F401
-
-    monkeypatch.setattr(model_routing, "project_chat_adapter",
-                        lambda *_a, **_k: _Answers(RuntimeError("offline")))
-    pool = [{"role_key": "b_agent", "holds": ["x.one", "x.two"]},
-            {"role_key": "a_agent", "holds": ["y.one"]}]
-    first = agent_steps.choose_agent(None, Settings(), "p", instructions="zzz", pool=pool)
-    again = agent_steps.choose_agent(None, Settings(), "p", instructions="zzz",
-                                     pool=list(reversed(pool)))
-    assert first["role_key"] == again["role_key"] == "a_agent"
-    assert "no agent's skills share a word" in first["why"]
+def test_no_rule_picks_an_agent_when_no_model_did(monkeypatch):
+    """No word-overlap fallback: a pick by shared words was a rule deciding. The step stops with
+    what to do instead — name the agent on the step, or connect a model."""
+    with pytest.raises(agent_steps.AgentStepError) as failed:
+        _route_with(monkeypatch, _Answers(RuntimeError("offline")))
+    assert "Name the agent on the step" in str(failed.value)
 
 
 def test_every_chat_adapter_can_answer_the_routing_question():
@@ -337,7 +349,7 @@ def test_an_agent_step_naming_nobody_is_routed_by_the_model_and_says_so(eng, pro
         first, second = _catalogue(c, project, 2)
         _agent(c, project, "editor", first, mission="edits")
         _agent(c, project, "poster", second, mission="posts")
-        router = _Answers(json.dumps({"role_key": "poster", "why": "it posts things"}))
+        router = _Answers(_picks("poster", "it posts things"))
         monkeypatch.setattr(model_routing, "project_chat_adapter", lambda *_a, **_k: router)
         version = _publish(c, project, "route", [_agent_step()])
         run = _start_and_tick(c, eng, project, version)
@@ -457,7 +469,7 @@ def test_a_custom_step_with_two_holders_is_put_to_the_model(eng, project, monkey
 
     monkeypatch.setattr(agent_loop, "_invoke_agent_skill",
                         lambda *a, **k: {"status": "succeeded", "result": {}})
-    router = _Answers(json.dumps({"role_key": "second_holder", "why": "closer remit"}))
+    router = _Answers(_picks("second_holder", "closer remit"))
     monkeypatch.setattr(model_routing, "project_chat_adapter", lambda *_a, **_k: router)
     with eng.begin() as c:
         (skill,) = _catalogue(c, project, 1)
