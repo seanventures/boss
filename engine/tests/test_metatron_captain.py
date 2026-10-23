@@ -4,15 +4,12 @@ These pin the captain contract: watch is evidence-only, drive never silently
 applies BOSS self-modifications, and goals are scored from observed snapshots.
 """
 
+from boss_engine.services import metatron_captain as captain_module
 from boss_engine.services.metatron_captain import (
     ACTION_KINDS,
     BLOCKED_APPLY_KINDS,
-    HELP_REPLY,
-    MUTATING_INTENTS,
     MetatronCaptain,
     findings_from_snapshot,
-    interpret_turn,
-    matches_default_process_story,
     measure_from_snapshot,
     proposed_moves_from_findings,
     validate_action,
@@ -21,129 +18,17 @@ from boss_engine.services.metatron_captain import (
 )
 
 
-def test_interpret_turn_remember_goal_watch_drive():
-    assert interpret_turn("remember the sandbox root is a volume")["intent"] == "remember"
-    parsed = interpret_turn("set goal Ship HookWatch kind=working_software")
-    assert parsed["intent"] == "set_goal"
-    assert parsed["kind"] == "working_software"
-    assert "HookWatch" in parsed["text"]
-    assert interpret_turn("overwatch")["intent"] == "overwatch"
-    assert interpret_turn("watch")["intent"] == "watch"
-    assert interpret_turn("drive")["intent"] == "drive"
-    assert interpret_turn("drive")["auto"] is False
-    assert interpret_turn("go")["intent"] == "drive"
-    assert interpret_turn("go")["auto"] is True
-    assert interpret_turn("build a settings page")["intent"] == "act"
-    assert interpret_turn("what is the budget")["intent"] == "status"
-
-
-def test_interpret_turn_build_and_prioritize():
-    """NL leftovers after parent land: build/act vs question, plus prioritize."""
-    assert interpret_turn("implement the next HookWatch slice")["intent"] == "act"
-    assert interpret_turn("ship ApproveIt")["intent"] == "act"
-    assert interpret_turn("fix the expired preview")["intent"] == "act"
-    # Questions stay status Q&A — they must not become an act.
-    assert interpret_turn("should we build this?")["intent"] == "status"
-    assert interpret_turn("what should we implement?")["intent"] == "status"
-
-    prio = interpret_turn("prioritize the deadletter queue")
-    assert prio["intent"] == "prioritize"
-    assert "deadletter" in prio["text"]
-    assert interpret_turn("prioritise HookWatch")["intent"] == "prioritize"
-    assert interpret_turn("p0 the queue")["intent"] == "prioritize"
-    assert interpret_turn("P1 ApproveIt")["intent"] == "prioritize"
-
-    auto = interpret_turn("drive auto")
-    assert auto["intent"] == "drive"
-    assert auto["auto"] is True
-    propose = interpret_turn("propose next")
-    assert propose["intent"] == "drive"
-    assert propose["auto"] is False
-
-    assert interpret_turn("")["intent"] == "help"
-    assert interpret_turn("measure")["intent"] == "measure"
-    assert interpret_turn("goals")["intent"] == "goals"
-    assert interpret_turn("memory")["intent"] == "memory"
-    assert interpret_turn("run overwatch")["intent"] == "overwatch"
-
-
-def test_interpret_turn_process_phrases_before_generic_build():
-    """Process authoring beats generic build/act. Settings-page build stays act."""
-    built = interpret_turn("build a process for PRD to accepted work")
-    assert built["intent"] == "build_process"
-    assert "prd" in built["text"].lower()
-
-    workflow = interpret_turn("create a workflow for architect and CTO review")
-    assert workflow["intent"] == "build_process"
-    assert "architect" in workflow["text"].lower()
-
-    defined = interpret_turn("define a process for QA review")
-    assert defined["intent"] == "build_process"
-    assert "QA" in defined["text"] or "qa" in defined["text"].lower()
-
-    handoff = interpret_turn("handoff process PRD to accepted")
-    assert handoff["intent"] == "build_process"
-    assert "PRD" in handoff["text"] or "prd" in handoff["text"].lower()
-
-    started = interpret_turn("start process prd_to_accepted_work")
-    assert started["intent"] == "start_process"
-    assert started.get("process_key") == "prd_to_accepted_work"
-
-    run_prd = interpret_turn("run the prd process")
-    assert run_prd["intent"] == "start_process"
-    assert run_prd.get("process_key") == "prd_to_accepted_work"
-    assert run_prd.get("auto_build") is False
-
-    auto = interpret_turn("start process hookwatch auto_build")
-    assert auto["intent"] == "start_process"
-    assert auto.get("process_key") == "hookwatch"
-    assert auto.get("auto_build") is True
-
-    listed = interpret_turn("list processes")
-    assert listed["intent"] == "list_processes"
-
-    # Existing contracts: generic product build vs question Q&A.
-    assert interpret_turn("build a settings page")["intent"] == "act"
-    assert interpret_turn("should we build this?")["intent"] == "status"
-
-
-def test_validate_action_process_intents():
-    empty = validate_action("build_process", {"text": ""})
-    assert empty["ok"] is False
-    assert "nonempty_text" in empty["failed"]
-
-    authored = validate_action("build_process", {"text": "PRD to accepted work"})
-    assert authored["ok"] is True
-
-    default_start = validate_action("start_process", {})
-    assert default_start["ok"] is True
-
-    listed = validate_action("list_processes", {})
-    assert listed["ok"] is True
-
-    assert "build_process" in ACTION_KINDS
-    assert "start_process" in ACTION_KINDS
-    assert "list_processes" in ACTION_KINDS
-    assert "build_process" in MUTATING_INTENTS
-    assert "start_process" in MUTATING_INTENTS
-    assert "list_processes" not in MUTATING_INTENTS
-
-    auto_red = validate_action(
-        "start_process",
-        {"process_key": "prd_to_accepted_work", "auto_build": True},
-        auto=True,
-        budget_state="red",
-    )
-    assert auto_red["ok"] is False
-    assert "budget_not_red" in auto_red["failed"]
-
-    assert matches_default_process_story("for PRD to accepted work")
-    assert not matches_default_process_story("")
-    assert "process" in HELP_REPLY.lower()
-    assert "build a process" in HELP_REPLY
-    assert "list processes" in HELP_REPLY
-    assert "theater" in HELP_REPLY.lower()
-    assert "reprioritize official" in HELP_REPLY
+def test_the_captain_reads_no_sentences():
+    """BOSSAPP-759: the captain's keyword reader, its free-text model decision and its chat turn
+    are gone. A typed sentence is the BOSS agent's (agent_turn); the captain keeps only the
+    overwatch powers the agent and the explicit commands invoke."""
+    for removed in ("interpret_turn", "decide_free_text", "HELP_REPLY", "MUTATING_INTENTS",
+                    "INFERRED", "matches_default_process_story"):
+        assert not hasattr(captain_module, removed), removed
+    assert not hasattr(MetatronCaptain, "session_turn")
+    for chat_intent in ("act", "prioritize", "help", "status", "no_model", "clarify",
+                        "build_process", "start_process", "list_processes"):
+        assert chat_intent not in ACTION_KINDS, chat_intent
 
 
 def test_working_software_goal_needs_preview_and_verify():

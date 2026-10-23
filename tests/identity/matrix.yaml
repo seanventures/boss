@@ -1076,7 +1076,7 @@
 "POST /v1/metatron/overwatch": ["permit autopilot:operate @ project(body=project_id)", "OAP"]
 "POST /v1/metatron/query": ["permit system:read @ project(body=project_id)", "OAPVU"]
 "GET /v1/metatron/session": ["permit autopilot:read @ project(query=project_id) +writes_on_get", "OAPVU"]
-"POST /v1/metatron/session": ["permit autopilot:operate @ project(body=project_id)", "OAP"]
+"POST /v1/metatron/session": ["permit assistant:chat @ project(body=project_id)", "OAP"]
 "POST /v1/metatron/session/load": ["permit autopilot:read @ project(query=project_id) +writes_on_get", "OAPVU"]
 "GET /v1/metatron/theater": ["permit autopilot:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/metatron/theater": ["permit autopilot:operate @ project(body=project_id)", "OAP"]

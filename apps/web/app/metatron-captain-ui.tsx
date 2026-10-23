@@ -91,7 +91,10 @@ export function MetatronCaptain({
         startTransition(async () => {
           const result = await callAction(sendMetatronCaptainMessageAction, undefined, "assistant:chat")(formData);
           if (result.ok && result.data) {
-            setState(mapMetatronCaptainSession(result.data));
+            // A turn is an Ask BOSS turn (BOSSAPP-759): its reply carries the conversation, not
+            // the captain's goals or watch — those stay as they were loaded.
+            const turn = mapMetatronCaptainSession(result.data);
+            setState((prev) => ({ ...prev, threadId: turn.threadId, messages: turn.messages }));
             return;
           }
           applyFailure(

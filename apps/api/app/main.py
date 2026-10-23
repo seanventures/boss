@@ -13311,11 +13311,12 @@ async def agent_turn_failed(_request: Request, exc: AgentTurnFailed):
     })
 
 
-def _run_agent_chat(payload: AgentChatRequest, request: Request, *, endpoint: str) -> AgentChatResponse:
-    """Shared handler for the BOSS chat interface. One brain (AgentService →
-    IntentRouter) behind both the canonical endpoint and its deprecated alias, so
-    all callers hit identical routing/persistence/confirmation logic and the
-    (now tool-grounded) discuss path."""
+def agent_turn(payload: AgentChatRequest, request: Request, *, endpoint: str) -> AgentChatResponse:
+    """THE ONE AGENT TURN (BOSSAPP-759). Every conversational surface — the console's Ask BOSS
+    (/v1/engine/agent/chat and its deprecated alias) and the Metatron terminal
+    (/v1/metatron/session) — sends its natural-language turn here: one brain (AgentService.chat →
+    IntentRouter), one thread model, one set of actions, one consent path. A fix to the agent is
+    made once. test_one_agent_turn enforces that no surface grows a second decision path."""
     _enforce_high_cost_rate_limit(
         request, payload.project_id, payload.actor, endpoint=endpoint
     )
@@ -13459,7 +13460,7 @@ def engine_agent_chat(payload: AgentChatRequest, request: Request) -> AgentChatR
     """The BOSS chat interface — one engine-native agent: routes intents, persists
     threads, gates confirmations, and answers questions grounded in live engine
     data via the read-tool layer. This is the canonical endpoint."""
-    return _run_agent_chat(payload, request, endpoint="/v1/engine/agent/chat")
+    return agent_turn(payload, request, endpoint="/v1/engine/agent/chat")
 
 
 @app.post("/v1/agent/chat", response_model=AgentChatResponse, deprecated=True)
@@ -13469,7 +13470,7 @@ def agent_chat(payload: AgentChatRequest, request: Request, response: Response) 
     existing callers keep working; migrate to the engine endpoint."""
     response.headers["Deprecation"] = "true"
     response.headers["Link"] = '</v1/engine/agent/chat>; rel="successor-version"'
-    return _run_agent_chat(payload, request, endpoint="/v1/agent/chat")
+    return agent_turn(payload, request, endpoint="/v1/agent/chat")
 
 
 @app.get("/v1/agent/briefing")

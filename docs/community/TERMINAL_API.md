@@ -2,6 +2,8 @@
 
 The Metatron terminal is a command-line client for the BOSS HTTP API. It uses the same control plane, credentials, and server-side enforcement as any other API client, and adds project selection, operation discovery, and one-shot JSON output for scripts.
 
+Metatron is a client of the same BOSS agent as the console's **Ask BOSS**. When you type a sentence, it goes through the same agent turn as a message typed in the console. The thread, the decision, the actions, consent and step-up are all the same, and so is the reply. A conversation you start in the terminal continues in the console, and the other way round, as long as you use the same actor. Captain powers (`/watch`, `/overwatch`, `/drive`) run only when you type them as commands. A sentence never sets them off.
+
 New to BOSS? The [quickstart](QUICKSTART.md) gets you to a console on `127.0.0.1`, and [Features](FEATURES.md) lists what Community includes. To connect an agent client instead, see [MCP](MCP.md).
 
 ## Start the terminal
@@ -33,8 +35,10 @@ Examples on this page use `boss-dogfood`, the default project seeded on your mac
 
 | Command | What it does |
 |---|---|
-| *(plain text)* | Sends a conversational message to `/v1/metatron/session` |
-| `/goals`, `/watch`, `/overwatch`, <code>/drive [auto&#124;go]</code> | Built-in Metatron captain commands |
+| *(plain text)* | One Ask BOSS turn. Sent to `/v1/metatron/session`, which hands it to the same agent turn as the console's `/v1/engine/agent/chat` |
+| `/pick N`, or just `N` | Runs one of the numbered choices from the last reply, through the console's own button path (`/v1/engine/agent/action`) |
+| `/confirm` | Confirms the plan the last reply is waiting on (`confirm_plan_id`) |
+| `/goals`, `/watch`, `/overwatch`, <code>/drive [auto&#124;go]</code>, `/go` | Captain commands. They run only when you type them |
 | `/projects` | Lists projects returned by the API |
 | `/project ID` | Selects a project and clears the prior Metatron conversation thread |
 | `/tasks [PAGE]` | Lists 25 tasks at a time |
@@ -48,6 +52,25 @@ Examples on this page use `boss-dogfood`, the default project seeded on your mac
 | `/op OPERATION_ID [JSON]` | Invokes an operation |
 | `/api METHOD /v1/path [JSON]` | Calls a local `/v1/` route directly |
 | `/coverage` | Compares the running OpenAPI with the mounted route catalog |
+
+## Talking to the BOSS agent
+
+Type a sentence and Metatron prints the agent's reply. Below the reply it lists what the agent did, any plan waiting for your confirmation, and the choices it offers, numbered. Nothing in that list has run yet:
+
+```text
+metatron> set up three projects for me and tell me what you can't do
+I can't create projects from this conversation. Create them in the console under Projects…
+
+Choices (nothing has run yet — /pick N, or type N):
+  1. Watch the new projects for failures [watch] — you asked to be told about problems
+  2. Investigate further
+metatron> 1
+watch: done.
+```
+
+When you pick an offer, Metatron sends the console's button request. It goes to `/v1/engine/agent/action` with exactly the tool and arguments you were shown, and no model reinterprets the choice. The server checks permission, consent, budget and receipts there, just as it does for the button. If an action needs you to confirm your identity again (step-up), Metatron tells you to sign in again in the console and then run the command again.
+
+`--exec '…' --json` prints the console API's reply structure (`thread_id`, `reply`, `actions`, `pending_confirmation`, `proposed_actions`, `next_steps`, `tool_calls`, `messages`), field for field.
 
 ## Tasks
 

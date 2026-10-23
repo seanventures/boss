@@ -5,9 +5,10 @@ from boss_engine.identity import P, PublicReason, Scope, authenticated, permit, 
 from ..identity_guard import writing_get  # noqa: E402  (identity int-b)
 from typing import Any, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from boss_engine.schemas import AgentChatRequest, AgentChatResponse
 from boss_engine.services.metatron_captain import MetatronCaptain
 
 from ..config import get_settings
@@ -15,13 +16,6 @@ from ..db import begin, get_engine
 
 
 router = APIRouter(tags=["metatron"])
-
-
-class SessionTurnRequest(BaseModel):
-    project_id: str
-    actor: str = "executive_console"
-    message: str
-    thread_id: Optional[str] = None
 
 
 class GoalCreateRequest(BaseModel):
@@ -57,20 +51,19 @@ def _require(connection, project_id: str, actor: str) -> None:
     require_project_actor(connection, project_id, actor, "agent_chat")
 
 
-@router.post("/v1/metatron/session")
-@permit(P.AUTOPILOT_OPERATE, scope=Scope.project(body="project_id"))
-def captain_session_turn(payload: SessionTurnRequest) -> dict[str, Any]:
-    if not payload.project_id.strip():
-        raise HTTPException(status_code=422, detail="project_id is required")
-    with begin(get_engine()) as connection:
-        _require(connection, payload.project_id, payload.actor)
-        return _captain().session_turn(
-            connection,
-            project_id=payload.project_id,
-            actor=payload.actor,
-            message=payload.message,
-            thread_id=payload.thread_id,
-        )
+@router.post("/v1/metatron/session", response_model=AgentChatResponse)
+@permit(P.ASSISTANT_CHAT, scope=Scope.project(body="project_id"))
+def captain_session_turn(payload: AgentChatRequest, request: Request) -> AgentChatResponse:
+    """A Metatron terminal turn IS an Ask BOSS turn (BOSSAPP-759).
+
+    A thin adapter, nothing more: the same request, the same function (`agent_turn`), the same
+    reply. There was a second engine here — MetatronCaptain.session_turn, its own keyword reading
+    and its own model decision — and asked to "set up three projects, tell me what you can't do"
+    it ran overwatch moves and proposed a factory job instead of answering. Captain powers are
+    explicit commands (/watch, /overwatch, /drive), never something plain text sets off."""
+    from apps.api.app.main import agent_turn
+
+    return agent_turn(payload, request, endpoint="/v1/metatron/session")
 
 
 @writing_get(router, "/v1/metatron/session")

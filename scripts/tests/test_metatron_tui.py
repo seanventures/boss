@@ -383,9 +383,19 @@ def test_api_command_rejects_external_paths_and_bad_json_before_http():
 def test_drive_auto_and_go_set_auto_true():
     assert tui.parse_line("/drive auto").auto is True
     assert tui.parse_line("/drive go").auto is True
-    go = tui.parse_line("go")
+    go = tui.parse_line("/go")
     assert go.kind == "drive"
     assert go.auto is True
+
+
+def test_plain_text_is_never_a_captain_power():
+    """BOSSAPP-759: a captain power runs only when typed as a command. "go", "overwatch", "drive
+    auto" or "launch it" as plain text are words for the BOSS agent, never a drive or overwatch."""
+    for said in ("go", "overwatch", "drive auto", "launch it", "run overwatch now",
+                 "set up three projects and tell me what you can't do"):
+        cmd = tui.parse_line(said)
+        assert cmd.kind == "session", said
+        assert cmd.message == said
 
 
 def test_load_config_reads_env_and_never_echoes_key():
@@ -505,7 +515,7 @@ def test_overwatch_hits_overwatch_endpoint():
 def test_go_posts_drive_with_auto_true():
     opener = FakeOpener([(200, {"status": "proposed", "applied": []})])
     client = tui.MetatronClient(_config(), urlopen=opener)
-    client.handle(tui.parse_line("go"))
+    client.handle(tui.parse_line("/go"))
     assert opener.calls[0]["url"].endswith("/v1/metatron/drive")
     assert opener.calls[0]["body"]["auto"] is True
 
@@ -1100,3 +1110,97 @@ def test_schedule_edit_uses_typed_op_input_and_returns_the_api_result():
         "schedule_id": "wsc_1",
         "input": {"sectors": "energy", "to": "reader@example.com"},
     }
+
+
+AGENT_TURN = {
+    "thread_id": "athr_7",
+    "reply": "I can't create projects from here: there is no route for it. Create them in the "
+             "console under Projects. I can set up the workflow once they exist.",
+    "actions": [],
+    "pending_confirmation": None,
+    "proposed_actions": [
+        {"id": "pa_1", "tool": "start_workflow", "args": {"template": "build_app"},
+         "label": "Start the build", "why": "you asked for it"},
+    ],
+    "next_steps": [{"id": "ns_1", "label": "Investigate further", "depth": "investigate",
+                    "message": "Investigate further"}],
+    "tool_calls": [],
+    "messages": [],
+    "cited_acts": [],
+}
+
+
+def test_plain_text_renders_the_agent_reply_with_numbered_choices():
+    opener = FakeOpener([(200, AGENT_TURN)])
+    client = tui.MetatronClient(_config(), urlopen=opener)
+    out = client.handle(tui.parse_line("set up three projects"))
+    assert "can't create projects" in out
+    assert "1. Start the build [start_workflow]" in out
+    assert "2. Investigate further" in out
+    assert opener.calls[0]["url"].endswith("/v1/metatron/session")
+    assert opener.calls[0]["body"]["surface"] == "chat"
+
+
+def test_picking_an_offer_goes_through_the_consoles_button_path():
+    """A numbered choice is the console's button: /v1/engine/agent/action with exactly the tool
+    and args the person was shown — no model in between, nothing re-decided."""
+    opener = FakeOpener([(200, AGENT_TURN),
+                         (200, {"ok": True, "tool": "start_workflow", "result": {"ok": True}})])
+    client = tui.MetatronClient(_config(), urlopen=opener)
+    client.handle(tui.parse_line("set up three projects"))
+    out = client.handle(tui.parse_line("1"))
+    call = opener.calls[1]
+    assert call["url"].endswith("/v1/engine/agent/action")
+    assert call["body"] == {"project_id": "boss-dogfood", "actor": "ceo", "tool": "start_workflow",
+                            "args": {"template": "build_app"}, "thread_id": "athr_7",
+                            "action_id": "pa_1", "label": "Start the build"}
+    assert "start_workflow: done" in out
+    # Spent: the same offer cannot be pressed twice by retyping its number.
+    assert [c["kind"] for c in client.choices()] == ["next_step"]
+
+
+def test_picking_a_next_step_sends_the_consoles_next_step_turn():
+    opener = FakeOpener([(200, AGENT_TURN), (200, {**AGENT_TURN, "proposed_actions": [],
+                                                  "next_steps": [], "reply": "Looked deeper."})])
+    client = tui.MetatronClient(_config(), urlopen=opener)
+    client.handle(tui.parse_line("why is the build stuck?"))
+    out = client.handle(tui.parse_line("/pick 2"))
+    body = opener.calls[1]["body"]
+    assert opener.calls[1]["url"].endswith("/v1/metatron/session")
+    assert body["message"] == "Investigate further" and body["depth"] == "investigate"
+    assert "Looked deeper." in out
+
+
+def test_confirm_dispatches_the_pending_plan_and_pick_without_choices_is_an_error():
+    pending = {**AGENT_TURN, "proposed_actions": [], "next_steps": [],
+               "pending_confirmation": {"plan_id": "plan_9", "summary": "Build HelpDesk"}}
+    opener = FakeOpener([(200, pending), (200, {**pending, "pending_confirmation": None,
+                                               "reply": "Dispatched."})])
+    client = tui.MetatronClient(_config(), urlopen=opener)
+    out = client.handle(tui.parse_line("build helpdesk"))
+    assert "Waiting for your confirmation: Build HelpDesk" in out
+    assert "/confirm" in out
+    assert client.handle(tui.parse_line("/pick 1")).startswith("error:")
+    client.handle(tui.parse_line("/confirm"))
+    assert opener.calls[1]["body"]["confirm_plan_id"] == "plan_9"
+    assert len(opener.calls) == 2
+
+
+def test_a_step_up_refusal_says_what_to_do():
+    opener = FakeOpener([(200, AGENT_TURN), (401, {"detail": "step_up_required"})])
+    client = tui.MetatronClient(_config(), urlopen=opener)
+    client.handle(tui.parse_line("deploy it"))
+    out = client.handle(tui.parse_line("1"))
+    assert "step-up" in out and "HTTP 401" in out
+    assert SECRET not in out
+
+
+def test_one_shot_json_returns_the_consoles_reply_structure(monkeypatch, capsys):
+    opener = FakeOpener([(200, AGENT_TURN)])
+    monkeypatch.setattr(tui, "urlopen", opener)
+    monkeypatch.setenv("BOSS_API_URL", "https://boss-api.test")
+    monkeypatch.setenv("BOSS_API_KEY", SECRET)
+    monkeypatch.setenv("BOSS_PROJECT_ID", "boss-dogfood")
+    assert tui.main(["--exec", "set up three projects", "--json"]) == 0
+    printed = json.loads(capsys.readouterr().out)
+    assert printed == AGENT_TURN

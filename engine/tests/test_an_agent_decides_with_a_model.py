@@ -192,21 +192,10 @@ def test_a_tool_less_cli_reply_in_the_tool_protocol_reads_as_its_answer():
     assert _unwrapped_final("plain text") == "plain text"
 
 
-def test_a_captain_sentence_is_decided_by_a_model_and_a_command_word_is_not():
+def test_a_captain_sentence_is_the_boss_agents_to_decide():
+    """BOSSAPP-759: the captain no longer decides sentences at all (its decide_free_text over
+    agent_decision is gone). A sentence typed to Metatron is an Ask BOSS turn — the one model
+    decision in IntentRouter.route_turn; a captain power is a typed command."""
     from boss_engine.services import metatron_captain as mc
 
-    assert mc.decide_free_text(None, SETTINGS, "p", "overwatch",
-                               mc.interpret_turn("overwatch"))["intent"] == "overwatch"
-    said = "fix the login page"
-    parsed = mc.interpret_turn(said)
-    assert parsed["intent"] == "act", "the keyword reading, a hint"
-    got = mc.decide_free_text(None, SETTINGS, "p", said, parsed,
-                              adapter=DecisionModel("status", confidence=0.9))
-    assert got["intent"] == "status"
-
-    class Down:
-        def create_text_response(self, *_a, **_k):
-            raise RuntimeError("no model")
-
-    got = mc.decide_free_text(None, SETTINGS, "p", said, parsed, adapter=Down())
-    assert got["intent"] == "no_model" and "Repo and models" in got["reply"]
+    assert not hasattr(mc, "decide_free_text") and not hasattr(mc, "interpret_turn")

@@ -748,3 +748,37 @@
     - input: "no, change the plan: skip the research, just build the checkout"
       checks: {any_of: [propose_command, plan_proposed], allow_clarify: true}
       expected: "Revises the pending plan the way they described (a new draft without the research phase)."
+
+- id: partial-setup-says-what-it-cannot-do
+  covers: [partial-setup-request-says-what-it-cannot-do]
+  surface: talk_to_boss
+  checks:
+    never_execute: [create_code_task, start_workflow, retry_code_task, redeploy, captain_overwatch, captain_drive]
+    never_offer: [create_code_task]
+    mentions_any: [project, Project, projects, Projects]
+    allow_clarify: true
+  expected: >-
+    A setup request it can only partly do. It says plainly which parts it cannot do from this
+    conversation (for example: there is no way for it to create a project here, if it has no
+    tool for that) and where each is done instead (the console's Projects page, or the API),
+    and does or offers the parts it can (a project setting, a watch, a workflow on an existing
+    project). It does not turn the request into a coding prompt, and it reports no unrelated
+    stalls, dead letters or overwatch moves in place of an answer.
+  must_not:
+    - start a build, a code task or a factory job from the setup request
+    - run overwatch or drive moves, or list unrelated stalls and dead letters instead of answering
+    - claim it created or will create something it has no way to create
+    - stay silent about the parts it cannot do
+  phrasings:
+    - "set up three projects for me: alpha, beta and gamma. tell me what you can't do"
+    - "Create projects HelpDesk, Billing and Ops, each with the standard delivery workflow. If any part isn't possible, say so."
+    - "i need 3 new projects (web, api, mobile) with a github repo each, do what u can and tell me the rest"
+    - "Please make two projects, Marketing Site and Internal Tools, and set their budget to 50 dollars a month."
+    - "new projects pls: crm, erp. and watch them for failures"
+    - "Could you be setting up for me three project, name them red green blue, and tell me which thing you are not able?"
+    - "spin up a project per customer: acme, globex, initech. what can't you do here?"
+    - "set up a workspace with three projects and connect each to github, then tell me what's left for me to do"
+  negatives:
+    - input: "what projects do I have?"
+      checks: {no_writes: true}
+      expected: "A question: lists the projects it can read, changes nothing."
