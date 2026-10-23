@@ -82,7 +82,7 @@ def test_schema_has_the_embedding_table_and_a_search_vector(pg_engine):
             text(
                 """
                 SELECT 1 FROM information_schema.columns
-                WHERE table_name = 'kg_nodes' AND column_name = 'search_tsv'
+                WHERE table_schema = current_schema() AND table_name = 'kg_nodes' AND column_name = 'search_tsv'
                 """
             )
         ).scalar_one_or_none()
@@ -90,7 +90,7 @@ def test_schema_has_the_embedding_table_and_a_search_vector(pg_engine):
             text(
                 """
                 SELECT 1 FROM information_schema.columns
-                WHERE table_name = 'kg_nodes' AND column_name = 'trust_tier'
+                WHERE table_schema = current_schema() AND table_name = 'kg_nodes' AND column_name = 'trust_tier'
                 """
             )
         ).scalar_one_or_none()
