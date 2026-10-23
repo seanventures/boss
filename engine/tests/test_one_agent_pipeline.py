@@ -181,6 +181,7 @@ MIGRATED = {
     "engine/boss_engine/services/comms.py": "inbox / Slack / email decision replies",
     "engine/boss_engine/services/github_triage_agent.py": "GitHub issue triage",
     "engine/boss_engine/services/app_alerts.py": "alert triage and flap tuning",
+    "engine/boss_engine/services/focused_agents.py": "the focused agents' duty loop",
 }
 
 
