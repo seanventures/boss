@@ -19,7 +19,8 @@ from collections import defaultdict
 from collections.abc import Iterable
 from pathlib import Path
 
-LEARNING_PAIRS = (("T3", "T7"), ("T4", "T9"))
+LEARNING_PAIRS = (("T3", "T7"), ("T4", "T9"), ("B1", "B2"), ("B3", "B4"))
+ARMS = ("A", "AP", "B")                 # AP is A′: keyword search only (case study §4)
 
 
 def load(results_dir: Path) -> list[dict]:
@@ -113,9 +114,23 @@ def learning(results: list[dict]) -> list[dict]:
     return rows
 
 
+def reuse(results: list[dict]) -> list[dict]:
+    """Learning pairs' second tasks: of the invariants the first task should have taught, how many the run reused.
+    A grader records `reuse: {invariant_id: true|false}` on the result; ungraded runs show as not scored."""
+    rows = []
+    for r in results:
+        expected = r.get("expected_reuse") or []
+        if not expected:
+            continue
+        graded = r.get("reuse") or {}
+        rows.append({"engine": r["engine"], "arm": r["arm"], "task": r["task"], "expected": len(expected),
+                     "reused": sum(1 for i in expected if graded.get(i)) if graded else None})
+    return rows
+
+
 def bar_svg(title: str, labels: list[str], series: dict[str, list[float]], unit: str) -> str:
     """Grouped bars, one group per label; plain SVG with currentColor text so it reads in both themes."""
-    colors = {"A": "#8a94a6", "B": "#2f6fdf"}
+    colors = {"A": "#8a94a6", "AP": "#c08a2e", "B": "#2f6fdf"}
     width, height, pad, top = 640, 260, 40, 30
     peak = max([v for vals in series.values() for v in vals] + [1e-9])
     group = (width - 2 * pad) / max(1, len(labels))
@@ -134,8 +149,8 @@ def bar_svg(title: str, labels: list[str], series: dict[str, list[float]], unit:
         parts.append(f'<text x="{x0 + group / 2:.1f}" y="{height - pad + 14}" text-anchor="middle" '
                      f'fill="currentColor">{label}</text>')
     for si, name in enumerate(series):
-        parts.append(f'<rect x="{width - 120 + si * 50}" y="8" width="10" height="10" fill="{colors.get(name)}"/>'
-                     f'<text x="{width - 106 + si * 50}" y="17" fill="currentColor">arm {name}</text>')
+        parts.append(f'<rect x="{width - 10 - 60 * len(series) + si * 60}" y="8" width="10" height="10" fill="{colors.get(name)}"/>'
+                     f'<text x="{width + 4 - 60 * len(series) + si * 60}" y="17" fill="currentColor">arm {name}</text>')
     parts.append("</svg>")
     return "\n".join(parts)
 
@@ -144,8 +159,10 @@ def render(results: list[dict], out_dir: Path) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
     summary, tasks = summarize(results), per_task(results)
     crit, learn = criteria(summary, tasks), learning(results)
-    lines = ["# Knowledge Graph case study: NorthPeak Retail", "",
-             f"{len(results)} builds · Saleor `{results[0].get('saleor_sha', '?')[:12]}` · stages: "
+    banking = all(r["task"].startswith("B") for r in results)
+    pin = ("Fineract", results[0].get("fineract_sha", "?")) if banking else ("Saleor", results[0].get("saleor_sha", "?"))
+    lines = [f"# Knowledge Graph case study: {'NorthPeak Bank (Fineract)' if banking else 'NorthPeak Retail'}", "",
+             f"{len(results)} builds · {pin[0]} `{pin[1][:12]}` · stages: "
              f"{', '.join(sorted({r.get('stage', '?') for r in results}))} · approved by "
              f"{', '.join(sorted({r.get('approved_by') or '?' for r in results}))}", "",
              "## Arms", "", "| Engine | Arm | Builds | Tasks solved | Spend | $ per solved task | Median min (solved) |",
@@ -155,12 +172,16 @@ def render(results: list[dict], out_dir: Path) -> Path:
                      f"{'$' + str(s['usd_per_solved']) if s['usd_per_solved'] is not None else '—'} | "
                      f"{s['median_wall_min_solved'] if s['median_wall_min_solved'] is not None else '—'} |")
     lines += ["", "Cost per solved task = all spend, failed attempts included, / tasks solved.", "",
-              "## Per task", "", "| Engine | Task | A solved | A $ | A min | B solved | B $ | B min |",
-              "|---|---|---|---|---|---|---|---|"]
-    for (engine, task), arms in sorted(tasks.items(), key=lambda kv: (kv[0][0], int(kv[0][1][1:]))):
-        a, b = arms.get("A", {}), arms.get("B", {})
-        lines.append(f"| {engine} | {task} | {a.get('solved', '—')} | {a.get('usd', '—')} | {a.get('minutes', '—')} | "
-                     f"{b.get('solved', '—')} | {b.get('usd', '—')} | {b.get('minutes', '—')} |")
+              "## Per task", ""]
+    shown = [arm for arm in ARMS if any(arm in t for t in tasks.values())]
+    lines += ["| Engine | Task | " + " | ".join(f"{a} solved | {a} $ | {a} min" for a in shown) + " |",
+              "|---|---|" + "---|---|---|" * len(shown)]
+    for (engine, task), arms in sorted(tasks.items(), key=lambda kv: (kv[0][0], kv[0][1][0], int(kv[0][1][1:]))):
+        cells = []
+        for arm in shown:
+            c = arms.get(arm, {})
+            cells += [str(c.get("solved", "—")), str(c.get("usd", "—")), str(c.get("minutes", "—"))]
+        lines.append(f"| {engine} | {task} | " + " | ".join(cells) + " |")
     lines += ["", "## Primary criteria (§5)", ""]
     for engine, c in crit.items():
         lines.append(f"- **{engine}: {c['verdict']}**" + (f" — outcome {'met' if c.get('outcome') else 'not met'}, "
@@ -171,9 +192,15 @@ def render(results: list[dict], out_dir: Path) -> Path:
                   "|---|---|---|---|---|---|"]
         lines += [f"| {r['engine']} | {r['pair']} | {r['B_ratio']} | {r['A_ratio']} | {r['normalised']} | "
                   f"{'yes' if r['meets_70pct'] else 'no'} |" for r in learn]
+    graded = reuse(results)
+    if graded:
+        lines += ["", "## Reuse on the learning pairs' second tasks", "", "| Engine | Arm | Task | Invariants reused |",
+                  "|---|---|---|---|"]
+        lines += [f"| {g['engine']} | {g['arm']} | {g['task']} | "
+                  f"{'not scored' if g['reused'] is None else str(g['reused']) + '/' + str(g['expected'])} |" for g in graded]
     for engine in sorted({e for e, _ in tasks}):
-        labels = sorted({t for e, t in tasks if e == engine}, key=lambda t: int(t[1:]))
-        series = {arm: [tasks[(engine, t)].get(arm, {}).get("usd", 0) for t in labels] for arm in ("A", "B")}
+        labels = sorted({t for e, t in tasks if e == engine}, key=lambda t: (t[0], int(t[1:])))
+        series = {arm: [tasks[(engine, t)].get(arm, {}).get("usd", 0) for t in labels] for arm in shown}
         name = f"cost_{engine}.svg"
         (out_dir / name).write_text(bar_svg(f"Model spend per task, {engine} (USD)", labels, series, "USD"))
         lines += ["", f"![Model spend per task, {engine}]({name})"]

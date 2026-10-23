@@ -1,0 +1,13 @@
+diff --git a/fineract-progressive-loan/src/main/java/org/apache/fineract/portfolio/loanproduct/calc/ProgressiveEMICalculator.java b/fineract-progressive-loan/src/main/java/org/apache/fineract/portfolio/loanproduct/calc/ProgressiveEMICalculator.java
+index 02a702b..8d4d7c2 100644
+--- a/fineract-progressive-loan/src/main/java/org/apache/fineract/portfolio/loanproduct/calc/ProgressiveEMICalculator.java
++++ b/fineract-progressive-loan/src/main/java/org/apache/fineract/portfolio/loanproduct/calc/ProgressiveEMICalculator.java
+@@ -2157,7 +2157,7 @@ public final class ProgressiveEMICalculator implements EMICalculator {
+         }
+         final BigDecimal interestFractionPerPeriod = repaymentPeriodMultiplierInDays//
+                 .multiply(repaymentEvery, mc)//
+-                .divide(daysInYear, mc);//
++                .divide(daysInYear, new MathContext(5, mc.getRoundingMode()));//
+         return interestRate//
+                 .multiply(interestFractionPerPeriod, mc)//
+                 .multiply(actualDaysInPeriod, mc)//

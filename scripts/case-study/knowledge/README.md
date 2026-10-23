@@ -1,4 +1,9 @@
-# NorthPeak Retail: the Knowledge Graph case study harness
+# The Knowledge Graph case study harness
+
+Two task sets: **NorthPeak Retail** on Saleor (T1..T12, below) and **NorthPeak Bank** on Apache
+Fineract (B1..B4, [banking set](#the-banking-set-fineract-b1b4)).
+
+## NorthPeak Retail (Saleor)
 
 The proof plan is [KNOWLEDGE_GRAPH_CASE_STUDY.md](../../../docs/product/KNOWLEDGE_GRAPH_CASE_STUDY.md).
 This folder runs it. Phase 0 delivers tasks T1–T4; T5–T12 follow the same layout.
@@ -43,3 +48,49 @@ Until then, arm B refuses to start and says so.
 
 Results are written to `artifacts/case-study/knowledge/<date>/<engine>/<arm>/Txx-rN.json`, which
 is gitignored. The final `report.md` is committed to `docs/case-studies/`.
+
+## The banking set (Fineract, B1–B4)
+
+Cases 1 and 3 of [KNOWLEDGE_GRAPH_BANKING_CASE_STUDIES.md](../../../docs/product/KNOWLEDGE_GRAPH_BANKING_CASE_STUDIES.md)
+(Plane BOSSAPP-758), on Apache Fineract **1.16.0** (`6da8a989b398`), the "legacy core". Two learning pairs:
+
+| Task | Case | What BOSS receives | Hidden suite (module) | How the suite is proven |
+|---|---|---|---|---|
+| B1 | 1 | Extract the progressive-loan interest rules into `InterestCalculationService`, not one cent changed | 200 generated loans (day-count conventions, leap-year strategies, rounding modes and currency digits, principal and interest grace, flat and declining) compared with schedules recorded on 1.16.0, plus a reflection-only contract (`fineract-progressive-loan`) | Behaviour passes on 1.16.0; contract fails there on assertions; `selftest/b1_reference.patch` (a behaviour-keeping extraction) passes both; 3 one-line mutants are caught |
+| B2 | 1 | Extract the fee and charge rules into `ChargeCalculationService` | 240 generated charges (every calculation and charge time, caps, rounding, installment split, schedule portions) against 1.16.0, plus a contract (`fineract-loan`) | As B1, with `selftest/b2_reference.patch` and 4 mutants |
+| B3 | 3 | Incident report: repayments post more than the customer paid | Posting conservation and allocation order for `mifos-standard-strategy`, 120 generated loans and repayment sequences plus 3 named scenarios (`fineract-loan`) | Passes on 1.16.0, fails on assertions with `fault.patch`, passes with B4's fault |
+| B4 | 3 | Incident report: early repayments post more than the customer paid | The same rules for the due/in-advance strategy (`fineract-loan`) | As B3, with its own `fault.patch`; passes with B3's fault |
+
+- **Learning pairs.** B1→B2 and B3→B4 run in that order. B2's and B4's `task.yaml` hold the
+  `expected_reuse` list: the invariants the first task should have discovered (listed under
+  `invariants` in B1 and B3) that the second should reuse rather than rediscover. A run records the
+  list; a grader marks `reuse: {id: true|false}` on the result and `report.py` counts it.
+- **The faults are one class through two code paths.** B3 drops a deduction in the standard
+  strategy's handler; B4 drops one in a different strategy's in-advance handler. Both post the same
+  money twice. Each suite passes with the other's fault, which proves the paths are distinct.
+- **Arms.** A (knowledge off), AP = A′ (keyword search only) and B (knowledge on), set through the
+  `knowledge_graph` project setting. BOSS's switch is `on | off` today, so **AP refuses to start
+  until the switch offers `keyword`**, as arm B did before the switch existed.
+
+### Build and validate (no spend)
+Fineract 1.16.0 needs **JDK 25** (Gradle toolchain) and runs on the Gradle 9.7.1 wrapper.
+```sh
+git clone --depth 1 --branch 1.16.0 https://github.com/apache/fineract ../fineract-1.16.0
+export FINERACT_JAVA_HOME=/path/to/jdk-25            # or JAVA_HOME
+python3 run.py validate-suites --fineract-dir ../fineract-1.16.0 --tasks B1..B4
+```
+Each suite runs through the narrowest task that covers it, one module's unit tests filtered to the
+suite (`harness.yaml` `fineract.test_command`), never the whole build: no database and no
+integration tests. Measured on an M-series laptop: the first run is about 3 minutes (dependency
+download and compiling the core modules), and each later suite run is 15–35 s. The validator needs
+a clean checkout and puts every file and patch back afterwards.
+
+### Stages (only after the operator approves the spend)
+```sh
+python3 run.py estimate --stage bank_smoke         # open model (E2), A/AP/B x B1..B4: 12 builds, $7.20–22.80, ceiling $36
+python3 run.py estimate --stage bank_learning_e1   # Sonnet 5 (E1), A/B x B1..B4: 8 builds, $48–80, ceiling $120
+python3 run.py run --stage bank_smoke --arm A --engine E2 --tasks B1..B4 --approved-by "<operator>" \
+    --project-id <project> --fineract-dir ../northpeak-fineract --resume
+```
+The fork `northpeak-fineract` (the pinned SHA, in the demo org) is created by the operator, like
+`northpeak-saleor`. Before B3 and B4 the harness pushes the task's `fault.patch` as the release.

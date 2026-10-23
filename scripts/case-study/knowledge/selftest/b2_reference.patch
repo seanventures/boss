@@ -1,0 +1,384 @@
+diff --git a/fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/domain/SingleLoanChargeRepaymentScheduleProcessingWrapper.java b/fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/domain/SingleLoanChargeRepaymentScheduleProcessingWrapper.java
+index bd25224..141a27a 100644
+--- a/fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/domain/SingleLoanChargeRepaymentScheduleProcessingWrapper.java
++++ b/fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/domain/SingleLoanChargeRepaymentScheduleProcessingWrapper.java
+@@ -29,12 +29,15 @@ import org.apache.fineract.organisation.monetary.domain.MonetaryCurrency;
+ import org.apache.fineract.organisation.monetary.domain.Money;
+ import org.apache.fineract.organisation.monetary.domain.MoneyHelper;
+ import org.apache.fineract.portfolio.charge.domain.ChargeCalculationType;
++import org.apache.fineract.portfolio.loanaccount.service.ChargeCalculationService;
+ 
+ /**
+  * A wrapper around loan schedule related data exposing needed behaviour by loan.
+  */
+ public class SingleLoanChargeRepaymentScheduleProcessingWrapper {
+ 
++    private final ChargeCalculationService chargeCalculation = new ChargeCalculationService();
++
+     public void reprocess(final MonetaryCurrency currency, final LocalDate disbursementDate,
+             final List<LoanRepaymentScheduleInstallment> installments, LoanCharge loanCharge) {
+         Money zero = Money.zero(currency);
+@@ -112,7 +115,7 @@ public class SingleLoanChargeRepaymentScheduleProcessingWrapper {
+             return zero;
+         }
+         if (loanCharge.isInstalmentFee() && isInstallmentChargeApplicable) {
+-            return Money.of(currency, getInstallmentFee(currency, period, loanCharge));
++            return Money.of(currency, chargeCalculation.installmentFee(currency, period, loanCharge));
+         }
+         if (!loanCharge.isDueInPeriod(periodStart, periodEnd, isFirstPeriod)) {
+             return zero;
+@@ -136,7 +139,7 @@ public class SingleLoanChargeRepaymentScheduleProcessingWrapper {
+                 }
+             }
+         } else {
+-            baseAmount = getBaseAmount(loanCharge, totalPrincipal.getAmount(), totalInterest.getAmount());
++            baseAmount = chargeCalculation.baseAmount(loanCharge, totalPrincipal.getAmount(), totalInterest.getAmount());
+         }
+         return Money.of(currency, MathUtil.percentageOf(baseAmount, loanCharge.getPercentage(), MoneyHelper.getMathContext()));
+     }
+@@ -175,34 +178,6 @@ public class SingleLoanChargeRepaymentScheduleProcessingWrapper {
+         return zero;
+     }
+ 
+-    private BigDecimal getInstallmentFee(MonetaryCurrency currency, LoanRepaymentScheduleInstallment period, LoanCharge loanCharge) {
+-        if (loanCharge.getChargeCalculation().isFlat()) {
+-            return loanCharge.amountOrPercentage();
+-        }
+-        return MathUtil.percentageOf(getBaseAmount(currency, period, loanCharge, null), loanCharge.getPercentage(),
+-                MoneyHelper.getMathContext());
+-    }
+-
+-    @NotNull
+-    private BigDecimal getBaseAmount(MonetaryCurrency currency, LoanRepaymentScheduleInstallment period, LoanCharge loanCharge,
+-            BigDecimal amount) {
+-        BigDecimal baseAmount = getBaseAmount(loanCharge, period.getPrincipal(currency).getAmount(),
+-                period.getInterestCharged(currency).getAmount());
+-        return MathUtil.add(amount, baseAmount);
+-    }
+-
+-    @NotNull
+-    private BigDecimal getBaseAmount(LoanCharge loanCharge, BigDecimal principal, BigDecimal interest) {
+-        ChargeCalculationType calcType = loanCharge.getChargeCalculation();
+-        if (calcType.isPercentageOfAmountAndInterest()) {
+-            return MathUtil.add(principal, interest);
+-        }
+-        if (calcType.isPercentageOfInterest()) {
+-            return interest;
+-        }
+-        return principal;
+-    }
+-
+     /**
+      * @return newly added period if there is any
+      */
+diff --git a/fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/service/ChargeCalculationService.java b/fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/service/ChargeCalculationService.java
+new file mode 100644
+index 0000000..5555f0a
+--- /dev/null
++++ b/fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/service/ChargeCalculationService.java
+@@ -0,0 +1,130 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements. See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership. The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License. You may obtain a copy of the License at
++ *
++ * http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing,
++ * software distributed under the License is distributed on an
++ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
++ * KIND, either express or implied. See the License for the
++ * specific language governing permissions and limitations
++ * under the License.
++ */
++package org.apache.fineract.portfolio.loanaccount.service;
++
++import jakarta.validation.constraints.NotNull;
++import java.math.BigDecimal;
++import java.util.List;
++import org.apache.fineract.infrastructure.core.service.DateUtils;
++import org.apache.fineract.infrastructure.core.service.MathUtil;
++import org.apache.fineract.organisation.monetary.domain.MonetaryCurrency;
++import org.apache.fineract.organisation.monetary.domain.Money;
++import org.apache.fineract.organisation.monetary.domain.MoneyHelper;
++import org.apache.fineract.portfolio.charge.domain.ChargeCalculationType;
++import org.apache.fineract.portfolio.charge.domain.ChargeTimeType;
++import org.apache.fineract.portfolio.loanaccount.domain.Loan;
++import org.apache.fineract.portfolio.loanaccount.domain.LoanCharge;
++import org.apache.fineract.portfolio.loanaccount.domain.LoanDisbursementDetails;
++import org.apache.fineract.portfolio.loanaccount.domain.LoanRepaymentScheduleInstallment;
++
++/**
++ * Loan fee and penalty charge amounts: the base an amount applies to, percentages, min/max caps and per-installment fees.
++ */
++public class ChargeCalculationService {
++
++    public BigDecimal percentageOf(final BigDecimal value, final BigDecimal percentage) {
++        return LoanCharge.percentageOf(value, percentage);
++    }
++
++    public BigDecimal applyMinMaxCap(final LoanCharge loanCharge, final BigDecimal amount) {
++        return loanCharge.minimumAndMaximumCap(amount);
++    }
++
++    @NotNull
++    public BigDecimal baseAmount(MonetaryCurrency currency, LoanRepaymentScheduleInstallment period, LoanCharge loanCharge,
++            BigDecimal amount) {
++        BigDecimal baseAmount = baseAmount(loanCharge, period.getPrincipal(currency).getAmount(),
++                period.getInterestCharged(currency).getAmount());
++        return MathUtil.add(amount, baseAmount);
++    }
++
++    @NotNull
++    public BigDecimal baseAmount(LoanCharge loanCharge, BigDecimal principal, BigDecimal interest) {
++        ChargeCalculationType calcType = loanCharge.getChargeCalculation();
++        if (calcType.isPercentageOfAmountAndInterest()) {
++            return MathUtil.add(principal, interest);
++        }
++        if (calcType.isPercentageOfInterest()) {
++            return interest;
++        }
++        return principal;
++    }
++
++    public BigDecimal installmentFee(MonetaryCurrency currency, LoanRepaymentScheduleInstallment period, LoanCharge loanCharge) {
++        if (loanCharge.getChargeCalculation().isFlat()) {
++            return loanCharge.amountOrPercentage();
++        }
++        return MathUtil.percentageOf(baseAmount(currency, period, loanCharge, null), loanCharge.getPercentage(),
++                MoneyHelper.getMathContext());
++    }
++
++    public Money installmentChargeAmount(final Loan loan, final ChargeCalculationType calculationType,
++            final BigDecimal percentage, final LoanRepaymentScheduleInstallment installment) {
++        Money percentOf = switch (calculationType) {
++            case PERCENT_OF_AMOUNT -> installment.getPrincipal(loan.getCurrency());
++            case PERCENT_OF_AMOUNT_AND_INTEREST ->
++                installment.getPrincipal(loan.getCurrency()).plus(installment.getInterestCharged(loan.getCurrency()));
++            case PERCENT_OF_INTEREST -> installment.getInterestCharged(loan.getCurrency());
++            case PERCENT_OF_DISBURSEMENT_AMOUNT, INVALID, FLAT -> Money.zero(loan.getCurrency());
++
++        };
++        return Money.zero(loan.getCurrency()) //
++                .plus(percentageOf(percentOf.getAmount(), percentage));
++    }
++
++    public BigDecimal derivedBaseAmount(final Loan loan, final LoanCharge loanCharge) {
++        BigDecimal amount = BigDecimal.ZERO;
++        final ChargeTimeType chargeTimeType = ChargeTimeType.fromInt(loanCharge.getCharge().getChargeTimeType());
++        if (loan.isMultiDisburmentLoan() && chargeTimeType.isDisbursementOrTrancheDisbursementCharge()) {
++            return sumMultiDisbursementAmounts(loan, chargeTimeType.isTrancheDisbursement()).getAmount();
++        } else {
++            // If charge type is specified due date and loan is multi disburment loan.
++            // Then we need to get as of this loan charge due date how much amount disbursed.
++            if (loanCharge.isSpecifiedDueDate() && loan.isMultiDisburmentLoan()) {
++                for (final LoanDisbursementDetails loanDisbursementDetails : loan.getDisbursementDetails()) {
++                    if (!DateUtils.isAfter(loanDisbursementDetails.expectedDisbursementDate(), loanCharge.getDueDate())) {
++                        amount = amount.add(loanDisbursementDetails.getPrincipal());
++                    }
++                }
++            } else {
++                amount = loan.getPrincipal().getAmount();
++            }
++        }
++        return amount;
++    }
++
++    public Money sumMultiDisbursementAmounts(final Loan loan, final boolean isTrancheDisbursement) {
++        if (loan.isMultiDisburmentLoan()) {
++            final List<LoanDisbursementDetails> loanDisbursementDetails = loan.getDisbursementDetails();
++            if (loan.isOpen() || !loanDisbursementDetails.isEmpty()) {
++                if (isTrancheDisbursement) {
++                    return Money.of(loan.getCurrency(), loanDisbursementDetails.stream() //
++                            .map(LoanDisbursementDetails::getPrincipal) //
++                            .reduce(BigDecimal.ZERO, BigDecimal::add));
++                }
++                return Money.of(loan.getCurrency(), loanDisbursementDetails.get(0).getPrincipal());
++            } else if (loan.isSubmittedAndPendingApproval()) {
++                return Money.of(loan.getCurrency(), loan.getProposedPrincipal());
++            } else if (loan.isApproved()) {
++                return Money.of(loan.getCurrency(), loan.getApprovedPrincipal());
++            }
++        }
++        return Money.zero(loan.getCurrency());
++    }
++}
+diff --git a/fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/service/LoanChargeService.java b/fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/service/LoanChargeService.java
+index 019e73c..4fab44c 100644
+--- a/fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/service/LoanChargeService.java
++++ b/fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/service/LoanChargeService.java
+@@ -66,6 +66,8 @@ import org.apache.fineract.portfolio.tax.service.TaxUtils;
+ @RequiredArgsConstructor
+ public class LoanChargeService {
+ 
++    private final ChargeCalculationService chargeCalculation = new ChargeCalculationService();
++
+     private final LoanChargeValidator loanChargeValidator;
+     private final LoanTransactionProcessingService loanTransactionProcessingService;
+     private final LoanLifecycleStateMachine loanLifecycleStateMachine;
+@@ -257,15 +259,15 @@ public class LoanChargeService {
+         }
+ 
+         return switch (loanCharge.getChargeCalculation()) {
+-            case PERCENT_OF_AMOUNT -> getDerivedAmountForCharge(loan, loanCharge);
++            case PERCENT_OF_AMOUNT -> chargeCalculation.derivedBaseAmount(loan, loanCharge);
+             case PERCENT_OF_AMOUNT_AND_INTEREST -> {
+                 final BigDecimal totalInterestCharged = loan.isMultiDisburmentLoan()
+                         ? loanScheduleGeneratorService.calculateInteresOnlyWithFirtDisbursement(loan)
+                         : loan.getTotalInterest();
+                 if (loan.isMultiDisburmentLoan() && loanCharge.isDisbursementCharge()) {
+-                    yield sumMultiDisbursementAmounts(loan, false).getAmount().add(totalInterestCharged);
++                    yield chargeCalculation.sumMultiDisbursementAmounts(loan, false).getAmount().add(totalInterestCharged);
+                 } else if (loan.isMultiDisburmentLoan() && loanCharge.isTrancheDisbursementCharge()) {
+-                    yield sumMultiDisbursementAmounts(loan, true).getAmount().add(totalInterestCharged);
++                    yield chargeCalculation.sumMultiDisbursementAmounts(loan, true).getAmount().add(totalInterestCharged);
+                 } else {
+                     yield loan.getPrincipal().getAmount().add(totalInterestCharged);
+                 }
+@@ -344,7 +346,7 @@ public class LoanChargeService {
+         Money amount = Money.zero(loan.getCurrency());
+         List<LoanRepaymentScheduleInstallment> installments = loan.getRepaymentScheduleInstallments();
+         for (final LoanRepaymentScheduleInstallment installment : installments) {
+-            amount = amount.plus(calculateInstallmentChargeAmount(loan, calculationType, percentage, installment));
++            amount = amount.plus(chargeCalculation.installmentChargeAmount(loan, calculationType, percentage, installment));
+         }
+         return amount.getAmount();
+     }
+@@ -396,9 +398,9 @@ public class LoanChargeService {
+                                 loanCharge.getPercentage());
+                     }
+                     if (loanChargeAmount.compareTo(BigDecimal.ZERO) == 0) {
+-                        loanChargeAmount = loanCharge.percentageOf(loanCharge.getAmountPercentageAppliedTo());
++                        loanChargeAmount = chargeCalculation.percentageOf(loanCharge.getAmountPercentageAppliedTo(), loanCharge.getPercentage());
+                     }
+-                    loanCharge.setAmount(loanCharge.minimumAndMaximumCap(loanChargeAmount));
++                    loanCharge.setAmount(chargeCalculation.applyMinMaxCap(loanCharge, loanChargeAmount));
+                     loanCharge.setAmountOutstanding(loanCharge.calculateOutstanding());
+                 break;
+             }
+@@ -446,9 +448,9 @@ public class LoanChargeService {
+                 loanCharge.setPercentage(chargeAmount);
+                 loanCharge.setAmountPercentageAppliedTo(amountPercentageAppliedTo);
+                 if (loanChargeAmount.compareTo(BigDecimal.ZERO) == 0) {
+-                    loanChargeAmount = loanCharge.percentageOf(loanCharge.getAmountPercentageAppliedTo());
++                    loanChargeAmount = chargeCalculation.percentageOf(loanCharge.getAmountPercentageAppliedTo(), loanCharge.getPercentage());
+                 }
+-                loanCharge.setAmount(loanCharge.minimumAndMaximumCap(loanChargeAmount));
++                loanCharge.setAmount(chargeCalculation.applyMinMaxCap(loanCharge, loanChargeAmount));
+                 loanCharge.setAmountPaid(null);
+                 loanCharge.setAmountOutstanding(loanCharge.calculateOutstanding());
+                 loanCharge.setAmountWaived(null);
+@@ -700,7 +702,7 @@ public class LoanChargeService {
+                 if (loanCharge.getChargeCalculation().isFlat()) {
+                     amount = loanCharge.amountOrPercentage();
+                 } else {
+-                    amount = calculateInstallmentChargeAmount(loan, loanCharge.getChargeCalculation(), loanCharge.getPercentage(),
++                    amount = chargeCalculation.installmentChargeAmount(loan, loanCharge.getChargeCalculation(), loanCharge.getPercentage(),
+                             installment).getAmount();
+                 }
+                 final LoanInstallmentCharge loanInstallmentCharge = new LoanInstallmentCharge(amount, loanCharge, installment);
+@@ -723,7 +725,7 @@ public class LoanChargeService {
+                 if (loanCharge.getChargeCalculation().isFlat()) {
+                     amount = loanCharge.amountOrPercentage();
+                 } else {
+-                    amount = calculateInstallmentChargeAmount(loan, loanCharge.getChargeCalculation(), loanCharge.getPercentage(),
++                    amount = chargeCalculation.installmentChargeAmount(loan, loanCharge.getChargeCalculation(), loanCharge.getPercentage(),
+                             installment).getAmount();
+                 }
+                 final LoanInstallmentCharge loanInstallmentCharge = new LoanInstallmentCharge(amount, loanCharge, installment);
+@@ -843,9 +845,9 @@ public class LoanChargeService {
+                     loanCharge.setPercentage(amount);
+                     loanCharge.setAmountPercentageAppliedTo(loanPrincipal);
+                     if (loanChargeAmount.compareTo(BigDecimal.ZERO) == 0) {
+-                        loanChargeAmount = loanCharge.percentageOf(loanCharge.getAmountPercentageAppliedTo());
++                        loanChargeAmount = chargeCalculation.percentageOf(loanCharge.getAmountPercentageAppliedTo(), loanCharge.getPercentage());
+                     }
+-                    loanCharge.setAmount(loanCharge.minimumAndMaximumCap(loanChargeAmount));
++                    loanCharge.setAmount(chargeCalculation.applyMinMaxCap(loanCharge, loanChargeAmount));
+                 break;
+             }
+             loanCharge.setAmountOrPercentage(amount);
+@@ -884,9 +886,9 @@ public class LoanChargeService {
+                     loanCharge.setPercentage(amount);
+                     loanCharge.setAmountPercentageAppliedTo(loanPrincipal);
+                     if (loanChargeAmount.compareTo(BigDecimal.ZERO) == 0) {
+-                        loanChargeAmount = loanCharge.percentageOf(loanCharge.getAmountPercentageAppliedTo());
++                        loanChargeAmount = chargeCalculation.percentageOf(loanCharge.getAmountPercentageAppliedTo(), loanCharge.getPercentage());
+                     }
+-                    loanCharge.setAmount(loanCharge.minimumAndMaximumCap(loanChargeAmount));
++                    loanCharge.setAmount(chargeCalculation.applyMinMaxCap(loanCharge, loanChargeAmount));
+                 break;
+             }
+             loanCharge.setAmountOrPercentage(amount);
+@@ -898,25 +900,6 @@ public class LoanChargeService {
+         }
+     }
+ 
+-    private Money sumMultiDisbursementAmounts(final Loan loan, final boolean isTrancheDisbursement) {
+-        if (loan.isMultiDisburmentLoan()) {
+-            final List<LoanDisbursementDetails> loanDisbursementDetails = loan.getDisbursementDetails();
+-            if (loan.isOpen() || !loanDisbursementDetails.isEmpty()) {
+-                if (isTrancheDisbursement) {
+-                    return Money.of(loan.getCurrency(), loanDisbursementDetails.stream() //
+-                            .map(LoanDisbursementDetails::getPrincipal) //
+-                            .reduce(BigDecimal.ZERO, BigDecimal::add));
+-                }
+-                return Money.of(loan.getCurrency(), loanDisbursementDetails.get(0).getPrincipal());
+-            } else if (loan.isSubmittedAndPendingApproval()) {
+-                return Money.of(loan.getCurrency(), loan.getProposedPrincipal());
+-            } else if (loan.isApproved()) {
+-                return Money.of(loan.getCurrency(), loan.getApprovedPrincipal());
+-            }
+-        }
+-        return Money.zero(loan.getCurrency());
+-    }
+-
+     private List<Long> fetchAllLoanChargeIds(final Loan loan) {
+         List<Long> list = new ArrayList<>();
+         for (LoanCharge loanCharge : loan.getLoanCharges()) {
+@@ -925,41 +908,6 @@ public class LoanChargeService {
+         return list;
+     }
+ 
+-    private Money calculateInstallmentChargeAmount(final Loan loan, final ChargeCalculationType calculationType,
+-            final BigDecimal percentage, final LoanRepaymentScheduleInstallment installment) {
+-        Money percentOf = switch (calculationType) {
+-            case PERCENT_OF_AMOUNT -> installment.getPrincipal(loan.getCurrency());
+-            case PERCENT_OF_AMOUNT_AND_INTEREST ->
+-                installment.getPrincipal(loan.getCurrency()).plus(installment.getInterestCharged(loan.getCurrency()));
+-            case PERCENT_OF_INTEREST -> installment.getInterestCharged(loan.getCurrency());
+-            case PERCENT_OF_DISBURSEMENT_AMOUNT, INVALID, FLAT -> Money.zero(loan.getCurrency());
+-
+-        };
+-        return Money.zero(loan.getCurrency()) //
+-                .plus(LoanCharge.percentageOf(percentOf.getAmount(), percentage));
+-    }
+-
+-    private BigDecimal getDerivedAmountForCharge(final Loan loan, final LoanCharge loanCharge) {
+-        BigDecimal amount = BigDecimal.ZERO;
+-        final ChargeTimeType chargeTimeType = ChargeTimeType.fromInt(loanCharge.getCharge().getChargeTimeType());
+-        if (loan.isMultiDisburmentLoan() && chargeTimeType.isDisbursementOrTrancheDisbursementCharge()) {
+-            return sumMultiDisbursementAmounts(loan, chargeTimeType.isTrancheDisbursement()).getAmount();
+-        } else {
+-            // If charge type is specified due date and loan is multi disburment loan.
+-            // Then we need to get as of this loan charge due date how much amount disbursed.
+-            if (loanCharge.isSpecifiedDueDate() && loan.isMultiDisburmentLoan()) {
+-                for (final LoanDisbursementDetails loanDisbursementDetails : loan.getDisbursementDetails()) {
+-                    if (!DateUtils.isAfter(loanDisbursementDetails.expectedDisbursementDate(), loanCharge.getDueDate())) {
+-                        amount = amount.add(loanDisbursementDetails.getPrincipal());
+-                    }
+-                }
+-            } else {
+-                amount = loan.getPrincipal().getAmount();
+-            }
+-        }
+-        return amount;
+-    }
+-
+     public void removeLoanCharge(final Loan loan, final LoanCharge loanCharge) {
+         final boolean removed = loanCharge.isActive();
+         if (removed) {

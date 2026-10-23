@@ -1,0 +1,39 @@
+id: B4
+set: banking
+case: 3
+title: Early repayments post more than the customer paid (incident)
+kind: incident (Beacon -> fix)
+knowledge: [B3 root cause and runbook, posting conservation]
+learning_pair: {with: B3, role: second}
+repo: fineract
+fault_patch: fault.patch
+distinct_from: B3
+evaluate:
+  mode: fineract_gradle
+  module: fineract-loan
+  tests: "*CaseStudyHiddenB4*"
+  install:
+    - {from: hidden_tests/CaseStudyHiddenB4PrepaymentPostingTest.java,
+       to: fineract-loan/src/test/java/org/apache/fineract/portfolio/loanaccount/domain/transactionprocessor/impl/CaseStudyHiddenB4PrepaymentPostingTest.java}
+# The planted fault (answer key): the same class as B3, POSTED-TWICE, through a different code path. The
+# due-penalty-fee-interest-principal-in-advance-... processor's IN-ADVANCE handler pays principal but does not take
+# it off the money left, so the remainder triggers the in-advance rerun and is posted again (penalty, fee, interest)
+# and carried to later installments. On-time and late repayments are unaffected, and so is B3's processor.
+fault_class: POSTED-TWICE
+# Scoring the learning pair: what B3 established that B4 should reuse rather than rediscover.
+expected_reuse:
+  - id: INV-POST-CONSERVE
+    from: B3
+    why: "The same symptom check: portions + overpayment = amount received, applied to the early repayments."
+  - id: INV-POST-LEDGER
+    from: B3
+    why: "The same ledger check across the loan; it localises the fault to installments paid in advance."
+  - id: INV-POST-DEDUCT
+    from: B3
+    why: "The root-cause class: a pay*Component result not subtracted from the remaining amount; look for it in the strategy's in-advance handler."
+  - id: RUNBOOK-POSTING
+    from: B3
+    why: "B3's runbook: from the loan's strategy code to the processor class, diff the handlers against the last release."
+  - id: B3-PREVENTION
+    from: B3
+    why: "B3's prevention action, if one was approved: a conservation test across every processor (which would have caught B4 before release)."

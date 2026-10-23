@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""NorthPeak Retail case-study harness (docs/product/KNOWLEDGE_GRAPH_CASE_STUDY.md §4, §6, §7).
+"""Knowledge Graph case-study harness (docs/product/KNOWLEDGE_GRAPH_CASE_STUDY.md §4, §6, §7).
+
+Two task sets share it: NorthPeak Retail on Saleor (T1..T12) and the banking set on Apache
+Fineract (B1..B4, docs/product/KNOWLEDGE_GRAPH_BANKING_CASE_STUDIES.md cases 1 and 3).
 
 It drives BOSS ONLY through its public HTTP API, as an operator would: code tasks, decisions,
 settings, budget and llm-calls. It never imports BOSS internals, so the run shows the real
@@ -8,6 +11,7 @@ them into report.md.
 
     run.py estimate --stage smoke
     run.py validate-suites --saleor-dir PATH [--tasks T1,T4]    # no model spend
+    run.py validate-suites --fineract-dir PATH --tasks B1..B4  # no model spend
     run.py run --stage smoke --arm A --engine E1 --tasks T1..T4 [--repeat 1] [--resume]
                --approved-by NAME --boss-url URL --project-id ID --saleor-dir PATH --fulfilment-dir PATH
 
@@ -30,6 +34,7 @@ import shutil
 import subprocess
 import sys
 import time
+import xml.etree.ElementTree as ET
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -46,6 +51,7 @@ TASKS_DIR = HERE / "tasks"
 ARTIFACTS = REPO / "artifacts" / "case-study" / "knowledge"
 TERMINAL = {"completed", "failed", "cancelled", "simulated"}
 KNOWLEDGE_SETTING = "knowledge_graph"          # the per-project switch (project_settings.KNOBS): on | off
+CONTROL_ARM = "A"                              # runs as BOSS is, with or without the switch
 
 
 class HarnessError(RuntimeError):
@@ -66,12 +72,12 @@ def load_answers() -> dict:
 
 
 def expand_tasks(spec: str) -> list[str]:
-    """'T1..T4' or 'T1,T3' -> ['T1', ...]."""
+    """'T1..T4', 'B1..B4' or 'T1,T3' -> ['T1', ...]."""
     out: list[str] = []
     for part in spec.split(","):
         part = part.strip()
-        m = re.fullmatch(r"T(\d+)\.\.T(\d+)", part)
-        out += [f"T{i}" for i in range(int(m[1]), int(m[2]) + 1)] if m else [part]
+        m = re.fullmatch(r"([A-Z])(\d+)\.\.\1(\d+)", part)
+        out += [f"{m[1]}{i}" for i in range(int(m[2]), int(m[3]) + 1)] if m else [part]
     return out
 
 
@@ -84,6 +90,7 @@ class Task:
     evaluate: dict
     fault_patch: Path | None = None
     dir: Path = field(default_factory=Path)
+    meta: dict = field(default_factory=dict)
 
 
 def load_task(task_id: str) -> Task:
@@ -93,7 +100,7 @@ def load_task(task_id: str) -> Task:
     meta = yaml.safe_load((d / "task.yaml").read_text())
     return Task(id=meta["id"], title=meta["title"], brief=(d / "brief.md").read_text(), repo=meta["repo"],
                 evaluate=meta["evaluate"], fault_patch=(d / meta["fault_patch"]) if meta.get("fault_patch") else None,
-                dir=d)
+                dir=d, meta=meta)
 
 
 def stage_builds(config: dict, stage: str) -> list[tuple[str, str, str, int]]:
@@ -285,13 +292,79 @@ def evaluate_service(task: Task, repo_dir: Path, *, scratch_dsn: str, secret: st
         subprocess.run(["docker", "rm", "-f", name], capture_output=True)
 
 
+def _junit_class(install_to: str) -> str | None:
+    """'fineract-loan/src/test/java/org/x/FooTest.java' -> 'org.x.FooTest' (None for a resource)."""
+    m = re.search(r"src/test/java/(.+)\.java$", install_to)
+    return m[1].replace("/", ".") if m else None
+
+
+def junit_reports(results_dir: Path, classes: list[str]) -> list[Path]:
+    """The JUnit XML files a previous run left for these classes."""
+    if not results_dir.exists():
+        return []
+    return [r for r in results_dir.glob("TEST-*.xml") if ET.parse(r).getroot().get("name") in classes]
+
+
+def junit_counts(results_dir: Path, classes: list[str]) -> dict[str, dict]:
+    """Per test class: tests, failures (assertions) and errors (exceptions) from Gradle's JUnit XML. Reports are
+    matched by the suite name inside, since Gradle shortens long report file names."""
+    out = {}
+    for report in sorted(results_dir.glob("TEST-*.xml")) if results_dir.exists() else []:
+        suite = ET.parse(report).getroot()
+        cls = suite.get("name")
+        if cls not in classes:
+            continue
+        tests, failures, errors = (int(suite.get(k, 0)) for k in ("tests", "failures", "errors"))
+        out[cls] = {"tests": tests, "failures": failures, "errors": errors, "passed": tests - failures - errors}
+    return out
+
+
+def evaluate_fineract(task: Task, fineract_dir: Path, *, gradle_cmd: str | None = None, timeout: int = 3600) -> dict:
+    """Install the hidden suite (tests and golden files) into the checkout, run the narrowest Gradle test task that
+    covers it, read the JUnit XML, then remove every installed file.
+
+    A suite that does not compile proves nothing, so `collection_error` is set and a validator never counts it as
+    a valid failure."""
+    ev = task.evaluate
+    module, pattern = ev["module"], ev["tests"]
+    template = gradle_cmd or load_config()["fineract"]["test_command"]
+    cmd = template.format(module=module, tests=pattern)
+    installed = []
+    for item in ev["install"]:
+        target = fineract_dir / item["to"]
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(task.dir / item["from"], target)
+        installed.append(target)
+    classes = [c for c in (_junit_class(i["to"]) for i in ev["install"]) if c]
+    results_dir = fineract_dir / module / "build" / "test-results" / "test"
+    for stale in junit_reports(results_dir, classes):
+        stale.unlink()
+    env = {**os.environ}
+    if os.environ.get("FINERACT_JAVA_HOME"):
+        env["JAVA_HOME"] = os.environ["FINERACT_JAVA_HOME"]
+    try:
+        started = time.monotonic()
+        proc = subprocess.run(cmd, shell=True, cwd=fineract_dir, capture_output=True, text=True, timeout=timeout, env=env)
+        output = proc.stdout + proc.stderr
+        by_class = junit_counts(results_dir, classes)
+    finally:
+        for target in installed:
+            target.unlink(missing_ok=True)
+    passed = sum(c["passed"] for c in by_class.values())
+    total = sum(c["tests"] for c in by_class.values())
+    compile_failed = not by_class and bool(re.search(r"compile\w*Java FAILED|Compilation failed|error: ", output))
+    return {"solved": proc.returncode == 0 and total > 0 and passed == total, "tests_passed": passed, "tests_total": total,
+            "collection_error": compile_failed or (proc.returncode != 0 and not by_class),
+            "by_class": by_class, "seconds": round(time.monotonic() - started, 1), "tail": output[-1500:]}
+
+
 # --- fork preparation ---------------------------------------------------------------------------
 def git(cwd: Path, *args: str) -> str:
     return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
 
 
 def prepare_saleor(saleor_dir: Path, sha: str, task: Task) -> None:
-    """The fork's main is the pinned SHA plus earlier tasks' merged work; T4 pushes the faulty release."""
+    """The fork's main is the pinned SHA plus earlier tasks' merged work; a fault task pushes the faulty release."""
     if task.fault_patch:
         git(saleor_dir, "apply", "--check", str(task.fault_patch))
         git(saleor_dir, "apply", str(task.fault_patch))
@@ -299,11 +372,28 @@ def prepare_saleor(saleor_dir: Path, sha: str, task: Task) -> None:
         git(saleor_dir, "push", "origin", "HEAD:main")
 
 
+prepare_fineract = prepare_saleor      # same rule for the banking fork: B3/B4 push their faulty release
+
+#: Hidden-suite file names, per task set. A fork that holds one has leaked the answer key.
+HIDDEN_PATTERNS = ("test_hidden_t*.py", "CaseStudyHidden*.java", "b[0-9]_*.golden")
+
+
 def hidden_suites_absent(repo_dir: Path) -> None:
     """Hidden suites are never shown to agents: refuse a fork that contains one."""
-    hits = list(repo_dir.rglob("test_hidden_t*.py")) if repo_dir.exists() else []
+    hits = [h for pattern in HIDDEN_PATTERNS for h in repo_dir.rglob(pattern)] if repo_dir.exists() else []
     if hits:
         raise HarnessError(f"hidden suite present in the target repository: {hits[0]}")
+
+
+def repo_target(config: dict, task: Task, args) -> tuple[Path, str]:
+    """The local checkout and the BOSS repository name a task works in."""
+    if task.repo == "saleor":
+        return Path(args.saleor_dir), config["saleor"]["fork_name"]
+    if task.repo == "fineract":
+        if not getattr(args, "fineract_dir", None):
+            raise HarnessError(f"{task.id} works in the Fineract fork: pass --fineract-dir")
+        return Path(args.fineract_dir), config["fineract"]["fork_name"]
+    return Path(args.fulfilment_dir or "."), config["fulfilment"]["repo_name"]
 
 
 # --- run ----------------------------------------------------------------------------------------
@@ -331,14 +421,16 @@ def run(args, *, client: BossClient | None = None, evaluator: Callable[[Task], d
     config, answers = load_config(), load_answers()
     est = check_approval(config, args)
     client = client or BossClient(args.boss_url, os.environ.get("BOSS_CASE_STUDY_API_KEY") or os.environ["BOSS_API_KEY"])
-    # Arm switch through BOSS's own settings: arm B on, arm A (the control) off. A BOSS without the
-    # switch refuses it; then arm B cannot run and says so, and arm A runs as that BOSS is.
+    # Arm switch through BOSS's own settings: arm B on, arm A (the control) off, arm AP (A′, keyword search
+    # only) "keyword". A BOSS without the switch or the value refuses it; then that arm cannot run and says so,
+    # and arm A runs as that BOSS is.
+    value = config["arms"][args.arm]["knowledge"]
     try:
-        client.set_setting(args.project_id, KNOWLEDGE_SETTING, "on" if args.arm == "B" else "off")
+        client.set_setting(args.project_id, KNOWLEDGE_SETTING, value)
     except HarnessError as exc:
-        if args.arm == "B":
-            raise HarnessError(f"arm B needs the {KNOWLEDGE_SETTING!r} project setting, which this BOSS does not "
-                               f"have yet ({exc}). Nothing was started.") from exc
+        if args.arm != CONTROL_ARM:
+            raise HarnessError(f"arm {args.arm} needs the {KNOWLEDGE_SETTING!r} project setting with the value {value!r}, "
+                               f"which this BOSS does not have yet ({exc}). Nothing was started.") from exc
     reservation = client.reserve_budget(args.project_id, est["ceiling_usd"],
                                         f"case study {args.stage}: approved by {args.approved_by}")
     if reservation.get("status") not in ("reserved", "ok", "approved"):
@@ -353,17 +445,20 @@ def run(args, *, client: BossClient | None = None, evaluator: Callable[[Task], d
             if args.resume and path.exists():
                 results.append(json.loads(path.read_text()))
                 continue
-            repo_dir = Path(args.saleor_dir if task.repo == "saleor" else args.fulfilment_dir or ".")
+            repo_dir, repo_name = repo_target(config, task, args)
             hidden_suites_absent(repo_dir)
-            (prepare or (lambda t: prepare_saleor(Path(args.saleor_dir), config["saleor"]["sha"], t)
-                         if t.repo == "saleor" else None))(task)
+            (prepare or (lambda t: prepare_saleor(repo_dir, config[t.repo]["sha"], t)
+                         if t.repo in ("saleor", "fineract") else None))(task)
             record = {"task": task_id, "arm": args.arm, "engine": args.engine, "model": engine["model"],
                       "repeat": repeat, "stage": args.stage, "approved_by": args.approved_by,
-                      "saleor_sha": config["saleor"]["sha"], "started_at": dt.datetime.now(dt.timezone.utc).isoformat()}
+                      "started_at": dt.datetime.now(dt.timezone.utc).isoformat()}
+            if task.repo == "fineract":
+                record["fineract_sha"] = config["fineract"]["sha"]
+                record["expected_reuse"] = [i["id"] for i in task.meta.get("expected_reuse", [])]
+            else:
+                record["saleor_sha"] = config["saleor"]["sha"]
             try:
-                record.update(drive(client, task, project_id=args.project_id,
-                                    repo=config["saleor"]["fork_name"] if task.repo == "saleor"
-                                    else config["fulfilment"]["repo_name"],
+                record.update(drive(client, task, project_id=args.project_id, repo=repo_name,
                                     engine=engine, answers=answers, sleep=sleep))
                 record["evaluation"] = (evaluator or (lambda t: default_evaluator(t, args)))(task)
             except NeedsOperator as exc:
@@ -379,19 +474,114 @@ def run(args, *, client: BossClient | None = None, evaluator: Callable[[Task], d
 def default_evaluator(task: Task, args) -> dict:
     if task.evaluate["mode"] == "saleor_pytest":
         return evaluate_saleor(task, Path(args.saleor_dir))
+    if task.evaluate["mode"] == "fineract_gradle":
+        return evaluate_fineract(task, Path(args.fineract_dir), gradle_cmd=getattr(args, "gradle_cmd", None))
     return evaluate_service(task, Path(args.fulfilment_dir), scratch_dsn=os.environ["NORTHPEAK_SCRATCH_DSN"],
                             secret=os.environ.get("NORTHPEAK_WEBHOOK_SECRET", "case-study-secret"))
 
 
 # --- suite validation (no model spend) -----------------------------------------------------------
+class _Patched:
+    """Apply a patch to a checkout for the length of a block, and always take it out again."""
+
+    def __init__(self, repo: Path, patch: Path):
+        self.repo, self.patch = repo, patch
+
+    def __enter__(self):
+        git(self.repo, "apply", str(self.patch))
+
+    def __exit__(self, *exc):
+        git(self.repo, "apply", "-R", str(self.patch))
+
+
+def _fineract_summary(result: dict) -> dict:
+    return {k: result[k] for k in ("solved", "tests_passed", "tests_total", "collection_error", "by_class")}
+
+
+def _assertion_failures(result: dict) -> tuple[int, int]:
+    """(failed by assertion, failed by exception) over every class of a result."""
+    by_class = result["by_class"].values()
+    return sum(c["failures"] for c in by_class), sum(c["errors"] for c in by_class)
+
+
+def validate_fineract(task: Task, repo: Path, *, gradle_cmd: str | None = None) -> dict:
+    """The banking set's rules, all without model spend.
+
+    Fault tasks (B3, B4): the suite passes on the pinned release, fails with the task's fault patch, and fails
+    on assertions, never on compilation or an exception. With `distinct_from`, it also passes with the other
+    task's fault applied: the two faults are on different code paths.
+
+    Refactor tasks (B1, B2): the behaviour suite passes on the pinned release (behaviour unchanged); every
+    contract test fails there on an assertion (the work is not done yet); the reference refactor in selftest/
+    passes both, so a refactor that keeps behaviour passes; and each mutant (a one-line behaviour change in the
+    rule family) is caught by the behaviour suite."""
+    ev = task.evaluate
+    run = lambda: evaluate_fineract(task, repo, gradle_cmd=gradle_cmd)      # noqa: E731
+    pristine = run()
+    entry: dict[str, Any] = {"pristine": _fineract_summary(pristine)}
+    if task.fault_patch:
+        with _Patched(repo, task.fault_patch):
+            faulty = run()
+        assertions, exceptions = _assertion_failures(faulty)
+        entry["with_fault"] = {**_fineract_summary(faulty), "assertion_failures": assertions, "exception_failures": exceptions}
+        valid = (pristine["solved"] and not faulty["solved"] and not faulty["collection_error"]
+                 and assertions > 0 and exceptions == 0)
+        if task.meta.get("distinct_from"):
+            other = load_task(task.meta["distinct_from"])
+            with _Patched(repo, other.fault_patch):
+                cross = run()
+            entry[f"with_{other.id}_fault"] = _fineract_summary(cross)
+            valid = valid and cross["solved"]
+        entry["valid"] = valid
+        return entry
+    by_class = pristine["by_class"]
+    simple = {cls.rsplit(".", 1)[-1]: counts for cls, counts in by_class.items()}
+    behaviour_ok = all(c in simple and simple[c]["tests"] > 0 and simple[c]["passed"] == simple[c]["tests"]
+                       for c in ev["behaviour"])
+    contract_fails = all(c in simple and simple[c]["tests"] > 0 and simple[c]["failures"] == simple[c]["tests"]
+                         for c in ev["contract"])
+    entry["behaviour_passes_on_pin"] = behaviour_ok
+    entry["contract_fails_on_pin_by_assertion"] = contract_fails
+    valid = behaviour_ok and contract_fails and not pristine["collection_error"]
+    if ev.get("reference_patch"):
+        with _Patched(repo, task.dir / ev["reference_patch"]):
+            reference = run()
+        entry["reference_refactor"] = _fineract_summary(reference)
+        valid = valid and reference["solved"]
+    killed = {}
+    for mutant in ev.get("mutants", []):
+        with _Patched(repo, task.dir / mutant):
+            result = run()
+        behaviour = {cls.rsplit(".", 1)[-1]: c for cls, c in result["by_class"].items()}
+        caught = sum(behaviour[c]["failures"] + behaviour[c]["errors"] for c in ev["behaviour"] if c in behaviour)
+        killed[Path(mutant).stem] = {"caught_by": caught, "of": sum(behaviour[c]["tests"] for c in ev["behaviour"] if c in behaviour),
+                                     "collection_error": result["collection_error"]}
+        valid = valid and caught > 0 and not result["collection_error"]
+    if killed:
+        entry["mutants"] = killed
+    entry["valid"] = valid
+    return entry
+
+
 def validate_suites(args) -> dict:
     """Each hidden suite must FAIL on the pinned SHA (the work is not done yet), and T4's must PASS on
     the pristine SHA and FAIL with the fault applied. T1's suite is proven against the reference
-    service in selftest/ (pass) and a variant without idempotency (fail)."""
+    service in selftest/ (pass) and a variant without idempotency (fail). The banking set's rules are
+    in validate_fineract."""
     out = {}
     saleor = Path(args.saleor_dir) if args.saleor_dir else None
+    fineract = Path(args.fineract_dir) if getattr(args, "fineract_dir", None) else None
     for task_id in expand_tasks(args.tasks):
         task = load_task(task_id)
+        if task.evaluate["mode"] == "fineract_gradle":
+            if fineract is None:
+                out[task_id] = "skipped: --fineract-dir not given"
+                continue
+            if subprocess.run(["git", "status", "--porcelain", "--untracked-files=no"], cwd=fineract, capture_output=True,
+                              text=True).stdout.strip():
+                raise HarnessError(f"{fineract} has local changes: validate on a clean checkout of the pinned tag")
+            out[task_id] = validate_fineract(task, fineract, gradle_cmd=getattr(args, "gradle_cmd", None))
+            continue
         if task.evaluate["mode"] == "saleor_pytest":
             if saleor is None:
                 out[task_id] = "skipped: --saleor-dir not given"
@@ -424,9 +614,11 @@ def main(argv: list[str] | None = None) -> int:
     v.add_argument("--saleor-dir")
     v.add_argument("--tasks", default="T1..T4")
     v.add_argument("--pytest-cmd", help="override, e.g. '.venv/bin/pytest -q --reuse-db'")
+    v.add_argument("--fineract-dir", help="a clean checkout of the pinned Fineract tag (harness.yaml)")
+    v.add_argument("--gradle-cmd", help="override harness.yaml fineract.test_command; {module} and {tests} are filled in")
     r = sub.add_parser("run")
     r.add_argument("--stage", required=True)
-    r.add_argument("--arm", choices=["A", "B"], required=True)
+    r.add_argument("--arm", choices=sorted(load_config()["arms"]), required=True)
     r.add_argument("--engine", choices=["E1", "E2"], required=True)
     r.add_argument("--tasks", required=True)
     r.add_argument("--repeat", type=int, default=1)
@@ -436,6 +628,8 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--project-id", required=True)
     r.add_argument("--saleor-dir")
     r.add_argument("--fulfilment-dir")
+    r.add_argument("--fineract-dir")
+    r.add_argument("--gradle-cmd")
     r.add_argument("--out")
     args = p.parse_args(argv)
     try:

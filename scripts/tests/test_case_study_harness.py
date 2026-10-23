@@ -227,3 +227,101 @@ def test_a_suite_that_cannot_be_imported_never_counts_as_a_valid_failure():
     assert run_py.collection_error("ImportError while importing test module '/x/test_hidden_t3.py'.")
     assert run_py.collection_error("ERROR collecting saleor/x.py")
     assert not run_py.collection_error("3 failed, 2 passed in 4.1s")
+
+
+# --- the banking set (Fineract, B1..B4; BOSSAPP-758) ---------------------------------------------------------------
+BANKING = ("B1", "B2", "B3", "B4")
+
+
+def test_banking_tasks_have_a_brief_a_hidden_suite_and_their_proofs():
+    config = run_py.load_config()
+    assert config["fineract"]["tag"] == "1.16.0" and len(config["fineract"]["sha"]) == 40
+    assert run_py.expand_tasks("B1..B4") == list(BANKING)
+    for task_id in BANKING:
+        task = run_py.load_task(task_id)
+        assert task.repo == "fineract" and task.evaluate["mode"] == "fineract_gradle"
+        assert "## Contract" in task.brief and len(task.brief) > 800
+        for item in task.evaluate["install"]:
+            source = task.dir / item["from"]
+            assert source.exists() and item["to"].startswith(task.evaluate["module"] + "/src/test/")
+            if source.suffix == ".java":
+                assert "hidden acceptance suite" in source.read_text() and source.stem in item["to"]
+        if task.fault_patch:                      # B3, B4: one planted fault, in the module the suite runs
+            patch = task.fault_patch.read_text()
+            assert patch.startswith("diff --git a/fineract-loan/src/main/") and patch.count("\n@@ ") == 1
+            assert task.meta["distinct_from"] in BANKING
+        else:                                     # B1, B2: a reference refactor and the mutants it must survive
+            assert (task.dir / task.evaluate["reference_patch"]).exists() and len(task.evaluate["mutants"]) >= 3
+            assert all((task.dir / m).exists() for m in task.evaluate["mutants"])
+            assert task.evaluate["behaviour"] and task.evaluate["contract"]
+
+
+def test_each_learning_pair_scores_reuse_of_what_the_first_task_found():
+    for first, second in (("B1", "B2"), ("B3", "B4")):
+        taught = {i["id"] for i in run_py.load_task(first).meta["invariants"]}
+        expected = run_py.load_task(second).meta["expected_reuse"]
+        assert len(expected) >= 4
+        for item in expected:
+            assert item["from"] == first
+            assert item["id"] in taught or item["id"].startswith(f"{first}-"), item["id"]
+
+
+def test_the_banking_stages_and_their_estimates():
+    config = run_py.load_config()
+    smoke = run_py.estimate(config, "bank_smoke")
+    assert config["stages"]["bank_smoke"]["arms"] == ["A", "AP", "B"]
+    assert smoke["builds"] == 12 and (smoke["usd_low"], smoke["usd_high"], smoke["ceiling_usd"]) == (7.2, 22.8, 36.0)
+    e1 = run_py.estimate(config, "bank_learning_e1")
+    assert e1["builds"] == 8 and (e1["usd_low"], e1["usd_high"], e1["ceiling_usd"]) == (48.0, 80.0, 120.0)
+
+
+def test_arm_a_prime_waits_for_a_keyword_switch(tmp_path):
+    boss = FakeBoss(knowledge_setting=False)
+    with pytest.raises(run_py.HarnessError, match="arm AP needs .* 'keyword'"):
+        _run(tmp_path, boss, stage="bank_smoke", engine="E2", arm="AP", tasks="B1..B4", fineract_dir=str(tmp_path / "f"))
+    assert not [c for c in boss.calls if c[0] in ("reserve", "start")]
+
+
+def test_a_banking_run_records_the_fineract_pin_and_the_reuse_to_score(tmp_path):
+    boss = FakeBoss()
+    results = _run(tmp_path, boss, stage="bank_smoke", engine="E2", arm="B", tasks="B1..B4", fineract_dir=str(tmp_path / "f"))
+    assert [r["task"] for r in results] == list(BANKING)
+    assert ("setting", "knowledge_graph", "on") in boss.calls
+    assert {r["fineract_sha"] for r in results} == {run_py.load_config()["fineract"]["sha"]}
+    assert results[0]["expected_reuse"] == [] and "INV-POST-DEDUCT" in results[3]["expected_reuse"]
+    with pytest.raises(run_py.HarnessError, match="--fineract-dir"):
+        _run(tmp_path, FakeBoss(), stage="bank_smoke", engine="E2", arm="A", tasks="B1", fineract_dir=None, out=str(tmp_path / "o2"))
+
+
+def test_a_fork_holding_a_java_hidden_suite_or_golden_file_is_refused(tmp_path):
+    for leak in ("fineract-loan/src/test/java/x/CaseStudyHiddenB3RepaymentPostingTest.java",
+                 "fineract-loan/src/test/resources/case-study/b2_charge_calculations.golden"):
+        path = tmp_path / "f" / leak
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("")
+        with pytest.raises(run_py.HarnessError, match="hidden suite present"):
+            run_py.hidden_suites_absent(tmp_path / "f")
+        path.unlink()
+
+
+def _fake_gradle(script: str) -> str:
+    return f"{sys.executable} -c '{script}' {{module}} {{tests}}"
+
+
+def test_the_fineract_evaluator_reads_junit_counts_and_removes_the_suite(tmp_path):
+    task = run_py.load_task("B3")
+    cls = "org.apache.fineract.portfolio.loanaccount.domain.transactionprocessor.impl.CaseStudyHiddenB3RepaymentPostingTest"
+    write_xml = ("import sys, pathlib; d = pathlib.Path(sys.argv[1], \"build/test-results/test\"); d.mkdir(parents=True, exist_ok=True); "
+                 f"(d / \"TEST-org.-SHORT.CaseStudyHiddenB3RepaymentPostingTest.xml\").write_text(\"<testsuite name=\\\"{cls}\\\" tests=\\\"123\\\" failures=\\\"7\\\" errors=\\\"0\\\"/>\"); sys.exit(1)")
+    result = run_py.evaluate_fineract(task, tmp_path, gradle_cmd=_fake_gradle(write_xml))
+    assert (result["tests_passed"], result["tests_total"], result["solved"], result["collection_error"]) == (116, 123, False, False)
+    assert result["by_class"][cls]["failures"] == 7
+    assert not list(tmp_path.rglob("CaseStudyHidden*.java"))           # never left behind in the fork
+
+
+def test_a_fineract_suite_that_does_not_compile_never_counts_as_a_valid_failure(tmp_path):
+    task = run_py.load_task("B1")
+    broken = "import sys; print(\"> Task :fineract-progressive-loan:compileTestJava FAILED\"); sys.exit(1)"
+    result = run_py.evaluate_fineract(task, tmp_path, gradle_cmd=_fake_gradle(broken))
+    assert result["collection_error"] and not result["solved"] and result["tests_total"] == 0
+    assert not list(tmp_path.rglob("*.golden"))
