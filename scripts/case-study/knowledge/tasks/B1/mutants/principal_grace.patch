@@ -1,13 +1,13 @@
 diff --git a/fineract-progressive-loan/src/main/java/org/apache/fineract/portfolio/loanproduct/calc/ProgressiveEMICalculator.java b/fineract-progressive-loan/src/main/java/org/apache/fineract/portfolio/loanproduct/calc/ProgressiveEMICalculator.java
-index 02a702b..95bad1a 100644
+index 2893b99..563c56d 100644
 --- a/fineract-progressive-loan/src/main/java/org/apache/fineract/portfolio/loanproduct/calc/ProgressiveEMICalculator.java
 +++ b/fineract-progressive-loan/src/main/java/org/apache/fineract/portfolio/loanproduct/calc/ProgressiveEMICalculator.java
-@@ -1863,7 +1863,7 @@ public final class ProgressiveEMICalculator implements EMICalculator {
+@@ -1691,7 +1691,7 @@ public final class ProgressiveEMICalculator implements EMICalculator {
          if (graceOnPrincipalPayment == null || graceOnPrincipalPayment <= 0) {
              return;
          }
--        final int gracePeriods = Math.min(graceOnPrincipalPayment, allPeriods.size());
-+        final int gracePeriods = Math.min(graceOnPrincipalPayment - 1, allPeriods.size());
-         final LocalDate sliceFirstDueDate = repaymentPeriods.getFirst().getDueDate();
-         allPeriods.subList(0, gracePeriods).forEach(period -> {
-             // Only rewrite EMI for periods inside the slice being recalculated. Periods before the slice keep
+-        int gracePeriods = Math.min(graceOnPrincipalPayment, repaymentPeriods.size());
++        int gracePeriods = Math.min(graceOnPrincipalPayment - 1, repaymentPeriods.size());
+         List<RepaymentPeriod> gracePeriodsList = repaymentPeriods.subList(0, gracePeriods);
+         gracePeriodsList.forEach(period -> {
+             Money interestOnlyEmi = period.getDueInterest();

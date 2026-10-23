@@ -32,7 +32,7 @@ schedule
   #6 2024-06-01..2024-07-01 fee=0 penalty=0
   #7 2024-07-01..2024-08-01 fee=0 penalty=0
   #8 2024-08-01..2024-09-01 fee=0 penalty=0
-updated amount=87.35 outstanding=87.35 percentage=null appliedTo=null amountOrPercentage=87.3495 penalty=false split=
+updated amount=87.3495 outstanding=87.3495 percentage=null appliedTo=null amountOrPercentage=87.3495 penalty=false split=
 === charge-002
 case charge-002 EUR/2/5 HALF_UP disb=2025-03-31 principal=8624.60 interest=1032.37 PERCENT_OF_INTEREST OVERDUE_INSTALLMENT penalty=true amount=1.1911 new=1.786650 min=null max=171.37 n=6 due=2025-05-31
 created amount=102.73 outstanding=102.73 percentage=1.1911 appliedTo=8624.6 amountOrPercentage=1.1911 penalty=true split=
@@ -60,7 +60,7 @@ schedule
   #4 2025-06-30..2025-07-31 fee=0 penalty=0
   #5 2025-07-31..2025-08-31 fee=0 penalty=0
   #6 2025-08-31..2025-09-30 fee=0 penalty=0
-updated amount=247.92 outstanding=247.92 percentage=null appliedTo=null amountOrPercentage=247.917 penalty=true split=
+updated amount=247.917 outstanding=247.917 percentage=null appliedTo=null amountOrPercentage=247.917 penalty=true split=
 === charge-004
 case charge-004 EUR/2/5 HALF_UP disb=2023-12-15 principal=470.08 interest=153.88 FLAT DISBURSEMENT penalty=false amount=217.965 new=326.947500 min=null max=null n=1 due=null
 created amount=217.965 outstanding=217.965 percentage=null appliedTo=null amountOrPercentage=217.965 penalty=false split=
@@ -69,7 +69,7 @@ per-installment-total 0
 unattached amount=217.965 outstanding=217.965 percentage=null appliedTo=null amountOrPercentage=217.965 penalty=false
 schedule 
   #1 2023-12-15..2024-01-15 fee=0 penalty=0
-updated amount=326.95 outstanding=326.95 percentage=null appliedTo=null amountOrPercentage=326.9475 penalty=false split=
+updated amount=326.9475 outstanding=326.9475 percentage=null appliedTo=null amountOrPercentage=326.9475 penalty=false split=
 === charge-005
 case charge-005 USD/2/1 HALF_UP disb=2024-02-29 principal=1980.71 interest=49.37 PERCENT_OF_INTEREST INSTALMENT_FEE penalty=false amount=0.1432 new=0.214800 min=null max=469.77 n=1 due=null
 created amount=0.07 outstanding=2.84 percentage=0.1432 appliedTo=1980.71 amountOrPercentage=0.1432 penalty=false split=1:0.07
@@ -220,7 +220,7 @@ unattached amount=1.261 outstanding=1.261 percentage=null appliedTo=null amountO
 schedule 
   #1 2023-12-15..2024-01-15 fee=0 penalty=0
   #2 2024-01-15..2024-02-15 fee=0 penalty=0
-updated amount=1.89 outstanding=1.89 percentage=null appliedTo=null amountOrPercentage=1.8915 penalty=false split=
+updated amount=1.8915 outstanding=1.8915 percentage=null appliedTo=null amountOrPercentage=1.8915 penalty=false split=
 === charge-016
 case charge-016 KWD/3/1 HALF_DOWN disb=2024-01-01 principal=7525.241 interest=1224.761 FLAT OVERDUE_INSTALLMENT penalty=true amount=234.440 new=351.660000 min=null max=null n=6 due=2024-05-01
 created amount=234.44 outstanding=234.44 percentage=null appliedTo=null amountOrPercentage=234.44 penalty=true split=
@@ -365,7 +365,7 @@ unattached amount=470.824 outstanding=470.824 percentage=null appliedTo=null amo
 schedule 
   #1 2024-01-31..2024-02-29 fee=235 penalty=0
   #2 2024-02-29..2024-03-31 fee=235 penalty=0
-updated amount=706 outstanding=706 percentage=null appliedTo=null amountOrPercentage=353.118 penalty=false split=1:353,2:353
+updated amount=706 outstanding=706.236 percentage=null appliedTo=null amountOrPercentage=353.118 penalty=false split=1:353,2:353
 === charge-026
 case charge-026 JPY/0/1 HALF_EVEN disb=2024-01-01 principal=13081 interest=2391 FLAT INSTALMENT_FEE penalty=false amount=23.496 new=35.244000 min=null max=null n=10 due=null
 created amount=230 outstanding=234.96 percentage=null appliedTo=null amountOrPercentage=23.496 penalty=false split=1:23,2:23,3:23,4:23,5:23,6:23,7:23,8:23,9:23,10:23
@@ -383,7 +383,7 @@ schedule
   #8 2024-08-01..2024-09-01 fee=23 penalty=0
   #9 2024-09-01..2024-10-01 fee=23 penalty=0
   #10 2024-10-01..2024-11-01 fee=23 penalty=0
-updated amount=350 outstanding=352 percentage=null appliedTo=null amountOrPercentage=35.244 penalty=false split=1:35,2:35,3:35,4:35,5:35,6:35,7:35,8:35,9:35,10:35
+updated amount=350 outstanding=352.44 percentage=null appliedTo=null amountOrPercentage=35.244 penalty=false split=1:35,2:35,3:35,4:35,5:35,6:35,7:35,8:35,9:35,10:35
 === charge-027
 case charge-027 KWD/3/1 HALF_DOWN disb=2025-03-31 principal=5908.508 interest=1695.057 FLAT SPECIFIED_DUE_DATE penalty=false amount=52.528 new=78.792000 min=null max=null n=7 due=2025-11-06
 created amount=52.528 outstanding=52.528 percentage=null appliedTo=null amountOrPercentage=52.528 penalty=false split=
@@ -506,7 +506,7 @@ schedule
   #2 2024-02-01..2024-03-01 fee=0 penalty=0
   #3 2024-03-01..2024-04-01 fee=0 penalty=0
   #4 2024-04-01..2024-05-01 fee=0 penalty=0
-updated amount=52.66 outstanding=52.66 percentage=null appliedTo=null amountOrPercentage=52.659 penalty=false split=
+updated amount=52.659 outstanding=52.659 percentage=null appliedTo=null amountOrPercentage=52.659 penalty=false split=
 === charge-036
 case charge-036 KWD/3/1 HALF_UP disb=2025-03-31 principal=9413.022 interest=1609.046 FLAT INSTALMENT_FEE penalty=false amount=154.491 new=231.736500 min=null max=null n=9 due=null
 created amount=1390.419 outstanding=1390.419 percentage=null appliedTo=null amountOrPercentage=154.491 penalty=false split=1:154.491,2:154.491,3:154.491,4:154.491,5:154.491,6:154.491,7:154.491,8:154.491,9:154.491
@@ -523,7 +523,7 @@ schedule
   #7 2025-09-30..2025-10-31 fee=154.491 penalty=0
   #8 2025-10-31..2025-11-30 fee=154.491 penalty=0
   #9 2025-11-30..2025-12-31 fee=154.491 penalty=0
-updated amount=2085.633 outstanding=2085.629 percentage=null appliedTo=null amountOrPercentage=231.7365 penalty=false split=1:231.737,2:231.737,3:231.737,4:231.737,5:231.737,6:231.737,7:231.737,8:231.737,9:231.737
+updated amount=2085.633 outstanding=2085.6285 percentage=null appliedTo=null amountOrPercentage=231.7365 penalty=false split=1:231.737,2:231.737,3:231.737,4:231.737,5:231.737,6:231.737,7:231.737,8:231.737,9:231.737
 === charge-037
 case charge-037 KWD/3/1 HALF_DOWN disb=2023-12-15 principal=6360.219 interest=1475.012 PERCENT_OF_DISBURSEMENT_AMOUNT INSTALMENT_FEE penalty=false amount=0.5481 new=0.822150 min=27.66 max=294.65 n=8 due=null
 created amount=0 outstanding=34.86 percentage=0.5481 appliedTo=6360.219 amountOrPercentage=0.5481 penalty=false split=1:0,2:0,3:0,4:0,5:0,6:0,7:0,8:0
@@ -554,7 +554,7 @@ per-installment-total 0
 unattached amount=0.535 outstanding=0.535 percentage=null appliedTo=null amountOrPercentage=0.535 penalty=false
 schedule 
   #1 2024-01-01..2024-02-01 fee=1 penalty=0
-updated amount=1 outstanding=1 percentage=null appliedTo=null amountOrPercentage=0.8025 penalty=false split=1:1
+updated amount=1 outstanding=0.8025 percentage=null appliedTo=null amountOrPercentage=0.8025 penalty=false split=1:1
 === charge-040
 case charge-040 KWD/3/1 HALF_EVEN disb=2023-12-15 principal=12582.065 interest=2228.256 PERCENT_OF_AMOUNT INSTALMENT_FEE penalty=false amount=0.0170 new=0.025500 min=null max=null n=11 due=null
 created amount=2.139 outstanding=2.139 percentage=0.017 appliedTo=12582.065 amountOrPercentage=0.017 penalty=false split=1:0.309,2:0.083,3:0.262,4:0.324,5:0.18,6:0.076,7:0.065,8:0.154,9:0.33,10:0.333,11:0.023
@@ -683,7 +683,7 @@ schedule
   #8 2024-08-31..2024-09-30 fee=0 penalty=0
   #9 2024-09-30..2024-10-31 fee=0 penalty=0
   #10 2024-10-31..2024-11-30 fee=82 penalty=0
-updated amount=123 outstanding=123 percentage=null appliedTo=null amountOrPercentage=123.0735 penalty=false split=
+updated amount=123.0735 outstanding=123.0735 percentage=null appliedTo=null amountOrPercentage=123.0735 penalty=false split=
 === charge-048
 case charge-048 EUR/2/5 HALF_UP disb=2025-03-31 principal=12869.14 interest=2234.51 PERCENT_OF_AMOUNT_AND_INTEREST DISBURSEMENT penalty=false amount=0.5683 new=0.852450 min=null max=null n=11 due=null
 created amount=73.14 outstanding=73.14 percentage=0.5683 appliedTo=12869.14 amountOrPercentage=0.5683 penalty=false split=
@@ -771,7 +771,7 @@ schedule
   #3 2024-03-31..2024-04-30 fee=93 penalty=0
   #4 2024-04-30..2024-05-31 fee=93 penalty=0
   #5 2024-05-31..2024-06-30 fee=93 penalty=0
-updated amount=700 outstanding=700 percentage=null appliedTo=null amountOrPercentage=139.932 penalty=false split=1:140,2:140,3:140,4:140,5:140
+updated amount=700 outstanding=699.66 percentage=null appliedTo=null amountOrPercentage=139.932 penalty=false split=1:140,2:140,3:140,4:140,5:140
 === charge-054
 case charge-054 EUR/2/5 HALF_DOWN disb=2025-03-31 principal=1511.14 interest=141.06 FLAT SPECIFIED_DUE_DATE penalty=true amount=217.647 new=326.470500 min=null max=null n=1 due=2025-04-20
 created amount=217.647 outstanding=217.647 percentage=null appliedTo=null amountOrPercentage=217.647 penalty=true split=
@@ -780,7 +780,7 @@ per-installment-total 0
 unattached amount=217.647 outstanding=217.647 percentage=null appliedTo=null amountOrPercentage=217.647 penalty=true
 schedule 
   #1 2025-03-31..2025-04-30 fee=0 penalty=217.65
-updated amount=326.47 outstanding=326.47 percentage=null appliedTo=null amountOrPercentage=326.4705 penalty=true split=
+updated amount=326.4705 outstanding=326.4705 percentage=null appliedTo=null amountOrPercentage=326.4705 penalty=true split=
 === charge-055
 case charge-055 KWD/3/1 HALF_EVEN disb=2024-01-31 principal=4421.312 interest=972.236 FLAT SPECIFIED_DUE_DATE penalty=true amount=172.541 new=258.811500 min=null max=null n=5 due=2024-04-01
 created amount=172.541 outstanding=172.541 percentage=null appliedTo=null amountOrPercentage=172.541 penalty=true split=
@@ -793,7 +793,7 @@ schedule
   #3 2024-03-31..2024-04-30 fee=0 penalty=172.541
   #4 2024-04-30..2024-05-31 fee=0 penalty=0
   #5 2024-05-31..2024-06-30 fee=0 penalty=0
-updated amount=258.812 outstanding=258.812 percentage=null appliedTo=null amountOrPercentage=258.8115 penalty=true split=
+updated amount=258.8115 outstanding=258.8115 percentage=null appliedTo=null amountOrPercentage=258.8115 penalty=true split=
 === charge-056
 case charge-056 JPY/0/1 HALF_EVEN disb=2024-01-01 principal=7517 interest=1744 PERCENT_OF_DISBURSEMENT_AMOUNT INSTALMENT_FEE penalty=false amount=0.9147 new=1.372050 min=null max=null n=8 due=null
 created amount=0 outstanding=69 percentage=0.9147 appliedTo=7517 amountOrPercentage=0.9147 penalty=false split=1:0,2:0,3:0,4:0,5:0,6:0,7:0,8:0
@@ -934,7 +934,7 @@ schedule
   #4 2025-06-30..2025-07-31 fee=0 penalty=0
   #5 2025-07-31..2025-08-31 fee=0 penalty=0
   #6 2025-08-31..2025-09-30 fee=0 penalty=0
-updated amount=93 outstanding=93 percentage=null appliedTo=null amountOrPercentage=92.5095 penalty=true split=
+updated amount=92.5095 outstanding=92.5095 percentage=null appliedTo=null amountOrPercentage=92.5095 penalty=true split=
 === charge-066
 case charge-066 EUR/2/5 HALF_UP disb=2023-12-15 principal=5693.90 interest=632.99 FLAT DISBURSEMENT penalty=false amount=194.295 new=291.442500 min=null max=null n=6 due=null
 created amount=194.295 outstanding=194.295 percentage=null appliedTo=null amountOrPercentage=194.295 penalty=false split=
@@ -948,7 +948,7 @@ schedule
   #4 2024-03-15..2024-04-15 fee=0 penalty=0
   #5 2024-04-15..2024-05-15 fee=0 penalty=0
   #6 2024-05-15..2024-06-15 fee=0 penalty=0
-updated amount=291.44 outstanding=291.44 percentage=null appliedTo=null amountOrPercentage=291.4425 penalty=false split=
+updated amount=291.4425 outstanding=291.4425 percentage=null appliedTo=null amountOrPercentage=291.4425 penalty=false split=
 === charge-067
 case charge-067 EUR/2/5 HALF_EVEN disb=2025-03-31 principal=9971.35 interest=2285.43 PERCENT_OF_DISBURSEMENT_AMOUNT INSTALMENT_FEE penalty=false amount=0.5211 new=0.781650 min=null max=null n=11 due=null
 created amount=0 outstanding=51.96 percentage=0.5211 appliedTo=9971.35 amountOrPercentage=0.5211 penalty=false split=1:0,2:0,3:0,4:0,5:0,6:0,7:0,8:0,9:0,10:0,11:0
@@ -1142,7 +1142,7 @@ schedule
   #8 2024-08-01..2024-09-01 fee=0 penalty=23
   #9 2024-09-01..2024-10-01 fee=0 penalty=0
   #10 2024-10-01..2024-11-01 fee=0 penalty=0
-updated amount=34 outstanding=34 percentage=null appliedTo=null amountOrPercentage=33.759 penalty=true split=
+updated amount=33.759 outstanding=33.759 percentage=null appliedTo=null amountOrPercentage=33.759 penalty=true split=
 === charge-080
 case charge-080 KWD/3/1 HALF_UP disb=2024-01-01 principal=7190.101 interest=2015.403 PERCENT_OF_AMOUNT SPECIFIED_DUE_DATE penalty=false amount=0.6106 new=0.915900 min=null max=null n=9 due=2024-02-07
 created amount=43.903 outstanding=43.903 percentage=0.6106 appliedTo=7190.101 amountOrPercentage=0.6106 penalty=false split=
@@ -1375,7 +1375,7 @@ schedule
   #8 2024-08-31..2024-09-30 fee=0 penalty=0
   #9 2024-09-30..2024-10-31 fee=0 penalty=0
   #10 2024-10-31..2024-11-30 fee=0 penalty=0
-updated amount=279.53 outstanding=279.53 percentage=null appliedTo=null amountOrPercentage=279.528 penalty=false split=
+updated amount=279.528 outstanding=279.528 percentage=null appliedTo=null amountOrPercentage=279.528 penalty=false split=
 === charge-097
 case charge-097 EUR/2/5 HALF_UP disb=2023-12-15 principal=10463.53 interest=2464.45 FLAT OVERDUE_INSTALLMENT penalty=true amount=175.460 new=263.190000 min=null max=null n=12 due=2024-10-14
 created amount=175.46 outstanding=175.46 percentage=null appliedTo=null amountOrPercentage=175.46 penalty=true split=
@@ -1638,7 +1638,7 @@ unattached amount=186.353 outstanding=186.353 percentage=null appliedTo=null amo
 schedule 
   #1 2024-02-29..2024-03-29 fee=0 penalty=0
   #2 2024-03-29..2024-04-29 fee=0 penalty=0
-updated amount=279.529 outstanding=279.529 percentage=null appliedTo=null amountOrPercentage=279.5295 penalty=false split=
+updated amount=279.5295 outstanding=279.5295 percentage=null appliedTo=null amountOrPercentage=279.5295 penalty=false split=
 === charge-113
 case charge-113 USD/2/1 HALF_UP disb=2023-12-15 principal=4917.74 interest=1759.76 PERCENT_OF_DISBURSEMENT_AMOUNT SPECIFIED_DUE_DATE penalty=false amount=0.0298 new=0.044700 min=null max=491.93 n=9 due=2024-01-09
 created amount=1.47 outstanding=1.47 percentage=0.0298 appliedTo=4917.74 amountOrPercentage=0.0298 penalty=false split=
@@ -1684,7 +1684,7 @@ schedule
   #8 2024-09-29..2024-10-29 fee=0 penalty=0
   #9 2024-10-29..2024-11-29 fee=0 penalty=0
   #10 2024-11-29..2024-12-29 fee=0 penalty=0
-updated amount=369.92 outstanding=369.92 percentage=null appliedTo=null amountOrPercentage=369.9225 penalty=false split=
+updated amount=369.9225 outstanding=369.9225 percentage=null appliedTo=null amountOrPercentage=369.9225 penalty=false split=
 === charge-116
 case charge-116 JPY/0/1 HALF_DOWN disb=2025-03-31 principal=4263 interest=1010 FLAT OVERDUE_INSTALLMENT penalty=true amount=212.005 new=318.007500 min=null max=null n=4 due=2025-07-31
 created amount=212.005 outstanding=212.005 percentage=null appliedTo=null amountOrPercentage=212.005 penalty=true split=
@@ -1696,7 +1696,7 @@ schedule
   #2 2025-04-30..2025-05-31 fee=0 penalty=0
   #3 2025-05-31..2025-06-30 fee=0 penalty=0
   #4 2025-06-30..2025-07-31 fee=0 penalty=212
-updated amount=318 outstanding=318 percentage=null appliedTo=null amountOrPercentage=318.0075 penalty=true split=
+updated amount=318.0075 outstanding=318.0075 percentage=null appliedTo=null amountOrPercentage=318.0075 penalty=true split=
 === charge-117
 case charge-117 EUR/2/5 HALF_UP disb=2024-01-01 principal=6193.03 interest=1159.34 PERCENT_OF_AMOUNT_AND_INTEREST DISBURSEMENT penalty=false amount=0.3492 new=0.523800 min=10.27 max=147.83 n=6 due=null
 created amount=21.63 outstanding=21.63 percentage=0.3492 appliedTo=6193.03 amountOrPercentage=0.3492 penalty=false split=
@@ -1801,7 +1801,7 @@ per-installment-total 0
 unattached amount=218.767 outstanding=218.767 percentage=null appliedTo=null amountOrPercentage=218.767 penalty=false
 schedule 
   #1 2025-03-31..2025-04-30 fee=218.77 penalty=0
-updated amount=328.15 outstanding=328.15 percentage=null appliedTo=null amountOrPercentage=328.1505 penalty=false split=1:328.15
+updated amount=328.15 outstanding=328.1505 percentage=null appliedTo=null amountOrPercentage=328.1505 penalty=false split=1:328.15
 === charge-125
 case charge-125 EUR/2/5 HALF_UP disb=2024-01-01 principal=1209.85 interest=208.92 FLAT DISBURSEMENT penalty=false amount=44.775 new=67.162500 min=null max=null n=1 due=null
 created amount=44.775 outstanding=44.775 percentage=null appliedTo=null amountOrPercentage=44.775 penalty=false split=
@@ -1810,7 +1810,7 @@ per-installment-total 0
 unattached amount=44.775 outstanding=44.775 percentage=null appliedTo=null amountOrPercentage=44.775 penalty=false
 schedule 
   #1 2024-01-01..2024-02-01 fee=0 penalty=0
-updated amount=67.16 outstanding=67.16 percentage=null appliedTo=null amountOrPercentage=67.1625 penalty=false split=
+updated amount=67.1625 outstanding=67.1625 percentage=null appliedTo=null amountOrPercentage=67.1625 penalty=false split=
 === charge-126
 case charge-126 EUR/2/5 HALF_EVEN disb=2024-01-31 principal=1552.07 interest=313.46 PERCENT_OF_AMOUNT DISBURSEMENT penalty=false amount=0.6093 new=0.913950 min=4.48 max=null n=3 due=null
 created amount=9.46 outstanding=9.46 percentage=0.6093 appliedTo=1552.07 amountOrPercentage=0.6093 penalty=false split=
@@ -1930,7 +1930,7 @@ schedule
   #4 2025-06-30..2025-07-31 fee=0 penalty=0
   #5 2025-07-31..2025-08-31 fee=0 penalty=0
   #6 2025-08-31..2025-09-30 fee=0 penalty=0
-updated amount=178.35 outstanding=178.35 percentage=null appliedTo=null amountOrPercentage=178.3485 penalty=true split=
+updated amount=178.3485 outstanding=178.3485 percentage=null appliedTo=null amountOrPercentage=178.3485 penalty=true split=
 === charge-135
 case charge-135 USD/2/1 HALF_UP disb=2024-02-29 principal=9671.03 interest=1869.95 FLAT OVERDUE_INSTALLMENT penalty=true amount=178.615 new=267.922500 min=null max=null n=8 due=2024-05-29
 created amount=178.615 outstanding=178.615 percentage=null appliedTo=null amountOrPercentage=178.615 penalty=true split=
@@ -1946,7 +1946,7 @@ schedule
   #6 2024-07-29..2024-08-29 fee=0 penalty=0
   #7 2024-08-29..2024-09-29 fee=0 penalty=0
   #8 2024-09-29..2024-10-29 fee=0 penalty=0
-updated amount=267.92 outstanding=267.92 percentage=null appliedTo=null amountOrPercentage=267.9225 penalty=true split=
+updated amount=267.9225 outstanding=267.9225 percentage=null appliedTo=null amountOrPercentage=267.9225 penalty=true split=
 === charge-136
 case charge-136 EUR/2/5 HALF_EVEN disb=2024-01-01 principal=9087.71 interest=1897.80 PERCENT_OF_AMOUNT_AND_INTEREST DISBURSEMENT penalty=false amount=1.1596 new=1.739400 min=30.71 max=null n=8 due=null
 created amount=105.38 outstanding=105.38 percentage=1.1596 appliedTo=9087.71 amountOrPercentage=1.1596 penalty=false split=
@@ -2051,7 +2051,7 @@ schedule
   #2 2024-01-15..2024-02-15 fee=0 penalty=0
   #3 2024-02-15..2024-03-15 fee=0 penalty=0
   #4 2024-03-15..2024-04-15 fee=0 penalty=0
-updated amount=48.46 outstanding=48.46 percentage=null appliedTo=null amountOrPercentage=48.462 penalty=false split=
+updated amount=48.462 outstanding=48.462 percentage=null appliedTo=null amountOrPercentage=48.462 penalty=false split=
 === charge-143
 case charge-143 EUR/2/5 HALF_EVEN disb=2025-03-31 principal=2193.01 interest=454.65 PERCENT_OF_AMOUNT DISBURSEMENT penalty=false amount=0.6053 new=0.907950 min=null max=36.3 n=2 due=null
 created amount=13.27 outstanding=13.27 percentage=0.6053 appliedTo=2193.01 amountOrPercentage=0.6053 penalty=false split=
@@ -2199,7 +2199,7 @@ schedule
   #3 2024-04-29..2024-05-29 fee=0 penalty=0
   #4 2024-05-29..2024-06-29 fee=0 penalty=0
   #5 2024-06-29..2024-07-29 fee=0 penalty=0
-updated amount=316.82 outstanding=316.82 percentage=null appliedTo=null amountOrPercentage=316.821 penalty=false split=
+updated amount=316.821 outstanding=316.821 percentage=null appliedTo=null amountOrPercentage=316.821 penalty=false split=
 === charge-153
 case charge-153 USD/2/1 HALF_UP disb=2024-02-29 principal=3823.61 interest=672.59 PERCENT_OF_DISBURSEMENT_AMOUNT SPECIFIED_DUE_DATE penalty=true amount=1.0273 new=1.540950 min=null max=null n=4 due=2024-05-29
 created amount=39.28 outstanding=39.28 percentage=1.0273 appliedTo=3823.61 amountOrPercentage=1.0273 penalty=true split=
@@ -2305,7 +2305,7 @@ schedule
   #9 2025-11-30..2025-12-31 fee=61.23 penalty=0
   #10 2025-12-31..2026-01-31 fee=0 penalty=0
   #11 2026-01-31..2026-02-28 fee=0 penalty=0
-updated amount=91.85 outstanding=91.85 percentage=null appliedTo=null amountOrPercentage=91.848 penalty=false split=
+updated amount=91.848 outstanding=91.848 percentage=null appliedTo=null amountOrPercentage=91.848 penalty=false split=
 === charge-160
 case charge-160 EUR/2/5 HALF_DOWN disb=2023-12-15 principal=2450.67 interest=708.01 FLAT OVERDUE_INSTALLMENT penalty=true amount=233.713 new=350.569500 min=null max=null n=3 due=2024-03-08
 created amount=233.713 outstanding=233.713 percentage=null appliedTo=null amountOrPercentage=233.713 penalty=true split=
@@ -2316,7 +2316,7 @@ schedule
   #1 2023-12-15..2024-01-15 fee=0 penalty=0
   #2 2024-01-15..2024-02-15 fee=0 penalty=0
   #3 2024-02-15..2024-03-15 fee=0 penalty=233.71
-updated amount=350.57 outstanding=350.57 percentage=null appliedTo=null amountOrPercentage=350.5695 penalty=true split=
+updated amount=350.5695 outstanding=350.5695 percentage=null appliedTo=null amountOrPercentage=350.5695 penalty=true split=
 === charge-161
 case charge-161 JPY/0/1 HALF_EVEN disb=2024-02-29 principal=6082 interest=1230 FLAT SPECIFIED_DUE_DATE penalty=true amount=103.383 new=155.074500 min=null max=null n=6 due=2024-06-17
 created amount=103.383 outstanding=103.383 percentage=null appliedTo=null amountOrPercentage=103.383 penalty=true split=
@@ -2330,7 +2330,7 @@ schedule
   #4 2024-05-29..2024-06-29 fee=0 penalty=103
   #5 2024-06-29..2024-07-29 fee=0 penalty=0
   #6 2024-07-29..2024-08-29 fee=0 penalty=0
-updated amount=155 outstanding=155 percentage=null appliedTo=null amountOrPercentage=155.0745 penalty=true split=
+updated amount=155.0745 outstanding=155.0745 percentage=null appliedTo=null amountOrPercentage=155.0745 penalty=true split=
 === charge-162
 case charge-162 EUR/2/5 HALF_EVEN disb=2024-01-01 principal=4599.67 interest=938.78 FLAT SPECIFIED_DUE_DATE penalty=false amount=7.109 new=10.663500 min=null max=null n=6 due=2024-05-26
 created amount=7.109 outstanding=7.109 percentage=null appliedTo=null amountOrPercentage=7.109 penalty=false split=
@@ -2344,7 +2344,7 @@ schedule
   #4 2024-04-01..2024-05-01 fee=0 penalty=0
   #5 2024-05-01..2024-06-01 fee=7.11 penalty=0
   #6 2024-06-01..2024-07-01 fee=0 penalty=0
-updated amount=10.66 outstanding=10.66 percentage=null appliedTo=null amountOrPercentage=10.6635 penalty=false split=
+updated amount=10.6635 outstanding=10.6635 percentage=null appliedTo=null amountOrPercentage=10.6635 penalty=false split=
 === charge-163
 case charge-163 EUR/2/5 HALF_DOWN disb=2024-01-01 principal=5597.22 interest=767.03 PERCENT_OF_INTEREST SPECIFIED_DUE_DATE penalty=true amount=0.0528 new=0.079200 min=42.92 max=null n=6 due=2024-04-14
 created amount=42.92 outstanding=42.92 percentage=0.0528 appliedTo=5597.22 amountOrPercentage=0.0528 penalty=true split=
@@ -2407,7 +2407,7 @@ schedule
   #6 2024-07-29..2024-08-29 fee=0 penalty=0
   #7 2024-08-29..2024-09-29 fee=0 penalty=0
   #8 2024-09-29..2024-10-29 fee=0 penalty=0
-updated amount=133.01 outstanding=133.01 percentage=null appliedTo=null amountOrPercentage=133.0065 penalty=true split=
+updated amount=133.0065 outstanding=133.0065 percentage=null appliedTo=null amountOrPercentage=133.0065 penalty=true split=
 === charge-168
 case charge-168 KWD/3/1 HALF_DOWN disb=2024-01-31 principal=6162.480 interest=1607.102 PERCENT_OF_AMOUNT OVERDUE_INSTALLMENT penalty=true amount=0.5777 new=0.866550 min=null max=124.9 n=10 due=2024-11-27
 created amount=35.601 outstanding=35.601 percentage=0.5777 appliedTo=6162.48 amountOrPercentage=0.5777 penalty=true split=
@@ -2455,7 +2455,7 @@ schedule
   #5 2024-06-29..2024-07-29 fee=96.2 penalty=0
   #6 2024-07-29..2024-08-29 fee=96.2 penalty=0
   #7 2024-08-29..2024-09-29 fee=96.2 penalty=0
-updated amount=1010.17 outstanding=1010.15 percentage=null appliedTo=null amountOrPercentage=144.3075 penalty=false split=1:144.31,2:144.31,3:144.31,4:144.31,5:144.31,6:144.31,7:144.31
+updated amount=1010.17 outstanding=1010.1525 percentage=null appliedTo=null amountOrPercentage=144.3075 penalty=false split=1:144.31,2:144.31,3:144.31,4:144.31,5:144.31,6:144.31,7:144.31
 === charge-171
 case charge-171 KWD/3/1 HALF_DOWN disb=2023-12-15 principal=476.427 interest=413.573 PERCENT_OF_DISBURSEMENT_AMOUNT INSTALMENT_FEE penalty=false amount=0.2806 new=0.420900 min=null max=null n=2 due=null
 created amount=0 outstanding=1.337 percentage=0.2806 appliedTo=476.427 amountOrPercentage=0.2806 penalty=false split=1:0,2:0
@@ -2474,7 +2474,7 @@ unattached amount=247.345 outstanding=247.345 percentage=null appliedTo=null amo
 schedule 
   #1 2024-02-29..2024-03-29 fee=0 penalty=0
   #2 2024-03-29..2024-04-29 fee=0 penalty=247.34
-updated amount=371.02 outstanding=371.02 percentage=null appliedTo=null amountOrPercentage=371.0175 penalty=true split=
+updated amount=371.0175 outstanding=371.0175 percentage=null appliedTo=null amountOrPercentage=371.0175 penalty=true split=
 === charge-173
 case charge-173 KWD/3/1 HALF_DOWN disb=2025-03-31 principal=6941.096 interest=2095.404 PERCENT_OF_DISBURSEMENT_AMOUNT DISBURSEMENT penalty=false amount=0.3747 new=0.562050 min=9.41 max=null n=11 due=null
 created amount=26.008 outstanding=26.008 percentage=0.3747 appliedTo=6941.096 amountOrPercentage=0.3747 penalty=false split=
@@ -2512,7 +2512,7 @@ per-installment-total 0
 unattached amount=245.619 outstanding=245.619 percentage=null appliedTo=null amountOrPercentage=245.619 penalty=true
 schedule 
   #1 2024-01-01..2024-02-01 fee=0 penalty=0
-updated amount=368.428 outstanding=368.428 percentage=null appliedTo=null amountOrPercentage=368.4285 penalty=true split=
+updated amount=368.4285 outstanding=368.4285 percentage=null appliedTo=null amountOrPercentage=368.4285 penalty=true split=
 === charge-176
 case charge-176 EUR/2/5 HALF_EVEN disb=2024-02-29 principal=7650.08 interest=2296.29 FLAT DISBURSEMENT penalty=false amount=56.155 new=84.232500 min=null max=null n=10 due=null
 created amount=56.155 outstanding=56.155 percentage=null appliedTo=null amountOrPercentage=56.155 penalty=false split=
@@ -2530,7 +2530,7 @@ schedule
   #8 2024-09-29..2024-10-29 fee=0 penalty=0
   #9 2024-10-29..2024-11-29 fee=0 penalty=0
   #10 2024-11-29..2024-12-29 fee=0 penalty=0
-updated amount=84.23 outstanding=84.23 percentage=null appliedTo=null amountOrPercentage=84.2325 penalty=false split=
+updated amount=84.2325 outstanding=84.2325 percentage=null appliedTo=null amountOrPercentage=84.2325 penalty=false split=
 === charge-177
 case charge-177 JPY/0/1 HALF_DOWN disb=2024-01-01 principal=2182 interest=566 PERCENT_OF_AMOUNT_AND_INTEREST SPECIFIED_DUE_DATE penalty=false amount=0.6851 new=1.027650 min=null max=108.63 n=3 due=2024-03-10
 created amount=15 outstanding=15 percentage=0.6851 appliedTo=2182 amountOrPercentage=0.6851 penalty=false split=
@@ -2608,7 +2608,7 @@ schedule
   #10 2024-11-29..2024-12-29 fee=0 penalty=0
   #11 2024-12-29..2025-01-29 fee=0 penalty=0
   #12 2025-01-29..2025-02-28 fee=0 penalty=0
-updated amount=189.13 outstanding=189.13 percentage=null appliedTo=null amountOrPercentage=189.1305 penalty=false split=
+updated amount=189.1305 outstanding=189.1305 percentage=null appliedTo=null amountOrPercentage=189.1305 penalty=false split=
 === charge-182
 case charge-182 KWD/3/1 HALF_DOWN disb=2023-12-15 principal=7118.496 interest=2121.413 PERCENT_OF_AMOUNT_AND_INTEREST DISBURSEMENT penalty=false amount=0.5603 new=0.840450 min=null max=null n=9 due=null
 created amount=39.885 outstanding=39.885 percentage=0.5603 appliedTo=7118.496 amountOrPercentage=0.5603 penalty=false split=
@@ -2829,7 +2829,7 @@ schedule
   #9 2024-09-01..2024-10-01 fee=0 penalty=0
   #10 2024-10-01..2024-11-01 fee=0 penalty=0
   #11 2024-11-01..2024-12-01 fee=0 penalty=0
-updated amount=86.31 outstanding=86.31 percentage=null appliedTo=null amountOrPercentage=86.3055 penalty=true split=
+updated amount=86.3055 outstanding=86.3055 percentage=null appliedTo=null amountOrPercentage=86.3055 penalty=true split=
 === charge-199
 case charge-199 EUR/2/5 HALF_UP disb=2024-01-01 principal=7698.97 interest=1439.95 FLAT INSTALMENT_FEE penalty=false amount=90.692 new=136.038000 min=null max=null n=8 due=null
 created amount=725.52 outstanding=725.536 percentage=null appliedTo=null amountOrPercentage=90.692 penalty=false split=1:90.69,2:90.69,3:90.69,4:90.69,5:90.69,6:90.69,7:90.69,8:90.69
@@ -2845,7 +2845,7 @@ schedule
   #6 2024-06-01..2024-07-01 fee=90.69 penalty=0
   #7 2024-07-01..2024-08-01 fee=90.69 penalty=0
   #8 2024-08-01..2024-09-01 fee=90.69 penalty=0
-updated amount=1088.32 outstanding=1088.3 percentage=null appliedTo=null amountOrPercentage=136.038 penalty=false split=1:136.04,2:136.04,3:136.04,4:136.04,5:136.04,6:136.04,7:136.04,8:136.04
+updated amount=1088.32 outstanding=1088.304 percentage=null appliedTo=null amountOrPercentage=136.038 penalty=false split=1:136.04,2:136.04,3:136.04,4:136.04,5:136.04,6:136.04,7:136.04,8:136.04
 === charge-200
 case charge-200 EUR/2/5 HALF_UP disb=2024-01-31 principal=13723.12 interest=2137.12 PERCENT_OF_AMOUNT_AND_INTEREST OVERDUE_INSTALLMENT penalty=true amount=0.7065 new=1.059750 min=null max=370.89 n=12 due=2024-07-03
 created amount=96.95 outstanding=96.95 percentage=0.7065 appliedTo=13723.12 amountOrPercentage=0.7065 penalty=true split=
@@ -2994,7 +2994,7 @@ unattached amount=228.874 outstanding=228.874 percentage=null appliedTo=null amo
 schedule 
   #1 2024-02-29..2024-03-29 fee=0 penalty=0
   #2 2024-03-29..2024-04-29 fee=0 penalty=0
-updated amount=343.31 outstanding=343.31 percentage=null appliedTo=null amountOrPercentage=343.311 penalty=false split=
+updated amount=343.311 outstanding=343.311 percentage=null appliedTo=null amountOrPercentage=343.311 penalty=false split=
 === charge-210
 case charge-210 USD/2/1 HALF_EVEN disb=2024-02-29 principal=7999.50 interest=1990.48 PERCENT_OF_DISBURSEMENT_AMOUNT INSTALMENT_FEE penalty=false amount=0.1180 new=0.177000 min=null max=null n=9 due=null
 created amount=0 outstanding=9.44 percentage=0.118 appliedTo=7999.5 amountOrPercentage=0.118 penalty=false split=1:0,2:0,3:0,4:0,5:0,6:0,7:0,8:0,9:0
@@ -3038,7 +3038,7 @@ schedule
   #4 2025-06-30..2025-07-31 fee=0 penalty=0
   #5 2025-07-31..2025-08-31 fee=0 penalty=0
   #6 2025-08-31..2025-09-30 fee=0 penalty=0
-updated amount=46 outstanding=46 percentage=null appliedTo=null amountOrPercentage=45.657 penalty=false split=
+updated amount=45.657 outstanding=45.657 percentage=null appliedTo=null amountOrPercentage=45.657 penalty=false split=
 === charge-213
 case charge-213 KWD/3/1 HALF_EVEN disb=2025-03-31 principal=2393.297 interest=507.778 PERCENT_OF_AMOUNT DISBURSEMENT penalty=false amount=1.1000 new=1.650000 min=null max=null n=3 due=null
 created amount=26.326 outstanding=26.326 percentage=1.1 appliedTo=2393.297 amountOrPercentage=1.1 penalty=false split=
@@ -3156,7 +3156,7 @@ schedule
   #8 2024-07-15..2024-08-15 fee=0 penalty=0
   #9 2024-08-15..2024-09-15 fee=0 penalty=0
   #10 2024-09-15..2024-10-15 fee=0 penalty=139
-updated amount=208 outstanding=208 percentage=null appliedTo=null amountOrPercentage=208.1835 penalty=true split=
+updated amount=208.1835 outstanding=208.1835 percentage=null appliedTo=null amountOrPercentage=208.1835 penalty=true split=
 === charge-221
 case charge-221 USD/2/1 HALF_DOWN disb=2024-01-31 principal=5306.39 interest=1223.28 FLAT SPECIFIED_DUE_DATE penalty=false amount=188.774 new=283.161000 min=null max=null n=5 due=2024-04-30
 created amount=188.774 outstanding=188.774 percentage=null appliedTo=null amountOrPercentage=188.774 penalty=false split=
@@ -3169,7 +3169,7 @@ schedule
   #3 2024-03-31..2024-04-30 fee=188.77 penalty=0
   #4 2024-04-30..2024-05-31 fee=0 penalty=0
   #5 2024-05-31..2024-06-30 fee=0 penalty=0
-updated amount=283.16 outstanding=283.16 percentage=null appliedTo=null amountOrPercentage=283.161 penalty=false split=
+updated amount=283.161 outstanding=283.161 percentage=null appliedTo=null amountOrPercentage=283.161 penalty=false split=
 === charge-222
 case charge-222 USD/2/1 HALF_EVEN disb=2023-12-15 principal=3978.26 interest=689.60 PERCENT_OF_AMOUNT SPECIFIED_DUE_DATE penalty=false amount=0.8665 new=1.299750 min=null max=null n=4 due=2024-01-06
 created amount=34.47 outstanding=34.47 percentage=0.8665 appliedTo=3978.26 amountOrPercentage=0.8665 penalty=false split=
@@ -3256,7 +3256,7 @@ unattached amount=173.051 outstanding=173.051 percentage=null appliedTo=null amo
 schedule 
   #1 2024-01-01..2024-02-01 fee=0 penalty=173.051
   #2 2024-02-01..2024-03-01 fee=0 penalty=0
-updated amount=259.576 outstanding=259.576 percentage=null appliedTo=null amountOrPercentage=259.5765 penalty=true split=
+updated amount=259.5765 outstanding=259.5765 percentage=null appliedTo=null amountOrPercentage=259.5765 penalty=true split=
 === charge-229
 case charge-229 EUR/2/5 HALF_UP disb=2024-01-31 principal=1306.74 interest=24.95 PERCENT_OF_AMOUNT INSTALMENT_FEE penalty=false amount=0.2190 new=0.328500 min=2.39 max=null n=1 due=null
 created amount=2.86 outstanding=2.86 percentage=0.219 appliedTo=1306.74 amountOrPercentage=0.219 penalty=false split=1:2.86
@@ -3312,7 +3312,7 @@ schedule
   #6 2024-06-01..2024-07-01 fee=0 penalty=0
   #7 2024-07-01..2024-08-01 fee=0 penalty=0
   #8 2024-08-01..2024-09-01 fee=0 penalty=0
-updated amount=71.34 outstanding=71.34 percentage=null appliedTo=null amountOrPercentage=71.3415 penalty=false split=
+updated amount=71.3415 outstanding=71.3415 percentage=null appliedTo=null amountOrPercentage=71.3415 penalty=false split=
 === charge-233
 case charge-233 KWD/3/1 HALF_UP disb=2024-01-01 principal=13681.602 interest=2365.381 PERCENT_OF_INTEREST SPECIFIED_DUE_DATE penalty=false amount=0.8584 new=1.287600 min=19.54 max=463.54 n=10 due=2024-07-18
 created amount=117.443 outstanding=117.443 percentage=0.8584 appliedTo=13681.602 amountOrPercentage=0.8584 penalty=false split=
@@ -3386,7 +3386,7 @@ schedule
   #1 2024-01-01..2024-02-01 fee=0 penalty=0
   #2 2024-02-01..2024-03-01 fee=0 penalty=0
   #3 2024-03-01..2024-04-01 fee=0 penalty=0
-updated amount=142.46 outstanding=142.46 percentage=null appliedTo=null amountOrPercentage=142.458 penalty=false split=
+updated amount=142.458 outstanding=142.458 percentage=null appliedTo=null amountOrPercentage=142.458 penalty=false split=
 === charge-238
 case charge-238 JPY/0/1 HALF_DOWN disb=2024-01-01 principal=237 interest=314 PERCENT_OF_INTEREST OVERDUE_INSTALLMENT penalty=true amount=0.3280 new=0.492000 min=null max=130.97 n=1 due=2024-02-23
 created amount=1 outstanding=1 percentage=0.328 appliedTo=237 amountOrPercentage=0.328 penalty=true split=

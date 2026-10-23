@@ -8,15 +8,25 @@ saleor:
   fork_name: northpeak-saleor
 fulfilment:
   repo_name: northpeak-fulfilment                # created empty; BOSS builds it in T1
-# The banking set's "legacy core". 1.16.0 builds and its loan tests run locally (validated 2026-10-22), so the
-# 1.15.0 fallback is not needed. Forked to the demo org per arm x engine, like Saleor (operator approval first).
+# The banking set's "legacy core". Pinned to 1.15.0, not 1.16.0: 1.16.0 needs JDK 25 and BOSS's build image
+# ships Temurin JDK 21 (Dockerfile.community); 1.15.0's Gradle toolchain is Java 21. Validated 2026-10-22.
 fineract:
   upstream: https://github.com/apache/fineract
-  tag: "1.16.0"
-  sha: 6da8a989b398cb46537e91d8fe8769655ea1810d   # the commit tag 1.16.0 points to (the tag object is dbfb2cde)
-  fork_name: northpeak-fineract
-  jdk: 25                                        # build.gradle toolchain; the Gradle 9.7.1 wrapper runs on it. Point
-                                                 # FINERACT_JAVA_HOME (or JAVA_HOME) at a JDK 25
+  tag: "1.15.0"
+  sha: d5636847ac556c30b437254c353f05526d172b97   # the commit tag 1.15.0 points to (the tag object is 9e76f088)
+  jdk: 21                                        # build.gradle toolchain (JavaLanguageVersion.of(21)); the Gradle
+                                                 # 8.14.5 wrapper runs on it. Point FINERACT_JAVA_HOME (or JAVA_HOME)
+                                                 # at a JDK 21, e.g. Temurin 21
+  gradle_wrapper: "8.14.5"
+  # The demo repositories, per engine x arm: private, on the operator's personal account, each a single snapshot
+  # commit of the 1.15.0 tree (only README.md differs: a demo-fork note; LICENSE_*/NOTICE_* intact). B3 and B4
+  # push their fault.patch onto the arm's main. bank_smoke runs E2 only; the Sonnet pairs (E1) need their own set.
+  snapshot_commit: 63dd10e4150b74932581181c6b3c18381ff15af0   # "NorthPeak core banking, based on Apache Fineract 1.15.0"
+  forks:
+    E2:
+      A:  {repo: paramg/northpeak-fineract-a,  url: https://github.com/paramg/northpeak-fineract-a}
+      AP: {repo: paramg/northpeak-fineract-ap, url: https://github.com/paramg/northpeak-fineract-ap}
+      B:  {repo: paramg/northpeak-fineract-b,  url: https://github.com/paramg/northpeak-fineract-b}
   # The narrowest task that covers a hidden suite: one module's unit tests, filtered to the suite's classes.
   # Never the whole build (no database, no integration tests). {module} and {tests} come from the task.
   test_command: "./gradlew --no-daemon -q --console=plain :{module}:test --tests '{tests}' --rerun"
@@ -26,8 +36,9 @@ engines:
   E1: {engine: claude_code, model: claude-sonnet-5, build_estimate_usd: {low: 6.0, high: 10.0}, build_ceiling_usd: 15.0}
   E2: {engine: openai_compatible, model: qwen3-coder, pinned: "2026-10-01",           # pin the exact name/date before running
        build_estimate_usd: {low: 0.6, high: 1.9}, build_ceiling_usd: 3.0}
-# Each arm's value for the knowledge_graph project setting. AP is A′ (case study §4): A plus plain keyword
-# search only. BOSS's switch is on|off today, so AP refuses to start until the switch offers "keyword".
+# Each arm's value for the knowledge_graph project setting (on | keyword | off). AP is A′ (case study §4): A plus
+# plain full-text keyword search only (no graph traversal, vectors, learned facts or precedent). BOSS offers
+# "keyword" from rel/rc10.10-kg f1f7fb6af; an older BOSS refuses the value and AP stops before any spend.
 arms:
   A: {knowledge: "off"}
   AP: {knowledge: keyword, label: "A′ (keyword search)"}

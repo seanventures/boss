@@ -235,7 +235,9 @@ BANKING = ("B1", "B2", "B3", "B4")
 
 def test_banking_tasks_have_a_brief_a_hidden_suite_and_their_proofs():
     config = run_py.load_config()
-    assert config["fineract"]["tag"] == "1.16.0" and len(config["fineract"]["sha"]) == 40
+    # 1.15.0, not 1.16.0: BOSS's build image ships JDK 21 and 1.16.0 needs 25 (BOSSAPP-758).
+    assert config["fineract"]["tag"] == "1.15.0" and len(config["fineract"]["sha"]) == 40
+    assert config["fineract"]["jdk"] == 21
     assert run_py.expand_tasks("B1..B4") == list(BANKING)
     for task_id in BANKING:
         task = run_py.load_task(task_id)
@@ -273,6 +275,23 @@ def test_the_banking_stages_and_their_estimates():
     assert smoke["builds"] == 12 and (smoke["usd_low"], smoke["usd_high"], smoke["ceiling_usd"]) == (7.2, 22.8, 36.0)
     e1 = run_py.estimate(config, "bank_learning_e1")
     assert e1["builds"] == 8 and (e1["usd_low"], e1["usd_high"], e1["ceiling_usd"]) == (48.0, 80.0, 120.0)
+
+
+def test_each_banking_arm_has_its_own_private_demo_repository_and_a_prime_sets_keyword(tmp_path):
+    forks = run_py.load_config()["fineract"]["forks"]
+    repos = {arm: fork["repo"] for arm, fork in forks["E2"].items()}
+    assert repos == {"A": "paramg/northpeak-fineract-a", "AP": "paramg/northpeak-fineract-ap",
+                     "B": "paramg/northpeak-fineract-b"}
+    assert all("kaappu" not in str(fork).lower() for fork in forks["E2"].values())
+    boss = FakeBoss()
+    results = _run(tmp_path, boss, stage="bank_smoke", engine="E2", arm="AP", tasks="B1..B4", fineract_dir=str(tmp_path / "f"))
+    assert ("setting", "knowledge_graph", "keyword") in boss.calls
+    assert {r["fineract_repo"] for r in results} == {"paramg/northpeak-fineract-ap"}
+    untouched = FakeBoss()
+    with pytest.raises(run_py.HarnessError, match="no Fineract demo repository for E1/A"):
+        _run(tmp_path, untouched, stage="bank_learning_e1", engine="E1", arm="A", tasks="B1",
+             fineract_dir=str(tmp_path / "f"), out=str(tmp_path / "o3"))
+    assert untouched.calls == []                   # refused before any setting, budget or start
 
 
 def test_arm_a_prime_waits_for_a_keyword_switch(tmp_path):

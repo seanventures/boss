@@ -30,7 +30,7 @@ evaluate:
 expected_reuse:
   - id: INV-ROUND-ONCE
     from: B1
-    why: "Charge amounts follow the same rule: keep full precision through percentage and cap, round to currency digits once, when the amount is attached to a loan (an unattached charge stays unrounded)."
+    why: "Charge amounts follow the same rule: keep full precision through percentage and cap, round to currency digits once, when the charge is created on a loan (an unattached charge, and on 1.15.0 an updated flat amount, stays unrounded)."
   - id: INV-PUBLIC-API
     from: B1
     why: "The same extraction pattern: keep LoanChargeService's and the schedule wrapper's public methods and constructors, delegate behind them, move the existing tests that call private rules."

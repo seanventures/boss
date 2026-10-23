@@ -50,7 +50,7 @@ REPO = HERE.parents[2]
 TASKS_DIR = HERE / "tasks"
 ARTIFACTS = REPO / "artifacts" / "case-study" / "knowledge"
 TERMINAL = {"completed", "failed", "cancelled", "simulated"}
-KNOWLEDGE_SETTING = "knowledge_graph"          # the per-project switch (project_settings.KNOBS): on | off
+KNOWLEDGE_SETTING = "knowledge_graph"          # the per-project switch (project_settings.KNOBS): on | keyword | off
 CONTROL_ARM = "A"                              # runs as BOSS is, with or without the switch
 
 
@@ -392,7 +392,11 @@ def repo_target(config: dict, task: Task, args) -> tuple[Path, str]:
     if task.repo == "fineract":
         if not getattr(args, "fineract_dir", None):
             raise HarnessError(f"{task.id} works in the Fineract fork: pass --fineract-dir")
-        return Path(args.fineract_dir), config["fineract"]["fork_name"]
+        fork = (config["fineract"].get("forks") or {}).get(args.engine, {}).get(args.arm)
+        if not fork:
+            raise HarnessError(f"no Fineract demo repository for {args.engine}/{args.arm} in harness.yaml "
+                               "fineract.forks; nothing was started")
+        return Path(args.fineract_dir), fork["repo"]
     return Path(args.fulfilment_dir or "."), config["fulfilment"]["repo_name"]
 
 
@@ -420,10 +424,14 @@ def run(args, *, client: BossClient | None = None, evaluator: Callable[[Task], d
         prepare: Callable[[Task], None] | None = None, sleep: Callable[[float], None] = time.sleep) -> list[dict]:
     config, answers = load_config(), load_answers()
     est = check_approval(config, args)
+    for task_id in expand_tasks(args.tasks):         # every fork known before any setting or budget moves
+        planned = load_task(task_id)
+        if planned.repo == "fineract":
+            repo_target(config, planned, args)
     client = client or BossClient(args.boss_url, os.environ.get("BOSS_CASE_STUDY_API_KEY") or os.environ["BOSS_API_KEY"])
-    # Arm switch through BOSS's own settings: arm B on, arm A (the control) off, arm AP (A′, keyword search
-    # only) "keyword". A BOSS without the switch or the value refuses it; then that arm cannot run and says so,
-    # and arm A runs as that BOSS is.
+    # Arm switch through BOSS's own settings: arm B on, arm A (the control) off, arm AP (A′, full-text keyword
+    # search only) "keyword". A BOSS without the switch or the value refuses it; then that arm cannot run and
+    # says so, and arm A runs as that BOSS is.
     value = config["arms"][args.arm]["knowledge"]
     try:
         client.set_setting(args.project_id, KNOWLEDGE_SETTING, value)
@@ -454,6 +462,7 @@ def run(args, *, client: BossClient | None = None, evaluator: Callable[[Task], d
                       "started_at": dt.datetime.now(dt.timezone.utc).isoformat()}
             if task.repo == "fineract":
                 record["fineract_sha"] = config["fineract"]["sha"]
+                record["fineract_repo"] = repo_name
                 record["expected_reuse"] = [i["id"] for i in task.meta.get("expected_reuse", [])]
             else:
                 record["saleor_sha"] = config["saleor"]["sha"]
