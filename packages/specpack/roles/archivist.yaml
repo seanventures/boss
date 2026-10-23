@@ -15,8 +15,8 @@ boundaries:
     - Call a model provider directly.
     - Open a network fetch for a connector.
 permissions:
-  # Proposing a fact is granted to six roles only (operator decision 2026-10-21); the Archivist
-  # writes its facts through the distil pipeline, which stores them `inferred`.
+  # Proposing a fact (knowledge.propose) is in every agent's baseline; the Archivist also writes
+  # its facts through the distil pipeline, which stores them `inferred`.
   allowed_skills: [knowledge.read]
   forbidden_skills: [github.merge_pr_real, infra.*]
 output_contracts: [KnowledgeFact]

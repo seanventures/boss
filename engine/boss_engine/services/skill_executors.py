@@ -2532,8 +2532,8 @@ def execute_knowledge_read(context: "SkillExecutorContext", inputs: dict[str, An
 
 @register_executor("knowledge.propose")
 def execute_knowledge_propose(context: "SkillExecutorContext", inputs: dict[str, Any]) -> dict[str, Any]:
-    """kg_propose_fact: the agent's fact, always stored `inferred`. Granted to the roles in
-    agent_baseline.PROPOSE_FACT_ROLES only."""
+    """kg_propose_fact: the agent's fact, always stored `inferred`. A baseline skill: every
+    agent holds it (agent_baseline.BASELINE_SKILLS)."""
     from .agent_baseline import run_bundled_tool
 
     return run_bundled_tool(context, "knowledge.propose", inputs)

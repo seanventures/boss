@@ -66,14 +66,15 @@ def test_every_agent_holds_the_knowledge_graph():
     assert all(reg.get(t).kind == "read" for t in ab.KNOWLEDGE_TOOLS)
 
 
-def test_kg_propose_fact_is_granted_to_exactly_the_six_roles():
-    """Operator decision 2026-10-21: pm, engineering_captain, qa, adversarial_reviewer,
-    security_reviewer and sre hold knowledge.propose; no other role, and not the baseline."""
-    assert "knowledge.propose" not in ab.BASELINE_SKILLS
+def test_kg_propose_fact_is_in_every_agents_baseline():
+    """It was granted to six named roles (2026-10-21). Every shipped agent has the same base
+    (operator, 2026-10-23), so it is a baseline skill, and no role spec grants it on its own."""
+    assert "knowledge.propose" in ab.BASELINE_SKILLS
+    assert not hasattr(ab, "PROPOSE_FACT_ROLES")
     holders = sorted(p.stem for p in (SPECPACK / "roles").glob("*.yaml")
                      if "knowledge.propose" in (((yaml.safe_load(p.read_text()) or {}).get("permissions") or {})
                                                 .get("allowed_skills") or []))
-    assert holders == sorted(ab.PROPOSE_FACT_ROLES)
+    assert holders == []
     assert ab.bundles()["knowledge.propose"] == ("kg_propose_fact",)
     spec = ab.bundle_tool_spec("knowledge.propose", "kg_propose_fact")
     assert spec is not None and spec.kind == "write" and spec.reversibility == "safe"
@@ -219,7 +220,7 @@ def test_a_harbor_turn_is_offered_the_baseline_tools_by_name():
     _append_skill_tools(schemas, occupied, [])
     names = {s["function"]["name"] for s in schemas}
     reg = _registry()
-    # The baseline bundles only: knowledge.propose is granted to six roles, not to Harbor.
+    # The baseline bundles — knowledge.propose among them, as for every agent.
     expected = {t for skill in ab.BASELINE_SKILLS for t in ab.bundles().get(skill, ()) if t in reg.names()}
     assert expected <= names, sorted(expected - names)
     for name, (spec, tool) in offered.items():
