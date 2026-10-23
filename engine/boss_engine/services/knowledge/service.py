@@ -17,6 +17,7 @@ from .archivist import distil, forget_source as forget_source_lineage
 from .capture import capture_lifecycle as capture_lifecycle_record
 from .learning import apply_learning
 from .retrieval import blast_radius, fuse_lists, knowledge_pack, precedent_section, rank_hits
+from .scopes import KEYWORD_EXCLUDED_LAYERS, keyword_policy
 from .store import PostgresKnowledgeStore
 
 READ = "knowledge:read"
@@ -37,10 +38,20 @@ class KnowledgeService:
         policy=None,
         embedder=None,
         seeds: Optional[list[str]] = None,
+        mode: str = "on",
     ) -> dict[str, Any]:
         """Hybrid retrieval: full text, the graph around the seeds (or around the best text hits),
         and the vector index when an embedder is given, fused by reciprocal rank. Governed and
-        approved facts still rank above inferred ones (rank_hits)."""
+        approved facts still rank above inferred ones (rank_hits).
+
+        ``mode`` is the project's knowledge switch as an agent path read it
+        (runtime.knowledge_mode): ``keyword`` is full-text keyword search only, ``off`` finds
+        nothing. A person's own search (the console) leaves it ``on``."""
+        if mode == "off":
+            return {"hits": [], "retrieval": {"mode": "off", "lists": {}}}
+        if mode == "keyword":
+            return self._keyword_search(connection, project_id=project_id, query=query, limit=limit,
+                                        policy=policy)
         text_hits = self.store.text_search(
             connection, project_id=project_id, query=query, limit=max(limit, 20), policy=policy
         )
@@ -87,6 +98,26 @@ class KnowledgeService:
                           "lists": {name: len(items) for name, items in lists.items()},
                           **({"reason": reason} if reason else {})},
         }
+
+    def _keyword_search(
+        self, connection: Connection, *, project_id: str, query: str, limit: int, policy=None
+    ) -> dict[str, Any]:
+        """The A′ baseline: plain full-text matches in text-rank order. No graph traversal (a
+        seeded stage reads its seeds only, zero hops), no vectors, and no learned facts (the
+        knowledge layer); precedent is not offered at all (precedent())."""
+        text_hits = self.store.text_search(
+            connection, project_id=project_id, query=query, limit=limit,
+            policy=keyword_policy(policy), exclude_layers=KEYWORD_EXCLUDED_LAYERS,
+        )
+        hits = []
+        for hit in text_hits:
+            node = self.store.get_node(connection, project_id=project_id, node_id=hit["node_id"])
+            if node is None:
+                continue
+            hits.append({"node_id": hit["node_id"], "node_key": hit.get("node_key"),
+                         "score": float(hit.get("rank") or 0), "via": ["text"],
+                         "name": node["name"], "trust_tier": node["trust_tier"], "body": node["body"]})
+        return {"hits": hits[:limit], "retrieval": {"mode": "keyword", "lists": {"text": len(text_hits)}}}
 
     def why(
         self, connection: Connection, *, project_id: str, node_id: str, policy=None
@@ -321,11 +352,14 @@ class KnowledgeService:
         budget_tokens: int,
         ceiling: str = "governed",
         policy=None,
+        mode: str = "on",
     ) -> dict[str, Any]:
-        """A budgeted pack, built under the stage's knowledge scope when one is given."""
+        """A budgeted pack, built under the stage's knowledge scope when one is given, from the
+        retrieval the project's switch allows (``mode``, see search)."""
         if policy is not None:
             budget_tokens = min(budget_tokens, policy.budget_tokens)
-        found = self.search(connection, project_id=project_id, query=query, limit=20, policy=policy)
+        found = self.search(connection, project_id=project_id, query=query, limit=20, policy=policy,
+                            mode=mode)
         return knowledge_pack(
             role=role,
             stage=stage,
@@ -335,8 +369,11 @@ class KnowledgeService:
         )
 
     def precedent(
-        self, connection: Connection, *, project_id: str, query: str, limit: int = 5, policy=None
+        self, connection: Connection, *, project_id: str, query: str, limit: int = 5, policy=None,
+        mode: str = "on",
     ) -> dict[str, Any]:
+        if mode != "on":            # keyword search only, or off: no precedent and nothing to cite
+            return {"cited_fact_ids": [], "section": ""}
         found = self.search(connection, project_id=project_id, query=query, limit=limit, policy=policy)
         decisions = [
             hit for hit in found["hits"]
@@ -376,8 +413,12 @@ class KnowledgeService:
             learned = apply_learning(dict(row), now=now)
             if learned["promotion_candidate"]:
                 candidates.append({"id": row["id"], "node_key": row["node_key"], "body": row["body"]})
+        from .runtime import knowledge_mode
+
         return {
             "project_id": project_id,
+            # The knowledge_graph switch: what agents are given (on | keyword | off).
+            "agent_access": knowledge_mode(connection, project_id),
             "counts": counts,
             "promotion_candidates": candidates,
             "budget_category": "knowledge",

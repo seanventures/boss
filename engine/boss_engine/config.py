@@ -1137,7 +1137,8 @@ class Settings(BaseSettings):
     # one real model spend. 0 = the Captain proposes, never starts one; Govern turns it on per
     # project (project_settings `captain_auto_improve`). Installs that predate this keep theirs on.
     captain_auto_improve: int = Field(default=0, alias="BOSS_CAPTAIN_AUTO_IMPROVE")
-    # BOSSAPP-622: whether agents are given the knowledge graph (project_settings `knowledge_graph`).
+    # BOSSAPP-622: what agents are given from the knowledge graph (project_settings `knowledge_graph`):
+    # on | keyword | off (knowledge/runtime.MODES).
     knowledge_graph: str = Field(default="on", alias="BOSS_KNOWLEDGE_GRAPH")
     # FIX AND REDEPLOY (services/deploy_repair.py): how many repair builds a workflow's deploy
     # step starts by itself when its deployment fails for the APP's reason (a runtime the machine

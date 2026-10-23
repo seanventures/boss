@@ -58,9 +58,9 @@ def _knowledge_precedent(
     if not query.strip():
         return ""
     try:
-        from .knowledge.runtime import knowledge_enabled
+        from .knowledge.runtime import knowledge_mode
 
-        if not knowledge_enabled(connection, project_id):
+        if knowledge_mode(connection, project_id) != "on":     # off, or keyword search only
             return ""
         from .knowledge.scopes import policy_for
         from .knowledge.service import KnowledgeService

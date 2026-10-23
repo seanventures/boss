@@ -47,16 +47,35 @@ def files_for_index(files: list) -> list[dict[str, str]]:
     return prepared
 
 
-def knowledge_enabled(connection: Any, project_id: str) -> bool:
-    """The project's `knowledge_graph` switch (project_settings); on unless set to off."""
+#: The values of the project's `knowledge_graph` switch (project_settings.KNOBS), as agents see them:
+#: * ``on``: hybrid retrieval (full text, graph, vectors), learned facts, precedent and citations;
+#: * ``keyword``: full-text keyword search only (the case study's A′ arm): no graph traversal, no
+#:   vectors, no learned facts, no precedent or citations;
+#: * ``off``: nothing from the graph at all.
+#: Indexing and capture go on in every mode, so switching back loses nothing.
+MODES = ("on", "keyword", "off")
+
+
+def knowledge_mode(connection: Any, project_id: str) -> str:
+    """The project's `knowledge_graph` switch: on, keyword or off. On unless set otherwise.
+
+    Every path that gives an agent knowledge reads it here: injected packs, pull-request
+    citations, workflow precedent and the kg_* MCP tools (tools/knowledge_tools.py), so every
+    engine gets the same behaviour."""
     try:
         from ...config import get_settings
         from ..project_settings import effective
 
         value = effective(connection, project_id, get_settings(), "knowledge_graph")
     except Exception:  # noqa: BLE001 - an unreadable switch leaves the default
-        return True
-    return str(value or "on").strip().lower() != "off"
+        return "on"
+    mode = str(value or "on").strip().lower()
+    return mode if mode in MODES else "on"
+
+
+def knowledge_enabled(connection: Any, project_id: str) -> bool:
+    """Whether agents get anything from the graph (on or keyword)."""
+    return knowledge_mode(connection, project_id) != "off"
 
 
 def append_quoted_pack(prompt: str | None, section: str) -> str:
@@ -151,7 +170,8 @@ def _remember_written_files(
             "symbol_names": list(dict.fromkeys(names)),
         },
     )
-    if not knowledge_enabled(connection, project_id):
+    if knowledge_mode(connection, project_id) != "on":
+        # Off, or keyword search only: a pull request cites no precedent.
         indexed = captured.get("indexed")
         return {"id": captured.get("id"), "replayed": bool(captured.get("replayed")),
                 "linked": list(captured.get("linked") or []), "cited_fact_ids": [],
@@ -200,7 +220,8 @@ def quoted_pack_for_turn(
     text = str(query or "").strip()
     if not text or not str(project_id or "").strip():
         return ""
-    if not knowledge_enabled(connection, project_id):
+    mode = knowledge_mode(connection, project_id)
+    if mode == "off":
         return ""
     try:
         return _within_savepoint(
@@ -211,13 +232,15 @@ def quoted_pack_for_turn(
                 query=text[:500],
                 run_id=run_id,
                 step=step,
+                mode=mode,
             ),
         )
     except Exception:
         return ""
 
 
-def _quoted_pack(connection: Any, *, project_id: str, query: str, run_id: str, step: str) -> str:
+def _quoted_pack(connection: Any, *, project_id: str, query: str, run_id: str, step: str,
+                 mode: str = "on") -> str:
     from .retrieval import precedent_section
     from .scopes import current_policy
     from .service import KnowledgeService
@@ -233,6 +256,7 @@ def _quoted_pack(connection: Any, *, project_id: str, query: str, run_id: str, s
         budget_tokens=PACK_BUDGET_TOKENS,
         ceiling=PACK_CEILING,
         policy=policy,
+        mode=mode,
     )
     items = packed.get("items") or []
     if not items:

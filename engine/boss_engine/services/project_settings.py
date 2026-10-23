@@ -23,16 +23,19 @@ logger = logging.getLogger(__name__)
 #: bounds a value has to fall inside. An unlisted key is refused rather than stored: a settings
 #: table that accepts anything becomes a place where typos live forever.
 KNOBS: dict[str, dict[str, Any]] = {
-    # THE KNOWLEDGE GRAPH SWITCH (BOSSAPP-622). Off: agents get no knowledge pack, precedent or
-    # citations from this project's graph. Indexing and capture go on, so turning it back on
-    # loses nothing. The case study's control arm (scripts/case-study/knowledge) runs with it off.
+    # THE KNOWLEDGE GRAPH SWITCH (BOSSAPP-622). Off: agents get no knowledge pack, precedent,
+    # citations or kg tool from this project's graph. Keyword: full-text keyword search only, no
+    # graph traversal, vectors, learned facts or precedent (knowledge/runtime.knowledge_mode, read
+    # by every delivery path). Indexing and capture go on, so turning it back on loses nothing.
+    # The case study (scripts/case-study/knowledge) runs arm A off, A′ keyword and B on.
     "knowledge_graph": {
         "attr": "knowledge_graph",
         "label": "Knowledge graph",
         "help": "On: agents are given what this project's knowledge graph knows (packs, precedent, "
-                "the facts a change is based on). Off: they work without it. The graph keeps "
-                "indexing either way.",
-        "kind": "choice", "choices": ["on", "off"],
+                "the facts a change is based on). Keyword: plain keyword search over its records "
+                "only, no graph, meaning search, learned facts or precedent. Off: they work "
+                "without it. The graph keeps indexing either way.",
+        "kind": "choice", "choices": ["on", "keyword", "off"],
     },
     "code_agent_max_concurrency": {
         "attr": "code_agent_max_concurrency",
