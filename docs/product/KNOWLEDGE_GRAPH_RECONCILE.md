@@ -30,7 +30,7 @@ The operator decided that A is the base. What B has and A lacks comes in as smal
 | Per-org budget defaults, and B's default-cap fix | None: A never spends. | `kg_knowledge_settings` with $2/day, $20/month and $0.20/run. B fixed caps that never bit for an org with no settings row. | — | **Port the class, not the table.** A's gate fails closed (`2fa93fb27`). The per-org caps come with a model-backed Archivist. |
 | Retrieval, RRF, packs, budgets | Text search, tier-first rank, packs under a token budget, `log_usage`. | Graph, text, vector and trusted lists with RRF; recipes per role and stage; PageRank module map; a reranker gated by budget; `kg_pack_log`. | `test_knowledge_hybrid_db` | **Merge both.** Here: text, graph and vector lists fused by RRF, with A's packs and tier rank. B's recipes, PageRank and reranker are left out. |
 | Permissions and Passport-scoped reads | `knowledge:read` and `knowledge:manage`. Presets did **not** hold `knowledge:read`, so delegated kg tools were refused. A tier ceiling on packs. | The same permissions, plus every preset and an archivist preset, `read_permissions` per fact, and team scope. | `test_every_shipped_role_and_any_new_agent_gets_a_preset` fails on A. | **Keep A's permissions** and port B's presets (`e62227979`). Per-fact `read_permissions` is left out. |
-| Branch overlay | None | `overlay.py`: an in-memory overlay per run. It is not wired into any stage (PHASE3 "Next" 1). | — | **Leave out.** It is unwired in B too, and A indexes a PR's files when it opens. Open decision 4. |
+| Branch overlay | None | `overlay.py`: an in-memory overlay per run. It is not wired into any stage (PHASE3 "Next" 1). | — | **Dropped for now** (operator, 2026-10-22). It is unwired in B too, and A indexes a PR's files when it opens. |
 | Stage knowledge scopes | None | Designed only (PHASE3 "Next" 5). | `test_knowledge_stage_scopes_db` | **Build it here, on A** (`2c4bc7eeb`): a generated layer column, declared policies, enforcement in the store, tool refusal, and the scoped pack. |
 | Jev precedent citations | Wired: typed-decision prompt, `cited_fact_ids`, attribution. | Not done ("Next" 2). | A's tests | **Keep A.** Precedent is read under the `decide` scope. |
 | Console: explorer, promotion queue, "based on" | Present. The settings panel and promotion queue read a shadowed route. | None | `test_knowledge_routes_are_reachable` | **Keep A**, and fix the route (`4ab487783`). |
@@ -57,7 +57,7 @@ This replaces "keep A's opt-in image, leave it open". Commits `a714b07f8`, `2db2
 
 - **B's model-backed Archivist, its per-org settings (caps, retention, PII) and the precision run.** This tree's distil path calls no model, and the precision run is not approved. The gate is ported fail-closed.
 - **B's full lifecycle sync** (decisions with approvers, runbooks, alert rules, releases). A captures PRs and decisions, and now runs and incidents. The rest is a follow-up.
-- **The branch overlay.** B does not wire it either.
+- **The branch overlay.** Dropped for now (operator, 2026-10-22). B does not wire it either.
 - **B's recipes, PageRank module map and reranker, and per-fact `read_permissions` and team scope.** A's packs and tier ceiling stay. Each is a separable follow-up.
 - **B's benchmark scripts.** They target B's schema. The index fixes they found are ported.
 - **B's governed embedding call** (`model_routing` `create_embeddings`). With no model configured, search degrades and says why. A named model without that call says so too.
@@ -68,7 +68,6 @@ This replaces "keep A's opt-in image, leave it open". Commits `a714b07f8`, `2db2
 1. **The embedding model**, and whether to port B's governed embedding call so a configured model is used.
 2. **The real-model precision run** (B's Phase 2, approved at a $0.50 cap), before a model-backed Archivist ships.
 3. **Regenerating the stale committed matrices on main.** `tests/identity/matrix.yaml` (and `read-routes.gen.ts`) and `docs/community/mcp-api-capability-matrix.json` were already stale at `e710eb6df`. The tests that check them fail on main and here alike. This branch's new routes are not in them.
-4. **The branch overlay**: wire it (B's PHASE3 "Next" 1), or drop it.
 5. **PR source ids.** A keys a PR as `pr-<number>` without its repository, so two repositories in one project can collide.
 6. **Agents with a custom Passport ceiling** do not gain `knowledge:read` (B's open decision 4).
 
