@@ -1,0 +1,22 @@
+╭─ BOSS is not answering ──────────────────────────────────────────────────────╮
+│ unreachable: request failed before an HTTP response (URLError)               │
+│                                                                              │
+│ fix Is BOSS running? boss status checks it (API http://127.0.0.1:8000); make │
+│ dev starts it from the install.                                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ HTTP 403 ───────────────────────────────────────────────────────────────────╮
+│ agent_chat is not allowed for this key                                       │
+│                                                                              │
+│ fix This key lacks the permission. An Owner can grant it in People & access. │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Confirm it's you ───────────────────────────────────────────────────────────╮
+│ This action needs you to confirm it is you (step-up).                        │
+│                                                                              │
+│ Sign in again in the console (My account), then press Enter here to run the  │
+│ same command again, or Esc to leave it.                                      │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Still working ──────────────────────────────────────────────────────────────╮
+│ BOSS is still working on this turn on the server (thread athr_7)             │
+│                                                                              │
+│ /thread athr_7 shows the reply when it lands.                                │
+╰──────────────────────────────────────────────────────────────────────────────╯

@@ -218,6 +218,11 @@ COPY templates ./templates
 COPY plugins ./plugins
 COPY packages/specpack ./packages/specpack
 COPY scripts/metatron_tui.py ./scripts/metatron_tui.py
+# Metatron's rich terminal (BOSSAPP-761): its drawing and its keyboard, beside the client, and
+# the release notes its welcome panel reads "What's new" from.
+COPY scripts/metatron_render.py ./scripts/metatron_render.py
+COPY scripts/metatron_shell.py ./scripts/metatron_shell.py
+COPY docs/community/RELEASE_NOTES_*.md ./docs/community/
 COPY scripts/reliability_mcp_server.py ./scripts/reliability_mcp_server.py
 COPY scripts/wait_for_postgres.py ./scripts/wait_for_postgres.py
 # install.sh runs this INSIDE the api container to record the installer's machine. It was never

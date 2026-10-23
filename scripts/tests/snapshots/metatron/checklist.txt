@@ -1,0 +1,16 @@
+╭─ Waiting for your go-ahead ──────────────────────────────────────────────────╮
+│ Add a support inbox                                                          │
+│                                                                              │
+│ Plan  ▰▰▰▱▱▱▱▱▱▱ 1/3                                                         │
+│   ☑ 1. Spec                                                                  │
+│   ▶ 2. Build  after 1                                                        │
+│   ☐ 3. Test  after 2                                                         │
+│                                                                              │
+│ /confirm to go ahead, or say what to change.                                 │
+╰──────────────────────────────────────────────────────────────────────────────╯
+Run wr_42  HelpDesk AI build  running
+  ✓ spec › ● build › ○ deploy  ▰▰▰▱▱▱▱▱ 1/3
+  Steps  ▰▰▰▱▱▱▱▱▱▱ 1/3
+    ☑ 1. spec
+    ▶ 2. build
+    ☐ 3. deploy

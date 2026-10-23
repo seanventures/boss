@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Metatron — BOSS's terminal. A stdlib REPL client of the one BOSS agent and the /v1 API.
+"""Metatron — BOSS's terminal. A client of the one BOSS agent and the /v1 API.
 
 Plain text is an Ask BOSS turn: POST /v1/metatron/session, a thin adapter onto the same
 `agent_turn` the console calls (BOSSAPP-759). The agent's offers become numbered choices; picking
@@ -8,21 +8,34 @@ one goes through the console's own button path (POST /v1/engine/agent/action).
 Reads BOSS_API_URL, BOSS_API_KEY, and BOSS_PROJECT_ID from the environment.
 Never prints the API key.
 
+THIS FILE IS THE WHOLE CLIENT, AND IT IS STDLIB. The rich terminal (BOSSAPP-761) is two optional
+siblings: metatron_render.py (Rich: banner, Markdown replies, cards, tables, diffs, error panels)
+and metatron_shell.py (prompt_toolkit: the bottom bar, completion, pickers). They only draw what
+this client fetched and send what the person chose through this client's methods; neither has a
+decision of its own. Without them, or without a terminal, or under NO_COLOR, the output is the
+plain text it always was, and `--exec … --json` is byte-for-byte what it always was.
+
 Usage:
+  boss metatron                       (on the install machine)
   BOSS_API_KEY=… make metatron
-  python3 scripts/metatron_tui.py
+  python3 scripts/metatron_tui.py [--plain] [--print COMMAND [--json]]
 """
 
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import os
 import re
 import sys
+from pathlib import Path
 from dataclasses import dataclass
 from typing import Any, Mapping, Optional, TextIO
-from urllib.error import HTTPError
+import http.client
+import socket
+import time
+from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qsl, quote, unquote, urlencode, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
@@ -41,6 +54,25 @@ DEFAULT_API_URL = "http://127.0.0.1:8000"
 DEFAULT_PROJECT_ID = "boss-dogfood"
 DEFAULT_ACTOR = "executive_console"
 DEFAULT_TIMEOUT_SECONDS = 30.0
+
+
+def _seconds(name: str, default: float) -> float:
+    try:
+        value = float(os.environ.get(name) or default)
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+#: A TURN IS NEVER FAILED FOR BEING SLOW. An Ask BOSS turn runs a tool loop and a model; on
+#: 2026-10-23 one took 35 s to create three projects, and the 30 s read timeout every other
+#: request uses reported "unreachable" for a turn that succeeded. Turns (a sentence, /confirm, a
+#: pressed offer) wait this long instead, and if the connection still drops after the turn was
+#: sent the client reads the thread for the reply rather than calling the server unreachable.
+TURN_TIMEOUT_SECONDS = _seconds("BOSS_METATRON_TURN_TIMEOUT", 900.0)
+#: How long a dropped turn's thread is read for its reply, and how often.
+RECOVER_SECONDS = _seconds("BOSS_METATRON_RECOVER_SECONDS", 600.0)
+RECOVER_POLL_SECONDS = _seconds("BOSS_METATRON_RECOVER_POLL", 3.0)
 OPS_PAGE_SIZE = 25
 
 HELP_TEXT = (
@@ -58,6 +90,41 @@ HELP_TEXT = (
     "The API enforces project, permission, edition, approval, budget, and receipt rules.\n"
     "/overwatch runs observe→measure→validate→apply-safe→verify.\n"
     "'/go' or '/drive auto' applies only moves that pass validation."
+)
+
+#: EVERY SLASH COMMAND, ONCE: (command, arguments, one line). The rich terminal's completion menu
+#: and its /help table read this list, so a command cannot exist without its description.
+SLASH_COMMANDS: tuple[tuple[str, str, str], ...] = (
+    ("/help", "", "Commands and keys"),
+    ("/agent", "[KEY|auto]", "Pick the agent you are talking to (Agent Studio)"),
+    ("/project", "[ID]", "Pick or switch the project"),
+    ("/projects", "", "List the projects this key can see"),
+    ("/model", "[ENGINE[:MODEL]|auto]", "Pick the chat model (Setup › jobs › chat)"),
+    ("/status", "", "Connection checklist: API, identity, project, models, GitHub"),
+    ("/pick", "[N]", "Run one of the last reply's numbered choices"),
+    ("/confirm", "", "Go ahead with the plan waiting on you"),
+    ("/expand", "", "The last reply's tool calls, in full"),
+    ("/thread", "[ID]", "The conversation so far, from the server (and a slow turn's reply)"),
+    ("/tasks", "[PAGE]", "Task list, 25 a page"),
+    ("/task", "ID | create KEY TITLE", "Show one task, or create one"),
+    ("/decisions", "[open|all] [PAGE]", "Decision inbox"),
+    ("/decision", "ID | approve|reject ID NOTE", "Show a decision card, or act on it"),
+    ("/runs", "[STATUS]", "Workflow runs"),
+    ("/run", "ID", "One run's steps"),
+    ("/follow", "ID", "Follow a run's steps live"),
+    ("/alerts", "[firing|resolved|all]", "Alerts across apps"),
+    ("/goals", "", "Captain goals"),
+    ("/watch", "", "Captain: one watch tick"),
+    ("/overwatch", "", "Captain: observe, measure, validate, apply-safe, verify"),
+    ("/drive", "[auto|go]", "Captain: propose moves (auto applies validated ones)"),
+    ("/go", "", "Captain: drive auto"),
+    ("/ops", "[TERM] [--page N]", "Search the live API operations"),
+    ("/describe", "OPERATION_ID", "An operation's parameters and body"),
+    ("/op", "OPERATION_ID [JSON]", "Invoke an operation"),
+    ("/api", "METHOD /v1/path [JSON]", "Call a local /v1/ route"),
+    ("/coverage", "", "Live OpenAPI against the mounted routes"),
+    ("/clear", "", "Clear the screen"),
+    ("/quit", "", "Leave Metatron"),
 )
 
 #: A bare number picks one of the last turn's numbered choices.
@@ -89,6 +156,9 @@ class Command:
 
 
 HTTP_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE"}
+ALERT_STATES = ("firing", "resolved", "all")
+#: How long a startup check may take. The checklist is a welcome, not a gate.
+CHECK_TIMEOUT_SECONDS = 5.0
 PATH_PARAMETER = re.compile(r"\{([A-Za-z_][A-Za-z_0-9]*)(?::path)?\}")
 SIMPLE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
 
@@ -118,6 +188,19 @@ def redact(text: str, secret: str = "") -> str:
     if secret and secret in redacted:
         redacted = redacted.replace(secret, "***")
     return redacted
+
+
+def redact_payload(value: Any, secret: str) -> Any:
+    """`redact`, through a whole payload: what the rich terminal draws is scrubbed too."""
+    if not secret:
+        return value
+    if isinstance(value, str):
+        return value.replace(secret, "***")
+    if isinstance(value, list):
+        return [redact_payload(item, secret) for item in value]
+    if isinstance(value, dict):
+        return {redact_payload(k, secret): redact_payload(v, secret) for k, v in value.items()}
+    return value
 
 
 def _secret_field(name: str) -> bool:
@@ -257,6 +340,36 @@ def parse_line(line: str) -> Command:
         if len(parts) != 2 or not SIMPLE_ID.fullmatch(parts[1]):
             return Command(kind="error", message="usage: /decision ID or /decision approve|reject ID NOTE")
         return Command(kind="decision", message=parts[1])
+    if lowered in {"/agent", "/agents"} or lowered.startswith("/agent "):
+        return Command(kind="agent", message=raw.partition(" ")[2].strip())
+    if lowered in {"/model", "/models"} or lowered.startswith("/model "):
+        return Command(kind="model", message=raw.partition(" ")[2].strip())
+    if lowered == "/status":
+        return Command(kind="status")
+    if lowered == "/expand":
+        return Command(kind="expand")
+    if lowered == "/thread" or lowered.startswith("/thread "):
+        parts = raw.split()
+        if len(parts) > 2 or (len(parts) == 2 and not SIMPLE_ID.fullmatch(parts[1])):
+            return Command(kind="error", message="usage: /thread [THREAD_ID]")
+        return Command(kind="thread", message=parts[1] if len(parts) == 2 else "")
+    if lowered == "/clear":
+        return Command(kind="clear")
+    if lowered == "/runs" or lowered.startswith("/runs "):
+        parts = raw.split()
+        if len(parts) > 2 or (len(parts) == 2 and not SIMPLE_ID.fullmatch(parts[1])):
+            return Command(kind="error", message="usage: /runs [STATUS]")
+        return Command(kind="runs", message=parts[1].lower() if len(parts) == 2 else "")
+    if lowered in {"/run", "/follow"} or lowered.startswith(("/run ", "/follow ")):
+        parts = raw.split()
+        if len(parts) != 2 or not SIMPLE_ID.fullmatch(parts[1]):
+            return Command(kind="error", message=f"usage: {parts[0].lower()} RUN_ID")
+        return Command(kind="run", message=parts[1], auto=lowered.startswith("/follow"))
+    if lowered == "/alerts" or lowered.startswith("/alerts "):
+        parts = raw.split()
+        if len(parts) > 2 or (len(parts) == 2 and parts[1].lower() not in ALERT_STATES):
+            return Command(kind="error", message="usage: /alerts [firing|resolved|all]")
+        return Command(kind="alerts", message=parts[1].lower() if len(parts) == 2 else "firing")
     if lowered == "/ops" or lowered.startswith("/ops "):
         return Command(kind="ops", message=raw.partition(" ")[2].strip())
     if lowered == "/coverage":
@@ -323,6 +436,263 @@ def format_banner(config: Config) -> str:
         f"Metatron captain  project={config.project_id}  api={config.api_url}\n"
         f"{HELP_TEXT}"
     )
+
+
+def _ok(payload: Any) -> bool:
+    return isinstance(payload, dict) and not payload.get("__http_error__") \
+        and not payload.get("__command_error__")
+
+
+def build_status(api_url: str, project_id: str, *, health: Any, me: Any, projects: Any,
+                 setup: Any, role_name: str = "") -> dict[str, Any]:
+    """Six checks from four API reads. A read this key may not make is "unknown", not ✗."""
+    checks: list[dict[str, Any]] = []
+
+    def check(check_id: str, label: str, ok: Optional[bool], detail: str, fix: str = "") -> None:
+        checks.append({"id": check_id, "label": label, "ok": ok, "detail": detail,
+                       "fix": "" if ok else fix})
+
+    reachable = _ok(health)
+    if not reachable:
+        check("api", "API reachable", False, f"no answer from {api_url}",
+              "Start BOSS: `boss status` shows what is down (or `make dev` in the install).")
+    elif health.get("database_connected") is False:
+        check("api", "API reachable", False, "the API answers but its database does not",
+              "`boss status`, then `boss logs db`.")
+    else:
+        check("api", "API reachable", True, api_url)
+
+    if _ok(me):
+        who = str(me.get("display_name") or me.get("principal_id") or "signed in")
+        kind = str(me.get("kind") or "")
+        check("identity", "Signed in", True, f"{who}" + (f" ({kind.replace('_', ' ')})" if kind else ""))
+    elif isinstance(me, dict) and me.get("status") in {401, 403}:
+        check("identity", "Signed in", False, "this key was refused",
+              "On the install machine `boss identity host-key` issues a new one; elsewhere "
+              "make a key in My account › API keys.")
+    else:
+        check("identity", "Signed in", None if not reachable else False,
+              "could not read who this key is", "`boss doctor` checks sign-in.")
+
+    project_name = project_id
+    if _ok(projects) and isinstance(projects.get("items"), list):
+        match = next((p for p in projects["items"]
+                      if isinstance(p, dict) and p.get("id") == project_id), None)
+        if match:
+            project_name = str(match.get("name") or project_id)
+            check("project", "Project", True, f"{project_name} ({project_id})")
+        else:
+            check("project", "Project", False, f"{project_id} is not visible to this key",
+                  "`/project` picks one this key can see.")
+    else:
+        check("project", "Project", None, "could not list projects", "`/projects` retries.")
+
+    model_label, budget = "", None
+    if _ok(setup):
+        budget = setup.get("budget") if isinstance(setup.get("budget"), dict) else None
+        models = [m for m in setup.get("models") or [] if isinstance(m, dict)]
+        chat = next((j for j in setup.get("jobs") or []
+                     if isinstance(j, dict) and j.get("job") == "chat"), {})
+        resolved = chat.get("resolved") if isinstance(chat.get("resolved"), dict) else {}
+        model_label = str(resolved.get("label") or resolved.get("model") or "")
+        green = [m for m in models if (m.get("pill") or {}).get("tone") == "green"]
+        if green:
+            check("model", "Model connected", True,
+                  model_label or str(green[0].get("label") or green[0].get("provider") or "connected"))
+        elif models:
+            pill = models[0].get("pill") or {}
+            check("model", "Model connected", False,
+                  f"{models[0].get('label') or models[0].get('provider')}: {pill.get('label') or 'not working'}",
+                  "`boss connect` finds model keys, subscriptions and local models here.")
+        else:
+            check("model", "Model connected", False, "no model connected",
+                  "`boss connect` finds model keys, subscriptions and local models here.")
+
+        embedding = setup.get("embedding_model")
+        if isinstance(embedding, dict) and embedding.get("configured") and embedding.get("search"):
+            check("embedding", "Embedding model", True,
+                  " ".join(str(v) for v in (embedding.get("label"), embedding.get("model")) if v))
+        elif isinstance(embedding, dict) and embedding.get("configured"):
+            check("embedding", "Embedding model", False,
+                  str(embedding.get("reason") or "set, but knowledge search is off"),
+                  "Console: Setup › Repo and models › Embedding model.")
+        else:
+            check("embedding", "Embedding model", False, "not set; knowledge search is off",
+                  "Console: Setup › Repo and models › Embedding model.")
+
+        repository = setup.get("repository") if isinstance(setup.get("repository"), dict) else {}
+        repos = [r for r in repository.get("repos") or [] if isinstance(r, dict)]
+        default = next((r for r in repos if r.get("default")), repos[0] if repos else None)
+        connection = repository.get("connection") if isinstance(repository.get("connection"), dict) else None
+        github_fix = "Console: Setup › Repo and models › Repository (or `boss connect`)."
+        if default and (default.get("pill") or {}).get("tone") == "green":
+            check("github", "GitHub access", True, str(default.get("full_name")))
+        elif default:
+            check("github", "GitHub access", False,
+                  f"{default.get('full_name')}: {(default.get('pill') or {}).get('label') or 'not checked'}",
+                  github_fix)
+        elif connection:
+            login = connection.get("account_login") or connection.get("auth") or "connected"
+            check("github", "GitHub access", False, f"connected as {login}; no repository chosen",
+                  github_fix)
+        else:
+            check("github", "GitHub access", False, "not connected", github_fix)
+    else:
+        why = ("this key cannot read Setup" if isinstance(setup, dict) and setup.get("status") in {401, 403}
+               else "could not read Setup")
+        for check_id, label in (("model", "Model connected"), ("embedding", "Embedding model"),
+                                ("github", "GitHub access")):
+            check(check_id, label, None, why, "Open the console's Setup to check.")
+    return {
+        "api_url": api_url, "project_id": project_id, "checks": checks,
+        "context": {"project": project_name, "agent": role_name or "BOSS",
+                    "model": model_label, "budget": budget},
+    }
+
+
+def _version_key(path: Path) -> tuple[int, ...]:
+    return tuple(int(n) for n in re.findall(r"\d+", path.stem))
+
+
+def whats_new(roots: Optional[list[Path]] = None, limit: int = 4) -> Optional[dict[str, Any]]:
+    """The newest release notes' headline and section names, for the welcome panel. Read
+    from the install's own docs; absent docs mean no panel, never an error."""
+    here = Path(__file__).resolve().parent
+    candidates = roots or [here.parent / "docs" / "community", Path.cwd() / "docs" / "community"]
+    for root in candidates:
+        notes = sorted(root.glob("RELEASE_NOTES_v*.md"), key=_version_key) if root.is_dir() else []
+        if not notes:
+            continue
+        newest = notes[-1]
+        try:
+            lines = newest.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            return None
+        title = next((ln[2:].strip() for ln in lines if ln.startswith("# ")), newest.stem)
+        items = [ln[4:].strip() for ln in lines if ln.startswith("### ")][:limit]
+        if not items:
+            items = [re.sub(r"\*\*", "", ln[2:]).strip() for ln in lines
+                     if ln.startswith("- **")][:limit]
+        return {"release": title, "items": items, "source": f"docs/community/{newest.name}"}
+    return None
+
+
+def format_status(payload: Mapping[str, Any]) -> str:
+    lines = [f"Connection ({payload.get('project_id')}):"]
+    for item in payload.get("checks") or []:
+        mark = {True: "✓", False: "✗", None: "–"}[item.get("ok")]
+        lines.append(f"  {mark} {item['label']}: {item.get('detail') or ''}".rstrip())
+        if item.get("fix"):
+            lines.append(f"      fix: {item['fix']}")
+    return "\n".join(lines)
+
+
+def format_agents(payload: Mapping[str, Any]) -> str:
+    if "items" not in payload:
+        return str(payload.get("note") or json.dumps(payload, default=str))
+    active = payload.get("active_role")
+    lines = [f"Agents in {payload.get('project_id')} (talking to: {active or 'BOSS'}):"]
+    for agent in payload["items"]:
+        mark = "*" if agent.get("role_key") == active else " "
+        mission = str(agent.get("mission") or "").strip()
+        paused = " (paused)" if agent.get("lifecycle") == "paused" else ""
+        lines.append(f"{mark} {agent['role_key']}: {agent.get('name') or agent['role_key']}{paused}"
+                     + (f" — {mission[:80]}" if mission else ""))
+    lines.append("Use /agent KEY to talk to one, /agent auto for BOSS.")
+    return "\n".join(lines)
+
+
+def format_models(payload: Mapping[str, Any]) -> str:
+    resolved = payload.get("resolved") or {}
+    lines = [f"Chat model in {payload.get('project_id')}: "
+             f"{resolved.get('label') or resolved.get('model') or 'not resolved'}"
+             + (" (Auto)" if not payload.get("choice") else "")]
+    if resolved.get("why"):
+        lines.append(f"  {resolved['why']}")
+    options = payload.get("options") or []
+    if options:
+        lines.append("Choices:")
+        for option in options:
+            spec = option.get("engine") + (f":{option['model']}" if option.get("model") else "")
+            metered = " (metered)" if option.get("metered") else ""
+            lines.append(f"  {spec}  {option.get('label') or ''}{metered}".rstrip())
+    lines.append("Use /model ENGINE[:MODEL] to choose, /model auto to let the router choose.")
+    return "\n".join(lines)
+
+
+def step_marks(steps: list[Mapping[str, Any]]) -> list[tuple[str, str]]:
+    """(mark, name) for each step: ✓ done, ● running, ✗ failed, ○ waiting."""
+    out = []
+    for step in steps:
+        status = str(step.get("status") or "").lower()
+        mark = ("✓" if status in DONE_STATES else "✗" if status in FAILED_STATES
+                else "●" if status in RUNNING_STATES else "○")
+        out.append((mark, str(step.get("step_id") or step.get("name") or step.get("title") or "step")))
+    return out
+
+
+DONE_STATES = {"done", "succeeded", "success", "completed", "complete", "ok", "passed",
+               "approved", "skipped", "merged"}
+FAILED_STATES = {"failed", "error", "errored", "rejected", "cancelled", "canceled", "dead",
+                 "blocked", "timed_out"}
+RUNNING_STATES = {"running", "in_progress", "active", "leased", "started", "working",
+                  "waiting_for_decision", "awaiting_approval", "paused"}
+
+
+def format_run(payload: Mapping[str, Any]) -> str:
+    steps = [s for s in payload.get("steps") or [] if isinstance(s, dict)]
+    marks = step_marks(steps)
+    done = sum(1 for mark, _ in marks if mark == "✓")
+    lines = [f"Run {payload.get('id')}: {payload.get('workflow_name') or payload.get('workflow_key')} "
+             f"[{payload.get('status')}]"]
+    if marks:
+        lines.append("  " + " › ".join(f"{m} {n}" for m, n in marks) + f"   {done}/{len(marks)}")
+    for field in ("blocked_reason", "error"):
+        if payload.get(field):
+            lines.append(f"  {field.replace('_', ' ')}: {payload[field]}")
+    return "\n".join(lines)
+
+
+def format_runs(payload: Mapping[str, Any]) -> str:
+    items = payload.get("items")
+    if not isinstance(items, list):
+        return json.dumps(payload, indent=2, default=str)
+    lines = [f"Workflow runs in {payload.get('project_id')}:"]
+    for run in items:
+        if isinstance(run, dict):
+            lines.append(f"  {run.get('id')}  [{run.get('status')}]  "
+                         f"{run.get('workflow_name') or run.get('workflow_key')}  {run.get('created_at') or ''}".rstrip())
+    if not items:
+        lines.append("  No runs.")
+    lines.append("Use /run ID for its steps.")
+    return "\n".join(lines)
+
+
+def format_alerts(payload: Mapping[str, Any]) -> str:
+    alerts = payload.get("alerts")
+    if not isinstance(alerts, list):
+        return json.dumps(payload, indent=2, default=str)
+    counts = payload.get("counts") or {}
+    lines = [f"Alerts in {payload.get('project_id')} ({payload.get('state')}): "
+             f"{counts.get('firing', 0)} firing, {counts.get('pending', 0)} pending, "
+             f"{counts.get('needs_attention', 0)} need attention"]
+    for alert in alerts:
+        if isinstance(alert, dict):
+            lines.append(f"  {alert.get('sev') or alert.get('severity') or '?'}  "
+                         f"[{alert.get('state_word') or alert.get('state')}]  "
+                         f"{alert.get('app') or ''}  {alert.get('summary') or alert.get('alertname') or alert.get('label') or ''}".rstrip())
+    if not alerts:
+        lines.append("  No alerts.")
+    return "\n".join(lines)
+
+
+def format_thread(payload: Mapping[str, Any]) -> str:
+    lines = [f"Thread {payload.get('thread_id')}" + (" (BOSS is working)" if payload.get("working") else "") + ":"]
+    for message in payload.get("messages") or []:
+        if isinstance(message, dict) and message.get("role") in {"user", "assistant"}:
+            who = "you" if message["role"] == "user" else "BOSS"
+            lines.append(f"  {who}: {str(message.get('content') or '').strip()}")
+    return "\n".join(lines)
 
 
 def format_payload(payload: Any) -> str:
@@ -750,6 +1120,29 @@ def _request_path(
     return path, body
 
 
+def _dropped_after_sending(error: BaseException) -> bool:
+    """Did the request reach BOSS and only the reply fail to come back?
+
+    A refused connection or an unknown host never reached it: that is "unreachable". A read
+    timeout, a reset, or a server that closed without answering happened after the turn was
+    sent; the turn is the server's now, and calling the server unreachable is false."""
+    reason = getattr(error, "reason", error) if isinstance(error, URLError) else error
+    if isinstance(reason, (ConnectionRefusedError, socket.gaierror)):
+        return False
+    return isinstance(reason, (TimeoutError, socket.timeout, http.client.RemoteDisconnected,
+                               http.client.IncompleteRead, ConnectionResetError,
+                               ConnectionAbortedError, BrokenPipeError))
+
+
+def _iso_seconds(value: Any) -> Optional[float]:
+    from datetime import datetime
+
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp()
+    except (TypeError, ValueError):
+        return None
+
+
 class MetatronClient:
     """Thin HTTP client for the captain surface. Inject urlopen in tests."""
 
@@ -762,11 +1155,18 @@ class MetatronClient:
         self._injected_urlopen = urlopen
         self._openapi_document: dict[str, Any] | None = None
         self._api_catalog: dict[str, Any] | None = None
+        #: WHICH AGENT IS BEING ASKED (AgentChatRequest.role): unset is BOSS-in-general.
+        self.role: Optional[str] = None
+        self.role_name: str = ""
+        #: Patch points for tests: the dropped-turn recovery's clock and wait.
+        self._sleep = time.sleep
+        self._clock = time.time
 
     def _opener(self):
         return self._injected_urlopen if self._injected_urlopen is not None else urlopen
 
-    def request(self, method: str, path: str, body: Any = None) -> Any:
+    def request(self, method: str, path: str, body: Any = None, *,
+                timeout: Optional[float] = None, turn: bool = False) -> Any:
         url = join_url(self.config.api_url, path)
         encoded = json.dumps(body).encode("utf-8") if body is not None else None
         headers = {
@@ -777,7 +1177,8 @@ class MetatronClient:
             headers["Content-Type"] = "application/json"
         try:
             request = Request(url, data=encoded, headers=headers, method=method)
-            with self._opener()(request, timeout=DEFAULT_TIMEOUT_SECONDS) as response:
+            wait = timeout or (TURN_TIMEOUT_SECONDS if turn else DEFAULT_TIMEOUT_SECONDS)
+            with self._opener()(request, timeout=wait) as response:
                 raw = response.read().decode("utf-8", errors="replace")
                 status = int(getattr(response, "status", 200) or 200)
         except HTTPError as error:
@@ -794,6 +1195,11 @@ class MetatronClient:
             return {"__http_error__": True, "status": status, "body": raw}
         except Exception as error:  # noqa: BLE001 — transport errors may contain request bodies
             reason_type = type(getattr(error, "reason", error)).__name__
+            if turn and _dropped_after_sending(error):
+                # The server has the turn; only the wait for its answer ended.
+                return {"__http_error__": True, "status": 0, "__turn_dropped__": True,
+                        "body": f"the connection ended before BOSS answered ({reason_type}); "
+                                "the turn is still running on the server"}
             return {"__http_error__": True, "status": 0,
                     "body": f"unreachable: request failed before an HTTP response ({reason_type})"}
         raw = _redact_response(raw, api_key=self.config.api_key, body=body, path=path)
@@ -824,10 +1230,119 @@ class MetatronClient:
             body["confirm_plan_id"] = confirm_plan_id
         if depth:
             body["depth"] = depth
-        payload = self.request("POST", "/v1/metatron/session", body)
+        if self.role:
+            body["role"] = self.role
+        sent_at = self._clock()
+        payload = self.request("POST", "/v1/metatron/session", body, turn=True)
+        if isinstance(payload, dict) and payload.get("__turn_dropped__"):
+            payload = self.recover_turn(message, sent_at=sent_at)
         self._remember_thread(payload)
         if isinstance(payload, dict) and not payload.get("__http_error__"):
             self.last_turn = payload
+        return payload
+
+    def ensure_thread(self) -> Optional[str]:
+        """The thread a turn will land in, before the turn: the console's own first call
+        (/v1/agent/threads/ensure resolves the same key the turn does, role included), so
+        progress can be read from the first second and a dropped turn can be found."""
+        if self.thread_id:
+            return self.thread_id
+        payload = self.request("POST", "/v1/agent/threads/ensure", {
+            "project_id": self.project_id, "actor": self.config.actor, "surface": "chat",
+            **({"role": self.role} if self.role else {}),
+        })
+        self._remember_thread(payload)
+        return self.thread_id
+
+    def thread_messages(self, thread_id: str) -> Any:
+        query = urlencode({"project_id": self.project_id, "actor": self.config.actor})
+        return self.request(
+            "GET", f"/v1/agent/threads/{quote(thread_id, safe='')}/messages?{query}")
+
+    def progress(self, thread_id: str, since: int = 0) -> Any:
+        """What BOSS is doing in this thread right now (the console's progress poll)."""
+        query = urlencode({"since": int(since or 0)})
+        return self.request(
+            "GET", f"/v1/agent/threads/{quote(thread_id, safe='')}/progress?{query}",
+            timeout=CHECK_TIMEOUT_SECONDS)
+
+    def recover_turn(self, message: str, *, sent_at: float) -> dict[str, Any]:
+        """The connection dropped after a turn was sent: read its thread for the reply.
+
+        A turn commits its messages when it finishes, so the reply is the first assistant
+        message after a user message carrying this text that is new since the drop (or dated
+        after the send). Bounded: past RECOVER_SECONDS the answer is "still running, here is
+        the thread", never "unreachable"."""
+        thread_id = self.thread_id or self.ensure_thread()
+        if not thread_id:
+            return {"__http_error__": True, "status": 0, "still_running": True,
+                    "thread_id": None,
+                    "body": "the connection ended after the turn was sent and BOSS has not "
+                            "answered yet; it is still running on the server. /thread shows "
+                            "its reply when it lands"}
+        wanted = (message or "").strip()
+        baseline: Optional[set[str]] = None
+        deadline = self._clock() + RECOVER_SECONDS
+        idle_polls = 0
+        while True:
+            payload = self.thread_messages(thread_id)
+            if isinstance(payload, dict) and not payload.get("__http_error__"):
+                history = [m for m in payload.get("messages") or [] if isinstance(m, dict)]
+                if baseline is None:
+                    baseline = {str(m.get("id")) for m in history}
+                found = self._reply_after(history, wanted, baseline=baseline, sent_at=sent_at)
+                if found is not None:
+                    return {
+                        "thread_id": thread_id,
+                        "reply": str(found.get("content") or ""),
+                        "actions": list(found.get("actions") or []),
+                        "pending_confirmation": payload.get("pending_confirmation"),
+                        "proposed_actions": list(payload.get("proposed_actions") or []),
+                        "messages": [], "tool_calls": list(found.get("tool_calls") or []),
+                        "next_steps": [], "cited_acts": [],
+                        "recovered_from_thread": True,
+                    }
+                idle_polls = idle_polls + 1 if payload.get("working") is False else 0
+                if idle_polls >= 3:
+                    return {"__http_error__": True, "status": 0, "still_running": False,
+                            "thread_id": thread_id,
+                            "body": "the connection ended after the turn was sent, and the "
+                                    "server reports nothing working in this thread now; "
+                                    f"/thread {thread_id} shows what it recorded"}
+            if self._clock() >= deadline:
+                break
+            self._sleep(RECOVER_POLL_SECONDS)
+        return {"__http_error__": True, "status": 0, "still_running": True,
+                "thread_id": thread_id,
+                "body": f"BOSS is still working on this turn on the server (thread {thread_id}); "
+                        f"its reply lands there: /thread {thread_id}"}
+
+    @staticmethod
+    def _reply_after(history: list[dict[str, Any]], wanted: str, *, baseline: set[str],
+                     sent_at: float) -> Optional[dict[str, Any]]:
+        for index in range(len(history) - 1, -1, -1):
+            item = history[index]
+            if item.get("role") != "user" or str(item.get("content") or "").strip() != wanted:
+                continue
+            created = _iso_seconds(item.get("created_at"))
+            if str(item.get("id")) in baseline and (created is None or created < sent_at - 5):
+                return None  # An earlier turn that said the same words.
+            for later in history[index + 1:]:
+                if later.get("role") == "assistant":
+                    return later
+            return None
+        return None
+
+    def thread(self, thread_id: str = "") -> Any:
+        """The conversation so far (its last dozen messages), from the server's record."""
+        target = thread_id or self.thread_id or self.ensure_thread()
+        if not target:
+            return _command_error("there is no conversation yet; say something first")
+        payload = self.thread_messages(target)
+        if isinstance(payload, dict) and not payload.get("__http_error__"):
+            if not self.thread_id:
+                self.thread_id = target
+            payload = {**payload, "messages": list(payload.get("messages") or [])[-12:]}
         return payload
 
     def choices(self) -> list[dict[str, Any]]:
@@ -867,7 +1382,12 @@ class MetatronClient:
             body["action_id"] = chosen["id"]
         if chosen.get("label"):
             body["label"] = chosen["label"]
-        payload = self.request("POST", "/v1/engine/agent/action", body)
+        payload = self.request("POST", "/v1/engine/agent/action", body, turn=True)
+        if isinstance(payload, dict) and payload.get("__turn_dropped__"):
+            where = f": /thread {self.thread_id}" if self.thread_id else ""
+            payload = {**payload, "still_running": True, "thread_id": self.thread_id,
+                       "body": f"{payload['body']}; the press is recorded in the "
+                               f"conversation{where}"}
         if isinstance(payload, dict) and not payload.get("__http_error__"):
             # SPENT, AS IN THE CONSOLE: a pressed offer is struck from the message that made it.
             if isinstance(self.last_turn, dict):
@@ -997,6 +1517,137 @@ class MetatronClient:
             self.thread_id = None  # Conversation context must not cross projects.
             self.last_turn = None  # ...and neither may the choices it offered.
         return {"active_project_id": self.project_id, "note": "The API checks project access on every request."}
+
+    # ── Who is asked, which model answers ────────────────────────────────────────────────────
+
+    def agents(self) -> Any:
+        """Agent Studio's agents in this project (a retired one cannot be asked)."""
+        payload = self.request("GET", f"/v1/agents?{urlencode({'project_id': self.project_id})}")
+        if isinstance(payload, dict) and payload.get("__http_error__"):
+            return payload
+        if not isinstance(payload, dict) or not isinstance(payload.get("items"), list):
+            return _command_error("the API did not return the agent list")
+        items = [a for a in payload["items"]
+                 if isinstance(a, dict) and a.get("role_key") and a.get("lifecycle") != "retired"]
+        return {"project_id": self.project_id, "active_role": self.role, "items": items}
+
+    def agent(self, key: str) -> Any:
+        """Address the next turns to one agent (AgentChatRequest.role), or back to BOSS."""
+        if not key:
+            return self.agents()
+        if key.lower() in {"auto", "boss", "none", "off"}:
+            changed = self.role is not None
+            self.role, self.role_name = None, ""
+            if changed:
+                self.thread_id, self.last_turn = None, None
+            return {"active_role": None, "name": "BOSS",
+                    "note": "Talking to BOSS. Its agents still do the work it hands them."}
+        listed = self.agents()
+        if isinstance(listed, dict) and (listed.get("__http_error__") or listed.get("__command_error__")):
+            return listed
+        wanted = key.casefold()
+        match = next((a for a in listed["items"] if str(a["role_key"]).casefold() == wanted
+                      or str(a.get("name") or "").casefold() == wanted), None)
+        if match is None:
+            return _command_error(f"no agent {key!r} in {self.project_id}; /agent lists them")
+        if match["role_key"] != self.role:
+            # One agent's conversation is not another's (test_one_agents_history_is_not_anothers).
+            self.thread_id, self.last_turn = None, None
+        self.role, self.role_name = str(match["role_key"]), str(match.get("name") or match["role_key"])
+        return {"active_role": self.role, "name": self.role_name,
+                "mission": match.get("mission") or "",
+                "note": f"Talking to {self.role_name}. /agent auto goes back to BOSS."}
+
+    def _setup(self) -> Any:
+        return self.request("GET", f"/v1/setup?{urlencode({'project_id': self.project_id})}",
+                            timeout=CHECK_TIMEOUT_SECONDS)
+
+    def _models_view(self, setup: Mapping[str, Any]) -> dict[str, Any]:
+        jobs = [j for j in setup.get("jobs") or [] if isinstance(j, dict)]
+        chat = next((j for j in jobs if j.get("job") == "chat"), {})
+        return {
+            "project_id": self.project_id,
+            "job": "chat",
+            "resolved": chat.get("resolved"),
+            "choice": chat.get("choice"),
+            "options": [o for o in chat.get("options") or [] if isinstance(o, dict)],
+            "models": [m for m in setup.get("models") or [] if isinstance(m, dict)],
+            "budget": setup.get("budget"),
+        }
+
+    def models(self) -> Any:
+        """The chat job's model and the choices Setup offers for it (Repo and models)."""
+        setup = self._setup()
+        if isinstance(setup, dict) and setup.get("__http_error__"):
+            return setup
+        if not isinstance(setup, dict):
+            return _command_error("the API did not return the setup view")
+        return self._models_view(setup)
+
+    def set_model(self, spec: str) -> Any:
+        """Write the chat job's engine and model through Setup (PUT /v1/setup/jobs/chat), the
+        same governed call the console's picker makes; "auto" hands it back to the router."""
+        if not spec:
+            return self.models()
+        if spec.lower() == "auto":
+            choice = None
+        else:
+            engine, _, model = spec.partition(":")
+            if not SIMPLE_ID.fullmatch(engine) or (model and any(ord(c) < 32 for c in model)):
+                return _command_error("usage: /model ENGINE[:MODEL], or /model auto")
+            choice = {"engine": engine, "model": model or None}
+        setup = self.request("PUT", "/v1/setup/jobs/chat", {
+            "project_id": self.project_id, "actor": self.config.actor, "choice": choice})
+        if isinstance(setup, dict) and setup.get("__http_error__"):
+            return setup
+        if not isinstance(setup, dict):
+            return _command_error("the API did not return the setup view")
+        return self._models_view(setup)
+
+    # ── Runs, alerts, the checklist ──────────────────────────────────────────────────────────
+
+    def runs(self, status: str = "") -> Any:
+        query = {"project_id": self.project_id, "limit": OPS_PAGE_SIZE}
+        if status:
+            query["status"] = status
+        return self.request("GET", f"/v1/workflow-runs?{urlencode(query)}")
+
+    def run(self, run_id: str) -> Any:
+        payload = self.request("GET", f"/v1/workflow-runs/{quote(run_id, safe='')}")
+        if isinstance(payload, dict) and isinstance(payload.get("project_id"), str) \
+                and payload["project_id"] != self.project_id:
+            return _command_error("run is outside the selected project; use /project ID first")
+        return payload
+
+    def alerts(self, state: str = "firing") -> Any:
+        query = urlencode({"project_id": self.project_id, "state": state or "firing"})
+        return self.request("GET", f"/v1/alerts?{query}")
+
+    def expand(self) -> Any:
+        turn = self.last_turn if isinstance(self.last_turn, dict) else {}
+        calls = [c for c in turn.get("tool_calls") or [] if isinstance(c, dict)]
+        done = [a for a in turn.get("actions") or [] if isinstance(a, dict)]
+        if not calls and not done:
+            return _command_error("the last reply made no tool or action calls")
+        return {"thread_id": self.thread_id, "tool_calls": calls, "actions": done}
+
+    def status(self) -> dict[str, Any]:
+        """The welcome checklist, from the API's own reads (never a guess): reachable, who this
+        key is, the project, the chat model, the embedding model, GitHub. Each ✗ carries the
+        one-line fix the install already documents."""
+        from concurrent.futures import ThreadPoolExecutor
+
+        project_query = urlencode({"project_id": self.project_id})
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            health_f = pool.submit(self.request, "GET", "/health", timeout=CHECK_TIMEOUT_SECONDS)
+            me_f = pool.submit(self.request, "GET", "/v1/identity/me", timeout=CHECK_TIMEOUT_SECONDS)
+            projects_f = pool.submit(self.request, "GET", "/v1/projects", timeout=CHECK_TIMEOUT_SECONDS)
+            setup_f = pool.submit(self.request, "GET", f"/v1/setup?{project_query}",
+                                  timeout=CHECK_TIMEOUT_SECONDS)
+            health, me, projects, setup = (health_f.result(), me_f.result(),
+                                           projects_f.result(), setup_f.result())
+        return build_status(self.config.api_url, self.project_id, health=health, me=me,
+                            projects=projects, setup=setup, role_name=self.role_name)
 
     def _openapi(self) -> dict[str, Any]:
         if self._openapi_document is None:
@@ -1271,6 +1922,24 @@ class MetatronClient:
             payload = self.coverage()
         elif command.kind == "api":
             payload = self.request(command.method, command.path, command.body)
+        elif command.kind == "agent":
+            payload = self.agent(command.message)
+        elif command.kind == "model":
+            payload = self.set_model(command.message)
+        elif command.kind == "status":
+            payload = self.status()
+        elif command.kind == "expand":
+            payload = self.expand()
+        elif command.kind == "thread":
+            payload = self.thread(command.message)
+        elif command.kind == "runs":
+            payload = self.runs(command.message)
+        elif command.kind == "run":
+            payload = self.run(command.message)
+        elif command.kind == "alerts":
+            payload = self.alerts(command.message)
+        elif command.kind == "clear":
+            return None
         else:
             return {"__command_error__": True, "message": f"unknown command: {command.kind}"}
         return payload
@@ -1287,6 +1956,9 @@ class MetatronClient:
         if isinstance(payload, dict) and payload.get("__http_error__"):
             status = payload.get("status")
             body = redact(str(payload.get("body") or ""), self.config.api_key)
+            if "still_running" in payload or payload.get("__turn_dropped__"):
+                # Sent and not answered in time is not a failure of the server: no "HTTP 0".
+                return f"Still working: {body}"
             if status == 401 and "step_up_required" in body:
                 return ("This needs you to confirm it is you (step-up). Sign in again in the "
                         "console — My account — then run the same command here.\n"
@@ -1317,7 +1989,12 @@ class MetatronClient:
             return redact(format_decisions(payload), self.config.api_key)
         if command.kind in {"decision", "decision_action"} and isinstance(payload, dict):
             return redact(format_decision(payload), self.config.api_key)
-        if command.kind in {"api", "op", "project"}:
+        plain = {"status": format_status, "agent": format_agents, "model": format_models,
+                 "runs": format_runs, "run": format_run, "alerts": format_alerts,
+                 "thread": format_thread}
+        if command.kind in plain and isinstance(payload, dict):
+            return redact(plain[command.kind](payload), self.config.api_key)
+        if command.kind in {"api", "op", "project", "expand"}:
             return redact(json.dumps(payload, indent=2, default=str), self.config.api_key)
         return redact(format_payload(payload), self.config.api_key)
 
@@ -1357,12 +2034,91 @@ def run_repl(
     return 0
 
 
+def sibling(name: str):
+    """metatron_render / metatron_shell, loaded from beside this file (it is run as a script,
+    or loaded by path, so the scripts directory is not necessarily importable)."""
+    if name in sys.modules:
+        return sys.modules[name]
+    spec = importlib.util.spec_from_file_location(name, Path(__file__).resolve().with_name(f"{name}.py"))
+    if spec is None or spec.loader is None:
+        raise ImportError(name)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(name, None)
+        raise
+    return module
+
+
+def rich_terminal(stream: TextIO, *, plain: bool = False, need_input: bool = True,
+                  env: Mapping[str, str] | None = None) -> bool:
+    """The rich terminal only where it can work: a real terminal (both ends for the
+    interactive shell), not TERM=dumb, not --plain, and Rich + prompt_toolkit installed.
+    Everything else is the plain text Metatron always printed. NO_COLOR keeps the layout and
+    drops every escape sequence (metatron_render.make_console)."""
+    source = os.environ if env is None else env
+    if plain or source.get("BOSS_METATRON_PLAIN") or source.get("TERM") == "dumb":
+        return False
+    try:
+        if not stream.isatty() or (need_input and not sys.stdin.isatty()):
+            return False
+    except (AttributeError, ValueError):
+        return False
+    return all(importlib.util.find_spec(m) is not None for m in ("rich", "prompt_toolkit"))
+
+
+TURN_KINDS = {"session", "confirm", "pick"}
+
+
+class _Ticker:
+    """'BOSS is working · 12s' on stderr while a one-shot turn runs, only when stderr is a
+    terminal, so a script's stdout (and --json) is exactly the result and nothing else."""
+
+    def __init__(self, active: bool):
+        self.active = active and _isatty(sys.stderr)
+        self._stop = None
+
+    def __enter__(self):
+        if self.active:
+            import threading
+
+            self._stop = threading.Event()
+            started = time.monotonic()
+
+            def tick() -> None:
+                while not self._stop.wait(1.0):
+                    sys.stderr.write(f"\rBOSS is working · {int(time.monotonic() - started)}s ")
+                    sys.stderr.flush()
+
+            threading.Thread(target=tick, daemon=True).start()
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        if self._stop is not None:
+            self._stop.set()
+            sys.stderr.write("\r\033[K")
+            sys.stderr.flush()
+
+
+def _isatty(stream: Any) -> bool:
+    try:
+        return bool(stream.isatty())
+    except (AttributeError, ValueError):
+        return False
+
+
 def main(argv: list[str] | None = None) -> int:
     import argparse
 
-    parser = argparse.ArgumentParser(description="Metatron terminal and BOSS API console")
-    parser.add_argument("--exec", dest="command", help="run one terminal command and exit")
+    parser = argparse.ArgumentParser(
+        description="Metatron: BOSS's terminal. Interactive by default; --print runs one command.")
+    parser.add_argument("--exec", "--print", "-p", dest="command", metavar="COMMAND",
+                        help="run one terminal command (a sentence or a /command) and exit")
     parser.add_argument("--json", action="store_true", help="emit the one-shot result as JSON")
+    parser.add_argument("--plain", action="store_true",
+                        help="plain text: no colours, panels or bottom bar")
     args = parser.parse_args(argv)
     if args.json and args.command is None:
         parser.error("--json requires --exec")
@@ -1373,16 +2129,26 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     client = MetatronClient(config)
     if args.command is None:
+        if rich_terminal(sys.stdout, plain=args.plain):
+            return int(sibling("metatron_shell").run(sys.modules[__name__], client))
         return run_repl(client)
     command = parse_line(args.command)
     if command.kind in {"empty", "quit"}:
         print("error: --exec requires an actionable command", file=sys.stderr)
         return 2
     if args.json:
-        payload = client.dispatch(command)
+        with _Ticker(command.kind in TURN_KINDS):
+            payload = client.dispatch(command)
         print(redact(json.dumps(payload, default=str), config.api_key))
+    elif rich_terminal(sys.stdout, plain=args.plain, need_input=False):
+        render = sibling("metatron_render")
+        console = render.make_console(sys.stdout)
+        with render.working(render.make_console(sys.stderr), active=command.kind in TURN_KINDS):
+            payload = client.dispatch(command)
+        render.print_result(console, client, command, payload)
     else:
-        payload = client.dispatch(command)
+        with _Ticker(command.kind in TURN_KINDS):
+            payload = client.dispatch(command)
         if isinstance(payload, dict) and payload.get("__command_error__"):
             print(client.render(command, payload), file=sys.stderr)
         elif isinstance(payload, dict) and payload.get("__http_error__"):

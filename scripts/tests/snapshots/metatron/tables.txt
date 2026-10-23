@@ -1,0 +1,22 @@
+Tasks in boss-dogfood · page 1
+
+ ID       Status      Title
+ ──────────────────────────────────────────────
+ task_1   running     Plan the community launch
+ task_2   succeeded   Ship the docs
+
+/task ID for details · /task create KEY TITLE adds work
+Open decisions in boss-dogfood · 1 total · page 1/1
+
+ ID      Status    Risk   Question
+ ──────────────────────────────────────────────────────────
+ dec_7   pending   2      Deploy HelpDesk AI to production?
+
+/decision ID opens the card
+Alerts in boss-dogfood · 1 firing · 0 pending · 1
+need attention
+
+ Sev    State    App        Alert
+ ───────────────────────────────────────────────────
+ SEV2   Firing   helpdesk   p95 latency above 800 ms
+

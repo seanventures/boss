@@ -1204,3 +1204,149 @@ def test_one_shot_json_returns_the_consoles_reply_structure(monkeypatch, capsys)
     assert tui.main(["--exec", "set up three projects", "--json"]) == 0
     printed = json.loads(capsys.readouterr().out)
     assert printed == AGENT_TURN
+
+
+# ── A slow turn is not a failed turn (2026-10-23: "unreachable" for a turn that succeeded) ────
+
+def _fake_boss(**kwargs):
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from metatron_fake_api import FakeBoss
+
+    return FakeBoss(**kwargs)
+
+
+def _env(monkeypatch, url: str) -> None:
+    monkeypatch.setenv("BOSS_API_URL", url)
+    monkeypatch.setenv("BOSS_API_KEY", SECRET)
+    monkeypatch.setenv("BOSS_PROJECT_ID", "boss-dogfood")
+
+
+def _real_http(monkeypatch) -> None:
+    monkeypatch.setattr(tui, "urlopen", tui.build_opener(tui.NoRedirectHandler()).open)
+
+
+def test_a_turn_waits_for_its_reply_and_other_requests_keep_the_short_timeout():
+    opener = FakeOpener([(200, AGENT_TURN), (200, {"project_id": "boss-dogfood", "items": []})])
+    client = tui.MetatronClient(_config(), urlopen=opener)
+    client.handle(tui.parse_line("set up three projects"))
+    client.handle(tui.parse_line("/tasks"))
+    assert opener.calls[0]["timeout"] == tui.TURN_TIMEOUT_SECONDS >= 600
+    assert opener.calls[1]["timeout"] == tui.DEFAULT_TIMEOUT_SECONDS
+
+
+def test_a_turn_that_takes_forty_seconds_returns_its_reply(monkeypatch, capsys):
+    """A real HTTP server that answers the turn after 40 s, past the 30 s every other request
+    allows: the one-shot JSON is the reply, not an error."""
+    _real_http(monkeypatch)
+    with _fake_boss(delay=40.0) as boss:
+        _env(monkeypatch, boss.url)
+        assert tui.main(["--exec", "set up three projects", "--json"]) == 0
+    printed = json.loads(capsys.readouterr().out)
+    assert "three projects" in printed["reply"]
+    assert "__http_error__" not in printed
+
+
+def test_a_dropped_turn_is_read_back_from_its_thread(monkeypatch, capsys):
+    """The server read the turn and the connection closed without an answer: the client finds
+    the reply in the thread (/v1/agent/threads/{id}/messages) once the turn commits it."""
+    _real_http(monkeypatch)
+    monkeypatch.setattr(tui, "RECOVER_POLL_SECONDS", 0.05)
+    with _fake_boss(drop=True, turn_lands_after=2) as boss:
+        _env(monkeypatch, boss.url)
+        assert tui.main(["--exec", "set up three projects", "--json"]) == 0
+        paths = [c["path"] for c in boss.calls]
+    printed = json.loads(capsys.readouterr().out)
+    assert "three projects" in printed["reply"]
+    assert printed["recovered_from_thread"] is True and printed["thread_id"] == "athr_demo"
+    assert paths[:2] == ["/v1/metatron/session", "/v1/agent/threads/ensure"]
+    assert paths.count("/v1/agent/threads/athr_demo/messages") >= 2
+
+
+def test_a_dropped_turn_that_has_not_answered_says_it_is_still_running(monkeypatch, capsys):
+    _real_http(monkeypatch)
+    monkeypatch.setattr(tui, "RECOVER_POLL_SECONDS", 0.05)
+    monkeypatch.setattr(tui, "RECOVER_SECONDS", 0.3)
+    with _fake_boss(drop=True, turn_lands_after=10_000, working=True) as boss:
+        _env(monkeypatch, boss.url)
+        assert tui.main(["--exec", "set up three projects", "--json"]) == 1
+        result = json.loads(capsys.readouterr().out)
+        assert result["still_running"] is True and result["thread_id"] == "athr_demo"
+        assert "unreachable" not in result["body"]
+        assert "/thread athr_demo" in result["body"]
+        # Plain one-shot says the same, without "HTTP 0".
+        assert tui.main(["--exec", "set up three projects"]) == 1
+        said = capsys.readouterr()
+        assert said.err.startswith("Still working:") and "unreachable" not in said.err
+        assert "HTTP 0" not in said.err and SECRET not in said.out + said.err
+
+
+def test_a_refused_connection_is_still_unreachable():
+    def refused(_request, timeout=None):
+        raise URLError(ConnectionRefusedError(61, "Connection refused"))
+
+    client = tui.MetatronClient(_config(), urlopen=refused)
+    payload = client.dispatch(tui.parse_line("hello"))
+    assert payload["status"] == 0 and "unreachable" in payload["body"]
+    assert "still_running" not in payload
+
+
+def test_the_thread_command_reads_the_conversation_from_the_server():
+    opener = FakeOpener([(200, {"thread_id": "athr_7", "working": False, "messages": [
+        {"id": "m1", "role": "user", "content": "set up three projects", "created_at": "x"},
+        {"id": "m2", "role": "assistant", "content": "Done: three projects.", "created_at": "x"}]})])
+    client = tui.MetatronClient(_config(), urlopen=opener)
+    client.thread_id = "athr_7"
+    out = client.handle(tui.parse_line("/thread"))
+    assert "you: set up three projects" in out and "BOSS: Done: three projects." in out
+    assert "/v1/agent/threads/athr_7/messages?project_id=boss-dogfood&actor=ceo" in opener.calls[0]["url"]
+
+
+def test_agent_model_runs_and_alerts_commands_use_their_routes():
+    agents = {"project_id": "boss-dogfood", "items": [
+        {"role_key": "qa_lead", "name": "QA Lead", "lifecycle": "active"},
+        {"role_key": "old", "name": "Old", "lifecycle": "retired"}]}
+    opener = FakeOpener([(200, agents), (200, AGENT_TURN),
+                         (200, {"jobs": [{"job": "chat", "resolved": {"label": "Qwen"}, "options": []}]}),
+                         (200, {"project_id": "boss-dogfood", "items": []}),
+                         (200, {"project_id": "boss-dogfood", "alerts": [], "counts": {}})])
+    client = tui.MetatronClient(_config(), urlopen=opener)
+    assert "Talking to QA Lead" in client.handle(tui.parse_line("/agent qa_lead"))
+    client.handle(tui.parse_line("is the inbox tested?"))
+    assert opener.calls[1]["body"]["role"] == "qa_lead"
+    client.handle(tui.parse_line("/model ollama:qwen2.5-coder:7b"))
+    assert opener.calls[2]["method"] == "PUT" and opener.calls[2]["url"].endswith("/v1/setup/jobs/chat")
+    assert opener.calls[2]["body"]["choice"] == {"engine": "ollama", "model": "qwen2.5-coder:7b"}
+    client.handle(tui.parse_line("/runs"))
+    assert "/v1/workflow-runs?project_id=boss-dogfood" in opener.calls[3]["url"]
+    client.handle(tui.parse_line("/alerts all"))
+    assert opener.calls[4]["url"].endswith("/v1/alerts?project_id=boss-dogfood&state=all")
+    assert tui.parse_line("/alerts loud").kind == "error"
+    assert tui.parse_line("/follow wr_1").auto is True
+    assert "/agent" in {name for name, _a, _d in tui.SLASH_COMMANDS}
+
+
+def test_the_rich_terminal_stays_a_thin_client_of_the_one_pipeline():
+    """Metatron's drawing and keyboard files decide nothing: no model, no router, no agent
+    decision, no request of their own. Every request is a MetatronClient method, and the only
+    turn routes the client sends are the console's (session → agent_turn, action → the button)."""
+    import ast
+
+    signs = {"agent_decision", "route_turn", "IntentRouter", "create_chat_completion",
+             "create_text_response", "run_agent_loop", "urlopen", "Request", "urllib", "httpx",
+             "requests", "openai", "anthropic"}
+    for name in ("metatron_render.py", "metatron_shell.py"):
+        tree = ast.parse((ROOT / "scripts" / name).read_text(encoding="utf-8"))
+        used = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Name):
+                used.add(node.id)
+            elif isinstance(node, ast.Attribute):
+                used.add(node.attr)
+            elif isinstance(node, (ast.Import, ast.ImportFrom)):
+                used.update(part for alias in node.names for part in alias.name.split("."))
+                used.update((getattr(node, "module", "") or "").split("."))
+        assert not used & signs, (name, sorted(used & signs))
+    client = (ROOT / "scripts" / "metatron_tui.py").read_text(encoding="utf-8")
+    assert "/v1/engine/agent/chat" not in client
+    assert client.count('"/v1/metatron/session"') == 1
+    assert client.count('"/v1/engine/agent/action"') == 1

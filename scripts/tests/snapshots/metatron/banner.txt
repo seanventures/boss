@@ -1,0 +1,29 @@
+    ▁▁▁▁▁▁▁       ██████╗  ██████╗ ███████╗███████╗
+   ╱       ╲      ██╔══██╗██╔═══██╗██╔════╝██╔════╝
+  ╱  ┏━━━╮  ╲     ██████╔╝██║   ██║███████╗███████╗
+ ▕   ┣━━━┫   ▏    ██╔══██╗██║   ██║╚════██║╚════██║
+  ╲  ┗━━━╯  ╱     ██████╔╝╚██████╔╝███████║███████║
+   ╲▁▁▁▁▁▁▁╱      ╚═════╝  ╚═════╝ ╚══════╝╚══════╝
+Metatron · the BOSS terminal
+
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ Welcome. Type to talk to BOSS — the same agent, thread and actions as the    │
+│ console's Ask BOSS. / for commands.                                          │
+│                                                                              │
+│ What's new                                                                   │
+│ BOSS Community 1.0.0-rc.10.9 candidate                                       │
+│ • Monitoring and alerting                                                    │
+│ • Agents in operations                                                       │
+│ docs/community/RELEASE_NOTES_v1.0-rc10.9.md                                  │
+│                                                                              │
+│ Connection                                                                   │
+│ ✓ API reachable   http://127.0.0.1:8000                                      │
+│ ✓ Signed in       Host tools (service account)                               │
+│ ✓ Project         BOSS dogfood (boss-dogfood)                                │
+│ ✓ Model connected Claude Sonnet                                              │
+│ ✗ Embedding model not set; knowledge search is off                           │
+│                   fix Console: Setup › Repo and models › Embedding model.    │
+│ ✗ GitHub access   connected as example-org; no repository chosen             │
+│                   fix Console: Setup › Repo and models › Repository (or boss │
+│                   connect).                                                  │
+╰─────────────────────────────────────── boss-dogfood · http://127.0.0.1:8000 ─╯

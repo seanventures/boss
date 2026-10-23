@@ -1,0 +1,7 @@
+          --- a/boss.deploy.yaml
+          +++ b/boss.deploy.yaml
+          @@ -12,4 +12,4 @@ steps:
+ 12   12     - id: build
+ 13       -    push: token
+      13  +    push: github_app
+ 14   14       retries: 2

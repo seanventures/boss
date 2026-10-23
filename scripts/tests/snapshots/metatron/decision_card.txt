@@ -1,0 +1,23 @@
+╭─ You decide ─────────────────────────────────────────────────────────────────╮
+│ 1 Start the build  start_workflow                                            │
+│   you asked for it                                                           │
+│ 2 Investigate further                                                        │
+│                                                                              │
+│ Nothing has run yet. Type a number, or /pick to choose with the arrows.      │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Decision dec_7 ─────────────────────────────────────────────────────────────╮
+│ Deploy HelpDesk AI to production?                                            │
+│                                                                              │
+│ status    pending                                                            │
+│ risk tier 2                                                                  │
+│ reason    First production release                                           │
+│                                                                              │
+│ Recommendation                                                               │
+│ Approve after the smoke test                                                 │
+│                                                                              │
+│ Options                                                                      │
+│   1  Approve                                                                 │
+│   2  Reject                                                                  │
+│                                                                              │
+│ /decision approve dec_7 NOTE   /decision reject dec_7 NOTE                   │
+╰──────────────────────────────────────────────────────────────────────────────╯

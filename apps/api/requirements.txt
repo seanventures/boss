@@ -27,3 +27,9 @@ signxml==5.1.0
 lxml==6.0.3
 # The TOTP enrolment QR code, rendered server-side (pure Python, no dependencies).
 segno==1.6.6
+# Metatron, the terminal (scripts/metatron_tui.py; BOSSAPP-761): Rich draws the transcript
+# (MIT), prompt_toolkit owns the input line, bottom bar, completion and pickers (BSD-3-Clause).
+# Pygments (BSD-2-Clause) and markdown-it-py (MIT) come with Rich. scripts/metatron-requirements.txt
+# pins the same two for the host's `boss metatron`.
+rich==14.3.4
+prompt_toolkit==3.0.52
