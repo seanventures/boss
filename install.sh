@@ -1872,7 +1872,11 @@ fi
 echo -e "${BOLD}On this machine${NC}"
 echo ""
 echo "  # Terminal on this machine"
-echo "  cd $INSTALL_DIR && make metatron"
+if [[ -n "$B" ]]; then
+  echo "  $B metatron"
+else
+  echo "  cd $INSTALL_DIR && make metatron"
+fi
 echo ""
 echo "  # CLI on this machine"
 echo "  source $INSTALL_DIR/boss-community.env.sh"

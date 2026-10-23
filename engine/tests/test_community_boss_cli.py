@@ -535,6 +535,33 @@ def test_boss_identity_host_key_keeps_the_key_in_env_and_never_prints_it(world) 
     assert oct((world["install"] / ".env").stat().st_mode & 0o777) == "0o600"
 
 
+def test_boss_metatron_runs_natively_with_the_host_key_never_printed(world) -> None:
+    """`boss metatron` runs the terminal on the host (not through docker compose exec), against
+    the local API, with the host tools' key passed through the environment."""
+    import sys
+
+    sys.path.insert(0, str(REPO / "scripts" / "tests"))
+    from metatron_fake_api import FakeBoss
+
+    boss = _installed(world)
+    shutil.copy2(REPO / "scripts/metatron_tui.py", world["install"] / "scripts")
+    key = "boss_sak_" + "M" * 43
+    usage = _run(boss, "help", env=world["env"])
+    assert "metatron" in usage.stdout
+    with FakeBoss() as api:
+        _set_env_line(world["install"], "BOSS_API_PORT", api.url.rsplit(":", 1)[1])
+        _set_env_line(world["install"], "BOSS_HOST_API_KEY", key)
+        Path(world["env"]["BOSS_TEST_DOCKER_LOG"]).write_text("")
+        env = dict(world["env"], BOSS_METATRON_NO_INSTALL="1")
+        result = _run(boss, "metatron", "--print", "/tasks", "--json", env=env)
+        keys = set(api.keys)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert json.loads(result.stdout)["items"][0]["id"] == "task_1"
+    assert keys == {key}
+    assert key not in result.stdout + result.stderr
+    assert "metatron" not in _docker_calls(world)
+
+
 def test_host_tools_never_put_a_key_on_a_command_line(world) -> None:
     """The host tools send their key through stdin or the environment: argv is visible to every
     user of the host (ps)."""

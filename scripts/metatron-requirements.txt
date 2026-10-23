@@ -1,0 +1,5 @@
+# The host's `boss metatron` (scripts/install/boss.sh) installs these into its own virtualenv.
+# The same pins as apps/api/requirements.txt, which puts them in the API image for make metatron.
+# Without them Metatron still runs, as plain text.
+rich==14.3.4
+prompt_toolkit==3.0.52

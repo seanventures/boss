@@ -22,6 +22,11 @@ Usage: boss [--dir PATH] COMMAND [options]
 Commands:
   status              Install directory, release, services, and API health
   open                Print the Mission Control address
+  metatron [options]  Open Metatron, the BOSS terminal, on this machine (colours, keys and
+                      the terminal's size work natively). Talks to the local API with the
+                      host tools' key, never printed. --print 'COMMAND' [--json] runs one
+                      command for scripts; --plain is plain text. First run sets up Rich
+                      and prompt_toolkit in ~/.local/share/boss/metatron-venv
   password [reset]    Show the console password (terminal only), or rotate it
   doctor [--probe]    Check the install can do its job (runs checkup.sh)
   logs [-f] [SERVICE] Recent service logs (api, worker, web, db)
@@ -1288,6 +1293,52 @@ cmd_self_fix() {
   esac
 }
 
+# ---- the terminal -----------------------------------------------------------------------------
+
+# METATRON, NATIVELY (BOSSAPP-761). Colours, keys and the terminal's size work as they do for any
+# program on this machine, not through `docker compose exec`. The host tools' key reaches it
+# through the environment, never a command line, and is never printed. Rich and prompt_toolkit
+# live in a virtualenv of their own outside the install directory, rebuilt when their pins change;
+# if they cannot be installed Metatron still runs, as plain text. `make metatron` still runs it
+# inside the API container.
+metatron_python() {
+  local py req venv want stamp
+  py="$(command -v python3 || true)"
+  [[ -n "$py" ]] || die "Metatron needs python3 on this machine. Or run it in the container: cd $INSTALL_DIR && make metatron"
+  "$py" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)' 2>/dev/null ||
+    die "Metatron needs Python 3.9 or newer here. Or run it in the container: cd $INSTALL_DIR && make metatron"
+  req="$INSTALL_DIR/scripts/metatron-requirements.txt"
+  if [[ ! -f "$req" || -n "${BOSS_METATRON_NO_INSTALL:-}" ]]; then
+    printf '%s\n' "$py"; return 0
+  fi
+  venv="${BOSS_METATRON_VENV:-${XDG_DATA_HOME:-$HOME/.local/share}/boss/metatron-venv}"
+  want="$(cksum <"$req" | cut -d' ' -f1)"
+  stamp="$venv/.boss-requirements"
+  if [[ ! -x "$venv/bin/python" || "$(cat "$stamp" 2>/dev/null || true)" != "$want" ]]; then
+    printf 'Setting up the terminal once (Rich, prompt_toolkit) in %s\n' "$venv" >&2
+    if mkdir -p "$(dirname "$venv")" && "$py" -m venv "$venv" >/dev/null 2>&1 &&
+       "$venv/bin/python" -m pip install --quiet --disable-pip-version-check -r "$req" >/dev/null 2>&1; then
+      printf '%s\n' "$want" >"$stamp"
+    else
+      printf 'boss: could not install Rich and prompt_toolkit; Metatron runs as plain text.\n' >&2
+      printf '%s\n' "$py"; return 0
+    fi
+  fi
+  printf '%s\n' "$venv/bin/python"
+}
+
+cmd_metatron() {
+  need_install
+  [[ -f "$INSTALL_DIR/scripts/metatron_tui.py" ]] || die "this release has no Metatron terminal."
+  local py key project
+  py="$(metatron_python)"
+  key="$(host_key)"
+  [[ -n "$key" ]] || die "no key for the host tools. Is the api service running (boss status)? Then: boss identity host-key"
+  project="${BOSS_PROJECT_ID:-$(env_value BOSS_DEFAULT_PROJECT_ID)}"
+  BOSS_API_URL="$(api_url)" BOSS_API_KEY="$key" BOSS_PROJECT_ID="${project:-boss-dogfood}" \
+    exec "$py" "$INSTALL_DIR/scripts/metatron_tui.py" "$@"
+}
+
 # ---- identity ---------------------------------------------------------------------------------
 
 # The identity CLI inside the api container, as the boss user (never root: files it writes must
@@ -1315,6 +1366,7 @@ cmd_identity() {
 
 case "$COMMAND" in
   status) cmd_status "$@" ;;
+  metatron|terminal) cmd_metatron "$@" ;;
   identity) cmd_identity "$@" ;;
   open) cmd_open "$@" ;;
   password) cmd_password "$@" ;;

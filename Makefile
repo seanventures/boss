@@ -19,7 +19,7 @@ help:
 	  '  make seed    Rerun the idempotent project seed' \
 	  '  make status  Show service status' \
 	  '  make check   Check installation health' \
-	  '  make metatron  Open the local BOSS terminal' \
+	  '  make metatron  Open the local BOSS terminal in the API container (or: boss metatron)' \
 	  '  make mcp-setup  Give an agent client its own key for one project' \
 	  '  make mcp    Start a scoped MCP stdio session for an agent client' \
 	  '  make stop    Stop services and keep data' \
