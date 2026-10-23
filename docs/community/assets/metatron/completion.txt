@@ -1,0 +1,16 @@
+❯ /
+ /help                                  Commands and keys
+ /agent [KEY|auto]                      Pick the agent you are talking to (Agent Studio)
+ /project [ID]                          Pick or switch the project
+ /projects                              List the projects this key can see
+ /model [ENGINE[:MODEL]|auto]           Pick the chat model (Setup › jobs › chat)
+ /status                                Connection checklist: API, identity, project, models, G...
+ /pick [N]                              Run one of the last reply's numbered choices
+ /confirm                               Go ahead with the plan waiting on you
+ /expand                                The last reply's tool calls, in full
+ /thread [ID]                           The conversation so far, from the server (and a slow tu...
+ /tasks [PAGE]                          Task list, 25 a page
+ /task ID | create KEY TITLE            Show one task, or create one
+ /decisions [open|all] [PAGE]           Decision inbox
+ ⬡ boss-dogfood · BOSS · Claude Sonnet (subscription) · $1.84 of $25.00 today
+ Enter send  Esc cancel  ↑↓ history  Tab complete  / commands  Ctrl-D quit

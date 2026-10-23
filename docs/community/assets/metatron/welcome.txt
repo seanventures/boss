@@ -1,0 +1,24 @@
+    ▁▁▁▁▁▁▁       ██████╗  ██████╗ ███████╗███████╗
+   ╱       ╲      ██╔══██╗██╔═══██╗██╔════╝██╔════╝
+  ╱  ┏━━━╮  ╲     ██████╔╝██║   ██║███████╗███████╗
+ ▕   ┣━━━┫   ▏    ██╔══██╗██║   ██║╚════██║╚════██║
+  ╲  ┗━━━╯  ╱     ██████╔╝╚██████╔╝███████║███████║
+   ╲▁▁▁▁▁▁▁╱      ╚═════╝  ╚═════╝ ╚══════╝╚══════╝
+Metatron · the BOSS terminal
+
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Welcome. Type to talk to BOSS — the same        Connection                                       │
+│ agent, thread and actions as the console's      ✓ API reachable   http://127.0.0.1:8765          │
+│ Ask BOSS. / for commands.                       ✓ Signed in       Host tools (service account)   │
+│                                                 ✓ Project         BOSS dogfood (boss-dogfood)    │
+│ What's new                                      ✓ Model connected Claude Sonnet (subscription)   │
+│ BOSS Community 1.0.0-rc.10.9 candidate          ✓ Embedding model Ollama nomic-embed-text        │
+│ • Monitoring and alerting                       ✓ GitHub access   example-org/helpdesk           │
+│ • Agents in operations                                                                           │
+│ • Safety                                                                                         │
+│ docs/community/RELEASE_NOTES_v1.0-rc10.9.md                                                      │
+╰─────────────────────────────────────────────────────────── boss-dogfood · http://127.0.0.1:8765 ─╯
+❯
+
+ ⬡ boss-dogfood · BOSS · Claude Sonnet (subscription) · $1.84 of $25.00 today
+ Enter send  Esc cancel  ↑↓ history  Tab complete  / commands  Ctrl-D quit

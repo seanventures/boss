@@ -8,15 +8,15 @@ New to BOSS? The [quickstart](QUICKSTART.md) gets you to a console on `127.0.0.1
 
 ## Start the terminal
 
-### Installed Community stack
-
-From the install directory:
+### On the install machine
 
 ```sh
-make metatron
+boss metatron
 ```
 
-This opens the terminal inside the API container with the host tools' key (`BOSS_HOST_API_KEY`, issued for you if missing) and the install's project. No host Python setup is needed.
+This runs Metatron natively on the host, so colours, keys and the terminal size behave as they do for any other program. It talks to the local API with the host tools' key (`BOSS_HOST_API_KEY`, issued for you if missing), which it passes through the environment and never prints. The first run installs Rich and prompt_toolkit into `~/.local/share/boss/metatron-venv` (set `BOSS_METATRON_VENV` to put it elsewhere). If they cannot be installed, Metatron still runs, as plain text. It needs Python 3.9 or newer.
+
+`make metatron`, from the install directory, still opens the same terminal inside the API container, with no host Python needed.
 
 ### From a checkout
 
@@ -31,6 +31,55 @@ Set these environment variables, then run `python3 scripts/metatron_tui.py`:
 
 Examples on this page use `boss-dogfood`, the default project seeded on your machine.
 
+## What it looks like
+
+Metatron opens with the BOSS logo and a welcome panel. The panel shows what's new in the installed release and a connection checklist, with a one-line fix for anything marked ✗:
+
+```text
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Welcome. Type to talk to BOSS — the same        Connection                                       │
+│ agent, thread and actions as the console's      ✓ API reachable   http://127.0.0.1:8000          │
+│ Ask BOSS. / for commands.                       ✓ Signed in       Host tools (service account)   │
+│                                                 ✓ Project         BOSS dogfood (boss-dogfood)    │
+│ What's new                                      ✓ Model connected Claude Sonnet (subscription)   │
+│ BOSS Community 1.0.0-rc.10.9 candidate          ✓ Embedding model Ollama nomic-embed-text        │
+│ • Monitoring and alerting                       ✓ GitHub access   example-org/helpdesk           │
+│ • Agents in operations                                                                           │
+│ • Safety                                                                                         │
+│ docs/community/RELEASE_NOTES_v1.0-rc10.9.md                                                      │
+╰─────────────────────────────────────────────────────────── boss-dogfood · http://127.0.0.1:8000 ─╯
+❯
+ ⬡ boss-dogfood · BOSS · Claude Sonnet (subscription) · $1.84 of $25.00 today
+ Enter send  Esc cancel  ↑↓ history  Tab complete  / commands  Ctrl-D quit
+```
+
+The transcript scrolls in your terminal as usual. Only the input line and the status bar under it stay at the bottom. The bar shows the project, the agent you are talking to, the chat model and today's budget.
+
+- **While BOSS works**, the bar shows a spinner, the elapsed time and what BOSS reports doing. You can keep typing: each line you send waits its turn and runs in order. **Esc** stops waiting. It does not stop the turn on the server, and `/thread` shows the reply when it lands.
+- **Type `/`** for every command, each with a one-line description. **Tab** completes commands, and also completes agent keys, project IDs and model names.
+- **`/agent`, `/project` and `/model`** with no argument open a picker. Type to filter, move with ↑↓, and press Enter to choose. `/agent` lists the agents from Agent Studio. `/model` writes the chat job's model through Setup, the same call the console's picker makes. `/agent auto` and `/model auto` hand the choice back to BOSS.
+- **Replies render as Markdown**, block by block, with syntax-highlighted code. A diff is shown with old and new line numbers, additions in green and removals in red. What the agent read and did shows as compact `● tool — ok` lines. `/expand` or **Ctrl-O** shows their arguments.
+- **What waits on you is amber.** Offers come in a **You decide** card, numbered. Type the number, or `/pick` to choose with the arrows. A plan comes in a **Waiting for your go-ahead** card, with its phases as a checklist; `/confirm` dispatches it. If an action needs you to confirm your identity again (step-up), the card says so, and pressing **Enter** after you sign in again runs the same command again.
+- **Runs and lists:** `/run ID` shows a run's steps as one progress line (`✓ spec › ● build › ○ deploy  1/3`), and `/follow ID` keeps watching it. Tasks, decisions, runs and alerts are tables.
+- **Errors are red panels** that end with the fix.
+
+A recorded session (scripted API, no model) is in [`assets/metatron/`](assets/metatron/): `metatron-demo.cast` plays in any asciinema player, and `session.txt`, `welcome.txt`, `working.txt`, `completion.txt` and `agent-picker.txt` are the same session as plain text.
+
+### Modes
+
+| How it runs | What you get |
+|---|---|
+| A terminal, Rich and prompt_toolkit installed | The interactive terminal described above |
+| `--plain`, `TERM=dumb`, or Rich missing | The plain prompt (`metatron>`) and plain text |
+| Output not a terminal (a pipe, a file, CI) | Plain text, unchanged from earlier releases |
+| `NO_COLOR` set | The same layout with no colour and no escape sequences |
+| `--print 'COMMAND'` (or `--exec`, `-p`) | One command, then exit. A spinner with the elapsed time goes to stderr only when stderr is a terminal |
+| `--print 'COMMAND' --json` | The API's JSON, exactly as before. Scripts and the case-study harness rely on it |
+
+### Slow turns
+
+An agent turn can take minutes. Metatron waits up to 15 minutes for a turn's reply (`BOSS_METATRON_TURN_TIMEOUT`, in seconds). Other requests time out after 30 seconds. If the connection drops after the turn was sent, Metatron does not report BOSS as unreachable. It reads the conversation from the server (`/v1/agent/threads/{id}/messages`) until the reply lands, for up to 10 minutes (`BOSS_METATRON_RECOVER_SECONDS`), and then shows it, `--json` included. If the reply still has not landed, it says the turn is still running and gives the thread to check with `/thread ID`. Only a connection that never reached BOSS is reported as unreachable.
+
 ## Command reference
 
 | Command | What it does |
@@ -38,6 +87,15 @@ Examples on this page use `boss-dogfood`, the default project seeded on your mac
 | *(plain text)* | One Ask BOSS turn. Sent to `/v1/metatron/session`, which hands it to the same agent turn as the console's `/v1/engine/agent/chat` |
 | `/pick N`, or just `N` | Runs one of the numbered choices from the last reply, through the console's own button path (`/v1/engine/agent/action`) |
 | `/confirm` | Confirms the plan the last reply is waiting on (`confirm_plan_id`) |
+| `/pick` | Opens the last reply's choices in a picker (interactive terminal) |
+| `/expand` | Shows the arguments of the last reply's tool and action calls |
+| `/thread [ID]` | Reads the conversation from the server, including a slow turn's reply |
+| <code>/agent [KEY&#124;auto]</code> | Talks to one agent from Agent Studio (the turn's `role`), or back to BOSS. A new agent starts a new conversation |
+| <code>/model [ENGINE[:MODEL]&#124;auto]</code> | Shows or sets the chat job's model through Setup (`PUT /v1/setup/jobs/chat`) |
+| `/status` | The connection checklist: API, sign-in, project, chat model, embedding model, GitHub |
+| `/runs [STATUS]`, `/run ID`, `/follow ID` | Workflow runs, one run's steps, or one run followed live |
+| <code>/alerts [firing&#124;resolved&#124;all]</code> | Alerts across apps |
+| `/help`, `/clear`, `/quit` | Commands and keys, clear the screen, leave |
 | `/goals`, `/watch`, `/overwatch`, <code>/drive [auto&#124;go]</code>, `/go` | Captain commands. They run only when you type them |
 | `/projects` | Lists projects returned by the API |
 | `/project ID` | Selects a project and clears the prior Metatron conversation thread |
@@ -66,6 +124,37 @@ Choices (nothing has run yet — /pick N, or type N):
   2. Investigate further
 metatron> 1
 retry_workflow_step: done.
+```
+
+That is the plain text form. In the interactive terminal the same reply looks like this (from the recorded session in `assets/metatron/session.txt`):
+
+```text
+● BOSS
+  One build is waiting on a failed step: HelpDesk AI, step build. GitHub refused the push (HTTP 403)
+  because the App's install lost write access to example-org/helpdesk.
+
+  The saved work is intact, so a retry pushes it without rebuilding:
+
+              @@ -12,4 +12,4 @@ steps:
+     12   12     - id: build
+     13       -    push: token
+          13  +    push: github_app
+     14   14       retries: 2
+  ● list_running_work — ok
+  ● describe_workflow_run — ok
+  ● test_github_access — failed  403: Resource not accessible by integration
+    /expand or Ctrl-O shows the arguments
+╭─ You decide ─────────────────────────────────────────────────────────────────────────────────────╮
+│ 1 Retry the build step  retry_workflow_step                                                      │
+│   the saved work is pushed; no rebuild                                                           │
+│ 2 Investigate further                                                                            │
+│                                                                                                  │
+│ Nothing has run yet. Type a number, or /pick to choose with the arrows.                          │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+❯ 1
+● retry_workflow_step — done
+  Retried build. It pushed the saved work.
+  ✓ spec › ● build › ○ test › ○ deploy  ▰▰▱▱▱▱▱▱ 1/4
 ```
 
 When you pick an offer, Metatron sends the console's button request. It goes to `/v1/engine/agent/action` with exactly the tool and arguments you were shown, and no model reinterprets the choice. The server checks permission, consent, budget and receipts there, just as it does for the button. If an action needs you to confirm your identity again (step-up), Metatron tells you to sign in again in the console and then run the command again.
@@ -162,6 +251,7 @@ metatron> /api POST /v1/metatron/watch {"project_id":"boss-dogfood","actor":"exe
 Run one command and receive one JSON result:
 
 ```sh
+boss metatron --print 'is anything stuck right now?' --json
 python3 scripts/metatron_tui.py --exec '/api GET /v1/tasks?project_id=boss-dogfood' --json
 python3 scripts/metatron_tui.py --exec '/op get_v1_tasks_339c8c60' --json
 python3 scripts/metatron_tui.py --exec '/coverage' --json > tui-coverage.json

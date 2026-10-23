@@ -131,33 +131,54 @@ The console, terminal and API-backed MCP use the authenticated HTTP API. Each op
 | Interface | Open it with | Guide |
 | --- | --- | --- |
 | **Mission Control** (web) | `https://boss.example.com`, or your server's private IP | [Console access](docs/community/CONSOLE_AUTH.md) |
-| **Metatron** (terminal) | `make metatron` in the install directory | [Terminal and API](docs/community/TERMINAL_API.md) |
+| **Metatron** (terminal) | `boss metatron` on the install machine (or `make metatron`) | [Terminal and API](docs/community/TERMINAL_API.md) |
 | **MCP** (agents) | `make mcp-setup`, then point your agent at `make mcp` | [MCP](docs/community/MCP.md) |
 | **CLI and HTTP API** | `boss` on the host, or a personal API key from **My account › API keys** | [CLI](docs/community/cli.md) |
 
 ### Metatron: BOSS in your terminal
 
-Metatron is a full terminal client for the control plane. Talk to BOSS in plain text, work the task list and decision inbox, and reach any API operation without leaving the keyboard.
-
-```text
-$ make metatron
-metatron> /project boss-dogfood
-metatron> /tasks
-metatron> /task create launch-plan-1 Plan the community launch
-metatron> /decisions
-metatron> /decision approve dec-launch-1 Release gates reviewed
-metatron> /ops budget
-metatron> /describe <operation-id>
-metatron> /op <operation-id> {"query": {"project_id": "boss-dogfood"}}
-```
-
-`/ops` searches the live operation catalog, `/describe` shows an operation's parameters and body without calling it, and `/op` invokes it. For scripts and CI, one-shot mode returns stable JSON:
+Metatron is BOSS in your terminal. Talk to BOSS in plain text: it is the same agent, thread and actions as the console's Ask BOSS. You can also work the task list and decision inbox, and reach any API operation, without leaving the keyboard.
 
 ```sh
-python3 scripts/metatron_tui.py --exec '/api GET /v1/tasks?project_id=boss-dogfood' --json
+boss metatron        # on the install machine: native colours, keys and window size
 ```
 
-See the [terminal and API reference](docs/community/TERMINAL_API.md) for every command, and the [capability matrix](docs/community/TERMINAL_CAPABILITY_MATRIX.md) for what the terminal can reach.
+It opens with a welcome panel: what's new in the release, and a connection checklist with a fix for anything missing. The reply scrolls in your terminal. Only the input line and its status bar stay at the bottom:
+
+```text
+❯ is anything stuck right now?
+  › reading the running work
+● BOSS
+  One build is waiting on a failed step: HelpDesk AI, step build. GitHub refused the push (HTTP 403)
+  because the App's install lost write access to example-org/helpdesk.
+  ● describe_workflow_run — ok
+  ● test_github_access — failed  403: Resource not accessible by integration
+╭─ You decide ─────────────────────────────────────────────────────────────────────────────────────╮
+│ 1 Retry the build step  retry_workflow_step                                                      │
+│   the saved work is pushed; no rebuild                                                           │
+│ 2 Investigate further                                                                            │
+│                                                                                                  │
+│ Nothing has run yet. Type a number, or /pick to choose with the arrows.                          │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+❯
+ ⬡ boss-dogfood · BOSS · Claude Sonnet (subscription) · $1.84 of $25.00 today
+ Enter send  Esc cancel  ↑↓ history  Tab complete  / commands  Ctrl-D quit
+```
+
+- Type `/` to list every command, each with a one-line description.
+- `/agent`, `/project` and `/model` open pickers.
+- Plans arrive as checklists, runs as step progress lines, diffs with line numbers, and lists as tables.
+- Errors are red panels that end with the fix.
+- You can keep typing while BOSS works: your lines wait their turn.
+- A slow turn is never reported as a failure.
+
+`/ops` searches the live operation catalog, `/describe` shows an operation's parameters and body without calling it, and `/op` invokes it. For scripts and CI, one-shot mode returns the same JSON as before. A pipe, `--plain` or `NO_COLOR` gives plain text:
+
+```sh
+boss metatron --print '/api GET /v1/tasks?project_id=boss-dogfood' --json
+```
+
+See the [terminal and API reference](docs/community/TERMINAL_API.md) for every command and a recorded session, and the [capability matrix](docs/community/TERMINAL_CAPABILITY_MATRIX.md) for what the terminal can reach.
 
 ### MCP: plug BOSS into your agents
 

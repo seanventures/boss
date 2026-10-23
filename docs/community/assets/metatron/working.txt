@@ -1,0 +1,7 @@
+❯ is anything stuck right now?
+  › reading the running work
+❯ /tasks
+  queued (1): /tasks
+❯
+ ⬡ boss-dogfood · BOSS · Claude Sonnet (subscription) · $1.84 of $25.00 today
+ ⠹ BOSS is working · 1s · reading the running work · type to queue a message (1 queued) · Esc cancel

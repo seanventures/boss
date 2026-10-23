@@ -1,0 +1,8 @@
+❯ /agent
+Talk to which agent?
+  filter ›
+ ❯ BOSS   the general agent; it hands work to the others
+   Engineering Captain   engineering_captain · Ships the builds and keeps them green
+   QA Lead   qa_lead · Decides what proves a feature works
+   SRE   sre · Keeps the apps up and the alerts honest
+  ↑↓ move · Enter choose · Esc leave · type to filter
