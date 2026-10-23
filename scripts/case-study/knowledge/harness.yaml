@@ -2,12 +2,30 @@
 # and the banking set on Apache Fineract (docs/product/KNOWLEDGE_GRAPH_BANKING_CASE_STUDIES.md cases 1 and 3,
 # B1..B4; Plane BOSSAPP-758). Pins, engines, arms, stages.
 # Read by run.py and report.py. No secrets here: credentials come from the environment (README).
+# Every repository a task works in is named per engine x arm ("forks"): `repo` is owner/name on GitHub (the harness
+# sends BOSS the two parts as `owner` and `repo`), and `project` is the slug of the arm's own BOSS project, so one
+# arm's knowledge never reaches another. `run.py setup` creates what is missing; `run.py run` resolves both.
 saleor:
   upstream: https://github.com/saleor/saleor
-  sha: 9ae360ae76b4777c7101215d8b3348022fcd3683   # main, 2026-10-20; forked to the demo org per arm x engine
-  fork_name: northpeak-saleor
+  sha: 9ae360ae76b4777c7101215d8b3348022fcd3683   # main, 2026-10-20; one snapshot repository per arm x engine
+  snapshot_message: "NorthPeak retail, based on Saleor 9ae360ae76b4"
+  forks:
+    E2:
+      A: {repo: paramg/northpeak-saleor-a, project: northpeak-retail-a}
+      B: {repo: paramg/northpeak-saleor-b, project: northpeak-retail-b}
+    E1:
+      A: {repo: paramg/northpeak-saleor-e1-a, project: northpeak-retail-e1-a}
+      B: {repo: paramg/northpeak-saleor-e1-b, project: northpeak-retail-e1-b}
 fulfilment:
-  repo_name: northpeak-fulfilment                # created empty; BOSS builds it in T1
+  upstream: null                                 # created empty (a README commit, so main exists); BOSS builds it in T1
+  snapshot_message: "NorthPeak fulfilment service"
+  forks:
+    E2:
+      A: {repo: paramg/northpeak-fulfilment-a, project: northpeak-retail-a}
+      B: {repo: paramg/northpeak-fulfilment-b, project: northpeak-retail-b}
+    E1:
+      A: {repo: paramg/northpeak-fulfilment-e1-a, project: northpeak-retail-e1-a}
+      B: {repo: paramg/northpeak-fulfilment-e1-b, project: northpeak-retail-e1-b}
 # The banking set's "legacy core". Pinned to 1.15.0, not 1.16.0: 1.16.0 needs JDK 25 and BOSS's build image
 # ships Temurin JDK 21 (Dockerfile.community); 1.15.0's Gradle toolchain is Java 21. Validated 2026-10-22.
 fineract:
@@ -21,12 +39,13 @@ fineract:
   # The demo repositories, per engine x arm: private, on the operator's personal account, each a single snapshot
   # commit of the 1.15.0 tree (only README.md differs: a demo-fork note; LICENSE_*/NOTICE_* intact). B3 and B4
   # push their fault.patch onto the arm's main. bank_smoke runs E2 only; the Sonnet pairs (E1) need their own set.
-  snapshot_commit: 63dd10e4150b74932581181c6b3c18381ff15af0   # "NorthPeak core banking, based on Apache Fineract 1.15.0"
+  snapshot_commit: 63dd10e4150b74932581181c6b3c18381ff15af0   # the three E2 repositories' first commit
+  snapshot_message: "NorthPeak core banking, based on Apache Fineract 1.15.0"
   forks:
     E2:
-      A:  {repo: paramg/northpeak-fineract-a,  url: https://github.com/paramg/northpeak-fineract-a}
-      AP: {repo: paramg/northpeak-fineract-ap, url: https://github.com/paramg/northpeak-fineract-ap}
-      B:  {repo: paramg/northpeak-fineract-b,  url: https://github.com/paramg/northpeak-fineract-b}
+      A:  {repo: paramg/northpeak-fineract-a,  url: https://github.com/paramg/northpeak-fineract-a,  project: northpeak-bank-a}
+      AP: {repo: paramg/northpeak-fineract-ap, url: https://github.com/paramg/northpeak-fineract-ap, project: northpeak-bank-ap}
+      B:  {repo: paramg/northpeak-fineract-b,  url: https://github.com/paramg/northpeak-fineract-b,  project: northpeak-bank-b}
   # The narrowest task that covers a hidden suite: one module's unit tests, filtered to the suite's classes.
   # Never the whole build (no database, no integration tests). {module} and {tests} come from the task.
   test_command: "./gradlew --no-daemon -q --console=plain :{module}:test --tests '{tests}' --rerun"
@@ -36,6 +55,15 @@ engines:
   E1: {engine: claude_code, model: claude-sonnet-5, build_estimate_usd: {low: 6.0, high: 10.0}, build_ceiling_usd: 15.0}
   E2: {engine: openai_compatible, model: qwen3-coder, pinned: "2026-10-01",           # pin the exact name/date before running
        build_estimate_usd: {low: 0.6, high: 1.9}, build_ceiling_usd: 3.0}
+# Task sets, for `run.py setup --set NAME`: the repository kinds an arm works in.
+sets:
+  banking: {repos: [fineract], project_name: "NorthPeak Bank"}
+  retail:  {repos: [saleor, fulfilment], project_name: "NorthPeak Retail"}
+# Grading and merging (README "How a task is graded"): how long to wait for BOSS's own merge after the harness
+# approves the pull request's merge decision, before the harness merges it with `gh` and records that it did.
+merge:
+  wait_minutes: 10
+  method: merge                                  # gh pr merge --merge: the PR's commits land on main as they were graded
 # Each arm's value for the knowledge_graph project setting (on | keyword | off). AP is A′ (case study §4): A plus
 # plain full-text keyword search only (no graph traversal, vectors, learned facts or precedent). BOSS offers
 # "keyword" from rel/rc10.10-kg f1f7fb6af; an older BOSS refuses the value and AP stops before any spend.

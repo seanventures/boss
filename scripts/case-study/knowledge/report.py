@@ -24,7 +24,7 @@ ARMS = ("A", "AP", "B")                 # AP is A′: keyword search only (case 
 
 
 def load(results_dir: Path) -> list[dict]:
-    return [json.loads(p.read_text()) for p in sorted(results_dir.rglob("T*-r*.json"))]
+    return [json.loads(p.read_text()) for p in sorted(results_dir.rglob("[TB][0-9]*-r*.json"))]
 
 
 def solved(r: dict) -> bool:
@@ -192,6 +192,16 @@ def render(results: list[dict], out_dir: Path) -> Path:
                   "|---|---|---|---|---|---|"]
         lines += [f"| {r['engine']} | {r['pair']} | {r['B_ratio']} | {r['A_ratio']} | {r['normalised']} | "
                   f"{'yes' if r['meets_70pct'] else 'no'} |" for r in learn]
+    lines += ["", "## What was graded", "",
+              "Each build is graded on the head commit of the pull request BOSS opened; a passing one is merged into the "
+              "arm's main before the next task, a failing one is not.", "",
+              "| Engine | Arm | Task | PR | Graded commit | Solved | Merged |", "|---|---|---|---|---|---|---|"]
+    for r in sorted(results, key=lambda r: (r["engine"], r["arm"], r["task"][0], int(r["task"][1:]), r.get("repeat", 1))):
+        pr, merge = r.get("pr") or {}, r.get("merge") or {}
+        merged = (f"yes, by {merge.get('by')}" if merge.get("merged") else "no") if merge else "—"
+        lines.append(f"| {r['engine']} | {r['arm']} | {r['task']} | {('#' + str(pr['number'])) if pr.get('number') else 'none'} | "
+                     f"{('`' + r['graded_commit'][:12] + '`') if r.get('graded_commit') else '—'} | "
+                     f"{'yes' if solved(r) else 'no'} | {merged} |")
     graded = reuse(results)
     if graded:
         lines += ["", "## Reuse on the learning pairs' second tasks", "", "| Engine | Arm | Task | Invariants reused |",

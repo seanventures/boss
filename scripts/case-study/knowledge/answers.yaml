@@ -25,3 +25,10 @@ rules:
   - match: {kind: question}
     answer: reply
     reason: "Follow the brief; choose the simplest option consistent with Saleor's existing patterns."
+# The pull request's merge decision (kind pull_request) is never answered while BOSS works. The harness grades
+# the PR's head commit with the hidden suite first: it approves this decision only when the suite passed, and
+# leaves it unanswered (and the PR unmerged) when it failed. Same rule in every arm.
+  - match: {kind: pull_request}
+    after: grading
+    answer: approve
+    reason: "The hidden acceptance suite passed on this pull request's head commit."
