@@ -25,7 +25,11 @@
         "name": "next"
       }
     ],
-    "esModuleInterop": true
+    "esModuleInterop": true,
+    "paths": {
+      "@boss/api-client": ["../../packages/api-client/src/community.ts"],
+      "@boss/api-client/community": ["../../packages/api-client/src/community.ts"]
+    }
   },
   "include": [
     "**/*.ts",
