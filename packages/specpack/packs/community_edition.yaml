@@ -39,7 +39,7 @@ requires:
 installs:
   # The Agent World cast (agent-world spec §0.1) rides with the edition too.
   roles: [metatron, coo, cto, pm, qa, release_manager, chief_architect, engineering_captain,
-          backend_engineer, frontend_engineer, operations_engineer, sre]
+          backend_engineer, frontend_engineer, operations_engineer, sre, archivist]
   workflows: [ceo_command_to_pr, decision_inbox, budget_gated_job, model_entitlement_routing]
   policies: [default_safety, budget_governor_policy, model_entitlement_policy, work_orchestration_policy]
   # `youtube` and `video` are the media pipeline. In COMMUNITY deliberately: enterprise

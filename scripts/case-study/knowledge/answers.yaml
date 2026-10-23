@@ -1,0 +1,27 @@
+# Scripted human approvals: the SAME answers for both arms, so a person never biases one (case study §4).
+# Matched against a pending decision's kind; the first matching rule answers. Unknown decisions stop the
+# run (never guessed) and are reported as "needs_operator".
+defaults:
+  unknown: stop
+rules:
+  - match: {kind: spec_signoff}
+    answer: approve
+    reason: "Matches the brief."
+  - match: {kind: plan_approval}
+    answer: approve
+    reason: "Plan is in scope."
+  - match: {kind: security_signoff}
+    answer: approve
+    reason: "Auth changes need security sign-off; reviewed against the brief's contract."
+  - match: {kind: release_approval}
+    answer: approve
+    reason: "Hidden acceptance suite is run by the harness after release."
+  - match: {kind: budget_increase}
+    answer: reject
+    reason: "Stay within the build ceiling; a build that needs more is a failed attempt."
+  - match: {kind: incident_fix_approval}
+    answer: approve
+    reason: "Fix the root cause; add a regression test."
+  - match: {kind: question}
+    answer: reply
+    reason: "Follow the brief; choose the simplest option consistent with Saleor's existing patterns."

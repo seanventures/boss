@@ -1,0 +1,158 @@
+{
+  "repo": "medusajs/medusa",
+  "commit": "020565398e43 (tag v2.21.2)",
+  "symbols": 15,
+  "correct": 14,
+  "accuracy": 0.933,
+  "micro_precision": 1.0,
+  "micro_recall": 0.921,
+  "index": {
+    "files": 11957,
+    "parsed": 11957,
+    "symbols": 16767,
+    "nodes": 40834,
+    "edges": 89475,
+    "seconds": 22.1
+  },
+  "rows": [
+    {
+      "symbol": "packages/admin/dashboard/src/routes/users/user-detail/loader.ts::userLoader",
+      "found": true,
+      "correct": true,
+      "precision": 1.0,
+      "recall": 1.0,
+      "missed": [],
+      "extra": []
+    },
+    {
+      "symbol": "packages/core/utils/src/pg/index.ts::parseConnectionString",
+      "found": true,
+      "correct": true,
+      "precision": 1.0,
+      "recall": 1.0,
+      "missed": [],
+      "extra": []
+    },
+    {
+      "symbol": "packages/admin/dashboard/src/hooks/table/query/use-customer-table-query.tsx::useCustomerTableQuery",
+      "found": true,
+      "correct": true,
+      "precision": 1.0,
+      "recall": 1.0,
+      "missed": [],
+      "extra": []
+    },
+    {
+      "symbol": "packages/admin/dashboard/src/lib/table/cell-renderers.tsx::defineCellRenderer",
+      "found": true,
+      "correct": true,
+      "precision": 1.0,
+      "recall": 1.0,
+      "missed": [],
+      "extra": []
+    },
+    {
+      "symbol": "packages/modules/providers/search-postgres/src/utils/plan.ts::tableNameForIndex",
+      "found": true,
+      "correct": true,
+      "precision": 1.0,
+      "recall": 1.0,
+      "missed": [],
+      "extra": []
+    },
+    {
+      "symbol": "www/packages/docs-ui/src/providers/Modal/index.tsx::ModalProvider.closeModal",
+      "found": true,
+      "correct": false,
+      "precision": 0.0,
+      "recall": 0.0,
+      "missed": [
+        "www/packages/docs-ui/src/components/Modal/Header/index.tsx",
+        "www/packages/docs-ui/src/components/Modal/index.tsx",
+        "www/packages/docs-ui/src/providers/Modal/__tests__/index.test.tsx"
+      ],
+      "extra": []
+    },
+    {
+      "symbol": "www/packages/build-scripts/src/retrieve-mdx-pages.ts::retrieveMdxPages",
+      "found": true,
+      "correct": true,
+      "precision": 1.0,
+      "recall": 1.0,
+      "missed": [],
+      "extra": []
+    },
+    {
+      "symbol": "packages/core/types/src/http/product-type/common.ts::BaseProductTypeListParams",
+      "found": true,
+      "correct": true,
+      "precision": 1.0,
+      "recall": 1.0,
+      "missed": [],
+      "extra": []
+    },
+    {
+      "symbol": "packages/core/types/src/http/product/common.ts::BaseProductOptionListParams",
+      "found": true,
+      "correct": true,
+      "precision": 1.0,
+      "recall": 1.0,
+      "missed": [],
+      "extra": []
+    },
+    {
+      "symbol": "packages/core/types/src/http/price-list/admin/payloads.ts::AdminUpdatePriceListPrice",
+      "found": true,
+      "correct": true,
+      "precision": 1.0,
+      "recall": 1.0,
+      "missed": [],
+      "extra": []
+    },
+    {
+      "symbol": "packages/core/types/src/workflow/order/items.ts::OrderClaimItemWorkflowInput",
+      "found": true,
+      "correct": true,
+      "precision": 1.0,
+      "recall": 1.0,
+      "missed": [],
+      "extra": []
+    },
+    {
+      "symbol": "packages/core/types/src/http/rbac/admin/responses.ts::AdminRbacRoleResponse",
+      "found": true,
+      "correct": true,
+      "precision": 1.0,
+      "recall": 1.0,
+      "missed": [],
+      "extra": []
+    },
+    {
+      "symbol": "packages/modules/order/src/services/order-module-service.ts::OrderModuleService.createOrderLineItemTaxLines",
+      "found": true,
+      "correct": true,
+      "precision": 1.0,
+      "recall": 1.0,
+      "missed": [],
+      "extra": []
+    },
+    {
+      "symbol": "packages/modules/order/src/services/order-module-service.ts::OrderModuleService.listAndCountOrders",
+      "found": true,
+      "correct": true,
+      "precision": 1.0,
+      "recall": 1.0,
+      "missed": [],
+      "extra": []
+    },
+    {
+      "symbol": "packages/modules/fulfillment/src/services/fulfillment-module-service.ts::FulfillmentModuleService.upsertShippingOptionTypes",
+      "found": true,
+      "correct": true,
+      "precision": 1.0,
+      "recall": 1.0,
+      "missed": [],
+      "extra": []
+    }
+  ]
+}

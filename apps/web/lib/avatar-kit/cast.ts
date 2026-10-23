@@ -72,6 +72,7 @@ export const CAST: readonly CastMember[] = [
   picked("providerops_manager", "ProviderOps Manager", ["twin", "cycle", "purple", "slit"]),
   picked("resource_janitor", "Resource Janitor", ["propeller", "cycle", "green", "band"]),
   picked("secrets_steward", "Secrets Steward", ["dome", "key", "amber", "shield"]),
+  picked("archivist", "Archivist", ["dome", "page", "slate", "glasses"]),
 ];
 
 export const CAST_BY_KEY: Readonly<Record<string, CastMember>> = dict(CAST.map((c) => [c.roleKey, c]));

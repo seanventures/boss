@@ -3,7 +3,7 @@
 # One line per operation: its declaration, then the built-in roles allowed
 # (O owner, A admin, P operator, V viewer, U auditor; '-' none). Every other role is denied
 # 403, or 404 when the operation names an object the role cannot even read.
-# 1615 operations.
+# 1628 operations.
 "GET /.well-known/boss-jwks.json": ["public:jwks", "OAPVU"]
 "GET /docs": ["public:api_description", "OAPVU"]
 "GET /docs/oauth2-redirect": ["public:api_description", "OAPVU"]
@@ -204,6 +204,7 @@
 "POST /v1/apps/{target_id}/alert-silences/{silence_id}/end": ["permit observability:manage @ project(body=project_id)", "OA"]
 "GET /v1/apps/{target_id}/alerts": ["permit observability:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/apps/{target_id}/alerts/{alert_id}/triage": ["permit observability:manage @ project(body=project_id)", "OA"]
+"POST /v1/apps/{target_id}/alerts/{alert_id}/triage/answer": ["permit reliability:respond @ project(body=project_id)", "OAP"]
 "GET /v1/apps/{target_id}/metric-names": ["permit observability:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/apps/{target_id}/signal-sources/{source_id}/rotate": ["permit observability:manage @ project(body=project_id)", "OA"]
 "POST /v1/apps/{target_id}/signals": ["public:hmac_signed_webhook", "OAPVU"]
@@ -989,8 +990,14 @@
 "POST /v1/kms/keys/{key_entry_id}/lease": ["permit secret:lease @ project(body=project_id)", "-"]
 "POST /v1/kms/leases/{lease_id}/resolve": ["permit secret:lease @ project(body=project_id)", "-"]
 "POST /v1/kms/leases/{lease_id}/revoke": ["permit kms_key:manage @ project(query=project_id)", "OA"]
+"GET /v1/knowledge/blast-radius": ["permit knowledge:read @ project(query=project_id)", "OAPVU"]
+"POST /v1/knowledge/cypher": ["permit knowledge:read @ project(body=project_id)", "OAPVU"]
 "GET /v1/knowledge/eval": ["permit reliability:read @ project(query=project_id) +writes_on_get", "OAPVU"]
 "POST /v1/knowledge/eval/load": ["permit reliability:read @ project(query=project_id) +writes_on_get", "OAPVU"]
+"POST /v1/knowledge/facts/{fact_id}/forget": ["permit knowledge:manage @ project(body=project_id)", "OA"]
+"POST /v1/knowledge/facts/{fact_id}/promote": ["permit knowledge:manage @ project(body=project_id)", "OA"]
+"POST /v1/knowledge/facts/{fact_id}/reject": ["permit knowledge:manage @ project(body=project_id)", "OA"]
+"GET /v1/knowledge/graph-status": ["permit knowledge:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/knowledge/graph/edges": ["permit reliability:respond @ project(body=project_id)", "OAP"]
 "GET /v1/knowledge/graph/health": ["permit reliability:read @ project(query=project_id)", "OAPVU"]
 "GET /v1/knowledge/graph/known-causes": ["permit reliability:read @ project(query=project_id)", "OAPVU"]
@@ -1000,7 +1007,10 @@
 "POST /v1/knowledge/graph/root-causes": ["permit reliability:respond @ project(body=project_id)", "OAP"]
 "POST /v1/knowledge/graph/seed-from-infra": ["permit reliability:respond @ project(body=project_id)", "OAP"]
 "GET /v1/knowledge/graph/subgraph": ["permit reliability:read @ project(query=project_id)", "OAPVU"]
+"POST /v1/knowledge/ingest/tick": ["permit worker:lease @ org", "-"]
+"GET /v1/knowledge/nodes/{node_id}": ["permit knowledge:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/knowledge/pack-context": ["permit reliability:respond @ project(body=project_id)", "OAP"]
+"GET /v1/knowledge/search": ["permit knowledge:read @ project(query=project_id)", "OAPVU"]
 "GET /v1/knowledge/status": ["permit reliability:read @ project(query=project_id)|org", "OAPVU"]
 "GET /v1/kpis": ["permit work_item:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/kpis": ["permit work_item:manage @ project(body=project_id)", "OAP"]
@@ -1408,6 +1418,9 @@
 "GET /v1/setup/decision-model": ["permit setup:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/setup/decision-model/key": ["permit model_provider:manage @ project(body=project_id)", "OA"]
 "POST /v1/setup/decisions/key": ["permit model_provider:manage @ project(body=project_id)", "OA"]
+"DELETE /v1/setup/embedding-model": ["permit model_provider:manage @ project(query=project_id)", "OA"]
+"POST /v1/setup/embedding-model": ["permit model_provider:manage @ project(body=project_id)", "OA"]
+"POST /v1/setup/embedding-model/check": ["permit model_provider:manage @ project(body=project_id)", "OA"]
 "GET /v1/setup/holds/{receipt_id}": ["permit setup:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/setup/holds/{receipt_id}/release": ["permit entitlement:manage @ project(body=project_id)", "OA"]
 "PUT /v1/setup/jobs/{job}": ["permit setup:manage @ project(body=project_id)", "OA"]

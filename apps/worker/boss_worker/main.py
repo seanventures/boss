@@ -347,6 +347,33 @@ def _tick_improve(client: ControlPlaneClient, settings) -> None:
         LOGGER.debug("improve_tick_failed", exc_info=True)
 
 
+#: Event-driven knowledge ingest (operator decision 2026-10-21): a finished run or a resolved
+#: incident is queued by a database trigger and drained this often; every
+#: KNOWLEDGE_SWEEP_INTERVAL_SECONDS the same call also sweeps for what the triggers missed.
+#: Matches boss_engine.services.knowledge.ingest.QUEUE_POLL_SECONDS and SWEEP_SECONDS.
+KNOWLEDGE_INGEST_INTERVAL_SECONDS = 30
+KNOWLEDGE_SWEEP_INTERVAL_SECONDS = 600
+_last_knowledge_ingest_monotonic = 0.0
+_last_knowledge_sweep_monotonic = 0.0
+
+
+def _tick_knowledge_ingest(client: ControlPlaneClient) -> None:
+    """Drain the knowledge ingest queue. Never kill the worker."""
+    global _last_knowledge_ingest_monotonic, _last_knowledge_sweep_monotonic
+    now = time.monotonic()
+    if now - _last_knowledge_ingest_monotonic < KNOWLEDGE_INGEST_INTERVAL_SECONDS:
+        return
+    _last_knowledge_ingest_monotonic = now
+    sweep = now - _last_knowledge_sweep_monotonic >= KNOWLEDGE_SWEEP_INTERVAL_SECONDS
+    if sweep:
+        _last_knowledge_sweep_monotonic = now
+    try:
+        out = client.knowledge_ingest_tick(sweep=sweep)
+        LOGGER.debug("knowledge_ingest %s", out)
+    except Exception:  # noqa: BLE001
+        LOGGER.debug("knowledge_ingest_failed", exc_info=True)
+
+
 CONTROL_PLANE_TOKEN_SWEEP_SECONDS = 60
 _last_token_sweep_monotonic = 0.0
 
@@ -728,6 +755,7 @@ def main() -> None:
             _tick_focused_agents(client, settings)
             _tick_workflow_schedules(client, settings)
             _tick_setup_checks(client, settings)
+            _tick_knowledge_ingest(client)
             _tick_agent_processes(client, settings)
             _tick_process_manager(client, settings)
             _tick_factory_flow(client, settings)

@@ -1,0 +1,25 @@
+# NorthPeak Retail case study (docs/product/KNOWLEDGE_GRAPH_CASE_STUDY.md). Pins, engines, stages.
+# Read by run.py and report.py. No secrets here: credentials come from the environment (README).
+saleor:
+  upstream: https://github.com/saleor/saleor
+  sha: 9ae360ae76b4777c7101215d8b3348022fcd3683   # main, 2026-10-20; forked to the demo org per arm x engine
+  fork_name: northpeak-saleor
+fulfilment:
+  repo_name: northpeak-fulfilment                # created empty; BOSS builds it in T1
+# Model spend per build (case study §4; BOSSAPP-600 lowers it), per engine. Used for each stage's
+# estimate and budget ceiling. run.py refuses a stage the operator has not approved.
+engines:
+  E1: {engine: claude_code, model: claude-sonnet-5, build_estimate_usd: {low: 6.0, high: 10.0}, build_ceiling_usd: 15.0}
+  E2: {engine: openai_compatible, model: qwen3-coder, pinned: "2026-10-01",           # pin the exact name/date before running
+       build_estimate_usd: {low: 0.6, high: 1.9}, build_ceiling_usd: 3.0}
+arms:
+  A: {knowledge: off}
+  B: {knowledge: on}
+# Operator decision 2026-10-21: no stage is approved yet. The smoke runs after Phases 1–3 (arm B
+# needs the knowledge switch), on the open-model engine first; the Sonnet 5 smoke comes after.
+stages:
+  smoke:    {engines: [E2], arms: [A, B], tasks: [T1, T2, T3, T4], repeats: 1}
+  smoke_e1: {engines: [E1], arms: [A, B], tasks: [T1, T2, T3, T4], repeats: 1}
+  learning: {engines: [E1, E2], arms: [A, B], tasks: [T3, T7, T4, T9], repeats: 1, extra_repeats: {T7: 3, T9: 3}}
+  full:     {engines: [E1, E2], arms: [A, B], tasks: [T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12], repeats: 1,
+             extra_repeats: {T7: 3, T9: 3, T10: 3}}

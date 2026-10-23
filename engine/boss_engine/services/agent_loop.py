@@ -301,7 +301,8 @@ def _append_repo_read_tools(
 
 #: How each bundle reads in the tool list, so the model knows which grant a tool came from.
 _BUNDLE_LABEL = {"repo.read": "Read the repo", "boss.fundamentals": "BOSS fundamentals",
-                 "boss.propose_fix": "Propose a fix"}
+                 "boss.propose_fix": "Propose a fix", "knowledge.read": "Knowledge graph",
+                 "knowledge.propose": "Propose a fact"}
 
 
 def _append_bundle_tools(
@@ -314,21 +315,25 @@ def _append_bundle_tools(
     repo.read, boss.fundamentals, boss.propose_fix); each call is a call of that one skill, so
     the grant, the budget gate and the invocation record are the ordinary skill runtime's. A
     tool not registered on this build is skipped, never offered and then failed."""
-    from ..tools.builtin import build_discuss_read_registry
-    from .agent_baseline import bundles
+    from .agent_baseline import bundle_tool_spec, bundles
+
+    from .knowledge.scopes import current_policy, offers_tool
 
     offered_by = bundles()
-    registry = build_discuss_read_registry(edition="community")
+    stage_scope = current_policy()
     offered: dict[str, tuple[dict[str, Any], str]] = {}
     for spec in specs:
         skill_id = str(spec.get("id") or "")
         for tool in offered_by.get(skill_id, ()):
-            if tool not in registry.names():
+            if skill_id.startswith("knowledge.") and not offers_tool(stage_scope, tool):
+                continue          # outside this stage's knowledge scope: not offered at all
+            found = bundle_tool_spec(skill_id, tool, edition="community")
+            if found is None:
                 continue
-            found = registry.get(tool)
             name = _unique_tool_name(tool, occupied, f"skill:{skill_id}:{tool}")
             parameters = dict(found.parameters or {"type": "object", "properties": {}})
             properties = dict(parameters.get("properties") or {})
+            properties.pop("project_id", None)   # the run's project, never the model's
             if skill_id == "repo.read" and "repo" in properties:
                 properties["repo"] = {"type": "string",
                                       "description": "owner/name; leave out for this project's repo"}
@@ -1849,6 +1854,20 @@ def run_agent_loop(
     a human approval. State is persisted to agent_runs after every step so the
     run survives a crash and can be resumed."""
     run_id = make_id("arun")
+    try:
+        from .knowledge.runtime import append_quoted_pack, quoted_pack_for_turn
+
+        system_prompt = append_quoted_pack(
+            system_prompt,
+            quoted_pack_for_turn(
+                connection,
+                project_id=project_id,
+                query=user_prompt,
+                run_id=run_id,
+            ),
+        ) or None
+    except Exception:
+        pass
     messages: list[dict] = []
     if system_prompt:
         messages.append({"role": "system", "content": system_prompt})
@@ -2789,6 +2808,14 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
         )
 
     _save_run(connection, run_id, project_id, task_id, "completed", messages, transcript, total, finalize_ctx, step=last_step + 1, output_text=final_text)
+    try:
+        from .knowledge.runtime import attribute_shown_facts
+
+        attribute_shown_facts(
+            connection, project_id=project_id, run_id=run_id, success=True
+        )
+    except Exception:
+        pass
     emit_event(connection, project_id, "agent.run_completed", "agent_loop", "agent_run", run_id, {"steps": len(transcript)})
     return {"status": "completed", "run_id": run_id, "output_text": final_text, "usage": total, "transcript": transcript, "tool_calls": len(transcript)}
 

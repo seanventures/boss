@@ -4835,8 +4835,27 @@ CREATE TABLE IF NOT EXISTS kg_nodes (
   confidence DOUBLE PRECISION NOT NULL DEFAULT 1.0 CHECK (confidence >= 0 AND confidence <= 1),
   valid_from TIMESTAMPTZ,           -- temporal validity window start (NULL = unbounded)
   valid_to TIMESTAMPTZ,             -- temporal validity window end (NULL = unbounded)
+  -- BOSSAPP-622. Common knowledge fields. trust_tier is enforced by the store
+  -- (an agent cannot write governed or approved). search_tsv is the retrieval
+  -- full-text column; pgvector HNSW waits on the Debian image, so embeddings
+  -- live in kg_embeddings as double precision[].
+  org_id TEXT,
+  scope TEXT,
+  trust_tier TEXT NOT NULL DEFAULT 'observed'
+    CHECK (trust_tier IN ('observed', 'governed', 'inferred', 'approved')),
+  weight DOUBLE PRECISION NOT NULL DEFAULT 1.0,
+  created_by TEXT NOT NULL DEFAULT 'system',
+  content_hash TEXT,
+  recorded_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  body TEXT NOT NULL DEFAULT '',
+  search_tsv TSVECTOR,
   first_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
   last_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
+  -- BOSSAPP-622 code graph: the repository ('' when unnamed) and file a code node comes from,
+  -- so a re-index closes exactly what a file no longer defines. NULL on project-wide nodes
+  -- (tables, queues, config keys), which two repositories share.
+  repo TEXT,
+  path TEXT,
   UNIQUE (project_id, kind, node_key)
 );
 CREATE INDEX IF NOT EXISTS idx_kg_nodes_project
@@ -4847,6 +4866,10 @@ CREATE INDEX IF NOT EXISTS idx_kg_nodes_confidence
   ON kg_nodes(project_id, confidence);
 CREATE INDEX IF NOT EXISTS idx_kg_nodes_valid
   ON kg_nodes(project_id, valid_from, valid_to);
+CREATE INDEX IF NOT EXISTS idx_kg_nodes_project_kind_valid
+  ON kg_nodes(project_id, kind, valid_to);
+CREATE INDEX IF NOT EXISTS idx_kg_nodes_search
+  ON kg_nodes USING GIN (search_tsv);
 
 CREATE TABLE IF NOT EXISTS kg_edges (
   id TEXT PRIMARY KEY,
@@ -4861,12 +4884,27 @@ CREATE TABLE IF NOT EXISTS kg_edges (
   confidence DOUBLE PRECISION NOT NULL DEFAULT 1.0 CHECK (confidence >= 0 AND confidence <= 1),
   valid_from TIMESTAMPTZ,
   valid_to TIMESTAMPTZ,
+  org_id TEXT,
+  scope TEXT,
+  trust_tier TEXT NOT NULL DEFAULT 'observed'
+    CHECK (trust_tier IN ('observed', 'governed', 'inferred', 'approved')),
+  weight DOUBLE PRECISION NOT NULL DEFAULT 1.0,
+  created_by TEXT NOT NULL DEFAULT 'system',
+  content_hash TEXT,
+  recorded_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   first_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
   last_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (project_id, src_id, dst_id, kind)
 );
 CREATE INDEX IF NOT EXISTS idx_kg_edges_src ON kg_edges(src_id, kind);
 CREATE INDEX IF NOT EXISTS idx_kg_edges_dst ON kg_edges(dst_id, kind);
+-- BOSSAPP-622: the lookups the code indexer and the graph reads make (the planner traps the
+-- earlier stack's 1M-node benchmark found: a missing (project_id, node_key) index, and scans of
+-- closed rows).
+CREATE INDEX IF NOT EXISTS idx_kg_nodes_repo_path ON kg_nodes(project_id, repo, path) WHERE repo IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_kg_nodes_key ON kg_nodes(project_id, node_key) WHERE valid_to IS NULL;
+CREATE INDEX IF NOT EXISTS idx_kg_nodes_name ON kg_nodes(project_id, name) WHERE valid_to IS NULL;
+CREATE INDEX IF NOT EXISTS idx_kg_edges_src_valid ON kg_edges(src_id) WHERE valid_to IS NULL;
 
 -- BOSS-357: knowledge retrieval evaluation snapshots (coverage + regression alarms)
 CREATE TABLE IF NOT EXISTS kg_eval_snapshots (
@@ -4880,6 +4918,100 @@ CREATE TABLE IF NOT EXISTS kg_eval_snapshots (
 );
 CREATE INDEX IF NOT EXISTS idx_kg_eval_snapshots_project
   ON kg_eval_snapshots(project_id, created_at DESC);
+
+-- BOSSAPP-622. One embedding space per (model, dimension). HNSW needs pgvector,
+-- which the Alpine image does not have; exact cosine over this array is the
+-- Phase 0 retrieval path. A later image can add the index without a new table.
+CREATE TABLE IF NOT EXISTS kg_embeddings (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  node_id TEXT NOT NULL REFERENCES kg_nodes(id) ON DELETE CASCADE,
+  model_id TEXT NOT NULL,
+  dimensions INTEGER NOT NULL CHECK (dimensions > 0),
+  embedding DOUBLE PRECISION[] NOT NULL,
+  content_hash TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (node_id, model_id, content_hash)
+);
+CREATE INDEX IF NOT EXISTS idx_kg_embeddings_project_model
+  ON kg_embeddings(project_id, model_id);
+
+-- BOSSAPP-622: record -> changed-symbol links, in their own durable table (ported from PR #12).
+-- A pull request names the symbols it changed by their natural keys, not by node ids: a
+-- re-index closes or replaces symbol nodes, and a forget deletes them with their edges, but the
+-- link stays and `changed` edges are derived from it again once the symbol is in the graph.
+CREATE TABLE IF NOT EXISTS kg_change_links (
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  source_kind TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  symbol_key TEXT NOT NULL,
+  recorded_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (project_id, source_kind, source_id, symbol_key)
+);
+CREATE INDEX IF NOT EXISTS idx_kg_change_links_symbol ON kg_change_links(project_id, symbol_key);
+-- BOSSAPP-622: the database image carries pgvector and Apache AGE (scripts/install/db-image).
+-- This is the schema step of the upgrade: an existing data directory gets the extensions on its
+-- first boot on the new image. A server without them (a stock postgres image, a test database)
+-- skips this and keeps exact-cosine search and the recursive CTE.
+DO $kg_ext$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_available_extensions WHERE name = 'vector') THEN
+    CREATE EXTENSION IF NOT EXISTS vector;
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_available_extensions WHERE name = 'age') THEN
+    CREATE EXTENSION IF NOT EXISTS age;
+  END IF;
+END $kg_ext$;
+-- BOSSAPP-622 stage knowledge scopes (services/knowledge/scopes.py): every node is in one layer
+-- (code, lifecycle, ops, knowledge), generated from its kind so every writer agrees. A stage
+-- reads only its layers; the partial GIN index lets a non-code text search skip code rows, so
+-- its cost does not grow with the code graph. Kept in step with scopes.layer_sql_case() by
+-- test_knowledge_stage_scopes_db.
+ALTER TABLE kg_nodes ADD COLUMN IF NOT EXISTS knowledge_layer TEXT
+  GENERATED ALWAYS AS (CASE WHEN kind IN ('config_key', 'endpoint', 'file', 'module', 'queue', 'symbol', 'table') THEN 'code' WHEN kind IN ('agent', 'decision', 'person', 'pull_request', 'release', 'review_finding', 'run', 'spec', 'team') THEN 'lifecycle' WHEN kind IN ('alert_rule', 'datastore', 'deployment', 'external', 'incident', 'repo', 'resource', 'root_cause', 'runbook', 'service') THEN 'ops' ELSE 'knowledge' END) STORED;
+CREATE INDEX IF NOT EXISTS idx_kg_nodes_layer
+  ON kg_nodes(project_id, knowledge_layer, kind) WHERE valid_to IS NULL;
+CREATE INDEX IF NOT EXISTS idx_kg_nodes_search_noncode
+  ON kg_nodes USING GIN (search_tsv) WHERE knowledge_layer <> 'code';
+-- BOSSAPP-622 capture, usage, and audit. Tenancy is project_id on every row.
+CREATE TABLE IF NOT EXISTS kg_captures (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  source_kind TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  body TEXT NOT NULL,
+  scrub_counts JSONB NOT NULL DEFAULT '{}'::jsonb,
+  status TEXT NOT NULL DEFAULT 'captured',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (project_id, source_kind, source_id, content_hash)
+);
+CREATE TABLE IF NOT EXISTS kg_usage (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  run_id TEXT NOT NULL,
+  step TEXT NOT NULL,
+  fact_id TEXT NOT NULL REFERENCES kg_nodes(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_kg_usage_run ON kg_usage(project_id, run_id);
+CREATE TABLE IF NOT EXISTS kg_fact_stats (
+  fact_id TEXT PRIMARY KEY REFERENCES kg_nodes(id) ON DELETE CASCADE,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  success_count INTEGER NOT NULL DEFAULT 0,
+  failure_count INTEGER NOT NULL DEFAULT 0,
+  last_used_at TIMESTAMPTZ,
+  archived BOOLEAN NOT NULL DEFAULT FALSE
+);
+CREATE TABLE IF NOT EXISTS kg_audit (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  action TEXT NOT NULL,
+  entity_id TEXT NOT NULL,
+  actor_kind TEXT NOT NULL,
+  detail JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 
 -- ── AI SRE reliability pipeline (RB-3/RB-4) ───────────────────────────────────
 -- A telemetry source (a connected observability tool). Scan can also run against an
@@ -10004,3 +10136,101 @@ CREATE TABLE IF NOT EXISTS synthetic_checks (
   created_by TEXT NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- BOSSAPP-622 event-driven ingest (operator decision 2026-10-21; services/knowledge/ingest.py).
+-- A run is queued the moment its status becomes completed or failed, and an incident the moment
+-- it becomes resolved, whatever code path finished it. The worker drains the queue every 30 s;
+-- every 10 minutes the same call also sweeps for anything the triggers missed.
+CREATE TABLE IF NOT EXISTS kg_ingest_queue (
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  source_kind TEXT NOT NULL CHECK (source_kind IN ('run', 'incident')),
+  source_id TEXT NOT NULL,
+  finished_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  attempts INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT,
+  PRIMARY KEY (project_id, source_kind, source_id)
+);
+CREATE INDEX IF NOT EXISTS idx_kg_ingest_queue_due ON kg_ingest_queue(finished_at) WHERE attempts < 3;
+CREATE OR REPLACE FUNCTION kg_queue_finished_run() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF NEW.status IN ('completed', 'failed') AND OLD.status IS DISTINCT FROM NEW.status THEN
+    INSERT INTO kg_ingest_queue (project_id, source_kind, source_id)
+    VALUES (NEW.project_id, 'run', NEW.id) ON CONFLICT DO NOTHING;
+  END IF;
+  RETURN NEW;
+END $$;
+CREATE OR REPLACE FUNCTION kg_queue_resolved_incident() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF NEW.status = 'resolved' AND OLD.status IS DISTINCT FROM NEW.status THEN
+    INSERT INTO kg_ingest_queue (project_id, source_kind, source_id)
+    VALUES (NEW.project_id, 'incident', NEW.id) ON CONFLICT DO NOTHING;
+  END IF;
+  RETURN NEW;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'kg_queue_finished_run'
+                 AND tgrelid = 'code_task_runs'::regclass) THEN
+    CREATE TRIGGER kg_queue_finished_run AFTER UPDATE OF status ON code_task_runs
+      FOR EACH ROW EXECUTE FUNCTION kg_queue_finished_run();
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'kg_queue_resolved_incident'
+                 AND tgrelid = 'incidents'::regclass) THEN
+    CREATE TRIGGER kg_queue_resolved_incident AFTER UPDATE OF status ON incidents
+      FOR EACH ROW EXECUTE FUNCTION kg_queue_resolved_incident();
+  END IF;
+END $$;
+-- BOSSAPP-622 (operator decision 2026-10-22): a pull request's knowledge source id names its
+-- repository, pr-<owner>/<repo>#<n> (knowledge/capture.py pull_request_source_id), so PR 9 of
+-- two repositories in one project are two records. This rewrites the old pr-<n> ids wherever
+-- the project's runs name exactly one repository for that number. A number two repositories
+-- share (the collision itself) is left as it is: nothing says which repository it was. The
+-- renamed nodes get last_seen = now(), so the AGE projection re-projects them on its next sync.
+CREATE OR REPLACE FUNCTION kg_qualify_pr_source_ids() RETURNS INTEGER LANGUAGE plpgsql AS $$
+DECLARE
+  renamed INTEGER := 0;
+  step INTEGER;
+BEGIN
+  CREATE TEMP TABLE IF NOT EXISTS kg_pr_rename (project_id TEXT, old_id TEXT, new_id TEXT) ON COMMIT DROP;
+  DELETE FROM kg_pr_rename;
+  INSERT INTO kg_pr_rename (project_id, old_id, new_id)
+  SELECT m.project_id, 'pr-' || m.n, 'pr-' || min(m.repo) || '#' || m.n
+  FROM (SELECT r.project_id, r.pull_request_number::text AS n,
+               lower(substring(r.pull_request_url from '://[^/]+/([^/]+/[^/]+)/pull/[0-9]+')) AS repo
+        FROM code_task_runs r
+        WHERE r.pull_request_number IS NOT NULL AND r.pull_request_url IS NOT NULL) m
+  WHERE m.repo IS NOT NULL
+  GROUP BY m.project_id, m.n
+  HAVING count(DISTINCT m.repo) = 1;
+
+  UPDATE kg_captures c SET source_id = x.new_id
+  FROM kg_pr_rename x
+  WHERE c.project_id = x.project_id AND c.source_kind = 'pull_request' AND c.source_id = x.old_id
+    AND NOT EXISTS (SELECT 1 FROM kg_captures d WHERE d.project_id = c.project_id
+                      AND d.source_kind = 'pull_request' AND d.source_id = x.new_id
+                      AND d.content_hash = c.content_hash);
+  GET DIAGNOSTICS step = ROW_COUNT;
+  renamed := renamed + step;
+
+  UPDATE kg_change_links l SET source_id = x.new_id
+  FROM kg_pr_rename x
+  WHERE l.project_id = x.project_id AND l.source_kind = 'pull_request' AND l.source_id = x.old_id
+    AND NOT EXISTS (SELECT 1 FROM kg_change_links d WHERE d.project_id = l.project_id
+                      AND d.source_kind = 'pull_request' AND d.source_id = x.new_id
+                      AND d.symbol_key = l.symbol_key);
+  GET DIAGNOSTICS step = ROW_COUNT;
+  renamed := renamed + step;
+
+  UPDATE kg_nodes n SET node_key = 'pull_request:' || x.new_id,
+                        attrs = jsonb_set(n.attrs, '{source_id}', to_jsonb(x.new_id)),
+                        last_seen = now()
+  FROM kg_pr_rename x
+  WHERE n.project_id = x.project_id AND n.kind = 'pull_request'
+    AND n.node_key = 'pull_request:' || x.old_id
+    AND NOT EXISTS (SELECT 1 FROM kg_nodes d WHERE d.project_id = n.project_id
+                      AND d.kind = 'pull_request' AND d.node_key = 'pull_request:' || x.new_id);
+  GET DIAGNOSTICS step = ROW_COUNT;
+  renamed := renamed + step;
+  RETURN renamed;
+END $$;
+SELECT kg_qualify_pr_source_ids();

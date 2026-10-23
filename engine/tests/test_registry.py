@@ -10,6 +10,11 @@ from boss_engine.tools.registry import ToolError, ToolRegistry, ToolSpec
 #: Every tool the default registry is expected to carry. Present so a count mismatch can name
 #: what changed instead of reporting two integers.
 _EXPECTED_TOOLS: set[str] = {
+    # THE KNOWLEDGE GRAPH (BOSSAPP-622): where code is, who depends on it, what a change can
+    # break, the facts and precedent behind it; and kg_propose_fact, the one write (an `inferred`
+    # fact), offered only through the knowledge.propose bundle to six roles.
+    "kg_symbol", "kg_callers", "kg_blast_radius", "kg_why", "kg_search", "kg_precedent", "kg_propose_fact",
+    "kg_cypher",   # read-only Cypher over the project's AGE projection
     # BOSS FIXES ITSELF (BOSSAPP-571): read the self-fixes and the autonomy metric. Reads only:
     # no tool starts, approves, installs, removes or sends a self-fix.
     "list_self_fixes", "get_self_fix", "autonomy_report",
@@ -220,12 +225,12 @@ def test_default_registry_shape():
     read = {s.name for s in reg.specs(kind="read")}
     write = {s.name for s in reg.specs(kind="write")}
     assert read | write == set(reg.names())
-    assert len(reg.names()) == 131, (
+    assert len(reg.names()) == 139, (
         f"tool set changed: unexpected={sorted(set(reg.names()) - _EXPECTED_TOOLS)}, "
         f"missing={sorted(_EXPECTED_TOOLS - set(reg.names()))}")
-    assert len(read) == 77  # + 3 self-fix reads, + read_app_logs, + my_recent_work, + system_health, + 7 template/security reads, + precheck_workflow
+    assert len(read) == 84  # + 7 kg reads, + 3 self-fix reads, + read_app_logs, + my_recent_work, + system_health, + 7 template/security reads, + precheck_workflow
     #                        + query_project_data (the agent baseline's fenced row read)
-    assert len(write) == 54  # + remove_app, + system_doctor_act, + run_security_scan (F4), + apply_template (F2),
+    assert len(write) == 55  # + kg_propose_fact, + remove_app, + system_doctor_act, + run_security_scan (F4), + apply_template (F2),
     #                         + review_pull_request_again
     # the capabilities the user explicitly asked the agent to cover
     for name in (
@@ -461,7 +466,7 @@ _SAFE_WRITES = [
     "investigate",
     # Creating a DESTINATION, not shipping to one. It writes a row that can be retired, and an
     # app that already has a target for the environment adopts it rather than growing a second.
-    "create_deployment_target", "deploy_app", "link_run_origin", "mandate_standard", "merge_apps",
+    "create_deployment_target", "deploy_app", "kg_propose_fact", "link_run_origin", "mandate_standard", "merge_apps",
     # Re-queues only steps whose recorded blocker has actually cleared — each one something the
     # operator could have retried by hand from the same screen.
     "recheck_workflow_run",

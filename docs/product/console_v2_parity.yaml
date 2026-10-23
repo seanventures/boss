@@ -135,6 +135,18 @@ knowledge-graph:
   to: null
   what: The infrastructure knowledge graph is a v1 reliability tool with no v2 screen yet.
   risk: Graph exploration is v1-only.
+knowledge-explorer:
+  to: null
+  what: The knowledge explorer (search, a node and why it is so) is a v1 Knowledge panel with no v2 screen yet.
+  risk: Knowledge search and "why" are v1-only.
+knowledge-settings:
+  to: null
+  what: The knowledge settings read-out (retention, embeddings, budget, ship gate) sits beside the explorer in v1.
+  risk: The knowledge settings are v1-only.
+knowledge-promotion:
+  to: null
+  what: The promotion queue (inferred facts a person may promote) sits in the v1 decision inbox.
+  risk: Promoting a fact is v1-only.
 pipeline:
   to: settings
   what: Not shown yet.
