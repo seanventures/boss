@@ -23,7 +23,7 @@ export function LaunchButton({ projectId, orgId }: { projectId: string; orgId?: 
         onClick={() => setOpen(true)}
         data-testid="v2-new-project"
       >
-        New project
+        New build
       </button>
       {open ? (
         <LaunchModal

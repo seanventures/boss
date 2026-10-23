@@ -1110,7 +1110,7 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
                   setTab(AREA_TABS[to]);
                 }}
                 onClick={() => setTab(key)}>
-          {key === "new" ? <>New project</> : key === "runs" ? <>Runs <em>({runs.length})</em></> : "Library"}
+          {key === "new" ? <>New build</> : key === "runs" ? <>Runs <em>({runs.length})</em></> : "Library"}
         </button>
       ))}
     </div>
@@ -1642,7 +1642,7 @@ export function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilit
   if (runs.length === 0) {
     return (
       <div className="dw-empty" data-testid="dw-no-runs">
-        <p title="Start one in New project, or press Start on a workflow in the Library">
+        <p title="Start one in New build, or press Start on a workflow in the Library">
           Nothing running yet
         </p>
         {onNewProject ? (
