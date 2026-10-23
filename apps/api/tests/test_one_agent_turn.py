@@ -129,6 +129,8 @@ def test_the_same_input_gets_the_same_decision_in_metatron_and_the_console(clien
     terminal = _turn(client, "/v1/metatron/session", said, "ceo")
     assert len(scripted) == 2
     assert scripted[0] == scripted[1]
+    # The terminal can choose everything the console can — creating a project among it.
+    assert "create_project" in scripted[1]["candidates"]
     for key in ("reply", "proposed_actions", "actions", "pending_confirmation", "next_steps"):
         assert console[key] == terminal[key], key
     # The same reply STRUCTURE, field for field: the terminal's --json is the console's API.

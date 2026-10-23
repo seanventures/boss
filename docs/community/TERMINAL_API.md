@@ -58,14 +58,14 @@ Examples on this page use `boss-dogfood`, the default project seeded on your mac
 Type a sentence and Metatron prints the agent's reply. Below the reply it lists what the agent did, any plan waiting for your confirmation, and the choices it offers, numbered. Nothing in that list has run yet:
 
 ```text
-metatron> set up three projects for me and tell me what you can't do
-I can't create projects from this conversation. Create them in the console under Projects…
+metatron> is anything stuck right now?
+One build is waiting on a failed step: Order API, step Build (GitHub refused the push, 403)…
 
 Choices (nothing has run yet — /pick N, or type N):
-  1. Watch the new projects for failures [watch] — you asked to be told about problems
+  1. Retry the Build step [retry_workflow_step] — the saved work is pushed; no rebuild
   2. Investigate further
 metatron> 1
-watch: done.
+retry_workflow_step: done.
 ```
 
 When you pick an offer, Metatron sends the console's button request. It goes to `/v1/engine/agent/action` with exactly the tool and arguments you were shown, and no model reinterprets the choice. The server checks permission, consent, budget and receipts there, just as it does for the button. If an action needs you to confirm your identity again (step-up), Metatron tells you to sign in again in the console and then run the command again.

@@ -758,12 +758,12 @@
     mentions_any: [project, Project, projects, Projects]
     allow_clarify: true
   expected: >-
-    A setup request it can only partly do. It says plainly which parts it cannot do from this
-    conversation (for example: there is no way for it to create a project here, if it has no
-    tool for that) and where each is done instead (the console's Projects page, or the API),
-    and does or offers the parts it can (a project setting, a watch, a workflow on an existing
-    project). It does not turn the request into a coding prompt, and it reports no unrelated
-    stalls, dead letters or overwatch moves in place of an answer.
+    A setup request it can only partly do. It does the parts it can: creates the projects
+    (create_project) or offers to, and sets what it can on them. It says plainly which parts it
+    cannot do from this conversation (for example connecting each project's GitHub repository,
+    or inviting people, when it has no tool for that) and where each is done instead (the
+    console page, or the API). It does not turn the request into a coding prompt, and it does not
+    report unrelated stalls, dead letters or overwatch moves in place of an answer.
   must_not:
     - start a build, a code task or a factory job from the setup request
     - run overwatch or drive moves, or list unrelated stalls and dead letters instead of answering

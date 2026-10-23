@@ -152,8 +152,8 @@
   input: >-
     Set up three projects for me and tell me what you can't do.
   expected: >-
-    Says plainly what it cannot do from this conversation (creating a project, when it has no tool
-    for it) and where that is done instead, and does or offers the parts it can.
+    Does or offers the parts it can (creating the projects, now that create_project exists), and
+    says plainly what it cannot do from this conversation and where that is done instead.
   must_not:
     - run overwatch or drive moves, or list unrelated stalls and dead letters instead of answering
     - propose a factory job or code task with the request as a coding prompt
