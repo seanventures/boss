@@ -7559,6 +7559,10 @@ def build_default_registry() -> ToolRegistry:
     from .knowledge_tools import register_knowledge_tools
 
     register_knowledge_tools(reg)
+    # The captain's powers are the BOSS agent's actions now, not a second engine (BOSSAPP-759).
+    from .captain_tools import register_captain_tools
+
+    register_captain_tools(reg)
     return reg
 
 
@@ -7745,6 +7749,13 @@ _DISCUSS_OPERATIONS_TOOLS: frozenset[str] = frozenset({
     # (stability spec §4e). The same options the console offers; stopping a build is one only
     # when they say so.
     "system_doctor_act",
+    # The captain's powers, retired as an engine and kept as the agent's actions (BOSSAPP-759).
+    # drive / overwatch / theater are operator_only: offered, pressed by a person.
+    "captain_watch",
+    "captain_set_goal",
+    "captain_drive",
+    "captain_overwatch",
+    "captain_theater",
 })
 
 #: REGISTERED, AND DELIBERATELY NOT REACHABLE FROM CHAT.
@@ -7890,6 +7901,10 @@ def build_discuss_read_registry(*, edition: str | None = None) -> ToolRegistry:
                 # build_default_registry, which is not the registry this path uses. A safety
                 # property that holds in the registry nobody calls is not a safety property.
                 reversibility=spec.reversibility,
+                # ...AND WHO MAY PRESS IT. Dropping this would let the chat model run the
+                # captain's overwatch itself — the very thing BOSSAPP-759 took away from a
+                # sentence.
+                operator_only=spec.operator_only,
             )
         )
     return reg

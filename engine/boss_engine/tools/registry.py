@@ -98,6 +98,11 @@ class ToolSpec:
     #: second key in its handler (apply_template: workflow_run:start at the project AND
     #: template:read, §2.6) is mirrored here, so the tool cannot be weaker than its route.
     also_requires: tuple = ()
+    #: OFFERED, NEVER PRESSED BY THE MODEL — whatever its reversibility. For a tool that applies
+    #: a batch of moves the person did not see one by one (the captain's overwatch and drive,
+    #: which can start a factory build): plain text never sets it off; the agent offers it, and
+    #: a person's press (or typed /overwatch) runs it (BOSSAPP-759).
+    operator_only: bool = False
 
     def permission_for(self, args: Optional[dict]) -> Optional[str]:
         """The permission THIS call needs (see `permission_by_arg`)."""
@@ -136,7 +141,7 @@ class ToolSpec:
     @property
     def self_executable(self) -> bool:
         """May the model run this itself, given permission to write?"""
-        return self.reversibility not in NEVER_SELF_EXECUTE
+        return self.reversibility not in NEVER_SELF_EXECUTE and not self.operator_only
 
     def openai(self) -> dict:
         """OpenAI/Anthropic function-calling schema (used by the agent loop)."""
@@ -332,6 +337,9 @@ class ToolRegistry:
                 # shown, so the arguments come back untouched for the proposal to carry.
                 "proposed_args": safe_args,
                 "message": (
+                    f"'{name}' applies moves a person has not seen one by one (a build may "
+                    "start) — so it runs only when an operator clicks it."
+                    if spec.operator_only and spec.reversibility not in NEVER_SELF_EXECUTE else
                     f"'{name}' is declared '{spec.reversibility}' — "
                     + ("it gives an agent reach on somebody's account"
                        if spec.reversibility == "grants_authority"

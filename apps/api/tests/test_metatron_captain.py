@@ -1,7 +1,7 @@
 """Metatron HTTP — the terminal's turn is an Ask BOSS turn; captain powers are commands."""
 
 from apps.api.app import main as api_main
-from apps.api.app.routers import metatron_captain
+from boss_engine.tools import captain_tools
 
 
 def test_installer_ceo_key_can_use_default_terminal_actor(client, monkeypatch):
@@ -30,7 +30,8 @@ def test_installer_ceo_key_can_use_default_terminal_actor(client, monkeypatch):
             return {"actor": actor}
 
     monkeypatch.setattr(api_main.orchestration_agent, "chat", chat)
-    monkeypatch.setattr(metatron_captain, "_captain", FakeCaptain)
+    # A typed captain command is a press of the agent's action: the captain behind it is the tool's.
+    monkeypatch.setattr(captain_tools, "_captain", lambda _ctx: FakeCaptain())
     headers = {"X-Boss-Api-Key": key}
     session = client.get("/v1/auth/session", headers=headers)
     assert session.status_code == 200, session.text

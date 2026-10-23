@@ -1,4 +1,6 @@
-"""Metatron Captain HTTP surface — session, goals, watch, drive, overwatch."""
+"""Metatron HTTP surface. A sentence is an Ask BOSS turn (`agent_turn`); a captain command
+(/watch, /overwatch, /drive, goals, theater) is a press of the BOSS agent's own action
+(`agent_action`). Neither has a decision path of its own (BOSSAPP-759)."""
 from __future__ import annotations
 
 from boss_engine.identity import P, PublicReason, Scope, authenticated, permit, public  # noqa: E402,F401  (identity S2)
@@ -8,7 +10,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from boss_engine.schemas import AgentChatRequest, AgentChatResponse
+from boss_engine.schemas import AgentActionRunRequest, AgentChatRequest, AgentChatResponse
 from boss_engine.services.metatron_captain import MetatronCaptain
 
 from ..config import get_settings
@@ -51,6 +53,27 @@ def _require(connection, project_id: str, actor: str) -> None:
     require_project_actor(connection, project_id, actor, "agent_chat")
 
 
+def _press(request: Request, project_id: str, actor: str, tool: str,
+           args: dict[str, Any]) -> dict[str, Any]:
+    """A TYPED CAPTAIN COMMAND IS A PRESS OF THE AGENT'S BUTTON (BOSSAPP-759).
+
+    /watch, /overwatch, /drive and the rest are the BOSS agent's actions (tools/captain_tools.py),
+    run through `agent_action` — the console's button path — with the arguments the person
+    typed: the tool's permission, the identity gate and the transcript are the same as a press
+    in Ask BOSS. The reply is the tool's result, the shape these routes always returned."""
+    from apps.api.app.main import agent_action
+
+    pressed = agent_action(AgentActionRunRequest(project_id=project_id, actor=actor, tool=tool,
+                                                 args=args, label=f"/{tool.split('_', 1)[1]}"),
+                           request)
+    if not pressed.ok:
+        result = pressed.result or {}
+        forbidden = result.get("status") in {"forbidden", "denied"} or result.get("permission")
+        raise HTTPException(status_code=403 if forbidden else 409,
+                            detail=result.get("message") or pressed.error or "refused")
+    return dict(pressed.result or {})
+
+
 @router.post("/v1/metatron/session", response_model=AgentChatResponse)
 @permit(P.ASSISTANT_CHAT, scope=Scope.project(body="project_id"))
 def captain_session_turn(payload: AgentChatRequest, request: Request) -> AgentChatResponse:
@@ -87,33 +110,22 @@ def captain_goals_list(project_id: str) -> dict[str, Any]:
 
 @router.post("/v1/metatron/goals", status_code=201)
 @permit(P.AUTOPILOT_OPERATE, scope=Scope.project(body="project_id"))
-def captain_goals_create(payload: GoalCreateRequest) -> dict[str, Any]:
+def captain_goals_create(payload: GoalCreateRequest, request: Request) -> dict[str, Any]:
     if not payload.project_id.strip() or not payload.title.strip():
         raise HTTPException(status_code=422, detail="project_id and title are required")
-    with begin(get_engine()) as connection:
-        _require(connection, payload.project_id, payload.actor)
-        goal = _captain().set_goal(
-            connection,
-            project_id=payload.project_id,
-            actor=payload.actor,
-            title=payload.title,
-            kind=payload.kind,
-            description=payload.description,
-            auto_drive=payload.auto_drive,
-        )
-        return goal
+    args: dict[str, Any] = {"title": payload.title, "kind": payload.kind,
+                            "description": payload.description}
+    if payload.auto_drive is not None:
+        args["auto_drive"] = payload.auto_drive
+    return _press(request, payload.project_id, payload.actor, "captain_set_goal", args)
 
 
 @router.post("/v1/metatron/watch")
 @permit(P.AUTOPILOT_OPERATE, scope=Scope.project(body="project_id"))
-def captain_watch(payload: WatchRequest) -> dict[str, Any]:
+def captain_watch(payload: WatchRequest, request: Request) -> dict[str, Any]:
     if not payload.project_id.strip():
         raise HTTPException(status_code=422, detail="project_id is required")
-    with begin(get_engine()) as connection:
-        _require(connection, payload.project_id, payload.actor)
-        return _captain().watch_once(
-            connection, project_id=payload.project_id, actor=payload.actor
-        )
+    return _press(request, payload.project_id, payload.actor, "captain_watch", {})
 
 
 @router.get("/v1/metatron/watch/latest")
@@ -128,29 +140,19 @@ def captain_watch_latest(project_id: str) -> dict[str, Any]:
 
 @router.post("/v1/metatron/drive")
 @permit(P.AUTOPILOT_OPERATE, scope=Scope.project(body="project_id"))
-def captain_drive(payload: DriveRequest) -> dict[str, Any]:
+def captain_drive(payload: DriveRequest, request: Request) -> dict[str, Any]:
     if not payload.project_id.strip():
         raise HTTPException(status_code=422, detail="project_id is required")
-    with begin(get_engine()) as connection:
-        _require(connection, payload.project_id, payload.actor)
-        return _captain().drive(
-            connection,
-            project_id=payload.project_id,
-            actor=payload.actor,
-            auto=payload.auto,
-        )
+    return _press(request, payload.project_id, payload.actor, "captain_drive",
+                  {"auto": bool(payload.auto)})
 
 
 @router.post("/v1/metatron/overwatch")
 @permit(P.AUTOPILOT_OPERATE, scope=Scope.project(body="project_id"))
-def captain_overwatch(payload: WatchRequest) -> dict[str, Any]:
+def captain_overwatch(payload: WatchRequest, request: Request) -> dict[str, Any]:
     if not payload.project_id.strip():
         raise HTTPException(status_code=422, detail="project_id is required")
-    with begin(get_engine()) as connection:
-        _require(connection, payload.project_id, payload.actor)
-        return _captain().overwatch_once(
-            connection, project_id=payload.project_id, actor=payload.actor
-        )
+    return _press(request, payload.project_id, payload.actor, "captain_overwatch", {})
 
 
 class TheaterRequest(BaseModel):
@@ -175,15 +177,9 @@ def captain_theater(project_id: str, actor: str = "executive_console") -> dict[s
 
 @router.post("/v1/metatron/theater")
 @permit(P.AUTOPILOT_OPERATE, scope=Scope.project(body="project_id"))
-def captain_theater_enact(payload: TheaterRequest) -> dict[str, Any]:
+def captain_theater_enact(payload: TheaterRequest, request: Request) -> dict[str, Any]:
     """Observe the fleet, then apply validated command powers when auto=true."""
     if not payload.project_id.strip():
         raise HTTPException(status_code=422, detail="project_id is required")
-    with begin(get_engine()) as connection:
-        _require(connection, payload.project_id, payload.actor)
-        return _captain().command_once(
-            connection,
-            project_id=payload.project_id,
-            actor=payload.actor,
-            auto=payload.auto,
-        )
+    return _press(request, payload.project_id, payload.actor, "captain_theater",
+                  {"auto": bool(payload.auto)})

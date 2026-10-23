@@ -13370,7 +13370,14 @@ def agent_turn(payload: AgentChatRequest, request: Request, *, endpoint: str) ->
 @permit(P.ASSISTANT_CHAT, scope=Scope.project(body="project_id"),
         confine=(Confine.body("thread_id", "agent_thread"),))
 def run_agent_action(payload: AgentActionRunRequest, request: Request) -> AgentActionRunResponse:
-    """Execute one action the operator ACCEPTED by clicking its button.
+    """Execute one action the operator ACCEPTED by clicking its button (see agent_action)."""
+    return agent_action(payload, request)
+
+
+def agent_action(payload: AgentActionRunRequest, request: Request) -> AgentActionRunResponse:
+    """THE ONE PRESS (BOSSAPP-759): execute one action the operator ACCEPTED by clicking its
+    button — in the console, as a numbered choice in Metatron, or by typing a captain command
+    (/watch, /overwatch, /drive, whose routes are thin adapters onto this).
 
     Deliberately does NOT go through the model. The operator saw a specific tool and specific
     arguments and clicked that; re-asking a model to interpret the click would let it drift into

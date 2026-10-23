@@ -325,18 +325,12 @@ class ControlPlaneClient:
         return response.json()
 
     def tick_metatron_watch(self, project_id: str, actor: str = "system") -> dict[str, Any]:
-        """Legacy observe-only tick. Prefer tick_metatron_overwatch."""
+        """The scheduled captain watch: observe and score goals, apply nothing. It runs the BOSS
+        agent's own `captain_watch` action through the agent's press path (BOSSAPP-759). The
+        always-on overwatch that APPLIED moves is retired: applying is a person's /overwatch or a
+        press of the agent's offer."""
         response = self._client.post(
             "/v1/metatron/watch",
-            json={"project_id": project_id, "actor": actor},
-        )
-        response.raise_for_status()
-        return response.json()
-
-    def tick_metatron_overwatch(self, project_id: str, actor: str = "system") -> dict[str, Any]:
-        """Always-on captain cycle: observe, measure, validate, apply safe, verify."""
-        response = self._client.post(
-            "/v1/metatron/overwatch",
             json={"project_id": project_id, "actor": actor},
         )
         response.raise_for_status()
