@@ -52,6 +52,10 @@ const OPS: Record<string, Op> = {
   build_database: { method: "PUT", path: () => "/v1/settings/build_services" },
   // "Build speed": the project setting build_speed (Owner/Admin).
   build_speed: { method: "PUT", path: () => "/v1/settings/build_speed" },
+  // Setup › Embedding model: save (the key in the body, into the vault), check, remove.
+  embedding_model: { method: "POST", path: () => "/v1/setup/embedding-model" },
+  embedding_model_check: { method: "POST", path: () => "/v1/setup/embedding-model/check" },
+  embedding_model_remove: { method: "DELETE", path: () => "/v1/setup/embedding-model", query: ["project_id"] },
 };
 
 async function forward(r: Response) {

@@ -215,8 +215,30 @@ export type SetupView = {
   /** "Build speed": parallel sub-agents per build (project setting build_speed). Absent on an older API. */
   build_speed?: { key: string; mode: "balanced" | "fastest"; parallelism: number; machine: number;
                   asks?: Record<string, number>; source: "project" | "default"; permission: string } | null;
+  /** Setup › Embedding model (knowledge/embedding_slot.py). Absent on an older API. */
+  embedding_model?: EmbeddingModel | null;
   /** A background probe (signed-in CLIs, the secret store) is on its way: ask again soon. */
   detecting?: boolean;
+};
+
+/** One provider Setup offers for the embedding model, with its form. */
+export type EmbeddingProvider = {
+  provider: "azure" | "openai" | "ollama" | string; label: string; needs_key: boolean;
+  fields: string[]; example_model?: string; example_dimension?: number; example_base_url?: string;
+};
+
+/** The embedding model's slot: only THAT a key is held, never the key. */
+export type EmbeddingModel = {
+  key: string; configured: boolean; permission: string; budget_category: string;
+  /** Meaning-based search is on (the last check passed); `reason` says why not in words. */
+  search: boolean; reason: string;
+  providers: EmbeddingProvider[];
+  provider?: string; label?: string; model?: string; dimension?: number; base_url?: string;
+  endpoint?: string; deployment?: string; api_version?: string; has_key?: boolean; model_id?: string;
+  check?: { state: "ok" | "failed" | "unchecked"; reply?: string; error?: string; checked_at?: string;
+            latency_ms?: number };
+  /** Summaries still to embed under this model (the background re-embed). */
+  reembed_pending?: number;
 };
 
 /** What a refused connect or check says: one pill's worth. */
@@ -249,4 +271,5 @@ export type TokenFound = {
 /** Rows on the board. */
 export type RowKey = "github" | "repository" | "models" | "capacity" | "jobs" | "budget" | "try"
   /** Advanced: the rows folded under it (`focus=` opens the fold on that row). */
-  | "advanced" | "github_app" | "repositories" | "ci" | "build_database" | "build_speed" | "toolchains" | "public_url";
+  | "advanced" | "github_app" | "repositories" | "ci" | "build_database" | "build_speed" | "toolchains" | "public_url"
+  | "embedding_model";

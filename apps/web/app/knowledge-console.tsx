@@ -19,7 +19,11 @@ export type KnowledgeWhy = {
 
 export type KnowledgeStatusView = {
   retention_years: number;
-  embedding_model: string | null;
+  /** Setup › Embedding model's slot (provider, model, dimension, its last check), or null. */
+  embedding_model: { provider: string; model: string | null; dimension: number | null; model_id: string;
+                     check: string } | null;
+  /** How retrieval runs, and why meaning-based search is off, in the server's words. */
+  retrieval?: { mode: string; reason?: string };
   vector_index: string;
   budget_category: string;
   ship_gate: string;
@@ -215,8 +219,10 @@ export function KnowledgeSettings({ projectId, actorId, initial }: SettingsProps
         <dt>Embedding</dt>
         <dd>
           {status?.embedding_model
-            ? status.embedding_model
-            : "No embedding model is configured."}{" "}
+            ? `${status.embedding_model.model} (${status.embedding_model.dimension} dimensions), check ${status.embedding_model.check}.`
+            : "No embedding model is set."}{" "}
+          {status?.retrieval?.reason ? <span data-testid="knowledge-search-off">{status.retrieval.reason}. </span> : null}
+          <a href="?area=setup&focus=embedding_model">Setup › Embedding model</a>.{" "}
           Vector index: {status?.vector_index === "not_created" ? "not created" : status?.vector_index ?? "not created"}.
         </dd>
         <dt>Budget</dt>

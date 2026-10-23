@@ -55,12 +55,19 @@ class KnowledgeService:
             from ...config import get_settings
             from .embeddings import configured_embedder
 
-            embedder, reason = configured_embedder(get_settings())
+            embedder, reason = configured_embedder(connection, get_settings(), project_id)
         if embedder is not None:
-            vector = embedder.embed([query])[0]
-            lists["vector"] = self.store.vector_search(
-                connection, project_id=project_id, model_id=embedder.model_id,
-                embedding=list(vector), limit=50, policy=policy)
+            # A refused budget or a provider that is down narrows THIS search to text and the
+            # graph, and says so; it never fails the search.
+            try:
+                with connection.begin_nested():
+                    vector = embedder.embed([query])[0]
+                    lists["vector"] = self.store.vector_search(
+                        connection, project_id=project_id, model_id=embedder.model_id,
+                        embedding=list(vector), limit=50, policy=policy)
+            except Exception as error:  # noqa: BLE001
+                reason = ("meaning-based search is off for this search: the embedding model did "
+                          f"not answer ({type(error).__name__}: {str(error)[:160]})")
         enriched = []
         for hit in fuse_lists(lists):
             node = self.store.get_node(
@@ -342,12 +349,10 @@ class KnowledgeService:
         }
 
     def status(self, connection: Connection, *, project_id: str) -> dict[str, Any]:
-        from ...config import get_settings
-        from .embeddings import configured_embedder
+        from .embedding_slot import model_id_of, read, search_state
 
-        settings = get_settings()
-        embedder, reason = configured_embedder(settings)
-        embedding_model = str(getattr(settings, "knowledge_embedding_model", "") or "")
+        slot = read(connection, project_id)
+        searching, reason = search_state(slot)
         counts = self.store.counts(connection, project_id=project_id)
         rows = connection.execute(
             text(
@@ -381,8 +386,11 @@ class KnowledgeService:
             "ingest_lag_seconds": None,
             "cost_usd": None,
             "retention_years": 1,
-            "embedding_model": embedding_model or None,
-            "retrieval": {"mode": "hybrid" if embedder is not None else "text+graph",
+            "embedding_model": ({"provider": slot["provider"], "model": slot.get("model"),
+                                 "dimension": slot.get("dimension"), "model_id": model_id_of(slot),
+                                 "check": (slot.get("check") or {}).get("state", "unchecked")}
+                                if slot else None),
+            "retrieval": {"mode": "hybrid" if searching else "text+graph",
                           **({"reason": reason} if reason else {})},
             "vector_index": self.store.vector_index_kind(connection),
             "vector_extension": self.store.vector_extension_version(connection),

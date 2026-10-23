@@ -1,11 +1,14 @@
-"""Embeddings for meaning-based search (BOSSAPP-622; operator decision 2026-10-22).
+"""Embeddings for meaning-based search (BOSSAPP-622; operator decisions 2026-10-22).
 
 The database image always has pgvector, so a stored embedding is searched through the HNSW
-index (``PostgresKnowledgeStore.sync_vector_index``). What it needs is an embedding model. An
-:class:`Embedder` is injected; ``configured_embedder`` says which one this BOSS has, or why it
-has none, and retrieval then runs on full text and the graph and states that reason in status.
+index (``PostgresKnowledgeStore.sync_vector_index``). The embedding model is its own slot,
+Setup › Embedding model (embedding_slot.py): ``configured_embedder`` answers with that slot's
+governed embedder when its check passed, or None and the reason in words, and retrieval then runs
+on full text and the graph and says so in status.
 
 Only distilled facts and node summaries are embedded (``EMBEDDED_KINDS``), never raw logs.
+``embed_due`` is the background half: on the worker's knowledge tick it drops a project's vectors
+of any other space (another model or dimension) and embeds what the current one lacks.
 """
 from __future__ import annotations
 
@@ -14,9 +17,11 @@ from typing import Any, Protocol
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
+from .embedding_slot import NO_MODEL, UNCHECKED  # noqa: F401 — the reasons, in words
+
 EMBEDDED_KINDS = ("fact", "decision", "incident", "runbook", "spec", "review_finding")
-NO_MODEL = "no embedding model is configured (BOSS_KNOWLEDGE_EMBEDDING_MODEL)"
-NOT_WIRED = "an embedding model is named, but this build has no governed embedding call for it"
+#: Summaries embedded per project per tick: a few governed calls, never a burst.
+BATCH = 64
 
 
 class Embedder(Protocol):
@@ -25,12 +30,57 @@ class Embedder(Protocol):
     def embed(self, texts: list[str]) -> list[list[float]]: ...
 
 
-def configured_embedder(settings: Any) -> tuple[Embedder | None, str]:
-    """The embedder this BOSS is configured with, or None and the reason in words."""
-    model = str(getattr(settings, "knowledge_embedding_model", "") or "").strip()
-    if not model:
-        return None, NO_MODEL
-    return None, NOT_WIRED
+def configured_embedder(connection: Connection, settings: Any, project_id: str) -> tuple[Embedder | None, str]:
+    """The embedder this project's slot gives, or None and the reason in words."""
+    from .embedding_slot import active_embedder
+
+    return active_embedder(connection, settings, project_id)
+
+
+def drop_other_spaces(connection: Connection, *, project_id: str, model_id: str) -> int:
+    """Remove this project's vectors of every space but ``model_id``, in kg_embeddings and in
+    the pgvector side table of each dimension: spaces never mix."""
+    from .store import _vec_table
+
+    dims = connection.execute(text(
+        "SELECT DISTINCT dimensions FROM kg_embeddings WHERE project_id = :p AND model_id <> :m"),
+        {"p": project_id, "m": model_id}).scalars().all()
+    removed = connection.execute(text(
+        "DELETE FROM kg_embeddings WHERE project_id = :p AND model_id <> :m"),
+        {"p": project_id, "m": model_id}).rowcount or 0
+    for dim in (int(d) for d in dims if 1 <= int(d) <= 2000):
+        table = _vec_table(dim)
+        if connection.execute(text("SELECT to_regclass(:t)"), {"t": table}).scalar():
+            connection.execute(text(f"DELETE FROM {table} WHERE project_id = :p AND model_id <> :m"),
+                               {"p": project_id, "m": model_id})
+    return int(removed)
+
+
+def embed_due(engine: Any, *, project_id: str | None = None, limit: int = BATCH) -> dict[str, int]:
+    """Re-embed in the background, per project whose slot passed its check. One project's
+    refusal (budget, a provider down) never holds the others back; nothing raises."""
+    from ...config import get_settings
+    from .embedding_slot import SETTING_KEY, active_embedder
+    from .store import PostgresKnowledgeStore
+
+    out = {"projects": 0, "embedded": 0, "dropped": 0, "failed": 0}
+    with engine.begin() as connection:
+        projects = [project_id] if project_id else connection.execute(text(
+            "SELECT project_id FROM project_settings WHERE key = :k"), {"k": SETTING_KEY}).scalars().all()
+    settings = get_settings()
+    for pid in projects:
+        try:
+            with engine.begin() as connection:
+                embedder, _reason = active_embedder(connection, settings, pid)
+                if embedder is None:
+                    continue
+                out["projects"] += 1
+                out["dropped"] += drop_other_spaces(connection, project_id=pid, model_id=embedder.model_id)
+                out["embedded"] += embed_pending(connection, PostgresKnowledgeStore(), project_id=pid,
+                                                 embedder=embedder, limit=limit)
+        except Exception:  # noqa: BLE001 — retried on the next tick
+            out["failed"] += 1
+    return out
 
 
 def embed_pending(

@@ -48,10 +48,35 @@ describe("knowledge console", () => {
       }),
     );
     expect(html).toContain("one year");
+    expect(html).toContain("No embedding model is set.");
+    expect(html).toContain("focus=embedding_model");
     expect(html).toContain("not created");
     expect(html).toContain("knowledge");
     expect(html).toContain("has not been run");
     expect(html).toContain("not been measured");
+  });
+
+  it("names the embedding slot, and why meaning-based search is off", () => {
+    const html = renderToStaticMarkup(
+      createElement(KnowledgeSettings, {
+        projectId: "proj",
+        actorId: "ceo",
+        initial: {
+          retention_years: 1,
+          embedding_model: { provider: "ollama", model: "nomic-embed-text", dimension: 768,
+                             model_id: "ollama:nomic-embed-text:768", check: "failed" },
+          retrieval: { mode: "text+graph",
+                       reason: "meaning-based search is off: the embedding model check failed: connection refused" },
+          vector_index: "hnsw",
+          budget_category: "knowledge",
+          ship_gate: "case_study_primary_not_run",
+          cost_usd: null,
+          sources: ["adr folder"],
+        },
+      }),
+    );
+    expect(html).toContain("nomic-embed-text (768 dimensions), check failed.");
+    expect(html).toContain("check failed: connection refused");
   });
 
   it("names the facts a decision used", () => {

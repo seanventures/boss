@@ -512,6 +512,22 @@ class DecisionModelKeyBody(OpenProjectBody):
     accept_database_fallback: SkipValidation[bool | None] = None
 
 
+class EmbeddingModelBody(OpenProjectBody):
+    """Setup › Embedding model (knowledge/embedding_slot.py). The key is write-only."""
+
+    model_config = ConfigDict(json_schema_extra={"required": ["project_id", "provider", "dimension"]})
+
+    provider: SkipValidation[str | None] = None
+    model: SkipValidation[str | None] = None
+    dimension: SkipValidation[int | str | None] = None
+    base_url: SkipValidation[str | None] = None
+    endpoint: SkipValidation[str | None] = None
+    deployment: SkipValidation[str | None] = None
+    api_version: SkipValidation[str | None] = None
+    api_key: SkipValidation[str | None] = Field(default=None, json_schema_extra={"writeOnly": True})
+    accept_database_fallback: SkipValidation[bool | None] = None
+
+
 class ProviderUsageIngestBody(OpenProjectBody):
     model_config = ConfigDict(json_schema_extra={
         "required": ["project_id", "provider", "operation"]

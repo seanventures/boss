@@ -1133,8 +1133,6 @@ class Settings(BaseSettings):
     captain_auto_improve: int = Field(default=0, alias="BOSS_CAPTAIN_AUTO_IMPROVE")
     # BOSSAPP-622: whether agents are given the knowledge graph (project_settings `knowledge_graph`).
     knowledge_graph: str = Field(default="on", alias="BOSS_KNOWLEDGE_GRAPH")
-    # The embedding model for meaning-based knowledge search; empty: full text and the graph only.
-    knowledge_embedding_model: str = Field(default="", alias="BOSS_KNOWLEDGE_EMBEDDING_MODEL")
     # FIX AND REDEPLOY (services/deploy_repair.py): how many repair builds a workflow's deploy
     # step starts by itself when its deployment fails for the APP's reason (a runtime the machine
     # lacks, a manifest that does not fit, the app's own install/health error). 0 = never; the

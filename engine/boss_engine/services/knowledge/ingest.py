@@ -5,7 +5,8 @@ and an incident the moment it becomes resolved (``kg_ingest_queue``), whatever c
 finished it. The worker drains the queue every ``QUEUE_POLL_SECONDS`` through
 POST /v1/knowledge/ingest/tick; every ``SWEEP_SECONDS`` the same call also sweeps the last
 ``SWEEP_DAYS`` for anything the triggers missed (a record finished before the trigger existed),
-and reconciles each project's AGE projection with the tables (knowledge/age.py).
+and reconciles each project's AGE projection with the tables (knowledge/age.py). Every tick
+also embeds what a project's embedding model has not embedded yet (embeddings.embed_due).
 
 Each record becomes a lifecycle node through ``capture_lifecycle`` (scrubbed, stored once per
 body). No model is called: the structure is captured, and distilling facts from it is the
@@ -141,7 +142,12 @@ def ingest_due(engine: Any, *, limit: int = 20, days: int = SWEEP_DAYS,
 def tick(engine: Any, *, sweep: bool = False, project_id: str | None = None) -> dict[str, Any]:
     """The worker's call: drain the queue; on a sweep tick, also catch what the triggers missed.
     ``project_id`` narrows it to one project (every project when None)."""
+    from .embeddings import embed_due
+
     out: dict[str, Any] = {"queued": ingest_queued(engine, project_id=project_id)}
+    # Re-embedding runs in the background here: what the project's embedding slot lacks, after
+    # a new model or dimension dropped the old space (embeddings.embed_due). Governed calls.
+    out["embedded"] = embed_due(engine, project_id=project_id)
     if sweep:
         out["sweep"] = ingest_due(engine, project_id=project_id)
         out["projection"] = reconcile_projections(engine, project_id=project_id)
