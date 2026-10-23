@@ -41,7 +41,7 @@ Governance is the same for every caller: permission and identity gate, consent (
 | GitHub issue triage | `services/github_triage_agent.py:GitHubTriageAgent._decide` | **own decision**: `agent_decision.decide` | `AgentService.decide`: a turn by the GitHub triage agent on the thread `github-issue:<repo>#<n>`, with the keyword triage as a hint. Unsure or no model: maintainer review (unchanged). Its keyword hint reads the pipeline's own router (`classify_message`) |
 | Alert triage, flap tuning (Beacon) | `services/app_alerts.py:triage_alert`, `propose_flap_tuning` | **own decision**: `agent_decision.decide` | `AgentService.decide`: a turn by the on-call agent (`sre`) on its incident's thread (`incident:<id>`, the one the verdict is decided on), else the alert's (`alert:<id>`). Candidates, context, the person's answer path (`answer_triage`) and the outcomes are unchanged. A flap tuning is still only proposed |
 | Incident verdict | `services/investigation.py:model_verdict` | **own decision**: `agent_decision.decide` over hypotheses. It records a verdict and acts on nothing | `AgentService.decide`: a turn by the on-call agent (`sre`) on the thread `incident:<id>`, with the hypotheses as choices and the signals and scores as the record. It still records a verdict and acts on nothing |
-| Agent-to-agent talk, plan, room | `services/agent_converse.py:take_turn/propose_start` (model through `conversation_spend.py`) | **own path**: persona prompt and its own model call. Plan and room choose a workflow, which a person presses | **Left to do** |
+| Agent-to-agent talk, plan, room | `services/agent_converse.py:take_turn/propose_start` (model through `conversation_spend.py`) | **own path**: persona prompt and its own model call. Plan and room choose a workflow, which a person presses | **Left, with a reason** (see "Not moved yet"): every seat's reply is one streamed call under the conversation's own spend envelope, which the pipeline's turn cannot carry yet |
 | Focused agents | `services/focused_agents.py:tick_one` | a deterministic duty loop over the captain's validated moves. It makes no model decision | **Left to do**: run as scheduled agent wakeups through `AgentService.chat` |
 | Self-fix (Mender) dispatch | `workflow_capability_runner.py:_boss_side_wait` → `self_fix.propose` | triggered by step recovery's `fix_boss`. Confidence is deterministic | Follows step recovery |
 | Debug-session investigation | `services/debug_session.py` | a coding engine with `boss-do`. It can run registry write tools | A worker. Its writes go through `registry.invoke`. Revisit with the workflow agent step |
@@ -50,7 +50,7 @@ Governance is the same for every caller: permission and identity gate, consent (
 
 A worker calls a model to produce an artifact, such as code, a PRD, a review, an edit plan or a drafted workflow. It doesn't choose what BOSS does next. Workers stay outside the pipeline, and so do the coding engines inside a build step (`code_agent.py`, the CLI harnesses), panel seats and PRD synthesis (`meeting_service.py`), the PR reviewers, `meeting_actions.py`, `prd_decomposition.py`, `video_planner.py`, `workflow_drafting.py`, `typed_decisions.py` (it answers a workflow author's own question), the read-only pre-check, `sre_ask.py` (it plans a query and never executes one) and the factory plan artifact. The boundary is choosing a BOSS action. Any module that picks which BOSS action to take, offer or skip belongs in the pipeline.
 
-`engine/tests/test_one_agent_pipeline.py` enforces this. Any module that imports the decision model, builds or calls the router, calls a model or runs its own tool loop must appear in its `ALLOWED` list with a reason. Each "left to do" entry above is marked `MIGRATE` there. The list can only shrink: an entry that stops deciding on its own fails the test until someone removes it. Metatron's router, the captain service, the captain tools, `focused_agents.py` and `metatron_command.py` may never decide on their own.
+`engine/tests/test_one_agent_pipeline.py` enforces this. Any module that imports the decision model, builds or calls the router, calls a model or runs its own tool loop must appear in its `ALLOWED` list with a reason. Each entry not moved yet is marked `MIGRATE` there. The list can only shrink: an entry that stops deciding on its own fails the test until someone removes it. Metatron's router, the captain service, the captain tools, `focused_agents.py` and `metatron_command.py` may never decide on their own.
 
 ### Intentional differences
 
@@ -65,13 +65,28 @@ Every shipped agent holds the same baseline skills (`agent_baseline.BASELINE_SKI
 - **Kept:** each role's specialist skills in its spec's `allowed_skills`. These are data that `sync_role_skills` writes into `role_skills`, and an operator can see and change them in the console like any other grant. Governance is unchanged: approvals, step-up, budget, receipts, Passport ceilings and consent.
 - **Enforced:** `engine/tests/test_every_shipped_agent_has_the_same_base.py`. No role list and no comparison against a shipped role key may appear in the pipeline's code. The base is one constant, not a function of the role. No role spec may forbid a baseline skill. The chat registry takes no role.
 
-## Left to do, in risk order
+## The migration, in risk order
 
-1. Incident verdict (`investigation.py`): ask through the pipeline with the hypotheses as the record.
-2. GitHub issue triage and inbox replies (`github_triage_agent.py`, `comms.py`): a turn on the issue's or decision's thread, with its verdict offered as actions.
-3. Alert triage and flap tuning (`app_alerts.py`): the same, keyed to the incident.
-4. Agent-to-agent talk, plan and room (`agent_converse.py`, `conversation_spend.py`): a role-addressed turn (`role=`) on the conversation's thread.
+1. Incident verdict (`investigation.py`): **moved** (`AgentService.decide`).
+2. GitHub issue triage and inbox replies (`github_triage_agent.py`, `comms.py`): **moved**.
+3. Alert triage and flap tuning (`app_alerts.py`): **moved**, keyed to the incident.
+4. Agent-to-agent talk, plan and room (`agent_converse.py`, `conversation_spend.py`): **not moved**. See "Not moved yet".
 5. Focused agents: scheduled wakeups through `AgentService.chat`, with the duty as the message.
 6. Step recovery and the workflow agent step (`step_recovery.py`, `agent_steps.py`, `agent_loop.py`): the riskiest move, because these run unattended inside builds. Move them onto `route_turn` with a step-scoped thread (`external_ref` = the step) once the battle set's `step_recovery` scenarios pass on the pipeline.
 
-Each step moves its module out of `MIGRATE` in `test_one_agent_pipeline.py` and runs the battle set's scenarios for that surface.
+Each step moves its module out of `MIGRATE` in `test_one_agent_pipeline.py` and runs the battle set's scenarios for that surface. A moved module is listed in that test's `MIGRATED`, which checks that it calls `AgentService.decide` and nothing on the decision signs.
+
+## Not moved yet
+
+These stay on the allow-list as `MIGRATE`, each with its reason there. Moving them needs a change to the pipeline itself, not to the entry point.
+
+### Agent-to-agent talk, plan and room
+
+**Why it cannot move as it is.** A talk, a plan and a room are conversations between a person and one to five seated agents. Each seat's reply is one model call, streamed token by token to the console, under the conversation's own spend envelope (`ConversationCallSpend`): one pinned provider attempt, a reservation and a model lease held across the live stream, a settled receipt, and the floor claim that keeps two streams from speaking at once. The pipeline's turn (`AgentService.chat` → `route_turn` → `EngineAgent`) answers in one piece and governs its own calls, so it has no way to stream a seat's reply or to run under a caller's envelope. Moving the seats onto it today would drop streaming and the conversation's settlement, which the console and `test_a_talk_streams_as_the_model_writes` rely on. The plan's start card and the room's summary are one structured call inside the same envelope, so they cannot move separately without splitting one governed call into two.
+
+**Design note.**
+
+1. Give the pipeline's answer a streaming form: `EngineAgent` yields tokens through the adapter's `stream_text_response`, and `route_turn` takes an optional spend envelope that its model calls run under, in place of its own governance.
+2. A seat then speaks as `AgentService.chat(role=<seat>, mode="discuss", external_ref="conversation:<id>")`, a role-addressed turn on the conversation's thread. `discuss` already writes nothing, which is the talk's rule (`TALK_CANNOT_ACT`). Round two, one agent answering another, is the same turn with the earlier seat's reply as the message. That is agent-to-agent communication on the one pipeline.
+3. The plan's start card becomes `AgentService.decide` over the catalogue's workflows, with the transcript as the record. The card's directive, inputs and acceptance are then a worker's draft for the person to press, as they are today.
+4. Move it when `test_a_talk_streams_as_the_model_writes`, `test_a_talk_never_claims_an_action` and the talking-with-agents API tests pass on the pipeline.

@@ -67,8 +67,12 @@ ALLOWED: dict[str, tuple[str, str]] = {
                                                                "pre-check predictions"),
     "engine/boss_engine/services/sre_ask.py": (WORKER, "plans a read-only query; never executes"),
     "engine/boss_engine/services/software_factory.py": (WORKER, "writes the factory plan artifact"),
-    "engine/boss_engine/services/conversation_spend.py": (MIGRATE, "transport of agent_converse "
-                                                          "talk / plan / room"),
+    "engine/boss_engine/services/conversation_spend.py": (
+        MIGRATE, "agent_converse's talk / plan / room: each seat's reply is ONE streamed call "
+                 "under the conversation's canonical spend envelope (pinned provider attempt, "
+                 "floor claim, settled receipt). The pipeline's turn neither streams nor "
+                 "accepts a caller's envelope, so it cannot move without that redesign (the "
+                 "doc's design note)"),
     # ── still outside the pipeline ──────────────────────────────────────────────────────────
     "engine/boss_engine/services/agent_loop.py": (MIGRATE, "workflow agent step's own tool loop"),
     "engine/boss_engine/services/agent_steps.py": (MIGRATE, "workflow agent step: picks a role, "
