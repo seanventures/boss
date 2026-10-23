@@ -6187,6 +6187,9 @@ export function createBossApiClient(config: BossApiClientConfig) {
     listProjects() {
       return request<ProjectListResponse>("GET", "/v1/projects");
     },
+    createProject(body: { name: string; slug?: string; description?: string }) {
+      return request<ProjectSummary & { description: string | null }>("POST", "/v1/projects", { body });
+    },
     getAuthSession() {
       return request<AuthSessionResponse>("GET", "/v1/auth/session");
     },

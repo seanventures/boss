@@ -19,6 +19,7 @@ import { AgentChat } from "./agent-ui";
 import { dockChatKey, dockSpeaker } from "../lib/dock-subject";
 import { dockWidthFor, railForDock } from "../lib/shell-rail";
 import { ProjectStrip } from "./project-strip";
+import { ProjectMenu, type ProjectMenuItem } from "./project-menu";
 import { PresencePill } from "./agents/presence-pill";
 import { NEW_BUILD_TIP, openNewProject } from "../lib/compose-links";
 import { setConsoleLive } from "../lib/console-live";
@@ -330,6 +331,9 @@ export type ConsoleShellProps = {
   };
   scope: { project: string; actor: string; projectId?: string; actorId?: string };
   org?: { id: string; name: string };
+  /** The org's projects the viewer can open, and which one is the org's own (no ?project_id=):
+   *  the top bar's project menu (switch, New project). Absent on route pages. */
+  projects?: { items: ProjectMenuItem[]; homeId: string };
   /** From GET /v1/edition (or BOSS_EDITION). Defaults to community honesty. */
   editionId?: string;
   initialArea?: string;
@@ -413,6 +417,7 @@ function ConsoleShellInner({
   status,
   scope,
   org,
+  projects,
   editionId,
   initialArea,
   signOutAvailable = false,
@@ -1528,6 +1533,9 @@ function ConsoleShellInner({
               <span className="bx-org-name">{org.name}</span>
               <span className="bx-org-switch" aria-hidden>⌄</span>
             </button>
+          ) : null}
+          {projects && scope.projectId ? (
+            <ProjectMenu projects={projects.items} activeId={scope.projectId} homeId={projects.homeId} />
           ) : null}
 
           <RefreshState coordinator={refreshCoordinator} fallback={refreshing}>{(refreshing) => (

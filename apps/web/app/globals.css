@@ -6507,6 +6507,30 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 }
 .bx-system-panel > div:last-child { border-bottom: 0; }
 .bx-system-panel > div > strong { color: var(--ink); font-weight: 600; }
+/* THE PROJECT MENU (project-menu.tsx): which project is open, the others, New project. */
+.bx-project-menu { position: relative; font-size: .8rem; color: var(--ink-soft); }
+.bx-project-menu summary {
+  cursor: pointer; list-style: none; padding: 7px 8px; border-radius: 4px;
+  max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.bx-project-menu summary::-webkit-details-marker { display: none; }
+.bx-project-menu summary::after { content: "⌄"; margin-left: 6px; }
+.bx-project-menu[open] summary, .bx-project-menu summary:hover { background: var(--surface-2); color: var(--ink); }
+.bx-project-menu-panel {
+  position: absolute; right: 0; top: calc(100% + 9px); z-index: 50;
+  min-width: 260px; padding: 8px 12px;
+  border: 1px solid var(--border-strong); border-radius: 8px;
+  background: var(--surface); box-shadow: 0 16px 32px rgba(0,0,0,.35);
+}
+.bx-project-menu-panel ul { list-style: none; margin: 0 0 6px; padding: 0; max-height: 240px; overflow-y: auto; }
+.bx-project-menu-panel li a { display: block; padding: 7px 4px; border-radius: 4px; color: var(--ink-soft); text-decoration: none; }
+.bx-project-menu-panel li a:hover { background: var(--surface-2); color: var(--ink); }
+.bx-project-menu-panel li a[aria-current="page"] { color: var(--ink); font-weight: 600; }
+.bx-project-menu-new { width: 100%; text-align: left; padding: 7px 4px; border: 0; border-top: 1px solid var(--border); background: transparent; color: var(--accent); font: inherit; cursor: pointer; }
+.bx-project-menu-panel form { display: grid; gap: 8px; padding-top: 8px; border-top: 1px solid var(--border); }
+.bx-project-menu-panel label { display: grid; gap: 4px; color: var(--ink-soft); }
+.bx-project-menu-panel input { font: inherit; padding: 6px 8px; border: 1px solid var(--border-strong); border-radius: 4px; background: var(--surface-2); color: var(--ink); }
+.bx-project-menu-actions { display: flex; gap: 8px; }
 .bx-system-budget { text-transform: capitalize; }
 .bx-system-budget.amber { color: var(--amber); }
 .bx-system-budget.red { color: var(--red); }
@@ -6585,6 +6609,8 @@ a.sp-node:hover .sp-label { color: var(--ink); }
   .bx-topbar { gap: 6px; }
   .bx-new-project { font-size: .75rem; padding: 0 8px; }
   .bx-system-panel { right: -6px; min-width: min(270px, calc(100vw - 24px)); }
+  .bx-project-menu summary { max-width: 110px; }
+  .bx-project-menu-panel { right: -6px; min-width: min(260px, calc(100vw - 24px)); }
 }
 
 /* BACK, AND OBVIOUSLY BACK.

@@ -41,6 +41,10 @@ function files(dir: string): string[] {
 function doors(): { where: string; tag: string }[] {
   const out: { where: string; tag: string }[] = [];
   for (const f of [...files(join(ROOT, "app")), ...files(join(ROOT, "components"))]) {
+    // The top bar's PROJECT MENU makes a BOSS project in the org (POST /v1/projects,
+    // project:create), not a build: its New project is not a composer door
+    // (tests/new-project-in-the-org.test.tsx holds it).
+    if (f.endsWith(join("app", "project-menu.tsx"))) continue;
     const s = readFileSync(f, "utf8");
     for (const m of s.matchAll(/>\s*(?:<span aria-hidden>\+<\/span>\s*|[+＋]\s*)?New (?:build|project)\s*</g)) {
       const before = s.slice(0, m.index! + 1);

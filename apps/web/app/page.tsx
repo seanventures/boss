@@ -985,6 +985,10 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         actorId: activeActorId,
       }}
       org={{ id: activeOrgId, name: activeOrgName }}
+      projects={{
+        items: projects.items.filter((p) => p.orgId === activeOrgId).map((p) => ({ id: p.id, name: p.name })),
+        homeId: selectedOrg.project_id,
+      }}
       editionId={editionId}
       initialArea={initialArea}
       // Sign out only means something when the console has a password; without one the button
