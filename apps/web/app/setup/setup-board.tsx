@@ -29,6 +29,7 @@ import type { RowKey, SetupView } from "../../lib/setup-types";
 import { BudgetRow } from "./budget-row";
 import { BuildDatabaseRow } from "./build-database-row";
 import { BuildSpeedRow } from "./build-speed-row";
+import { EmbeddingModelRow } from "./embedding-model-row";
 import { CapacityRow } from "./capacity-row";
 import { ModelsRow } from "./models-row";
 import { BoardContext, toast, useBoard } from "./parts";
@@ -59,6 +60,8 @@ const ADVANCED: Record<string, { line: string; tip: string }> = {
   build_speed: { line: "How many agents write a build at once", tip: "Balanced or Fastest." },
   toolchains: { line: "What builds can compile and run", tip: "Python and Node always; others on the host." },
   jobs: { line: "Which model does which job", tip: "Pin a model to a job, or let BOSS route." },
+  embedding_model: { line: "Model for meaning-based search",
+                     tip: "Azure OpenAI, OpenAI-compatible or Ollama. Without one, search uses text and graph." },
   budget: { line: "Monthly spend cap", tip: "BOSS pauses model spend at the cap." },
   public_url: { line: "Address used in emailed links", tip: "Sign-in, passkeys and emailed links use it." },
 };
@@ -344,6 +347,8 @@ export function SetupBoard({ projectId, actor, initialView = null }: {
           <div className="su-adv-item" ref={ref("toolchains")}><Why id="toolchains" /><ToolchainsRow /></div>
           {/* Model routing — where "Who does what" lived; its rows are "Pin a job" inside. */}
           <div className="su-adv-item"><Why id="jobs" /><RoutingRow ref={ref("jobs")} mode={rowMode(view, "jobs")} focused={focus === "jobs"} /></div>
+          {/* The embedding model: its own slot, like Decisions (knowledge search). */}
+          <div className="su-adv-item" ref={ref("embedding_model")}><Why id="embedding_model" /><EmbeddingModelRow /></div>
           <div className="su-adv-item"><Why id="budget" /><BudgetRow ref={ref("budget")} mode={rowMode(view, "budget")} focused={focus === "budget"} /></div>
           <div className="su-adv-item" ref={ref("public_url")}><Why id="public_url" /><PublicUrlRow /></div>
         </details>

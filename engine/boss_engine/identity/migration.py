@@ -597,6 +597,8 @@ def seed(db: Any, *, settings: Any = None, org_id: Optional[str] = None,
     _seed_scim(db, org_id, settings, report)
     _seed_providers(db, org_id, report)
     _seed_agents(db, org_id, report)
+    from . import passports
+    passports.grant_baseline_to_custom_ceilings(db, org_id=org_id)
     if is_claimed and apply_claimed:
         _apply_claimed_state(db, org_id, settings, now, started=claimed_at(db, org_id))
     bump_epoch(db, org_id)

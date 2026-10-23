@@ -40,7 +40,7 @@ import re
 from typing import Any
 
 #: The skills every agent holds. `test_every_agent_holds_the_baseline` fails on a role without.
-BASELINE_SKILLS: tuple[str, ...] = ("boss.fundamentals", "repo.read", "boss.propose_fix")
+BASELINE_SKILLS: tuple[str, ...] = ("boss.fundamentals", "repo.read", "boss.propose_fix", "knowledge.read")
 
 #: The engine read tools `boss.fundamentals` offers, by name — its spec's policy.tools, and
 #: nothing else. Every one must be a `read` tool in the registry (the enforcing test checks).
@@ -74,6 +74,23 @@ OPTIONAL_TOOLS: frozenset[str] = frozenset({"precheck_workflow"})
 #: `boss.propose_fix` offers exactly this.
 PROPOSE_TOOLS: tuple[str, ...] = ("propose_action",)
 
+#: `knowledge.read` offers the knowledge graph (BOSSAPP-622): where code is, who depends on it, what
+#: a change can break, and the history behind it. Every role holds it; what a stage may read of
+#: it is the stage's knowledge scope (services/knowledge/scopes.py).
+KNOWLEDGE_TOOLS: tuple[str, ...] = ("kg_symbol", "kg_callers", "kg_blast_radius", "kg_why",
+                                     "kg_search", "kg_precedent", "kg_cypher")
+
+#: `knowledge.propose` offers `kg_propose_fact`: the one bundle that writes. What it writes is
+#: always `inferred` (quarantined, forgettable, never above governed or approved), so it is
+#: tier 0. It is NOT in the baseline: operator decision 2026-10-21 grants it, through the role
+#: specs' allowed_skills, to exactly PROPOSE_FACT_ROLES.
+PROPOSE_FACT_TOOLS: tuple[str, ...] = ("kg_propose_fact",)
+PROPOSE_FACT_ROLES: tuple[str, ...] = ("pm", "engineering_captain", "qa", "adversarial_reviewer",
+                                       "security_reviewer", "sre")
+
+#: Bundles allowed to offer a write tool. Each such tool must declare reversibility "safe".
+WRITE_BUNDLES: frozenset[str] = frozenset({"knowledge.propose"})
+
 #: The input naming which of a bundle's tools a call is (agent_loop sets it). repo.read predates
 #: the bundles and keeps `tool`.
 BUNDLE_TOOL_KEY = "bundle_tool"
@@ -85,7 +102,24 @@ def bundles() -> dict[str, tuple[str, ...]]:
     from .skill_executors import REPO_READ_TOOLS
 
     return {"repo.read": REPO_READ_TOOLS, "boss.fundamentals": FUNDAMENTALS_TOOLS,
-            "boss.propose_fix": PROPOSE_TOOLS}
+            "boss.propose_fix": PROPOSE_TOOLS, "knowledge.read": KNOWLEDGE_TOOLS,
+            "knowledge.propose": PROPOSE_FACT_TOOLS}
+
+
+def bundle_tool_spec(skill_id: str, tool: str, *, edition: str | None = None) -> Any:
+    """The registered spec a bundle offers as `tool`, or None. Reads come from the chat agent's
+    project-pinned registry; a write bundle's tool from the default registry, admitted only when
+    it declares itself safe to reverse."""
+    from ..tools.builtin import build_default_registry, build_discuss_read_registry
+
+    registry = build_discuss_read_registry(edition=edition)
+    if tool in registry.names():
+        return registry.get(tool)
+    if skill_id in WRITE_BUNDLES:
+        full = build_default_registry()
+        if tool in full.names() and getattr(full.get(tool), "reversibility", None) == "safe":
+            return full.get(tool)
+    return None
 
 
 # ── THE PRIMER ────────────────────────────────────────────────────────────────────────────────
@@ -209,7 +243,6 @@ def run_bundled_tool(context: Any, skill_id: str, inputs: dict[str, Any]) -> dic
     """One call of a baseline bundle skill: the named engine tool, project-pinned (the chat
     agent's registry — the project is the run's, not the model's), its result redacted."""
     from ..context import EngineContext
-    from ..tools.builtin import build_discuss_read_registry
 
     offered = bundles().get(skill_id) or ()
     # WHICH TOOL OF THE BUNDLE: `bundle_tool`, never `tool` — propose_action's own `tool` argument
@@ -217,19 +250,18 @@ def run_bundled_tool(context: Any, skill_id: str, inputs: dict[str, Any]) -> dic
     tool = str(inputs.get(BUNDLE_TOOL_KEY) or "").strip()
     if tool not in offered:
         raise ValueError(f"{skill_id} offers {', '.join(offered)}; not {tool!r}.")
-    registry = build_discuss_read_registry(
-        edition=getattr(context.settings, "boss_edition", None))
-    if tool not in registry.names():
+    spec = bundle_tool_spec(skill_id, tool, edition=getattr(context.settings, "boss_edition", None))
+    if spec is None:
         from .skill_executors import SkillExecutorConfigurationError
 
         raise SkillExecutorConfigurationError(f"this BOSS has no {tool} tool.")
-    spec = registry.get(tool)
-    if spec.kind != "read":
-        # A BUNDLE IS READ-ONLY BY CONSTRUCTION. propose_action is declared a read: it records an
-        # offer and runs nothing.
+    if spec.kind != "read" and skill_id not in WRITE_BUNDLES:
+        # A BUNDLE IS READ-ONLY BY CONSTRUCTION, except a WRITE_BUNDLES one. propose_action is
+        # declared a read: it records an offer and runs nothing.
         raise ValueError(f"{tool} is not a read tool; {skill_id} offers reads only.")
+    # THE PROJECT IS THE RUN'S, never the model's: a write tool's schema still names project_id.
     args = {k: v for k, v in inputs.items()
-            if k != BUNDLE_TOOL_KEY and not str(k).startswith("_")}
+            if k not in (BUNDLE_TOOL_KEY, "project_id") and not str(k).startswith("_")}
     ctx = EngineContext(settings=context.settings, engine=context.connection.engine)
     out = spec.handler(ctx, project_id=context.project_id, actor=context.actor, args=args)
     return {"tool": tool, "result": redact_for_agent(out if isinstance(out, dict)

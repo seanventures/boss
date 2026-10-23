@@ -1007,6 +1007,9 @@ def _build(connection: Connection, settings: Any, project_id: str, *,
         "toolchains": _toolchains(),
         "build_database": build_database(connection, settings, project_id),
         "build_speed": build_speed(connection, settings, project_id),
+        # The embedding model, its own slot (knowledge/embedding_slot.py): only that a key is
+        # held, never the key; whether meaning-based search is on, and why not in words.
+        "embedding_model": embedding_model(connection, settings, project_id),
         "generated_at": now.isoformat(),
     }
 
@@ -1047,6 +1050,17 @@ def build_database(connection: Connection, settings: Any, project_id: str) -> di
             "source": "project" if build_services.SETTING_KEY in chosen else "default",
             "configured": bool((os.environ.get(build_services.SERVER_URL_ENV) or "").strip()),
             "permission": "settings:update"}
+
+
+def embedding_model(connection: Connection, settings: Any, project_id: str) -> Optional[dict[str, Any]]:
+    """Setup › Embedding model. None only when it cannot be read (the rest still renders)."""
+    from .knowledge import embedding_slot
+
+    try:
+        with connection.begin_nested():
+            return embedding_slot.status(connection, settings, project_id)
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def build_speed(connection: Connection, settings: Any, project_id: str) -> dict[str, Any]:

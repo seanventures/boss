@@ -2146,6 +2146,37 @@ class SoftwareFactoryService:
             created_by_job_id=created_by_job_id,
         )
         sealed_evidence = attach_sealed_evidence(evidence)
+        citations: list[str] = []
+        try:
+            from .knowledge.capture import pull_request_source_id
+            from .knowledge.runtime import remember_written_files
+
+            remembered = remember_written_files(
+                connection,
+                project_id=project_id,
+                source_id=pull_request_source_id(
+                    getattr(self.github, "repository_full_name", "") or "", pr.number),
+                title=title,
+                body=summary,
+                files=files,
+                run_id=str(run_id or ""),
+            )
+            citations = [str(item) for item in (remembered.get("cited_fact_ids") or [])]
+        except Exception:
+            citations = []
+            try:
+                self.events.emit(
+                    connection,
+                    project_id,
+                    "knowledge.commit_capture_failed",
+                    "coding_worker",
+                    "task",
+                    task_id or project_id,
+                    {},
+                )
+            except Exception:
+                pass
+
         # ONE DECISION FOR A MULTI-REPO CHANGE (multirepo/change_sets.py). A lane of a change set
         # opens its PR and stops: the set asks once, pinned to every PR's head, when all of them
         # (and the cross-repo check) are green. A per-PR merge decision here would let one PR of
@@ -2208,6 +2239,9 @@ class SoftwareFactoryService:
                     **checks_failing,
                     "draft": bool(getattr(self.github, "supports_draft_pull_requests", False)),
                     "label": _checks_failing.LABEL}} if checks_failing else {}),
+                # The knowledge the card is "based on": facts matched to this change's symbols
+                # (knowledge/runtime.remember_written_files). Empty when none matched.
+                "cited_fact_ids": citations,
             },
             {},
             "merge_decision_required",

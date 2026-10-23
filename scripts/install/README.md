@@ -486,6 +486,10 @@ boss upgrade --no-rollback                                  # keep a failed rele
 
 If the new release fails to start after its source is in place, `boss upgrade` puts the previous release back and starts it again, then says **Rolled back**. Data volumes are kept. Source rollback alone does not undo database migrations; compatibility must be verified for the two revisions. If that compatibility is unknown or rollback cannot start, restore the complete backup into a fresh stack (below).
 
+### The database image
+
+The database runs `boss-community-db:pg16.12-vector0.8.1-age1.6.0`, built by the installer from `scripts/install/db-image/Dockerfile`: PostgreSQL 16 on Alpine (the same base and libc as the `postgres:16-alpine` image earlier releases ran) with pgvector 0.8.1 and Apache AGE 1.6.0 compiled in. Upgrading to it is an image swap: the existing volume opens unchanged, and on its first boot the schema step creates the `vector` and `age` extensions. Nothing is dumped or restored. `boss upgrade` takes its protected backup before the swap, as for every upgrade. `engine/tests/test_db_image_upgrade_real_docker.py` proves the swap on a populated volume (row counts, `amcheck` on every B-tree index, both extensions loading) and a fresh install.
+
 `boss upgrade` runs `scripts/install/upgrade.sh` from the install. Without `--to`, a release install moves to the newest published release tag and never to `main`; see [which release](#which-release-and-staying-on-it). The script works directly too:
 
 ```bash
@@ -516,7 +520,7 @@ All running application writers, including egress, pause during the snapshot and
 
 ### Recover an older safe uninstall
 
-Older versions of safe uninstall used `docker compose down`. That removed the database container but kept its named data volume. The current backup refuses to guess which mutable `postgres:16-alpine` image should reopen that data, so if `backup.sh` reports a missing Postgres container, use this recovery path before upgrading.
+Older versions of safe uninstall used `docker compose down`. That removed the database container but kept its named data volume. The current backup refuses to guess which database image (`postgres:16-alpine` before this release, `boss-community-db` since) should reopen that data, so if `backup.sh` reports a missing Postgres container, use this recovery path before upgrading.
 
 > [!CAUTION]
 > Do not run the new installer or `compose up` against that volume yet. Confirm that the old stack is stopped and no other container is writing to its database volume; the offline copy below is valid only while the volume is idle.

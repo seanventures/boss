@@ -514,6 +514,59 @@ def _grow_to_preset(db: Any, passport: "Passport") -> bool:
     return True
 
 
+#: Baseline reads a hand-set (`custom`) ceiling is given ONCE, by name (operator decision
+#: 2026-10-22). The baseline reads go to every agent, and `_grow_to_preset` never touches a ceiling
+#: a person set, so an agent with a custom ceiling made before knowledge:read existed never gained
+#: it and its kg_* tools refused. Each entry runs once per org (`schema_once`) and is audited; a
+#: person who takes the permission away afterwards is not overruled on the next boot.
+CUSTOM_CEILING_BASELINE_ONCE: dict[str, tuple[str, ...]] = {
+    "knowledge_read_for_custom_ceilings": ("knowledge:read",),
+}
+
+
+def grant_baseline_to_custom_ceilings(db: Any, *, org_id: str) -> dict[str, list[str]]:
+    """Give every live agent of `org_id` whose ceiling is `custom` the baseline reads in
+    CUSTOM_CEILING_BASELINE_ONCE it lacks, once per org per entry. Returns agent_id -> added.
+    Nothing happens on a database without `schema_once` (no one-time record, so no grant)."""
+    from sqlalchemy import text
+
+    from . import lineage
+
+    out: dict[str, list[str]] = {}
+    if not db.execute(text("SELECT to_regclass('schema_once') IS NOT NULL")).scalar():
+        return out
+    for name, perms in CUSTOM_CEILING_BASELINE_ONCE.items():
+        key = f"{name}:{org_id}"
+        if db.execute(text("SELECT 1 FROM schema_once WHERE key = :k"), {"k": key}).first():
+            continue
+        _require_delegable(frozenset(perms))
+        rows = db.execute(text(
+            "SELECT p.agent_id FROM identity_agent_passports p "
+            "JOIN identity_principals pr ON pr.id = p.agent_id "
+            "WHERE pr.org_id = :o AND p.ceiling_preset = 'custom' AND pr.status <> 'revoked' "
+            "ORDER BY p.agent_id"), {"o": org_id}).scalars().all()
+        for agent_id in rows:
+            have = set(db.execute(text(
+                "SELECT permission_key FROM identity_agent_ceilings WHERE agent_id = :a"),
+                {"a": agent_id}).scalars().all())
+            missing = sorted(set(perms) - have)
+            if not missing:
+                continue
+            for perm in missing:
+                db.execute(text("INSERT INTO identity_agent_ceilings (agent_id, permission_key) "
+                                "VALUES (:a, :k) ON CONFLICT DO NOTHING"), {"a": agent_id, "k": perm})
+            db.execute(text("UPDATE identity_agent_passports SET version = version + 1, updated_at = now() "
+                            "WHERE agent_id = :a"), {"a": agent_id})
+            lineage.passport_event(db, get(agent_id, db=db), "agent.passport.ceiling_changed",
+                                   actor_id="sys_migration",
+                                   details={"preset": "custom", "added": missing,
+                                            "reason": "baseline read for every agent"})
+            out[agent_id] = missing
+        db.execute(text("INSERT INTO schema_once (key) VALUES (:k) ON CONFLICT (key) DO NOTHING"),
+                   {"k": key})
+    return out
+
+
 def upgrade_from_roles(*, org_id: str, db: Any, default_sponsor: Optional[str] = None) -> dict[str, str]:
     """The Passport upgrade (§7.1, migration M0 calls this): every `roles` row with an `agent_id`
     gets an `agent` principal and a Passport with its preset ceiling. The sponsor is the role's

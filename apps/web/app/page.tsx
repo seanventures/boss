@@ -194,6 +194,8 @@ import {
 import { ReleasePlanningPanel } from "./release-planning-ui";
 import { fetchKnowledgeGraphFeed } from "../lib/knowledge-graph";
 import { KnowledgeGraphPanel } from "./knowledge-graph-ui";
+import { KnowledgeExplorer, KnowledgeSettings } from "./knowledge-console";
+import { KnowledgePromotionQueue } from "./knowledge-promotion-ui";
 import { AskBossHero } from "./ask-boss-hero";
 import { ActionForm } from "./client-forms";
 import { actorWords } from "../lib/actor-words";
@@ -3157,6 +3159,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             </p>
           </div>
           <KnowledgeGraphPanel feed={knowledgeGraphFeed} />
+          <KnowledgeExplorer projectId={activeProjectId} actorId={activeActorId} />
+          <KnowledgeSettings projectId={activeProjectId} actorId={activeActorId} />
         </section>
         ) : null}
 
@@ -3664,6 +3668,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             orgId={activeOrgId}
             initialFilter={requestedDecisionFilter}
           />
+          <KnowledgePromotionQueue projectId={activeProjectId} actorId={activeActorId} />
         </section>
         ) : null}
 

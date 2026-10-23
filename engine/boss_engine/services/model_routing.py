@@ -612,8 +612,10 @@ class GovernedChatAdapter:
 
     def __init__(self, inner: Any, connection: Any, settings: Any, project_id: str, *,
                  skill_id: str, ref: str, estimate_usd_micros: int,
-                 choice: Optional[ModelChoice] = None):
+                 choice: Optional[ModelChoice] = None, category: str = "model"):
         self._inner = inner
+        #: The budget category the call spends: "model" for a turn, "knowledge" for an embedding.
+        self._category = category
         self._connection = connection
         self._settings = settings
         self._project_id = project_id
@@ -657,6 +659,15 @@ class GovernedChatAdapter:
     def create_text_response(self, *args: Any, **kwargs: Any):
         return self._governed("create_text_response", args, kwargs, usage_at=2)
 
+    @property
+    def create_embeddings(self) -> Any:
+        """The inner adapter's embeddings call, governed like a turn: `(vectors, usage)`. None when
+        the inner adapter has no embeddings — `__getattr__` would otherwise hand out the inner
+        call ungoverned."""
+        if not callable(getattr(self._inner, "create_embeddings", None)):
+            return None
+        return lambda *args, **kwargs: self._governed("create_embeddings", args, kwargs, usage_at=1)
+
     def _governed(self, method: str, args: tuple, kwargs: dict, *, usage_at: int):
         held = self._open()
         try:
@@ -680,7 +691,7 @@ class GovernedChatAdapter:
         connection, project_id = self._connection, self._project_id
         budget = BudgetGovernor(self._settings)
         reservation = budget.reserve(
-            connection, project_id, "model", self._estimate,
+            connection, project_id, self._category, self._estimate,
             f"{self._skill_id}: one model turn ({self._ref})", 15)
         if reservation.get("status") != "reserved":
             message = str(reservation.get("message") or "")
@@ -739,14 +750,18 @@ class GovernedChatAdapter:
              **({"included_in_subscription": True,
                  "equivalent_usd_micros": worth} if included else {})})
         BudgetGovernor(self._settings).settle(self._connection, self._project_id,
-                                              reservation_id, receipt_id, "model",
+                                              reservation_id, receipt_id, self._category,
                                               self._skill_id, self._estimate, worth,
                                               included_in_subscription=included)
 
 
 def governed(adapter: Any, connection: Any, settings: Any, project_id: str, *,
-             skill_id: str, ref: str) -> Any:
+             skill_id: str, ref: str, category: str = "model",
+             estimate_usd_micros: Optional[int] = None) -> Any:
     """`adapter` with every call reserved, receipted and settled (GovernedChatAdapter).
+
+    `category` is the budget category spent (an embedding's is "knowledge");
+    `estimate_usd_micros` is what one call reserves, else the source's turn estimate.
 
     The estimate follows the source `choose` picks for this project: a metered key reserves
     `agent_turn_budget_usd_micros` per turn, a subscription or local model reserves nothing but
@@ -761,8 +776,68 @@ def governed(adapter: Any, connection: Any, settings: Any, project_id: str, *,
         choice = choose(connection, routed_settings(connection, settings, project_id), project_id)
     return GovernedChatAdapter(adapter, connection, settings, project_id,
                                skill_id=skill_id, ref=ref,
-                               estimate_usd_micros=turn_estimate_usd_micros(choice, settings),
-                               choice=choice)
+                               estimate_usd_micros=(turn_estimate_usd_micros(choice, settings)
+                                                    if estimate_usd_micros is None
+                                                    else estimate_usd_micros),
+                               choice=choice, category=category)
+
+
+# ── The embedding model ────────────────────────────────────────────────────────────────────────
+#
+# ITS OWN SLOT, like the decision model (operator decision 2026-10-22): Setup › Embedding model
+# stores a provider, a model and its dimension (knowledge/embedding_slot.py). Every embedding
+# call is built HERE from that slot and governed: reserved in the budget category `knowledge`,
+# receipted and settled. Nothing else builds an EmbeddingAdapter
+# (engine/tests/test_embedding_model_slot.py).
+
+#: What one embedding call reserves before it is sent: a probe or a batch of summaries is a
+#: fraction of a cent on any hosted embedding model.
+EMBEDDING_ESTIMATE_USD_MICROS = 2_000
+EMBEDDING_CATEGORY = "knowledge"
+
+
+class ProjectEmbedder:
+    """`embed(texts) -> vectors` on the project's embedding slot, every call governed.
+    `model_id` keys the vector space: provider, model and dimension, so spaces never mix."""
+
+    def __init__(self, governed_adapter: Any, model_id: str, dimension: int):
+        self._adapter = governed_adapter
+        self.model_id = model_id
+        self.dimension = int(dimension)
+        self.last_usage: dict = {}
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        call = self._adapter.create_embeddings
+        if call is None:
+            raise IntegrationConfigurationError("this provider has no embeddings call")
+        vectors, usage = call(list(texts))
+        self.last_usage = usage if isinstance(usage, dict) else {}
+        return [list(v) for v in vectors]
+
+
+def project_embedder(connection: Any, settings: Any, project_id: str, slot: dict[str, Any], *,
+                     ref: str = "embed", skill_id: str = "knowledge.embed") -> ProjectEmbedder:
+    """The governed embedder for `slot` (embedding_slot.read): its key resolved from the vault
+    for this project, never from the environment."""
+    from .embedding_adapter import LOCAL_PROVIDERS, EmbeddingAdapter
+    from .knowledge.embedding_slot import model_id_of
+    from .secret_backends import resolve_secret_ref
+
+    provider = str(slot.get("provider") or "")
+    key = None
+    if slot.get("secret_ref_id"):
+        key = resolve_secret_ref(connection, str(slot["secret_ref_id"]), settings, project_id=project_id)
+    adapter = EmbeddingAdapter(provider, str(slot.get("model") or ""), int(slot.get("dimension") or 0),
+                               base_url=str(slot.get("base_url") or ""),
+                               endpoint=str(slot.get("endpoint") or ""),
+                               deployment=str(slot.get("deployment") or ""),
+                               api_version=str(slot.get("api_version") or ""), api_key=key)
+    adapter._boss_choice = ModelChoice(provider if provider in LOCAL_PROVIDERS else f"embedding:{provider}",
+                                       "the project's embedding model")
+    wrapped = governed(adapter, connection, settings, project_id, skill_id=skill_id, ref=ref,
+                       category=EMBEDDING_CATEGORY,
+                       estimate_usd_micros=0 if provider in LOCAL_PROVIDERS else EMBEDDING_ESTIMATE_USD_MICROS)
+    return ProjectEmbedder(wrapped, model_id_of(slot), int(slot.get("dimension") or 0))
 
 
 # ── Provider-specific capabilities ─────────────────────────────────────────────────────────────

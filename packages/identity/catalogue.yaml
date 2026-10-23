@@ -112,11 +112,12 @@ system_principals:
 # `baseline`: the baseline reads and nothing else. The panel voices (Nova, Axiom, Tempo, Sage) had no
 # preset and so an EMPTY ceiling — every tool refused; and it is the preset of any agent whose role
 # names no other (an agent made in the console), via passports.upgrade_from_roles.
+# Every preset holds knowledge:read: the kg_* tools of the knowledge.read baseline skill check it.
 passport_presets:
   - key: builder
     name: Builder
     agents: [forge, strata, prism, helm]
-    permissions: [code_task:read, code_task:create, code_task:steer, code_task:retry, repository:read,
+    permissions: [knowledge:read, code_task:read, code_task:create, code_task:steer, code_task:retry, repository:read,
                   github:read, github:sync, preview:read, preview:manage, artifact:read, artifact:rebuild,
                   workflow:read, workflow_run:read, skill:read, skill:invoke, memory:read, memory:manage,
                   spend:reserve, secret:lease, sandbox:read,
@@ -127,7 +128,7 @@ passport_presets:
     agents: [vera, rook, sentry, weave, muse]
     # meeting:read/convene: a reviewer CHAIRS review panels (the security review's panel is
     # convened by the security lens); without them its consent could never be granted.
-    permissions: [code_task:read, code_task:steer, repository:read, github:read, preview:read,
+    permissions: [knowledge:read, code_task:read, code_task:steer, repository:read, github:read, preview:read,
                   artifact:read, assurance:read, assurance:run, workflow_run:read, skill:read,
                   skill:invoke, memory:read, spend:reserve, security_scan:run, meeting:read,
                   meeting:convene,
@@ -136,7 +137,7 @@ passport_presets:
   - key: planner
     name: Planner
     agents: [juno, atlas, keystone, rally, vector, cadence]
-    permissions: [code_task:read, code_task:create, meeting:read, meeting:convene, discovery:read,
+    permissions: [knowledge:read, code_task:read, code_task:create, meeting:read, meeting:convene, discovery:read,
                   discovery:create, workflow:read, workflow:create, workflow_run:read, workflow_run:start,
                   work_item:read, work_item:manage, decision:read, memory:read, memory:manage, spend:reserve,
                   agent:read, deployment:read, github:read, host:read, observability:read, preview:read, project:read, repository:read, sandbox:read, skill:read, system:read]
@@ -144,7 +145,7 @@ passport_presets:
   - key: operator_agent
     name: Operator agent
     agents: [harbor, pilot, bedrock, relay, beacon]
-    permissions: [deployment:read, deployment:create, host:read, infra:read, observability:read,
+    permissions: [knowledge:read, deployment:read, deployment:create, host:read, infra:read, observability:read,
                   reliability:read, reliability:respond, preview:read, preview:manage, workflow_run:read,
                   workflow_run:control, spend:reserve, secret:lease,
                   agent:read, code_task:read, decision:read, github:read, meeting:read, memory:read, project:read, repository:read, sandbox:read, skill:read, system:read, workflow:read]
@@ -152,28 +153,39 @@ passport_presets:
   - key: analyst
     name: Analyst
     agents: [ledger, meter, conduit, sweep]
-    permissions: [budget:read, model_provider:read, infra:read, observability:read, activity:read,
+    permissions: [knowledge:read, budget:read, model_provider:read, infra:read, observability:read, activity:read,
                   spend:reserve, workflow_run:read,
                   agent:read, code_task:read, decision:read, deployment:read, github:read, host:read, meeting:read, memory:read, preview:read, project:read, repository:read, sandbox:read, skill:read, system:read, workflow:read]
     external_ceiling: {}
   - key: writer
     name: Writer and publisher
     agents: [quill, herald, splice]
-    permissions: [artifact:read, artifact:rebuild, discovery:read, comms:read, comms:send, memory:read,
+    permissions: [knowledge:read, artifact:read, artifact:rebuild, discovery:read, comms:read, comms:send, memory:read,
                   spend:reserve, workflow_run:read,
                   agent:read, code_task:read, decision:read, deployment:read, github:read, host:read, meeting:read, observability:read, preview:read, project:read, repository:read, sandbox:read, skill:read, system:read, workflow:read]
     external_ceiling: {}
   - key: guardian
     name: Guardian
     agents: [warden, vault, halo]
-    permissions: [agent:read, agent_passport:read, activity:read, policy:read, secret:read_metadata,
+    permissions: [knowledge:read, agent:read, agent_passport:read, activity:read, policy:read, secret:read_metadata,
                   workflow_run:read,
                   code_task:read, decision:read, deployment:read, github:read, host:read, meeting:read, memory:read, observability:read, preview:read, project:read, repository:read, sandbox:read, skill:read, system:read, workflow:read]
     external_ceiling: {}
+  # The Archivist (BOSSAPP-622): reads sources, writes only to the knowledge store. No
+  # code_task:create, github write, deployment or comms: its only write is a fact, and the
+  # pipeline, not the Passport, keeps its facts `inferred`.
+  - key: archivist
+    name: Archivist
+    agents: [lore]
+    permissions: [knowledge:read, code_task:read, decision:read, observability:read, reliability:read, repository:read,
+                  memory:read, spend:reserve, workflow_run:read,
+                  agent:read, deployment:read, github:read, host:read, meeting:read, preview:read,
+                  project:read, sandbox:read, skill:read, system:read, workflow:read]
+    external_ceiling: {github: {contents: read}}
   - key: baseline
     name: Baseline (every agent)
     agents: [nova, axiom, tempo, sage]
-    permissions: [agent:read, code_task:read, decision:read, deployment:read, github:read, host:read,
+    permissions: [knowledge:read, agent:read, code_task:read, decision:read, deployment:read, github:read, host:read,
                   meeting:read, memory:read, observability:read, preview:read, project:read,
                   repository:read, sandbox:read, skill:read, system:read, workflow:read, workflow_run:read]
     external_ceiling: {}
@@ -1401,3 +1413,19 @@ categories:
         roles: [system_self_installer]
         scope: org
         flags: [system_only]
+
+  # ---- Knowledge ---------------------------------------------------------------------------------
+  - category: "Knowledge"
+    permissions:
+      - key: knowledge:read
+        title: "Read knowledge"
+        description: "Search this project's knowledge and read a fact, a symbol, and its precedent."
+        roles: [owner, admin, operator, viewer, auditor]
+        scope: project
+        flags: [delegable]
+      - key: knowledge:manage
+        title: "Manage knowledge"
+        description: "Promote, reject, or forget a fact. Confirmation is required."
+        roles: [owner, admin]
+        scope: project
+        flags: [step_up]

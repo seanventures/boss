@@ -2519,3 +2519,21 @@ def execute_boss_propose_fix(context: "SkillExecutorContext", inputs: dict[str, 
     from .agent_baseline import propose
 
     return propose(context, dict(inputs))
+
+
+@register_executor("knowledge.read")
+def execute_knowledge_read(context: "SkillExecutorContext", inputs: dict[str, Any]) -> dict[str, Any]:
+    """The knowledge graph's read tools: symbol, callers, blast radius, why, search, precedent.
+    See agent_baseline.KNOWLEDGE_TOOLS; every agent holds it."""
+    from .agent_baseline import run_bundled_tool
+
+    return run_bundled_tool(context, "knowledge.read", inputs)
+
+
+@register_executor("knowledge.propose")
+def execute_knowledge_propose(context: "SkillExecutorContext", inputs: dict[str, Any]) -> dict[str, Any]:
+    """kg_propose_fact: the agent's fact, always stored `inferred`. Granted to the roles in
+    agent_baseline.PROPOSE_FACT_ROLES only."""
+    from .agent_baseline import run_bundled_tool
+
+    return run_bundled_tool(context, "knowledge.propose", inputs)

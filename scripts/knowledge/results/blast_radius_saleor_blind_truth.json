@@ -1,0 +1,162 @@
+{
+  "repo": "saleor/saleor",
+  "commit": "9ae360ae76b4777c7101215d8b3348022fcd3683",
+  "blind": "Answer key written and committed BEFORE the tool was run on any of these symbols; the commit that adds this file precedes the commit that adds the scores.",
+  "question": "Which files depend directly on this symbol (depth 1), other than the file that defines it?",
+  "rules": [
+    "Same rules as blast_radius_saleor_truth.json: a file counts when its Python code imports or uses THIS symbol (import, call, annotation, base class, value, a re-export of it).",
+    "Not counted: GraphQL query strings and schema.graphql; mock.patch target strings; comments and docstrings; same-named other definitions (e.g. BasePlugin's calculate_checkout_subtotal hook attribute); names only listed in __all__ without an import; subclasses that inherit a method without naming it.",
+    "Candidates from `git grep -nw NAME`; the full output of every symbol was read (no truncation this time) and judged by hand."
+  ],
+  "selection": "scripts/knowledge/sample_symbols.py --seed 20261022, excluding the first 30: symbols drawn from the parser (not the graph), non-test, non-migration, short name defined once, >= 8 characters, in 3-20 files; 14 functions, 10 classes, 6 methods.",
+  "symbols": {
+    "saleor/graphql/webhook/subscription_payload.py::initialize_request": [
+      "saleor/graphql/core/tests/test_deprecated_field_monitoring.py",
+      "saleor/graphql/webhook/tests/test_subscription_payload.py",
+      "saleor/plugins/webhook/plugin.py",
+      "saleor/webhook/transport/asynchronous/tests/test_deferred_payload.py",
+      "saleor/webhook/transport/asynchronous/transport.py",
+      "saleor/webhook/transport/synchronous/transport.py"
+    ],
+    "saleor/graphql/core/validators/__init__.py::clean_seo_fields": [
+      "saleor/graphql/core/tests/test_validators.py",
+      "saleor/graphql/page/mutations/page_create.py",
+      "saleor/graphql/product/bulk_mutations/product_bulk_create.py",
+      "saleor/graphql/product/mutations/category/category_create.py",
+      "saleor/graphql/product/mutations/collection/collection_create.py",
+      "saleor/graphql/product/mutations/product/product_create.py",
+      "saleor/graphql/product/mutations/product/product_update.py"
+    ],
+    "saleor/graphql/core/utils/__init__.py::get_duplicated_values": [
+      "saleor/graphql/account/bulk_mutations/customer_bulk_update.py",
+      "saleor/graphql/attribute/mutations/attribute_bulk_create.py",
+      "saleor/graphql/attribute/mutations/attribute_bulk_update.py",
+      "saleor/graphql/attribute/utils/type_handlers.py",
+      "saleor/graphql/channel/mutations/base_channel_listing.py",
+      "saleor/graphql/core/tests/test_core.py",
+      "saleor/graphql/discount/mutations/voucher/voucher_create.py",
+      "saleor/graphql/order/mutations/order_fulfill.py",
+      "saleor/graphql/product/bulk_mutations/product_bulk_create.py",
+      "saleor/graphql/product/bulk_mutations/product_variant_bulk_create.py",
+      "saleor/graphql/product/bulk_mutations/product_variant_bulk_update.py",
+      "saleor/graphql/product/mutations/channels.py",
+      "saleor/graphql/product/mutations/product_variant/product_variant_create.py"
+    ],
+    "saleor/discount/utils/shared.py::discount_info_for_logs": [
+      "saleor/checkout/utils.py",
+      "saleor/discount/tests/test_discounts.py",
+      "saleor/order/utils.py"
+    ],
+    "saleor/order/webhooks/order_calculate_taxes.py::generate_order_payload_for_tax_calculation": [
+      "saleor/order/tests/webhooks/static_payloads/test_order_calculate_taxes.py",
+      "saleor/order/tests/webhooks/test_order_calculate_taxes.py"
+    ],
+    "saleor/graphql/order/utils.py::validate_draft_order": [
+      "saleor/graphql/order/mutations/draft_order_complete.py",
+      "saleor/graphql/order/tests/test_draft_order_validate.py",
+      "saleor/graphql/order/types.py"
+    ],
+    "saleor/giftcard/utils.py::add_gift_card_code_to_checkout": [
+      "saleor/checkout/utils.py",
+      "saleor/giftcard/tests/test_utils.py"
+    ],
+    "saleor/account/forms.py::get_address_form": [
+      "saleor/account/tests/test_account.py",
+      "saleor/graphql/account/i18n.py"
+    ],
+    "saleor/giftcard/utils.py::gift_cards_create": [
+      "saleor/giftcard/tests/test_utils.py",
+      "saleor/order/actions.py"
+    ],
+    "saleor/asgi/gzip_compression.py::gzip_compression": [
+      "saleor/asgi/__init__.py",
+      "saleor/asgi/tests/test_gzip.py"
+    ],
+    "saleor/plugins/admin_email/notify_events.py::send_staff_order_confirmation": [
+      "saleor/plugins/admin_email/plugin.py",
+      "saleor/plugins/admin_email/tests/test_notify_events.py",
+      "saleor/plugins/admin_email/tests/test_plugin.py"
+    ],
+    "saleor/csv/utils/products_data.py::get_products_data": [
+      "saleor/csv/tests/export/products_data/test_get_products_data.py",
+      "saleor/csv/utils/export.py"
+    ],
+    "saleor/payment/utils.py::fetch_customer_id": [
+      "saleor/checkout/complete_checkout.py",
+      "saleor/graphql/account/resolvers.py",
+      "saleor/graphql/payment/tests/queries/test_payment_sources.py"
+    ],
+    "saleor/warehouse/webhooks/channel_stock_events.py::trigger_product_variant_back_in_stock_in_channel": [
+      "saleor/warehouse/channel_stock_availability.py",
+      "saleor/warehouse/tests/webhooks/test_channel_stock_events.py"
+    ],
+    "saleor/account/utils.py::RequestorAwareContext.create_context_data": [
+      "saleor/graphql/account/mutations/account/account_register.py",
+      "saleor/graphql/account/mutations/authentication/request_password_reset.py"
+    ],
+    "saleor/graphql/order/mutations/fulfillment_refund_and_return_product_base.py::FulfillmentRefundAndReturnProductBase.raise_error_for_payment_error": [
+      "saleor/graphql/order/mutations/fulfillment_refund_products.py",
+      "saleor/graphql/order/mutations/fulfillment_return_products.py"
+    ],
+    "saleor/graphql/core/mutations.py::ModelWithExtRefMutation.get_object_id": [
+      "saleor/graphql/account/mutations/staff/customer_update.py",
+      "saleor/graphql/attribute/mutations/attribute_value_update.py",
+      "saleor/graphql/core/tests/test_core.py",
+      "saleor/graphql/product/mutations/product/product_update.py"
+    ],
+    "saleor/plugins/manager.py::PluginsManager.calculate_checkout_subtotal": [
+      "saleor/checkout/calculations.py",
+      "saleor/checkout/tests/fixtures/checkout_with_prices.py",
+      "saleor/checkout/tests/test_calculations.py",
+      "saleor/checkout/tests/test_checkout.py",
+      "saleor/plugins/avatax/tests/test_avatax.py",
+      "saleor/plugins/avatax/tests/test_avatax_caching.py",
+      "saleor/plugins/tests/test_manager.py"
+    ],
+    "saleor/warehouse/models.py::ReservationQuerySet.not_expired": [
+      "saleor/graphql/warehouse/dataloaders.py",
+      "saleor/warehouse/availability.py",
+      "saleor/warehouse/management.py",
+      "saleor/warehouse/reservations.py"
+    ],
+    "saleor/discount/models.py::Voucher.validate_min_spent": [
+      "saleor/discount/tests/test_discounts.py",
+      "saleor/discount/utils/voucher.py"
+    ],
+    "saleor/tax/__init__.py::TaxableObjectDiscountType": [
+      "saleor/checkout/tests/webhooks/subscriptions/test_calculate_taxes.py",
+      "saleor/graphql/tax/enums.py",
+      "saleor/order/tests/webhooks/subscriptions/test_order_calculate_taxes.py"
+    ],
+    "saleor/graphql/core/filters/where_input.py::MetadataFilterInput": [
+      "saleor/graphql/core/filters/where_filters.py",
+      "saleor/graphql/order/filters.py"
+    ],
+    "saleor/graphql/tax/mutations/tax_class_create.py::TaxClassCreate": [
+      "saleor/graphql/tax/mutations/__init__.py",
+      "saleor/graphql/tax/schema.py"
+    ],
+    "saleor/graphql/discount/mutations/promotion/promotion_create.py::PromotionRuleInput": [
+      "saleor/graphql/discount/mutations/promotion/promotion_rule_create.py"
+    ],
+    "saleor/graphql/product/dataloaders/attributes.py::ProductAttributesAllByProductTypeIdLoader": [
+      "saleor/graphql/product/dataloaders/__init__.py",
+      "saleor/graphql/product/types/products.py"
+    ],
+    "saleor/graphql/core/scalars.py::WeightScalar": [
+      "saleor/graphql/core/tests/test_scalars_weight.py",
+      "saleor/graphql/order/bulk_mutations/order_bulk_create.py",
+      "saleor/graphql/product/bulk_mutations/product_bulk_create.py",
+      "saleor/graphql/product/mutations/product/product_create.py",
+      "saleor/graphql/product/mutations/product_type/product_type_create.py",
+      "saleor/graphql/product/mutations/product_variant/product_variant_create.py",
+      "saleor/graphql/shipping/mutations/shipping_price_create.py"
+    ],
+    "saleor/graphql/product/bulk_mutations/product_bulk_create.py::ProductBulkCreateInput": [],
+    "saleor/graphql/warehouse/sorters.py::WarehouseSortingInput": [
+      "saleor/graphql/warehouse/schema.py"
+    ],
+    "saleor/graphql/webhook/subscription_types.py::GiftCardStatusChanged": [],
+    "saleor/graphql/webhook/subscription_types.py::AccountEmailChanged": []
+  }
+}

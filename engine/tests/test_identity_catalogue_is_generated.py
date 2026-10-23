@@ -41,9 +41,11 @@ def test_the_built_in_roles_are_the_reviewed_sizes():
     # +2 self_fix:ticket_read and self_fix:ticket_report, held only by the new fixed system role
     # system_self_installer (BOSS fixes itself, BOSS_FIXES_ITSELF.md §6.5; operator decision 1:
     # the host self-installer runs signed tickets and nothing else).
-    assert len(Permission) == 197
+    # +2 knowledge:read and knowledge:manage (BOSSAPP-622). Read is held by every human role.
+    # Manage is owner and admin, with step-up.
+    assert len(Permission) == 199
     sizes = {role: len(perms) for role, perms in ROLE_PERMISSIONS.items()}
-    assert sizes == {"owner": 190, "admin": 181, "operator": 93, "viewer": 48, "auditor": 62,
+    assert sizes == {"owner": 192, "admin": 183, "operator": 94, "viewer": 49, "auditor": 63,
                      "system_worker": 3, "system_collector": 1, "system_scim": 1,
                      "system_self_installer": 2}
 
@@ -108,4 +110,4 @@ def test_a_catalogue_that_breaks_a_rule_is_refused(mutate, message):
 
 
 def test_the_source_loads():
-    assert len(load().permissions) == 197
+    assert len(load().permissions) == 199

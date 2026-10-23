@@ -1,0 +1,8 @@
+id: T1
+title: Reserve stock when an order is placed
+kind: new service, multi-repo
+knowledge: [webhook contract, order model]
+repo: fulfilment
+evaluate:
+  mode: service            # build the repo's Dockerfile, run it against a scratch Postgres, run the suite over HTTP
+  suite: hidden_tests/hidden_t1_fulfilment.py

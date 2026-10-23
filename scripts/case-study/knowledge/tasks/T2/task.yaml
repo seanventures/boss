@@ -1,0 +1,9 @@
+id: T2
+title: Click & collect with pickup slots
+kind: major feature
+knowledge: [checkout and shipping invariants, T1 couplings]
+repo: saleor
+evaluate:
+  mode: saleor_pytest      # copy the suite into the fork and run it with Saleor's own pytest setup
+  suite: hidden_tests/hidden_t2_click_and_collect_slots.py
+  install_as: saleor/graphql/checkout/tests/test_hidden_t2_pickup_slots.py

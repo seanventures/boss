@@ -7515,6 +7515,9 @@ def build_default_registry() -> ToolRegistry:
     from .app_platform_tools import register_app_platform_tools
 
     register_app_platform_tools(reg)
+    from .knowledge_tools import register_knowledge_tools
+
+    register_knowledge_tools(reg)
     return reg
 
 
@@ -7561,6 +7564,9 @@ def build_default_registry() -> ToolRegistry:
 # owning eighteen tools and being allowed five.
 _DISCUSS_OPERATIONS_TOOLS: frozenset[str] = frozenset({
     "deploy_app",
+    # "Remember that ..." from chat: one fact, stored `inferred` (quarantined, forgettable, never
+    # above a governed or approved fact) until a person promotes it (BOSSAPP-622).
+    "kg_propose_fact",
     # "Scan my app" from chat: the pinned scanners on the app's own code, BOSS's own targets only.
     "run_security_scan",
     # SETUP REPAIR, because a diagnosis with no matching capability is a loop — and setup is
