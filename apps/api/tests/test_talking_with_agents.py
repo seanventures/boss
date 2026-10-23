@@ -50,7 +50,11 @@ class Model:
                  "total_tokens": 160, "cost_usd_micros": 1500,
                  **({"billing": self.billing} if self.billing else {})}
         if "Turn this conversation into ONE concrete start" in prompt:
-            return "r", json.dumps(self.proposal), usage
+            # The start card is the pipeline's decision: the workflow is the chosen action and
+            # the card's draft is that action's arguments.
+            card = dict(self.proposal or {})
+            return "r", json.dumps({"action": card.pop("workflow_key", None), "confidence": 0.9,
+                                    "reason": card.get("why") or "", "arguments": card}), usage
         if "close the discussion" in prompt:
             return "r", json.dumps(self.summary), usage
         return "r", f"{who} speaking: considered view number {len(self.calls)}.", usage

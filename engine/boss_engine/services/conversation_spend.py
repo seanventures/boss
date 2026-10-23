@@ -150,8 +150,16 @@ class ConversationCallSpend(ArchitectureSpend):
             )
         return decision
 
-    def stream(self, settings, adapter, *, prompt, system_prompt, check_work):
-        """Yield live chunks, then a settled reply; preserve unknown liability on close."""
+    def stream(self, settings, adapter, *, prompt, system_prompt, check_work, produce):
+        """Yield live chunks, then a settled reply; preserve unknown liability on close.
+
+        THE ENVELOPE, NOT THE CALL (BOSSAPP-759). This pins the provider, admits the job,
+        reservation, lease and receipt, heartbeats the lease, enforces the deadline and byte
+        limits and settles. The model call itself is the one pipeline's: `produce(pinned)`
+        returns the answer's iterator (`engine_agent.stream_answer`, through
+        `AgentService.answer_stream` or a decision under `agent_decision.SpendEnvelope`),
+        lazily, so the provider is contacted inside this envelope's single-attempt and
+        deadline scope at the first `next()`. Its `close()` is the provider's close."""
         from .call_deadline import TurnDeadlineExceeded, until
         from .included_spend import source_by_id, source_is_included
         from .model_router.failover import FailoverChatAdapter
@@ -224,24 +232,9 @@ class ConversationCallSpend(ArchitectureSpend):
                     heartbeat_errors.append(error)
                     return
 
-        provider_iterator = None
-
-        def pieces():
-            nonlocal provider_iterator
-            stream = getattr(adapter, "stream_text_response", None)
-            if callable(stream):
-                provider_iterator = iter(stream(prompt, system_prompt=system_prompt))
-                yield from provider_iterator
-            else:
-                reply = adapter.create_text_response(prompt, system_prompt=system_prompt)
-                if isinstance(reply, tuple):
-                    yield str(reply[1] if len(reply) > 1 else reply[0] or "")
-                    yield reply[2] if len(reply) > 2 and isinstance(reply[2], dict) else {}
-                else:
-                    yield str(reply or "")
-
         thread = Thread(target=heartbeat, name="conversation-lease-heartbeat", daemon=True)
-        iterator = pieces()
+        # The pinned provider's answer. Nothing is sent until the first `next()` below.
+        iterator = produce(adapter)
         chunks, usage = [], {}
         reply_bytes = 0
         contacted = False
@@ -334,8 +327,7 @@ class ConversationCallSpend(ArchitectureSpend):
             thread.join(timeout=max(1, self.ttl_seconds))
             try:
                 with single_attempt(), until(deadline):
-                    iterator.close()
-                    close_provider = getattr(provider_iterator, "close", None)
+                    close_provider = getattr(iterator, "close", None)
                     if close_provider:
                         close_provider()
             except BaseException:

@@ -67,12 +67,6 @@ ALLOWED: dict[str, tuple[str, str]] = {
                                                                "pre-check predictions"),
     "engine/boss_engine/services/sre_ask.py": (WORKER, "plans a read-only query; never executes"),
     "engine/boss_engine/services/software_factory.py": (WORKER, "writes the factory plan artifact"),
-    "engine/boss_engine/services/conversation_spend.py": (
-        MIGRATE, "agent_converse's talk / plan / room: each seat's reply is ONE streamed call "
-                 "under the conversation's canonical spend envelope (pinned provider attempt, "
-                 "floor claim, settled receipt). The pipeline's turn neither streams nor "
-                 "accepts a caller's envelope, so it cannot move without that redesign (the "
-                 "doc's design note)"),
     "engine/boss_engine/services/agent_loop.py": (
         WORKER, "carries out a workflow agent step's instruction (and the factory's plan) with "
                 "only the step agent's granted skills and servers, each call re-checked by "
@@ -82,14 +76,6 @@ ALLOWED: dict[str, tuple[str, str]] = {
         WORKER, "runs a workflow agent step's instruction through agent_loop (the worker); "
                 "WHICH agent runs it is a turn through the pipeline (choose_agent → "
                 "AgentService.decide)"),
-    # ── still outside the pipeline ──────────────────────────────────────────────────────────
-    "engine/boss_engine/services/step_recovery.py": (
-        MIGRATE, "a failed step's recovery agent. Its decision carries per-action arguments "
-                 "(a fix note, the projects to clean, a boss_fix), comes after a read-tool "
-                 "phase, and is validated against the evidence it cites with one re-ask, "
-                 "inside the step's recovery budget. The pipeline's decision is "
-                 "{action, confidence, reason, question} with no tool phase, so it cannot move "
-                 "without that redesign (the doc's design note)"),
 }
 
 #: These may never decide on their own again: Metatron's router and the captain's service were
@@ -194,7 +180,20 @@ MIGRATED = {
     "engine/boss_engine/services/github_triage_agent.py": "GitHub issue triage",
     "engine/boss_engine/services/app_alerts.py": "alert triage and flap tuning",
     "engine/boss_engine/services/focused_agents.py": "the focused agents' duty loop",
+    "engine/boss_engine/services/step_recovery.py": "a failed step's recovery agent (arguments, "
+                                                    "a bounded read phase, validate as the "
+                                                    "check with one re-ask)",
+    "engine/boss_engine/services/agent_converse.py": "agent-to-agent talk, plan and room: the "
+                                                     "plan's start card",
 }
+
+#: Entry points whose agents SPEAK through the pipeline's streaming answer turn
+#: (`AgentService.answer_stream`), under the caller's spend envelope. The envelope itself
+#: (conversation_spend.py) governs the call and makes none: it holds no sign.
+SPEAKS_THROUGH_THE_PIPELINE = {
+    "engine/boss_engine/services/agent_converse.py": "every talk, plan and room seat",
+}
+ENVELOPES = ("engine/boss_engine/services/conversation_spend.py",)
 
 #: Moved too, but the module still holds a worker (ALLOWED says which): its decision is the
 #: pipeline's, its execution stays a worker.
@@ -223,6 +222,157 @@ def test_every_migrated_entry_point_takes_its_turn_through_the_pipeline():
         # Only the worker's sign is left: no decision model, router or one-shot model call.
         assert deciders.get(path, set()) <= {"run_agent_loop"}, (what, deciders.get(path))
         assert _calls_the_domain_turn(path), f"{what} ({path}) does not call AgentService.decide"
+
+
+def test_every_seat_speaks_through_the_pipelines_streaming_answer():
+    deciders = _deciders()
+    for path, what in SPEAKS_THROUGH_THE_PIPELINE.items():
+        tree = ast.parse((ROOT / path).read_text())
+        assert any(isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                   and n.func.attr == "answer_stream" for n in ast.walk(tree)), what
+        assert path not in deciders and path not in ALLOWED, what
+    for path in ENVELOPES:
+        assert path not in deciders and path not in ALLOWED, path
+
+
+class _Envelope:
+    """A caller's envelope (no paid call): pins its own adapter, counts the attempts it admits,
+    and settles what the pipeline's call produced."""
+
+    def __init__(self, pinned):
+        self.pinned, self.attempts, self.settled, self.contacted = pinned, 0, None, []
+
+    def run(self, produce, *, prompt, system_prompt):
+        self.attempts += 1
+        answer = produce(self.pinned)
+        self.contacted.append(False)
+        chunks, usage = [], {}
+        try:
+            for piece in answer:
+                self.contacted[-1] = True
+                if isinstance(piece, dict):
+                    usage = piece
+                else:
+                    chunks.append(piece)
+                    yield "chunk", piece
+        finally:
+            answer.close()
+        self.settled = ("".join(chunks), usage)
+        yield "done", self.settled
+
+
+class _Streaming:
+    def __init__(self, words):
+        self.words, self.calls = words, []
+
+    def stream_text_response(self, prompt, system_prompt=None):
+        self.calls.append((system_prompt, prompt))
+        yield from self.words
+        yield {"model": "scripted", "prompt_tokens": 3, "completion_tokens": len(self.words)}
+
+
+def test_a_seat_speaks_through_the_pipelines_streaming_answer_inside_the_callers_envelope():
+    """AgentService.answer_stream: a role-addressed turn whose answer (engine_agent.stream_answer)
+    streams word by word inside the caller's envelope, which pinned the model and settles it."""
+    from boss_engine.services.agent_service import AgentService, SpendEnvelope
+
+    model = _Streaming(["I would ", "test the ", "login first."])
+    envelope = _Envelope(model)
+    stream = AgentService(None).answer_stream(
+        role="qa", system_prompt="You are Vera, the QA engineer.", prompt="What first?",
+        envelope=SpendEnvelope(envelope.run))
+    first = next(stream)
+    assert first == ("chunk", "I would ") and model.calls == [
+        ("You are Vera, the QA engineer.", "What first?")]
+    rest = list(stream)
+    assert [v for k, v in rest if k == "chunk"] == ["test the ", "login first."]
+    assert rest[-1] == ("done", ("I would test the login first.",
+                                 {"model": "scripted", "prompt_tokens": 3,
+                                  "completion_tokens": 3}))
+    assert envelope.attempts == 1 and envelope.settled == rest[-1][1]
+    import pytest
+
+    with pytest.raises(ValueError):
+        next(AgentService(None).answer_stream(role="qa", system_prompt="s", prompt="p",
+                                              adapter=model, mode="operate"))
+
+
+class _Reading:
+    """A scripted chat model: reads with a tool first, then answers each turn from a script."""
+
+    def __init__(self, answers):
+        import json
+
+        self.answers = [json.dumps(a) for a in answers]
+        self.seen = []
+
+    def create_chat_completion(self, messages, tools=None, **_):
+        self.seen.append((list(messages), tools))
+        if len(self.seen) == 1:
+            return ({"content": "", "tool_calls": [{"id": "t1", "name": "read_logs",
+                                                    "arguments": '{"run": "wfr_1"}'}]},
+                    {"model": "scripted"})
+        return {"content": self.answers.pop(0)}, {"model": "scripted"}
+
+
+def test_a_structured_decision_reads_first_checks_its_evidence_and_asks_once_more():
+    """The step-recovery shape, through the router's one decision: a bounded read phase, the
+    chosen action's arguments validated against its schema, and the caller's check against the
+    corpus (context + reads) with ONE re-ask when it refuses."""
+    from boss_engine.services.agent_service import (AgentService, Choice, DECIDED, ReadPhase)
+
+    reads: list = []
+
+    def run(name, args):
+        reads.append((name, args))
+        return {"ok": True, "lines": ["Bind for 0.0.0.0:8000 failed: port is already allocated"]}
+
+    def check(answer, corpus):
+        cited = " ".join(str(e) for e in answer.get("evidence") or [])
+        return "" if cited and cited in corpus else "cite evidence you were shown"
+
+    model = _Reading([
+        {"action": "clean", "confidence": 0.9, "reason": "r", "arguments": {"projects": ["a"]},
+         "evidence": ["the moon was in the wrong phase"]},
+        {"action": "clean", "confidence": 0.9, "reason": "port held by our release",
+         "arguments": {"projects": ["helpdesk-ai"]},
+         "evidence": ["Bind for 0.0.0.0:8000 failed: port is already allocated"]}])
+    schema = {"properties": {"projects": {"type": "array", "description": "what to take down"}},
+              "required": ["projects"]}
+    got = AgentService(None).decide(
+        None, project_id="p", actor="boss recovery agent", agent="Harbor", external_ref="",
+        situation="A deploy failed.", message="Recover it.", brief="You are Harbor.",
+        choices=[Choice("clean", "take our old release down", arguments=schema),
+                 Choice("ask", "ask a person", acts=False)],
+        context={"failure": "deploy failed"}, check=check, adapter=model, min_confidence=0.5,
+        read=ReadPhase(tools=[{"type": "function", "function": {"name": "read_logs"}}],
+                       run=run, max_turns=4))
+    assert got.status == DECIDED and got.action == "clean"
+    assert got.arguments == {"projects": ["helpdesk-ai"]} and got.turns == 3
+    assert reads == [("read_logs", {"run": "wfr_1"})]
+    assert model.seen[0][1] and "You are Harbor." in model.seen[0][0][0]["content"]
+    assert model.seen[2][0][-1]["content"].startswith("Refused: cite evidence")
+
+
+def test_a_decision_under_an_envelope_is_one_attempt_and_never_asked_twice():
+    """Under a caller's envelope the decision's call is the envelope's one attempt: an answer
+    its arguments refuse is not re-asked, and nothing is decided."""
+    import json
+
+    from boss_engine.services.agent_service import NO_MODEL, AgentService, Choice, SpendEnvelope
+
+    class Whole:
+        def create_text_response(self, prompt, system_prompt=None):
+            return "r", json.dumps({"action": "start_build", "arguments": {"inputs": "x"}}), {}
+
+    envelope = _Envelope(Whole())
+    got = AgentService(None).decide(
+        None, project_id="p", actor="pm", external_ref="", situation="s", message="Propose.",
+        choices=[Choice("start_build", "start a build", acts=False,
+                        arguments={"properties": {"inputs": {"type": "object"}}})],
+        envelope=SpendEnvelope(envelope.run))
+    assert envelope.attempts == 1 and got.status == NO_MODEL
+    assert "must be a JSON object" in got.refused
 
 
 class _Model:

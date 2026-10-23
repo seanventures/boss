@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Optional
+from typing import Any, Iterator, Optional
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
@@ -25,6 +25,12 @@ AgentDecision = agent_decision.AgentDecision
 DECIDED, CLARIFY, NO_MODEL = agent_decision.DECIDED, agent_decision.CLARIFY, agent_decision.NO_MODEL
 #: What to tell a person when no model answered (names an exhausted provider when known).
 no_model_reply = agent_decision.no_model_reply
+#: The confidence an action needs on this project (the setting, else the default).
+decision_threshold = agent_decision.threshold
+#: Read tools a domain agent may call before it decides, bounded by the caller.
+ReadPhase = agent_decision.ReadPhase
+#: A caller's spend envelope: the one model attempt it governs, which the turn runs inside.
+SpendEnvelope = agent_decision.SpendEnvelope
 
 #: The surface a domain agent's turns are kept on: its own threads, never the chat rail's.
 DOMAIN_SURFACE = "agent"
@@ -621,6 +627,16 @@ class AgentService:
         adapter: Any = None,
         decider: Any = None,
         min_confidence: Optional[float] = None,
+        #: THE STRUCTURED DECISION (agent_decision.decide): the caller's own rules for it,
+        #: `check(answer, corpus) -> refusal` (one re-ask on refusal), a bounded read phase
+        #: (ReadPhase) and the caller's spend envelope (SpendEnvelope, one attempt). The
+        #: choices may carry argument schemas (`Choice(arguments=…)`); the decision then
+        #: returns them validated, in `arguments`.
+        brief: str = "",
+        check: Any = None,
+        read: Optional["ReadPhase"] = None,
+        envelope: Optional["SpendEnvelope"] = None,
+        context_limit: int = 9000,
     ) -> "AgentDecision":
         """A DOMAIN AGENT'S TURN THROUGH THE ONE PIPELINE (BOSSAPP-759).
 
@@ -647,11 +663,67 @@ class AgentService:
             connection, project_id=project_id, message=message, choices=list(choices),
             situation=situation, history=history, context=context, hints=hints,
             agent=agent or role or "BOSS", ref=ref if ref is not None else external_ref,
-            adapter=adapter, decider=decider, min_confidence=min_confidence)
+            adapter=adapter, decider=decider, min_confidence=min_confidence, brief=brief,
+            check=check, read=read, envelope=envelope, context_limit=context_limit)
         if thread is not None:
             self._record_domain_turn(connection, thread_id=thread["id"], role=role,
                                      message=message, decision=decision)
         return decision
+
+    def answer_stream(
+        self,
+        *,
+        #: The agent addressed: the seat that speaks (`qa`, `pm`, a custom agent's key).
+        role: str,
+        #: Its prompt, composed by the one persona compiler (agent_persona.compose_agent_prompt)
+        #: — the same compiler the dock, the work prompt and every panel seat use.
+        system_prompt: str,
+        prompt: str,
+        #: The speaking agent's model, as model_routing chose it for this agent.
+        adapter: Any = None,
+        #: The caller's spend envelope the answer runs inside (one attempt): its pinned
+        #: provider, reservation, lease, settled receipt and floor. Without one, the adapter's
+        #: own governance applies (a GovernedChatAdapter passes the stream through).
+        envelope: Optional["SpendEnvelope"] = None,
+        mode: str = "discuss",
+    ) -> Iterator[tuple[str, Any]]:
+        """THE STREAMING ANSWER TURN (BOSSAPP-759): a role-addressed turn whose answer is
+        streamed as the model writes it — ("chunk", text)… then ("done", (text, usage)).
+
+        This is how one agent speaks to a person or to another agent: a talk, a plan and a room
+        seat each speak through it, and round two of a room is the same turn with the earlier
+        seat's reply in its prompt. A seat has ONE thing to do — answer — so there is nothing to
+        decide and no decision call is spent; what a turn would choose (a plan's start card) is
+        `decide`. The answer is the pipeline's (engine_agent.stream_answer). `discuss` is the
+        only mode it runs: a streamed answer has no tools and writes nothing, which is the
+        talk's rule (agent_converse.TALK_CANNOT_ACT)."""
+        if mode != "discuss":
+            raise ValueError("a streamed answer runs no tools: its mode is discuss")
+        if not str(role or "").strip():
+            raise ValueError("a streamed answer is a turn addressed to an agent")
+        from ..agent.engine_agent import stream_answer
+
+        def produce(pinned: Any) -> Any:
+            return stream_answer(pinned, prompt=prompt, system_prompt=system_prompt)
+
+        if envelope is not None:
+            yield from envelope.run(produce, prompt=prompt, system_prompt=system_prompt)
+            return
+        if adapter is None:
+            raise ValueError("a streamed answer needs the speaking agent's model")
+        answer = produce(adapter)
+        chunks: list[str] = []
+        usage: dict[str, Any] = {}
+        try:
+            for piece in answer:
+                if isinstance(piece, dict):
+                    usage = piece
+                else:
+                    chunks.append(str(piece))
+                    yield "chunk", str(piece)
+        finally:
+            answer.close()
+        yield "done", ("".join(chunks), usage)
 
     def _domain_thread(self, connection: Optional[Connection], *, project_id: str, actor: str,
                        external_ref: str, role: Optional[str]) -> Optional[dict[str, Any]]:
@@ -669,7 +741,9 @@ class AgentService:
     def _record_domain_turn(self, connection: Connection, *, thread_id: str,
                             role: Optional[str], message: str, decision: Any) -> None:
         said = decision.to_dict()
-        if decision.status == NO_MODEL:
+        if decision.status == NO_MODEL and decision.refused:
+            reply = f"Refused, so nothing was decided: {decision.refused}"
+        elif decision.status == NO_MODEL:
             reply = "No model answered, so nothing was decided."
         elif decision.status == CLARIFY:
             reply = f"Asks: {decision.question}"

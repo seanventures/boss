@@ -1877,7 +1877,10 @@ class IntentRouter:
                      history: list | tuple = (), context: Optional[dict] = None,
                      hints: list | tuple = (), agent: str = "BOSS", ref: str = "",
                      adapter: Any = None, decider: Any = None,
-                     min_confidence: Optional[float] = None) -> "agent_decision.AgentDecision":
+                     min_confidence: Optional[float] = None, brief: str = "",
+                     check: Any = None, read: Optional["agent_decision.ReadPhase"] = None,
+                     envelope: Optional["agent_decision.SpendEnvelope"] = None,
+                     context_limit: int = 9000) -> "agent_decision.AgentDecision":
         """THE TURN'S DECISION, for a turn whose caller names the actions (BOSSAPP-759).
 
         A domain agent — the on-call agent triaging an alert, the inbox reading a reply, the
@@ -1886,12 +1889,18 @@ class IntentRouter:
         the caller's input; the decision is this one: the same model (Jev when ready, else the
         project's routed model, governed), the same prompt contract, the same confidence bar,
         and no keyword behind it. A caller passing its own `adapter`/`decider` is a test seam
-        or the battle-test runner, the same seams `route_turn` has."""
+        or the battle-test runner, the same seams `route_turn` has.
+
+        A decision that is more than a choice (`agent_decision.decide`'s structured decision):
+        choices with argument schemas, the caller's `check` with one re-ask, a bounded `read`
+        phase over read tools, the caller's `brief`, and an `envelope` — the caller's spend
+        envelope its one model attempt runs under."""
         return agent_decision.decide(
             connection, self.settings, project_id, situation=situation, message=message,
             candidates=list(choices), history=list(history or ()), context=context,
             hints=list(hints or ()), agent=agent, ref=ref, min_confidence=min_confidence,
-            adapter=adapter, decider=decider)
+            adapter=adapter, decider=decider, brief=brief, check=check, read=read,
+            envelope=envelope, context_limit=context_limit)
 
     def _revised_objective(self, connection, project_id: str, objective: str,
                            revision: str) -> str:
