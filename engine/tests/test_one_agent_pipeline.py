@@ -74,8 +74,6 @@ ALLOWED: dict[str, tuple[str, str]] = {
     "engine/boss_engine/services/agent_steps.py": (MIGRATE, "workflow agent step: picks a role, "
                                                    "then agent_loop"),
     "engine/boss_engine/services/step_recovery.py": (MIGRATE, "a failed step's recovery agent"),
-    "engine/boss_engine/services/comms.py": (MIGRATE, "inbox / Slack / email decision replies"),
-    "engine/boss_engine/services/github_triage_agent.py": (MIGRATE, "GitHub issue triage"),
     "engine/boss_engine/services/app_alerts.py": (MIGRATE, "alert triage and flap tuning"),
 }
 
@@ -177,6 +175,8 @@ def test_the_doc_accounts_for_every_entry_left_to_migrate():
 #: must call `AgentService…decide` — the router's one decision — and nothing on SIGNS.
 MIGRATED = {
     "engine/boss_engine/services/investigation.py": "incident verdict",
+    "engine/boss_engine/services/comms.py": "inbox / Slack / email decision replies",
+    "engine/boss_engine/services/github_triage_agent.py": "GitHub issue triage",
 }
 
 
