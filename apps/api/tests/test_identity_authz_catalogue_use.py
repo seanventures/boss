@@ -26,7 +26,6 @@ IDENTITY_API = frozenset({
 RESERVED = {
     "org:read": "GET /v1/orgs is authenticated and filters to the caller's org (§6.7)",
     "org:delete": "no org deletion route exists (one org per install, D24)",
-    "project:create": "projects are created by setup and seed, not by a route yet",
     "project:delete": "no project deletion route exists",
     "telemetry:ingest": "the collector's machine routes are public:collector_signed (A1); kept "
                         "for an authenticated collector principal",

@@ -12,7 +12,7 @@ This is the first draft of the one catalogue every BOSS API route, MCP tool, con
 - **No wildcards anywhere.** Neither `*` nor `resource:*` exists, in storage or in matching. Built-in roles are explicit lists generated from the `roles` column of each entry. In the role editor, "select all in a resource" expands to explicit keys when you save. So a permission added in a later BOSS release never reaches a custom role silently. A seeder that grants a wildcard, or two near-identical wildcards that drift apart, cannot happen here.
 - **Actions are named for what they risk, not for the HTTP verb.** `read`, `create`, `update`, `delete` and `manage` are the common ones. Dangerous effects get their own action, such as `deployment:production`, `code_task:override`, `host:exec`, `agent_ability:assign` and `owner:assign`, so a broader permission never implies them.
 - **Flags:**
-  - **step-up:** the session must have passed MFA in the last 10 minutes (IDENTITY.md §4.6).
+  - **step-up:** the session must have passed MFA in the last 10 minutes (IDENTITY.md §4.6). A bearer credential cannot step up, so a person's PAT never satisfies it. A service account's own key (`sak`) is exempt when the permission is in its scopes, except for identity administration, `approval_rule:manage` and `owner:assign`, which no key ever uses (`authz._step_up_exempt`, `authz.KEY_NEVER_STEPS_UP`). So a service account holding `project:create` makes projects without a second factor, exactly as it can use `org:update`.
   - **delegable:** the permission may appear in an agent Passport ceiling or a delegation grant. Anything not marked delegable is human-only, whatever the agent's chain holds. Approvals, identity administration and secret management are never delegable.
   - **org-only:** the permission can only be bound at org scope, never per project.
   - **system-only:** no human role holds it. Only the built-in system service accounts do: `worker`, `collector` and `scim`.
@@ -468,6 +468,7 @@ The rules are a first pass. During the build every route gets a hand-checked `@p
 | `org:read` | GET | `/v1/orgs` | main.py |
 | `org:update` | POST | `/v1/orgs` | main.py |
 | `project:read` | GET | `/v1/projects` | main.py |
+| `project:create` | POST | `/v1/projects` | main.py |
 | `project:read` | GET | `/v1/projects/{project_id}/preflight` | main.py |
 | `project:read` | GET | `/v1/projects/{project_id}/host-advice` | main.py |
 | `project:update` | PUT | `/v1/projects/{project_id}/settings/builds_at_once` | system_health.py |
@@ -884,7 +885,7 @@ The rules are a first pass. During the build every route gets a hand-checked `@p
 | `agent:test` | 7 |  | `telemetry:ingest` | 2 |
 | `agent_ability:assign` | 4 |  | `worker:lease` | 36 |
 
-Catalogue permissions with no route today are used by the new identity API (§5) or by MCP tools only (§7): `user:read`, `user:update`, `user:disable`, `user:delete`, `user:reset_mfa`, `user:revoke_sessions`, `group:read`, `group:manage`, `group:manage_members`, `access_role:read`, `access_role:manage`, `role_binding:read`, `owner:assign`, `service_account:read`, `service_account:manage`, `service_account_key:manage`, `api_key:manage_own`, `api_key:read`, `api_key:revoke`, `session:read`, `session:revoke`, `agent_passport:manage`, `agent_passport:suspend`, `agent_passport:revoke`, `delegation:grant`, `delegation:read_all`, `delegation:revoke_any`, `connection:use_own`, `connection:read_all`, `connection:revoke_any`, `security_policy:read`, `security_policy:manage`, `audit:export`, `org:delete`, `project:create`, `project:delete`, `repository:register`, `workflow:delete`, `approval_rule:manage`, `host:exec`.
+Catalogue permissions with no route today are used by the new identity API (§5) or by MCP tools only (§7): `user:read`, `user:update`, `user:disable`, `user:delete`, `user:reset_mfa`, `user:revoke_sessions`, `group:read`, `group:manage`, `group:manage_members`, `access_role:read`, `access_role:manage`, `role_binding:read`, `owner:assign`, `service_account:read`, `service_account:manage`, `service_account_key:manage`, `api_key:manage_own`, `api_key:read`, `api_key:revoke`, `session:read`, `session:revoke`, `agent_passport:manage`, `agent_passport:suspend`, `agent_passport:revoke`, `delegation:grant`, `delegation:read_all`, `delegation:revoke_any`, `connection:use_own`, `connection:read_all`, `connection:revoke_any`, `security_policy:read`, `security_policy:manage`, `audit:export`, `org:delete`, `project:delete`, `repository:register`, `workflow:delete`, `approval_rule:manage`, `host:exec`.
 
 ## 7. MCP tools → permission (all of them)
 

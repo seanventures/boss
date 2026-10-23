@@ -21,6 +21,8 @@ CREATE TABLE IF NOT EXISTS projects (
   name TEXT NOT NULL,
   slug TEXT NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  -- What a project is for, in its creator's words (POST /v1/projects). Optional.
+  description TEXT,
   UNIQUE(workspace_id, slug)
 );
 

@@ -4,11 +4,11 @@
   "canonical_key": "method + path",
   "request_body_type_enforcement_note": "pass_through_documented fields appear in OpenAPI but SkipValidation preserves the handler's existing input coercion and error statuses; runtime_validated_input_schema is a legacy schema-presence flag",
   "edition": "community",
-  "operation_count": 1625,
+  "operation_count": 1626,
   "counts": {
     "api_policy_gated": 1384,
     "excluded": 102,
-    "human_confirmation_gated": 71,
+    "human_confirmation_gated": 72,
     "operator_only_unavailable": 68
   },
   "operations": [
@@ -22061,6 +22061,24 @@
       "domain_scoped_direct_tool": true,
       "requires_explicit_bound_api_credential": true,
       "read_only_available": true
+    },
+    {
+      "method": "POST",
+      "path": "/v1/projects",
+      "alias": "post_v1_projects_26859131",
+      "domain": "workspace",
+      "summary": "Create Project Endpoint",
+      "mcp_status": "human_confirmation_gated",
+      "reason": "fresh_human_confirmation_required",
+      "input_schema_quality": "typed_json_body",
+      "mounted_input_schema_quality": "typed_json_body",
+      "request_body_type_enforcement": "pydantic_fields",
+      "curated_input_fields": false,
+      "typed_input_schema": true,
+      "runtime_validated_input_schema": true,
+      "domain_scoped_direct_tool": true,
+      "requires_explicit_bound_api_credential": true,
+      "read_only_available": false
     },
     {
       "method": "GET",

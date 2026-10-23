@@ -75,6 +75,8 @@ _EXPECTED_TOOLS: set[str] = {
     "remove_app",
 
     "cancel_code_task",
+    # "Create a project called northpeak-bank-a": a new project in the org (project:create).
+    "create_project",
     # The first deployment. BOSS could create hosts and targets and could redeploy, and had
     # nothing that performs a deployment which never happened — so "deploy it" had no
     # executable action at all.
@@ -225,12 +227,12 @@ def test_default_registry_shape():
     read = {s.name for s in reg.specs(kind="read")}
     write = {s.name for s in reg.specs(kind="write")}
     assert read | write == set(reg.names())
-    assert len(reg.names()) == 139, (
+    assert len(reg.names()) == 140, (
         f"tool set changed: unexpected={sorted(set(reg.names()) - _EXPECTED_TOOLS)}, "
         f"missing={sorted(_EXPECTED_TOOLS - set(reg.names()))}")
     assert len(read) == 84  # + 7 kg reads, + 3 self-fix reads, + read_app_logs, + my_recent_work, + system_health, + 7 template/security reads, + precheck_workflow
     #                        + query_project_data (the agent baseline's fenced row read)
-    assert len(write) == 55  # + kg_propose_fact, + remove_app, + system_doctor_act, + run_security_scan (F4), + apply_template (F2),
+    assert len(write) == 56  # + create_project, + kg_propose_fact, + remove_app, + system_doctor_act, + run_security_scan (F4), + apply_template (F2),
     #                         + review_pull_request_again
     # the capabilities the user explicitly asked the agent to cover
     for name in (
@@ -428,6 +430,9 @@ _SAFE_WRITES = [
     # TURNING A DIAL BACK IS SETTING IT AGAIN. Which model fills which role, how many agents
     # run at once; an empty value hands it back to the deployment default. Nothing starts.
     "set_project_setting",
+    # A NEW PROJECT IS EMPTY. It starts nothing, spends nothing and touches no existing work; the
+    # identity gate still decides project:create with the caller's own step-up.
+    "create_project",
     # CONNECTING A SUBSCRIPTION READS. It probes a CLI the operator already installed, makes
     # it answer once in a read-only sandbox, and records an entitlement row. It stores no
     # credential (there is none to store) and changes no code.

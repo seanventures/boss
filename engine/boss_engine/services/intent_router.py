@@ -125,6 +125,12 @@ _DECIDED_MEANS = {
                 "step, redeploy for a deployment, skip/recheck for a stopped run. Never start new work for it. If "
                 "what they asked would destroy or replay something they may not intend (a "
                 "removal, deleted data), ask ONE question instead. Report only what a tool did."),
+    "create_project": ("a request to CREATE A PROJECT in this organization (a separate BOSS "
+                       "workspace with its own agents, budget and settings), not an app. Call "
+                       "create_project once, with the name they gave (and the slug, when they "
+                       "named a kebab-case one). Report the project it made and its id, or its "
+                       "refusal in their words: a slug in use, a missing permission, or a "
+                       "confirmation they must give first. Start no build."),
     "new_code_change": ("a request for NEW work. Offer it: create_code_task for one scoped "
                         "change, start_workflow for a whole delivery — both come back as a "
                         "button the person presses; say it is offered, not started. Do not "
@@ -153,7 +159,7 @@ def _decision_note(decision: Any) -> str:
 _AGENT_ACTIONS = frozenset({"answer", "investigate", "operate", "new_code_change"})
 
 #: The decided actions that authorise the agent to change things this turn.
-_WRITE_ACTIONS = frozenset({"operate", "new_code_change"})
+_WRITE_ACTIONS = frozenset({"operate", "new_code_change", "create_project"})
 
 
 _TOOL_SCHEMAS = [
@@ -1767,6 +1773,9 @@ class IntentRouter:
                          "still come back as buttons for them to press)"),
             C("new_code_change", "start NEW code work on an app: a new app, a feature or a "
                                  "change to an app's code (offered as a button for them to start)"),
+            C("create_project", "create a new BOSS PROJECT in this organization: a separate "
+                                "workspace with its own agents, budget, settings and work, set up "
+                                "like the first one (not a new app)", label="Create the project"),
         ]
         if pending_plan:
             out += [C("confirm_plan", "run the pending plan exactly as proposed"),

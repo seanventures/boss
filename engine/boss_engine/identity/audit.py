@@ -117,6 +117,8 @@ EVENT_TYPES: frozenset[str] = frozenset({
     "self_fix.started", "self_fix.refused", "self_fix.approved", "self_fix.rejected",
     "self_fix.ticket_issued", "self_fix.installed", "self_fix.rolled_back", "self_fix.removed",
     "self_fix.upstream_sent", "self_fix.policy_changed", "self_fix.switch_changed",
+    # projects (POST /v1/projects): who made a project in the org, and which
+    "project.created",
 })
 
 #: hash of "no previous event" for the first row of an org's chain.

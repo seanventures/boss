@@ -47,6 +47,7 @@ HEADLINES = {
     "auth.signup.requested": "asked to sign up", "auth.signup.completed": "signed up",
     "auth.signup.refused": "was refused sign-up", "session.created": "started a session",
     "session.revoked": "ended a session", "token.issued": "was given a run token",
+    "project.created": "created a project",
 }
 
 

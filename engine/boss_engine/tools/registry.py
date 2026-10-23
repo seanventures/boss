@@ -346,12 +346,18 @@ class ToolRegistry:
                                 project_id, safe_args)
         if refused is not None:
             return refused
+        # The handler sees the identity the gate decided: an explicit `auth` is this call's
+        # caller for the handler too (one that records who acted reads CURRENT_TOOL_AUTH).
+        auth_token = CURRENT_TOOL_AUTH.set(auth) if auth is not None else None
         try:
             result = spec.handler(ctx, project_id=project_id, actor=actor, args=safe_args)
         except ToolError:
             raise
         except Exception as exc:  # normalize handler failures into a tool result
             return {"ok": False, "tool": name, "error": f"{type(exc).__name__}: {exc}"}
+        finally:
+            if auth_token is not None:
+                CURRENT_TOOL_AUTH.reset(auth_token)
         if not isinstance(result, dict):
             result = {"result": result}
         result.setdefault("ok", True)

@@ -2688,6 +2688,47 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
                             f"run, nothing to restart"}
 
     @reg.tool(
+        "create_project",
+        "Create a new BOSS PROJECT in this organization: a separate workspace with its own "
+        "agents, skills, budget, settings, repositories and work, set up exactly like the first "
+        "project. Use it when someone asks for a new project (\"create a project called "
+        "northpeak-bank-a\"). NOT for a new app — an app is built with start_workflow or "
+        "create_code_task inside a project. The slug is kebab-case and becomes the project's "
+        "id; give it when they named one, else it is made from the name. A slug already in use "
+        "comes back with the existing project's id.",
+        _obj({"name": {"type": "string", "description": "the project's name, as they said it"},
+              "slug": {"type": "string",
+                       "description": "kebab-case id, e.g. northpeak-bank-a (optional)"},
+              "description": {"type": "string", "description": "what it is for (optional)"}},
+             required=["name"]),
+        kind="write",
+        # A NEW, EMPTY PROJECT: it spends nothing and changes no existing work. The identity gate
+        # decides project:create with the caller's own context (a person's fresh step-up; a
+        # service account's key); an agent's run token never holds it (not delegable).
+        reversibility="safe", permission="project:create", org_scope=True)
+    def create_project(ctx, *, project_id, actor, args):
+        from ..services import projects as project_service
+        from .registry import CURRENT_TOOL_AUTH
+
+        auth = CURRENT_TOOL_AUTH.get()
+        try:
+            with ctx.begin() as c:
+                made = project_service.create(
+                    c, ctx.settings, auth=auth, name=args.get("name"), slug=args.get("slug"),
+                    description=args.get("description"), actor=actor)
+        except project_service.ProjectExists as clash:
+            return {"ok": False, "error": "project_exists", "slug": clash.slug,
+                    "project_id": clash.project_id,
+                    "message": (f"A project {clash.project_id} already exists." if clash.project_id
+                                else f"The slug {clash.slug} is taken; choose another.")}
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        return {"ok": True, "project_id": made["project_id"], "name": made["name"],
+                "slug": made["slug"], "href": f"/?project_id={made['project_id']}",
+                "note": f"Project {made['name']} ({made['project_id']}) is ready, set up like "
+                        "the first project."}
+
+    @reg.tool(
         "diagnose_setup",
         "EVERYTHING about whether this install is set up, in one call — the same view Repo "
         "and models renders: the repository and its read/write/pull-request checks, each "
@@ -7576,6 +7617,8 @@ _DISCUSS_OPERATIONS_TOOLS: frozenset[str] = frozenset({
     # anyone." Both of these are reversible and neither takes a credential.
     "test_github_access",
     "set_project_setting",
+    # "Create a project called northpeak-bank-a": a new project in the org (project:create).
+    "create_project",
     # The escape hatch from a registry of fixed questions: a real debugging session.
     "investigate",
     # Reconciling a run with a world that has moved on. Named by an investigation as the

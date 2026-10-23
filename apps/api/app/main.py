@@ -417,6 +417,7 @@ from .schemas import (
     ProjectMemberListResponse,
     ProjectMemberSummary,
     ProjectMemberUpsertRequest,
+    ProjectCreatedResponse,
     ProjectListResponse,
     ProjectSummary,
     PlanCreateRequest,
@@ -682,6 +683,7 @@ from .request_bodies import (
     PrdDecomposeBody,
     ProjectAgentsBody,
     ProjectBody,
+    ProjectCreateBody,
     ProjectSettingBody,
     ProviderUsageIngestBody,
     ProviderUsageSyncBody,
@@ -5777,6 +5779,55 @@ def list_projects(request: Request) -> ProjectListResponse:
             items=[project_summary_from_row(row) for row in rows
                    if visible is None or str(row["id"]) in visible]
         )
+
+
+@app.post("/v1/projects", status_code=201, response_model=ProjectCreatedResponse)
+@permit(P.PROJECT_CREATE, scope=Scope.org())
+def create_project_endpoint(request: Request, payload: ProjectCreateBody) -> Any:
+    """A new project in the caller's organization, seeded EXACTLY like the default one
+    (bootstrap.create_project -> seed_project_defaults: budget policy, members, packs and agents,
+    skills and grants, MCP servers, the shipped cast, workflows, trackers). The slug, given or made
+    from the name, is kebab-case and is the project's id. A slug in use answers 409 with the
+    existing project's id. Audited: an `events` row in the new project and, for an identity
+    principal, `project.created` in the org's security log (who, when, what).
+
+    `project:create` needs step-up for a person; a service account's own key is exempt exactly as
+    it is for every other step-up permission outside identity administration (authz._step_up_exempt)."""
+    body = payload.payload()
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from boss_engine.services import projects as project_service
+
+    ctx = identity_guard.request_auth(request)
+    principal = current_api_principal.get()
+    actor = identity_guard.actor_for(ctx) if ctx is not None else (principal or "operator")
+    with begin(engine) as connection:
+        if not identity_guard.identity_enforced() and principal and current_transport_authenticated.get():
+            # Pre-identity installs: the same bar as running the bootstrap seed (member_manage on
+            # the default project). Under enforce the guard has decided project:create already.
+            require_project_actor(connection, settings.default_project_id, principal, "member_manage")
+        try:
+            created = project_service.create(
+                connection, settings, auth=ctx, name=body.get("name"), slug=body.get("slug"),
+                description=body.get("description"), actor=actor, principal=principal,
+                entitlements=entitlements, members=members, specpack=specpack,
+            )
+        except project_service.ProjectExists as clash:
+            raise HTTPException(status_code=409, detail={
+                "error": "project_exists", "slug": clash.slug, "project_id": clash.project_id,
+                "message": (f"A project with the slug {clash.slug} already exists." if clash.project_id
+                            else f"The slug {clash.slug} is taken. Choose another."),
+            }) from None
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from None
+        project_id = created["project_id"]
+        row = connection.execute(text(
+            "SELECT p.id, p.name, p.slug, p.workspace_id, p.created_at, p.description, "
+            "w.name AS workspace_name, o.id AS org_id, o.name AS org_name FROM projects p "
+            "JOIN workspaces w ON w.id = p.workspace_id JOIN orgs o ON o.id = w.org_id "
+            "WHERE p.id = :p"), {"p": project_id}).mappings().one()
+    return ProjectCreatedResponse(**project_summary_from_row(row).model_dump(),
+                                  description=row["description"])
 
 
 @app.get("/v1/members", response_model=ProjectMemberListResponse)
