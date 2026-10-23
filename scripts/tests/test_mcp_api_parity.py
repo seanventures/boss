@@ -139,7 +139,12 @@ def test_operator_boundary_preserves_human_and_api_policy_gates():
     assert rows[("POST", "/v1/platform-standards/apply")]["mcp_status"] == (
         "api_policy_gated"
     )
+    # Counts of the matrix regenerated 2026-10-22 (it had been stale since well before rc10.9:
+    # 992 of 1,622 operations). +7 confirmation-gated are main's agent and role-skill routes.
+    # The 68 operator-only are DELETEs and revoke/rotate/promote/reject tails: 65 from main, and
+    # from the knowledge graph POST facts/{id}/promote and /reject (a person's step-up) and
+    # DELETE /v1/setup/embedding-model, kept out of MCP on purpose.
     assert sum(row["mcp_status"] == "human_confirmation_gated"
-               for row in community["operations"]) == 64
+               for row in community["operations"]) == 71
     assert sum(row["mcp_status"] == "operator_only_unavailable"
-               for row in community["operations"]) == 0
+               for row in community["operations"]) == 68
