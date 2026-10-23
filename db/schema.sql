@@ -2837,9 +2837,16 @@ CREATE TABLE IF NOT EXISTS agent_threads (
   agent_role TEXT NOT NULL DEFAULT '',
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  CHECK (surface IN ('chat', 'github')),
+  -- 'agent': a domain agent's turns on a record (AgentService.decide, BOSSAPP-759) — the
+  -- on-call agent on an incident, the inbox on a decision. Never on the chat rail.
+  CHECK (surface IN ('chat', 'github', 'agent')),
   CHECK (status IN ('active', 'closed'))
 );
+DO $$ BEGIN
+  ALTER TABLE agent_threads DROP CONSTRAINT IF EXISTS agent_threads_surface_check;
+  ALTER TABLE agent_threads ADD CONSTRAINT agent_threads_surface_check
+    CHECK (surface IN ('chat', 'github', 'agent'));
+END $$;
 CREATE INDEX IF NOT EXISTS idx_agent_threads_project_actor
   ON agent_threads(project_id, actor, updated_at DESC);
 -- A SHARED TASK THREAD IS SHARED PER AGENT. Two agents discussing one task each keep their

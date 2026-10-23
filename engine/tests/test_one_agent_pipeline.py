@@ -77,8 +77,6 @@ ALLOWED: dict[str, tuple[str, str]] = {
     "engine/boss_engine/services/comms.py": (MIGRATE, "inbox / Slack / email decision replies"),
     "engine/boss_engine/services/github_triage_agent.py": (MIGRATE, "GitHub issue triage"),
     "engine/boss_engine/services/app_alerts.py": (MIGRATE, "alert triage and flap tuning"),
-    "engine/boss_engine/services/investigation.py": (MIGRATE, "incident root-cause verdict "
-                                                     "(recorded, acts on nothing)"),
 }
 
 #: These may never decide on their own again: Metatron's router and the captain's service were
@@ -171,3 +169,116 @@ def test_the_doc_accounts_for_every_entry_left_to_migrate():
     for path, (kind, _why) in ALLOWED.items():
         if kind == MIGRATE:
             assert Path(path).name in doc, path
+
+
+# ── Domain agents take their turn through the pipeline (AgentService.decide) ─────────────────
+
+#: Entry points that used to decide on their own and now take a turn through the pipeline. Each
+#: must call `AgentService…decide` — the router's one decision — and nothing on SIGNS.
+MIGRATED = {
+    "engine/boss_engine/services/investigation.py": "incident verdict",
+}
+
+
+def _calls_the_domain_turn(path: str) -> bool:
+    tree = ast.parse((ROOT / path).read_text())
+    names = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)} | {
+        a.name for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) for a in n.names}
+    decides = any(isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                  and n.func.attr == "decide" for n in ast.walk(tree))
+    return "AgentService" in names and decides
+
+
+def test_every_migrated_entry_point_takes_its_turn_through_the_pipeline():
+    deciders = _deciders()
+    for path, what in MIGRATED.items():
+        assert path not in deciders, (what, sorted(deciders[path]))
+        assert path not in ALLOWED, what
+        assert _calls_the_domain_turn(path), f"{what} ({path}) does not call AgentService.decide"
+
+
+class _Model:
+    """A scripted decision model (no paid call) answering agent_decision's JSON contract."""
+
+    def __init__(self, action: str, confidence: float = 0.9):
+        self.action, self.confidence, self.prompts = action, confidence, []
+
+    def create_text_response(self, prompt, system_prompt=None, model=None):
+        import json
+
+        self.prompts.append((system_prompt, prompt))
+        return "r", json.dumps({"action": self.action, "confidence": self.confidence,
+                                "reason": "scripted", "question": ""}), {"model": "scripted"}
+
+
+def test_a_domain_turn_is_the_routers_one_decision(monkeypatch):
+    """AgentService.decide → IntentRouter.decide_among → agent_decision.decide: the same seam the
+    console's turn decides through, with the caller's choices, record and hints as its input."""
+    from boss_engine.services import agent_decision
+    from boss_engine.services.agent_service import AgentService, Choice
+
+    seen: list[dict] = []
+    real = agent_decision.decide
+
+    def spy(connection, settings, project_id, **kwargs):
+        seen.append(kwargs)
+        return real(connection, settings, project_id, **kwargs)
+
+    monkeypatch.setattr(agent_decision, "decide", spy)
+    model = _Model("noise")
+    got = AgentService(None).decide(
+        None, project_id="p", actor="boss.on_call", role="sre", agent="the on-call agent",
+        external_ref="alert:a1", situation="An alert fired.", message="Triage it.",
+        choices=[Choice("noise", "mark it noise"), Choice("page_now", "page someone")],
+        context={"signals": ["x"]}, hints=["a guess"], adapter=model, min_confidence=0.5)
+    assert got.decided and got.action == "noise"
+    assert [c.key for c in seen[0]["candidates"]] == ["noise", "page_now"]
+    assert seen[0]["context"] == {"signals": ["x"]} and seen[0]["hints"] == ["a guess"]
+    assert seen[0]["agent"] == "the on-call agent" and seen[0]["ref"] == "alert:a1"
+    assert "the on-call agent" in model.prompts[0][0]
+
+
+def test_a_domain_turn_outside_the_choices_is_refused_not_coerced():
+    from boss_engine.services.agent_service import CLARIFY, AgentService, Choice
+
+    got = AgentService(None).decide(
+        None, project_id="p", actor="x", external_ref="", situation="s", message="m",
+        choices=[Choice("a", "do a")], adapter=_Model("b"))
+    assert got.status == CLARIFY and got.action is None
+
+
+def test_a_domain_turn_is_kept_on_its_records_thread():
+    """The turn and its verdict are written on the record's own thread (surface `agent`, never
+    the chat rail), and the next turn on that record reads them as its history."""
+    from uuid import uuid4
+
+    from sqlalchemy import text
+
+    from ._obs_seed import pg_engine, project
+    from boss_engine.services.agent_service import DOMAIN_SURFACE, AgentService, Choice
+
+    eng = pg_engine()
+    ref = f"incident:inc_{uuid4().hex[:8]}"
+    with eng.begin() as c:
+        pid = project(c)
+    service = AgentService(None)
+    first, second = _Model("h0"), _Model("unknown")
+    choices = [Choice("h0", "the cause is the deploy"), Choice("unknown", "not known", acts=False)]
+    with eng.begin() as c:
+        service.decide(c, project_id=pid, actor="boss.investigation", role="sre",
+                       external_ref=ref, situation="s", message="Which cause?", choices=choices,
+                       adapter=first)
+    with eng.begin() as c:
+        service.decide(c, project_id=pid, actor="boss.investigation", role="sre",
+                       external_ref=ref, situation="s", message="Which cause now?",
+                       choices=choices, adapter=second)
+        rows = c.execute(text(
+            "SELECT t.surface, t.agent_role, m.role, m.content FROM agent_threads t "
+            "JOIN agent_messages m ON m.thread_id = t.id WHERE t.project_id = :p "
+            "AND t.external_ref = :r ORDER BY m.created_at, CASE m.role WHEN 'user' THEN 0 "
+            "ELSE 1 END"), {"p": pid, "r": ref}).all()
+    assert {r[0] for r in rows} == {DOMAIN_SURFACE} and {r[1] for r in rows} == {"sre"}
+    assert [r[2] for r in rows] == ["user", "assistant", "user", "assistant"]
+    assert rows[1][3].startswith("h0 (confidence 0.9)")
+    # The second turn read the first as its history.
+    assert "Which cause?" in second.prompts[0][1] and "h0 (confidence" in second.prompts[0][1]

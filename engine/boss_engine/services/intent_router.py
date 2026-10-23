@@ -1872,6 +1872,27 @@ class IntentRouter:
             adapter=(getattr(self, "_decision_adapter", None)
                      or getattr(self, "_answer_adapter", None)))
 
+    def decide_among(self, connection, *, project_id: str, message: str,
+                     choices: list["agent_decision.Candidate"], situation: str,
+                     history: list | tuple = (), context: Optional[dict] = None,
+                     hints: list | tuple = (), agent: str = "BOSS", ref: str = "",
+                     adapter: Any = None, decider: Any = None,
+                     min_confidence: Optional[float] = None) -> "agent_decision.AgentDecision":
+        """THE TURN'S DECISION, for a turn whose caller names the actions (BOSSAPP-759).
+
+        A domain agent — the on-call agent triaging an alert, the inbox reading a reply, the
+        investigator choosing a root cause — asks the one pipeline, through
+        `AgentService.decide`, which of ITS actions fits. The candidates and the record are
+        the caller's input; the decision is this one: the same model (Jev when ready, else the
+        project's routed model, governed), the same prompt contract, the same confidence bar,
+        and no keyword behind it. A caller passing its own `adapter`/`decider` is a test seam
+        or the battle-test runner, the same seams `route_turn` has."""
+        return agent_decision.decide(
+            connection, self.settings, project_id, situation=situation, message=message,
+            candidates=list(choices), history=list(history or ()), context=context,
+            hints=list(hints or ()), agent=agent, ref=ref, min_confidence=min_confidence,
+            adapter=adapter, decider=decider)
+
     def _revised_objective(self, connection, project_id: str, objective: str,
                            revision: str) -> str:
         """The plan's objective rewritten with the person's change, by the project's model.

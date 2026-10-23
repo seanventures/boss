@@ -9,12 +9,25 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.exc import IntegrityError
 
 from ..config import Settings
+from . import agent_decision
 from .capability_manifest import build_manifest
 from .core import emit_event, make_id
 from .intent_router import IntentRouter
 
 
 LOGGER = logging.getLogger(__name__)
+
+# ── What a domain turn is asked with and answered by (AgentService.decide) ───────────────────
+#: One action a domain agent may take: what it does, whether it is available, its button label.
+Choice = agent_decision.Candidate
+#: The pipeline's answer: an action and a confidence, or one question, or "no model".
+AgentDecision = agent_decision.AgentDecision
+DECIDED, CLARIFY, NO_MODEL = agent_decision.DECIDED, agent_decision.CLARIFY, agent_decision.NO_MODEL
+#: What to tell a person when no model answered (names an exhausted provider when known).
+no_model_reply = agent_decision.no_model_reply
+
+#: The surface a domain agent's turns are kept on: its own threads, never the chat rail's.
+DOMAIN_SURFACE = "agent"
 
 
 class AgentThreadNotFoundError(ValueError):
@@ -584,6 +597,94 @@ class AgentService:
                 "pending_plan_id": pending_plan_id,
             },
         )
+
+    def decide(
+        self,
+        connection: Optional[Connection],
+        *,
+        project_id: str,
+        actor: str,
+        message: str,
+        choices: list[Any],
+        situation: str,
+        #: The record this turn is about (`incident:inc_…`, `alert:alr_…`, `decision:dec_…`):
+        #: the thread the domain agent's turns on it are kept on, so its next turn reads them.
+        external_ref: str,
+        #: The workforce member taking the turn (`sre`), when the project has one.
+        role: Optional[str] = None,
+        #: How the decision names the agent ("the SRE, BOSS's on-call agent").
+        agent: Optional[str] = None,
+        context: Optional[dict[str, Any]] = None,
+        hints: list[str] | tuple[str, ...] = (),
+        #: The receipt / routing ref; defaults to `external_ref`.
+        ref: Optional[str] = None,
+        adapter: Any = None,
+        decider: Any = None,
+        min_confidence: Optional[float] = None,
+    ) -> "AgentDecision":
+        """A DOMAIN AGENT'S TURN THROUGH THE ONE PIPELINE (BOSSAPP-759).
+
+        The turn for an agent whose actions are its domain's (an alert's triage, a reply to a
+        decision, a GitHub issue, a root cause), not the console's catalogue. The caller hands
+        over what the decision needs — the candidates, the record, BOSS's pattern guesses as
+        hints — and the router's one decision (`IntentRouter.decide_among`) chooses. The turn is
+        kept on the record's own thread (surface `agent`, never the chat rail), and that
+        thread's earlier turns are the decision's history.
+
+        Never raises: a thread that cannot be written is a turn without a transcript, not a
+        failed decision. What the chosen action then DOES stays the caller's, under its own
+        governance (approvals, step-up, budget, receipts)."""
+        thread = self._domain_thread(connection, project_id=project_id, actor=actor,
+                                     external_ref=external_ref, role=role)
+        history: list[dict[str, Any]] = []
+        if thread is not None:
+            try:
+                with connection.begin_nested():
+                    history = self.list_messages(connection, thread["id"])
+            except Exception:  # noqa: BLE001 — a turn without its history is still a turn
+                LOGGER.info("domain turn: history unavailable for %s", external_ref)
+        decision = self.router.decide_among(
+            connection, project_id=project_id, message=message, choices=list(choices),
+            situation=situation, history=history, context=context, hints=hints,
+            agent=agent or role or "BOSS", ref=ref if ref is not None else external_ref,
+            adapter=adapter, decider=decider, min_confidence=min_confidence)
+        if thread is not None:
+            self._record_domain_turn(connection, thread_id=thread["id"], role=role,
+                                     message=message, decision=decision)
+        return decision
+
+    def _domain_thread(self, connection: Optional[Connection], *, project_id: str, actor: str,
+                       external_ref: str, role: Optional[str]) -> Optional[dict[str, Any]]:
+        if connection is None or not external_ref or not hasattr(connection, "begin_nested"):
+            return None
+        try:
+            with connection.begin_nested():
+                return self.start_or_load_thread(
+                    connection, project_id=project_id, actor=actor or "boss",
+                    surface=DOMAIN_SURFACE, external_ref=external_ref, agent_role=role or "")
+        except Exception:  # noqa: BLE001 — see `decide`: the transcript is an aid
+            LOGGER.info("domain turn: no thread for %s", external_ref, exc_info=True)
+            return None
+
+    def _record_domain_turn(self, connection: Connection, *, thread_id: str,
+                            role: Optional[str], message: str, decision: Any) -> None:
+        said = decision.to_dict()
+        if decision.status == NO_MODEL:
+            reply = "No model answered, so nothing was decided."
+        elif decision.status == CLARIFY:
+            reply = f"Asks: {decision.question}"
+        else:
+            reply = (f"{decision.action} (confidence {said['confidence']}): "
+                     f"{decision.reason}").strip()
+        try:
+            with connection.begin_nested():
+                self.append_message(connection, thread_id=thread_id, role="user",
+                                    content=message.strip() or "(no message)")
+                self.append_message(connection, thread_id=thread_id, role="assistant",
+                                    content=reply, actions=[{"kind": "decision", **said}],
+                                    agent_role=role or "")
+        except Exception:  # noqa: BLE001
+            LOGGER.info("domain turn: transcript not written for %s", thread_id, exc_info=True)
 
     def chat(
         self,
