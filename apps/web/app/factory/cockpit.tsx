@@ -54,6 +54,7 @@ import { Story, bayLabel } from "./story";
 import { plural } from "../../lib/factory-floor";
 import { useIdentityVersion } from "../../lib/use-agent-identities";
 import { ChangeSetCockpit, useRunChangeSet } from "../multirepo/change-set-cockpit";
+import { LearnedStrip } from "../knowledge/learned-strip";
 
 export type CockpitProps = {
   projectId: string;
@@ -511,6 +512,7 @@ function CockpitView({ c, projectId, runId, actor, onClose, onOpenBuild, refresh
       </ol>
 
       <NowBand c={c} now={now} />
+      <LearnedStrip projectId={projectId} actor={actor} runId={c.run.id} live={c.live} />
       {c.run.status === "completed" ? <ResultReview key={c.run.id} runId={c.run.id}
         onChangeRequested={(note) => { setReviewChange(note); setChangeIt(true); }} /> : null}
 

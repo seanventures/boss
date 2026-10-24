@@ -3,96 +3,152 @@
 /**
  * GRAPH — code, rules and what agents learned (KNOWLEDGE_GRAPH_PRODUCT_SPEC.md §5).
  *
- * Phase 0: the area is registered and mounted, with its tab row (§5.1: Graph · Rules review ·
- * Settings) and a designed state on every tab, so the rail entry never opens an unstyled screen.
- * Stream S4 replaces the bodies with the tree, canvas, detail panel and Rules review, reading
- * lib/kg-view-types.ts. Tokens only (kg.css); the layer colours are kg.css custom properties.
+ * The area's shell: the tab row (§5.1: Graph · Rules review · Settings), the project's
+ * repositories and graph status (indexing, the add-on entitlement), the archived banner, and deep
+ * links (?kg_node= focuses a node, ?kg_tab=rules&kg_scan= opens a scan's review, ?kg_sub=facts
+ * the fact queue). The tabs' bodies are graph-view.tsx, rules-review.tsx and kg-settings.tsx.
+ * Tokens only (kg.css). Nothing is read until the area is first on screen, and the indexing
+ * state refreshes only while it is on screen.
  */
-import React, { useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { AreaLink } from "../area-link";
 import { AreaHead, type HeadTab } from "../infra/kit";
-import { KG_LAYERS } from "../../lib/kg-view-types";
+import { useOnScreen } from "../../lib/area-shown";
+import { useGate } from "../../components/gated";
+import { INDEX_NOW, getGraphStatus, getRepositories, indexNow, rulesLock, type KgGraphStatus, type KgRepository } from "../../lib/kg-view";
+import { GraphView } from "./graph-view";
+import { KgArchived, KgIndexing, KgLoading, KgNoRepo } from "./kg-states";
+import { KgSettings } from "./kg-settings";
+import { RulesReview } from "./rules-review";
 import "../infra/infra.css";
 import "./kg.css";
 
 type GraphTab = "graph" | "rules" | "settings";
 
-const TABS: HeadTab[] = [
-  { key: "graph", label: "Graph", tip: "The whole repository, or one symbol, rule or learning and what connects to it" },
-  { key: "rules", label: "Rules review", tip: "Business rules agents proposed: approve, edit or reject" },
-  { key: "settings", label: "Settings", tip: "Indexing, embeddings and retention" },
-];
+type Deep = { tab: GraphTab | null; node: string | null; scan: string | null; sub: "facts" | "rules" | null };
 
-const LAYER_LINE: Record<(typeof KG_LAYERS)[number], { name: string; what: string }> = {
-  code: { name: "Code", what: "indexed from the repository" },
-  rules: { name: "Rules", what: "proposed by agents, approved by people" },
-  learning: { name: "Learning", what: "written by agents as they work" },
-};
-
-/** Faint hop rings behind the card: the Focus view's motif, drawn in tokens. */
-function Rings() {
-  return (
-    <svg className="kg-stage-rings" viewBox="0 0 800 460" preserveAspectRatio="xMidYMid slice" aria-hidden focusable="false">
-      <circle cx="400" cy="230" r="120" />
-      <circle cx="400" cy="230" r="210" />
-      <circle cx="400" cy="230" r="300" />
-    </svg>
-  );
+function readDeep(): Deep {
+  if (typeof window === "undefined") return { tab: null, node: null, scan: null, sub: null };
+  const p = new URLSearchParams(window.location.search);
+  if (p.get("area") !== "knowledge") return { tab: null, node: null, scan: null, sub: null };
+  const t = p.get("kg_tab");
+  const node = p.get("kg_node");
+  return {
+    tab: t === "rules" || t === "settings" || t === "graph" ? t : node ? "graph" : null,
+    node,
+    scan: p.get("kg_scan"),
+    sub: p.get("kg_sub") === "facts" ? "facts" : null,
+  };
 }
 
-function Layers() {
-  return (
-    <ul className="kg-layers" aria-label="The three layers">
-      {KG_LAYERS.map((l) => (
-        <li key={l} className="kg-layer">
-          <span className="kg-dot" data-layer={l} aria-hidden />
-          <span><span className="kg-layer-name">{LAYER_LINE[l].name}</span> · {LAYER_LINE[l].what}</span>
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-function Empty({ testId, eyebrow, title, body, children }: {
-  testId: string; eyebrow: string; title: string; body: string; children?: React.ReactNode;
+export function GraphArea({ projectId, actor, orgId, archived = false }: {
+  projectId: string; actor: string; orgId?: string | null;
+  /** The project is archived (S5): read-only, scans and review off, with the reason. */
+  archived?: boolean;
 }) {
-  return (
-    <div className="kg-stage" data-testid={testId}>
-      <Rings />
-      <div className="kg-empty" role="status">
-        <span className="kg-empty-eyebrow">{eyebrow}</span>
-        <h3 className="kg-empty-title">{title}</h3>
-        <p className="kg-empty-body">{body}</p>
-        <Layers />
-        {children ? <div className="kg-empty-actions">{children}</div> : null}
-      </div>
-    </div>
-  );
-}
+  const w = useMemo(() => ({ projectId, actor }), [projectId, actor]);
+  const onScreen = useOnScreen();
+  const [deep, setDeep] = useState<Deep>(() => readDeep());
+  const [tab, setTab] = useState<GraphTab>(() => deep.tab ?? "graph");
+  const [repos, setRepos] = useState<{ data: KgRepository[] | null; error: string | null }>({ data: null, error: null });
+  const [status, setStatus] = useState<KgGraphStatus | null>(null);
+  const [proposed, setProposed] = useState<number | null>(null);
+  const [editId, setEditId] = useState<string | null>(null);
+  const [focus, setFocus] = useState<{ id: string; seq: number } | null>(() => (deep.node ? { id: deep.node, seq: 1 } : null));
+  const [indexing, setIndexing] = useState(false);
+  const seq = useRef(1);
 
-export function GraphArea({ projectId, actor, orgId }: { projectId: string; actor: string; orgId?: string | null }) {
-  const [tab, setTab] = useState<GraphTab>("graph");
+  // Deep links arrive on load and on every in-console navigation (ConsoleShell dispatches popstate).
+  useEffect(() => {
+    const on = () => {
+      const d = readDeep();
+      setDeep(d);
+      if (d.tab) setTab(d.tab);
+      if (d.node) { seq.current += 1; setFocus({ id: d.node, seq: seq.current }); }
+    };
+    window.addEventListener("popstate", on);
+    return () => window.removeEventListener("popstate", on);
+  }, []);
+
+  const seen = useRef(false);
+  if (onScreen) seen.current = true;
+  const armed = seen.current;
+
+  const loadRepos = useCallback(async () => {
+    const r = await getRepositories(w);
+    if (r.ok) setRepos({ data: r.data.repositories ?? [], error: null });
+    else setRepos((cur) => ({ data: cur.data, error: r.error }));
+  }, [w]);
+  useEffect(() => {
+    if (!armed) return;
+    void loadRepos();
+    void getGraphStatus(w).then((r) => { if (r.ok) setStatus(r.data); });
+  }, [armed, loadRepos, w]);
+
+  // Indexing refreshes itself — only while on screen.
+  const working = (repos.data ?? []).some((r) => r.status === "queued" || r.status === "running" || r.status === "pending");
+  useEffect(() => {
+    if (!onScreen || !working) return undefined;
+    const t = setInterval(() => void loadRepos(), 5000);
+    return () => clearInterval(t);
+  }, [onScreen, working, loadRepos]);
+
+  // Index now from the "not built yet" card (the card's button is pre-greyed on the same gate).
+  const indexGate = useGate(INDEX_NOW);
+  const startIndex = async () => {
+    if (!indexGate.allowed || archived) return;
+    setIndexing(true);
+    await indexNow(w, "");
+    setIndexing(false);
+    void loadRepos();
+  };
+
+  const rulesLocked = rulesLock(status);
+  const anyIndexed = (repos.data ?? []).some((r) => r.status === "indexed" || (r.graph?.nodes ?? 0) > 0);
+  const totalNodes = (repos.data ?? []).reduce((s, r) => s + (r.graph?.nodes ?? 0), 0);
+
+  const TABS: HeadTab[] = [
+    { key: "graph", label: "Graph", tip: "The whole repository, or one symbol, rule or learning and what connects to it" },
+    { key: "rules", label: "Rules review", tip: "Business rules agents proposed: approve, edit or reject", count: proposed ? proposed : undefined },
+    { key: "settings", label: "Settings", tip: "Indexing, embeddings and retention" },
+  ];
+
+  let body: React.ReactNode;
+  if (tab === "graph") {
+    if (!repos.data && !repos.error) body = <KgLoading nodes={totalNodes || null} />;
+    else if (repos.data && repos.data.length === 0) body = <KgNoRepo orgId={orgId} />;
+    else if (repos.data && !anyIndexed && working) body = <KgIndexing repos={repos.data} />;
+    else if (repos.data && !anyIndexed) {
+      body = <KgIndexing repos={repos.data} busy={indexing} onIndex={() => void startIndex()} />;
+    } else {
+      body = (
+        <GraphView projectId={projectId} actor={actor} orgId={orgId} repos={repos.data} onReposChanged={() => void loadRepos()}
+                   rulesLocked={rulesLocked} archived={archived} focusRequest={focus}
+                   onEditRule={(id) => { setEditId(id); setTab("rules"); }} />
+      );
+    }
+  } else if (tab === "rules") {
+    body = (
+      <RulesReview projectId={projectId} actor={actor} orgId={orgId} archived={archived} locked={rulesLocked}
+                   initialScan={deep.scan} initialSub={deep.sub ?? undefined} editId={editId} onCount={setProposed}
+                   onFocusNode={(id) => { seq.current += 1; setFocus({ id, seq: seq.current }); setTab("graph"); }} />
+    );
+  } else {
+    body = <KgSettings projectId={projectId} actor={actor} />;
+  }
+
   return (
-    <div className="kg" data-testid="kg" data-project={projectId} data-actor={actor}>
-      <AreaHead area="kg" title="Graph" tabs={TABS} active={tab} onTab={(k) => setTab(k as GraphTab)} />
-      {tab === "graph" ? (
-        <Empty testId="kg-empty-graph" eyebrow="Graph"
-               title="Connect a repository to see its graph"
-               body="BOSS indexes the repository into a graph of its areas, packages, classes and calls. Rules and what agents learn while they work are drawn on the same graph.">
-          <AreaLink area="setup" orgId={orgId ?? undefined} className="ag-btn ag-btn-primary">Open Repo and models</AreaLink>
-        </Empty>
-      ) : tab === "rules" ? (
-        <Empty testId="kg-empty-rules" eyebrow="Rules review"
-               title="No rules yet"
-               body="Agents propose business rules from the code, each with the lines that show it. A rule becomes trusted input for every agent only after a person approves it here." />
-      ) : (
-        <Empty testId="kg-empty-settings" eyebrow="Settings"
-               title="Indexing, embeddings and retention"
-               body="These settings are in Reliability for now, beside the knowledge explorer.">
-          <AreaLink area="reliability" orgId={orgId ?? undefined} className="ag-btn">Open Reliability</AreaLink>
-        </Empty>
-      )}
+    <div className="kg" data-testid="kg" data-project={projectId} data-actor={actor} data-tab={tab}>
+      <AreaHead area="kg" title="Graph" tabs={TABS} active={tab} onTab={(k) => setTab(k as GraphTab)}
+                counts={totalNodes ? <span>{totalNodes.toLocaleString("en-US")} code nodes</span> : undefined} />
+      {archived ? <KgArchived /> : null}
+      {repos.error && !repos.data && tab === "graph" ? (
+        <div className="kg-banner" data-tone="red" role="alert" data-testid="kg-repos-error">
+          <span>Couldn&apos;t read this project&apos;s repositories: {repos.error}</span>
+          <button type="button" className="inf-link" onClick={() => void loadRepos()}>Retry</button>
+        </div>
+      ) : null}
+      {body}
     </div>
   );
 }
