@@ -6,12 +6,15 @@ confidence above what the evidence carries; an item under 0.4 handed to the next
 that writes the wrong kind, loses the run/step, or raises into the pipeline; a test failure
 whose fix is not linked; a contradicted decision left standing; the live feed missing what a
 run just learned; a pack that does not quote the rules in scope and what was learned before, or
-gives learned items to the keyword arm.
+gives learned items to the keyword arm; a kg_why answer not logged consulted; Learned before missing an item that is near the task only
+in meaning, ranking a one-list match above an item two lists agree on, or failing (or calling the
+model) when there is no embedding model, no vector in its space, or a model that does not answer.
 """
 from __future__ import annotations
 
 import json
 import os
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -200,6 +203,105 @@ def test_an_item_below_the_injection_floor_is_stored_but_never_given_to_the_next
                                             seeds=learning_context.code_seeds(connection, P, "LoanDisburser.disburse"))
     ids = [i["id"] for i in found]
     assert strong["node"]["id"] in ids and weak["node"]["id"] not in ids
+
+
+class _Embedder:
+    """A scripted embedding model: each text's vector is looked up by its first word."""
+    model_id = "scripted:emb:3"
+
+    def __init__(self, vectors, fail=False):
+        self.vectors, self.fail, self.calls = vectors, fail, 0
+
+    def embed(self, texts):
+        self.calls += 1
+        if self.fail:
+            raise RuntimeError("budget refused")
+        return [self.vectors[t.split()[0].lower()] for t in texts]
+
+
+def _embed(connection, node_id, vector, model_id=_Embedder.model_id):
+    content_hash = connection.execute(text("SELECT content_hash FROM kg_nodes WHERE id = :i"),
+                                      {"i": node_id}).scalar_one()
+    STORE.upsert_embedding(connection, project_id=P, node_id=node_id, model_id=model_id,
+                           embedding=vector, content_hash=content_hash)
+
+
+def _three_learnings(connection):
+    """account: the default investigation; month: matches "month end" by words only; payout: by
+    words and by meaning. Vectors: the query is (1, 0, 0)."""
+    account = _record(connection)["node"]["id"]
+    month = _record(connection, learning_kind="fact", title="Interest posts at month end",
+                    statement="Interest accrual posts on the last day of the month.", detail={},
+                    confidence=0.8)["node"]["id"]
+    payout = _record(connection, learning_kind="root_cause", title="Payout refused at month end",
+                     statement="The payout was refused because the month end batch held the account.",
+                     detail={}, confidence=0.8)["node"]["id"]
+    _embed(connection, account, [0.9, 0.1, 0.0])
+    _embed(connection, month, [0.0, 0.0, 1.0])
+    _embed(connection, payout, [0.8, 0.0, 0.2])
+    return account, month, payout
+
+
+def test_learned_before_finds_an_item_near_the_task_only_in_meaning(connection):
+    account, month, _payout = _three_learnings(connection)
+    query = "Money transfer refused because nothing attached"          # no word of `account`
+    model = _Embedder({"money": [1.0, 0.0, 0.0]})
+    found = [i["id"] for i in learning_context.learned_before(connection, P, query=query, embedder=model)]
+    assert account in found and month not in found and model.calls == 1
+    # No embedding model set for the org: the words alone, and no error.
+    words_only = [i["id"] for i in learning_context.learned_before(connection, P, query=query)]
+    assert account not in words_only
+
+
+def test_learned_before_fuses_words_meaning_usefulness_and_recency_by_reciprocal_rank(connection):
+    account, month, payout = _three_learnings(connection)
+    model = _Embedder({"payout": [1.0, 0.0, 0.0]})
+    found = learning_context.learned_before(connection, P, query="Payout month end", embedder=model)
+    ids = [i["id"] for i in found]
+    assert ids[0] == payout                     # words and meaning agree on it
+    assert set(ids) == {account, month, payout}
+    assert found[0]["score"] > found[1]["score"] > 0
+
+
+def test_learned_before_falls_back_to_words_when_the_model_fails_or_has_no_vectors(connection):
+    _account, month, payout = _three_learnings(connection)
+    query = "Payout month end"
+    words = [i["id"] for i in learning_context.learned_before(connection, P, query=query)]
+    assert set(words) == {month, payout}
+    failing = _Embedder({}, fail=True)
+    assert [i["id"] for i in learning_context.learned_before(connection, P, query=query, embedder=failing)] == words
+    other_space = _Embedder({"payout": [1.0, 0.0, 0.0]})
+    other_space.model_id = "scripted:other:3"           # no learned item has a vector in its space
+    assert [i["id"] for i in learning_context.learned_before(connection, P, query=query,
+                                                              embedder=other_space)] == words
+    assert other_space.calls == 0                        # and the model is not called for nothing
+
+
+class _Ctx:
+    def __init__(self, connection):
+        self.connection = connection
+
+    @contextmanager
+    def begin(self):
+        yield self.connection
+
+
+def test_what_kg_why_returns_to_a_run_is_logged_consulted_with_its_edge(connection):
+    from boss_engine.tools.builtin import build_default_registry
+
+    item = _record(connection)["node"]["id"]
+    symbol = STORE.find_by_key(connection, project_id=P, kind="symbol", node_key=DISBURSE)["id"]
+    set_llm_context(role_key="backend_engineer", run_id="crun_build_b", stage="implement", project_id=P,
+                    knowledge_seeds=[symbol])           # the build's own code: in its scope
+    out = build_default_registry().get("kg_why").handler(_Ctx(connection), project_id=P, actor="backend_engineer",
+                                                         args={"node_id": symbol})
+    assert "why" in out, out
+    assert item in [hit["node_id"] for hit in out["why"]]
+    used = connection.execute(text(
+        "SELECT use_kind, agent_role FROM kg_usage WHERE project_id = :p AND run_id = 'crun_build_b' AND fact_id = :f"),
+        {"p": P, "f": item}).all()
+    assert [tuple(u) for u in used] == [("consulted", "backend_engineer")]
+    assert "run:crun_build_b" in [e["src_key"] for e in _edges(connection, dst=item, kind="consulted")]
 
 
 def test_a_decision_contradicting_an_open_one_on_the_same_question_closes_it(connection):

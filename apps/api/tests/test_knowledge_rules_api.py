@@ -2,9 +2,13 @@
 
 Breaks covered: the review queue not answering in the KgRulesResponse shape; an approval without
 step-up confirmation, or by someone without knowledge:review; the reviewer not recorded as the
-request's actor; an edit that does not return the version it superseded.
+request's actor; an edit that does not return the version it superseded; the review that empties
+a business_rules_scan's queue leaving that run's review gate open until the runner's next tick.
 """
 from __future__ import annotations
+
+import json
+import uuid
 
 from sqlalchemy import text
 
@@ -20,14 +24,14 @@ SOURCE = "def check_limit(amount, limit):\n    if amount > limit:\n        raise
 SYMBOL = symbol_key(None, PATH, "check_limit")
 
 
-def _proposed(engine, statement: str = "Amounts above the limit are refused.") -> str:
+def _proposed(engine, statement: str = "Amounts above the limit are refused.", scan_id: str = "scan_api") -> str:
     with begin(engine) as connection:
         index_files(connection, PostgresKnowledgeStore(), project_id=PROJECT_ID,
                     files=[{"path": PATH, "language": "python", "source": SOURCE}])
         return rules.propose_rule(
             connection, project_id=PROJECT_ID, title="Limit", statement=statement, category="limit",
             scope={}, evidence=[{"symbol": SYMBOL, "lines": [2, 3]}], rationale="", confidence=0.8,
-            actor_ref="chief_architect", scan_id="scan_api")["node"]["id"]
+            actor_ref="chief_architect", scan_id=scan_id)["node"]["id"]
 
 
 def test_the_queue_lists_proposed_rules_with_counts(client, engine):
@@ -90,3 +94,30 @@ def test_edit_returns_the_new_version_and_the_one_it_superseded(client, engine):
                          json={"project_id": PROJECT_ID, "actor": ACTOR, "step_up": "confirmed",
                                "note": "Retired"})
     assert reject.status_code == 200 and reject.json()["rule"]["status"] == "rejected"
+
+
+def test_the_review_that_empties_a_scans_queue_closes_its_gate_at_once(client, engine):
+    from boss_engine.services.knowledge import rule_scan
+
+    scan = f"scan_gate_{uuid.uuid4().hex[:8]}"
+    first = _proposed(engine, f"Amounts above the limit are refused ({scan} a).", scan_id=scan)
+    second = _proposed(engine, f"Amounts above the limit are refused ({scan} b).", scan_id=scan)
+    gate = f"dec_{scan}"
+    with begin(engine) as connection:
+        connection.execute(text(
+            "INSERT INTO decisions (id, project_id, question, recommendation, risk_tier, status) "
+            "VALUES (:i, :p, 'Review the proposed rules', CAST(:r AS JSONB), 1, 'pending')"),
+            {"i": gate, "p": PROJECT_ID,
+             "r": json.dumps({"action": rule_scan.REVIEW_ACTION, "scan_id": scan})})
+
+    def status() -> str:
+        with begin(engine) as connection:
+            return connection.execute(text("SELECT status FROM decisions WHERE id = :i"), {"i": gate}).scalar_one()
+
+    review = {"project_id": PROJECT_ID, "actor": ACTOR, "step_up": "confirmed"}
+    assert client.post(f"/v1/knowledge/view/rules/{first}/approve", json=review).status_code == 200
+    assert status() == "pending"                      # one rule still waits: the gate stays open
+    edited = client.post(f"/v1/knowledge/view/rules/{second}/edit",
+                         json={**review, "statement": f"Amounts above the product limit are refused ({scan})."})
+    assert edited.status_code == 200, edited.text
+    assert status() == "approved"                     # the queue is empty: closed in the same act

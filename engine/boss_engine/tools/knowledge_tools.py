@@ -94,9 +94,23 @@ def _why(ctx, *, project_id, actor, args, policy=None, mode="on"):
         return {"error": "node_id is required"}
     with ctx.begin() as connection:
         try:
-            return _SERVICE.why(connection, project_id=project_id, node_id=node_id, policy=policy)
+            found = _SERVICE.why(connection, project_id=project_id, node_id=node_id, policy=policy)
         except LookupError:
             return {"error": "node not found"}
+        _log_consulted(connection, project_id, [hit.get("node_id") for hit in found.get("why") or []])
+        return found
+
+
+def _log_consulted(connection, project_id, ids) -> None:
+    """What a read tool returned to a run is "consulted" (spec §2.5): the run's edge to each rule
+    or learning now. log_use ignores ids that are neither, and a run-less caller logs nothing."""
+    ids = [str(i) for i in ids if i]
+    if not ids:
+        return
+    from ..services.knowledge.learning_writeback import log_use
+
+    with connection.begin_nested():
+        log_use(connection, project_id=project_id, ids=ids, use_kind="consulted")
 
 
 def _precedent(ctx, *, project_id, actor, args, policy=None, mode="on"):
@@ -105,13 +119,8 @@ def _precedent(ctx, *, project_id, actor, args, policy=None, mode="on"):
         return {"error": "query is required"}
     with ctx.begin() as connection:
         found = _SERVICE.precedent(connection, project_id=project_id, query=query, policy=policy, mode=mode)
-        learned = [item["id"] for item in found.get("learned") or []]
-        if learned:
-            # What earlier runs learned, returned to this run: "consulted" (spec §2.5), its edge now.
-            from ..services.knowledge.learning_writeback import log_use
-
-            with connection.begin_nested():
-                log_use(connection, project_id=project_id, ids=learned, use_kind="consulted")
+        # What earlier runs learned, returned to this run: "consulted" (spec §2.5), its edge now.
+        _log_consulted(connection, project_id, [item["id"] for item in found.get("learned") or []])
         return found
 
 
