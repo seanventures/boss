@@ -410,8 +410,30 @@ def plan(root: Path, limits: Limits) -> dict[str, Any]:
     return {"paths": paths, "source_files": len(files), "source_bytes": total}
 
 
+#: One code index writes at a time, install-wide. Each run ANALYZEs the shared kg tables and
+#: ensures the store's schema; both take locks that conflict with another run's, so three projects
+#: indexed together failed with "lock timeout" (the banking case study, BOSSAPP-767 #15).
+#: Parsing is seconds; waiting a turn is cheap; a failed run is not.
+INDEX_LOCK_KEY = "boss.knowledge.repo_index"
+
+
 def index_tree(engine: Any, *, project_id: str, repo: str, root: Path, limits: Limits,
                previous: str = "", head: str = "") -> dict[str, Any]:
+    """index_tree_unlocked under the install-wide index lock (a session advisory lock on its own
+    connection, so it spans both of the run's transactions and is released if the process dies)."""
+    with engine.connect() as holder:
+        holder.execute(text("SELECT pg_advisory_lock(hashtext(:k))"), {"k": INDEX_LOCK_KEY})
+        holder.commit()
+        try:
+            return index_tree_unlocked(engine, project_id=project_id, repo=repo, root=root,
+                                       limits=limits, previous=previous, head=head)
+        finally:
+            holder.execute(text("SELECT pg_advisory_unlock(hashtext(:k))"), {"k": INDEX_LOCK_KEY})
+            holder.commit()
+
+
+def index_tree_unlocked(engine: Any, *, project_id: str, repo: str, root: Path, limits: Limits,
+                        previous: str = "", head: str = "") -> dict[str, Any]:
     """Index one checkout into the project's graph, in ONE transaction (all or nothing).
     Incremental when `previous` is the commit last indexed and few files changed."""
     from .code_index import index_files, index_repository

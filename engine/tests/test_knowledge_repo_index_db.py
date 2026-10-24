@@ -369,3 +369,31 @@ def test_a_graph_from_an_older_indexer_is_indexed_whole_again_on_the_next_tick(p
             "WHERE e.project_id = :p AND e.kind = 'extends' AND e.valid_to IS NULL "
             "AND s.name = 'EarlyLoanService' AND d.name = 'LoanService'"), {"p": world["project"]}).scalar() == 1
     assert repo_index.enqueue_due(pg_engine, world["settings"], project_id=world["project"])["queued"] == 0
+
+
+def test_three_indexes_at_once_all_succeed_one_writing_at_a_time(pg_engine, world, remote):
+    """Three projects indexed together failed with "lock timeout": each run ANALYZEs the shared
+    kg tables and ensures the store schema inside its transactions (BOSSAPP-767 #15). The runs
+    take turns under one install-wide advisory lock, so every one finishes."""
+    import threading
+
+    limits = repo_index.Limits.from_settings(world["settings"])
+    results, errors = [], []
+
+    def run(name):
+        try:
+            results.append(repo_index.index_tree(pg_engine, project_id=world["project"], repo=f"bank/{name}",
+                                                 root=remote, limits=limits))
+        except Exception as error:  # noqa: BLE001 — the assertion reports it
+            errors.append(repr(error))
+
+    threads = [threading.Thread(target=run, args=(n,)) for n in ("a", "b", "c")]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=300)
+    assert not errors, errors
+    assert len(results) == 3
+    with pg_engine.begin() as c:
+        held = c.execute(text("SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND granted")).scalar()
+    assert held == 0, "the index lock is released after every run"
