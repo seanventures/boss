@@ -358,7 +358,8 @@ def promote(connection, *, project_id: str, eid: str, arm: str, actor: str,
     plan = promote_plan(connection, project_id, exp, arm)
     if not plan["enough"] and not anyway:
         raise NotEnoughEvidence(f"Not enough evidence: {plan['why_not']}.")
-    set_one(connection, project_id, plan["setting"], plan["value"], actor=actor)
+    # An arm is THIS project's: a model knob is pinned here, never written for the whole org.
+    set_one(connection, project_id, plan["setting"], plan["value"], actor=actor, scope="project")
     connection.execute(text(
         "UPDATE experiments SET status = 'promoted', promoted_arm = :arm, "
         "ended_at = COALESCE(ended_at, now()), ended_by = :a WHERE id = :e"),

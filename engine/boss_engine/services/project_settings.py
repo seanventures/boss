@@ -646,13 +646,34 @@ def coerce(key: str, value: Any) -> Any:
     return value
 
 
-def get_all(connection, project_id: str) -> dict[str, Any]:
-    """Every knob this project has set. Absent keys are not defaults — they are silence."""
+def get_own(connection, project_id: str) -> dict[str, Any]:
+    """Every knob THIS PROJECT has set itself (for a model knob: its override of the org's)."""
     rows = connection.execute(
         text("SELECT key, value FROM project_settings WHERE project_id = :p"),
         {"p": project_id},
     ).mappings().all()
     return {r["key"]: r["value"] for r in rows}
+
+
+def get_all(connection, project_id: str) -> dict[str, Any]:
+    """Every knob chosen for this project: the org's model choices (org_models.MODEL_KNOBS),
+    with this project's own rows over them. Absent keys are not defaults — they are silence."""
+    from . import org_models
+
+    own = get_own(connection, project_id)
+    org = org_models.org_values(connection, project_id)
+    return {**org, **own} if org else own
+
+
+def source_of(connection, project_id: str, key: str) -> str:
+    """Where this knob's value comes from: 'project', 'org' or 'default'."""
+    from . import org_models
+
+    if key in get_own(connection, project_id):
+        return "project"
+    if org_models.is_org_knob(key) and key in org_models.org_values(connection, project_id):
+        return "org"
+    return "default"
 
 
 #: What Govern calls each knob — the names on the board AND in the Log's change lines, one
@@ -668,7 +689,7 @@ GOVERN_NAMES: dict[str, str] = {
 
 
 def _record_change(connection, project_id: str, key: str, before: Any, after: Any,
-                   actor: str) -> None:
+                   actor: str, scope: str = "project") -> None:
     """`settings.changed`, so Govern's changes are read in the Log (`Govern changes`) and Govern
     keeps no change list of its own. Best effort, in a savepoint: a failed write of the record
     must never undo or refuse the change itself."""
@@ -684,14 +705,42 @@ def _record_change(connection, project_id: str, key: str, before: Any, after: An
                        {"key": key, "label": GOVERN_NAMES.get(key) or spec.get("label") or key,
                         "from": before,
                         "to": after,
-                        "source_before": "project" if before is not None else "default",
-                        "source_after": "project" if after is not None else "default"})
+                        "scope": scope,
+                        "source_before": scope if before is not None else "default",
+                        "source_after": scope if after is not None else "default"})
     except Exception:  # noqa: BLE001 — the record of a change is not the change
         logger.exception("could not record settings.changed for %s", key)
 
 
-def set_one(connection, project_id: str, key: str, value: Any, actor: str = "operator") -> Any:
+def _org_scoped(key: str, scope: Optional[str]) -> bool:
+    from . import org_models
+
+    if scope not in (None, "", "org", "project"):
+        raise ValueError(f"scope is 'org' (every project of the organisation) or 'project', "
+                         f"not {scope!r}.")
+    return org_models.is_org_knob(key) and scope != "project"
+
+
+def set_one(connection, project_id: str, key: str, value: Any, actor: str = "operator",
+            scope: Optional[str] = None) -> Any:
+    """Set one knob. A model knob (org_models.MODEL_KNOBS) is the ORG's unless scope='project':
+    every project of the org uses it, and this project's own override of it goes, so the
+    project that set it follows it. scope='project' pins it for this project only."""
     clean = coerce(key, value)
+    if _org_scoped(key, scope):
+        from . import org_models
+
+        org_id = org_models.org_of(connection, project_id)
+        if org_id and org_models.resolve_scope(connection, org_id, scope) == "org":
+            row = org_models.org_row(connection, org_id, key)
+            own = connection.execute(
+                text("DELETE FROM project_settings WHERE project_id = :p AND key = :k "
+                     "RETURNING value"), {"p": project_id, "k": key}).scalar()
+            before = own if own is not None else (row or {}).get("value")
+            org_models.write_org(connection, org_id, key, clean, actor)
+            _record_change(connection, project_id, key, before, clean, actor, scope="org")
+            org_models.invalidate_org(connection, org_id)
+            return clean
     before = connection.execute(
         text("SELECT value FROM project_settings WHERE project_id = :p AND key = :k"),
         {"p": project_id, "k": key},
@@ -719,9 +768,27 @@ def _routing_changed(project_id: str) -> None:
         pass
 
 
-def clear_one(connection, project_id: str, key: str, actor: str = "operator") -> None:
+def clear_one(connection, project_id: str, key: str, actor: str = "operator",
+              scope: Optional[str] = None) -> None:
     """Hand the knob back to the environment. Deleting is how a project says 'use the default'
-    — storing the current default instead would freeze it against a later change."""
+    — storing the current default instead would freeze it against a later change.
+
+    A model knob: scope='project' removes only this project's override (it follows the org
+    again); otherwise the org's value goes too (every project back to Auto / the install)."""
+    if _org_scoped(key, scope):
+        from . import org_models
+
+        org_id = org_models.org_of(connection, project_id)
+        if org_id and org_models.resolve_scope(connection, org_id, scope) == "org":
+            own = connection.execute(
+                text("DELETE FROM project_settings WHERE project_id = :p AND key = :k "
+                     "RETURNING value"), {"p": project_id, "k": key}).scalar()
+            org = org_models.delete_org(connection, org_id, key)
+            before = own if own is not None else org
+            if before is not None:
+                _record_change(connection, project_id, key, before, None, actor, scope="org")
+            org_models.invalidate_org(connection, org_id)
+            return
     before = connection.execute(
         text("DELETE FROM project_settings WHERE project_id = :p AND key = :k RETURNING value"),
         {"p": project_id, "k": key},
@@ -739,6 +806,11 @@ def version_of(connection, project_id: str, key: str) -> tuple[str, Optional[str
              "WHERE project_id = :p AND key = :k"),
         {"p": project_id, "k": key},
     ).mappings().first()
+    if not row:
+        from . import org_models
+
+        org_id = org_models.org_of(connection, project_id) if org_models.is_org_knob(key) else None
+        row = org_models.org_row(connection, org_id, key) if org_id else None
     if not row:
         return "unset", None
     stamp = row["updated_at"]
@@ -799,6 +871,11 @@ def effective(connection, project_id: Optional[str], settings: Any, key: str) ->
         ).scalar()
     except Exception:  # noqa: BLE001 — the environment is a complete answer
         return fallback
+    if row is None:
+        from . import org_models
+
+        if org_models.is_org_knob(key):
+            row = org_models.org_values(connection, project_id).get(key)
     return fallback if row is None else row
 
 

@@ -88,7 +88,8 @@ export function JobLine({ job }: { job: Job }) {
   // What Auto resolves to now, when Auto is what runs; "Auto" alone while a choice stands.
   const autoLabel = job.resolved && !job.choice ? job.resolved.label : "Auto";
   const jobGate = useGate("setup:manage");
-  const save = async (raw: string) => {
+  const pinned = job.scope === "project";
+  const save = async (raw: string, scope?: "project") => {
     if (raw === "add-key") { setAdding(true); return; }
     const option = job.options.find((o) => encode(o.engine, o.model) === raw);
     setBusy(true);
@@ -96,6 +97,7 @@ export function JobLine({ job }: { job: Job }) {
       const next = await setupWrite<SetupView>(projectId, "job", {
         job: job.job, choice: raw === "auto" || !option ? null
           : { engine: option.engine, model: option.model },
+        ...(scope ? { scope } : {}),
       }, { label: job.label });
       apply(next);
       const saved = next.jobs.find((j) => j.job === job.job);
@@ -127,6 +129,20 @@ export function JobLine({ job }: { job: Job }) {
           ))}
         </select>
       )}
+      {job.choice && !pinned ? (
+        <Tip tip="Set once: every project in this org uses it." className="su-chip"
+             testid={`su-job-scope-${job.job}`}>All projects</Tip>
+      ) : null}
+      {pinned ? (
+        <>
+          <Tip tip="Pinned for this project only; the other projects use the org's choice."
+               className="su-chip" testid={`su-job-scope-${job.job}`}>This project</Tip>
+          <GatedButton permission="setup:manage" type="button" className="su-link"
+                       data-testid={`su-job-unpin-${job.job}`} disabled={busy}
+                       title="Use the org's choice here too."
+                       onClick={() => void save("auto", "project")}>Use org&apos;s</GatedButton>
+        </>
+      ) : null}
       {job.resolved ? (
         <Tip tip={job.metered ? "Metered: counts toward your budget." : "No per-call charge."}
              className={`su-chip ${job.metered ? "su-chip-metered" : ""}`}>

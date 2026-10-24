@@ -172,6 +172,8 @@ class SetupView(_Open):
     # `try` is a Python keyword.
     try_: TrySection = Field(alias="try")
     build_database: Optional[dict[str, Any]] = None
+    #: Whose models these are (org_models.view): the org's, its model home, this project's pins.
+    models_scope: Optional[dict[str, Any]] = None
 
     model_config = ConfigDict(extra="allow", populate_by_name=True)
 
@@ -231,6 +233,8 @@ class ModelConnectBody(_Body):
     idempotency_key: Optional[str] = None
     #: Replace: the one connection this credential replaces (never a working one with a worse).
     source_id: Optional[str] = None
+    #: 'org' (the default: every project of the org) or 'project' (this project's own).
+    scope: Optional[Literal["org", "project"]] = None
 
 
 class SourceModelBody(_Body):
@@ -239,6 +243,9 @@ class SourceModelBody(_Body):
 
 class JobBody(_Body):
     choice: Optional[JobChoice] = None
+    #: 'org' (the default: every project of the org) or 'project' (pin this project only;
+    #: with no choice, removes only the pin).
+    scope: Optional[Literal["org", "project"]] = None
 
 
 class RoutingBody(_Body):

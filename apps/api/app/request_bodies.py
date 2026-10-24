@@ -572,6 +572,9 @@ class ProjectSettingBody(OpenProjectBody):
     model_config = ConfigDict(json_schema_extra={"required": ["project_id"]})
 
     value: SkipValidation[str | int | None] = None
+    #: A model knob (org_models.MODEL_KNOBS): 'org' (the default — every project of the org) or
+    #: 'project' (pin this project only; clearing with 'project' removes only the pin).
+    scope: SkipValidation[str | None] = None
 
 
 # Remaining Community operations retain their handler validation and pass-through inputs.

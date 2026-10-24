@@ -65,8 +65,10 @@ def test_switching_to_smart_is_a_logged_setting_and_a_versioned_policy(client, e
     assert saved.json()["routing"]["mode"] == "smart"
     assert saved.json()["routing"]["version"] == 1
     with engine.begin() as c:
-        mode = c.execute(text("SELECT value FROM project_settings WHERE project_id = :p "
-                              "AND key = 'model_routing_mode'"), {"p": PROJECT}).scalar()
+        from boss_engine.services.project_settings import get_all
+
+        # The routing mode is a model setting: the org's (org_models), read by the project.
+        mode = get_all(c, PROJECT).get("model_routing_mode")
         logged = c.execute(text("SELECT count(*) FROM events WHERE project_id = :p "
                                 "AND event_type = 'settings.changed' "
                                 "AND data->>'key' = 'model_routing_mode'"),

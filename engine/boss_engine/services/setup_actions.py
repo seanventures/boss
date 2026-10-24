@@ -1314,22 +1314,32 @@ def detect_local(settings: Any, http: Optional[Http] = None) -> None:
 # ── Who does what ─────────────────────────────────────────────────────────────────────────────
 
 def set_job(connection: Connection, settings: Any, project_id: str, job: str,
-            choice: Optional[dict[str, Any]], *, actor: str = "ceo") -> dict[str, Any]:
+            choice: Optional[dict[str, Any]], *, actor: str = "ceo",
+            scope: Optional[str] = None) -> dict[str, Any]:
     """Write a job's engine and model together, or hand the job back to Auto. All or nothing:
-    a choice the view does not offer is a 422 and nothing is written."""
+    a choice the view does not offer is a 422 and nothing is written.
+
+    The choice is the ORG's (org_models: every project of the org) unless scope='project' pins
+    it for this project; Auto with scope='project' removes only the pin."""
     from . import project_settings
     from .core import emit_event
     from .model_routing import JOB_KNOBS, chat_model_knob
 
     if job not in JOB_KNOBS:
         raise SetupActionError(404, "failed", "Unknown job", f"One of: {', '.join(JOB_KNOBS)}.")
+    if scope not in (None, "", "org", "project"):
+        raise SetupActionError(422, "failed", "Scope", "All projects (org) or this project.")
     engine_knob, model_knob = JOB_KNOBS[job]
     if not choice:
-        project_settings.clear_one(connection, project_id, engine_knob)
-        for knob in ([model_knob] if model_knob else
-                     ["claude_cli_model", "codex_cli_model", "chat_model"]):
-            project_settings.clear_one(connection, project_id, knob)
-        emit_event(connection, project_id, "setup.job_set", actor, "job", job, {"auto": True})
+        try:
+            project_settings.clear_one(connection, project_id, engine_knob, scope=scope)
+            for knob in ([model_knob] if model_knob else
+                         ["claude_cli_model", "codex_cli_model", "chat_model"]):
+                project_settings.clear_one(connection, project_id, knob, scope=scope)
+        except PermissionError as exc:
+            raise SetupActionError(403, "failed", "Org admin", str(exc)) from None
+        emit_event(connection, project_id, "setup.job_set", actor, "job", job,
+                   {"auto": True, "scope": scope or "org"})
         return {"job": job, "auto": True}
     engine = str(choice.get("engine") or "").strip().lower()
     model = str(choice.get("model") or "").strip() or None
@@ -1353,13 +1363,15 @@ def set_job(connection: Connection, settings: Any, project_id: str, job: str,
     try:
         for key, value in values.items():
             if value == "":
-                project_settings.clear_one(connection, project_id, key)
+                project_settings.clear_one(connection, project_id, key, scope=scope)
             else:
-                project_settings.set_one(connection, project_id, key, value, actor)
+                project_settings.set_one(connection, project_id, key, value, actor, scope=scope)
+    except PermissionError as exc:
+        raise SetupActionError(403, "failed", "Org admin", str(exc)) from None
     except ValueError as exc:
         raise SetupActionError(422, "failed", "Not offered", _first_sentence(str(exc))) from None
     emit_event(connection, project_id, "setup.job_set", actor, "job", job,
-               {"engine": engine, "model": model})
+               {"engine": engine, "model": model, "scope": scope or "org"})
     return {"job": job, "engine": engine, "model": model}
 
 

@@ -174,11 +174,17 @@ def _project_ref(connection: Any, project_id: str, *, token: bool) -> Optional[s
     from .secrets_service import ref_key_for
 
     if token:
+        # This project's own login first, else the org's: the login stored in the org's model
+        # home (org_models), which every project of the org uses.
+        from .org_models import home_for
+
+        home = home_for(connection, project_id) or project_id
         row = connection.execute(text(
-            "SELECT id FROM secret_refs WHERE project_id = :p AND ref_key = :k "
+            "SELECT id FROM secret_refs WHERE project_id IN (:p, :h) AND ref_key = :k "
             "AND status IN ('active', 'rotating', 'rotation_due') "
-            "ORDER BY updated_at DESC NULLS LAST, id LIMIT 1"),
-            {"p": project_id, "k": ref_key_for(SUBSCRIPTION_SECRET_SCOPE, TOKEN_NAME)}).first()
+            "ORDER BY (project_id = :p) DESC, updated_at DESC NULLS LAST, id LIMIT 1"),
+            {"p": project_id, "h": home,
+             "k": ref_key_for(SUBSCRIPTION_SECRET_SCOPE, TOKEN_NAME)}).first()
         return row[0] if row else None
     row = connection.execute(text(
         "SELECT es.credential_secret_ref_id FROM entitlement_sources es "

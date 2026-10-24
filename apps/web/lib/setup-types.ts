@@ -59,6 +59,8 @@ export type ModelEntry = {
   stale?: boolean;
   /** Where a key or local model points (no userinfo): Replace keeps it. */
   base_url?: string | null;
+  /** The org's connection (every project holds it) or one this project made itself. */
+  scope?: "org" | "project";
 };
 
 export type Found = "signed_in" | "needs_token" | "needs_file" | "not_on_server" | "found";
@@ -101,6 +103,8 @@ export type Job = {
   resolved: null | { engine: string; model: string | null; label: string; why: string };
   metered: boolean;
   options: JobOption[];
+  /** Whose choice: the org's (every project) or this project's pin. Absent on an older API. */
+  scope?: "org" | "project";
 };
 
 /** Setup › Model routing (docs/product/MODEL_ROUTER.md). Decided by the server. */
@@ -217,8 +221,20 @@ export type SetupView = {
                   asks?: Record<string, number>; source: "project" | "default"; permission: string } | null;
   /** Setup › Repo and models › Embedding model, the org's (knowledge/embedding_slot.py). Absent on an older API. */
   embedding_model?: EmbeddingModel | null;
+  /** Whose models these are (org_models.view): the org's, its model home, this project's pins. */
+  models_scope?: ModelsScope | null;
   /** A background probe (signed-in CLIs, the secret store) is on its way: ask again soon. */
   detecting?: boolean;
+};
+
+/** Setup › Repo and models › Models is the org's: set once, every project uses it. */
+export type ModelsScope = {
+  scope: "org" | "project";
+  org_id: string | null;
+  home_project: string | null;
+  is_home: boolean;
+  overrides: { key: string; label: string; value: unknown; org_value: unknown }[];
+  own_sources: string[];
 };
 
 /** One provider Setup offers for the embedding model, with its form. */
