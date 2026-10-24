@@ -1429,3 +1429,12 @@ categories:
         roles: [owner, admin]
         scope: project
         flags: [step_up]
+      # Rules review (BOSSAPP-768): agents propose business rules; a person approves, edits or
+      # rejects them, and an approved rule becomes trusted input for every agent. Owners and admins
+      # only (operator decision 2026-10-24). Never delegable: no agent run can approve a rule.
+      - key: knowledge:review
+        title: "Review business rules"
+        description: "Approve, edit or reject the business rules agents propose. Confirmation is required."
+        roles: [owner, admin]
+        scope: project
+        flags: [step_up]

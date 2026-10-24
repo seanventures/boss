@@ -109,6 +109,8 @@ const STEP_UP_ACTIONS = [
   "user:delete", "user:disable", "user:invite", "user:reset_mfa", "user:revoke_sessions",
   "user:update", "workflow:delete", "workflow:publish", "workflow_run:compensate",
   "workflow_run:delete", "app_secret:live", "app_secret:write",
+  // The knowledge graph: forgetting/promoting facts (BOSSAPP-622) and Rules review (BOSSAPP-768).
+  "knowledge:manage", "knowledge:review",
 ].sort();
 
 describe("the step-up list", () => {

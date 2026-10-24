@@ -35,6 +35,8 @@ NEVER_DELEGABLE = frozenset({
     "decision:approve", "deployment:production", "code_task:override", "host:exec",
     "agent_ability:assign", "role_binding:assign", "access_role:manage", "delegation:grant",
     "agent_passport:manage", "owner:assign", "secret:manage", "security_policy:manage",
+    # An agent proposes a business rule; only a person approves it (BOSSAPP-768).
+    "knowledge:review",
 })
 
 

@@ -7,7 +7,7 @@ from enum import StrEnum
 from .catalogue import AccessRoleMeta, PassportPreset, PermissionMeta, SystemPrincipalMeta
 
 CATALOGUE_VERSION = 1
-CATALOGUE_FINGERPRINT = "de8d1aff616122b3"
+CATALOGUE_FINGERPRINT = "d9ecc3942dc4ea8a"
 
 
 class Permission(StrEnum):
@@ -212,6 +212,7 @@ class Permission(StrEnum):
     SELF_FIX_TICKET_REPORT = "self_fix:ticket_report"
     KNOWLEDGE_READ = "knowledge:read"
     KNOWLEDGE_MANAGE = "knowledge:manage"
+    KNOWLEDGE_REVIEW = "knowledge:review"
 
 
 #: Alias for declarations: `@permit(P.WORKFLOW_PUBLISH, ...)`.
@@ -417,6 +418,7 @@ PERMISSION_META: dict[str, PermissionMeta] = {
     "self_fix:ticket_report": PermissionMeta(key="self_fix:ticket_report", title="Report self-fix install phases", description="Report each install phase of a taken self-fix ticket (host self-installer only).", category="Operations and assurance", roles=('system_self_installer',), scope='org', step_up=False, delegable=False, critical=False, system_only=True, readonly_post=False),
     "knowledge:read": PermissionMeta(key="knowledge:read", title="Read knowledge", description="Search this project's knowledge and read a fact, a symbol, and its precedent.", category="Knowledge", roles=('owner', 'admin', 'operator', 'viewer', 'auditor'), scope='project', step_up=False, delegable=True, critical=False, system_only=False, readonly_post=False),
     "knowledge:manage": PermissionMeta(key="knowledge:manage", title="Manage knowledge", description="Promote, reject, or forget a fact. Confirmation is required.", category="Knowledge", roles=('owner', 'admin'), scope='project', step_up=True, delegable=False, critical=False, system_only=False, readonly_post=False),
+    "knowledge:review": PermissionMeta(key="knowledge:review", title="Review business rules", description="Approve, edit or reject the business rules agents propose. Confirmation is required.", category="Knowledge", roles=('owner', 'admin'), scope='project', step_up=True, delegable=False, critical=False, system_only=False, readonly_post=False),
 }
 
 ACCESS_ROLES: dict[str, AccessRoleMeta] = {
@@ -433,7 +435,7 @@ ACCESS_ROLES: dict[str, AccessRoleMeta] = {
 
 #: Built-in role -> its permissions. Derived ONLY from each entry's `roles`.
 ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
-    "owner": frozenset({  # 192
+    "owner": frozenset({  # 193
         "directory:read",
         "user:read",
         "user:invite",
@@ -626,8 +628,9 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "telemetry:manage",
         "knowledge:read",
         "knowledge:manage",
+        "knowledge:review",
     }),
-    "admin": frozenset({  # 183
+    "admin": frozenset({  # 184
         "directory:read",
         "user:read",
         "user:invite",
@@ -811,6 +814,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "telemetry:manage",
         "knowledge:read",
         "knowledge:manage",
+        "knowledge:review",
     }),
     "operator": frozenset({  # 94
         "directory:read",

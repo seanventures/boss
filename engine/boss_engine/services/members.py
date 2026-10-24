@@ -239,6 +239,11 @@ class MemberDirectoryService:
                 "knowledge:manage" not in permissions
             ):
                 permissions.append("knowledge:manage")
+            # Rules review (BOSSAPP-768): the same owners approve the rules agents propose.
+            if member["member_id"] in {"ceo", "cto", "executive_console"} and (
+                "knowledge:review" not in permissions
+            ):
+                permissions.append("knowledge:review")
             member["permissions"] = permissions
             # Bootstrap runs again on upgrades. An ordinary upsert would turn an
             # inactive default member back on, or grant back a removed permission.
