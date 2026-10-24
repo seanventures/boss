@@ -163,11 +163,14 @@ def tick(engine: Any, *, sweep: bool = False, project_id: str | None = None) -> 
     return out
 
 
-def reconcile_projections(engine: Any, *, project_id: str | None = None) -> dict[str, int]:
-    """Rebuild any project's AGE projection whose counts drifted from the tables."""
+def reconcile_projections(engine: Any, *, project_id: str | None = None) -> dict[str, Any]:
+    """Rebuild any project's AGE projection whose counts drifted from the tables, and any Graph
+    area rollup (view_rollup.py) whose node count drifted from the live code graph."""
     from .age import available, reconcile
+    from .view_rollup import reconcile as reconcile_views
 
-    out = {"current": 0, "rebuilt": 0, "failed": 0}
+    out: dict[str, Any] = {"current": 0, "rebuilt": 0, "failed": 0,
+                           "views": reconcile_views(engine, project_id=project_id)}
     with engine.begin() as connection:
         if not available(connection):
             return out

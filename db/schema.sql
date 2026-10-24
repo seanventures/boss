@@ -10382,3 +10382,68 @@ BEGIN
       FOR EACH ROW EXECUTE FUNCTION kg_repo_index_mark_due();
   END IF;
 END $$;
+
+-- ── BOSSAPP-768 KGV view rollups (KNOWLEDGE_GRAPH_PRODUCT_SPEC.md §2.4) ─────────────────────
+-- Derived and rebuildable (services/knowledge/view_rollup.py rebuild): the Graph area's overview
+-- and neighbourhood read these instead of aggregating a large code graph live (Fineract: 523 ms
+-- ad hoc for the area level against a 300 ms target). Keys: 'area:<repo>:<area>',
+-- 'pkg:<repo>:<area>:<package>' (a package name spans areas: 189 of 1,151 on Fineract), and the
+-- class/method node_key. Rebuilt at the end of a successful index and by the worker's reconcile
+-- when kg_view_sync.nodes differs from the live code count. Rules and Learning are read live.
+-- UNLOGGED, all three: derived data needs no WAL, and a crash empties them together, which reads
+-- as never built (stale) and the reconcile rebuilds. The tree and edge rows carry no foreign key
+-- (a per-row check was a quarter of the 3 s build budget on Fineract's 83k rows): kg_view_sync
+-- holds it, and its delete trigger removes the project's rows with it.
+CREATE UNLOGGED TABLE IF NOT EXISTS kg_view_tree (
+  project_id TEXT NOT NULL,
+  key TEXT NOT NULL,
+  parent_key TEXT,
+  level TEXT NOT NULL CHECK (level IN ('area','package','class','method')),
+  node_id TEXT,
+  label TEXT NOT NULL,
+  symbol_kind TEXT,
+  child_count INTEGER NOT NULL DEFAULT 0,
+  class_count INTEGER NOT NULL DEFAULT 0,
+  sort_key TEXT NOT NULL,
+  -- beside the spec's columns: the repo, area and package labels of every row and the methods
+  -- under it, so a node's area, an overview bubble's counts and a repo filter need no join
+  repo TEXT NOT NULL DEFAULT '',
+  area TEXT NOT NULL DEFAULT '',
+  package TEXT,
+  method_count INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (project_id, key)
+);
+CREATE INDEX IF NOT EXISTS idx_kg_view_tree_parent ON kg_view_tree(project_id, parent_key, sort_key);
+CREATE UNLOGGED TABLE IF NOT EXISTS kg_view_edges (
+  project_id TEXT NOT NULL,
+  level TEXT NOT NULL CHECK (level IN ('area','package','class')),
+  src_key TEXT NOT NULL,
+  dst_key TEXT NOT NULL,
+  kind TEXT NOT NULL,             -- calls (calls+dispatches_to) | imports | extends (extends+implements)
+  weight INTEGER NOT NULL,
+  PRIMARY KEY (project_id, level, src_key, dst_key, kind)
+);
+CREATE INDEX IF NOT EXISTS idx_kg_view_edges_dst ON kg_view_edges(project_id, level, dst_key);
+CREATE UNLOGGED TABLE IF NOT EXISTS kg_view_sync (
+  project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+  built_at TIMESTAMPTZ NOT NULL,
+  nodes INTEGER NOT NULL,         -- live code nodes when built (the staleness test)
+  edges INTEGER NOT NULL,         -- live edges when built (the overview's totals)
+  ms INTEGER NOT NULL,
+  tree_rows INTEGER NOT NULL DEFAULT 0,
+  view_edges INTEGER NOT NULL DEFAULT 0
+);
+CREATE OR REPLACE FUNCTION kg_view_sync_cleanup() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  DELETE FROM kg_view_tree WHERE project_id = OLD.project_id;
+  DELETE FROM kg_view_edges WHERE project_id = OLD.project_id;
+  RETURN OLD;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'kg_view_sync_cleanup'
+                 AND tgrelid = 'kg_view_sync'::regclass) THEN
+    CREATE TRIGGER kg_view_sync_cleanup AFTER DELETE ON kg_view_sync
+      FOR EACH ROW EXECUTE FUNCTION kg_view_sync_cleanup();
+  END IF;
+END $$;
