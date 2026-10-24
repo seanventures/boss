@@ -113,11 +113,22 @@ def _workflow_run(connection, project_id: str, ref: str, _repository: str) -> Lo
     state = _jsonable(dict(row))
     if status in TERMINAL_RUN_STATES or status in ("paused", "blocked"):
         return Look(state, True, status)
-    # A step held on a person's decision does not move by waiting: say so now.
-    asks = [str(r[0]) for r in connection.execute(text(
-        "SELECT s.step_id FROM workflow_step_runs s JOIN decisions d ON d.id = s.decision_id "
-        "WHERE s.workflow_run_id = :r AND s.status = 'waiting' AND d.status = 'pending'"),
-        {"r": ref}).all()]
+    # A step held on a person's decision does not move by waiting: say so now. Candidates are
+    # selected in SQL (decision_actions.NEEDS_ACTION_CANDIDATE_STATUSES: never this module's own
+    # list, which would disagree with the Approvals inbox about what still needs a person — see
+    # engine/tests/test_every_surface_agrees_on_what_needs_the_operator.py) and classified by
+    # `attention` here, same as every other reader.
+    from sqlalchemy import bindparam
+
+    from .decision_actions import NEEDS_ACTION_CANDIDATE_STATUSES, attention
+
+    candidates = connection.execute(text(
+        "SELECT s.step_id, d.status, d.deadline_at, d.default_action, d.recommendation "
+        "FROM workflow_step_runs s JOIN decisions d ON d.id = s.decision_id "
+        "WHERE s.workflow_run_id = :r AND s.status = 'waiting' AND d.status IN :statuses"
+    ).bindparams(bindparam("statuses", expanding=True)),
+        {"r": ref, "statuses": list(NEEDS_ACTION_CANDIDATE_STATUSES)}).mappings().all()
+    asks = [str(row["step_id"]) for row in candidates if attention(row) == "needs_action"]
     if asks:
         state["waiting_on_a_person"] = asks
         return Look(state, True, "needs a person")

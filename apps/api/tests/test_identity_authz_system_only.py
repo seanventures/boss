@@ -8,6 +8,15 @@
     the request's principal (it never trusts the route's declaration alone);
   * the console's one system-only call (reserving comms spend before queueing a message) moved
     server-side: /v1/comms/outbox/{id}/queue reserves for a person who may send.
+
+System-only is not all one principal, though: scim:provision is `system_scim`'s and
+self_fix:ticket_read / self_fix:ticket_report are `system_self_installer`'s alone
+(apps/api/app/routers/self_fix.py, identity_guard.require_self_installer) — the host
+self-installer's own key, under every authz mode, with no legacy bridge. The worker is refused
+there on purpose: require_self_installer checks the principal id itself, never the route's
+declaration, so `sys_worker` gets 403 same as a person. SYSTEM_ONLY below is scoped to the
+permissions `system_worker` actually holds (worker:lease, spend:reserve, secret:lease), which is
+what "the worker is allowed on every system-only route" means to assert.
 """
 from __future__ import annotations
 
@@ -45,11 +54,20 @@ CHECK_NAMES = ("require_worker_principal(", "require_worker()")
 
 
 def _system_only():
+    """Every route declared with a system-only permission `system_worker` holds.
+
+    system_only alone is not enough: scim:provision (system_scim) and self_fix:ticket_read /
+    self_fix:ticket_report (system_self_installer, apps/api/app/routers/self_fix.py) are
+    system-only too, but reserved to a DIFFERENT system principal — the worker is refused there
+    by require_self_installer, same as a person. Filtering on the permission's own roles (the
+    catalogue's roles tuple), rather than naming scim: as the one exception, is what keeps this
+    from going stale the next time a non-worker system principal gets a system-only permission.
+    """
     out = {}
     for entry in identity_guard.route_inventory(app):
         access = entry.access
         if isinstance(access, Permit) and PERMISSION_META[access.permission].system_only \
-                and not access.permission.startswith("scim:"):
+                and "system_worker" in PERMISSION_META[access.permission].roles:
             for label in entry.labels():
                 out[label] = entry
     return out

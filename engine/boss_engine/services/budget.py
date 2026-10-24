@@ -1596,7 +1596,9 @@ class BudgetGovernor:
         action = str(rec.get("action") or "")
         if action not in ("reconcile_legacy_model_exposure", "reconcile_legacy_provider_exposure"):
             raise ValueError("This decision is not a legacy-exposure reconciliation.")
-        if decision["status"] not in ("pending", "delegated"):
+        from .decision_actions import OPEN_STATUSES
+
+        if decision["status"] not in OPEN_STATUSES:
             raise ValueError(f"Decision is already {decision['status']}.")
         reservation_id = str(rec.get("reservation_id") or "")
         receipt_id = str(rec.get("receipt_id") or "")

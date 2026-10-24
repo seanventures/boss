@@ -38,7 +38,7 @@ import os
 from datetime import timedelta
 from typing import Any, Callable, Mapping, Optional
 
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 from sqlalchemy.engine import Connection
 
 from . import self_fix as sf
@@ -284,10 +284,13 @@ def request_removal(connection: Connection, settings: Any, *, project_id: str, a
         effect = ("Puts the plain release back (no local fixes), restarts BOSS and checks its "
                   "health; puts the current build back if health drops.")
         kind = "remove_all"
+    from .decision_actions import OPEN_STATUSES
+
     open_one = connection.execute(text(
-        "SELECT id FROM decisions WHERE status IN ('pending', 'delegated') AND "
-        "recommendation->>'action' = :a AND COALESCE(recommendation->>'self_fix_id', '') = :i"),
-        {"a": REMOVE_ACTION, "i": sfx_id or ""}).scalar()
+        "SELECT id FROM decisions WHERE status IN :open_statuses AND "
+        "recommendation->>'action' = :a AND COALESCE(recommendation->>'self_fix_id', '') = :i"
+    ).bindparams(bindparam("open_statuses", expanding=True)),
+        {"open_statuses": list(OPEN_STATUSES), "a": REMOVE_ACTION, "i": sfx_id or ""}).scalar()
     if open_one:
         return {"decision_id": str(open_one), "kind": kind, "existing": True}
     decision_id = make_id("dec")

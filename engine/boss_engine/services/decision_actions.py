@@ -199,7 +199,14 @@ KNOWN_ACTIONS = (REFUSAL_REASONS | CARRIED_OUT_ON_APPROVAL | WORKFLOW_GATE_ACTIO
 KINDS = ("refusal", "deploy_gate", "workflow_gate", "architecture_review", "pull_request",
          "change_set", "general")
 
-_OPEN = frozenset({"pending", "delegated"})
+#: A decision still awaiting an answer (not yet approved, rejected, executed, expired or
+#: withdrawn). THE shared definition of "open": a guard elsewhere that needs to know whether a
+#: decision can still be acted on (budget.py's legacy-exposure reconciliation,
+#: self_fix_install.py's remove-request dedup) imports this rather than keeping its own
+#: ("pending", "delegated") literal — see
+#: engine/tests/test_every_surface_agrees_on_what_needs_the_operator.py.
+OPEN_STATUSES = frozenset({"pending", "delegated"})
+_OPEN = OPEN_STATUSES  # noqa: F841 — short local alias used throughout this module
 #: An expired hold-default decision can still be answered: see DecisionService.transition.
 _REOPENABLE = frozenset({"expired"})
 
