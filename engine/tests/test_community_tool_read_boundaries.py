@@ -98,7 +98,9 @@ def test_explicit_unbound_repository_stops_before_clone(tool, args, monkeypatch)
     )
     assert result["ok"] is False
     assert result["error"] == "repository unavailable in this project"
-    assert len(conn.queries) == 1
+    # The binding check, then (for a source tool's refusal) where else the org has it bound.
+    assert 1 <= len(conn.queries) <= 2
+    assert all("FROM github_repository_bindings" in sql for sql, _ in conn.queries)
 
 
 def test_explicit_bound_repository_remains_resolvable():

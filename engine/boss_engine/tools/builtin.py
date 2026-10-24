@@ -4762,6 +4762,8 @@ def _repo_root(settings: Any, repo: str,
                             owner, short,
                             token or (getattr(settings, "github_token", "") or ""))
         url, genv = access.url, access.environ()
+        if _ABBREVIATED_SHA.fullmatch(ref):
+            return _abbreviated_sha_root(dest, url, genv, ref, f"{owner}/{short}")
         if _os.path.isdir(_os.path.join(dest, ".git")):
             # A cache made before this kept the token in its remote URL: rewrite it.
             _subprocess.run(["git", "-C", dest, "remote", "set-url", "origin", url],
@@ -4801,6 +4803,49 @@ def _repo_root(settings: Any, repo: str,
         return None, "git is not installed in this environment"
     except Exception as exc:  # noqa: BLE001 — a read tool must not raise
         return None, f"{type(exc).__name__}: {exc}"[:200]
+
+
+#: A commit named by a prefix of its sha (what `git log --oneline`, the knowledge graph's pinned
+#: commit and people quote). A remote serves only full object names, so `fetch origin <prefix>`
+#: answers "couldn't find remote ref" for a commit that is there.
+_ABBREVIATED_SHA = re.compile(r"[0-9a-f]{7,39}")
+
+
+def _abbreviated_sha_root(dest: str, url: str, genv: dict, ref: str, repo: str
+                          ) -> tuple[_Optional[str], _Optional[str]]:
+    """The checkout of the commit `ref` abbreviates: a treeless clone (commits only; the one
+    tree is fetched on checkout) resolves the prefix locally, as git itself would."""
+    if not _os.path.isdir(_os.path.join(dest, ".git")):
+        out = _subprocess.run(["git", "clone", "--filter=tree:0", "--no-checkout", url, dest],
+                              capture_output=True, text=True, timeout=300, env=genv)
+        if out.returncode != 0:
+            return None, f"clone failed: {(out.stderr or '')[-200:]}"
+    else:
+        _subprocess.run(["git", "-C", dest, "remote", "set-url", "origin", url],
+                        capture_output=True, timeout=30)
+    found = _subprocess.run(["git", "-C", dest, "rev-parse", "--verify", "--quiet",
+                             f"{ref}^{{commit}}"], capture_output=True, text=True, timeout=30)
+    if found.returncode != 0:
+        # A commit newer than the cache, or one only a shallow cache was missing: fetch all.
+        _subprocess.run(["git", "-C", dest, "fetch", "--filter=tree:0", "--unshallow", "origin"],
+                        capture_output=True, timeout=300, env=genv)
+        _subprocess.run(["git", "-C", dest, "fetch", "--filter=tree:0", "origin"],
+                        capture_output=True, timeout=300, env=genv)
+        found = _subprocess.run(["git", "-C", dest, "rev-parse", "--verify", "--quiet",
+                                 f"{ref}^{{commit}}"], capture_output=True, text=True, timeout=30)
+    if found.returncode != 0:
+        # A branch whose name happens to be all hex digits.
+        found = _subprocess.run(["git", "-C", dest, "rev-parse", "--verify", "--quiet",
+                                 f"origin/{ref}^{{commit}}"], capture_output=True, text=True,
+                                timeout=30)
+    full = (found.stdout or "").strip()
+    if found.returncode != 0 or not full:
+        return None, f"no commit {ref!r} in {repo} (a branch, a tag or a sha of that repository)"
+    done = _subprocess.run(["git", "-C", dest, "checkout", "--force", "--detach", full],
+                           capture_output=True, text=True, timeout=300, env=genv)
+    if done.returncode != 0:
+        return None, f"could not check out {ref!r}: {(done.stderr or '').strip()[-160:]}"
+    return dest, None
 
 
 def _source_for_run(ctx: Any, run_id: str, *, project_id: str) -> tuple[
@@ -4918,8 +4963,51 @@ def _resolve_source(ctx: Any, args: dict, *, project_id: str) -> tuple[
         full = repo if "/" in repo else (
             f"{getattr(ctx.settings, 'target_github_owner', '') or ''}/{repo}")
         if not _project_repository_bound(ctx, project_id, full):
-            return "", None, "repository unavailable in this project"
+            return "", None, UNBOUND_REPOSITORY
     return repo, (args.get("ref") or None), None
+
+
+UNBOUND_REPOSITORY = "repository unavailable in this project"
+
+
+def _projects_binding(ctx: Any, project_id: str, repo: str) -> list[str]:
+    """The OTHER projects of the acting project's org that have `repo` bound (active), so a
+    refusal can say where the repository is instead of only that it is not here."""
+    if repo.count("/") != 1:
+        return []
+    try:
+        with ctx.begin() as connection:
+            return [str(r) for r in connection.execute(_text(
+                "SELECT b.project_id FROM github_repository_bindings b "
+                "JOIN projects p ON p.id = b.project_id "
+                "JOIN workspaces w ON w.id = p.workspace_id "
+                "WHERE lower(b.full_name) = lower(:repo) AND b.status = 'active' "
+                "AND b.project_id <> :p AND w.org_id = (SELECT w2.org_id FROM projects p2 "
+                "JOIN workspaces w2 ON w2.id = p2.workspace_id WHERE p2.id = :p) "
+                "ORDER BY b.project_id LIMIT 10"), {"p": project_id, "repo": repo}).scalars()]
+    except Exception:  # noqa: BLE001 — no hint is still a refusal
+        return []
+
+
+def _source_refusal(ctx: Any, args: dict, project_id: str, err: str) -> dict:
+    """A source tool's refusal. A repository bound in ANOTHER project of the org (a conversation
+    in boss-dogfood asking about paramg/northpeak-fineract-b, bound in northpeak-bank-b) names
+    that project and the argument that reaches it — `project` (PROJECT_ARG), which the registry
+    authorizes there. Without it the agent read "unavailable" as a fault of its `ref` and gave
+    up on the pinned commit (the banking case study, 2026-10-24)."""
+    out: dict = {"ok": False, "error": err}
+    if err != UNBOUND_REPOSITORY:
+        return out
+    repo = str(args.get("repo") or "").strip()
+    full = repo if "/" in repo else (
+        f"{getattr(ctx.settings, 'target_github_owner', '') or ''}/{repo}")
+    elsewhere = _projects_binding(ctx, project_id, full)
+    if elsewhere:
+        out["bound_in"] = elsewhere
+        out["do_this"] = (f"{full} is bound in project {elsewhere[0]}, not in {project_id}: call "
+                          f"again with {PROJECT_ARG}='{elsewhere[0]}' and the same arguments "
+                          "(ref included).")
+    return out
 
 
 def _safe_path(rel: str, root: _Optional[str] = None) -> _Optional[str]:
@@ -7113,7 +7201,7 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
             return {"ok": False, "error": f"bad regex: {exc}"}
         repo, ref, err = _resolve_source(ctx, args, project_id=project_id)
         if err:
-            return {"ok": False, "error": err}
+            return _source_refusal(ctx, args, project_id, err)
         root, err = _repo_root(ctx.settings, repo, ref,
                                token=_github_token_for(ctx, project_id))
         if root is None:
@@ -7177,7 +7265,7 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
 
         repo, ref, err = _resolve_source(ctx, args, project_id=project_id)
         if err:
-            return {"ok": False, "error": err}
+            return _source_refusal(ctx, args, project_id, err)
         root, err = _repo_root(ctx.settings, repo, ref,
                                token=_github_token_for(ctx, project_id))
         if root is None:
@@ -7227,7 +7315,7 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
     def read_code(ctx, *, project_id, actor, args):
         repo, ref, err = _resolve_source(ctx, args, project_id=project_id)
         if err:
-            return {"ok": False, "error": err}
+            return _source_refusal(ctx, args, project_id, err)
         root, err = _repo_root(ctx.settings, repo, ref,
                                token=_github_token_for(ctx, project_id))
         if root is None:
@@ -7749,7 +7837,7 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
     def git_history(ctx, *, project_id, actor, args):
         repo, ref, err = _resolve_source(ctx, args, project_id=project_id)
         if err:
-            return {"ok": False, "error": err}
+            return _source_refusal(ctx, args, project_id, err)
         root, err = _repo_root(ctx.settings, repo, ref,
                                token=_github_token_for(ctx, project_id))
         if root is None:
