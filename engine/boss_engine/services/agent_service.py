@@ -12,6 +12,7 @@ from ..config import Settings
 from . import agent_decision, protocol_reply
 from .capability_manifest import build_manifest
 from .core import emit_event, make_id
+from .knowledge import learning_writeback as _learning  # learning while executing (BOSSAPP-768)
 from .intent_router import IntentRouter
 
 
@@ -728,6 +729,11 @@ class AgentService:
         if thread is not None:
             self._record_domain_turn(connection, thread_id=thread["id"], role=role,
                                      message=message, decision=decision)
+        _learning.write_back(connection, project_id=project_id, hook="agent_decide", observed={
+            "chosen": decision.action if decision.decided else None, "reason": decision.reason,
+            "confidence": decision.confidence, "evidence": decision.evidence, "question": message,
+            "alternatives": [getattr(c, "key", c) for c in choices], "external_ref": external_ref,
+            "agent_role": role})
         return decision
 
     def answer_stream(
