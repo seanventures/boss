@@ -164,16 +164,24 @@ def lane_models(connection: Any, settings: Any, project_id: str, builder: str,
 
 
 def build_engines(connection: Any, settings: Any, project_id: str) -> Engines:
-    from .code_agent import _build_code_agent
+    from .code_agent import _bind_lane_credentials, _build_code_agent
     from .engine_contract import contracted
 
+    def bound(name: str) -> Any:
+        # EACH LANE ON THE PROJECT'S OWN CREDENTIAL, as make_code_agent binds a build's: the
+        # stored key (anthropic_api or a setup-anthropic source) or the login, read with this
+        # connection. Unbound, an engine looked only in the environment and the store by name,
+        # and an install whose key lives on its setup source had none.
+        return _bind_lane_credentials(settings, name, connection=connection,
+                                      project_id=project_id)
+
     builder_name, reviewer_name = engine_names(connection, settings, project_id)
-    builder = contracted(_build_code_agent(settings, builder_name))
+    builder = contracted(_build_code_agent(bound(builder_name), builder_name))
     if reviewer_name == builder_name:
         reviewer = builder
     else:
         try:
-            reviewer = contracted(_build_code_agent(settings, reviewer_name))
+            reviewer = contracted(_build_code_agent(bound(reviewer_name), reviewer_name))
         except Exception as error:  # noqa: BLE001 — fall back to a fresh session of the builder
             log.info("self-fix reviewer engine %s unavailable: %s", reviewer_name, error)
             reviewer, reviewer_name = builder, builder_name

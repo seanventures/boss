@@ -869,6 +869,43 @@ def _post_to_thread(connection, thread_id: str, investigation_id: str,
                      investigation_id, thread_id, exc)
 
 
+def _post_failure_to_thread(connection, thread_id: Optional[str], investigation_id: str,
+                            error: Any) -> None:
+    """A FAILED investigation says so where it was asked, in words.
+
+    The agent tells the operator "the result is posted into this conversation when it lands";
+    a failure is a result too. On the laptop (2026-10-24) one failed in 0.4 s on a refused model
+    source and the conversation never heard: the operator was left waiting on a promise. The
+    words are model_failures.explain's — the same sentence every surface gives for that cause —
+    never a stack trace or a credential.
+    """
+    if not thread_id:
+        return
+    from .core import make_id
+    from .model_failures import explain
+
+    try:
+        said = explain(error)
+        words = f"{said.get('headline') or ''} {said.get('action') or ''}".strip()
+    except Exception:  # noqa: BLE001 — the reason in plain text still beats silence
+        words = ""
+    reason = str(error or "").strip()
+    body = [f"**Investigation {investigation_id} did not run to a verdict.**", "",
+            words or reason[:600] or "It stopped without saying why."]
+    if words and reason and reason not in words:
+        body += ["", f"What BOSS saw: {reason[:600]}"]
+    body += ["", "Nothing was changed. Ask again once that is fixed, or ask me what I can find "
+                 "with my own tools meanwhile."]
+    try:
+        connection.execute(
+            sql("INSERT INTO agent_messages (id, thread_id, role, content, created_at) "
+                "VALUES (:i, :t, 'assistant', :c, now())"),
+            {"i": make_id("amsg"), "t": thread_id, "c": "\n".join(body)[:6000]})
+    except Exception as exc:  # noqa: BLE001 — the record is stored either way
+        _log.warning("could not post investigation %s failure to thread %s: %s",
+                     investigation_id, thread_id, exc)
+
+
 def block_community_investigation(
     connection, settings: Settings, investigation_id: str, *,
     lease: Optional[dict[str, Any]] = None,
@@ -884,7 +921,7 @@ def block_community_investigation(
     if not _community_investigations_paused(settings):
         return None
     row = connection.execute(
-        sql("SELECT id, project_id, status, allow_fix, job_id FROM investigations "
+        sql("SELECT id, project_id, status, allow_fix, job_id, thread_id FROM investigations "
             "WHERE id = :i FOR UPDATE"),
         {"i": investigation_id},
     ).mappings().first()
@@ -921,6 +958,7 @@ def block_community_investigation(
         {"reason": "community_investigation_governance_gate",
          "effect_reconciliation_required": was_running},
     )
+    _post_failure_to_thread(connection, row.get("thread_id"), investigation_id, reason)
     return {"ok": False, "status": "blocked", "investigation_id": investigation_id,
             "error": reason}
 
@@ -1041,7 +1079,14 @@ def run_investigation(engine, settings: Settings, *, investigation_id: str,
                     except Exception:  # noqa: BLE001 — a heartbeat must not fail the work
                         pass
 
-            agent = ClaudeCodeAgent(settings)
+            # THE CREDENTIAL IT RUNS ON, AND THE SOURCE IT BOOKS, FROM ONE RESOLUTION
+            # (claude_credential): the subscription login or the stored key, in the operator's
+            # order — bound as Discovery's and the builds' CLI is, never the bare environment.
+            from .claude_credential import bind_claude_credential
+
+            with engine.begin() as _c:
+                bound = bind_claude_credential(settings, connection=_c, project_id=project_id)
+            agent = ClaudeCodeAgent(bound)
 
             def _call() -> dict:
                 data = agent._invoke(  # noqa: SLF001 — the pipeline's own entry
@@ -1080,6 +1125,10 @@ def run_investigation(engine, settings: Settings, *, investigation_id: str,
                           "token = NULL, finished_at = now(), updated_at = now() "
                           "WHERE id = :i"),
                       {"i": investigation_id, "e": f"{type(exc).__name__}: {exc}"[:1000]})
+            emit_event(c, project_id, "investigation.failed", str(record["actor"]),
+                       "investigation", investigation_id,
+                       {"error": f"{type(exc).__name__}: {exc}"[:500]})
+            _post_failure_to_thread(c, record.get("thread_id"), investigation_id, exc)
         return {"ok": False, "investigation_id": investigation_id,
                 "error": f"{type(exc).__name__}: {exc}"[:500]}
 

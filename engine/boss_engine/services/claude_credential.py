@@ -341,7 +341,8 @@ def describe(connection: Any, settings: Any, project_id: str) -> dict[str, Any]:
     rows = {}
     try:
         for r in connection.execute(text(
-                "SELECT source_id, connection_status, credential_secret_ref_id, observed_capacity "
+                "SELECT source_id, connection_status, credential_secret_ref_id, observed_capacity, "
+                "status, updated_at "
                 "FROM entitlement_sources WHERE project_id = :p "
                 "AND (source_id IN (:sub, :api) OR source_id LIKE 'setup-anthropic%')"),
                 {"p": project_id, "sub": SUBSCRIPTION_SOURCE_ID, "api": API_KEY_SOURCE_ID}
@@ -369,8 +370,27 @@ def describe(connection: Any, settings: Any, project_id: str) -> dict[str, Any]:
     cred = ClaudeCredential(active)
     return {"active": active, "order": order,
             "billing": cred.billing if active != KIND_NONE else None,
-            "source_id": source_for_kind(active),
+            "source_id": (key_source_id(rows) if active == KIND_STORED_KEY
+                          else source_for_kind(active)),
             "subscription_disconnected": disconnected}
+
+
+def key_source_id(rows: dict[str, Any]) -> str:
+    """THE SOURCE THAT HOLDS THE STORED KEY, which is where a call on it books its capacity.
+
+    The key `_project_ref` resolves is bound to `anthropic_api` (the console's) or to a Repo and
+    models `setup-anthropic[-n]` source. Booking every stored key on `anthropic_api` refused
+    every governed call on an install whose key lives on `setup-anthropic` (the laptop,
+    2026-10-24: a read-only investigation, `no_eligible_source` in 0.4 s, because
+    `anthropic_api` was declared, not connected, with no runtime). Same order as `_project_ref`:
+    `anthropic_api` when it holds a key, else the newest `setup-anthropic*` that does."""
+    held = [(sid, r) for sid, r in rows.items()
+            if sid != SUBSCRIPTION_SOURCE_ID and r.get("credential_secret_ref_id")
+            and str(r.get("status") or "active") not in ("inactive", "revoked")]
+    if any(sid == API_KEY_SOURCE_ID for sid, _ in held):
+        return API_KEY_SOURCE_ID
+    held.sort(key=lambda item: str(item[1].get("updated_at") or ""), reverse=True)
+    return held[0][0] if held else API_KEY_SOURCE_ID
 
 
 def source_for_kind(kind: str) -> str:

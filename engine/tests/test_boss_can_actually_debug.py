@@ -149,7 +149,7 @@ class TestARealDebuggingSession:
         from boss_engine.services.debug_session import run_investigation
 
         body = inspect.getsource(run_investigation)
-        assert "agent = ClaudeCodeAgent(settings)" in body and "agent._invoke(" in body
+        assert "agent = ClaudeCodeAgent(bound)" in body and "agent._invoke(" in body
         assert "Read,Grep,Glob,Bash" in body
         assert "EphemeralSandbox" in body
 

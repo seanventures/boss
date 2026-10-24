@@ -13480,9 +13480,18 @@ def agent_action(payload: AgentActionRunRequest, request: Request) -> AgentActio
     # The distinction the operator drew after the 2026-09-02 wipe: an agent working WITH a
     # person is fine; an autonomous one performing a destructive act with nobody watching is
     # not. This is where that line is enforced.
+    # THE TURN'S AMBIENT CONTEXT, which a press must carry as the turn would have
+    # (engine_agent.ambient): the conversation the offer was made in. A pressed `investigate`
+    # (laptop, 2026-10-24) ran with no thread, so its result — a failure — had nowhere to land
+    # although the agent had said it would be posted there; `watch` and every other tool that
+    # reports back lost its thread the same way. Underscore keys are BOSS's, never the client's.
+    pressed_args = {k: v for k, v in dict(payload.args or {}).items()
+                    if not str(k).startswith("_")}
+    if payload.thread_id:
+        pressed_args["_thread_id"] = payload.thread_id
     result = registry.invoke(
         spec.name, ctx, project_id=payload.project_id, actor=payload.actor,
-        args=dict(payload.args or {}), operator_confirmed=True,
+        args=pressed_args, operator_confirmed=True,
         # IDENTITY (S2): the person who pressed it must hold the TOOL's permission too
         # (`run_on_host` is host:exec), not only assistant:chat.
         auth=_request_identity(request),
