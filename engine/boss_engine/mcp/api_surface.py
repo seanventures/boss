@@ -97,6 +97,10 @@ _EXCLUDED_EXACT = {
     # The worker hands its leased knowledge.repository.index job to the API, which holds the
     # GitHub credential and the graph (services/knowledge/repo_index.py): a worker protocol.
     "/v1/knowledge/repositories/index/execute": "knowledge_index_worker_lease_protocol",
+    # The worker hands its leased change_set.merge job (queued by the set's one approval) to the
+    # API, which re-verifies the lease, the job, the decision and the pinned SHAs before merging
+    # (multirepo/merge.py execute_job). A person's POST /v1/change-sets/{cs_id}/merge stays held.
+    "/v1/change-sets/{cs_id}/merge/execute": "change_set_merge_worker_lease_protocol",
 }
 _EXCLUDED_FRAGMENTS = (
     ("/steps/claim", "workflow_worker_protocol"),

@@ -289,6 +289,8 @@ def _approve(eng, cs_id, jobs, *, decision_id=None):
     with eng.begin() as db:
         row = dict(db.execute(text("SELECT * FROM decisions WHERE id = :d"),
                               {"d": decision_id or change_sets._row(db, cs_id)["decision_id"]}).mappings().first())
+        # As DecisionService does: the decision is approved first, then the follow-on runs.
+        db.execute(text("UPDATE decisions SET status = 'approved' WHERE id = :d"), {"d": row["id"]})
         change_sets.on_decision(db, row, status="approved", actor="usr_approver", jobs=jobs)
 
 
@@ -410,6 +412,60 @@ def test_a_merge_is_refused_before_the_approval(eng, gh, model, builds):
         with pytest.raises(MultiRepoError) as err:
             merge.merge_set(db, get_settings(), cs_id)
     assert err.value.code == "not_approved"
+
+
+def test_a_withdrawn_approval_merges_nothing_even_if_the_set_says_approved(eng, gh, model, builds):
+    jobs = Jobs()
+    cs_id, _v = _ready_set(eng, gh, builds, jobs)
+    _approve(eng, cs_id, jobs)
+    with eng.begin() as db:
+        db.execute(text("UPDATE decisions SET status = 'expired' WHERE id = :d"),
+                   {"d": change_sets._row(db, cs_id)["decision_id"]})
+        with pytest.raises(MultiRepoError) as err:
+            merge.merge_set(db, get_settings(), cs_id)
+    assert err.value.code == "not_approved"
+    assert not [p for m, p in gh.calls if m == "PUT"]
+
+
+def test_the_worker_merges_only_under_its_jobs_lease_for_this_set_and_decision(eng, gh, model, builds,
+                                                                                 monkeypatch):
+    from boss_engine.services import jobs as jobs_module
+
+    jobs = Jobs()
+    cs_id, _v = _ready_set(eng, gh, builds, jobs)
+    _approve(eng, cs_id, jobs)
+    queued = jobs.created[-1]
+    with eng.begin() as db:
+        project_id = change_sets._row(db, cs_id)["project_id"]
+    leased = {"job_1": {"id": "job_1", "kind": "change_set.merge", "project_id": project_id,
+                        "payload": queued["payload"]},
+              "job_other": {"id": "job_other", "kind": "change_set.merge", "project_id": project_id,
+                            "payload": {**queued["payload"], "change_set_id": "chs_other"}},
+              "job_old": {"id": "job_old", "kind": "change_set.merge", "project_id": project_id,
+                          "payload": {**queued["payload"], "decision_id": "dec_older"}},
+              "job_kind": {"id": "job_kind", "kind": "code.task", "project_id": project_id,
+                           "payload": queued["payload"]}}
+
+    def lease(self, db, worker_id, job_id, lease_token):
+        if lease_token != "live" or job_id not in leased:
+            raise jobs_module.LeaseNotFoundError("no live lease")
+        return leased[job_id]
+
+    monkeypatch.setattr(jobs_module.JobLeaseService, "require_active_lease", lease)
+
+    def run(job_id, token="live"):
+        with eng.begin() as db:
+            return merge.execute_job(db, get_settings(), cs_id, job_id=job_id, worker_id="w", lease_token=token)
+
+    for job_id, token, code in (("job_1", "stolen", "lease_lost"), ("job_other", "live", "wrong_job"),
+                                ("job_kind", "live", "wrong_job"), ("job_old", "live", "stale_decision")):
+        with pytest.raises(MultiRepoError) as err:
+            run(job_id, token)
+        assert err.value.code == code, job_id
+    assert not [p for m, p in gh.calls if m == "PUT"]           # nothing merged on any refusal
+    out = run("job_1")
+    assert out["status"] == "merged" and out["project_id"] == project_id
+    assert run("job_1")["already"] is True                       # a re-delivered job is a no-op
 
 
 # ── the grant ────────────────────────────────────────────────────────────────────────────────

@@ -956,8 +956,8 @@ def execute_job(job: LeasedJob, client: ControlPlaneClient) -> dict[str, Any]:
     if job.kind == "change_set.merge":
         # A multi-repo change after its one approval: merged as a set (heads re-checked, in
         # dependency order, reverted if one fails). The API owns the merge; this hands it over.
-        result = client.merge_change_set({"project_id": job.project_id,
-                                          "change_set_id": job.payload["change_set_id"]})
+        result = client.merge_change_set({"change_set_id": job.payload["change_set_id"], "job_id": job.id,
+                                          "worker_id": client.worker_id, "lease_token": job.lease_token})
         if result.get("status") == "failed" and not result.get("reverted") and not result.get("failed"):
             raise RuntimeError(result.get("message") or "Change set merge failed.")
         return result

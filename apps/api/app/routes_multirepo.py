@@ -402,23 +402,46 @@ def build_multirepo_router() -> APIRouter:
         except MultiRepoError as exc:
             return _refuse(exc)
 
+    def _audit_merge(request: Request, db: Any, cs_id: str, project_id: str, out: dict[str, Any]) -> None:
+        if out.get("status") == "merged":
+            _audit(request, db, "change_set.merged", target_type="change_set", target_id=cs_id,
+                   permission=P.GITHUB_MERGE.value, project_id=project_id,
+                   details={"repositories": sorted((out.get("merged") or {}).keys())})
+        elif out.get("reverted"):
+            _audit(request, db, "change_set.reverted", target_type="change_set", target_id=cs_id,
+                   permission=P.GITHUB_MERGE.value, project_id=project_id,
+                   details={"failed": out.get("failed"), "reverted": out.get("reverted")})
+
     @router.post("/v1/change-sets/{cs_id}/merge")
     @permit(P.GITHUB_MERGE, scope=Scope.project(body="project_id"))
     def merge_change_set(cs_id: str, request: Request, payload: dict = Body(...)) -> Any:
-        """The `change_set.merge` job (the worker hands it here after the one approval)."""
+        """A person merges an approved set by hand. A non-human caller is held for a person's
+        confirmation (`merge`); the worker uses /merge/execute under its job's lease instead."""
         project_id = str(payload.get("project_id") or "")
         try:
             with begin() as db:
                 _mine(db, cs_id, project_id)
                 out = merge.merge_set(db, _settings(), cs_id, actor=_actor(request, "boss"))
-                if out.get("status") == "merged":
-                    _audit(request, db, "change_set.merged", target_type="change_set", target_id=cs_id,
-                           permission=P.GITHUB_MERGE.value, project_id=project_id,
-                           details={"repositories": sorted((out.get("merged") or {}).keys())})
-                elif out.get("reverted"):
-                    _audit(request, db, "change_set.reverted", target_type="change_set", target_id=cs_id,
-                           permission=P.GITHUB_MERGE.value, project_id=project_id,
-                           details={"failed": out.get("failed"), "reverted": out.get("reverted")})
+                _audit_merge(request, db, cs_id, project_id, out)
+                return out
+        except MultiRepoError as exc:
+            return _refuse(exc)
+
+    @router.post("/v1/change-sets/{cs_id}/merge/execute")
+    @permit(P.WORKER_LEASE)
+    def execute_change_set_merge(cs_id: str, request: Request, payload: dict = Body(...)) -> Any:
+        """The `change_set.merge` job (the worker hands it here after the one approval). A worker
+        lease protocol: only the worker principal, only under the job's live lease, only for the
+        set and decision the job was queued for (multirepo/merge.py execute_job)."""
+        from apps.api.app.main import require_worker_principal
+
+        require_worker_principal()
+        try:
+            with begin() as db:
+                out = merge.execute_job(db, _settings(), cs_id, job_id=str(payload.get("job_id") or ""),
+                                        worker_id=str(payload.get("worker_id") or ""),
+                                        lease_token=str(payload.get("lease_token") or ""))
+                _audit_merge(request, db, cs_id, out["project_id"], out)
                 return out
         except MultiRepoError as exc:
             return _refuse(exc)

@@ -276,9 +276,10 @@ class ControlPlaneClient:
         return response.json()
 
     def merge_change_set(self, payload: dict[str, Any]) -> dict[str, Any]:
-        """POST /v1/change-sets/{id}/merge: a refusal (409, a sentence) is the answer, not a crash."""
-        response = self._client.post(f"/v1/change-sets/{payload['change_set_id']}/merge",
-                                     json={"project_id": payload["project_id"]})
+        """POST /v1/change-sets/{id}/merge/execute under the job's lease (a worker lease protocol):
+        a refusal (409, a sentence) is the answer, not a crash."""
+        response = self._client.post(f"/v1/change-sets/{payload['change_set_id']}/merge/execute",
+                                     json={key: payload[key] for key in ("job_id", "worker_id", "lease_token")})
         if response.status_code in (404, 409, 422):
             body = response.json() if response.content else {}
             return {"status": "refused", **(body if isinstance(body, dict) else {})}

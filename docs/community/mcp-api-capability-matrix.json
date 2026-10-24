@@ -4,10 +4,10 @@
   "canonical_key": "method + path",
   "request_body_type_enforcement_note": "pass_through_documented fields appear in OpenAPI but SkipValidation preserves the handler's existing input coercion and error statuses; runtime_validated_input_schema is a legacy schema-presence flag",
   "edition": "community",
-  "operation_count": 1629,
+  "operation_count": 1630,
   "counts": {
     "api_policy_gated": 1386,
-    "excluded": 103,
+    "excluded": 104,
     "human_confirmation_gated": 72,
     "operator_only_unavailable": 68
   },
@@ -5626,6 +5626,24 @@
       "runtime_validated_input_schema": false,
       "domain_scoped_direct_tool": false,
       "requires_explicit_bound_api_credential": true,
+      "read_only_available": false
+    },
+    {
+      "method": "POST",
+      "path": "/v1/change-sets/{cs_id}/merge/execute",
+      "alias": "post_v1_change_sets_cs_id_merge_execute_fcb27319",
+      "domain": "other",
+      "summary": "Execute Change Set Merge",
+      "mcp_status": "excluded",
+      "reason": "change_set_merge_worker_lease_protocol",
+      "input_schema_quality": "loose_json_body",
+      "mounted_input_schema_quality": "loose_json_body",
+      "request_body_type_enforcement": "unstructured",
+      "curated_input_fields": false,
+      "typed_input_schema": false,
+      "runtime_validated_input_schema": false,
+      "domain_scoped_direct_tool": false,
+      "requires_explicit_bound_api_credential": false,
       "read_only_available": false
     },
     {
