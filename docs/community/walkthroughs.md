@@ -104,9 +104,9 @@ python3 scripts/metatron_tui.py
 At the `metatron>` prompt, work through these commands in order:
 
 1. **`/projects`** lists the projects the API returns on this machine. A standard install seeds a local project named `boss-dogfood`. Select a project with `/project` followed by its id.
-2. **`/ops`** lists the product domains on the running API. `/ops budget` searches budget reads and writes, `/ops receipts` searches receipt reads, and `/ops * --page 1` browses one page of the full list.
-3. **`/describe`** followed by an operation id from that list shows the operation's parameters and body. Copy the id exactly as the terminal printed it.
-4. **`/op`** followed by the same id sends one request. Add JSON only when `/describe` shows that the call needs `path`, `query`, or `body`.
+2. **`/api`** lists the capability domains on the running API, and opens a picker on a rich terminal. `/api budget` lists that domain's operations in a numbered list, `/api receipts` does the same for receipt reads, and `/api *` lists all of them. `/ops` reads the same catalog by operation id.
+3. **`/api`** followed by a number from that listing shows the operation's parameters, body, path template, and a ready example. `/describe` followed by an operation id shows the same card. Copy what the terminal printed; do not invent an id.
+4. **`/api run`** followed by that number, or **`/op`** followed by that id, sends one request. Add JSON only when the card shows that the call needs `path`, `query`, or `body`.
 
 !!! note "What a successful `/op` means"
     A successful `/op` means the API accepted that one call. It does not confirm that a later job, model turn, deploy, or external send finished, and the API can still deny or hold a call for permission, budget, or approval. After a write, check **Approvals**, **Activity log**, and a budget or receipt read before treating the work as done.

@@ -60,8 +60,11 @@ The core commands are:
 | Command | What it does |
 | --- | --- |
 | `/projects` | Lists the projects available to the current credentials and marks the active one. It does not switch projects. |
-| `/ops` | Reads the operation catalog of the connected API. With no argument it lists product domains; add a domain or search term to filter, or use `/ops * --page N` to browse the full list. |
-| `/describe <id>` | Shows an operation's method, path, parameters, and typed body fields, plus an example of the arguments `/op` expects. It does not call the operation. |
+| `/api` | Lists the capability domains of the connected API; on a rich terminal it opens a picker for a domain and then an operation. A domain name, a search term, or `*` lists the matching operations, numbered. |
+| `/api <number>` | Shows the picked operation's method, path template, parameters, and typed body fields, with lines to copy for `/api run`, `/op`, and the written-out `/api` form. It does not call the operation. |
+| `/api run <number> [json]` | Sends the picked call. The optional JSON accepts only the keys `path`, `query`, and `body`. |
+| `/ops` | Reads the same catalog by operation ID. With no argument it lists product domains; add a domain or search term to filter, or use `/ops * --page N` to browse the full list. Its rows carry the same pick numbers as `/api`. |
+| `/describe <id>` | Shows an operation's method, path, parameters, typed body fields, and path template, plus an example of the arguments `/op` expects. It does not call the operation. |
 | `/op <id> [json]` | Sends the call through the authenticated HTTP API. The optional JSON accepts only the keys `path`, `query`, and `body`. |
 
 !!! note

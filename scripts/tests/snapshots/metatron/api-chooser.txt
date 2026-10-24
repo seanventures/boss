@@ -1,0 +1,41 @@
+The API on this install
+
+ Domain   Routes
+ ───────────────────────────
+ core     4        Core work
+ system   1        System
+
+project boss-dogfood
+Pick a domain with /api DOMAIN, search with /api SEARCH, or list everything with
+/api *; then /api NUMBER for one operation.
+4 operations for '*' · page 1/1
+
+ #   Method   Path                  Summary
+ ──────────────────────────────────────────────────────────────────────────────
+ 1   GET      /v1/tasks             List tasks
+ 2   POST     /v1/tasks             Create task
+ 3   GET      /v1/tasks/{task_id}   Get task
+ 4   GET      /v1/undocumented      Catalog-only route  [use /api METHOD
+                                    /v1/path [JSON]]
+
+Pick one with /api NUMBER to see its path template and example.
+╭─ [3] operation ──────────────────────────────────────────────────────────────╮
+│ GET /v1/tasks/{task_id}                                                      │
+│ get_v1_tasks_task_id_23ec4533                                                │
+│ Get task                                                                     │
+│                                                                              │
+│ path task_id      composite, required                                        │
+│ query project_id  composite, required                                        │
+│                                                                              │
+│ Path template                                                                │
+│ GET /v1/tasks/<task_id>?project_id=boss-dogfood                              │
+│                                                                              │
+│ Copy one of these and replace every <value>                                  │
+│ /api run 3                                                                   │
+│ {"path":{"task_id":"<task_id>"},"query":{"project_id":"boss-dogfood"}}       │
+│ /op get_v1_tasks_task_id_23ec4533                                            │
+│ {"path":{"task_id":"<task_id>"},"query":{"project_id":"boss-dogfood"}}       │
+│ /api GET /v1/tasks/<task_id>?project_id=boss-dogfood                         │
+│                                                                              │
+│ The API applies edition, permission, approval, budget, and receipt rules.    │
+╰──────────────────────────────────────────────────────────────────────────────╯

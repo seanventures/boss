@@ -105,8 +105,12 @@ An agent turn can take minutes. Metatron waits up to 15 minutes for a turn's rep
 | <code>/decisions [open&#124;all] [PAGE]</code> | Reads the decision inbox |
 | `/decision ID` | Shows one decision card |
 | `/decision approve ID NOTE`, `/decision reject ID NOTE` | Approves or rejects a decision with a note |
-| `/ops [TERM] [--page N]` | Lists API domains or searches operations |
-| `/describe OPERATION_ID` | Shows an operation's parameters and request body |
+| `/api` | Lists the API's capability domains; on a rich terminal it opens a picker |
+| `/api [TERM] [--page N]` | Lists numbered operations for a domain, a search, or `*` |
+| `/api NUMBER` | Shows the picked operation's path template and ready-to-edit examples |
+| `/api run NUMBER [JSON]` | Invokes the picked operation |
+| `/ops [TERM] [--page N]` | Lists API domains or searches operations by operation ID |
+| `/describe OPERATION_ID` | Shows an operation's parameters, request body, and path template |
 | `/op OPERATION_ID [JSON]` | Invokes an operation |
 | `/api METHOD /v1/path [JSON]` | Calls a local `/v1/` route directly |
 | `/coverage` | Compares the running OpenAPI with the mounted route catalog |
@@ -200,6 +204,27 @@ Use `--exec '/decision ID' --json` for the full decision card. Other decision tr
 
 ## Discover and invoke any operation
 
+You do not have to know a route to call one. `/api` browses what the running API exposes and prints a filled-in template for the operation you pick.
+
+| Command | Use |
+|---|---|
+| `/api` | The API's capability domains, with a route count each. On a rich terminal it opens a picker: choose a domain, then an operation, and its card appears |
+| `/api DOMAIN`, `/api SEARCH`, `/api *` | Numbered operations, grouped by domain, 25 to a page |
+| `/api [TERM] --page N` | The next page of that listing |
+| `/api NUMBER` | The picked operation's summary, parameters, typed body fields, path template, and examples |
+| `/api run NUMBER [JSON]` | Invoke the picked operation with the typed arguments `/op` takes |
+
+A search matches a domain, path, operation ID, or summary. `/api NUMBER` prints the path template with `<value>` placeholders and three lines you can copy and edit: an `/api run` call, the same call as `/op`, and the written-out `/api METHOD /v1/path` form. A row number refers to the listing you last saw in this session, including a `/ops` listing; if you pick a number before listing anything, it addresses the full operation list. A catalog-only route has no typed operation, so its card offers only the written-out form.
+
+```text
+metatron> /api
+metatron> /api tasks
+metatron> /api 2
+metatron> /api run 2 {"body":{"title":"Plan launch","dedupe_key":"launch-plan-1"}}
+```
+
+The same operations are addressable by operation ID:
+
 | Command | Use |
 |---|---|
 | `/ops` | Product domains exposed by the running API |
@@ -210,7 +235,7 @@ Use `--exec '/decision ID' --json` for the full decision card. Other decision tr
 
 Interactive output shows concise rows; one-shot `--json` returns the same page with counts and stable operation IDs.
 
-Operation IDs are derived from the HTTP method and path, so they stay unique even when the API framework assigns duplicate IDs to a multi-method route, and they match the generated Community OpenAPI contract. The terminal fetches the live `/openapi.json` and capability catalog on each run rather than relying on a bundled route list.
+Operation IDs are derived from the HTTP method and path, so they stay unique even when the API framework assigns duplicate IDs to a multi-method route, and they match the generated Community OpenAPI contract. The terminal fetches the live `/openapi.json` and capability catalog on each run rather than relying on a bundled route list. `/ops` rows carry the same pick numbers as `/api`, so `/api NUMBER` works after either listing.
 
 ### `/op` arguments
 
@@ -219,7 +244,8 @@ The JSON argument has three optional keys: `path`, `query`, and `body`. `path` a
 - The terminal checks path placeholders and declared query names before sending a request.
 - If an operation declares a `project_id` query parameter, the active project is inserted when omitted.
 - If a typed JSON request body declares `project_id` and your body omits it, the selected project is inserted. An explicit `project_id` is preserved, and the API authorizes access to that project.
-- All other required body fields must be supplied. `/describe` lists typed fields, choices, and nested required keys where the API schema provides them.
+- All other required body fields must be supplied. `/describe` lists typed fields, choices, and nested required keys where the API schema provides them, plus the path template and the written-out `/api` line for the same call.
+- `/api run NUMBER [JSON]` takes the same arguments for the row you picked from an `/api` or `/ops` listing.
 
 The API checks access and policy on every call.
 
@@ -236,10 +262,10 @@ metatron> /project another-project
 
 ### Direct routes with `/api`
 
-For a catalog-only route or direct path control, use `/api METHOD /v1/path [JSON]`. The method may be `GET`, `POST`, `PUT`, `PATCH`, or `DELETE`; the optional JSON body applies to non-GET requests. The path must be a local `/v1/` route.
+For a catalog-only route or direct path control, write the call out as `/api METHOD /v1/path [JSON]`. The method may be `GET`, `POST`, `PUT`, `PATCH`, or `DELETE`; the optional JSON body applies to non-GET requests. The path must be a local `/v1/` route. The card printed by `/api NUMBER` and `/describe` already spells out the required query values and body fields for this form.
 
 !!! warning
-    Unlike `/op`, `/api` does not infer `project_id`. Include it wherever the route requires it.
+    Unlike `/op` and `/api run`, the written-out form infers nothing. Include `project_id` wherever the route requires it.
 
 ```text
 metatron> /api GET /v1/tasks?project_id=boss-dogfood
@@ -253,6 +279,7 @@ Run one command and receive one JSON result:
 ```sh
 boss metatron --print 'is anything stuck right now?' --json
 python3 scripts/metatron_tui.py --exec '/api GET /v1/tasks?project_id=boss-dogfood' --json
+python3 scripts/metatron_tui.py --exec '/api tasks' --json
 python3 scripts/metatron_tui.py --exec '/op get_v1_tasks_339c8c60' --json
 python3 scripts/metatron_tui.py --exec '/coverage' --json > tui-coverage.json
 ```

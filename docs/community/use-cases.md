@@ -56,7 +56,7 @@ There is no hosted account to sign into and no marketplace of hosted connectors.
 
 Exact dollar amounts require a billing-readable key. Without one, the cost label shows as empty, unknown, or unavailable. Treat a blank as unknown, not as zero.
 
-**From the terminal:** Run `make metatron`, then use `/projects`, `/ops budget`, `/ops receipts`, `/describe`, and `/op` to make a single read. Copy the operation id from the live list that `/ops` prints. The terminal reads the same API records; it does not keep a separate ledger. See [Ask the terminal](walkthroughs.md#ask-the-terminal) for the full sequence.
+**From the terminal:** Run `make metatron`, then use `/projects`, `/api budget` or `/api receipts` for a numbered list of those operations, and `/api NUMBER` followed by `/api run NUMBER` to make a single read. `/ops`, `/describe`, and `/op` do the same by operation id. Copy the number or id from the live list the terminal prints. The terminal reads the same API records; it does not keep a separate ledger. See [Ask the terminal](walkthroughs.md#ask-the-terminal) for the full sequence.
 
 **What BOSS records:** Nothing new. Status reads return the budget reservations and receipts the API already stored, without creating a plan or a decision.
 

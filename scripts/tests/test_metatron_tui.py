@@ -1350,3 +1350,184 @@ def test_the_rich_terminal_stays_a_thin_client_of_the_one_pipeline():
     assert "/v1/engine/agent/chat" not in client
     assert client.count('"/v1/metatron/session"') == 1
     assert client.count('"/v1/engine/agent/action"') == 1
+
+
+# ── /api browses the API instead of demanding a route (BOSSAPP-761 follow-on) ────────────────
+
+def test_api_browses_and_picks_operations_without_losing_the_raw_path_form():
+    """Plain /api browses; METHOD-first still sends an operator-built path."""
+    assert tui.parse_line("/api").kind == "api_menu"
+    assert tui.parse_line("/api").message == ""
+    search = tui.parse_line("/api tasks --page 2")
+    assert search.kind == "api_menu"
+    assert search.message == "tasks --page 2"
+    assert tui.parse_line("/api list budget").message == "budget"
+    pick = tui.parse_line("/api 7")
+    assert pick.kind == "api_template"
+    assert pick.message == "7"
+    run = tui.parse_line('/api run 7 {"body":{"title":"Plan"}}')
+    assert run.kind == "api_run"
+    assert run.message == "7"
+    assert run.body == {"body": {"title": "Plan"}}
+    assert tui.parse_line("/api run 7").body == {}
+    raw = tui.parse_line('/api POST /v1/metatron/watch {"project_id":"boss-dogfood"}')
+    assert raw.kind == "api"
+    assert (raw.method, raw.path) == ("POST", "/v1/metatron/watch")
+    for line in (
+        "/api 0",
+        '/api 7 {"body":{}}',
+        "/api run",
+        "/api run 7 {bad-json}",
+        '/api run 7 {"unknown":{}}',
+        "/api POST",
+        "/api /v1/tasks",
+        "/api GET https://evil.example/v1/tasks",
+    ):
+        assert tui.parse_line(line).kind == "error", line
+
+
+def test_api_menu_lists_numbered_operations_with_a_template_for_the_pick():
+    opener = FakeOpener([(200, _catalog()), (200, _openapi())])
+    client = tui.MetatronClient(_config(), urlopen=opener)
+    domains_command = tui.parse_line("/api")
+    domains = client.dispatch(domains_command)
+    assert domains["view"] == "domains"
+    assert [item["id"] for item in domains["domains"]] == ["core", "system"]
+    domains_rendered = client.render(domains_command, domains)
+    assert "core" in domains_rendered and "/api DOMAIN" in domains_rendered
+    assert client.dispatch(tui.parse_line("/api --page 2"))["__command_error__"] is True
+
+    menu_command = tui.parse_line("/api *")
+    menu = client.dispatch(menu_command)
+    assert menu["view"] == "operations"
+    assert [item["index"] for item in menu["operations"]] == [1, 2, 3, 4]
+    assert [(item["method"], item["path"]) for item in menu["operations"]] == [
+        ("GET", "/v1/tasks"),
+        ("POST", "/v1/tasks"),
+        ("GET", "/v1/tasks/{task_id}"),
+        ("GET", "/v1/undocumented"),
+    ]
+    assert menu["domains"] == [{"id": "core", "count": 4}]
+    rendered = client.render(menu_command, menu)
+    assert "   1  GET    /v1/tasks" in rendered
+    assert "/api NUMBER" in rendered
+    assert SECRET not in rendered
+
+    pick_command = tui.parse_line("/api 3")
+    pick = client.dispatch(pick_command)
+    assert (pick["method"], pick["path"]) == ("GET", "/v1/tasks/{task_id}")
+    assert pick["path_template"] == "/v1/tasks/<task_id>?project_id=boss-dogfood"
+    assert pick["api_example"] == "/api GET /v1/tasks/<task_id>?project_id=boss-dogfood"
+    assert pick["run_command"] == (
+        '/api run 3 {"path":{"task_id":"<task_id>"},"query":{"project_id":"boss-dogfood"}}'
+    )
+    rendered_pick = client.render(pick_command, pick)
+    assert "Path template:" in rendered_pick
+    assert "GET /v1/tasks/<task_id>?project_id=boss-dogfood" in rendered_pick
+    assert "  /api run 3 {" in rendered_pick
+
+    create = client.dispatch(tui.parse_line("/api 2"))
+    assert create["path_template"] == "/v1/tasks"
+    assert create["api_example"] == (
+        '/api POST /v1/tasks {"project_id":"boss-dogfood","title":"<title>"}'
+    )
+    assert len(opener.calls) == 2  # The chooser reuses one catalog and schema read.
+
+
+def test_api_pick_rejects_a_number_outside_the_listing_and_explains_catalog_only_rows():
+    opener = FakeOpener([(200, _catalog()), (200, _openapi())])
+    client = tui.MetatronClient(_config(), urlopen=opener)
+    narrowed = client.dispatch(tui.parse_line("/api tasks"))
+    assert narrowed["count"] == 3
+    out_of_range = client.dispatch(tui.parse_line("/api 4"))
+    assert out_of_range["__command_error__"] is True
+    assert "pick 1-3" in out_of_range["message"]
+    assert client.dispatch(tui.parse_line("/api nothing-matches-this"))["__command_error__"] is True
+
+    everything = client.dispatch(tui.parse_line("/api *"))
+    catalog_only = next(
+        item["index"] for item in everything["operations"] if item["path"] == "/v1/undocumented"
+    )
+    template = client.dispatch(tui.parse_line(f"/api {catalog_only}"))
+    assert template["terminal_invokable"] is False
+    assert template["api_example"] == "/api GET /v1/undocumented"
+    assert template["run_command"] is None
+    refused = client.dispatch(tui.parse_line(f"/api run {catalog_only}"))
+    assert refused["__command_error__"] is True
+    assert "/api GET /v1/undocumented" in refused["message"]
+
+
+def test_api_run_invokes_the_picked_row_with_the_selected_project():
+    opener = FakeOpener([
+        (200, _catalog()),
+        (200, _openapi()),
+        (200, {"id": "task-9", "title": "Plan launch"}),
+    ])
+    client = tui.MetatronClient(_config(), urlopen=opener)
+    menu = client.dispatch(tui.parse_line("/api tasks"))
+    create = next(item["index"] for item in menu["operations"] if item["method"] == "POST")
+    result = client.dispatch(tui.parse_line(f'/api run {create} {{"body":{{"title":"Plan launch"}}}}'))
+    assert result["id"] == "task-9"
+    assert opener.calls[2]["method"] == "POST"
+    assert opener.calls[2]["url"].endswith("/v1/tasks")
+    assert opener.calls[2]["headers"]["x-boss-api-key"] == SECRET
+    assert opener.calls[2]["body"] == {"project_id": "boss-dogfood", "title": "Plan launch"}
+
+
+def test_api_numbers_stay_stable_across_pages_and_work_without_a_prior_listing():
+    paths = {f"/v1/records/{index}": {"get": {"summary": f"Read record {index}"}} for index in range(60)}
+    routes = [{"method": "GET", "path": path} for path in paths]
+    catalog = {"domains": [{"id": "core", "title": "Core", "route_count": 60, "routes": routes}]}
+    opener = FakeOpener([(200, catalog), (200, {"paths": paths})])
+    client = tui.MetatronClient(_config(), urlopen=opener)
+    first = client.dispatch(tui.parse_line("/api *"))
+    assert (first["count"], first["pages"]) == (60, 3)
+    assert [item["index"] for item in first["operations"]] == list(range(1, 26))
+    assert first["next_page_command"] == "/api * --page 2"
+    second = client.dispatch(tui.parse_line("/api * --page 2"))
+    assert [item["index"] for item in second["operations"]] == list(range(26, 51))
+    expected = {item["index"]: item["path"] for item in second["operations"]}
+    assert client.dispatch(tui.parse_line("/api 30"))["path"] == expected[30]
+    assert client.dispatch(tui.parse_line("/api 61"))["__command_error__"] is True
+
+    # A one-shot pick with no prior listing numbers the whole API the same way.
+    fresh = tui.MetatronClient(_config(), urlopen=FakeOpener([(200, catalog), (200, {"paths": paths})]))
+    assert fresh.dispatch(tui.parse_line("/api 30"))["path"] == expected[30]
+
+
+def test_ops_rows_carry_the_same_pick_numbers_as_the_api_chooser():
+    opener = FakeOpener([(200, _catalog()), (200, _openapi())])
+    client = tui.MetatronClient(_config(), urlopen=opener)
+    command = tui.parse_line("/ops tasks")
+    found = client.dispatch(command)
+    assert [item["index"] for item in found["operations"]] == [1, 2, 3]
+    rendered = client.render(command, found)
+    assert "   1  get_v1_tasks_339c8c60  GET /v1/tasks" in rendered
+    assert "/api NUMBER" in rendered
+    picked = client.dispatch(tui.parse_line("/api 1"))
+    assert (picked["method"], picked["path"]) == ("GET", "/v1/tasks")
+
+
+def test_describe_shows_the_path_template_and_a_raw_api_example():
+    opener = FakeOpener([(200, _openapi())])
+    client = tui.MetatronClient(_config(), urlopen=opener)
+    alias = next(
+        record["operation_id"] for record in tui.operation_records(_openapi())
+        if record["path"] == "/v1/tasks" and record["method"] == "GET"
+    )
+    command = tui.parse_line(f"/describe {alias}")
+    payload = client.dispatch(command)
+    assert payload["path_template"] == "/v1/tasks?project_id=boss-dogfood"
+    assert payload["api_example"] == "/api GET /v1/tasks?project_id=boss-dogfood"
+    assert payload["parameter_fields"] == [
+        {"in": "query", "name": "project_id", "required": True, "type": "composite"}]
+    rendered = client.render(command, payload)
+    assert "Path template:" in rendered
+    assert "Copy one of these and replace every <value>:" in rendered
+    assert SECRET not in rendered
+
+
+def test_every_api_form_is_in_the_command_list_the_help_and_completion_read():
+    row = next(entry for entry in tui.SLASH_COMMANDS if entry[0] == "/api")
+    assert "N" in row[1] and "run N" in row[1] and "METHOD /v1/path" in row[1]
+    assert "/api NUMBER" in tui.HELP_TEXT and "/api run NUMBER" in tui.HELP_TEXT

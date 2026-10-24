@@ -5,7 +5,7 @@ BOSS has one HTTP control plane. The Metatron terminal and the API-backed MCP se
 | Interface | Discover operations | Invoke an operation | Start on an installed Community VM |
 |---|---|---|---|
 | HTTP API | `/openapi.json` and `/v1/meta/api-catalog` | HTTP method and `/v1/` path | Use a project-bound API key; see [terminal and API access](TERMINAL_API.md). |
-| Metatron terminal | `/projects`, `/ops * --page N`, `/describe ID`, `/coverage` | `/op ID {"path":{},"query":{},"body":{}}` | `make metatron` |
+| Metatron terminal | `/projects`, `/api [SEARCH]`, `/api NUMBER`, `/ops * --page N`, `/describe ID`, `/coverage` | `/api run NUMBER {...}` or `/op ID {"path":{},"query":{},"body":{}}` | `make metatron` |
 | API-backed MCP | `api_find_operations`, `api_describe_operation` | `api_read_operation`, `api_write_operation`; sensitive actions use `api_request_confirmation` | `make mcp-setup`, then `make mcp`; see [MCP access](MCP.md). |
 
 ## One operation, three surfaces

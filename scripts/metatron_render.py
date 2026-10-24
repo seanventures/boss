@@ -693,6 +693,76 @@ def alerts_table(payload: Mapping[str, Any]) -> RenderableType:
     return table if alerts else Group(Text(title, style="bold"), Text("No alerts.", style="boss.dim"))
 
 
+def api_menu(payload: Mapping[str, Any]) -> RenderableType:
+    """The chooser /api draws: the API's domains, or one numbered listing of operations."""
+    if payload.get("view") == "domains":
+        table = _table("The API on this install", "Domain", "Routes", "")
+        for domain in payload.get("domains") or []:
+            table.add_row(Text(str(domain.get("id")), style="boss.agent"),
+                          str(domain.get("route_count")), str(domain.get("title") or ""))
+        return Group(table, Text(f"project {payload.get('active_project_id')}", style="boss.dim"),
+                     Text(str(payload.get("hint") or ""), style="boss.dim"))
+    title = (f"{payload.get('count')} operations for {payload.get('search')!r} · page "
+             f"{payload.get('page')}/{payload.get('pages')}")
+    table = _table(title, "#", "Method", "Path", "Summary")
+    for operation in payload.get("operations") or []:
+        summary = str(operation.get("summary") or "")
+        if not operation.get("terminal_invokable"):
+            summary += f"  [{operation.get('limitation') or 'not addressable by /op'}]"
+        table.add_row(Text(str(operation.get("index") or ""), style="boss.decide"),
+                      str(operation.get("method")),
+                      Text(str(operation.get("path")), style="boss.agent"), summary)
+    hint = Text(str(payload.get("hint") or ""), style="boss.dim")
+    if payload.get("next_page_command"):
+        hint = Text(f"{payload['next_page_command']} · ", style="boss.dim").append_text(hint)
+    return Group(table, hint)
+
+
+def api_card(payload: Mapping[str, Any], *, plain: str = "") -> RenderableType:
+    """One operation, picked: what it takes, its path template, and the lines to copy."""
+    heading = Text(f"{payload.get('method')} {payload.get('path')}", style="bold")
+    if payload.get("operation_id"):
+        heading.append(f"\n{payload['operation_id']}", style="boss.dim")
+    parts: list[RenderableType] = [heading]
+    for key in ("summary", "description"):
+        if payload.get(key):
+            parts.append(Text(str(payload[key]).strip()))
+    fields = Table.grid(padding=(0, 2))
+    fields.add_column(style="boss.agent", no_wrap=True)
+    fields.add_column(overflow="fold")
+    for parameter in payload.get("parameter_fields") or []:
+        fields.add_row(f"{parameter.get('in')} {parameter.get('name')}",
+                       ", ".join(v for v in (str(parameter.get("type") or ""),
+                                             "required" if parameter.get("required") else "optional") if v))
+    for field in payload.get("body_fields") or []:
+        detail = [str(field.get("type") or ""), "required" if field.get("required") else "optional"]
+        if field.get("enum"):
+            detail.append(f"choices={field['enum']}")
+        if field.get("description"):
+            detail.append(str(field["description"]))
+        fields.add_row(f"body {field.get('name')}", ", ".join(d for d in detail if d))
+    if fields.row_count:
+        parts += [Text(""), fields]
+    if payload.get("auto_filled_body_fields"):
+        parts.append(Text("The selected project is inserted when the body omits project_id.",
+                          style="boss.dim"))
+    if not payload.get("terminal_invokable"):
+        parts.append(Text(f"Limit: {payload.get('limitation')}", style="boss.decide"))
+    if payload.get("path_template"):
+        parts += [Text(""), Text("Path template", style="boss.dim"),
+                  Text(f"{payload.get('method')} {payload['path_template']}", style="boss.agent")]
+    lines = [line for line in (payload.get("run_command"), payload.get("example"),
+                               payload.get("api_example")) if line]
+    if lines:
+        parts.append(Text(""))
+        parts.append(Text("Copy one of these and replace every <value>", style="boss.dim"))
+        parts += [_inline_code(line) for line in lines]
+    parts += [Text(""), Text(str(payload.get("access_note") or ""), style="boss.dim")]
+    title = Text(f"[{payload['index']}] operation", style="boss.agent") if payload.get("index") else None
+    return Panel(Group(*parts), title=title, title_align="left", border_style="boss.hex",
+                 box=box.ROUNDED, padding=(0, 1))
+
+
 def ops_table(payload: Mapping[str, Any]) -> RenderableType:
     if "domains" in payload:
         table = _table(f"API domains · project {payload.get('active_project_id')}", "Domain", "Routes", "")
@@ -701,15 +771,16 @@ def ops_table(payload: Mapping[str, Any]) -> RenderableType:
                           str(domain.get("title") or ""))
         return Group(table, Text(str(payload.get("hint") or ""), style="boss.dim"))
     table = _table(f"{payload.get('count')} matches for {payload.get('search')!r} · page "
-                   f"{payload.get('page')}/{payload.get('pages')}", "Operation", "Method", "Path", "Summary")
+                   f"{payload.get('page')}/{payload.get('pages')}", "#", "Operation", "Method", "Path", "Summary")
     for operation in payload.get("operations") or []:
         alias = operation.get("operation_id") or f"/api {operation['method']} {operation['path']}"
         summary = str(operation.get("summary") or "")
         if not operation.get("terminal_invokable"):
             summary += f"  [{operation.get('limitation') or 'not addressable by /op'}]"
-        table.add_row(Text(str(alias), style="boss.agent"), str(operation.get("method")),
+        table.add_row(Text(str(operation.get("index") or ""), style="boss.decide"),
+                      Text(str(alias), style="boss.agent"), str(operation.get("method")),
                       str(operation.get("path")), summary)
-    hint = "/describe OPERATION_ID before /op"
+    hint = "/api NUMBER for the card, or /describe OPERATION_ID before /op"
     if payload.get("page", 1) < payload.get("pages", 1):
         hint = f"Next: /ops {payload.get('search')} --page {payload.get('page', 1) + 1} · " + hint
     return Group(table, Text(hint, style="boss.dim"))
@@ -871,7 +942,7 @@ def result(client: Any, command: Any, payload: Any, *, commands: Iterable[tuple[
              "decision": decision_card, "decision_action": decision_card, "projects": projects_table,
              "agent": agents_table, "model": models_view, "runs": runs_table, "run": run_view,
              "alerts": alerts_table, "ops": ops_table, "status": status_panel, "thread": thread_view,
-             "expand": expanded}
+             "expand": expanded, "api_menu": api_menu, "api_template": api_card}
     if kind in views and isinstance(payload, dict):
         try:
             return views[kind](payload)

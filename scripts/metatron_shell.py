@@ -265,7 +265,8 @@ class Shell:
         self.follows: dict[str, str] = {}
         self.context: dict[str, Any] = {"project": client.project_id, "agent": "BOSS",
                                         "model": "", "budget": None}
-        self.cache: dict[str, list[tuple[str, str]]] = {"/agent": [], "/project": [], "/model": []}
+        self.cache: dict[str, list[tuple[str, str]]] = {"/agent": [], "/project": [], "/model": [],
+                                                        "/api": []}
         self.done = False
         #: The prompt line stays in the scrollback on a real terminal; tests and the demo
         #: cast, which have no prompt line, echo it.
@@ -351,7 +352,8 @@ class Shell:
         return FormattedText(bar)
 
     def values(self, command: str) -> list[tuple[str, str]]:
-        fixed = {"/decisions": [("open", "pending and delegated"), ("all", "every status")],
+        fixed = {"/api": [("run", "invoke the row you picked"), ("*", "every operation")],
+                 "/decisions": [("open", "pending and delegated"), ("all", "every status")],
                  "/decision": [("approve", "approve with a note"), ("reject", "reject with a note")],
                  "/alerts": [(s, "") for s in self.tui.ALERT_STATES],
                  "/drive": [("auto", "apply validated moves"), ("go", "same as auto")]}
@@ -359,6 +361,8 @@ class Shell:
             return [("auto", "back to BOSS")] + self.cache["/agent"]
         if command in {"/model", "/models"}:
             return [("auto", "let the router choose")] + self.cache["/model"]
+        if command == "/api":
+            return fixed["/api"] + self.cache.get("/api", [])
         return self.cache.get(command) or fixed.get(command, [])
 
     # ── Startup ──────────────────────────────────────────────────────────────────────────────
@@ -475,6 +479,36 @@ class Shell:
                                 initial=current)
             if chosen is not None:
                 self.start(self.tui.Command(kind="project", message=str(chosen.value)))
+            return True
+        if command.kind == "api_menu" and bare:
+            # NOBODY TYPES A ROUTE THEY HAVE NOT SEEN. The domains, then that domain's
+            # operations, both filterable; the chosen row is sent as /api NUMBER.
+            listed = await loop.run_in_executor(None, self.client.api_menu, "")
+            if not isinstance(listed, dict) or listed.get("view") != "domains":
+                self.print(self.render.result(self.client, command, listed))
+                return True
+            self.cache["/api"] = [(str(d.get("id")), str(d.get("title") or ""))
+                                  for d in listed.get("domains") or [] if d.get("id")]
+            items = [PickItem(d.get("id"), str(d.get("id")),
+                              f"{d.get('route_count')} routes · {str(d.get('title') or '')}".rstrip(" ·"))
+                     for d in listed.get("domains") or [] if d.get("id")]
+            chosen = await pick(items, title="Which part of the API?", input=self.input,
+                                output=self.output)
+            if chosen is None:
+                return True
+            rows = await loop.run_in_executor(None, self.client.api_rows, str(chosen.value))
+            if not isinstance(rows, list):
+                self.print(self.render.result(self.client, command, rows))
+                return True
+            operations = [
+                PickItem(operation["index"],
+                         f"{operation['index']}. {operation['method']} {operation['path']}",
+                         str(operation.get("summary") or operation.get("limitation") or ""))
+                for operation in rows]
+            picked = await pick(operations, title=f"{chosen.value}: which operation?",
+                                input=self.input, output=self.output)
+            if picked is not None:
+                self.start(self.tui.Command(kind="api_template", message=str(picked.value)))
             return True
         if command.kind == "model" and bare:
             listed = await loop.run_in_executor(None, self.client.models)

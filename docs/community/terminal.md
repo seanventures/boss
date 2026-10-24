@@ -19,6 +19,10 @@ Set `BOSS_API_URL` and `BOSS_PROJECT_ID` (sourcing `boss-community.env.sh` does)
 !!! warning
     Load the API key from the environment. Never pass it on the command line.
 
+## Find an operation without knowing a route
+
+`/api` lists the API's capability domains — on a rich terminal it opens a picker for a domain and then an operation. `/api DOMAIN` (or `/api *`) lists the operations in a numbered list, and `/api NUMBER` shows that operation's path template with ready-to-edit examples. `/api run NUMBER [JSON]` then sends it.
+
 ## Learn the commands
 
 - [Terminal and API access](TERMINAL_API.md) is the command reference.

@@ -29,6 +29,7 @@ import json
 import os
 import re
 import sys
+import textwrap
 from pathlib import Path
 from dataclasses import dataclass
 from typing import Any, Mapping, Optional, TextIO
@@ -83,9 +84,12 @@ HELP_TEXT = (
     "Slash commands: /projects  /project [ID]  /quit\n"
     "Work: /tasks [PAGE]  /task ID  /task create DEDUPE_KEY TITLE\n"
     "Decisions: /decisions [open|all] [PAGE]  /decision ID  /decision approve ID NOTE  /decision reject ID NOTE\n"
-    "API commands: /ops [domain or search|*] [--page N]  /describe OPERATION_ID  /op OPERATION_ID [JSON]  /coverage\n"
-    "Fallback: /api METHOD /v1/path [JSON]\n"
-    "Use /ops to discover live API operations; /op accepts JSON with path, query, and body keys.\n"
+    "Browse the API: /api [domain or search|*] [--page N]  /api NUMBER  /api run NUMBER [JSON]\n"
+    "By operation ID: /ops [domain or search|*] [--page N]  /describe OPERATION_ID  /op OPERATION_ID [JSON]  /coverage\n"
+    "Raw path: /api METHOD /v1/path [JSON]\n"
+    "/api with no method lists API domains; /api DOMAIN or /api * lists numbered operations.\n"
+    "/api NUMBER shows one operation's path template and a ready example to copy.\n"
+    "/api run NUMBER and /op accept JSON with path, query, and body keys.\n"
     "For typed JSON writes, /op inserts the selected project_id when the body omits it.\n"
     "The API enforces project, permission, edition, approval, budget, and receipt rules.\n"
     "/overwatch runs observe→measure→validate→apply-safe→verify.\n"
@@ -121,7 +125,7 @@ SLASH_COMMANDS: tuple[tuple[str, str, str], ...] = (
     ("/ops", "[TERM] [--page N]", "Search the live API operations"),
     ("/describe", "OPERATION_ID", "An operation's parameters and body"),
     ("/op", "OPERATION_ID [JSON]", "Invoke an operation"),
-    ("/api", "METHOD /v1/path [JSON]", "Call a local /v1/ route"),
+    ("/api", "[TERM] | N | run N [JSON] | METHOD /v1/path [JSON]", "Browse the API and call an operation"),
     ("/coverage", "", "Live OpenAPI against the mounted routes"),
     ("/clear", "", "Clear the screen"),
     ("/quit", "", "Leave Metatron"),
@@ -161,6 +165,8 @@ ALERT_STATES = ("firing", "resolved", "all")
 CHECK_TIMEOUT_SECONDS = 5.0
 PATH_PARAMETER = re.compile(r"\{([A-Za-z_][A-Za-z_0-9]*)(?::path)?\}")
 SIMPLE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
+#: A chooser pick: a row number from the last /api or /ops listing, or an operation ID.
+MENU_SELECTOR = re.compile(r"(?:[0-9]{1,6}|[A-Za-z][A-Za-z0-9._:-]{0,127})\Z")
 
 
 def valid_v1_path(path: str) -> bool:
@@ -290,6 +296,72 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
     return Config(api_url=api_url, api_key=api_key, project_id=project_id, actor=actor)
 
 
+def _parse_op_arguments(text: str) -> tuple[Any, str]:
+    """Shared JSON argument parsing for /op and /api run."""
+    try:
+        arguments = json.loads(text)
+    except json.JSONDecodeError:
+        return None, "arguments must be valid JSON"
+    if not isinstance(arguments, dict) or set(arguments) - {"path", "query", "body"}:
+        return None, "JSON must contain only path, query, and body keys"
+    return arguments, ""
+
+
+def parse_api_line(raw: str) -> Command:
+    """Route /api to the chooser, one operation's template, a run, or a written-out path.
+
+    NOBODY KNOWS THE ROUTE TABLE. /api used to demand a method and a path, which only
+    worked if you already knew the route; the plain forms browse it and print the
+    template. METHOD-first keeps the written-out call exactly as it was.
+    """
+    rest = raw.partition(" ")[2].strip()
+    if not rest:
+        return Command(kind="api_menu", message="")
+    parts = rest.split(None, 2)
+    head = parts[0]
+    if head.lower() == "list":
+        return Command(kind="api_menu", message=rest.partition(" ")[2].strip())
+    if head.lower() == "run":
+        if len(parts) < 2 or not MENU_SELECTOR.fullmatch(parts[1]):
+            return Command(kind="error", message="usage: /api run NUMBER [JSON], with NUMBER from /api")
+        arguments: Any = {}
+        if len(parts) == 3:
+            arguments, error = _parse_op_arguments(parts[2])
+            if error:
+                return Command(kind="error", message=f"/api run {error}")
+        return Command(kind="api_run", message=parts[1], body=arguments)
+    if re.fullmatch(r"[0-9]{1,6}", head):
+        if len(parts) > 1:
+            return Command(
+                kind="error",
+                message=f"usage: /api {head} to see the template, or /api run {head} [JSON] to invoke it",
+            )
+        if head == "0":
+            return Command(kind="error", message="/api numbers start at 1; run /api to list operations")
+        return Command(kind="api_template", message=head)
+    if head.upper() in HTTP_METHODS:
+        if len(parts) < 2:
+            return Command(
+                kind="error",
+                message="usage: /api METHOD /v1/path [JSON], or /api SEARCH to browse operations",
+            )
+        method, path = head.upper(), parts[1]
+        if not valid_v1_path(path):
+            return Command(kind="error", message="/api path must be a local /v1/ route")
+        body = None
+        if len(parts) == 3:
+            if method == "GET":
+                return Command(kind="error", message="GET requests cannot include a JSON body")
+            try:
+                body = json.loads(parts[2])
+            except json.JSONDecodeError:
+                return Command(kind="error", message="/api body must be valid JSON")
+        return Command(kind="api", method=method, path=path, body=body)
+    if parts[0].startswith("/") or (len(parts) > 1 and parts[1].startswith("/")):
+        return Command(kind="error", message="/api method must be GET, POST, PUT, PATCH, or DELETE")
+    return Command(kind="api_menu", message=rest)
+
+
 def parse_line(line: str) -> Command:
     raw = (line or "").strip()
     if not raw:
@@ -385,31 +457,12 @@ def parse_line(line: str) -> Command:
             return Command(kind="error", message="usage: /op OPERATION_ID [JSON]")
         arguments: Any = {}
         if len(parts) == 3:
-            try:
-                arguments = json.loads(parts[2])
-            except json.JSONDecodeError:
-                return Command(kind="error", message="/op arguments must be valid JSON")
-        if not isinstance(arguments, dict) or set(arguments) - {"path", "query", "body"}:
-            return Command(kind="error", message="/op JSON must contain only path, query, and body keys")
+            arguments, error = _parse_op_arguments(parts[2])
+            if error:
+                return Command(kind="error", message=f"/op {error}")
         return Command(kind="op", message=parts[1], body=arguments)
     if lowered == "/api" or lowered.startswith("/api "):
-        parts = raw.split(None, 3)
-        if len(parts) < 3:
-            return Command(kind="error", message="usage: /api METHOD /v1/path [JSON]")
-        method, path = parts[1].upper(), parts[2]
-        if method not in HTTP_METHODS:
-            return Command(kind="error", message="/api method must be GET, POST, PUT, PATCH, or DELETE")
-        if not valid_v1_path(path):
-            return Command(kind="error", message="/api path must be a local /v1/ route")
-        body = None
-        if len(parts) == 4:
-            if method == "GET":
-                return Command(kind="error", message="GET requests cannot include a JSON body")
-            try:
-                body = json.loads(parts[3])
-            except json.JSONDecodeError:
-                return Command(kind="error", message="/api body must be valid JSON")
-        return Command(kind="api", method=method, path=path, body=body)
+        return parse_api_line(raw)
     # A CAPTAIN POWER IS TYPED AS A COMMAND, NEVER READ OUT OF A SENTENCE. Bare "go" used to
     # apply drive moves, a factory job among them; it is a word the agent hears now (BOSSAPP-759).
     if lowered == "/go":
@@ -780,6 +833,51 @@ def format_action_result(payload: Mapping[str, Any]) -> str:
     return f"{tool}: done." + (f"\n{said}" if said else "")
 
 
+def format_operation_rows(operations: Any) -> list[str]:
+    """Numbered chooser rows, grouped by domain. The number is what /api NUMBER picks."""
+    lines: list[str] = []
+    domain = None
+    for operation in operations:
+        if operation.get("domain") and operation["domain"] != domain:
+            domain = operation["domain"]
+            lines.append(f"{domain}:")
+        index = operation.get("index")
+        marker = f"{index:>4}  " if index else "      "
+        lines.append(f"{marker}{operation['method']:<6} {operation['path']}")
+        summary = str(operation.get("summary") or "").strip()
+        if summary:
+            lines.append(f"        {summary}")
+        if not operation["terminal_invokable"]:
+            lines.append(f"        Limit: {operation.get('limitation') or 'not addressable by /op'}")
+    return lines
+
+
+def format_api_menu(payload: Mapping[str, Any]) -> str:
+    """The chooser: the API's domains, or one listing of numbered operations."""
+    if payload.get("view") == "domains":
+        lines = [f"BOSS API domains on this install (project {payload['active_project_id']}):"]
+        for domain in payload["domains"]:
+            lines.append(
+                f"  {domain['id']:<18} {domain['route_count']:>4}  {domain.get('title') or ''}".rstrip()
+            )
+        lines.append(textwrap.fill(str(payload["hint"]), width=78))
+        return "\n".join(lines)
+    noun = "operation" if payload["count"] == 1 else "operations"
+    lines = [
+        f"{payload['count']} {noun} for {payload['search']!r} "
+        f"(page {payload['page']}/{payload['pages']}), project {payload['active_project_id']}:"
+    ]
+    if payload["domains"]:
+        domains = "  ".join(f"{item['id']}({item['count']})" for item in payload["domains"])
+        lines.append(textwrap.fill(f"Domains: {domains}", width=78, subsequent_indent="         "))
+    lines.extend(format_operation_rows(payload["operations"]))
+    if payload.get("next_page_command"):
+        lines.append(f"Next: {payload['next_page_command']}")
+    lines.append(str(payload["hint"]))
+    lines.append("Narrow the list with /api SEARCH, or send a raw call with /api METHOD /v1/path [JSON].")
+    return "\n".join(lines)
+
+
 def format_ops(payload: Mapping[str, Any]) -> str:
     if "domains" in payload:
         lines = [f"Project: {payload['active_project_id']}", "API domains:"]
@@ -793,23 +891,27 @@ def format_ops(payload: Mapping[str, Any]) -> str:
     ]
     for operation in payload["operations"]:
         alias = operation["operation_id"] or f"/api {operation['method']} {operation['path']}"
-        lines.append(f"  {alias}  {operation['method']} {operation['path']}")
+        index = operation.get("index")
+        marker = f"{index:>4}  " if index else "  "
+        lines.append(f"{marker}{alias}  {operation['method']} {operation['path']}")
         summary = str(operation.get("summary") or "").strip()
         if summary:
-            lines.append(f"    {summary}")
+            lines.append(f"        {summary}")
         if not operation["terminal_invokable"]:
-            lines.append(f"    Limit: {operation.get('limitation') or 'not addressable by /op'}")
+            lines.append(f"        Limit: {operation.get('limitation') or 'not addressable by /op'}")
     if payload["page"] < payload["pages"]:
         lines.append(f"Next: /ops {payload['search']} --page {payload['page'] + 1}")
-    lines.append("Use /describe OPERATION_ID to inspect fields before /op.")
+    lines.append("Use /api NUMBER or /describe OPERATION_ID to see fields and a template before invoking.")
     return "\n".join(lines)
 
 
 def format_description(payload: Mapping[str, Any]) -> str:
-    lines = [
-        f"{payload['method']} {payload['path']}",
-        f"Operation: {payload['operation_id']}",
-    ]
+    heading = f"{payload['method']} {payload['path']}"
+    if payload.get("index"):
+        heading = f"[{payload['index']}] {heading}"
+    lines = [heading]
+    if payload.get("operation_id"):
+        lines.append(f"Operation: {payload['operation_id']}")
     if payload.get("summary"):
         lines.append(str(payload["summary"]))
     if payload.get("description"):
@@ -838,7 +940,18 @@ def format_description(payload: Mapping[str, Any]) -> str:
         lines.append("The selected project_id is inserted into a JSON body when omitted.")
     if not payload["terminal_invokable"]:
         lines.append(f"Limit: {payload['limitation']}")
-    lines.extend((f"Example: {payload['example']}", str(payload["access_note"])))
+    if payload.get("path_template"):
+        lines.append("Path template:")
+        lines.append(f"  {payload['method']} {payload['path_template']}")
+    examples = [
+        line for line in (
+            payload.get("run_command"), payload.get("example"), payload.get("api_example"),
+        ) if line
+    ]
+    if examples:
+        lines.append("Copy one of these and replace every <value>:")
+        lines.extend(f"  {line}" for line in examples)
+    lines.append(str(payload["access_note"]))
     return "\n".join(lines)
 
 
@@ -1056,6 +1169,19 @@ def _body_fields(document: Mapping[str, Any], request_body: Mapping[str, Any]) -
     return fields
 
 
+def _path_template(path: str) -> str:
+    """Turn {task_id} into <task_id> so the operator sees what to replace."""
+    return PATH_PARAMETER.sub(lambda match: f"<{match.group(1)}>", path)
+
+
+def _api_example(method: str, path: str, body: Any) -> str:
+    """A written-out /api line the operator can copy, edit, and send."""
+    line = f"/api {method} {path}"
+    if method != "GET" and body is not None:
+        line += f" {json.dumps(body, separators=(',', ':'))}"
+    return line
+
+
 def _request_path(
     operation: Mapping[str, Any], arguments: Mapping[str, Any], project_id: str,
     *, catchall_parameters: set[str] | None = None,
@@ -1155,6 +1281,9 @@ class MetatronClient:
         self._injected_urlopen = urlopen
         self._openapi_document: dict[str, Any] | None = None
         self._api_catalog: dict[str, Any] | None = None
+        #: The listing a row number refers to, so /api NUMBER is never ambiguous.
+        self._menu: list[dict[str, Any]] | None = None
+        self._menu_search: str = "*"
         #: WHICH AGENT IS BEING ASKED (AgentChatRequest.role): unset is BOSS-in-general.
         self.role: Optional[str] = None
         self.role_name: str = ""
@@ -1685,34 +1814,176 @@ class MetatronClient:
             for route in domain.get("routes", []) if isinstance(route, dict)
         }
 
-    def ops(self, term: str = "") -> dict[str, Any]:
-        catalog = self._catalog()
-        if catalog.get("__http_error__") or catalog.get("__command_error__"):
-            return catalog
+    def _split_page(self, term: str, usage: str) -> tuple[str, int] | dict[str, Any]:
         page = 1
         if "--page" in term:
             match = re.search(r"(?:^|\s)--page(?:=|\s+)([1-9][0-9]{0,5})\s*$", term)
             if not match:
-                return _command_error("usage: /ops [domain or search|*] [--page N], with N >= 1")
+                return _command_error(usage)
             page = int(match.group(1))
             term = term[:match.start()].strip()
+        return term, page
+
+    def _remember_menu(self, term: str, matches: list[dict[str, Any]]) -> None:
+        """A row number addresses the listing the person just saw, nothing else."""
+        self._menu = matches
+        self._menu_search = term or "*"
+
+    def _menu_entry(self, selector: str) -> dict[str, Any]:
+        """Resolve a row number from the last listing, or an operation ID."""
+        if self._menu is None:
+            matches = self._match_operations("")
+            if isinstance(matches, dict):
+                return matches
+            self._remember_menu("", matches)
+        menu = self._menu or []
+        if not menu:
+            return _command_error("no operations are listed; run /api to list the API")
+        if re.fullmatch(r"[0-9]{1,6}", selector):
+            index = int(selector)
+            if not 1 <= index <= len(menu):
+                return _command_error(
+                    f"pick 1-{len(menu)} from the {self._menu_search!r} listing, "
+                    "or run /api [SEARCH] to list again"
+                )
+            return menu[index - 1]
+        entry = next((item for item in menu if item["operation_id"] == selector), None)
+        if entry is None:
+            return _command_error(
+                f"{selector} is not in the {self._menu_search!r} listing; "
+                "use /api [SEARCH] to list, then /api NUMBER"
+            )
+        return entry
+
+    def api_rows(self, term: str = "") -> list[dict[str, Any]] | dict[str, Any]:
+        """Every match for one search, numbered and remembered. The rich picker's source."""
+        matches = self._match_operations(term)
+        if isinstance(matches, dict):
+            return matches
+        self._remember_menu(term, matches)
+        return matches
+
+    def api_menu(self, term: str = "") -> dict[str, Any]:
+        """The chooser. No method means browse: domains first, then numbered operations."""
+        catalog = self._catalog()
+        if catalog.get("__http_error__") or catalog.get("__command_error__"):
+            return catalog
+        split = self._split_page(term, "usage: /api [domain or search|*] [--page N], with N >= 1")
+        if isinstance(split, dict):
+            return split
+        term, page = split
         if not term:
+            # THE LIVE API MOUNTS HUNDREDS OF ROUTES. Page 1 of 40 is not a menu; the
+            # domain the person is thinking about is.
             if page != 1:
-                return _command_error("use /ops * --page N to browse all operations")
+                return _command_error("use /api * --page N to browse every operation")
             return {
+                "view": "domains",
                 "active_project_id": self.project_id,
                 "domains": [
                     {"id": d.get("id"), "title": d.get("title"), "route_count": d.get("route_count")}
                     for d in catalog["domains"] if isinstance(d, dict) and d.get("route_count")
                 ],
-                "hint": "Use /ops DOMAIN, /ops SEARCH, or /ops * --page N; then /describe OPERATION_ID and /op OPERATION_ID [JSON].",
+                "hint": (
+                    "Pick a domain with /api DOMAIN, search with /api SEARCH, or list "
+                    "everything with /api *; then /api NUMBER for one operation."
+                ),
             }
+        matches = self._match_operations(term)
+        if isinstance(matches, dict):
+            return matches
+        if not matches:
+            return _command_error(
+                f"no operation matches {term!r}; run /api to list the domains "
+                "or /api * for every operation"
+            )
+        pages = max(1, (len(matches) + OPS_PAGE_SIZE - 1) // OPS_PAGE_SIZE)
+        if page > pages:
+            return _command_error(f"page {page} is past the last page ({pages})")
+        self._remember_menu(term, matches)
+        counts: dict[str, int] = {}
+        for match in matches:
+            counts[match["domain"]] = counts.get(match["domain"], 0) + 1
+        return {
+            "view": "operations",
+            "search": term or "*",
+            "active_project_id": self.project_id,
+            "count": len(matches),
+            "page": page,
+            "pages": pages,
+            "page_size": OPS_PAGE_SIZE,
+            "domains": [{"id": name, "count": counts[name]} for name in sorted(counts)],
+            "operations": matches[(page - 1) * OPS_PAGE_SIZE:page * OPS_PAGE_SIZE],
+            "next_page_command": (
+                " ".join(part for part in ("/api", term, f"--page {page + 1}") if part)
+                if page < pages else None
+            ),
+            "hint": "Pick one with /api NUMBER to see its path template and example.",
+            "access_note": "The API applies edition, permission, and policy checks when invoked.",
+        }
+
+    def api_template(self, selector: str) -> dict[str, Any]:
+        """The picked operation's card: path template, fields, and lines to copy."""
+        entry = self._menu_entry(selector)
+        if entry.get("__command_error__") or entry.get("__http_error__"):
+            return entry
+        if entry["operation_id"]:
+            payload = self.describe(entry["operation_id"])
+            if payload.get("__command_error__") or payload.get("__http_error__"):
+                return payload
+        else:
+            template = _path_template(entry["path"])
+            payload = {
+                "operation_id": None,
+                "method": entry["method"],
+                "path": entry["path"],
+                "summary": entry["summary"],
+                "description": "",
+                "parameters": [],
+                "parameter_fields": [],
+                "body_fields": [],
+                "auto_filled_body_fields": [],
+                "terminal_invokable": False,
+                "limitation": entry["limitation"],
+                "path_template": template,
+                "example": None,
+                "api_example": _api_example(entry["method"], template, None),
+                "access_note": "The API applies edition, permission, approval, budget, and receipt rules.",
+            }
+        payload["index"] = entry["index"]
+        payload["menu_search"] = self._menu_search
+        run_command = None
+        if entry["operation_id"] and entry["terminal_invokable"]:
+            arguments = payload.get("example_arguments") or {}
+            run_command = f"/api run {entry['index']}"
+            if arguments:
+                run_command += f" {json.dumps(arguments, separators=(',', ':'))}"
+        payload["run_command"] = run_command
+        return payload
+
+    def api_run(self, selector: str, arguments: Mapping[str, Any]) -> Any:
+        """Invoke the picked row. The same invoke() /op uses — no second path to the API."""
+        entry = self._menu_entry(selector)
+        if isinstance(entry, dict) and (entry.get("__command_error__") or entry.get("__http_error__")):
+            return entry
+        if not entry["operation_id"]:
+            return _command_error(
+                f"{entry['method']} {entry['path']} has no typed operation; "
+                f"use /api {entry['method']} {_path_template(entry['path'])} [JSON]"
+            )
+        return self.invoke(entry["operation_id"], arguments)
+
+    def _match_operations(self, term: str) -> list[dict[str, Any]] | dict[str, Any]:
+        """One numbered match list behind /ops, /api browsing, and every pick."""
+        catalog = self._catalog()
+        if catalog.get("__http_error__") or catalog.get("__command_error__"):
+            return catalog
         records = self._records()
         if isinstance(records, dict):
             return records
         domain_map = self._domain_map(catalog)
         documented_keys = {_route_key(item["method"], item["path"]) for item in records}
-        needle = "" if term == "*" else term.casefold()
+        needle = "" if term in {"", "*"} else term.casefold()
         matches = []
         for operation in records:
             domain = domain_map.get(_route_key(operation["method"], operation["path"]), "other")
@@ -1743,9 +2014,36 @@ class MetatronClient:
                     "limitation": "use /api METHOD /v1/path [JSON]",
                 })
         matches.sort(key=lambda item: (item["domain"], item["path"], item["method"]))
+        for index, match in enumerate(matches, start=1):
+            match["index"] = index
+        return matches
+
+    def ops(self, term: str = "") -> dict[str, Any]:
+        catalog = self._catalog()
+        if catalog.get("__http_error__") or catalog.get("__command_error__"):
+            return catalog
+        split = self._split_page(term, "usage: /ops [domain or search|*] [--page N], with N >= 1")
+        if isinstance(split, dict):
+            return split
+        term, page = split
+        if not term:
+            if page != 1:
+                return _command_error("use /ops * --page N to browse all operations")
+            return {
+                "active_project_id": self.project_id,
+                "domains": [
+                    {"id": d.get("id"), "title": d.get("title"), "route_count": d.get("route_count")}
+                    for d in catalog["domains"] if isinstance(d, dict) and d.get("route_count")
+                ],
+                "hint": "Use /ops DOMAIN, /ops SEARCH, or /ops * --page N; then /describe OPERATION_ID and /op OPERATION_ID [JSON].",
+            }
+        matches = self._match_operations(term)
+        if isinstance(matches, dict):
+            return matches
         pages = max(1, (len(matches) + OPS_PAGE_SIZE - 1) // OPS_PAGE_SIZE)
         if page > pages:
             return _command_error(f"page {page} is past the last page ({pages})")
+        self._remember_menu(term, matches)
         shown = matches[(page - 1) * OPS_PAGE_SIZE:page * OPS_PAGE_SIZE]
         return {"search": term, "count": len(matches), "shown_count": len(shown),
                 "page": page, "pages": pages, "page_size": OPS_PAGE_SIZE,
@@ -1777,10 +2075,26 @@ class MetatronClient:
             example_args["query"] = required_query
         if operation["request_body"].get("required"):
             example_args["body"] = required_body
+        # THE WRITTEN-OUT FORM INFERS NOTHING, so the template spells out every
+        # required query value and body field, project included.
+        raw_path = _path_template(operation["path"])
+        if required_query:
+            raw_path += "?" + "&".join(f"{name}={value}" for name, value in required_query.items())
+        raw_body = (
+            required_body
+            if operation["request_body"].get("required") or required_body
+            else None
+        )
         return {
             "operation_id": operation_id,
             "method": operation["method"],
             "path": operation["path"],
+            "path_template": raw_path,
+            "parameter_fields": [
+                {"in": p.get("in"), "name": p.get("name"), "required": bool(p.get("required")),
+                 "type": _field_type(p.get("schema") or {})}
+                for p in operation["parameters"] if isinstance(p, dict)
+            ],
             "summary": operation["summary"],
             "description": operation["description"],
             "parameters": operation["parameters"],
@@ -1790,6 +2104,8 @@ class MetatronClient:
             "terminal_invokable": operation["addressable"],
             "limitation": operation["limitation"],
             "example": f"/op {operation_id} {json.dumps(example_args, separators=(',', ':'))}" if example_args else f"/op {operation_id}",
+            "example_arguments": example_args,
+            "api_example": _api_example(operation["method"], raw_path, raw_body),
             "access_note": "The API applies edition, permission, approval, budget, and receipt rules.",
         }
 
@@ -1920,6 +2236,12 @@ class MetatronClient:
             payload = self.invoke(command.message, command.body)
         elif command.kind == "coverage":
             payload = self.coverage()
+        elif command.kind == "api_menu":
+            payload = self.api_menu(command.message)
+        elif command.kind == "api_template":
+            payload = self.api_template(command.message)
+        elif command.kind == "api_run":
+            payload = self.api_run(command.message, command.body)
         elif command.kind == "api":
             payload = self.request(command.method, command.path, command.body)
         elif command.kind == "agent":
@@ -1977,7 +2299,9 @@ class MetatronClient:
             )
         if command.kind == "ops" and isinstance(payload, dict):
             return redact(format_ops(payload), self.config.api_key)
-        if command.kind == "describe" and isinstance(payload, dict):
+        if command.kind == "api_menu" and isinstance(payload, dict):
+            return redact(format_api_menu(payload), self.config.api_key)
+        if command.kind in {"describe", "api_template"} and isinstance(payload, dict):
             return redact(format_description(payload), self.config.api_key)
         if command.kind == "projects" and isinstance(payload, dict):
             return redact(format_projects(payload), self.config.api_key)
@@ -1994,7 +2318,7 @@ class MetatronClient:
                  "thread": format_thread}
         if command.kind in plain and isinstance(payload, dict):
             return redact(plain[command.kind](payload), self.config.api_key)
-        if command.kind in {"api", "op", "project", "expand"}:
+        if command.kind in {"api", "api_run", "op", "project", "expand"}:
             return redact(json.dumps(payload, indent=2, default=str), self.config.api_key)
         return redact(format_payload(payload), self.config.api_key)
 

@@ -24,9 +24,12 @@ The terminal fetches `/v1/meta/api-catalog` and `/openapi.json` from the same AP
 | Command | Role |
 |---|---|
 | `/projects` | Lists projects the API returns under the current authentication settings |
-| `/ops` | Lists domains and searches their operations |
+| `/api` | Lists the catalog domains; a domain, a search term, or `*` lists the matching operations, numbered |
+| `/api NUMBER` | Shows the picked operation's card and a ready example for `/api run`, `/op`, and the written-out form |
+| `/api run NUMBER [JSON]` | Invokes the picked operation with the arguments `/op` takes |
+| `/ops` | Lists domains and searches their operations by operation ID |
 | `/ops * --page N` | Complete paged discovery |
-| `/describe` | Shows an operation's method, path, parameters, typed body fields, and an example with required fields |
+| `/describe` | Shows an operation's method, path, parameters, typed body fields, path template, and an example with required fields |
 | `/op` | Invokes a stable method-and-path operation ID with JSON `path`, `query`, and `body` arguments |
 | `/api METHOD /v1/path [JSON]` | Fallback for a mounted route missing from OpenAPI |
 

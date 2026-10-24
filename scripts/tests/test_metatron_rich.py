@@ -432,3 +432,60 @@ def test_history_never_keeps_a_credential(tmp_path):
     assert "is anything stuck?" in saved
     assert "sk-live-1" not in saved and SECRET not in saved
     assert oct((tmp_path / "metatron_history").stat().st_mode & 0o777) == "0o600"
+
+
+def test_the_api_chooser_is_a_table_and_the_pick_is_a_card():
+    from test_metatron_tui import _catalog, _openapi  # noqa: PLC0415 — fixtures live with the client tests
+
+    client = tui.MetatronClient(_config(api_url="http://127.0.0.1:8000"),
+                                urlopen=FakeOpener([(200, _catalog()), (200, _openapi())]))
+    domains = client.dispatch(tui.parse_line("/api"))
+    listing = client.dispatch(tui.parse_line("/api *"))
+    card = client.dispatch(tui.parse_line("/api 3"))
+    text = draw(render.api_menu(domains)) + draw(render.api_menu(listing)) + draw(render.api_card(card))
+    snapshot("api-chooser", text)
+    assert re.search(r"core\s+4\s+Core work", text)
+    assert re.search(r"1\s+GET\s+/v1/tasks", text)
+    assert re.search(r"3\s+GET\s+/v1/tasks/\{task_id\}", text)
+    assert "/v1/tasks/<task_id>?project_id=boss-dogfood" in text
+    assert "/api run 3" in text and "Copy one of these" in text
+    assert SECRET not in text
+
+
+def test_a_bare_api_picks_a_domain_then_an_operation_and_shows_its_card():
+    from test_metatron_tui import _catalog, _openapi  # noqa: PLC0415
+
+    opener = FakeOpener([(200, _catalog()), (200, _openapi())])
+    client = tui.MetatronClient(_config(api_url="http://127.0.0.1:8000"), urlopen=opener)
+    buffer = io.StringIO()
+    console = render.make_console(buffer, width=80, color=False)
+
+    async def go():
+        with create_pipe_input() as pipe:
+            shell = shell_module.Shell(tui, client, console=console, input=pipe,
+                                       output=DummyOutput(), reveal_delay=0, progress_every=60)
+            pipe.send_text("core\r")        # the domain picker, filtered
+            pipe.send_text("\x1b[B\x1b[B\r")  # the operation picker: third row
+            await shell.handle_line("/api")
+            if shell.job is not None:
+                await shell.job
+    asyncio.run(go())
+    out = buffer.getvalue()
+    assert "GET /v1/tasks/{task_id}" in out
+    assert "/v1/tasks/<task_id>?project_id=boss-dogfood" in out
+    assert client._menu_search == "core"
+    # Browsing and picking read the catalog and the schema once; no call is made for the pick.
+    assert [call["url"].split("8000")[1] for call in opener.calls] == [
+        "/v1/meta/api-catalog", "/openapi.json"]
+    assert SECRET not in out
+
+
+def test_completion_after_api_offers_its_words_and_the_domains_it_has_seen():
+    shell = shell_module.Shell(tui, _client(), console=render.make_console(io.StringIO(), width=80),
+                               output=DummyOutput())
+    shell.cache["/api"] = [("core", "Core work"), ("delivery", "Software factory")]
+    completer = shell_module.SlashCompleter(tui.SLASH_COMMANDS, shell.values)
+    assert [c.text for c in completer.get_completions(Document("/api r"), CompleteEvent())] == ["run"]
+    assert [c.text for c in completer.get_completions(Document("/api c"), CompleteEvent())] == ["core"]
+    assert {c.text for c in completer.get_completions(Document("/api "), CompleteEvent())} == {
+        "run", "*", "core", "delivery"}
