@@ -1,0 +1,12 @@
+diff --git a/fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/domain/transactionprocessor/impl/FineractStyleLoanRepaymentScheduleTransactionProcessor.java b/fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/domain/transactionprocessor/impl/FineractStyleLoanRepaymentScheduleTransactionProcessor.java
+index 3717842..4ad5dbb 100644
+--- a/fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/domain/transactionprocessor/impl/FineractStyleLoanRepaymentScheduleTransactionProcessor.java
++++ b/fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/domain/transactionprocessor/impl/FineractStyleLoanRepaymentScheduleTransactionProcessor.java
+@@ -136,7 +136,6 @@ public class FineractStyleLoanRepaymentScheduleTransactionProcessor extends Abst
+             transactionAmountRemaining = transactionAmountRemaining.minus(feeChargesPortion);
+ 
+             interestPortion = currentInstallment.payInterestComponent(transactionDate, transactionAmountRemaining);
+-            transactionAmountRemaining = transactionAmountRemaining.minus(interestPortion);
+ 
+             principalPortion = currentInstallment.payPrincipalComponent(transactionDate, transactionAmountRemaining);
+             transactionAmountRemaining = transactionAmountRemaining.minus(principalPortion);

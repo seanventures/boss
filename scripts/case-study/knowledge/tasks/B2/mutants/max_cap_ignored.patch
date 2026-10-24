@@ -1,0 +1,13 @@
+diff --git a/fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/domain/LoanCharge.java b/fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/domain/LoanCharge.java
+index 7f5a527..10b6c9c 100644
+--- a/fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/domain/LoanCharge.java
++++ b/fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/domain/LoanCharge.java
+@@ -335,7 +335,7 @@ public class LoanCharge extends AbstractAuditableWithUTCDateTimeCustom<Long> {
+         }
+         if (this.maxCap != null) {
+             final int maximumCap = percentageOf.compareTo(this.maxCap);
+-            if (maximumCap == 1) {
++            if (maximumCap == 2) {
+                 minMaxCap = this.maxCap;
+                 return minMaxCap;
+             }

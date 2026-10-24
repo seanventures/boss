@@ -1,0 +1,32 @@
+id: B3
+set: banking
+case: 3                      # operational resilience: payments incidents that don't repeat
+title: Repayments post more than the customer paid (incident)
+kind: incident (Beacon -> fix)
+knowledge: [posting conservation, allocation order]
+learning_pair: {with: B4, role: first}
+repo: fineract
+fault_patch: fault.patch     # applied to the fork and pushed as the "release" before the task starts
+distinct_from: B4            # the suite must pass with B4's fault: a different code path
+evaluate:
+  mode: fineract_gradle
+  module: fineract-loan
+  tests: "*CaseStudyHiddenB3*"
+  install:
+    - {from: hidden_tests/CaseStudyHiddenB3RepaymentPostingTest.java,
+       to: fineract-loan/src/test/java/org/apache/fineract/portfolio/loanaccount/domain/transactionprocessor/impl/CaseStudyHiddenB3RepaymentPostingTest.java}
+# The planted fault (answer key, never shown to agents): the mifos-standard-strategy processor pays the
+# installment's interest but does not take it off the money left to allocate, so the same cash is posted again
+# to principal (and onward to later installments). Fault class: POSTED-TWICE.
+fault_class: POSTED-TWICE
+invariants:
+  - id: INV-POST-CONSERVE
+    statement: "For every repayment, principal + interest + fee + penalty portions + overpayment = the amount received."
+  - id: INV-POST-LEDGER
+    statement: "Across a loan, what the installments record as paid equals the cash applied to them; no component is paid beyond what was charged."
+  - id: INV-POST-DEDUCT
+    statement: "Every pay*Component call returns the portion it took, and the handler must subtract exactly that from the amount still to allocate before the next component."
+  - id: INV-POST-ORDER
+    statement: "Each strategy allocates per installment, oldest first, in its documented component order."
+  - id: RUNBOOK-POSTING
+    statement: "Triage: compare portions + overpayment with the amount for the affected repayments; the strategy code on the loan names the processor class; diff its handlers against the last release."

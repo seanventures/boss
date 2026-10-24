@@ -1,0 +1,13 @@
+diff --git a/fineract-progressive-loan/src/main/java/org/apache/fineract/portfolio/loanproduct/calc/ProgressiveEMICalculator.java b/fineract-progressive-loan/src/main/java/org/apache/fineract/portfolio/loanproduct/calc/ProgressiveEMICalculator.java
+index 2893b99..563c56d 100644
+--- a/fineract-progressive-loan/src/main/java/org/apache/fineract/portfolio/loanproduct/calc/ProgressiveEMICalculator.java
++++ b/fineract-progressive-loan/src/main/java/org/apache/fineract/portfolio/loanproduct/calc/ProgressiveEMICalculator.java
+@@ -1691,7 +1691,7 @@ public final class ProgressiveEMICalculator implements EMICalculator {
+         if (graceOnPrincipalPayment == null || graceOnPrincipalPayment <= 0) {
+             return;
+         }
+-        int gracePeriods = Math.min(graceOnPrincipalPayment, repaymentPeriods.size());
++        int gracePeriods = Math.min(graceOnPrincipalPayment - 1, repaymentPeriods.size());
+         List<RepaymentPeriod> gracePeriodsList = repaymentPeriods.subList(0, gracePeriods);
+         gracePeriodsList.forEach(period -> {
+             Money interestOnlyEmi = period.getDueInterest();

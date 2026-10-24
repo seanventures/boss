@@ -1,0 +1,13 @@
+diff --git a/fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/domain/SingleLoanChargeRepaymentScheduleProcessingWrapper.java b/fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/domain/SingleLoanChargeRepaymentScheduleProcessingWrapper.java
+index bd25224..9cbff0f 100644
+--- a/fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/domain/SingleLoanChargeRepaymentScheduleProcessingWrapper.java
++++ b/fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/domain/SingleLoanChargeRepaymentScheduleProcessingWrapper.java
+@@ -195,7 +195,7 @@ public class SingleLoanChargeRepaymentScheduleProcessingWrapper {
+     private BigDecimal getBaseAmount(LoanCharge loanCharge, BigDecimal principal, BigDecimal interest) {
+         ChargeCalculationType calcType = loanCharge.getChargeCalculation();
+         if (calcType.isPercentageOfAmountAndInterest()) {
+-            return MathUtil.add(principal, interest);
++            return principal;
+         }
+         if (calcType.isPercentageOfInterest()) {
+             return interest;

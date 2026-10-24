@@ -1,0 +1,50 @@
+id: B2
+set: banking
+case: 1
+title: Extract loan fee and charge calculation into its own service
+kind: refactor (behaviour unchanged)
+knowledge: [B1 invariants, charge base amounts, caps, rounding]
+learning_pair: {with: B1, role: second}
+repo: fineract
+evaluate:
+  mode: fineract_gradle
+  module: fineract-loan
+  tests: "*CaseStudyHiddenB2*"
+  install:
+    - {from: hidden_tests/CaseStudyHiddenB2ChargeCalculationTest.java,
+       to: fineract-loan/src/test/java/org/apache/fineract/portfolio/loanaccount/domain/CaseStudyHiddenB2ChargeCalculationTest.java}
+    - {from: hidden_tests/CaseStudyHiddenB2ContractTest.java,
+       to: fineract-loan/src/test/java/org/apache/fineract/portfolio/loanaccount/domain/CaseStudyHiddenB2ContractTest.java}
+    - {from: hidden_tests/b2_charge_calculations.golden,
+       to: fineract-loan/src/test/resources/case-study/b2_charge_calculations.golden}
+  behaviour: [CaseStudyHiddenB2ChargeCalculationTest]
+  contract: [CaseStudyHiddenB2ContractTest]
+  reference_patch: ../../selftest/b2_reference.patch
+  mutants:
+    - mutants/max_cap_ignored.patch
+    - mutants/cap_rounding_dropped.patch
+    - mutants/base_amount_and_interest.patch
+    - mutants/installment_fee_percent_of_interest.patch
+# Scoring the learning pair: what B1 discovered that B2 should reuse rather than rediscover. A run "reuses" an
+# invariant when its plan, review or change record cites it (arm B: from the knowledge graph) before acting on it.
+expected_reuse:
+  - id: INV-ROUND-ONCE
+    from: B1
+    why: "Charge amounts follow the same rule: keep full precision through percentage and cap, round to currency digits once, when the charge is created on a loan (an unattached charge, and on 1.15.0 an updated flat amount, stays unrounded)."
+  - id: INV-PUBLIC-API
+    from: B1
+    why: "The same extraction pattern: keep LoanChargeService's and the schedule wrapper's public methods and constructors, delegate behind them, move the existing tests that call private rules."
+  - id: INV-PERIOD-BOUNDS
+    from: B1
+    why: "A dated charge lands in the period (from, due] that contains it, the same boundary rule B1's leap-day check uses; only the first period also includes its start date."
+  - id: B1-METHOD
+    from: B1
+    why: "The verification method: characterise old behaviour on generated cases before moving code, then compare to the cent (B1's review finding, if any, becomes a B2 review check)."
+# New to B2 (no reuse expected): recorded so a run that finds them is credited.
+invariants:
+  - id: INV-CHARGE-BASE
+    statement: "A percentage charge applies to principal, principal + interest, interest, or the disbursed amount, by calculation type; per-installment fees use that installment's principal and interest, loan-level charges the loan totals."
+  - id: INV-CHARGE-CAP
+    statement: "Min and max caps apply to the computed percentage amount, before rounding; a capped amount is the cap itself."
+  - id: INV-CHARGE-ONE-RULE
+    statement: "The base-amount rule was written twice (LoanChargeService and the schedule wrapper) and must stay one rule."

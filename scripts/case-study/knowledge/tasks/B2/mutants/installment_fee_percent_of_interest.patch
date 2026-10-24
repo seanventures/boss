@@ -1,0 +1,13 @@
+diff --git a/fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/service/LoanChargeService.java b/fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/service/LoanChargeService.java
+index 019e73c..38e3b12 100644
+--- a/fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/service/LoanChargeService.java
++++ b/fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/service/LoanChargeService.java
+@@ -931,7 +931,7 @@ public class LoanChargeService {
+             case PERCENT_OF_AMOUNT -> installment.getPrincipal(loan.getCurrency());
+             case PERCENT_OF_AMOUNT_AND_INTEREST ->
+                 installment.getPrincipal(loan.getCurrency()).plus(installment.getInterestCharged(loan.getCurrency()));
+-            case PERCENT_OF_INTEREST -> installment.getInterestCharged(loan.getCurrency());
++            case PERCENT_OF_INTEREST -> installment.getPrincipal(loan.getCurrency());
+             case PERCENT_OF_DISBURSEMENT_AMOUNT, INVALID, FLAT -> Money.zero(loan.getCurrency());
+ 
+         };

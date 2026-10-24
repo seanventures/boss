@@ -1,0 +1,42 @@
+id: B1
+set: banking
+case: 1                      # core-banking modernisation without losing the business rules
+title: Extract loan interest calculation into its own service
+kind: refactor (behaviour unchanged)
+knowledge: [day-count conventions, rate-factor rules, rounding, grace]
+learning_pair: {with: B2, role: first}
+repo: fineract
+evaluate:
+  mode: fineract_gradle
+  module: fineract-progressive-loan
+  tests: "*CaseStudyHiddenB1*"
+  install:
+    - {from: hidden_tests/CaseStudyHiddenB1InterestScheduleTest.java,
+       to: fineract-progressive-loan/src/test/java/org/apache/fineract/portfolio/loanproduct/calc/CaseStudyHiddenB1InterestScheduleTest.java}
+    - {from: hidden_tests/CaseStudyHiddenB1ContractTest.java,
+       to: fineract-progressive-loan/src/test/java/org/apache/fineract/portfolio/loanproduct/calc/CaseStudyHiddenB1ContractTest.java}
+    - {from: hidden_tests/b1_interest_schedules.golden,
+       to: fineract-progressive-loan/src/test/resources/case-study/b1_interest_schedules.golden}
+  behaviour: [CaseStudyHiddenB1InterestScheduleTest]   # old vs new schedules: must pass before and after
+  contract: [CaseStudyHiddenB1ContractTest]            # the extraction itself: fails on the pinned release
+  reference_patch: ../../selftest/b1_reference.patch   # a behaviour-keeping refactor: passes both
+  mutants:                                             # one-line behaviour changes the behaviour suite must catch
+    - mutants/day_count_feb29.patch
+    - mutants/rounding_rate_factor.patch
+    - mutants/principal_grace.patch
+# What B1 should discover (and, in arm B, record as governed facts). B2's expected_reuse points back here.
+invariants:
+  - id: INV-DAYCOUNT
+    statement: "Interest accrues per period as rate x days / days-in-year, with days-in-year from the product (ACTUAL, 360, 364, 365); ACTUAL with FEB_29_PERIOD_ONLY uses 366 only for a period that contains 29 February."
+  - id: INV-30E-RATIO
+    statement: "With 30-day months, a period's rate factor is its share of whole repayment periods counted from the seed date, not its day count."
+  - id: INV-YEAR-SPLIT
+    statement: "An ACTUAL/ACTUAL period that crosses a year end is split into per-year fractions, each over that year's own length."
+  - id: INV-ROUND-ONCE
+    statement: "Rate factors keep the schedule's MathContext (12 significant digits, the tenant rounding mode); money is rounded to currency digits (and installment multiples) only when it becomes an amount due."
+  - id: INV-GRACE
+    statement: "Principal grace periods charge interest only; the deferred principal is spread over the remaining installments; interest grace moves interest, it does not waive it."
+  - id: INV-PERIOD-BOUNDS
+    statement: "A repayment period runs from its start date (exclusive) to its due date (inclusive): a date on a boundary, such as 29 February, belongs to the period that ends on it."
+  - id: INV-PUBLIC-API
+    statement: "Callers depend on EMICalculator and ProgressiveLoanScheduleGenerator only; the calculation can move behind them without touching callers."
