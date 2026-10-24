@@ -253,6 +253,9 @@ services:
         condition: service_healthy
     environment:
       DATABASE_URL: postgresql+psycopg://boss:${BOSS_DB_PASSWORD:?set BOSS_DB_PASSWORD (install.sh generates it; never the old default)}@db:5432/boss
+      # Self-fix runs apps/api tests against its OWN disposable database on the same server
+      # (created on first use by self_fix_build._api_suite); never the live one.
+      BOSS_SELF_FIX_TEST_DATABASE_URL: postgresql+psycopg://boss:${BOSS_DB_PASSWORD:?set BOSS_DB_PASSWORD}@db:5432/boss_selffix_test
       BOSS_EDITION: community
       # BOSS FIXES ITSELF (docs/product/BOSS_FIXES_ITSELF.md §6): the head of the local stack of
       # installed self-fixes over the release (written by the host self-installer; empty = the
@@ -489,6 +492,9 @@ services:
         condition: service_healthy
     environment:
       DATABASE_URL: postgresql+psycopg://boss:${BOSS_DB_PASSWORD:?set BOSS_DB_PASSWORD (install.sh generates it; never the old default)}@db:5432/boss
+      # Self-fix runs apps/api tests against its OWN disposable database on the same server
+      # (created on first use by self_fix_build._api_suite); never the live one.
+      BOSS_SELF_FIX_TEST_DATABASE_URL: postgresql+psycopg://boss:${BOSS_DB_PASSWORD:?set BOSS_DB_PASSWORD}@db:5432/boss_selffix_test
       BOSS_EDITION: community
       # BOSS FIXES ITSELF (docs/product/BOSS_FIXES_ITSELF.md §6): the head of the local stack of
       # installed self-fixes over the release (written by the host self-installer; empty = the
@@ -702,6 +708,9 @@ services:
         condition: service_healthy
     environment:
       DATABASE_URL: postgresql+psycopg://boss:${BOSS_DB_PASSWORD:?set BOSS_DB_PASSWORD (install.sh generates it; never the old default)}@db:5432/boss
+      # Self-fix runs apps/api tests against its OWN disposable database on the same server
+      # (created on first use by self_fix_build._api_suite); never the live one.
+      BOSS_SELF_FIX_TEST_DATABASE_URL: postgresql+psycopg://boss:${BOSS_DB_PASSWORD:?set BOSS_DB_PASSWORD}@db:5432/boss_selffix_test
       BOSS_EDITION: community
       BOSS_PUBLIC_URL: ${BOSS_PUBLIC_URL:-${BOSS_CONSOLE_PUBLIC_ORIGIN:-}}
       # The console's real port, for links printed before any public origin is bound (the claim

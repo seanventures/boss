@@ -1495,9 +1495,42 @@ def _max_lines(engine: Any, settings: Any) -> int:
 
 
 def _api_suite() -> bool:
+    """apps/api's tests need a live Postgres: the install's disposable self-fix database. It is
+    created on first use (same server, its own name, which must read as a test database), so a
+    fresh install can fix its API without an operator step."""
     import os
 
-    return bool((os.environ.get("BOSS_SELF_FIX_TEST_DATABASE_URL") or "").strip())
+    url = (os.environ.get("BOSS_SELF_FIX_TEST_DATABASE_URL") or "").strip()
+    if not url:
+        return False
+    try:
+        _ensure_test_database(url)
+    except Exception as error:  # noqa: BLE001 — no suite is better than a wrong one
+        log.warning("self-fix test database unavailable: %s", type(error).__name__)
+        return False
+    return True
+
+
+def _ensure_test_database(url: str) -> None:
+    """CREATE DATABASE <name> on the same server when missing; refuses a name that does not read
+    as a disposable test database, so the live one can never be the target."""
+    import re as _re
+
+    from sqlalchemy import create_engine
+    from sqlalchemy.engine import make_url
+
+    target = make_url(url)
+    name = str(target.database or "")
+    if not _re.fullmatch(r"[a-z0-9_]*(test|scratch)[a-z0-9_]*", name):
+        raise ValueError("the self-fix test database must be named like a test database")
+    admin = create_engine(target.set(database="postgres"), isolation_level="AUTOCOMMIT", future=True)
+    try:
+        with admin.connect() as c:
+            exists = c.exec_driver_sql("SELECT 1 FROM pg_database WHERE datname = %s", (name,)).scalar()
+            if not exists:
+                c.exec_driver_sql(f'CREATE DATABASE "{name}"')
+    finally:
+        admin.dispose()
 
 
 def _work_root(settings: Any) -> Path:
