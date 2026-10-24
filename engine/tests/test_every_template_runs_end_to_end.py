@@ -241,9 +241,19 @@ def test_every_catalogue_template_runs_to_its_last_step(eng, project, monkeypatc
             return {"capability": "wait_for_ci", "tool": None, "status": "awaiting",
                     "await": {"kind": "ci_wait", "id": wait_id}, "ci_wait_id": wait_id}
         monkeypatch.setattr(runner, "_start_ci_wait", _ci_passed)
+        # SCAN FOR BUSINESS RULES: the scan is a fake that reports it read the scope and
+        # proposed nothing, so the review gate steps aside (rule_scan.has_open_proposals).
+        from boss_engine.services.knowledge import rule_scan
+
+        monkeypatch.setattr(rule_scan, "run_step", lambda *_a, **_k: {
+            "capability": "scan_business_rules", "tool": None, "status": "succeeded",
+            "scan_id": f"rscan_{uuid.uuid4().hex[:10]}", "files_read": 3, "rules_proposed": 0,
+            "spend_usd": 0.0, "stopped_by": "scope_exhausted", "report": {},
+            "review_link": {}})
         # ONLY WHAT START WOULD REQUIRE — the form's required fields and nothing else.
         brief = {"title": TITLE, "directive": wc.example_for(key)["directive"],
-                 "notify_channel": "mattermost:announcements", "app_key": "swap-board"}
+                 "notify_channel": "mattermost:announcements", "app_key": "swap-board",
+                 "scope": ["pkg:owner/swap-board:core:com.example.swaps"]}
         if "incident_id" in spec["input_schema"]["required"]:
             brief["incident_id"] = _incident(c, project, monkeypatch)
         run_input = {name: brief[name] for name in spec["input_schema"]["required"]}

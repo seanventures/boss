@@ -5738,6 +5738,130 @@
         "output_schema": {},
         "step_agent_rules": 2
       }
+    },
+    {
+      "workflow_key": "business_rules_scan",
+      "name": "Scan for Business Rules",
+      "description": "Read an area or package of the code and propose the business rules it enforces, with the lines that prove them. A person approves each rule.",
+      "spec": {
+        "entry_step": "scan",
+        "steps": [
+          {
+            "id": "scan",
+            "kind": "capability",
+            "binding": {
+              "capability": "scan_business_rules",
+              "inputs": {
+                "scope": {
+                  "from_input": "scope"
+                },
+                "focus": {
+                  "from_input": "directive"
+                },
+                "max_files": {
+                  "from_input": "max_files"
+                },
+                "max_rules": {
+                  "from_input": "max_rules"
+                },
+                "budget_usd": {
+                  "from_input": "budget_usd"
+                }
+              }
+            },
+            "next": [
+              "review"
+            ],
+            "captain": "chief_architect",
+            "default_captain": "chief_architect",
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "review",
+            "kind": "capability",
+            "binding": {
+              "capability": "rules_review",
+              "inputs": {
+                "scan_id": {
+                  "from_step": "scan",
+                  "field": "scan_id"
+                }
+              }
+            },
+            "next": [],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "manual",
+              "on_timeout": "block",
+              "risk_tier": 2,
+              "forced_manual": true
+            }
+          }
+        ],
+        "objective": "Find the business rules this part of the code enforces — validations, calculations, limits, state transitions, who may do what — and propose each one with the lines that enforce it. Propose only what the code shows; a person decides which rules are true. Nothing is built or changed.",
+        "workflow_name": "Scan for Business Rules",
+        "input_schema": {
+          "type": "object",
+          "required": [
+            "scope"
+          ],
+          "properties": {
+            "scope": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "title": "What to scan",
+              "description": "Areas or packages from the Graph's project tree (their keys: area:<repo>:<area> or pkg:<repo>:<area>:<package>). Start the scan from the tree to have this filled in.",
+              "examples": [
+                [
+                  "pkg:owner/app:core:com.example.loans"
+                ]
+              ]
+            },
+            "directive": {
+              "type": "string",
+              "format": "textarea",
+              "title": "What should the scan look for? (optional)",
+              "description": "The scan proposes every business rule it finds in the scope. Name what matters most to you and the agent reads for that first.",
+              "examples": [
+                "Which dates, amounts and loan states allow a disbursement, and who may approve one."
+              ]
+            },
+            "max_files": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500,
+              "default": 60,
+              "title": "Most files to read (optional)",
+              "description": "The scan stops after reading this many files. Default 60."
+            },
+            "max_rules": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 25,
+              "title": "Most rules to propose (optional)",
+              "description": "The scan stops after proposing this many rules. Default 25."
+            },
+            "budget_usd": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "default": 2.0,
+              "title": "Budget in dollars (optional)",
+              "description": "The most the scan may spend on its model, at most the project's cap. Default $2.00."
+            }
+          }
+        },
+        "output_schema": {},
+        "step_agent_rules": 2
+      }
     }
   ],
   "branched": {

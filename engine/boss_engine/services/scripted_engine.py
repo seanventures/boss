@@ -16,6 +16,7 @@ engine's telemetry is):
     security_check                     VERDICT: CLEAN
     consistency_check                  CONSISTENT: YES
     check_tests                        the mutation probe: changes one line; the arbiter: CODE_WRONG
+    rule_scan                          one rule on the first symbol listed (rule_scan.scripted_reply)
 
 The app is a known-good fixture (tests/e2e/fixtures/plain-node by default; BOSS_SCRIPTED_FIXTURE
 names another directory). Its files are split into tests (written by write_tests) and the app
@@ -219,6 +220,11 @@ class ScriptedEngine:
                 turns.append({"direction": "tool_call", "tool_name": "write_file",
                               "content": {"path": rel}})
             return summary, written
+        if stage == "rule_scan":
+            # SCAN FOR BUSINESS RULES (knowledge/rule_scan.py): its script lives beside it.
+            from .knowledge.rule_scan import scripted_reply
+
+            return scripted_reply(prompt), []
         written: list[str] = []
         files = self._files()
         prefix = f"{app}/" if app else ""

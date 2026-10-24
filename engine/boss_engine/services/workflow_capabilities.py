@@ -752,6 +752,54 @@ CAPABILITIES: dict[str, Capability] = {
             produces=("document_id",),
             typical_minutes=3,
         ),
+        # ── BUSINESS RULES (services/knowledge/rule_scan.py, KNOWLEDGE_GRAPH_PRODUCT_SPEC §4.5) ──
+        # An agent reads an area or package of the code graph and PROPOSES the rules it
+        # enforces, with evidence; a person approves each one. Nothing it writes is trusted
+        # until then (rules.propose_rule writes `inferred`; only a person sets `approved`).
+        _cap(
+            key="scan_business_rules",
+            family="research",
+            # reads the system's structure and says what it enforces
+            captain="chief_architect",
+            label="Scan for business rules",
+            summary="Read an area or package of the code, class by class, and propose the "
+                    "business rules it enforces, each with the lines that prove it. Stops at "
+                    "the files, rules or budget limit, whichever comes first.",
+            # No tool: the runner runs the scan in-process (rule_scan.run_step). It reads code
+            # through repo.read's read_code, so that is the tool it declares it calls.
+            tool=None,
+            calls=("read_code",),
+            # Spends model budget and writes inferred rules, which a person can reject.
+            risk_tier=1,
+            # `scope`: area or package keys from the Graph's project tree. `budget_usd`: the
+            # scan's own ceiling (default 2.00, at most the project's cap).
+            required_inputs=("scope",),
+            # `focus`: what the person wants read for first, in their words (the run's brief).
+            optional_inputs=("focus", "max_files", "max_rules", "budget_usd"),
+            produces=("scan_id", "files_read", "rules_proposed", "spend_usd", "stopped_by",
+                      "report", "review_link"),
+            requires_project=("repository",),
+            skills=("repo.read", "knowledge.propose"),
+            typical_minutes=20,
+            needs_model=True,
+            cost_note="Model spend up to the scan's budget (default $2.00), charged to the "
+                      "knowledge budget.",
+        ),
+        _cap(
+            key="rules_review",
+            # answers for the review; a PERSON approves each rule (Rules review allows only
+            # people who hold knowledge:review)
+            captain="chief_architect",
+            label="Review proposed rules",
+            summary="A person approves, edits or rejects each rule the scan proposed, in "
+                    "Graph › Rules review. Ends when the scan's queue is empty or a person "
+                    "closes the review.",
+            tool=None,
+            risk_tier=2,
+            optional_inputs=("scan_id", "approver_role"),
+            produces=("decision_id",),
+            is_gate=True,
+        ),
     )
 }
 

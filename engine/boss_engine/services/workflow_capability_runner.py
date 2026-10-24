@@ -2627,6 +2627,11 @@ def _execute_step(
                 connection, project_id, context):
             return workflow_outcomes.apply(key, security_review_steps.not_applicable(
                 key, "Nothing to choose: the scan found nothing to fix."), {})
+        if key == "rules_review":
+            from .knowledge import rule_scan
+
+            if not rule_scan.has_open_proposals(connection, project_id, context):
+                return workflow_outcomes.apply(key, rule_scan.not_applicable(context), {})
         adopted_gate = _adopted_gate(connection, key, context)
         if adopted_gate:
             return workflow_outcomes.apply(key, {
@@ -2884,6 +2889,20 @@ def _investigate_incident(connection: Connection, ctx: Any, project_id: str,
             "note": f"{got['logs_word']}; {got['diff_word']}. {got['root_cause']}"}
 
 
+def _scan_business_rules(connection: Connection, ctx: Any, project_id: str,
+                         step: dict[str, Any], context: dict[str, Any],
+                         inputs: dict[str, Any]) -> dict[str, Any]:
+    """`scan_business_rules`: an agent reads the scope's code and proposes rules with evidence,
+    within its files, rules and budget limits. A scope it cannot read is settled, in words."""
+    from .knowledge import rule_scan
+
+    try:
+        return rule_scan.run_step(connection, getattr(ctx, "settings", None) or _settings(),
+                                  project_id, step, context, inputs)
+    except rule_scan.RuleScanRefused as refused:
+        raise SettledCapabilityError(str(refused)) from refused
+
+
 def _set_up_monitoring(connection: Connection, ctx: Any, project_id: str,
                        context: dict[str, Any], step: dict[str, Any],
                        inputs: dict[str, Any]) -> dict[str, Any]:
@@ -3077,6 +3096,9 @@ def _perform_toolless(
             capability, key, _start_recovery_check(connection, project_id, context, inputs))
     if key == "incident_report":
         return _write_the_incident_report(connection, ctx, project_id, context, inputs)
+    # SCAN FOR BUSINESS RULES (services/knowledge/rule_scan.py): reads code, proposes rules.
+    if key == "scan_business_rules":
+        return _scan_business_rules(connection, ctx, project_id, step, context, inputs)
     # Same shape as `document`: no tool because it commissions nothing — it READS what the
     # run has already recorded and leaves a document behind.
     # THE RE-REVIEW AND THE SECURITY REPORT (services/security_review_steps.py).
@@ -6149,6 +6171,11 @@ def _gate_subject(
         if key == "security_decide" and context is not None and not \
                 security_review_steps.has_choices(connection, project_id, context):
             return None  # nothing to choose from: runs as ordinary work and records why
+        if key == "rules_review" and context is not None:
+            from .knowledge import rule_scan
+
+            if not rule_scan.has_open_proposals(connection, project_id, context):
+                return None  # the scan proposed nothing: runs as ordinary work, says why
         if context is not None and _adopted_gate(connection, key, context):
             # Already answered. Returning None sends it down the ordinary path, where
             # execute_step records the approval it was started with.
@@ -6360,36 +6387,46 @@ def _open_gate(
             "run_id": run["id"], "app_key": str(run_input.get("app_key") or ""),
             "recommendations": len(security_review_steps.review.list_recommendations(
                 connection, run["id"]))}
+    recommendation = {
+        "capability": subject["key"],
+        "approver_role": approval.get("approver_role"),
+        # WHAT THE APPROVER IS ACTUALLY DECIDING ABOUT.
+        #
+        # The recommendation carried a capability key, a step id and a run id — three
+        # identifiers and not one fact. So the Approvals page, having no `action` it
+        # recognised, fell through to its default and told the approver "this type has no
+        # automated follow-on (no project is started)" above a Deploy gate whose approval
+        # ships a container onto a host. That sentence is the opposite of true, and it is
+        # the one an approver reads before pressing the green button.
+        #
+        # The label and the app name are what make the sentence sayable: "approving builds
+        # a container from Onboarding Path Builder and runs it on the bound host" rather
+        # than "approving records your decision".
+        "step_label": subject["label"],
+        "workflow_key": run.get("workflow_key"),
+        "app_name": str(run_input.get("app_name")
+                        or run_input.get("title") or "").strip()[:120],
+        "run_title": subject_name,
+        # Whether answering this finishes the step or merely lets it run. The two have
+        # different consequences and the page has never been able to tell them apart.
+        "gate_completes_step": bool(subject["completes_step"]),
+        **recommendation_extra,
+    }
+    if capability_key == "rules_review":
+        # THE RULES ARE REVIEWED IN GRAPH › RULES REVIEW, filtered to this scan; the card
+        # carries the scan, how many rules wait, and the link (rule_scan.review_card). Its own
+        # action gives it its own buttons (decision_actions: approving it approves no rule).
+        from .knowledge import rule_scan
+
+        recommendation = {**recommendation,
+                          **rule_scan.review_card(connection, project_id, run_context),
+                          "action": "review_proposed_rules"}
     decision_id = subject.get("decision_id") or open_step_decision(
         connection,
         project_id,
         run.get("task_id"),
         question,
-        {
-            "capability": subject["key"],
-            "approver_role": approval.get("approver_role"),
-            # WHAT THE APPROVER IS ACTUALLY DECIDING ABOUT.
-            #
-            # The recommendation carried a capability key, a step id and a run id — three
-            # identifiers and not one fact. So the Approvals page, having no `action` it
-            # recognised, fell through to its default and told the approver "this type has no
-            # automated follow-on (no project is started)" above a Deploy gate whose approval
-            # ships a container onto a host. That sentence is the opposite of true, and it is
-            # the one an approver reads before pressing the green button.
-            #
-            # The label and the app name are what make the sentence sayable: "approving builds
-            # a container from Onboarding Path Builder and runs it on the bound host" rather
-            # than "approving records your decision".
-            "step_label": subject["label"],
-            "workflow_key": run.get("workflow_key"),
-            "app_name": str(run_input.get("app_name")
-                            or run_input.get("title") or "").strip()[:120],
-            "run_title": subject_name,
-            # Whether answering this finishes the step or merely lets it run. The two have
-            # different consequences and the page has never been able to tell them apart.
-            "gate_completes_step": bool(subject["completes_step"]),
-            **recommendation_extra,
-        },
+        recommendation,
         {"estimated_usd": 0.0},
         subject["summary"],
         run_id=run["id"],
@@ -6536,6 +6573,11 @@ def _resume_answered_gates(
     steps. A gate that cannot be passed is worse than no gate — the work never happens and
     nothing says why.
     """
+    # A RULES REVIEW ENDS ITSELF once its scan's queue is empty (knowledge/rule_scan.py): every
+    # rule was approved or rejected in Rules review, so its gate is answered here, in words.
+    from .knowledge import rule_scan
+
+    rule_scan.settle_empty_reviews(connection, project_id, str(run["id"]))
     rows = connection.execute(
         text(
             """

@@ -168,6 +168,20 @@ def incident_reported(result: Mapping[str, Any], inputs: Mapping[str, Any]) -> V
     return Verdict(FAILED, _reason(result) or "no incident report was written")
 
 
+def scanned(result: Mapping[str, Any], inputs: Mapping[str, Any]) -> Verdict:
+    """scan_business_rules: done when the scan reports why it stopped. Proposing no rule is a
+    finding, not a failure; an engine that failed mid-scan is a failure, in its words."""
+    refused = _refused(result)
+    if refused:
+        return refused
+    if not result.get("scan_id") or not result.get("stopped_by"):
+        return Verdict(FAILED, _reason(result) or "the scan reported nothing")
+    if result.get("stopped_by") == "engine_failed" and not result.get("rules_proposed"):
+        report = result.get("report") if isinstance(result.get("report"), Mapping) else {}
+        return Verdict(FAILED, str(report.get("stopped_reason") or "the engine failed"))
+    return Verdict(SUCCEEDED)
+
+
 def commissions_nothing(result: Mapping[str, Any], inputs: Mapping[str, Any]) -> Verdict:
     """video_edit, social_publish as bare capabilities: no tool performs them, so the runner
     records an honest `recorded` no-op that says so in its note. The work, when there is any,
@@ -267,6 +281,8 @@ VERDICTS: dict[str, Callable[[Mapping[str, Any], Mapping[str, Any]], Verdict]] =
     "verify_recovery": awaited_work,
     "incident_report": incident_reported,
     "monitoring_pack": packed,
+    "scan_business_rules": scanned,
+    "rules_review": answered_gate,
 }
 
 

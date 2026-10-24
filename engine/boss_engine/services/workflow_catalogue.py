@@ -86,6 +86,8 @@ DEFAULT_STEP_AGENTS: dict[str, str] = {
     "security_fix": "engineering_captain",
     "security_rereview": "security_reviewer",
     "security_report": "security_reviewer",
+    # THE RULES SCAN: the architect reads what the system enforces (rule_scan.DEFAULT_ROLE).
+    "scan_business_rules": "chief_architect",
 }
 
 #: WHO BUILDS IT DEPENDS ON WHAT IS BEING BUILT (§0.1 item 4: "build → Engineering Captain /
@@ -861,6 +863,29 @@ CATALOGUE: list[dict[str, Any]] = [
         "work_class": "project.new",
         "steps": _increments(4),
     },
+    {
+        # SCAN FOR BUSINESS RULES (KNOWLEDGE_GRAPH_PRODUCT_SPEC.md §4.5). Reads code, writes no
+        # code: an agent proposes the rules an area or package enforces, with evidence, and a
+        # person approves each one in Graph › Rules review. Started from the Graph area (an
+        # area or package in the tree) or as a workflow.
+        "key": "business_rules_scan",
+        "name": "Scan for Business Rules",
+        "description": "Read an area or package of the code and propose the business rules it "
+                       "enforces, with the lines that prove them. A person approves each rule.",
+        "objective": (
+            "Find the business rules this part of the code enforces — validations, "
+            "calculations, limits, state transitions, who may do what — and propose each one "
+            "with the lines that enforce it. Propose only what the code shows; a person decides "
+            "which rules are true. Nothing is built or changed."
+        ),
+        "work_class": "any",
+        "steps": _chain([
+            _step("scan", "scan_business_rules", {
+                "scope": _in("scope"), "focus": _in("directive"), "max_files": _in("max_files"),
+                "max_rules": _in("max_rules"), "budget_usd": _in("budget_usd")}),
+            _step("review", "rules_review", {"scan_id": _from("scan", "scan_id")}),
+        ]),
+    },
 ]
 
 
@@ -947,6 +972,21 @@ _FIELD_TEXT: dict[str, dict[str, Any]] = {
                                    "alert). An alert rule starts this for you when its "
                                    "Respond automatically is on (the app's Alerts tab).",
                     "examples": ["inc_0123456789ab"]},
+    "scope": {"type": "array", "items": {"type": "string"}, "title": "What to scan",
+              "description": "Areas or packages from the Graph's project tree (their keys: "
+                             "area:<repo>:<area> or pkg:<repo>:<area>:<package>). Start the "
+                             "scan from the tree to have this filled in.",
+              "examples": [["pkg:owner/app:core:com.example.loans"]]},
+    "max_files": {"type": "integer", "minimum": 1, "maximum": 500, "default": 60,
+                  "title": "Most files to read (optional)",
+                  "description": "The scan stops after reading this many files. Default 60."},
+    "max_rules": {"type": "integer", "minimum": 1, "maximum": 200, "default": 25,
+                  "title": "Most rules to propose (optional)",
+                  "description": "The scan stops after proposing this many rules. Default 25."},
+    "budget_usd": {"type": "number", "exclusiveMinimum": 0, "default": 2.0,
+                   "title": "Budget in dollars (optional)",
+                   "description": "The most the scan may spend on its model, at most the "
+                                  "project's cap. Default $2.00."},
     "notify_channel": {"type": "string", "title": "Who to tell",
                        "description": "Where the outcome is posted: email:someone@example.com or "
                                       "mattermost:<channel id>. Leave blank and the notify step "
@@ -1058,6 +1098,16 @@ BRIEFS: dict[str, dict[str, Any]] = {
                     "directive": "Check the approvals flow for injection and missing headers.",
                     "app_key": "shift-swap-board"},
         "required": ("app_key",),
+    },
+    "business_rules_scan": {
+        "directive": ("What should the scan look for? (optional)",
+                      "The scan proposes every business rule it finds in the scope. Name what "
+                      "matters most to you and the agent reads for that first."),
+        "example": {"title": "Rules in loan disbursement",
+                    "directive": "Which dates, amounts and loan states allow a disbursement, and "
+                                 "who may approve one.",
+                    "scope": ["pkg:owner/app:core:com.example.loans.disbursement"]},
+        "required": ("scope",),
     },
     "data_migration": {
         "directive": ("What data changes?",

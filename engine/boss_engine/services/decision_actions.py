@@ -128,7 +128,10 @@ REVISE_CONSUMED = frozenset({
 #: A workflow decision step (workflows.py) writes this action and no run id. The runner reads
 #: the decision's status exactly as it reads a capability gate's, so it is a workflow gate;
 #: as `general` it offered "Request changes", which left the run waiting for ever.
-WORKFLOW_GATE_ACTIONS = frozenset({"resume_workflow"})
+#: `review_proposed_rules` is the Scan for business rules workflow's review gate
+#: (knowledge/rule_scan.py): the rules themselves are answered one by one in Graph › Rules
+#: review; the gate resolves itself when that scan's queue is empty, or a person closes it here.
+WORKFLOW_GATE_ACTIONS = frozenset({"resume_workflow", "review_proposed_rules"})
 
 #: Approving these RECORDS a go-ahead and starts nothing. Some are read later by the work that
 #: asked (an SRE runbook, an assurance reopen, a GitHub effect fenced to an approved decision);
@@ -427,6 +430,19 @@ def allowed_actions(decision: Mapping[str, Any]) -> list[dict[str, Any]]:
                     "Builds a container from this app and runs it on the bound host."),
             _action("reject", "Don't ship", "reject",
                     "Fails the Deploy step. Nothing is sent to any host."),
+            _delegate(),
+        ]
+    if kind == "workflow_gate" and _action_of(decision) == "review_proposed_rules":
+        # THE RULES ARE ANSWERED ONE BY ONE in Graph › Rules review, never here: approving this
+        # card approves no rule. It only ends the review (BOSS ends it by itself once the
+        # scan's queue is empty).
+        return [
+            _action("approve", "Finish the review", "approve",
+                    "Ends the review and the workflow continues. Approves no rule: rules still "
+                    "proposed stay in Rules review."),
+            _action("reject", "Stop the run", "reject",
+                    "Fails the review step and the run stops there. Proposed rules stay in "
+                    "Rules review."),
             _delegate(),
         ]
     if kind == "workflow_gate":

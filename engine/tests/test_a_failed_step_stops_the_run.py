@@ -89,6 +89,8 @@ INTERNAL = {
     # Set up monitoring (services/monitoring_pack.py): no pack under monitoring_gate: block
     # fails the step, so the release cannot ship without one.
     "monitoring_pack": "_set_up_monitoring",
+    # Scan for business rules (knowledge/rule_scan.py): a scan that cannot run fails the step.
+    "scan_business_rules": "_scan_business_rules",
 }
 
 #: Tool-less capabilities that commission NOTHING. They are honest no-ops that say so
@@ -657,6 +659,11 @@ def test_a_refused_gate_blocks_the_run_and_cannot_be_skipped(eng, project, monke
         from boss_engine.services import security_review_steps
 
         monkeypatch.setattr(security_review_steps, "has_choices", lambda *a, **k: True)
+    if key == "rules_review":
+        # Likewise the rules review is asked only when the scan left rules waiting.
+        from boss_engine.services.knowledge import rule_scan
+
+        monkeypatch.setattr(rule_scan, "has_open_proposals", lambda *a, **k: True)
     with eng.begin() as c:
         run = _two_step(c, project, key)
         runner.tick(c, Ctx(eng), project_id=project)

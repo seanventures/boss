@@ -180,6 +180,11 @@ CAPABILITY_PRECHECKS: dict[str, CapabilityPrecheck] = {
     # build's branch. The model and GitHub are what it needs; it runs no build sandbox.
     "monitoring_pack": CapabilityPrecheck(("authority.consent", "github.access", "sandbox.model",
                                            "budget.run_cost")),
+    # Scan for business rules (knowledge/rule_scan.py): reads the repository and runs the
+    # review seat's engine read-only; spends within its own budget.
+    "scan_business_rules": CapabilityPrecheck(("authority.consent", "github.access") + _AGENT,
+                                              invokes_tools=("read_code",)),
+    "rules_review": NO_CHECKS("a person's review of the proposed rules"),
 }
 
 #: Which route a capability's agent takes (engine_startup): the build pipeline's stages, the
@@ -190,6 +195,8 @@ AGENT_ROUTE = {
     "retry_build": "build", "review": "review",
     "research": "chat", "meeting": "chat", "architecture": "chat", "security_panel": "chat",
     "security_rereview": "chat", "document": "chat",
+    # The scan runs on the review seat's engine, read-only (rule_scan._review_engine).
+    "scan_business_rules": "review",
 }
 
 #: Capabilities that VERIFY work. Skipping one with a deploy after it would ship unverified work,
