@@ -170,3 +170,10 @@ def test_every_threaded_reply_and_the_router_door_pass_the_last_door():
     route = main[main.index('"/v1/intent/route"'):]
     route = route[: route.index("\n@app.", 10)]
     assert "readable_reply(turn.reply" in route
+
+
+def test_one_backslash_n_in_prose_is_the_subject_not_debris():
+    from boss_engine.services.protocol_reply import unescape_stray_json
+    said = "Split each record on \\n and keep the header."
+    assert unescape_stray_json(said) == said
+    assert unescape_stray_json('He said \\"done\\".\\n\\nNext.') == 'He said "done".\n\nNext.'

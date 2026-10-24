@@ -174,6 +174,11 @@ def unescape_stray_json(text: Any) -> str:
     t = str(text or "")
     if "\\" not in t:
         return t
+    # Only a reply that carries the artefact's signature: an escaped quote, or repeated literal
+    # line breaks. One `\n` in prose ("split the line on \n") is the person's subject, not debris.
+    prose = _INLINE_CODE.sub("", _FENCED_BLOCK.sub("", t))
+    if '\\"' not in prose and prose.count("\\n") < 2:
+        return t
     out: list[str] = []
     pos = 0
     for block in _FENCED_BLOCK.finditer(t):
