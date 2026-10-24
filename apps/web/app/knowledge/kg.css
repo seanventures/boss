@@ -17,7 +17,7 @@
   /* Colour distinguishes kind (operator's rule): enums and records are not another blue. */
   --kg-enum: #e2e8f0;
   --kg-record: #e2e8f0;
-  --kg-file: #cbd5e1;
+  --kg-file: #d6b48a;
   /* The "N more areas" bubble: a code bubble, quieter. */
   --kg-more: #3b5b94;
   --kg-function: #94a3c8;
@@ -36,9 +36,12 @@
   --kg-layer-learning: #c4a1ff;
 }
 
-.kg { display: flex; flex-direction: column; gap: 12px; width: 100%; min-width: 0; }
-/* The graph wants the whole width the console gives an area. */
-.bx-content[data-active="knowledge"]:has(.kg) { max-width: none; }
+.kg { display: flex; flex-direction: column; gap: 6px; width: 100%; min-width: 0; }
+/* The graph wants the whole width the console gives an area, and starts high (round 2: less empty
+   space above the canvas — the area's card and the page keep a slim frame). */
+.bx-content[data-active="knowledge"]:has(.kg) { max-width: none; padding-top: 12px; padding-bottom: 16px; }
+.panel-stack[data-area="knowledge"] { padding: 10px 12px 12px; gap: 6px; }
+.kg .inf-head { gap: 6px 12px; }
 
 /* ── shared bits ──────────────────────────────────────────────────────────────────────────── */
 .kg-dot { display: inline-block; flex: none; width: 12px; height: 12px; border-radius: 50%; background: var(--kg-layer-code); }
@@ -112,16 +115,21 @@
   overflow: hidden; container: kg / inline-size;
 }
 /* One row at every desktop width (tester round 1 P0-2, P1-10): the search gives way first. */
-.kg-toolbar { display: flex; flex-wrap: nowrap; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--border); min-width: 0; }
+.kg-toolbar { display: flex; flex-wrap: nowrap; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--border); min-width: 0; }
 .kg-toolbar > * { flex: none; }
 .kg-toolbar > .kg-search { flex: 0 1 15rem; min-width: 7rem; }
 .kg-toolbar > .ag-spacer { flex: 1 1 0; min-width: 0; }
-.kg-subbar { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; min-height: 30px; padding: 4px 12px; font-size: 0.8rem; color: var(--muted); }
+.kg-subbar { display: flex; flex-wrap: nowrap; align-items: center; gap: 4px 14px; min-height: 28px; padding: 2px 10px; font-size: 0.78rem; color: var(--muted); min-width: 0; }
+.kg-subbar > * { flex: none; }
+/* The one sentence about the view stays one line (its whole text is its tooltip). */
+.kg-subbar > .kg-view-note { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .kg-subbar:empty { display: none; }
 .kg-view-note { color: var(--muted); }
 .kg-crumbs { display: inline-flex; align-items: center; gap: 4px; font-size: 0.82rem; color: var(--ink); }
 .kg-trunc { margin: 0; color: var(--amber); }
-.kg-tree-toggle { display: none; }
+.kg-tree-toggle { display: inline-flex; }
+.kg-work[data-tree-collapsed] { grid-template-columns: minmax(0, 1fr); }
+.kg-work[data-tree-collapsed] .kg-col-tree { display: none; }
 .kg-search { position: relative; }
 .kg-find { width: 100%; }
 .kg-find input { width: 100%; min-width: 0; }
@@ -156,9 +164,17 @@
 .kg-drop-meaning { display: block; margin: 4px 8px 6px; }
 
 .kg-work {
-  position: relative; display: grid; grid-template-columns: 15.78947rem minmax(0, 1fr) 18.94737rem;
-  height: clamp(420px, calc(100vh - 230px), 1400px); border-top: 1px solid var(--border); min-width: 0;
+  position: relative; display: grid; grid-template-columns: 14.21053rem minmax(0, 1fr);
+  height: clamp(420px, calc(100vh - 190px), 1400px); border-top: 1px solid var(--border); min-width: 0; overflow: hidden;
 }
+/* The details panel is a drawer over the canvas's right edge (round 2): hidden until something is
+   selected, slid in, closed with × or Esc. The graph has the whole width meanwhile. */
+.kg-col-panel {
+  position: absolute; top: 0; right: 0; bottom: 0; z-index: 6; width: min(22rem, 92%); border-left: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-lg); transform: translateX(105%); transition: transform 200ms ease, visibility 200ms; visibility: hidden;
+}
+.kg-work[data-panel-open] .kg-col-panel { transform: none; visibility: visible; }
+.kg-panel-close { display: inline-flex !important; }
 .kg-work-loading { border: 1px solid var(--border); border-radius: var(--r-lg); overflow: hidden; background: var(--surface); }
 .kg-col-tree { display: flex; flex-direction: column; min-height: 0; min-width: 0; border-right: 1px solid var(--border); background: var(--surface-2); }
 .kg-col-canvas { position: relative; min-width: 0; min-height: 0; background: var(--graph); overflow: hidden; }
@@ -171,7 +187,7 @@
 .kg-loading-note { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); margin: 0; font-size: 0.9rem; color: var(--ink-soft); }
 
 /* The canvas. */
-.kg-canvas-wrap { position: absolute; inset: 0; }
+.kg-canvas-wrap { position: absolute; inset: 0 0 var(--kg-gutter, 34px) 0; }
 .kg-canvas { display: block; width: 100%; height: 100%; cursor: grab; touch-action: none; }
 .kg-canvas:active { cursor: grabbing; }
 .kg-canvas:focus-visible { outline: 2px solid var(--accent-text); outline-offset: -2px; }
@@ -181,10 +197,12 @@
 }
 .kg-tip-title { font-size: 0.82rem; color: var(--ink); overflow-wrap: break-word; word-break: normal; }
 .kg-tip-line { font-size: 0.74rem; color: var(--muted); }
+/* The legend lives in its own gutter under the canvas (round 2): it can never sit on a node. */
 .kg-legend {
-  position: absolute; left: 12px; bottom: 12px; z-index: 4; max-width: calc(100% - 24px); padding: 6px 10px;
-  border: 1px solid var(--border-strong); border-radius: var(--r); background: color-mix(in srgb, var(--surface) 94%, transparent);
+  position: absolute; left: 0; right: 0; bottom: 0; z-index: 4; height: var(--kg-gutter, 34px); display: flex; align-items: center; gap: 12px;
+  padding: 0 12px; border-top: 1px solid var(--border); background: var(--surface-2); overflow: hidden;
 }
+.kg-legend .kg-legend-list { flex-wrap: nowrap; margin: 0; overflow: hidden; }
 .kg-legend-toggle { padding: 0; border: 0; background: none; color: var(--muted); font: inherit; font-size: 0.74rem; font-weight: 650; letter-spacing: 0.06em; text-transform: uppercase; cursor: pointer; }
 .kg-legend-list { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 6px 0 2px; padding: 0; list-style: none; }
 .kg-legend-item { display: inline-flex; align-items: center; gap: 6px; font-size: 0.8rem; color: var(--ink-soft); }
@@ -330,15 +348,6 @@
 /* ── widths, by the GRAPH's own width, not the window's (tester round 1 P0-2: the rail counts) ──
    Wide: tree | canvas | panel. Medium: tree | canvas, the panel a drawer over the canvas's right
    edge. Narrow: the canvas alone, the tree a drawer from the left. The canvas always gets the room. */
-@container kg (max-width: 1450px) {
-  .kg-work { grid-template-columns: 14.21053rem minmax(0, 1fr); }
-  .kg-col-panel {
-    position: absolute; top: 0; right: 0; bottom: 0; z-index: 6; width: min(21rem, 92%); border-left: 1px solid var(--border-strong);
-    box-shadow: var(--shadow-lg); transform: translateX(105%); transition: transform 200ms ease; visibility: hidden;
-  }
-  .kg-work[data-panel-open] .kg-col-panel { transform: none; visibility: visible; }
-  .kg-panel-close { display: inline-flex; }
-}
 @container kg (max-width: 860px) {
   .kg-work { grid-template-columns: minmax(0, 1fr); }
   .kg-col-tree {
@@ -370,3 +379,18 @@
 .kg-moved-icon { flex: none; color: var(--accent-text); }
 .kg-moved-text { display: flex; flex-direction: column; gap: 2px; flex: 1 1 16rem; min-width: 0; font-size: 0.84rem; color: var(--ink-soft); }
 .kg-moved-text strong { color: var(--ink); font-weight: 600; }
+.kg-subbar > .ag-spacer { flex: 1 1 0; }
+.kg-member { display: flex; flex-direction: column; gap: 4px; }
+.kg-member-row { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.kg-member-row .kg-conn { flex: 1; min-width: 0; }
+.kg-member-conn { margin-left: 26px; display: flex; flex-direction: column; gap: 4px; }
+/* A state card in the canvas stays in the part the details drawer leaves visible. */
+.kg-col-canvas > .kg-stage, .kg-col-canvas > .kg-stage-wrap, .kg-col-canvas > .kg-canvas-loading { right: var(--kg-occlude, 0px); }
+/* The panel and the tree scroll on their own; the page under them does not move (tester round 2). */
+.kg-col-panel, .kg-tree-scroll { overscroll-behavior: contain; }
+/* A narrower graph (a 1280 px window): the toolbar still fits one row — quieter controls first. */
+@container kg (max-width: 1150px) {
+  .kg-zoom-pct, .kg-kbd { display: none; }
+  .kg-layer-chip { padding: 0 8px; gap: 5px; }
+  .kg-toolbar { gap: 6px; }
+}

@@ -244,7 +244,7 @@ function BubbleBody({ b, onFocusNode }: { b: BubbleSummary; onFocusNode: (id: st
         </ul>
       </Section>
       <Section title="Vector" testId="kg-panel-vector">
-        <p className="kg-quiet">{b.node.kind === "layer" ? "Each item in this layer carries its own vector when an embedding model is set (Settings); open one to see its model and nearest items." : "An area is a summary of what it holds; code symbols are matched by structure, not meaning."}</p>
+        <p className="kg-quiet">{b.node.kind === "layer" ? "Each item in this layer carries its own vector when an embedding model is set (Settings); open one to see its model and nearest items." : `${b.node.kind === "package" ? "A package" : b.node.kind === "group" ? "A group" : "An area"} is a summary of what it holds; code symbols are matched by structure, not meaning.`}</p>
       </Section>
       <Section title="Provenance" testId="kg-panel-provenance">
         <p className="kg-quiet">{b.node.kind === "layer" ? (b.node.id === "layer:rules" ? "Proposed by agents, approved by people in Rules review." : "Written by agents while they work, with the run and step that wrote it.") : "Rolled up from the code index after each index."}</p>
@@ -302,6 +302,7 @@ function DetailBody({ d, w, orgId, onFocusNode, viewEdges }: {
           {extra.map(([k, v]) => <div key={k} className="kg-attr"><dt>{k.replace(/_/g, " ")}</dt><dd className="inf-mono">{String(v)}</dd></div>)}
         </dl>
       </Section>
+      {isType(d.node) ? <Members d={d} w={w} onFocusNode={onFocusNode} /> : null}
       <Connections d={d} w={w} onFocusNode={onFocusNode} viewEdges={viewEdges} />
       <Section title="Vector" testId="kg-panel-vector">
         {d.vector.embedded ? (
@@ -322,8 +323,94 @@ function DetailBody({ d, w, orgId, onFocusNode, viewEdges }: {
         </p>
       ) : null}
       <Provenance p={d.provenance} orgId={orgId} />
-      {d.node.layer === "code" ? <WhyAndBlast w={w} nodeId={d.node.id} onFocusNode={onFocusNode} /> : null}
+      {d.node.layer === "code" ? <WhyAndBlast w={w} nodeId={d.node.id} detail={d} onFocusNode={onFocusNode} /> : null}
     </>
+  );
+}
+
+const TYPE_KINDS = new Set(["class", "interface", "enum", "record"]);
+/** A class (or interface, enum, record): the node the graph focuses at class level. */
+export function isType(n: KgViewNode): boolean {
+  return n.kind === "symbol" && TYPE_KINDS.has(n.symbol_kind ?? "class");
+}
+
+/**
+ * A CLASS'S METHODS (round 2: the class is the node). Its methods are listed here, each with its
+ * own connections one press away; pressing one opens the method-level view on the canvas.
+ */
+function Members({ d, w, onFocusNode }: {
+  d: KgNodeDetailResponse; w: { projectId: string; actor: string }; onFocusNode: (id: string, n?: KgViewNode) => void;
+}) {
+  const first = d.connections.find((g) => g.kind === "defines" && g.direction === "out") ?? null;
+  const [group, setGroup] = useState<KgConnectionGroup | null>(first);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => setGroup(d.connections.find((g) => g.kind === "defines" && g.direction === "out") ?? null), [d]);
+  if (!group || !group.items.length) {
+    return <Section title="Methods" testId="kg-panel-members"><p className="kg-quiet">It declares no methods of its own.</p></Section>;
+  }
+  const more = async () => {
+    setBusy(true);
+    const r = await getNode(w, d.node.id, { edge: "defines", direction: "out", offset: group.items.length });
+    setBusy(false);
+    const page = r.ok ? r.data.connections.find((x) => x.kind === "defines" && x.direction === "out") : null;
+    if (page) setGroup({ ...group, items: [...group.items, ...page.items.filter((i) => !group.items.some((y) => y.id === i.id))] });
+  };
+  return (
+    <Section title={`Methods · ${group.total.toLocaleString("en-US")}`} testId="kg-panel-members">
+      <ul className="kg-conn-list">
+        {group.items.map((m) => <MemberRow key={m.id} m={m} w={w} onFocusNode={onFocusNode} />)}
+      </ul>
+      {group.items.length < group.total ? (
+        <button type="button" className="inf-link kg-more" data-testid="kg-members-more" disabled={busy} onClick={() => void more()}>
+          {busy ? "Loading…" : `Show all · next ${Math.min(20, group.total - group.items.length)} (${group.items.length} of ${group.total.toLocaleString("en-US")})`}
+        </button>
+      ) : null}
+    </Section>
+  );
+}
+
+function MemberRow({ m, w, onFocusNode }: { m: KgViewNode; w: { projectId: string; actor: string }; onFocusNode: (id: string, n?: KgViewNode) => void }) {
+  const [open, setOpen] = useState(false);
+  const [conn, setConn] = useState<KgConnectionGroup[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const toggle = async () => {
+    const next = !open;
+    setOpen(next);
+    if (next && !conn) {
+      const r = await getNode(w, m.id);
+      if (r.ok) setConn(r.data.connections.filter((g) => g.kind !== "defines")); else setErr(r.error);
+    }
+  };
+  return (
+    <li className="kg-member" data-testid="kg-member">
+      <span className="kg-member-row">
+        <button type="button" className="ag-icon-btn kg-member-toggle" aria-expanded={open} aria-label={`${open ? "Hide" : "Show"} what ${m.label} connects to`}
+                data-testid="kg-member-toggle" onClick={() => void toggle()}>{open ? "▾" : "▸"}</button>
+        <button type="button" className="kg-conn" onClick={() => onFocusNode(m.id, m)} data-testid="kg-member-open"
+                title={`Open the method-level view of ${m.label}`}>
+          <span className="kg-dot" style={{ background: `var(${kindToken(m.kind, m.symbol_kind, m.id)})` }} aria-hidden />
+          <span className="kg-conn-label" data-user-text>{m.label}</span>
+          <span className="kg-conn-go" aria-hidden>›</span>
+        </button>
+      </span>
+      {open ? (
+        <div className="kg-member-conn" data-testid="kg-member-conn">
+          {err ? <p className="kg-inline-err" role="alert">{err}</p> : null}
+          {!conn && !err ? <p className="kg-quiet">Reading…</p> : null}
+          {conn && !conn.length ? <p className="kg-quiet">Nothing connects to it.</p> : null}
+          {conn?.length ? (
+            <>
+              <p className="kg-quiet">{conn.map((g) => `${g.label} ${g.total.toLocaleString("en-US")}`).join(" · ")}</p>
+              <ul className="kg-conn-list">
+                {conn.flatMap((g) => g.items.slice(0, 3).map((n) => ({ g, n }))).slice(0, 6).map(({ g, n }) => (
+                  <NodeRow key={`${g.kind}-${g.direction}-${n.id}`} n={n} note={g.label} onPick={() => onFocusNode(n.id, n)} />
+                ))}
+              </ul>
+            </>
+          ) : null}
+        </div>
+      ) : null}
+    </li>
   );
 }
 
@@ -331,10 +418,13 @@ function Connections({ d, w, onFocusNode, viewEdges }: {
   d: KgNodeDetailResponse; w: { projectId: string; actor: string }; onFocusNode: (id: string, n?: KgViewNode) => void;
   viewEdges: Array<{ edge: KgViewEdge; other: KgViewNode; out: boolean }> | null;
 }) {
-  const [groups, setGroups] = useState<KgConnectionGroup[]>(d.connections);
+  // A type's own members are listed under Methods (round 2), not again here.
+  const own = (gs: KgConnectionGroup[]) => (isType(d.node) ? gs.filter((g) => !(g.kind === "defines" && g.direction === "out")) : gs);
+  const [groups, setGroups] = useState<KgConnectionGroup[]>(own(d.connections));
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  useEffect(() => setGroups(d.connections), [d]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => setGroups(own(d.connections)), [d]);
   const summary = groups.map((g) => `${g.label} ${g.total.toLocaleString("en-US")}`).join(" · ");
   const more = async (g: KgConnectionGroup) => {
     const k = `${g.kind}:${g.direction}`;
@@ -432,7 +522,15 @@ function Provenance({ p, orgId }: { p: KgProvenance; orgId?: string | null }) {
 }
 
 /** Parity with the old explorer (§5.1): why a node is believed, and what a change to it reaches. */
-function WhyAndBlast({ w, nodeId, onFocusNode }: { w: { projectId: string; actor: string }; nodeId: string; onFocusNode: (id: string) => void }) {
+/** What depends on a node (tester round 2: blast radius said "reaches nothing" for a class with
+ *  112 referrers and 53 importers): every incoming code edge — callers, references, imports,
+ *  dispatch, implementations, subclasses, overrides — from the detail the panel already holds. */
+export function dependents(d: KgNodeDetailResponse): KgConnectionGroup[] {
+  const reach = new Set(["calls", "references", "imports", "dispatches_to", "implements", "extends", "overrides", "reads", "writes", "governs"]);
+  return d.connections.filter((g) => g.direction === "in" && reach.has(g.kind) && g.total > 0);
+}
+
+function WhyAndBlast({ w, nodeId, detail, onFocusNode }: { w: { projectId: string; actor: string }; nodeId: string; detail: KgNodeDetailResponse; onFocusNode: (id: string) => void }) {
   const [why, setWhy] = useState<Array<{ name: string; body: string; trust_tier: string }> | null>(null);
   const [blast, setBlast] = useState<Array<{ id?: string; node_id?: string; name?: string; kind?: string }> | null>(null);
   const [note, setNote] = useState<string | null>(null);
@@ -458,8 +556,27 @@ function WhyAndBlast({ w, nodeId, onFocusNode }: { w: { projectId: string; actor
       {why ? (why.length ? (
         <ul className="kg-why" data-testid="kg-why-list">{why.map((f) => <li key={f.body}><span data-user-text>{f.body}</span> <span className="kg-quiet">· {f.trust_tier}</span></li>)}</ul>
       ) : <p className="kg-quiet" data-testid="kg-why-list">No fact explains it yet.</p>) : null}
-      {blast ? (blast.length ? (
-        <ul className="kg-conn-list" data-testid="kg-blast-list">
+      {blast ? (() => {
+        const direct = dependents(detail);
+        const total = direct.reduce((n, g) => n + g.total, 0);
+        if (!direct.length && !blast.length) return <p className="kg-quiet" data-testid="kg-blast-list">Nothing in the graph depends on it: a change here reaches nothing else.</p>;
+        return (
+          <div data-testid="kg-blast-list">
+            {direct.length ? (
+              <>
+                <p className="kg-quiet" data-testid="kg-blast-summary">
+                  A change here reaches {total.toLocaleString("en-US")} {total === 1 ? "place" : "places"} directly: {direct.map((g) => `${g.label.toLowerCase()} ${g.total.toLocaleString("en-US")}`).join(" · ")}
+                </p>
+                <ul className="kg-conn-list">
+                  {direct.flatMap((g) => g.items.slice(0, 4).map((n) => ({ g, n }))).slice(0, 10).map(({ g, n }) => (
+                    <NodeRow key={`${g.kind}-${n.id}`} n={n} note={g.label} onPick={() => onFocusNode(n.id)} />
+                  ))}
+                </ul>
+              </>
+            ) : null}
+            {blast.length ? <p className="kg-quiet">Further out, through what depends on those:</p> : null}
+            {blast.length ? (
+        <ul className="kg-conn-list">
           {blast.map((b, i) => {
             const id = b.id ?? b.node_id;
             return (
@@ -470,7 +587,10 @@ function WhyAndBlast({ w, nodeId, onFocusNode }: { w: { projectId: string; actor
             );
           })}
         </ul>
-      ) : <p className="kg-quiet" data-testid="kg-blast-list">A change here reaches nothing else in the graph.</p>) : null}
+            ) : null}
+          </div>
+        );
+      })() : null}
     </Section>
   );
 }
@@ -574,10 +694,10 @@ export function ScanForRules({ w, node, archived, archivedWhy, compact }: {
   return (
     <form className="kg-scan-preview" data-testid="kg-scan-preview" noValidate onSubmit={(e) => { e.preventDefault(); if (valid) void start(); }}>
       <p className="kg-scan-what">
-        Scout reads up to <strong>60 files</strong> in <span data-user-text>{node.label}</span>, in weight order, and proposes up to
+        Scout reads {node.kind === "symbol" ? <><span data-user-text>{node.label}</span> and the code it calls</> : <>the code in <span data-user-text>{node.label}</span></>}
+        — up to <strong>60 files</strong>, the most connected first — and proposes up to
         <strong> 25 rules</strong>, each with the lines that show it. It stops at whichever limit comes first. No rule is trusted until
-        a person approves it.
-      </p>
+        a person approves it.</p>
       <label className="kg-field">
         <span>Spend at most (USD)</span>
         <input className="input" inputMode="decimal" value={budget} onChange={(e) => setBudget(e.target.value)} aria-label="Budget in US dollars"

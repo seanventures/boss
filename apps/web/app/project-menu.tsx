@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 
 import { GatedButton } from "../components/gated";
 import { ActionForm } from "./client-forms";
@@ -46,9 +46,27 @@ export function ProjectMenu({ projects, activeId, homeId, orgId }: {
   const isHome = activeId === homeId;
   const goHome = () => window.location.assign(projectHref(homeId, homeId));
   const openProject = (id: string) => window.location.assign(projectHref(id, homeId));
+  // A menu closes when it has done its job or the person looks away (KG tester round 2: it stayed
+  // open over the page after a pick): on a pick, on Esc, and on a press anywhere outside it.
+  const menu = useRef<HTMLDetailsElement>(null);
+  const [isOpen, setIsOpen] = useState(false);
+  const close = () => { if (menu.current) menu.current.open = false; setIsOpen(false); };
+  useEffect(() => {
+    if (!isOpen) return undefined;
+    const outside = (e: PointerEvent) => { if (menu.current && !menu.current.contains(e.target as Node)) close(); };
+    const escape = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      close();
+      menu.current?.querySelector<HTMLElement>("summary")?.focus();
+    };
+    document.addEventListener("pointerdown", outside);
+    document.addEventListener("keydown", escape);
+    return () => { document.removeEventListener("pointerdown", outside); document.removeEventListener("keydown", escape); };
+  }, [isOpen]);
   return (
     <>
-    <details className="bx-project-menu" data-testid="project-menu">
+    <details ref={menu} className="bx-project-menu" data-testid="project-menu"
+             onToggle={(e) => setIsOpen((e.currentTarget as HTMLDetailsElement).open)}>
       <summary title="Project · switch, create, or archive one">
         {active?.name ?? archived?.name ?? activeId}
         {archived ? <span className="bx-project-menu-archived" data-testid="project-menu-archived-badge">Archived</span> : null}
@@ -59,7 +77,7 @@ export function ProjectMenu({ projects, activeId, homeId, orgId }: {
           {projects.map((p) => (
             <li key={p.id}>
               <a href={projectHref(p.id, homeId)} aria-current={p.id === activeId ? "page" : undefined}
-                 data-testid={`project-menu-${p.id}`}>{p.name}</a>
+                 data-testid={`project-menu-${p.id}`} onClick={close}>{p.name}</a>
             </li>
           ))}
         </ul>
@@ -90,7 +108,7 @@ export function ProjectMenu({ projects, activeId, homeId, orgId }: {
           </button>
         ) : (
           <GatedButton permission="project:delete" className="bx-project-menu-new bx-project-menu-archive"
-                       title={ARCHIVE_TIP} data-testid="archive-project" onClick={() => setArchiving(true)}>
+                       title={ARCHIVE_TIP} data-testid="archive-project" onClick={() => { close(); setArchiving(true); }}>
             Archive project…
           </GatedButton>
         )) : null}

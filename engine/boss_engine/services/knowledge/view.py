@@ -238,8 +238,22 @@ def _rollup_payload(row: Mapping[str, Any]) -> dict[str, Any]:
     if level == "area":
         counts["packages"] = int(row["child_count"])
     return {"id": row["key"], "key": row["key"], "kind": level, "layer": "code",
-            "label": row["label"], "sub": f"{classes:,} class{'' if classes == 1 else 'es'}",
+            "label": row["label"], "sub": rollup_sub(classes, methods, int(row["child_count"] or 0), level),
             "trust_tier": "observed", "counts": counts}
+
+
+def rollup_sub(classes: int, functions: int, children: int, level: str) -> str:
+    """What an area or package holds, in one phrase. A Python or JavaScript area with no classes
+    says its functions ("24 functions"), never "0 classes" (Graph area round 2)."""
+    def n(v: int, one: str, many: str) -> str:
+        return f"{v:,} {one if v == 1 else many}"
+    if classes:
+        return n(classes, "class", "classes")
+    if functions:
+        return n(functions, "function", "functions")
+    if children:
+        return n(children, "package", "packages") if level == "area" else n(children, "module", "modules")
+    return "empty"
 
 
 def _nodes_by_id(connection: Connection, project_id: str, ids: Iterable[str]) -> dict[str, dict]:

@@ -74,7 +74,10 @@ export const OVERVIEW_BOX = { w: 190, h: 56 + 44 };
  *   3. rectangle separation: no two label boxes overlap;
  *   4. the Rules and Learning bubbles pinned in a column to the right.
  */
-export function overviewLayout(nodes: LayoutNode[], edges: LayoutEdge[], pinned: string[] = []): Map<string, Pt> {
+export function overviewLayout(nodes: LayoutNode[], edges: LayoutEdge[], pinned: string[] = [], aspect = 1.75): Map<string, Pt> {
+  // The canvas's width over its height: the picture takes the same shape, so it opens at 100%.
+  // The pinned column takes a strip on the right; the rest of the picture fills what is left.
+  const a = Math.min(3, Math.max(0.6, aspect - (pinned.length ? 0.55 : 0)));
   const pin = new Set(pinned);
   const free = nodes.filter((n) => !pin.has(n.id)).map((n) => ({ id: n.id, key: n.key ?? n.id, w: n.w ?? OVERVIEW_BOX.w, h: n.h ?? OVERVIEW_BOX.h }))
     .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
@@ -132,7 +135,7 @@ export function overviewLayout(nodes: LayoutNode[], edges: LayoutEdge[], pinned:
     for (let i = 0; i < n; i += 1) {
       // Wider than tall, like the canvas it fills.
       dx[i] -= pos[i].x * 0.9;
-      dy[i] -= pos[i].y * 1.8;
+      dy[i] -= pos[i].y * 0.9 * a * a;
       const d = Math.hypot(dx[i], dy[i]);
       if (d > 0) {
         const step = Math.min(d, temp);
@@ -143,7 +146,17 @@ export function overviewLayout(nodes: LayoutNode[], edges: LayoutEdge[], pinned:
     temp = Math.max(2, temp * 0.97);
   }
   // 3. no two label boxes overlap.
-  separateBoxes(pos, free.map((f) => ({ w: f.w + 24, h: f.h + 20 })));
+  // 3. no two label boxes overlap — then pulled in until they nearly touch (round 2: the picture
+  //    opens at a readable 100%, not shrunk to fit a loose spread).
+  const boxes = free.map((f) => ({ w: f.w + 24, h: f.h + 20 }));
+  separateBoxes(pos, boxes);
+  for (let pass = 0; pass < 24; pass += 1) {
+    const c = bounds(pos);
+    const mx = (c.minX + c.maxX) / 2;
+    const my = (c.minY + c.maxY) / 2;
+    for (const p of pos) { p.x = mx + (p.x - mx) * 0.94; p.y = my + (p.y - my) * 0.94; }
+    separateBoxes(pos, boxes);
+  }
   const out = new Map<string, Pt>();
   const bb = bounds(pos);
   const cx = (bb.minX + bb.maxX) / 2;
@@ -226,7 +239,9 @@ export type OverviewPick<N, E> = {
  */
 export function pickOverview<N extends { id: string; counts?: Record<string, number> }, E extends { src: string; dst: string; kind: string; weight: number; label: string | null }>(
   areas: N[], layers: N[], edges: E[], page: number, makeMore: (folded: N[], total: number) => N,
+  perPage: number = OVERVIEW_AREAS,
 ): OverviewPick<N, E> {
+  const PER = Math.max(3, Math.min(OVERVIEW_AREAS, Math.floor(perPage)));
   const size = (n: N) => (n.counts?.classes ?? 0) * 4 + (n.counts?.methods ?? n.counts?.functions ?? 0) + (n.counts?.packages ?? 0);
   const weight = new Map<string, number>();
   for (const e of edges) {
@@ -234,10 +249,10 @@ export function pickOverview<N extends { id: string; counts?: Record<string, num
     weight.set(e.dst, (weight.get(e.dst) ?? 0) + e.weight);
   }
   const ranked = [...areas].sort((a, b) => size(b) - size(a) || (weight.get(b.id) ?? 0) - (weight.get(a.id) ?? 0) || (a.id < b.id ? -1 : 1));
-  const fits = ranked.length <= OVERVIEW_AREAS + 2;
-  const pages = fits ? 1 : Math.ceil(ranked.length / OVERVIEW_AREAS);
+  const fits = ranked.length <= PER + 2;
+  const pages = fits ? 1 : Math.ceil(ranked.length / PER);
   const p = Math.max(0, Math.min(page, pages - 1));
-  const shown = fits ? ranked : ranked.slice(p * OVERVIEW_AREAS, (p + 1) * OVERVIEW_AREAS);
+  const shown = fits ? ranked : ranked.slice(p * PER, (p + 1) * PER);
   const shownIds = new Set(shown.map((n) => n.id));
   const folded = ranked.filter((n) => !shownIds.has(n.id));
   const more = folded.length ? makeMore(folded, ranked.length) : null;
@@ -253,7 +268,7 @@ export function pickOverview<N extends { id: string; counts?: Record<string, num
     const w = prev.weight + e.weight;
     merged.set(k, { ...prev, weight: w, label: relabel(prev.label ?? e.label, w) });
   }
-  const pageOf = new Map(ranked.map((n, i) => [n.id, fits ? 0 : Math.floor(i / OVERVIEW_AREAS)]));
+  const pageOf = new Map(ranked.map((n, i) => [n.id, fits ? 0 : Math.floor(i / PER)]));
   return { nodes: [...shown, ...(more ? [more] : []), ...layers], edges: [...merged.values()], folded, page: p, pages, pageOf };
 }
 
@@ -643,4 +658,113 @@ export const LOOP_EDGES = new Set(["consulted", "reused", "approved_by"]);
 
 export function layerToken(layer: string): string {
   return layer === "rules" ? "--kg-layer-rules" : layer === "learning" ? "--kg-layer-learning" : "--kg-layer-code";
+}
+
+export type LabelChoice = { id: string; x: number; y: number; priority: number; variants: Array<{ w: number; h: number }> };
+
+/**
+ * Every node keeps a label (tester round 2: "never draw an unlabelled node"). Highest priority
+ * first, each label takes the first of its variants (full name, then shorter middle-ellipsised
+ * names, then without its second line) that clears the circles and the labels already placed;
+ * when none does, the shortest is drawn all the same. Returns the variant index per id.
+ */
+export function placeNodeLabels(items: LabelChoice[], obstacles: LabelBox[], gap = 2): Map<string, number> {
+  const placed: LabelBox[] = [];
+  const out = new Map<string, number>();
+  const hits = (b: LabelBox, others: LabelBox[], self: string) => others.some((p) => p.id !== self && p.id !== `o:${self}`
+    && b.x - b.w / 2 - gap < p.x + p.w / 2 && b.x + b.w / 2 + gap > p.x - p.w / 2 && b.y - gap < p.y + p.h && b.y + b.h + gap > p.y);
+  for (const it of [...items].sort((a, b) => b.priority - a.priority || (a.id < b.id ? -1 : 1))) {
+    let chosen = it.variants.length - 1;
+    for (let v = 0; v < it.variants.length; v += 1) {
+      const box = { id: it.id, x: it.x, y: it.y, w: it.variants[v].w, h: it.variants[v].h, priority: it.priority };
+      if (!hits(box, obstacles, it.id) && !hits(box, placed, it.id)) { chosen = v; break; }
+    }
+    out.set(it.id, chosen);
+    placed.push({ id: it.id, x: it.x, y: it.y, w: it.variants[chosen].w, h: it.variants[chosen].h, priority: it.priority });
+  }
+  return out;
+}
+
+// ── Focus that stays readable at any size (tester round 2: 2 hops / Show 200) ─────────────
+
+/** At most this many neighbours are drawn on a hop's ring; the rest are grouped. */
+export const FOCUS_RING_CAP: Record<number, number> = { 1: 28, 2: 32, 3: 32 };
+/** At most this many group bubbles per hop; anything beyond joins one "+N more" group. */
+export const FOCUS_GROUPS = 6;
+
+export type GroupNode = { id: string; key: string; kind: string; label: string; layer: "code" | "rules" | "learning"; trust_tier: "observed"; sub?: string; hop: number };
+
+/** What a neighbour is grouped under: its package (the folder its file is in), or its layer. */
+export function groupKey(n: { layer: string; sub?: string; key: string }): { key: string; label: string } {
+  if (n.layer !== "code") return { key: n.layer, label: n.layer === "rules" ? "rules" : "learnings" };
+  const path = n.sub && n.sub.includes("/") ? n.sub : n.key.split(":")[2] ?? "";
+  const dirs = path.split("/").filter(Boolean).slice(0, -1);
+  const tail = dirs.slice(-2).join("/") || "elsewhere";
+  return { key: dirs.join("/") || "elsewhere", label: tail };
+}
+
+/**
+ * Cap each hop's ring at FOCUS_RING_CAP nodes — the strongest connected — and fold the rest into
+ * group bubbles by package ("+12 in loanaccount/service"), at most FOCUS_GROUPS per hop. Edges to
+ * a folded node move to its group, summed. Deterministic: ties by id.
+ */
+export function groupFocus<N extends { id: string; key: string; layer: string; sub?: string; hop: number; label: string },
+  E extends { src: string; dst: string; kind: string; weight: number; label: string | null }>(
+  centerId: string, nodes: N[], edges: E[],
+): { nodes: Array<N | GroupNode>; edges: E[]; members: Map<string, N[]> } {
+  const weight = new Map<string, number>();
+  for (const e of edges) {
+    weight.set(e.src, (weight.get(e.src) ?? 0) + e.weight);
+    weight.set(e.dst, (weight.get(e.dst) ?? 0) + e.weight);
+  }
+  const into = new Map<string, string>();
+  const members = new Map<string, N[]>();
+  const out: Array<N | GroupNode> = [];
+  const hops = [...new Set(nodes.map((n) => n.hop))].sort((a, b) => a - b);
+  for (const h of hops) {
+    const list = nodes.filter((n) => n.hop === h);
+    if (h === 0 || list.some((n) => n.id === centerId)) { out.push(...list); continue; }
+    const cap = FOCUS_RING_CAP[h] ?? 32;
+    const ranked = [...list].sort((a, b) => (weight.get(b.id) ?? 0) - (weight.get(a.id) ?? 0) || (a.id < b.id ? -1 : 1));
+    if (ranked.length <= cap + 2) { out.push(...ranked); continue; }
+    const keep = ranked.slice(0, cap);
+    out.push(...keep);
+    const rest = ranked.slice(cap);
+    const byGroup = new Map<string, { label: string; items: N[] }>();
+    for (const n of rest) {
+      const g = groupKey(n);
+      const cur = byGroup.get(g.key) ?? { label: g.label, items: [] };
+      cur.items.push(n);
+      byGroup.set(g.key, cur);
+    }
+    // A group holds two or more; lone ones join "other packages" (and a lone "other" is drawn as itself).
+    const groups = [...byGroup.entries()].filter(([, g]) => g.items.length >= 2)
+      .sort((a, b) => b[1].items.length - a[1].items.length || (a[0] < b[0] ? -1 : 1));
+    const named = groups.slice(0, FOCUS_GROUPS - (groups.length >= FOCUS_GROUPS ? 1 : 0));
+    const namedKeys = new Set(named.map(([k]) => k));
+    const other = [...byGroup.entries()].filter(([k]) => !namedKeys.has(k)).flatMap(([, g]) => g.items);
+    if (other.length === 1) { out.push(other[0]); other.length = 0; }
+    const make = (key: string, label: string, items: N[]) => {
+      const id = `group:${h}:${key}`;
+      members.set(id, items);
+      for (const n of items) into.set(n.id, id);
+      out.push({ id, key: id, kind: "group", label: `+${items.length} in ${label}`, layer: items[0].layer === "code" ? "code" : items[0].layer as "rules" | "learning",
+        trust_tier: "observed", sub: `${items.length} more, grouped`, hop: h });
+    };
+    for (const [key, g] of named) make(key, g.label, g.items);
+    if (other.length) make("other", "other packages", other);
+  }
+  const merged = new Map<string, E>();
+  for (const e of edges) {
+    const s = into.get(e.src) ?? e.src;
+    const d = into.get(e.dst) ?? e.dst;
+    if (s === d) continue;
+    const k = `${s}\u0000${d}\u0000${e.kind}`;
+    const prev = merged.get(k);
+    if (!prev) { merged.set(k, { ...e, src: s, dst: d }); continue; }
+    const w = prev.weight + e.weight;
+    const noun = (prev.label ?? e.label ?? "").replace(/^[\d,]+\s*/, "");
+    merged.set(k, { ...prev, weight: w, label: noun ? `${w.toLocaleString("en-US")} ${w === 1 ? noun.replace(/s$/, "") : noun.endsWith("s") ? noun : `${noun}s`}` : null });
+  }
+  return { nodes: out, edges: [...merged.values()], members };
 }

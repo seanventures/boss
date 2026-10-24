@@ -103,6 +103,18 @@ export function GraphArea({ projectId, actor, orgId, archived = false }: {
     void loadRepos();
   };
 
+  /** A tab is also the URL's (?kg_tab=), so a reload or a shared link opens the same tab. */
+  const changeTab = (next: GraphTab) => {
+    setTab(next);
+    try {
+      const url = new URL(window.location.href);
+      if (url.searchParams.get("area") === "knowledge") {
+        if (next === "graph") url.searchParams.delete("kg_tab"); else url.searchParams.set("kg_tab", next);
+        window.history.replaceState(window.history.state, "", url.toString());
+      }
+    } catch { /* no location */ }
+  };
+
   const rulesLocked = rulesLock(status);
   const anyIndexed = (repos.data ?? []).some((r) => r.status === "indexed" || (r.graph?.nodes ?? 0) > 0);
   const totalNodes = (repos.data ?? []).reduce((s, r) => s + (r.graph?.nodes ?? 0), 0);
@@ -113,33 +125,37 @@ export function GraphArea({ projectId, actor, orgId, archived = false }: {
     { key: "settings", label: "Settings", tip: "Indexing, embeddings and retention" },
   ];
 
-  let body: React.ReactNode;
-  if (tab === "graph") {
-    if (!repos.data && !repos.error) body = <KgLoading nodes={totalNodes || null} />;
-    else if (repos.data && repos.data.length === 0) body = <KgNoRepo orgId={orgId} />;
-    else if (repos.data && !anyIndexed && working) body = <KgIndexing repos={repos.data} />;
+  // The Graph tab stays mounted while another tab shows (tester round 2: Rules review and back
+  // dropped the focus, the search and the selection); only its key handling pauses.
+  let graphBody: React.ReactNode = null;
+  {
+    if (!repos.data && !repos.error) graphBody = <KgLoading nodes={totalNodes || null} />;
+    else if (repos.data && repos.data.length === 0) graphBody = <KgNoRepo orgId={orgId} />;
+    else if (repos.data && !anyIndexed && working) graphBody = <KgIndexing repos={repos.data} />;
     else if (repos.data && !anyIndexed) {
-      body = <KgIndexing repos={repos.data} busy={indexing} onIndex={() => void startIndex()} />;
+      graphBody = <KgIndexing repos={repos.data} busy={indexing} onIndex={() => void startIndex()} />;
     } else {
-      body = (
+      graphBody = (
         <GraphView projectId={projectId} actor={actor} orgId={orgId} repos={repos.data} onReposChanged={() => void loadRepos()}
-                   rulesLocked={rulesLocked} archived={archived} focusRequest={focus}
-                   onEditRule={(id) => { setEditId(id); setTab("rules"); }} />
+                   rulesLocked={rulesLocked} archived={archived} focusRequest={focus} inactive={tab !== "graph"}
+                   onEditRule={(id) => { setEditId(id); changeTab("rules"); }} />
       );
     }
-  } else if (tab === "rules") {
+  }
+  let body: React.ReactNode = null;
+  if (tab === "rules") {
     body = (
       <RulesReview projectId={projectId} actor={actor} orgId={orgId} archived={archived} locked={rulesLocked}
                    initialScan={deep.scan} initialSub={deep.sub ?? undefined} editId={editId} onCount={setProposed}
-                   onFocusNode={(id) => { seq.current += 1; setFocus({ id, seq: seq.current }); setTab("graph"); }} />
+                   onFocusNode={(id) => { seq.current += 1; setFocus({ id, seq: seq.current }); changeTab("graph"); }} />
     );
-  } else {
+  } else if (tab === "settings") {
     body = <KgSettings projectId={projectId} actor={actor} />;
   }
 
   return (
     <div className="kg" data-testid="kg" data-project={projectId} data-actor={actor} data-tab={tab}>
-      <AreaHead area="kg" title="Graph" tabs={TABS} active={tab} onTab={(k) => setTab(k as GraphTab)}
+      <AreaHead area="kg" title="Graph" tabs={TABS} active={tab} onTab={(k) => changeTab(k as GraphTab)}
                 counts={totalNodes ? <span>{totalNodes.toLocaleString("en-US")} code nodes</span> : undefined} />
       {archived ? <KgArchived /> : null}
       {repos.error && !repos.data && tab === "graph" ? (
@@ -148,6 +164,7 @@ export function GraphArea({ projectId, actor, orgId, archived = false }: {
           <button type="button" className="inf-link" onClick={() => void loadRepos()}>Retry</button>
         </div>
       ) : null}
+      <div className="kg-tab-graph" hidden={tab !== "graph"} data-testid="kg-graph-pane">{graphBody}</div>
       {body}
     </div>
   );

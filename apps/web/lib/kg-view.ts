@@ -57,19 +57,46 @@ function qs(params: Record<string, string | number | boolean | null | undefined>
 }
 
 /** One GET, said in words when it fails. `status` 0 means nothing answered. */
+/** A cold console (tester round 2): the API or its identity check still starting. Retried with
+ *  backoff before anything is said; then said in words, never "identity_unavailable". */
+export const STARTING = "BOSS is still starting up. It will answer in a moment — Retry, or wait a few seconds.";
+export const RETRY_DELAYS_MS = [700, 1600, 3200];
+
+function warmingUp(status: number, body: unknown): boolean {
+  if (status === 0 || status === 502 || status === 504) return true;
+  if (status !== 503) return false;
+  const text = JSON.stringify(body ?? "").toLowerCase();
+  return /identity_unavailable|starting|warming|not ready|unavailable/.test(text);
+}
+
+const sleep = (ms: number, signal?: AbortSignal) => new Promise<void>((resolve) => {
+  const t = setTimeout(resolve, ms);
+  signal?.addEventListener?.("abort", () => { clearTimeout(t); resolve(); });
+});
+
+/** One GET, said in words when it fails. `status` 0 means nothing answered. */
 export async function kgRead<T>(path: string, params: Record<string, string | number | boolean | null | undefined>, signal?: AbortSignal): Promise<Read<T>> {
-  try {
-    const r = await fetch(`${API_URL}${path}?${qs(params)}`, { cache: "no-store", signal });
+  for (let attempt = 0; ; attempt += 1) {
+    let status = 0;
     let body: unknown = null;
-    try { body = await r.json(); } catch { body = null; }
-    if (!r.ok) {
+    try {
+      const r = await fetch(`${API_URL}${path}?${qs(params)}`, { cache: "no-store", signal });
+      status = r.status;
+      try { body = await r.json(); } catch { body = null; }
+      if (r.ok) return { ok: true, data: body as T };
       if (isMissingRoute(r.status, body)) return { ok: false, status: r.status, error: UNAVAILABLE, unavailable: true };
-      return { ok: false, status: r.status, error: apiErrorText(body, r.status) };
+    } catch (e) {
+      if ((e as { name?: string })?.name === "AbortError") return { ok: false, status: -1, error: "cancelled" };
+      status = 0;
     }
-    return { ok: true, data: body as T };
-  } catch (e) {
-    if ((e as { name?: string })?.name === "AbortError") return { ok: false, status: -1, error: "cancelled" };
-    return { ok: false, status: 0, error: "BOSS did not answer. Check that the API is running, then retry." };
+    if (warmingUp(status, body) && attempt < RETRY_DELAYS_MS.length && !signal?.aborted) {
+      await sleep(RETRY_DELAYS_MS[attempt], signal);
+      if (signal?.aborted) return { ok: false, status: -1, error: "cancelled" };
+      continue;
+    }
+    if (status === 0) return { ok: false, status: 0, error: "BOSS did not answer. Check that the API is running, then retry." };
+    if (warmingUp(status, body)) return { ok: false, status, error: STARTING };
+    return { ok: false, status, error: apiErrorText(body, status) };
   }
 }
 
@@ -287,7 +314,7 @@ export function kgWhen(at: string | null | undefined): string {
 /** Search hits that share a name told apart (P1-9): the part of each path the others do not
  *  share, middle-ellipsised, so `…/loanaccount/service/Foo.java` and `…/savings/service/Foo.java`
  *  never read the same. */
-export function distinctPaths(paths: Array<string | null | undefined>, max = 56): string[] {
+export function distinctPaths(paths: Array<string | null | undefined>, max = 44): string[] {
   const split = paths.map((p) => (p ?? "").split("/").filter(Boolean));
   return split.map((segs, i) => {
     if (!segs.length) return "";
@@ -320,7 +347,11 @@ export function distinctPaths(paths: Array<string | null | undefined>, max = 56)
 export function rankHits<H extends { match: string; node: { symbol_kind?: string } }>(q: string, hits: H[]): H[] {
   if (!/^[A-Z]/.test(q.trim())) return hits;
   const tier: Record<string, number> = { exact: 0, prefix: 1, text: 2, meaning: 3 };
-  const member = (h: H) => (h.node.symbol_kind === "method" || h.node.symbol_kind === "function" ? 1 : 0);
+  // Types first, then files and modules, then members (tester round 2: modules ranked above classes).
+  const member = (h: H) => {
+    const k = h.node.symbol_kind ?? (h.node as { kind?: string }).kind ?? "";
+    return k === "method" || k === "function" ? 2 : k === "module" || k === "file" ? 1 : 0;
+  };
   return hits.map((h, i) => ({ h, i })).sort((a, b) => (tier[a.h.match] ?? 9) - (tier[b.h.match] ?? 9)
     || member(a.h) - member(b.h) || a.i - b.i).map((x) => x.h);
 }

@@ -126,8 +126,12 @@ export function ProjectTree({ projectId, actor, tab, onTab, query, selectedId, o
       return out;
     }
     const out: Flat[] = [];
+    // A row is drawn once, even if a page names it again (a cycle can never recurse).
+    const seen = new Set<string>();
     const walk = (key: string, depth: number) => {
       for (const r of pages.get(key)?.rows ?? []) {
+        if (seen.has(r.key)) continue;
+        seen.add(r.key);
         out.push({ row: r, depth, parentKey: key === ROOT ? null : key });
         if (open.has(r.key)) walk(r.key, depth + 1);
       }
@@ -346,7 +350,7 @@ export function ProjectTree({ projectId, actor, tab, onTab, query, selectedId, o
                   </span>
                   <span className="kg-dot kg-row-dot" style={{ background: `var(${dotToken(row)})` }} aria-hidden />
                   <span className="kg-row-label">{highlight(row.label, match ? lower : "")}</span>
-                  {row.count ? <span className="kg-row-count">{row.count.toLocaleString("en-US")}</span> : null}
+                  {row.count ? <span className="kg-row-count" title={countWords(row)}>{row.count.toLocaleString("en-US")}</span> : null}
                 </div>
             );
           })}
@@ -368,6 +372,16 @@ export function ProjectTree({ projectId, actor, tab, onTab, query, selectedId, o
       </div>
     </div>
   );
+}
+
+/** What a row's count counts, said in its tooltip (a bare number next to a name is a guess). */
+export function countWords(row: KgTreeRow): string {
+  const n = row.count;
+  const w = (one: string, many: string) => `${n.toLocaleString("en-US")} ${n === 1 ? one : many}`;
+  if (row.level === "area") return w("package", "packages");
+  if (row.level === "package") return w("class or module", "classes and modules");
+  if (row.level === "class") return w("member", "members");
+  return w("item", "items");
 }
 
 function highlight(label: string, q: string): React.ReactNode {

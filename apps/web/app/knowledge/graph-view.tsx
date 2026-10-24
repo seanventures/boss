@@ -19,7 +19,7 @@ import { useOnScreen } from "../../lib/area-shown";
 import { useAreaKeydown } from "../../lib/area-keys";
 import {
   FOCUS_CEILING, MORE_ID, focusLayout, isBubble, kindName, kindToken, legendKey, overviewLayout,
-  pickEdges, pickOverview, placeNear,
+  groupFocus, pickEdges, pickOverview, placeNear,
 } from "../../lib/kg-layout";
 import {
   INDEX_NOW, distinctPaths, getLive, getNeighbourhood, getOverview, getSearch, indexNow, layersParam, rankHits,
@@ -45,16 +45,12 @@ const idle = <T,>(): Load<T> => ({ data: null, error: null, loading: false });
 /** The neighbourhood a Focus asks for first, and what Show more raises it to (the server's cap). */
 export const FOCUS_FIRST = 40;
 export const FOCUS_MORE = FOCUS_CEILING;
+/** sessionStorage: whether the details drawer was left open. */
+export const PANEL_KEY = "boss.kg.panel";
 
 const LAYER_CHIPS: Array<{ key: Layer; label: string }> = [
   { key: "code", label: "Code" }, { key: "rules", label: "Rules" }, { key: "learning", label: "Learning" },
 ];
-
-/** Connections the panel lists that the canvas also draws around the Focus centre (P1-5): the
- *  structural and learning edges; a class's methods (defines) and plain references stay in the panel. */
-const DRAWN_FROM_DETAIL = new Set(["calls", "extends", "implements", "overrides", "dispatches_to", "imports", "about",
-  "evidenced_by", "governs", "consulted", "reused", "caused_by", "fixed_by", "produced", "ruled_out", "corrects",
-  "supersedes", "approved_by", "changed"]);
 
 export type GraphViewProps = {
   projectId: string;
@@ -67,6 +63,8 @@ export type GraphViewProps = {
   /** A deep link (?kg_node=) or a rule's evidence chip: select and focus it (seq makes a repeat count). */
   focusRequest?: { id: string; seq: number } | null;
   onEditRule: (ruleId: string) => void;
+  /** Another tab of the area shows: the Graph stays mounted, its keys pause. */
+  inactive?: boolean;
 };
 
 /** What a bubble says under its name: classes, or (a Python area) its functions (P2). */
@@ -85,7 +83,8 @@ export function bubbleSub(n: KgViewNode): string | undefined {
 function toCanvas(n: KgViewNode, bubbleOk: boolean, fresh = false): CanvasNode {
   const bubble = bubbleOk && (isBubble(n.kind) || n.kind === "more");
   return {
-    id: n.id, label: n.label, sub: bubble ? bubbleSub(n) : n.sub, kind: n.kind, symbol_kind: n.symbol_kind, layer: n.layer,
+    // An area or package always says what it holds: classes, or (Python, JS) its functions.
+    id: n.id, label: n.label, sub: bubble || n.kind === "area" || n.kind === "package" ? bubbleSub(n) : n.sub, kind: n.kind, symbol_kind: n.symbol_kind, layer: n.layer,
     token: n.kind === "more" ? "--kg-more" : kindToken(n.kind, n.symbol_kind, n.id), bubble, fresh,
     rank: n.kind === "layer" ? 1e6 : n.counts ? (n.counts.classes ?? Object.values(n.counts).reduce((a, b) => a + b, 0)) : 0,
   };
@@ -112,8 +111,17 @@ function useFitHeight(): [React.RefObject<HTMLDivElement | null>, number | null]
     const measure = () => {
       const el = ref.current;
       if (!el || !el.offsetParent) return;
-      const top = el.getBoundingClientRect().top + window.scrollY;
-      setH(Math.max(420, Math.round(window.innerHeight - Math.max(0, top - window.scrollY) - 20)));
+      // Everything above the work area and everything the page draws below it (its card's padding,
+      // the page's own) fits in the window with it: the document is never taller than the viewport.
+      const r = el.getBoundingClientRect();
+      const top = r.top + window.scrollY;
+      // What the page draws under the work area: the rest of its card, then the page's own padding.
+      const card = el.closest("section") ?? el.parentElement;
+      const cardBottom = card ? card.getBoundingClientRect().bottom - r.bottom : 0;
+      const main = el.closest("main");
+      const pad = main ? parseFloat(getComputedStyle(main).paddingBottom) || 0 : 0;
+      const below = Math.max(0, cardBottom) + pad;
+      setH(Math.max(420, Math.round(window.innerHeight - top - below - 2)));
     };
     measure();
     const t = window.setTimeout(measure, 200);
@@ -123,7 +131,7 @@ function useFitHeight(): [React.RefObject<HTMLDivElement | null>, number | null]
   return [ref, h];
 }
 
-export function GraphView({ projectId, actor, orgId, repos, onReposChanged, rulesLocked, archived, focusRequest, onEditRule }: GraphViewProps) {
+export function GraphView({ projectId, actor, orgId, repos, onReposChanged, rulesLocked, archived, focusRequest, onEditRule, inactive = false }: GraphViewProps) {
   const w = useMemo(() => ({ projectId, actor }), [projectId, actor]);
   const onScreen = useOnScreen();
   const [chips, setChips] = useState<Set<Layer>>(new Set());
@@ -138,22 +146,39 @@ export function GraphView({ projectId, actor, orgId, repos, onReposChanged, rule
   const [listView, setListView] = useState(false);
   const [zoom, setZoom] = useState(1);
   const [treeOpen, setTreeOpen] = useState(false);
-  const [panelOpen, setPanelOpen] = useState(false);
+  // Wide: the tree is a column that can be put away (tester round 2: not collapsible at 1280).
+  const [treeCollapsed, setTreeCollapsed] = useState(false);
+  // The details panel is a drawer, closed until something is selected (round 2): the graph has the
+  // whole width. Its open/closed state is remembered for the session.
+  const [panelOpen, setPanelOpenState] = useState(false);
+  const setPanelOpen = useCallback((open: boolean) => {
+    setPanelOpenState(open);
+    try { window.sessionStorage.setItem(PANEL_KEY, open ? "open" : "closed"); } catch { /* private mode */ }
+  }, []);
   const [rebuilding, setRebuilding] = useState(false);
   const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null);
   const [nonce, setNonce] = useState(0);
   const [treeKey, setTreeKey] = useState(0);
-  const [centerDetail, setCenterDetail] = useState<KgNodeDetailResponse | null>(null);
   const bubbleCache = useRef(new Map<string, BubbleSummary>());
   const canvasRef = useRef<CanvasHandle>(null);
   const [workRef, workHeight] = useFitHeight();
-  // The panel as a drawer over the canvas (medium widths): the canvas fits beside it, not under it.
+  // The drawer over the canvas's right edge: the selection is panned out from under it.
   const [occlude, setOcclude] = useState(0);
+  // The canvas's shape: the Whole-repo picture is laid out to it, so it opens at 100%.
+  const [aspect, setAspect] = useState(1.75);
+  // How many areas one Whole-repo page draws: as many as the canvas holds at a readable scale
+  // (tester round 2: a 1280-wide window drew a ball). Ten at most.
+  const [perPage, setPerPage] = useState(10);
   useEffect(() => {
     const el = workRef.current?.querySelector<HTMLElement>(".kg-col-panel");
-    if (!el || typeof getComputedStyle === "undefined") return;
-    const drawer = getComputedStyle(el).position === "absolute";
-    setOcclude(drawer && panelOpen && selected ? el.offsetWidth : 0);
+    if (el) setOcclude(panelOpen && selected ? el.offsetWidth : 0);
+    const c = workRef.current?.querySelector<HTMLElement>(".kg-col-canvas");
+    if (c && c.clientWidth > 0 && c.clientHeight > 0) {
+      const a = Math.round((c.clientWidth / c.clientHeight) * 10) / 10;
+      if (Math.abs(a - aspect) >= 0.2) setAspect(a);
+      const fit = Math.max(4, Math.min(10, Math.floor((c.clientWidth * c.clientHeight) / 52000) - 3));
+      if (fit !== perPage) setPerPage(fit);
+    }
   });
   // Rebuild (index now): KgBuilt pre-greys its button on the same gate; the press checks it too.
   const indexGate = useGate(INDEX_NOW);
@@ -179,7 +204,7 @@ export function GraphView({ projectId, actor, orgId, repos, onReposChanged, rule
     if (view.mode !== "focus") { setHood(idle()); return undefined; }
     const ctl = typeof AbortController !== "undefined" ? new AbortController() : null;
     setHood((h) => ({ ...h, loading: true, error: null }));
-    void getNeighbourhood(w, view.node, { depth: view.depth, layers, limit: Math.min(view.limit, FOCUS_MORE) }, ctl?.signal).then((r) => {
+    void getNeighbourhood(w, view.node, { depth: view.depth, layers, limit: Math.min(view.limit * view.depth, FOCUS_MORE) }, ctl?.signal).then((r) => {
       if (r.ok) setHood({ data: r.data, error: null, loading: false });
       else if (r.status !== -1) setHood({ data: null, error: { status: r.status, text: r.error, unavailable: r.unavailable }, loading: false });
     });
@@ -214,7 +239,11 @@ export function GraphView({ projectId, actor, orgId, repos, onReposChanged, rule
   useEffect(() => {
     if (focusRequest && focusRequest.seq !== linked.current) {
       linked.current = focusRequest.seq;
+      // A deep link restores the drawer as this session left it.
+      let closed = false;
+      try { closed = window.sessionStorage.getItem(PANEL_KEY) === "closed"; } catch { /* private mode */ }
       focusOn(focusRequest.id);
+      if (closed) setPanelOpen(false);
     }
   }, [focusRequest, focusOn]);
 
@@ -245,7 +274,6 @@ export function GraphView({ projectId, actor, orgId, repos, onReposChanged, rule
   }, [onScreen, live.active, live.delay, live.tick]);
 
   // The panel's detail of the Focus centre: what it lists, the canvas draws (P1-5).
-  useEffect(() => { setCenterDetail(null); }, [focusKey]);
 
   // ── what the canvas draws ────────────────────────────────────────────────────────────────
   const page = view.mode === "overview" ? view.page : 0;
@@ -259,45 +287,43 @@ export function GraphView({ projectId, actor, orgId, repos, onReposChanged, rule
         label: `${folded.length.toLocaleString("en-US")} more ${noun}`,
         sub: `of ${total.toLocaleString("en-US")} · double-click for the next`,
         counts: { [noun]: folded.length },
-      } as KgViewNode));
+      } as KgViewNode), perPage);
       const pinned = o.layers.map((l) => l.id);
-      const pos = overviewLayout(pick.nodes.map((n) => ({ id: n.id, key: n.key, w: boxWidth(n) })), pick.edges, pinned);
+      const pos = overviewLayout(pick.nodes.map((n) => ({ id: n.id, key: n.key, w: boxWidth(n) })), pick.edges, pinned, aspect);
       const { drawn, labelled } = pickEdges(pick.edges, selected?.id ?? null, { perNode: 2, labelled: 8 });
       return {
         nodes: pick.nodes.map((n) => toCanvas(n, true)), raw: pick.nodes, edges: drawn, allEdges: pick.edges, pos,
         rings: [] as number[], center: null as string | null, labelled: new Set([...labelled].map(edgeKey)),
         folded: pick.folded, pages: pick.pages, page: pick.page, pageOf: pick.pageOf, total: o.areas.length, noun,
+        groups: new Map<string, KgViewNode[]>(), readCount: 0,
         drawnCount: drawn.length, edgeTotal: o.edges.length,
       };
     }
     const h = hood.data;
     if (!h) return null;
-    const nodes: Array<KgViewNode & { hop: number }> = h.nodes.slice(0, FOCUS_CEILING + 1);
+    const read: Array<KgViewNode & { hop: number }> = h.nodes.slice(0, FOCUS_CEILING + 1);
+    const readIds = new Set(read.map((n) => n.id));
+    // Exactly what the server answered — the same count every time (tester round 2) — with each
+    // hop's ring capped and the rest folded into "+N in <package>" groups, so 2 hops or 200
+    // neighbours still read: every node labelled, none on another.
+    const grouped = groupFocus(h.center.id, read, h.edges.filter((e) => readIds.has(e.src) && readIds.has(e.dst)));
+    const nodes = grouped.nodes as Array<KgViewNode & { hop: number }>;
+    const edges = grouped.edges;
     const ids = new Set(nodes.map((n) => n.id));
-    const edges = h.edges.filter((e) => ids.has(e.src) && ids.has(e.dst));
-    // One source of truth (P1-5): the centre's own connections from its detail join the picture.
-    if (centerDetail && centerDetail.node.id === h.center.id) {
-      for (const g of centerDetail.connections) {
-        if (!DRAWN_FROM_DETAIL.has(g.kind)) continue;
-        for (const item of g.items) {
-          if (nodes.length > FOCUS_CEILING) break;
-          if (!ids.has(item.id)) { ids.add(item.id); nodes.push({ ...item, hop: 1 }); }
-          const e = g.direction === "out" ? { src: h.center.id, dst: item.id } : { src: item.id, dst: h.center.id };
-          if (!edges.some((x) => x.src === e.src && x.dst === e.dst && x.kind === g.kind)) edges.push({ ...e, kind: g.kind, weight: 1, label: null });
-        }
-      }
-    }
     const { pos, rings, angle, ring } = focusLayout(h.center.id, nodes, edges);
     const outer = rings.length - 1;
     const raw: KgViewNode[] = [...nodes];
+    const perRing = new Map<number, number>();
+    for (const r of ring.values()) perRing.set(r, (perRing.get(r) ?? 0) + 1);
     const canvasNodes = nodes.map((n) => {
-      const c = toCanvas(n, n.kind === "area" || n.kind === "layer");
+      const c = n.kind === "group" ? { ...toCanvas(n, false), token: "--kg-more" } : toCanvas(n, n.kind === "area" || n.kind === "layer");
       if (n.id === h.center.id) return { ...c, labelMode: "below" as const, labelMax: 36 };
       const r = ring.get(n.id) ?? 0;
       // Every neighbour named along its ray: outward on the outer ring, inward on the first when
-      // there are more; a middle ring waits for room (hover always names it).
-      const mode = r === outer ? "out" as const : r === 0 ? "in" as const : "below" as const;
-      return { ...c, labelMode: mode, angle: angle.get(n.id), ring: r, labelMax: 22 };
+      // there are more. A ring of a few reads better level, under each node.
+      const few = (perRing.get(r) ?? 0) <= 10;
+      const mode = few ? "below" as const : r === outer ? "out" as const : r === 0 ? "in" as const : "below" as const;
+      return { ...c, labelMode: mode, angle: angle.get(n.id), ring: r, labelMax: 20 };
     });
     const extra: CanvasNode[] = [];
     const extraEdges: KgViewEdge[] = [];
@@ -317,9 +343,10 @@ export function GraphView({ projectId, actor, orgId, repos, onReposChanged, rule
     const all = [...edges, ...extraEdges];
     return {
       nodes: [...canvasNodes, ...extra], raw, edges: all, allEdges: all, pos, rings, center: h.center.id, labelled: strongest,
+      groups: grouped.members as Map<string, KgViewNode[]>, readCount: read.length - 1,
       folded: [] as KgViewNode[], pages: 1, page: 0, pageOf: new Map<string, number>(), total: 0, noun: "", drawnCount: all.length, edgeTotal: all.length,
     };
-  }, [view.mode, page, overview.data, hood.data, liveAdds, selected?.id, centerDetail]);
+  }, [view.mode, page, overview.data, hood.data, liveAdds, selected?.id, aspect, perPage]);
 
   function absorbLive(d: KgLiveResponse) {
     const h = hood.data;
@@ -347,8 +374,8 @@ export function GraphView({ projectId, actor, orgId, repos, onReposChanged, rule
   }
 
   const fitKey = view.mode === "overview"
-    ? `o|${overview.data?.level}|${overview.data?.parent}|${overview.data?.areas.length}|${layers}|${repo}|${page}`
-    : `f|${hood.data?.center.id}|${hood.data?.nodes.length}|${view.depth}|${layers}|${centerDetail ? 1 : 0}`;
+    ? `o|${overview.data?.level}|${overview.data?.parent}|${overview.data?.areas.length}|${layers}|${repo}|${page}|${aspect}|${perPage}`
+    : `f|${hood.data?.center.id}|${hood.data?.nodes.length}|${view.depth}|${layers}`;
 
   const legend = useMemo(() => {
     if (!picture) return [];
@@ -365,7 +392,11 @@ export function GraphView({ projectId, actor, orgId, repos, onReposChanged, rule
   const bubble: BubbleSummary | null = useMemo(() => {
     if (!selected) return null;
     const node = rawById.get(selected.id) ?? selected.node;
-    if (!node || !/^(area|pkg|layer|more):/.test(node.id)) return null;
+    if (!node || !/^(area|pkg|layer|more|group):/.test(node.id)) return null;
+    if (node.id.startsWith("group:") && picture) {
+      // A Focus group: the neighbours it holds, each one press from its own view.
+      return { node: { ...node, sub: undefined }, out: [], in: [], members: picture.groups.get(node.id) ?? [] };
+    }
     if (view.mode === "overview" && picture && rawById.has(node.id)) {
       const edges = picture.allEdges;
       const pair = (id: string) => rawById.get(id)!;
@@ -383,9 +414,17 @@ export function GraphView({ projectId, actor, orgId, repos, onReposChanged, rule
   // The canvas's own edges for the selected node: the panel lists them (P1-5).
   const viewEdges = useMemo(() => {
     if (!selected || !picture || view.mode !== "focus") return null;
-    return picture.edges.filter((e) => e.src === selected.id || e.dst === selected.id)
-      .map((edge) => ({ edge, out: edge.src === selected.id, other: rawById.get(edge.src === selected.id ? edge.dst : edge.src)! }))
-      .filter((x) => x.other).sort((a, b) => b.edge.weight - a.edge.weight);
+    // One row per neighbour (tester round 2: a node joined by two edges was listed twice).
+    const rows = new Map<string, { edge: KgViewEdge; out: boolean; other: KgViewNode }>();
+    for (const edge of picture.edges) {
+      if (edge.src !== selected.id && edge.dst !== selected.id) continue;
+      const out = edge.src === selected.id;
+      const other = rawById.get(out ? edge.dst : edge.src);
+      if (!other) continue;
+      const prev = rows.get(other.id);
+      if (!prev || edge.weight > prev.edge.weight) rows.set(other.id, { edge, out, other });
+    }
+    return [...rows.values()].sort((a, b) => b.edge.weight - a.edge.weight);
   }, [selected, picture, view.mode, rawById]);
 
   // ── the selection, announced (§5.10) ─────────────────────────────────────────────────────
@@ -429,7 +468,7 @@ export function GraphView({ projectId, actor, orgId, repos, onReposChanged, rule
       searchBox.current?.focus();
       searchBox.current?.select();
     }
-  }, { target: "document", capture: true });
+  }, { target: "document", capture: true, enabled: !inactive });
 
   // ── intents ──────────────────────────────────────────────────────────────────────────────
   const onCanvasActivate = (id: string) => {
@@ -443,11 +482,13 @@ export function GraphView({ projectId, actor, orgId, repos, onReposChanged, rule
   };
   const onTreePick = ({ nodeId, row }: TreePick) => {
     if (nodeId) { focusOn(nodeId); return; }
+    // A package is shown on the canvas: its own Focus, its connected packages (tester round 2).
+    if (row.level === "package") { focusOn(row.key, { id: row.key, key: row.key, kind: "package", layer: "code", label: row.label, trust_tier: "observed", counts: { classes: row.count } }); return; }
     // An area, package or group fills the panel (P1-8): what the overview knows of it, or the row.
     const known = rawById.get(row.key);
     const node: KgViewNode = known ?? {
       id: row.key, key: row.key, kind: row.level === "group" ? "group" : row.level, layer: row.layer, label: row.label,
-      trust_tier: "observed", counts: row.level === "area" ? { packages: row.count } : row.level === "package" ? { classes: row.count } : { items: row.count },
+      trust_tier: "observed", counts: row.level === "area" ? { packages: row.count } : { items: row.count },
     };
     setSelected({ id: row.key, node });
     setPanelOpen(true);
@@ -526,7 +567,9 @@ export function GraphView({ projectId, actor, orgId, repos, onReposChanged, rule
       <>
         <GraphCanvas ref={canvasRef} nodes={picture.nodes} edges={picture.edges as CanvasEdge[]} positions={picture.pos}
                      rings={picture.rings} centerId={picture.center} mode={view.mode} selectedId={selected?.id ?? null}
-                     onSelect={(id) => select(id, rawById.get(id))} onActivate={onCanvasActivate} onBack={back}
+                     onSelect={(id) => select(id, rawById.get(id))} onActivate={onCanvasActivate}
+                     onBack={() => { if (panelOpen && selected) setPanelOpen(false); else back(); }}
+                     onClear={() => { setSelected(null); setPanelOpen(false); }}
                      onZoom={setZoom} fitKey={fitKey} labelled={picture.labelled} occludeRight={occlude}
                      ariaLabel={view.mode === "overview"
                        ? `Whole repository: ${picture.raw.length} bubbles and the ${picture.drawnCount} strongest of ${picture.edgeTotal} calls. Tab moves between nodes, Enter focuses one.`
@@ -551,7 +594,6 @@ export function GraphView({ projectId, actor, orgId, repos, onReposChanged, rule
                onEditRule={onEditRule}
                onClose={() => setPanelOpen(false)}
                viewEdges={viewEdges}
-               onDetail={(d) => setCenterDetail(d)}
                onChanged={() => { setNonce((n) => n + 1); setTreeKey((k) => k + 1); }} />
   );
 
@@ -559,8 +601,14 @@ export function GraphView({ projectId, actor, orgId, repos, onReposChanged, rule
   return (
     <div className="kg-graph" data-testid="kg-graph" data-mode={view.mode}>
       <div className="kg-toolbar" role="toolbar" aria-label="Graph controls">
-        <button type="button" className="ag-btn kg-tree-toggle" aria-expanded={treeOpen} onClick={() => setTreeOpen((v) => !v)}
-                data-testid="kg-tree-toggle" title="Show the project tree">
+        <button type="button" className="ag-btn kg-tree-toggle" aria-expanded={treeOpen || !treeCollapsed}
+                onClick={() => {
+                  // A drawer below 860 px of graph, a column above it.
+                  const col = workRef.current?.querySelector<HTMLElement>(".kg-col-tree");
+                  if (col && getComputedStyle(col).position === "absolute") setTreeOpen((v) => !v);
+                  else setTreeCollapsed((v) => !v);
+                }}
+                data-testid="kg-tree-toggle" title={treeCollapsed ? "Show the project tree" : "Hide the project tree"}>
           <TreeStructure size={14} aria-hidden /> Tree
         </button>
         <div className="kg-search" data-testid="kg-search">
@@ -656,6 +704,10 @@ export function GraphView({ projectId, actor, orgId, repos, onReposChanged, rule
                 aria-label={listView ? "Graph view" : "List view"} title={listView ? "Back to the graph" : "List view: the current view as a table of nodes and edges"}>
           <ListBullets size={15} aria-hidden />
         </button>
+        <button type="button" className="ag-btn" aria-expanded={panelOpen && !!selected} aria-controls="kg-details"
+                data-testid="kg-details-toggle" disabled={!selected}
+                title={selected ? (panelOpen ? "Hide the details (Esc)" : "Show the details of the selection") : "Select a node to see its details"}
+                onClick={() => setPanelOpen(!panelOpen)}>Details</button>
       </div>
 
       <div className="kg-subbar">
@@ -668,18 +720,20 @@ export function GraphView({ projectId, actor, orgId, repos, onReposChanged, rule
         ) : null}
         {view.mode === "focus" && focusCenter ? (
           <span className="kg-view-note" data-testid="kg-view-note">
-            {focusCenter.label} and {(picture ? picture.nodes.length - 1 : hood.data!.nodes.length - 1).toLocaleString("en-US")} connected within {view.depth} {view.depth === 1 ? "hop" : "hops"}
+            {focusCenter.label} and {(picture?.readCount ?? hood.data!.nodes.length - 1).toLocaleString("en-US")} connected within {view.depth} {view.depth === 1 ? "hop" : "hops"}
+            {picture && picture.groups.size ? ` · ${picture.nodes.length - 1 - picture.groups.size} drawn, the rest in ${picture.groups.size} ${picture.groups.size === 1 ? "group" : "groups"}` : ""}
             {history.current.length ? <> · <button type="button" className="inf-link" onClick={back}>Back</button></> : null}
           </span>
         ) : null}
         {view.mode === "overview" && o && picture ? (
-          <span className="kg-view-note" data-testid="kg-overview-note">
-            {folded
-              ? `The ${picture.raw.filter((n) => n.kind !== "layer" && n.kind !== "more").length} ${picture.page ? "next" : "largest"} of ${picture.total.toLocaleString("en-US")} ${picture.noun}; the rest are in “${folded} more”. `
-              : `${picture.total.toLocaleString("en-US")} ${picture.noun}. `}
-            {picture.drawnCount < picture.edgeTotal ? `The strongest ${picture.drawnCount} of ${picture.edgeTotal.toLocaleString("en-US")} connections; select a bubble for all of its own. ` : ""}
-            Double-click {o.level === "package" ? "a package to focus it" : "an area to open its packages"}.
-          </span>
+          (() => {
+            const drawnAreas = picture.raw.filter((n) => n.kind !== "layer" && n.kind !== "more").length;
+            const text = `${folded
+              ? `The ${drawnAreas} ${picture.page ? "next" : "largest"} of ${picture.total.toLocaleString("en-US")} ${picture.noun}; the rest are in “${folded} more”. `
+              : `${picture.total.toLocaleString("en-US")} ${picture.noun}. `}${picture.drawnCount < picture.edgeTotal
+              ? `The strongest ${picture.drawnCount} of ${picture.edgeTotal.toLocaleString("en-US")} connections; select a bubble for all of its own. ` : ""}Double-click ${o.level === "package" ? "a package to focus it" : "an area to open its packages"}.`;
+            return <span className="kg-view-note" data-testid="kg-overview-note" title={text}>{text}</span>;
+          })()
         ) : null}
         {view.mode === "overview" && picture && picture.page > 0 ? (
           <button type="button" className="inf-link" data-testid="kg-first-page" onClick={() => go({ mode: "overview", area, page: 0 })}>Back to the largest</button>
@@ -697,15 +751,24 @@ export function GraphView({ projectId, actor, orgId, repos, onReposChanged, rule
         {o ? <KgBuilt builtAt={o.built_at} stale={o.stale} onRebuild={() => void rebuild()} busy={rebuilding || archived} indexing={indexingNow} /> : null}
       </div>
 
-      <div ref={workRef} className="kg-work" data-tree-open={treeOpen || undefined} data-panel-open={(panelOpen && !!selected) || undefined}
-           style={workHeight ? { height: workHeight } : undefined}>
+      <div ref={workRef} className="kg-work" data-tree-open={treeOpen || undefined} data-tree-collapsed={treeCollapsed || undefined} data-panel-open={(panelOpen && !!selected) || undefined}
+           style={{ ...(workHeight ? { height: workHeight } : {}), ["--kg-occlude" as string]: `${occlude}px` }}>
         <div className="kg-col-tree" data-testid="kg-col-tree">
           <ProjectTree projectId={projectId} actor={actor} tab={treeTab} onTab={setTreeTab} query={query}
                        selectedId={selected?.id ?? null} onPick={(p) => { onTreePick(p); setTreeOpen(false); }}
                        refreshKey={treeKey} reveal={reveal} />
         </div>
         <div className="kg-col-canvas" data-testid="kg-col-canvas">{stage}</div>
-        <div className="kg-col-panel" data-testid="kg-col-panel">{panel}</div>
+        <div className="kg-col-panel" id="kg-details" data-testid="kg-col-panel" role="region" aria-label="Details"
+             aria-hidden={!(panelOpen && selected) || undefined}
+             onKeyDown={(e) => {
+               // Esc closes the drawer from anywhere inside it and hands the keyboard back to the graph.
+               if (e.key !== "Escape" || e.defaultPrevented) return;
+               if ((e.target as HTMLElement).closest("input, textarea, select")) return;
+               e.preventDefault();
+               setPanelOpen(false);
+               workRef.current?.querySelector<HTMLElement>(".kg-canvas, [data-testid=kg-tree-row][tabindex='0']")?.focus();
+             }}>{panel}</div>
       </div>
       <span className="ag-sr" aria-live="polite" data-testid="kg-announce">{announce}</span>
     </div>

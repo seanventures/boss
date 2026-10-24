@@ -70,21 +70,21 @@ describe("P1-2 the moved-to-Graph cards keep the project", () => {
   });
 });
 
-describe("P1-5 the canvas and the panel show the same connections", () => {
-  it("the Focus centre's listed connections are drawn, and the panel lists what the canvas draws", async () => {
+describe("P1-5 the canvas and the panel show the same connections (round 2: deterministic)", () => {
+  it("the canvas draws exactly what the server answered (grouped past the cap), the panel lists one row per drawn neighbour", async () => {
     const center = FX.hood.center;
-    const implementer = { ...FX.hood.nodes[5], id: "kgn_only_in_the_panel_0001", label: "OnlyInThePanelImpl" };
-    const detail = { ...FX.detail, node: center, connections: [{ kind: "implements", direction: "in", label: "Implemented by", total: 1, items: [implementer] }] };
     window.history.replaceState(null, "", `/?area=knowledge&kg_node=${center.id}`);
-    mockKgFetch({ "/view/node/": { body: detail } });
+    mockKgFetch({ "/view/node/": { body: { ...FX.detail, node: center } } });
     await mount(<GraphArea projectId="p" actor="ceo" />);
     await settle();
-    // The implementer the panel lists is on the canvas too.
-    expect(Number($('[data-testid="kg-canvas"]')?.getAttribute("data-nodes"))).toBe(FX.hood.nodes.length + 1);
-    // And the panel lists the canvas's own edges for the centre.
+    const drawn = Number($('[data-testid="kg-canvas"]')?.getAttribute("data-nodes"));
+    // 80 read: 28 drawn on the ring, the rest in package groups; the same number every time.
+    expect(drawn).toBeLessThan(FX.hood.nodes.length);
+    expect($('[data-testid="kg-view-note"]')?.textContent).toMatch(/and 80 connected within 1 hop · 28 drawn, the rest in \d+ groups?/);
     const inView = $$('[data-testid="kg-conn-view"] [data-testid="kg-conn-item"]');
-    expect(inView.length).toBe(FX.hood.edges.filter((e) => e.src === center.id || e.dst === center.id).length + 1);
-    expect($('[data-testid="kg-conn-view"]')?.textContent).toContain("OnlyInThePanelImpl");
+    expect(inView.length).toBe(drawn - 1);
+    const labels = inView.map((e) => e.textContent);
+    expect(new Set(labels).size).toBe(labels.length);
   });
 });
 
@@ -215,7 +215,7 @@ describe("P1-12, P1-13, P2", () => {
     const css = readFileSync("app/knowledge/kg.css", "utf8");
     expect(css).toMatch(/\.kg-toolbar \{[^}]*flex-wrap: nowrap/);
     expect(css).toMatch(/container: kg \/ inline-size/);
-    expect(css).toMatch(/@container kg \(max-width: 1450px\)/);
+    expect(css).toMatch(/@container kg \(max-width: 860px\)/);
     expect(css).not.toMatch(/@media \(max-width: 1100px\)/);
     expect(calls).toBeDefined();
   });

@@ -350,7 +350,15 @@ function FactsQueue({ w }: { w: { projectId: string; actor: string } }) {
       {error ? <KgReadError error={error} onRetry={() => void load()} testId="kg-facts-error" what="The fact queue" /> : null}
       {msg ? <p className={msg.ok ? "kg-ok" : "kg-inline-err"} role={msg.ok ? "status" : "alert"}>{msg.text}</p> : null}
       {items === null && !error ? <ul className="kg-cards" aria-busy="true"><li className="kg-card kg-card-skel"><span className="kg-skel-row" /><span className="kg-skel-row" /></li></ul> : null}
-      {items && !items.length ? <p className="kg-tree-empty" data-testid="kg-facts-empty">No inferred facts are waiting for a person.</p> : null}
+      {items && !items.length ? (
+        <div className="kg-stage kg-stage-short" data-testid="kg-facts-empty">
+          <div className="kg-empty" role="status">
+            <span className="kg-empty-eyebrow">Facts</span>
+            <h3 className="kg-empty-title">Nothing waiting for a person</h3>
+            <p className="kg-empty-body">When an agent infers a fact while it works, it waits here until someone approves it as trusted input for every agent, or rejects it.</p>
+          </div>
+        </div>
+      ) : null}
       {items?.length ? (
         <ul className="kg-cards">
           {items.map((f) => (
