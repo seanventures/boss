@@ -40,6 +40,7 @@ export {
   DeploymentLine, appOrigin, failingGatesOf, fromInteractiveControl, isRetryable, latestPreviewFor,
   leadLine, pickBuiltRun,
 } from "./factory/legacy-build-parts";
+import { useAreaKeydown } from "../lib/area-keys";
 
 type View = "floor" | "apps" | "repositories" | "components";
 type UrlState = { view: View; build: string | null; app?: string | null; changeset?: string | null };
@@ -316,20 +317,16 @@ export function CodeTasksHome({ projectId, orgId, codeTasks, codeTaskTotal, apiR
   }, []);
 
   // `/` finds a build.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      const t = e.target as HTMLElement | null;
-      const typing = !!t?.closest?.("input, textarea, select, [contenteditable=true]");
-      if (e.key === "/" && !typing && !e.metaKey && !e.ctrlKey && !url.build) {
-        e.preventDefault();
-        find.current?.focus();
-      }
-      // Esc inside the cockpit is the cockpit's own chain (drawer → filter → Floor): it calls
-      // onClose last. Handling it here too raced the cockpit's listener and skipped the chain.
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [url.build, closeBuild]);
+  useAreaKeydown((e: KeyboardEvent) => {
+    const t = e.target as HTMLElement | null;
+    const typing = !!t?.closest?.("input, textarea, select, [contenteditable=true]");
+    if (e.key === "/" && !typing && !e.metaKey && !e.ctrlKey && !url.build) {
+      e.preventDefault();
+      find.current?.focus();
+    }
+    // Esc inside the cockpit is the cockpit's own chain (drawer → filter → Floor): it calls
+    // onClose last. Handling it here too raced the cockpit's listener and skipped the chain.
+  }, { target: "document" });
 
   const plan = useCallback(() => openPlan("pm", { from: "roster" }), []);
   const runs = codeTasks.filter((c) => !isInternalRun(c));

@@ -12,12 +12,13 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 
 import { GatedButton } from "../../components/gated";
 import { LockedPanel } from "../../components/locked-panel";
+import { KgReadError } from "./kg-states";
 import { roleWords } from "../agents/chain-model";
 import { actorWords } from "../../lib/actor-words";
-import { formatDateTimeShort } from "../../lib/datetime";
 import {
   FACT_MANAGE, RULE_REVIEW, approveRule, codeHref, editRule, getGraphStatus, getRules, kgRunHref, promoteFact,
   rejectFact, rejectRule,
+  kgWhen,
 } from "../../lib/kg-view";
 import { KG_RULE_CATEGORIES, type KgRule, type KgRuleCategory, type KgRulesResponse, type KgRuleStatus } from "../../lib/kg-view-types";
 
@@ -27,10 +28,8 @@ const STATUS: Array<{ key: StatusFilter; label: string }> = [
   { key: "rejected", label: "Rejected" }, { key: "all", label: "All" },
 ];
 
-/** "Oct 24, 9:40 AM UTC": one zone and locale, so the server and the browser agree. */
-function when(at: string | null | undefined): string {
-  return formatDateTimeShort(at, at ?? "");
-}
+/** One formatter for the area: the viewer's own zone, labelled (lib/kg-view.ts kgWhen). */
+const when = kgWhen;
 
 export function RulesReview({ projectId, actor, orgId, archived, locked, initialScan, initialSub, onFocusNode, editId, onCount }: {
   projectId: string; actor: string; orgId?: string | null;
@@ -50,7 +49,7 @@ export function RulesReview({ projectId, actor, orgId, archived, locked, initial
   const [scan, setScan] = useState<string>(initialScan ?? "");
   const [area, setArea] = useState<string>("");
   const [data, setData] = useState<KgRulesResponse | null>(null);
-  const [error, setError] = useState<{ status: number; text: string } | null>(null);
+  const [error, setError] = useState<{ status: number; text: string; unavailable?: boolean } | null>(null);
   const [loading, setLoading] = useState(true);
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [confirmBulk, setConfirmBulk] = useState(false);
@@ -67,7 +66,7 @@ export function RulesReview({ projectId, actor, orgId, archived, locked, initial
     const r = await getRules(w, { status: status === "all" ? null : status, scan_id: scan || null, area: area || null });
     setLoading(false);
     if (r.ok) { setData(r.data); setError(null); onCount?.(r.data.counts.proposed ?? 0); }
-    else setError({ status: r.status, text: r.error });
+    else setError({ status: r.status, text: r.error, unavailable: r.unavailable });
   }, [w, status, scan, area, onCount]);
 
   useEffect(() => { if (!locked && sub === "rules") void load(); }, [load, locked, sub, nonce]);
@@ -165,12 +164,7 @@ export function RulesReview({ projectId, actor, orgId, archived, locked, initial
 
       {sub === "facts" ? <FactsQueue w={w} /> : (
         <>
-          {error ? (
-            <div className="kg-banner" data-tone="red" role="alert" data-testid="kg-review-error">
-              <span>{error.text}</span>
-              <button type="button" className="inf-link" onClick={() => void load()}>Retry</button>
-            </div>
-          ) : null}
+          {error ? <KgReadError error={error} onRetry={() => void load()} testId="kg-review-error" what="Rules review" /> : null}
           {loading && !data ? (
             <ul className="kg-cards" aria-busy="true" data-testid="kg-review-loading">
               {Array.from({ length: 3 }, (_, i) => <li key={i} className="kg-card kg-card-skel"><span className="kg-skel-row" /><span className="kg-skel-row" /><span className="kg-skel-row" style={{ width: "40%" }} /></li>)}
@@ -334,12 +328,12 @@ function RuleCard({ r, w, orgId, archived, archivedWhy, picked, editing, onPick,
 /** The fact promotion queue (was Approvals › Knowledge facts waiting for a person). */
 function FactsQueue({ w }: { w: { projectId: string; actor: string } }) {
   const [items, setItems] = useState<Array<{ id: string; node_key: string; body: string }> | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<{ status: number; text: string; unavailable?: boolean } | null>(null);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const load = useCallback(async () => {
     const r = await getGraphStatus(w);
-    if (r.ok) { setItems(r.data.promotion_candidates ?? []); setError(null); } else setError(r.error);
+    if (r.ok) { setItems(r.data.promotion_candidates ?? []); setError(null); } else setError({ status: r.status, text: r.error, unavailable: r.unavailable });
   }, [w]);
   useEffect(() => { void load(); }, [load]);
   const decide = async (id: string, action: "promote" | "reject") => {
@@ -353,11 +347,7 @@ function FactsQueue({ w }: { w: { projectId: string; actor: string } }) {
   return (
     <section className="kg-facts" data-testid="kg-facts" data-area="knowledge-promotion" aria-label="Facts waiting for a person">
       <p className="kg-quiet">Facts agents inferred while they worked. Approving one makes it trusted input for every agent; rejecting closes it.</p>
-      {error ? (
-        <div className="kg-banner" data-tone="red" role="alert" data-testid="kg-facts-error">
-          <span>{error}</span><button type="button" className="inf-link" onClick={() => void load()}>Retry</button>
-        </div>
-      ) : null}
+      {error ? <KgReadError error={error} onRetry={() => void load()} testId="kg-facts-error" what="The fact queue" /> : null}
       {msg ? <p className={msg.ok ? "kg-ok" : "kg-inline-err"} role={msg.ok ? "status" : "alert"}>{msg.text}</p> : null}
       {items === null && !error ? <ul className="kg-cards" aria-busy="true"><li className="kg-card kg-card-skel"><span className="kg-skel-row" /><span className="kg-skel-row" /></li></ul> : null}
       {items && !items.length ? <p className="kg-tree-empty" data-testid="kg-facts-empty">No inferred facts are waiting for a person.</p> : null}

@@ -382,7 +382,7 @@ function ToolsItem({ projectId, actor, roleKey, server, onDone }: {
   return (
     <span className="ld-tools" data-testid={`agent-mcp-tools-list-${server.mcp_server_id}`}>
       {failed ? (
-        <button type="button" role="menuitem" className="ld-retry" data-testid={`agent-mcp-tools-retry-${server.mcp_server_id}`}
+        <button type="button" role="menuitem" className="linklike ld-retry" data-testid={`agent-mcp-tools-retry-${server.mcp_server_id}`}
                 onClick={() => setAttempt((n) => n + 1)}>Can&apos;t reach BOSS API · Retry</button>
       ) : all === null ? <span className="kit-faint">Reading…</span> : all.length === 0 ? <span className="kit-faint">No tools listed</span> : all.map((t) => (
         <label key={t.name} className="ld-tool" data-tip={t.description || undefined}>

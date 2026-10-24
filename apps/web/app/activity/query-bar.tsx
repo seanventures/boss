@@ -15,6 +15,7 @@ import { SCOPE_KEYS, parseToken, removeToken, tokenForId, type LogToken, type Lo
 import { nameOf, RunFace } from "../agents/run-face";
 import { LEVELS, SERVICE_LABEL, STATUSES, STREAMS, tokenText } from "./log-model";
 import { useIdentityVersion } from "../../lib/use-agent-identities";
+import { useAreaKeydown } from "../../lib/area-keys";
 
 type Suggestion = { token: LogToken; label: string; count?: number };
 
@@ -70,17 +71,13 @@ export function QueryBar({ tokens, q, labels, names, facets, error, onTokens, on
   useEffect(() => { setText((cur) => (cur.includes(":") ? cur : q)); }, [q]);
 
   // `/` focuses the bar from anywhere that is not already a text box.
-  useEffect(() => {
-    const on = (e: KeyboardEvent) => {
-      if (e.key !== "/" || e.metaKey || e.ctrlKey) return;
-      const target = e.target as HTMLElement | null;
-      if (target && (target.closest("input, textarea, select, [contenteditable=true]"))) return;
-      e.preventDefault();
-      input.current?.focus();
-    };
-    window.addEventListener("keydown", on);
-    return () => window.removeEventListener("keydown", on);
-  }, []);
+  useAreaKeydown((e: KeyboardEvent) => {
+    if (e.key !== "/" || e.metaKey || e.ctrlKey) return;
+    const target = e.target as HTMLElement | null;
+    if (target && (target.closest("input, textarea, select, [contenteditable=true]"))) return;
+    e.preventDefault();
+    input.current?.focus();
+  });
 
   // Plain text searches after a pause in typing; `key:` text is a token in progress, never a search.
   useEffect(() => {

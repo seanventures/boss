@@ -162,6 +162,27 @@ export function KgIndexing({ repos, onIndex, busy }: { repos: KgRepository[]; on
   );
 }
 
+/** A read failed: a route not on this install is a designed card that says when it arrives
+ *  (tester round 1 P0-3, never "Not Found · Retry"); anything else is the server's words + Retry. */
+export function KgReadError({ error, onRetry, testId, what }: {
+  error: { status: number; text: string; unavailable?: boolean }; onRetry: () => void; testId: string; what: string;
+}) {
+  if (error.unavailable) {
+    return (
+      <div className="kg-stage kg-stage-short" data-testid={`${testId}-unavailable`} data-tone="amber">
+        <Rings />
+        <div className="kg-empty" role="status">
+          <span className="kg-empty-eyebrow">{what}</span>
+          <h3 className="kg-empty-title">Not on this install yet</h3>
+          <p className="kg-empty-body">{what} arrives with this release&apos;s knowledge update. The code graph works now; this view fills in once the update is installed.</p>
+          <div className="kg-empty-actions"><button type="button" className="ag-btn" onClick={onRetry}>Check again</button></div>
+        </div>
+      </div>
+    );
+  }
+  return <KgError text={error.text} onRetry={onRetry} testId={testId} />;
+}
+
 /** An error: the server's words and Retry, inline; the other panels keep working. */
 export function KgError({ text, onRetry, testId = "kg-error" }: { text: string; onRetry: () => void; testId?: string }) {
   return (
@@ -203,27 +224,35 @@ export function KgBuilt({ builtAt, stale, onRebuild, busy, indexing }: {
   );
 }
 
-/** Empty layer: e.g. only the Rules chip on, and no rule exists yet. */
-export function KgEmptyLayer({ layer, onScan }: { layer: "rules" | "learning"; onScan?: () => void }) {
+/** Empty layer: only the Rules (or Learning) chip on and nothing of it — in the whole repo, or
+ *  around the node in Focus (tester round 1 P1-6). Says what is true and offers the next step. */
+export function KgEmptyLayer({ layer, onScan, scope = "repo", children }: {
+  layer: "rules" | "learning"; onScan?: () => void; scope?: "repo" | "here"; children?: React.ReactNode;
+}) {
   return layer === "rules" ? (
-    <StageCard testId="kg-empty-layer" eyebrow="Rules" title="No rules yet"
-               body="Scan an area for business rules: Scout reads its code within a budget you set and proposes the rules it finds, each with the lines that show it. You approve them in Rules review.">
+    <StageCard testId="kg-empty-layer" eyebrow="Rules" title={scope === "here" ? "No rules here yet" : "No rules yet"}
+               body={scope === "here"
+                 ? "No business rule governs this code yet. Scan it: Scout reads it within a budget you set and proposes the rules it finds, each with the lines that show it. You approve them in Rules review."
+                 : "Scan an area for business rules: Scout reads its code within a budget you set and proposes the rules it finds, each with the lines that show it. You approve them in Rules review."}>
+      {children}
       {onScan ? <button type="button" className="ag-btn ag-btn-primary" data-testid="kg-empty-layer-scan" onClick={onScan}>Choose an area to scan</button> : null}
     </StageCard>
   ) : (
-    <StageCard testId="kg-empty-layer" eyebrow="Learning" title="Nothing learned yet"
+    <StageCard testId="kg-empty-layer" eyebrow="Learning" title={scope === "here" ? "Nothing learned about this yet" : "Nothing learned yet"}
                body="Agents record what they try, rule out, find and fix while they work: test failures and their fixes, root causes, precedents. They appear here, linked to the code, within seconds." />
   );
 }
 
-/** A large neighbourhood: what the limit left out, and Show more (never more than 300). */
-export function KgTruncation({ shown, hidden, level, onMore, maxed }: { shown: number; hidden: number; level: string; onMore?: () => void; maxed: boolean }) {
+/** A large neighbourhood: what the limit left out, and Show more up to the most one view reads. */
+export function KgTruncation({ shown, hidden, level, onMore, maxed, max = 200 }: {
+  shown: number; hidden: number; level: string; onMore?: () => void; maxed: boolean; max?: number;
+}) {
   const noun = level === "class" ? "classes" : level === "package" ? "packages" : level === "method" ? "symbols" : "nodes";
   return (
     <p className="kg-trunc" data-testid="kg-truncated" role="status">
       Showing {shown.toLocaleString("en-US")} of {(shown + hidden).toLocaleString("en-US")} connected {noun}, the most connected first
-      {maxed ? " — 300 is the most one view draws; narrow it with layers or hops." : null}
-      {!maxed && onMore ? <> · <button type="button" className="inf-link" data-testid="kg-show-more" onClick={onMore}>Show more</button></> : null}
+      {maxed ? ` — ${max} is the most one view reads; narrow it with layers or hops.` : null}
+      {!maxed && onMore ? <> · <button type="button" className="inf-link" data-testid="kg-show-more" onClick={onMore}>Show {max}</button></> : null}
     </p>
   );
 }

@@ -24,6 +24,7 @@ import type { OrgDrift } from "../lib/agents-org-board";
 import { notifyChanged } from "./changed";
 import { ActivityRiver } from "./agents/activity-river";
 import { openRoom } from "../lib/agent-converse";
+import { useAreaKeydown } from "../lib/area-keys";
 
 /**
  * The Agents area: Live, Organization, Directory, Activity (and Panels when there is one) —
@@ -209,18 +210,14 @@ export function WorkforceArea(
   const dot = liveDot(needs, working);
 
   // `/` finds an agent, from anywhere in the area.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "/" || e.metaKey || e.ctrlKey || e.altKey || !areaIsAgents()) return;
-      const t = e.target as HTMLElement | null;
-      if (t && (t.closest("input, textarea, select, [contenteditable='true']"))) return;
-      e.preventDefault();
-      setSearchOpen(true);
-      window.setTimeout(() => searchBox.current?.focus(), 0);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  useAreaKeydown((e: KeyboardEvent) => {
+    if (e.key !== "/" || e.metaKey || e.ctrlKey || e.altKey || !areaIsAgents()) return;
+    const t = e.target as HTMLElement | null;
+    if (t && (t.closest("input, textarea, select, [contenteditable='true']"))) return;
+    e.preventDefault();
+    setSearchOpen(true);
+    window.setTimeout(() => searchBox.current?.focus(), 0);
+  });
 
   const tabs: { key: AgentsView; label: React.ReactNode; testid: string }[] = [
     { key: "live", testid: "agents-view-live", label: (

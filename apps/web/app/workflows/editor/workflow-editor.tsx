@@ -43,6 +43,7 @@ import { SummaryChips } from "./summary-chips";
 import { NO_DELETE_TIP, TopBar } from "./top-bar";
 import { TestRunPanel } from "./test-run-panel";
 import { useCan } from "../../../components/identity/identity-provider";
+import { useAreaKeydown } from "../../../lib/area-keys";
 
 const BLOCK_REMOVED: Record<ControlBlock, string> = {
   condition: "Branch removed", parallel: "Parallel steps removed", bounded_loop: "Repeat removed",
@@ -425,33 +426,29 @@ export function WorkflowEditor({ projectId, workflowKey, onBack, onStart, actor,
   }, [projectId, dispatch, meta.definition_id]);
 
   /* ── Keys ── */
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      const mod = e.metaKey || e.ctrlKey;
-      const k = e.key.toLowerCase();
-      if (mod && k === "s") { e.preventDefault(); if (publishGate.allowed) void saveFlow.save(); return; }
-      if (typing(e.target) || e.defaultPrevented) return;
-      if (mod && k === "z") { e.preventDefault(); dispatch({ type: e.shiftKey ? "REDO" : "UNDO" }); return; }
-      if (mod && k === "y") { e.preventDefault(); dispatch({ type: "REDO" }); return; }
-      if (mod && k === "d") {
-        e.preventDefault();
-        if (state.selection && !readOnly) dispatch({ type: "DUPLICATE", id: state.selection });
-        return;
-      }
-      if (mod || e.altKey) return;
-      if (k === "f" && view === "visual") { setZoom("fit"); return; }
-      if (k === "delete" || k === "backspace") {
-        const active = document.activeElement as HTMLElement | null;
-        const node = active?.closest<HTMLElement>(".wf-lane .wf-node[data-step-id]");
-        const id = node?.dataset.stepId ?? (!active || active === document.body ? state.selection : null);
-        if (id) { e.preventDefault(); remove(id); }
-        return;
-      }
-      if (k === "escape" && (state.selection || settingsOpen)) closeDrawer();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [saveFlow, publishGate.allowed, dispatch, state.selection, readOnly, view, remove, settingsOpen, closeDrawer]);
+  useAreaKeydown((e: KeyboardEvent) => {
+    const mod = e.metaKey || e.ctrlKey;
+    const k = e.key.toLowerCase();
+    if (mod && k === "s") { e.preventDefault(); if (publishGate.allowed) void saveFlow.save(); return; }
+    if (typing(e.target) || e.defaultPrevented) return;
+    if (mod && k === "z") { e.preventDefault(); dispatch({ type: e.shiftKey ? "REDO" : "UNDO" }); return; }
+    if (mod && k === "y") { e.preventDefault(); dispatch({ type: "REDO" }); return; }
+    if (mod && k === "d") {
+      e.preventDefault();
+      if (state.selection && !readOnly) dispatch({ type: "DUPLICATE", id: state.selection });
+      return;
+    }
+    if (mod || e.altKey) return;
+    if (k === "f" && view === "visual") { setZoom("fit"); return; }
+    if (k === "delete" || k === "backspace") {
+      const active = document.activeElement as HTMLElement | null;
+      const node = active?.closest<HTMLElement>(".wf-lane .wf-node[data-step-id]");
+      const id = node?.dataset.stepId ?? (!active || active === document.body ? state.selection : null);
+      if (id) { e.preventDefault(); remove(id); }
+      return;
+    }
+    if (k === "escape" && (state.selection || settingsOpen)) closeDrawer();
+  });
 
   /* ── Render ── */
   const gapAction = useCallback((at: number) => (

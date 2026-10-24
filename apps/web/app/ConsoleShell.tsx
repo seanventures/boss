@@ -1216,6 +1216,9 @@ function ConsoleShellInner({
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // An area that answered the key itself (the Graph's own ⌘K search, a canvas's Esc) has
+      // prevented its default: the shell neither opens the palette nor collapses the rail.
+      if (e.defaultPrevented) return;
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
         setPaletteOpen((v) => !v);
@@ -1659,7 +1662,7 @@ function ConsoleShellInner({
               {loadSlow ? (
                 <span>
                   This is taking longer than usual — the control plane may be busy.{" "}
-                  <button type="button" className="linkish"
+                  <button type="button" className="linklike"
                           onClick={() => window.location.reload()}>
                     Reload the page
                   </button>

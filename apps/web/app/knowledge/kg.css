@@ -14,8 +14,12 @@
   --kg-fix: #4ade80;
   --kg-precedent: #e879f9;
   /* Proposed in §5.3 and adopted (operator, §7: "spec's proposed colours stand"). */
-  --kg-enum: #38bdf8;
-  --kg-record: #38bdf8;
+  /* Colour distinguishes kind (operator's rule): enums and records are not another blue. */
+  --kg-enum: #e2e8f0;
+  --kg-record: #e2e8f0;
+  --kg-file: #cbd5e1;
+  /* The "N more areas" bubble: a code bubble, quieter. */
+  --kg-more: #3b5b94;
   --kg-function: #94a3c8;
   --kg-endpoint: var(--teal);
   --kg-table: #facc15;
@@ -103,8 +107,15 @@
 .kg-bar i { display: block; height: 100%; background: var(--accent-text); transition: width 400ms ease; }
 
 /* ── the Graph tab: toolbar, sub-bar, three columns ───────────────────────────────────────── */
-.kg-graph { display: flex; flex-direction: column; min-width: 0; border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--surface); overflow: hidden; }
-.kg-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+.kg-graph {
+  display: flex; flex-direction: column; min-width: 0; border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--surface);
+  overflow: hidden; container: kg / inline-size;
+}
+/* One row at every desktop width (tester round 1 P0-2, P1-10): the search gives way first. */
+.kg-toolbar { display: flex; flex-wrap: nowrap; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--border); min-width: 0; }
+.kg-toolbar > * { flex: none; }
+.kg-toolbar > .kg-search { flex: 0 1 15rem; min-width: 7rem; }
+.kg-toolbar > .ag-spacer { flex: 1 1 0; min-width: 0; }
 .kg-subbar { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; min-height: 30px; padding: 4px 12px; font-size: 0.8rem; color: var(--muted); }
 .kg-subbar:empty { display: none; }
 .kg-view-note { color: var(--muted); }
@@ -112,7 +123,8 @@
 .kg-trunc { margin: 0; color: var(--amber); }
 .kg-tree-toggle { display: none; }
 .kg-search { position: relative; }
-.kg-find input { width: 250px; }
+.kg-find { width: 100%; }
+.kg-find input { width: 100%; min-width: 0; }
 .kg-chips { display: inline-flex; flex-wrap: wrap; gap: 6px; }
 .kg-layer-chip {
   display: inline-flex; align-items: center; gap: 7px; min-height: 30px; padding: 0 12px; border: 1px solid var(--border-strong);
@@ -136,15 +148,16 @@
 .kg-hit { display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px; border: 0; border-radius: var(--r-sm); background: transparent; color: var(--ink); font: inherit; text-align: left; cursor: pointer; }
 .kg-hit[aria-selected="true"] { background: var(--surface-3); }
 .kg-hit-text { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
-.kg-hit-label { font-size: 0.86rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.kg-hit-kind { margin-left: 4px; font-size: 0.72rem; color: var(--faint); }
-.kg-hit-path { font-size: 0.72rem; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
+.kg-hit-line { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.kg-hit-label { min-width: 0; font-size: 0.86rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kg-hit-kind { flex: none; font-size: 0.72rem; color: var(--faint); }
+.kg-hit-path { font-size: 0.72rem; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .kg-drop-none { margin: 0; padding: 10px; font-size: 0.84rem; color: var(--muted); }
 .kg-drop-meaning { display: block; margin: 4px 8px 6px; }
 
 .kg-work {
-  display: grid; grid-template-columns: 15.78947rem minmax(0, 1fr) 18.94737rem; height: clamp(520px, calc(100vh - 250px), 1100px);
-  border-top: 1px solid var(--border); min-width: 0;
+  position: relative; display: grid; grid-template-columns: 15.78947rem minmax(0, 1fr) 18.94737rem;
+  height: clamp(420px, calc(100vh - 230px), 1400px); border-top: 1px solid var(--border); min-width: 0;
 }
 .kg-work-loading { border: 1px solid var(--border); border-radius: var(--r-lg); overflow: hidden; background: var(--surface); }
 .kg-col-tree { display: flex; flex-direction: column; min-height: 0; min-width: 0; border-right: 1px solid var(--border); background: var(--surface-2); }
@@ -166,7 +179,7 @@
   position: absolute; z-index: 5; display: flex; flex-direction: column; gap: 2px; max-width: 340px; padding: 6px 10px; pointer-events: none;
   border: 1px solid var(--border-strong); border-radius: var(--r-sm); background: var(--surface); box-shadow: var(--shadow-lg);
 }
-.kg-tip-title { font-size: 0.82rem; color: var(--ink); word-break: break-word; }
+.kg-tip-title { font-size: 0.82rem; color: var(--ink); overflow-wrap: break-word; word-break: normal; }
 .kg-tip-line { font-size: 0.74rem; color: var(--muted); }
 .kg-legend {
   position: absolute; left: 12px; bottom: 12px; z-index: 4; max-width: calc(100% - 24px); padding: 6px 10px;
@@ -176,7 +189,9 @@
 .kg-legend-list { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 6px 0 2px; padding: 0; list-style: none; }
 .kg-legend-item { display: inline-flex; align-items: center; gap: 6px; font-size: 0.8rem; color: var(--ink-soft); }
 .kg-table-wrap { position: absolute; inset: 0; overflow: auto; padding: 12px; background: var(--surface); display: flex; flex-direction: column; gap: 16px; }
-.kg-table td { vertical-align: middle; }
+.kg-table { table-layout: auto; }
+.kg-table td { vertical-align: middle; overflow-wrap: anywhere; }
+.kg-table td:last-child { min-width: 12rem; }
 .kg-table .inf-link { gap: 6px; }
 
 /* ── the tree ─────────────────────────────────────────────────────────────────────────────── */
@@ -211,7 +226,7 @@
 .kg-badge[data-layer="learning"] { background: var(--kg-layer-learning); }
 .kg-panel-kind { font-size: 0.78rem; color: var(--muted); }
 .kg-panel-close { display: none; }
-.kg-panel-title { margin: 0; font-family: var(--display); font-size: 1.05rem; font-weight: 600; line-height: 1.35; color: var(--ink); word-break: break-word; }
+.kg-panel-title { margin: 0; font-family: var(--display); font-size: 1.05rem; font-weight: 600; line-height: 1.35; color: var(--ink); overflow-wrap: break-word; word-break: normal; }
 .kg-panel-sub { margin: 0; font-size: 0.72rem; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
 .kg-panel-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .kg-panel-skel { display: flex; flex-direction: column; }
@@ -225,7 +240,7 @@
 .kg-attr { display: grid; grid-template-columns: 5.05263rem minmax(0, 1fr); gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--border); font-size: 0.82rem; }
 .kg-attr dt { color: var(--faint); }
 .kg-attr dd { margin: 0; min-width: 0; color: var(--ink-soft); overflow-wrap: anywhere; }
-.kg-panel .kg-path { display: inline; white-space: normal; overflow-wrap: anywhere; word-break: break-all; }
+.kg-panel .kg-path { display: inline; white-space: normal; overflow-wrap: break-word; }
 .kg-group { display: flex; flex-direction: column; }
 .kg-group-head { display: flex; gap: 6px; margin: 8px 0 4px; font-size: 0.8rem; font-weight: 600; color: var(--ink); }
 .kg-group-head span { color: var(--faint); font-weight: 500; font-variant-numeric: tabular-nums; }
@@ -312,27 +327,30 @@
 @keyframes kg-in { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { .kg-strip-item { animation: none; } }
 
-/* ── widths: panel a drawer below 1100 px, tree a drawer below 760 px (§5.2) ──────────────── */
-@media (max-width: 1100px) {
-  .kg-work { grid-template-columns: 14.73684rem minmax(0, 1fr); }
+/* ── widths, by the GRAPH's own width, not the window's (tester round 1 P0-2: the rail counts) ──
+   Wide: tree | canvas | panel. Medium: tree | canvas, the panel a drawer over the canvas's right
+   edge. Narrow: the canvas alone, the tree a drawer from the left. The canvas always gets the room. */
+@container kg (max-width: 1450px) {
+  .kg-work { grid-template-columns: 14.21053rem minmax(0, 1fr); }
   .kg-col-panel {
-    position: fixed; top: 0; right: 0; bottom: 0; z-index: 60; width: min(380px, 92vw); border-left: 1px solid var(--border-strong);
+    position: absolute; top: 0; right: 0; bottom: 0; z-index: 6; width: min(21rem, 92%); border-left: 1px solid var(--border-strong);
     box-shadow: var(--shadow-lg); transform: translateX(105%); transition: transform 200ms ease; visibility: hidden;
   }
   .kg-work[data-panel-open] .kg-col-panel { transform: none; visibility: visible; }
   .kg-panel-close { display: inline-flex; }
 }
-@media (max-width: 760px) {
-  .kg-work { grid-template-columns: minmax(0, 1fr); height: clamp(440px, calc(100vh - 300px), 900px); }
+@container kg (max-width: 860px) {
+  .kg-work { grid-template-columns: minmax(0, 1fr); }
   .kg-col-tree {
-    position: fixed; top: 0; left: 0; bottom: 0; z-index: 60; width: min(320px, 88vw); border-right: 1px solid var(--border-strong);
+    position: absolute; top: 0; left: 0; bottom: 0; z-index: 7; width: min(18rem, 88%); border-right: 1px solid var(--border-strong);
     box-shadow: var(--shadow-lg); transform: translateX(-105%); transition: transform 200ms ease; visibility: hidden;
   }
   .kg-work[data-tree-open] .kg-col-tree { transform: none; visibility: visible; }
   .kg-tree-toggle { display: inline-flex; }
-  .kg-find input { width: 100%; min-width: 0; }
-  .kg-search { flex: 1 1 100%; }
-  .kg-search .inf-find { width: 100%; }
+  .kg-toolbar { flex-wrap: wrap; }
+  .kg-toolbar > .kg-search { flex: 1 1 100%; }
+}
+@media (max-width: 760px) {
   .kg-stage { min-height: 380px; padding: 24px 12px; }
   .kg-empty { padding: 20px 16px; }
   .kg .ag-btn, .kg-layer-chip, .kg .inf-seg-btn { min-height: 44px; }
@@ -343,3 +361,12 @@
 @media (prefers-reduced-motion: reduce) {
   .kg-col-panel, .kg-col-tree { transition: none; }
 }
+
+/* ── where the old knowledge screens went (moved-card.tsx) ──────────────────────────────────── */
+.kg-moved {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; margin: 0; padding: 12px 14px;
+  border: 1px solid var(--border-strong); border-radius: var(--r-lg); background: var(--surface-2);
+}
+.kg-moved-icon { flex: none; color: var(--accent-text); }
+.kg-moved-text { display: flex; flex-direction: column; gap: 2px; flex: 1 1 16rem; min-width: 0; font-size: 0.84rem; color: var(--ink-soft); }
+.kg-moved-text strong { color: var(--ink); font-weight: 600; }

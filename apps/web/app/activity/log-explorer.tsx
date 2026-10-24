@@ -33,6 +33,7 @@ import { LogRows, lineOrder } from "./log-rows";
 import { PulseStrip } from "./pulse-strip";
 import { QueryBar } from "./query-bar";
 import { plural } from "../../lib/factory-floor";
+import { useAreaKeydown } from "../../lib/area-keys";
 
 export const LOG_POLL_MS = 5000;
 const PAGE = 100;
@@ -191,17 +192,13 @@ export function LogExplorer({ projectId, actor }: { projectId: string; actor: st
   }, [order, state.row, openRow]);
 
   // J/K (and arrows) move through lines; Enter opens; Esc closes.
-  useEffect(() => {
-    const on = (e: KeyboardEvent) => {
-      const target = e.target as HTMLElement | null;
-      if (target?.closest("input, textarea, select, [contenteditable=true], .lx-drawer")) return;
-      if (e.key === "j" || e.key === "ArrowDown") { e.preventDefault(); step(1); }
-      else if (e.key === "k" || e.key === "ArrowUp") { e.preventDefault(); step(-1); }
-      else if (e.key === "Escape" && state.row) { e.preventDefault(); openRow(null); }
-    };
-    window.addEventListener("keydown", on);
-    return () => window.removeEventListener("keydown", on);
-  }, [step, state.row, openRow]);
+  useAreaKeydown((e: KeyboardEvent) => {
+    const target = e.target as HTMLElement | null;
+    if (target?.closest("input, textarea, select, [contenteditable=true], .lx-drawer")) return;
+    if (e.key === "j" || e.key === "ArrowDown") { e.preventDefault(); step(1); }
+    else if (e.key === "k" || e.key === "ArrowUp") { e.preventDefault(); step(-1); }
+    else if (e.key === "Escape" && state.row) { e.preventDefault(); openRow(null); }
+  });
 
   const setRange = (range: LogRange) => {
     prevRange.current = null; setToolsOpen(false); apply({ ...state, range, from: null, to: null });

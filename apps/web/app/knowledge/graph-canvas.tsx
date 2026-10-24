@@ -16,8 +16,9 @@
 import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 
 import {
-  BEND, BUBBLE_R, LOOP_EDGES, NODE_R, bidirectional, distanceToEdge, edgeGeometry, edgeWidth, fitTransform,
-  kindName, layerToken, middleEllipsis, nodeAt, placeLabels, toScreen, toWorld, weightOrder, zoomAt,
+  BEND, BUBBLE_R, LABEL_MAX, LOOP_EDGES, NODE_R, arrowRim, bidirectional, distanceToEdge, edgeGeometry, edgeWidth,
+  fitTransform, kindName, layerToken, middleEllipsis, nodeAt, placeLabels, radialLabel, toScreen, toWorld, weightOrder,
+  zoomAt,
   type EdgeGeometry, type LabelBox, type Pt, type Transform,
 } from "../../lib/kg-layout";
 
@@ -35,7 +36,19 @@ export type CanvasNode = {
   fresh?: boolean;
   /** Which labels win when they collide: the bigger area's (its class count). */
   rank?: number;
+  /** Where its label goes: under it (default), along its ray out or in (Focus rings). */
+  labelMode?: "below" | "out" | "in";
+  /** Its angle around the Focus centre and its ring, for a radial label. */
+  angle?: number;
+  ring?: number;
+  /** Characters before the label is middle-ellipsised (the full name is in the tooltip). */
+  labelMax?: number;
 };
+
+/** One edge's identity on the canvas: hover, labels and the strongest-edge set use it. */
+export function edgeKey(e: { src: string; dst: string; kind: string }): string {
+  return `${e.src}\u0000${e.dst}\u0000${e.kind}`;
+}
 
 export type CanvasEdge = { src: string; dst: string; kind: string; weight: number; label: string | null };
 
@@ -59,6 +72,10 @@ type Props = {
   ariaLabel: string;
   /** Changes when the picture is new: fit again. */
   fitKey: string;
+  /** Edges (edgeKey) whose weight label shows; absent = every edge with a weight > 1. */
+  labelled?: Set<string> | null;
+  /** Screen px along the right edge covered by an open drawer: the fit centres in what is left. */
+  occludeRight?: number;
 };
 
 const EDGE_WORDS: Record<string, string> = {
@@ -81,7 +98,7 @@ const TOKENS = ["--graph", "--ink", "--ink-soft", "--muted", "--faint", "--borde
 type Drawn = { id: string; x: number; y: number; r: number };
 
 export const GraphCanvas = forwardRef<CanvasHandle, Props>(function GraphCanvas(props, ref) {
-  const { nodes, edges, positions, rings, centerId, mode, selectedId, onSelect, onActivate, onBack, onZoom, ariaLabel, fitKey } = props;
+  const { nodes, edges, positions, rings, centerId, mode, selectedId, onSelect, onActivate, onBack, onZoom, ariaLabel, fitKey, labelled, occludeRight = 0 } = props;
   const wrap = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const t = useRef<Transform>({ k: 1, x: 0, y: 0 });
@@ -116,15 +133,16 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(function GraphCanvas(
       el.height = Math.round(h * dpr);
     }
     const cs = getComputedStyle(el);
-    const tok = (name: string) => cs.getPropertyValue(name).trim();
     const colour = new Map<string, string>();
-    const c = (name: string) => { if (!colour.has(name)) colour.set(name, tok(name)); return colour.get(name)!; };
+    const c = (name: string) => { if (!colour.has(name)) colour.set(name, cs.getPropertyValue(name).trim()); return colour.get(name)!; };
     for (const name of TOKENS) c(name);
     const font = c("--sans") || "sans-serif";
-    // Text follows the console's type scale: the spec's 14 / 16 / 12 px at the default root size.
+    // Text follows the console's type scale: the spec's 14 / 16 / 12 px at the default root size,
+    // and shrinks with the picture below 100% (never under 72%) so a fitted view never collides.
     const root = parseFloat(getComputedStyle(document.documentElement).fontSize) || ROOT_PX;
-    const fs = (px: number) => Math.round(px * (root / ROOT_PX) * 10) / 10;
     const tr = t.current;
+    const shrink = Math.min(1, Math.max(0.62, tr.k));
+    const fs = (px: number) => Math.round(px * (root / ROOT_PX) * shrink * 10) / 10;
     const now = typeof performance !== "undefined" ? performance.now() : 0;
     let animating = false;
 
@@ -147,22 +165,24 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(function GraphCanvas(
       }
     }
 
-    // Screen positions, culled.
-    const margin = 120;
+    // Screen positions, culled. Every node the same size: 28 px (56 px bubbles) from 62.5% zoom
+    // up; zoomed further out the whole picture shrinks together, so nothing piles up.
+    const margin = 160;
     const screen = new Map<string, Drawn>();
     for (const n of nodes) {
       const p = posOf(n.id);
       if (!p) continue;
       const s = toScreen(tr, p);
-      // Every node the same size: 28 px (56 px bubbles) from 62.5% zoom up; zoomed further out
-      // the whole picture shrinks together (never below 16 / 28 px), so nothing piles up.
       const r = Math.max(n.bubble ? 14 : 8, (n.bubble ? BUBBLE_R : NODE_R) * Math.min(1, tr.k * 1.6));
       screen.set(n.id, { id: n.id, x: s.x, y: s.y, r });
     }
     const visible = (d: Drawn) => d.x > -margin && d.x < w + margin && d.y > -margin && d.y < h + margin;
     drawn.current = [...screen.values()].filter(visible);
 
-    // Edges.
+    // Arrowheads spread on a wider rim where many arrive, so each stays a distinct head.
+    const fanIn = new Map<string, number>();
+    for (const e of edges) fanIn.set(e.dst, (fanIn.get(e.dst) ?? 0) + 1);
+
     const hv = hoverRef.current;
     const selId = sel.current;
     const g: Array<{ e: CanvasEdge; g: EdgeGeometry }> = [];
@@ -173,15 +193,17 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(function GraphCanvas(
       const b = screen.get(e.dst);
       if (!a || !b || (!visible(a) && !visible(b))) continue;
       const bend = pairs.has(`${e.src}\u0000${e.dst}`) ? BEND : 0;
-      const geo = edgeGeometry(a, b, a.r, b.r, bend);
+      const geo = edgeGeometry(a, b, a.r, arrowRim(b.r, fanIn.get(e.dst) ?? 0), bend);
       g.push({ e, g: geo });
-      const key = `${e.src}\u0000${e.dst}\u0000${e.kind}`;
-      const hot = !!selId && (e.src === selId || e.dst === selId);
+      const key = edgeKey(e);
+      const touchesSel = !!selId && (e.src === selId || e.dst === selId);
       const hovered = hv?.what === "edge" && hv.id === key;
+      // The selection's edges stand out — except the Focus centre's, which are every edge.
+      const hot = hovered || (touchesSel && selId !== centerId);
       let stroke = c("--muted");
-      let alpha = 0.7;
+      let alpha = mode === "overview" ? 0.55 : 0.6;
       if (LOOP_EDGES.has(e.kind)) { stroke = c(layerToken(byId.get(e.dst)?.layer ?? "code")); alpha = 0.95; }
-      if (hot || hovered) { stroke = LOOP_EDGES.has(e.kind) ? stroke : c("--ink-soft"); alpha = 1; }
+      if (hot) { stroke = LOOP_EDGES.has(e.kind) ? stroke : c("--ink-soft"); alpha = 1; }
       const fresh = born.current.get(e.dst) ?? born.current.get(e.src);
       if (fresh !== undefined) { const f = Math.min(1, (now - fresh) / 600); alpha *= f; if (f < 1) animating = true; }
       ctx.globalAlpha = alpha;
@@ -201,20 +223,26 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(function GraphCanvas(
       ctx.lineTo(geo.right.x, geo.right.y);
       ctx.closePath();
       ctx.fill();
-      // Labels: weights on Whole repo, weight > 1 in Focus, the selected node's edges, hover always.
-      const show = hot || hovered || (e.label && (mode === "overview" || e.weight > 1));
-      if (show) {
-        const text = e.label ?? edgeWords(e.kind);
+      // Labels (P1-3): the weight where it says something (> 1) and the edge is one of the
+      // strongest; the type only on hover or on the selected node's own edges.
+      const weighty = e.weight > 1 && !!e.label && (labelled ? labelled.has(key) : true);
+      if (hot || weighty) {
+        const text = hot ? `${edgeWords(e.kind)}${e.weight > 1 ? ` · ${(e.label ?? e.weight.toLocaleString("en-US"))}` : ""}` : (e.label as string);
         ctx.font = `500 ${fs(12)}px ${font}`;
         const tw = ctx.measureText(text).width + 12;
-        edgeLabels.push({ id: key, x: geo.label.x, y: geo.label.y - fs(18) / 2, w: tw, h: fs(18), priority: (hot || hovered ? 5000 : 0) + Math.log10(Math.max(1, e.weight)), text, at: geo.label, hot: hot || hovered });
+        const lh = fs(18);
+        edgeLabels.push({ id: key, x: geo.label.x, y: geo.label.y - lh / 2, w: tw, h: lh, priority: (hot ? 9000 : 0) + Math.log10(Math.max(1, e.weight)) * 100, text, at: geo.label, hot });
       }
     }
     ctx.restore();
     geoms.current = g;
 
     // Nodes.
-    const labels: Array<LabelBox & { text: string; size: number; weight: number }> = [];
+    type NodeLabel = LabelBox & { lines: Array<{ text: string; size: number; weight: number; muted: boolean }> };
+    const labels: NodeLabel[] = [];
+    const radial: Array<{ d: Drawn; n: CanvasNode; out: boolean }> = [];
+    // Each node's circle is an obstacle no label may cover.
+    const obstacles: LabelBox[] = drawn.current.map((d) => ({ id: `o:${d.id}`, x: d.x, y: d.y - d.r, w: d.r * 2, h: d.r * 2, priority: 1e9 }));
     for (const d of drawn.current) {
       const n = byId.get(d.id)!;
       const isSel = d.id === selId;
@@ -228,10 +256,7 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(function GraphCanvas(
       ctx.save();
       ctx.globalAlpha = alpha;
       const fill = c(n.token);
-      if (isSel) {
-        ctx.shadowColor = fill;
-        ctx.shadowBlur = 18;
-      }
+      if (isSel) { ctx.shadowColor = fill; ctx.shadowBlur = 18; }
       ctx.fillStyle = fill;
       ctx.beginPath();
       ctx.arc(d.x, d.y, d.r, 0, Math.PI * 2);
@@ -251,19 +276,27 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(function GraphCanvas(
         ctx.stroke();
       }
       ctx.restore();
-      const text = n.bubble && n.sub ? `${middleEllipsis(n.label)} · ${n.sub}` : middleEllipsis(n.label);
-      const sizePx = fs(n.bubble ? 16 : 14);
-      const weight = n.bubble || isSel ? 600 : 400;
-      ctx.font = `${weight} ${sizePx}px ${font}`;
-      const tw = ctx.measureText(text).width + 8;
-      const pri = isSel ? 10000 : (hv?.what === "node" && hv.id === d.id) ? 9000 : n.bubble ? 3000 + Math.min(4000, Math.log10(1 + (n.rank ?? 0)) * 500) : d.id === centerId ? 8000 : 1000 - order.indexOf(d.id);
+      const mode_ = n.labelMode ?? "below";
+      if ((mode_ === "out" || mode_ === "in") && n.angle !== undefined && !isSel && !(hv?.what === "node" && hv.id === d.id)) {
+        radial.push({ d, n, out: mode_ === "out" });
+        continue;
+      }
+      const lines = n.bubble
+        ? [{ text: middleEllipsis(n.label, n.labelMax ?? LABEL_MAX), size: fs(16), weight: 600, muted: false },
+           ...(n.sub ? [{ text: n.sub, size: fs(13), weight: 400, muted: true }] : [])]
+        : [{ text: middleEllipsis(n.label, n.labelMax ?? LABEL_MAX), size: fs(14), weight: isSel ? 600 : 400, muted: false }];
+      let tw = 0;
+      for (const l of lines) { ctx.font = `${l.weight} ${l.size}px ${font}`; tw = Math.max(tw, ctx.measureText(l.text).width + 8); }
+      const th = lines.reduce((s, l) => s + l.size + 4, 0);
       // Kept inside the canvas: a label at the edge slides in rather than being cut.
       const lx = Math.min(Math.max(d.x, tw / 2 + 4), Math.max(tw / 2 + 4, w - tw / 2 - 4));
-      labels.push({ id: d.id, x: lx, y: d.y + d.r + 6, w: tw, h: sizePx + 6, priority: pri, text, size: sizePx, weight });
+      const pri = isSel ? 1e7 : (hv?.what === "node" && hv.id === d.id) ? 9e6 : n.bubble ? 5e6 + (n.rank ?? 0) : d.id === centerId ? 8e6 : 1e6 - order.indexOf(d.id);
+      labels.push({ id: d.id, x: lx, y: d.y + d.r + 5, w: tw, h: th, priority: pri, lines });
     }
 
-    // One placement for node and edge labels: nodes first, a colliding label waits for hover/zoom.
-    const shown = placeLabels([...labels, ...edgeLabels.map((l) => ({ ...l, priority: l.priority + (l.hot ? 6000 : -2000) }))]);
+    // One placement for node and edge labels, around the circles: node labels first; a label
+    // that would still collide waits for hover or zoom (its full name is in the tooltip).
+    const shown = placeLabels([...obstacles, ...labels, ...edgeLabels.map((l) => ({ ...l, priority: l.priority + (l.hot ? 2e7 : 0) }))]);
     for (const l of edgeLabels) {
       if (!shown.has(l.id)) continue;
       ctx.save();
@@ -283,21 +316,56 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(function GraphCanvas(
     }
     for (const l of labels) {
       if (!shown.has(l.id)) continue;
+      let y = l.y;
+      for (const line of l.lines) {
+        ctx.save();
+        ctx.font = `${line.weight} ${line.size}px ${font}`;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "top";
+        ctx.lineJoin = "round";
+        ctx.lineWidth = 5;
+        ctx.strokeStyle = c("--graph");
+        ctx.strokeText(line.text, l.x, y);
+        ctx.fillStyle = l.id === selId ? c("--ink") : line.muted ? c("--muted") : c("--ink-soft");
+        ctx.fillText(line.text, l.x, y);
+        ctx.restore();
+        y += line.size + 4;
+      }
+    }
+    // Radial labels (Focus rings): along each node's ray, outward on the outer ring, inward on
+    // the first when there is more than one — every neighbour named, none on another (P1-4).
+    // Too dense to read at this zoom (under 9 px of arc each), they wait for zoom or hover.
+    const ringSize = new Map<number, number>();
+    for (const { n } of radial) ringSize.set(n.ring ?? 0, (ringSize.get(n.ring ?? 0) ?? 0) + 1);
+    for (const { d, n, out } of radial) {
+      const ringR = (rings?.[n.ring ?? 0] ?? 0) * tr.k;
+      const count = ringSize.get(n.ring ?? 0) ?? 1;
+      if (ringR && (2 * Math.PI * ringR) / count < 9) continue;
+      const { rotate, align } = radialLabel(n.angle!, out);
+      const size = fs(14);
       ctx.save();
-      ctx.font = `${l.weight} ${l.size}px ${font}`;
-      ctx.textAlign = "center";
-      ctx.textBaseline = "top";
+      ctx.font = `400 ${size}px ${font}`;
+      const room = out ? 999 : Math.max(0, ringR - 30 * shrink - d.r);
+      let text = middleEllipsis(n.label, n.labelMax ?? 22);
+      while (text.length > 4 && ctx.measureText(text).width > room) text = middleEllipsis(n.label, text.length - 2);
+      if (!out && ctx.measureText(text).width > room) { ctx.restore(); continue; }
+      const off = d.r + 5;
+      const dir = out ? 1 : -1;
+      ctx.translate(d.x + Math.cos(n.angle!) * off * dir, d.y + Math.sin(n.angle!) * off * dir);
+      ctx.rotate(rotate);
+      ctx.textAlign = align;
+      ctx.textBaseline = "middle";
       ctx.lineJoin = "round";
-      ctx.lineWidth = 5;
+      ctx.lineWidth = 4;
       ctx.strokeStyle = c("--graph");
-      ctx.strokeText(l.text, l.x, l.y);
-      ctx.fillStyle = l.id === selId ? c("--ink") : c("--ink-soft");
-      ctx.fillText(l.text, l.x, l.y);
+      ctx.strokeText(text, 0, 0);
+      ctx.fillStyle = c("--ink-soft");
+      ctx.fillText(text, 0, 0);
       ctx.restore();
     }
     if (animating) schedule();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nodes, edges, rings, centerId, mode, byId, pairs, maxW, order, posOf]);
+  }, [nodes, edges, rings, centerId, mode, byId, pairs, maxW, order, posOf, labelled]);
 
   const schedule = useCallback(() => {
     if (frame.current !== null || typeof window === "undefined") return;
@@ -312,9 +380,11 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(function GraphCanvas(
 
   const fit = useCallback(() => {
     const pts = nodes.map((n) => posOf(n.id)).filter((p): p is Pt => !!p);
-    const ext = mode === "overview" ? { x: 40, top: BUBBLE_R, bottom: BUBBLE_R + 24 } : { x: 40, top: NODE_R + 4, bottom: NODE_R + 24 };
-    setT(fitTransform(pts, size.current, { extent: ext }));
-  }, [nodes, posOf, mode, setT]);
+    // Room for the labels past the outermost nodes, and for the legend along the bottom-left.
+    const ext = mode === "overview" ? { x: 40, top: BUBBLE_R, bottom: BUBBLE_R + 24 + 44 } : { x: 120, top: 115, bottom: 115 + 30 };
+    const view = { w: Math.max(240, size.current.w - occludeRight), h: size.current.h };
+    setT(fitTransform(pts, view, { extent: ext }));
+  }, [nodes, posOf, mode, setT, occludeRight]);
 
   useImperativeHandle(ref, () => ({
     zoomIn: () => setT(zoomAt(t.current, 1.25, { x: size.current.w / 2, y: size.current.h / 2 })),
@@ -322,12 +392,12 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(function GraphCanvas(
     fit,
   }), [fit, setT]);
 
-  // New picture: forget session drags of nodes that are gone, fit again.
+  // New picture (or a drawer opened over it): forget session drags of nodes that are gone, fit again.
   useEffect(() => {
     for (const id of [...moved.current.keys()]) if (!byId.has(id)) moved.current.delete(id);
     fit();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fitKey]);
+  }, [fitKey, occludeRight]);
 
   useEffect(() => { schedule(); }, [schedule, selectedId, hover]);
 
@@ -375,6 +445,8 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(function GraphCanvas(
   };
   const onPointerDown = (e: React.PointerEvent) => {
     const p = local(e);
+    // A press or a drag starts: no tooltip left behind from where the pointer was (P1-13).
+    if (hoverRef.current) setHover(null);
     pointers.current.set(e.pointerId, p);
     try { canvas.current?.setPointerCapture?.(e.pointerId); } catch { /* not capturable */ }
     if (pointers.current.size === 2) {
@@ -419,7 +491,7 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(function GraphCanvas(
     }
     const near = geoms.current.find(({ g }) => distanceToEdge(p, g) < 5);
     if (near) {
-      const key = `${near.e.src}\u0000${near.e.dst}\u0000${near.e.kind}`;
+      const key = edgeKey(near.e);
       if (hoverRef.current?.id !== key) setHover({ what: "edge", id: key, x: p.x, y: p.y });
       return;
     }
@@ -474,7 +546,8 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(function GraphCanvas(
               onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp}
               onPointerCancel={onPointerUp} onPointerLeave={() => setHover(null)} onDoubleClick={onDoubleClick} />
       {tip && hover ? (
-        <div className="kg-tip" role="tooltip" data-testid="kg-tip" style={{ left: hover.x + 14, top: hover.y + 14 }}>
+        <div className="kg-tip" role="tooltip" data-testid="kg-tip"
+             style={tipPlace(hover, size.current)}>
           <span className="kg-tip-title">{tip.title}</span>
           {tip.line ? <span className="kg-tip-line">{tip.line}</span> : null}
         </div>
@@ -482,6 +555,16 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(function GraphCanvas(
     </div>
   );
 });
+
+/** The tooltip beside the pointer, flipped to stay inside the canvas near its right and bottom edges. */
+export function tipPlace(at: { x: number; y: number }, view: { w: number; h: number }): React.CSSProperties {
+  const right = at.x > view.w - 300;
+  const below = at.y < view.h - 90;
+  return {
+    left: right ? undefined : at.x + 14, right: right ? Math.max(8, view.w - at.x + 14) : undefined,
+    top: below ? at.y + 14 : undefined, bottom: below ? undefined : Math.max(8, view.h - at.y + 14),
+  };
+}
 
 function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
   ctx.beginPath();

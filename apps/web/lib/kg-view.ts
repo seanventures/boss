@@ -14,6 +14,7 @@ import { apiErrorText } from "./api-error";
 import { apiWrite } from "./api-write";
 import { API_URL } from "./client";
 import { repoUrl } from "./github-urls";
+import { localWith } from "./local-time";
 import type { Permission } from "./identity/permissions.gen";
 import type {
   KgLiveResponse, KgNeighbourhoodResponse, KgNodeDetailResponse, KgOverviewResponse, KgRuleActionRequest,
@@ -32,7 +33,19 @@ export const INDEX_NOW: Permission = "knowledge:read";
 /** "Scan for rules here" starts the business_rules_scan workflow. */
 export const SCAN_START: Permission = "workflow_run:start";
 
-export type Read<T> = { ok: true; data: T } | { ok: false; status: number; error: string };
+export type Read<T> = { ok: true; data: T } | { ok: false; status: number; error: string; unavailable?: boolean };
+
+/** What a screen says when its route is not on this install yet (tester round 1 P0-3): never the
+ *  framework's bare "Not Found". */
+export const UNAVAILABLE = "This part of the graph is not on this install yet. It arrives with the release's knowledge update.";
+
+/** A 404 from a route that does not exist (FastAPI's own "Not Found"), as opposed to a route
+ *  answering that one thing is missing ("no such node"). */
+export function isMissingRoute(status: number, body: unknown): boolean {
+  if (status !== 404 && status !== 405) return false;
+  const d = body && typeof body === "object" ? (body as { detail?: unknown }).detail : body;
+  return status === 405 || d === "Not Found" || d === undefined || d === null;
+}
 
 function qs(params: Record<string, string | number | boolean | null | undefined>): string {
   const out = new URLSearchParams();
@@ -49,7 +62,10 @@ export async function kgRead<T>(path: string, params: Record<string, string | nu
     const r = await fetch(`${API_URL}${path}?${qs(params)}`, { cache: "no-store", signal });
     let body: unknown = null;
     try { body = await r.json(); } catch { body = null; }
-    if (!r.ok) return { ok: false, status: r.status, error: apiErrorText(body, r.status) };
+    if (!r.ok) {
+      if (isMissingRoute(r.status, body)) return { ok: false, status: r.status, error: UNAVAILABLE, unavailable: true };
+      return { ok: false, status: r.status, error: apiErrorText(body, r.status) };
+    }
     return { ok: true, data: body as T };
   } catch (e) {
     if ((e as { name?: string })?.name === "AbortError") return { ok: false, status: -1, error: "cancelled" };
@@ -257,4 +273,54 @@ export function codeHref(repo: string | null | undefined, path: string | null | 
 /** The layers param for a chip set: All = every layer. */
 export function layersParam(chips: ReadonlySet<string>): string {
   return chips.size ? [...chips].join(",") : "code,rules,learning";
+}
+
+/** A time in the viewer's own zone, labelled with it: "Oct 24, 09:40 PDT" (tester round 1 P1-12:
+ *  one formatter for the whole area; never local time labelled UTC). */
+export function kgWhen(at: string | null | undefined): string {
+  if (!at) return "";
+  const t = Date.parse(at);
+  if (Number.isNaN(t)) return at;
+  return localWith(t, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false, timeZoneName: "short" });
+}
+
+/** Search hits that share a name told apart (P1-9): the part of each path the others do not
+ *  share, middle-ellipsised, so `…/loanaccount/service/Foo.java` and `…/savings/service/Foo.java`
+ *  never read the same. */
+export function distinctPaths(paths: Array<string | null | undefined>, max = 56): string[] {
+  const split = paths.map((p) => (p ?? "").split("/").filter(Boolean));
+  return split.map((segs, i) => {
+    if (!segs.length) return "";
+    const twins = split.filter((o, j) => j !== i && o[o.length - 1] === segs[segs.length - 1]);
+    // Keep the file and the first segment from the end that differs from every twin's.
+    let from = segs.length - 1;
+    for (const o of twins) {
+      let k = 1;
+      while (k <= segs.length && k <= o.length && segs[segs.length - k] === o[o.length - k]) k += 1;
+      from = Math.min(from, segs.length - k);
+    }
+    const file = segs[segs.length - 1];
+    const parts: string[] = [segs[0]];
+    const diff = Math.min(from, segs.length - 2);
+    if (diff > 1) parts.push("…");
+    if (diff >= 1) parts.push(segs[diff]);
+    if (diff >= 1 && diff < segs.length - 2) parts.push(segs.length - 2 - diff > 1 ? "…" : segs[segs.length - 2]);
+    if (segs.length > 1) parts.push(file);
+    let text = parts.join("/");
+    // Too long: the area goes first; the segment that tells them apart never does.
+    if (text.length > max && parts.length > 2) text = ["…", ...parts.slice(parts[1] === "…" ? 2 : 1)].join("/");
+    if (text.length <= max) return text;
+    const keep = max - 1;
+    return `${text.slice(0, Math.ceil(keep / 3))}…${text.slice(text.length - (keep - Math.ceil(keep / 3)))}`;
+  });
+}
+
+/** A type-like query (it starts upper-case: "LoanTransaction") ranks types above members within
+ *  the server's own tiers (P1-9); a member-like one keeps the server's order. */
+export function rankHits<H extends { match: string; node: { symbol_kind?: string } }>(q: string, hits: H[]): H[] {
+  if (!/^[A-Z]/.test(q.trim())) return hits;
+  const tier: Record<string, number> = { exact: 0, prefix: 1, text: 2, meaning: 3 };
+  const member = (h: H) => (h.node.symbol_kind === "method" || h.node.symbol_kind === "function" ? 1 : 0);
+  return hits.map((h, i) => ({ h, i })).sort((a, b) => (tier[a.h.match] ?? 9) - (tier[b.h.match] ?? 9)
+    || member(a.h) - member(b.h) || a.i - b.i).map((x) => x.h);
 }

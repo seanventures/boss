@@ -10,7 +10,7 @@ import { describe, expect, it } from "vitest";
 import {
   ARROW_LEN, ARROW_WIDTH, BUBBLE_R, EDGE_MAX, EDGE_MIN, FIT_PADDING, NODE_R, ZOOM_MAX, ZOOM_MIN, bidirectional, bounds,
   clampZoom, edgeGeometry, edgeWidth, fitTransform, focusLayout, hashSeed, kindName, kindToken, middleEllipsis, nodeAt,
-  overviewLayout, placeLabels, placeNear, ringCapacity, seeded, toScreen, toWorld, weightOrder, zoomAt,
+  overviewLayout, placeLabels, placeNear, seeded, pickOverview, pickEdges, boxesClear, OVERVIEW_AREAS, OVERVIEW_BOX, LABEL_ARC, radialLabel, arrowRim, MORE_ID, toScreen, toWorld, weightOrder, zoomAt,
 } from "../lib/kg-layout";
 import type { KgNeighbourhoodResponse, KgOverviewResponse } from "../lib/kg-view-types";
 
@@ -34,35 +34,83 @@ describe("determinism", () => {
     expect(one.size).toBe(all.length);
   });
 
-  it("areas do not sit on top of each other, and the layer bubbles are pinned to the right", () => {
-    const pos = overviewLayout(all, overview.edges, pins);
-    const areas = overview.areas.map((a) => pos.get(a.id)!);
-    let closest = Infinity;
-    for (let i = 0; i < areas.length; i += 1) for (let j = i + 1; j < areas.length; j += 1) {
-      closest = Math.min(closest, Math.hypot(areas[i].x - areas[j].x, areas[i].y - areas[j].y));
-    }
-    expect(closest).toBeGreaterThan(130);
-    const maxX = Math.max(...areas.map((p) => p.x));
+  it("Whole repo at Fineract scale: ten areas, the rest in one bubble, every label box clear of every other", () => {
+    const pick = pickOverview(overview.areas, overview.layers, overview.edges, 0,
+      (folded) => ({ ...overview.areas[0], id: MORE_ID, key: MORE_ID, label: `${folded.length} more areas` }));
+    expect(pick.nodes).toHaveLength(OVERVIEW_AREAS + 1 + 2);
+    expect(pick.folded).toHaveLength(36 - OVERVIEW_AREAS);
+    expect(pick.pages).toBe(4);
+    expect(pick.nodes[0].label).toBe("fineract-provider");
+    expect(pick.pageOf.size).toBe(36);
+    // Edges to folded areas are summed onto the bubble, never dropped or doubled.
+    const into = pick.edges.filter((e) => e.dst === MORE_ID);
+    expect(into.length).toBeGreaterThan(0);
+    for (const e of into) expect(e.label).toMatch(/^[\d,]+ (calls?|rules?|learnings?)$/);
+    const total = (es: Array<{ weight: number }>) => es.reduce((s, e) => s + e.weight, 0);
+    const shown = (id: string) => id.startsWith("layer:") || pick.pageOf.get(id) === 0;
+    const internal = overview.edges.filter((e) => !shown(e.src) && !shown(e.dst));
+    expect(total(pick.edges) + total(internal)).toBe(total(overview.edges));
+    const nodes = pick.nodes.map((n) => ({ id: n.id, key: n.key, w: Math.max(120, n.label.length * 9 + 16) }));
+    const pos = overviewLayout(nodes, pick.edges, pins);
+    expect(boxesClear(nodes.map((n) => pos.get(n.id)!), nodes.map((n) => ({ w: n.w, h: OVERVIEW_BOX.h })))).toBe(true);
+    expect(fitTransform([...pos.values()], { w: 900, h: 560 }).k).toBeGreaterThan(0.6);
+    const maxX = Math.max(...overview.areas.filter((a) => pos.has(a.id)).map((a) => pos.get(a.id)!.x));
     for (const id of pins) expect(pos.get(id)!.x).toBeGreaterThan(maxX);
     expect(pos.get("layer:rules")!.y).toBeLessThan(pos.get("layer:learning")!.y);
   });
 
-  it("focus is radial by hop: the centre at the origin, the heaviest neighbour at the top", () => {
-    const { pos, rings } = focusLayout(hood.center.id, hood.nodes, hood.edges);
+  it("a small project draws every area, still clear", () => {
+    const twelve = overview.areas.slice(0, 12);
+    const ids = new Set(twelve.map((a) => a.id));
+    const pick = pickOverview(twelve, [], overview.edges.filter((e) => ids.has(e.src) && ids.has(e.dst)), 0, (f) => f[0]);
+    expect(pick.nodes).toHaveLength(12);
+    expect(pick.folded).toHaveLength(0);
+    const nodes = pick.nodes.map((n) => ({ id: n.id, key: n.key, w: Math.max(120, n.label.length * 9 + 16) }));
+    const pos = overviewLayout(nodes, pick.edges);
+    expect(boxesClear(nodes.map((n) => pos.get(n.id)!), nodes.map((n) => ({ w: n.w, h: OVERVIEW_BOX.h })))).toBe(true);
+  });
+
+  it("the overview draws each bubble's strongest calls, and labels only the strongest of those", () => {
+    const { drawn, labelled } = pickEdges(overview.edges, null, { perNode: 2, labelled: 8 });
+    expect(drawn.length).toBeLessThanOrEqual(2 * 38);
+    expect(drawn.length).toBeLessThan(overview.edges.length / 2);
+    expect(labelled.size).toBe(8);
+    const top = [...overview.edges].sort((a, b) => b.weight - a.weight)[0];
+    expect(labelled.has(top)).toBe(true);
+    const sel = overview.areas[0].id;
+    const withSel = pickEdges(overview.edges, sel);
+    expect(withSel.drawn.filter((e) => e.src === sel || e.dst === sel)).toHaveLength(overview.edges.filter((e) => e.src === sel || e.dst === sel).length);
+  });
+
+  it("the next page draws the next ten; the bubble folds the rest, earlier pages included", () => {
+    const pick = pickOverview(overview.areas, overview.layers, overview.edges, 1, (f) => ({ ...overview.areas[0], id: MORE_ID, label: `${f.length} more` }));
+    expect(pick.page).toBe(1);
+    expect(pick.nodes.filter((n) => n.kind === "area" && n.id !== MORE_ID)).toHaveLength(OVERVIEW_AREAS);
+    expect(pick.folded).toHaveLength(36 - OVERVIEW_AREAS);
+    expect(pick.folded.map((n) => n.label)).toContain("fineract-provider");
+  });
+
+  it("focus is radial by hop: centre at the origin, heaviest neighbour on top, one ring with room for every label", () => {
+    const { pos, rings, angle } = focusLayout(hood.center.id, hood.nodes, hood.edges);
     expect(pos.get(hood.center.id)).toEqual({ x: 0, y: 0 });
     expect(pos.size).toBe(hood.nodes.length);
     const heaviest = [...hood.edges].sort((a, b) => b.weight - a.weight)[0];
     const top = pos.get(heaviest.dst)!;
     expect(top.x).toBeCloseTo(0, 0);
     expect(top.y).toBeLessThan(0);
-    // 80 neighbours do not fit one ring: they continue outwards, every ring within capacity.
-    expect(rings.length).toBeGreaterThan(1);
-    const r = (id: string) => Math.round(Math.hypot(pos.get(id)!.x, pos.get(id)!.y));
-    for (const ring of rings) {
-      const on = hood.nodes.filter((n) => n.id !== hood.center.id && Math.abs(r(n.id) - ring) < 2).length;
-      expect(on).toBeLessThanOrEqual(ringCapacity(ring));
-    }
+    expect(rings).toHaveLength(1);
+    expect((2 * Math.PI * rings[0]) / 80).toBeGreaterThanOrEqual(LABEL_ARC - 0.01);
+    expect(angle.size).toBe(80);
     expect(focusLayout(hood.center.id, [...hood.nodes].reverse(), hood.edges).pos).toEqual(pos);
+  });
+
+  it("radial labels read upright on both halves; a crowded rim spreads its arrowheads", () => {
+    expect(radialLabel(0, true)).toEqual({ rotate: 0, align: "left" });
+    expect(radialLabel(Math.PI, true)).toEqual({ rotate: 2 * Math.PI, align: "right" });
+    expect(radialLabel(Math.PI, false).align).toBe("left");
+    expect(arrowRim(14, 3)).toBe(14);
+    expect(arrowRim(14, 40)).toBeGreaterThan(14);
+    expect(arrowRim(14, 400)).toBeLessThanOrEqual(14 + 36);
   });
 
   it("a second hop sits near what it connects to on the first", () => {
