@@ -80,6 +80,7 @@ CONFINED: dict[str, dict[str, str | tuple[str, ...]]] = {
     "update_ledger": {"artifact_id": "artifact"},
     "waive_gates": {"run_id": CODE_TASK},
     "watch_code_task": {"run_id": CODE_TASK},
+    "wait_for": {"id": ("job", CODE_TASK, "workflow_run")},
 }
 
 #: tool -> {argument: why it cannot reach another project}. `project_id` is never listed: the

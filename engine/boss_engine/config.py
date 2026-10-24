@@ -164,6 +164,18 @@ class Settings(BaseSettings):
     #: ended without its button. 180 still answers before the console's 240 s stall line.
     chat_turn_seconds: int = Field(default=180, alias="BOSS_CHAT_TURN_SECONDS")
     chat_turn_model_calls: int = Field(default=16, alias="BOSS_CHAT_TURN_MODEL_CALLS")
+    #: A DEEP turn's budget: one the decision read as investigate / operate / new work, or a press
+    #: of "Investigate further" / "Continue" (turn_budget.for_turn). The values above are a
+    #: question's. Measured 2026-10-24: "make sure the three indexes finished, then query the
+    #: graph" ran out of a question's 14 round-trips in every turn it was asked.
+    chat_deep_max_steps: int = Field(default=28, alias="BOSS_CHAT_DEEP_MAX_STEPS")
+    chat_deep_turn_model_calls: int = Field(default=32, alias="BOSS_CHAT_DEEP_TURN_MODEL_CALLS")
+    #: The hard ceiling on model calls in any one turn, whatever the settings above say.
+    chat_turn_model_calls_ceiling: int = Field(default=40,
+                                               alias="BOSS_CHAT_TURN_MODEL_CALLS_CEILING")
+    #: The longest one wait_for call may block (services/wait_for.py); inside a chat turn it is
+    #: cut further, to the turn's own time.
+    agent_wait_max_seconds: int = Field(default=600, alias="BOSS_AGENT_WAIT_MAX_SECONDS")
     #: The investigation runner — a real Claude Code session with a shell, the repo, the
     #: database and the fleet. Its own model, because this is the deep-thinking seat and the
     #: chat seat is optimised for latency.

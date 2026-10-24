@@ -4560,7 +4560,13 @@ def _query_project_data(ctx: Any, project_id: str, args: dict) -> dict:
         if order and order not in cols:
             unknown.append(order)
         if unknown:
-            return {"ok": False, "error": f"unknown column(s) {sorted(set(unknown))}",
+            # THE REAL COLUMNS IN THE ERROR ITSELF. A guessed `attempts, started_at` on jobs
+            # failed with the columns beside the error, and the model read only the error: the
+            # next turn sees no more than the error string either (tool_calls keep it alone).
+            return {"ok": False,
+                    "error": (f"unknown column(s) {sorted(set(unknown))} in {table}; its "
+                              f"columns are: {', '.join(cols)}. Use these names and run it "
+                              "once more."),
                     "columns": cols}
         sql = (f'SELECT {", ".join(chr(34) + x + chr(34) for x in wanted)} FROM "{table}" '
                "WHERE project_id = :__p")
@@ -5092,7 +5098,9 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
         "on', 'let me know when', 'monitor', or 'tell me when it is done'. Each wake runs in "
         "this same conversation, so you keep the context. It costs a model call per cycle, so "
         "choose an interval matched to how fast the thing actually changes: a CI run that "
-        "takes eight minutes does not need a check every minute.",
+        "takes eight minutes does not need a check every minute. To wait for BOSS's own job, "
+        "build, workflow run or code index to finish within minutes, use wait_for: one call, "
+        "no model calls.",
         _obj({"check": {"type": "string",
                         "description": "what to do on each wake, in your own words"},
               "until": {"type": "string",
@@ -5132,6 +5140,44 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
                 "note": ("Armed. This conversation will wake itself and check; the operator "
                          "does not need to stay. Tell them what you will watch for and how "
                          "often, then stop.")}
+
+    @reg.tool(
+        "wait_for",
+        "Wait, in this one call, until BOSS's own work settles — a job (job_), a build "
+        "(crun_), a workflow run (wfr_) or the project's code graph indexing — and return its "
+        "final state: finished, failed, cancelled, or waiting for a person. No model call is "
+        "spent while it waits; it reads the record again every few seconds. It returns early "
+        "with done=false and the current state when its time runs out (at most 10 minutes, "
+        "and never past this turn's time). One wait_for replaces reading a status over and "
+        "over. For something outside BOSS or longer than a turn (a PR review, an external "
+        "CI), use watch.",
+        _obj({"what": {"type": "string", "enum": ["job", "code_task", "workflow_run",
+                                                  "code_graph"],
+                       "description": "the kind of record"},
+              "id": {"type": "string",
+                     "description": "the job_, crun_ or wfr_ id; not needed for code_graph"},
+              "repository": {"type": "string",
+                             "description": "code_graph: owner/name of one repository; all "
+                                            "when omitted"},
+              "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 600,
+                                  "description": "default 300; cut to this turn's time"}},
+             ["what"]),
+        permission="job:read",
+        # Each kind reads what its own status tool reads, under that tool's permission.
+        permission_by_arg=("what", (("code_task", "code_task:read"),
+                                    ("workflow_run", "workflow_run:read"),
+                                    ("code_graph", "knowledge:read"))))
+    def wait_for(ctx, *, project_id, actor, args):
+        from ..services import wait_for as waiting
+
+        try:
+            return _json_safe(waiting.wait(
+                ctx.begin, ctx.settings, project_id=project_id,
+                what=str(args.get("what") or ""), ref=str(args.get("id") or "").strip(),
+                repository=str(args.get("repository") or "").strip(),
+                timeout_seconds=args.get("timeout_seconds")))
+        except waiting.WaitRefused as refused:
+            return {"ok": False, "error": str(refused)}
 
     @reg.tool(
         "schedule_work",

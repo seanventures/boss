@@ -19,7 +19,7 @@ from . import agent_decision, model_routing
 from .code_task_service import start_code_task
 from .core import stable_dedupe_key, emit_event, make_id
 from .offer_label import button_label as _offer_label
-from .turn_budget import TurnBudget
+from .turn_budget import TurnBudget, continue_steps, for_turn as _budget_for_turn
 from .turn_subject import (
     cites_the_record, id_exists, parse_subject, resolve_subject, stays_on_subject,
     strays_from_subject,
@@ -1555,6 +1555,40 @@ def _agent_voice(role: str, connection: Any, project_id: Optional[str]) -> str:
     return "\n\n=== WHO YOU ARE ===\n" + voice
 
 
+def history_is_not_state(earlier: list) -> str:
+    """The note a turn gets when its thread holds earlier replies: they are history, not facts.
+
+    THE EXAM (Metatron, 2026-10-24). A turn repeated "kg_cypher returned forbidden" from its own
+    reply two turns before, after that had been fixed, and planned to reuse "the same Cypher
+    query used previously" after a schema tool and new relationship types had been added. It
+    never looked again: its own earlier words read as the state of the system. How old the
+    newest earlier reply is, is said so the model can weigh it; nothing in a reply is parsed."""
+    from datetime import datetime, timezone
+
+    replies = [m for m in (earlier or []) if isinstance(m, dict) and m.get("role") == "assistant"
+               and m.get("content")]
+    if not replies:
+        return ""
+    age = ""
+    stamp = replies[-1].get("created_at")
+    try:
+        when = (stamp if isinstance(stamp, datetime)
+                else datetime.fromisoformat(str(stamp).replace("Z", "+00:00")) if stamp else None)
+        if when is not None:
+            if when.tzinfo is None:
+                when = when.replace(tzinfo=timezone.utc)
+            minutes = int((datetime.now(timezone.utc) - when).total_seconds() // 60)
+            age = (f" (the newest is {minutes} minute{'s' if minutes != 1 else ''} old)"
+                   if minutes >= 1 else " (the newest is from moments ago)")
+    except (TypeError, ValueError):
+        age = ""
+    return ("EARLIER REPLIES ARE HISTORY, NOT STATE. This conversation holds "
+            f"{len(replies)} earlier repl{'ies' if len(replies) != 1 else 'y'}{age}. What they "
+            "said about tools, permissions, failures or the state of the work may be out of "
+            "date: the tools you hold now, and what they return now, are authoritative. Re-read "
+            "before you repeat a status, a refusal or an earlier query.")
+
+
 def _baseline_primer() -> str:
     from .agent_baseline import PRIMER
 
@@ -1718,6 +1752,7 @@ class IntentRouter:
         self._turn_messages, self._turn_thread = messages, thread_id
         self._turn_action = None
         self._turn_verdict = None
+        self._turn_passes, self._budget_ran_out = None, False
         self._use_project_chat_model(connection, project_id)
         latest = str(messages[-1].get("content") or "").strip() if messages else ""
         if confirm_plan_id:
@@ -2145,10 +2180,12 @@ class IntentRouter:
         """
         if budget is not None and budget.spent():
             _log.info("re-ask skipped: the turn's budget is spent (%s)", budget.describe())
+            # The turn ran out with something still to fix: it ends with a Continue press.
+            self._budget_ran_out = True
             return None
         message, full_history = continuation_messages(
             question=question, history=history, reply=reply, instruction=instruction)
-        return self._answer_agent().chat(
+        again = self._answer_agent().chat(
             project_id=project_id, actor=actor, message=message, history=full_history,
             system=system, allow_writes=allow_writes,
             max_steps=budget.steps_for(max_steps) if budget is not None else max_steps,
@@ -2156,6 +2193,10 @@ class IntentRouter:
             # left no progress rows at all.
             on_step=on_step, budget=budget, focus=focus,
         )
+        passes = getattr(self, "_turn_passes", None)
+        if isinstance(passes, list):
+            passes.append(again)
+        return again
 
     def _answer(self, connection, project_id: str, messages: list,
                 #: BOSS-417: the grounding re-ask below calls the answer agent as the
@@ -2573,6 +2614,10 @@ class IntentRouter:
         latest = convo[-1]["content"] if convo and convo[-1]["role"] == "user" else (
             convo[-1]["content"] if convo else "")
         history = convo[:-1] if convo else []
+        # EARLIER REPLIES ARE HISTORY, NOT STATE. Appended, so the cached prefix is unchanged.
+        _then = history_is_not_state(messages[:-1] if messages else [])
+        if _then:
+            system = system + "\n\n" + _then
         # WHAT THEY ATTACHED TO THIS MESSAGE.
         #
         # Text goes into the prompt with its filename around it, so the model can tell the
@@ -2639,10 +2684,13 @@ class IntentRouter:
                     # ONE BUDGET FOR THE WHOLE TURN — see turn_budget.py. Every pass below
                     # draws from it, so a first pass, a grounding re-ask and a continuation can
                     # no longer add up to 32 model calls and 276 seconds.
-                    _budget = TurnBudget(
-                        seconds=float(getattr(self.settings, "chat_turn_seconds", 180) or 180),
-                        model_calls=int(getattr(self.settings, "chat_turn_model_calls", 16)
-                                        or 16))
+                    # SIZED BY WHAT THE TURN WAS DECIDED TO BE (turn_budget.for_turn): a
+                    # question gets a question's budget, an investigate / operate turn or a
+                    # pressed Continue a deep one, both under one hard ceiling.
+                    _budget, _first_steps, _turn_size = _budget_for_turn(
+                        self.settings, action=getattr(self, "_turn_action", None), depth=depth)
+                    # Every pass the turn runs, for the Continue / Keep waiting it may end with.
+                    self._turn_passes, self._budget_ran_out = [], False
                     # THE WHOLE TURN ENDS IN TIME, every model call in it included — the
                     # re-asks and anything else this method asks a model (call_deadline.py).
                     # EngineAgent narrows it further per call; nothing may widen it.
@@ -2692,10 +2740,10 @@ class IntentRouter:
                         # button — so the operator gets the diagnosis and the fix, one click
                         # away, instead of a fait accompli.
                         allow_writes=not _looking_only, on_step=_report,
-                        max_steps=_budget.steps_for(
-                            int(getattr(self.settings, "chat_max_steps", 14) or 14)),
+                        max_steps=_first_steps,
                         budget=_budget, focus=_focus,
                     )
+                    self._turn_passes.append(turn)
                     reply = str(turn.reply or "").strip()
                     # AN ANSWER DRAWN FROM THE SUBJECT'S RECORDED FAILURE IS GROUNDED — the
                     # gates below that count lookups must not punish it (boss-1's first pass
@@ -3190,8 +3238,14 @@ class IntentRouter:
         # SAY IT ONCE. Applied last, after every reconciler has had its say, so a correction
         # note is never mistaken for a repetition and stripped.
         reply = without_what_was_already_said(reply, history)
+        # A TURN THAT STOPPED SHORT ENDS WITH ONE PRESS THAT RESUMES IT (turn_budget.
+        # continue_steps): "Keep waiting" for a wait that was cut short, "Continue" for a turn
+        # that ran out — never "ask me again".
         return RouterTurn(reply=reply, actions=actions, tool_calls=tool_calls,
-                          proposed_actions=proposed)
+                          proposed_actions=proposed,
+                          next_steps=continue_steps(
+                              getattr(self, "_turn_passes", None) or [],
+                              budget_ran_out=bool(getattr(self, "_budget_ran_out", False))))
 
     def _existing_app_for_task(self, connection: Connection, project_id: str,
                                task_id: Optional[str]) -> tuple[Optional[str], Optional[str]]:

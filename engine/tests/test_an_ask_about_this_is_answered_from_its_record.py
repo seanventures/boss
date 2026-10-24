@@ -579,7 +579,9 @@ def test_a_spent_budget_starts_no_re_ask(db, monkeypatch):
     """The first pass used the turn; the reply hands the problem back; nothing more runs."""
     agent = _Scripted("I could not determine it. Would you like me to investigate further?",
                       "second pass", spend=16)
-    router, _ = _router(monkeypatch, agent, chat_turn_model_calls=16)
+    # The turn's own budget, whichever size it was given (turn_budget.for_turn).
+    router, _ = _router(monkeypatch, agent, chat_turn_model_calls=16,
+                        chat_deep_turn_model_calls=16)
     _ask(router, db, external_ref=None, role=None, question="why is the queue slow?")
     assert len(agent.calls) == 1
 
@@ -817,3 +819,42 @@ def test_an_id_this_project_does_not_have_leaves_the_question_general(db, monkey
     _ask(router, db, external_ref=None, role=None,
          question="Why did crun_ffffffffffff fail?")
     assert not agent.calls[0]["system"].startswith("SUBJECT OF THIS TURN")
+
+
+# --------------------------------------------------------------------------------------------
+# A turn sized by its decision, and one that stops short ends with a press that resumes it.
+# --------------------------------------------------------------------------------------------
+class _ExhaustedTurn(_Turn):
+    def __init__(self, reply, exhausted):
+        super().__init__(reply)
+        self.exhausted = exhausted
+
+
+def test_a_deep_turn_gets_a_deep_budget_and_a_question_a_light_one(db, monkeypatch):
+    from boss_engine.config import Settings
+
+    s = Settings()
+    deep = _Scripted(ANSWER)
+    router, _ = _router(monkeypatch, deep)
+    _ask(router, db, depth="investigate")
+    assert deep.calls[0]["budget"].model_calls == s.chat_deep_turn_model_calls
+    assert deep.calls[0]["max_steps"] == s.chat_deep_max_steps
+    light = _Scripted(ANSWER)
+    router, _ = _router(monkeypatch, light)
+    router._turn_action = "answer"
+    _ask(router, db, external_ref=None, role=None, depth=None)
+    assert light.calls[0]["budget"].model_calls == s.chat_turn_model_calls
+
+
+def test_a_turn_that_ran_out_ends_with_one_press_to_continue(db, monkeypatch):
+    class RanOut(_Scripted):
+        def chat(self, **kwargs):
+            super().chat(**kwargs)
+            return _ExhaustedTurn(ANSWER, "steps")
+
+    router, _ = _router(monkeypatch, RanOut())
+    turn = _ask(router, db)
+    assert [s["id"] for s in turn.next_steps] == ["continue"]
+    assert turn.next_steps[0]["depth"] == "investigate"
+    finished, _ = _router(monkeypatch, _Scripted(ANSWER))
+    assert _ask(finished, db).next_steps == []

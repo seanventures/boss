@@ -63,6 +63,8 @@ FUNDAMENTALS_TOOLS: tuple[str, ...] = (
     "consistency_report", "project_status", "list_projects", "describe_project",
     # the code graph of the project's repositories: is it indexed, and index it now
     "code_graph_status", "index_repository_code",
+    # waiting for BOSS's own work (a job, a build, a run, a code index) without a model call per look
+    "wait_for",
     "list_org_repositories",
     "list_deployments", "describe_deployment_target",
     "list_deployment_hosts", "describe_deployment_host",
@@ -154,6 +156,15 @@ PRIMER = (
     "list_running_work / consistency_report for BOSS's own health; list_capabilities / "
     "list_skills / describe_workflow for what BOSS can do; recall for what this project "
     "already learned. Quote the error line, the file, the value you read.\n"
+    "TO WAIT for work that is running (a job, a build, a workflow run, a code index), call "
+    "wait_for once: it blocks until the work settles, without a model call per look. Do not "
+    "read a status over and over.\n"
+    "NOW, NOT THEN: earlier replies in a conversation, yours included, are history, not facts. "
+    "A tool that failed or was refused in an earlier turn may have been fixed or granted since; "
+    "the tools you are given now are what you hold, so call one instead of repeating an "
+    "earlier failure. Read state again (a status, a count, a setting) before you report it, and "
+    "check what a tool offers now (a schema or a describe tool) before reusing an earlier query "
+    "or approach.\n"
     "TO FIX, propose — never improvise: name the cause, then call propose_action with the BOSS "
     "action that fixes it (retry, redeploy, set a setting...) and exact arguments. A person or "
     "policy approves; you do not run it, raise your own authority, or ask anyone to paste a "

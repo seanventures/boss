@@ -79,6 +79,10 @@ class AgentTurn:
     trace: list[dict] = field(default_factory=list)
     pending_writes: list[dict] = field(default_factory=list)
     steps: int = 0
+    #: Why the turn was made to answer while it still wanted tools: "steps" (this pass's step
+    #: limit), "budget" (the turn's model calls or time), or "" when it answered on its own. The
+    #: router offers a one-press Continue on an exhausted turn instead of a re-ask.
+    exhausted: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -86,6 +90,7 @@ class AgentTurn:
             "trace": self.trace,
             "pending_writes": self.pending_writes,
             "steps": self.steps,
+            "exhausted": self.exhausted,
         }
 
 
@@ -305,13 +310,14 @@ def _step_label(name: str, args: dict) -> str:
     """
     subject = ""
     for key in ("preview_id", "run_id", "job_id", "target_id", "app_name", "host", "service",
-                "path", "query", "repo", "role", "sql"):
+                "path", "query", "repo", "role", "sql", "id", "repository", "what"):
         value = str(args.get(key) or "").strip()
         if value:
             subject = value[:40]
             break
     friendly = {
         "diagnose_run": "diagnosing the run",
+        "wait_for": "waiting for it to finish",
         "read_run_turns": "reading what the build actually did",
         "read_logs": "reading the service logs",
         "explain_run": "breaking down where the time went",
@@ -526,6 +532,8 @@ class EngineAgent:
         offer_spent = False
         #: The turn's deadline cut a model call off: the next round-trip is the answer.
         out_of_time = False
+        #: Why the answer was forced while tools were still wanted (AgentTurn.exhausted).
+        exhausted = ""
 
         for i in range(max_steps):
             steps = i + 1
@@ -534,6 +542,8 @@ class EngineAgent:
             # waits on, so the turn is what is counted.
             out_of_turn = out_of_time or (budget is not None and budget.must_answer_now())
             last = i >= answer_step or out_of_turn
+            if last and not exhausted:
+                exhausted = "budget" if out_of_turn else "steps"
             # The forced answer, with the button allowed in the same call — never a call of its
             # own (see `offer_schemas`).
             closing_offer = bool(last and out_of_turn and offer_schemas and not offer_spent)
@@ -545,11 +555,13 @@ class EngineAgent:
                          + (budget.describe() if budget is not None else "its time is up")
                          + "). "
                          if out_of_turn else "You are out of tool budget for this turn. ")
-                        + "Do not apologise and do not "
-                        "ask to continue. Answer from what you have already established:\n"
+                        + "Do not apologise. Answer from what you have already established:\n"
                         "1. The answer to the operator's question, with concrete evidence.\n"
-                        "2. What you could NOT check, in one sentence each, and why.\n"
+                        "2. What is left: each part of the request you could NOT check or finish,"
+                        " one line each, and why.\n"
                         "3. The single next action you would take.\n"
+                        "The operator gets a one-press Continue that resumes from your list of "
+                        "what is left, so never ask them to ask again or to re-send the request. "
                         "Partial findings are useful; a report of running out of steps is not."
                         + ("\nIf you have found a fix and have not yet offered it, you may call "
                            "propose_action ONCE in this same message to attach it as a button "
@@ -809,7 +821,8 @@ class EngineAgent:
         if not final_text.strip():
             final_text = _report_from_trace(trace)
 
-        return AgentTurn(reply=final_text, trace=trace, pending_writes=pending, steps=steps)
+        return AgentTurn(reply=final_text, trace=trace, pending_writes=pending, steps=steps,
+                         exhausted=exhausted)
 
     def _prose_again(self, messages: list[dict], *, budget: Any = None) -> str:
         """One more call, with no tools, asking for the answer in prose — after the model wrote

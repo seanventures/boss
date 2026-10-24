@@ -100,3 +100,94 @@ class TurnBudget:
     def describe(self) -> str:
         return (f"{self.used} of {self.model_calls} model calls, "
                 f"{int(self.elapsed)}s of {int(self.seconds)}s")
+
+
+# ── How big a turn's budget is ──────────────────────────────────────────────────────────────────
+#
+# ONE CONSTANT FOR EVERY TURN WAS TOO SMALL FOR A REAL ONE AND TOO BIG FOR A PLAIN QUESTION
+# (Metatron, 2026-10-24): "make sure the three code indexes finished, then query the graph" ran
+# out of its 14 round-trips in every turn it was asked, and handed back "poll it again". The
+# turn's decision (agent_decision, in route_turn) already says what kind of turn it is, so the
+# budget is sized from that — never from the words — under one hard ceiling. The time is the
+# same for every turn: it is what the console's stall line allows.
+
+LIGHT = "light"
+DEEP = "deep"
+#: The decided actions that look into or act on the work, and so need a chain of reads.
+DEEP_ACTIONS = frozenset({"investigate", "operate", "new_code_change", "create_project"})
+
+
+def turn_depth(action: str | None, depth: str | None) -> str:
+    """LIGHT for a question (or a turn nothing decided); DEEP for a decision to investigate or
+    act, and for a pressed "Investigate further" / "Continue" (depth=investigate)."""
+    if depth == "investigate" or (action or "") in DEEP_ACTIONS:
+        return DEEP
+    return LIGHT
+
+
+def _int(settings, name: str, default: int) -> int:
+    try:
+        value = int(getattr(settings, name, default) or default)
+    except (TypeError, ValueError):
+        value = default
+    return max(1, value)
+
+
+def for_turn(settings, *, action: str | None, depth: str | None) -> tuple[TurnBudget, int, str]:
+    """(the turn's budget, the first pass's step limit, LIGHT|DEEP) for a decided turn.
+
+    Model calls and steps are both clamped to `chat_turn_model_calls_ceiling`: a setting can
+    make a turn smaller, never bigger than the ceiling."""
+    kind = turn_depth(action, depth)
+    ceiling = _int(settings, "chat_turn_model_calls_ceiling", 40)
+    if kind == DEEP:
+        calls = _int(settings, "chat_deep_turn_model_calls", 32)
+        steps = _int(settings, "chat_deep_max_steps", 28)
+    else:
+        calls = _int(settings, "chat_turn_model_calls", 16)
+        steps = _int(settings, "chat_max_steps", 14)
+    calls = min(calls, ceiling)
+    budget = TurnBudget(seconds=float(_int(settings, "chat_turn_seconds", 180)),
+                        model_calls=calls)
+    return budget, budget.steps_for(min(steps, ceiling)), kind
+
+
+# ── What a turn that stopped short offers next ──────────────────────────────────────────────────
+#
+# "I'm out of tool budget … Next action: poll code_graph_status again" asked the person to type
+# the request again. A turn that ran out, or a wait that was cut short, ends with ONE press that
+# resumes it instead: a next step (RouterTurn.next_steps), which the console and Metatron already
+# render as a button / numbered choice and send as a deep turn.
+
+#: The resume for a turn that ran out of its budget while it still had work to do.
+CONTINUE_STEP: dict[str, str] = {
+    "id": "continue", "label": "Continue", "depth": "investigate",
+    "message": ("Continue where your last reply stopped: read the current state again first, "
+                "then do what it listed as left."),
+}
+
+
+def continue_steps(passes, *, budget_ran_out: bool = False) -> list[dict[str, str]]:
+    """The next steps for a turn: "Keep waiting" when its last wait on some record was cut short
+    (a tool result carrying `resume`), else "Continue" when a pass was made to answer early or a
+    re-ask could not start for want of budget; nothing when the turn finished on its own."""
+    latest: dict[str, dict] = {}
+    exhausted = budget_ran_out
+    for one in passes or ():
+        if one is None:
+            continue
+        exhausted = exhausted or bool(getattr(one, "exhausted", ""))
+        for step in getattr(one, "trace", None) or []:
+            result = step.get("result")
+            if not isinstance(result, dict) or not ("resume" in result or "done" in result):
+                continue
+            args = {k: v for k, v in (step.get("args") or {}).items() if k != "timeout_seconds"}
+            key = f"{step.get('tool')}:{sorted(args.items(), key=lambda kv: kv[0])!r}"
+            latest[key] = result          # a later wait on the same record supersedes it
+    resumes = [r["resume"] for r in latest.values()
+               if isinstance(r.get("resume"), dict) and r["resume"].get("message")]
+    if resumes:
+        said = list(dict.fromkeys(str(r["message"]) for r in resumes))
+        return [{"id": "keep_waiting", "label": str(resumes[-1].get("label") or "Keep waiting"),
+                 "depth": "investigate", "message": " ".join(said)}]
+    return [dict(CONTINUE_STEP)] if exhausted else []
