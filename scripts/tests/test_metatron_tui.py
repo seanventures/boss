@@ -1343,6 +1343,56 @@ def test_the_thread_command_reads_the_conversation_from_the_server():
     assert "/v1/agent/threads/athr_7/messages?project_id=boss-dogfood&actor=ceo" in opener.calls[0]["url"]
 
 
+def test_new_command_asks_the_server_for_a_new_thread():
+    """BOSS_ACTOR alone no longer forks a conversation (identity binds every request to the
+    signed-in principal); /new is the explicit ask -- it must carry new_thread=True and adopt
+    whatever thread id comes back."""
+    opener = FakeOpener([(200, {"thread_id": "athr_new_1"})])
+    client = tui.MetatronClient(_config(), urlopen=opener)
+    client.thread_id = "athr_old"
+    out = client.handle(tui.parse_line("/new"))
+    call = opener.calls[0]
+    assert call["method"] == "POST"
+    assert call["url"].endswith("/v1/agent/threads/ensure")
+    assert call["body"]["new_thread"] is True
+    assert "thread_id" not in call["body"]  # the stale held id must not defeat /new
+    assert client.thread_id == "athr_new_1"
+    assert "athr_new_1" in out
+
+
+def test_new_command_drops_the_last_turns_standing_offers():
+    """/pick after /new must have nothing to pick -- the old turn's numbered choices belong to
+    the conversation that was just left behind."""
+    opener = FakeOpener([(200, AGENT_TURN), (200, {"thread_id": "athr_new_2"})])
+    client = tui.MetatronClient(_config(), urlopen=opener)
+    client.handle(tui.parse_line("why is the build stuck?"))
+    assert client.choices()  # the first turn did offer something
+    client.handle(tui.parse_line("/new"))
+    assert client.choices() == []
+
+
+def test_new_command_asks_for_the_held_roles_thread():
+    opener = FakeOpener([(200, {"thread_id": "athr_qa_new"})])
+    client = tui.MetatronClient(_config(), urlopen=opener)
+    client.role, client.role_name = "qa_lead", "QA Lead"
+    client.handle(tui.parse_line("/new"))
+    assert opener.calls[0]["body"]["role"] == "qa_lead"
+
+
+def test_new_flag_starts_a_new_conversation_before_the_one_shot_command(monkeypatch):
+    opener = FakeOpener([(200, {"thread_id": "athr_new_3"}), (200, AGENT_TURN)])
+    monkeypatch.setenv("BOSS_API_URL", "https://boss-api.test")
+    monkeypatch.setenv("BOSS_API_KEY", SECRET)
+    monkeypatch.setenv("BOSS_PROJECT_ID", "boss-dogfood")
+    monkeypatch.setenv("BOSS_ACTOR", "ceo")
+    monkeypatch.setattr(tui, "urlopen", opener)
+    assert tui.main(["--new", "--exec", "why is the build stuck?", "--json"]) == 0
+    assert opener.calls[0]["url"].endswith("/v1/agent/threads/ensure")
+    assert opener.calls[0]["body"]["new_thread"] is True
+    assert opener.calls[1]["url"].endswith("/v1/metatron/session")
+    assert opener.calls[1]["body"]["thread_id"] == "athr_new_3"
+
+
 def test_agent_model_runs_and_alerts_commands_use_their_routes():
     agents = {"project_id": "boss-dogfood", "items": [
         {"role_key": "qa_lead", "name": "QA Lead", "lifecycle": "active"},

@@ -140,3 +140,58 @@ def prose_of_final(structure: Optional[dict]) -> Optional[str]:
     if isinstance(final, str) and final.strip():
         return final.strip()
     return None
+
+
+#: A FENCED BLOCK IS CONTENT, NEVER TOUCHED. Captured live: a reply read
+#:
+#:     …can.\n\nSo, restated with this now confirmed rather than inferred:…
+#:
+#: — two literal backslash-n pairs printed as text, with every quote in the same reply still
+#: `\"escaped\"` rather than `"quoted"`. Nothing upstream is a clean JSON round trip here: the
+#: model's own "final" string sometimes keeps a few of its OWN escapes instead of the character
+#: each one stood for, while most of the same reply already reads as plain prose (real
+#: newlines, real quotes). That is a narrower case than a whole decision structure
+#: (protocol_reply.parse already decodes one of those correctly, in one `json.loads`); this is
+#: the backstop for the leftovers in ordinary prose.
+_FENCED_BLOCK = re.compile(r"```.*?```", re.DOTALL)
+_INLINE_CODE = re.compile(r"`[^`\n]+`")
+#: Only the escapes a person reads as a visible defect when left raw (a blank line that
+#: printed as `\n\n`, a quote that printed as `\"`) — never `\\` or `\/`, which are exactly the
+#: characters a Windows path, a regex or a URL escape legitimately spells out in prose.
+_STRAY_JSON_ESCAPE = re.compile(r'\\(["ntr])')
+_STRAY_ESCAPE_CHARS = {'"': '"', "n": "\n", "t": "\t", "r": "\r"}
+
+
+def _decode_stray_escapes(segment: str) -> str:
+    return _STRAY_JSON_ESCAPE.sub(lambda m: _STRAY_ESCAPE_CHARS[m.group(1)], segment)
+
+
+def unescape_stray_json(text: Any) -> str:
+    """A model's reply, with any leftover JSON-string escape it never turned back into the
+    character it stood for — decoded everywhere EXCEPT inside a fenced ``` block or an inline
+    `code span`, where the same two characters are the content, not an artefact of carrying it
+    this far (a regex's `\\n`, a Windows path, a literal example someone is asking about)."""
+    t = str(text or "")
+    if "\\" not in t:
+        return t
+    out: list[str] = []
+    pos = 0
+    for block in _FENCED_BLOCK.finditer(t):
+        out.append(_decode_between_code(t[pos:block.start()]))
+        out.append(block.group(0))
+        pos = block.end()
+    out.append(_decode_between_code(t[pos:]))
+    return "".join(out)
+
+
+def _decode_between_code(segment: str) -> str:
+    """`_decode_stray_escapes`, skipping any inline `code span` within this (already
+    fenced-block-free) segment."""
+    out: list[str] = []
+    pos = 0
+    for span in _INLINE_CODE.finditer(segment):
+        out.append(_decode_stray_escapes(segment[pos:span.start()]))
+        out.append(span.group(0))
+        pos = span.end()
+    out.append(_decode_stray_escapes(segment[pos:]))
+    return "".join(out)

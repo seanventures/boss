@@ -108,6 +108,7 @@ SLASH_COMMANDS: tuple[tuple[str, str, str], ...] = (
     ("/pick", "[N]", "Run one of the last reply's numbered choices"),
     ("/confirm", "", "Go ahead with the plan waiting on you"),
     ("/expand", "", "The last reply's tool calls, in full"),
+    ("/new", "", "Start a new conversation (actor/role alone no longer forks one)"),
     ("/thread", "[ID]", "The conversation so far, from the server (and a slow turn's reply)"),
     ("/tasks", "[PAGE]", "Task list, 25 a page"),
     ("/task", "ID | create KEY TITLE", "Show one task, or create one"),
@@ -420,6 +421,8 @@ def parse_line(line: str) -> Command:
         return Command(kind="status")
     if lowered == "/expand":
         return Command(kind="expand")
+    if lowered == "/new":
+        return Command(kind="new")
     if lowered == "/thread" or lowered.startswith("/thread "):
         parts = raw.split()
         if len(parts) > 2 or (len(parts) == 2 and not SIMPLE_ID.fullmatch(parts[1])):
@@ -1383,6 +1386,27 @@ class MetatronClient:
         self._remember_thread(payload)
         return self.thread_id
 
+    def new_conversation(self) -> Any:
+        """/new and --new: start over, explicitly.
+
+        BOSS_ACTOR used to fork a conversation by naming a different one; under identity
+        enforcement the actor is the signed-in principal, not whatever is claimed here, so
+        three different BOSS_ACTOR values all landed back in this key's one thread. There is
+        no implicit way to start fresh any more, so this asks for one outright
+        (/v1/agent/threads/ensure with new_thread, the same key the next turn will resolve) and
+        shows the new thread id immediately, the way the very first message does."""
+        self.thread_id, self.last_turn = None, None
+        payload = self.request("POST", "/v1/agent/threads/ensure", {
+            "project_id": self.project_id, "actor": self.config.actor, "surface": "chat",
+            "new_thread": True,
+            **({"role": self.role} if self.role else {}),
+        })
+        self._remember_thread(payload)
+        if isinstance(payload, dict) and not payload.get("__http_error__"):
+            return {**payload, "note": f"Started a new conversation: thread {self.thread_id}."
+                    + (f" (talking to {self.role_name})" if self.role else "")}
+        return payload
+
     def thread_messages(self, thread_id: str) -> Any:
         query = urlencode({"project_id": self.project_id, "actor": self.config.actor})
         return self.request(
@@ -2277,6 +2301,8 @@ class MetatronClient:
             payload = self.status()
         elif command.kind == "expand":
             payload = self.expand()
+        elif command.kind == "new":
+            payload = self.new_conversation()
         elif command.kind == "thread":
             payload = self.thread(command.message)
         elif command.kind == "runs":
@@ -2465,6 +2491,9 @@ def main(argv: list[str] | None = None) -> int:
         description="Metatron: BOSS's terminal. Interactive by default; --print runs one command.")
     parser.add_argument("--exec", "--print", "-p", dest="command", metavar="COMMAND",
                         help="run one terminal command (a sentence or a /command) and exit")
+    parser.add_argument("--new", action="store_true",
+                        help="start a new conversation first (see /new); with --exec, "
+                             "that command then runs in it")
     parser.add_argument("--json", action="store_true", help="emit the one-shot result as JSON")
     parser.add_argument("--plain", action="store_true",
                         help="plain text: no colours, panels or bottom bar")
@@ -2477,6 +2506,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     client = MetatronClient(config)
+    if args.new:
+        started = client.new_conversation()
+        if isinstance(started, dict) and started.get("__http_error__"):
+            print(f"error: could not start a new conversation: {started.get('body')}",
+                  file=sys.stderr)
+            return 1
     if args.command is None:
         if rich_terminal(sys.stdout, plain=args.plain):
             return int(sibling("metatron_shell").run(sys.modules[__name__], client))

@@ -13368,6 +13368,7 @@ def agent_turn(payload: AgentChatRequest, request: Request, *, endpoint: str) ->
                 mode=payload.mode,
                 depth=payload.depth,
                 context=payload.context,
+                new_thread=payload.new_thread,
                 attachments=[
                     {"name": a.name, "media_type": a.media_type, "kind": a.kind,
                      "data": a.data}
@@ -13801,6 +13802,9 @@ def ensure_agent_thread_endpoint(payload: open_bodies.AgentThreadEnsureBody, req
             # thread, the turn (role=Qa) fell through to another one, and in boss-1 the dock
             # polled the empty thread for 276 seconds while the progress went elsewhere.
             agent_role=str(payload.get("role") or ""),
+            # EXPLICIT "new conversation" (Metatron's /new, the console's equivalent): skip the
+            # thread this key would otherwise resume and hand back a fresh one instead.
+            new_thread=bool(payload.get("new_thread") or False),
         )
     return {"thread_id": thread["id"]}
 

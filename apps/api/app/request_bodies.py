@@ -819,6 +819,9 @@ class AgentThreadEnsureBody(OpenRequestBody):
     actor: SkipValidation[str | None] = None
     surface: SkipValidation[str | None] = None
     external_ref: SkipValidation[str | None] = None
+    #: Start a new thread for this same project+actor+surface+role rather than resuming the
+    #: current one — see AgentChatRequest.new_thread.
+    new_thread: SkipValidation[bool | None] = None
 
 class OrgAssignmentBody(OpenRequestBody):
     model_config = ConfigDict(json_schema_extra={"required": ['project_id']})

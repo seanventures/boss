@@ -39,14 +39,17 @@ DOMAIN_SURFACE = "agent"
 def readable_reply(reply: Any, tool_calls: Any = None) -> str:
     """The reply a person may read. A model's decision structure (the tool protocol's JSON, or
     the decision contract's), however it got this far, becomes its final answer, else an honest
-    account of what was checked — never the raw JSON."""
+    account of what was checked — never the raw JSON. THE LAST DOOR (every surface reaches this
+    one function), so it is also where a reply that carried a JSON escape it never turned back
+    into a real character gets cleaned up once, for all of them — see
+    protocol_reply.unescape_stray_json."""
     text_reply = str(reply or "")
     structure = protocol_reply.parse(text_reply)
     if structure is None:
-        return text_reply
+        return protocol_reply.unescape_stray_json(text_reply)
     final = protocol_reply.prose_of_final(structure)
     if final:
-        return final
+        return protocol_reply.unescape_stray_json(final)
     LOGGER.warning("a decision structure reached the reply; replaced (%s)",
                    sorted(structure)[:6])
     checked = [f"- {c.get('tool')}" + ("" if c.get("ok", True) else " (failed)")
@@ -81,13 +84,42 @@ class AgentService:
         surface: str = "chat",
         external_ref: Optional[str] = None,
         agent_role: str = "",
+        new_thread: bool = False,
     ) -> dict[str, Any]:
         # WHOSE CONVERSATION. The key was (project, surface, external_ref) and nothing else, so
         # asking the Program Manager and then asking QA on the same task resolved to ONE thread
         # and the second agent read the first's turns as its own. Normalised the same way the
         # role is matched everywhere else, or "QA" and "qa" would be two conversations.
         agent_role = (agent_role or "").strip().lower()
-        if thread_id:
+        # AN EXPLICIT "NEW CONVERSATION" (the Metatron /new, and whatever asks for one).
+        #
+        # The key above is (project, actor, surface, role) — the verified principal under
+        # identity enforcement, so changing BOSS_ACTOR cannot fork a thread any more (it never
+        # reaches here: identity_guard._bind_actor overwrites the claimed actor with the
+        # principal before this runs). That keying is right for IDENTITY; it left no way to
+        # start over on purpose. `new_thread` is that way: skip every lookup below — including
+        # a passed `thread_id`, which would otherwise just continue what this was supposed to
+        # replace — and fall through to a fresh INSERT. A shared task thread's unique slot
+        # (project, surface, external_ref, agent_role) has to be freed first or the insert
+        # fails; a private thread needs nothing freed, because the lookup that would have
+        # found it is the thing being skipped, and the new row's later `updated_at` makes it
+        # the one found next time.
+        if new_thread and external_ref:
+            connection.execute(
+                text(
+                    """
+                    UPDATE agent_threads
+                    SET external_ref = external_ref || '#new-' || id,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE project_id = :project_id AND surface = :surface
+                      AND external_ref = :external_ref AND agent_role = :agent_role
+                      AND status = 'active'
+                    """
+                ),
+                {"project_id": project_id, "surface": surface,
+                 "external_ref": external_ref, "agent_role": agent_role},
+            )
+        if thread_id and not new_thread:
             row = connection.execute(
                 text(
                     """
@@ -130,7 +162,7 @@ class AgentService:
                 if same_scope:
                     return dict(row)
 
-        if external_ref:
+        if external_ref and not new_thread:
             row = connection.execute(
                 text(
                     """
@@ -162,7 +194,7 @@ class AgentService:
         # persist on task threads (they carry an external_ref) and nowhere else. Keyed on who
         # is asking and who is being asked, so switching agent in the console lands in that
         # agent's own conversation rather than the previous one's.
-        if not external_ref:
+        if not external_ref and not new_thread:
             row = connection.execute(
                 text(
                     """
@@ -815,6 +847,9 @@ class AgentService:
         #: WHAT THE DOCK WAS OPENED ABOUT — {act_id} or {workflow_run_id, step_id}. The turn is
         #: signed as work under it, so "Ask about this" shows up in that work's chain.
         context: Optional[dict[str, Any]] = None,
+        #: AN EXPLICIT "start over" (console's clear, Metatron's /new or --new): a fresh
+        #: thread for this same project+actor+surface+role, ignoring any held `thread_id`.
+        new_thread: bool = False,
     ) -> dict[str, Any]:
         # THE AGENT IS PART OF WHICH CONVERSATION THIS IS. Without it the thread resolved on
         # (project, surface, external_ref) alone, so asking a second agent about the same task
@@ -828,6 +863,7 @@ class AgentService:
             surface=surface,
             external_ref=external_ref,
             agent_role=role or "",
+            new_thread=new_thread,
         )
         user_content = message.strip() or f"Confirm plan {confirm_plan_id}"
         if not user_content and attachments:

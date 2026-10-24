@@ -832,6 +832,12 @@ class AgentChatRequest(BaseModel):
     #: 347 s "Ask the Qa"). "investigate" is the dock's "Investigate further" / "Do the fix":
     #: the full tool loop, on the operator's explicit say-so.
     depth: Optional[Literal["investigate"]] = None
+    #: START OVER, EXPLICITLY. `actor`/`role` alone no longer forks a conversation — under
+    #: identity enforcement the actor is the verified principal, not whatever is claimed here
+    #: (identity_guard._bind_actor) — so a fresh thread for this same principal+project+surface
+    #: needs its own ask. True ignores any `thread_id` on this turn and starts a new one, which
+    #: becomes the current conversation for the next turn that does not ask for one either.
+    new_thread: bool = False
 
     @model_validator(mode="after")
     def validate_turn(self):

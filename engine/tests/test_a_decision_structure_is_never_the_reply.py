@@ -12,6 +12,8 @@ from __future__ import annotations
 import json
 import types
 
+import pytest
+
 from boss_engine.agent.engine_agent import EngineAgent
 from boss_engine.config import get_settings
 from boss_engine.services import protocol_reply
@@ -106,6 +108,55 @@ def test_the_threads_last_door_turns_any_structure_into_a_readable_reply():
     said = readable_reply(MALFORMED, [{"tool": "list_projects", "ok": True}])
     assert "{" not in said and "list_projects" in said
     assert readable_reply("plain answer") == "plain answer"
+
+
+#: A reply BOSS actually printed (captures/v2_impact.txt, kg-demo-impact,
+#: northpeak-bank-b): most of the "final" text read as plain prose with real paragraph
+#: breaks, but two of them, and every quote in the whole reply, were still the JSON
+#: escapes that stood for them — `\n\n` and `\"…\"` printed literally rather than a blank
+#: line and a quoted phrase. Not a decision structure (it does not start with `{`), so the
+#: old code returned it completely unprocessed.
+CAPTURED_SHAPE = (
+    "...the Due-strategy's `do...while(ignoreDueDateCheck && rerun)` loop (lines 69-180 "
+    "of the Due-strategy class) can.\\n\\nSo, restated with this now confirmed rather than "
+    "inferred:\\n\\n**What remains genuinely unread**: the 7 other \\\"structurally "
+    "exposed\\\" bodies beyond Due-strategy."
+)
+
+
+def test_a_stray_json_escape_in_plain_prose_is_decoded():
+    said = readable_reply(CAPTURED_SHAPE)
+    assert "\\n" not in said and '\\"' not in said
+    assert "\n\nSo, restated" in said
+    assert '"structurally exposed"' in said
+
+
+def test_the_real_captured_reply_comes_out_clean():
+    import pathlib
+
+    captured = pathlib.Path(
+        "/Users/param/Downloads/boss-video-kg/captures/v2_impact.txt")
+    if not captured.exists():
+        pytest.skip("capture not present on this machine")
+    said = readable_reply(captured.read_text(encoding="utf-8"))
+    assert "\\n" not in said
+    assert '\\"' not in said
+    assert "\n\nSo, restated with this now confirmed" in said
+
+
+def test_a_fenced_or_inline_code_span_is_never_touched():
+    sample = ("Prose with a bug.\\n\\nSecond line.\n\n"
+             "```python\nre.compile(r\"a\\nb\")\n```\n\n"
+             "Inline `\\n` stays raw too.")
+    said = readable_reply(sample)
+    assert said.startswith("Prose with a bug.\n\nSecond line.")
+    assert 're.compile(r"a\\nb")' in said  # inside the fence, untouched
+    assert "Inline `\\n` stays raw too." in said  # inside the inline span, untouched
+
+
+def test_a_reply_with_no_backslash_is_returned_unchanged():
+    plain = "All three projects exist; none has a repo."
+    assert readable_reply(plain) == plain
 
 
 def test_every_threaded_reply_and_the_router_door_pass_the_last_door():
