@@ -8740,3 +8740,18 @@ details[open] > .skill-form-summary::before { transform: rotate(90deg); }
   margin: 0 0 12px; padding: 8px 12px; border: 1px solid var(--border, #d0d4dc); border-radius: 8px;
   background: var(--surface-warn, #fff8e6); font-size: 0.68421rem; }
 .project-away a { white-space: nowrap; }
+
+/* The project menu's own rows (app/project-menu.tsx): Archive project…, Show archived, the badge. */
+.bx-project-menu-panel .bx-project-menu-archive { color: var(--red); }
+.bx-project-menu-panel .bx-project-menu-archive[aria-disabled="true"] { color: var(--faint); cursor: not-allowed; }
+.bx-project-menu-panel .bx-project-menu-toggle { color: var(--ink-soft); }
+.bx-project-menu-archived {
+  margin-left: 6px;
+  padding: 0 6px;
+  border: 1px solid rgba(245, 181, 68, 0.45);
+  border-radius: 999px;
+  background: var(--amber-soft);
+  color: var(--amber);
+  font-size: 0.66rem;
+  font-weight: 600;
+}

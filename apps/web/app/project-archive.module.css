@@ -155,17 +155,4 @@
 }
 .notice .badge { margin-left: 0; }
 
-/* The project menu's own rows (app/project-menu.tsx): Archive project…, Show archived, the badge. */
-:global(.bx-project-menu-panel) :global(.bx-project-menu-archive) { color: var(--red); }
-:global(.bx-project-menu-panel) :global(.bx-project-menu-archive[aria-disabled="true"]) { color: var(--faint); cursor: not-allowed; }
-:global(.bx-project-menu-panel) :global(.bx-project-menu-toggle) { color: var(--ink-soft); }
-:global(.bx-project-menu-archived) {
-  margin-left: 6px;
-  padding: 0 6px;
-  border: 1px solid rgba(245, 181, 68, 0.45);
-  border-radius: 999px;
-  background: var(--amber-soft);
-  color: var(--amber);
-  font-size: 0.66rem;
-  font-weight: 600;
-}
+
