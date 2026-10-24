@@ -4,8 +4,16 @@
 JavaScript, Go, Java and C# through tree-sitter). This module resolves names ACROSS the files of
 a repository and writes the graph through the knowledge store. Nodes are ``file``, ``module``,
 ``symbol``, ``endpoint``, ``table``, ``queue`` and ``config_key``; edges are ``defines``,
-``imports``, ``calls``, ``references``, ``extends``, ``implements``, ``exposes``, ``reads``,
-``writes``, ``publishes`` and ``subscribes``. ``extends``/``implements`` run from a type to the
+``imports``, ``calls``, ``dispatches_to``, ``overrides``, ``references``, ``extends``,
+``implements``, ``exposes``, ``reads``, ``writes``, ``publishes`` and ``subscribes``.
+
+A call is resolved by its receiver's declared type where the code states one (a field, a
+parameter, a local, ``this``/``self``, a call's declared return type, ``new T()``), through the
+type hierarchy: ``calls`` links to the method that type has, its own or inherited (a call to an
+interface or abstract method links to the declaration), and ``dispatches_to`` (confidence 0.6
+of the call's) to each override in the type's subtypes, where the call may land at run time.
+``overrides`` runs from a method to the supertype method it overrides. A receiver whose type is
+outside the repository (a library's) gets no edge, rather than a guess by name. ``extends``/``implements`` run from a type to the
 type it inherits from (a class's superclass, an interface it implements, an interface's parent,
 a Python base, a Go embedded type), resolved like any other name; a base resolved only because
 its simple name is unique in the repository has confidence 0.5. Tables, queues, webhooks and config keys are keyed project-wide, so two
@@ -38,7 +46,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from ..core import now_utc
-from .code_parse import FACTS_VERSION, Def, FileFacts, Import, Ref, language_for, parse_file
+from .code_parse import CALL, FACTS_VERSION, TYPED, Def, FileFacts, Import, Ref, language_for, parse_file
 from .store import PostgresKnowledgeStore
 
 LANGUAGES = frozenset({"python", "typescript", "javascript", "go", "java", "csharp"})
@@ -49,10 +57,20 @@ JS_FAMILY = ("javascript", "typescript", "tsx")
 #: What a whole-repository index produces. A repository last indexed by an older version is due
 #: again (repo_index.observe_bindings), and its cached file facts of an older shape are parsed
 #: again, so a graph built before a new edge kind existed gains it on the next tick after an
-#: install. Bump it with any change to what the index writes. 2: extends/implements edges.
-INDEXER_VERSION = 2
+#: install. Bump it with any change to what the index writes. 2: extends/implements edges. 3: calls
+#: by the receiver's declared type, dispatches_to and overrides edges.
+INDEXER_VERSION = 3
 #: Edge kinds between types.
 INHERITANCE_KINDS = ("extends", "implements")
+#: A call through a value of type T links to the method T has (its own or inherited), kind
+#: ``calls``, and to each override in T's subtypes, kind ``dispatches_to``, at a lower confidence:
+#: which one runs depends on the value. At most this many overrides per call.
+DISPATCH_LIMIT = 64
+DISPATCH_CONFIDENCE = 0.6
+#: Languages where a bare call inside a class may be a call on ``this``.
+IMPLICIT_THIS = ("java", "csharp")
+#: The receiver of a call is known to be outside the repository (a library type): no edge.
+EXTERNAL = "external"
 
 _DECL = {
     "javascript": (
@@ -216,6 +234,9 @@ def facts_from_dict(d: dict) -> FileFacts:
     f.bases = [(x[0], tuple(x[1].split(".")) if isinstance(x[1], str) else tuple(x[1]), x[2], int(x[3]))
                for x in d.get("bases", [])]
     f.types = dict(d.get("types") or {})
+    f.fields = [(x[0], x[1], tuple(x[2].split(".")), int(x[3])) for x in d.get("fields", [])]
+    f.vars = [(x[0], x[1], tuple(x[2].split(".")), int(x[3])) for x in d.get("vars", [])]
+    f.returns = {k: tuple(v.split(".")) for k, v in (d.get("returns") or {}).items()}
     f.version = int(d.get("v") or d.get("version") or 1)    # facts cached before versions were 1
     return f
 
@@ -227,7 +248,11 @@ def facts_to_row(f: FileFacts) -> dict:
             "refs": [[r.src, ".".join(r.chain), int(r.call), r.line] for r in f.refs],
             "endpoints": f.endpoints, "tables": f.tables, "queues": f.queues, "config": f.config,
             "bases": [[src, ".".join(chain), rel, line] for src, chain, rel, line in f.bases],
-            "types": f.types, "lines": f.lines, "error": f.error, "v": f.version}
+            "types": f.types,
+            "fields": [[scope, name, ".".join(chain), line] for scope, name, chain, line in f.fields],
+            "vars": [[scope, name, ".".join(chain), line] for scope, name, chain, line in f.vars],
+            "returns": {k: ".".join(v) for k, v in f.returns.items()},
+            "lines": f.lines, "error": f.error, "v": f.version}
 
 
 def row_to_facts(path: str, lang: str, module: str, content_hash: str, data: dict) -> FileFacts:
@@ -239,15 +264,22 @@ def names_of(f: FileFacts) -> list[str]:
     """Every name whose meaning could change this file's edges: what it refers to and imports."""
     names: set[str] = set()
     for r in f.refs:
-        names.update(part for part in r.chain if part and not part.startswith("#"))
+        names.update(part for part in r.chain if part and (not part.startswith("#") or part.startswith(TYPED)))
     for _src, chain, _rel, _line in f.bases:
+        names.update(chain)
+    for _scope, _name, chain, _line in (*f.fields, *f.vars):
+        names.update(chain)
+    for chain in f.returns.values():
         names.update(chain)
     for i in f.imports:
         names.add(i.module)
         names.add(i.module.rsplit(".", 1)[-1].rsplit("/", 1)[-1])
         if i.name and i.name != "*":
             names.add(i.name)
-    return sorted(n for n in names if n)
+    for part in list(names):
+        if part.startswith(TYPED):              # new Foo().bar(): the type's names count too
+            names.update(part[len(TYPED):].split("."))
+    return sorted(n for n in names if n and n != CALL and not n.startswith("#"))
 
 
 # --- how a JS/TS repository names its own code ----------------------------------------------------
@@ -424,11 +456,24 @@ class RepoIndex:
         self.qual_of_key: dict[str, str] = {}
         self.types_by_name: dict[str, list[str]] = defaultdict(list)     # simple name -> type keys
         self.type_kind: dict[str, str] = {}                               # type key -> interface...
+        # Members, for resolving a call by its receiver's type (see Resolver.resolve_call).
+        self.facts: dict[str, FileFacts] = {}
+        self.members: dict[str, dict[str, str]] = defaultdict(dict)       # type key -> name -> method key
+        self.owner: dict[str, str] = {}                                   # method key -> type key
+        self.fields: dict[str, dict[str, tuple[str, str, tuple[str, ...], int]]] = defaultdict(dict)
+        self._supers: dict[str, list[tuple[str, float]]] | None = None
+        self._subs: dict[str, list[str]] | None = None
+        self._resolvers: dict[str, Resolver] = {}
+        self._type_memo: dict[tuple, tuple[str, float] | None] = {}
+        self._field_memo: dict[tuple[str, str], tuple[str, float] | None] = {}
+        self._return_memo: dict[str, tuple[str, float] | None] = {}
         files = list(files)
         for f in files:
             self.add(f)
         for f in files:                       # exports need every module known, to map package names
             self.add_exports(f)
+        for f in files:                       # a Go method may sit in another file than its type
+            self.add_members(f)
 
     def imports_of(self, f: FileFacts) -> list[Import]:
         """The file's imports, with JS/TS package names and path aliases mapped onto repository modules."""
@@ -450,6 +495,7 @@ class RepoIndex:
                     self.star_exports[f.module].append(imp.module)
 
     def add(self, f: FileFacts) -> None:
+        self.facts[f.path] = f
         self.module_of[f.path] = f.module
         self.lang_of[f.path] = f.lang
         if f.lang not in GO_LIKE:
@@ -466,6 +512,145 @@ class RepoIndex:
             elif d.kind == "class":
                 self.types_by_name[d.qualname.rsplit(".", 1)[-1]].append(key)
                 self.type_kind[key] = f.types.get(d.qualname, "class")
+
+    def add_members(self, f: FileFacts) -> None:
+        """Methods and fields by the type that declares them."""
+        scope = self.defs.get(f.module, {}) if f.lang in GO_LIKE else self.file_defs.get(f.path, {})
+        for d in f.defs:
+            if d.kind not in ("function", "method", "property") or "." not in d.qualname:
+                continue
+            parent, name = d.qualname.rsplit(".", 1)
+            tkey = scope.get(parent)
+            if tkey is not None and tkey in self.type_kind:
+                key = self.file_defs[f.path][d.qualname]
+                self.members[tkey].setdefault(name, key)
+                self.owner[key] = tkey
+        for owner, name, chain, line in f.fields:
+            tkey = scope.get(owner)
+            if tkey is not None and tkey in self.type_kind:
+                self.fields[tkey].setdefault(name, (f.path, owner, chain, line))
+
+    # --- the type hierarchy ---------------------------------------------------------------------
+    def resolver_for(self, path: str) -> Resolver | None:
+        r = self._resolvers.get(path)
+        if r is None and path in self.facts:
+            if len(self._resolvers) > 4096:      # bounded: a resolver holds one file's aliases
+                self._resolvers.clear()
+            r = self._resolvers[path] = Resolver(self, self.facts[path])
+        return r
+
+    def supers(self, tkey: str) -> list[tuple[str, float]]:
+        """The types ``tkey`` extends or implements, resolved once for the whole repository."""
+        if self._supers is None:
+            self._supers, self._subs = defaultdict(list), defaultdict(list)
+            for path, f in self.facts.items():
+                r = None
+                for src, chain, _rel, line in f.bases:
+                    r = r or Resolver(self, f)
+                    hit = r.resolve_type(src, chain, line)
+                    sk = r.src_key(src)
+                    if hit and hit[0] != sk and sk in self.type_kind:
+                        self._supers[sk].append(hit)
+                        self._subs[hit[0]].append(sk)
+        return self._supers.get(tkey, [])
+
+    def subs(self, tkey: str) -> list[str]:
+        self.supers(tkey)
+        return self._subs.get(tkey, []) if self._subs is not None else []
+
+    def ancestry(self, tkey: str, limit: int = 64) -> list[tuple[str, float]]:
+        """``tkey`` then its supertypes, nearest first (breadth first), with the confidence of
+        the weakest inheritance link on the way."""
+        out, seen, frontier = [(tkey, 1.0)], {tkey}, [(tkey, 1.0)]
+        while frontier and len(out) < limit:
+            nxt = []
+            for t, conf in frontier:
+                for sup, c in self.supers(t):
+                    if sup not in seen:
+                        seen.add(sup)
+                        out.append((sup, min(conf, c)))
+                        nxt.append((sup, min(conf, c)))
+            frontier = nxt
+        return out
+
+    def find_method(self, tkey: str, name: str, *, skip_self: bool = False) -> tuple[str, float] | None:
+        """The method ``name`` a value of type ``tkey`` calls: its own, else the nearest inherited."""
+        for t, conf in self.ancestry(tkey):
+            if skip_self and t == tkey:
+                continue
+            key = self.members.get(t, {}).get(name)
+            if key is not None:
+                return key, conf
+        return None
+
+    def overrides(self, tkey: str, name: str, limit: int = DISPATCH_LIMIT) -> list[str]:
+        """Methods named ``name`` in the subtypes of ``tkey``: where a call through a value of type
+        ``tkey`` may dispatch at run time."""
+        out, seen, frontier = [], {tkey}, [tkey]
+        while frontier and len(out) < limit:
+            nxt = []
+            for t in frontier:
+                for sub in self.subs(t):
+                    if sub in seen:
+                        continue
+                    seen.add(sub)
+                    nxt.append(sub)
+                    key = self.members.get(sub, {}).get(name)
+                    if key is not None and len(out) < limit:
+                        out.append(key)
+            frontier = nxt
+        return out
+
+    def field_type(self, tkey: str, name: str) -> tuple[str, float] | None | bool:
+        """The type of field ``name`` on ``tkey`` (or a supertype): (type key, confidence); None
+        when the field's type is outside the repository; False when no such field is declared."""
+        memo = (tkey, name)
+        if memo in self._field_memo:
+            return self._field_memo[memo]
+        found: tuple[str, float] | None | bool = False
+        for t, conf in self.ancestry(tkey):
+            decl = self.fields.get(t, {}).get(name)
+            if decl is not None:
+                path, owner, chain, line = decl
+                hit = self.type_in(path, owner, chain, line)
+                found = (hit[0], min(conf, hit[1])) if hit else None
+                break
+        self._field_memo[memo] = found
+        return found
+
+    def return_type(self, mkey: str) -> tuple[str, float] | None:
+        """The type a method or function returns, when the repository defines it. Calling a type
+        (a Python class, a constructor) yields the type itself."""
+        if mkey in self.type_kind:
+            return mkey, 1.0
+        if mkey in self._return_memo:
+            return self._return_memo[mkey]
+        self._return_memo[mkey] = None                    # a recursive return type stops here
+        path, qual = self.path_of_key.get(mkey), self.qual_of_key.get(mkey)
+        f = self.facts.get(path or "")
+        chain = f.returns.get(qual or "") if f is not None else None
+        hit = self.type_in(path, qual, chain, 0) if chain else None
+        self._return_memo[mkey] = hit
+        return hit
+
+    def type_in(self, path: str, src: str, chain: tuple[str, ...], line: int,
+                depth: int = 0) -> tuple[str, float] | None:
+        """The repository type a declared type chain names, read in the file and scope that
+        declared it: a type name, ``#t:T``, or a call chain ending in CALL (its return type)."""
+        memo = (path, src, chain)
+        if memo in self._type_memo:
+            return self._type_memo[memo]
+        hit = None
+        r = self.resolver_for(path)
+        if r is not None and chain and depth < 6 and chain != ("#array",):
+            if chain[-1] == CALL:
+                self._type_memo[memo] = None              # a cycle through calls stops here
+                hit = r.call_result(Ref(src, chain[:-1], True, line), depth + 1)
+            else:
+                typed = chain[0][len(TYPED):].split(".") if chain[0].startswith(TYPED) else chain
+                hit = r.resolve_type(src, tuple(typed), line)
+        self._type_memo[memo] = hit
+        return hit
 
     @property
     def modules(self) -> dict[str, dict[str, str]]:
@@ -585,11 +770,172 @@ class Resolver:
                 self.stars.append(imp)
             elif imp.alias:
                 self.aliases[imp.alias] = imp
+        self.vars: dict[tuple[str, str], list[tuple[int, tuple[str, ...]]]] = defaultdict(list)
+        for scope, name, chain, line in f.vars:
+            self.vars[(scope, name)].append((line, chain))
+
+    # --- calls by the receiver's type ---------------------------------------------------------------
+    def enclosing_type(self, src: str) -> str | None:
+        """The innermost type whose body ``src`` is in."""
+        parts = src.split(".") if src else []
+        while parts:
+            key = self.local.get(".".join(parts))
+            if key is not None and key in self.ix.type_kind:
+                return key
+            parts.pop()
+        return None
+
+    def _outer_types(self, src: str) -> list[str]:
+        """The enclosing type, then the types enclosing it (an inner class reaches its outer's members)."""
+        out: list[str] = []
+        parts = src.split(".") if src else []
+        while parts:
+            key = self.local.get(".".join(parts))
+            if key is not None and key in self.ix.type_kind and key not in out:
+                out.append(key)
+            parts.pop()
+        return out
+
+    def var_decl(self, src: str, name: str, line: int) -> tuple[str, tuple[str, ...]] | None:
+        """The declared type of a parameter or local ``name`` seen from ``src``: the innermost
+        scope that declares it, the latest declaration at or before ``line``."""
+        parts = src.split(".") if src else []
+        while True:
+            scope = ".".join(parts)
+            decls = self.vars.get((scope, name))
+            if decls:
+                before = [d for d in decls if d[0] <= line] or decls
+                return scope, max(before, key=lambda d: d[0])[1]
+            if not parts:
+                return None
+            parts.pop()
+
+    def call_result(self, ref: Ref, depth: int = 0) -> tuple[str, float] | None:
+        """The repository type calling ``ref.chain`` yields, or None: by the receiver's type
+        when it has one, else by the name rules (a function, a class called as a constructor)."""
+        got = self.callee(ref, depth)
+        if got is None:
+            hit = self.resolve(ref)
+            key, conf = (hit[0], hit[1]) if hit else (None, 0.0)
+        elif isinstance(got, tuple):
+            key, conf = got[0], got[1]
+        else:
+            return None
+        ret = self.ix.return_type(key) if key else None
+        return (ret[0], min(conf, ret[1])) if ret else None
+
+    def callee(self, ref: Ref, depth: int = 0):
+        """The method a call names, by its receiver's declared type: (method key, confidence,
+        the receiver's type key, whether it may dispatch to overrides). EXTERNAL when a step
+        leaves the repository (a library type, a member the type does not have); None when the
+        head is not a value this resolver can type (a module, a type, an unknown name)."""
+        chain, ix, lang, src, line = ref.chain, self.ix, self.f.lang, ref.src, ref.line
+        if depth > 6 or not chain:
+            return None
+        if len(chain) == 1:
+            if lang not in IMPLICIT_THIS:
+                return None
+            hit = self.resolve(ref)                 # a static import, a top-level function
+            if hit and ix.def_kind.get(hit[0]) in ("function", "method", "property"):
+                return hit[0], hit[1], ix.owner.get(hit[0]), False
+            for t in self._outer_types(src):        # this.m(), or an outer class's m()
+                found = ix.find_method(t, chain[0])
+                if found:
+                    return found[0], found[1], t, True
+            return None
+        head, conf, i = chain[0], 1.0, 1
+        typ: str | None = None
+        dispatch = True
+        if head in ("this", "self", "cls") and (head == "this" or lang == "python"):
+            typ = self.enclosing_type(src)
+            if typ is None:
+                return None
+        elif head == "super":
+            own = self.enclosing_type(src)
+            sups = ix.supers(own) if own else []
+            extends = [s for s in sups if ix.type_kind.get(s[0]) != "interface"] or sups
+            if not extends:
+                return EXTERNAL if own else None
+            typ, conf, dispatch = extends[0][0], extends[0][1], False
+            if len(chain) > 1 and chain[1] == CALL:   # Python's super().m()
+                i = 2
+        elif head.startswith(TYPED):
+            hit = self.resolve_type(src, tuple(head[len(TYPED):].split(".")), line)
+            if hit is None:
+                return EXTERNAL
+            typ, conf, dispatch = hit[0], hit[1], False
+        else:
+            decl = self.var_decl(src, head, line)
+            if decl is not None:
+                hit = ix.type_in(self.f.path, decl[0], decl[1], line, depth + 1)
+                if hit is None:
+                    return EXTERNAL
+                typ, conf = hit
+            else:
+                field = False
+                # A bare name is a field only where the language reads fields without this.
+                for t in (self._outer_types(src) if lang in IMPLICIT_THIS else ()):
+                    field = ix.field_type(t, head)
+                    if field is not False:
+                        break
+                if field is None:
+                    return EXTERNAL
+                if field:
+                    typ, conf = field
+                elif CALL in chain:
+                    # Foo.create().run(): resolve up to the first call the usual way.
+                    j = chain.index(CALL)
+                    ret = self.call_result(Ref(src, chain[:j], True, line), depth + 1)
+                    if ret is None:
+                        return None
+                    typ, conf, i = ret[0], ret[1], j + 1
+                else:
+                    return None
+        # The middle of the chain: fields, and calls' results.
+        last = len(chain) - 1
+        while i < last:
+            part = chain[i]
+            if i + 1 <= last and chain[i + 1] == CALL:
+                found = ix.find_method(typ, part)
+                ret = ix.return_type(found[0]) if found else None
+                if ret is None:
+                    return EXTERNAL
+                typ, conf, i = ret[0], min(conf, found[1], ret[1]), i + 2
+            else:
+                got = ix.field_type(typ, part)
+                if not got:
+                    return EXTERNAL
+                typ, conf, i = got[0], min(conf, got[1]), i + 1
+            dispatch = True
+        if i != last or chain[last] == CALL:
+            return EXTERNAL
+        found = ix.find_method(typ, chain[last])
+        if found is None:
+            return EXTERNAL
+        return found[0], min(conf, found[1]), typ, dispatch
+
+    def resolve_call(self, ref: Ref) -> list[tuple[str, str, float]] | str | None:
+        """A call resolved by its receiver's type: the method that type has (``calls``) and the
+        overrides in its subtypes (``dispatches_to``). EXTERNAL: the receiver's type is outside
+        the repository, so no edge (no guessing by name). None: not a typed receiver; the name
+        rules apply (resolve)."""
+        got = self.callee(ref)
+        if not isinstance(got, tuple):
+            return got
+        key, conf, typ, dispatch = got
+        out = [(key, "calls", conf)]
+        if dispatch and typ:
+            name = ref.chain[-1]
+            out += [(o, "dispatches_to", round(conf * DISPATCH_CONFIDENCE, 3))
+                    for o in self.ix.overrides(typ, name) if o != key]
+        return out
 
     def resolve(self, ref: Ref) -> tuple[str, float] | None:
         chain = ref.chain
         head = chain[0]
         lang = self.f.lang
+        if any(part == CALL or part.startswith(TYPED) for part in chain):
+            return self._unique(ref)                # a call's result, untyped: only the name rule
         if head in ("self", "cls", "this") and len(chain) >= 2:
             cls = ref.src.split(".")[0] if ref.src else ""
             hit = self.ix.longest(self.ix.file_defs.get(self.f.path, {}), (cls, *chain[1:])) if cls else None
@@ -668,8 +1014,11 @@ def _family(lang: str | None) -> str | None:
 
 
 
-def graph_for(index: RepoIndex, files: Iterable[FileFacts]) -> tuple[list[dict], list[dict]]:
-    """Nodes and edges contributed by these files (edges keyed by node keys, not ids yet)."""
+def graph_for(index: RepoIndex, files: Iterable[FileFacts], *,
+              calls: bool = True) -> tuple[list[dict], list[dict]]:
+    """Nodes and edges contributed by these files (edges keyed by node keys, not ids yet).
+    ``calls=False`` leaves out the call, reference and override edges (the costly part, and no
+    node comes from them but a Celery queue), for a pass that only writes nodes."""
     repo = index.repo
     nodes: dict[tuple[str, str], dict] = {}
     edges: dict[tuple[str, str, str], dict] = {}
@@ -716,9 +1065,28 @@ def graph_for(index: RepoIndex, files: Iterable[FileFacts]) -> tuple[list[dict],
                 node("module", target, module, {"lang": f.lang},
                      path=index.module_path.get(module) if f.lang not in GO_LIKE else None)
             edge(fk, target, "imports", 0)
+        for d in (f.defs if calls else ()):
+            # An override: a method whose type's supertypes have one of the same name.
+            key = r.local.get(d.qualname) if f.lang in GO_LIKE else r.ix.file_defs[f.path].get(d.qualname)
+            owner = index.owner.get(key or "")
+            if owner is not None:
+                found = index.find_method(owner, d.qualname.rsplit(".", 1)[-1], skip_self=True)
+                if found:
+                    edge(key, found[0], "overrides", d.line, found[1])
         for ref in f.refs:
             publish = ref.chain[-1] == "#publish"
+            if not (calls or publish):
+                continue
             chain = ref.chain[:-1] if publish else ref.chain
+            if ref.call and not publish:
+                typed = r.resolve_call(ref)
+                if typed == EXTERNAL:
+                    continue                           # a library type's method: not ours
+                if typed:
+                    src = r.src_key(ref.src)
+                    for target, kind, conf in typed:
+                        edge(src, target, kind, ref.line, conf)
+                    continue
             hit = r.resolve(Ref(ref.src, chain, ref.call, ref.line))
             if not hit:
                 continue
@@ -800,7 +1168,7 @@ def _write(
     parts = [files[i:i + batch] for i in range(0, len(files), max(1, batch))] or [[]]
     seen: set[tuple[str, str]] = set()
     for number, part in enumerate(parts):
-        nodes, _edges = graph_for(index, part)
+        nodes, _edges = graph_for(index, part, calls=False)
         facts_by_path = {f.path: f for f in part}
         rows = []
         for node in [*nodes, *(extra_nodes if number == len(parts) - 1 else ())]:
@@ -970,6 +1338,15 @@ def index_files(
         before = {d.qualname for d in old.defs} if old is not None else set()
         for qual in before ^ {d.qualname for d in new.defs}:
             touched.update(qual.split("."))
+        # A changed declared type (a field's, a return's) or base moves the calls resolved
+        # through it: the member's and the type's names.
+        if old is not None:
+            for a, b in ((old.fields, new.fields), (old.bases, new.bases)):
+                for item in set(map(_shape, a)) ^ set(map(_shape, b)):
+                    touched.update(item[0].split("."))
+                    touched.add(item[1] if isinstance(item[1], str) else item[1][-1])
+            for qual in set(old.returns.items()) ^ set(new.returns.items()):
+                touched.update(qual[0].split("."))
         if old is None or old.module != new.module or old.imports != new.imports:
             for f in (old, new):
                 if f is not None:
@@ -987,6 +1364,11 @@ def index_files(
     return {"indexed": len(changed), "skipped": skipped,
             "symbols": sum(len(f.defs) for f in changed.values()),
             "reresolved": len(slice_files), **wrote, "closed": closed}
+
+
+def _shape(item: tuple) -> tuple:
+    """A field or base without its line: moving a declaration is not a change of type."""
+    return item[:3]
 
 
 def symbol_keys_for(files: list[dict], repo: str | None = None) -> list[str]:

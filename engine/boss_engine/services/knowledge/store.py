@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 from typing import Any, Optional
 
 from sqlalchemy import text
@@ -36,13 +37,31 @@ NODE_KINDS = frozenset({
 EDGE_KINDS = frozenset({
     "depends_on", "runs_on", "deployed_from", "owns", "emits", "caused_by",
     "correlates_with",
-    "defines", "calls", "references", "imports", "reads", "writes", "publishes", "subscribes",
-    "exposes", "tests", "extends",
+    "defines", "calls", "dispatches_to", "overrides", "references", "imports", "reads", "writes",
+    "publishes", "subscribes", "exposes", "tests", "extends",
     "specifies", "implements", "changed", "reviewed", "found_in", "shipped",
     "fired_on", "fixed_by", "decided_by", "approved_by", "about", "supersedes",
     "evidenced_by",
 })
 TRUST_TIERS = frozenset({"observed", "governed", "inferred", "approved"})
+_IDENT_SPLIT = re.compile(r"[^A-Za-z0-9_]+")
+_IDENT_WORD = re.compile(r"[A-Z]+(?=[A-Z][a-z])|[A-Z]?[a-z]+|[A-Z]+|[0-9]+")
+
+
+def identifier_terms(name: str) -> str:
+    """The words inside a code name, for full-text search: each dotted/slashed part whole, then
+    split at camelCase and snake_case boundaries. Postgres reads ``Processor.handleInAdvance``
+    as one token, so a phrase ("payment in advance") never met it; with these terms it does,
+    and the part itself ("handleInAdvance") still matches a query naming the symbol."""
+    words: list[str] = []
+    for part in _IDENT_SPLIT.split(name or ""):
+        if not part.strip("_"):
+            continue
+        words.append(part)
+        for segment in part.split("_"):
+            split = _IDENT_WORD.findall(segment)
+            words.extend([segment] if len(split) <= 1 else [segment, *split])
+    return " ".join(w for w in dict.fromkeys(words) if w)
 # The existing kg_* CHECK only allows these two layers. Trust lives in trust_tier.
 _LAYER_FOR_TIER = {
     "observed": "deterministic",
@@ -524,13 +543,15 @@ class PostgresKnowledgeStore:
                     )
                     SELECT u.id, :project_id, u.kind, u.key, u.name, u.body, CAST(u.attrs AS JSONB),
                            'deterministic', :source, 1.0, :org_id, :project_id, 'observed', 1.0,
-                           'system', u.hash, :seen, to_tsvector('english', u.name || ' ' || u.body),
+                           'system', u.hash, :seen,
+                           to_tsvector('english', u.name || ' ' || u.terms || ' ' || u.body),
                            :seen, :seen, :seen, u.repo, u.path
                     FROM unnest(
                       CAST(:ids AS TEXT[]), CAST(:kinds AS TEXT[]), CAST(:keys AS TEXT[]),
                       CAST(:names AS TEXT[]), CAST(:bodies AS TEXT[]), CAST(:attrs AS TEXT[]),
-                      CAST(:hashes AS TEXT[]), CAST(:repos AS TEXT[]), CAST(:paths AS TEXT[])
-                    ) AS u(id, kind, key, name, body, attrs, hash, repo, path)
+                      CAST(:hashes AS TEXT[]), CAST(:repos AS TEXT[]), CAST(:paths AS TEXT[]),
+                      CAST(:terms AS TEXT[])
+                    ) AS u(id, kind, key, name, body, attrs, hash, repo, path, terms)
                     ON CONFLICT (project_id, kind, node_key) DO UPDATE SET
                       name = EXCLUDED.name,
                       body = EXCLUDED.body,
@@ -570,6 +591,7 @@ class PostgresKnowledgeStore:
                     ],
                     "repos": [r.get("repo") for r in part],
                     "paths": [r.get("path") for r in part],
+                    "terms": [identifier_terms(r.get("name") or r["key"]) for r in part],
                 },
             )
             ids.update({(row.kind, row.node_key): row.id for row in result})
@@ -919,23 +941,33 @@ class PostgresKnowledgeStore:
         if exclude_layers:
             scope_sql += " AND NOT (knowledge_layer = ANY(:exclude_layers))"
             scope_params = {**scope_params, "exclude_layers": list(exclude_layers)}
-        rows = connection.execute(
-            text(
-                f"""
-                SELECT id AS node_id, node_key,
-                       ts_rank(search_tsv, plainto_tsquery('english', :query)) AS rank
-                FROM kg_nodes
-                WHERE project_id = :project_id
-                  AND search_tsv @@ plainto_tsquery('english', :query)
-                  AND (valid_to IS NULL OR valid_to > now()){scope_sql}
-                ORDER BY rank DESC, node_key ASC
-                LIMIT :limit
-                """
-            ),
-            {"project_id": project_id, "query": query, "limit": max(1, min(int(limit), 50)),
-             **scope_params},
-        ).mappings().all()
-        return [dict(row) for row in rows]
+        limit = max(1, min(int(limit), 50))
+        params = {"project_id": project_id, "query": query, "limit": limit, **scope_params}
+        # Every word first; when that leaves room, any word, ranked by how many it matches: a
+        # phrase ("repayment allocation in advance") names the parts of several symbols, rarely
+        # all of them in one.
+        hits: list[dict[str, Any]] = []
+        for tsquery in ("plainto_tsquery('english', :query)",
+                        "CAST(replace(CAST(plainto_tsquery('english', :query) AS TEXT), '&', '|') AS tsquery)"):
+            if len(hits) >= limit:
+                break
+            rows = connection.execute(
+                text(
+                    f"""
+                    SELECT id AS node_id, node_key, ts_rank(search_tsv, q) AS rank
+                    FROM kg_nodes, {tsquery} AS q
+                    WHERE project_id = :project_id
+                      AND search_tsv @@ q
+                      AND (valid_to IS NULL OR valid_to > now()){scope_sql}
+                    ORDER BY rank DESC, node_key ASC
+                    LIMIT :limit
+                    """
+                ),
+                params,
+            ).mappings().all()
+            seen = {hit["node_id"] for hit in hits}
+            hits += [dict(row) for row in rows if row["node_id"] not in seen]
+        return hits[:limit]
 
     def _vector_extension_available(self, connection: Connection) -> bool:
         return (

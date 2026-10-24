@@ -8,7 +8,7 @@ definition, and the framework facts (endpoints, tables, queues/webhooks, config 
 """
 from __future__ import annotations
 
-from boss_engine.services.knowledge.code_parse import language_for, module_name, parse_file
+from boss_engine.services.knowledge.code_parse import CALL, language_for, module_name, parse_file
 
 PY = b'''
 import os
@@ -220,13 +220,17 @@ def test_a_file_that_cannot_be_parsed_records_its_error_and_never_raises():
     assert module_name("web/src/index.ts", "typescript") == "web/src"
 
 
-def test_a_method_called_on_an_expression_is_recorded_for_the_unique_name_rule():
-    """x.filter(...).not_expired() and Manager(...).run(): the receiver is a call, so its type is unknown."""
-    f = parse_file("m.py", b"def f():\n    Reservation.objects.filter(a=1).not_expired()\n    Manager(p).calculate_total(x)\n")
+def test_a_method_called_on_a_call_result_records_the_call_in_its_chain():
+    """x.filter(...).not_expired() and Manager(...).run(): the receiver is a call's result (CALL),
+    so the resolver can follow the call's return type, and failing that the unique-name rule;
+    a receiver that is no name at all (an index) keeps "?"."""
+    f = parse_file("m.py", b"def f():\n    Reservation.objects.filter(a=1).not_expired()\n"
+                           b"    Manager(p).calculate_total(x)\n    xs[0].pop_first()\n")
     refs = {(r.src, r.chain, r.call) for r in f.refs}
-    assert ("f", ("?", "not_expired"), True) in refs
-    assert ("f", ("?", "calculate_total"), True) in refs
+    assert ("f", ("Reservation", "objects", "filter", CALL, "not_expired"), True) in refs
+    assert ("f", ("Manager", CALL, "calculate_total"), True) in refs
     assert ("f", ("Reservation", "objects", "filter"), True) in refs
+    assert ("f", ("?", "pop_first"), True) in refs
 
 
 def test_typescript_re_exports_scoped_packages_and_namespace_types():

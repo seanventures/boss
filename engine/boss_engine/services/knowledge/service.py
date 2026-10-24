@@ -39,6 +39,7 @@ class KnowledgeService:
         embedder=None,
         seeds: Optional[list[str]] = None,
         mode: str = "on",
+        exclude_layers: tuple[str, ...] = (),
     ) -> dict[str, Any]:
         """Hybrid retrieval: full text, the graph around the seeds (or around the best text hits),
         and the vector index when an embedder is given, fused by reciprocal rank. Governed and
@@ -53,7 +54,8 @@ class KnowledgeService:
             return self._keyword_search(connection, project_id=project_id, query=query, limit=limit,
                                         policy=policy)
         text_hits = self.store.text_search(
-            connection, project_id=project_id, query=query, limit=max(limit, 20), policy=policy
+            connection, project_id=project_id, query=query, limit=max(limit, 20), policy=policy,
+            exclude_layers=exclude_layers,
         )
         seed_ids = list(seeds or [hit["node_id"] for hit in text_hits[:5]])
         lists: dict[str, list[dict]] = {
@@ -196,12 +198,15 @@ class KnowledgeService:
     def callers(
         self, connection: Connection, *, project_id: str, node_id: str, policy=None
     ) -> dict[str, Any]:
-        return {
-            "callers": self.store.neighbors(
-                connection, project_id=project_id, node_id=node_id, kind="calls", direction="in",
+        """Who calls this node: directly (``calls``), and through a supertype's method that may
+        dispatch here at run time (``dispatches_to``; each row's edge_kind says which)."""
+        rows = []
+        for kind in ("calls", "dispatches_to"):
+            rows += self.store.neighbors(
+                connection, project_id=project_id, node_id=node_id, kind=kind, direction="in",
                 policy=policy,
             )
-        }
+        return {"callers": rows}
 
     def capture_lifecycle(
         self, connection: Connection, *, project_id: str, record: dict[str, Any]
@@ -374,12 +379,15 @@ class KnowledgeService:
     ) -> dict[str, Any]:
         if mode != "on":            # keyword search only, or off: no precedent and nothing to cite
             return {"cited_fact_ids": [], "section": ""}
-        found = self.search(connection, project_id=project_id, query=query, limit=limit, policy=policy)
+        # Precedent is past facts and decisions, never code: code names now match a phrase's
+        # words (identifier_terms), and a large repository's symbols would crowd them out.
+        found = self.search(connection, project_id=project_id, query=query, limit=max(limit, 20),
+                            policy=policy, exclude_layers=("code",))
         decisions = [
             hit for hit in found["hits"]
             if str(hit.get("node_key") or "").startswith("fact:")
             or hit.get("trust_tier") in {"governed", "approved"}
-        ]
+        ][:limit]
         return {
             "cited_fact_ids": [hit["node_id"] for hit in decisions],
             "section": precedent_section(decisions),
@@ -505,7 +513,6 @@ SCHEMA_GUIDANCE = (
 def graph_schema(connection: Connection, *, project_id: str, policy=None) -> dict[str, Any]:
     import time
 
-    from .age import DIALECT_NOTES, LABELS, VERTEX_EXTRAS
     from .scopes import LAYERS
 
     layers = [layer for layer in LAYERS if policy is None or layer in policy.layers]
@@ -518,6 +525,24 @@ def graph_schema(connection: Connection, *, project_id: str, policy=None) -> dic
     cached = _SCHEMA_CACHE.get(key)
     if cached is not None and cached[0] == stamp and time.monotonic() - cached[1] < _SCHEMA_TTL_SECONDS:
         return cached[2]
+    # Counted serially: a parallel hash join over a large graph asks for dynamic shared memory,
+    # and a database container's default 64 MB /dev/shm refused it ("could not resize shared
+    # memory segment"), failing kg_schema on a freshly indexed 51k-node project. Restored when
+    # the savepoint ends.
+    serial = connection.begin_nested()
+    try:
+        connection.exec_driver_sql("SET LOCAL max_parallel_workers_per_gather = 0")
+        connection.exec_driver_sql("SET LOCAL jit = off")
+        out = _count_schema(connection, project_id, layers)
+    finally:
+        serial.rollback()
+    _SCHEMA_CACHE[key] = (stamp, time.monotonic(), out)
+    return out
+
+
+def _count_schema(connection: Connection, project_id: str, layers: list[str]) -> dict[str, Any]:
+    from .age import DIALECT_NOTES, LABELS, VERTEX_EXTRAS
+
     nodes = connection.execute(text(
         """
         SELECT knowledge_layer AS layer, kind, attrs->>'symbol_kind' AS symbol_kind,
@@ -558,15 +583,21 @@ def graph_schema(connection: Connection, *, project_id: str, policy=None) -> dic
         "edge_properties": ["edge_id", "kind", "trust_tier", "confidence"],
         "notes": {
             "name": "a symbol's name is its qualname inside its file: Class, Class.method, function",
-            "confidence": "1.0 resolved through the code's own scope or imports; 0.5 only because "
-                          "the simple name is unique in the repository",
+            "confidence": "1.0 resolved through the code's own scope, imports or the receiver's "
+                          "declared type; 0.5 only because the simple name is unique in the "
+                          "repository; dispatches_to is 0.6 of its call's",
+            "calls": "a call links (calls) to the method the receiver's declared type has, its own "
+                     "or inherited, so a call through an interface or abstract method lands on the "
+                     "declaration; dispatches_to links the same call to each override in the "
+                     "type's subtypes (where it may run); overrides runs from a method to the "
+                     "supertype method it overrides. Who reaches an implementation: its callers "
+                     "by calls plus dispatches_to.",
         },
         "repositories": [{"repo": r["repo"], "status": r["status"], "commit": (r["indexed_sha"] or "")[:12]}
                          for r in repos],
         "guidance": list(SCHEMA_GUIDANCE),
         "dialect": list(DIALECT_NOTES),
     }
-    _SCHEMA_CACHE[key] = (stamp, time.monotonic(), out)
     return out
 
 
