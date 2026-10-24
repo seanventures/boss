@@ -78,7 +78,7 @@ def test_kg_propose_fact_is_in_every_agents_baseline():
     assert holders == []
     # BOSSAPP-768: proposing a business rule rides the same bundle — every agent may propose one,
     # none may approve one (knowledge:review is never delegable).
-    assert ab.bundles()["knowledge.propose"] == ("kg_propose_fact", "kg_propose_rule")
+    assert ab.bundles()["knowledge.propose"] == ("kg_propose_fact", "kg_propose_rule", "record_learning")
     for tool in ab.PROPOSE_FACT_TOOLS:
         spec = ab.bundle_tool_spec("knowledge.propose", tool)
         assert spec is not None and spec.kind == "write" and spec.reversibility == "safe", tool

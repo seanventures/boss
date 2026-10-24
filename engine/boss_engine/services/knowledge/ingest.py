@@ -173,7 +173,30 @@ def tick(engine: Any, *, sweep: bool = False, project_id: str | None = None) -> 
     out["embedded"] = embed_due(engine, project_id=project_id)
     if sweep:
         out["sweep"] = ingest_due(engine, project_id=project_id)
+        out["usage_edges"] = derive_usage_edges(engine, project_id=project_id)
         out["projection"] = reconcile_projections(engine, project_id=project_id)
+    return out
+
+
+def derive_usage_edges(engine: Any, *, project_id: str | None = None) -> dict[str, int]:
+    """The sweep's half of "consulted" and "reused" (spec §2.5): every project's uses that have
+    no edge yet — a workflow run is never captured as a run record, and a tool may log a use
+    before anything derives its edge. Idempotent; one project's failure never stops the rest."""
+    from .. import projects_archive
+    from .learning_writeback import sync_usage_edges
+
+    out = {"projects": 0, "edges": 0, "failed": 0}
+    with engine.begin() as connection:
+        projects = projects_archive.live_ids(connection, [project_id] if project_id else connection.execute(
+            text("SELECT DISTINCT project_id FROM kg_usage WHERE use_kind <> 'shown' "
+                 "AND created_at > now() - make_interval(days => :d)"), {"d": SWEEP_DAYS}).scalars().all())
+    for pid in projects:
+        try:
+            with engine.begin() as connection:
+                out["edges"] += sync_usage_edges(connection, project_id=pid)
+            out["projects"] += 1
+        except Exception:  # noqa: BLE001 - one project never blocks the others
+            out["failed"] += 1
     return out
 
 

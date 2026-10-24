@@ -17,6 +17,9 @@ _EXPECTED_TOOLS: set[str] = {
     # RULES (BOSSAPP-768): the approved business rules that govern code, and proposing one (stored
     # proposed and untrusted until a person approves it in Rules review; no tool approves).
     "kg_rules", "kg_propose_rule",
+    # LEARNING WHILE EXECUTING (BOSSAPP-768 S2b): what an agent learned, recorded the moment it
+    # learns it — one `inferred` item with evidence, the run's provenance, forgettable.
+    "record_learning",
     "kg_cypher",   # read-only Cypher over the project's AGE projection
     "kg_schema",   # what that graph holds: labels, relationship types and counts, properties
     # THE CAPTAIN'S POWERS (BOSSAPP-759): retired as an engine, kept as the one agent's actions.
@@ -248,14 +251,14 @@ def test_default_registry_shape():
     read = {s.name for s in reg.specs(kind="read")}
     write = {s.name for s in reg.specs(kind="write")}
     assert read | write == set(reg.names())
-    assert len(reg.names()) == 159, (
+    assert len(reg.names()) == 160, (
         f"tool set changed: unexpected={sorted(set(reg.names()) - _EXPECTED_TOOLS)}, "
         f"missing={sorted(_EXPECTED_TOOLS - set(reg.names()))}")
     assert len(read) == 93  # + kg_rules (the approved business rules, BOSSAPP-768)
     #                         + wait_for (waiting for BOSS's own work) + kg_schema (what the knowledge graph holds) + code_graph_status, index_repository_code (a repository's code graph) + list_org_repositories (the org's repository registry) + list_projects, describe_project (a project's real state, any project)
     #                        + captain_goals, + 7 kg reads, + 3 self-fix reads, + read_app_logs, + my_recent_work, + system_health, + 7 template/security reads, + precheck_workflow
     #                        + query_project_data (the agent baseline's fenced row read)
-    assert len(write) == 66  # + kg_propose_rule (BOSSAPP-768 S2a), + archive_project, restore_project (BOSSAPP-768 S5), + allow_repository, remove_project_repository + 5 captain writes (BOSSAPP-759), + create_project, + kg_propose_fact, + remove_app, + system_doctor_act, + run_security_scan (F4), + apply_template (F2),
+    assert len(write) == 67  # + record_learning (BOSSAPP-768 S2b), + kg_propose_rule (BOSSAPP-768 S2a), + archive_project, restore_project (BOSSAPP-768 S5), + allow_repository, remove_project_repository + 5 captain writes (BOSSAPP-759), + create_project, + kg_propose_fact, + remove_app, + system_doctor_act, + run_security_scan (F4), + apply_template (F2),
     #                         + review_pull_request_again
     # the capabilities the user explicitly asked the agent to cover
     for name in (
@@ -504,6 +507,8 @@ _SAFE_WRITES = [
     # A PROPOSED RULE IS NOT A RULE (BOSSAPP-768). kg_propose_rule writes one `inferred`, proposed
     # rule: untrusted, never given to an agent, until a person approves it in Rules review.
     "kg_propose_rule",
+    # What an agent learned while working: one `inferred` item, with evidence (BOSSAPP-768 S2b).
+    "record_learning",
     # Re-queues only steps whose recorded blocker has actually cleared — each one something the
     # operator could have retried by hand from the same screen.
     "recheck_workflow_run",

@@ -299,6 +299,9 @@ def failure_of(exc: Optional[BaseException], run_id: Optional[str] = None
 
 def check_turn(turn: Mapping[str, Any], *, engine: Optional[str]) -> None:
     """Raise HarnessFailure when a captured turn is the harness answering in a tool's place."""
+    from .knowledge.learning_writeback import observe_turn  # learning while executing (BOSSAPP-768)
+
+    observe_turn(turn)
     if not isinstance(turn, Mapping) or turn.get("direction") != "tool_result":
         return
     ok = turn.get("ok")

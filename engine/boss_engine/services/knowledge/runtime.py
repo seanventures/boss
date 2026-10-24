@@ -259,7 +259,11 @@ def _quoted_pack(connection: Any, *, project_id: str, query: str, run_id: str, s
         mode=mode,
     )
     items = packed.get("items") or []
-    if not items:
+    # Rules in scope and Learned before (spec §4.2), quoted [R:<id>] / [L:<id>]: logged `shown`;
+    # what the turn's output then cites becomes `cited` (learning_writeback.log_use).
+    extra = packed.get("sections") or {}
+    extra_text = str(extra.get("text") or "").strip()
+    if not items and not extra_text:
         return ""
     fact_ids = [str(item) for item in (packed.get("fact_ids") or []) if str(item).strip()]
     if run_id and fact_ids:
@@ -270,7 +274,12 @@ def _quoted_pack(connection: Any, *, project_id: str, query: str, run_id: str, s
             step=step,
             fact_ids=fact_ids,
         )
-    return precedent_section(items)
+    if run_id and extra_text:
+        from .learning_context import log_shown
+
+        log_shown(connection, project_id, list(extra.get("rule_ids") or []) + list(extra.get("learning_ids") or []),
+                  run_id=run_id, step=step)
+    return "\n\n".join(part for part in (precedent_section(items) if items else "", extra_text) if part)
 
 
 def attribute_shown_facts(

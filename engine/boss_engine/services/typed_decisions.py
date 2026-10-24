@@ -39,6 +39,13 @@ class Decision:
     reason: str = ""
     error: str = ""
     cited_fact_ids: tuple[str, ...] = ()
+    #: The approved rules ([R:<id>]) and learnings ([L:<id>]) the answer relied on
+    #: (KNOWLEDGE_GRAPH_PRODUCT_SPEC.md §4.2): logged `cited`, a consulted edge from the run.
+    cited_rule_ids: tuple[str, ...] = ()
+    cited_learning_ids: tuple[str, ...] = ()
+    #: What the decider learned while answering, in record_learning's shape (§4.1): an engine
+    #: that cannot call tools still contributes. Recorded at step completion.
+    learned: tuple[dict, ...] = ()
 
 
 @dataclass
@@ -95,6 +102,12 @@ def _prompt(context: str, questions: list[Question], precedent: str = "") -> str
             shape[key]["cited_fact_ids"] = [
                 "<fact_id values from PRECEDENT that this answer used>"
             ]
+            shape[key]["cited_rule_ids"] = ["<ids of [R:<id>] rules in PRECEDENT this answer followed>"]
+            shape[key]["cited_learning_ids"] = ["<ids of [L:<id>] learnings in PRECEDENT this answer used>"]
+            shape[key]["learned"] = [
+                "<optional: {learning_kind, title, statement, detail, about, evidence, confidence} for "
+                "something you learned that the next decision should know>"
+            ]
     return (
         "You are a classifier inside a software pipeline. Answer every question about the "
         "CONTEXT below by choosing exactly one of that question's option labels. Judge what the "
@@ -126,6 +139,14 @@ def decide_with_precedent(decider: Decider, context: str, questions: list[Questi
     return decider.decide(context, questions)
 
 
+def _ids(value) -> tuple[str, ...]:
+    """A list of ids as the model wrote it; anything else is none. A placeholder is not an id."""
+    if isinstance(value, str) or not isinstance(value, (list, tuple)):
+        return ()
+    return tuple(str(v).strip() for v in value
+                 if str(v or "").strip() and not str(v).strip().startswith("<"))
+
+
 def _parse(text: str, questions: list[Question]) -> dict[str, Decision]:
     from .claude_cli_adapter import _first_json_object
 
@@ -146,14 +167,15 @@ def _parse(text: str, questions: list[Question]) -> dict[str, Decision]:
             conf = max(0.0, min(1.0, float(item.get("confidence"))))
         except (TypeError, ValueError):
             conf = None
-        cited = item.get("cited_fact_ids") or ()
-        if isinstance(cited, str) or not isinstance(cited, (list, tuple)):
-            cited = ()
         out[q.key] = Decision(
             answer,
             conf,
             reason=str(item.get("reason", ""))[:300],
-            cited_fact_ids=tuple(str(item_id) for item_id in cited),
+            cited_fact_ids=_ids(item.get("cited_fact_ids")),
+            cited_rule_ids=_ids(item.get("cited_rule_ids")),
+            cited_learning_ids=_ids(item.get("cited_learning_ids")),
+            learned=tuple(dict(x) for x in (item.get("learned") or ())[:5]
+                          if isinstance(x, dict)) if isinstance(item.get("learned"), list) else (),
         )
     return out
 
@@ -473,6 +495,11 @@ def _step_output(spec: dict, batch: DecisionBatch) -> dict:
         "confident": floor is None or (d.confidence is not None and d.confidence >= float(floor)),
         "reason": d.reason,
         "cited_fact_ids": list(d.cited_fact_ids),
+        "cited_rule_ids": list(d.cited_rule_ids),
+        "cited_learning_ids": list(d.cited_learning_ids),
+        # Recorded by the step-completion hook (knowledge/learning_writeback.py): every engine
+        # contributes what it learned, tools or not.
+        "learned": [dict(x) for x in d.learned],
         "backend": batch.backend, "model": batch.model,
         "latency_ms": batch.latency_ms, "cost_usd_micros": batch.cost_usd_micros,
         # Present only when a second opinion overruled or confirmed an unsure first answer.
