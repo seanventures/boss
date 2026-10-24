@@ -10457,3 +10457,75 @@ BEGIN
       FOR EACH ROW EXECUTE FUNCTION kg_view_sync_cleanup();
   END IF;
 END $$;
+
+-- ============================================================================================
+-- BOSSAPP-KGR rules + usage (BOSSAPP-768, KNOWLEDGE_GRAPH_PRODUCT_SPEC.md §2.1-2.3, §2.5-2.6).
+-- ============================================================================================
+-- 1. The storage layer gains `rules` (kind 'rule'), so a stage scope can grant or refuse rules
+--    on their own. The generated column's CASE changes, and Postgres cannot alter a generation
+--    expression, so the column is dropped and added again — but only when the live expression
+--    differs from this one: the probe table below asks Postgres how IT spells this CASE, and the
+--    live column is compared with that, so the rewrite of kg_nodes (seconds on 5 x 51k rows)
+--    happens once, on the upgrade that changes the CASE, never on an ordinary boot. The earlier
+--    BOSSAPP-622 block's ADD COLUMN IF NOT EXISTS is then a no-op. Kept in step with
+--    scopes.layer_sql_case() by test_knowledge_stage_scopes_db.
+DO $kgr_layer$
+DECLARE
+  want TEXT;
+  have TEXT;
+BEGIN
+  CREATE TEMP TABLE kgr_layer_probe (
+    kind TEXT,
+    knowledge_layer TEXT GENERATED ALWAYS AS (CASE WHEN kind IN ('config_key', 'endpoint', 'file', 'module', 'queue', 'symbol', 'table') THEN 'code' WHEN kind IN ('agent', 'decision', 'person', 'pull_request', 'release', 'review_finding', 'run', 'spec', 'team') THEN 'lifecycle' WHEN kind IN ('alert_rule', 'datastore', 'deployment', 'external', 'incident', 'repo', 'resource', 'root_cause', 'runbook', 'service') THEN 'ops' WHEN kind IN ('rule') THEN 'rules' ELSE 'knowledge' END) STORED
+  );
+  SELECT generation_expression INTO want FROM information_schema.columns
+  WHERE table_name = 'kgr_layer_probe' AND column_name = 'knowledge_layer';
+  DROP TABLE kgr_layer_probe;
+  SELECT generation_expression INTO have FROM information_schema.columns
+  WHERE table_schema = current_schema() AND table_name = 'kg_nodes' AND column_name = 'knowledge_layer';
+  IF have IS DISTINCT FROM want THEN
+    DROP INDEX IF EXISTS idx_kg_nodes_layer;
+    DROP INDEX IF EXISTS idx_kg_nodes_search_noncode;
+    ALTER TABLE kg_nodes DROP COLUMN IF EXISTS knowledge_layer;
+    ALTER TABLE kg_nodes ADD COLUMN knowledge_layer TEXT
+      GENERATED ALWAYS AS (CASE WHEN kind IN ('config_key', 'endpoint', 'file', 'module', 'queue', 'symbol', 'table') THEN 'code' WHEN kind IN ('agent', 'decision', 'person', 'pull_request', 'release', 'review_finding', 'run', 'spec', 'team') THEN 'lifecycle' WHEN kind IN ('alert_rule', 'datastore', 'deployment', 'external', 'incident', 'repo', 'resource', 'root_cause', 'runbook', 'service') THEN 'ops' WHEN kind IN ('rule') THEN 'rules' ELSE 'knowledge' END) STORED;
+  END IF;
+END $kgr_layer$;
+CREATE INDEX IF NOT EXISTS idx_kg_nodes_layer
+  ON kg_nodes(project_id, knowledge_layer, kind) WHERE valid_to IS NULL;
+CREATE INDEX IF NOT EXISTS idx_kg_nodes_search_noncode
+  ON kg_nodes USING GIN (search_tsv) WHERE knowledge_layer <> 'code';
+-- Rules are read by status (the review queue) and by scan; both live in attrs.
+CREATE INDEX IF NOT EXISTS idx_kg_nodes_rule_status
+  ON kg_nodes(project_id, (attrs->>'status')) WHERE kind = 'rule';
+-- 2. Durable "consulted" and "reused" (§2.5). `shown` is today's behaviour (the item was in the
+--    injected pack) and draws no edge; consulted / cited / reused do. run_id stays the agent run.
+ALTER TABLE kg_usage ADD COLUMN IF NOT EXISTS use_kind TEXT NOT NULL DEFAULT 'shown';
+ALTER TABLE kg_usage ADD COLUMN IF NOT EXISTS workflow_run_id TEXT;
+ALTER TABLE kg_usage ADD COLUMN IF NOT EXISTS code_task_run_id TEXT;
+ALTER TABLE kg_usage ADD COLUMN IF NOT EXISTS agent_role TEXT;
+DO $kgr_usage$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'kg_usage_use_kind_check') THEN
+    ALTER TABLE kg_usage ADD CONSTRAINT kg_usage_use_kind_check
+      CHECK (use_kind IN ('shown', 'consulted', 'cited', 'reused'));
+  END IF;
+END $kgr_usage$;
+-- "Consulted by N runs" on a node, and the edges ingest derives per item.
+CREATE INDEX IF NOT EXISTS idx_kg_usage_fact_kind ON kg_usage(project_id, fact_id, use_kind);
+-- 3. Who, not only what kind of actor: a person id or an agent role key on every audited write
+--    (rule approve / edit / reject, fact promote / reject / forget).
+ALTER TABLE kg_audit ADD COLUMN IF NOT EXISTS actor_ref TEXT;
+CREATE INDEX IF NOT EXISTS idx_kg_audit_entity ON kg_audit(project_id, entity_id, created_at);
+-- 4. The AGE projection's shape (§2.6: the Rules label, product_layer and status properties).
+--    age.PROJECTION_SHAPE names the shape the code writes; a graph projected with an older shape
+--    is rebuilt by the next reconcile even when its counts match, so the new properties reach
+--    every existing vertex once, after this upgrade. The table itself is age.py's (created on the
+--    first projection, with the column); an install that already projected gains it here.
+DO $kgr_age$
+BEGIN
+  IF to_regclass('kg_age_sync') IS NOT NULL THEN
+    ALTER TABLE kg_age_sync ADD COLUMN IF NOT EXISTS shape INTEGER NOT NULL DEFAULT 0;
+  END IF;
+END $kgr_age$;
+-- ================================ end BOSSAPP-KGR rules + usage =============================

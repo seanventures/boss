@@ -5,8 +5,10 @@ tools keep traversing with the recursive CTE (measured faster). AGE holds a proj
 
 * **One graph per project** (``graph_name``), so scope is structural: a Cypher query runs inside
   one project's graph and cannot name another.
-* A vertex's label is its knowledge layer (``Code``, ``Lifecycle``, ``Ops``, ``Knowledge``), so
-  the code layer is its own label and a stage scope can refuse it by name. An edge's label is its
+* A vertex's label is its knowledge layer (``Code``, ``Lifecycle``, ``Ops``, ``Knowledge``,
+  ``Rules``), so the code layer is its own label and a stage scope can refuse it (or rules) by
+  name. Every vertex carries its ``product_layer`` (code, rules, learning; scopes.product_layer)
+  and a rule vertex its ``status`` (proposed, approved, rejected, superseded). An edge's label is its
   kind. Properties carry the node id, kind, key, name and trust tier, and where the node has
   them its repo, path, line, lang, symbol_kind (function/method/class/property) and type_kind
   (class/interface/enum/record/struct). An edge carries its kind, trust tier and confidence.
@@ -33,9 +35,14 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from ..core import now_utc
-from .scopes import LAYER_KINDS, StagePolicy, layer_of
+from .scopes import LAYER_KINDS, StagePolicy, layer_of, product_layer
 
-LABELS = {"code": "Code", "lifecycle": "Lifecycle", "ops": "Ops", "knowledge": "Knowledge"}
+LABELS = {"code": "Code", "lifecycle": "Lifecycle", "ops": "Ops", "knowledge": "Knowledge",
+          "rules": "Rules"}
+#: The shape of what a projection writes (labels and vertex properties). Raise it when that shape
+#: changes: a graph projected with an older shape is rebuilt by the next reconcile or sync, even
+#: when its counts match the tables. 1: the Rules label, product_layer and a rule's status.
+PROJECTION_SHAPE = 1
 REBUILD_ABOVE = 2000                # changed nodes: past this, rebuild instead of patching
 DEFAULT_TIMEOUT_MS = 5000
 DEFAULT_ROW_LIMIT = 200
@@ -46,7 +53,8 @@ CREATE TABLE IF NOT EXISTS kg_age_sync (
   graph TEXT NOT NULL,
   synced_at TIMESTAMPTZ NOT NULL,
   nodes INTEGER NOT NULL DEFAULT 0,
-  edges INTEGER NOT NULL DEFAULT 0
+  edges INTEGER NOT NULL DEFAULT 0,
+  shape INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS kg_age_vertices (
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -156,7 +164,8 @@ def _node_rows(connection: Connection, project_id: str, ids: list[str] | None = 
     return [dict(r) for r in connection.execute(text(
         f"""
         SELECT id, kind, node_key, name, trust_tier, repo, path, attrs->>'symbol_kind' AS symbol_kind,
-               attrs->>'type_kind' AS type_kind, attrs->>'lang' AS lang, attrs->>'line' AS line
+               attrs->>'type_kind' AS type_kind, attrs->>'lang' AS lang, attrs->>'line' AS line,
+               CASE WHEN kind = 'rule' THEN attrs->>'status' END AS status
         FROM kg_nodes
         WHERE project_id = :p AND (valid_to IS NULL OR valid_to > now()) {where}
         """), {"p": project_id, "ids": list(ids or [])}).mappings()]
@@ -174,12 +183,15 @@ def _edge_rows(connection: Connection, project_id: str, where: str = "", params:
 
 
 #: Optional vertex properties, copied when the node has them (a code node's location and shape).
-VERTEX_EXTRAS = ("repo", "path", "line", "lang", "symbol_kind", "type_kind")
+VERTEX_EXTRAS = ("repo", "path", "line", "lang", "symbol_kind", "type_kind", "status")
 
 
 def _vertex_props(node: dict) -> dict:
     props = {"node_id": node["id"], "kind": node["kind"], "node_key": node["node_key"],
              "name": node["name"], "trust_tier": node["trust_tier"]}
+    layer = product_layer(node["kind"])
+    if layer:
+        props["product_layer"] = layer
     for key in VERTEX_EXTRAS:
         value = node.get(key)
         if value not in (None, ""):
@@ -266,10 +278,12 @@ def _project_all_edges(connection: Connection, project_id: str, name: str) -> in
 def _mark(connection: Connection, project_id: str, name: str, synced_at) -> dict[str, int]:
     counts = projection_counts(connection, project_id)
     connection.execute(text(
-        "INSERT INTO kg_age_sync (project_id, graph, synced_at, nodes, edges) VALUES (:p, :g, :t, :n, :e) "
+        "INSERT INTO kg_age_sync (project_id, graph, synced_at, nodes, edges, shape) "
+        "VALUES (:p, :g, :t, :n, :e, :s) "
         "ON CONFLICT (project_id) DO UPDATE SET graph = EXCLUDED.graph, synced_at = EXCLUDED.synced_at, "
-        "nodes = EXCLUDED.nodes, edges = EXCLUDED.edges"),
-        {"p": project_id, "g": name, "t": synced_at, "n": counts["nodes"], "e": counts["edges"]})
+        "nodes = EXCLUDED.nodes, edges = EXCLUDED.edges, shape = EXCLUDED.shape"),
+        {"p": project_id, "g": name, "t": synced_at, "n": counts["nodes"], "e": counts["edges"],
+         "s": PROJECTION_SHAPE})
     return counts
 
 
@@ -319,9 +333,10 @@ def sync(connection: Connection, project_id: str) -> dict[str, Any]:
         return {"mode": "unavailable"}
     _prepare(connection)
     name = graph_name(project_id)
-    last = connection.execute(text("SELECT synced_at FROM kg_age_sync WHERE project_id = :p"),
-                              {"p": project_id}).scalar()
-    if last is None or not _graph_exists(connection, name):
+    row = connection.execute(text("SELECT synced_at, shape FROM kg_age_sync WHERE project_id = :p"),
+                             {"p": project_id}).first()
+    last = row[0] if row else None
+    if last is None or not _graph_exists(connection, name) or int(row[1] or 0) != PROJECTION_SHAPE:
         return rebuild(connection, project_id)
     # A margin for the application's clock against the database's: re-projecting twice is harmless.
     since = last - timedelta(seconds=5)
@@ -398,7 +413,9 @@ def reconcile(connection: Connection, project_id: str) -> dict[str, Any]:
     _prepare(connection)
     want = {"nodes": len(_node_rows(connection, project_id)), "edges": len(_edge_rows(connection, project_id))}
     have = projection_counts(connection, project_id)
-    if have == want:
+    shape = connection.execute(text("SELECT shape FROM kg_age_sync WHERE project_id = :p"),
+                               {"p": project_id}).scalar()
+    if have == want and int(shape or 0) == PROJECTION_SHAPE:
         return {"mode": "current", **have}
     return rebuild(connection, project_id)
 

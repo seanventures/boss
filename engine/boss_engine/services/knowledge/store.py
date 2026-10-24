@@ -24,7 +24,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from ..core import make_id, now_utc
-from .scopes import StagePolicy
+from .scopes import StagePolicy, layer_sql_case
 
 NODE_KINDS = frozenset({
     "service", "resource", "repo", "deployment", "datastore", "external",
@@ -33,6 +33,8 @@ NODE_KINDS = frozenset({
     "spec", "decision", "pull_request", "review_finding", "release", "runbook",
     "alert_rule", "run", "person", "agent", "team",
     "fact", "topic",
+    # The Rules layer and what agents learn while they work (KNOWLEDGE_GRAPH_PRODUCT_SPEC.md §2.2).
+    "rule", "fix", "precedent", "investigation", "test_failure", "workaround",
 })
 EDGE_KINDS = frozenset({
     "depends_on", "runs_on", "deployed_from", "owns", "emits", "caused_by",
@@ -42,6 +44,10 @@ EDGE_KINDS = frozenset({
     "specifies", "implements", "changed", "reviewed", "found_in", "shipped",
     "fired_on", "fixed_by", "decided_by", "approved_by", "about", "supersedes",
     "evidenced_by",
+    # Learning and rules provenance (§2.2): a run consulted or reused an item, who proposed a rule
+    # or fact, what a run produced, what an investigation ruled out, a rule correcting another,
+    # and where an approved rule applies.
+    "consulted", "reused", "proposed_by", "produced", "ruled_out", "corrects", "governs",
 })
 TRUST_TIERS = frozenset({"observed", "governed", "inferred", "approved"})
 _IDENT_SPLIT = re.compile(r"[^A-Za-z0-9_]+")
@@ -114,7 +120,7 @@ CREATE INDEX IF NOT EXISTS idx_kg_edges_src_valid ON kg_edges(src_id) WHERE vali
 CREATE INDEX IF NOT EXISTS idx_kg_embeddings_project_model
   ON kg_embeddings(project_id, model_id);
 ALTER TABLE kg_nodes ADD COLUMN IF NOT EXISTS knowledge_layer TEXT
-  GENERATED ALWAYS AS (CASE WHEN kind IN ('config_key', 'endpoint', 'file', 'module', 'queue', 'symbol', 'table') THEN 'code' WHEN kind IN ('agent', 'decision', 'person', 'pull_request', 'release', 'review_finding', 'run', 'spec', 'team') THEN 'lifecycle' WHEN kind IN ('alert_rule', 'datastore', 'deployment', 'external', 'incident', 'repo', 'resource', 'root_cause', 'runbook', 'service') THEN 'ops' ELSE 'knowledge' END) STORED;
+  GENERATED ALWAYS AS (""" + layer_sql_case("kind") + """) STORED;
 CREATE INDEX IF NOT EXISTS idx_kg_nodes_layer
   ON kg_nodes(project_id, knowledge_layer, kind) WHERE valid_to IS NULL;
 CREATE INDEX IF NOT EXISTS idx_kg_nodes_search_noncode
@@ -146,7 +152,11 @@ CREATE TABLE IF NOT EXISTS kg_usage (
   run_id TEXT NOT NULL,
   step TEXT NOT NULL,
   fact_id TEXT NOT NULL REFERENCES kg_nodes(id) ON DELETE CASCADE,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  use_kind TEXT NOT NULL DEFAULT 'shown',
+  workflow_run_id TEXT,
+  code_task_run_id TEXT,
+  agent_role TEXT
 );
 CREATE TABLE IF NOT EXISTS kg_fact_stats (
   fact_id TEXT PRIMARY KEY REFERENCES kg_nodes(id) ON DELETE CASCADE,
@@ -163,7 +173,8 @@ CREATE TABLE IF NOT EXISTS kg_audit (
   entity_id TEXT NOT NULL,
   actor_kind TEXT NOT NULL,
   detail JSONB NOT NULL DEFAULT '{}'::jsonb,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  actor_ref TEXT
 );
 """
 
@@ -186,6 +197,13 @@ def _assert_can_write(actor_kind: str, trust_tier: str) -> None:
         raise ValueError(f"unknown trust_tier {trust_tier!r}")
     if trust_tier not in allowed:
         raise PermissionError(f"{actor_kind} cannot write trust_tier {trust_tier}")
+
+
+def _created_by(actor_kind: str, actor_ref: Optional[str]) -> str:
+    """kg_*.created_by: who wrote the row when the caller knows (a person id, an agent role key),
+    else the kind of actor."""
+    ref = str(actor_ref or "").strip()
+    return ref or actor_kind
 
 
 def _assert_can_close(actor_kind: str, trust_tier: str) -> None:
@@ -287,7 +305,10 @@ class PostgresKnowledgeStore:
         org_id: Optional[str] = None,
         attrs: Optional[dict] = None,
         source: str = "knowledge_store",
+        actor_ref: Optional[str] = None,
     ) -> str:
+        """``actor_ref`` is who wrote it — a person id or an agent role key — and becomes
+        ``created_by``; without it ``created_by`` is the actor kind, as before."""
         self.ensure_schema(connection)
         if kind not in NODE_KINDS:
             raise ValueError(f"unknown node kind {kind!r}")
@@ -345,7 +366,7 @@ class PostgresKnowledgeStore:
                     "layer": _LAYER_FOR_TIER[trust_tier],
                     "content_hash": digest,
                     "now": now,
-                    "actor": actor_kind,
+                    "actor": _created_by(actor_kind, actor_ref),
                 },
             )
             return existing["id"]
@@ -379,7 +400,7 @@ class PostgresKnowledgeStore:
                 "org_id": resolved_org,
                 "scope": project_id,
                 "trust_tier": trust_tier,
-                "actor": actor_kind,
+                "actor": _created_by(actor_kind, actor_ref),
                 "content_hash": digest,
                 "now": now,
             },
@@ -413,7 +434,11 @@ class PostgresKnowledgeStore:
         dst_id: str,
         kind: str,
         actor_kind: str,
+        attrs: Optional[dict] = None,
+        actor_ref: Optional[str] = None,
     ) -> str:
+        """One edge, unique per (project, src, dst, kind). ``attrs`` (evidence lines, a run's step)
+        are written on insert and merged on a repeat; ``actor_ref`` becomes ``created_by``."""
         self.ensure_schema(connection)
         if kind not in EDGE_KINDS:
             raise ValueError(f"unknown edge kind {kind!r}")
@@ -434,12 +459,13 @@ class PostgresKnowledgeStore:
                   confidence, org_id, scope, trust_tier, weight, created_by,
                   content_hash, recorded_at, first_seen, last_seen
                 ) VALUES (
-                  :id, :project_id, :src, :dst, :kind, CAST('{}' AS JSONB),
+                  :id, :project_id, :src, :dst, :kind, CAST(:attrs AS JSONB),
                   :layer, 'knowledge_store', 1.0, :org_id, :scope, :trust_tier,
                   1.0, :actor, :content_hash, :now, :now, :now
                 )
                 ON CONFLICT (project_id, src_id, dst_id, kind) DO UPDATE SET
-                  last_seen = EXCLUDED.last_seen
+                  last_seen = EXCLUDED.last_seen,
+                  attrs = kg_edges.attrs || EXCLUDED.attrs
                 RETURNING id
                 """
             ),
@@ -453,7 +479,8 @@ class PostgresKnowledgeStore:
                 "org_id": org_id,
                 "scope": project_id,
                 "trust_tier": trust,
-                "actor": actor_kind,
+                "actor": _created_by(actor_kind, actor_ref),
+                "attrs": json.dumps(attrs or {}),
                 "content_hash": _content_hash(kind, src_id, dst_id, "", trust),
                 "now": now,
             },
@@ -897,12 +924,16 @@ class PostgresKnowledgeStore:
             return "", {}
         col = f"{alias}." if alias else ""
         params: dict[str, Any] = {"scope_layers": sorted(policy.layers - {"code"})}
+        # A proposed (unapproved) rule is never trusted input: a stage reads approved rules only.
+        # The review queue and kg_rules(status='proposed') read them explicitly, labelled.
+        rules = f" AND ({col}knowledge_layer <> 'rules' OR {col}trust_tier = 'approved')"
         if policy.reads_code:
             params["scope_code_ids"] = self.code_reach(connection, project_id=project_id, policy=policy)
             return (f" AND ({col}knowledge_layer = ANY(:scope_layers) OR ({col}knowledge_layer = 'code'"
-                    f" AND {col}id = ANY(:scope_code_ids)))", params)
+                    f" AND {col}id = ANY(:scope_code_ids))){rules}", params)
         # The literal lets the planner use the partial non-code index.
-        return f" AND {col}knowledge_layer <> 'code' AND {col}knowledge_layer = ANY(:scope_layers)", params
+        return (f" AND {col}knowledge_layer <> 'code' AND {col}knowledge_layer = ANY(:scope_layers)"
+                f"{rules}", params)
 
     def assert_readable(
         self, connection: Connection, *, project_id: str, node_id: str, policy: Optional[StagePolicy]
@@ -1474,15 +1505,18 @@ class PostgresKnowledgeStore:
         entity_id: str,
         actor_kind: str,
         detail: Optional[dict] = None,
+        actor_ref: Optional[str] = None,
     ) -> str:
+        """``actor_ref``: who acted (a person id or an agent role key), beside what kind of actor."""
         self.ensure_schema(connection)
         self._org_id(connection, project_id, None)
         audit_id = make_id("kga")
         connection.execute(
             text(
                 """
-                INSERT INTO kg_audit (id, project_id, action, entity_id, actor_kind, detail)
-                VALUES (:id, :project_id, :action, :entity_id, :actor_kind, CAST(:detail AS JSONB))
+                INSERT INTO kg_audit (id, project_id, action, entity_id, actor_kind, actor_ref, detail)
+                VALUES (:id, :project_id, :action, :entity_id, :actor_kind, :actor_ref,
+                        CAST(:detail AS JSONB))
                 """
             ),
             {
@@ -1491,6 +1525,7 @@ class PostgresKnowledgeStore:
                 "action": action,
                 "entity_id": entity_id,
                 "actor_kind": actor_kind,
+                "actor_ref": actor_ref,
                 "detail": json.dumps(detail or {}),
             },
         )

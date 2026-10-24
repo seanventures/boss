@@ -7,7 +7,15 @@ The code graph is large, so a stage's reach is declared, not left to the prompt 
 * ``code``: files, modules, symbols, endpoints, tables, queues, config keys;
 * ``lifecycle``: specs, pull requests, decisions, review findings, releases, runs, people;
 * ``ops``: services, resources, deployments, incidents, root causes, runbooks, alert rules;
-* ``knowledge``: distilled facts and topics.
+* ``knowledge``: distilled facts and topics, and what agents learn while they work
+  (investigations, test failures, fixes, workarounds, precedents);
+* ``rules``: business rules (``kind='rule'``). Its own layer so a stage can be granted or refused
+  rules on their own: every default stage reads them, because approved rules are trusted input.
+
+Beside the storage layer there is the **product layer** (:func:`product_layer`): what a person sees
+on a chip (code, rules, learning, domain). It groups kinds differently (the infra topology reads
+as code; learned items and the run/incident anchors they hang on read as learning) and is never
+used to scope a stage.
 
 A :class:`StagePolicy` says which layers a stage reads and how it may reach code:
 
@@ -26,7 +34,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-LAYERS = ("code", "lifecycle", "ops", "knowledge")
+LAYERS = ("code", "lifecycle", "ops", "knowledge", "rules")
 
 LAYER_KINDS: dict[str, frozenset[str]] = {
     "code": frozenset({"file", "module", "symbol", "endpoint", "table", "queue", "config_key"}),
@@ -34,8 +42,13 @@ LAYER_KINDS: dict[str, frozenset[str]] = {
                             "person", "agent", "team"}),
     "ops": frozenset({"service", "resource", "repo", "deployment", "datastore", "external", "incident",
                       "root_cause", "runbook", "alert_rule"}),
-    "knowledge": frozenset({"fact", "topic"}),
+    "knowledge": frozenset({"fact", "topic", "investigation", "test_failure", "fix", "workaround",
+                            "precedent"}),
+    "rules": frozenset({"rule"}),
 }
+
+#: The layers the generated column names explicitly; every other kind is ``knowledge`` (ELSE).
+_CASE_LAYERS = ("code", "lifecycle", "ops", "rules")
 
 
 def layer_of(kind: str) -> str:
@@ -49,10 +62,52 @@ def layer_of(kind: str) -> str:
 def layer_sql_case(column: str = "kind") -> str:
     """The CASE expression behind kg_nodes.knowledge_layer (kept in step with db/schema.sql)."""
     parts = []
-    for layer in ("code", "lifecycle", "ops"):
+    for layer in _CASE_LAYERS:
         kinds = ", ".join(f"'{k}'" for k in sorted(LAYER_KINDS[layer]))
         parts.append(f"WHEN {column} IN ({kinds}) THEN '{layer}'")
     return "CASE " + " ".join(parts) + " ELSE 'knowledge' END"
+
+
+# --- the product layer (spec §2.1): what a person sees on a chip ---------------------------------
+PRODUCT_LAYERS = ("code", "rules", "learning", "domain")
+
+#: Infra topology kinds the product shows as Code, beside the code storage layer.
+CODE_TOPOLOGY_KINDS = frozenset({"service", "resource", "deployment", "datastore", "external", "repo"})
+#: What agents learn while they work (§4): counted as learned.
+LEARNED_KINDS = frozenset({"investigation", "test_failure", "fix", "workaround", "review_finding",
+                           "decision", "root_cause", "precedent", "fact"})
+#: What learned items hang on: shown in the Learning layer, never counted as learned.
+ANCHOR_KINDS = frozenset({"run", "incident", "pull_request", "release", "spec", "runbook",
+                          "alert_rule", "topic"})
+#: Reserved for regulations and policy documents; not written in this build.
+DOMAIN_KINDS = frozenset({"regulation", "policy_clause", "document"})
+
+PRODUCT_LAYER_KINDS: dict[str, frozenset[str]] = {
+    "code": LAYER_KINDS["code"] | CODE_TOPOLOGY_KINDS,
+    "rules": LAYER_KINDS["rules"],
+    "learning": LEARNED_KINDS | ANCHOR_KINDS,
+    "domain": DOMAIN_KINDS,
+}
+
+
+def product_layer(kind: str) -> str | None:
+    """The product layer of a node kind (apps/web/lib/kg-view-types.ts productLayerOf says the
+    same). People, agents and teams are in none: they are actors, shown as provenance, never as a
+    chip. None for those, and for a kind nothing names."""
+    for layer, kinds in PRODUCT_LAYER_KINDS.items():
+        if kind in kinds:
+            return layer
+    return None
+
+
+def product_layer_sql_case(column: str = "kind") -> str:
+    """The same mapping as a SQL CASE (NULL for actors and unknown kinds), for queries that filter
+    or group by product layer."""
+    parts = []
+    for layer in PRODUCT_LAYERS:
+        kinds = ", ".join(f"'{k}'" for k in sorted(PRODUCT_LAYER_KINDS[layer]))
+        parts.append(f"WHEN {column} IN ({kinds}) THEN '{layer}'")
+    return "CASE " + " ".join(parts) + " END"
 
 
 @dataclass(frozen=True)
@@ -102,17 +157,18 @@ def _gerund(stage: str) -> str:
             "implement": "implementing", "review": "reviewing"}.get(stage, f"in {stage}")
 
 
-#: The defaults per stage kind. A workflow step may override any of these in its definition
+#: The defaults per stage kind. Every one reads ``rules``: approved rules are trusted input for
+#: every agent (a stage may still declare its layers without them). A workflow step may override any of these in its definition
 #: (``knowledge: {layers, tools, budget_tokens, code_seed, max_hops, max_nodes}``).
 DEFAULTS: dict[str, StagePolicy] = {
-    "triage": StagePolicy("triage", frozenset({"ops", "lifecycle", "knowledge"})),
-    "investigate": StagePolicy("investigate", frozenset({"ops", "lifecycle", "knowledge", "code"}),
+    "triage": StagePolicy("triage", frozenset({"ops", "lifecycle", "knowledge", "rules"})),
+    "investigate": StagePolicy("investigate", frozenset({"ops", "lifecycle", "knowledge", "code", "rules"}),
                                code="seeded", max_hops=2, max_nodes=200),
-    "implement": StagePolicy("implement", frozenset({"code", "lifecycle", "knowledge"}),
+    "implement": StagePolicy("implement", frozenset({"code", "lifecycle", "knowledge", "rules"}),
                              code="seeded", max_hops=2, max_nodes=500),
-    "review": StagePolicy("review", frozenset({"code", "lifecycle", "knowledge"}),
+    "review": StagePolicy("review", frozenset({"code", "lifecycle", "knowledge", "rules"}),
                           code="seeded", max_hops=1, max_nodes=300),
-    "decide": StagePolicy("decide", frozenset({"lifecycle", "knowledge", "ops"})),
+    "decide": StagePolicy("decide", frozenset({"lifecycle", "knowledge", "ops", "rules"})),
 }
 
 #: The stage names BOSS's pipelines and workflow steps use, by the kind whose default they get.
@@ -143,6 +199,8 @@ TOOL_LAYERS: dict[str, frozenset[str]] = {
     "kg_why": frozenset(LAYERS),
     "kg_precedent": frozenset({"lifecycle", "knowledge"}),
     "kg_propose_fact": frozenset({"knowledge"}),
+    "kg_rules": frozenset({"rules"}),
+    "kg_propose_rule": frozenset({"rules"}),
     "kg_cypher": frozenset(LAYERS),          # the query itself is checked against the scope (age.py)
     "kg_schema": frozenset(LAYERS),          # counts only, of the layers the stage reads
 }
@@ -170,7 +228,7 @@ def policy_for(
     declared = (step or {}).get("knowledge") if step is not None else None
     if kind is None and not declared:
         return None
-    base = DEFAULTS[kind] if kind else StagePolicy("custom", frozenset({"lifecycle", "knowledge", "ops"}))
+    base = DEFAULTS[kind] if kind else StagePolicy("custom", frozenset({"lifecycle", "knowledge", "ops", "rules"}))
     return apply_declaration(base, declared) if declared else base
 
 
