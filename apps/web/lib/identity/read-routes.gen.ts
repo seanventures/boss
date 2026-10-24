@@ -363,6 +363,7 @@ export const READ_ROUTES: ReadonlyArray<readonly [string, Permission]> = [
   ["knowledge/graph/nodes", "reliability:read"],
   ["knowledge/graph/subgraph", "reliability:read"],
   ["knowledge/nodes/{}", "knowledge:read"],
+  ["knowledge/repositories", "knowledge:read"],
   ["knowledge/search", "knowledge:read"],
   ["knowledge/status", "reliability:read"],
   ["kpis", "work_item:read"],

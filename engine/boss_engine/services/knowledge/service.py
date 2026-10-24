@@ -440,6 +440,8 @@ class KnowledgeService:
                        "projection": projection_counts(connection, project_id)
                        if age_extension_version(connection) != "not_installed" else None},
             "sources": ["adr folder", "connector document"],
+            # Each registered repository's code graph (repo_index.py): state, commit, counts.
+            "repositories": _repositories(connection, project_id),
         }
 
     def log_pack(
@@ -490,3 +492,12 @@ def require_confirmation(step_up: str | None) -> None:
     if step_up != "confirmed":
         raise PermissionError("knowledge:manage requires step_up=confirmed")
 
+
+def _repositories(connection: Connection, project_id: str) -> list[dict[str, Any]]:
+    from .repo_index import status as repo_status
+
+    try:
+        with connection.begin_nested():
+            return repo_status(connection, project_id)["repositories"]
+    except Exception:  # noqa: BLE001 - an older schema without kg_repo_index: no rows to show
+        return []

@@ -1594,6 +1594,14 @@ async def lifespan(_: FastAPI):
         with begin(engine) as _connection:
             _kek = _identity_vault.boot(db=_connection)
             _org = _identity_migration.default_org(_connection)
+            if _org:
+                # The roles BOSS defines from a code set (the host's own key, MCP keys) gain what
+                # the catalogue added since they were made; a person's narrowing stays.
+                from boss_engine.identity import host_tools as _identity_host_tools
+
+                _grown = _identity_host_tools.follow_catalogue(_connection, org_id=_org)
+                if _grown:
+                    print(f"[identity] {len(_grown)} host-tool role(s) gained the catalogue's new permissions")
             if _org and _kek:
                 _identity_signing_keys.provision(org_id=_org, db=_connection)
                 _identity_signing_keys.require_keys(org_id=_org, db=_connection)

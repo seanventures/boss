@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState } from "react";
 
+import { apiWrite } from "../lib/api-write";
 import { API_URL, authHeaders } from "../lib/client";
 
 export type KnowledgeHit = {
@@ -31,6 +32,17 @@ export type KnowledgeStatusView = {
   ship_gate: string;
   cost_usd: number | null;
   sources: string[];
+  /** Each registered repository's code graph (engine knowledge/repo_index.py). */
+  repositories?: CodeGraphRepo[];
+};
+
+export type CodeGraphRepo = {
+  repo: string;
+  branch: string;
+  status: string;
+  summary: string;
+  indexed_sha?: string | null;
+  graph?: { nodes: number; edges: number };
 };
 
 type ExplorerProps = {
@@ -184,9 +196,53 @@ const AGENT_ACCESS: Record<string, string> = {
   off: "Nothing: agents work without the graph. It keeps indexing.",
 };
 
+/** One repository's code graph line: its state in words, and Index / Re-index. */
+function CodeGraphRow({ repo, onIndex, busy }: { repo: CodeGraphRepo; onIndex: (repo: string) => void; busy: boolean }) {
+  const indexed = repo.status === "indexed";
+  const working = repo.status === "queued" || repo.status === "running";
+  return (
+    <li data-testid="knowledge-code-repo" data-status={repo.status}>
+      <strong>{repo.repo}</strong> <span>{repo.summary}</span>{" "}
+      <button
+        type="button"
+        className="cap-btn"
+        disabled={busy || working}
+        title={
+          indexed
+            ? "Read this repository's branch again now, in full: files, symbols, calls and imports. No model is called."
+            : "Build this repository's code graph now: parse its branch into files, symbols, calls and imports. No model is called."
+        }
+        onClick={() => onIndex(repo.repo)}
+      >
+        {working ? "Indexing…" : indexed ? "Re-index" : "Index"}
+      </button>
+    </li>
+  );
+}
+
 export function KnowledgeSettings({ projectId, actorId, initial }: SettingsProps) {
   const [status, setStatus] = useState<KnowledgeStatusView | null>(initial ?? null);
   const [note, setNote] = useState<string | null>(null);
+  const [indexing, setIndexing] = useState(false);
+
+  async function indexNow(repository: string) {
+    setIndexing(true);
+    try {
+      const response = await apiWrite("/v1/knowledge/repositories/index", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ project_id: projectId, actor: actorId, repository, force: true }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(String(body?.detail ?? response.status));
+      setStatus((current) => (current ? { ...current, repositories: body.repositories } : current));
+      setNote(body.message || null);
+    } catch (error) {
+      setNote(`Could not start the index: ${error instanceof Error ? error.message : "error"}.`);
+    } finally {
+      setIndexing(false);
+    }
+  }
 
   useEffect(() => {
     if (initial) return;
@@ -231,6 +287,18 @@ export function KnowledgeSettings({ projectId, actorId, initial }: SettingsProps
             </dd>
           </>
         ) : null}
+        <dt title="Each registered repository is parsed into the graph when it is registered and when its branch moves">Code</dt>
+        <dd>
+          {status?.repositories?.length ? (
+            <ul className="hairline-list" data-testid="knowledge-code">
+              {status.repositories.map((repo) => (
+                <CodeGraphRow key={repo.repo} repo={repo} onIndex={indexNow} busy={indexing} />
+              ))}
+            </ul>
+          ) : (
+            "No repository is registered in this project."
+          )}
+        </dd>
         <dt>Retention</dt>
         <dd>Facts stay until they are superseded, then {years === 1 ? "one year" : `${years} years`}.</dd>
         <dt>Embedding</dt>

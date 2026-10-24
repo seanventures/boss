@@ -10264,3 +10264,62 @@ BEGIN
   RETURN renamed;
 END $$;
 SELECT kg_qualify_pr_source_ids();
+
+-- THE CODE GRAPH OF EVERY REGISTERED REPOSITORY (services/knowledge/repo_index.py). BOSS's own
+-- agent found kg_nodes empty in three projects with a registered repository: the graph was fed
+-- only by code BOSS wrote (a finished build) and nothing indexed a repository as it was
+-- registered. One row per project repository: what was indexed (commit, counts) and whether an
+-- index is due. Registering a repository, or moving its base branch, marks it due through this
+-- trigger whatever code path did it; the worker's knowledge tick queues a
+-- `knowledge.repository.index` job for each due row, and its sweep re-checks the branch head.
+CREATE TABLE IF NOT EXISTS kg_repo_index (
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  binding_id TEXT NOT NULL REFERENCES github_repository_bindings(id) ON DELETE CASCADE,
+  repo TEXT NOT NULL,
+  branch TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'pending'
+    CHECK (status IN ('pending', 'queued', 'running', 'indexed', 'failed', 'too_large')),
+  due BOOLEAN NOT NULL DEFAULT true,
+  reason TEXT NOT NULL DEFAULT 'registered',
+  force BOOLEAN NOT NULL DEFAULT false,
+  job_id TEXT,
+  indexed_sha TEXT,
+  head_sha TEXT,
+  files INTEGER,
+  parsed INTEGER,
+  nodes INTEGER,
+  edges INTEGER,
+  seconds DOUBLE PRECISION,
+  last_run JSONB NOT NULL DEFAULT '{}'::jsonb,
+  error TEXT,
+  requested_by TEXT,
+  last_checked_at TIMESTAMPTZ,
+  indexed_at TIMESTAMPTZ,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (project_id, binding_id)
+);
+CREATE INDEX IF NOT EXISTS idx_kg_repo_index_due ON kg_repo_index(updated_at) WHERE due;
+CREATE OR REPLACE FUNCTION kg_repo_index_mark_due() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF NEW.status = 'active' AND (TG_OP = 'INSERT' OR OLD.status IS DISTINCT FROM NEW.status
+       OR OLD.default_branch IS DISTINCT FROM NEW.default_branch
+       OR OLD.full_name IS DISTINCT FROM NEW.full_name) THEN
+    INSERT INTO kg_repo_index (project_id, binding_id, repo, branch, due, reason)
+    VALUES (NEW.project_id, NEW.id, NEW.full_name, COALESCE(NEW.default_branch, ''), true,
+            CASE WHEN TG_OP = 'INSERT' OR OLD.status IS DISTINCT FROM NEW.status
+                 THEN 'registered' ELSE 'branch_changed' END)
+    ON CONFLICT (project_id, binding_id) DO UPDATE SET
+      repo = EXCLUDED.repo, branch = EXCLUDED.branch, due = true, reason = EXCLUDED.reason,
+      updated_at = now();
+  END IF;
+  RETURN NEW;
+END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'kg_repo_index_mark_due'
+                 AND tgrelid = 'github_repository_bindings'::regclass) THEN
+    CREATE TRIGGER kg_repo_index_mark_due
+      AFTER INSERT OR UPDATE OF status, default_branch, full_name ON github_repository_bindings
+      FOR EACH ROW EXECUTE FUNCTION kg_repo_index_mark_due();
+  END IF;
+END $$;

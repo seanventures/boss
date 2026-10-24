@@ -169,6 +169,15 @@ class ControlPlaneClient:
         response.raise_for_status()
         return response.json()
 
+    def run_repository_index(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Ask the API container to index one registered repository's branch into the knowledge
+        graph under this job's lease (services/knowledge/repo_index.py)."""
+        response = self._client.post(
+            "/v1/knowledge/repositories/index/execute",
+            json={key: payload[key] for key in ("job_id", "worker_id", "lease_token")})
+        response.raise_for_status()
+        return response.json()
+
     def run_security_scan(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Ask the API container to run one security scan — the scanners live there (F4)."""
         response = self._client.post(f"/v1/security/scans/{payload['scan_id']}/run", json={})

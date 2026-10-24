@@ -300,6 +300,7 @@ def _register_read_tools(reg: ToolRegistry) -> None:
                 " ORDER BY (role = 'primary') DESC, full_name"),
                 {"p": project_id}).mappings().all()
             stored = ps.get_all(c, project_id)
+            code_graph = _code_graph_lines(c, project_id)
         settings_out = []
         for key, spec in ps.KNOBS.items():
             default = getattr(ctx.settings, spec["attr"], None)
@@ -312,12 +313,49 @@ def _register_read_tools(reg: ToolRegistry) -> None:
         return {"ok": True, "project": _json_safe(dict(row)),
                 "repositories": _json_safe([dict(r) for r in repos]),
                 "repository_count": len(repos),
+                # Each repository's code graph (knowledge/repo_index.py): indexed or not, and why.
+                "code_graph": code_graph,
                 "settings": _json_safe(settings_out),
                 "settings_set_on_this_project": sorted(stored),
                 "note": ("No repository is in this project yet. The org's GitHub connection "
                          "serves every project: list_org_repositories shows what it reaches, "
                          "allow_repository allows one, register_repository adds it here."
                          if not repos else "")}
+
+    @reg.tool(
+        "code_graph_status",
+        "Whether each repository registered in the project is in the knowledge graph: its state "
+        "(indexed, queued, running, failed, too_large, pending), the commit and branch indexed, "
+        "files, nodes and edges, when, and why not. Registering a repository indexes it by "
+        "itself; index_repository_code asks for it now. Pass `project` for another project.",
+        _obj({}), permission="knowledge:read")
+    def code_graph_status(ctx, *, project_id, actor, args):
+        from ..services.knowledge import repo_index
+
+        with ctx.begin() as c:
+            return {"ok": True, **_json_safe(repo_index.status(c, project_id))}
+
+    @reg.tool(
+        "index_repository_code",
+        "Build or refresh the code graph of the project's registered repositories now (or the "
+        "one named: owner/name). It parses the base branch into files, symbols, calls and "
+        "imports — no model is called, nothing in the repository changes — and runs in the "
+        "background (minutes for a large repository); read code_graph_status for progress. A "
+        "branch whose head has not moved is not parsed again unless force is true. Pass "
+        "`project` for another project.",
+        _obj({"repository": {"type": "string", "description": "owner/name; all when omitted"},
+              "force": {"type": "boolean", "description": "re-index an unmoved head"}}),
+        # A read-safe action (operator decision 2026-10-24): it refreshes derived data, bounded
+        # and deduplicated, and changes no record anyone made — so whoever reads the graph may.
+        permission="knowledge:read")
+    def index_repository_code(ctx, *, project_id, actor, args):
+        from ..services.knowledge import repo_index
+
+        with ctx.begin() as c:
+            out = repo_index.request(c, ctx.settings, project_id=project_id, actor=actor,
+                                     repository=str(args.get("repository") or ""),
+                                     force=bool(args.get("force")))
+        return {"ok": True, **_json_safe(out)}
 
     @reg.tool(
         "list_code_tasks",
@@ -4358,6 +4396,18 @@ def _org_github_connection(c: Any, project_id: str) -> dict:
                 "note": "One connection for the whole organization; no project needs its own."}
     except Exception as exc:  # noqa: BLE001 — no registry here: say so, do not fail the read
         return {"error": f"{type(exc).__name__}: {exc}"[:200]}
+
+
+def _code_graph_lines(connection, project_id: str) -> list[dict]:
+    """describe_project's view of each repository's code graph (knowledge/repo_index.py)."""
+    try:
+        from ..services.knowledge import repo_index
+
+        with connection.begin_nested():
+            rows = repo_index.status(connection, project_id)["repositories"]
+    except Exception:  # noqa: BLE001 - an older schema: say nothing rather than fail the read
+        return []
+    return [{"repository": r["repo"], "status": r["status"], "summary": r["summary"]} for r in rows]
 
 
 def _may_read_project(auth: Any, project_id: str) -> bool:
