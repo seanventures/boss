@@ -87,6 +87,17 @@ def test_a_new_test_that_cannot_fail_is_refused(label, body):
     assert not result.ok and result.final, label
 
 
+def test_an_unconditional_pytest_fail_is_refused_a_conditional_one_is_an_assertion():
+    """A body that always calls pytest.fail can never pass; `if wrong: pytest.fail(why)` is a
+    strict assertion (BOSS's first self-fix on the laptop was refused for writing one)."""
+    head = "import pytest\nfrom boss_engine.services import stack_deploy\n\n\n"
+    always = head + "def test_x():\n    stack_deploy.plan_stack_deploy\n    pytest.fail('later')\n"
+    assert not _gate(FileChange("engine/tests/test_new.py", "A", None, always)).ok
+    conditional = head + ("def test_x():\n    plan = stack_deploy.plan_stack_deploy\n"
+                          "    if plan is None:\n        pytest.fail('no plan')\n    assert plan\n")
+    assert _gate(FileChange("engine/tests/test_new.py", "A", None, conditional)).ok
+
+
 def test_a_new_test_must_name_the_diagnosed_code():
     source = "def test_x():\n    assert 1 + 1 == 2\n"
     result = _gate(FileChange("engine/tests/test_new.py", "A", None, source))

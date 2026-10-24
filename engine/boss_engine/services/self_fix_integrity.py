@@ -104,6 +104,16 @@ def _shape(fn: Any) -> str:
     return ast.dump(ast.Module(body=[fn], type_ignores=[]), include_attributes=False)
 
 
+
+def _unconditional(fn: Any, call: Any) -> bool:
+    """True when `call` is a statement of the test body itself (not under if/try/for/while/with
+    or a nested function), so every run reaches it."""
+    for stmt in fn.body:
+        if isinstance(stmt, ast.Expr) and stmt.value is call:
+            return True
+    return False
+
+
 def _weak_python_test(fn: Any) -> Optional[str]:
     """Why a NEW Python test is too weak to count, or None."""
     for deco in fn.decorator_list:
@@ -119,6 +129,11 @@ def _weak_python_test(fn: Any) -> Optional[str]:
     for node in ast.walk(fn):
         if isinstance(node, ast.Call) and _call_name(node) in _SKIP_CALLS and isinstance(
                 node.func, ast.Attribute) and _decorator_text(node.func.value) == "pytest":
+            # `pytest.fail` is an assertion when it is CONDITIONAL (`if wrong: pytest.fail(why)`),
+            # and only weak when the test body calls it unconditionally (it can then never pass).
+            # skip/xfail/importorskip are weak wherever they appear.
+            if _call_name(node) == "fail" and not _unconditional(fn, node):
+                continue
             return f"{fn.name} calls pytest.{_call_name(node)}"
     asserts = [n for n in ast.walk(fn) if isinstance(n, ast.Assert)]
     for a in asserts:
