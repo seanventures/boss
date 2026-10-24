@@ -197,3 +197,42 @@
     - say repositories are blocked for want of a per-project GitHub connection
     - send the operator to the console to create a connection the org already has
     - offer a button whose label does not say which project, key and value it acts on
+
+- id: agent-records-what-it-ruled-out
+  origin: BOSSAPP-768 S2b 2026-10-24 (KNOWLEDGE_GRAPH_PRODUCT_SPEC.md §4.1 — learning while executing)
+  surface: talk_to_boss
+  context: >-
+    The Orders API answers 502 since this morning. Its logs show the database pool exhausted
+    (pool size 5, 37 waiting) and no release went out since Monday. Agents investigate this kind
+    of failure again and again; nothing kept what the last investigation tried and ruled out.
+  input: >-
+    Orders API is throwing 502s since this morning. Find out why — and make sure whoever looks at
+    this next doesn't have to redo the digging.
+  expected: >-
+    Investigates with its read tools, finds the cause the logs show (the pool exhausted), and, the
+    moment it has it, records an investigation with record_learning: what it tried, what it ruled
+    out and why (the release: nothing deployed since Monday), what it found, with the log lines as
+    evidence and the code or area it is about. Reports the cause and that it recorded it.
+  must_not:
+    - record a learning with no evidence, or one the tools did not show
+    - claim a cause no tool showed
+    - put a secret or a connection string in what it records
+
+- id: agent-consults-a-prior-test-failure
+  origin: BOSSAPP-768 S2b 2026-10-24 (KNOWLEDGE_GRAPH_PRODUCT_SPEC.md §4.2 — Learned before)
+  surface: talk_to_boss
+  context: >-
+    An earlier build (crun_bt_tf_1, Builder) recorded a test failure — the disbursement test fails
+    with LinkedAccountRequiredException when the linked-savings check is dropped on the transfer
+    charge path — and the fix that made it pass. The same failure is back on another branch.
+  input: >-
+    The disbursement test is failing again with LinkedAccountRequiredException. Has anyone hit
+    this before, and what fixed it?
+  expected: >-
+    Consults what the project already learned (kg_precedent / kg_search / kg_why) before guessing,
+    finds the earlier test failure and its fix, cites it by its tag ([L:kgn_bt_tf_1]), says who
+    learned it in which run, and that it is an agent's inference to check against the code.
+  must_not:
+    - invent a fix the record does not hold
+    - present the earlier learning as approved fact
+    - claim it re-ran or verified the tests

@@ -873,3 +873,102 @@
     - input: "create a project called shop-purple"
       checks: {any_of: [create_project], allow_clarify: true}
       expected: "A new project: creates (or offers to create) shop-purple."
+
+- id: records-what-it-ruled-out
+  covers: [agent-records-what-it-ruled-out]
+  surface: talk_to_boss
+  tools:
+    read_logs:
+      ok: true
+      service: orders-api
+      lines:
+        - "2026-10-24T07:58:12Z ERROR sqlalchemy.pool: QueuePool limit of size 5 overflow 0 reached, connection timed out, timeout 30.00"
+        - "2026-10-24T07:58:12Z ERROR orders.api: GET /orders 502 upstream timed out waiting for a database connection"
+        - "2026-10-24T07:58:13Z WARN  orders.db: pool exhausted (size=5, checked_out=5, waiting=37)"
+    list_deployments:
+      ok: true
+      deployments:
+        - {app: orders-api, commit_sha: 3f2a9c1, deployed_at: "2026-10-19T16:02:00Z", status: live}
+    project_status:
+      ok: true
+      apps: [{name: orders-api, status: degraded, error_rate: 0.31}]
+  writes:
+    record_learning: {learning: {id: kgn_bt_inv_1, kind: investigation, seen_count: 1},
+                      note: "Recorded as inferred knowledge; later agents working on this code are given it as [L:kgn_bt_inv_1]."}
+  checks:
+    any_of: [record_learning]
+    never_execute: [create_code_task, start_workflow, redeploy]
+  expected: >-
+    Reads the logs and the deployments, finds the cause the logs show (the database pool of 5 is
+    exhausted, 37 requests waiting), rules out the release (nothing deployed since Oct 19), and
+    records that with record_learning as an investigation — tried, ruled out with the reason, found
+    — with a log line as evidence. Reports the cause and says it recorded it.
+  must_not:
+    - record a learning without evidence, or with a cause the logs do not show
+    - claim it fixed or redeployed anything
+    - record a secret or a connection string
+  phrasings:
+    - "Orders API is throwing 502s since this morning. Find out why — and make sure whoever looks at this next doesn't have to redo the digging."
+    - "502s on orders-api again, why? keep a note of what you rule out"
+    - "Can you investigate the orders API 502 errors? Whatever you find or rule out, record it for the team."
+    - "orders api down-ish since 8am, lots of 502. was it the release? figure it out and log what you learned"
+    - "Please look into why orders-api returns 502 and leave the findings in BOSS so the next agent starts from them."
+    - "why is orders failing? it's not the deploy I think. check and record it"
+    - "Investigate the Orders API degradation (31% errors). Document the root cause and what you excluded."
+    - "the 502s on /orders — dig in, tell me the cause, and save what you ruled out so we don't repeat it"
+  negatives:
+    - input: "What does record_learning do?"
+      checks: {no_writes: true}
+      expected: "Explains that it records what an agent learned while working (inferred, with evidence and provenance) so later agents are given it. It records nothing."
+    - input: "Remember that our standup is at 9am."
+      checks: {never_execute: [record_learning]}
+      expected: "Not something learned while working on the code: it may note it as a fact (kg_propose_fact) or say where such notes go, but it does not record an investigation or a learning about code."
+
+- id: consults-a-prior-test-failure
+  covers: [agent-consults-a-prior-test-failure]
+  surface: talk_to_boss
+  tools:
+    kg_precedent:
+      cited_fact_ids: [kgn_bt_tf_1, kgn_bt_fix_1]
+      learned:
+        - {id: kgn_bt_tf_1, kind: test_failure, title: "Disbursement test fails without a linked savings account",
+           statement: "disburseLoan with an account-transfer disbursement charge and no linked account throws LinkedAccountRequiredException.",
+           by: Builder, run: crun_bt_tf_1, at: "2026-10-20", confidence: 0.9}
+        - {id: kgn_bt_fix_1, kind: fix, title: "Keep the linked-account check before the transfer charge",
+           statement: "The linked-savings check must run before an account-transfer disbursement charge is applied.",
+           by: Builder, run: crun_bt_tf_1, at: "2026-10-20", confidence: 0.9}
+      section: |-
+        - [L:kgn_bt_tf_1] (test failure) Disbursement test fails without a linked savings account: disburseLoan with an account-transfer disbursement charge and no linked account throws LinkedAccountRequiredException. (learned by Builder in crun_bt_tf_1)
+        - [L:kgn_bt_fix_1] (fix) Keep the linked-account check before the transfer charge: The linked-savings check must run before an account-transfer disbursement charge is applied. (learned by Builder in crun_bt_tf_1)
+    kg_search:
+      hits:
+        - {node_id: kgn_bt_tf_1, node_key: "learning:test_failure:bt1", trust_tier: inferred,
+           body: "disburseLoan with an account-transfer disbursement charge and no linked account throws LinkedAccountRequiredException."}
+  checks:
+    any_of: [kg_precedent, kg_search, kg_why, recall]
+    no_writes: true
+    mentions_any: [kgn_bt_tf_1, kgn_bt_fix_1, linked]
+  expected: >-
+    Looks up what the project learned before it answers (kg_precedent or kg_search), finds the
+    earlier test failure and the fix that made it pass, cites them ([L:kgn_bt_tf_1],
+    [L:kgn_bt_fix_1]), says Builder learned it in crun_bt_tf_1, and gives the fix: keep the
+    linked-savings check before the account-transfer charge — as an earlier agent's inference to
+    check against the code, not as an approved rule.
+  must_not:
+    - answer from guesswork without consulting what was learned
+    - invent a fix the records do not hold
+    - present the learning as an approved rule or verified fact
+    - claim it ran the tests
+  phrasings:
+    - "The disbursement test is failing again with LinkedAccountRequiredException. Has anyone hit this before, and what fixed it?"
+    - "LinkedAccountRequiredException in the disbursement tests — seen this before?"
+    - "did we already solve the linked account test failure on disburseLoan? what was the fix"
+    - "Before I dig in: is there anything BOSS learned about disbursement tests failing on a missing linked savings account?"
+    - "test fails: LinkedAccountRequiredException loan.link.to.savings.account.required. history?"
+    - "Builder hit something like this last week I think — the disburse test and linked accounts. What did it learn?"
+    - "Our CI shows disburseLoan test red again (linked account required). Look up if we know the cause."
+    - "pls check the knowledge graph for prior failures of the disbursement test w/ linked account"
+  negatives:
+    - input: "Write a new test for disburseLoan that checks the fee."
+      checks: {never_execute: [record_learning]}
+      expected: "New work: offers a build (or asks one question). It may mention the earlier learning; it records nothing on its own."
