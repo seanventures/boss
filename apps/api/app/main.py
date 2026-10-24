@@ -1277,6 +1277,24 @@ def _backfill_agent_identities() -> int:
         return 0
 
 
+def _mirror_org_models() -> dict:
+    """EVERY PROJECT OF AN ORG HOLDS THE ORG'S MODEL CONNECTIONS (org_models.sync_sources): the
+    upgrade path for an org whose model home the schema's one-time step just chose, and a repair
+    for any project that missed a mirror. Idempotent; never blocks boot."""
+    from boss_engine.services import org_models
+
+    try:
+        with begin(engine) as connection:
+            results = org_models.sync_all(connection, actor="boss")
+        mirrored = {o: r["mirrored"] for o, r in results.items() if r.get("mirrored")}
+        if mirrored:
+            print(f"[lifespan] org model connections mirrored: {mirrored}")
+        return results
+    except Exception as exc:  # noqa: BLE001
+        print(f"[lifespan] org model mirror skipped: {exc}")
+        return {}
+
+
 def _install_shipped_cast() -> dict:
     """AN UPGRADE GETS THE CAST, in every project, not only a fresh install's default one.
 
@@ -1423,6 +1441,7 @@ async def lifespan(_: FastAPI):
     _sync_builtin_templates()
     _seed_work_tracker_defaults()
     _backfill_agent_identities()
+    _mirror_org_models()
     # REFUSED DEPLOYMENT PLANS LEFT NOTHING BEHIND ONCE, AND NOW NEVER DID. An unverified host
     # used to raise a pending decision nobody could act on and a failed run that never ran;
     # those are withdrawn and removed here, idempotently (governed_host_deploy).
@@ -18307,10 +18326,24 @@ def setup_connect_coding_agent(payload: open_bodies.CodingAgentConnectBody,
     with begin() as connection:
         require_project_actor(connection, project_id, actor, "pack_manage")
         try:
-            return connect_coding_agent(connection, get_settings(), project_id, provider,
+            done = connect_coding_agent(connection, get_settings(), project_id, provider,
                                         actor=actor, prove=payload.get("prove") is not False)
         except SetupError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+    _mirror_project_models(project_id)
+    return done
+
+
+def _mirror_project_models(project_id: str) -> None:
+    """After a model connection changed in `project_id`: the org's projects hold its mirror
+    (org_models.sync_for; the project becomes the org's model home when the org has none)."""
+    from boss_engine.services import org_models
+
+    try:
+        with begin(engine) as connection:
+            org_models.sync_for(connection, project_id)
+    except Exception as exc:  # noqa: BLE001 — the connection itself is saved
+        print(f"[setup] org model mirror skipped: {exc}")
 
 
 @app.post("/v1/setup/model", status_code=201)
@@ -18345,6 +18378,7 @@ def setup_model_endpoint(payload: open_bodies.ModelSetupBody, response: Response
                 accept_database_fallback=True, actor=actor)
         except setup_actions.SetupActionError as error:
             raise _setup_failure(error) from error
+    _mirror_project_models(project_id)
     return {"ok": True, "provider": provider, "source_id": done["source_id"],
             "verified": bool(done.get("ok")),
             "verification_state": "verified" if done.get("ok") else str(done.get("state")),
@@ -23150,10 +23184,11 @@ def get_project_settings(project_id: str) -> dict:
     agents" and "nobody has chosen, so it runs the deployment default" — and only one of those
     tells an operator whether changing it here will do anything.
     """
-    from boss_engine.services import project_settings as ps
+    from boss_engine.services import org_models, project_settings as ps
     from boss_engine.services.setup_service import connected_engines
     with begin(engine) as connection:
         chosen = ps.get_all(connection, project_id)
+        own = ps.get_own(connection, project_id)
         connected = connected_engines(connection, settings, project_id)
         from boss_engine.services.setup_service import engine_login_states
 
@@ -23167,7 +23202,8 @@ def get_project_settings(project_id: str) -> dict:
         for key, spec in ps.KNOBS.items():
             default = getattr(settings, spec["attr"], None)
             value = chosen.get(key, default)
-            source = "project" if key in chosen else "deployment default"
+            source = ("project" if key in own else "org" if key in chosen
+                      else "deployment default")
             if key in ps.MODEL_FOR_ENGINE.values():
                 harness = ps.harness_for_model_knob(spec, effective)
                 if not ps.model_is_compatible_with_harness(default, harness):
@@ -23197,6 +23233,9 @@ def get_project_settings(project_id: str) -> dict:
                 "value": value,
                 "default": default,
                 "source": source,
+                # A model knob is the org's (Setup writes it for every project); `source`
+                # 'project' on one is this project's pin, removable with scope='project'.
+                "scope": "org" if key in org_models.MODEL_KNOBS else "project",
             })
     return {"project_id": project_id, "knobs": knobs,
             # So the console can say WHY the list is short, and what to do about it, instead
@@ -23223,22 +23262,31 @@ def put_project_setting(key: str, payload: ProjectSettingBody, request: Request)
     spec = ps.KNOBS.get(key)
     if spec is None:
         raise HTTPException(status_code=404, detail=f"'{key}' is not a setting BOSS knows about.")
+    scope = str(payload.get("scope") or "").strip().lower() or None
     with begin(engine) as connection:
         require_project_actor(connection, project_id, actor, "providerops_manage")
         require_fresh(request, *ps.version_of(connection, project_id, key))
         if payload.get("value") in (None, ""):
-            ps.clear_one(connection, project_id, key, actor=actor)
-            paired = ps.MODEL_FOR_ENGINE.get(key)
-            if paired:
-                ps.clear_one(connection, project_id, paired, actor=actor)
+            try:
+                ps.clear_one(connection, project_id, key, actor=actor, scope=scope)
+                paired = ps.MODEL_FOR_ENGINE.get(key)
+                if paired:
+                    ps.clear_one(connection, project_id, paired, actor=actor, scope=scope)
+            except PermissionError as error:
+                raise HTTPException(status_code=403, detail=str(error)) from error
+            except ValueError as error:
+                raise HTTPException(status_code=422, detail=str(error)) from error
             effective = ps.applied(connection, project_id, settings)
             value = getattr(effective, spec["attr"], None)
-            source = ("deployment default" if value == getattr(settings, spec["attr"], None)
-                      else "engine default")
+            source = ps.source_of(connection, project_id, key)
+            if source == "default":
+                source = ("deployment default" if value == getattr(settings, spec["attr"], None)
+                          else "engine default")
             return {"key": key, "value": value, "source": source}
         try:
             before = ps.get_all(connection, project_id).get(key)
-            value = ps.set_one(connection, project_id, key, payload.get("value"), actor)
+            value = ps.set_one(connection, project_id, key, payload.get("value"), actor,
+                               scope=scope)
             if key in ps.MODEL_FOR_ENGINE.values():
                 effective = ps.applied(connection, project_id, settings)
                 harness = ps.harness_for_model_knob(spec, effective)
@@ -23249,6 +23297,8 @@ def put_project_setting(key: str, payload: ProjectSettingBody, request: Request)
                     )
         except ps.UnknownKnob as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
+        except PermissionError as error:
+            raise HTTPException(status_code=403, detail=str(error)) from error
         except ValueError as error:
             # The bound, in words: "between 1 and 16" is actionable, "invalid" is not.
             raise HTTPException(status_code=422, detail=str(error)) from error
@@ -23259,9 +23309,10 @@ def put_project_setting(key: str, payload: ProjectSettingBody, request: Request)
         cleared = None
         paired = ps.MODEL_FOR_ENGINE.get(key)
         if paired and before != value and ps.get_all(connection, project_id).get(paired):
-            ps.clear_one(connection, project_id, paired, actor=actor)
+            ps.clear_one(connection, project_id, paired, actor=actor, scope=scope)
             cleared = paired
-    return {"key": key, "value": value, "source": "project",
+        source = ps.source_of(connection, project_id, key)
+    return {"key": key, "value": value, "source": source,
             **({"cleared": cleared} if cleared else {})}
 
 

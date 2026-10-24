@@ -5,9 +5,12 @@ from apps.api.tests.setup_helpers import AUTH, PROJECT, as_ceo, connect_key, fak
 
 
 def _knobs(engine):
+    """What the project resolves (its own pins over the ORG's model choices, org_models): a
+    Setup job choice is written once for the org."""
+    from boss_engine.services.project_settings import get_all
+
     with engine.begin() as c:
-        return dict(c.execute(text("SELECT key, value FROM project_settings WHERE project_id=:p "
-                                   "AND key LIKE 'code_review_%'"), {"p": PROJECT}).all())
+        return {k: v for k, v in get_all(c, PROJECT).items() if k.startswith("code_review_")}
 
 
 def test_one_request_writes_engine_and_model(client, engine, monkeypatch):

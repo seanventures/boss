@@ -103,4 +103,5 @@ def test_compatible_project_model_remains_selected_and_wrong_alias_is_refused(cl
     assert repeat.status_code == 200, repeat.text
     model = _knob(client, "code_agent_strong_model")
     assert model["value"] == "gpt-6-codex-preview"
-    assert model["source"] == "project"
+    # A model setting is the org's (org_models): kept, for every project of the org.
+    assert model["source"] == "org"

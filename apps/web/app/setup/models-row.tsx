@@ -100,6 +100,10 @@ function ModelLine({ entry, menuOpen, onReplace, replacing }: {
         <Pill pill={pill} testid="su-model-pill" />
         <span className="su-strong">{entry.label}</span>
         <Tip tip={KIND[entry.kind].tip} className="su-chip">{KIND[entry.kind].label}</Tip>
+        {entry.scope === "org" ? (
+          <Tip tip="The org's connection: set once, every project in this org uses it."
+               className="su-chip" testid="su-model-scope">All projects</Tip>
+        ) : null}
         {entry.source === "install" ? (
           <Tip tip="Set in the server's settings file. Replace here to manage it in BOSS."
                className="su-chip">From install</Tip>

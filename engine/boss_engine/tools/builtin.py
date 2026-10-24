@@ -300,6 +300,7 @@ def _register_read_tools(reg: ToolRegistry) -> None:
                 " ORDER BY (role = 'primary') DESC, full_name"),
                 {"p": project_id}).mappings().all()
             stored = ps.get_all(c, project_id)
+            own = ps.get_own(c, project_id)
             code_graph = _code_graph_lines(c, project_id)
         settings_out = []
         for key, spec in ps.KNOBS.items():
@@ -308,7 +309,9 @@ def _register_read_tools(reg: ToolRegistry) -> None:
                 "key": key, "label": spec.get("label"),
                 "stored": stored.get(key),
                 "effective": stored[key] if key in stored else default,
-                "source": "project" if key in stored else "deployment default",
+                # 'org': the organisation's model choice, which every project uses.
+                "source": ("project" if key in own else "org" if key in stored
+                           else "deployment default"),
                 "allowed": ps.allowed_values_said(spec)})
         return {"ok": True, "project": _json_safe(dict(row)),
                 "repositories": _json_safe([dict(r) for r in repos]),
@@ -316,7 +319,8 @@ def _register_read_tools(reg: ToolRegistry) -> None:
                 # Each repository's code graph (knowledge/repo_index.py): indexed or not, and why.
                 "code_graph": code_graph,
                 "settings": _json_safe(settings_out),
-                "settings_set_on_this_project": sorted(stored),
+                "settings_set_on_this_project": sorted(own),
+                "settings_from_the_organisation": sorted(k for k in stored if k not in own),
                 "note": ("No repository is in this project yet. The org's GitHub connection "
                          "serves every project: list_org_repositories shows what it reaches, "
                          "allow_repository allows one, register_repository adds it here."
@@ -2766,12 +2770,18 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
         "change you have recommended once the operator agrees, instead of describing where "
         "they could click. Send an empty value to hand a setting back to the deployment "
         "default. Refuses a key or a value that is not allowed, and says what is. "
+        "A MODEL setting (which engine/model builds, reviews, chats, decides, routes) is the "
+        "ORGANISATION's: it applies to every project unless scope='project' pins it for this "
+        "project only (an empty value with scope='project' removes just the pin). "
         # GENERATED FROM THE SETTINGS TABLE, so the agent reads the real names and values
         # instead of guessing one (`knowledge` for `knowledge_graph`).
         "Keys and allowed values: " + _project_settings_catalogue() + ".",
         _obj({"key": {"type": "string", "description": "the setting key, exactly as listed"},
               "value": {"type": "string",
-                        "description": "the new value; empty to use the deployment default"}},
+                        "description": "the new value; empty to use the deployment default"},
+              "scope": {"type": "string", "enum": ["org", "project"],
+                        "description": "model settings only: org (default, every project) or "
+                                       "project (pin this one)"}},
              required=["key"]),
         kind="write",
         # UNDONE BY SETTING IT BACK, or by sending an empty value to return to the deployment
@@ -2783,23 +2793,32 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
         pid = args.get("project_id") or project_id
         key = str(args.get("key") or "").strip()
         value = args.get("value")
+        scope = str(args.get("scope") or "").strip().lower() or None
         with ctx.begin() as c:
             if key not in ps.KNOBS:
                 return {"ok": False, "error": f"{key!r} is not a setting BOSS can change",
                         "available": sorted(ps.KNOBS)}
             spec = ps.KNOBS[key]
             if value in (None, ""):
-                ps.clear_one(c, pid, key)
+                try:
+                    ps.clear_one(c, pid, key, actor=actor, scope=scope)
+                except (PermissionError, ValueError) as exc:
+                    return {"ok": False, "key": key, "error": str(exc)[:300]}
+                follows = ps.effective(c, pid, ctx.settings, key)
+                said = ("the organisation's choice" if ps.source_of(c, pid, key) == "org"
+                        else "the deployment default")
                 return {"ok": True, "key": key, "value": None,
-                        "note": (f"{spec['label']} now follows the deployment default "
-                                 f"({getattr(ctx.settings, spec['attr'], None)})")}
+                        "note": f"{spec['label']} now follows {said} ({follows})"}
             try:
-                ps.set_one(c, pid, key, value, actor=actor)
+                ps.set_one(c, pid, key, value, actor=actor, scope=scope)
             except Exception as exc:  # noqa: BLE001 — the bound's own message is the answer
                 return {"ok": False, "key": key, "error": str(exc)[:300],
                         "offered": ps.offered_choices(c, ctx.settings, pid, spec)}
+            landed = ps.source_of(c, pid, key)        # a caller who may not change the org pins
+            where = "every project of the organisation" if landed == "org" else pid
             return {"ok": True, "key": key, "value": value,
-                    "note": f"{spec['label']} is now {value} for {pid}; applies on the next "
+                    "scope": "org" if landed == "org" else "project",
+                    "note": f"{spec['label']} is now {value} for {where}; applies on the next "
                             f"run, nothing to restart"}
 
     @reg.tool(

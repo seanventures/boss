@@ -54,6 +54,26 @@ def build_setup_router(
     def fail(error: setup_actions.SetupActionError):
         raise HTTPException(status_code=error.status, detail=error.detail) from error
 
+    def models_target(connection, project_id: str, *, scope: Optional[str] = None,
+                      source_id: str = "", actor: str = "setup") -> str:
+        """Where a model connection write lands: the org's model home (every project of the
+        org then holds a mirror, org_models.sync_sources), or this project with scope='project'
+        or for a connection this project made itself."""
+        from boss_engine.services import org_models
+
+        try:
+            return org_models.write_target(connection, project_id, scope=scope,
+                                           source_id=source_id, actor=actor)
+        except org_models.OrgModelsForbidden as error:
+            raise HTTPException(status_code=403, detail={
+                "state": "failed", "headline": "Org admin", "fix": str(error)}) from error
+
+    def mirror(project_id: str) -> None:
+        from boss_engine.services import org_models
+
+        with begin(engine) as connection:
+            org_models.sync_for(connection, project_id)
+
     def fresh_view(project_id: str) -> dict[str, Any]:
         with begin(engine) as connection:
             return view(connection, project_id)
@@ -194,9 +214,12 @@ def build_setup_router(
         # A short in-process cache must not hide a refused or changed request.
         with begin(engine) as connection:
             require_actor(connection, body.project_id, actor, "entitlement_manage")
+            target = models_target(connection, body.project_id, scope=body.scope,
+                                   source_id=body.source_id or "", actor=actor)
+        with begin(engine) as connection:
             try:
                 setup_actions.connect_model(
-                    connection, get_settings(), body.project_id, provider=body.provider,
+                    connection, get_settings(), target, provider=body.provider,
                     kind=body.kind, api_key=body.api_key or "",
                     credential=body.credential or "",
                     credential_file=body.credential_file or "",
@@ -206,6 +229,7 @@ def build_setup_router(
                     intent=body.idempotency_key or "")
             except setup_actions.SetupActionError as error:
                 fail(error)
+        mirror(target)
         return fresh_view(body.project_id)
 
     @router.post("/v1/setup/holds/{receipt_id}/release", response_model=SetupView,
@@ -250,11 +274,13 @@ def build_setup_router(
         actor = actor_for(body.actor)
         with begin(engine) as connection:
             require_actor(connection, body.project_id, actor, "entitlement_manage")
+            target = models_target(connection, body.project_id, source_id=source_id, actor=actor)
             try:
-                setup_actions.set_source_model(connection, get_settings(), body.project_id,
+                setup_actions.set_source_model(connection, get_settings(), target,
                                                source_id, body.model, actor=actor)
             except setup_actions.SetupActionError as error:
                 fail(error)
+        mirror(target)
         return fresh_view(body.project_id)
 
     @router.delete("/v1/setup/models/{source_id}", response_model=SetupView,
@@ -265,11 +291,13 @@ def build_setup_router(
         who = actor_for(actor)
         with begin(engine) as connection:
             require_actor(connection, project_id, who, "entitlement_manage")
+            target = models_target(connection, project_id, source_id=source_id, actor=who)
             try:
-                setup_actions.remove_model(connection, get_settings(), project_id, source_id,
+                setup_actions.remove_model(connection, get_settings(), target, source_id,
                                            confirm=confirm, actor=who)
             except setup_actions.SetupActionError as error:
                 fail(error)
+        mirror(target)
         return fresh_view(project_id)
 
     @router.get("/v1/setup/models/{provider}/catalogue")
@@ -307,7 +335,7 @@ def build_setup_router(
             try:
                 setup_actions.set_job(connection, get_settings(), body.project_id, job,
                                       body.choice.model_dump() if body.choice else None,
-                                      actor=actor)
+                                      actor=actor, scope=body.scope)
             except setup_actions.SetupActionError as error:
                 fail(error)
         return fresh_view(body.project_id)

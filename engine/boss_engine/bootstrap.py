@@ -461,6 +461,11 @@ def create_project(connection, settings, *, org_id, name, slug=None, description
         connection, settings, project_slug,
         entitlements=entitlements, members=members, specpack=specpack, actor=actor,
     )
+    # THE ORG'S MODELS FROM THE FIRST MINUTE (org_models): its connections are mirrored into
+    # the new project; the model choices are read from the org already.
+    from .services import org_models
+
+    org_models.sync_for(connection, project_slug, actor=actor)
     return {"project_id": project_slug, "workspace_id": workspace_id, "org_id": org_id,
             "name": name, "slug": project_slug, "description": description}
 

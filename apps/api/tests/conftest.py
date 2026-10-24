@@ -285,6 +285,9 @@ def clean_tables(engine):
             "resource_policies",
             "capacity_receipts",
             "entitlement_sources",
+            # The org's models (org_models) and embedding slot: one test's org choice must not
+            # become every later test's.
+            "org_settings",
             "skill_invocations",
             "cost_receipts",
             "budget_reservations",

@@ -6757,6 +6757,56 @@ BEGIN
   END IF;
 END $$;
 
+-- MODELS ARE THE ORG'S (engine/boss_engine/services/org_models.py, banking case study 2026-10-24:
+-- projects created after boss-dogfood had no model and answered "none is answering"). An org with
+-- no model configuration of its own adopts its most-configured project's (most model knobs, then
+-- most connections, then the oldest): those knobs become the org's `models.<knob>` rows and leave
+-- that project (they were never an override), and it becomes the org's model home, whose
+-- connections the API mirrors into every project of the org at start (org_models.sync_all). Other
+-- projects' own model knobs stay as their overrides. Runs once; an org that already has model
+-- rows is left alone.
+DO $$
+DECLARE
+  pick RECORD;
+  model_keys TEXT[] := ARRAY['code_agent_engine', 'code_agent_model', 'code_review_engine',
+    'code_review_model', 'code_agent_strong_engine', 'code_agent_strong_model',
+    'code_agent_low_cost_engine', 'code_agent_low_cost_model', 'codex_cli_model',
+    'claude_cli_model', 'chat_llm_engine', 'chat_model', 'model_routing_mode',
+    'decision_backend', 'decision_model', 'anthropic_credential_order'];
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM schema_once WHERE key = 'org_models_adopted_from_project') THEN
+    FOR pick IN
+      SELECT DISTINCT ON (r.org_id) r.org_id, r.project_id
+        FROM (SELECT w.org_id, p.id AS project_id, p.created_at,
+                     (SELECT count(*) FROM project_settings s
+                       WHERE s.project_id = p.id AND s.key = ANY(model_keys)) AS knobs,
+                     (SELECT count(*) FROM entitlement_sources e
+                       WHERE e.project_id = p.id AND e.source_id NOT LIKE 'proof-%'
+                         AND (e.connection_status = 'connected'
+                              OR (e.credential_secret_ref_id IS NOT NULL
+                                  AND e.connection_status <> 'revoked'))) AS sources
+                FROM projects p JOIN workspaces w ON w.id = p.workspace_id) r
+       WHERE (r.knobs > 0 OR r.sources > 0)
+         AND NOT EXISTS (SELECT 1 FROM org_settings o
+                          WHERE o.org_id = r.org_id AND o.key LIKE 'models.%')
+       ORDER BY r.org_id, r.knobs DESC, r.sources DESC, r.created_at, r.project_id
+    LOOP
+      INSERT INTO org_settings (org_id, key, value, updated_by)
+      SELECT pick.org_id, 'models.' || s.key, s.value, 'upgrade'
+        FROM project_settings s
+       WHERE s.project_id = pick.project_id AND s.key = ANY(model_keys)
+      ON CONFLICT (org_id, key) DO NOTHING;
+      DELETE FROM project_settings
+       WHERE project_id = pick.project_id AND key = ANY(model_keys);
+      INSERT INTO org_settings (org_id, key, value, updated_by)
+      VALUES (pick.org_id, 'models.home', jsonb_build_object('project_id', pick.project_id), 'upgrade')
+      ON CONFLICT (org_id, key) DO NOTHING;
+    END LOOP;
+    INSERT INTO schema_once (key) VALUES ('org_models_adopted_from_project')
+    ON CONFLICT (key) DO NOTHING;
+  END IF;
+END $$;
+
 -- workflow_custom_steps.knowledge, for databases created before it existed. The CREATE above
 -- covers a fresh install; this covers every deployment that already has the table.
 ALTER TABLE workflow_custom_steps ADD COLUMN IF NOT EXISTS knowledge TEXT;

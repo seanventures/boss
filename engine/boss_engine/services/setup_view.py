@@ -535,6 +535,12 @@ def _models(connection: Connection, settings: Any, project_id: str, now: datetim
              " ORDER BY created_at, source_id"), {"p": project_id}).mappings().all()
     out: list[dict[str, Any]] = []
     engines_seen: set[str] = set()
+    try:
+        from .org_models import home_for
+
+        is_home = home_for(connection, project_id) == project_id
+    except Exception:  # noqa: BLE001
+        is_home = False
     for row in rows:
         source_id = str(row["source_id"])
         provider = _provider_of(source_id, by_entitlement)
@@ -561,11 +567,15 @@ def _models(connection: Connection, settings: Any, project_id: str, now: datetim
         model = models[0] if models else (metadata.get("model") or None)
         last = metadata.get("last_check") if isinstance(metadata.get("last_check"), dict) else {}
         engines_seen.add(engine_for_provider(provider))
-        out.append(_model_entry(
+        entry = _model_entry(
             source_id=source_id, provider=provider, kind=kind, model=model, state=state,
             checked_at=checked_at, retry_at=retry_at, source="connected", now=now,
             host=last.get("host") or "", latency_ms=last.get("latency_ms"),
-            base_url=str(metadata.get("base_url") or ""), budget_period=budget_period))
+            base_url=str(metadata.get("base_url") or ""), budget_period=budget_period)
+        # The org's connection (a mirror of the org's model home, org_models) or one this
+        # project made for itself.
+        entry["scope"] = "org" if (metadata.get("org_source") or is_home) else "project"
+        out.append(entry)
     # THE INSTALL'S OWN SETTINGS FILE. A key there is a model like any other, with the chip
     # `From install` — never a mystery "Unverified" model nobody remembers choosing.
     for engine, attr in ENV_LANES:
@@ -700,11 +710,12 @@ def _jobs(connection: Connection, settings: Any, project_id: str,
     from . import project_settings
     from .model_routing import CHAT_ROUTABLE, JOB_KNOBS, chat_model_knob, resolve_job
 
-    chosen = {}
+    chosen, own = {}, {}
     try:
         chosen = project_settings.get_all(connection, project_id)
+        own = project_settings.get_own(connection, project_id)
     except Exception:  # noqa: BLE001
-        chosen = {}
+        chosen, own = {}, {}
     by_engine: dict[str, dict[str, Any]] = {}
     for entry in models:
         if model_working(entry):
@@ -755,8 +766,12 @@ def _jobs(connection: Connection, settings: Any, project_id: str,
                         "label": label if choice else f"Auto · {name}", "why": picked.why,
                         "source_id": picked.source_id}
         metered = bool(picked and picked.metered)
+        # WHOSE CHOICE: the org's (every project) or this project's pin, which Setup shows with
+        # a Remove that hands the job back to the org's choice.
+        scope = ("project" if engine_knob in own or (model_knob and model_knob in own)
+                 else "org")
         out.append({**spec, "choice": choice, "resolved": resolved, "metered": metered,
-                    "options": options})
+                    "options": options, "scope": scope})
     for entry in models:
         entry["used_for"] = [j["label"] for j in out if j["resolved"]
                              and _resolves_to(j["resolved"], entry)]
@@ -1010,8 +1025,20 @@ def _build(connection: Connection, settings: Any, project_id: str, *,
         # The embedding model, its own slot (knowledge/embedding_slot.py): only that a key is
         # held, never the key; whether meaning-based search is on, and why not in words.
         "embedding_model": embedding_model(connection, settings, project_id),
+        # Whose models these are: the org's (set once, every project uses them), the org's model
+        # home, and this project's pins (org_models.view).
+        "models_scope": _models_scope(connection, project_id),
         "generated_at": now.isoformat(),
     }
+
+
+def _models_scope(connection: Connection, project_id: str) -> Optional[dict[str, Any]]:
+    from . import org_models
+
+    try:
+        return org_models.view(connection, project_id)
+    except Exception:  # noqa: BLE001 — the scope line is information, never a failed view
+        return None
 
 
 def _held_proofs(connection: Connection, project_id: str) -> list[dict[str, Any]]:
