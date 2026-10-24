@@ -45,6 +45,7 @@ from .step_agents import (
     under_current_rules as under_current_agent_rules,
 )
 from .typed_decisions import step_problems as typed_decision_problems
+from .knowledge import learning_writeback  # learning while executing (BOSSAPP-768)
 
 logger = logging.getLogger(__name__)
 
@@ -6092,6 +6093,9 @@ def complete_step(
     )
     spec = _run_spec(connection, row["workflow_run_id"])
     template = _step_map(spec)[row["step_id"]]
+    learning_writeback.write_back(connection, project_id=project_id, hook="step_complete",
+                                  observed={"step": dict(updated), "template": template,
+                                            "context": run.get("context")})
     compensation = template.get("compensation")
     if compensation:
         sequence = int(
