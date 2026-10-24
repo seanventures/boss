@@ -18,11 +18,16 @@
  *
  * A built-in rule is changed by its settings (its PromQL follows them); a rule of your own is
  * PromQL, in the Prometheus alerting-rule shape. The server checks every value and says why.
+ *
+ * TUNE (P1-C) is this sheet. Preview replays the NEW values over the last 24 h next to the rule as
+ * it is. A rule the repo owns (boss.deploy.yaml, `tuneVia: pull_request`) shows where it lives
+ * (path:line) and its primary press is Propose PR: a pull request that changes only that rule's
+ * lines — its row is not overwritten. Any other rule is saved here, audited.
  */
 import React, { useState } from "react";
 
 import { GatedButton } from "../../components/gated";
-import { SEVERITIES, forWord, rulesPutPath, type AlertRule, type RuleKind, type Sev, type SevInfo } from "../../lib/app-alerts";
+import { SEVERITIES, forWord, proposePath, rulesPutPath, tunePreviewPath, whereWord, type AlertRule, type RuleKind, type Sev, type SevInfo } from "../../lib/app-alerts";
 import { showToast } from "../client-forms";
 import { Sheet } from "../infra/kit";
 import { obsWrite } from "./obs-write";
@@ -91,20 +96,79 @@ export function RuleSheet({ rule, targetId, projectId, actor, onClose, onSaved, 
   const current = policies.data?.find((p) => p.ruleId === rule?.id)?.contactPointIds ?? null;
   const [notify, setNotify] = useState<Set<string> | null>(null);
   const told = notify ?? new Set(current ?? []);
-  const [preview, setPreview] = useState<{ word: string; bad: boolean } | null>(null);
+  const [preview, setPreview] = useState<{ word: string; now?: string; bad: boolean } | null>(null);
+  const [proposed, setProposed] = useState<{ url: string | null; number: number | null } | null>(null);
+  const repo = rule?.tuneVia === "pull_request";
+  const holdMin = Number(hold) || 0;
+  /** The rule's own values as the change: all of them (Preview), or only what changed (Propose PR). */
+  const tuneChange = (onlyChanged: boolean): Record<string, unknown> => {
+    const c: Record<string, unknown> = {};
+    if (custom) { if (!onlyChanged || expr !== rule?.expr) c.expr = expr; }
+    else {
+      const p = Object.fromEntries(Object.entries(params).map(([k, v]) => [k, Number(v)]));
+      const moved = Object.fromEntries(Object.entries(p).filter(([k, v]) => v !== rule?.params[k]));
+      if (!onlyChanged) c.params = p; else if (Object.keys(moved).length) c.params = moved;
+    }
+    if (!onlyChanged || holdMin * 60 !== (rule?.forSeconds ?? 0)) c.for = forWord(holdMin * 60);
+    if (onlyChanged && severity !== rule?.severity) c.severity = severity;
+    return c;
+  };
   const runPreview = async () => {
     setPreview(null);
+    if (rule) {
+      const r = await obsWrite<{ now?: { word?: string }; tuned?: { word?: string } }>(tunePreviewPath(targetId, rule.id),
+        { project_id: projectId, change: tuneChange(false) }, { scope: `obs:rule-tune-preview:${rule.id}`, label: "Preview" });
+      setPreview(r.ok ? { word: r.body?.tuned?.word ?? "No answer", now: r.body?.now?.word, bad: false } : { word: r.error ?? "No preview", bad: true });
+      return;
+    }
     const r = await obsWrite<{ word?: string }>("/v1/alert-rules/preview", { project_id: projectId, subject_id: targetId, expr,
-      for: forWord((Number(hold) || 0) * 60) }, { scope: `obs:rule-preview:${targetId}`, label: "Preview" });
+      for: forWord(holdMin * 60) }, { scope: `obs:rule-preview:${targetId}`, label: "Preview" });
     setPreview(r.ok ? { word: r.body?.word ?? "No answer", bad: false } : { word: r.error ?? "No preview", bad: true });
   };
   const spec = rule && rule.kind !== "custom" ? FIELDS[rule.kind] : null;
   const title = spec ? spec.head : rule ? `${rule.alert} alert` : "Add a rule";
 
-  const save = async () => {
+  const saveNotify = async (): Promise<boolean> => {
+    if (!rule || !notify) return true;
+    const n = await obsWrite(`/v1/alert-rules/${encodeURIComponent(rule.id)}/notify`, { project_id: projectId, actor, contact_point_ids: [...notify] },
+                             { scope: `obs:rule-notify:${rule.id}`, label: "Notify" }, "PUT");
+    if (!n.ok) setError(`Rule saved, but who is told was not: ${n.error ?? "refused"}`);
+    return n.ok;
+  };
+
+  /** A repo rule: its yaml values go to a pull request; BOSS's own switches are saved here. */
+  const propose = async (r: AlertRule) => {
+    const change = tuneChange(true);
+    const keepS = (Number(keep) || 0) * 60;
+    const side: Record<string, unknown> = {};
+    if (triage !== r.triage) side.triage = triage;
+    if (respond !== r.autoRespond) side.auto_respond = respond;
+    if (keepS !== r.facts.keepFiringForS) side.keep_firing_for = forWord(keepS);
+    if (!Object.keys(change).length && !Object.keys(side).length && !notify) { setError("Nothing to change"); return; }
     setBusy(true);
     setError(null);
-    const holdMin = Number(hold) || 0;
+    if (Object.keys(change).length) {
+      const p = await obsWrite<{ pull_request?: { url?: string; number?: number } }>(proposePath(targetId, r.id),
+        { project_id: projectId, actor, reason, change }, { scope: `obs:rule-propose:${r.id}`, label: "Propose PR" });
+      if (!p.ok) { setBusy(false); setError(p.error ?? "Not proposed"); return; }
+      setProposed({ url: p.body?.pull_request?.url ?? null, number: p.body?.pull_request?.number ?? null });
+    }
+    if (Object.keys(side).length) {
+      const w = await obsWrite(rulesPutPath(targetId), { project_id: projectId, actor, reason, rules: [{ id: r.id, ...side }] },
+                               { scope: `obs:rule:${r.id}`, label: "Save" }, "PUT");
+      if (!w.ok) { setBusy(false); setError(w.error ?? "Not saved"); return; }
+    }
+    const told = await saveNotify();
+    setBusy(false);
+    if (!told) return;
+    if (!Object.keys(change).length) { showToast("success", "Saved"); onSaved(); return; }
+    showToast("success", "Pull request opened");
+  };
+
+  const save = async () => {
+    if (rule && repo) { await propose(rule); return; }
+    setBusy(true);
+    setError(null);
     const change: Record<string, unknown> = custom
       ? { alert, expr, for: forWord(holdMin * 60), keep_firing_for: forWord((Number(keep) || 0) * 60), labels: { severity }, annotations: { summary, ...(runbook ? { runbook_url: runbook } : {}) },
           enabled, triage, auto_respond: respond }
@@ -112,15 +176,14 @@ export function RuleSheet({ rule, targetId, projectId, actor, onClose, onSaved, 
           keep_firing_for: forWord((Number(keep) || 0) * 60), severity, enabled, triage, auto_respond: respond, runbook_url: runbook };
     if (rule) change.id = rule.id;
     const r = await obsWrite(rulesPutPath(targetId), { project_id: projectId, actor, reason, rules: [change] },
-                             { scope: `obs:rule:${rule?.id ?? "new"}`, label: "Save rule" }, "PUT");
+                             { scope: `obs:rule:${rule?.id ?? "new"}`, label: rule ? "Save" : "Add rule" }, "PUT");
     setBusy(false);
     if (!r.ok) { setError(r.error ?? "Not saved"); return; }
     if (rule && notify) {
       setBusy(true);
-      const n = await obsWrite(`/v1/alert-rules/${encodeURIComponent(rule.id)}/notify`, { project_id: projectId, actor, contact_point_ids: [...notify] },
-                               { scope: `obs:rule-notify:${rule.id}`, label: "Notify" }, "PUT");
+      const ok = await saveNotify();
       setBusy(false);
-      if (!n.ok) { setError(`Rule saved, but who is told was not: ${n.error ?? "refused"}`); return; }
+      if (!ok) return;
     }
     showToast("success", rule ? (notify ? `Rule saved; ${notify.size ? `tells ${notify.size} contact point${notify.size === 1 ? "" : "s"}` : "tells the console only"}` : "Rule saved") : "Rule added");
     onSaved();
@@ -129,6 +192,18 @@ export function RuleSheet({ rule, targetId, projectId, actor, onClose, onSaved, 
   return (
     <Sheet title={title} testId="obs-rule-sheet" onClose={onClose}>
       <div className="obs-rform">
+        {repo ? (
+          <div className="obs-rrow" data-testid="obs-rule-where">
+            <span className="obs-rlabel" title="Declared in the app's repo: Propose PR changes only these lines">Lives in</span>
+            <span className="obs-rbody">
+              {rule?.where ? (rule.where.href
+                ? <a className="inf-link inf-mono" href={rule.where.href} target="_blank" rel="noreferrer noopener" data-copy="data"
+                     title={`Lines ${rule.where.line}–${rule.where.endLine} of ${rule.where.path}, as deployed`}>{whereWord(rule.where)} ↗</a>
+                : <span className="inf-mono" data-copy="data">{whereWord(rule.where)}</span>)
+                : <span className="inf-mono" title="Its line is found when the pull request is opened">boss.deploy.yaml</span>}
+            </span>
+          </div>
+        ) : null}
         {spec ? spec.rows.map((row) => (
           <div key={row.label} className="obs-rrow">
             <span className="obs-rlabel">{row.label}</span>
@@ -150,11 +225,6 @@ export function RuleSheet({ rule, targetId, projectId, actor, onClose, onSaved, 
               <textarea value={expr} onChange={(e) => { setExpr(e.target.value); setPreview(null); }} data-testid="obs-rule-expr" rows={4} spellCheck={false}
                         className="obs-promql-edit" placeholder='sum(rate(http_requests_total{status=~"5.."}[5m])) > 1' />
             </label>
-            <span className="obs-line">
-              <button type="button" className="ag-btn ag-btn-sm" data-testid="obs-rule-preview" disabled={!expr.trim()}
-                      title="Run it over the last 24 hours: how often would it have fired?" onClick={() => void runPreview()}>Preview</button>
-              {preview ? <span className={preview.bad ? "inf-error" : "obs-strong"} data-testid="obs-rule-preview-word" data-copy="data">{preview.word}</span> : null}
-            </span>
             <label className="inf-field">
               <span>Summary</span>
               <input value={summary} onChange={(e) => setSummary(e.target.value)} data-testid="obs-rule-summary" autoComplete="off" />
@@ -173,6 +243,18 @@ export function RuleSheet({ rule, targetId, projectId, actor, onClose, onSaved, 
           <span className="obs-rbody">
             <NumberField f={{ key: "keep_firing_for", before: "", after: "min after it clears", tip: "0 resolves on the first clear check" }}
                          value={keep} bounds={[0, 1440]} onChange={setKeep} />
+          </span>
+        </div>
+        <div className="obs-rrow">
+          <span className="obs-rlabel" title="Replays these values over the app's last 24 hours; nothing is saved">Last 24 h</span>
+          <span className="obs-rbody">
+            <button type="button" className="ag-btn ag-btn-sm" data-testid="obs-rule-preview" disabled={custom && !expr.trim()}
+                    title="How often these values would have fired in the last 24 hours" onClick={() => void runPreview()}>Preview</button>
+            {preview ? (
+              <span className={preview.bad ? "inf-error" : "obs-strong"} data-testid="obs-rule-preview-word" data-copy="data"
+                    title={preview.now ? `As it is now: ${preview.now}` : undefined}>{preview.word}</span>
+            ) : null}
+            {preview?.now ? <span className="inf-faint" data-testid="obs-rule-preview-now" data-copy="data">now: {preview.now}</span> : null}
           </span>
         </div>
         <div className="obs-rrow" role="radiogroup" aria-label="Severity">
@@ -220,11 +302,13 @@ export function RuleSheet({ rule, targetId, projectId, actor, onClose, onSaved, 
         </div>
         <label className="inf-field">
           <span>Runbook</span>
-          <input value={runbook} onChange={(e) => setRunbook(e.target.value)} data-testid="obs-rule-runbook" autoComplete="off"
-                 spellCheck={false} placeholder="docs/runbooks/checkout.md" title="A markdown page kept with the app, or a URL" />
+          <input value={runbook} onChange={(e) => setRunbook(e.target.value)} data-testid="obs-rule-runbook" autoComplete="off" disabled={repo}
+                 spellCheck={false} placeholder="docs/runbooks/checkout.md"
+                 title={repo ? "Set in boss.deploy.yaml: change it in the repo" : "A markdown page kept with the app, or a URL"} />
         </label>
         <label className="obs-rcheck">
-          <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} data-testid="obs-rule-enabled" />
+          <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} data-testid="obs-rule-enabled" disabled={repo}
+                 title={repo ? "Set in boss.deploy.yaml: change it in the repo" : undefined} />
           <span>Rule on</span>
         </label>
         {rule ? (
@@ -239,13 +323,29 @@ export function RuleSheet({ rule, targetId, projectId, actor, onClose, onSaved, 
           <input value={reason} onChange={(e) => setReason(e.target.value)} data-testid="obs-rule-reason" autoComplete="off" />
         </label>
         {error ? <span className="inf-error" data-testid="obs-rule-error" data-copy="data">{error}</span> : null}
+        {proposed ? (
+          <span className="obs-line" data-testid="obs-rule-proposed">
+            <span className="obs-strong">Proposed</span>
+            {proposed.url ? <a className="inf-link" href={proposed.url} target="_blank" rel="noreferrer noopener" data-copy="data"
+                               title="Takes effect when it merges and the app deploys">PR{proposed.number ? ` #${proposed.number}` : ""} ↗</a> : null}
+          </span>
+        ) : null}
         <div className="inf-actions">
           <span className="ag-spacer" />
-          <button type="button" className="ag-btn" onClick={onClose}>Cancel</button>
-          <GatedButton permission="observability:manage" type="button" className="ag-btn ag-btn-primary" data-testid="obs-rule-save"
-                       disabled={busy || (custom && (!alert.trim() || !expr.trim()))} aria-busy={busy || undefined} onClick={save}>
-            {busy ? "Saving…" : rule ? "Save rule" : "Add rule"}
-          </GatedButton>
+          {proposed ? (
+            <button type="button" className="ag-btn ag-btn-primary" data-testid="obs-rule-done" onClick={onSaved}>Done</button>
+          ) : (
+            <>
+              <button type="button" className="ag-btn" onClick={onClose}>Cancel</button>
+              <GatedButton permission="observability:manage" type="button" className="ag-btn ag-btn-primary" data-testid="obs-rule-save"
+                           data-via={repo ? "pull_request" : "console"}
+                           title={repo ? "Opens a pull request changing only this rule; applies once merged and deployed"
+                             : rule ? "Saved now; the change is recorded with who and why" : undefined}
+                           disabled={busy || (custom && (!alert.trim() || !expr.trim()))} aria-busy={busy || undefined} onClick={save}>
+                {busy ? (repo ? "Proposing…" : "Saving…") : !rule ? "Add rule" : repo ? "Propose PR" : "Save"}
+              </GatedButton>
+            </>
+          )}
         </div>
       </div>
     </Sheet>

@@ -79,6 +79,6 @@ it("the empty Runs tab says how to start, without jargon", () => {
   // empty line is short, the how-to is its tooltip (labels, not paragraphs), and one button
   // goes to the tab.
   expect(UI).not.toContain("apply a workflow to a class of work");
-  expect(UI).toContain('title="Start one in New project, or press Start on a workflow in the Library"');
+  expect(UI).toContain('title="Start one in New build, or press Start on a workflow in the Library"');
   expect(UI).toContain('data-testid="dw-empty-new"');
 });

@@ -8,7 +8,7 @@ signals rather than trusting mere adjacency.
 THE SCORES ARE EVIDENCE, NOT THE VERDICT (BOSSAPP-598, spec §8.3, G8). `_score`'s priors are BOSS's
 statistical guess: every hypothesis carries it as `statistical_guess`, labelled so. The verdict — which
 cause it is, or that BOSS does not know — is a MODEL's choice among these candidates (`model_verdict`,
-through agent_decision), recorded word for word. With no model there is no verdict, and it says so: the
+a turn through the one agent pipeline), recorded word for word. With no model there is no verdict, and it says so: the
 statistical leader is shown as a guess, never as the finding. Sources of candidates:
 * **memory** — prior confirmed causes for the service (`known_causes`), the strongest prior.
 * **change** — recent deploys/config/flag flips correlated with onset (RB-17 feeds these; hook is here).
@@ -167,20 +167,26 @@ VERDICT_MESSAGE = ("Which of these is the incident's root cause? Choose `unknown
 def model_verdict(connection: Any, settings: Any, project_id: str, *, incident: dict[str, Any],
                   hypotheses: list[dict[str, Any]], signals: list[dict[str, Any]],
                   adapter: Any = None, decider: Any = None) -> dict[str, Any]:
-    """The model's verdict among the hypotheses (agent_decision): {status, cause_key, reason,
-    confidence, by}. Signal samples are third-party text: evidence, never instructions."""
-    from . import agent_decision as ad
+    """The verdict among the hypotheses: {status, cause_key, reason, confidence, by}.
 
-    cands = [ad.Candidate(f"h{i}", f"The cause is {h.get('root_cause')} ({h.get('cause_kind')}): "
-                                   f"{h.get('rationale')}") for i, h in enumerate(hypotheses)]
-    cands.append(ad.Candidate("unknown", "The evidence does not support any of these yet",
-                              acts=False))
-    decision = ad.decide(
-        connection, settings, project_id,
+    A turn by the project's on-call agent through the one pipeline (`AgentService.decide`, on
+    the incident's own thread): the hypotheses are its choices, the signals and BOSS's scores
+    its record. Signal samples are third-party text: evidence, never instructions."""
+    from .agent_service import NO_MODEL, AgentService, Choice
+    from .app_alerts import ON_CALL_ROLE
+
+    choices = [Choice(f"h{i}", f"The cause is {h.get('root_cause')} ({h.get('cause_kind')}): "
+                               f"{h.get('rationale')}") for i, h in enumerate(hypotheses)]
+    choices.append(Choice("unknown", "The evidence does not support any of these yet",
+                          acts=False))
+    ref = str(incident.get("id") or "")
+    decision = AgentService(settings).decide(
+        connection, project_id=project_id, actor="boss.investigation",
         situation=f"Investigating the incident '{incident.get('title')}' on "
                   f"{incident.get('service') or 'a service'}.",
-        message=VERDICT_MESSAGE, candidates=cands, agent="BOSS's investigation agent",
-        ref=str(incident.get("id") or ""), adapter=adapter, decider=decider,
+        message=VERDICT_MESSAGE, choices=choices, agent="BOSS's investigation agent",
+        role=ON_CALL_ROLE, external_ref=f"incident:{ref}" if ref else "", ref=ref,
+        adapter=adapter, decider=decider,
         context={"signals": signals[:10], "hypotheses": hypotheses},
         hints=[f"BOSS's statistical guess for {h.get('root_cause')}: {h.get('statistical_guess')}"
                for h in hypotheses])
@@ -194,5 +200,16 @@ def model_verdict(connection: Any, settings: Any, project_id: str, *, incident: 
             "root_cause": (chosen or {}).get("root_cause") if chosen else (
                 "unknown" if decision.decided else None),
             "reason": decision.reason, "confidence": decision.confidence, "by": decision.by,
-            "word": ("No model is answering: no verdict, only BOSS's statistical guesses"
-                     if decision.status == ad.NO_MODEL else decision.reason)}
+            "word": (_no_model_word(decision) if decision.status == NO_MODEL
+                     else decision.reason)}
+
+
+def _no_model_word(decision) -> str:
+    """No verdict, only BOSS's statistical guesses — or, when the provider's own words say
+    it is specifically out of credit, that plainly, with the provider named (BOSSAPP-604)."""
+    from . import provider_limits
+
+    if provider_limits.credit_exhausted(decision.error):
+        return (f"Credit balance too low on {decision.provider or 'its provider'}: no verdict, "
+                "only BOSS's statistical guesses.")
+    return "No model is answering: no verdict, only BOSS's statistical guesses"

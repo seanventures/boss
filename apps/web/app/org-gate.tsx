@@ -9,6 +9,7 @@ import { SubmitButton } from "./submit-button";
 import { ActionForm } from "./client-forms";
 import { useConsoleRefresh } from "./use-console-refresh";
 import { ORG_ONBOARD_PERMISSION } from "./org-gate-permission";
+import { rememberOrg } from "../lib/console-org";
 
 const ORG_KEY = "boss.org";
 
@@ -62,6 +63,7 @@ export function orgHref(orgId: string, search: string): string {
 }
 
 function openOrg(orgId: string, replace = false) {
+  rememberOrg(orgId);
   const url = orgHref(orgId, window.location.search);
   if (replace) window.location.replace(url);
   else window.location.assign(url);
@@ -96,9 +98,6 @@ export function OrgGate({ orgs, canOnboard }: {
   }, [orgs, params]);
 
   const enter = (orgId: string) => {
-    try {
-      window.localStorage.setItem(ORG_KEY, orgId);
-    } catch {}
     setOpening(orgId);
     openOrg(orgId);
   };

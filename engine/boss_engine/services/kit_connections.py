@@ -325,25 +325,41 @@ def view(connection: Connection, settings: Any, project_id: str, ability: dict[s
     acts_as: Optional[str] = None
     connected = False
     if key == "email":
+        # EMAIL (SMTP), THE CONNECTOR (email_config). The local test inbox is offered only when
+        # the install turned Mailpit on; a saved row of any age reads as this connector.
         from .email_config import describe
+        from .mail_transport import dev_inbox_enabled
 
+        if not dev_inbox_enabled(settings):
+            providers = [p for p in providers if p["key"] != "dev_inbox"]
         stored = describe(connection, project_id)
-        if stored.get("configured"):
+        provider = "smtp"
+        if stored.get("mode") == "dev_inbox":
+            provider, connected = "dev_inbox", True
+            acts_as = "Local test inbox"
+        elif stored.get("configured"):
             provider, connected = "smtp", True
-            fields = {"host": str(stored.get("host") or ""), "port": str(stored.get("port") or ""),
+            fields = {"url": str(stored.get("url") or ""),
+                      "host": str(stored.get("host") or ""), "port": str(stored.get("port") or ""),
                       "from_address": str(stored.get("from_address") or ""),
+                      "from_name": str(stored.get("from_name") or ""),
                       "username": str(stored.get("username") or "")}
             if stored.get("has_password"):
-                fields["password"] = _mask(stored.get("password_last4"))
+                # "set", never any part of the key.
+                fields["password"] = "set"
             fields["security"] = ("ssl" if stored.get("use_ssl") else "starttls"
                                   if stored.get("use_tls") else "none")
             acts_as = stored.get("from_address")
-        elif getattr(settings, "email_smtp_host", None):
-            # Configured the old way (environment). It works; say so, and show where.
-            provider, connected = "smtp", True
-            fields = {"host": str(settings.email_smtp_host),
-                      "from_address": str(getattr(settings, "email_from_address", "") or "")}
-            acts_as = getattr(settings, "email_from_address", None)
+        else:
+            from .mail_transport import route
+
+            chosen = route(connection, settings, project_id)
+            if chosen.source == "env":
+                # Configured the old way (environment). It works; say so, and show where.
+                provider, connected = "smtp", True
+                fields = {"host": str(chosen.settings.email_smtp_host),
+                          "from_address": str(chosen.settings.email_from_address or "")}
+                acts_as = chosen.settings.email_from_address
     elif key == "file_tickets":
         row = kit_tracker(connection, project_id)
         if row is not None:
@@ -666,7 +682,10 @@ def smtp_security(values: dict[str, Any]) -> str:
 
 
 def _smtp_send(settings: Any, values: dict[str, Any], to: str) -> dict[str, Any]:
-    from .email_adapter import EmailAdapter
+    """Send test: one message through exactly these values. The fact is the SERVER'S OWN REPLY
+    (`250 2.0.0 Ok: queued as …`); a failure is the server's reason in words
+    (mail_transport.failure_reason). Neither carries any part of the key."""
+    from .mail_transport import failure_reason, send_test
 
     started = time.monotonic()
     try:
@@ -679,24 +698,25 @@ def _smtp_send(settings: Any, values: dict[str, Any], to: str) -> dict[str, Any]
         "email_smtp_username": values.get("username") or None,
         "email_smtp_password": values.get("password") or None,
         "email_from_address": values.get("from_address"),
+        "email_from_name": values.get("from_name") or None,
         "email_smtp_use_tls": security == "starttls", "email_smtp_use_ssl": security == "ssl",
         "email_real_send_allowed": True,
     })
     try:
-        EmailAdapter(scoped).send_message(
-            f"email:{to}", "BOSS connected ✓",
-            "BOSS can send email from this address. Nothing to do.")
+        reply = send_test(scoped, to)
     except Exception as error:  # noqa: BLE001
-        said = _said(error)
-        low = said.lower()
-        field = ("password" if "auth" in low or "535" in low or "password" in low
+        said = failure_reason(error, scoped)
+        low = (said + " " + type(error).__name__).lower()
+        field = ("password" if "auth" in low or "535" in low or "login" in low
+                 or "password" in low
                  else "security" if any(k in low for k in ("starttls", "ssl", "tls",
                                                           "wrong version number"))
+                 else "from_address" if "from address" in low
                  else "host" if any(k in low for k in ("connect", "refused", "resolve", "nodename", "gaierror",
                                                         "timed out", "name or service"))
                  else None)
         return result(False, error=said[:300], field=field, started=started)
-    return result(True, fact=f"Sent to {_masked_address(to)}", started=started)
+    return result(True, fact=f"{reply} · to {_masked_address(to)}", started=started)
 
 
 def _masked_address(address: str) -> str:
@@ -789,16 +809,18 @@ def run_test(begin: Begin, settings: Any, project_id: str, ability: dict[str, An
                                                     row["provider_key"], row["configuration"])
             return _tracker_test(settings, row["provider_key"], config)
         if test == "smtp_send":
-            from .email_config import settings_for
+            from .mail_transport import route
 
             with begin() as connection:
-                scoped = settings_for(connection, settings, project_id)
-            if not scoped.email_smtp_host:
-                return result(False, error="No mail server set", started=started)
+                chosen = route(connection, settings, project_id)
+            if not chosen.ready:
+                return result(False, error=chosen.detail, started=started)
+            scoped = chosen.settings
             values = {"host": scoped.email_smtp_host, "port": scoped.email_smtp_port,
                       "username": scoped.email_smtp_username,
                       "password": scoped.email_smtp_password,
                       "from_address": scoped.email_from_address,
+                      "from_name": scoped.email_from_name,
                       "security": ("ssl" if scoped.email_smtp_use_ssl else "starttls"
                                    if scoped.email_smtp_use_tls else "none")}
             return _smtp_send(settings, values, actor_email or str(scoped.email_from_address))
@@ -853,7 +875,8 @@ def connect(begin: Begin, settings: Any, project_id: str, ability: dict[str, Any
         _required(provider, fields, stored)
 
     if key == "email":
-        return _connect_email(begin, settings, project_id, fields, actor, actor_email)
+        return _connect_email(begin, settings, project_id, provider_key, fields, actor,
+                              actor_email)
     if key == "file_tickets":
         return _connect_tracker(begin, settings, project_id, provider, fields, actor)
     if key == "team_chat":
@@ -871,30 +894,55 @@ def _fail(outcome: dict[str, Any]) -> None:
                             latency_ms=int(outcome.get("latency_ms") or 0))
 
 
-def _connect_email(begin: Begin, settings: Any, project_id: str, fields: dict[str, Any],
-                   actor: str, actor_email: Optional[str]) -> dict[str, Any]:
+def _connect_email(begin: Begin, settings: Any, project_id: str, provider_key: str,
+                   fields: dict[str, Any], actor: str,
+                   actor_email: Optional[str]) -> dict[str, Any]:
+    """Email (SMTP): one connection URL OR the separate fields (email_config.connector_values
+    makes them the same values), tested by sending, stored only when the server took it. Or the
+    local test inbox, when the install turned it on."""
     from . import email_config
+    from .mail_transport import _dev_inbox
 
-    values = dict(fields)
-    if not values.get("password"):
-        # NOT RETYPED: the test uses the password already stored, which is what Save keeps.
+    if provider_key == "dev_inbox":
+        dev = _dev_inbox(settings)
+        if dev is None:
+            raise KitFieldError("The local test inbox is off on this install. Re-run the "
+                                "installer with --with-mailpit to turn it on.", None)
+        values = {"host": dev.email_smtp_host, "port": dev.email_smtp_port,
+                  "from_address": dev.email_from_address, "security": "none"}
+        outcome = _smtp_send(settings, values, actor_email or str(dev.email_from_address))
+        _fail(outcome)
         with begin() as connection:
-            values["password"] = email_config.settings_for(
-                connection, settings, project_id).email_smtp_password
+            email_config.save_dev_inbox(connection, settings, project_id=project_id, actor=actor)
+        return outcome
+
+    try:
+        values = email_config.connector_values(
+            url=fields.get("url"), host=fields.get("host"), port=fields.get("port"),
+            security=fields.get("security"), username=fields.get("username"),
+            password=fields.get("password"), from_address=fields.get("from_address"),
+            from_name=fields.get("from_name"))
+    except email_config.EmailConfigError as error:
+        raise KitFieldError(str(error), error.field) from error
+    typed_password = values.get("password") or None
+    if not typed_password:
+        # NOT RETYPED: the stored key is kept — for the same login only — and the test uses it.
+        with begin() as connection:
+            row = email_config._row(connection, project_id) or {}
+            if row.get("mode") == "smtp" and row.get("username") == values["username"]:
+                values["password"] = email_config._password(connection, settings, row) or ""
     outcome = _smtp_send(settings, values, actor_email or str(values.get("from_address")))
     _fail(outcome)
     with begin() as connection:
         try:
             email_config.save(connection, settings, project_id=project_id,
-                              host=str(values.get("host") or ""),
-                              from_address=str(values.get("from_address") or ""),
-                              port=int(values.get("port") or 587),
-                              username=str(values.get("username") or ""),
-                              password=fields.get("password") or None,
-                              use_tls=smtp_security(values) == "starttls",
-                              use_ssl=smtp_security(values) == "ssl", actor=actor)
+                              host=values["host"], from_address=values["from_address"],
+                              port=values["port"], username=values["username"],
+                              password=typed_password, use_tls=values["use_tls"],
+                              use_ssl=values["use_ssl"], from_name=values["from_name"],
+                              actor=actor)
         except email_config.EmailConfigError as error:
-            raise KitFieldError(str(error), None) from error
+            raise KitFieldError(str(error), error.field) from error
     return outcome
 
 

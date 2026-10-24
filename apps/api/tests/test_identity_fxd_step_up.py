@@ -83,7 +83,7 @@ def test_the_sweep_covers_every_step_up_permission_a_route_declares():
     # step-up itself (identity_access.require_permission -> authz.check -> STEP_UP_REQUIRED):
     #   app_secret:live: PUT /v1/apps/{app_key}/secrets with mode=live (routes_templates.py).
     handler_enforced = {"app_secret:live"}
-    reserved = {"org:delete", "project:create", "project:delete"}
+    reserved = {"org:delete", "project:delete"}
     assert catalogue - swept <= reserved | handler_enforced, catalogue - swept
     assert set(swept) <= role_perms("owner")
 

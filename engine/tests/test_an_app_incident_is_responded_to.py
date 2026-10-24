@@ -320,6 +320,33 @@ def test_the_investigation_correlates_metrics_logs_and_the_release(pg, app):
     assert {"logs", "release_diff", "rca_hypothesis"} <= kinds and status == "diagnosing"
 
 
+def test_investigate_ignores_a_customer_report_from_an_older_occurrence(pg, app):
+    """A reused incident row carries a `customer_reports` evidence row from a PRIOR occurrence
+    that already resolved. Before this, investigate() blamed the CURRENT occurrence's release
+    on that old report ('created_at <= onset' is true of anything in the past) — it must read
+    only evidence from this occurrence (its own `occurrence` boundary), and say the alert fired
+    first for a re-fire that has no report of its own."""
+    eng, pid = pg
+    t0 = datetime.now(timezone.utc).replace(microsecond=0)
+    tid, inc = _fired_incident(eng, pid, app, t0=t0)
+    with eng.begin() as c:
+        ctx = c.execute(text("SELECT finalize_ctx FROM incidents WHERE id = :i"),
+                        {"i": inc}).scalar()
+        # A customer report from a PRIOR occurrence, long before this one began — evidence of
+        # the old, already-resolved incident, not of this one.
+        c.execute(text(
+            "INSERT INTO incident_evidence (id, incident_id, kind, ref, payload, created_at) "
+            "VALUES (:id, :i, 'customer_reports', 'old', '{}'::jsonb, :at)"),
+            {"id": f"ev_{uuid4().hex[:10]}", "i": inc, "at": t0 - timedelta(days=3)})
+    host = FakeHost('{"level":"error","method":"POST","route":"/orders","status":500,'
+                    '"exc_type":"TypeError","location":"/app/app/pricing.py:41"}\n' * 5)
+    with eng.begin() as c:
+        got = ir.investigate(c, get_settings(), pid, inc, host_access=host, github=FakeGitHub())
+    assert "before the alert fired" in got["root_cause"]
+    assert "before the first customer report" not in got["root_cause"]
+    assert ctx["occurrence"] is not None
+
+
 def test_recovery_is_judged_by_the_monitor_and_the_report_keeps_spend_apart(pg, app):
     eng, pid = pg
     t0 = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(minutes=30)
@@ -551,3 +578,98 @@ def test_an_alert_is_answered_end_to_end_by_incident_response(pg, app, monkeypat
     assert verify["detail"]["state"] == "recovered"
     assert "## Who did what" in rep["markdown"] and "**Approve the release** — ceo (person)" \
         in rep["markdown"]
+
+
+# ── BOSSAPP-613: a lagging alert inside the fix's settle window never resets the incident ──
+def _ten_minute_incident(eng, pid, app, *, t0) -> tuple[str, str]:
+    """An incident opened by an error-rate rule over a 10-minute window, its response recorded,
+    fixed at t0+1m and verified recovered at t0+5m: the 10m window still holds the pre-fix
+    errors, so the rule keeps firing after the recovery check passed."""
+    with eng.begin() as c:
+        tid = _seed(c, pid, app.origin + "/", releases=[("a" * 40, "crun_root"), ("b" * 40, None)],
+                    metrics={"path": "/metrics", "via": "public",
+                             "alert": {"window_minutes": 10, "error_rate_percent": 5,
+                                       "min_requests": 20}})
+    app.status = 200
+    for at, page in ((-20, (100, 0, 100)), (-10, (300, 0, 300)), (-2, (302, 0, 302)),
+                     (0, (330, 30, 360))):
+        app.body = orders_page(*page)
+        _scrape(eng, tid, t0 + timedelta(minutes=at))
+    with eng.begin() as c:
+        inc = c.execute(text("SELECT id FROM incidents WHERE dedupe_key = :k"),
+                        {"k": app_metrics.INCIDENT_PREFIX + tid}).scalar()
+        ir._merge_ctx(c, inc, {"response": {"workflow_run_id": "wfr_resp_" + tid}})
+        ir._evidence(c, inc, "rca_hypothesis", payload={"root_cause": "bulk pricing"},
+                     at=t0 + timedelta(seconds=30))
+    fixed_at = t0 + timedelta(minutes=1)
+    with eng.begin() as c:
+        check = ir.start_recovery_check(c, pid, inc, since=fixed_at, stable_minutes=3,
+                                        timeout_minutes=30, now=fixed_at)
+    ok = 330
+    for m in (2, 3, 4, 5):                       # clean traffic on the fixed release
+        ok += 10
+        app.body = orders_page(ok, 30, ok + 30)
+        _scrape(eng, tid, t0 + timedelta(minutes=m))
+    with eng.begin() as c:
+        done = ir.look_at_recovery(c, check["id"], now=t0 + timedelta(minutes=5))
+    assert done["status"] == "recovered", done
+    return tid, inc
+
+
+def test_a_lagging_alert_inside_the_settle_window_never_resets_the_incident(pg, app):
+    eng, pid = pg
+    t0 = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(minutes=40)
+    tid, inc = _ten_minute_incident(eng, pid, app, t0=t0)
+    with eng.begin() as c:
+        before = c.execute(text("SELECT finalize_ctx, first_seen FROM incidents WHERE id = :i"),
+                           {"i": inc}).mappings().one()
+    assert before["finalize_ctx"]["verification"]["state"] == "recovered"
+    # 7 seconds after the recovery check passed, the 10m rule is still over its threshold on
+    # errors from BEFORE the fix (OrdersCreatePricingErrorsUnseen, inc_0e7e7f4bbaf34a6b95b4)
+    app.body = orders_page(380, 30, 410)
+    lag = _scrape(eng, tid, t0 + timedelta(minutes=5, seconds=7))
+    assert lag["alert"]["action"] not in ("opened", "reopened"), lag["alert"]
+    with eng.begin() as c:
+        after = c.execute(text("SELECT status, finalize_ctx, first_seen FROM incidents "
+                               "WHERE id = :i"), {"i": inc}).mappings().one()
+        resp = ir.response_view(c, pid, inc)
+    ctx = after["finalize_ctx"]
+    assert after["status"] == "resolved"
+    assert ctx["verification"] == before["finalize_ctx"]["verification"]
+    assert ctx["response"] == before["finalize_ctx"]["response"]
+    assert ctx["occurrence"] == before["finalize_ctx"]["occurrence"]
+    assert after["first_seen"] == before["first_seen"]
+    assert any(e["kind"] == "rca_hypothesis" for e in resp["evidence"])
+    assert resp["verification"]["state"] == "recovered"
+
+    # still inside the window (fix + 10m): held, not a new occurrence
+    app.body = orders_page(390, 30, 420)
+    held = _scrape(eng, tid, t0 + timedelta(minutes=9))
+    assert held["alert"]["action"] not in ("opened", "reopened"), held["alert"]
+
+    # past the settle window the app fails AGAIN: a genuinely new occurrence, which keeps the
+    # last occurrence's response, its who-did-what and its verification as history
+    app.body = orders_page(400, 30, 430)
+    _scrape(eng, tid, t0 + timedelta(minutes=13))
+    app.body = orders_page(410, 90, 440)
+    new = _scrape(eng, tid, t0 + timedelta(minutes=14))
+    assert new["alert"]["action"] == "reopened", new["alert"]
+    with eng.begin() as c:
+        ctx2 = c.execute(text("SELECT finalize_ctx FROM incidents WHERE id = :i"),
+                         {"i": inc}).scalar()
+    assert ctx2["verification"] is None and ctx2["response"] is None
+    assert ctx2["occurrence"] != before["finalize_ctx"]["occurrence"]
+    prior = ctx2["occurrences"][-1]
+    assert prior["occurrence"] == before["finalize_ctx"]["occurrence"]
+    assert prior["response"] == before["finalize_ctx"]["response"]
+    assert prior["verification"] == before["finalize_ctx"]["verification"]
+
+
+def test_the_settle_window_is_the_rules_own_lookback_and_for():
+    rule = {"kind": "custom", "for_seconds": 120,
+            "expr": 'sum(increase(orders_pricing_errors_total[10m])) > 0 '
+                    'unless on() max_over_time(up{job="x"}[5m])'}
+    assert ir.rule_settle_window(rule) == timedelta(minutes=12)
+    assert ir.rule_settle_window({"kind": "error_rate", "params": {"window_minutes": 10}}) \
+        == timedelta(minutes=10)
+    assert ir.rule_settle_window(None) == timedelta(minutes=5)

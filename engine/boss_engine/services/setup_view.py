@@ -521,7 +521,7 @@ def _model_state(*, kind: str, metadata: dict[str, Any], capacity: dict[str, Any
 
 
 def _models(connection: Connection, settings: Any, project_id: str, now: datetime,
-            budget_spent: bool) -> list[dict[str, Any]]:
+            budget_spent: bool, *, budget_period: str = "month") -> list[dict[str, Any]]:
     from .setup_service import ENV_LANES, _set_deliberately
 
     by_entitlement = _by_entitlement(settings)
@@ -565,7 +565,7 @@ def _models(connection: Connection, settings: Any, project_id: str, now: datetim
             source_id=source_id, provider=provider, kind=kind, model=model, state=state,
             checked_at=checked_at, retry_at=retry_at, source="connected", now=now,
             host=last.get("host") or "", latency_ms=last.get("latency_ms"),
-            base_url=str(metadata.get("base_url") or "")))
+            base_url=str(metadata.get("base_url") or ""), budget_period=budget_period))
     # THE INSTALL'S OWN SETTINGS FILE. A key there is a model like any other, with the chip
     # `From install` — never a mystery "Unverified" model nobody remembers choosing.
     for engine, attr in ENV_LANES:
@@ -589,20 +589,25 @@ def _models(connection: Connection, settings: Any, project_id: str, now: datetim
         out.append(_model_entry(
             source_id=source_id, provider=provider, kind=kind, model=model, state=state,
             checked_at=checked_at, retry_at=retry_at, source="install", now=now,
-            host=(last or {}).get("host") or "", latency_ms=(last or {}).get("latency_ms")))
+            host=(last or {}).get("host") or "", latency_ms=(last or {}).get("latency_ms"),
+            budget_period=budget_period))
     return out
 
 
 def _model_entry(*, source_id: str, provider: str, kind: str, model: Optional[str], state: str,
                  checked_at: Optional[str], retry_at: Optional[str], source: str,
-                 now: datetime, host: str, latency_ms: Any, base_url: str = "") -> dict[str, Any]:
+                 now: datetime, host: str, latency_ms: Any, base_url: str = "",
+                 budget_period: str = "month") -> dict[str, Any]:
     entry = CATALOGUE_BY_PROVIDER.get(provider) or {}
     pill = setup_pills.pill(
         "model", state, age=_age(checked_at, now) or "a moment", time=_hhmm(retry_at),
         at=_iso(retry_at),
         model=model or "That model", host=host or "the provider",
         provider_fix=setup_pills.LOGIN_FIX.get(provider, setup_pills.DEFAULT_LOGIN_FIX),
-        fix_url=entry.get("billing_url") if state == "no_credit" else None)
+        fix_url=entry.get("billing_url") if state == "no_credit" else None,
+        # THE PILL NAMES THE CAP THAT IS ACTUALLY BINDING, never a hardcoded "Monthly cap":
+        # `_budget` already worked out which period (day, month, or a burst refusal) is tightest.
+        cap_name=_cap_name(budget_period))
     checked = parse_time(checked_at)
     return {
         "source_id": source_id, "provider": provider,
@@ -843,6 +848,16 @@ def _usd(value: float) -> str:
     return f"${value:,.0f}" if value == int(value) else f"${value:,.2f}"
 
 
+def _cap_name(period: str) -> str:
+    """"Daily cap" / "Monthly cap" / "Burst cap" — the words for whichever cap is actually
+    binding (`_budget`'s `period`), never a hardcoded "Monthly cap" (J8 follow-up, boss-1
+    rc10.9: a model paused by the daily or a burst cap still read "Monthly cap reached")."""
+    from .budget import PERIOD_WORDS
+
+    _, cap_name = PERIOD_WORDS.get(period, PERIOD_WORDS["month"])
+    return cap_name[:1].upper() + cap_name[1:]
+
+
 # ── Try it ────────────────────────────────────────────────────────────────────────────────────
 
 def _try(connection: Connection, project_id: str) -> dict[str, Any]:
@@ -925,7 +940,8 @@ def _build(connection: Connection, settings: Any, project_id: str, *,
     now = now or now_utc()
     budget = _budget(connection, settings, project_id)
     repository = _repository(connection, settings, project_id, now)
-    models = _models(connection, settings, project_id, now, budget["state"] == "spent")
+    models = _models(connection, settings, project_id, now, budget["state"] == "spent",
+                     budget_period=budget["period"])
     jobs = _jobs(connection, settings, project_id, models)
     detected = _detected(settings)
     trying = _try(connection, project_id)

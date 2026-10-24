@@ -2688,6 +2688,47 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
                             f"run, nothing to restart"}
 
     @reg.tool(
+        "create_project",
+        "Create a new BOSS PROJECT in this organization: a separate workspace with its own "
+        "agents, skills, budget, settings, repositories and work, set up exactly like the first "
+        "project. Use it when someone asks for a new project (\"create a project called "
+        "northpeak-bank-a\"). NOT for a new app — an app is built with start_workflow or "
+        "create_code_task inside a project. The slug is kebab-case and becomes the project's "
+        "id; give it when they named one, else it is made from the name. A slug already in use "
+        "comes back with the existing project's id.",
+        _obj({"name": {"type": "string", "description": "the project's name, as they said it"},
+              "slug": {"type": "string",
+                       "description": "kebab-case id, e.g. northpeak-bank-a (optional)"},
+              "description": {"type": "string", "description": "what it is for (optional)"}},
+             required=["name"]),
+        kind="write",
+        # A NEW, EMPTY PROJECT: it spends nothing and changes no existing work. The identity gate
+        # decides project:create with the caller's own context (a person's fresh step-up; a
+        # service account's key); an agent's run token never holds it (not delegable).
+        reversibility="safe", permission="project:create", org_scope=True)
+    def create_project(ctx, *, project_id, actor, args):
+        from ..services import projects as project_service
+        from .registry import CURRENT_TOOL_AUTH
+
+        auth = CURRENT_TOOL_AUTH.get()
+        try:
+            with ctx.begin() as c:
+                made = project_service.create(
+                    c, ctx.settings, auth=auth, name=args.get("name"), slug=args.get("slug"),
+                    description=args.get("description"), actor=actor)
+        except project_service.ProjectExists as clash:
+            return {"ok": False, "error": "project_exists", "slug": clash.slug,
+                    "project_id": clash.project_id,
+                    "message": (f"A project {clash.project_id} already exists." if clash.project_id
+                                else f"The slug {clash.slug} is taken; choose another.")}
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        return {"ok": True, "project_id": made["project_id"], "name": made["name"],
+                "slug": made["slug"], "href": f"/?project_id={made['project_id']}",
+                "note": f"Project {made['name']} ({made['project_id']}) is ready, set up like "
+                        "the first project."}
+
+    @reg.tool(
         "diagnose_setup",
         "EVERYTHING about whether this install is set up, in one call — the same view Repo "
         "and models renders: the repository and its read/write/pull-request checks, each "
@@ -7518,6 +7559,10 @@ def build_default_registry() -> ToolRegistry:
     from .knowledge_tools import register_knowledge_tools
 
     register_knowledge_tools(reg)
+    # The captain's powers are the BOSS agent's actions now, not a second engine (BOSSAPP-759).
+    from .captain_tools import register_captain_tools
+
+    register_captain_tools(reg)
     return reg
 
 
@@ -7576,6 +7621,8 @@ _DISCUSS_OPERATIONS_TOOLS: frozenset[str] = frozenset({
     # anyone." Both of these are reversible and neither takes a credential.
     "test_github_access",
     "set_project_setting",
+    # "Create a project called northpeak-bank-a": a new project in the org (project:create).
+    "create_project",
     # The escape hatch from a registry of fixed questions: a real debugging session.
     "investigate",
     # Reconciling a run with a world that has moved on. Named by an investigation as the
@@ -7702,6 +7749,13 @@ _DISCUSS_OPERATIONS_TOOLS: frozenset[str] = frozenset({
     # (stability spec §4e). The same options the console offers; stopping a build is one only
     # when they say so.
     "system_doctor_act",
+    # The captain's powers, retired as an engine and kept as the agent's actions (BOSSAPP-759).
+    # drive / overwatch / theater are operator_only: offered, pressed by a person.
+    "captain_watch",
+    "captain_set_goal",
+    "captain_drive",
+    "captain_overwatch",
+    "captain_theater",
 })
 
 #: REGISTERED, AND DELIBERATELY NOT REACHABLE FROM CHAT.
@@ -7847,6 +7901,10 @@ def build_discuss_read_registry(*, edition: str | None = None) -> ToolRegistry:
                 # build_default_registry, which is not the registry this path uses. A safety
                 # property that holds in the registry nobody calls is not a safety property.
                 reversibility=spec.reversibility,
+                # ...AND WHO MAY PRESS IT. Dropping this would let the chat model run the
+                # captain's overwatch itself — the very thing BOSSAPP-759 took away from a
+                # sentence.
+                operator_only=spec.operator_only,
             )
         )
     return reg

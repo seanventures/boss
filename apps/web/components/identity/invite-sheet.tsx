@@ -2,11 +2,12 @@
 
 /**
  * INVITE PEOPLE (IDENTITY.md §9.2): emails, access roles (only ones you hold all of — the API
- * enforces the subset rule, the sheet shows which are out of reach) and groups. With SMTP the
- * invitations are emailed; without it the sheet shows each single-use link to hand over.
+ * enforces the subset rule, the sheet shows which are out of reach) and groups. Each invitation
+ * says what happened to its email: sent, failed with the server's reason, or not configured — and
+ * whenever it was not emailed, the single-use link to hand over. Resend issues a new link.
  */
 import React, { useState } from "react";
-import { Check, EnvelopeSimple, Copy, UsersThree } from "@phosphor-icons/react";
+import { ArrowClockwise, Check, EnvelopeSimple, Copy, UsersThree, Warning } from "@phosphor-icons/react";
 
 import { IdentityError, idPost } from "../../lib/identity/api";
 import type { AccessRole, Group } from "../../lib/identity/types";
@@ -14,6 +15,29 @@ import { grantReach } from "../../lib/identity/grant-limit";
 import { useGuardedCall, useIdentity } from "./identity-provider";
 import { ErrorLine, RoleChip, Sheet } from "./kit";
 import { showToast } from "../../app/client-forms";
+
+/** One invitation's answer (POST /v1/identity/users, …/resend). */
+type Delivery = { status: "sent" | "failed" | "not_configured"; reason?: string | null; via?: string; inbox_url?: string | null };
+type Sent = { email: string; id: string | null; link: string | null; delivery: Delivery | null };
+type InviteAnswer = { invitation_id: string; emailed: boolean; link?: string | null; delivery?: Delivery };
+
+const asSent = (email: string, r: InviteAnswer): Sent =>
+  ({ email, id: r.invitation_id, link: r.link ?? null, delivery: r.delivery ?? null });
+
+/** Show the result sheet unless every invitation went to the person's own inbox. */
+const needsAttention = (list: Sent[]) =>
+  list.some((i) => i.link || i.delivery?.status !== "sent" || i.delivery?.via === "dev_inbox");
+
+function statusOf(d: Delivery | null, hasLink: boolean): { label: string; tip: string; bad: boolean } {
+  if (!d) return { label: hasLink ? "Not emailed" : "Sent", tip: "", bad: hasLink };
+  if (d.status === "sent") {
+    return d.via === "dev_inbox"
+      ? { label: "In test inbox", tip: "Local test inbox (Mailpit) on this machine: not delivered", bad: false }
+      : { label: "Sent", tip: "", bad: false };
+  }
+  if (d.status === "failed") return { label: "Failed", tip: d.reason ?? "", bad: true };
+  return { label: "Not configured", tip: d.reason ?? "Connect Email (SMTP) in Skills & MCP", bad: true };
+}
 
 export function InviteSheet({ roles, groups = [], onClose, onInvited }: {
   roles: AccessRole[];
@@ -26,7 +50,8 @@ export function InviteSheet({ roles, groups = [], onClose, onInvited }: {
   const [role, setRole] = useState("operator");
   const [picked, setPicked] = useState<string[]>([]);
   const pickable = groups.filter((g) => g.source === "manual");
-  const [links, setLinks] = useState<{ email: string; link: string | null }[] | null>(null);
+  const [links, setLinks] = useState<Sent[] | null>(null);
+  const [resending, setResending] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const guarded = useGuardedCall();
@@ -40,44 +65,83 @@ export function InviteSheet({ roles, groups = [], onClose, onInvited }: {
     setError(null);
     // One invitation per person (POST /v1/identity/users takes one email). A retry after a
     // step-up skips the ones already sent, so nobody is invited twice.
-    const invited: { email: string; link: string | null }[] = [];
+    const invited: Sent[] = [];
     try {
       await guarded("Inviting people grants them access.", async () => {
         for (const email of list) {
           if (invited.some((i) => i.email === email)) continue;
-          const r = await idPost<{ invitation_id: string; emailed: boolean; link?: string | null }>("/v1/identity/users", {
+          const r = await idPost<InviteAnswer>("/v1/identity/users", {
             email, bindings: [{ role_key: role, scope_type: "org" }], group_ids: picked,
           });
-          invited.push({ email, link: r.link ?? null });
+          invited.push(asSent(email, r));
         }
       });
       onInvited?.();
-      if (invited.some((i) => i.link)) setLinks(invited);
+      if (needsAttention(invited)) setLinks(invited);
       else { showToast("success", `${invited.length} invited`); onClose(); }
     } catch (e) {
       if (invited.length) onInvited?.();
       const sent = invited.length ? `${invited.length} sent; ` : "";
       setError(`${sent}${e instanceof IdentityError ? e.message : "Not sent"}`);
-      if (invited.some((i) => i.link)) setLinks(invited);
+      if (invited.length) setLinks(invited);
     } finally {
       setBusy(false);
     }
   };
 
+  const resend = async (row: Sent) => {
+    if (!row.id) return;
+    setResending(row.id);
+    try {
+      await guarded("Resending issues a new link; the old one stops working.", async () => {
+        const r = await idPost<InviteAnswer>(`/v1/identity/invitations/${encodeURIComponent(row.id ?? "")}/resend`, {});
+        setLinks((all) => (all ?? []).map((x) => (x.id === row.id ? asSent(x.email, r) : x)));
+        if (r.delivery?.status === "sent") showToast("success", "Sent again");
+        else showToast("error", `Not sent · ${r.delivery?.reason ?? "no reason given"}`);
+      });
+    } catch (e) {
+      showToast("error", e instanceof IdentityError ? e.message : "Not resent");
+    } finally {
+      setResending(null);
+    }
+  };
+
   if (links) {
+    const unsent = links.some((l) => l.link);
     return (
-      <Sheet title="Hand over these links" icon={<EnvelopeSimple size={18} aria-hidden />} onClose={onClose} testId="invite-links">
-        <p className="idn-lede2" data-copy="prose">No email is set up, so send each person their link. Each works once, for 7 days.</p>
-        {links.map((l) => (
-          <div key={l.email} className="idn-field">
-            <span className="idn-label">{l.email}</span>
-            <div className="idn-secret"><code data-copy="data">{l.link}</code>
-              <button type="button" className="idn-btn sm" onClick={() => navigator.clipboard?.writeText(l.link ?? "").then(() => showToast("success", "Copied"))}>
-                <Copy size={14} aria-hidden /> Copy
-              </button>
+      <Sheet title="Invitations" icon={<EnvelopeSimple size={18} aria-hidden />} onClose={onClose} testId="invite-links">
+        <p className="idn-lede2" data-copy="prose">
+          {unsent ? "Send each unsent person their link. Each works once, for 7 days." : "Each invite works once, for 7 days."}
+        </p>
+        {links.map((l) => {
+          const st = statusOf(l.delivery, Boolean(l.link));
+          return (
+            <div key={l.email} className="idn-field" data-testid={`invite-row-${l.email}`}>
+              <span className="idn-label">
+                {l.email}{" "}
+                <span className="idn-chip" data-bad={st.bad || undefined} title={!st.bad && st.tip ? st.tip : undefined} data-testid="invite-status">
+                  {st.bad ? <Warning size={12} aria-hidden /> : <Check size={12} aria-hidden />} {st.label}
+                </span>
+                {l.delivery?.inbox_url ? <> <a className="idn-link" href={l.delivery.inbox_url} target="_blank" rel="noreferrer">Open inbox</a></> : null}
+              </span>
+              {st.bad && st.tip ? <small className="idn-dim" data-testid="invite-reason">{st.tip}</small> : null}
+              <div className="idn-secret">
+                {l.link ? <code data-copy="data">{l.link}</code> : <span className="idn-spacer" />}
+                {l.link ? (
+                  <button type="button" className="idn-btn sm" title="Copy the single-use link" onClick={() => navigator.clipboard?.writeText(l.link ?? "").then(() => showToast("success", "Copied"))}>
+                    <Copy size={14} aria-hidden /> Copy link
+                  </button>
+                ) : null}
+                {l.id ? (
+                  <button type="button" className="idn-btn sm ghost" title="New link and another email; the old link stops working"
+                    disabled={resending === l.id} onClick={() => void resend(l)} data-testid="invite-resend">
+                    <ArrowClockwise size={14} aria-hidden /> {resending === l.id ? "Sending…" : "Resend"}
+                  </button>
+                ) : null}
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
         <div className="idn-mf"><span className="idn-spacer" /><button type="button" className="idn-btn primary" onClick={onClose}>Done</button></div>
       </Sheet>
     );

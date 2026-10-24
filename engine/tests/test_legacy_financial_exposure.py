@@ -141,6 +141,34 @@ def failed_typed(engine, p, *, status="released"):
     return old
 
 
+def failed_auth_rejected(engine, p, *, status="released"):
+    """A row recorded before the structured `typed_decision_nonacceptance` proof existed: the
+    provider's own 401 answered, kept only as the legacy owner's free-text `reason` (boss-1
+    rc10.9's actual stuck row — a TypeSafe key proof, $0.01 estimate, released). No spend
+    happened; the provider refused before the call was ever accepted."""
+    old = legacy(engine, p, status=status)
+    error = json.dumps({"reason": "TypeSafe 401: authentication_error, invalid api key"})
+    with engine.begin() as c:
+        c.execute(
+            text("UPDATE model_gateway_invocations SET status='failed',error=CAST(:error AS JSONB) "
+                 "WHERE id=:id"),
+            {"id": old, "error": error},
+        )
+        c.execute(
+            text("UPDATE receipts SET status='failed',dedupe_key=:dedupe,error=CAST(:error AS JSONB) "
+                 "WHERE id=:id"),
+            {"id": old, "dedupe": f"model-gateway:{p}:{old}", "error": error},
+        )
+        c.execute(
+            text("INSERT INTO events(id,project_id,event_type,actor,entity_type,entity_id,data) "
+                 "VALUES(:id,:p,'typed_decision.attempt_failed','owned-owner',"
+                 "'typed_decision_attempt',:id,CAST(:data AS JSONB))"),
+            {"id": old, "p": p, "data": json.dumps(
+                {"attempt": 1, "receipt_id": old, "message": "TypeSafe 401: authentication_error"})},
+        )
+    return old
+
+
 def historical(engine, p, history, *, status="expired"):
     return (failed_typed if history == "typed_failed" else legacy)(engine, p, status=status)
 
@@ -208,6 +236,94 @@ def test_legacy_hold_denies_independent_of_cap_period_without_reviving_authority
             ).scalar_one()
             == 0
         )
+
+
+@pytest.mark.parametrize("status", ["expired", "released"])
+def test_a_legacy_401_row_no_longer_blocks(database, status):
+    """A provider 401/403 kept only as the legacy owner's free-text `reason` ("TypeSafe 401:
+    authentication_error…") is non-acceptance — the structured `typed_decision_nonacceptance`
+    proof just did not exist yet when it was written. No spend happened either way, so this
+    stops blocking paid work the moment it is the only unresolved row (boss-1 rc10.9: it
+    blocked every paid connect, forever, because the predicate only recognised the modern
+    structured shape)."""
+    p = new_project(database)
+    failed_auth_rejected(database, p, status=status)
+    g = BudgetGovernor(Settings(_env_file=None))
+    with database.begin() as c:
+        snap = g.status_for_project(c, p)
+        assert snap["legacy_financial_hold"] is None
+        allowed = reserve(c, p, 1)
+        assert allowed["status"] == "reserved"
+
+
+def test_an_in_progress_row_still_blocks_until_settled_via_the_new_action(database):
+    """An invocation stuck `in_progress` is genuinely unknown — the gate still fences it
+    (unaffected by the legacy-text recognition, which only ever excludes a FAILED row) — until
+    a person gives its decision a real action: `resolve_legacy_exposure` writes the
+    cost_receipts row the attempt never got and closes the decision, so the gate finds it
+    already reconciled (boss-1 rc10.9: nothing before this ever closed this decision kind;
+    _resolve_reconciliation only watches `verify_provider_outcome_*`, which settle themselves
+    through a worker's ordinary later activity — this reservation has none left to come)."""
+    p = new_project(database)
+    old = legacy(database, p, status="released")  # i.status stays 'in_progress'
+    g = BudgetGovernor(Settings(_env_file=None))
+    with database.begin() as c:
+        snap = g.status_for_project(c, p)
+        hold = snap["legacy_financial_hold"]
+        assert hold is not None and hold["invocation_id"] == old
+        decision_id = hold["decision_id"]
+        denied = reserve(c, p, 1)
+        assert denied["refusal"] == "legacy_reconciliation_required"
+        assert denied["decision_id"] == decision_id
+        resolved = g.resolve_legacy_exposure(
+            c, p, decision_id, settle_at="zero", actor="usr_owner")
+        assert resolved["actual_usd_micros"] == 0
+        assert (
+            c.execute(text("SELECT status,resolution_note FROM decisions WHERE id=:id"),
+                     {"id": decision_id}).mappings().one()["status"] == "resolved"
+        )
+        # The fixture's reservation, lease, invocation and receipt all share one id.
+        assert c.execute(text(
+            "SELECT estimated_usd_micros,actual_usd_micros FROM cost_receipts "
+            "WHERE project_id=:p AND reservation_id=:r AND receipt_id=:rc"),
+            {"p": p, "r": old, "rc": old}).mappings().one() == {
+                "estimated_usd_micros": 80000, "actual_usd_micros": 0}
+    with database.begin() as c:
+        snap = g.status_for_project(c, p)
+        assert snap["legacy_financial_hold"] is None
+        allowed = reserve(c, p, 1)
+        assert allowed["status"] == "reserved"
+
+
+def test_settling_at_the_estimate_records_the_estimate(database):
+    """`settle_at="estimate"`: the outcome could not be confirmed either way, so the original
+    estimate stands rather than assuming the provider never charged anything."""
+    p = new_project(database)
+    old = legacy(database, p, status="released")
+    g = BudgetGovernor(Settings(_env_file=None))
+    with database.begin() as c:
+        decision_id = g.status_for_project(c, p)["legacy_financial_hold"]["decision_id"]
+        resolved = g.resolve_legacy_exposure(
+            c, p, decision_id, settle_at="estimate", actor="usr_owner")
+        assert resolved["actual_usd_micros"] == 80000
+
+
+def test_resolve_legacy_exposure_refuses_what_it_should(database):
+    p = new_project(database)
+    old = legacy(database, p, status="released")
+    g = BudgetGovernor(Settings(_env_file=None))
+    with database.begin() as c:
+        decision_id = g.status_for_project(c, p)["legacy_financial_hold"]["decision_id"]
+        with pytest.raises(ValueError, match="settle_at"):
+            g.resolve_legacy_exposure(c, p, decision_id, settle_at="half", actor="usr_owner")
+        with pytest.raises(ValueError, match="No such decision"):
+            g.resolve_legacy_exposure(c, p, "dec_nope", settle_at="zero", actor="usr_owner")
+        g.resolve_legacy_exposure(c, p, decision_id, settle_at="zero", actor="usr_owner")
+        # Already resolved: a second call refuses instead of writing a second cost_receipts row.
+        with pytest.raises(ValueError, match="already resolved"):
+            g.resolve_legacy_exposure(c, p, decision_id, settle_at="zero", actor="usr_owner")
+        assert c.execute(text(
+            "SELECT count(*) FROM cost_receipts WHERE project_id=:p"), {"p": p}).scalar_one() == 1
 
 
 @pytest.mark.parametrize("history", ["in_progress", "typed_failed"])

@@ -18,6 +18,8 @@ export type KnowledgeWhy = {
 };
 
 export type KnowledgeStatusView = {
+  /** The project's knowledge_graph setting: what agents are given (on | keyword | off). */
+  agent_access?: string;
   retention_years: number;
   /** Setup › Embedding model's slot (provider, model, dimension, its last check), or null. */
   embedding_model: { provider: string; model: string | null; dimension: number | null; model_id: string;
@@ -175,6 +177,13 @@ export function KnowledgeExplorer({
   );
 }
 
+/** The knowledge_graph setting's values, in words (engine knowledge/runtime.MODES). */
+const AGENT_ACCESS: Record<string, string> = {
+  on: "Everything the graph knows: search, the graph, learned facts and precedent.",
+  keyword: "Keyword search only: no graph, meaning search, learned facts or precedent.",
+  off: "Nothing: agents work without the graph. It keeps indexing.",
+};
+
 export function KnowledgeSettings({ projectId, actorId, initial }: SettingsProps) {
   const [status, setStatus] = useState<KnowledgeStatusView | null>(initial ?? null);
   const [note, setNote] = useState<string | null>(null);
@@ -214,6 +223,14 @@ export function KnowledgeSettings({ projectId, actorId, initial }: SettingsProps
       </div>
       {note ? <p className="detail">{note}</p> : null}
       <dl className="detail">
+        {status?.agent_access ? (
+          <>
+            <dt>Agents get</dt>
+            <dd data-testid="knowledge-agent-access" title={`Project setting knowledge_graph = ${status.agent_access}`}>
+              {AGENT_ACCESS[status.agent_access] ?? status.agent_access}
+            </dd>
+          </>
+        ) : null}
         <dt>Retention</dt>
         <dd>Facts stay until they are superseded, then {years === 1 ? "one year" : `${years} years`}.</dd>
         <dt>Embedding</dt>

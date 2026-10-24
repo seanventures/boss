@@ -83,13 +83,13 @@ NEEDS: dict[str, Need] = {
         # Lands on Infra › Fleet with the App target sheet open (the Host sheet when there is no
         # host yet): the place the target is made, not a page that describes it.
         "infra", (("view", "fleet"), ("add", "target"))),
-    # The fix names a console form, not an API call, and the form is drawn inline on the start
-    # checklist beside this item. Outgoing email lives in Skills & MCP › Email (the Kit;
-    # skills-mcp spec §5.1), not in Repo and models.
+    # The fix names a console surface, not an API call: the Email (SMTP) connector in Skills & MCP
+    # (the Kit; skills-mcp spec §5.1), the one place mail is set up. The checklist links there.
     "email": Need(
         "email", "Outgoing email (SMTP)",
-        "Connect your mail server in Skills & MCP → Email — its host, port, the address mail "
-        "comes from, and its password. Save & test sends you a test message.", "skills",
+        "Connect Email (SMTP) in Skills & MCP — one URL such as "
+        "smtps://user:key@smtp.example.com:465 (or the separate fields) and a From address on "
+        "your own domain. Save & test sends a test message.", "skills",
         (("ability", "email"),)),
     "mattermost": Need(
         "mattermost", "A Mattermost bot BOSS can post as",
@@ -529,18 +529,14 @@ def check(connection: Connection, settings: Any, project_id: str, key: str
         return False, ("this project has no verified deployment host, no active target and no "
                        "stack target")
     if key == "email":
-        from .email_config import settings_for
+        from .mail_transport import route
 
-        effective = settings_for(connection, settings, project_id) if settings else None
-        host = getattr(effective, "email_smtp_host", None) if effective else None
-        sender = getattr(effective, "email_from_address", None) if effective else None
-        allowed = bool(getattr(effective, "email_real_send_allowed", False)) if effective else False
-        if host and sender and allowed:
-            return True, f"sends through {host} as {sender}"
-        if host and sender:
-            return False, ("SMTP is set in the environment but BOSS_EMAIL_REAL_SEND_ALLOWED is "
-                           "false, so nothing would be sent")
-        return False, "no SMTP server is configured for this project"
+        if not settings:
+            return False, "no SMTP server is configured for this project"
+        chosen = route(connection, settings, project_id)
+        if chosen.ready:
+            return True, f"sends through {chosen.detail}"
+        return False, chosen.detail.rstrip(".")
     if key == "mattermost":
         # CONNECTED IN SKILLS & MCP › Team chat (tested when saved), or the environment.
         from .kit_connections import TEAM_CHAT_KEY, _config

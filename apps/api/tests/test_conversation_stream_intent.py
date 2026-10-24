@@ -613,14 +613,20 @@ def test_helper_returning_summary_and_proposal_have_durable_exact_replay(
         with engine.connect() as c:
             catalog = agent_converse._catalogue(c, main.settings, owned.project)
         chosen = next(w for w in catalog if w["name"] == "Owned proposal")
+        # The start card is the pipeline's decision, in its contract: the workflow is the
+        # chosen action, the card's draft its arguments.
         owned.model.reply = json.dumps(
             {
-                "workflow_key": chosen["workflow_key"],
-                "title": "Owned plan",
-                "directive": "Inspect the owned fixture",
-                "inputs": {},
-                "acceptance_criteria": ["Owned output exists"],
-                "why": "Owner requested it",
+                "action": chosen["workflow_key"],
+                "confidence": 0.9,
+                "reason": "Owner requested it",
+                "arguments": {
+                    "title": "Owned plan",
+                    "directive": "Inspect the owned fixture",
+                    "inputs": {},
+                    "acceptance_criteria": ["Owned output exists"],
+                    "why": "Owner requested it",
+                },
             }
         )
     path = f"/v1/conversations/{cid}/{part}"

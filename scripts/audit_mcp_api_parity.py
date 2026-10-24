@@ -174,6 +174,8 @@ def main() -> int:
     parser.add_argument("--check", action="store_true")
     parser.add_argument("--check-community", action="store_true",
                         help="Verify only mounted Community rows against the dual-edition matrix")
+    parser.add_argument("--write-community", action="store_true",
+                        help="Write only the Community matrix (a tree without the paid source)")
     args = parser.parse_args()
     if args.dump_edition:
         print(json.dumps(mounted_rows(args.dump_edition), separators=(",", ":")))
@@ -187,6 +189,12 @@ def main() -> int:
             print("MCP Community API capability matrix is stale", file=sys.stderr)
             return 1
         print("MCP API parity: Community mounted operations accounted for")
+        return 0
+    if args.write_community:
+        args.community_output.parent.mkdir(parents=True, exist_ok=True)
+        args.community_output.write_text(
+            json.dumps(community_matrix(mounted_rows("community")), indent=2) + "\n")
+        print(f"MCP API parity: Community matrix written to {args.community_output}")
         return 0
     matrix = build_matrix()
     rendered = json.dumps(matrix, indent=2, sort_keys=False) + "\n"

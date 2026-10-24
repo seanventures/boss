@@ -127,7 +127,7 @@ if ! docker info >/dev/null 2>&1; then
 fi
 # The images are tagged with the compose project name (install.sh), not "local".
 export BOSS_COMMUNITY_IMAGE_TAG="${BOSS_COMMUNITY_IMAGE_TAG:-${COMPOSE_PROJECT_NAME:-boss-community}}"
-COMPOSE=("${DOCKER[@]}" compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" --profile web --profile secrets)
+COMPOSE=("${DOCKER[@]}" compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" --profile web --profile secrets --profile mail)
 if [[ "$PURGE_DATA" -eq 1 && "$SKIP_BACKUP" -eq 0 ]]; then
   args=(--dir "$INSTALL_DIR" --leave-stopped)
   [[ -n "$BACKUP_DIR" ]] && args+=(--backup-dir "$BACKUP_DIR")

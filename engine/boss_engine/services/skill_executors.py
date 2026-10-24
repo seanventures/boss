@@ -1522,8 +1522,7 @@ def execute_email_send(
     REFUSES RATHER THAN PRETENDS. An install without SMTP configured gets a message naming the
     setting that is missing, not a success with nothing sent.
     """
-    from .email_adapter import EmailAdapter
-    from .email_config import settings_for
+    from .mail_transport import send
 
     to = str(inputs.get("to") or inputs.get("channel") or "").strip()
     if not to:
@@ -1535,13 +1534,13 @@ def execute_email_send(
 
     # THIS PROJECT'S MAIL SERVER, falling back to the environment. An install that configured
     # SMTP with env vars keeps working; one that set it up in the console no longer needs to.
-    settings = settings_for(context.connection, context.settings, context.project_id)
     # THE ADAPTER TAKES A CHANNEL, NOT AN ADDRESS. It wants `email:someone@example.com` and
     # refuses a bare address — which is a sensible rule for a channel abstraction and a trap
     # for a workflow input called `to`. Nobody types a scheme into a To field, so it is added
     # here rather than made the operator's problem.
     channel = to if to.startswith("email:") else f"email:{to}"
-    message_id = EmailAdapter(settings).send_message(channel, subject, body)
+    message_id = send(channel, subject, body, connection=context.connection,
+                      settings=context.settings, project_id=context.project_id)
     return {"to": to, "subject": subject, "message_id": message_id,
             "characters": len(body)}
 
@@ -2533,8 +2532,8 @@ def execute_knowledge_read(context: "SkillExecutorContext", inputs: dict[str, An
 
 @register_executor("knowledge.propose")
 def execute_knowledge_propose(context: "SkillExecutorContext", inputs: dict[str, Any]) -> dict[str, Any]:
-    """kg_propose_fact: the agent's fact, always stored `inferred`. Granted to the roles in
-    agent_baseline.PROPOSE_FACT_ROLES only."""
+    """kg_propose_fact: the agent's fact, always stored `inferred`. A baseline skill: every
+    agent holds it (agent_baseline.BASELINE_SKILLS)."""
     from .agent_baseline import run_bundled_tool
 
     return run_bundled_tool(context, "knowledge.propose", inputs)

@@ -153,7 +153,28 @@ PYMETA
 if [[ -d "$INSTALL_DIR/.git" || -f "$INSTALL_DIR/.git" ]]; then
   git -C "$INSTALL_DIR" rev-parse HEAD > "$BACKUP/source-commit"
 else
-  cp "$INSTALL_DIR/.boss-shipped-commit" "$BACKUP/source-commit"
+  # An archive-only install (remote.sh: `git archive` ships no .git). remote.sh now writes
+  # the full 40-hex commit here, but an older install's marker — or one made before that fix
+  # — can hold a SHORT sha, or even a TAG's own object hash instead of the commit it points
+  # at (`git rev-parse --short <tag>` names an annotated tag, not its commit, without
+  # `^{commit}`). Resolved when there happens to be a repo here to resolve it against;
+  # otherwise this says plainly what is wrong and how to fix it, rather than copying an
+  # ambiguous value into the backup's own record of what it holds.
+  marker="$(cat "$INSTALL_DIR/.boss-shipped-commit" 2>/dev/null || true)"
+  if [[ "$marker" =~ ^[0-9a-f]{40}$ ]]; then
+    printf '%s\n' "$marker" > "$BACKUP/source-commit"
+  elif resolved="$(git -C "$INSTALL_DIR" rev-parse --verify "${marker}^{commit}" 2>/dev/null)" \
+       && [[ "$resolved" =~ ^[0-9a-f]{40}$ ]]; then
+    printf '%s\n' "$resolved" > "$BACKUP/source-commit"
+  else
+    {
+      echo "$INSTALL_DIR/.boss-shipped-commit holds '${marker:-nothing}', not a full commit"
+      echo "sha, and there is no Git checkout here to resolve it against. Run"
+      echo "remote.sh update (or ship) once more from a Git checkout of the source so a"
+      echo "full 40-character commit is recorded, then back up again."
+    } >&2
+    exit 1
+  fi
 fi
 
 PAUSED=()

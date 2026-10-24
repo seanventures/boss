@@ -70,6 +70,11 @@ class ProjectListResponse(BaseModel):
     items: list[ProjectSummary]
 
 
+class ProjectCreatedResponse(ProjectSummary):
+    """POST /v1/projects: the new project, seeded like the default one."""
+    description: Optional[str] = None
+
+
 class AuthSessionResponse(BaseModel):
     auth_required: bool
     transport_authenticated: bool

@@ -8,15 +8,16 @@
  *   SampleLatencyP95                                                      ×
  *    ◐ SEV3  p95 latency   Custom PromQL                         Firing
  *    Respond automatically ◉      Triage ◉
- *    Silence   Edit
+ *    Silence   Tune
  *
- * Edit opens the full rule sheet; Silence the silence sheet. The switches write at once, through
+ * Tune opens the rule sheet (threshold, 24 h preview; a repo rule is proposed as a pull request);
+ * Silence the silence sheet. An alert's own Tune opens straight on the sheet (`start="tune"`). The switches write at once, through
  * the same toggleRule the app's Rules list uses.
  */
 import React, { useState } from "react";
 
 import { GatedButton } from "../../components/gated";
-import { endSilencePath, rulesPutPath, useRules, type AlertRule } from "../../lib/app-alerts";
+import { endSilencePath, rulesPutPath, tuneTip, useRules, type AlertRule } from "../../lib/app-alerts";
 import { showToast } from "../client-forms";
 import { notifyChanged } from "../changed";
 import { Sheet } from "../infra/kit";
@@ -68,11 +69,13 @@ export function RuleSwitch({ on, label, tip, disabled, testId, onPress }: {
 }
 
 /** The rule an alert came from, found by its id (else its alert name) among the app's rules. */
-export function RuleOfAlert({ ruleId, alertname, targetId, projectId, actor, onClose }: {
+export function RuleOfAlert({ ruleId, alertname, targetId, projectId, actor, onClose, start = "switches" }: {
   ruleId: string | null; alertname: string; targetId: string; projectId: string; actor: string; onClose: () => void;
+  /** "tune": open straight on the rule sheet (the alert's own Tune). */
+  start?: "switches" | "tune";
 }) {
   const rules = useRules(projectId, targetId);
-  const [mode, setMode] = useState<"switches" | "edit" | "silence">("switches");
+  const [mode, setMode] = useState<"switches" | "edit" | "silence">(start === "tune" ? "edit" : "switches");
   const [busy, setBusy] = useState(false);
   const d = rules.data;
   const r = d?.rules.find((x) => x.id === ruleId) ?? d?.rules.find((x) => x.alert === alertname) ?? null;
@@ -82,7 +85,7 @@ export function RuleOfAlert({ ruleId, alertname, targetId, projectId, actor, onC
 
   if (r && mode === "edit") {
     return <RuleSheet rule={r} severities={d?.severities} targetId={targetId} projectId={projectId} actor={actor}
-                      onClose={() => setMode("switches")} onSaved={done} />;
+                      onClose={start === "tune" ? onClose : () => setMode("switches")} onSaved={start === "tune" ? onClose : done} />;
   }
   if (r && mode === "silence") {
     return <SilenceSheet rule={r} targetId={targetId} projectId={projectId} actor={actor} onClose={() => setMode("switches")} onSaved={done} />;
@@ -116,7 +119,7 @@ export function RuleOfAlert({ ruleId, alertname, targetId, projectId, actor, onC
             )}
             <span className="ag-spacer" />
             <GatedButton permission="observability:manage" type="button" className="ag-btn ag-btn-primary" data-testid="obs-alert-rule-edit"
-                         title="Its threshold, severity, notify and runbook" onClick={() => setMode("edit")}>Edit</GatedButton>
+                         title={tuneTip(r)} onClick={() => setMode("edit")}>Tune</GatedButton>
           </div>
         </div>
       )}

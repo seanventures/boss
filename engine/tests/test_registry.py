@@ -12,9 +12,13 @@ from boss_engine.tools.registry import ToolError, ToolRegistry, ToolSpec
 _EXPECTED_TOOLS: set[str] = {
     # THE KNOWLEDGE GRAPH (BOSSAPP-622): where code is, who depends on it, what a change can
     # break, the facts and precedent behind it; and kg_propose_fact, the one write (an `inferred`
-    # fact), offered only through the knowledge.propose bundle to six roles.
+    # fact), offered through the knowledge.propose bundle, which every agent holds.
     "kg_symbol", "kg_callers", "kg_blast_radius", "kg_why", "kg_search", "kg_precedent", "kg_propose_fact",
     "kg_cypher",   # read-only Cypher over the project's AGE projection
+    # THE CAPTAIN'S POWERS (BOSSAPP-759): retired as an engine, kept as the one agent's actions.
+    # watch / goals / set_goal the agent may run; drive / overwatch / theater are operator_only.
+    "captain_watch", "captain_goals", "captain_set_goal", "captain_drive", "captain_overwatch",
+    "captain_theater",
     # BOSS FIXES ITSELF (BOSSAPP-571): read the self-fixes and the autonomy metric. Reads only:
     # no tool starts, approves, installs, removes or sends a self-fix.
     "list_self_fixes", "get_self_fix", "autonomy_report",
@@ -75,6 +79,8 @@ _EXPECTED_TOOLS: set[str] = {
     "remove_app",
 
     "cancel_code_task",
+    # "Create a project called northpeak-bank-a": a new project in the org (project:create).
+    "create_project",
     # The first deployment. BOSS could create hosts and targets and could redeploy, and had
     # nothing that performs a deployment which never happened — so "deploy it" had no
     # executable action at all.
@@ -225,12 +231,12 @@ def test_default_registry_shape():
     read = {s.name for s in reg.specs(kind="read")}
     write = {s.name for s in reg.specs(kind="write")}
     assert read | write == set(reg.names())
-    assert len(reg.names()) == 139, (
+    assert len(reg.names()) == 146, (
         f"tool set changed: unexpected={sorted(set(reg.names()) - _EXPECTED_TOOLS)}, "
         f"missing={sorted(_EXPECTED_TOOLS - set(reg.names()))}")
-    assert len(read) == 84  # + 7 kg reads, + 3 self-fix reads, + read_app_logs, + my_recent_work, + system_health, + 7 template/security reads, + precheck_workflow
+    assert len(read) == 85  # + captain_goals, + 7 kg reads, + 3 self-fix reads, + read_app_logs, + my_recent_work, + system_health, + 7 template/security reads, + precheck_workflow
     #                        + query_project_data (the agent baseline's fenced row read)
-    assert len(write) == 55  # + kg_propose_fact, + remove_app, + system_doctor_act, + run_security_scan (F4), + apply_template (F2),
+    assert len(write) == 61  # + 5 captain writes (BOSSAPP-759), + create_project, + kg_propose_fact, + remove_app, + system_doctor_act, + run_security_scan (F4), + apply_template (F2),
     #                         + review_pull_request_again
     # the capabilities the user explicitly asked the agent to cover
     for name in (
@@ -416,6 +422,9 @@ def test_every_write_declares_what_pressing_it_costs():
 #: Writes whose effect can be undone or simply redone. These are what "fix it" legitimately
 #: means, and they stay one-shot when the operator asks for them.
 _SAFE_WRITES = [
+    # THE CAPTAIN OBSERVES AND KEEPS GOALS (BOSSAPP-759): a watch tick records what it saw and
+    # applies nothing; a goal is a row the captain scores. Running either again records again.
+    "captain_watch", "captain_set_goal",
     # A SCAN READS THE APP AND WRITES FINDINGS. It runs the pinned scanners on the app's own code
     # in a sandbox and against BOSS's own targets only; nothing in the app or the world changes,
     # and running it twice records a second scan (APP_TEMPLATES_AND_SECURITY_LOOP.md §4).
@@ -428,6 +437,9 @@ _SAFE_WRITES = [
     # TURNING A DIAL BACK IS SETTING IT AGAIN. Which model fills which role, how many agents
     # run at once; an empty value hands it back to the deployment default. Nothing starts.
     "set_project_setting",
+    # A NEW PROJECT IS EMPTY. It starts nothing, spends nothing and touches no existing work; the
+    # identity gate still decides project:create with the caller's own step-up.
+    "create_project",
     # CONNECTING A SUBSCRIPTION READS. It probes a CLI the operator already installed, makes
     # it answer once in a read-only sandbox, and records an entitlement row. It stores no
     # credential (there is none to store) and changes no code.
@@ -500,6 +512,8 @@ def test_the_tools_that_are_never_pressed_by_the_model():
         "assign_mcp_to_agent",
         "cancel_code_task",   # throws away a build in flight
         "cancel_job",         # the one that caused this
+        # the captain's powers that APPLY moves a person has not seen one by one (BOSSAPP-759)
+        "captain_drive", "captain_overwatch", "captain_theater",
         "decide",             # approves a gate; an agent that approves its own gates is ungated
         "delete_workflow",    # removes a path a person authored
         "remove_app",         # stops an app and removes it from its host

@@ -21,7 +21,7 @@ decision_rights:
     - Disagreements that require risk acceptance.
     - Findings implying scope or spec changes.
 permissions:
-  allowed_skills: [repo.read, ci.status, coding_pipeline.review_code, knowledge.propose]
+  allowed_skills: [repo.read, ci.status, coding_pipeline.review_code]
   # The Kit's abilities (packages/specpack/kits): granted on install, and offered.
   abilities: [read_repo, tests_ci]
   forbidden_skills: [code.edit, github.merge_pr_real, github.create_pr_sandbox, infra.*]

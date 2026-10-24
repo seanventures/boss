@@ -67,7 +67,13 @@ export function InviteAccept({ token, invitation, options }: { token: string; in
   }
 
   const days = invitation.expires_at && now !== null ? Math.max(0, Math.ceil((Date.parse(invitation.expires_at) - now) / 86_400_000)) : null;
-  const ok = name.trim().length > 0 && password.length >= minPw;
+  const stillNeeded = Math.max(0, minPw - password.length);
+  const ok = name.trim().length > 0 && stillNeeded === 0;
+  // THE JOIN BUTTON SAYS WHY it is disabled, never just greyed out with no reason: a name
+  // first, then exactly how many characters the password still needs.
+  const whyNotReady = !name.trim() ? "Your name is needed first"
+    : stillNeeded > 0 ? `${stillNeeded} more character${stillNeeded === 1 ? "" : "s"} needed`
+    : "";
 
   const accept = async () => {
     setBusy(true);
@@ -112,10 +118,15 @@ export function InviteAccept({ token, invitation, options }: { token: string; in
           <label htmlFor="inv-pw">Choose a password</label>
           <input id="inv-pw" className="idn-i" type="password" autoComplete="new-password" minLength={minPw} required value={password}
             onChange={(e) => setPassword(e.target.value)} aria-describedby="inv-pw-hint" />
-          <span id="inv-pw-hint" className="idn-dim idn-hint">{minPw} characters or more</span>
+          <span id="inv-pw-hint" className="idn-dim idn-hint" aria-live="polite" data-testid="invite-pw-hint">
+            {password.length === 0 ? `${minPw} characters or more`
+              : stillNeeded > 0 ? `${stillNeeded} more character${stillNeeded === 1 ? "" : "s"} needed`
+              : "Long enough"}
+          </span>
         </div>
         {error ? <div className="idn-err" role="alert">{error}</div> : null}
-        <button type="submit" className="idn-big p" disabled={!ok || busy} data-testid="invite-accept">{busy ? "Joining…" : "Join and continue"}</button>
+        <button type="submit" className="idn-big p" disabled={!ok || busy} title={busy ? undefined : whyNotReady || undefined}
+          data-testid="invite-accept">{busy ? "Joining…" : "Join and continue"}</button>
       </form>
       <p className="idn-fine" data-copy="prose">Next you&apos;ll add a passkey or an authenticator app.</p>
       <Live text={busy ? "Joining" : ""} />

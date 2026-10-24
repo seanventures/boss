@@ -502,11 +502,16 @@ def choose_agent(
     `pool` is who may be chosen. `step_agents.resolve` passes the agents that HOLD what the step
     needs; left out, it is every agent holding any skill, narrowed by `only`.
 
-    IT FALLS BACK TO SOMETHING DETERMINISTIC, AND SAYS WHY IT HAD TO. This used to call a
-    method named `complete` on the adapter, which no chat adapter has. The AttributeError was swallowed by a
-    bare `except`, so every multi-agent pick fell through to word overlap with the reason "no
-    model was available" — false, on installs whose model was fine. The adapters' real one-shot
-    call is `create_text_response`, and when it does fail the reason recorded is the real error.
+    THE PICK IS A TURN THROUGH THE ONE AGENT PIPELINE (BOSSAPP-759): `AgentService.decide`, with
+    the agents in the pool as its choices (what each is for and holds) and the instruction as
+    the message — the same decision every other agent turn takes, not a routing prompt of its
+    own. The model's pick is used whatever its confidence (an unattended step has nobody to ask
+    which agent; the pick and its reason are shown on the run card).
+
+    NO WORD-OVERLAP FALLBACK. When no model picked (none answered, or it named somebody outside
+    the pool) the step stops with the real reason, phrased for the operator: naming the agent
+    on the step is the fix that needs no model. A pick by shared words was a rule deciding, and
+    the agent that would then run the step needs the same model anyway.
     """
     if pool is None:
         pool = [c for c in candidates(connection, settings, project_id)
@@ -519,108 +524,31 @@ def choose_agent(
         return {"role_key": pool[0]["role_key"], "why": "the only agent holding any skill",
                 "how": "only_candidate"}
 
-    keys = [c["role_key"] for c in pool]
-    described = "\n".join(
-        f"  {c['role_key']}: {c.get('mission') or 'no stated mission'}\n"
-        f"    holds: {', '.join(c.get('holds') or []) or 'nothing yet'}"
-        for c in pool
-    )
-    prompt = (
-        "Pick the ONE agent best suited to carry out this instruction.\n\n"
-        f"THE INSTRUCTION\n  {instructions.strip()}\n\n"
-        f"THE AGENTS, and what each one is for and holds\n{described}\n\n"
-        "An agent can only use the skills it holds. Pick the one whose skills can actually do\n"
-        "what is asked. Answer with JSON and nothing else:\n"
-        '  {"role_key": "...", "why": "one sentence"}'
-    )
-    # WHY THE MODEL WAS NOT USED, said truthfully when it was not.
-    #
-    # This called `adapter.complete(...)`, a method no chat adapter has. The AttributeError was
-    # swallowed below, so the model was never once consulted, every pick was the word-overlap
-    # fallback, and the run card told the operator "no model was available" on installs whose
-    # model was working fine. The one-shot completion every adapter does implement is
-    # `create_text_response(prompt, system_prompt=...) -> (ref, text, usage)`.
-    model_failure = ""
-    try:
-        text_out = _ask_the_model(connection, settings, project_id, prompt)
-    except Exception as error:  # noqa: BLE001 — a routing failure must not fail the step
-        not_model = f"the model could not be asked ({_short(error)})"
+    from .agent_service import NO_MODEL, AgentService, Choice
+
+    choices = [Choice(str(c["role_key"]),
+                      f"{c.get('name') or c['role_key']}: {c.get('mission') or 'no stated mission'}"
+                      f" — holds {', '.join(c.get('holds') or []) or 'nothing yet'}",
+                      label=str(c.get("name") or c["role_key"]))
+               for c in pool]
+    decision = AgentService(settings).decide(
+        connection, project_id=project_id, actor="workflow", external_ref="",
+        ref=f"agent_pick:{project_id}", agent="BOSS's workflow runner",
+        situation=("A workflow step states what is wanted in words. Pick the ONE agent that "
+                   "carries it out. An agent can only use the skills it holds, so pick the one "
+                   "whose skills can actually do what is asked."),
+        message=instructions.strip(), choices=choices, min_confidence=0.0)
+    if decision.decided:
+        return {"role_key": str(decision.action),
+                "why": decision.reason or "chosen for this instruction", "how": "model"}
+    if decision.status == NO_MODEL:
+        not_model = ("no model answered"
+                     + (f" ({decision.error[:160]})" if decision.error else ""))
     else:
-        try:
-            picked = json.loads(_only_json(text_out))
-        except ValueError:
-            picked = None
-        if not isinstance(picked, dict):
-            not_model = "the model's answer named no agent"
-        else:
-            role = str(picked.get("role_key") or "").strip().lower()
-            if role in keys:
-                return {"role_key": role,
-                        "why": str(picked.get("why") or "").strip()
-                        or "chosen for this instruction",
-                        "how": "model"}
-            not_model = (f"the model named '{role}', which is not one of the {len(keys)} "
-                         "agents that could do it")
-
-    # THE DETERMINISTIC FALLBACK. Overlap between the words in the instruction and the words in
-    # the skill ids each agent holds. Crude, and it beats refusing to run. On a tie the most
-    # specialised agent — the one holding the fewest skills — wins, then the earliest key, so
-    # the same project and instruction always give the same answer; the reason says which.
-    words = {w for w in _words(instructions) if len(w) > 3}
-
-    def shared(c: dict[str, Any]) -> set[str]:
-        return words & {w for skill in (c.get("holds") or []) for w in _words(skill)}
-
-    best = sorted(pool, key=lambda c: (-len(shared(c)), len(c.get("holds") or []),
-                                       c["role_key"]))[0]
-    common = sorted(shared(best))
-    if common:
-        why = (f"{not_model}, so BOSS matched the instruction's words against the skills each "
-               f"agent holds: {best['role_key']} shares {', '.join(common)}")
-    else:
-        why = (f"{not_model}, and no agent's skills share a word with the instruction, so BOSS "
-               f"took {best['role_key']}, the most specialised of the {len(keys)}")
-    return {"role_key": best["role_key"], "why": why, "how": "word_overlap"}
-
-
-def _ask_the_model(connection: Connection, settings: Settings, project_id: str,
-                   prompt: str) -> str:
-    """One routing question to the project's chat model. Raises whatever the adapter raises."""
-    from .model_routing import project_chat_adapter
-
-    adapter = project_chat_adapter(connection, settings, project_id)
-    reply = adapter.create_text_response(
-        prompt,
-        system_prompt="You route work to the agent that can do it. You output JSON only.",
-    )
-    # Every adapter returns (session_ref, text, usage); a bare string is tolerated.
-    if isinstance(reply, tuple):
-        return str(reply[1] if len(reply) > 1 else reply[0] or "")
-    return str(reply or "")
-
-
-def _short(error: BaseException) -> str:
-    """An exception as one line an operator can read on the run card."""
-    said = str(error).strip().splitlines()[0][:160] if str(error).strip() else ""
-    return f"{type(error).__name__}: {said}" if said else type(error).__name__
-
-
-def _words(value: str) -> set[str]:
-    import re
-
-    return {w.lower() for w in re.split(r"[^A-Za-z0-9]+", str(value or "")) if w}
-
-
-def _only_json(value: str) -> str:
-    """The JSON out of a reply that may be wrapped in prose or a fence."""
-    trimmed = str(value or "").strip()
-    if trimmed.startswith("```"):
-        trimmed = trimmed.split("```")[1] if "```" in trimmed[3:] else trimmed[3:]
-        trimmed = trimmed.removeprefix("json").strip()
-    start, end = trimmed.find("{"), trimmed.rfind("}")
-    if start == -1 or end <= start:
-        raise ValueError("no JSON object in the reply")
-    return trimmed[start:end + 1]
+        not_model = decision.reason or "the model named nobody in the pool"
+    raise AgentStepError(
+        f"BOSS could not pick which of {len(pool)} agents runs this step: {not_model}. Name "
+        "the agent on the step, or connect a model in Repo and models, then run it again.")
 
 
 def run(

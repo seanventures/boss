@@ -138,6 +138,35 @@ def attribute(connection, commits: list[dict[str, Any]],
     return out
 
 
+def _own_step_facts(connection, workflow_run_id: Optional[str]) -> tuple[set[str], set[str]]:
+    """What this run's OWN later steps made directly, with no code-task PR of their own to
+    trace: Set up monitoring commits straight to the branch (monitoring_pack.write_pack) and
+    More tests extends the build into a new code-task run (two_pass/extend_code_task). Neither
+    leaves a `Boss-Lineage` trailer or a recorded PR head `attribute()` can follow, so without
+    this they showed up as "no BOSS run" / "never reviewed" and forced a reason on a release
+    that, in fact, only ever shipped this run's own work.
+
+    Returns (commit shas committed directly by a step, code-task run ids a step produced)."""
+    if not workflow_run_id:
+        return set(), set()
+    shas: set[str] = set()
+    runs: set[str] = set()
+    rows = connection.execute(sql(
+        "SELECT output FROM workflow_step_runs WHERE workflow_run_id = :w"),
+        {"w": workflow_run_id}).all()
+    for (out,) in rows:
+        out = _json(out) or {}
+        if not isinstance(out, dict):
+            continue
+        sha = str(out.get("commit_sha") or "").strip()
+        if _SHA.match(sha):
+            shas.add(sha)
+        rid = str(out.get("code_task_run_id") or "").strip()
+        if rid:
+            runs.add(rid)
+    return shas, runs
+
+
 def _approval(connection, run_id: str, workflow_run_id: Optional[str]) -> tuple[str, str]:
     """(status, what was asked) of a build's release: its workflow's release or deploy gate,
     its stack deployment's decision, else its PR's merge decision."""
@@ -287,10 +316,13 @@ def ship_list(connection, compare: Any, *, serving_sha: Optional[str], head_sha:
             commits = list(got.get("commits") or [])
             runs = attribute(connection, commits, project_id)
             facts = run_facts(connection, [r for r in runs if r])
+            step_shas, step_runs = _own_step_facts(connection, own_workflow_run_id)
+            all_own_run_ids = set(own_run_ids) | step_runs
             for c, run in zip(commits, runs):
                 f = facts.get(run or "") or {}
-                own = bool(run) and (run in own_run_ids or (
+                own = (bool(run) and (run in all_own_run_ids or (
                     own_workflow_run_id and f.get("workflow_run_id") == own_workflow_run_id))
+                    ) or str(c.get("sha") or "") in step_shas
                 card["commits"].append({
                     "sha": str(c.get("sha") or ""), "short": _short(c.get("sha")),
                     "message": str(c.get("message") or "")[:200],
@@ -306,14 +338,18 @@ def ship_list(connection, compare: Any, *, serving_sha: Optional[str], head_sha:
                                     if c["run_id"] and c["approval"] == "rejected"})
     card["unreviewed_runs"] = sorted({c["run_id"] for c in commits
                                       if c["run_id"] and not c["reviewed"]})
-    card["unattributed"] = sum(1 for c in commits if not c["run_id"])
+    # Own-but-untraceable (a later step's direct commit, no code-task run behind it) is still
+    # this run's own work, not a commit BOSS "cannot trace to any run": excluded here.
+    card["unattributed"] = sum(1 for c in commits if not c["run_id"] and not c["own"])
     card["beyond_reviewers"] = any(not c["own"] for c in commits)
     # WHAT NEEDS A REASON: a list BOSS could not read, a commit from a run whose release was
-    # rejected, a commit no BOSS run made, or another run's commit nobody reviewed. This run's
-    # own commits are what the card is about: they are listed, reviewed or not, and approving
-    # the card is a person reading them.
+    # rejected, a commit no BOSS run made that is not this run's own, or another run's commit
+    # nobody reviewed. This run's own commits are what the card is about: they are listed,
+    # reviewed or not, and approving the card is a person reading them — never forced just
+    # because one of this run's OWN later steps (More tests, Set up monitoring) committed
+    # directly and so has no code-task run of its own to point at.
     card["needs_reason"] = (not card["known"]) or any(
-        c["approval"] == "rejected" or not c["run_id"] or (not c["own"] and not c["reviewed"])
+        c["approval"] == "rejected" or (not c["own"] and (not c["run_id"] or not c["reviewed"]))
         for c in commits)
     card["sentence"] = sentence(card)
     card["content_hash"] = card_hash(card)

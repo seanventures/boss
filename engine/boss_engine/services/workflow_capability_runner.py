@@ -58,9 +58,9 @@ def _knowledge_precedent(
     if not query.strip():
         return ""
     try:
-        from .knowledge.runtime import knowledge_enabled
+        from .knowledge.runtime import knowledge_mode
 
-        if not knowledge_enabled(connection, project_id):
+        if knowledge_mode(connection, project_id) != "on":     # off, or keyword search only
             return ""
         from .knowledge.scopes import policy_for
         from .knowledge.service import KnowledgeService
@@ -2750,11 +2750,10 @@ def _notify(
     kind = channel.split(":", 1)[0].lower()
     try:
         if kind == "email":
-            from .email_adapter import EmailAdapter
-            from .email_config import settings_for
+            from .mail_transport import send
 
-            receipt = EmailAdapter(settings_for(connection, settings, project_id)).send_message(
-                channel, subject, body)
+            receipt = send(channel, subject, body, connection=connection, settings=settings,
+                           project_id=project_id)
         elif kind == "mattermost":
             from .mattermost_adapter import MattermostAdapter
 

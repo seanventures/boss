@@ -71,6 +71,17 @@ class _Authority:
     outcome: str
     output: Optional[dict] = None
     message: str = ""
+    #: WHY outcome == "refused", specifically — "cap_exceeded" (budget.py's own `reserve()`
+    #: refusal, or another of its kinds: "headroom", "admission_busy", "tier2_frozen",
+    #: "reconciliation_required", "legacy_reconciliation_required"), "job_deferred" (BOSS's own
+    #: job queue, nothing to do with money) or "model_capacity". None when not refused. A
+    #: caller that only reads `message` cannot tell a budget cap from a deferred job apart —
+    #: connection_spend.py used to call both "budget_refused" (boss-1 rc10.9).
+    refusal_kind: Optional[str] = None
+    #: The decision a "reconciliation_required" / "legacy_reconciliation_required" refusal
+    #: asks a person to resolve (budget.py's `reserve()` already names it). A refusal the
+    #: Setup pill can point at, rather than only describe.
+    refusal_decision_id: Optional[str] = None
     reservation_id: Optional[str] = None
     job_id: Optional[str] = None
     job_lease_token: Optional[str] = None
@@ -459,6 +470,12 @@ class TypedDecisionSpend:
             return _Authority(
                 outcome="refused",
                 message=_safe_error(reserved.get("message") or "Budget reservation denied."),
+                # budget.py's own `reserve()` already names which refusal this is
+                # ("cap_exceeded", "headroom", "admission_busy", "tier2_frozen",
+                # "reconciliation_required", "legacy_reconciliation_required"); carried through
+                # rather than collapsed, so only an actual cap gets called a budget refusal.
+                refusal_kind=str(reserved.get("refusal") or "budget_cap"),
+                refusal_decision_id=reserved.get("decision_id"),
                 invocation_dedupe=dedupe,
                 role=role,
             )
@@ -495,7 +512,12 @@ class TypedDecisionSpend:
                 "decision_id": decision_id, "attempt": self.attempt, "message": _safe_error(deferred),
             })
             return _Authority(
-                outcome="refused", message=_safe_error(deferred), invocation_dedupe=dedupe, role=role,
+                # NOT a budget refusal: BOSS's own job queue, nothing to do with money. A
+                # caller that read only `outcome == "refused"` called this "budget_refused"
+                # too, so the console paused the model for a "budget" cap that was never
+                # the problem (boss-1 rc10.9).
+                outcome="refused", message=_safe_error(deferred), refusal_kind="job_deferred",
+                invocation_dedupe=dedupe, role=role,
             )
         try:
             acquired = self.gateway.acquire(
@@ -537,7 +559,8 @@ class TypedDecisionSpend:
                 "decision_id": decision_id, "attempt": self.attempt, "message": _safe_error(denied),
             })
             return _Authority(
-                outcome="refused", message=_safe_error(denied), invocation_dedupe=dedupe, role=role,
+                outcome="refused", message=_safe_error(denied), refusal_kind="model_capacity",
+                invocation_dedupe=dedupe, role=role,
             )
         if acquired.get("duplicate") or not acquired.get("lease_token"):
             self.budget.release(

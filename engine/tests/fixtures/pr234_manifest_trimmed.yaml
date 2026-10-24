@@ -1,0 +1,15 @@
+version: 1
+name: order-api
+kind: compose
+compose:
+  file: docker-compose.yml
+health:
+  - url: "{target.public_url}/health"
+    expect: 200
+metrics:
+  path: /metrics
+  interval: 15
+  alert:
+    error_rate_percent: 5
+    window_minutes: 2
+    min_requests: 20

@@ -268,15 +268,34 @@ class ConnectionSpend(TypedDecisionSpend):
                 self.commit(lambda c: _retire_candidate(
                     c, self.project_id, source_id, self.actor, provider=provider,
                     receipt_id=authority.receipt_id, not_sent=authority.message))
+            # THE REFUSAL'S KIND, NOT JUST ITS OUTCOME: _prepare names which refusal this is
+            # ("cap_exceeded" — an actual budget cap; "job_deferred" — BOSS's own job queue,
+            # nothing to do with money; "model_capacity", "headroom", "admission_busy", …).
+            # Only an actual cap pauses the model for budget; everything else used to get the
+            # same "budget_refused" and the same "Paused · budget" pill regardless of what
+            # happened (operator report, boss-1 rc10.9).
+            kind = authority.refusal_kind if authority.outcome == "refused" else None
             return {
                 "ok": False,
                 "state": "failed",
                 "error": authority.message,
+                # ALWAYS the real sentence, never only in "error": setup_actions._failure and
+                # the held-proof 409 both read proof["summary"], which this never set, so every
+                # connection-proof refusal showed nothing but the generic pill tip.
+                "summary": authority.message,
+                "refusal_kind": kind,
                 "receipt_id": authority.receipt_id,
                 "reconciliation_required": authority.outcome == "reconcile",
-                "budget_refused": authority.outcome == "refused" and not (
+                "budget_refused": kind == "cap_exceeded" and not (
                     self.capacity_denied or self.intent_conflict
                 ),
+                "job_deferred": kind == "job_deferred",
+                # A HOLD ON HISTORICAL EXPOSURE, NAMED AND LINKED — never "Paused · budget": no
+                # cap would fix this, and the operator could not tell what to do (boss-1
+                # rc10.9). `decision_id` is the one `BudgetGovernor.resolve_legacy_exposure`
+                # settles.
+                "legacy_hold": kind == "legacy_reconciliation_required",
+                "decision_id": authority.refusal_decision_id if kind else None,
                 "capacity_refused": self.capacity_denied,
                 "intent_conflict": self.intent_conflict,
             }

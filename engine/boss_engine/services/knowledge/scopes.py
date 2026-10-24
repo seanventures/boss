@@ -202,6 +202,23 @@ def apply_declaration(base: StagePolicy, declared: Mapping[str, Any]) -> StagePo
     return replace(base, **changes)
 
 
+#: Keyword search only (the knowledge_graph switch's ``keyword``): the layer it never reads. Learned
+#: facts and topics are what the graph distilled; the A′ arm has plain records only.
+KEYWORD_EXCLUDED_LAYERS = ("knowledge",)
+
+#: The one kg tool keyword search offers. Every other tool walks the graph (callers, blast radius,
+#: why, Cypher), looks up learned facts (precedent) or teaches the graph (propose).
+KEYWORD_TOOLS = frozenset({"kg_search"})
+
+
+def keyword_policy(policy: StagePolicy | None) -> StagePolicy | None:
+    """A stage's scope under keyword search: its layers minus learned knowledge, and code reached
+    from its seeds by zero hops (the seeds themselves), so nothing is found by traversal."""
+    if policy is None:
+        return None
+    return replace(policy, layers=frozenset(policy.layers - set(KEYWORD_EXCLUDED_LAYERS)), max_hops=0)
+
+
 def offers_tool(policy: StagePolicy | None, tool: str) -> bool:
     if policy is None:
         return True

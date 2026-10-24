@@ -277,6 +277,7 @@ export const ACTION_PERMISSIONS: Readonly<Record<string, Permission>> = {
   "app/metatron-captain-actions.ts#loadMetatronTheaterAction": "autopilot:read",
   "app/metatron-captain-actions.ts#runMetatronTheaterAction": "autopilot:operate",
   "app/org-gate-actions.ts#onboardOrgFormAction": "org:update",
+  "app/project-actions.ts#createProjectAction": "project:create",
   "app/process-manager-actions.ts#loadProcessManagerAction": "autopilot:read",
   "app/process-manager-actions.ts#loadProcessManagerMetricsAction": "autopilot:read",
   "app/process-manager-actions.ts#loadProcessManagerProposalsAction": "autopilot:read",

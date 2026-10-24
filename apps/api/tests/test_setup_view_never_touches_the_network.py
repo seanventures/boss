@@ -109,6 +109,108 @@ def test_connected_then_expired_then_budget_red(client, engine, monkeypatch, off
     assert body["verdict"]["label"] != "Budget spent"
 
 
+def test_paused_budget_names_the_cap_that_is_actually_binding(client, engine, monkeypatch, offline):
+    """"Paused · budget" used to say "Monthly cap reached" no matter which cap refused the
+    call. A key tester's monthly cap had room; it was the DAILY cap that was tiny, and the
+    pill still blamed "Monthly" — the operator raised the wrong one. The tip now names
+    whichever cap is actually binding (J8 follow-up, boss-1 rc10.9)."""
+    as_ceo(monkeypatch)
+    fakes(monkeypatch)
+    assert connect_key(client).status_code == 200
+    offline()
+    # The monthly cap stays generous; only the daily cap is tiny, so the DAY period is the one
+    # with no room left — the month is nowhere close.
+    with engine.begin() as c:
+        c.execute(text("UPDATE budget_policies SET daily_cap_usd_micros = 1, "
+                       "monthly_cap_usd_micros = 200000000, version = version + 1 "
+                       "WHERE scope_type = 'project' AND scope_id = :p"), {"p": PROJECT})
+    body = view(client)
+    assert body["budget"]["period"] == "day"
+    pill = body["models"][0]["pill"]
+    assert pill["label"] == "Paused · budget"
+    assert pill["tip"] == "Daily cap reached. Raise it or wait for reset."
+
+
+def test_a_budget_cap_refusal_names_the_real_reason(client, engine, monkeypatch, offline):
+    """POST /v1/setup/models, end to end, with the cap already spent: the refusal is "Paused ·
+    budget" with the API's own sentence ("Budget cap exceeded: …") ahead of the generic tip —
+    never only the tip, which connection_spend.py used to drop on the floor (boss-1 rc10.9:
+    proof["summary"] was never set, so setup_actions._failure had nothing but "Monthly/Daily
+    cap reached" to show)."""
+    as_ceo(monkeypatch)
+    fakes(monkeypatch)
+    offline()
+    with engine.begin() as c:
+        c.execute(text("UPDATE budget_policies SET daily_cap_usd_micros = 200000000, "
+                       "monthly_cap_usd_micros = 1, version = version + 1 "
+                       "WHERE scope_type = 'project' AND scope_id = :p"), {"p": PROJECT})
+        if c.execute(text("SELECT 1 FROM budget_policies WHERE scope_type='project' "
+                          "AND scope_id=:p"), {"p": PROJECT}).first() is None:
+            c.execute(text("INSERT INTO budget_policies (id, scope_type, scope_id, "
+                           "daily_cap_usd_micros, monthly_cap_usd_micros) "
+                           "VALUES (:id, 'project', :p, 200000000, 1)"),
+                     {"id": "bp_" + PROJECT, "p": PROJECT})
+    refused = connect_key(client)
+    assert refused.status_code == 422, refused.text
+    refusal = refused.json()["detail"]
+    assert refusal["headline"] == "Paused · budget"
+    assert refusal["fix"].startswith("Budget cap exceeded:")
+    assert "Budget cap reached" in refusal["fix"]  # the generic tip still follows it
+    assert refusal.get("summary", "").startswith("Budget cap exceeded:")
+
+
+def test_a_deferred_job_is_not_shown_as_a_budget_refusal(client, monkeypatch, offline):
+    """POST /v1/setup/models, end to end, when BOSS's OWN job queue defers the proof's job
+    (JobDeferredError) — nothing to do with money. It used to come back exactly like a cap
+    refusal ("Paused · budget", a "Raise it" fix) and sent the operator to the Budget screen
+    for a problem a cap could never fix (boss-1 rc10.9)."""
+    as_ceo(monkeypatch)
+    fakes(monkeypatch)
+    offline()
+    from boss_engine.services.connection_spend import ConnectionSpend
+    from boss_engine.services.jobs import JobDeferredError
+
+    def deferred(self, connection, dedupe, role):
+        raise JobDeferredError("queue_full")
+
+    monkeypatch.setattr(ConnectionSpend, "_enqueue", deferred)
+    refused = connect_key(client)
+    assert refused.status_code == 422, refused.text
+    refusal = refused.json()["detail"]
+    assert refusal["headline"] == "Busy · retry"
+    assert refusal["headline"] != "Paused · budget"
+    assert "queue_full" in refusal["fix"]
+    assert refusal.get("summary") == "queue_full"
+
+
+def test_a_legacy_exposure_hold_names_and_links_its_decision(client, monkeypatch, offline):
+    """POST /v1/setup/models, end to end, when historical unresolved model exposure holds all
+    paid work (BudgetGovernor.legacy_model_reconciliation) — nothing a budget cap would fix.
+    It used to come back as "Paused · budget" with a "Raise it or wait for reset" fix, which
+    named the wrong problem and nowhere to act on the real one (boss-1 rc10.9)."""
+    as_ceo(monkeypatch)
+    fakes(monkeypatch)
+    offline()
+    from boss_engine.services.budget import BudgetGovernor
+
+    hold = {"status": "denied", "refusal": "legacy_reconciliation_required", "transient": False,
+            "decision_id": "dec_legacy123", "budget_state": "unknown",
+            "legacy_exposure": {}, "message": "Paid work is held for historical unresolved "
+            "model exposure. Reconcile the recorded attempt; raising a cap or resolving this "
+            "decision alone does not authorize new spend."}
+    monkeypatch.setattr(BudgetGovernor, "legacy_model_reconciliation",
+                        lambda self, connection, project_id: hold)
+    refused = connect_key(client)
+    assert refused.status_code == 422, refused.text
+    refusal = refused.json()["detail"]
+    assert refusal["headline"] == "Needs review"
+    assert refusal["headline"] != "Paused · budget"
+    assert "reconcile the recorded attempt" in refusal["fix"]
+    assert "Raise it or wait for reset" not in refusal["fix"]
+    assert refusal.get("decision_id") == "dec_legacy123"
+    assert refusal.get("href") == "/?area=decisions&decision=dec_legacy123"
+
+
 @pytest.mark.parametrize("state", ["rate_limited", "unreachable"])
 def test_a_check_github_did_not_answer_is_not_ready(client, engine, monkeypatch, offline, state):
     """READY MEANS PROVEN: "Repository and model checked" is false over a busy or unreachable

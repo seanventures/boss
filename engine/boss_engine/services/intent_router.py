@@ -125,6 +125,12 @@ _DECIDED_MEANS = {
                 "step, redeploy for a deployment, skip/recheck for a stopped run. Never start new work for it. If "
                 "what they asked would destroy or replay something they may not intend (a "
                 "removal, deleted data), ask ONE question instead. Report only what a tool did."),
+    "create_project": ("a request to CREATE A PROJECT in this organization (a separate BOSS "
+                       "workspace with its own agents, budget and settings), not an app. Call "
+                       "create_project once, with the name they gave (and the slug, when they "
+                       "named a kebab-case one). Report the project it made and its id, or its "
+                       "refusal in their words: a slug in use, a missing permission, or a "
+                       "confirmation they must give first. Start no build."),
     "new_code_change": ("a request for NEW work. Offer it: create_code_task for one scoped "
                         "change, start_workflow for a whole delivery — both come back as a "
                         "button the person presses; say it is offered, not started. Do not "
@@ -153,7 +159,7 @@ def _decision_note(decision: Any) -> str:
 _AGENT_ACTIONS = frozenset({"answer", "investigate", "operate", "new_code_change"})
 
 #: The decided actions that authorise the agent to change things this turn.
-_WRITE_ACTIONS = frozenset({"operate", "new_code_change"})
+_WRITE_ACTIONS = frozenset({"operate", "new_code_change", "create_project"})
 
 
 _TOOL_SCHEMAS = [
@@ -1694,7 +1700,7 @@ class IntentRouter:
                                      role=role, depth=depth)
         verdict = decision.to_dict()
         if decision.status == agent_decision.NO_MODEL:
-            return RouterTurn(reply=agent_decision.NO_MODEL_REPLY, decision=verdict)
+            return RouterTurn(reply=agent_decision.no_model_reply(decision), decision=verdict)
         if decision.status == agent_decision.CLARIFY and decision.action in _AGENT_ACTIONS:
             # UNSURE IS ONE QUESTION, NEVER A GUESSED ACTION — but an INFORMED question. The
             # decision model could not tell "fix order api deploy" apart as a retry, a repair of
@@ -1767,6 +1773,9 @@ class IntentRouter:
                          "still come back as buttons for them to press)"),
             C("new_code_change", "start NEW code work on an app: a new app, a feature or a "
                                  "change to an app's code (offered as a button for them to start)"),
+            C("create_project", "create a new BOSS PROJECT in this organization: a separate "
+                                "workspace with its own agents, budget, settings and work, set up "
+                                "like the first one (not a new app)", label="Create the project"),
         ]
         if pending_plan:
             out += [C("confirm_plan", "run the pending plan exactly as proposed"),
@@ -1862,6 +1871,36 @@ class IntentRouter:
             # decision routes its own (Jev when ready).
             adapter=(getattr(self, "_decision_adapter", None)
                      or getattr(self, "_answer_adapter", None)))
+
+    def decide_among(self, connection, *, project_id: str, message: str,
+                     choices: list["agent_decision.Candidate"], situation: str,
+                     history: list | tuple = (), context: Optional[dict] = None,
+                     hints: list | tuple = (), agent: str = "BOSS", ref: str = "",
+                     adapter: Any = None, decider: Any = None,
+                     min_confidence: Optional[float] = None, brief: str = "",
+                     check: Any = None, read: Optional["agent_decision.ReadPhase"] = None,
+                     envelope: Optional["agent_decision.SpendEnvelope"] = None,
+                     context_limit: int = 9000) -> "agent_decision.AgentDecision":
+        """THE TURN'S DECISION, for a turn whose caller names the actions (BOSSAPP-759).
+
+        A domain agent — the on-call agent triaging an alert, the inbox reading a reply, the
+        investigator choosing a root cause — asks the one pipeline, through
+        `AgentService.decide`, which of ITS actions fits. The candidates and the record are
+        the caller's input; the decision is this one: the same model (Jev when ready, else the
+        project's routed model, governed), the same prompt contract, the same confidence bar,
+        and no keyword behind it. A caller passing its own `adapter`/`decider` is a test seam
+        or the battle-test runner, the same seams `route_turn` has.
+
+        A decision that is more than a choice (`agent_decision.decide`'s structured decision):
+        choices with argument schemas, the caller's `check` with one re-ask, a bounded `read`
+        phase over read tools, the caller's `brief`, and an `envelope` — the caller's spend
+        envelope its one model attempt runs under."""
+        return agent_decision.decide(
+            connection, self.settings, project_id, situation=situation, message=message,
+            candidates=list(choices), history=list(history or ()), context=context,
+            hints=list(hints or ()), agent=agent, ref=ref, min_confidence=min_confidence,
+            adapter=adapter, decider=decider, brief=brief, check=check, read=read,
+            envelope=envelope, context_limit=context_limit)
 
     def _revised_objective(self, connection, project_id: str, objective: str,
                            revision: str) -> str:

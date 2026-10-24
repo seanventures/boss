@@ -383,6 +383,88 @@ def onboard_org(connection, settings, name, *, entitlements, members, specpack, 
     return {"org_id": org_id, "workspace_id": workspace_id, "project_id": project_id, "name": name}
 
 
+#: A project slug: kebab-case, 2-63 characters (it is also the project's id, as `boss-dogfood` is).
+PROJECT_SLUG = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+
+
+class ProjectExists(Exception):
+    """The slug is taken. `project_id` names the existing project when it is in the caller's org
+    (None when the id is used elsewhere: another org's project is not disclosed)."""
+
+    def __init__(self, slug: str, project_id: str | None):
+        super().__init__(slug)
+        self.slug = slug
+        self.project_id = project_id
+
+
+def project_slug_for(name: str, slug: str | None) -> str:
+    """The slug asked for, or one made from the name. Raises ValueError with what to do."""
+    if slug is not None and str(slug).strip():
+        candidate = str(slug).strip()
+        if candidate != candidate.lower() or not PROJECT_SLUG.match(candidate) \
+                or not 2 <= len(candidate) <= 63:
+            raise ValueError(
+                "The slug must be kebab-case: 2-63 lowercase letters, digits and single hyphens, "
+                "starting and ending with a letter or digit (for example northpeak-bank-a).")
+        return candidate
+    derived = re.sub(r"[^a-z0-9]+", "-", str(name or "").lower()).strip("-")[:63].strip("-")
+    if len(derived) < 2:
+        raise ValueError("Give the project a slug: its name has too few letters or digits to make one.")
+    return derived
+
+
+def create_project(connection, settings, *, org_id, name, slug=None, description=None,
+                   actor="boss", entitlements, members, specpack):
+    """A new project in an existing org, SEEDED EXACTLY LIKE THE DEFAULT ONE: the same
+    `seed_project_defaults` that bootstrap runs for `boss-dogfood` and onboarding runs for a new
+    org (budget policy, members, packs and agents, skills and their grants, MCP servers and their
+    grants, the shipped cast, workflows, the delivery catalogue, trackers, A2A channels). Identity
+    needs nothing per project: Owner/Admin bindings are org-scoped and cover it at once.
+
+    The slug is the project's id too (as `boss-dogfood` is). Raises ProjectExists for a slug in use
+    and ValueError for a bad name or slug."""
+    name = str(name or "").strip()
+    if not name:
+        raise ValueError("Give the project a name.")
+    if len(name) > 120:
+        raise ValueError("The project name is longer than 120 characters.")
+    description = (str(description).strip() or None) if description is not None else None
+    if description and len(description) > 2000:
+        raise ValueError("The description is longer than 2000 characters.")
+    project_slug = project_slug_for(name, slug)
+    # One creator per slug at a time: two presses of Create make one project.
+    connection.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"),
+                       {"k": f"project.create:{project_slug}"})
+    clash = connection.execute(text(
+        "SELECT p.id, w.org_id FROM projects p JOIN workspaces w ON w.id = p.workspace_id "
+        "WHERE p.id = :s OR (p.slug = :s AND w.org_id = :o) "
+        "ORDER BY (w.org_id = :o) DESC LIMIT 1"), {"s": project_slug, "o": org_id}).first()
+    if clash is not None:
+        raise ProjectExists(project_slug, str(clash[0]) if str(clash[1]) == org_id else None)
+    workspace = connection.execute(text(
+        "SELECT id, name FROM workspaces WHERE org_id = :o ORDER BY created_at, id LIMIT 1"),
+        {"o": org_id}).first()
+    if workspace is None:
+        if connection.execute(text("SELECT 1 FROM orgs WHERE id = :o"), {"o": org_id}).first() is None:
+            raise ValueError("That organization does not exist.")
+        workspace_id = make_id("ws")
+        connection.execute(text("INSERT INTO workspaces (id, org_id, name) VALUES (:id, :o, :n)"),
+                           {"id": workspace_id, "o": org_id, "n": "Default workspace"})
+    else:
+        workspace_id = str(workspace[0])
+    connection.execute(text(
+        "INSERT INTO projects (id, workspace_id, name, slug, description) "
+        "VALUES (:id, :ws, :name, :slug, :description)"),
+        {"id": project_slug, "ws": workspace_id, "name": name, "slug": project_slug,
+         "description": description})
+    seed_project_defaults(
+        connection, settings, project_slug,
+        entitlements=entitlements, members=members, specpack=specpack, actor=actor,
+    )
+    return {"project_id": project_slug, "workspace_id": workspace_id, "org_id": org_id,
+            "name": name, "slug": project_slug, "description": description}
+
+
 def seed() -> None:
     settings = get_settings()
     settings.artifact_root.mkdir(parents=True, exist_ok=True)

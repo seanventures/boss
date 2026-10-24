@@ -140,10 +140,38 @@ def _cmd_call(args) -> int:
     return 0 if result.get("ok", True) else 1
 
 
+def _pipeline_turn(ctx, project_id: str, message: str, thread_id: str | None = None) -> dict:
+    """ONE AGENT PIPELINE (BOSSAPP-759): with a database, a CLI turn is an Ask BOSS turn —
+    AgentService.chat → IntentRouter.route_turn, the same thread, decision, actions and reply as
+    the console and Metatron."""
+    from .services.agent_service import AgentService
+
+    with ctx.begin() as connection:
+        return AgentService(ctx.settings).chat(connection, project_id=project_id, actor="cli",
+                                               message=message, thread_id=thread_id)
+
+
+def _print_offers(turn: dict) -> None:
+    for number, offer in enumerate(turn.get("proposed_actions") or [], 1):
+        print(f"  {number}. {offer.get('label') or offer.get('tool')} [{offer.get('tool')}] "
+              f"{json.dumps(offer.get('args') or {})[:140]}", file=sys.stderr)
+
+
 def _cmd_ask(args) -> int:
     from .agent import EngineAgent
 
-    turn = EngineAgent(_ctx()).chat(
+    ctx = _ctx()
+    if ctx.durable_workspace_configured:
+        turn = _pipeline_turn(ctx, args.project, args.message)
+        print(turn["reply"])
+        if turn.get("proposed_actions"):
+            print("\n-- offered, nothing has run (press in the console, or `boss-engine chat`) --",
+                  file=sys.stderr)
+            _print_offers(turn)
+        return 0
+    # No database: no thread and no decision step, only the pipeline's own tool loop (the one
+    # route_turn answers with).
+    turn = EngineAgent(ctx).chat(
         project_id=args.project, actor="cli", message=args.message,
         allow_writes=args.allow_writes,
     )
@@ -154,10 +182,55 @@ def _cmd_ask(args) -> int:
     return 0
 
 
+def _cmd_chat_pipeline(ctx, args) -> int:
+    """An interactive Ask BOSS conversation (one thread). An offer the person answers `y` to is
+    pressed exactly as shown — the tool's own gates and an operator confirmation — and the press
+    is written into the thread, as the console's button does."""
+    from .services.agent_service import AgentService
+    from .tools import build_discuss_read_registry
+
+    registry = build_discuss_read_registry(edition=getattr(ctx.settings, "boss_edition", None))
+    thread_id: str | None = None
+    print("BOSS Agent — the same agent as the console's Ask BOSS. Type 'exit' to quit.")
+    while True:
+        try:
+            message = input("you> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return 0
+        if message.lower() in ("exit", "quit"):
+            return 0
+        if not message:
+            continue
+        turn = _pipeline_turn(ctx, args.project, message, thread_id)
+        thread_id = turn["thread_id"]
+        print(f"boss> {turn['reply']}")
+        for offer in turn.get("proposed_actions") or []:
+            preview = json.dumps(offer.get("args") or {})[:140]
+            ans = input(f"  ⏵ {offer.get('label') or offer['tool']} [{offer['tool']}] {preview} "
+                        "? [y/N] ").strip().lower()
+            if ans not in ("y", "yes"):
+                print("  ✗ skipped")
+                continue
+            result = registry.invoke(offer["tool"], ctx, project_id=args.project, actor="cli",
+                                     args=dict(offer.get("args") or {}), operator_confirmed=True)
+            ok = bool(result.get("ok", True))
+            with ctx.begin() as connection:
+                AgentService(ctx.settings).record_action_outcome(
+                    connection, thread_id=thread_id, action_id=str(offer.get("id") or ""),
+                    tool=offer["tool"], args=dict(offer.get("args") or {}),
+                    label=str(offer.get("label") or ""), ok=ok, result=result,
+                    error="" if ok else str(result.get("error") or ""))
+            print(f"  {'✓' if ok else '✗'} {offer['tool']} → {json.dumps(result, default=str)[:400]}")
+
+
 def _cmd_chat(args) -> int:
     from .agent import EngineAgent
 
-    agent = EngineAgent(_ctx())
+    ctx = _ctx()
+    if ctx.durable_workspace_configured:
+        return _cmd_chat_pipeline(ctx, args)
+    agent = EngineAgent(ctx)
     history: list[dict] = []
     print("BOSS Agent (engine-native). Type 'exit' to quit. "
           f"Writes are {'ENABLED' if args.allow_writes else 'confirmation-gated'}.")

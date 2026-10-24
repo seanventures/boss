@@ -56,6 +56,29 @@ describe("knowledge console", () => {
     expect(html).toContain("not been measured");
   });
 
+  it("says what agents get under each value of the knowledge_graph setting", () => {
+    const render = (agent_access: string) => renderToStaticMarkup(
+      createElement(KnowledgeSettings, {
+        projectId: "proj",
+        actorId: "ceo",
+        initial: {
+          agent_access,
+          retention_years: 1,
+          embedding_model: null,
+          vector_index: "not_created",
+          budget_category: "knowledge",
+          ship_gate: "case_study_primary_not_run",
+          cost_usd: null,
+          sources: ["adr folder"],
+        },
+      }),
+    );
+    expect(render("keyword")).toContain("Keyword search only: no graph, meaning search, learned facts or precedent.");
+    expect(render("keyword")).toContain("knowledge_graph = keyword");
+    expect(render("on")).toContain("learned facts and precedent");
+    expect(render("off")).toContain("agents work without the graph");
+  });
+
   it("names the embedding slot, and why meaning-based search is off", () => {
     const html = renderToStaticMarkup(
       createElement(KnowledgeSettings, {

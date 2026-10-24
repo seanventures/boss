@@ -231,6 +231,8 @@ def test_the_knowledge_switch_is_a_project_setting_the_harness_turns():
     from boss_engine.services import project_settings as ps
 
     assert ps.coerce("knowledge_graph", "OFF") == "off"
+    assert ps.coerce("knowledge_graph", "Keyword") == "keyword"          # the A′ arm (BOSSAPP-758)
+    assert ps.KNOBS["knowledge_graph"]["choices"] == ["on", "keyword", "off"]
     with pytest.raises(ValueError):
         ps.coerce("knowledge_graph", "maybe")
     harness = HARNESS.read_text()

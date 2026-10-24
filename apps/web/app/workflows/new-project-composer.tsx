@@ -789,7 +789,7 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
     : "";
   const heading = lockedForm
     ? (chosen?.name ?? entry?.name ?? draft.workflowKey)
-    : "New project";
+    : "New build";
 
   /** WHO IS ON IT, recorded as a CHOICE — but only when it differs from what start_run already
    *  seeded. Writing an identical list back as `operator` would claim a decision nobody made. */

@@ -5,7 +5,8 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
- * WORKFLOWS: NEW PROJECT · RUNS · LIBRARY (operator, 2026-10-13). "+ New project" opened the
+ * WORKFLOWS: NEW BUILD · RUNS · LIBRARY (operator, 2026-10-13; the tab was "New project" until the
+ * operator-approved rename to "New build" — "New project" is the project menu's alone). "+ New project" opened the
  * composer ABOVE the runs list, which pushed the runs down and read as "where are my runs?".
  * The composer is now its own tab; Runs is only ever the list; a Start lands on Runs with the
  * new run highlighted and scrolled to; every New project door opens the tab; the tab is in the
@@ -112,11 +113,11 @@ const navigateTo = async (search: string) => {
   await settle();
 };
 
-describe("three tabs: New project · Runs · Library", () => {
+describe("three tabs: New build · Runs · Library", () => {
   it("in that order, Runs counting, opening on Runs", async () => {
     await mount();
     const tabs = [...host!.querySelectorAll<HTMLElement>('[role="tablist"][aria-label="Workflows"] [role="tab"]')];
-    expect(tabs.map((t) => t.textContent)).toEqual(["New project", "Runs (1)", "Library"]);
+    expect(tabs.map((t) => t.textContent)).toEqual(["New build", "Runs (1)", "Library"]);
     expect(selected()).toBe("dw-tab-runs");
     // Runs is only the list: no composer in it, and no button that would stack one over it.
     expect($('[data-testid="dw-panel-runs"]')).not.toBeNull();

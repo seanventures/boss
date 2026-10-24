@@ -1,7 +1,7 @@
-"""Metatron Captain HTTP — persistent session, goals, watch, proposal-only drive."""
+"""Metatron HTTP — the terminal's turn is an Ask BOSS turn; captain powers are commands."""
 
 from apps.api.app import main as api_main
-from apps.api.app.routers import metatron_captain
+from boss_engine.tools import captain_tools
 
 
 def test_installer_ceo_key_can_use_default_terminal_actor(client, monkeypatch):
@@ -12,11 +12,11 @@ def test_installer_ceo_key_can_use_default_terminal_actor(client, monkeypatch):
     monkeypatch.setattr(api_main.settings, "api_key_principals", f"{key}:ceo")
     seen = []
 
-    class FakeCaptain:
-        def session_turn(self, _connection, *, actor, **_kwargs):
-            seen.append(("session", actor))
-            return {"actor": actor}
+    def chat(_connection, *, actor, **_kwargs):
+        seen.append(("session", actor))
+        return {"thread_id": "athr_fake", "reply": "ok", "actions": [], "messages": []}
 
+    class FakeCaptain:
         def watch_once(self, _connection, *, actor, **_kwargs):
             seen.append(("watch", actor))
             return {"actor": actor}
@@ -29,7 +29,9 @@ def test_installer_ceo_key_can_use_default_terminal_actor(client, monkeypatch):
             seen.append(("overwatch", actor))
             return {"actor": actor}
 
-    monkeypatch.setattr(metatron_captain, "_captain", FakeCaptain)
+    monkeypatch.setattr(api_main.orchestration_agent, "chat", chat)
+    # A typed captain command is a press of the agent's action: the captain behind it is the tool's.
+    monkeypatch.setattr(captain_tools, "_captain", lambda _ctx: FakeCaptain())
     headers = {"X-Boss-Api-Key": key}
     session = client.get("/v1/auth/session", headers=headers)
     assert session.status_code == 200, session.text
@@ -55,34 +57,18 @@ def test_installer_ceo_key_can_use_default_terminal_actor(client, monkeypatch):
     ]
 
 
-def test_captain_session_remembers_and_sets_goal(client):
-    remember = client.post(
-        "/v1/metatron/session",
-        json={
-            "project_id": "boss-dogfood",
-            "actor": "ceo",
-            "message": "remember sandbox root must stay on the artifacts volume",
-        },
-    )
-    assert remember.status_code == 200, remember.text
-    body = remember.json()
-    assert body["intent"] == "remember"
-    assert body["thread_id"].startswith("athr_")
-    assert any("artifacts volume" in (m.get("content") or "") for m in body["memories"])
+def test_captain_session_load_is_the_ask_boss_thread(client, monkeypatch):
+    """GET /v1/metatron/session opens the actor's general chat thread — the one the console's
+    Ask BOSS and a Metatron turn both land in — with the captain's goals and watch beside it."""
 
-    goal = client.post(
-        "/v1/metatron/session",
-        json={
-            "project_id": "boss-dogfood",
-            "actor": "ceo",
-            "thread_id": body["thread_id"],
-            "message": "set goal All three canaries serve backends kind=working_software",
-        },
-    )
-    assert goal.status_code == 200, goal.text
-    assert goal.json()["intent"] == "set_goal"
-    titles = [g["title"] for g in goal.json()["goals"]]
-    assert any("canaries" in t.lower() for t in titles)
+    loaded = client.get("/v1/metatron/session",
+                        params={"project_id": "boss-dogfood", "actor": "ceo"})
+    assert loaded.status_code == 200, loaded.text
+    body = loaded.json()
+    assert body["thread_id"].startswith("athr_")
+    assert isinstance(body["goals"], list) and "watch" in body
+    threads = client.get("/v1/agent/threads", params={"project_id": "boss-dogfood", "actor": "ceo"})
+    assert threads.status_code == 200, threads.text
 
 
 def test_captain_watch_and_drive_are_proposal_only(client):

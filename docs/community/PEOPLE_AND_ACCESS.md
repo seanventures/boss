@@ -28,7 +28,7 @@ You can only add permissions you hold yourself.
 
 ### Invite people
 
-**People › Invite people**: enter one or more emails and pick an access role. With email (SMTP) set up, BOSS sends each person a link. Without it, BOSS shows the links once; hand them over yourself.
+**People › Invite people**: enter one or more emails and pick an access role. BOSS emails each person a link and shows what happened: **Sent**, **Failed** with the mail server's reason, or **Not configured**. When an invite was not emailed, BOSS shows its link once; use **Copy link** and hand it over. **Resend** sends a new link, and the old one stops working. To set up email, see [Email](EMAIL.md).
 
 Each invite shows as **Invited** until it is accepted. The person sets a password (and a second factor if their role needs one), or signs in with single sign-on.
 

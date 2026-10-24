@@ -233,6 +233,68 @@ def test_a_fix_on_its_own_branch_ships_only_itself_and_needs_no_reason(pg):
                                 "1 from this run.")
 
 
+def _workflow_run(c, pid, run_id):
+    """A minimal workflow_runs row this run's steps can hang off of."""
+    wid, vid = f"wd_{uuid4().hex[:8]}", f"wv_{uuid4().hex[:8]}"
+    c.execute(text("INSERT INTO workflow_definitions (id, project_id, workflow_key, name, "
+                   "created_by) VALUES (:i, :p, 'release_test', 'Release test', 'test')"),
+              {"i": wid, "p": pid})
+    c.execute(text("INSERT INTO workflow_versions (id, project_id, workflow_definition_id, "
+                   "version, spec, content_hash, created_by) VALUES (:i, :p, :w, 1, '{}'::jsonb, "
+                   "'h', 'test')"), {"i": vid, "p": pid, "w": wid})
+    c.execute(text("INSERT INTO workflow_runs (id, project_id, workflow_definition_id, "
+                   "workflow_version_id, actor, status) VALUES (:i, :p, :w, :v, 'ceo', "
+                   "'running')"), {"i": run_id, "p": pid, "w": wid, "v": vid})
+
+
+def _own_step(c, pid, workflow_run_id, step_id, *, commit_sha=None, code_task_run_id=None):
+    """A step of this run that produced a commit or a code-task run directly on its output —
+    More tests' extend_code_task, Set up monitoring's commit straight to the branch."""
+    out = {}
+    if commit_sha:
+        out["commit_sha"] = commit_sha
+    if code_task_run_id:
+        out["code_task_run_id"] = code_task_run_id
+    c.execute(text("INSERT INTO workflow_step_runs (id, project_id, workflow_run_id, step_id, "
+                   "step_kind, status, output) VALUES (:i, :p, :r, :s, 'capability', 'succeeded', "
+                   "CAST(:o AS JSONB))"),
+              {"i": f"wsr_{uuid4().hex[:10]}", "p": pid, "r": workflow_run_id, "s": step_id,
+               "o": json.dumps(out)})
+
+
+def test_a_runs_own_later_steps_are_credited_to_it_not_flagged_untraceable(pg):
+    """BOSSAPP-602/603/604: Set up monitoring commits straight to the branch (no PR head, no
+    Boss-Lineage trailer) and More tests extends the build into a new code-task run. Neither
+    had a way to be traced back to this run, so they showed up as commits "no BOSS run" made,
+    counted as "never reviewed" and forced a reason on a release that, in truth, only shipped
+    this run's own work end to end."""
+    eng, pid = pg
+    wfr = f"wfr_{uuid4().hex[:10]}"
+    build = f"crun_build{uuid4().hex[:6]}"
+    more_tests_run = f"crun_moretests{uuid4().hex[:6]}"
+    monitoring_sha = _sha(201)
+    with eng.begin() as c:
+        _workflow_run(c, pid, wfr)
+        _run(c, pid, build, wfr=wfr, title="build")
+        # More tests: a step of this run extended the build into a NEW code-task run.
+        _own_step(c, pid, wfr, "more_tests", code_task_run_id=more_tests_run)
+        # Set up monitoring: a step of this run committed the pack straight to the branch.
+        _own_step(c, pid, wfr, "monitoring_pack", commit_sha=monitoring_sha)
+        commits = [
+            {"sha": _sha(200), "message": "feat: the build's own commit"},
+            {"sha": monitoring_sha, "message": "monitoring: write the pack (Set up monitoring)"},
+        ]
+        _recorded_head(c, pid, build, _sha(200))
+        card = rs.ship_list(c, lambda b, h: {"commits": commits}, serving_sha=SERVING,
+                            head_sha=monitoring_sha, own_workflow_run_id=wfr,
+                            own_run_ids=(build,), project_id=pid)
+    assert card["own_count"] == 2
+    assert card["unattributed"] == 0
+    assert not card["beyond_reviewers"] and not card["needs_reason"]
+    by_sha = {c_["sha"]: c_ for c_ in card["commits"]}
+    assert by_sha[monitoring_sha]["own"] is True and by_sha[monitoring_sha]["run_id"] is None
+
+
 def test_a_list_that_cannot_be_read_is_said_and_needs_a_reason(pg):
     eng, pid = pg
 

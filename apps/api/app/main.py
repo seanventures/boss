@@ -417,6 +417,7 @@ from .schemas import (
     ProjectMemberListResponse,
     ProjectMemberSummary,
     ProjectMemberUpsertRequest,
+    ProjectCreatedResponse,
     ProjectListResponse,
     ProjectSummary,
     PlanCreateRequest,
@@ -682,6 +683,7 @@ from .request_bodies import (
     PrdDecomposeBody,
     ProjectAgentsBody,
     ProjectBody,
+    ProjectCreateBody,
     ProjectSettingBody,
     ProviderUsageIngestBody,
     ProviderUsageSyncBody,
@@ -5777,6 +5779,55 @@ def list_projects(request: Request) -> ProjectListResponse:
             items=[project_summary_from_row(row) for row in rows
                    if visible is None or str(row["id"]) in visible]
         )
+
+
+@app.post("/v1/projects", status_code=201, response_model=ProjectCreatedResponse)
+@permit(P.PROJECT_CREATE, scope=Scope.org())
+def create_project_endpoint(request: Request, payload: ProjectCreateBody) -> Any:
+    """A new project in the caller's organization, seeded EXACTLY like the default one
+    (bootstrap.create_project -> seed_project_defaults: budget policy, members, packs and agents,
+    skills and grants, MCP servers, the shipped cast, workflows, trackers). The slug, given or made
+    from the name, is kebab-case and is the project's id. A slug in use answers 409 with the
+    existing project's id. Audited: an `events` row in the new project and, for an identity
+    principal, `project.created` in the org's security log (who, when, what).
+
+    `project:create` needs step-up for a person; a service account's own key is exempt exactly as
+    it is for every other step-up permission outside identity administration (authz._step_up_exempt)."""
+    body = payload.payload()
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from boss_engine.services import projects as project_service
+
+    ctx = identity_guard.request_auth(request)
+    principal = current_api_principal.get()
+    actor = identity_guard.actor_for(ctx) if ctx is not None else (principal or "operator")
+    with begin(engine) as connection:
+        if not identity_guard.identity_enforced() and principal and current_transport_authenticated.get():
+            # Pre-identity installs: the same bar as running the bootstrap seed (member_manage on
+            # the default project). Under enforce the guard has decided project:create already.
+            require_project_actor(connection, settings.default_project_id, principal, "member_manage")
+        try:
+            created = project_service.create(
+                connection, settings, auth=ctx, name=body.get("name"), slug=body.get("slug"),
+                description=body.get("description"), actor=actor, principal=principal,
+                entitlements=entitlements, members=members, specpack=specpack,
+            )
+        except project_service.ProjectExists as clash:
+            raise HTTPException(status_code=409, detail={
+                "error": "project_exists", "slug": clash.slug, "project_id": clash.project_id,
+                "message": (f"A project with the slug {clash.slug} already exists." if clash.project_id
+                            else f"The slug {clash.slug} is taken. Choose another."),
+            }) from None
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from None
+        project_id = created["project_id"]
+        row = connection.execute(text(
+            "SELECT p.id, p.name, p.slug, p.workspace_id, p.created_at, p.description, "
+            "w.name AS workspace_name, o.id AS org_id, o.name AS org_name FROM projects p "
+            "JOIN workspaces w ON w.id = p.workspace_id JOIN orgs o ON o.id = w.org_id "
+            "WHERE p.id = :p"), {"p": project_id}).mappings().one()
+    return ProjectCreatedResponse(**project_summary_from_row(row).model_dump(),
+                                  description=row["description"])
 
 
 @app.get("/v1/members", response_model=ProjectMemberListResponse)
@@ -13260,11 +13311,12 @@ async def agent_turn_failed(_request: Request, exc: AgentTurnFailed):
     })
 
 
-def _run_agent_chat(payload: AgentChatRequest, request: Request, *, endpoint: str) -> AgentChatResponse:
-    """Shared handler for the BOSS chat interface. One brain (AgentService →
-    IntentRouter) behind both the canonical endpoint and its deprecated alias, so
-    all callers hit identical routing/persistence/confirmation logic and the
-    (now tool-grounded) discuss path."""
+def agent_turn(payload: AgentChatRequest, request: Request, *, endpoint: str) -> AgentChatResponse:
+    """THE ONE AGENT TURN (BOSSAPP-759). Every conversational surface — the console's Ask BOSS
+    (/v1/engine/agent/chat and its deprecated alias) and the Metatron terminal
+    (/v1/metatron/session) — sends its natural-language turn here: one brain (AgentService.chat →
+    IntentRouter), one thread model, one set of actions, one consent path. A fix to the agent is
+    made once. test_one_agent_turn enforces that no surface grows a second decision path."""
     _enforce_high_cost_rate_limit(
         request, payload.project_id, payload.actor, endpoint=endpoint
     )
@@ -13318,7 +13370,14 @@ def _run_agent_chat(payload: AgentChatRequest, request: Request, *, endpoint: st
 @permit(P.ASSISTANT_CHAT, scope=Scope.project(body="project_id"),
         confine=(Confine.body("thread_id", "agent_thread"),))
 def run_agent_action(payload: AgentActionRunRequest, request: Request) -> AgentActionRunResponse:
-    """Execute one action the operator ACCEPTED by clicking its button.
+    """Execute one action the operator ACCEPTED by clicking its button (see agent_action)."""
+    return agent_action(payload, request)
+
+
+def agent_action(payload: AgentActionRunRequest, request: Request) -> AgentActionRunResponse:
+    """THE ONE PRESS (BOSSAPP-759): execute one action the operator ACCEPTED by clicking its
+    button — in the console, as a numbered choice in Metatron, or by typing a captain command
+    (/watch, /overwatch, /drive, whose routes are thin adapters onto this).
 
     Deliberately does NOT go through the model. The operator saw a specific tool and specific
     arguments and clicked that; re-asking a model to interpret the click would let it drift into
@@ -13408,7 +13467,7 @@ def engine_agent_chat(payload: AgentChatRequest, request: Request) -> AgentChatR
     """The BOSS chat interface — one engine-native agent: routes intents, persists
     threads, gates confirmations, and answers questions grounded in live engine
     data via the read-tool layer. This is the canonical endpoint."""
-    return _run_agent_chat(payload, request, endpoint="/v1/engine/agent/chat")
+    return agent_turn(payload, request, endpoint="/v1/engine/agent/chat")
 
 
 @app.post("/v1/agent/chat", response_model=AgentChatResponse, deprecated=True)
@@ -13418,7 +13477,7 @@ def agent_chat(payload: AgentChatRequest, request: Request, response: Response) 
     existing callers keep working; migrate to the engine endpoint."""
     response.headers["Deprecation"] = "true"
     response.headers["Link"] = '</v1/engine/agent/chat>; rel="successor-version"'
-    return _run_agent_chat(payload, request, endpoint="/v1/agent/chat")
+    return agent_turn(payload, request, endpoint="/v1/agent/chat")
 
 
 @app.get("/v1/agent/briefing")
@@ -24830,12 +24889,15 @@ def raise_workflow_error(error: workflow_runtime.WorkflowError) -> None:
 @app.get("/v1/email/config")
 @permit(P.COMMS_READ, scope=Scope.project(query="project_id"))
 def get_email_config(project_id: str, actor: str = "executive_console") -> dict:
-    """How this project sends email. Never returns the password — only whether one is set."""
-    from boss_engine.services import email_config
+    """How this project sends email. Never returns the password — only whether one is set.
+    `route` is where mail actually goes now (the Email (SMTP) connector, environment, dev inbox
+    or nowhere). The console's surface for this is the connector (/v1/kit/email)."""
+    from boss_engine.services import email_config, mail_transport
 
     with begin(engine) as connection:
         require_project_actor(connection, project_id, actor, "integration_manage")
-        return email_config.describe(connection, project_id)
+        return {**email_config.describe(connection, project_id),
+                "route": mail_transport.route(connection, get_settings(), project_id).describe()}
 
 
 @app.post("/v1/email/config")
@@ -24873,8 +24935,8 @@ def set_email_config(payload: open_bodies.EmailConfigBody) -> dict:
 @permit(P.COMMS_MANAGE, scope=Scope.project(body="project_id"))
 def test_email_config(payload: EmailTestRequest) -> dict:
     """Send a test through the governed outbox, with a receipt and a budget reservation."""
-    from boss_engine.services import email_config
     from boss_engine.services.comms import CommsService
+    from boss_engine.services.email_adapter import recipient_from_channel
     from boss_engine.services.github_adapter import IntegrationConfigurationError
 
     project_id = payload.project_id
@@ -24889,10 +24951,10 @@ def test_email_config(payload: EmailTestRequest) -> dict:
     effect_key = f"email-test-delivery:{project_id}:{dedupe_key}"
     with begin(engine) as connection:
         require_project_actor(connection, project_id, actor, "comms_manage")
-        scoped_settings = email_config.settings_for(connection, get_settings(), project_id)
-        delivery = CommsService(scoped_settings)
+        # The server is resolved where it is sent (services/mail_transport.py), like every send.
+        delivery = CommsService(get_settings())
         try:
-            recipient = delivery.email._recipient_from_channel(
+            recipient = recipient_from_channel(
                 to if to.startswith("email:") else f"email:{to}")
         except IntegrationConfigurationError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
@@ -24960,7 +25022,7 @@ def test_email_config(payload: EmailTestRequest) -> dict:
 
         reservation = delivery.budget.reserve(
             connection, project_id, "comms",
-            scoped_settings.comms_message_budget_usd_micros,
+            delivery.settings.comms_message_budget_usd_micros,
             "Send one SMTP configuration test message", 15,
         )
         if reservation["status"] != "reserved":

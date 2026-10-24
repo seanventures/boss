@@ -37,16 +37,36 @@ function files(dir: string): string[] {
   return out;
 }
 
-/** Each "New build" / "New project" label and the opening tag of the control that holds it. */
+const SOURCES = () => [...files(join(ROOT, "app")), ...files(join(ROOT, "components"))];
+const rel = (f: string) => f.slice(ROOT.length + 1);
+
+/** Each "New build" label and the opening tag of the control that holds it. */
 function doors(): { where: string; tag: string }[] {
   const out: { where: string; tag: string }[] = [];
-  for (const f of [...files(join(ROOT, "app")), ...files(join(ROOT, "components"))]) {
+  for (const f of SOURCES()) {
     const s = readFileSync(f, "utf8");
-    for (const m of s.matchAll(/>\s*(?:<span aria-hidden>\+<\/span>\s*|[+＋]\s*)?New (?:build|project)\s*</g)) {
+    for (const m of s.matchAll(/>\s*(?:<span aria-hidden>\+<\/span>\s*|[+＋]\s*)?New build\s*</g)) {
       const before = s.slice(0, m.index! + 1);
       const open = Math.max(before.lastIndexOf("<button"), before.lastIndexOf("<GatedButton"));
       if (open < 0) continue;
-      out.push({ where: `${f.slice(ROOT.length + 1)}:${before.split("\n").length}`, tag: before.slice(open) });
+      out.push({ where: `${rel(f)}:${before.split("\n").length}`, tag: before.slice(open) });
+    }
+  }
+  return out;
+}
+
+/** Every place the console SHOWS "New project": JSX text, or a string literal (a heading, a
+ *  tooltip, a label prop). Comments are not shown, so they are not read. */
+function newProjectLabels(): string[] {
+  const out: string[] = [];
+  for (const f of SOURCES()) {
+    const s = readFileSync(f, "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, (c) => c.replace(/[^\n]/g, " "))
+      .replace(/(^|[^:"'`])\/\/.*$/gm, "$1");
+    const shown = [/>\s*(?:<span aria-hidden>\+<\/span>\s*|[+＋]\s*)?New project\s*</g,
+      /["'`][^"'`\n]*\bNew project\b[^"'`\n]*["'`]/g];
+    for (const re of shown) {
+      for (const m of s.matchAll(re)) out.push(`${rel(f)}:${s.slice(0, m.index!).split("\n").length}`);
     }
   }
   return out;
@@ -59,6 +79,23 @@ describe("no New build door opens the agent chat", () => {
     const where = doors().map((d) => d.where.split(":")[0]);
     for (const f of ["app/ConsoleShell.tsx", "app/code-tasks-ui.tsx", "app/factory/floor.tsx",
       "app/factory/apps-tab.tsx", "app/delivery-workflows-ui.tsx"]) expect(where).toContain(f);
+  });
+
+  it("calls the composer New build everywhere: New project is only the project menu's", () => {
+    // Operator-approved rename: the build composer's doors, the Workflows tab and the composer's
+    // own heading read "New build". "New project" is the top bar's PROJECT MENU alone — it makes
+    // a BOSS project in the org (POST /v1/projects, project:create), not a build
+    // (tests/new-project-in-the-org.test.tsx holds it).
+    const labels = newProjectLabels();
+    expect(labels.map((l) => l.split(":")[0]).every((f) => f === "app/project-menu.tsx"), labels.join(", "))
+      .toBe(true);
+    expect(labels.length).toBeGreaterThan(0);
+    const menu = readFileSync(join(ROOT, "app", "project-menu.tsx"), "utf8");
+    expect(menu).not.toMatch(/openNewProject|compose=/);
+    const workflows = readFileSync(join(ROOT, "app", "delivery-workflows-ui.tsx"), "utf8");
+    expect(workflows).toContain('key === "new" ? <>New build</>');
+    const composer = readFileSync(join(ROOT, "app", "workflows", "new-project-composer.tsx"), "utf8");
+    expect(composer).toMatch(/:\s*"New build";/);
   });
 
   it("names no planner in any door's control", () => {

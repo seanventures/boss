@@ -902,12 +902,16 @@ class PostgresKnowledgeStore:
         query: str,
         limit: int = 20,
         policy: Optional[StagePolicy] = None,
+        exclude_layers: tuple[str, ...] = (),
     ) -> list[dict[str, Any]]:
         self.ensure_schema(connection)
         self._org_id(connection, project_id, None)
         if not query or not query.strip():
             raise ValueError("query is required")
         scope_sql, scope_params = self._scope_sql(connection, project_id, policy)
+        if exclude_layers:
+            scope_sql += " AND NOT (knowledge_layer = ANY(:exclude_layers))"
+            scope_params = {**scope_params, "exclude_layers": list(exclude_layers)}
         rows = connection.execute(
             text(
                 f"""

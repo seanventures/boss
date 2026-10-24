@@ -81,6 +81,12 @@ export type AlertRule = {
   source: string; sourceWord: string; changedBy: string | null; changedAt: string | null;
   /** "code": declared in the repo's boss.deploy.yaml (repo-managed, D4). */
   managedBy: string;
+  /** The latest deploy's boss.deploy.yaml no longer declares it; BOSS keeps it running. */
+  droppedWord: string | null;
+  /** Tune: a repo rule is proposed as a pull request to its manifest; any other is saved here. */
+  tuneVia: "pull_request" | "console";
+  /** Where a repo rule lives: the manifest's path and the lines of its rule. */
+  where: { path: string; line: number; endLine: number; href: string | null } | null;
   state: string | null; stateWord: string; stateTone: Tone; stateTip: string | null;
   value: number | null; valueWord: string | null; evaluatedAt: string | null; evaluatedBy: string | null;
   silence: { id: string; endsAt: string; reason: string; by: string | null } | null;
@@ -109,6 +115,11 @@ export function parseRule(w: unknown): AlertRule {
     respondOnBehalfOf: optStr(o.respond_on_behalf_of), notify: str(o.notify, "console"),
     source: str(o.source), sourceWord: str(o.source_word), changedBy: optStr(o.changed_by), changedAt: optStr(o.changed_at),
     managedBy: str(o.managed_by, str(o.source) === "yaml" ? "code" : "builtin"),
+    droppedWord: optStr(o.dropped_word) ?? null,
+    tuneVia: o.tune_via === "pull_request" ? "pull_request" : "console",
+    where: o.where && typeof o.where === "object" && str(obj(o.where).path)
+      ? { path: str(obj(o.where).path), line: num(obj(o.where).line), endLine: num(obj(o.where).end_line, num(obj(o.where).line)),
+          href: optStr(obj(o.where).href) } : null,
     state: optStr(o.state), stateWord: str(o.state_word, "Not evaluated yet"), stateTone: toneOf(o.state_tone),
     stateTip: optStr(o.state_tip), value: optNum(o.value), valueWord: optStr(o.value_word),
     evaluatedAt: optStr(o.evaluated_at), evaluatedBy: optStr(o.evaluated_by),
@@ -315,6 +326,14 @@ export const allAlertsUrl = (projectId: string, f: AlertsFilter) =>
                                attention: f.attention ? "true" : null })}`;
 export const ACK_PATH = "/v1/alerts/ack";
 export const rulesPutPath = (targetId: string) => `${appPath(targetId)}/alert-rules`;
+export const tunePreviewPath = (targetId: string, ruleId: string) => `${appPath(targetId)}/alert-rules/${encodeURIComponent(ruleId)}/tune-preview`;
+export const proposePath = (targetId: string, ruleId: string) => `${appPath(targetId)}/alert-rules/${encodeURIComponent(ruleId)}/propose`;
+/** Tune's tooltip: where the change goes. */
+export const tuneTip = (r: Pick<AlertRule, "tuneVia" | "where">) => r.tuneVia === "pull_request"
+  ? `Change its threshold: proposes a pull request to ${r.where ? whereWord(r.where) : "boss.deploy.yaml"}`
+  : "Change its threshold: saved here, with who and why";
+/** "boss.deploy.yaml:12" — where a repo rule lives. */
+export const whereWord = (w: NonNullable<AlertRule["where"]>) => `${w.path}:${w.line}`;
 export const silencePath = (targetId: string, ruleId: string) => `${appPath(targetId)}/alert-rules/${encodeURIComponent(ruleId)}/silence`;
 export const endSilencePath = (targetId: string, silenceId: string) => `${appPath(targetId)}/alert-silences/${encodeURIComponent(silenceId)}/end`;
 export const triagePath = (targetId: string, alertId: string) => `${appPath(targetId)}/alerts/${encodeURIComponent(alertId)}/triage`;

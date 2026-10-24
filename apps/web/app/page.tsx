@@ -154,6 +154,7 @@ import { Suspense } from "react";
 import { AreaFrame } from "./area-frame";
 import { fetchOrgs } from "../lib/orgs";
 import { OrgGate, OrgReconnect } from "./org-gate";
+import { ORG_COOKIE, resolveConsoleOrg } from "../lib/console-org";
 import { fetchApprovalRules } from "../lib/approval-rules";
 import { ApprovalRulesView } from "./approval-rules-ui";
 import { emptyPackFeed, fetchPackFeed } from "../lib/packs";
@@ -554,9 +555,15 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   const requestedOrgId =
     getParam(resolvedSearchParams?.org) || getParam(resolvedSearchParams?.org_id);
   const orgs = await orgsP;
-  const selectedOrg = requestedOrgId
-    ? orgs.items.find((o) => o.org_id === requestedOrgId)
-    : undefined;
+  // A URL WITHOUT AN ORG MEANS THE ORG THIS SESSION IS IN (lib/console-org.ts). Only a genuine
+  // choice — `?pick=1`, or nothing remembered among several orgs — draws the picker; a link or
+  // a page load that lost `?org=` no longer flashes it mid-session.
+  const pickRequested = getParam(resolvedSearchParams?.pick) === "1";
+  const rememberedOrgId = pickRequested ? undefined : requestCookies.get(ORG_COOKIE)?.value;
+  const selectedOrg = resolveConsoleOrg({
+    requested: requestedOrgId, pick: pickRequested, remembered: rememberedOrgId, orgs: orgs.items,
+  });
+  const heldOrgId = requestedOrgId || rememberedOrgId;
   if (!selectedOrg) {
     // A transient API failure must NOT dump an in-session operator back to the org
     // picker (it destroys their console state mid-work). URL names an org + the org
@@ -572,11 +579,11 @@ export default async function HomePage({ searchParams }: HomePageProps) {
     // If the URL names an org and the list came back EMPTY, the list is wrong, not the URL:
     // hold the session and retry. A non-empty list that simply lacks this org is a real
     // mismatch and still falls through to the picker, so a bad link cannot retry forever.
-    if (requestedOrgId && (!orgs.apiReachable || orgs.items.length === 0)) {
+    if (heldOrgId && (!orgs.apiReachable || orgs.items.length === 0)) {
       return (
         <Suspense fallback={null}>
           <OrgReconnect
-            orgId={requestedOrgId}
+            orgId={heldOrgId}
             reason={orgs.blockedReason ?? (orgs.items.length === 0 ? "the org list came back empty" : undefined)}
           />
         </Suspense>
@@ -978,6 +985,10 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         actorId: activeActorId,
       }}
       org={{ id: activeOrgId, name: activeOrgName }}
+      projects={{
+        items: projects.items.filter((p) => p.orgId === activeOrgId).map((p) => ({ id: p.id, name: p.name })),
+        homeId: selectedOrg.project_id,
+      }}
       editionId={editionId}
       initialArea={initialArea}
       // Sign out only means something when the console has a password; without one the button

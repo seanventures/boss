@@ -315,11 +315,20 @@ describe("Invitations and email landings", () => {
     const inv = { org: "Acme BOSS", inviter: "Priya Raman", email: "ana@acme.dev", roles: ["Operator · acme-web"], expires_at: null, sso: [] };
     const el = await mount(<InviteAccept token="inv_1" invitation={inv} options={options(null)} />);
     const go = el.querySelector("[data-testid='invite-accept']") as HTMLButtonElement;
+    // Disabled, and SAYS WHY — before anything is typed, the name is the first thing missing.
+    expect(go.disabled).toBe(true);
+    expect(go.title).toBe("Your name is needed first");
     type(el.querySelector("#inv-name"), "Ana Costa");
     type(el.querySelector("#inv-pw"), "short");
     expect(go.disabled).toBe(true);
+    // THE HINT COUNTS DOWN LIVE: "short" is 5 of 12, so 7 are still needed — never a static
+    // "12 characters or more" that never answers how much further there is to go.
+    expect(el.querySelector("[data-testid='invite-pw-hint']")?.textContent).toBe("7 more characters needed");
+    expect(go.title).toBe("7 more characters needed");
     type(el.querySelector("#inv-pw"), "a long enough phrase");
     expect(go.disabled).toBe(false);
+    expect(el.querySelector("[data-testid='invite-pw-hint']")?.textContent).toBe("Long enough");
+    expect(go.title ?? "").toBe("");
     accessible(el);
   });
 

@@ -2,6 +2,7 @@
 
 import { GatedButton } from "../components/gated";
 import { IDENTITY_PARAMS } from "./url-intent";
+import { rememberOrg, withOrgRestored } from "../lib/console-org";
 import { isInConsoleLink } from "./console-href";
 import { consoleParams, resolveLegacyArea } from "./legacy-areas";
 import { SETUP_BADGE_EVENT } from "../lib/setup-stepper";
@@ -18,6 +19,7 @@ import { AgentChat } from "./agent-ui";
 import { dockChatKey, dockSpeaker } from "../lib/dock-subject";
 import { dockWidthFor, railForDock } from "../lib/shell-rail";
 import { ProjectStrip } from "./project-strip";
+import { ProjectMenu, type ProjectMenuItem } from "./project-menu";
 import { PresencePill } from "./agents/presence-pill";
 import { NEW_BUILD_TIP, openNewProject } from "../lib/compose-links";
 import { setConsoleLive } from "../lib/console-live";
@@ -329,6 +331,9 @@ export type ConsoleShellProps = {
   };
   scope: { project: string; actor: string; projectId?: string; actorId?: string };
   org?: { id: string; name: string };
+  /** The org's projects the viewer can open, and which one is the org's own (no ?project_id=):
+   *  the top bar's project menu (switch, New project). Absent on route pages. */
+  projects?: { items: ProjectMenuItem[]; homeId: string };
   /** From GET /v1/edition (or BOSS_EDITION). Defaults to community honesty. */
   editionId?: string;
   initialArea?: string;
@@ -412,6 +417,7 @@ function ConsoleShellInner({
   status,
   scope,
   org,
+  projects,
   editionId,
   initialArea,
   signOutAvailable = false,
@@ -727,6 +733,24 @@ function ConsoleShellInner({
     // Coalesced: asked during a refresh, it runs once that one lands, so the change is shown.
     refreshCoordinator.request("now");
   }, "console-shell"), [refreshCoordinator]);
+
+  // THE ORG THIS CONSOLE IS OPEN IN IS REMEMBERED, AND THE ADDRESS BAR KEEPS IT.
+  //
+  // The server resolves a URL without `?org=` to this remembered org (lib/console-org.ts), so a
+  // link or page load that dropped it no longer flashes "Select your organization". The URL is
+  // put back too, so every href built from location.search from here on carries it again.
+  const orgId = org?.id;
+  useEffect(() => {
+    if (!orgId) return;
+    rememberOrg(orgId);
+    if (routeMode) return;
+    const restored = withOrgRestored(window.location.search, orgId);
+    if (restored) {
+      try {
+        window.history.replaceState(null, "", `${window.location.pathname}${restored}${window.location.hash}`);
+      } catch { /* non-browser */ }
+    }
+  }, [orgId, routeMode, queryString]);
 
   // Depend on the query STRING (stable across router.refresh(), changes on real
   // navigation) so the area syncs from the URL on deep links like "View in Work →"
@@ -1509,6 +1533,9 @@ function ConsoleShellInner({
               <span className="bx-org-name">{org.name}</span>
               <span className="bx-org-switch" aria-hidden>⌄</span>
             </button>
+          ) : null}
+          {projects && scope.projectId ? (
+            <ProjectMenu projects={projects.items} activeId={scope.projectId} homeId={projects.homeId} />
           ) : null}
 
           <RefreshState coordinator={refreshCoordinator} fallback={refreshing}>{(refreshing) => (

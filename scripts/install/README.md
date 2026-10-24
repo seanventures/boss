@@ -24,7 +24,7 @@ Pass installer flags after `bash -s --`:
 
 ```bash
 curl -fsSL https://boss.sean.network/install.sh | bash -s -- --yes
-curl -fsSL https://boss.sean.network/install.sh | bash -s -- --ref v1.0-rc10.9 --console-origin https://boss.example.com
+curl -fsSL https://boss.sean.network/install.sh | bash -s -- --ref v1.0-rc10.10 --console-origin https://boss.example.com
 ```
 
 `BOSS_REF=main` (or `--ref main`) installs the development branch instead of a release.
@@ -145,23 +145,23 @@ Install the reviewed RC10.5 source without the website. This uses Git authentica
 (
   set -e
   BOSS_RELEASE_COMMIT=cb278010b4cef68c55a9684c3e9bd74b14c8b520
-  git clone --branch v1.0-rc10.9 https://github.com/seanventures/boss.git boss-rc10.9
-  cd boss-rc10.9
+  git clone --branch v1.0-rc10.10 https://github.com/seanventures/boss.git boss-rc10.10
+  cd boss-rc10.10
   git checkout --detach "$BOSS_RELEASE_COMMIT"
   ./install.sh --dir "$PWD" --ref "$BOSS_RELEASE_COMMIT"
 )
 ```
 
-The `boss-rc10.9` directory must not already exist. Read the script in that checkout before running it if you want to inspect it. This records a pinned commit; a later upgrade needs `boss upgrade --to REF`. Add installer flags to the `./install.sh` line, for example `--console-origin https://boss.example.com`.
+The `boss-rc10.10` directory must not already exist. Read the script in that checkout before running it if you want to inspect it. This records a pinned commit; a later upgrade needs `boss upgrade --to REF`. Add installer flags to the `./install.sh` line, for example `--console-origin https://boss.example.com`.
 
 ### From a local checkout
 
 Clone the release and install it in place:
 
 ```bash
-git clone --branch v1.0-rc10.9 https://github.com/seanventures/boss.git
+git clone --branch v1.0-rc10.10 https://github.com/seanventures/boss.git
 cd boss
-./install.sh --dir "$PWD" --ref v1.0-rc10.9
+./install.sh --dir "$PWD" --ref v1.0-rc10.10
 ```
 
 A checkout at a release tag stays on that release. A checkout on a branch follows `main` unless you pass `--ref`, and the ref is then [recorded](#which-release-and-staying-on-it). From a checkout you already have on the branch you want:
@@ -237,6 +237,7 @@ A rerun retains both API credentials and any operator-added API keys, the databa
 - A rerun remembers which release you installed. Without `--ref`, it stays on the ref recorded in `.boss-release`, so changing a setting never moves a release install to `main`: `boss update --install-coding-clis` or `./install.sh --dir "$PWD" --install-coding-clis`.
 - Pasting the installer line again also backs up an existing running install before switching to a newer source revision. A stopped database container is started from its existing image ID for that snapshot, then returned to its stopped state. If that container is missing, cannot start, or backup fails, the source and configuration stay untouched. The backup path is printed; keep it private.
 - For an older headless install, pass `--no-web` once to record that choice; use `--web` to enable the console later.
+- The local test inbox (Mailpit) is off unless you pass `--with-mailpit` (or set `BOSS_EMAIL_DEV_INBOX=1`). A rerun keeps that choice; `--no-mailpit` turns it off. Real mail goes through the Email (SMTP) connector: see [Email](../../docs/community/EMAIL.md).
 - If you choose Infisical and it cannot be provisioned, the installer reports an incomplete install. The next rerun keeps that choice and retries it rather than silently switching to database credential storage.
 
 ### API keys

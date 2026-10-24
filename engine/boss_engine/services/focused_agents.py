@@ -4,6 +4,9 @@ Agent Studio already versions full roles. This service is the thin path:
 pick a focus template, start the agent, keep it working.
 
 Hard rules (same as Metatron captain):
+  * The playbook proposes; the AGENT decides. Which validated move (if any) a tick applies is
+    the agent's turn through the one agent pipeline (AgentService.decide, BOSSAPP-759). No
+    model, or unsure: nothing is applied.
   * Every action is validated before apply.
   * Decisions and deadletters never auto-apply.
   * BOSS self-change is a PR, never a silent write.
@@ -499,6 +502,7 @@ class FocusedAgentService:
         repo = f"{self.settings.target_github_owner}/{self.settings.target_github_repo}"
         applied: list[dict[str, Any]] = []
         rejected: list[dict[str, Any]] = []
+        applicable: list[dict[str, Any]] = []
         for move in planned:
             verdict = validate_move(
                 move, before, auto=bool(auto), in_flight=in_flight,
@@ -510,6 +514,21 @@ class FocusedAgentService:
                 if move.get("apply") and not verdict["ok"]:
                     move["status"] = "rejected"
                     rejected.append(move)
+                continue
+            applicable.append(move)
+        # THE AGENT DECIDES WHICH MOVE, THROUGH THE ONE PIPELINE (BOSSAPP-759). The playbook
+        # above proposes and validates; whether to apply one of them now is the agent's turn
+        # (AgentService.decide), with its duty, the snapshot and the validated moves as input.
+        # No model, or unsure: nothing is applied this tick, and the tick says why.
+        decision = self._decide_move(connection, project_id=project_id, actor=actor,
+                                     agent=agent, trigger=trigger, snapshot=before,
+                                     applicable=applicable) if applicable else None
+        chosen = (decision or {}).get("move")
+        for move in applicable:
+            if move is not chosen:
+                move["status"] = "skipped"
+                move["skipped_because"] = ((decision or {}).get("word")
+                                           or "the agent chose another move")
                 continue
             focus = str(agent.get("focus") or "")
             move_directive = str(move.get("directive") or "")
@@ -561,7 +580,8 @@ class FocusedAgentService:
                 "trigger": trigger[:80],
                 "obs": json.dumps(before),
                 "plan": json.dumps(planned),
-                "val": json.dumps({"moves": [move.get("validation") for move in planned]}),
+                "val": json.dumps({"moves": [move.get("validation") for move in planned],
+                                   "decision": (decision or {}).get("decided_by")}),
                 "app": json.dumps(applied),
                 "rej": json.dumps(rejected),
                 "ver": json.dumps(verify),
@@ -614,6 +634,8 @@ class FocusedAgentService:
             "rejected": rejected,
             "planned": planned,
             "verify": verify,
+            # Which move the agent chose and why (None when no move was applicable).
+            "decision": (decision or {}).get("decided_by"),
             "receipt_id": receipt.get("id"),
             "note": (
                 f"{agent.get('name')} {trigger}: {len(applied)} applied, "
@@ -622,6 +644,57 @@ class FocusedAgentService:
                 "Decisions and deadletters stay human."
             ),
         }
+
+    #: What a move does, as the agent is offered it.
+    _MOVE_MEANS = {
+        "restart_preview": "restart the preview of the latest verify-green run, so it is "
+                           "reachable again",
+        "launch_factory_job": "launch a governed factory job with this directive",
+    }
+
+    def _decide_move(self, connection: Connection, *, project_id: str, actor: str,
+                     agent: dict[str, Any], trigger: str, snapshot: dict[str, Any],
+                     applicable: list[dict[str, Any]]) -> dict[str, Any]:
+        """The agent's turn through the one pipeline: which ONE validated move to apply now, or
+        none. Returns {move, decided_by, word}; `move` is None unless one was decided."""
+        from .agent_service import CLARIFY, NO_MODEL, AgentService, Choice
+
+        choices = [Choice(f"m{i}", f"{self._MOVE_MEANS.get(str(m.get('kind')), m.get('kind'))}"
+                                   f": {str(m.get('detail') or m.get('directive') or '')[:400]}",
+                          label=str(m.get("kind") or "apply"))
+                   for i, m in enumerate(applicable)]
+        choices.append(Choice("none", "apply nothing this tick: none of these serves the duty "
+                                      "now, or it is better to wait for the next tick",
+                              acts=False, label="Wait"))
+        name = str(agent.get("name") or "a focused agent")
+        decision = AgentService(self.settings).decide(
+            connection, project_id=project_id, actor=actor, agent=name,
+            external_ref=f"focused_agent:{agent.get('id')}",
+            situation=(f"You are {name}, a focused BOSS agent on duty ({trigger}). Your duty: "
+                       f"{agent.get('focus') or 'none stated'}. BOSS observed the project and "
+                       "its playbook proposed these moves; each one passed BOSS's validation "
+                       "(budget, in-flight work, duplicates). Decide which ONE to apply now."),
+            message="Which of these validated moves should you apply now, if any?",
+            choices=choices,
+            context={"what BOSS observed": {k: v for k, v in snapshot.items()
+                                            if not isinstance(v, (list, dict))
+                                            or len(json.dumps(v, default=str)) < 2000},
+                     "the validated moves": [{k: m.get(k) for k in
+                                              ("kind", "detail", "directive", "finding_id")}
+                                             for m in applicable]},
+            hints=[f"BOSS's duty playbook proposed {len(applicable)} move(s) for this focus"])
+        said = decision.to_dict()
+        if not decision.decided or decision.action == "none":
+            word = ("no model answered, so no move was applied" if decision.status == NO_MODEL
+                    else decision.question if decision.status == CLARIFY
+                    else decision.reason or "the agent chose to wait")
+            return {"move": None, "decided_by": said, "word": word}
+        try:
+            move = applicable[int(str(decision.action)[1:])]
+        except (ValueError, IndexError):
+            return {"move": None, "decided_by": said, "word": "the answer named no move"}
+        move["chosen_because"] = decision.reason
+        return {"move": move, "decided_by": said, "word": ""}
 
     def _due_reason(self, connection: Connection, agent: dict[str, Any]) -> Optional[str]:
         mode = str(agent.get("mode") or "on_demand")

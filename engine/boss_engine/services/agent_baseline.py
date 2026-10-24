@@ -40,7 +40,13 @@ import re
 from typing import Any
 
 #: The skills every agent holds. `test_every_agent_holds_the_baseline` fails on a role without.
-BASELINE_SKILLS: tuple[str, ...] = ("boss.fundamentals", "repo.read", "boss.propose_fix", "knowledge.read")
+#:
+#: EVERY SHIPPED AGENT HOLDS THE SAME BASE (operator, 2026-10-23): the same expertise and the same
+#: action and tool access through the one agent pipeline. Agents differ only by the skills and MCP
+#: servers a person assigns (role_skills / role_mcp_servers) or a customised agent, never by a code
+#: branch on a role name. `test_every_shipped_agent_has_the_same_base` enforces it.
+BASELINE_SKILLS: tuple[str, ...] = ("boss.fundamentals", "repo.read", "boss.propose_fix",
+                                    "knowledge.read", "knowledge.propose")
 
 #: The engine read tools `boss.fundamentals` offers, by name — its spec's policy.tools, and
 #: nothing else. Every one must be a `read` tool in the registry (the enforcing test checks).
@@ -82,11 +88,10 @@ KNOWLEDGE_TOOLS: tuple[str, ...] = ("kg_symbol", "kg_callers", "kg_blast_radius"
 
 #: `knowledge.propose` offers `kg_propose_fact`: the one bundle that writes. What it writes is
 #: always `inferred` (quarantined, forgettable, never above governed or approved), so it is
-#: tier 0. It is NOT in the baseline: operator decision 2026-10-21 grants it, through the role
-#: specs' allowed_skills, to exactly PROPOSE_FACT_ROLES.
+#: tier 0. It is in the baseline: it was granted to six named roles (2026-10-21), and a shipped
+#: agent is not handicapped by a role list in code (operator, 2026-10-23). The governance on
+#: what it writes is the same for every agent.
 PROPOSE_FACT_TOOLS: tuple[str, ...] = ("kg_propose_fact",)
-PROPOSE_FACT_ROLES: tuple[str, ...] = ("pm", "engineering_captain", "qa", "adversarial_reviewer",
-                                       "security_reviewer", "sre")
 
 #: Bundles allowed to offer a write tool. Each such tool must declare reversibility "safe".
 WRITE_BUNDLES: frozenset[str] = frozenset({"knowledge.propose"})

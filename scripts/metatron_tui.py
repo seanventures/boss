@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Metatron captain TUI — stdlib REPL against /v1/metatron/*.
+"""Metatron — BOSS's terminal. A stdlib REPL client of the one BOSS agent and the /v1 API.
+
+Plain text is an Ask BOSS turn: POST /v1/metatron/session, a thin adapter onto the same
+`agent_turn` the console calls (BOSSAPP-759). The agent's offers become numbered choices; picking
+one goes through the console's own button path (POST /v1/engine/agent/action).
 
 Reads BOSS_API_URL, BOSS_API_KEY, and BOSS_PROJECT_ID from the environment.
 Never prints the API key.
@@ -40,18 +44,24 @@ DEFAULT_TIMEOUT_SECONDS = 30.0
 OPS_PAGE_SIZE = 25
 
 HELP_TEXT = (
-    "Slash commands: /watch  /overwatch  /drive [auto|go]  /goals  /projects  /project [ID]  /quit\n"
+    "Type naturally to talk to the BOSS agent — the same agent, thread and actions as the "
+    "console's Ask BOSS.\n"
+    "Its offers are numbered: /pick N (or just N) runs one, /confirm dispatches a pending plan.\n"
+    "Captain commands: /watch  /overwatch  /drive [auto|go]  /goals  — run only when typed.\n"
+    "Slash commands: /projects  /project [ID]  /quit\n"
     "Work: /tasks [PAGE]  /task ID  /task create DEDUPE_KEY TITLE\n"
     "Decisions: /decisions [open|all] [PAGE]  /decision ID  /decision approve ID NOTE  /decision reject ID NOTE\n"
     "API commands: /ops [domain or search|*] [--page N]  /describe OPERATION_ID  /op OPERATION_ID [JSON]  /coverage\n"
     "Fallback: /api METHOD /v1/path [JSON]\n"
-    "Type naturally to POST /v1/metatron/session.\n"
     "Use /ops to discover live API operations; /op accepts JSON with path, query, and body keys.\n"
     "For typed JSON writes, /op inserts the selected project_id when the body omits it.\n"
     "The API enforces project, permission, edition, approval, budget, and receipt rules.\n"
     "/overwatch runs observe→measure→validate→apply-safe→verify.\n"
-    "'go' or '/drive auto' applies only moves that pass validation."
+    "'/go' or '/drive auto' applies only moves that pass validation."
 )
+
+#: A bare number picks one of the last turn's numbered choices.
+CHOICE_NUMBER = re.compile(r"[1-9][0-9]{0,2}\Z")
 
 
 class ConfigError(Exception):
@@ -287,8 +297,19 @@ def parse_line(line: str) -> Command:
             except json.JSONDecodeError:
                 return Command(kind="error", message="/api body must be valid JSON")
         return Command(kind="api", method=method, path=path, body=body)
-    if lowered == "go" or lowered == "/go":
+    # A CAPTAIN POWER IS TYPED AS A COMMAND, NEVER READ OUT OF A SENTENCE. Bare "go" used to
+    # apply drive moves, a factory job among them; it is a word the agent hears now (BOSSAPP-759).
+    if lowered == "/go":
         return Command(kind="drive", auto=True)
+    if lowered == "/confirm":
+        return Command(kind="confirm")
+    if CHOICE_NUMBER.match(lowered):
+        return Command(kind="pick", page=int(lowered))
+    if lowered == "/pick" or lowered.startswith("/pick "):
+        parts = raw.split()
+        if len(parts) != 2 or not CHOICE_NUMBER.match(parts[1]):
+            return Command(kind="error", message="usage: /pick N, with N one of the numbered choices")
+        return Command(kind="pick", page=int(parts[1]))
     if lowered == "/drive" or lowered.startswith("/drive "):
         rest = raw.split(None, 1)[1].strip().lower() if " " in raw else ""
         return Command(kind="drive", auto=rest in {"auto", "go"})
@@ -345,6 +366,48 @@ def format_payload(payload: Any) -> str:
     if lines:
         return "\n".join(lines)
     return json.dumps(payload, indent=2, default=str)
+
+
+def format_agent_turn(payload: Any, choices: list[dict[str, Any]]) -> str:
+    """An Ask BOSS reply, for a terminal: the words, what it did, what it offers (numbered, for
+    /pick N), and anything waiting on the person's say-so."""
+    if not isinstance(payload, dict):
+        return format_payload(payload)
+    lines: list[str] = []
+    reply = str(payload.get("reply") or "").strip()
+    if reply:
+        lines.append(reply)
+    done = [a for a in payload.get("actions") or [] if isinstance(a, dict)]
+    if done:
+        lines.append("")
+        lines.append("Done:")
+        for action in done:
+            lines.append(f"  - {action.get('summary') or action.get('kind') or 'action'}")
+    pending = payload.get("pending_confirmation")
+    if isinstance(pending, dict) and pending.get("plan_id"):
+        lines.append("")
+        summary = pending.get("summary") or pending.get("title") or pending.get("plan_id")
+        lines.append(f"Waiting for your confirmation: {summary}")
+        lines.append("  /confirm to go ahead, or say what to change.")
+    if choices:
+        lines.append("")
+        lines.append("Choices (nothing has run yet — /pick N, or type N):")
+        for number, choice in enumerate(choices, 1):
+            label = choice.get("label") or choice.get("tool") or choice.get("message") or "choice"
+            why = str(choice.get("why") or "").strip()
+            tool = f" [{choice['tool']}]" if choice.get("kind") == "action" else ""
+            lines.append(f"  {number}. {label}{tool}" + (f" — {why}" if why else ""))
+    return "\n".join(lines) if lines else format_payload(payload)
+
+
+def format_action_result(payload: Mapping[str, Any]) -> str:
+    """What pressing an offer did (AgentActionRunResponse)."""
+    tool = payload.get("tool") or "action"
+    if payload.get("ok") is False or payload.get("error"):
+        return f"{tool} did not run: {payload.get('error') or 'refused'}"
+    result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
+    said = result.get("reply") or result.get("summary") or result.get("note") or result.get("message")
+    return f"{tool}: done." + (f"\n{said}" if said else "")
 
 
 def format_ops(payload: Mapping[str, Any]) -> str:
@@ -694,6 +757,8 @@ class MetatronClient:
         self.config = config
         self.project_id = config.project_id
         self.thread_id: Optional[str] = None
+        #: The last agent turn, whose offers /pick N and /confirm act on.
+        self.last_turn: Optional[dict[str, Any]] = None
         self._injected_urlopen = urlopen
         self._openapi_document: dict[str, Any] | None = None
         self._api_catalog: dict[str, Any] | None = None
@@ -745,17 +810,83 @@ class MetatronClient:
             if isinstance(thread_id, str) and thread_id.strip():
                 self.thread_id = thread_id.strip()
 
-    def session(self, message: str) -> Any:
+    def session(self, message: str, *, confirm_plan_id: str = "", depth: str = "") -> Any:
+        """One Ask BOSS turn — the console's request body, the console's reply (AgentChatResponse)."""
         body: dict[str, Any] = {
             "project_id": self.project_id,
             "actor": self.config.actor,
             "message": message,
+            "surface": "chat",
         }
         if self.thread_id:
             body["thread_id"] = self.thread_id
+        if confirm_plan_id:
+            body["confirm_plan_id"] = confirm_plan_id
+        if depth:
+            body["depth"] = depth
         payload = self.request("POST", "/v1/metatron/session", body)
         self._remember_thread(payload)
+        if isinstance(payload, dict) and not payload.get("__http_error__"):
+            self.last_turn = payload
         return payload
+
+    def choices(self) -> list[dict[str, Any]]:
+        """The last turn's numbered choices: its offers, then its next steps — in that order,
+        the order they are printed in."""
+        turn = self.last_turn if isinstance(self.last_turn, dict) else {}
+        out: list[dict[str, Any]] = []
+        for offer in turn.get("proposed_actions") or []:
+            if isinstance(offer, dict) and offer.get("tool"):
+                out.append({"kind": "action", **offer})
+        for step in turn.get("next_steps") or []:
+            if isinstance(step, dict) and step.get("message"):
+                out.append({"kind": "next_step", **step})
+        return out
+
+    def pick(self, number: int) -> Any:
+        """Run choice N exactly as the console's button would: an offer goes to
+        /v1/engine/agent/action with the tool and args the person was shown (no model in
+        between); a next step is the turn the console's next-step button sends."""
+        options = self.choices()
+        if not options:
+            return _command_error("there is nothing to pick — the last reply offered no choices")
+        if number < 1 or number > len(options):
+            return _command_error(f"pick a number from 1 to {len(options)}")
+        chosen = options[number - 1]
+        if chosen["kind"] == "next_step":
+            return self.session(str(chosen["message"]), depth=str(chosen.get("depth") or ""))
+        body: dict[str, Any] = {
+            "project_id": self.project_id,
+            "actor": self.config.actor,
+            "tool": chosen["tool"],
+            "args": dict(chosen.get("args") or {}),
+        }
+        if self.thread_id:
+            body["thread_id"] = self.thread_id
+        if chosen.get("id"):
+            body["action_id"] = chosen["id"]
+        if chosen.get("label"):
+            body["label"] = chosen["label"]
+        payload = self.request("POST", "/v1/engine/agent/action", body)
+        if isinstance(payload, dict) and not payload.get("__http_error__"):
+            # SPENT, AS IN THE CONSOLE: a pressed offer is struck from the message that made it.
+            if isinstance(self.last_turn, dict):
+                self.last_turn = {
+                    **self.last_turn,
+                    "proposed_actions": [
+                        o for o in self.last_turn.get("proposed_actions") or []
+                        if not (isinstance(o, dict) and o.get("id") == chosen.get("id"))
+                    ],
+                }
+        return payload
+
+    def confirm(self) -> Any:
+        turn = self.last_turn if isinstance(self.last_turn, dict) else {}
+        pending = turn.get("pending_confirmation") or {}
+        plan_id = str(pending.get("plan_id") or "") if isinstance(pending, dict) else ""
+        if not plan_id:
+            return _command_error("there is no plan waiting for your confirmation")
+        return self.session("", confirm_plan_id=plan_id)
 
     def watch(self) -> Any:
         return self.request(
@@ -864,6 +995,7 @@ class MetatronClient:
                 return _command_error("project ID contains an unsafe character")
             self.project_id = project_id
             self.thread_id = None  # Conversation context must not cross projects.
+            self.last_turn = None  # ...and neither may the choices it offered.
         return {"active_project_id": self.project_id, "note": "The API checks project access on every request."}
 
     def _openapi(self) -> dict[str, Any]:
@@ -1101,6 +1233,10 @@ class MetatronClient:
             return {"__command_error__": True, "message": command.message}
         if command.kind == "session":
             payload = self.session(command.message)
+        elif command.kind == "pick":
+            payload = self.pick(command.page)
+        elif command.kind == "confirm":
+            payload = self.confirm()
         elif command.kind == "watch":
             payload = self.watch()
         elif command.kind == "overwatch":
@@ -1151,7 +1287,16 @@ class MetatronClient:
         if isinstance(payload, dict) and payload.get("__http_error__"):
             status = payload.get("status")
             body = redact(str(payload.get("body") or ""), self.config.api_key)
+            if status == 401 and "step_up_required" in body:
+                return ("This needs you to confirm it is you (step-up). Sign in again in the "
+                        "console — My account — then run the same command here.\n"
+                        f"HTTP {status}: {body}")
             return f"HTTP {status}: {body}"
+        if command.kind in {"session", "confirm"} or (
+                command.kind == "pick" and isinstance(payload, dict) and "reply" in payload):
+            return redact(format_agent_turn(payload, self.choices()), self.config.api_key)
+        if command.kind == "pick" and isinstance(payload, dict):
+            return redact(format_action_result(payload), self.config.api_key)
         if command.kind == "coverage" and isinstance(payload, dict):
             return (
                 f"discovered: {payload['discovered_operations']}  operation IDs: {payload['operation_id_invokable']}"

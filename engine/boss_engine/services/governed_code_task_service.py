@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from . import parallel_build as _parallel_build
+from .monitoring_guard import KEEP_MONITORING_RULE as _KEEP_MONITORING
 from .review_seats import run_seats as _run_seats
 from .run_terminal import on_status_written
 from ..config import Settings
@@ -1994,7 +1995,7 @@ def _qa_prompt(title, instructions, criteria, test_cmd, *, iac=False, web=False,
             f"- Do NOT run anything and do NOT commit. (BOSS will run: {test_cmd}.)\n"
             "- End with a one-line summary of the cases you wrote.\n"
             + _metrics_tests_clause(title, instructions, service=True)
-            + _test_scope_clause(criteria) + _deferred_e2e_note()
+            + _test_scope_clause(criteria) + _deferred_e2e_note() + _KEEP_MONITORING
             + (_IAC_GUIDANCE + _IAC_QA_GUIDANCE if iac else "")
             + stack_note
         )
@@ -2017,7 +2018,7 @@ def _qa_prompt(title, instructions, criteria, test_cmd, *, iac=False, web=False,
             f"- Do NOT run anything and do NOT commit. (BOSS will run `{test_cmd}` inside {scope}.)\n"
             "- End with a one-line summary of the cases you wrote.\n"
             + _NO_SECRETS_IN_TESTS + _metrics_tests_clause(title, instructions, service=service)
-            + _test_scope_clause(criteria) + _deferred_e2e_note()
+            + _test_scope_clause(criteria) + _deferred_e2e_note() + _KEEP_MONITORING
             + (_IAC_GUIDANCE + _IAC_QA_GUIDANCE if iac else "")
         )
     return (
@@ -2032,7 +2033,7 @@ def _qa_prompt(title, instructions, criteria, test_cmd, *, iac=False, web=False,
         f"- Do NOT run anything and do NOT commit. (BOSS will run `{test_cmd}`.)\n"
         "- End with a one-line summary of the cases you wrote.\n"
         + _NO_SECRETS_IN_TESTS + _metrics_tests_clause(title, instructions, service=service)
-        + _test_scope_clause(criteria) + _deferred_e2e_note()
+        + _test_scope_clause(criteria) + _deferred_e2e_note() + _KEEP_MONITORING
         + (_IAC_GUIDANCE + _IAC_QA_GUIDANCE if iac else "")
     )
 
@@ -2054,6 +2055,13 @@ def _metrics_tests_clause(title: str, instructions: str, *,
     if not wants_ops(bool(service or applies_to(f"{title}\n{instructions}"))):
         return ""
     return "\n\n" + METRICS_TEST_REQUIREMENT + "\n"
+
+
+def _monitoring_removals(spec: Optional[dict]) -> Optional[list[str]]:
+    """The monitoring entries a change ABOUT monitoring was asked to remove, as its spec names
+    them (monitoring_guard.entries' names). Every other removal is undone at the PR."""
+    got = (spec or {}).get("monitoring_removals") if isinstance(spec, dict) else None
+    return [str(x) for x in got] if isinstance(got, list) else None
 
 
 def _run_declaration_rule() -> str:
@@ -2120,7 +2128,7 @@ def _impl_prompt(title, instructions, test_files, test_cmd, *, criteria=(), iac=
         f"- Run `{test_cmd}` from the app directory when a chunk of work is finished, and "
         "iterate until the tests pass. "
         "Create parent directories for SQLite/data files before opening them.\n"
-        + _run_declaration_rule()
+        + _run_declaration_rule() + _KEEP_MONITORING
         + "- Do NOT commit. End with a one-line summary of what you changed.\n"
         + _deferred_e2e_note()
         + FIRST_PASS_CHECKLIST
@@ -2602,7 +2610,7 @@ def _solo_prompt(title, instructions, criteria, test_cmd, *, iac=False, web=Fals
             + f"- Run `{test_cmd}` from {scope} when a chunk of work is finished, and iterate "
             "until it passes. "
             "Create parent directories for SQLite/data files before opening them.\n"
-            + _run_declaration_rule()
+            + _run_declaration_rule() + _KEEP_MONITORING
             + "- Do NOT commit. End with a one-line summary of what you built.\n"
             + FIRST_PASS_CHECKLIST
             + (_IAC_GUIDANCE + _IAC_QA_GUIDANCE if iac else "")
@@ -2616,7 +2624,7 @@ def _solo_prompt(title, instructions, criteria, test_cmd, *, iac=False, web=Fals
         f"- Run `{test_cmd}` when a chunk of work is finished, and iterate until it passes. "
         "Do NOT commit.\n"
         + "- " + SECRETS_FROM_ENV_RULE + "\n"
-        + _run_declaration_rule()
+        + _run_declaration_rule() + _KEEP_MONITORING
         + "- End with a one-line summary of what you built.\n"
         + (_IAC_GUIDANCE + _IAC_QA_GUIDANCE if iac else "")
     )
@@ -4578,7 +4586,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                             for p, content in accumulated.items()]
                            if use_microvm else sandbox.diff()),
                     created_by_job_id=job_id, actual_usd_micros=cost,
-                    **({"pr_base": _release_target["pr_base"]} if _release_target else {}))
+                    **({"pr_base": _release_target["pr_base"]} if _release_target else {}),
+                    monitoring_removals=_monitoring_removals(spec))
                 if pr.get("status") in ("created", "succeeded"):
                     url = pr.get("pull_request_url") or pr.get("url")
                     c.execute(sql("UPDATE code_task_runs SET pull_request_url=:u, updated_at=now() "
@@ -8283,7 +8292,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 created_by_job_id=job_id, actual_usd_micros=cost,
                 evidence=evidence, quality_gate_id=qg_id, run_id=run_id,
                 **({"pr_base": _release_target["pr_base"]} if _release_target else {}),
-                **({"checks_failing": _checks} if _checks else {}))
+                **({"checks_failing": _checks} if _checks else {}),
+                monitoring_removals=_monitoring_removals(spec))
 
         status = proposal.get("status")
         # RETRY THE PR ITSELF. A transient GitHub error, an expired reservation, a network
@@ -8333,7 +8343,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         created_by_job_id=job_id, actual_usd_micros=cost,
                         evidence=evidence, quality_gate_id=qg_id, run_id=run_id,
                         **({"pr_base": _release_target["pr_base"]} if _release_target else {}),
-                        **({"checks_failing": _checks} if _checks else {}))
+                        **({"checks_failing": _checks} if _checks else {}),
+                        monitoring_removals=_monitoring_removals(spec))
                     status = proposal.get("status")
                 except Exception as exc:  # noqa: BLE001
                     _log_caught(logger)

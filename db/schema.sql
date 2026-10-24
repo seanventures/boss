@@ -21,6 +21,8 @@ CREATE TABLE IF NOT EXISTS projects (
   name TEXT NOT NULL,
   slug TEXT NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  -- What a project is for, in its creator's words (POST /v1/projects). Optional.
+  description TEXT,
   UNIQUE(workspace_id, slug)
 );
 
@@ -2835,9 +2837,16 @@ CREATE TABLE IF NOT EXISTS agent_threads (
   agent_role TEXT NOT NULL DEFAULT '',
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  CHECK (surface IN ('chat', 'github')),
+  -- 'agent': a domain agent's turns on a record (AgentService.decide, BOSSAPP-759) — the
+  -- on-call agent on an incident, the inbox on a decision. Never on the chat rail.
+  CHECK (surface IN ('chat', 'github', 'agent')),
   CHECK (status IN ('active', 'closed'))
 );
+DO $$ BEGIN
+  ALTER TABLE agent_threads DROP CONSTRAINT IF EXISTS agent_threads_surface_check;
+  ALTER TABLE agent_threads ADD CONSTRAINT agent_threads_surface_check
+    CHECK (surface IN ('chat', 'github', 'agent'));
+END $$;
 CREATE INDEX IF NOT EXISTS idx_agent_threads_project_actor
   ON agent_threads(project_id, actor, updated_at DESC);
 -- A SHARED TASK THREAD IS SHARED PER AGENT. Two agents discussing one task each keep their
@@ -10136,6 +10145,16 @@ CREATE TABLE IF NOT EXISTS synthetic_checks (
   created_by TEXT NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- A deploy whose boss.deploy.yaml lost monitoring rules (PR paramg/boss-sandbox#234): the rule
+-- keeps running, is marked with when it went missing, and BOSS raises MonitoringRulesDropped.
+ALTER TABLE app_alert_rules ADD COLUMN IF NOT EXISTS dropped_from_manifest_at TIMESTAMPTZ;
+
+-- Email invites: what happened to the last send (sent | failed | not_configured) and the server's
+-- reason, so the console can say why an invitation did not arrive. Never the token or a credential.
+ALTER TABLE identity_invitations ADD COLUMN IF NOT EXISTS delivery_status TEXT;
+ALTER TABLE identity_invitations ADD COLUMN IF NOT EXISTS delivery_error TEXT;
+ALTER TABLE identity_invitations ADD COLUMN IF NOT EXISTS delivered_at TIMESTAMPTZ;
 
 -- BOSSAPP-622 event-driven ingest (operator decision 2026-10-21; services/knowledge/ingest.py).
 -- A run is queued the moment its status becomes completed or failed, and an incident the moment

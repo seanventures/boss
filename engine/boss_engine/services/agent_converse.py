@@ -15,6 +15,12 @@ door the composer uses (`start_from_proposal`, given the API's start function).
           summary, decisions (with who was for and against) and next actions, any of which can
           carry a start card or open a decision.
 
+ONE PIPELINE (BOSSAPP-759). A seat speaks through the pipeline's streaming answer turn
+(`AgentService.answer_stream`, role-addressed, `discuss`: no tools, nothing written), and the
+plan's start card is the pipeline's decision (`AgentService.decide` over the catalogue's
+workflows, the card's draft as the chosen workflow's arguments). Both run INSIDE the turn's
+spend envelope (`_envelope`): ConversationCallSpend makes no model call of its own.
+
 STREAMING. Each word goes out as a `token` event the moment the model writes it: the Claude
 CLI (`stream-json` partial messages) and the OpenAI adapter (`stream=True`) implement
 `stream_text_response`. ConversationCallSpend pins one source and carries its canonical
@@ -43,6 +49,7 @@ from .agent_world_types import AI_DISCLOSURE, ROOM_PRESETS
 from .core import create_blocking_decision, emit_event, make_id
 from .conversation_spend import ConversationAuthority, ConversationCallSpend
 from .typed_decision_spend import TypedDecisionReconciliationRequired
+from .agent_service import AgentService, Choice, SpendEnvelope
 
 log = logging.getLogger("boss.agent_converse")
 
@@ -956,17 +963,15 @@ def _instruction(plan: _Plan, conv: dict, speaker: _Speaker, roles: dict[str, di
             "invent agreement. kind=start only when a workflow below fits the work; "
             "kind=decision when the operator must choose.\n\n" + _catalogue_text(catalogue))
     if plan.mode == "proposal":
+        # A DECISION'S REQUEST (_decide_card): the workflows are its candidates, each with the
+        # draft it needs as its arguments; the decision's own contract says how to answer.
         return (
-            "Turn this conversation into ONE concrete start the operator can review. Reply with "
-            "ONE JSON object and nothing else:\n"
-            '{"message": "<one sentence, in your voice, introducing the plan>", '
-            '"workflow_key": "<one key from the list>", "title": "<≤8 words>", '
-            '"directive": "<what to build or do, 1-3 sentences>", "inputs": {"<field>": "<value>"}, '
-            '"acceptance_criteria": ["<testable>"], "why": "<why this workflow, one line>", '
-            '"agents": {"<step_id>": "<role_key>"}}\n'
-            "Fill only the inputs the workflow declares. Suggest agents only for steps marked "
-            "Auto or (default), and only agents listed; prefer the agents in this "
-            "conversation where their role fits the step.\n\n" + _catalogue_text(catalogue)
+            "Turn this conversation into ONE concrete start the operator can review: choose "
+            "the ONE workflow that fits the work, and fill its arguments with the draft — "
+            "message, title, directive, inputs, acceptance_criteria, why and agents. Fill only "
+            "the inputs the workflow declares. Suggest agents only for steps marked Auto or "
+            "(default), and only agents listed; prefer the agents in this conversation where "
+            "their role fits the step.\n\n" + _catalogue_text(catalogue)
             + "\n\nAgents: " + ", ".join(f"{k} ({_speaker(r, k)})" for k, r in roles.items()))
     if conv["kind"] == "talk":
         if greeting:
@@ -1114,6 +1119,99 @@ def _only_json(value: str) -> dict:
     if not isinstance(parsed, dict):
         raise ValueError("The agent did not answer with a plan. Try again.")
     return parsed
+
+
+def _envelope(spend: ConversationCallSpend, settings: Any, adapter: Any,
+              check_work: Callable[[], None]) -> tuple[SpendEnvelope, dict]:
+    """THE CONVERSATION'S SPEND ENVELOPE around the pipeline's one call (BOSSAPP-759): the turn's
+    ConversationCallSpend — its pinned provider attempt, reservation, lease, settled receipt and
+    the floor checked between every chunk (`check_work`). The pipeline's answer or decision
+    runs inside it; `settled["reply"]` is the (text, usage) it settled."""
+    settled: dict = {}
+
+    def run(produce, *, prompt: str, system_prompt: str):
+        inner = spend.stream(settings, adapter, prompt=prompt, system_prompt=system_prompt,
+                             check_work=check_work, produce=produce)
+        try:
+            for kind, value in inner:
+                if kind == "done":
+                    settled["reply"] = value
+                yield kind, value
+        finally:
+            # Closing the turn (Stop, a closed tab) closes the envelope now, so it settles
+            # what it holds before the floor is given back.
+            inner.close()
+
+    return SpendEnvelope(run), settled
+
+
+#: What a start card's chosen workflow comes with: the draft the operator reviews and presses.
+def _card_arguments(workflow: dict) -> dict:
+    declared = ", ".join(f"{k} ({v}){' — required' if k in workflow['required'] else ''}"
+                         for k, v in workflow["inputs"].items()) or "none"
+    steps = ", ".join(s["id"] for s in workflow["steps"]
+                      if not s["agent"] or s.get("soft")) or "none"
+    return {"properties": {
+        "message": {"type": "string",
+                    "description": "one sentence, in your voice, introducing the plan"},
+        "title": {"type": "string", "description": "at most 8 words"},
+        "directive": {"type": "string", "description": "what to build or do, 1-3 sentences"},
+        "inputs": {"type": "object",
+                   "description": f"only the inputs this workflow declares: {declared}"},
+        "acceptance_criteria": {"type": "array", "description": "testable criteria"},
+        "why": {"type": "string", "description": "why this workflow, one line"},
+        "agents": {"type": "object",
+                   "description": "step_id -> role_key, only for these steps (Auto or a "
+                                  f"default): {steps}"}}}
+
+
+def _decide_card(engine, settings: Any, plan: _Plan, conv: dict, speaker: _Speaker,
+                 roles: dict[str, dict], role: dict, *, system_prompt: str, about: str,
+                 transcript: str, catalogue: list[dict], envelope: SpendEnvelope) -> dict:
+    """THE START CARD, DECIDED (BOSSAPP-759): `AgentService.decide` over the catalogue's
+    workflows, by the seat in its own voice (its persona is the decision's brief), with the
+    conversation as the record. The chosen workflow's arguments are the card's draft —
+    directive, inputs, acceptance, who runs each step — checked by `validate_proposal` against
+    what this project can run. Offering a card changes nothing (only the operator's press
+    starts work), so every workflow is a choice that does not act. Under the turn's envelope it
+    is one attempt: a refused answer is not asked again; the turn says why it failed.
+
+    Returns {proposal, message, refused}: the validated card, or None and why."""
+    from ..db import begin
+
+    checked: dict = {}
+
+    def check(answer: dict, _corpus: str) -> str:
+        draft = {**dict(answer.get("arguments") or {}), "workflow_key": answer["action"]}
+        try:
+            with begin(engine) as c:
+                checked["proposal"] = validate_proposal(c, settings, plan.project_id, draft,
+                                                        catalogue)
+        except ValueError as error:
+            return str(error)
+        checked["message"] = str(draft.get("message") or "")
+        return ""
+
+    choices = [Choice(w["workflow_key"], f"start {w['name']}: {w['description']}",
+                      acts=False, label=f"Start {w['name']}", arguments=_card_arguments(w))
+               for w in catalogue]
+    decision = AgentService(settings).decide(
+        None, project_id=plan.project_id, actor=plan.actor, role=speaker.role_key,
+        agent=_speaker(role, speaker.role_key), external_ref=f"conversation:{plan.conversation_id}",
+        situation=(f"The operator and {_speaker(role, speaker.role_key)} have been scoping work in "
+                   f"a {conv['kind']}, and the operator pressed Propose."),
+        message=_instruction(plan, conv, speaker, roles, False, catalogue),
+        choices=choices,
+        context={"about": about or None, "conversation": transcript or None,
+                 "agents": {k: _speaker(r, k) for k, r in roles.items()}},
+        brief=system_prompt, check=check, envelope=envelope, context_limit=60_000)
+    if decision.decided and checked.get("proposal"):
+        return {"proposal": checked["proposal"], "message": checked.get("message") or "",
+                "refused": ""}
+    refused = decision.refused or decision.error or "no plan was decided"
+    if refused == "not the JSON object asked for":
+        refused = "The agent did not answer with a plan. Try again."
+    return {"proposal": None, "message": "", "refused": refused}
 
 
 def _speak(engine, settings: Any, plan: _Plan, speaker: _Speaker) -> Iterator[dict]:
@@ -1297,14 +1395,28 @@ def _speak(engine, settings: Any, plan: _Plan, speaker: _Speaker) -> Iterator[di
             spend.acting = plan.authority.acting
             spend.max_cost_usd_micros = (REPLY_RESERVE_MICROS if plan.mode == "reply"
                                           else SYNTHESIS_RESERVE_MICROS)
-            stream = spend.stream(settings, adapter, prompt=prompt,
-                                  system_prompt=system_prompt, check_work=check_work)
-            for kind, value in stream:
-                if kind == "chunk" and not structured:
-                    yield {"type": "token", "turn_id": turn_id, "text": value}
-                elif kind == "done":
-                    full, usage = value
-                    usage = usage or {}
+            envelope, settled = _envelope(spend, settings, adapter, check_work)
+            if plan.mode == "proposal":
+                # THE START CARD IS A DECISION: which workflow to offer, with its draft as the
+                # chosen action's arguments, by the pipeline's one decision — inside this
+                # turn's envelope, so it is still one governed, settled call.
+                card = _decide_card(engine, settings, plan, conv, speaker, roles, role,
+                                    system_prompt=system_prompt, about=about,
+                                    transcript=transcript, catalogue=catalogue,
+                                    envelope=envelope)
+                full, usage = settled.get("reply") or ("", {})
+            else:
+                # A SEAT SPEAKS: a role-addressed turn through the pipeline's streaming answer,
+                # under this conversation's envelope.
+                stream = AgentService(settings).answer_stream(
+                    role=speaker.role_key, system_prompt=system_prompt, prompt=prompt,
+                    envelope=envelope)
+                for kind, value in stream:
+                    if kind == "chunk" and not structured:
+                        yield {"type": "token", "turn_id": turn_id, "text": value}
+                    elif kind == "done":
+                        full, usage = value
+            usage = usage or {}
         except Exception as error:  # noqa: BLE001 — explained to the operator, never raised
             if spend is not None and spend.producer_failed and plan.authority.incomplete:
                 plan.authority.incomplete()
@@ -1331,17 +1443,17 @@ def _speak(engine, settings: Any, plan: _Plan, speaker: _Speaker) -> Iterator[di
         if structured:
             try:
                 with begin(engine) as c:
-                    parsed = _only_json(full)
                     if plan.mode == "proposal":
-                        proposal = validate_proposal(c, settings, plan.project_id, parsed,
-                                                     catalogue)
+                        if card["proposal"] is None:
+                            raise ValueError(card["refused"])
+                        proposal = card["proposal"]
                         _supersede(c, plan.conversation_id)
                         payload = {**proposal, "spend_status": "settled"}
-                        content = str(parsed.get("message") or proposal["why"]
-                                      or "Here is a plan.")
+                        content = str(card["message"] or proposal["why"] or "Here is a plan.")
                         extra_events.append({"type": "proposal", "turn_id": turn_id,
                                              "proposal": proposal})
                     else:
+                        parsed = _only_json(full)
                         summary = _validate_summary(c, settings, plan.project_id, parsed, conv,
                                                     speaker.role_key, catalogue)
                         payload = {**summary, "spend_status": "settled"}

@@ -1,0 +1,259 @@
+version: 1
+name: order-api
+kind: compose
+compose:
+  file: docker-compose.yml
+health:
+  - url: "{target.public_url}/health"
+    expect: 200
+metrics:
+  path: /metrics
+  interval: 15
+  alert:
+    error_rate_percent: 5
+    window_minutes: 2
+    min_requests: 20
+alerts:
+  # Monitoring pack: written by BOSS's Set up monitoring step (Beacon, SRE) from the code and the series the app emitted. Reviewed in this pull request; change it here.
+  error_rate:
+    threshold: 5
+    window_minutes: 5
+    min_requests: 20
+    severity: sev2
+    runbook_url: runbooks/order-api-error-rate.md
+  latency_p95:
+    threshold: 1000
+    window_minutes: 5
+    min_requests: 20
+    severity: sev3
+    runbook_url: runbooks/order-api-p95-latency.md
+  health_check:
+    min_failures: 3
+    window_minutes: 10
+    severity: sev1
+    runbook_url: runbooks/order-api-health-check.md
+  no_traffic:
+    window_minutes: 15
+    expected_hours: 2
+    enabled: true
+    severity: sev3
+    runbook_url: runbooks/order-api-no-traffic.md
+  rules:
+  - alert: OrdersCreateServerErrorRateHigh
+    expr: sum(rate(orders_created_total{app="Order API",environment="staging",result="server_error"}[5m]))
+      > 0.02
+    for: 5m
+    labels:
+      severity: sev2
+    annotations:
+      summary: Order creation is failing server-side
+      description: orders_created_total{result="server_error"} is only incremented in orders.py's post_order
+        when create_order() (repository.py) raises after validation already passed, so this is a DB/persistence
+        fault, not a bad request.
+      runbook_url: runbooks/order-create-failures.md
+  - alert: OrdersZeroSuccessWithTraffic
+    expr: sum(rate(http_requests_total{app="Order API",environment="staging",route="/orders",method="POST"}[10m]))
+      > 0 and sum(rate(orders_created_total{app="Order API",environment="staging",result="success"}[10m]))
+      == 0
+    for: 10m
+    labels:
+      severity: sev1
+    annotations:
+      summary: Nobody can place an order right now
+      description: Catches the case where every POST /orders call ends in validation_error or server_error
+        (e.g. catalogue/pricing data is broken or the DB is unwritable) even if the error-rate ratio alert
+        hasn't crossed its percentage threshold yet.
+      runbook_url: runbooks/order-create-failures.md
+  - alert: OrderCreateLatencyHigh
+    expr: 1000 * histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{app="Order API",environment="staging",route="/orders",method="POST"}[10m]))
+      by (le)) > 750
+    for: 10m
+    labels:
+      severity: sev3
+    annotations:
+      summary: Order creation is getting slow
+      description: POST /orders does Decimal pricing math (pricing.py) then an insert under repository.py's
+        global threading.Lock; sustained p95 growth here usually means lock contention or a slow sqlite
+        write, ahead of it becoming a full error-rate incident.
+      runbook_url: runbooks/latency-runbook.md
+  - alert: OrdersSummaryServerErrorRateHigh
+    expr: sum(rate(http_requests_total{app="Order API",environment="staging",route="/orders/summary",method="GET",status=~"5.."}[10m]))
+      > 0.02
+    for: 10m
+    labels:
+      severity: sev2
+    annotations:
+      summary: Orders summary endpoint is erroring
+      description: GET /orders/summary calls get_today_summary() (repository.py), a grouped aggregate
+        query run under the same global threading.Lock used by order writes. A 5xx here is not the expected
+        config-toggle 404 (ORDERS_SUMMARY_ENABLED=false, tested in test_orders_summary_disabled_returns_404_p2)
+        — it means the aggregate query itself is failing, most likely the same DB fault class that trips
+        OrdersCreateServerErrorRateHigh.
+      runbook_url: runbooks/order-api-orders-summary-endpoint-is-erroring.md
+  - alert: OrdersSummaryLatencyHigh
+    expr: 1000 * histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{app="Order API",environment="staging",route="/orders/summary",method="GET"}[10m]))
+      by (le)) > 500
+    for: 10m
+    labels:
+      severity: sev3
+    annotations:
+      summary: Orders summary queries are slow and may be stalling order writes
+      description: get_today_summary() runs a full GROUP BY aggregate over the orders table while holding
+        repository.py's single global lock, the same lock create_order/update_status/delete_pending need.
+        Sustained p95 growth here doesn't just slow the reporting caller, it serializes and delays checkout
+        and cancellation traffic.
+      runbook_url: runbooks/order-api-orders-summary-queries-are-slow-and-may-be-stallin.md
+  - alert: OrdersDeleteServerErrorRateHigh
+    expr: sum(rate(http_requests_total{app="Order API",environment="staging",route="/orders/{id}",method="DELETE",status=~"5.."}[10m]))
+      > 0.02
+    for: 10m
+    labels:
+      severity: sev2
+    annotations:
+      summary: Cancelling pending orders is failing server-side
+      description: DELETE /orders/{id} calls delete_pending() (repository.py), which deletes order_items
+        then the order row under the global lock. A 5xx here is not the expected 404 (missing order) or
+        409 (order not pending, tested in test_delete_order_conflict_envelope_p2) — it means the delete
+        write itself is failing, leaving an order stuck pending that a customer believes they cancelled.
+      runbook_url: runbooks/order-api-cancelling-pending-orders-is-failing-server-side.md
+  - alert: OrdersCreatePricingErrorsUnseen
+    expr: sum(rate(http_requests_total{app="Order API",environment="staging",route="/orders",method="POST",status=~"5.."}[10m]))
+      > 0.02
+    for: 10m
+    labels:
+      severity: sev2
+    annotations:
+      summary: POST /orders is returning 5xx that the order-create failure metric can't see
+      description: orders.py's post_order() calls price_order() (the new pricing.py bulk-pricing module,
+        bounded by MAX_ITEMS=100 and MAX_QUANTITY_PER_LINE=10000) BEFORE the try/except that wraps create_order()
+        and increments orders_created_total{result="server_error"}. An exception raised inside price_order()
+        (e.g. bad catalogue.py price data, Decimal edge case on a large bulk quantity) instead falls through
+        to error_handlers.py's generic Exception handler, returns a 500, and is logged — but never increments
+        orders_created_total. That means OrdersCreateServerErrorRateHigh is structurally blind to this
+        failure class, and OrdersZeroSuccessWithTraffic only fires once 100% of orders fail for 10 straight
+        minutes. This rule watches the route-level http_requests_total status code directly so a partial
+        pricing-layer outage (e.g. one bad SKU price entry) is caught long before every order is failing.
+      runbook_url: runbooks/order-create-pricing-failures.md
+  - alert: OrdersListServerErrorRateHigh
+    expr: sum(rate(http_requests_total{app="Order API",environment="staging",route="/orders",method="GET",status=~"5.."}[10m]))
+      > 0.02
+    for: 10m
+    labels:
+      severity: sev2
+    annotations:
+      summary: Listing orders is failing server-side
+      description: get_orders() builds a dynamic WHERE query (status/customer_id filters, LIMIT clamp)
+        and calls list_orders() (repository.py) under the global lock. A 5xx here is not the expected
+        422 for an invalid status filter (test_list_orders_invalid_status_rejected_p2) — it means the
+        list query itself is failing, which blocks customers and any internal tooling from seeing order
+        history at all.
+      runbook_url: runbooks/order-list-failures.md
+  - alert: OrdersListLatencyHigh
+    expr: 1000 * histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{app="Order API",environment="staging",route="/orders",method="GET"}[10m]))
+      by (le)) > 900
+    for: 10m
+    labels:
+      severity: sev3
+    annotations:
+      summary: Listing orders is getting slow
+      description: list_orders() runs a filtered, ORDER BY created_at DESC query (up to MAX_LIMIT=200
+        rows) under repository.py's single global threading.Lock, the same lock create_order/update_status/delete_pending
+        need. Growing p95 here means lock contention or a slow scan is starting to spill over onto order
+        creation and cancellation, ahead of it becoming a full outage.
+      runbook_url: runbooks/order-list-latency.md
+  - alert: OrderGetByIdServerErrorRateHigh
+    expr: sum(rate(http_requests_total{app="Order API",environment="staging",route="/orders/{id}",method="GET",status=~"5.."}[10m]))
+      > 0.02
+    for: 10m
+    labels:
+      severity: sev2
+    annotations:
+      summary: Fetching a single order is failing server-side
+      description: get_order_by_id() calls get_order() (repository.py) under the global lock. A 5xx here
+        is not the expected 404 for a missing id (test_get_order_404_envelope_p2) — it means the single-row
+        lookup itself is failing, which tends to track the same DB fault class that trips the order-create
+        and summary alerts.
+      runbook_url: runbooks/order-get-by-id-failures.md
+  - alert: OrderPatchStatusServerErrorRateHigh
+    expr: sum(rate(http_requests_total{app="Order API",environment="staging",route="/orders/{id}",method="PATCH",status=~"5.."}[10m]))
+      > 0.02
+    for: 10m
+    labels:
+      severity: sev2
+    annotations:
+      summary: Updating order status is failing server-side
+      description: patch_order() calls update_status() (repository.py), which writes the new status under
+        the global lock. A 5xx here is not the expected 404 for a missing id (test_patch_order_404_p2)
+        — it means a status transition (e.g. pending to paid to shipped) silently failed to persist, leaving
+        the order's real state out of sync with whatever billing/fulfilment system just acted on the PATCH
+        response.
+      runbook_url: runbooks/order-patch-status-failures.md
+dashboard:
+  panels:
+  - title: Request Rate by Route & Status
+    expr: sum(rate(http_requests_total{app="Order API",environment="staging"}[5m])) by (route, status)
+    unit: reqps
+    kind: timeseries
+  - title: Error Rate %
+    expr: 100 * sum(rate(http_requests_total{app="Order API",environment="staging",status=~"5.."}[5m]))
+      / sum(rate(http_requests_total{app="Order API",environment="staging"}[5m]))
+    unit: percent
+    kind: timeseries
+  - title: Overall Latency p95
+    expr: 1000 * histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{app="Order API",environment="staging"}[5m]))
+      by (le))
+    unit: ms
+    kind: timeseries
+  - title: POST /orders Latency p95
+    expr: 1000 * histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{app="Order API",environment="staging",route="/orders",method="POST"}[10m]))
+      by (le))
+    unit: ms
+    kind: timeseries
+  - title: Orders Created by Result
+    expr: sum(rate(orders_created_total{app="Order API",environment="staging"}[5m])) by (result)
+    unit: short
+    kind: timeseries
+  - title: App Uptime
+    expr: app_uptime_seconds{app="Order API",environment="staging"}
+    unit: s
+    kind: stat
+  - title: GET /orders/summary Request Rate by Status
+    expr: sum(rate(http_requests_total{app="Order API",environment="staging",route="/orders/summary"}[5m]))
+      by (status)
+    unit: reqps
+    kind: timeseries
+  - title: GET /orders/summary Latency p95
+    expr: 1000 * histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{app="Order API",environment="staging",route="/orders/summary"}[10m]))
+      by (le))
+    unit: ms
+    kind: timeseries
+  - title: DELETE /orders/{id} Request Rate by Status
+    expr: sum(rate(http_requests_total{app="Order API",environment="staging",route="/orders/{id}",method="DELETE"}[5m]))
+      by (status)
+    unit: reqps
+    kind: timeseries
+  - title: POST /orders Status Code Breakdown
+    expr: sum(rate(http_requests_total{app="Order API",environment="staging",route="/orders",method="POST"}[5m]))
+      by (status)
+    unit: reqps
+    kind: timeseries
+  - title: GET /orders Request Rate by Status
+    expr: sum(rate(http_requests_total{app="Order API",environment="staging",route="/orders",method="GET"}[5m]))
+      by (status)
+    unit: reqps
+    kind: timeseries
+  - title: GET /orders Latency p95
+    expr: 1000 * histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{app="Order API",environment="staging",route="/orders",method="GET"}[10m]))
+      by (le))
+    unit: ms
+    kind: timeseries
+  - title: GET /orders/{id} Request Rate by Status
+    expr: sum(rate(http_requests_total{app="Order API",environment="staging",route="/orders/{id}",method="GET"}[5m]))
+      by (status)
+    unit: reqps
+    kind: timeseries
+  - title: PATCH /orders/{id} Request Rate by Status
+    expr: sum(rate(http_requests_total{app="Order API",environment="staging",route="/orders/{id}",method="PATCH"}[5m]))
+      by (status)
+    unit: reqps
+    kind: timeseries

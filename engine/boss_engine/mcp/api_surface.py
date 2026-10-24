@@ -127,7 +127,8 @@ ROSTER_AUTHORITY_WRITES = frozenset({
     ("POST", "/v1/role-skills/sync"),
 })
 _OPERATOR_ONLY_EXACT = frozenset({
-    "/v1/orgs", "/v1/members", "/v1/break-glass/grants",
+    # A new org or project is tenancy, not work: a non-human caller is held like POST /v1/orgs.
+    "/v1/orgs", "/v1/projects", "/v1/members", "/v1/break-glass/grants",
     "/v1/budget/allocations", "/v1/budget/set_intensity",
     "/v1/console/v2/autonomy", "/v1/console/v2/autonomy/apply",
     "/v1/enterprise/identity-providers",
@@ -228,6 +229,8 @@ _CONFIRMABLE_EXACT = frozenset({
     ("POST", "/v1/enterprise/identity-providers"),
     ("POST", "/v1/observability/stack/deploy"),
     ("POST", "/v1/orgs"),
+    # project:create is step-up for a person: an MCP client asks, a stepped-up person confirms.
+    ("POST", "/v1/projects"),
     ("DELETE", "/v1/preview-sandboxes/{preview_id}"),
     ("POST", "/v1/roles"),
     ("DELETE", "/v1/sandboxes/{sandbox_id}"),

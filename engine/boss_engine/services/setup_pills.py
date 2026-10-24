@@ -30,6 +30,14 @@ from ..identity import github_urls as _gh
 GITHUB_TOKENS_URL = _gh.fine_grained_tokens()
 
 
+def _decision_link(values: dict[str, Any]) -> str:
+    """Where the Decisions area opens this exact decision (lib/command-center.ts's
+    `?area=decisions&decision=` convention) — a link, not only a sentence saying "reconcile
+    the recorded attempt" with nowhere to click (boss-1 rc10.9)."""
+    decision_id = str(values.get("decision_id") or "")
+    return f"/?area=decisions&decision={decision_id}" if decision_id else "/?area=decisions"
+
+
 def _org_requests(values: dict[str, Any]) -> str:
     owner = str(values.get("repo") or "").split("/", 1)[0] if "/" in str(values.get("repo") or "") else None
     return _gh.token_requests(owner)
@@ -100,9 +108,26 @@ MODEL: dict[str, dict[str, Any]] = {
     "unreachable": {"label": "Can't reach", "tone": "amber",
                     "tip": "The server can't reach {host}.",
                     "action": "test"},
+    # {cap_name} is the cap that is actually binding (Daily cap / Monthly cap / Burst cap) —
+    # never hardcoded to "Monthly": a daily or burst cap can refuse a call while the monthly
+    # one has room left, and a tip naming the wrong cap sends the operator to raise the wrong
+    # one (operator report, boss-1 rc10.9: budget was fine, the pill still said "Monthly").
     "paused_budget": {"label": "Paused · budget", "tone": "amber",
-                      "tip": "Monthly cap reached. Raise it or wait for reset.",
+                      "tip": "{cap_name} reached. Raise it or wait for reset.",
                       "action": "budget"},
+    # NOT a budget cap: BOSS's own job queue was full for a moment. Used to share
+    # "paused_budget" and send the operator to raise a cap that was never the problem
+    # (boss-1 rc10.9, connection_spend's JobDeferredError).
+    "job_deferred": {"label": "Busy · retry", "tone": "amber",
+                     "tip": "BOSS's own queue is full right now. Press Connect again shortly.",
+                     "action": "test"},
+    # Nothing a budget cap would fix: a PAST paid attempt's outcome was never confirmed, and
+    # no cap or wait clears it — a person settles it in Decisions. Used to share
+    # "paused_budget" with its "Raise it" fix, which sent the operator nowhere useful
+    # (boss-1 rc10.9).
+    "legacy_hold": {"label": "Needs review", "tone": "red",
+                    "tip": "Paid work is held pending review. See Decisions.",
+                    "action": "fix_link", "fix_url": _decision_link},
     "not_on_server": {"label": "Not on server", "tone": "grey",
                       "tip": "Install and sign in on the BOSS server first."},
     # A check that failed for a reason none of the above names. Still one pill, still a fix.

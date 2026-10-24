@@ -156,3 +156,27 @@ class TestTheLinkGoesSomewhereReal:
         state = {"state": down["state"], "base_url": "http://127.0.0.1:1",
                  "reason": down["reason"], "dashboards": None}
         assert dashboard_link(state, "invoice") == (None, "Grafana isn't answering on its host")
+
+    def test_a_trimmed_state_dict_still_gets_the_browser_link(self, monkeypatch):
+        """BOSSAPP-614: the console's "Dashboard" link opened http://grafana:3000, the docker
+        -internal address a browser cannot reach. `endpoint_state` computes a `public_url`
+        field for exactly this, but `dashboard_link` used to trust the CALLER to forward it —
+        and obs_view's header projection (`_grafana`), which copies a fixed subset of
+        `endpoint_state`'s keys onto the per-app dict handed to `dashboard_link`, does not
+        include `public_url`. The link silently fell back to `base_url`, the internal host.
+
+        `dashboard_link` must derive the browser URL itself, from `base_url`, so no caller can
+        drop it by trimming the dict down to a few keys."""
+        from boss_engine.config import get_settings
+        from boss_engine.services.observability_stack import dashboard_link
+
+        s = get_settings()
+        monkeypatch.setattr(s, "monitoring_grafana_url", "http://grafana:3000")
+        monkeypatch.setattr(s, "monitoring_grafana_public_url", "http://127.0.0.1:3300")
+        # Exactly the shape obs_view._grafana() hands to dashboard_link: no "public_url" key.
+        trimmed = {"state": "answering", "base_url": "http://grafana:3000",
+                  "reason": "", "dashboards": ["boss-order-api"]}
+        url, why = dashboard_link(trimmed, "Order API")
+        assert why is None
+        assert url == "http://127.0.0.1:3300/d/boss-order-api"
+        assert "grafana:3000" not in url

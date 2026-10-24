@@ -416,21 +416,30 @@ def purge_expired_challenges(db: Any) -> None:
 
 
 # ---- identity mail (SMTP only; D26, D30) ----------------------------------------------------------
+#
+# ONE TRANSPORT (services/mail_transport.py): identity mail goes through the same resolver as every
+# other sender — the Email (SMTP) connector first, the environment second, the dev inbox
+# third — so the Email screen and the invite dialog can never disagree about whether mail works.
 
 def smtp_configured() -> bool:
-    s = get_settings()
-    return bool(s.email_smtp_host and getattr(s, "email_from_address", None)
-                and getattr(s, "email_real_send_allowed", False))
+    from ..services import mail_transport
+
+    return mail_transport.ready()
 
 
-def _smtp_send(to: str, subject: str, body: str) -> None:
-    from ..services.email_adapter import EmailAdapter
+def _smtp_send(to: str, subject: str, body: str, *, html: Optional[str] = None,
+               inline_images: tuple = ()) -> None:
+    from ..services import mail_templates, mail_transport
 
-    EmailAdapter(get_settings()).send_message(f"email:{to}", subject, body)
+    if html is None:
+        # Every identity email wears the same frame: a reset, a code and a notice included.
+        rendered = mail_templates.notice(subject, body)
+        html, inline_images = rendered.html, rendered.inline_images
+    mail_transport.send(to, subject, body, html=html, inline_images=inline_images)
 
 
-#: The transport. Tests replace it; production sends through the configured SMTP server.
-MAIL_TRANSPORT: Callable[[str, str, str], None] = _smtp_send
+#: The transport. Tests replace it; production sends through services/mail_transport.py.
+MAIL_TRANSPORT: Callable[..., None] = _smtp_send
 
 
 def send_mail(to: str, subject: str, body: str) -> None:
@@ -440,6 +449,24 @@ def send_mail(to: str, subject: str, body: str) -> None:
         MAIL_TRANSPORT(to, subject, body)
     except Exception as exc:  # noqa: BLE001 — never leak delivery state to the caller
         print(f"[identity] identity mail not delivered: {type(exc).__name__}", flush=True)
+
+
+def deliver_mail(to: str, rendered: Any) -> Any:
+    """Send a rendered message to someone the CALLER chose (an invitation), and say what happened:
+    sent, failed with the server's reason, or not configured. Not for anti-enumeration paths —
+    those use send_mail, which tells nobody anything."""
+    from ..services import mail_transport
+
+    chosen = mail_transport.route()
+    if not smtp_configured():
+        return mail_transport.Delivery("not_configured", chosen.detail)
+    try:
+        MAIL_TRANSPORT(to, rendered.subject, rendered.text, html=rendered.html,
+                       inline_images=rendered.inline_images)
+    except Exception as exc:  # noqa: BLE001 — the reason IS the answer
+        return mail_transport.Delivery("failed", mail_transport.failure_reason(exc, chosen.settings),
+                                       source=chosen.source)
+    return mail_transport.Delivery("sent", source=chosen.source)
 
 
 # ---- timing ----------------------------------------------------------------------------------------

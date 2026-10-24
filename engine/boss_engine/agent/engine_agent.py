@@ -313,6 +313,57 @@ _WHY_NOT_SELF_EXECUTED = {
 }
 
 
+class StreamedAnswer:
+    """THE ANSWER'S STREAMING FORM (BOSSAPP-759): one model call, no tools, its words yielded as
+    the model writes them, then its usage (a dict) last.
+
+    This is the answer a turn with nothing to do gives — a seat speaking in a talk, a plan or a
+    room (`discuss` writes nothing, which is the talk's rule) — and the form a turn's decision
+    takes when it runs under a caller's spend envelope (`agent_decision.SpendEnvelope`). It
+    streams through the adapter's own `stream_text_response` (the Claude CLI's stream-json, the
+    OpenAI adapter's `stream=True`; the governed and fallback wrappers pass it through); an
+    adapter that cannot stream answers whole, as one piece.
+
+    LAZY, AND CLOSED AS THE PROVIDER'S. Nothing reaches the provider until the first `next()`,
+    so an envelope that pins one attempt makes that contact inside its own single-attempt and
+    deadline scope. `close()` closes the provider's own iterator (a stopped stream ends the
+    CLI process) and lets its failure surface, so the envelope can hold what it cannot prove."""
+
+    def __init__(self, adapter: Any, *, prompt: str, system_prompt: Optional[str]):
+        self.adapter = adapter
+        self.prompt = prompt
+        self.system_prompt = system_prompt
+        self._inner: Any = None
+
+    def __iter__(self) -> "StreamedAnswer":
+        return self
+
+    def __next__(self) -> Any:
+        if self._inner is None:
+            stream = getattr(self.adapter, "stream_text_response", None)
+            self._inner = (iter(stream(self.prompt, system_prompt=self.system_prompt))
+                           if callable(stream) else self._whole())
+        return next(self._inner)
+
+    def _whole(self):
+        reply = self.adapter.create_text_response(self.prompt, system_prompt=self.system_prompt)
+        if isinstance(reply, tuple):
+            yield str(reply[1] if len(reply) > 1 else reply[0] or "")
+            yield reply[2] if len(reply) > 2 and isinstance(reply[2], dict) else {}
+        else:
+            yield str(reply or "")
+
+    def close(self) -> None:
+        close = getattr(self._inner, "close", None)
+        if close is not None:
+            close()
+
+
+def stream_answer(adapter: Any, *, prompt: str, system_prompt: Optional[str]) -> StreamedAnswer:
+    """The answer, streamed, with no tools: see `StreamedAnswer`."""
+    return StreamedAnswer(adapter, prompt=prompt, system_prompt=system_prompt)
+
+
 class EngineAgent:
     def __init__(self, ctx: Any, registry: Optional[ToolRegistry] = None,
                  adapter: Any = None):

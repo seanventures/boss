@@ -3,7 +3,7 @@
 # One line per operation: its declaration, then the built-in roles allowed
 # (O owner, A admin, P operator, V viewer, U auditor; '-' none). Every other role is denied
 # 403, or 404 when the operation names an object the role cannot even read.
-# 1628 operations.
+# 1632 operations.
 "GET /.well-known/boss-jwks.json": ["public:jwks", "OAPVU"]
 "GET /docs": ["public:api_description", "OAPVU"]
 "GET /docs/oauth2-redirect": ["public:api_description", "OAPVU"]
@@ -200,7 +200,9 @@
 "PUT /v1/apps/{target_id}/alert-rules": ["permit observability:manage @ project(body=project_id)", "OA"]
 "POST /v1/apps/{target_id}/alert-rules/samples": ["permit observability:manage @ project(body=project_id)", "OA"]
 "POST /v1/apps/{target_id}/alert-rules/samples/remove": ["permit observability:manage @ project(body=project_id)", "OA"]
+"POST /v1/apps/{target_id}/alert-rules/{rule_id}/propose": ["permit observability:manage @ project(body=project_id)", "OA"]
 "POST /v1/apps/{target_id}/alert-rules/{rule_id}/silence": ["permit observability:manage @ project(body=project_id)", "OA"]
+"POST /v1/apps/{target_id}/alert-rules/{rule_id}/tune-preview": ["permit observability:read @ project(body=project_id)", "OAPVU"]
 "POST /v1/apps/{target_id}/alert-silences/{silence_id}/end": ["permit observability:manage @ project(body=project_id)", "OA"]
 "GET /v1/apps/{target_id}/alerts": ["permit observability:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/apps/{target_id}/alerts/{alert_id}/triage": ["permit observability:manage @ project(body=project_id)", "OA"]
@@ -815,6 +817,7 @@
 "POST /v1/identity/introspect": ["public:egress_service_credential", "OAPVU"]
 "GET /v1/identity/invitations": ["permit user:read @ org", "OAU"]
 "DELETE /v1/identity/invitations/{invitation_id}": ["permit user:invite @ org", "OA"]
+"POST /v1/identity/invitations/{invitation_id}/resend": ["permit user:invite @ org", "OA"]
 "GET /v1/identity/legacy": ["permit security_policy:read @ org", "OAU"]
 "POST /v1/identity/legacy/{path}/extend": ["permit security_policy:manage @ org", "O"]
 "POST /v1/identity/legacy/{path}/retire": ["permit security_policy:manage @ org", "O"]
@@ -1073,7 +1076,7 @@
 "POST /v1/metatron/overwatch": ["permit autopilot:operate @ project(body=project_id)", "OAP"]
 "POST /v1/metatron/query": ["permit system:read @ project(body=project_id)", "OAPVU"]
 "GET /v1/metatron/session": ["permit autopilot:read @ project(query=project_id) +writes_on_get", "OAPVU"]
-"POST /v1/metatron/session": ["permit autopilot:operate @ project(body=project_id)", "OAP"]
+"POST /v1/metatron/session": ["permit assistant:chat @ project(body=project_id)", "OAP"]
 "POST /v1/metatron/session/load": ["permit autopilot:read @ project(query=project_id) +writes_on_get", "OAPVU"]
 "GET /v1/metatron/theater": ["permit autopilot:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/metatron/theater": ["permit autopilot:operate @ project(body=project_id)", "OAP"]
@@ -1232,6 +1235,7 @@
 "GET /v1/process-manager/proposals": ["permit autopilot:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/process-manager/tick": ["permit autopilot:operate @ project(body=project_id)", "OAP"]
 "GET /v1/projects": ["authenticated", "OAPVU"]
+"POST /v1/projects": ["permit project:create @ org", "OA"]
 "GET /v1/projects/{project_id}/agents": ["permit agent:read @ project(path=project_id)", "OAPVU"]
 "POST /v1/projects/{project_id}/agents": ["permit work_item:manage @ project(path=project_id)", "OAP"]
 "GET /v1/projects/{project_id}/change-sets": ["permit code_task:read @ project(path=project_id)", "OAPVU"]

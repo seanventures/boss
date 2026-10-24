@@ -173,6 +173,64 @@ def deploy_context(connection, target_id: str) -> dict[str, Any]:
     return out
 
 
+#: How many past occurrences an incident row keeps in finalize_ctx.occurrences.
+OCCURRENCE_HISTORY = 20
+_RANGE = re.compile(r"\[\s*([0-9][0-9a-z]*)\s*(?::[^\]]*)?\]")
+
+
+def rule_settle_window(rule: Optional[dict]) -> timedelta:
+    """How long a rule can keep firing on samples from BEFORE a fix: its own lookback (window
+    minutes, the longest range selector in its expr) plus its `for` and keep_firing_for. Pure.
+    A 10m rule still sees the pre-fix errors for 10 min after the fix, whatever the recovery
+    check said (BOSSAPP-613)."""
+    from . import promql_lite as pq
+
+    rule = rule or {}
+    params = rule.get("params") or {}
+    look = float(params.get("window_minutes") or rule.get("window_minutes") or 5) * 60.0
+    for m in _RANGE.finditer(str(rule.get("expr") or "")):
+        try:
+            look = max(look, pq.parse_duration(m.group(1)) / 1000.0)
+        except Exception:  # noqa: BLE001 — not a duration (a label value in brackets)
+            continue
+    hold = float(rule.get("for_seconds") or 0) + float(rule.get("keep_firing_for_s") or 0)
+    return timedelta(seconds=look + hold)
+
+
+def settling_until(inc: dict, rule: Optional[dict]) -> Optional[datetime]:
+    """A resolved incident whose fix was verified is SETTLING until the firing rule's own window
+    has fully elapsed past the fix: a firing before then is the old occurrence's lagging signal,
+    not a new one. None when the incident is not settling on a verified fix."""
+    if inc.get("status") != "resolved":
+        return None
+    ver = (inc.get("finalize_ctx") or {}).get("verification") or {}
+    if ver.get("state") != "recovered":
+        return None
+    fixed = _dt(ver.get("since")) or _dt(ver.get("at"))
+    return fixed + rule_settle_window(rule) if fixed else None
+
+
+def archive_occurrence(connection, incident_id: str, *, now: datetime) -> None:
+    """Before a closed incident row is reused for a NEW occurrence, keep the one that ended —
+    its opening, response, verification, alert and release — in finalize_ctx.occurrences, so
+    the new occurrence never erases who did what last time."""
+    inc = _incident(connection, incident_id)
+    if not inc:
+        return
+    ctx = inc["finalize_ctx"]
+    if not any(ctx.get(k) for k in ("occurrence", "response", "verification", "alert")):
+        return
+    ver = ctx.get("verification") or {}
+    past = {"occurrence": ctx.get("occurrence") or _iso(inc.get("first_seen")),
+            "first_seen": _iso(inc.get("first_seen")),
+            "closed_at": ver.get("at") or _iso(inc.get("last_seen")),
+            "status": inc.get("status"), "archived_at": _iso(now),
+            **{k: ctx.get(k) for k in ("response", "verification", "alert", "deploy", "app")}}
+    history = [h for h in (ctx.get("occurrences") or []) if isinstance(h, dict)]
+    _merge_ctx(connection, incident_id,
+               {"occurrences": (history + [past])[-OCCURRENCE_HISTORY:]})
+
+
 def _response_in_flight(connection, project_id: str, incident_id: str) -> Optional[str]:
     return connection.execute(sql(
         "SELECT id FROM workflow_runs WHERE project_id = :p AND input->>'incident_id' = :i "
@@ -579,9 +637,20 @@ def investigate(connection, settings: Any, project_id: str, incident_id: str, *,
     # NAME THE ONSET FOR WHAT IT IS. An incident a customer reported first starts at the first
     # report, not at the alert (D2: "0.8 min before the alert fired" — the alert came 6.9 min
     # after the release; the first report 0.8 min after).
+    #
+    # THIS OCCURRENCE ONLY. An incident row is reused across occurrences: resolved, then
+    # fired again later by the alert alone, with no new report. Without the lower bound, a
+    # customer_reports row from a PRIOR, already-closed occurrence — always "created_at <=
+    # onset" simply by being in the past — made every later, alert-only re-fire say "the
+    # first customer report" too, blaming the wrong release on a report about the old one
+    # (Order API, 2026-10-18). `since` is when THIS occurrence began (ingest() and
+    # open_or_reopen both set it from the very moment that opened it), so a report only
+    # counts here when it is no older than that.
+    since = _occurrence(ctx)
     reported_first = bool(connection.execute(sql(
         "SELECT 1 FROM incident_evidence WHERE incident_id = :i AND kind = 'customer_reports' "
-        "AND created_at <= :t LIMIT 1"), {"i": incident_id, "t": onset}).first())
+        "AND created_at <= :t AND (CAST(:s AS timestamptz) IS NULL OR created_at >= :s) "
+        "LIMIT 1"), {"i": incident_id, "t": onset, "s": since}).first())
     hyp = hypothesis(deploy, alert, signatures, diff, onset=onset,
                      onset_was=("the first customer report" if reported_first
                                 else "the alert fired"))

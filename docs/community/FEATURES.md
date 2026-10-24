@@ -155,10 +155,13 @@ Community installs and runs without Plane, an ops token, or a private registry. 
 
 Endpoints: one-shot `POST /v1/metatron/query`, plus `/v1/metatron/session|goals|watch|drive|overwatch`.
 
+The captain is no longer a separate engine. A sentence sent to `/v1/metatron/session` is an Ask BOSS turn for the BOSS agent. The captain's watch, goals, drive, overwatch and theater are actions of that same agent (`captain_watch`, `captain_goals`, `captain_set_goal`, `captain_drive`, `captain_overwatch`, `captain_theater`). The routes are thin adapters that press those actions.
+
 | Aspect | Behavior |
 |---|---|
-| Overwatch | Always on in the worker |
-| Validation | Every action (chat, goal, drive, apply) runs `validate_action` / `validate_move` first |
+| Watch | The worker runs `captain_watch` on a schedule. It observes and scores goals and applies nothing |
+| Overwatch, drive, theater | These apply moves, so they run only when a person asks: `/overwatch` in the terminal, the route, or pressing the agent's offer. The agent offers them and never runs them itself |
+| Validation | Every captain action (goal, drive, overwatch apply) runs `validate_action` / `validate_move` first |
 | Human gates | Decisions and deadletters never auto-apply |
 | Changes to BOSS itself | Opened as a PR, never written silently |
 

@@ -33,7 +33,7 @@ def test_periodic_worker_calls_claim_the_system_actor():
     client = ControlPlaneClient("http://api:8000", api_key="worker-key")
     client._client.close()
     client._client = RecordingClient()
-    client.tick_metatron_overwatch("boss-dogfood")
+    client.tick_metatron_watch("boss-dogfood")
     client.tick_focused_agents("boss-dogfood")
     client.tick_agent_processes("boss-dogfood")
     client.tick_process_manager("boss-dogfood")

@@ -246,3 +246,57 @@ def test_factory_driver_scorecard_gaps_still_leave_decisions_and_dlq_human():
     factory = [move for move in moves if move.get("kind") == "launch_factory_job"]
     assert factory
     assert "ui" in str(factory[0].get("directive") or factory[0].get("detail") or "").lower()
+
+
+# ── The agent decides which validated move a tick applies (BOSSAPP-759) ──────────────────────
+
+def _decides(monkeypatch, answer):
+    """A scripted decision model through the one pipeline: records what it was offered."""
+    from boss_engine.services import agent_decision as ad
+
+    asked: list[dict] = []
+
+    def decide(connection, settings, project_id, **kwargs):
+        asked.append(kwargs)
+        if answer is None:
+            return ad.AgentDecision(ad.NO_MODEL, error="no model is connected")
+        return ad.AgentDecision(ad.DECIDED, action=answer, confidence=0.9, reason="it is due")
+
+    monkeypatch.setattr(ad, "decide", decide)
+    return asked
+
+
+_AGENT = {"id": "fa_1", "name": "Preview keeper", "focus": "Keep previews up"}
+_MOVES = [{"kind": "restart_preview", "detail": "run wfr_1 is verify-green without a preview"},
+          {"kind": "launch_factory_job", "directive": "close the scorecard's UI gap"}]
+
+
+def _service():
+    from boss_engine.config import Settings
+    from boss_engine.services.focused_agents import FocusedAgentService
+
+    return FocusedAgentService(Settings())
+
+
+def test_the_agent_chooses_one_validated_move_through_the_pipeline(monkeypatch):
+    asked = _decides(monkeypatch, "m1")
+    got = _service()._decide_move(None, project_id="p", actor="ceo", agent=_AGENT,
+                                  trigger="interval", snapshot={"in_flight": 0},
+                                  applicable=[dict(m) for m in _MOVES])
+    assert got["move"]["kind"] == "launch_factory_job"
+    assert got["move"]["chosen_because"] == "it is due"
+    offered = [c.key for c in asked[0]["candidates"]]
+    assert offered == ["m0", "m1", "none"]
+    assert "Keep previews up" in asked[0]["situation"]
+    assert asked[0]["context"]["the validated moves"][0]["kind"] == "restart_preview"
+
+
+def test_no_model_or_none_applies_nothing(monkeypatch):
+    _decides(monkeypatch, None)
+    got = _service()._decide_move(None, project_id="p", actor="ceo", agent=_AGENT,
+                                  trigger="interval", snapshot={}, applicable=[dict(_MOVES[0])])
+    assert got["move"] is None and "no model" in got["word"]
+    _decides(monkeypatch, "none")
+    got = _service()._decide_move(None, project_id="p", actor="ceo", agent=_AGENT,
+                                  trigger="interval", snapshot={}, applicable=[dict(_MOVES[0])])
+    assert got["move"] is None and got["decided_by"]["action"] == "none"

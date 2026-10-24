@@ -261,7 +261,10 @@ def test_beacon_writes_a_previewed_tuned_pack_as_code_and_the_release_makes_it_l
     assert card["tuned"][0]["fired_before"] > 0
     pay = by["OrderPaymentFailures"]
     assert 'app="Order API",environment="staging"' in pay["expr"]
-    assert pay["runbook"] == "runbooks/payments-failing.md"
+    # Keyed by the rule's own stable identity (its alert name), not by the model's free-text
+    # runbook title — which it words differently call to call (BOSSAPP-603: 18 runbook files
+    # for ~15 rules, before this) — so a retry overwrites the same file.
+    assert pay["runbook"] == "runbooks/orderpaymentfailures.md"
     assert pay["runbook_title"] == "Payments are failing"
     assert card["rules_href"].endswith(f"app={target['id']}&atab=alerts")
     assert card["by"]["role_key"] == "sre"
@@ -275,7 +278,7 @@ def test_beacon_writes_a_previewed_tuned_pack_as_code_and_the_release_makes_it_l
     assert doc["alerts"]["error_rate"]["threshold"] == 3
     assert doc["alerts"]["rules"][0]["alert"] == "OrderPaymentFailures"
     assert doc["dashboard"]["panels"][0]["title"] == "Orders created / s"
-    assert "PAYMENTS_URL" in repo.files["runbooks/payments-failing.md"]
+    assert "PAYMENTS_URL" in repo.files["runbooks/orderpaymentfailures.md"]
     manifest = parse_manifest(doc, source_text=written)
 
     # The release ships that commit: its manifest makes the rules active and repo-managed.
@@ -327,6 +330,62 @@ def test_add_a_feature_extends_the_pack_and_never_duplicates(pg, monkeypatch):
     assert any("already in the pack" in why for why in card["refused"])
     # the built-ins keep the values the first pack set
     assert yaml.safe_load(repo.files["boss.deploy.yaml"])["alerts"]["error_rate"]["threshold"] == 3
+
+
+def test_a_retry_keeps_the_same_runbook_file_even_when_the_model_rewords_it():
+    """BOSSAPP-603: the runbook's path is keyed on the rule's own stable identity (its alert
+    name, or its built-in kind) — never on the model's free-text summary or title, which it
+    words differently call to call. Before this, a retry's reworded pack wrote a SECOND
+    runbook file for the same rule instead of overwriting the first (18 runbooks for ~15
+    rules)."""
+    from boss_engine.services import monitoring_pack as mp
+
+    rule = {"alert": "OrderPaymentFailures",
+           "expr": "sum(rate(payment_failures_total{SELECTOR}[5m])) > 0.2", "for": "5m",
+           "severity": "sev2", "description": "src/payments.ts: is PAYMENTS_URL up?"}
+    first = mp.validate({"rules": [{**rule, "summary": "Payments are failing"}]},
+                        app="Order API", env="staging")
+    retried = mp.validate({"rules": [{**rule, "summary": "Payment processing is broken now"}]},
+                          app="Order API", env="staging")
+    path1 = first["rules"][0]["annotations"]["runbook_url"]
+    path2 = retried["rules"][0]["annotations"]["runbook_url"]
+    assert path1 == path2 == "runbooks/orderpaymentfailures.md"
+    assert set(first["runbooks"]) == set(retried["runbooks"]) == {"orderpaymentfailures"}
+
+
+def test_a_pack_that_breaks_the_apps_own_tests_is_repaired_or_refused_with_the_output(
+        pg, monkeypatch):
+    """BOSSAPP-603: a pack that breaks the app's own test suite (it broke test_deploy_manifest
+    by adding `alerts:`) is fixed in the same step when the model's repair fixes it, or the
+    step fails carrying the test output — never ships silently as 'succeeded'."""
+    class CIRepo(FakeRepo):
+        def __init__(self, files, verdicts):
+            super().__init__(files)
+            self._verdicts = list(verdicts)
+            self.checked = 0
+
+        def commit_checks(self, commit_sha):
+            self.checked += 1
+            conclusion = self._verdicts.pop(0) if self._verdicts else "success"
+            return [{"name": "test_deploy_manifest", "status": "completed",
+                    "conclusion": conclusion}]
+
+    eng, pid = pg
+    # The repair's pack passes CI.
+    repo = CIRepo({"boss.deploy.yaml": MANIFEST, **CODE}, verdicts=["failure", "success"])
+    with eng.begin() as c:
+        target, crun = _seed(c, pid)
+        out = _run(c, pid, crun, target["id"], repo, Model(_pack(3), _pack(3)), monkeypatch)
+    assert out["status"] == "succeeded" and repo.checked == 2
+
+    # The repair's pack ALSO fails CI: the step fails, carrying the test output.
+    repo2 = CIRepo({"boss.deploy.yaml": MANIFEST, **CODE}, verdicts=["failure", "failure"])
+    with eng.begin() as c:
+        pid2 = project(c)
+        target2, crun2 = _seed(c, pid2)
+        with pytest.raises(mp.PackRefused, match="test_deploy_manifest"):
+            _run(c, pid2, crun2, target2["id"], repo2, Model(_pack(3), _pack(3)), monkeypatch)
+    assert repo2.checked == 2
 
 
 def test_a_pack_that_would_break_the_manifest_or_has_no_model_is_refused_in_words(

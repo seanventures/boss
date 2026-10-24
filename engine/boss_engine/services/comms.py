@@ -19,7 +19,8 @@ from .core import (
     now_utc,
 )
 from .receipts import ReceiptService
-from .email_adapter import EmailAdapter
+from . import mail_transport
+from .email_adapter import recipient_from_channel
 from .slack_adapter import SlackAdapter
 from .mattermost_adapter import MattermostAdapter
 from .github_adapter import IntegrationConfigurationError
@@ -44,7 +45,6 @@ class CommsService:
         self.receipts = ReceiptService()
         self.slack = SlackAdapter(settings)
         self.mattermost = MattermostAdapter(settings)
-        self.email = EmailAdapter(settings)
 
     def list_channel_policies(
         self,
@@ -684,7 +684,8 @@ class CommsService:
         self._set_outbox_status(connection, message_id, "sending", receipt["id"])
         try:
             provider_ref = self._send_message(
-                provider, message["channel"], message.get("subject"), message["body"]
+                provider, message["channel"], message.get("subject"), message["body"],
+                connection=connection, project_id=project_id,
             )
         except IntegrationConfigurationError as error:
             self.receipts.mark_failed(connection, receipt["id"], {"message": str(error)})
@@ -837,12 +838,16 @@ class CommsService:
         return None
 
     def _send_message(
-        self, provider: dict[str, str], channel: str, subject: Optional[str], body: str
+        self, provider: dict[str, str], channel: str, subject: Optional[str], body: str,
+        *, connection: Optional[Connection] = None, project_id: Optional[str] = None,
     ) -> str:
         if provider["key"] == "slack":
             return self.slack.post_message(channel, subject, body)
         if provider["key"] == "email":
-            return self.email.send_message(channel, subject, body)
+            # The one transport: the Email (SMTP) connector, the environment, the dev inbox.
+            recipient_from_channel(channel)
+            return mail_transport.send(channel, subject, body, connection=connection,
+                                       settings=self.settings, project_id=project_id)
         if provider["key"] == "mattermost":
             return self.mattermost.post_message(channel, subject, body)
         raise RuntimeError(f"Unsupported provider key: {provider['key']}")
@@ -1431,10 +1436,11 @@ class CommsService:
                      subject: Optional[str], body: str, *, adapter: Any = None) -> dict:
         """What a person's emailed or chatted reply to a decision MEANS, decided by a model.
 
-        The reply, the decision it answers (its question and options) and the keyword hint go
-        to `agent_decision.decide`. Below the confidence bar, or with no model, NOTHING is
-        transitioned: the reply is parked with the question to answer instead."""
-        from . import agent_decision
+        A turn by BOSS's inbox agent through the one pipeline (`AgentService.decide`, on the
+        decision's own thread): the reply, the decision it answers (its question and options)
+        and the keyword hint are its input. Below the confidence bar, or with no model, NOTHING
+        is transitioned: the reply is parked with the question to answer instead."""
+        from .agent_service import NO_MODEL, AgentService, Choice, no_model_reply
 
         if parsed.get("kind") != "decision_reply" or parsed.get("parse_error") \
                 or not parsed.get("decision_id"):
@@ -1455,20 +1461,22 @@ class CommsService:
                 "options": row["options"]}
         hints = ([f"the first decision word in the reply is '{parsed['action_hint']}'"]
                  if parsed.get("action_hint") else [])
-        verdict = agent_decision.decide(
-            connection, self.settings, project_id,
+        verdict = AgentService(self.settings).decide(
+            connection, project_id=project_id,
+            actor="boss.inbox",
             situation=("A person replied by " + str(parsed.get("source_channel") or "message")
                        + " to a decision BOSS asked them. Decide what the reply does to it."),
             message="\n".join(x for x in (subject or "", body or "") if x),
             context=context, hints=hints, agent="BOSS inbox",
+            external_ref=f"decision:{parsed['decision_id']}",
             ref=f"inbox:{parsed['decision_id']}", adapter=adapter,
-            candidates=[agent_decision.Candidate(k, v) for k, v in self._REPLY_ACTIONS.items()])
+            choices=[Choice(k, v) for k, v in self._REPLY_ACTIONS.items()])
         parsed["decided_by"] = verdict.to_dict()
         if verdict.decided and verdict.action != "none":
             parsed["action"] = verdict.action
-        elif verdict.status == agent_decision.NO_MODEL:
+        elif verdict.status == NO_MODEL:
             parsed["parse_error"] = "decision_reply_needs_a_model"
-            parsed["remediation"] = agent_decision.NO_MODEL_REPLY
+            parsed["remediation"] = no_model_reply(verdict)
         else:
             parsed["parse_error"] = "decision_reply_unclear"
             parsed["remediation"] = (verdict.question or

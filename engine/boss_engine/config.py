@@ -423,6 +423,12 @@ class Settings(BaseSettings):
     email_from_name: Optional[str] = Field(
         default=None, alias="BOSS_EMAIL_FROM_NAME"
     )
+    #: The local test inbox: 1 (the bundled Mailpit, mailpit:1025) or host:port. OFF when empty —
+    #: install.sh sets it only with --with-mailpit. Used only when no
+    #: provider is configured; nothing sent to it leaves the machine (services/mail_transport.py).
+    email_dev_inbox: str = Field(default="", alias="BOSS_EMAIL_DEV_INBOX")
+    #: Where a browser opens the dev inbox (Mailpit's UI), for the console's "Open inbox".
+    email_dev_inbox_url: str = Field(default="", alias="BOSS_EMAIL_DEV_INBOX_URL")
     require_api_auth: bool = Field(default=False, alias="BOSS_REQUIRE_API_AUTH")
     # BOSS IDENTITY ENFORCEMENT (docs/product/IDENTITY.md §6.6, IDENTITY_BUILD.md §2.4).
     # off | shadow | enforce. ENFORCE BY DEFAULT: a deny is refused. Shadow (evaluate, record the
@@ -1131,7 +1137,8 @@ class Settings(BaseSettings):
     # one real model spend. 0 = the Captain proposes, never starts one; Govern turns it on per
     # project (project_settings `captain_auto_improve`). Installs that predate this keep theirs on.
     captain_auto_improve: int = Field(default=0, alias="BOSS_CAPTAIN_AUTO_IMPROVE")
-    # BOSSAPP-622: whether agents are given the knowledge graph (project_settings `knowledge_graph`).
+    # BOSSAPP-622: what agents are given from the knowledge graph (project_settings `knowledge_graph`):
+    # on | keyword | off (knowledge/runtime.MODES).
     knowledge_graph: str = Field(default="on", alias="BOSS_KNOWLEDGE_GRAPH")
     # FIX AND REDEPLOY (services/deploy_repair.py): how many repair builds a workflow's deploy
     # step starts by itself when its deployment fails for the APP's reason (a runtime the machine

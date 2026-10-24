@@ -4,8 +4,8 @@ THE INCIDENT. `choose_agent` called `adapter.complete(...)`. No chat adapter has
 method, the AttributeError was swallowed, and so the model was never once consulted: every pick
 was the word-overlap fallback, and the run card told the operator "no model was available to
 judge properly" on installs whose model was working. The existing tests accepted any `how`, so
-they passed throughout. These pin `how == "model"` when the model answers, and an honest reason
-when it does not.
+they passed throughout. These pin `how == "model"` when the model answers — the pick is a turn
+through the one agent pipeline (BOSSAPP-759) — and an honest reason when it does not.
 
 Also here, without a database: a bounded agent run is offered exactly the MCP servers its agent
 holds, pinned at step start.
@@ -57,9 +57,13 @@ def _adapter(monkeypatch, reply):
     return adapter
 
 
+def _picks(role: str, why: str = "") -> str:
+    """The one pipeline's decision contract (agent_decision): the pick is an action."""
+    return json.dumps({"action": role, "confidence": 0.9, "reason": why, "question": ""})
+
+
 def test_the_model_is_asked_and_its_pick_is_used(monkeypatch, pool):
-    adapter = _adapter(monkeypatch, json.dumps(
-        {"role_key": "publisher", "why": "it holds the upload"}))
+    adapter = _adapter(monkeypatch, _picks("publisher", "it holds the upload"))
     chosen = agent_steps.choose_agent(None, Settings(), "p", instructions="Upload the cut")
     assert adapter.asked, "the model was never asked"
     assert chosen == {"role_key": "publisher", "why": "it holds the upload", "how": "model"}
@@ -67,53 +71,41 @@ def test_the_model_is_asked_and_its_pick_is_used(monkeypatch, pool):
 
 def test_a_model_that_fails_is_reported_as_failing_not_as_absent(monkeypatch, pool):
     _adapter(monkeypatch, RuntimeError("usage limit reached"))
-    chosen = agent_steps.choose_agent(None, Settings(), "p",
-                                      instructions="trim and reframe the video")
-    assert chosen["how"] == "word_overlap"
-    assert chosen["role_key"] == "video_editor"
-    assert "usage limit reached" in chosen["why"]
-    assert "no model was available" not in chosen["why"]
+    with pytest.raises(agent_steps.AgentStepError) as failed:
+        agent_steps.choose_agent(None, Settings(), "p", instructions="trim and reframe the video")
+    assert "usage limit reached" in str(failed.value)
+    assert "no model was available" not in str(failed.value)
 
 
 def test_a_model_naming_somebody_outside_the_pool_is_not_obeyed(monkeypatch, pool):
-    _adapter(monkeypatch, json.dumps({"role_key": "cto", "why": "seniority"}))
-    chosen = agent_steps.choose_agent(None, Settings(), "p", instructions="post the notes")
-    assert chosen["how"] == "word_overlap"
-    assert "'cto'" in chosen["why"]
+    _adapter(monkeypatch, _picks("cto", "seniority"))
+    with pytest.raises(agent_steps.AgentStepError, match="'cto'"):
+        agent_steps.choose_agent(None, Settings(), "p", instructions="post the notes")
 
 
-def test_a_tie_goes_to_the_most_specialised_agent_then_to_its_key(monkeypatch, pool):
-    """REWRITTEN AT INTEGRATION. The agents stream broke a tie toward the agent holding MORE; the
-    steps stream, which owns who runs a step (R4), toward the one holding FEWEST — the most
-    specialised, the least authority handed to work nobody's words matched — and
-    test_who_runs_a_step pins that. One rule is kept (the steps stream's); what this test
-    protects is unchanged: a tie is broken deterministically, the same pool in any order gives
-    the same agent, and the key decides between equals."""
+def test_no_rule_breaks_a_tie_or_picks_without_a_model(monkeypatch, pool):
+    """REWRITTEN FOR BOSSAPP-759. This pinned the word-overlap fallback's tie-break (the most
+    specialised agent, then its key). The pick is now a turn through the one pipeline with no
+    rule behind it: with no model, nobody is picked by shared words, and the step says what to
+    do instead."""
     _adapter(monkeypatch, RuntimeError("down"))
-    tie = [{"role_key": "b_agent", "name": "", "mission": "", "holds": ["x.one"]},
-           {"role_key": "a_agent", "name": "", "mission": "", "holds": ["x.one"]},
-           {"role_key": "c_agent", "name": "", "mission": "", "holds": ["x.one", "x.two"]}]
-    monkeypatch.setattr(agent_steps, "candidates", lambda *_a, **_k: tie)
-    assert agent_steps.choose_agent(None, Settings(), "p",
-                                    instructions="nothing matches")["role_key"] == "a_agent"
-    monkeypatch.setattr(agent_steps, "candidates", lambda *_a, **_k: list(reversed(tie)))
-    assert agent_steps.choose_agent(None, Settings(), "p",
-                                    instructions="nothing matches")["role_key"] == "a_agent"
-    monkeypatch.setattr(agent_steps, "candidates", lambda *_a, **_k: [tie[2], tie[0]])
-    assert agent_steps.choose_agent(None, Settings(), "p",
-                                    instructions="nothing matches")["role_key"] == "b_agent"
+    with pytest.raises(agent_steps.AgentStepError, match="Name the agent on the step"):
+        agent_steps.choose_agent(None, Settings(), "p", instructions="nothing matches")
 
 
 def test_the_code_never_calls_a_method_adapters_do_not_have():
     import inspect
 
-    # Code only: the comment explaining the old call names it.
-    # choose_agent asks through `_ask_the_model` since the steps stream; both are read.
-    source = "\n".join(line for fn in (agent_steps.choose_agent, agent_steps._ask_the_model)
+    # Code only: the comment explaining the old call names it. The pick asks the one pipeline
+    # (AgentService.decide), whose decision calls the adapter's create_text_response.
+    from boss_engine.services import agent_decision
+
+    source = "\n".join(line for fn in (agent_steps.choose_agent, agent_decision._ask_model)
                        for line in inspect.getsource(fn).splitlines()
                        if not line.strip().startswith("#"))
     assert ".complete(" not in source
     assert "create_text_response(" in source
+    assert ".decide(" in inspect.getsource(agent_steps.choose_agent)
 
 
 def test_a_bounded_run_gets_the_mcp_servers_its_agent_holds_pinned_at_start(monkeypatch):

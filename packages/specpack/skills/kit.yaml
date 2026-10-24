@@ -87,9 +87,9 @@ skills:
       requires_receipt: false
       tools: [kg_symbol, kg_callers, kg_blast_radius, kg_why, kg_search, kg_precedent, kg_cypher]
 
-  # PROPOSE A FACT: not in the baseline. Granted through allowed_skills to pm, engineering_captain,
-  # qa, adversarial_reviewer, security_reviewer and sre (operator decision 2026-10-21). What it
-  # writes is always `inferred`: quarantined, scrubbed, forgettable, never above governed facts.
+  # PROPOSE A FACT: every agent holds this (the baseline). It was granted to six named roles
+  # (2026-10-21); every shipped agent has the same base (operator, 2026-10-23). What it writes is
+  # always `inferred`: quarantined, scrubbed, forgettable, never above governed facts.
   - id: knowledge.propose
     kind: engine_read
     risk_tier: 0

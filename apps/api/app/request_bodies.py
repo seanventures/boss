@@ -308,6 +308,16 @@ class OrgOnboardBody(OpenRequestBody):
     name: SkipValidation[str | None] = None
 
 
+class ProjectCreateBody(OpenRequestBody):
+    """POST /v1/projects. The handler checks the fields (bootstrap.create_project) and says
+    what to fix; the slug, when given, is kebab-case and becomes the project's id."""
+    model_config = ConfigDict(json_schema_extra={"required": ["name"]})
+
+    name: str | None = None
+    slug: str | None = None
+    description: str | None = None
+
+
 class DeploymentTargetCreateBody(OpenProjectBody):
     model_config = ConfigDict(json_schema_extra={"required": [
         "project_id", "app_name", "repo", "environment", "target_kind", "target_ref", "actor"

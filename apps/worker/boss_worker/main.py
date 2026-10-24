@@ -213,11 +213,14 @@ def _report_host_stall(client, stalled_seconds: float) -> None:
 
 
 def _tick_metatron_watch(client: ControlPlaneClient, settings) -> None:
-    """Always-on Metatron overwatch: observe, measure, validate, apply safe, verify.
+    """The scheduled captain watch: observe and score goals; apply nothing.
 
-    Runs even while a job is leased so goals keep being scored. Apply is still
-    fail-closed (budget, duplicates, human-only kinds). Swallowed like the
-    shepherd: a captain that kills the worker is worse than none.
+    It used to be an always-on overwatch that APPLIED moves — the captain autopilot the operator
+    retired (2026-10-23, BOSSAPP-759: "Why do we even have the captain autopilot? Retire it.").
+    What remains is the observation, run as the BOSS agent's `captain_watch` action through the
+    agent's own press path, so goals keep being scored and findings stay fresh for the agent and
+    the console. Applying moves is a person's: /overwatch, or a press of the agent's offer.
+    Swallowed like the shepherd: a watch that kills the worker is worse than none.
     """
     global _last_metatron_watch_monotonic
     now = time.monotonic()
@@ -229,19 +232,13 @@ def _tick_metatron_watch(client: ControlPlaneClient, settings) -> None:
         or "boss-dogfood"
     )
     try:
-        result = client.tick_metatron_overwatch(str(project_id))
+        result = client.tick_metatron_watch(str(project_id))
         _last_metatron_watch_monotonic = now
-        applied = result.get("applied") if isinstance(result, dict) else None
-        verify = (result or {}).get("verify") if isinstance(result, dict) else None
-        if applied or (isinstance(verify, dict) and verify.get("ok") is False):
-            LOGGER.info(
-                "metatron_overwatch status=%s applied=%s verify_ok=%s",
-                (result or {}).get("status"),
-                len(applied or []),
-                (verify or {}).get("ok"),
-            )
+        findings = result.get("findings") if isinstance(result, dict) else None
+        if findings:
+            LOGGER.debug("metatron_watch findings=%s", len(findings))
     except Exception:  # noqa: BLE001
-        LOGGER.debug("metatron_overwatch_failed", exc_info=True)
+        LOGGER.debug("metatron_watch_failed", exc_info=True)
 
 
 def _tick_focused_agents(client: ControlPlaneClient, settings) -> None:

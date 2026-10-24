@@ -140,3 +140,21 @@
     plan pending (or asks whether to drop it).
   must_not:
     - append an unrelated question to a pending plan as a "requested revision"
+
+- id: partial-setup-request-says-what-it-cannot-do
+  origin: Metatron terminal 2026-10-22, thread athr_17aadfd3fd0d4962bdda (BOSSAPP-759)
+  surface: talk_to_boss
+  context: >-
+    The person asked Metatron, BOSS's terminal, to set up three projects and to say what it
+    could not do. At the time the terminal ran a separate captain engine; it ran overwatch moves,
+    listed unrelated dead letters and stalls, proposed launch_factory_job with the request as a
+    coding prompt, and never said that project creation was not possible from there.
+  input: >-
+    Set up three projects for me and tell me what you can't do.
+  expected: >-
+    Does or offers the parts it can (creating the projects, now that create_project exists), and
+    says plainly what it cannot do from this conversation and where that is done instead.
+  must_not:
+    - run overwatch or drive moves, or list unrelated stalls and dead letters instead of answering
+    - propose a factory job or code task with the request as a coding prompt
+    - stay silent about the parts it cannot do

@@ -143,7 +143,8 @@ def plan_query(project_id: str, question: str, *, connection: Any = None, settin
     by BOSS. Never executes the plan. No model: `no_model`, said plainly."""
     import json as _json
 
-    from .agent_decision import NO_MODEL_REPLY
+    from . import provider_limits
+    from .agent_decision import NO_MODEL_REPLY, _provider_name
 
     def parse(text_out: str):
         import re as _re
@@ -163,6 +164,7 @@ def plan_query(project_id: str, question: str, *, connection: Any = None, settin
     base = {"project_id": pid, "question": raw_question, "executed": False, "public_ga": False,
             "boss_guess": {k: guess.get(k) for k in ("status", "connector_kind",
                                                       "suggested_query", "window")}}
+    no_model_reason = NO_MODEL_REPLY
     try:
         if adapter is None:
             adapter = _project_adapter(connection, settings, pid, raw_question)
@@ -171,10 +173,15 @@ def plan_query(project_id: str, question: str, *, connection: Any = None, settin
         out = adapter.create_text_response(prompt, system_prompt=PLAN_SYSTEM)
         text_out = out[1] if isinstance(out, tuple) and len(out) > 1 else str(out or "")
         answer = parse(str(text_out or ""))
-    except Exception:  # noqa: BLE001 — no model is an answer, never a crash
+    except Exception as exc:  # noqa: BLE001 — no model is an answer, never a crash
         answer = None
+        if provider_limits.credit_exhausted(str(exc)):
+            who = _provider_name(adapter) or "its provider"
+            no_model_reason = (f"BOSS could not get an answer: credit balance too low on "
+                               f"{who}. Add credit there (or connect a different model in "
+                               "Repo and models), then ask again.")
     if not isinstance(answer, dict) or not answer.get("status"):
-        return {**base, "status": "no_model", "reason": NO_MODEL_REPLY, "connector_kind": None,
+        return {**base, "status": "no_model", "reason": no_model_reason, "connector_kind": None,
                 "suggested_query": None, "window": None}
     if answer.get("status") != "planned":
         return {**base, "status": "unknown", "reason": str(answer.get("reason") or
