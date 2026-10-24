@@ -13885,16 +13885,23 @@ def get_agent_thread_messages_endpoint(thread_id: str, project_id: str, actor: s
         # by the turns after it, and re-rendering it invites pressing something the
         # conversation has moved past.
         offers: list = []
+        next_steps: list = []
         for message in reversed(history):
             if message.get("role") != "assistant":
                 continue
             offers = list(message.get("proposed_actions") or [])
+            # THE OTHER STANDING OFFER. A turn that stopped short ends with ONE resume press
+            # ("Keep waiting", "Continue") instead of buttons -- same restore, same reason: a
+            # fresh process or a reloaded console only has the thread, never the live HTTP
+            # response that first carried it.
+            next_steps = list(message.get("next_steps") or [])
             break
         return {
             "thread_id": thread_id,
             "messages": history,
             "pending_confirmation": pending,
             "proposed_actions": offers,
+            "next_steps": next_steps,
             "working": working,
         }
 

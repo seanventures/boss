@@ -770,6 +770,23 @@ def _sentences(text: str) -> list[str]:
     return [x.strip() for x in re.split(r"(?<=[.!?])\s+|\n+", text or "") if x.strip()]
 
 
+#: A line belonging to the answer's own table or list, never eligible to be dropped as a
+#: repetition. Observed live: asked to list every class implementing an interface, the model
+#: correctly repeated the same table it had already printed earlier in the conversation (the
+#: operator asked for the list again, not a diff), and every row matched a sentence already in
+#: `seen` almost verbatim -- the table came back with a header and no rows. A table row or list
+#: item IS the answer; it is never a stray repeated remark, no matter how many times it is
+#: repeated. Markdown table rows (`| a | b |`), table separators (`|---|---|`), and ordered/
+#: unordered list items (`1. x`, `1) x`, `- x`, `* x`, `+ x`) all match.
+_PROTECTED_LINE = re.compile(r"^(?:\|.*\|)$|^(?:[-*+]|\d+[.)])\s+\S")
+
+
+def _line_sentences(line: str) -> list[str]:
+    """Sentence units within a single line. The caller has already split on newlines, so this
+    only splits on sentence-ending punctuation."""
+    return [x.strip() for x in re.split(r"(?<=[.!?])\s+", line) if x.strip()]
+
+
 def without_what_was_already_said(reply: str, history: list) -> str:
     """Strip sentences this thread has already been told, and say so once.
 
@@ -780,7 +797,10 @@ def without_what_was_already_said(reply: str, history: list) -> str:
 
     Deliberately conservative: only long sentences (short ones repeat innocently — "Here is what
     I found."), only exact matches after normalisation, and never the whole reply. A
-    de-duplicator that eats an answer is worse than one that misses a repetition.
+    de-duplicator that eats an answer is worse than one that misses a repetition. And never a
+    row of the answer's own table or an item of its own list (`_PROTECTED_LINE`) — those are the
+    answer, not commentary about it, so a repeat of one is the correct answer again, not a
+    repetition to collapse.
     """
     if not reply or not history:
         return reply
@@ -793,16 +813,28 @@ def without_what_was_already_said(reply: str, history: list) -> str:
     if not seen:
         return reply
 
-    kept, dropped = [], 0
-    for sentence in _sentences(reply):
-        norm = " ".join(sentence.lower().split())
-        if len(norm) > 80 and norm in seen:
-            dropped += 1
+    kept_lines: list[str] = []
+    dropped = 0
+    for line in reply.split("\n"):
+        stripped = line.strip()
+        if not stripped or _PROTECTED_LINE.match(stripped):
+            kept_lines.append(line)
             continue
-        kept.append(sentence)
-    if not dropped or not kept:
+        kept_sentences = []
+        for sentence in _line_sentences(stripped):
+            norm = " ".join(sentence.lower().split())
+            if len(norm) > 80 and norm in seen:
+                dropped += 1
+                continue
+            kept_sentences.append(sentence)
+        if kept_sentences:
+            kept_lines.append(" ".join(kept_sentences))
+        # else: the whole line was a repeated remark -- drop the line, not just its words.
+    if not dropped:
         return reply
-    out = " ".join(kept)
+    out = "\n".join(kept_lines).strip()
+    if not out:
+        return reply
     # Say that something was removed rather than leaving a reply that reads as oddly terse.
     return out + (f"\n\n(BOSS left out {dropped} point{'s' if dropped > 1 else ''} already "
                   "covered above rather than repeating them.)")

@@ -7308,6 +7308,13 @@ ALTER TABLE llm_calls   ADD COLUMN IF NOT EXISTS act_id TEXT;
 ALTER TABLE agent_turns ADD COLUMN IF NOT EXISTS act_id TEXT;
 ALTER TABLE agent_messages ADD COLUMN IF NOT EXISTS act_id TEXT;
 ALTER TABLE agent_messages ADD COLUMN IF NOT EXISTS fingerprint TEXT;
+-- THE OTHER STANDING OFFER. `proposed_actions` restores the buttons a turn put above itself;
+-- a turn that stopped short instead ends with ONE resume press (RouterTurn.next_steps --
+-- "Keep waiting", "Continue"). That lived only in the HTTP response, so a fresh process
+-- (`boss metatron --print '/pick 1'`) or a reloaded console had nothing to press: the offer
+-- was real on the server (the wait was really cut short) but nowhere a restored thread could
+-- read it back from. Stored per message, exactly like `proposed_actions`.
+ALTER TABLE agent_messages ADD COLUMN IF NOT EXISTS next_steps JSONB NOT NULL DEFAULT '[]'::jsonb;
 -- A review panel's seats each sign their own work (factory spec §6.4): 1-based, NULL = no panel.
 ALTER TABLE agent_acts ADD COLUMN IF NOT EXISTS seat INT;
 -- A STOP IS RECORDED AT ONCE, NOT WHEN THE RUN ROW IS FREE (factory test D1). The worker holds

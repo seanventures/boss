@@ -79,6 +79,46 @@ def test_chat_persists_thread_messages_and_turn_events(client, engine, decides):
         ).scalar_one() == 2
 
 
+def test_a_next_step_is_restored_after_the_process_restarts(client, monkeypatch):
+    """The other standing offer. `proposed_actions` (the buttons a reply puts above itself)
+    are restored on GET .../messages so a reloaded console or a fresh `boss metatron --print`
+    process can still press one; a turn that stopped short instead offers ONE resume step
+    (RouterTurn.next_steps -- "Keep waiting", "Continue") and that has to come back the same
+    way, or a fresh process reading the thread sees the reply but not the one thing it offered.
+
+    Reproduces the real stored shape (`continue_steps`' "keep_waiting" dict, read live off
+    agent_messages.next_steps)."""
+    def decide(connection, settings, project_id, *, message, candidates, **_k):
+        return agent_decision.AgentDecision(agent_decision.DECIDED, action="answer",
+                                            confidence=0.95, by={"backend": "stub"})
+
+    monkeypatch.setattr(agent_decision, "decide", decide)
+    monkeypatch.setattr(EngineRouter, "_a_model_can_answer", lambda *a, **k: True)
+
+    next_step = {"id": "keep_waiting", "label": "Keep waiting", "depth": "investigate",
+                "message": "Keep waiting on the northpeak-bank-b index job."}
+
+    def answer(self, connection, project_id, messages, **kwargs):
+        return RouterTurn(reply="Still indexing.", next_steps=[next_step])
+
+    monkeypatch.setattr(EngineRouter, "_answer", answer)
+
+    first = client.post("/v1/agent/chat", json=_payload("why is it stuck?"))
+    assert first.status_code == 200, first.text
+    body = first.json()
+    thread_id = body["thread_id"]
+    # The live response already carried it (this part never broke).
+    assert body["next_steps"] == [next_step]
+
+    restored = client.get(
+        f"/v1/agent/threads/{thread_id}/messages",
+        params={"project_id": get_settings().default_project_id, "actor": "executive_console"},
+    )
+    assert restored.status_code == 200, restored.text
+    # The part that broke: a fresh read of the thread must offer it too.
+    assert restored.json()["next_steps"] == [next_step]
+
+
 def test_chat_requires_agent_chat_permission(client):
     response = client.post(
         "/v1/agent/chat",

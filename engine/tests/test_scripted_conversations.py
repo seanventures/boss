@@ -234,6 +234,38 @@ class TestSayingItOnce:
                       history=[{"role": "assistant", "content": said}])
         assert turn.reply.strip()
 
+    def test_table_rows_survive_even_when_the_intro_repeats(self, monkeypatch):
+        """Observed live: asked to list every class implementing an interface, the model's
+        table came back with a header and no rows. The intro sentence restated what an earlier
+        turn already said (a true repeat, correctly dropped), but the table rows -- the actual
+        answer -- shared words with that intro ("processor", "class", "implement") and one row
+        was even byte-for-byte the row an earlier turn had already printed. The dedupe matched
+        it as "already covered" and dropped it too. A table row is the answer, not commentary
+        about the answer, no matter how many times it repeats."""
+        intro = ("Fineract's loan module defines one processor interface, and twelve classes "
+                 "implement or extend that loan repayment schedule transaction processor.")
+        row_abstract = ("| AbstractLoanRepaymentScheduleTransactionProcessor | fineract-loan/"
+                        "src/main/java/.../transactionprocessor/Abstract...java |")
+        row_creocore = ("| CreocoreLoanRepaymentScheduleTransactionProcessor | fineract-loan/"
+                        "src/main/java/.../transactionprocessor/Creocore...java |")
+        history = [{"role": "assistant", "content": intro + "\n" + row_abstract}]
+        reply = "\n".join([
+            intro,
+            "| Class | Path |",
+            "|---|---|",
+            row_abstract,
+            row_creocore,
+        ])
+        turn, _ = run(monkeypatch, "list every class again, with paths", [(reply, SIX_READS)],
+                      history=history)
+        assert "AbstractLoanRepaymentScheduleTransactionProcessor" in turn.reply
+        assert "CreocoreLoanRepaymentScheduleTransactionProcessor" in turn.reply
+        assert row_abstract in turn.reply
+        assert row_creocore in turn.reply
+        # The repeated intro sentence is the one thing that should actually go.
+        assert intro not in turn.reply
+        assert "already covered above" in turn.reply
+
 
 class TestEveryShapeAPrintedOfferTakes:
     """Four shapes, one question, four deploys apart.

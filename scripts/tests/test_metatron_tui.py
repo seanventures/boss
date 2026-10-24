@@ -1177,6 +1177,30 @@ def test_a_fresh_process_picks_the_offer_the_last_command_was_shown():
     assert client.choices() == []  # spent, as in the console
 
 
+def test_a_fresh_process_picks_the_next_step_the_last_reply_offered():
+    """The other standing offer. A turn that stopped short ends with ONE resume step ("Keep
+    waiting", "Continue") instead of a button -- stored on the message as `next_steps`, exactly
+    like `proposed_actions`. Observed live: a `--print '/pick 1'` process said "nothing to pick"
+    right after the console had shown "Choices ... 1. Keep waiting" for the same thread, because
+    the restore path only ever rebuilt `proposed_actions` and dropped `next_steps` on the floor."""
+    next_step = {"id": "keep_waiting", "label": "Keep waiting", "depth": "investigate",
+                "message": "Keep waiting on the northpeak-bank-b index job."}
+    opener = FakeOpener([(200, {"thread_id": "athr_9"}),
+                         (200, {"thread_id": "athr_9", "messages": [], "proposed_actions": [],
+                                "next_steps": [next_step], "pending_confirmation": None}),
+                         (200, {**AGENT_TURN, "thread_id": "athr_9", "proposed_actions": [],
+                                "next_steps": [], "reply": "Still indexing."})])
+    client = tui.MetatronClient(_config(), urlopen=opener)
+    out = client.handle(tui.parse_line("/pick 1"))
+    assert opener.calls[0]["url"].endswith("/v1/agent/threads/ensure")
+    assert "/v1/agent/threads/athr_9/messages" in opener.calls[1]["url"]
+    call = opener.calls[2]
+    assert call["url"].endswith("/v1/metatron/session")
+    assert call["body"]["message"] == next_step["message"]
+    assert call["body"]["depth"] == "investigate"
+    assert "Still indexing" in out
+
+
 def test_picking_a_next_step_sends_the_consoles_next_step_turn():
     opener = FakeOpener([(200, AGENT_TURN), (200, {**AGENT_TURN, "proposed_actions": [],
                                                   "next_steps": [], "reply": "Looked deeper."})])

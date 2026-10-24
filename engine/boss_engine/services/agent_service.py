@@ -283,6 +283,11 @@ class AgentService:
         #: The buttons this reply put above itself. Not writes that ran — offers, which is
         #: why they are not in `actions`. Stored so reopening the thread restores them.
         proposed_actions: Optional[list[dict[str, Any]]] = None,
+        #: The ONE resume a turn that stopped short offers ("Keep waiting", "Continue") --
+        #: RouterTurn.next_steps. Stored for the same reason as `proposed_actions`: a fresh
+        #: process or a reloaded console has no memory of the live HTTP response, only the
+        #: thread, and the offer must still be there to press.
+        next_steps: Optional[list[dict[str, Any]]] = None,
         #: WHICH AGENT SAID IT. Recorded nowhere before, so an existing thread could not be
         #: sorted out after the fact — "assistant" says a machine spoke, not which one.
         agent_role: str = "",
@@ -292,15 +297,15 @@ class AgentService:
                 """
                 INSERT INTO agent_messages (
                     id, thread_id, role, content, tool_calls, actions, proposed_actions,
-                    agent_role
+                    next_steps, agent_role
                 )
                 VALUES (
                     :id, :thread_id, :role, :content,
                     CAST(:tool_calls AS JSONB), CAST(:actions AS JSONB),
-                    CAST(:proposed AS JSONB), :agent_role
+                    CAST(:proposed AS JSONB), CAST(:next_steps AS JSONB), :agent_role
                 )
                 RETURNING id, role, content, tool_calls, actions, proposed_actions,
-                          agent_role, created_at
+                          next_steps, agent_role, created_at
                 """
             ),
             {
@@ -311,6 +316,7 @@ class AgentService:
                 "tool_calls": json.dumps(tool_calls or []),
                 "actions": json.dumps(actions or []),
                 "proposed": json.dumps(proposed_actions or []),
+                "next_steps": json.dumps(next_steps or []),
                 "agent_role": (agent_role or "").strip().lower(),
             },
         ).mappings().one()
@@ -432,7 +438,7 @@ class AgentService:
             text(
                 """
                 SELECT id, role, content, tool_calls, actions, proposed_actions,
-                       agent_role, created_at
+                       next_steps, agent_role, created_at
                 FROM agent_messages
                 WHERE thread_id = :thread_id
                 -- A TURN'S ROWS SHARE ONE TIMESTAMP, SO THE TIEBREAK DECIDES THE TRANSCRIPT.
@@ -888,6 +894,7 @@ class AgentService:
             tool_calls=turn.tool_calls,
             actions=turn.actions,
             proposed_actions=getattr(turn, "proposed_actions", []) or [],
+            next_steps=getattr(turn, "next_steps", []) or [],
             agent_role=role or "",
         )
         cited = self._close_chat_act(connection, project_id=project_id, act_id=act_id,
@@ -1045,6 +1052,7 @@ class AgentService:
             "tool_calls": value("tool_calls"),
             "actions": value("actions"),
             "proposed_actions": value("proposed_actions"),
+            "next_steps": value("next_steps"),
             "created_at": created_at.isoformat()
             if hasattr(created_at, "isoformat")
             else str(created_at),

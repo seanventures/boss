@@ -1489,8 +1489,16 @@ class MetatronClient:
 
     def _restored_turn(self) -> dict[str, Any]:
         """A fresh process (`--print '/pick 2'`, a script, a restart) has no last turn in memory,
-        but the server keeps every reply's offers and the thread's pending plan: read them, so a
-        choice offered in one command can be picked in the next, as the console does on reload."""
+        but the server keeps every reply's offers, its one resume step, and the thread's
+        pending plan: read them, so a choice offered in one command can be picked in the next,
+        as the console does on reload.
+
+        Both kinds, not just the buttons: a turn that stopped short offers ONE next step
+        ("Keep waiting", "Continue") instead of an action button, and it is restored the same
+        way `proposed_actions` is -- from the newest reply, via GET .../messages. Dropping
+        `next_steps` here left `choices()` with nothing to find for that offer, even though the
+        server returned it, so `/pick 1` for "Keep waiting" said "nothing to pick" right after
+        the console had shown exactly that choice."""
         thread_id = self.ensure_thread()
         if not thread_id:
             return {}
@@ -1499,6 +1507,7 @@ class MetatronClient:
             return {}
         # The server's own "offers still standing": the newest reply's, as the console restores them.
         turn = {"proposed_actions": [o for o in payload.get("proposed_actions") or [] if isinstance(o, dict)],
+                "next_steps": [s for s in payload.get("next_steps") or [] if isinstance(s, dict)],
                 "pending_confirmation": payload.get("pending_confirmation")}
         self.last_turn = turn
         return turn
