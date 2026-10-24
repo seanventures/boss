@@ -1331,6 +1331,8 @@ export BOSS_COMMUNITY_IMAGE_TAG="${BOSS_COMMUNITY_IMAGE_TAG:-$COMPOSE_PROJECT_NA
 # identifies a clean Git checkout; it is not a content attestation for an image.
 set_build_metadata() {
   local source_root="" source_head="" source_status="" built_at=""
+  # The revision is the TRACKED source: an install-local untracked file (a local CA root.crt, a
+  # note) never makes it unknown — that silently disabled self-fix ("not built from a git checkout").
   BOSS_SOURCE_SHA=unknown
   BOSS_BUILT_AT=unknown
   if [[ -d "$INSTALL_DIR/.git" || -f "$INSTALL_DIR/.git" ]] &&
@@ -1338,7 +1340,7 @@ set_build_metadata() {
      [[ "$source_root" == "$(cd "$INSTALL_DIR" && pwd -P)" ]] &&
      source_head="$(git -C "$INSTALL_DIR" rev-parse --verify HEAD 2>/dev/null)" &&
      [[ "$source_head" =~ ^[0-9a-f]{40}$ ]] &&
-     source_status="$(GIT_OPTIONAL_LOCKS=0 git -c core.fsmonitor=false -C "$INSTALL_DIR" status --porcelain --untracked-files=normal 2>/dev/null)" &&
+     source_status="$(GIT_OPTIONAL_LOCKS=0 git -c core.fsmonitor=false -C "$INSTALL_DIR" status --porcelain --untracked-files=no 2>/dev/null)" &&
      [[ -z "$source_status" ]]; then
     BOSS_SOURCE_SHA="$source_head"
   fi
