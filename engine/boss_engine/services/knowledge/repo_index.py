@@ -17,6 +17,10 @@ call into it):
   registered before this existed, and a base branch whose head may have moved since the last
   look (``BOSS_KG_INDEX_RECHECK_MINUTES``; a newer head in github_repository_ref_states counts
   at once).
+* A repository last indexed by an older indexer (``kg_repo_index.indexer_version`` below
+  ``code_index.INDEXER_VERSION``) is due again at the next tick, as a whole-tree index even when
+  its head did not move: a graph built before the indexer learned an edge kind gains it after
+  an install, with nobody asking.
 * The worker hands the leased job to the API (``execute_job``), which fetches the base branch
   through BOSS's own clone path (``identity.runs.repo_access``: the project's GitHub connection,
   the egress proxy when on; the credential rides in git's environment only) into a shallow
@@ -91,7 +95,10 @@ class Limits:
 # --- what is due --------------------------------------------------------------------------------
 def observe_bindings(connection: Connection, project_id: Optional[str] = None) -> int:
     """Rows for active repositories that have none (registered before the trigger existed), and
-    due again where the binding's base branch differs from the one last indexed."""
+    due again where the binding's base branch differs from the one last indexed, or where an
+    older indexer wrote the graph."""
+    from .code_index import INDEXER_VERSION
+
     params = {"p": project_id}
     added = connection.execute(text(
         """
@@ -110,7 +117,15 @@ def observe_bindings(connection: Connection, project_id: Optional[str] = None) -
           AND (CAST(:p AS TEXT) IS NULL OR r.project_id = :p)
           AND (r.branch IS DISTINCT FROM COALESCE(b.default_branch, '') OR r.repo <> b.full_name)
         """), params).rowcount
-    return int(added or 0) + int(moved or 0)
+    upgraded = connection.execute(text(
+        """
+        UPDATE kg_repo_index r SET due = true, force = true, reason = 'indexer_upgraded', updated_at = now()
+        FROM github_repository_bindings b
+        WHERE b.id = r.binding_id AND b.status = 'active' AND NOT r.due AND r.status = 'indexed'
+          AND COALESCE(r.indexer_version, 1) < :v
+          AND (CAST(:p AS TEXT) IS NULL OR r.project_id = :p)
+        """), {**params, "v": INDEXER_VERSION}).rowcount
+    return int(added or 0) + int(moved or 0) + int(upgraded or 0)
 
 
 def mark_stale(connection: Connection, *, recheck_minutes: int, project_id: Optional[str] = None) -> int:
@@ -513,6 +528,7 @@ def _finish(engine: Any, row: dict, job_id: str, *, state: str, error: Optional[
             head: str = "", run: Optional[dict] = None) -> None:
     from ..core import emit_event
     from ..receipts import ReceiptService
+    from .code_index import INDEXER_VERSION
 
     run = run or {}
     with engine.begin() as c:
@@ -528,9 +544,12 @@ def _finish(engine: Any, row: dict, job_id: str, *, state: str, error: Optional[
                    indexed_at = CASE WHEN :s = 'indexed' AND :changed THEN now() ELSE indexed_at END,
                    files = COALESCE(:files, files), parsed = COALESCE(:parsed, parsed),
                    nodes = COALESCE(:nodes, nodes), edges = COALESCE(:edges, edges),
-                   seconds = COALESCE(:secs, seconds)
+                   seconds = COALESCE(:secs, seconds),
+                   indexer_version = CASE WHEN :s = 'indexed' AND :whole THEN :v ELSE indexer_version END
             WHERE project_id = :p AND binding_id = :b AND (job_id = :j OR job_id IS NULL)
-            """), {**sets, **numbers, "secs": run.get("seconds"), "changed": run.get("mode") != "unchanged"})
+            """), {**sets, **numbers, "secs": run.get("seconds"), "changed": run.get("mode") != "unchanged",
+                   # Only a whole-tree run re-parses every file, so only it vouches for the version.
+                   "whole": run.get("mode") == "full", "v": INDEXER_VERSION})
         scope = c.execute(text(
             "SELECT w.org_id, p.workspace_id FROM projects p JOIN workspaces w ON w.id = p.workspace_id "
             "WHERE p.id = :p"), {"p": row["project_id"]}).one()
@@ -554,6 +573,7 @@ def execute_job(engine: Any, settings: Any, *, job_id: str, worker_id: str, leas
     """The worker's leased `knowledge.repository.index` job, run here (the API holds the GitHub
     credential). `checkout` and `inline` are for tests: a local fetch, and the index in-process."""
     from ..jobs import JobLeaseService, LeaseNotFoundError
+    from .code_index import INDEXER_VERSION
 
     limits = Limits.from_settings(settings)
     with engine.begin() as c:
@@ -580,12 +600,14 @@ def execute_job(engine: Any, settings: Any, *, job_id: str, worker_id: str, leas
             project_id=row["project_id"], repo=row["repo"], branch=row["branch"], dest=dest,
             timeout=min(900, limits.timeout_seconds))
         last = row.get("indexed_sha") or ""
-        if head and head == last and not (row.get("force") or payload.get("force")):
+        current = int(row.get("indexer_version") or 1) >= INDEXER_VERSION
+        if head and head == last and current and not (row.get("force") or payload.get("force")):
             run = {"mode": "unchanged", "files": row.get("files"), "parsed": 0, "nodes": row.get("nodes"),
                    "edges": row.get("edges"), "seconds": 0}
             _finish(engine, row, job_id, state="indexed", head=head, run=run)
             return {"status": "succeeded", "mode": "unchanged", "head": head}
-        since = last if last and previous == last else ""
+        # An older indexer's graph is redone whole: an incremental run re-parses only what changed.
+        since = last if last and previous == last and current else ""
         if inline:
             run = index_tree(engine, project_id=row["project_id"], repo=row["repo"], root=dest,
                              limits=limits, previous=since, head=head)

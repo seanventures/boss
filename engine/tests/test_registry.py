@@ -15,6 +15,7 @@ _EXPECTED_TOOLS: set[str] = {
     # fact), offered through the knowledge.propose bundle, which every agent holds.
     "kg_symbol", "kg_callers", "kg_blast_radius", "kg_why", "kg_search", "kg_precedent", "kg_propose_fact",
     "kg_cypher",   # read-only Cypher over the project's AGE projection
+    "kg_schema",   # what that graph holds: labels, relationship types and counts, properties
     # THE CAPTAIN'S POWERS (BOSSAPP-759): retired as an engine, kept as the one agent's actions.
     # watch / goals / set_goal the agent may run; drive / overwatch / theater are operator_only.
     "captain_watch", "captain_goals", "captain_set_goal", "captain_drive", "captain_overwatch",
@@ -239,10 +240,10 @@ def test_default_registry_shape():
     read = {s.name for s in reg.specs(kind="read")}
     write = {s.name for s in reg.specs(kind="write")}
     assert read | write == set(reg.names())
-    assert len(reg.names()) == 153, (
+    assert len(reg.names()) == 154, (
         f"tool set changed: unexpected={sorted(set(reg.names()) - _EXPECTED_TOOLS)}, "
         f"missing={sorted(_EXPECTED_TOOLS - set(reg.names()))}")
-    assert len(read) == 90  # + code_graph_status, index_repository_code (a repository's code graph) + list_org_repositories (the org's repository registry) + list_projects, describe_project (a project's real state, any project)
+    assert len(read) == 91  # + kg_schema (what the knowledge graph holds) + code_graph_status, index_repository_code (a repository's code graph) + list_org_repositories (the org's repository registry) + list_projects, describe_project (a project's real state, any project)
     #                        + captain_goals, + 7 kg reads, + 3 self-fix reads, + read_app_logs, + my_recent_work, + system_health, + 7 template/security reads, + precheck_workflow
     #                        + query_project_data (the agent baseline's fenced row read)
     assert len(write) == 63  # + allow_repository, remove_project_repository + 5 captain writes (BOSSAPP-759), + create_project, + kg_propose_fact, + remove_app, + system_doctor_act, + run_security_scan (F4), + apply_template (F2),

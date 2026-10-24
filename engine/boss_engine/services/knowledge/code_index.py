@@ -4,8 +4,11 @@
 JavaScript, Go, Java and C# through tree-sitter). This module resolves names ACROSS the files of
 a repository and writes the graph through the knowledge store. Nodes are ``file``, ``module``,
 ``symbol``, ``endpoint``, ``table``, ``queue`` and ``config_key``; edges are ``defines``,
-``imports``, ``calls``, ``references``, ``exposes``, ``reads``, ``writes``, ``publishes`` and
-``subscribes``. Tables, queues, webhooks and config keys are keyed project-wide, so two
+``imports``, ``calls``, ``references``, ``extends``, ``implements``, ``exposes``, ``reads``,
+``writes``, ``publishes`` and ``subscribes``. ``extends``/``implements`` run from a type to the
+type it inherits from (a class's superclass, an interface it implements, an interface's parent,
+a Python base, a Go embedded type), resolved like any other name; a base resolved only because
+its simple name is unique in the repository has confidence 0.5. Tables, queues, webhooks and config keys are keyed project-wide, so two
 repositories that use the same table meet at the same node.
 
 * ``index_repository`` indexes a whole tree: unchanged files (same content hash) are not
@@ -35,7 +38,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from ..core import now_utc
-from .code_parse import Def, FileFacts, Import, Ref, language_for, parse_file
+from .code_parse import FACTS_VERSION, Def, FileFacts, Import, Ref, language_for, parse_file
 from .store import PostgresKnowledgeStore
 
 LANGUAGES = frozenset({"python", "typescript", "javascript", "go", "java", "csharp"})
@@ -43,6 +46,13 @@ SOURCE = "code_index"
 SKIP_DIRS = ("node_modules/", "vendor/", "dist/", "build/", ".git/", "__pycache__/", "third_party/")
 GO_LIKE = ("go", "java", "csharp")       # a module (package/namespace) spans several files
 JS_FAMILY = ("javascript", "typescript", "tsx")
+#: What a whole-repository index produces. A repository last indexed by an older version is due
+#: again (repo_index.observe_bindings), and its cached file facts of an older shape are parsed
+#: again, so a graph built before a new edge kind existed gains it on the next tick after an
+#: install. Bump it with any change to what the index writes. 2: extends/implements edges.
+INDEXER_VERSION = 2
+#: Edge kinds between types.
+INHERITANCE_KINDS = ("extends", "implements")
 
 _DECL = {
     "javascript": (
@@ -203,6 +213,10 @@ def facts_from_dict(d: dict) -> FileFacts:
               else Ref(x[0], tuple(x[1].split(".")), bool(x[2]), x[3]) for x in d.get("refs", [])]
     for key in ("endpoints", "tables", "queues", "config"):
         setattr(f, key, [tuple(x) for x in d.get(key, [])])
+    f.bases = [(x[0], tuple(x[1].split(".")) if isinstance(x[1], str) else tuple(x[1]), x[2], int(x[3]))
+               for x in d.get("bases", [])]
+    f.types = dict(d.get("types") or {})
+    f.version = int(d.get("v") or d.get("version") or 1)    # facts cached before versions were 1
     return f
 
 
@@ -212,7 +226,8 @@ def facts_to_row(f: FileFacts) -> dict:
             "imports": [[i.alias, i.module, i.name] for i in f.imports],
             "refs": [[r.src, ".".join(r.chain), int(r.call), r.line] for r in f.refs],
             "endpoints": f.endpoints, "tables": f.tables, "queues": f.queues, "config": f.config,
-            "lines": f.lines, "error": f.error}
+            "bases": [[src, ".".join(chain), rel, line] for src, chain, rel, line in f.bases],
+            "types": f.types, "lines": f.lines, "error": f.error, "v": f.version}
 
 
 def row_to_facts(path: str, lang: str, module: str, content_hash: str, data: dict) -> FileFacts:
@@ -225,6 +240,8 @@ def names_of(f: FileFacts) -> list[str]:
     names: set[str] = set()
     for r in f.refs:
         names.update(part for part in r.chain if part and not part.startswith("#"))
+    for _src, chain, _rel, _line in f.bases:
+        names.update(chain)
     for i in f.imports:
         names.add(i.module)
         names.add(i.module.rsplit(".", 1)[-1].rsplit("/", 1)[-1])
@@ -405,6 +422,8 @@ class RepoIndex:
         self._imports: dict[str, list[Import]] = {}
         self.path_of_key: dict[str, str] = {}
         self.qual_of_key: dict[str, str] = {}
+        self.types_by_name: dict[str, list[str]] = defaultdict(list)     # simple name -> type keys
+        self.type_kind: dict[str, str] = {}                               # type key -> interface...
         files = list(files)
         for f in files:
             self.add(f)
@@ -444,6 +463,9 @@ class RepoIndex:
             self.qual_of_key[key] = d.qualname
             if d.kind in ("function", "method", "property"):
                 self.by_name[d.qualname.rsplit(".", 1)[-1]].append(key)
+            elif d.kind == "class":
+                self.types_by_name[d.qualname.rsplit(".", 1)[-1]].append(key)
+                self.type_kind[key] = f.types.get(d.qualname, "class")
 
     @property
     def modules(self) -> dict[str, dict[str, str]]:
@@ -602,6 +624,34 @@ class Resolver:
             return None
         return cands[0], 0.5
 
+    def resolve_type(self, src: str, chain: tuple[str, ...], line: int) -> tuple[str, float] | None:
+        """The type a base name written in ``src`` (a type's qualname) names: a type nested
+        beside it, then the same rules as any reference (this file or package, an import, a
+        star import), then a fully qualified name, then a simple name unique among the
+        repository's types in this language (confidence 0.5). Only a type is an answer."""
+        ix = self.ix
+        scope = src.split(".")[:-1]
+        while scope:                                   # class Outer { class A extends Inner }
+            hit = self.local.get(".".join([*scope, *chain]))
+            if hit and ix.def_kind.get(hit) == "class":
+                return hit, 1.0
+            scope.pop()
+        hit = self.resolve(Ref(src, chain, False, line))
+        qual = ix.qual_of_key.get(hit[0], "") if hit else ""
+        if hit and ix.def_kind.get(hit[0]) == "class" and (qual == chain[-1] or qual.endswith("." + chain[-1])):
+            return hit
+        for k in range(len(chain) - 1, 0, -1):         # org.example.Base, Outer.Inner by package
+            module = ix.internal(".".join(chain[:k]), self.f.lang)
+            found = ix.defs.get(module, {}).get(".".join(chain[k:])) if module else None
+            if found and ix.def_kind.get(found) == "class":
+                return found, 1.0
+        family = _family(self.f.lang)
+        cands = [k for k in ix.types_by_name.get(chain[-1], ())
+                 if _family(ix.lang_of.get(ix.path_of_key.get(k))) == family]
+        if len(cands) == 1:
+            return cands[0], 0.5
+        return None
+
     def src_key(self, src: str) -> str:
         defs = self.ix.file_defs.get(self.f.path, {})
         parts = src.split(".") if src else []
@@ -648,9 +698,11 @@ def graph_for(index: RepoIndex, files: Iterable[FileFacts]) -> tuple[list[dict],
              path=f.path if f.lang not in GO_LIKE else None)
         r = Resolver(index, f)
         for d in f.defs:
-            sk = node("symbol", symbol_key(repo, f.path, d.qualname), d.qualname,
-                      {"symbol_kind": d.kind, "line": d.line, "end_line": d.end_line, "lang": f.lang,
-                       "module": f.module}, path=f.path)
+            attrs = {"symbol_kind": d.kind, "line": d.line, "end_line": d.end_line, "lang": f.lang,
+                     "module": f.module}
+            if d.qualname in f.types:
+                attrs["type_kind"] = f.types[d.qualname]
+            sk = node("symbol", symbol_key(repo, f.path, d.qualname), d.qualname, attrs, path=f.path)
             edge(fk, sk, "defines", d.line)
         for imp in index.imports_of(f):
             module = index.internal(imp.module, f.lang)
@@ -679,6 +731,14 @@ def graph_for(index: RepoIndex, files: Iterable[FileFacts]) -> tuple[list[dict],
                 edge(src, qk, "publishes", ref.line, conf)
             else:
                 edge(src, target, "calls" if ref.call else "references", ref.line, conf)
+        for src, chain, rel, line in f.bases:
+            hit = r.resolve_type(src, chain, line)
+            if not hit:
+                continue                               # a type outside the repository
+            target, conf = hit
+            if rel == "inherits":                      # C#: the base's own kind says which
+                rel = "implements" if index.type_kind.get(target) == "interface" else "extends"
+            edge(r.src_key(src), target, rel, line, conf)
         for src, method, route in f.endpoints:
             if src.startswith("#ref:"):
                 hit = r.resolve(Ref("", tuple(src[5:].split(".")), False, 0))
@@ -857,7 +917,7 @@ def index_repository(
             continue
         digest = hashlib.sha256(raw).hexdigest()
         old = cached.get(path)
-        if old is not None and old.content_hash == digest:
+        if old is not None and old.content_hash == digest and old.version >= FACTS_VERSION:
             files.append(old)
             continue
         files.append(parse_file(path, raw))
@@ -865,7 +925,7 @@ def index_repository(
     workspace = JsWorkspace.from_texts({p: t for p, t in config.items() if p != "go.mod"})
     go_prefix = _go_prefix(config)
     index = RepoIndex(repo, files, go_prefix, workspace)
-    run: dict[str, Any] = {"mode": "full", "files": len(files), "parsed": parsed,
+    run: dict[str, Any] = {"mode": "full", "indexer_version": INDEXER_VERSION, "files": len(files), "parsed": parsed,
                            "symbols": sum(len(f.defs) for f in files),
                            "unparsed": sorted(f.path for f in files if f.error)[:50],
                            "too_large": len(too_big), "too_large_paths": too_big[:20]}

@@ -473,8 +473,106 @@ class KnowledgeService:
         from .age import run_cypher
 
         self.store._org_id(connection, project_id, None)
-        return run_cypher(connection, project_id=project_id, query=query, params=params,
-                          columns=columns, policy=policy, row_limit=limit)
+        result = run_cypher(connection, project_id=project_id, query=query, params=params,
+                            columns=columns, policy=policy, row_limit=limit)
+        if not result["rows"]:
+            result["note"] = ("No rows. Check the labels, relationship types and property names "
+                              "against kg_schema before reading this as absence.")
+        return result
+
+    def schema(self, connection: Connection, *, project_id: str, policy=None) -> dict[str, Any]:
+        """What this project's graph holds, from its own rows: labels and kinds with counts,
+        relationship types with counts and the labels they join, the properties a query can
+        read, and the repositories indexed. Cached per project until the graph is written again."""
+        self.store._org_id(connection, project_id, None)
+        return graph_schema(connection, project_id=project_id, policy=policy)
+
+_SCHEMA_CACHE: dict[str, tuple[Any, float, dict[str, Any]]] = {}
+_SCHEMA_TTL_SECONDS = 600.0
+
+#: How to read the summary. General, never about one repository or question.
+SCHEMA_GUIDANCE = (
+    "Answer structure questions (who implements or extends a type, who calls a function, what a "
+    "file defines) by following relationships, not by matching names: names match methods, "
+    "tests and samples too.",
+    "A result that hits a LIMIT is a sample; absence from a sample proves nothing. Count first "
+    "(RETURN count(*)) when completeness matters.",
+    "A relationship type with no count here does not exist in this graph: say so rather than "
+    "inferring from names.",
+)
+
+
+def graph_schema(connection: Connection, *, project_id: str, policy=None) -> dict[str, Any]:
+    import time
+
+    from .age import DIALECT_NOTES, LABELS, VERTEX_EXTRAS
+    from .scopes import LAYERS
+
+    layers = [layer for layer in LAYERS if policy is None or layer in policy.layers]
+    if policy is not None and not policy.reads_code:
+        layers = [layer for layer in layers if layer != "code"]
+    stamp = connection.execute(text(
+        "SELECT synced_at FROM kg_age_sync WHERE project_id = :p"), {"p": project_id}).scalar() \
+        if _has_table(connection, "kg_age_sync") else None
+    key = f"{project_id}|{','.join(layers)}"
+    cached = _SCHEMA_CACHE.get(key)
+    if cached is not None and cached[0] == stamp and time.monotonic() - cached[1] < _SCHEMA_TTL_SECONDS:
+        return cached[2]
+    nodes = connection.execute(text(
+        """
+        SELECT knowledge_layer AS layer, kind, attrs->>'symbol_kind' AS symbol_kind,
+               attrs->>'type_kind' AS type_kind, count(*) AS n
+        FROM kg_nodes WHERE project_id = :p AND valid_to IS NULL AND knowledge_layer = ANY(:layers)
+        GROUP BY 1, 2, 3, 4
+        """), {"p": project_id, "layers": layers}).mappings().all()
+    labels: dict[str, dict[str, Any]] = {}
+    for row in nodes:
+        label = labels.setdefault(LABELS[row["layer"]], {"count": 0, "kinds": {}})
+        label["count"] += int(row["n"])
+        label["kinds"][row["kind"]] = label["kinds"].get(row["kind"], 0) + int(row["n"])
+        for prop in ("symbol_kind", "type_kind"):
+            if row[prop]:
+                bucket = label.setdefault(prop, {})
+                bucket[row[prop]] = bucket.get(row[prop], 0) + int(row["n"])
+    edges = connection.execute(text(
+        """
+        SELECT e.kind, s.knowledge_layer AS src, d.knowledge_layer AS dst, count(*) AS n
+        FROM kg_edges e JOIN kg_nodes s ON s.id = e.src_id JOIN kg_nodes d ON d.id = e.dst_id
+        WHERE e.project_id = :p AND e.valid_to IS NULL AND s.valid_to IS NULL AND d.valid_to IS NULL
+          AND s.knowledge_layer = ANY(:layers) AND d.knowledge_layer = ANY(:layers)
+        GROUP BY 1, 2, 3 ORDER BY 4 DESC
+        """), {"p": project_id, "layers": layers}).mappings().all()
+    relationships: dict[str, dict[str, Any]] = {}
+    for row in edges:
+        rel = relationships.setdefault(row["kind"], {"count": 0, "between": {}})
+        rel["count"] += int(row["n"])
+        rel["between"][f"{LABELS[row['src']]}->{LABELS[row['dst']]}"] = int(row["n"])
+    repos = connection.execute(text(
+        "SELECT repo, status, indexed_sha FROM kg_repo_index WHERE project_id = :p ORDER BY repo"),
+        {"p": project_id}).mappings().all() if _has_table(connection, "kg_repo_index") else []
+    out = {
+        "project_id": project_id,
+        "labels": {k: labels[k] for k in sorted(labels, key=lambda k: -labels[k]["count"])},
+        "relationships": dict(sorted(relationships.items(), key=lambda kv: -kv[1]["count"])),
+        "vertex_properties": ["node_id", "kind", "node_key", "name", "trust_tier", *VERTEX_EXTRAS],
+        "edge_properties": ["edge_id", "kind", "trust_tier", "confidence"],
+        "notes": {
+            "name": "a symbol's name is its qualname inside its file: Class, Class.method, function",
+            "confidence": "1.0 resolved through the code's own scope or imports; 0.5 only because "
+                          "the simple name is unique in the repository",
+        },
+        "repositories": [{"repo": r["repo"], "status": r["status"], "commit": (r["indexed_sha"] or "")[:12]}
+                         for r in repos],
+        "guidance": list(SCHEMA_GUIDANCE),
+        "dialect": list(DIALECT_NOTES),
+    }
+    _SCHEMA_CACHE[key] = (stamp, time.monotonic(), out)
+    return out
+
+
+def _has_table(connection: Connection, name: str) -> bool:
+    return connection.execute(text("SELECT to_regclass(:n) IS NOT NULL"), {"n": name}).scalar() is True
+
 
 def _public_node(node: dict) -> dict:
     return {

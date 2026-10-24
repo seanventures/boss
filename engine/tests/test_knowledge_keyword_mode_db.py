@@ -129,7 +129,7 @@ def test_keyword_is_full_text_only_on_every_agent_path(connection):
     # Every graph, precedent or learning tool is refused in words; precedent and citations are empty.
     for tool, args in (("kg_precedent", {"query": "ledger"}), ("kg_callers", {"node_id": _sym(connection, 2)}),
                        ("kg_blast_radius", {"node_id": _sym(connection, 2)}), ("kg_why", {"node_id": _sym(connection, 2)}),
-                       ("kg_symbol", {"name": "ledger_step2"}), ("kg_cypher", {"query": "MATCH (n) RETURN n"}),
+                       ("kg_symbol", {"name": "ledger_step2"}), ("kg_cypher", {"query": "MATCH (n) RETURN n"}), ("kg_schema", {}),
                        ("kg_propose_fact", {"statement": "x", "subject": "a", "predicate": "b", "object": "c"})):
         assert _tool(connection, tool, **args) == {
             "error": "Only keyword search is on for this project (setting knowledge_graph = keyword): use kg_search."}, tool
