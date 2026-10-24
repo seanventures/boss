@@ -97,6 +97,23 @@ def test_nothing_merges_without_the_one_approval(client, world, change):
     assert r.status_code == 409 and r.json()["error"] == "not_approved"
 
 
+def test_the_worker_merge_route_is_the_workers_and_needs_its_lease(client, world, change, engine):
+    """The worker's door (/merge/execute) is not a person's: an Owner is refused, and the worker
+    itself merges nothing without the job's live lease."""
+    from boss_engine.identity.principal import AuthContext, AuthMethod, Principal, PrincipalKind, PrincipalStatus
+
+    body = {"job_id": "job_none", "worker_id": "w", "lease_token": "nope"}
+    with _as(world, "owner"):
+        assert client.post(f"/v1/change-sets/{change}/merge/execute", json=body).status_code == 403
+    worker = AuthContext(Principal("sys_worker", PrincipalKind.SYSTEM, world.org, PrincipalStatus.ACTIVE, "worker"),
+                         AuthMethod.SYSTEM)
+    with world.acting_as(worker):
+        r = client.post(f"/v1/change-sets/{change}/merge/execute", json=body)
+    assert r.status_code == 409 and r.json()["error"] == "lease_lost", r.text
+    with engine.begin() as db:
+        assert db.execute(text("SELECT state FROM repo_change_sets WHERE id = :i"), {"i": change}).scalar() == "building"
+
+
 def test_deploy_plan_is_readable_and_deploy_and_rollback_are_gated(client, world, change):
     with _as(world, "viewer"):
         plan = client.get(f"/v1/change-sets/{change}/deploy-plan", params={"project_id": world.project_a})

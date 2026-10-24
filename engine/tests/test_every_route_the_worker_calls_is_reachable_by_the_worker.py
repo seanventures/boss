@@ -54,5 +54,6 @@ def test_no_worker_route_is_held_for_human_confirmation():
         "(scripts/audit_mcp_api_parity.py) after mounting the route.")
     assert not held, (
         f"the API would answer the worker 409 on {held}: register each as a worker lease "
-        "protocol in boss_engine/mcp/api_surface.py (_EXCLUDED_EXACT), as "
+        "protocol in boss_engine/mcp/api_surface.py (_EXCLUDED_EXACT) AND fence it to the worker "
+        "(@permit(P.WORKER_LEASE) + require_worker_principal() + the job lease), as "
         "/v1/discoveries/{run_id}/execute is.")

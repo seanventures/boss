@@ -9,6 +9,12 @@
      left half-merged. A revert that GitHub refuses is said in words, by repository, for a person.
 
 Idempotent: a re-delivered job skips the PRs already merged and carries on.
+
+Two doors, one rule. The worker hands its leased job to `execute_job` (POST
+/v1/change-sets/{id}/merge/execute, a worker lease protocol): only the worker principal, only under
+the job's live lease, only for the change set and the decision that job was queued for. A person
+uses POST /v1/change-sets/{id}/merge, which the API holds for confirmation when a non-human calls
+it. Both end in `merge_set`, which re-reads the approval itself and merges nothing without it.
 """
 from __future__ import annotations
 
@@ -29,6 +35,7 @@ def merge_set(db: Any, settings: Any, cs_id: str, *, actor: str = "boss") -> dic
     if cs["state"] not in ("approved", "merging"):
         raise MultiRepoError(409, "not_approved", f"This change is {cs['state']}, not approved; nothing was merged.")
     approved = jload(cs.get("approved_shas"), {}) or {}
+    _require_the_approval(db, cs, approved)
     lanes = [lane for lane in change_sets._lanes(db, cs_id) if lane["lane_state"] != "unchanged"]  # noqa: SLF001
     lanes.sort(key=lambda x: (x["wave"], x["full_name"]))
     repos = {lane["full_name"]: github.Repo(db, settings, cs["project_id"], cs_id, lane["full_name"]) for lane in lanes}
@@ -86,6 +93,47 @@ def merge_set(db: Any, settings: Any, cs_id: str, *, actor: str = "boss") -> dic
     release.after_merge(db, settings, cs_id, actor=actor)
     return {"status": "merged", "change_set_id": cs_id,
             "merged": {lane["full_name"]: lane.get("merged_sha") for lane in landed}}
+
+
+#: The decision states that still stand behind a merge (`approved`; `executed` once acted on).
+_STANDING = ("approved", "executed")
+
+
+def _require_the_approval(db: Any, cs: dict[str, Any], approved: dict[str, Any]) -> None:
+    """The set's state alone is not the approval: its ONE decision must still be approved, and the
+    SHAs it pinned must be on the set. A withdrawn or expired decision merges nothing."""
+    status = None
+    if cs.get("decision_id"):
+        status = db.execute(sql("SELECT status FROM decisions WHERE id = :d AND project_id = :p"),
+                            {"d": cs["decision_id"], "p": cs["project_id"]}).scalar()
+    if not approved or status not in _STANDING:
+        raise MultiRepoError(409, "not_approved",
+                             "This change has no standing approval (" + (status or "no decision")
+                             + "); nothing was merged.")
+
+
+def execute_job(db: Any, settings: Any, cs_id: str, *, job_id: str, worker_id: str,
+                lease_token: str) -> dict[str, Any]:
+    """The worker's leased `change_set.merge` job. Fenced by the job's live lease, and the job must
+    be the merge of THIS set under the decision the set still carries — a job queued for an older
+    approval never merges the newer content. Then `merge_set`, which re-checks the approval."""
+    from ..services.jobs import JobLeaseService, LeaseNotFoundError
+    from . import change_sets
+
+    try:
+        job = JobLeaseService(settings).require_active_lease(db, worker_id, job_id, lease_token)
+    except LeaseNotFoundError as exc:
+        raise MultiRepoError(409, "lease_lost", f"This merge job's lease is no longer held: {exc}") from exc
+    payload = job.get("payload")
+    payload = payload if isinstance(payload, dict) else (jload(payload, {}) or {})
+    if job.get("kind") != change_sets.MERGE_JOB or str(payload.get("change_set_id") or "") != cs_id:
+        raise MultiRepoError(409, "wrong_job", "This job is not the merge of this change.")
+    cs = change_sets._row(db, cs_id, lock=True)  # noqa: SLF001
+    if cs["project_id"] != job.get("project_id"):
+        raise MultiRepoError(409, "wrong_job", "This job is not the merge of this change.")
+    if cs["state"] not in ("merged", "deploying", "live") and payload.get("decision_id") != cs.get("decision_id"):
+        raise MultiRepoError(409, "stale_decision", "This merge was queued for an older approval; nothing was merged.")
+    return {**merge_set(db, settings, cs_id, actor="boss"), "project_id": cs["project_id"]}
 
 
 def _revert(db: Any, settings: Any, cs: dict[str, Any], repos: dict[str, Any], landed: list[dict[str, Any]], *,

@@ -37,7 +37,7 @@ REQUIRED = {
     "POST /v1/github/code-sync-runs/{sync_run_id}/apply", "POST /v1/github/resolution-plans/{plan_id}/apply",
     "POST /v1/github/merge-authorizations/{authorization_id}/apply",
     "POST /v1/elastic/instances/{instance_id}/heartbeat", "POST /v1/activity/retention/prune",
-    "POST /v1/orchestration/next-move/execute",
+    "POST /v1/orchestration/next-move/execute", "POST /v1/change-sets/{cs_id}/merge/execute",
 }
 
 #: Worker-protocol routes whose handler receives the check under another name.
