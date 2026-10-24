@@ -1159,6 +1159,24 @@ def test_picking_an_offer_goes_through_the_consoles_button_path():
     assert [c["kind"] for c in client.choices()] == ["next_step"]
 
 
+def test_a_fresh_process_picks_the_offer_the_last_command_was_shown():
+    """`--print '/pick 1'` is a new process with nothing in memory: the choices come from the
+    server's record of the conversation (its standing offers), exactly as the console reloads them."""
+    offer = AGENT_TURN["proposed_actions"][0]
+    opener = FakeOpener([(200, {"thread_id": "athr_7"}),
+                         (200, {"thread_id": "athr_7", "messages": [], "proposed_actions": [offer],
+                                "pending_confirmation": None}),
+                         (200, {"ok": True, "tool": offer["tool"], "result": {"ok": True}})])
+    client = tui.MetatronClient(_config(), urlopen=opener)
+    client.handle(tui.parse_line("/pick 1"))
+    assert opener.calls[0]["url"].endswith("/v1/agent/threads/ensure")
+    assert "/v1/agent/threads/athr_7/messages" in opener.calls[1]["url"]
+    call = opener.calls[2]
+    assert call["url"].endswith("/v1/engine/agent/action")
+    assert call["body"]["tool"] == offer["tool"] and call["body"]["action_id"] == offer["id"]
+    assert client.choices() == []  # spent, as in the console
+
+
 def test_picking_a_next_step_sends_the_consoles_next_step_turn():
     opener = FakeOpener([(200, AGENT_TURN), (200, {**AGENT_TURN, "proposed_actions": [],
                                                   "next_steps": [], "reply": "Looked deeper."})])

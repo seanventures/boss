@@ -1477,7 +1477,7 @@ class MetatronClient:
     def choices(self) -> list[dict[str, Any]]:
         """The last turn's numbered choices: its offers, then its next steps — in that order,
         the order they are printed in."""
-        turn = self.last_turn if isinstance(self.last_turn, dict) else {}
+        turn = self.last_turn if isinstance(self.last_turn, dict) else self._restored_turn()
         out: list[dict[str, Any]] = []
         for offer in turn.get("proposed_actions") or []:
             if isinstance(offer, dict) and offer.get("tool"):
@@ -1486,6 +1486,22 @@ class MetatronClient:
             if isinstance(step, dict) and step.get("message"):
                 out.append({"kind": "next_step", **step})
         return out
+
+    def _restored_turn(self) -> dict[str, Any]:
+        """A fresh process (`--print '/pick 2'`, a script, a restart) has no last turn in memory,
+        but the server keeps every reply's offers and the thread's pending plan: read them, so a
+        choice offered in one command can be picked in the next, as the console does on reload."""
+        thread_id = self.ensure_thread()
+        if not thread_id:
+            return {}
+        payload = self.thread_messages(thread_id)
+        if not isinstance(payload, dict) or payload.get("__http_error__"):
+            return {}
+        # The server's own "offers still standing": the newest reply's, as the console restores them.
+        turn = {"proposed_actions": [o for o in payload.get("proposed_actions") or [] if isinstance(o, dict)],
+                "pending_confirmation": payload.get("pending_confirmation")}
+        self.last_turn = turn
+        return turn
 
     def pick(self, number: int) -> Any:
         """Run choice N exactly as the console's button would: an offer goes to
@@ -1530,7 +1546,7 @@ class MetatronClient:
         return payload
 
     def confirm(self) -> Any:
-        turn = self.last_turn if isinstance(self.last_turn, dict) else {}
+        turn = self.last_turn if isinstance(self.last_turn, dict) else self._restored_turn()
         pending = turn.get("pending_confirmation") or {}
         plan_id = str(pending.get("plan_id") or "") if isinstance(pending, dict) else ""
         if not plan_id:
