@@ -1,0 +1,314 @@
+{
+ "_fixture": {
+  "project_id": "northpeak-bank-b",
+  "repo": "paramg/northpeak-fineract-b",
+  "read_at": "2026-10-24",
+  "source": "live boss-community-db-1, read-only",
+  "note": "398 non-test symbols match; ranked per spec §3 (name only, no embedding)"
+ },
+ "q": "disburse",
+ "meaning": false,
+ "meaning_available": false,
+ "hits": [
+  {
+   "node": {
+    "id": "kgn_fffaccf9cb8a4a37abbe",
+    "key": "symbol:paramg/northpeak-fineract-b:fineract-progressive-loan/src/main/java/org/apache/fineract/portfolio/loanproduct/calc/data/EmiChangeOperation.java:EmiChangeOperation.disburse",
+    "kind": "symbol",
+    "layer": "code",
+    "label": "disburse()",
+    "trust_tier": "observed",
+    "symbol_kind": "method",
+    "sub": "fineract-progressive-loan/src/main/java/org/apache/fineract/portfolio/loanproduct/calc/data/EmiChangeOperation.java"
+   },
+   "path": "fineract-progressive-loan/src/main/java/org/apache/fineract/portfolio/loanproduct/calc/data/EmiChangeOperation.java",
+   "match": "exact",
+   "score": 1.0
+  },
+  {
+   "node": {
+    "id": "kgn_4a3692c07b0e411fb2b7",
+    "key": "symbol:paramg/northpeak-fineract-b:fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/data/DisbursementData.java:DisbursementData",
+    "kind": "symbol",
+    "layer": "code",
+    "label": "DisbursementData",
+    "trust_tier": "observed",
+    "symbol_kind": "class",
+    "sub": "fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/data/DisbursementData.java"
+   },
+   "path": "fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/data/DisbursementData.java",
+   "match": "prefix",
+   "score": 0.95
+  },
+  {
+   "node": {
+    "id": "kgn_7aaca22ffc074336bde7",
+    "key": "symbol:paramg/northpeak-fineract-b:fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/handler/DisburseLoanCommandHandler.java:DisburseLoanCommandHandler",
+    "kind": "symbol",
+    "layer": "code",
+    "label": "DisburseLoanCommandHandler",
+    "trust_tier": "observed",
+    "symbol_kind": "class",
+    "sub": "fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/handler/DisburseLoanCommandHandler.java"
+   },
+   "path": "fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/handler/DisburseLoanCommandHandler.java",
+   "match": "prefix",
+   "score": 0.9
+  },
+  {
+   "node": {
+    "id": "kgn_64aee6c89d15455a89ad",
+    "key": "symbol:paramg/northpeak-fineract-b:fineract-provider/src/main/java/org/apache/fineract/batch/command/internal/DisburseLoanCommandStrategy.java:DisburseLoanCommandStrategy",
+    "kind": "symbol",
+    "layer": "code",
+    "label": "DisburseLoanCommandStrategy",
+    "trust_tier": "observed",
+    "symbol_kind": "class",
+    "sub": "fineract-provider/src/main/java/org/apache/fineract/batch/command/internal/DisburseLoanCommandStrategy.java"
+   },
+   "path": "fineract-provider/src/main/java/org/apache/fineract/batch/command/internal/DisburseLoanCommandStrategy.java",
+   "match": "prefix",
+   "score": 0.85
+  },
+  {
+   "node": {
+    "id": "kgn_086a7c741e724d07be51",
+    "key": "symbol:paramg/northpeak-fineract-b:fineract-provider/src/main/java/org/apache/fineract/portfolio/collectionsheet/data/DisbursementTransactionsRequest.java:DisbursementTransactionsRequest",
+    "kind": "symbol",
+    "layer": "code",
+    "label": "DisbursementTransactionsRequest",
+    "trust_tier": "observed",
+    "symbol_kind": "class",
+    "sub": "fineract-provider/src/main/java/org/apache/fineract/portfolio/collectionsheet/data/DisbursementTransactionsRequest.java"
+   },
+   "path": "fineract-provider/src/main/java/org/apache/fineract/portfolio/collectionsheet/data/DisbursementTransactionsRequest.java",
+   "match": "prefix",
+   "score": 0.8
+  },
+  {
+   "node": {
+    "id": "kgn_6a947bc7ae04498ca98c",
+    "key": "symbol:paramg/northpeak-fineract-b:fineract-provider/src/main/java/org/apache/fineract/batch/command/internal/DisburseToSavingsCommandStrategy.java:DisburseToSavingsCommandStrategy",
+    "kind": "symbol",
+    "layer": "code",
+    "label": "DisburseToSavingsCommandStrategy",
+    "trust_tier": "observed",
+    "symbol_kind": "class",
+    "sub": "fineract-provider/src/main/java/org/apache/fineract/batch/command/internal/DisburseToSavingsCommandStrategy.java"
+   },
+   "path": "fineract-provider/src/main/java/org/apache/fineract/batch/command/internal/DisburseToSavingsCommandStrategy.java",
+   "match": "prefix",
+   "score": 0.75
+  },
+  {
+   "node": {
+    "id": "kgn_88b0e4aa944d459c8506",
+    "key": "symbol:paramg/northpeak-fineract-b:fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/handler/DisburseLoanToSavingsCommandHandler.java:DisburseLoanToSavingsCommandHandler",
+    "kind": "symbol",
+    "layer": "code",
+    "label": "DisburseLoanToSavingsCommandHandler",
+    "trust_tier": "observed",
+    "symbol_kind": "class",
+    "sub": "fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/handler/DisburseLoanToSavingsCommandHandler.java"
+   },
+   "path": "fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/handler/DisburseLoanToSavingsCommandHandler.java",
+   "match": "prefix",
+   "score": 0.7
+  },
+  {
+   "node": {
+    "id": "kgn_496ccb542f1240b79d52",
+    "key": "symbol:paramg/northpeak-fineract-b:fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/handler/DisburseLoanWithoutAutoPaymentHandler.java:DisburseLoanWithoutAutoPaymentHandler",
+    "kind": "symbol",
+    "layer": "code",
+    "label": "DisburseLoanWithoutAutoPaymentHandler",
+    "trust_tier": "observed",
+    "symbol_kind": "class",
+    "sub": "fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/handler/DisburseLoanWithoutAutoPaymentHandler.java"
+   },
+   "path": "fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/handler/DisburseLoanWithoutAutoPaymentHandler.java",
+   "match": "prefix",
+   "score": 0.65
+  },
+  {
+   "node": {
+    "id": "kgn_d72df8388fb8411381e0",
+    "key": "symbol:paramg/northpeak-fineract-b:fineract-working-capital-loan/src/main/java/org/apache/fineract/portfolio/workingcapitalloan/handler/DisburseWorkingCapitalLoanCommandHandler.java:DisburseWorkingCapitalLoanCommandHandler",
+    "kind": "symbol",
+    "layer": "code",
+    "label": "DisburseWorkingCapitalLoanCommandHandler",
+    "trust_tier": "observed",
+    "symbol_kind": "class",
+    "sub": "fineract-working-capital-loan/src/main/java/org/apache/fineract/portfolio/workingcapitalloan/handler/DisburseWorkingCapitalLoanCommandHandler.java"
+   },
+   "path": "fineract-working-capital-loan/src/main/java/org/apache/fineract/portfolio/workingcapitalloan/handler/DisburseWorkingCapitalLoanCommandHandler.java",
+   "match": "prefix",
+   "score": 0.6
+  },
+  {
+   "node": {
+    "id": "kgn_0b9118b2b9434453ba5b",
+    "key": "symbol:paramg/northpeak-fineract-b:fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/service/LoanArrearsAgingServiceImpl.java:LoanArrearsAgingServiceImpl.DisbursementEventListener",
+    "kind": "symbol",
+    "layer": "code",
+    "label": "LoanArrearsAgingServiceImpl.DisbursementEventListener",
+    "trust_tier": "observed",
+    "symbol_kind": "class",
+    "sub": "fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/service/LoanArrearsAgingServiceImpl.java"
+   },
+   "path": "fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/service/LoanArrearsAgingServiceImpl.java",
+   "match": "prefix",
+   "score": 0.55
+  },
+  {
+   "node": {
+    "id": "kgn_1e869d045ebc475c8e46",
+    "key": "symbol:paramg/northpeak-fineract-b:fineract-provider/src/main/java/org/apache/fineract/portfolio/loanaccount/api/LoanDisbursementDetailApiResourceSwagger.java:LoanDisbursementDetailApiResourceSwagger.DisbursementDetail",
+    "kind": "symbol",
+    "layer": "code",
+    "label": "LoanDisbursementDetailApiResourceSwagger.DisbursementDetail",
+    "trust_tier": "observed",
+    "symbol_kind": "class",
+    "sub": "fineract-provider/src/main/java/org/apache/fineract/portfolio/loanaccount/api/LoanDisbursementDetailApiResourceSwagger.java"
+   },
+   "path": "fineract-provider/src/main/java/org/apache/fineract/portfolio/loanaccount/api/LoanDisbursementDetailApiResourceSwagger.java",
+   "match": "prefix",
+   "score": 0.5
+  },
+  {
+   "node": {
+    "id": "kgn_2ced7fb118b04ba9bbce",
+    "key": "symbol:paramg/northpeak-fineract-b:fineract-provider/src/main/java/org/apache/fineract/interoperation/service/InteropService.java:InteropService.disburseLoan",
+    "kind": "symbol",
+    "layer": "code",
+    "label": "disburseLoan()",
+    "trust_tier": "observed",
+    "symbol_kind": "method",
+    "sub": "fineract-provider/src/main/java/org/apache/fineract/interoperation/service/InteropService.java"
+   },
+   "path": "fineract-provider/src/main/java/org/apache/fineract/interoperation/service/InteropService.java",
+   "match": "prefix",
+   "score": 0.45
+  },
+  {
+   "node": {
+    "id": "kgn_d22f421e726d42219f51",
+    "key": "symbol:paramg/northpeak-fineract-b:fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/domain/LoanTransaction.java:LoanTransaction.disbursement",
+    "kind": "symbol",
+    "layer": "code",
+    "label": "disbursement()",
+    "trust_tier": "observed",
+    "symbol_kind": "method",
+    "sub": "fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/domain/LoanTransaction.java"
+   },
+   "path": "fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/domain/LoanTransaction.java",
+   "match": "prefix",
+   "score": 0.4
+  },
+  {
+   "node": {
+    "id": "kgn_b2379487296b43c0aeba",
+    "key": "symbol:paramg/northpeak-fineract-b:fineract-provider/src/main/java/org/apache/fineract/interoperation/api/InteropApiResource.java:InteropApiResource.disburseLoan",
+    "kind": "symbol",
+    "layer": "code",
+    "label": "disburseLoan()",
+    "trust_tier": "observed",
+    "symbol_kind": "method",
+    "sub": "fineract-provider/src/main/java/org/apache/fineract/interoperation/api/InteropApiResource.java"
+   },
+   "path": "fineract-provider/src/main/java/org/apache/fineract/interoperation/api/InteropApiResource.java",
+   "match": "prefix",
+   "score": 0.35
+  },
+  {
+   "node": {
+    "id": "kgn_51209cff61a14484af91",
+    "key": "symbol:paramg/northpeak-fineract-b:fineract-provider/src/main/java/org/apache/fineract/interoperation/service/InteropServiceImpl.java:InteropServiceImpl.disburseLoan",
+    "kind": "symbol",
+    "layer": "code",
+    "label": "disburseLoan()",
+    "trust_tier": "observed",
+    "symbol_kind": "method",
+    "sub": "fineract-provider/src/main/java/org/apache/fineract/interoperation/service/InteropServiceImpl.java"
+   },
+   "path": "fineract-provider/src/main/java/org/apache/fineract/interoperation/service/InteropServiceImpl.java",
+   "match": "prefix",
+   "score": 0.3
+  },
+  {
+   "node": {
+    "id": "kgn_f99d3f84fb4b4708be87",
+    "key": "symbol:paramg/northpeak-fineract-b:fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/data/DisbursementData.java:DisbursementData.DisbursementData",
+    "kind": "symbol",
+    "layer": "code",
+    "label": "DisbursementData()",
+    "trust_tier": "observed",
+    "symbol_kind": "method",
+    "sub": "fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/data/DisbursementData.java"
+   },
+   "path": "fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/data/DisbursementData.java",
+   "match": "prefix",
+   "score": 0.25
+  },
+  {
+   "node": {
+    "id": "kgn_b6d048e5b13e44f18ed7",
+    "key": "symbol:paramg/northpeak-fineract-b:fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/data/DisbursementData.java:DisbursementData.disbursementDate",
+    "kind": "symbol",
+    "layer": "code",
+    "label": "disbursementDate()",
+    "trust_tier": "observed",
+    "symbol_kind": "method",
+    "sub": "fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/data/DisbursementData.java"
+   },
+   "path": "fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/data/DisbursementData.java",
+   "match": "prefix",
+   "score": 0.2
+  },
+  {
+   "node": {
+    "id": "kgn_b3c170281f324ae18357",
+    "key": "symbol:paramg/northpeak-fineract-b:fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/service/LoanWritePlatformService.java:LoanWritePlatformService.disburseLoan",
+    "kind": "symbol",
+    "layer": "code",
+    "label": "disburseLoan()",
+    "trust_tier": "observed",
+    "symbol_kind": "method",
+    "sub": "fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/service/LoanWritePlatformService.java"
+   },
+   "path": "fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/service/LoanWritePlatformService.java",
+   "match": "prefix",
+   "score": 0.15
+  },
+  {
+   "node": {
+    "id": "kgn_882255a21f734573b2f3",
+    "key": "symbol:paramg/northpeak-fineract-b:fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/service/LoanWritePlatformService.java:LoanWritePlatformService.disburseGLIMLoan",
+    "kind": "symbol",
+    "layer": "code",
+    "label": "disburseGLIMLoan()",
+    "trust_tier": "observed",
+    "symbol_kind": "method",
+    "sub": "fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/service/LoanWritePlatformService.java"
+   },
+   "path": "fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/service/LoanWritePlatformService.java",
+   "match": "prefix",
+   "score": 0.1
+  },
+  {
+   "node": {
+    "id": "kgn_c90e30fdf65e4682be16",
+    "key": "symbol:paramg/northpeak-fineract-b:fineract-working-capital-loan/src/main/java/org/apache/fineract/portfolio/workingcapitalloan/domain/WorkingCapitalLoanTransaction.java:WorkingCapitalLoanTransaction.disbursement",
+    "kind": "symbol",
+    "layer": "code",
+    "label": "disbursement()",
+    "trust_tier": "observed",
+    "symbol_kind": "method",
+    "sub": "fineract-working-capital-loan/src/main/java/org/apache/fineract/portfolio/workingcapitalloan/domain/WorkingCapitalLoanTransaction.java"
+   },
+   "path": "fineract-working-capital-loan/src/main/java/org/apache/fineract/portfolio/workingcapitalloan/domain/WorkingCapitalLoanTransaction.java",
+   "match": "prefix",
+   "score": 0.05
+  }
+ ]
+}

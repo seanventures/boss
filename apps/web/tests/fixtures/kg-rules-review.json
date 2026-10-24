@@ -1,0 +1,458 @@
+{
+ "_fixture": {
+  "project_id": "northpeak-bank-b",
+  "repo": "paramg/northpeak-fineract-b",
+  "read_at": "2026-10-24",
+  "source": "live boss-community-db-1, read-only",
+  "composed": "rules are composed on real code rows (ids, keys, paths, lines and excerpts are real; no rule node exists yet)"
+ },
+ "items": [
+  {
+   "node": {
+    "id": "kgn_fixture_rule_01",
+    "key": "rule:fixture01",
+    "kind": "rule",
+    "layer": "rules",
+    "label": "A loan cannot be disbursed on a future date",
+    "sub": "approved · validation",
+    "trust_tier": "approved",
+    "status": "approved"
+   },
+   "title": "A loan cannot be disbursed on a future date",
+   "statement": "Disbursing a loan with a disbursement date later than today is refused with cannot.be.a.future.date.",
+   "rationale": "validateDisburseDate throws InvalidLoanStateTransitionException when DateUtils.isDateInTheFuture(disbursedOn).",
+   "category": "validation",
+   "scope": {
+    "repo": "paramg/northpeak-fineract-b",
+    "areas": [
+     "fineract-provider"
+    ],
+    "packages": [
+     "org.apache.fineract.portfolio.loanaccount.serialization"
+    ],
+    "symbols": [
+     "symbol:paramg/northpeak-fineract-b:fineract-provider/src/main/java/org/apache/fineract/portfolio/loanaccount/serialization/LoanDisbursementValidator.java:LoanDisbursementValidator.validateDisburseDate"
+    ]
+   },
+   "status": "approved",
+   "confidence": 0.9,
+   "provenance": {
+    "created_by": "chief_architect",
+    "created_by_kind": "agent",
+    "agent_role": "chief_architect",
+    "agent_name": "Scout",
+    "run_id": "run_fixture_scout_1",
+    "workflow_run_id": "wfr_fixture_scan_1",
+    "code_task_run_id": null,
+    "step": "scan",
+    "model_id": "claude-opus-5-5",
+    "at": "2026-10-24T09:12:04Z",
+    "approved_by": "usr_param",
+    "approved_at": "2026-10-24T09:40:11Z",
+    "version": 1,
+    "previous_id": null,
+    "events": [
+     {
+      "at": "2026-10-24T09:12:04Z",
+      "what": "proposed",
+      "by": "Scout"
+     },
+     {
+      "at": "2026-10-24T09:40:11Z",
+      "what": "approved",
+      "by": "usr_param"
+     }
+    ]
+   },
+   "review": {
+    "by": "usr_param",
+    "at": "2026-10-24T09:40:11Z",
+    "decision_id": null,
+    "note": null
+   },
+   "version": 1,
+   "previous_id": null,
+   "evidence": [
+    {
+     "symbol_id": "kgn_208a03a604874f2eacc1",
+     "symbol_key": "symbol:paramg/northpeak-fineract-b:fineract-provider/src/main/java/org/apache/fineract/portfolio/loanaccount/serialization/LoanDisbursementValidator.java:LoanDisbursementValidator.validateDisburseDate",
+     "label": "LoanDisbursementValidator.validateDisburseDate",
+     "path": "fineract-provider/src/main/java/org/apache/fineract/portfolio/loanaccount/serialization/LoanDisbursementValidator.java",
+     "lines": [
+      79,
+      83
+     ],
+     "excerpt": "if (DateUtils.isDateInTheFuture(disbursedOn)) { … \"cannot.be.a.future.date\" … }"
+    }
+   ],
+   "scan_id": "scan_fixture_loan_1"
+  },
+  {
+   "node": {
+    "id": "kgn_fixture_rule_02",
+    "key": "rule:fixture02",
+    "kind": "rule",
+    "layer": "rules",
+    "label": "No loan transaction before the disbursement date",
+    "sub": "proposed · state transition",
+    "trust_tier": "inferred",
+    "status": "proposed"
+   },
+   "title": "No loan transaction before the disbursement date",
+   "statement": "A transaction on a loan cannot be dated before the loan's disbursement date.",
+   "rationale": "validateLoanDisbursementIsBeforeTransactionDate refuses a transactionDate before loan.getDisbursementDate().",
+   "category": "state_transition",
+   "scope": {
+    "repo": "paramg/northpeak-fineract-b",
+    "areas": [
+     "fineract-provider"
+    ],
+    "packages": [
+     "org.apache.fineract.portfolio.loanaccount.serialization"
+    ],
+    "symbols": [
+     "symbol:paramg/northpeak-fineract-b:fineract-provider/src/main/java/org/apache/fineract/portfolio/loanaccount/serialization/LoanTransactionValidatorImpl.java:LoanTransactionValidatorImpl.validateLoanDisbursementIsBeforeTransactionDate"
+    ]
+   },
+   "status": "proposed",
+   "confidence": 0.85,
+   "provenance": {
+    "created_by": "chief_architect",
+    "created_by_kind": "agent",
+    "agent_role": "chief_architect",
+    "agent_name": "Scout",
+    "run_id": "run_fixture_scout_1",
+    "workflow_run_id": "wfr_fixture_scan_1",
+    "code_task_run_id": null,
+    "step": "scan",
+    "model_id": "claude-opus-5-5",
+    "at": "2026-10-24T09:12:31Z",
+    "approved_by": null,
+    "approved_at": null,
+    "version": 1,
+    "previous_id": null,
+    "events": [
+     {
+      "at": "2026-10-24T09:12:31Z",
+      "what": "proposed",
+      "by": "Scout"
+     }
+    ]
+   },
+   "review": null,
+   "version": 1,
+   "previous_id": null,
+   "evidence": [
+    {
+     "symbol_id": "kgn_8325d4ae824149f198f5",
+     "symbol_key": "symbol:paramg/northpeak-fineract-b:fineract-provider/src/main/java/org/apache/fineract/portfolio/loanaccount/serialization/LoanTransactionValidatorImpl.java:LoanTransactionValidatorImpl.validateLoanDisbursementIsBeforeTransactionDate",
+     "label": "LoanTransactionValidatorImpl.validateLoanDisbursementIsBeforeTransactionDate",
+     "path": "fineract-provider/src/main/java/org/apache/fineract/portfolio/loanaccount/serialization/LoanTransactionValidatorImpl.java",
+     "lines": [
+      701,
+      708
+     ],
+     "excerpt": "if (DateUtils.isBefore(transactionDate, loan.getDisbursementDate())) { … }"
+    }
+   ],
+   "scan_id": "scan_fixture_loan_1"
+  },
+  {
+   "node": {
+    "id": "kgn_fixture_rule_03",
+    "key": "rule:fixture03",
+    "kind": "rule",
+    "layer": "rules",
+    "label": "Expected disbursement date is a working day",
+    "sub": "proposed · validation",
+    "trust_tier": "inferred",
+    "status": "proposed"
+   },
+   "title": "Expected disbursement date is a working day",
+   "statement": "The expected disbursement date cannot fall on a non-working day unless the tenant allows transactions on non-working days.",
+   "rationale": "Checked against WorkingDays and configurationDomainService.allowTransactionsOnNonWorkingDayEnabled().",
+   "category": "validation",
+   "scope": {
+    "repo": "paramg/northpeak-fineract-b",
+    "areas": [
+     "fineract-provider"
+    ],
+    "packages": [
+     "org.apache.fineract.portfolio.loanaccount.serialization"
+    ],
+    "symbols": [
+     "symbol:paramg/northpeak-fineract-b:fineract-provider/src/main/java/org/apache/fineract/portfolio/loanaccount/serialization/ExpectedDisbursementDateValidatorImpl.java:ExpectedDisbursementDateValidatorImpl.validateDisbursementDateIsOnNonWorkingDay"
+    ]
+   },
+   "status": "proposed",
+   "confidence": 0.8,
+   "provenance": {
+    "created_by": "chief_architect",
+    "created_by_kind": "agent",
+    "agent_role": "chief_architect",
+    "agent_name": "Scout",
+    "run_id": "run_fixture_scout_1",
+    "workflow_run_id": "wfr_fixture_scan_1",
+    "code_task_run_id": null,
+    "step": "scan",
+    "model_id": "claude-opus-5-5",
+    "at": "2026-10-24T09:13:02Z",
+    "approved_by": null,
+    "approved_at": null,
+    "version": 1,
+    "previous_id": null,
+    "events": [
+     {
+      "at": "2026-10-24T09:13:02Z",
+      "what": "proposed",
+      "by": "Scout"
+     }
+    ]
+   },
+   "review": null,
+   "version": 1,
+   "previous_id": null,
+   "evidence": [
+    {
+     "symbol_id": "kgn_6ac907065b35497a9b1d",
+     "symbol_key": "symbol:paramg/northpeak-fineract-b:fineract-provider/src/main/java/org/apache/fineract/portfolio/loanaccount/serialization/ExpectedDisbursementDateValidatorImpl.java:ExpectedDisbursementDateValidatorImpl.validateDisbursementDateIsOnNonWorkingDay",
+     "label": "ExpectedDisbursementDateValidatorImpl.validateDisbursementDateIsOnNonWorkingDay",
+     "path": "fineract-provider/src/main/java/org/apache/fineract/portfolio/loanaccount/serialization/ExpectedDisbursementDateValidatorImpl.java",
+     "lines": [
+      57,
+      64
+     ],
+     "excerpt": "if (!allowTransactionsOnNonWorkingDay && !WorkingDaysUtil.isWorkingDay(workingDays, expectedDisbursementDate))"
+    }
+   ],
+   "scan_id": "scan_fixture_loan_1"
+  },
+  {
+   "node": {
+    "id": "kgn_fixture_rule_04",
+    "key": "rule:fixture04",
+    "kind": "rule",
+    "layer": "rules",
+    "label": "Expected disbursement date is not an office holiday",
+    "sub": "proposed · validation",
+    "trust_tier": "inferred",
+    "status": "proposed"
+   },
+   "title": "Expected disbursement date is not an office holiday",
+   "statement": "The expected disbursement date cannot be a holiday of the loan's office unless the tenant allows transactions on holidays.",
+   "rationale": "Holidays are read per office (holidayRepository.findByOfficeIdAndGreaterThanDate).",
+   "category": "validation",
+   "scope": {
+    "repo": "paramg/northpeak-fineract-b",
+    "areas": [
+     "fineract-provider"
+    ],
+    "packages": [
+     "org.apache.fineract.portfolio.loanaccount.serialization"
+    ],
+    "symbols": [
+     "symbol:paramg/northpeak-fineract-b:fineract-provider/src/main/java/org/apache/fineract/portfolio/loanaccount/serialization/ExpectedDisbursementDateValidatorImpl.java:ExpectedDisbursementDateValidatorImpl.validateDisbursementDateIsOnHoliday"
+    ]
+   },
+   "status": "proposed",
+   "confidence": 0.8,
+   "provenance": {
+    "created_by": "chief_architect",
+    "created_by_kind": "agent",
+    "agent_role": "chief_architect",
+    "agent_name": "Scout",
+    "run_id": "run_fixture_scout_1",
+    "workflow_run_id": "wfr_fixture_scan_1",
+    "code_task_run_id": null,
+    "step": "scan",
+    "model_id": "claude-opus-5-5",
+    "at": "2026-10-24T09:13:20Z",
+    "approved_by": null,
+    "approved_at": null,
+    "version": 1,
+    "previous_id": null,
+    "events": [
+     {
+      "at": "2026-10-24T09:13:20Z",
+      "what": "proposed",
+      "by": "Scout"
+     }
+    ]
+   },
+   "review": null,
+   "version": 1,
+   "previous_id": null,
+   "evidence": [
+    {
+     "symbol_id": "kgn_cfe666e602ad4f22bf05",
+     "symbol_key": "symbol:paramg/northpeak-fineract-b:fineract-provider/src/main/java/org/apache/fineract/portfolio/loanaccount/serialization/ExpectedDisbursementDateValidatorImpl.java:ExpectedDisbursementDateValidatorImpl.validateDisbursementDateIsOnHoliday",
+     "label": "ExpectedDisbursementDateValidatorImpl.validateDisbursementDateIsOnHoliday",
+     "path": "fineract-provider/src/main/java/org/apache/fineract/portfolio/loanaccount/serialization/ExpectedDisbursementDateValidatorImpl.java",
+     "lines": [
+      66,
+      73
+     ],
+     "excerpt": "if (!allowTransactionsOnHoliday && HolidayUtil.isHoliday(expectedDisbursementDate, holidays))"
+    }
+   ],
+   "scan_id": "scan_fixture_loan_1"
+  },
+  {
+   "node": {
+    "id": "kgn_fixture_rule_05",
+    "key": "rule:fixture05",
+    "kind": "rule",
+    "layer": "rules",
+    "label": "Back-dated disbursement needs DISBURSEINPAST_LOAN",
+    "sub": "proposed · authorization",
+    "trust_tier": "inferred",
+    "status": "proposed"
+   },
+   "title": "Back-dated disbursement needs DISBURSEINPAST_LOAN",
+   "statement": "Only a user holding ALL_FUNCTIONS or DISBURSEINPAST_LOAN may disburse a loan with a date in the past.",
+   "rationale": "AppUser.canNotDisburseLoanInPast is the permission check the disbursement path consults.",
+   "category": "authorization",
+   "scope": {
+    "repo": "paramg/northpeak-fineract-b",
+    "areas": [
+     "fineract-core"
+    ],
+    "packages": [
+     "org.apache.fineract.useradministration.domain"
+    ],
+    "symbols": [
+     "symbol:paramg/northpeak-fineract-b:fineract-core/src/main/java/org/apache/fineract/useradministration/domain/AppUser.java:AppUser.canNotDisburseLoanInPast"
+    ]
+   },
+   "status": "proposed",
+   "confidence": 0.7,
+   "provenance": {
+    "created_by": "chief_architect",
+    "created_by_kind": "agent",
+    "agent_role": "chief_architect",
+    "agent_name": "Scout",
+    "run_id": "run_fixture_scout_1",
+    "workflow_run_id": "wfr_fixture_scan_1",
+    "code_task_run_id": null,
+    "step": "scan",
+    "model_id": "claude-opus-5-5",
+    "at": "2026-10-24T09:14:45Z",
+    "approved_by": null,
+    "approved_at": null,
+    "version": 1,
+    "previous_id": null,
+    "events": [
+     {
+      "at": "2026-10-24T09:14:45Z",
+      "what": "proposed",
+      "by": "Scout"
+     }
+    ]
+   },
+   "review": null,
+   "version": 1,
+   "previous_id": null,
+   "evidence": [
+    {
+     "symbol_id": "kgn_57a6607221ca404f98b3",
+     "symbol_key": "symbol:paramg/northpeak-fineract-b:fineract-core/src/main/java/org/apache/fineract/useradministration/domain/AppUser.java:AppUser.canNotDisburseLoanInPast",
+     "label": "AppUser.canNotDisburseLoanInPast",
+     "path": "fineract-core/src/main/java/org/apache/fineract/useradministration/domain/AppUser.java",
+     "lines": [
+      537,
+      539
+     ],
+     "excerpt": "return hasNotPermissionForAnyOf(\"ALL_FUNCTIONS\", \"DISBURSEINPAST_LOAN\");"
+    }
+   ],
+   "scan_id": "scan_fixture_loan_1"
+  },
+  {
+   "node": {
+    "id": "kgn_fixture_rule_06",
+    "key": "rule:fixture06",
+    "kind": "rule",
+    "layer": "rules",
+    "label": "Tranche disbursement dates are in date order",
+    "sub": "rejected · validation",
+    "trust_tier": "inferred",
+    "status": "rejected"
+   },
+   "title": "Tranche disbursement dates are in date order",
+   "statement": "Each tranche's expected disbursement date must not be after a later tranche's date.",
+   "rationale": "validateDisbursementsAreDatewiseOrdered fails with DISBURSEMENT_DATES_NOT_IN_ORDER.",
+   "category": "validation",
+   "scope": {
+    "repo": "paramg/northpeak-fineract-b",
+    "areas": [
+     "fineract-provider"
+    ],
+    "packages": [
+     "org.apache.fineract.portfolio.loanaccount.serialization"
+    ],
+    "symbols": [
+     "symbol:paramg/northpeak-fineract-b:fineract-provider/src/main/java/org/apache/fineract/portfolio/loanaccount/serialization/LoanApplicationValidator.java:LoanApplicationValidator.validateDisbursementsAreDatewiseOrdered"
+    ]
+   },
+   "status": "rejected",
+   "confidence": 0.55,
+   "provenance": {
+    "created_by": "chief_architect",
+    "created_by_kind": "agent",
+    "agent_role": "chief_architect",
+    "agent_name": "Scout",
+    "run_id": "run_fixture_scout_1",
+    "workflow_run_id": "wfr_fixture_scan_1",
+    "code_task_run_id": null,
+    "step": "scan",
+    "model_id": "claude-opus-5-5",
+    "at": "2026-10-24T09:15:10Z",
+    "approved_by": null,
+    "approved_at": null,
+    "version": 1,
+    "previous_id": null,
+    "events": [
+     {
+      "at": "2026-10-24T09:15:10Z",
+      "what": "proposed",
+      "by": "Scout"
+     },
+     {
+      "at": "2026-10-24T09:41:30Z",
+      "what": "rejected",
+      "by": "usr_param"
+     }
+    ]
+   },
+   "review": {
+    "by": "usr_param",
+    "at": "2026-10-24T09:41:30Z",
+    "decision_id": null,
+    "note": "Input validation of one request, not a business rule worth carrying."
+   },
+   "version": 1,
+   "previous_id": null,
+   "evidence": [
+    {
+     "symbol_id": "kgn_60f75dc79fc24f63a617",
+     "symbol_key": "symbol:paramg/northpeak-fineract-b:fineract-provider/src/main/java/org/apache/fineract/portfolio/loanaccount/serialization/LoanApplicationValidator.java:LoanApplicationValidator.validateDisbursementsAreDatewiseOrdered",
+     "label": "LoanApplicationValidator.validateDisbursementsAreDatewiseOrdered",
+     "path": "fineract-provider/src/main/java/org/apache/fineract/portfolio/loanaccount/serialization/LoanApplicationValidator.java",
+     "lines": [
+      1679,
+      1707
+     ],
+     "excerpt": "if (DateUtils.isAfter(date1, date2)) { … DISBURSEMENT_DATES_NOT_IN_ORDER }"
+    }
+   ],
+   "scan_id": "scan_fixture_loan_1"
+  }
+ ],
+ "counts": {
+  "proposed": 4,
+  "approved": 1,
+  "rejected": 1,
+  "superseded": 0
+ },
+ "scan_id": "scan_fixture_loan_1"
+}

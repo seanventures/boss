@@ -1,0 +1,67 @@
+/* ── Graph area (KNOWLEDGE_GRAPH_PRODUCT_SPEC.md §5) ──
+   kg- classes only. The kind colours below are the ONLY literal colours the area may use (§5.3,
+   §6.4): the canvas reads them from these custom properties, everything else is console tokens.
+   Phase 0 lands the tokens and the area's designed empty state; S4 builds the rest on them. */
+
+.kg {
+  /* Kind colours (operator decisions, binding). */
+  --kg-interface: #7dd3fc;
+  --kg-class: #5b9dff;
+  --kg-method: #94a3c8;
+  --kg-rule: #f0a43a;
+  --kg-incident: #ff7a6b;
+  --kg-root-cause: #c4a1ff;
+  --kg-fix: #4ade80;
+  --kg-precedent: #e879f9;
+  /* Proposed in §5.3 and adopted (operator, §7: "spec's proposed colours stand"). */
+  --kg-enum: #38bdf8;
+  --kg-record: #38bdf8;
+  --kg-function: #94a3c8;
+  --kg-endpoint: var(--teal);
+  --kg-table: #facc15;
+  --kg-investigation: #f9a8d4;
+  --kg-test-failure: #fb923c;
+  --kg-workaround: #a3e635;
+  --kg-review-finding: #fcd34d;
+  --kg-decision: #fda4af;
+  --kg-anchor: #a5b4fc;
+  --kg-fact: #d8b4fe;
+  /* Whole-repo bubbles and layer badges. */
+  --kg-layer-code: #5b9dff;
+  --kg-layer-rules: #f0a43a;
+  --kg-layer-learning: #c4a1ff;
+
+  display: flex; flex-direction: column; gap: 16px; width: 100%; min-width: 0;
+}
+
+/* ── the empty state: the canvas frame, a card centred on it ─────────────────────────────── */
+.kg-stage {
+  position: relative; display: grid; place-items: center; min-height: 460px; padding: 48px 16px;
+  border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--graph); overflow: hidden;
+}
+/* Faint hop rings: the Focus view's own motif, drawn in tokens, behind the card. */
+.kg-stage-rings { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.kg-stage-rings circle { fill: none; stroke: var(--border); stroke-width: 1px; }
+.kg-empty {
+  position: relative; display: flex; flex-direction: column; align-items: center; gap: 14px;
+  max-width: 520px; padding: 28px 28px 24px; text-align: center;
+  border: 1px solid var(--border-strong); border-radius: var(--r-lg); background: var(--surface); box-shadow: var(--shadow);
+}
+.kg-empty-eyebrow { font-size: 0.74rem; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--faint); }
+.kg-empty-title { margin: 0; font-family: var(--display); font-size: 1.15rem; font-weight: 600; color: var(--ink); }
+.kg-empty-body { margin: 0; font-size: 0.9rem; line-height: 1.5; color: var(--ink-soft); }
+.kg-empty-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
+
+/* The three layers, each a solid dot in its layer colour plus its name: colour is never the only signal. */
+.kg-layers { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px 18px; margin: 0; padding: 0; list-style: none; }
+.kg-layer { display: inline-flex; align-items: center; gap: 8px; font-size: 0.86rem; color: var(--ink-soft); }
+.kg-layer-name { font-weight: 600; color: var(--ink); }
+.kg-dot { display: inline-block; flex: none; width: 12px; height: 12px; border-radius: 50%; background: var(--kg-layer-code); }
+.kg-dot[data-layer="rules"] { background: var(--kg-layer-rules); }
+.kg-dot[data-layer="learning"] { background: var(--kg-layer-learning); }
+
+@media (max-width: 760px) {
+  .kg-stage { min-height: 380px; padding: 24px 12px; }
+  .kg-empty { padding: 20px 16px; }
+  .kg .ag-btn { min-height: 44px; }
+}

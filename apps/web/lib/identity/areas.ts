@@ -24,6 +24,7 @@ export const AREA_ACCESS: Readonly<Record<AreaId, AreaAccess>> = {
   code_tasks: p("code_task:read"),
   delivery_workflows: p("workflow:read"),
   workforce: p("agent:read"),
+  knowledge: p("knowledge:read"),
   decisions: p("decision:read"),
   self_fixes: p("improvement:read"),
   infra: p("infra:read"),

@@ -130,6 +130,7 @@ import { ShepherdConsole } from "./shepherd-ui";
 import { getShepherdOverviewAction } from "./actions";
 import { InfraHome } from "./infra/infra-home";
 import { ObsHome } from "./observability/obs-home";
+import { GraphArea } from "./knowledge/graph-area";
 import { fetchReliabilityFeed } from "../lib/reliability";
 import { fetchAiSreCapabilities } from "../lib/ai-sre";
 import { AiSreHome } from "./ai-sre-ui";
@@ -3031,6 +3032,14 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         <section className="panel-stack" data-area="workforce" aria-label="Agent Studio">
           <WorkforceArea workforce={workforceData} chart={orgChartData} studio={agentStudioFeed}
                          actor={activeActorId} />
+        </section>
+        ) : null}
+
+        {/* THE GRAPH (KNOWLEDGE_GRAPH_PRODUCT_SPEC.md §5). Fetches its own views client-side,
+            scoped to the active project; nothing for it is fetched here. */}
+        {shows("knowledge") ? (
+        <section className="panel-stack" data-area="knowledge" aria-label="Graph">
+          <GraphArea projectId={activeProjectId} actor={activeActorId} orgId={activeOrgId} />
         </section>
         ) : null}
 

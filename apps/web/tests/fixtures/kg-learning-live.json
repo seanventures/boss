@@ -1,0 +1,252 @@
+{
+ "_fixture": {
+  "project_id": "northpeak-bank-b",
+  "repo": "paramg/northpeak-fineract-b",
+  "read_at": "2026-10-24",
+  "source": "live boss-community-db-1, read-only",
+  "composed": "learned items are composed on real symbols; no learned node exists yet"
+ },
+ "cursor": "2026-10-24T11:20:05Z#3",
+ "learnings": [
+  {
+   "node": {
+    "id": "kgn_fixture_learn_01",
+    "key": "learning:fixture01",
+    "kind": "test_failure",
+    "layer": "learning",
+    "label": "Disbursement test fails without a linked savings account",
+    "sub": "Builder · implement-repair1",
+    "trust_tier": "inferred"
+   },
+   "learning_kind": "test_failure",
+   "title": "Disbursement test fails without a linked savings account",
+   "statement": "disburseLoan with an account-transfer disbursement charge and no linked account throws LinkedAccountRequiredException.",
+   "detail": {
+    "test": "LoanWritePlatformServiceJpaRepositoryImplTest.disburseLoan_withAccountTransferDisbursementChargeButNoLinkedAccount_shouldThrowLinkedAccountRequired",
+    "error_signature": "LinkedAccountRequiredException: loan.link.to.savings.account.required",
+    "cause": "the repair dropped the linked-account check on the account-transfer charge path"
+   },
+   "about": {
+    "symbols": [
+     "symbol:paramg/northpeak-fineract-b:fineract-provider/src/test/java/org/apache/fineract/portfolio/loanaccount/service/LoanWritePlatformServiceJpaRepositoryImplTest.java:LoanWritePlatformServiceJpaRepositoryImplTest.disburseLoan_withAccountTransferDisbursementChargeButNoLinkedAccount_shouldThrowLinkedAccountRequired",
+     "symbol:paramg/northpeak-fineract-b:fineract-provider/src/main/java/org/apache/fineract/portfolio/loanaccount/service/LoanWritePlatformServiceJpaRepositoryImpl.java:LoanWritePlatformServiceJpaRepositoryImpl.disburseLoan"
+    ],
+    "rules": [],
+    "areas": [
+     "fineract-provider"
+    ]
+   },
+   "evidence": [
+    {
+     "type": "test",
+     "ref": "fineract-provider/src/test/java/org/apache/fineract/portfolio/loanaccount/service/LoanWritePlatformServiceJpaRepositoryImplTest.java:400-481",
+     "excerpt": null
+    }
+   ],
+   "confidence": 0.9,
+   "seen_count": 1,
+   "last_seen_run": "run_fixture_builder_1",
+   "provenance": {
+    "created_by": "backend_engineer",
+    "created_by_kind": "agent",
+    "agent_role": "backend_engineer",
+    "agent_name": "Builder",
+    "run_id": "run_fixture_builder_1",
+    "workflow_run_id": null,
+    "code_task_run_id": "ctr_fixture_build_1",
+    "model_id": "claude-opus-5-5",
+    "step": "implement-repair1",
+    "at": "2026-10-24T10:02:17Z",
+    "approved_by": null,
+    "approved_at": null,
+    "version": null,
+    "previous_id": null,
+    "events": [
+     {
+      "at": "2026-10-24T10:02:17Z",
+      "what": "recorded",
+      "by": "Builder"
+     }
+    ]
+   },
+   "at": "2026-10-24T10:02:17Z"
+  },
+  {
+   "node": {
+    "id": "kgn_fixture_learn_02",
+    "key": "learning:fixture02",
+    "kind": "fix",
+    "layer": "learning",
+    "label": "Keep the linked-account check before the transfer charge",
+    "sub": "Builder · implement-repair1",
+    "trust_tier": "inferred"
+   },
+   "learning_kind": "fix",
+   "title": "Keep the linked-account check before the transfer charge",
+   "statement": "The linked-savings check must run before an account-transfer disbursement charge is applied.",
+   "detail": {
+    "change_summary": "restored the linked-account guard ahead of the charge",
+    "files": [
+     "fineract-provider/src/main/java/org/apache/fineract/portfolio/loanaccount/service/LoanWritePlatformServiceJpaRepositoryImpl.java"
+    ],
+    "pr_url": null
+   },
+   "about": {
+    "symbols": [
+     "symbol:paramg/northpeak-fineract-b:fineract-provider/src/main/java/org/apache/fineract/portfolio/loanaccount/service/LoanWritePlatformServiceJpaRepositoryImpl.java:LoanWritePlatformServiceJpaRepositoryImpl.disburseLoan"
+    ],
+    "rules": [],
+    "areas": [
+     "fineract-provider"
+    ]
+   },
+   "evidence": [
+    {
+     "type": "test",
+     "ref": "fineract-provider/src/test/java/org/apache/fineract/portfolio/loanaccount/service/LoanWritePlatformServiceJpaRepositoryImplTest.java:400-481",
+     "excerpt": "passes after the change"
+    }
+   ],
+   "confidence": 0.9,
+   "seen_count": 1,
+   "last_seen_run": "run_fixture_builder_1",
+   "provenance": {
+    "created_by": "backend_engineer",
+    "created_by_kind": "agent",
+    "agent_role": "backend_engineer",
+    "agent_name": "Builder",
+    "run_id": "run_fixture_builder_1",
+    "workflow_run_id": null,
+    "code_task_run_id": "ctr_fixture_build_1",
+    "model_id": "claude-opus-5-5",
+    "step": "implement-repair1",
+    "at": "2026-10-24T10:06:40Z",
+    "approved_by": null,
+    "approved_at": null,
+    "version": null,
+    "previous_id": null,
+    "events": [
+     {
+      "at": "2026-10-24T10:06:40Z",
+      "what": "recorded",
+      "by": "Builder"
+     }
+    ]
+   },
+   "at": "2026-10-24T10:06:40Z"
+  },
+  {
+   "node": {
+    "id": "kgn_fixture_learn_03",
+    "key": "learning:fixture03",
+    "kind": "investigation",
+    "layer": "learning",
+    "label": "Over-posted disbursement: date checks ruled out",
+    "sub": "Responder · investigate",
+    "trust_tier": "inferred"
+   },
+   "learning_kind": "investigation",
+   "title": "Over-posted disbursement: date checks ruled out",
+   "statement": "The date validators were not the cause: the disbursement date passed every check.",
+   "detail": {
+    "tried": [
+     "replayed the disbursement with the incident's dates"
+    ],
+    "ruled_out": [
+     {
+      "hypothesis": "a future-dated disbursement slipped through",
+      "reason": "validateDisburseDate refuses it; the date was today"
+     },
+     {
+      "hypothesis": "a holiday bypass",
+      "reason": "the office had no holiday on that date"
+     }
+    ],
+    "found": "the charge path ran twice"
+   },
+   "about": {
+    "symbols": [
+     "symbol:paramg/northpeak-fineract-b:fineract-provider/src/main/java/org/apache/fineract/portfolio/loanaccount/serialization/LoanDisbursementValidator.java:LoanDisbursementValidator.validateDisburseDate",
+     "symbol:paramg/northpeak-fineract-b:fineract-provider/src/main/java/org/apache/fineract/portfolio/loanaccount/serialization/ExpectedDisbursementDateValidatorImpl.java:ExpectedDisbursementDateValidatorImpl.validateDisbursementDateIsOnHoliday"
+    ],
+    "rules": [
+     "kgn_fixture_rule_01"
+    ],
+    "areas": [
+     "fineract-provider"
+    ]
+   },
+   "evidence": [
+    {
+     "type": "log",
+     "ref": "incident log excerpt",
+     "excerpt": null
+    }
+   ],
+   "confidence": 0.6,
+   "seen_count": 1,
+   "last_seen_run": "run_fixture_responder_1",
+   "provenance": {
+    "created_by": "site_reliability_engineer",
+    "created_by_kind": "agent",
+    "agent_role": "site_reliability_engineer",
+    "agent_name": "Responder",
+    "run_id": "run_fixture_responder_1",
+    "workflow_run_id": "wfr_fixture_incident_1",
+    "code_task_run_id": null,
+    "model_id": "claude-opus-5-5",
+    "step": "investigate",
+    "at": "2026-10-24T11:20:05Z",
+    "approved_by": null,
+    "approved_at": null,
+    "version": null,
+    "previous_id": null,
+    "events": [
+     {
+      "at": "2026-10-24T11:20:05Z",
+      "what": "recorded",
+      "by": "Responder"
+     }
+    ]
+   },
+   "at": "2026-10-24T11:20:05Z"
+  }
+ ],
+ "rules": [],
+ "edges": [
+  {
+   "src": "run_fixture_responder_1",
+   "dst": "kgn_fixture_rule_01",
+   "kind": "consulted",
+   "run_id": "run_fixture_responder_1",
+   "how": "tool",
+   "at": "2026-10-24T11:18:40Z"
+  },
+  {
+   "src": "run_fixture_builder_1",
+   "dst": "kgn_fixture_learn_01",
+   "kind": "produced",
+   "run_id": "run_fixture_builder_1",
+   "how": null,
+   "at": "2026-10-24T10:02:17Z"
+  },
+  {
+   "src": "run_fixture_builder_1",
+   "dst": "kgn_fixture_learn_02",
+   "kind": "produced",
+   "run_id": "run_fixture_builder_1",
+   "how": null,
+   "at": "2026-10-24T10:06:40Z"
+  },
+  {
+   "src": "run_fixture_responder_1",
+   "dst": "kgn_fixture_learn_03",
+   "kind": "produced",
+   "run_id": "run_fixture_responder_1",
+   "how": null,
+   "at": "2026-10-24T11:20:05Z"
+  }
+ ],
+ "active_runs": 1,
+ "poll_after_ms": 5000
+}

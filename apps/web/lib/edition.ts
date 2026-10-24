@@ -119,6 +119,10 @@ const V1_COMMUNITY_PRIMARY_NAV = new Set([
   "infra",
   "observability",
 
+  // The Graph (KNOWLEDGE_GRAPH_PRODUCT_SPEC.md §5.1, §3.7): the code view is never gated, and
+  // Rules and Learning go through the entitlement port, which is allow-all in Community.
+  "knowledge",
+
   // How work moves through the factory. A self-hosted operator who cannot choose or see the
   // path their work takes is running the product blind, so this is not a paid feature either.
   "delivery_workflows",

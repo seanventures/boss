@@ -76,7 +76,7 @@ export type HeadTab = { key: string; label: string; tip: string; count?: number;
  *  navigation, counts, spacer, actions. One row; wraps at narrow widths, tabs scroll in their
  *  own strip under 640 px. */
 export function AreaHead({ area, title, tabs, active, onTab, counts, children }: {
-  area: "infra" | "obs"; title: string; tabs: HeadTab[]; active: string; onTab: (key: string) => void;
+  area: "infra" | "obs" | "kg"; title: string; tabs: HeadTab[]; active: string; onTab: (key: string) => void;
   counts?: React.ReactNode; children?: React.ReactNode;
 }) {
   const refs = useRef<(HTMLButtonElement | null)[]>([]);

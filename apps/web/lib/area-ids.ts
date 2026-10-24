@@ -10,6 +10,8 @@
  */
 export const AREA_IDS = [
   "workforce",
+  // The Graph area (KNOWLEDGE_GRAPH_PRODUCT_SPEC.md §5.1): code, rules and what agents learned.
+  "knowledge",
   "agent",
   "dashboard",
   "overview",

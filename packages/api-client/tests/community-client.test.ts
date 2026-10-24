@@ -16,8 +16,9 @@ describe("Community client", () => {
     expect(client).toHaveProperty("updateMcpServer");
     // 376 on main (one more than this line said), +5: workflow webhook triggers (#512) — list,
     // create, rotate, enable/disable, deliveries. +3: startWorkflowTestRun, getWorkflowTestRuns,
-    // rerunWorkflowFromStep (#512).
-    expect(Object.keys(client)).toHaveLength(384);
+    // rerunWorkflowFromStep (#512). 385 on rel/rc10.10-kg, +12: the Graph area's view, rules,
+    // live and project-archive routes (KNOWLEDGE_GRAPH_PRODUCT_SPEC.md §3, BOSSAPP-768 P0).
+    expect(Object.keys(client)).toHaveLength(397);
     await client.listProjects();
     await client.getCloudCatalog("p1");
     expect(fetchImpl).toHaveBeenCalledWith("https://boss.test/v1/cloud/catalog?project_id=p1", expect.objectContaining({ method: "GET" }));

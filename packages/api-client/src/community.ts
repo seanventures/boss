@@ -5342,6 +5342,347 @@ export type WorkflowWebhookDeliveryList = {
   deliveries: WorkflowWebhookDelivery[];
 };
 
+// ── KNOWLEDGE GRAPH VIEW (docs/product/KNOWLEDGE_GRAPH_PRODUCT_SPEC.md §3; Phase 0 contract) ───
+//
+// The wire shapes of /v1/knowledge/view/* (routers knowledge_view.py, knowledge_rules.py,
+// knowledge_learning.py) and the project archive (projects_archive.py). FROZEN by Phase 0 so the
+// read path (S1), rules (S2a), learning (S2b) and the Graph area (S4) build against one shape.
+// apps/web/lib/kg-view-types.ts re-exports these; apps/web/tests/fixtures/kg-*.json are real
+// northpeak-bank-b (Fineract) rows in exactly these shapes. Change a shape here, the fixtures
+// and their test together, never one alone.
+
+/** The product layer (spec §2.1): what a person sees on a chip. Distinct from the storage layer
+ *  (`kg_nodes.knowledge_layer`). `domain` is reserved and never written in this build. */
+export type KgProductLayer = "code" | "rules" | "learning" | "domain";
+export type KgTrustTier = "observed" | "governed" | "inferred" | "approved";
+/** `class` covers the type kinds the index records as `attrs.type_kind`: the payload carries the
+ *  type kind (interface, enum, record) so the canvas can colour it. */
+export type KgSymbolKind = "class" | "interface" | "enum" | "record" | "method" | "function";
+export type KgRuleStatus = "proposed" | "approved" | "rejected" | "superseded";
+export type KgRuleCategory =
+  | "validation" | "calculation" | "limit" | "state_transition" | "authorization" | "other";
+/** Learned items: written by agents while they work (spec §4.1). Never a re-index. */
+export type KgLearningKind =
+  | "investigation" | "test_failure" | "fix" | "workaround" | "review_finding"
+  | "decision" | "root_cause" | "precedent" | "fact";
+/** Anchors learned items hang on. Drawn, never counted as "learned". */
+export type KgAnchorKind =
+  | "run" | "incident" | "pull_request" | "release" | "spec" | "runbook" | "alert_rule" | "topic";
+/** Rollup levels (kg_view_tree.level). */
+export type KgViewLevel = "area" | "package" | "class" | "method";
+/** Rollup edge kinds: calls = calls+dispatches_to, extends = extends+implements. */
+export type KgRollupEdgeKind = "calls" | "imports" | "extends";
+/** Edge kinds a view can return: the rollup kinds plus every kg_edges kind, new ones included. */
+export type KgViewEdgeKind =
+  | KgRollupEdgeKind
+  | "dispatches_to" | "overrides" | "implements" | "references" | "defines" | "exposes"
+  | "reads" | "writes" | "about" | "changed" | "evidenced_by" | "approved_by" | "supersedes"
+  | "caused_by" | "fixed_by"
+  | "consulted" | "reused" | "proposed_by" | "produced" | "ruled_out" | "corrects" | "governs";
+
+/** A node as every view route returns it (spec §3). For rollup nodes (`kind` area | package) and
+ *  the two layer bubbles (`kind` layer) `id` is the rollup key (`area:<repo>:<area>`,
+ *  `pkg:<repo>:<area>:<package>` — one package name spans areas, 189 of 1,151 on Fineract —
+ *  `layer:rules`, `layer:learning`); otherwise it is kg_nodes.id. */
+export type KgViewNode = {
+  id: string;
+  key: string;
+  /** kg_nodes.kind, or one of the view-only kinds area · package · layer. */
+  kind: string;
+  symbol_kind?: KgSymbolKind;
+  layer: KgProductLayer;
+  label: string;
+  /** One line under the label: a path, "869 classes", "approved · validation". */
+  sub?: string;
+  trust_tier: KgTrustTier;
+  /** Rules only. */
+  status?: KgRuleStatus;
+  /** Area/package: classes, methods, packages. Layer bubbles: per status or per kind. */
+  counts?: Record<string, number>;
+};
+
+export type KgViewEdge = {
+  src: string;
+  dst: string;
+  kind: KgViewEdgeKind;
+  weight: number;
+  /** Pre-formatted by the API ("16,749 calls"); null when weight is 1 and there is nothing to say. */
+  label: string | null;
+};
+
+/** GET /v1/knowledge/view/overview?project_id&actor&layers=code,rules,learning&repo=&area=
+ *  With `area`, the package-level overview of that area (breadcrumb "Repo › area"). */
+export type KgOverviewResponse = {
+  project_id: string;
+  repo: string | null;
+  /** Every indexed repo of the project, for the picker (shown when > 1). */
+  repos: string[];
+  level: "area" | "package";
+  /** The area being drilled into at level package; null at level area. */
+  parent: string | null;
+  areas: KgViewNode[];
+  /** The Rules and Learning bubbles (kind layer); omitted layers are not in `layers=`. */
+  layers: KgViewNode[];
+  edges: KgViewEdge[];
+  /** Live code-node and edge totals ("Reading 51,319 nodes…"). */
+  totals: { nodes: number; edges: number };
+  /** kg_view_sync.built_at; null when the rollup was never built. */
+  built_at: string | null;
+  /** The rollup's node count differs from the live code count: show "Rebuild". */
+  stale: boolean;
+};
+
+/** A node in a neighbourhood carries its hop from the centre (0 = centre) for the radial layout. */
+export type KgNeighbourNode = KgViewNode & { hop: number };
+
+/** GET /v1/knowledge/view/neighbourhood?project_id&actor&node=&depth=1..3&layers=&limit=80 */
+export type KgNeighbourhoodResponse = {
+  center: KgNeighbourNode;
+  nodes: KgNeighbourNode[];
+  edges: KgViewEdge[];
+  depth: number;
+  limit: number;
+  /** The level walked: a rollup level for area/package/class, "method" for kg_edges walks,
+   *  "graph" for rule and learning nodes (kg_edges of any kind). */
+  level: KgViewLevel | "graph";
+  truncated: boolean;
+  /** What the limit left out: "Showing 80 of 180 connected classes". */
+  hidden: { nodes: number; edges: number };
+};
+
+export type KgProvenanceEvent = { at: string; what: string; by: string | null };
+
+export type KgProvenance = {
+  /** kg_nodes.created_by: an agent role key, a person id, or "system" for the code index. */
+  created_by: string;
+  created_by_kind: "agent" | "person" | "system";
+  agent_role?: string | null;
+  agent_name?: string | null;
+  run_id?: string | null;
+  workflow_run_id?: string | null;
+  code_task_run_id?: string | null;
+  step?: string | null;
+  model_id?: string | null;
+  at: string | null;
+  approved_by?: string | null;
+  approved_at?: string | null;
+  version?: number | null;
+  previous_id?: string | null;
+  /** Shown as a timeline when there is more than one. */
+  events: KgProvenanceEvent[];
+};
+
+export type KgConnectionGroup = {
+  kind: KgViewEdgeKind;
+  direction: "out" | "in";
+  /** "Calls" · "Called by" · "Evidence" · "Consulted by". */
+  label: string;
+  total: number;
+  /** The first 20; the next page is GET /node/{id}?edge=<kind>&direction=<dir>&offset=20. */
+  items: KgViewNode[];
+};
+
+export type KgVectorInfo =
+  | {
+      embedded: true;
+      model_id: string;
+      dimensions: number;
+      neighbours: Array<{ node: KgViewNode; score: number }>;
+    }
+  | {
+      embedded: false;
+      /** "Not embedded: code symbols are matched by structure, not meaning". */
+      reason: string;
+    };
+
+export type KgLineageUse = {
+  run_id: string;
+  agent_role: string | null;
+  agent_name: string | null;
+  how: "consulted" | "cited" | "reused";
+  at: string;
+};
+
+/** "Learned by Responder in run A (step investigate) → used by Builder in run B". */
+export type KgLineage = {
+  learned: { run_id: string | null; agent_role: string | null; agent_name: string | null; step: string | null; at: string | null };
+  used: KgLineageUse[];
+};
+
+/** GET /v1/knowledge/view/node/{id}?project_id&actor (&edge&direction&offset for a page). */
+export type KgNodeDetailResponse = {
+  node: KgViewNode;
+  /** kg_nodes.body: the rule statement or the learned statement; null for code. */
+  statement: string | null;
+  attrs: Record<string, unknown>;
+  repo: string | null;
+  path: string | null;
+  line: number | null;
+  end_line: number | null;
+  area: string | null;
+  package: string | null;
+  language: string | null;
+  connections: KgConnectionGroup[];
+  vector: KgVectorInfo;
+  usage: { shown: number; consulted_runs: number; reused_runs: number };
+  provenance: KgProvenance;
+  /** Learned items only. */
+  lineage: KgLineage | null;
+};
+
+export type KgTreeTab = "project" | "rules" | "learning";
+
+/** A tree row. Project tab: rollup rows. Rules tab: a status group → a category group → a rule.
+ *  Learning tab: a kind group → an item, newest first. */
+export type KgTreeRow = {
+  key: string;
+  parent_key: string | null;
+  level: KgViewLevel | "group" | "item";
+  /** kg_nodes.id for class, method, rule and learned rows; null for areas, packages and groups. */
+  node_id: string | null;
+  label: string;
+  /** The kind dot: a symbol kind, a rule, a learning kind or an anchor kind. */
+  kind: KgSymbolKind | "area" | "package" | "rule" | KgLearningKind | KgAnchorKind | "group";
+  layer: KgProductLayer;
+  /** Right-aligned count (children, or members of a class). */
+  count: number;
+  has_children: boolean;
+  /** With `q`: true for a match, false for an ancestor shown so the tree opens to it. */
+  match?: boolean;
+};
+
+/** GET /v1/knowledge/view/tree/children?project_id&actor&parent=&tab=&q=&offset= */
+export type KgTreeChildrenResponse = {
+  tab: KgTreeTab;
+  parent: string | null;
+  q: string | null;
+  rows: KgTreeRow[];
+  total: number;
+  /** Paged 200; null at the end. */
+  next_offset: number | null;
+};
+
+export type KgSearchHit = {
+  node: KgViewNode;
+  path: string | null;
+  /** Why it ranked: exact name > prefix of the last segment > text rank; "meaning" with meaning=1. */
+  match: "exact" | "prefix" | "text" | "meaning";
+  score: number;
+};
+
+/** GET /v1/knowledge/view/search?project_id&actor&q=&layers=&limit=20&meaning=0|1 */
+export type KgSearchResponse = {
+  q: string;
+  hits: KgSearchHit[];
+  meaning: boolean;
+  /** An embedding model is configured: show "Search by meaning". */
+  meaning_available: boolean;
+};
+
+export type KgRuleScope = { repo: string | null; areas: string[]; packages: string[]; symbols: string[] };
+
+export type KgRuleEvidence = {
+  symbol_id: string;
+  symbol_key: string;
+  label: string;
+  path: string | null;
+  /** The cited lines, e.g. [1569, 1576]. */
+  lines: [number, number] | null;
+  excerpt: string | null;
+};
+
+export type KgRuleReview = { by: string; at: string; decision_id: string | null; note: string | null };
+
+export type KgRule = {
+  node: KgViewNode;
+  title: string;
+  statement: string;
+  rationale: string | null;
+  category: KgRuleCategory;
+  scope: KgRuleScope;
+  status: KgRuleStatus;
+  confidence: number;
+  provenance: KgProvenance;
+  review: KgRuleReview | null;
+  version: number;
+  previous_id: string | null;
+  evidence: KgRuleEvidence[];
+  /** The scan that proposed it, for Rules review filtered by scan_id. */
+  scan_id: string | null;
+};
+
+/** GET /v1/knowledge/view/rules?project_id&actor&status=proposed&scan_id=&area= */
+export type KgRulesResponse = {
+  items: KgRule[];
+  counts: Record<KgRuleStatus, number>;
+  scan_id: string | null;
+};
+
+/** POST /v1/knowledge/view/rules/{id}/approve · /edit · /reject (needs knowledge:review). */
+export type KgRuleActionRequest = {
+  project_id: string;
+  actor?: string;
+  step_up: "confirmed";
+  note?: string;
+  /** Edit only: the new version's fields (version n+1, supersedes the old, approved in the act). */
+  statement?: string;
+  title?: string;
+  category?: KgRuleCategory;
+  scope?: Partial<KgRuleScope>;
+};
+
+export type KgRuleActionResponse = {
+  rule: KgRule;
+  /** Edit: the version it superseded. */
+  previous: KgRule | null;
+};
+
+export type KgLearningEvidence = { type: "log" | "test" | "diff" | "metric" | "file"; ref: string; excerpt: string | null };
+
+/** A learned item (spec §2.3 envelope). `detail` holds the kind-specific fields. */
+export type KgLearningItem = {
+  node: KgViewNode;
+  learning_kind: KgLearningKind;
+  title: string;
+  statement: string;
+  detail: Record<string, unknown>;
+  about: { symbols: string[]; rules: string[]; areas: string[] };
+  evidence: KgLearningEvidence[];
+  confidence: number;
+  seen_count: number;
+  last_seen_run: string | null;
+  provenance: KgProvenance;
+  at: string;
+};
+
+/** A consulted/reused/produced edge that appeared since the cursor. */
+export type KgLiveEdge = {
+  src: string;
+  dst: string;
+  kind: "consulted" | "reused" | "produced" | "governs" | "approved_by" | "corrects";
+  run_id: string | null;
+  how?: "pack" | "tool" | "cited" | null;
+  at: string;
+};
+
+/** GET /v1/knowledge/view/live?project_id&actor&since=<cursor>&run= */
+export type KgLiveResponse = {
+  /** Opaque; pass back as `since`. */
+  cursor: string;
+  learnings: KgLearningItem[];
+  rules: KgRule[];
+  edges: KgLiveEdge[];
+  /** Runs writing to the graph now; the area polls (every poll_after_ms) only while > 0. */
+  active_runs: number;
+  poll_after_ms: number;
+};
+
+/** POST /v1/projects/{id}/archive · /unarchive (project:delete, step-up confirmed). */
+export type ProjectArchiveRequest = { actor?: string; step_up: "confirmed" };
+export type ProjectArchiveResponse = {
+  project: { id: string; name: string; slug: string; archived_at: string | null; archived_by: string | null };
+};
+
 export class BossApiError extends Error {
   status: number;
   body?: unknown;
@@ -8591,6 +8932,68 @@ export function createBossApiClient(config: BossApiClientConfig) {
         `/v1/delivery-workflows/webhooks/${encodeURIComponent(triggerId)}/deliveries`,
         { query: { project_id: projectId, limit } },
       );
+    },
+    // KNOWLEDGE GRAPH VIEW (KNOWLEDGE_GRAPH_PRODUCT_SPEC.md §3; Phase 0 contract).
+    getKnowledgeViewOverview(projectId: string, options: { actor?: string; layers?: string; repo?: string; area?: string } = {}) {
+      return request<KgOverviewResponse>("GET", "/v1/knowledge/view/overview", {
+        query: { project_id: projectId, ...options },
+      });
+    },
+    getKnowledgeViewNeighbourhood(projectId: string, node: string, options: { actor?: string; depth?: number; layers?: string; limit?: number } = {}) {
+      return request<KgNeighbourhoodResponse>("GET", "/v1/knowledge/view/neighbourhood", {
+        query: { project_id: projectId, node, ...options },
+      });
+    },
+    getKnowledgeViewNode(projectId: string, nodeId: string, options: { actor?: string; edge?: string; direction?: "out" | "in"; offset?: number } = {}) {
+      return request<KgNodeDetailResponse>("GET", `/v1/knowledge/view/node/${encodeURIComponent(nodeId)}`, {
+        query: { project_id: projectId, ...options },
+      });
+    },
+    getKnowledgeViewTreeChildren(projectId: string, options: { actor?: string; parent?: string | null; tab?: KgTreeTab; q?: string; offset?: number } = {}) {
+      return request<KgTreeChildrenResponse>("GET", "/v1/knowledge/view/tree/children", {
+        query: { project_id: projectId, ...options },
+      });
+    },
+    searchKnowledgeView(projectId: string, q: string, options: { actor?: string; layers?: string; limit?: number; meaning?: boolean } = {}) {
+      const { meaning, ...rest } = options;
+      return request<KgSearchResponse>("GET", "/v1/knowledge/view/search", {
+        query: { project_id: projectId, q, ...rest, meaning: meaning ? 1 : undefined },
+      });
+    },
+    listKnowledgeRules(projectId: string, options: { actor?: string; status?: KgRuleStatus; scan_id?: string; area?: string } = {}) {
+      return request<KgRulesResponse>("GET", "/v1/knowledge/view/rules", {
+        query: { project_id: projectId, ...options },
+      });
+    },
+    approveKnowledgeRule(ruleId: string, payload: KgRuleActionRequest) {
+      return request<KgRuleActionResponse>("POST", `/v1/knowledge/view/rules/${encodeURIComponent(ruleId)}/approve`, {
+        body: payload,
+      });
+    },
+    editKnowledgeRule(ruleId: string, payload: KgRuleActionRequest) {
+      return request<KgRuleActionResponse>("POST", `/v1/knowledge/view/rules/${encodeURIComponent(ruleId)}/edit`, {
+        body: payload,
+      });
+    },
+    rejectKnowledgeRule(ruleId: string, payload: KgRuleActionRequest) {
+      return request<KgRuleActionResponse>("POST", `/v1/knowledge/view/rules/${encodeURIComponent(ruleId)}/reject`, {
+        body: payload,
+      });
+    },
+    getKnowledgeLive(projectId: string, options: { actor?: string; since?: string; run?: string } = {}) {
+      return request<KgLiveResponse>("GET", "/v1/knowledge/view/live", {
+        query: { project_id: projectId, ...options },
+      });
+    },
+    archiveProject(projectId: string, payload: ProjectArchiveRequest) {
+      return request<ProjectArchiveResponse>("POST", `/v1/projects/${encodeURIComponent(projectId)}/archive`, {
+        body: payload,
+      });
+    },
+    unarchiveProject(projectId: string, payload: ProjectArchiveRequest) {
+      return request<ProjectArchiveResponse>("POST", `/v1/projects/${encodeURIComponent(projectId)}/unarchive`, {
+        body: payload,
+      });
     },
   };
 }

@@ -1,0 +1,812 @@
+{
+ "_fixture": {
+  "project_id": "northpeak-bank-b",
+  "repo": "paramg/northpeak-fineract-b",
+  "read_at": "2026-10-24",
+  "source": "live boss-community-db-1, read-only"
+ },
+ "node": {
+  "id": "kgn_ce1dc84503de413d8ebc",
+  "key": "symbol:paramg/northpeak-fineract-b:fineract-provider/src/main/java/org/apache/fineract/portfolio/loanaccount/service/LoanWritePlatformServiceJpaRepositoryImpl.java:LoanWritePlatformServiceJpaRepositoryImpl.disburseLoan",
+  "kind": "symbol",
+  "layer": "code",
+  "label": "disburseLoan()",
+  "trust_tier": "observed",
+  "symbol_kind": "method",
+  "sub": "fineract-provider/src/main/java/org/apache/fineract/portfolio/loanaccount/service/LoanWritePlatformServiceJpaRepositoryImpl.java"
+ },
+ "statement": null,
+ "attrs": {
+  "lang": "java",
+  "line": 317,
+  "module": "org.apache.fineract.portfolio.loanaccount.service",
+  "end_line": 320,
+  "symbol_kind": "method"
+ },
+ "repo": "paramg/northpeak-fineract-b",
+ "path": "fineract-provider/src/main/java/org/apache/fineract/portfolio/loanaccount/service/LoanWritePlatformServiceJpaRepositoryImpl.java",
+ "line": 317,
+ "end_line": 320,
+ "area": "fineract-provider",
+ "package": "org.apache.fineract.portfolio.loanaccount.service",
+ "language": "java",
+ "connections": [
+  {
+   "kind": "calls",
+   "direction": "out",
+   "label": "Calls",
+   "total": 119,
+   "items": [
+    {
+     "id": "kgn_625beebf2e9c4468b333",
+     "key": "symbol:paramg/northpeak-fineract-b:fineract-provider/src/main/java/org/apache/fineract/portfolio/account/service/AccountAssociationsReadPlatformService.java:AccountAssociationsReadPlatformService.retriveLoanLinkedAssociation",
+     "kind": "symbol",
+     "layer": "code",
+     "label": "retriveLoanLinkedAssociation()",
+     "trust_tier": "observed",
+     "symbol_kind": "method",
+     "sub": "fineract-provider/src/main/java/org/apache/fineract/portfolio/account/service/AccountAssociationsReadPlatformService.java"
+    },
+    {
+     "id": "kgn_c07574884356421093b0",
+     "key": "symbol:paramg/northpeak-fineract-b:fineract-provider/src/main/java/org/apache/fineract/portfolio/account/domain/AccountTransferType.java:AccountTransferType",
+     "kind": "symbol",
+     "layer": "code",
+     "label": "AccountTransferType",
+     "trust_tier": "observed",
+     "symbol_kind": "enum",
+     "sub": "fineract-provider/src/main/java/org/apache/fineract/portfolio/account/domain/AccountTransferType.java"
+    },
+    {
+     "id": "kgn_be7b0d120dc04851b92a",
+     "key": "symbol:paramg/northpeak-fineract-b:fineract-provider/src/main/java/org/apache/fineract/portfolio/account/service/AccountTransfersWritePlatformService.java:AccountTransfersWritePlatformService.transferFunds",
+     "kind": "symbol",
+     "layer": "code",
+     "label": "transferFunds()",
+     "trust_tier": "observed",
+     "symbol_kind": "method",
+     "sub": "fineract-provider/src/main/java/org/apache/fineract/portfolio/account/service/AccountTransfersWritePlatformService.java"
+    },
+    {
+     "id": "kgn_617a7657be0a48c0b75e",
+     "key": "symbol:paramg/northpeak-fineract-b:fineract-core/src/main/java/org/apache/fineract/infrastructure/event/business/service/BusinessEventNotifierService.java:BusinessEventNotifierService.notifyPostBusinessEvent",
+     "kind": "symbol",
+     "layer": "code",
+     "label": "notifyPostBusinessEvent()",
+     "trust_tier": "observed",
+     "symbol_kind": "method",
+     "sub": "fineract-core/src/main/java/org/apache/fineract/infrastructure/event/business/service/BusinessEventNotifierService.java"
+    },
+    {
+     "id": "kgn_6e01b6744d744680a243",
+     "key": "symbol:paramg/northpeak-fineract-b:fineract-core/src/main/java/org/apache/fineract/infrastructure/event/business/service/BusinessEventNotifierService.java:BusinessEventNotifierService.notifyPreBusinessEvent",
+     "kind": "symbol",
+     "layer": "code",
+     "label": "notifyPreBusinessEvent()",
+     "trust_tier": "observed",
+     "symbol_kind": "method",
+     "sub": "fineract-core/src/main/java/org/apache/fineract/infrastructure/event/business/service/BusinessEventNotifierService.java"
+    },
+    {
+     "id": "kgn_32ebef3cb45d4fdcb4fe",
+     "key": "symbol:paramg/northpeak-fineract-b:fineract-branch/src/main/java/org/apache/fineract/organisation/teller/data/CashierTransactionDataValidator.java:CashierTransactionDataValidator.validateOnLoanDisbursal",
+     "kind": "symbol",
+     "layer": "code",
+     "label": "validateOnLoanDisbursal()",
+     "trust_tier": "observed",
+     "symbol_kind": "method",
+     "sub": "fineract-branch/src/main/java/org/apache/fineract/organisation/teller/data/CashierTransactionDataValidator.java"
+    },
+    {
+     "id": "kgn_4a5281964b094100a5f0",
+     "key": "symbol:paramg/northpeak-fineract-b:fineract-charge/src/main/java/org/apache/fineract/portfolio/charge/domain/ChargePaymentMode.java:ChargePaymentMode.isPaymentModeAccountTransfer",
+     "kind": "symbol",
+     "layer": "code",
+     "label": "isPaymentModeAccountTransfer()",
+     "trust_tier": "observed",
+     "symbol_kind": "method",
+     "sub": "fineract-charge/src/main/java/org/apache/fineract/portfolio/charge/domain/ChargePaymentMode.java"
+    },
+    {
+     "id": "kgn_d8259fed99f54dc78847",
+     "key": "symbol:paramg/northpeak-fineract-b:fineract-core/src/main/java/org/apache/fineract/infrastructure/core/data/CommandProcessingResultBuilder.java:CommandProcessingResultBuilder.withCommandId",
+     "kind": "symbol",
+     "layer": "code",
+     "label": "withCommandId()",
+     "trust_tier": "observed",
+     "symbol_kind": "method",
+     "sub": "fineract-core/src/main/java/org/apache/fineract/infrastructure/core/data/CommandProcessingResultBuilder.java"
+    },
+    {
+     "id": "kgn_42e394d13fa049fe9152",
+     "key": "symbol:paramg/northpeak-fineract-b:fineract-core/src/main/java/org/apache/fineract/infrastructure/core/data/CommandProcessingResultBuilder.java:CommandProcessingResultBuilder.withEntityExternalId",
+     "kind": "symbol",
+     "layer": "code",
+     "label": "withEntityExternalId()",
+     "trust_tier": "observed",
+     "symbol_kind": "method",
+     "sub": "fineract-core/src/main/java/org/apache/fineract/infrastructure/core/data/CommandProcessingResultBuilder.java"
+    },
+    {
+     "id": "kgn_6909fe099604432e8eff",
+     "key": "symbol:paramg/northpeak-fineract-b:fineract-core/src/main/java/org/apache/fineract/infrastructure/core/data/CommandProcessingResultBuilder.java:CommandProcessingResultBuilder.withEntityId",
+     "kind": "symbol",
+     "layer": "code",
+     "label": "withEntityId()",
+     "trust_tier": "observed",
+     "symbol_kind": "method",
+     "sub": "fineract-core/src/main/java/org/apache/fineract/infrastructure/core/data/CommandProcessingResultBuilder.java"
+    },
+    {
+     "id": "kgn_2fa183b1fd3349dc910f",
+     "key": "symbol:paramg/northpeak-fineract-b:fineract-core/src/main/java/org/apache/fineract/infrastructure/core/data/CommandProcessingResultBuilder.java:CommandProcessingResultBuilder.withOfficeId",
+     "kind": "symbol",
+     "layer": "code",
+     "label": "withOfficeId()",
+     "trust_tier": "observed",
+     "symbol_kind": "method",
+     "sub": "fineract-core/src/main/java/org/apache/fineract/infrastructure/core/data/CommandProcessingResultBuilder.java"
+    },
+    {
+     "id": "kgn_fee92d22d46f458fa33c",
+     "key": "symbol:paramg/northpeak-fineract-b:fineract-core/src/main/java/org/apache/fineract/infrastructure/core/data/CommandProcessingResultBuilder.java:CommandProcessingResultBuilder.withSubEntityExternalId",
+     "kind": "symbol",
+     "layer": "code",
+     "label": "withSubEntityExternalId()",
+     "trust_tier": "observed",
+     "symbol_kind": "method",
+     "sub": "fineract-core/src/main/java/org/apache/fineract/infrastructure/core/data/CommandProcessingResultBuilder.java"
+    },
+    {
+     "id": "kgn_87f4869eb15f423c8e24",
+     "key": "symbol:paramg/northpeak-fineract-b:fineract-core/src/main/java/org/apache/fineract/infrastructure/core/data/CommandProcessingResultBuilder.java:CommandProcessingResultBuilder.withSubEntityId",
+     "kind": "symbol",
+     "layer": "code",
+     "label": "withSubEntityId()",
+     "trust_tier": "observed",
+     "symbol_kind": "method",
+     "sub": "fineract-core/src/main/java/org/apache/fineract/infrastructure/core/data/CommandProcessingResultBuilder.java"
+    },
+    {
+     "id": "kgn_eec8cd190e0c4746b93d",
+     "key": "symbol:paramg/northpeak-fineract-b:fineract-core/src/main/java/org/apache/fineract/infrastructure/configuration/domain/ConfigurationDomainService.java:ConfigurationDomainService.isAllowCashAndNonCashAccrual",
+     "kind": "symbol",
+     "layer": "code",
+     "label": "isAllowCashAndNonCashAccrual()",
+     "trust_tier": "observed",
+     "symbol_kind": "method",
+     "sub": "fineract-core/src/main/java/org/apache/fineract/infrastructure/configuration/domain/ConfigurationDomainService.java"
+    },
+    {
+     "id": "kgn_a7a7e3f19e0941ee8ca6",
+     "key": "symbol:paramg/northpeak-fineract-b:fineract-core/src/main/java/org/apache/fineract/infrastructure/configuration/domain/ConfigurationDomainService.java:ConfigurationDomainService.isPaymentTypeApplicableForDisbursementCharge",
+     "kind": "symbol",
+     "layer": "code",
+     "label": "isPaymentTypeApplicableForDisbursementCharge()",
+     "trust_tier": "observed",
+     "symbol_kind": "method",
+     "sub": "fineract-core/src/main/java/org/apache/fineract/infrastructure/configuration/domain/ConfigurationDomainService.java"
+    },
+    {
+     "id": "kgn_2d48c8a50369467bac53",
+     "key": "symbol:paramg/northpeak-fineract-b:fineract-core/src/main/java/org/apache/fineract/infrastructure/core/service/DateUtils.java:DateUtils.getBusinessLocalDate",
+     "kind": "symbol",
+     "layer": "code",
+     "label": "getBusinessLocalDate()",
+     "trust_tier": "observed",
+     "symbol_kind": "method",
+     "sub": "fineract-core/src/main/java/org/apache/fineract/infrastructure/core/service/DateUtils.java"
+    },
+    {
+     "id": "kgn_faf23dedda434a538803",
+     "key": "symbol:paramg/northpeak-fineract-b:fineract-core/src/main/java/org/apache/fineract/infrastructure/core/service/DateUtils.java:DateUtils.isBeforeBusinessDate",
+     "kind": "symbol",
+     "layer": "code",
+     "label": "isBeforeBusinessDate()",
+     "trust_tier": "observed",
+     "symbol_kind": "method",
+     "sub": "fineract-core/src/main/java/org/apache/fineract/infrastructure/core/service/DateUtils.java"
+    },
+    {
+     "id": "kgn_bd7242bbca584b46bbdf",
+     "key": "symbol:paramg/northpeak-fineract-b:fineract-core/src/main/java/org/apache/fineract/infrastructure/core/domain/ExternalId.java:ExternalId.empty",
+     "kind": "symbol",
+     "layer": "code",
+     "label": "empty()",
+     "trust_tier": "observed",
+     "symbol_kind": "method",
+     "sub": "fineract-core/src/main/java/org/apache/fineract/infrastructure/core/domain/ExternalId.java"
+    },
+    {
+     "id": "kgn_fcba76b1bdfd4a6eadb8",
+     "key": "symbol:paramg/northpeak-fineract-b:fineract-core/src/main/java/org/apache/fineract/infrastructure/core/domain/ExternalId.java:ExternalId.generate",
+     "kind": "symbol",
+     "layer": "code",
+     "label": "generate()",
+     "trust_tier": "observed",
+     "symbol_kind": "method",
+     "sub": "fineract-core/src/main/java/org/apache/fineract/infrastructure/core/domain/ExternalId.java"
+    },
+    {
+     "id": "kgn_81fa3a3c86734b3aa16a",
+     "key": "symbol:paramg/northpeak-fineract-b:fineract-core/src/main/java/org/apache/fineract/infrastructure/core/service/ExternalIdFactory.java:ExternalIdFactory.createFromCommand",
+     "kind": "symbol",
+     "layer": "code",
+     "label": "createFromCommand()",
+     "trust_tier": "observed",
+     "symbol_kind": "method",
+     "sub": "fineract-core/src/main/java/org/apache/fineract/infrastructure/core/service/ExternalIdFactory.java"
+    }
+   ]
+  },
+  {
+   "kind": "references",
+   "direction": "out",
+   "label": "References",
+   "total": 23,
+   "items": [
+    {
+     "id": "kgn_823e99a18c934a9eae69",
+     "key": "symbol:paramg/northpeak-fineract-b:fineract-provider/src/main/java/org/apache/fineract/portfolio/account/data/AccountTransferDTO.java:AccountTransferDTO",
+     "kind": "symbol",
+     "layer": "code",
+     "label": "AccountTransferDTO",
+     "trust_tier": "observed",
+     "symbol_kind": "class",
+     "sub": "fineract-provider/src/main/java/org/apache/fineract/portfolio/account/data/AccountTransferDTO.java"
+    },
+    {
+     "id": "kgn_d82acb512b344603987c",
+     "key": "symbol:paramg/northpeak-fineract-b:fineract-core/src/main/java/org/apache/fineract/useradministration/domain/AppUser.java:AppUser",
+     "kind": "symbol",
+     "layer": "code",
+     "label": "AppUser",
+     "trust_tier": "observed",
+     "symbol_kind": "class",
+     "sub": "fineract-core/src/main/java/org/apache/fineract/useradministration/domain/AppUser.java"
+    },
+    {
+     "id": "kgn_72d019d5969944569265",
+     "key": "symbol:paramg/northpeak-fineract-b:fineract-core/src/main/java/org/apache/fineract/infrastructure/core/data/CommandProcessingResult.java:CommandProcessingResult",
+     "kind": "symbol",
+     "layer": "code",
+     "label": "CommandProcessingResult",
+     "trust_tier": "observed",
+     "symbol_kind": "class",
+     "sub": "fineract-core/src/main/java/org/apache/fineract/infrastructure/core/data/CommandProcessingResult.java"
+    },
+    {
+     "id": "kgn_542190e9e4084f5eb618",
+     "key": "symbol:paramg/northpeak-fineract-b:fineract-core/src/main/java/org/apache/fineract/infrastructure/core/data/CommandProcessingResultBuilder.java:CommandProcessingResultBuilder",
+     "kind": "symbol",
+     "layer": "code",
+     "label": "CommandProcessingResultBuilder",
+     "trust_tier": "observed",
+     "symbol_kind": "class",
+     "sub": "fineract-core/src/main/java/org/apache/fineract/infrastructure/core/data/CommandProcessingResultBuilder.java"
+    },
+    {
+     "id": "kgn_ff400e18de56484b8f97",
+     "key": "symbol:paramg/northpeak-fineract-b:fineract-core/src/main/java/org/apache/fineract/infrastructure/core/domain/ExternalId.java:ExternalId",
+     "kind": "symbol",
+     "layer": "code",
+     "label": "ExternalId",
+     "trust_tier": "observed",
+     "symbol_kind": "class",
+     "sub": "fineract-core/src/main/java/org/apache/fineract/infrastructure/core/domain/ExternalId.java"
+    },
+    {
+     "id": "kgn_d91a47aca89349c9bfcd",
+     "key": "symbol:paramg/northpeak-fineract-b:fineract-loan/src/main/java/org/apache/fineract/portfolio/loanproduct/exception/LinkedAccountRequiredException.java:LinkedAccountRequiredException",
+     "kind": "symbol",
+     "layer": "code",
+     "label": "LinkedAccountRequiredException",
+     "trust_tier": "observed",
+     "symbol_kind": "class",
+     "sub": "fineract-loan/src/main/java/org/apache/fineract/portfolio/loanproduct/exception/LinkedAccountRequiredException.java"
+    },
+    {
+     "id": "kgn_a826c9f68bf94070b044",
+     "key": "symbol:paramg/northpeak-fineract-b:fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/domain/Loan.java:Loan",
+     "kind": "symbol",
+     "layer": "code",
+     "label": "Loan",
+     "trust_tier": "observed",
+     "symbol_kind": "class",
+     "sub": "fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/domain/Loan.java"
+    },
+    {
+     "id": "kgn_85204b997bd041838a68",
+     "key": "symbol:paramg/northpeak-fineract-b:fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/api/LoanApiConstants.java:LoanApiConstants",
+     "kind": "symbol",
+     "layer": "code",
+     "label": "LoanApiConstants",
+     "trust_tier": "observed",
+     "symbol_kind": "interface",
+     "sub": "fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/api/LoanApiConstants.java"
+    },
+    {
+     "id": "kgn_48f4d46504ca4be4906b",
+     "key": "symbol:paramg/northpeak-fineract-b:fineract-loan/src/main/java/org/apache/fineract/infrastructure/event/business/domain/loan/LoanBalanceChangedBusinessEvent.java:LoanBalanceChangedBusinessEvent",
+     "kind": "symbol",
+     "layer": "code",
+     "label": "LoanBalanceChangedBusinessEvent",
+     "trust_tier": "observed",
+     "symbol_kind": "class",
+     "sub": "fineract-loan/src/main/java/org/apache/fineract/infrastructure/event/business/domain/loan/LoanBalanceChangedBusinessEvent.java"
+    },
+    {
+     "id": "kgn_3015f0cdde5f4734b288",
+     "key": "symbol:paramg/northpeak-fineract-b:fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/domain/LoanCharge.java:LoanCharge",
+     "kind": "symbol",
+     "layer": "code",
+     "label": "LoanCharge",
+     "trust_tier": "observed",
+     "symbol_kind": "class",
+     "sub": "fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/domain/LoanCharge.java"
+    },
+    {
+     "id": "kgn_dcbdb44a82544c13b784",
+     "key": "symbol:paramg/northpeak-fineract-b:fineract-loan/src/main/java/org/apache/fineract/infrastructure/event/business/domain/loan/LoanDisbursalBusinessEvent.java:LoanDisbursalBusinessEvent",
+     "kind": "symbol",
+     "layer": "code",
+     "label": "LoanDisbursalBusinessEvent",
+     "trust_tier": "observed",
+     "symbol_kind": "class",
+     "sub": "fineract-loan/src/main/java/org/apache/fineract/infrastructure/event/business/domain/loan/LoanDisbursalBusinessEvent.java"
+    },
+    {
+     "id": "kgn_c5d364da1d244411a4ef",
+     "key": "symbol:paramg/northpeak-fineract-b:fineract-loan/src/main/java/org/apache/fineract/infrastructure/event/business/domain/loan/transaction/LoanDisbursalTransactionBusinessEvent.java:LoanDisbursalTransactionBusinessEvent",
+     "kind": "symbol",
+     "layer": "code",
+     "label": "LoanDisbursalTransactionBusinessEvent",
+     "trust_tier": "observed",
+     "symbol_kind": "class",
+     "sub": "fineract-loan/src/main/java/org/apache/fineract/infrastructure/event/business/domain/loan/transaction/LoanDisbursalTransactionBusinessEvent.java"
+    },
+    {
+     "id": "kgn_b98b19d706784a5bae93",
+     "key": "symbol:paramg/northpeak-fineract-b:fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/domain/LoanDisbursementDetails.java:LoanDisbursementDetails",
+     "kind": "symbol",
+     "layer": "code",
+     "label": "LoanDisbursementDetails",
+     "trust_tier": "observed",
+     "symbol_kind": "class",
+     "sub": "fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/domain/LoanDisbursementDetails.java"
+    },
+    {
+     "id": "kgn_ba2da97b610d4011b230",
+     "key": "symbol:paramg/northpeak-fineract-b:fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/domain/LoanEvent.java:LoanEvent",
+     "kind": "symbol",
+     "layer": "code",
+     "label": "LoanEvent",
+     "trust_tier": "observed",
+     "symbol_kind": "enum",
+     "sub": "fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/domain/LoanEvent.java"
+    },
+    {
+     "id": "kgn_f30bf7d63f5141299d33",
+     "key": "symbol:paramg/northpeak-fineract-b:fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/domain/LoanTransaction.java:LoanTransaction",
+     "kind": "symbol",
+     "layer": "code",
+     "label": "LoanTransaction",
+     "trust_tier": "observed",
+     "symbol_kind": "class",
+     "sub": "fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/domain/LoanTransaction.java"
+    },
+    {
+     "id": "kgn_105c2f236bfd4024801a",
+     "key": "symbol:paramg/northpeak-fineract-b:fineract-loan/src/main/java/org/apache/fineract/infrastructure/event/business/domain/loan/transaction/LoanTransactionFlagsData.java:LoanTransactionFlagsData",
+     "kind": "symbol",
+     "layer": "code",
+     "label": "LoanTransactionFlagsData",
+     "trust_tier": "observed",
+     "symbol_kind": "record",
+     "sub": "fineract-loan/src/main/java/org/apache/fineract/infrastructure/event/business/domain/loan/transaction/LoanTransactionFlagsData.java"
+    },
+    {
+     "id": "kgn_3ba3c9349bf84118b608",
+     "key": "symbol:paramg/northpeak-fineract-b:fineract-core/src/main/java/org/apache/fineract/organisation/monetary/domain/Money.java:Money",
+     "kind": "symbol",
+     "layer": "code",
+     "label": "Money",
+     "trust_tier": "observed",
+     "symbol_kind": "class",
+     "sub": "fineract-core/src/main/java/org/apache/fineract/organisation/monetary/domain/Money.java"
+    },
+    {
+     "id": "kgn_680ecaef3901464aab63",
+     "key": "symbol:paramg/northpeak-fineract-b:fineract-core/src/main/java/org/apache/fineract/portfolio/paymentdetail/domain/PaymentDetail.java:PaymentDetail",
+     "kind": "symbol",
+     "layer": "code",
+     "label": "PaymentDetail",
+     "trust_tier": "observed",
+     "symbol_kind": "class",
+     "sub": "fineract-core/src/main/java/org/apache/fineract/portfolio/paymentdetail/domain/PaymentDetail.java"
+    },
+    {
+     "id": "kgn_8044a99b1e2e456cbd1e",
+     "key": "symbol:paramg/northpeak-fineract-b:fineract-core/src/main/java/org/apache/fineract/portfolio/account/data/PortfolioAccountData.java:PortfolioAccountData",
+     "kind": "symbol",
+     "layer": "code",
+     "label": "PortfolioAccountData",
+     "trust_tier": "observed",
+     "symbol_kind": "class",
+     "sub": "fineract-core/src/main/java/org/apache/fineract/portfolio/account/data/PortfolioAccountData.java"
+    },
+    {
+     "id": "kgn_cf4b75d9557742ada029",
+     "key": "symbol:paramg/northpeak-fineract-b:fineract-core/src/main/java/org/apache/fineract/portfolio/account/PortfolioAccountType.java:PortfolioAccountType",
+     "kind": "symbol",
+     "layer": "code",
+     "label": "PortfolioAccountType",
+     "trust_tier": "observed",
+     "symbol_kind": "enum",
+     "sub": "fineract-core/src/main/java/org/apache/fineract/portfolio/account/PortfolioAccountType.java"
+    }
+   ]
+  },
+  {
+   "kind": "dispatches_to",
+   "direction": "out",
+   "label": "Dispatches to",
+   "total": 20,
+   "items": [
+    {
+     "id": "kgn_e2bc4bd84b7b4c0bae02",
+     "key": "symbol:paramg/northpeak-fineract-b:fineract-provider/src/main/java/org/apache/fineract/portfolio/account/service/AccountAssociationsReadPlatformServiceImpl.java:AccountAssociationsReadPlatformServiceImpl.retriveLoanLinkedAssociation",
+     "kind": "symbol",
+     "layer": "code",
+     "label": "retriveLoanLinkedAssociation()",
+     "trust_tier": "observed",
+     "symbol_kind": "method",
+     "sub": "fineract-provider/src/main/java/org/apache/fineract/portfolio/account/service/AccountAssociationsReadPlatformServiceImpl.java"
+    },
+    {
+     "id": "kgn_195945d26f5145369f6d",
+     "key": "symbol:paramg/northpeak-fineract-b:fineract-provider/src/main/java/org/apache/fineract/portfolio/account/service/AccountTransfersWritePlatformServiceImpl.java:AccountTransfersWritePlatformServiceImpl.transferFunds",
+     "kind": "symbol",
+     "layer": "code",
+     "label": "transferFunds()",
+     "trust_tier": "observed",
+     "symbol_kind": "method",
+     "sub": "fineract-provider/src/main/java/org/apache/fineract/portfolio/account/service/AccountTransfersWritePlatformServiceImpl.java"
+    },
+    {
+     "id": "kgn_3934b38c9bf149dbb800",
+     "key": "symbol:paramg/northpeak-fineract-b:fineract-core/src/main/java/org/apache/fineract/infrastructure/event/business/service/BusinessEventNotifierServiceImpl.java:BusinessEventNotifierServiceImpl.notifyPostBusinessEvent",
+     "kind": "symbol",
+     "layer": "code",
+     "label": "notifyPostBusinessEvent()",
+     "trust_tier": "observed",
+     "symbol_kind": "method",
+     "sub": "fineract-core/src/main/java/org/apache/fineract/infrastructure/event/business/service/BusinessEventNotifierServiceImpl.java"
+    },
+    {
+     "id": "kgn_b287ed45ef4e435f9a96",
+     "key": "symbol:paramg/northpeak-fineract-b:fineract-core/src/main/java/org/apache/fineract/infrastructure/event/business/service/BusinessEventNotifierServiceImpl.java:BusinessEventNotifierServiceImpl.notifyPreBusinessEvent",
+     "kind": "symbol",
+     "layer": "code",
+     "label": "notifyPreBusinessEvent()",
+     "trust_tier": "observed",
+     "symbol_kind": "method",
+     "sub": "fineract-core/src/main/java/org/apache/fineract/infrastructure/event/business/service/BusinessEventNotifierServiceImpl.java"
+    },
+    {
+     "id": "kgn_d38955b8a552468aa1e8",
+     "key": "symbol:paramg/northpeak-fineract-b:fineract-provider/src/main/java/org/apache/fineract/infrastructure/configuration/domain/ConfigurationDomainServiceJpa.java:ConfigurationDomainServiceJpa.isAllowCashAndNonCashAccrual",
+     "kind": "symbol",
+     "layer": "code",
+     "label": "isAllowCashAndNonCashAccrual()",
+     "trust_tier": "observed",
+     "symbol_kind": "method",
+     "sub": "fineract-provider/src/main/java/org/apache/fineract/infrastructure/configuration/domain/ConfigurationDomainServiceJpa.java"
+    },
+    {
+     "id": "kgn_c8f7072a126c4c90ad3e",
+     "key": "symbol:paramg/northpeak-fineract-b:fineract-provider/src/main/java/org/apache/fineract/infrastructure/configuration/domain/ConfigurationDomainServiceJpa.java:ConfigurationDomainServiceJpa.isPaymentTypeApplicableForDisbursementCharge",
+     "kind": "symbol",
+     "layer": "code",
+     "label": "isPaymentTypeApplicableForDisbursementCharge()",
+     "trust_tier": "observed",
+     "symbol_kind": "method",
+     "sub": "fineract-provider/src/main/java/org/apache/fineract/infrastructure/configuration/domain/ConfigurationDomainServiceJpa.java"
+    },
+    {
+     "id": "kgn_b0a0fe61e82b4a2d8d58",
+     "key": "symbol:paramg/northpeak-fineract-b:fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/domain/DefaultLoanLifecycleStateMachine.java:DefaultLoanLifecycleStateMachine.transition",
+     "kind": "symbol",
+     "layer": "code",
+     "label": "transition()",
+     "trust_tier": "observed",
+     "symbol_kind": "method",
+     "sub": "fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/domain/DefaultLoanLifecycleStateMachine.java"
+    },
+    {
+     "id": "kgn_2a127d5dfc13427d8be4",
+     "key": "symbol:paramg/northpeak-fineract-b:fineract-provider/src/main/java/org/apache/fineract/portfolio/loanaccount/domain/LoanAccountDomainServiceJpa.java:LoanAccountDomainServiceJpa.setLoanDelinquencyTag",
+     "kind": "symbol",
+     "layer": "code",
+     "label": "setLoanDelinquencyTag()",
+     "trust_tier": "observed",
+     "symbol_kind": "method",
+     "sub": "fineract-provider/src/main/java/org/apache/fineract/portfolio/loanaccount/domain/LoanAccountDomainServiceJpa.java"
+    },
+    {
+     "id": "kgn_82929dc4f6a9458183ea",
+     "key": "symbol:paramg/northpeak-fineract-b:fineract-provider/src/main/java/org/apache/fineract/portfolio/loanaccount/service/LoanAccrualsProcessingServiceImpl.java:LoanAccrualsProcessingServiceImpl.processAccrualsOnInterestRecalculation",
+     "kind": "symbol",
+     "layer": "code",
+     "label": "processAccrualsOnInterestRecalculation()",
+     "trust_tier": "observed",
+     "symbol_kind": "method",
+     "sub": "fineract-provider/src/main/java/org/apache/fineract/portfolio/loanaccount/service/LoanAccrualsProcessingServiceImpl.java"
+    },
+    {
+     "id": "kgn_8fa4b46fb6ce4785af20",
+     "key": "symbol:paramg/northpeak-fineract-b:fineract-provider/src/main/java/org/apache/fineract/portfolio/loanaccount/service/LoanAccrualsProcessingServiceImpl.java:LoanAccrualsProcessingServiceImpl.processIncomePostingAndAccruals",
+     "kind": "symbol",
+     "layer": "code",
+     "label": "processIncomePostingAndAccruals()",
+     "trust_tier": "observed",
+     "symbol_kind": "method",
+     "sub": "fineract-provider/src/main/java/org/apache/fineract/portfolio/loanaccount/service/LoanAccrualsProcessingServiceImpl.java"
+    },
+    {
+     "id": "kgn_32ab1fd7d810428a850a",
+     "key": "symbol:paramg/northpeak-fineract-b:fineract-provider/src/main/java/org/apache/fineract/portfolio/loanaccount/service/LoanAccrualsProcessingServiceImpl.java:LoanAccrualsProcessingServiceImpl.reprocessExistingAccruals",
+     "kind": "symbol",
+     "layer": "code",
+     "label": "reprocessExistingAccruals()",
+     "trust_tier": "observed",
+     "symbol_kind": "method",
+     "sub": "fineract-provider/src/main/java/org/apache/fineract/portfolio/loanaccount/service/LoanAccrualsProcessingServiceImpl.java"
+    },
+    {
+     "id": "kgn_fedfebc6482b44b4bbcc",
+     "key": "symbol:paramg/northpeak-fineract-b:fineract-provider/src/main/java/org/apache/fineract/portfolio/loanaccount/service/LoanAssemblerImpl.java:LoanAssemblerImpl.assembleFrom",
+     "kind": "symbol",
+     "layer": "code",
+     "label": "assembleFrom()",
+     "trust_tier": "observed",
+     "symbol_kind": "method",
+     "sub": "fineract-provider/src/main/java/org/apache/fineract/portfolio/loanaccount/service/LoanAssemblerImpl.java"
+    },
+    {
+     "id": "kgn_44db830bf6ed41a2bb9e",
+     "key": "symbol:paramg/northpeak-fineract-b:fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/service/LoanDownPaymentHandlerServiceImpl.java:LoanDownPaymentHandlerServiceImpl.handleDownPayment",
+     "kind": "symbol",
+     "layer": "code",
+     "label": "handleDownPayment()",
+     "trust_tier": "observed",
+     "symbol_kind": "method",
+     "sub": "fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/service/LoanDownPaymentHandlerServiceImpl.java"
+    },
+    {
+     "id": "kgn_55992d87b4ab48508076",
+     "key": "symbol:paramg/northpeak-fineract-b:fineract-provider/src/main/java/org/apache/fineract/portfolio/loanaccount/service/LoanJournalEntryPosterImpl.java:LoanJournalEntryPosterImpl.postJournalEntriesForLoanTransaction",
+     "kind": "symbol",
+     "layer": "code",
+     "label": "postJournalEntriesForLoanTransaction()",
+     "trust_tier": "observed",
+     "symbol_kind": "method",
+     "sub": "fineract-provider/src/main/java/org/apache/fineract/portfolio/loanaccount/service/LoanJournalEntryPosterImpl.java"
+    },
+    {
+     "id": "kgn_7181516c58604c7fa587",
+     "key": "symbol:paramg/northpeak-fineract-b:fineract-provider/src/main/java/org/apache/fineract/portfolio/loanaccount/serialization/LoanTransactionValidatorImpl.java:LoanTransactionValidatorImpl.validateActivityNotBeforeClientOrGroupTransferDate",
+     "kind": "symbol",
+     "layer": "code",
+     "label": "validateActivityNotBeforeClientOrGroupTransferDate()",
+     "trust_tier": "observed",
+     "symbol_kind": "method",
+     "sub": "fineract-provider/src/main/java/org/apache/fineract/portfolio/loanaccount/serialization/LoanTransactionValidatorImpl.java"
+    },
+    {
+     "id": "kgn_09c84b3b410a4ea29d0a",
+     "key": "symbol:paramg/northpeak-fineract-b:fineract-provider/src/main/java/org/apache/fineract/portfolio/loanaccount/serialization/LoanTransactionValidatorImpl.java:LoanTransactionValidatorImpl.validateDisbursement",
+     "kind": "symbol",
+     "layer": "code",
+     "label": "validateDisbursement()",
+     "trust_tier": "observed",
+     "symbol_kind": "method",
+     "sub": "fineract-provider/src/main/java/org/apache/fineract/portfolio/loanaccount/serialization/LoanTransactionValidatorImpl.java"
+    },
+    {
+     "id": "kgn_2361591d7b1c432b804f",
+     "key": "symbol:paramg/northpeak-fineract-b:fineract-core/src/main/java/org/apache/fineract/portfolio/paymentdetail/service/PaymentDetailWritePlatformServiceJpaRepositoryImpl.java:PaymentDetailWritePlatformServiceJpaRepositoryImpl.createAndPersistPaymentDetail",
+     "kind": "symbol",
+     "layer": "code",
+     "label": "createAndPersistPaymentDetail()",
+     "trust_tier": "observed",
+     "symbol_kind": "method",
+     "sub": "fineract-core/src/main/java/org/apache/fineract/portfolio/paymentdetail/service/PaymentDetailWritePlatformServiceJpaRepositoryImpl.java"
+    },
+    {
+     "id": "kgn_b32f9e20efe942d68383",
+     "key": "symbol:paramg/northpeak-fineract-b:fineract-progressive-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/service/ProgressiveLoanTransactionValidatorImpl.java:ProgressiveLoanTransactionValidatorImpl.validateActivityNotBeforeClientOrGroupTransferDate",
+     "kind": "symbol",
+     "layer": "code",
+     "label": "validateActivityNotBeforeClientOrGroupTransferDate()",
+     "trust_tier": "observed",
+     "symbol_kind": "method",
+     "sub": "fineract-progressive-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/service/ProgressiveLoanTransactionValidatorImpl.java"
+    },
+    {
+     "id": "kgn_14541ed811b247a883a3",
+     "key": "symbol:paramg/northpeak-fineract-b:fineract-progressive-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/service/ProgressiveLoanTransactionValidatorImpl.java:ProgressiveLoanTransactionValidatorImpl.validateDisbursement",
+     "kind": "symbol",
+     "layer": "code",
+     "label": "validateDisbursement()",
+     "trust_tier": "observed",
+     "symbol_kind": "method",
+     "sub": "fineract-progressive-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/service/ProgressiveLoanTransactionValidatorImpl.java"
+    },
+    {
+     "id": "kgn_17e45b3c909248c98cf8",
+     "key": "symbol:paramg/northpeak-fineract-b:fineract-provider/src/main/java/org/apache/fineract/portfolio/loanaccount/service/ReprocessLoanTransactionsServiceImpl.java:ReprocessLoanTransactionsServiceImpl.reprocessTransactions",
+     "kind": "symbol",
+     "layer": "code",
+     "label": "reprocessTransactions()",
+     "trust_tier": "observed",
+     "symbol_kind": "method",
+     "sub": "fineract-provider/src/main/java/org/apache/fineract/portfolio/loanaccount/service/ReprocessLoanTransactionsServiceImpl.java"
+    }
+   ]
+  },
+  {
+   "kind": "overrides",
+   "direction": "out",
+   "label": "Overrides",
+   "total": 1,
+   "items": [
+    {
+     "id": "kgn_b3c170281f324ae18357",
+     "key": "symbol:paramg/northpeak-fineract-b:fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/service/LoanWritePlatformService.java:LoanWritePlatformService.disburseLoan",
+     "kind": "symbol",
+     "layer": "code",
+     "label": "disburseLoan()",
+     "trust_tier": "observed",
+     "symbol_kind": "method",
+     "sub": "fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/service/LoanWritePlatformService.java"
+    }
+   ]
+  },
+  {
+   "kind": "calls",
+   "direction": "in",
+   "label": "Called by",
+   "total": 5,
+   "items": [
+    {
+     "id": "kgn_5988f00298fe4878a253",
+     "key": "symbol:paramg/northpeak-fineract-b:fineract-provider/src/main/java/org/apache/fineract/portfolio/loanaccount/service/LoanWritePlatformServiceJpaRepositoryImpl.java:LoanWritePlatformServiceJpaRepositoryImpl.bulkLoanDisbursal",
+     "kind": "symbol",
+     "layer": "code",
+     "label": "bulkLoanDisbursal()",
+     "trust_tier": "observed",
+     "symbol_kind": "method",
+     "sub": "fineract-provider/src/main/java/org/apache/fineract/portfolio/loanaccount/service/LoanWritePlatformServiceJpaRepositoryImpl.java"
+    },
+    {
+     "id": "kgn_cfe530a09461498da8d3",
+     "key": "symbol:paramg/northpeak-fineract-b:fineract-provider/src/main/java/org/apache/fineract/portfolio/loanaccount/service/LoanWritePlatformServiceJpaRepositoryImpl.java:LoanWritePlatformServiceJpaRepositoryImpl.disburseGLIMLoan",
+     "kind": "symbol",
+     "layer": "code",
+     "label": "disburseGLIMLoan()",
+     "trust_tier": "observed",
+     "symbol_kind": "method",
+     "sub": "fineract-provider/src/main/java/org/apache/fineract/portfolio/loanaccount/service/LoanWritePlatformServiceJpaRepositoryImpl.java"
+    },
+    {
+     "id": "kgn_584fc85e637c4ed39095",
+     "key": "symbol:paramg/northpeak-fineract-b:fineract-provider/src/test/java/org/apache/fineract/portfolio/loanaccount/service/LoanWritePlatformServiceJpaRepositoryImplTest.java:LoanWritePlatformServiceJpaRepositoryImplTest.disburseLoan_withAccountTransferDisbursementChargeButNoLinkedAccount_shouldThrowLinkedAccountRequired",
+     "kind": "symbol",
+     "layer": "code",
+     "label": "disburseLoan_withAccountTransferDisbursementChargeButNoLinkedAccount_shouldThrowLinkedAccountRequired()",
+     "trust_tier": "observed",
+     "symbol_kind": "method",
+     "sub": "fineract-provider/src/test/java/org/apache/fineract/portfolio/loanaccount/service/LoanWritePlatformServiceJpaRepositoryImplTest.java"
+    },
+    {
+     "id": "kgn_dd960a8b7aac4ffe96f7",
+     "key": "symbol:paramg/northpeak-fineract-b:fineract-provider/src/test/java/org/apache/fineract/portfolio/loanaccount/service/LoanWritePlatformServiceJpaRepositoryImplTest.java:LoanWritePlatformServiceJpaRepositoryImplTest.disburseLoan_withAccountTransferDisbursementCharge_shouldRefreshLoanSummary",
+     "kind": "symbol",
+     "layer": "code",
+     "label": "disburseLoan_withAccountTransferDisbursementCharge_shouldRefreshLoanSummary()",
+     "trust_tier": "observed",
+     "symbol_kind": "method",
+     "sub": "fineract-provider/src/test/java/org/apache/fineract/portfolio/loanaccount/service/LoanWritePlatformServiceJpaRepositoryImplTest.java"
+    },
+    {
+     "id": "kgn_e91ec46cc0fa4d659218",
+     "key": "symbol:paramg/northpeak-fineract-b:fineract-provider/src/test/java/org/apache/fineract/portfolio/loanaccount/service/LoanWritePlatformServiceJpaRepositoryImplTest.java:LoanWritePlatformServiceJpaRepositoryImplTest.disburseLoan_withoutAccountTransferDisbursementCharge_shouldNotRefreshLoanSummaryExtraTime",
+     "kind": "symbol",
+     "layer": "code",
+     "label": "disburseLoan_withoutAccountTransferDisbursementCharge_shouldNotRefreshLoanSummaryExtraTime()",
+     "trust_tier": "observed",
+     "symbol_kind": "method",
+     "sub": "fineract-provider/src/test/java/org/apache/fineract/portfolio/loanaccount/service/LoanWritePlatformServiceJpaRepositoryImplTest.java"
+    }
+   ]
+  },
+  {
+   "kind": "dispatches_to",
+   "direction": "in",
+   "label": "Dispatched from",
+   "total": 3,
+   "items": [
+    {
+     "id": "kgn_06fdf6f85687499084b9",
+     "key": "symbol:paramg/northpeak-fineract-b:fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/handler/DisburseLoanCommandHandler.java:DisburseLoanCommandHandler.processCommand",
+     "kind": "symbol",
+     "layer": "code",
+     "label": "processCommand()",
+     "trust_tier": "observed",
+     "symbol_kind": "method",
+     "sub": "fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/handler/DisburseLoanCommandHandler.java"
+    },
+    {
+     "id": "kgn_36aea7d88ac6454899ff",
+     "key": "symbol:paramg/northpeak-fineract-b:fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/handler/DisburseLoanToSavingsCommandHandler.java:DisburseLoanToSavingsCommandHandler.processCommand",
+     "kind": "symbol",
+     "layer": "code",
+     "label": "processCommand()",
+     "trust_tier": "observed",
+     "symbol_kind": "method",
+     "sub": "fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/handler/DisburseLoanToSavingsCommandHandler.java"
+    },
+    {
+     "id": "kgn_90ffbb243aa34ad896f7",
+     "key": "symbol:paramg/northpeak-fineract-b:fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/handler/DisburseLoanWithoutAutoPaymentHandler.java:DisburseLoanWithoutAutoPaymentHandler.processCommand",
+     "kind": "symbol",
+     "layer": "code",
+     "label": "processCommand()",
+     "trust_tier": "observed",
+     "symbol_kind": "method",
+     "sub": "fineract-loan/src/main/java/org/apache/fineract/portfolio/loanaccount/handler/DisburseLoanWithoutAutoPaymentHandler.java"
+    }
+   ]
+  },
+  {
+   "kind": "defines",
+   "direction": "in",
+   "label": "Defined in",
+   "total": 1,
+   "items": [
+    {
+     "id": "kgn_48ffef2eaa574ff1b08d",
+     "key": "file:paramg/northpeak-fineract-b:fineract-provider/src/main/java/org/apache/fineract/portfolio/loanaccount/service/LoanWritePlatformServiceJpaRepositoryImpl.java",
+     "kind": "file",
+     "layer": "code",
+     "label": "fineract-provider/src/main/java/org/apache/fineract/portfolio/loanaccount/service/LoanWritePlatformServiceJpaRepositoryImpl.java",
+     "trust_tier": "observed",
+     "sub": "fineract-provider/src/main/java/org/apache/fineract/portfolio/loanaccount/service/LoanWritePlatformServiceJpaRepositoryImpl.java"
+    }
+   ]
+  }
+ ],
+ "vector": {
+  "embedded": false,
+  "reason": "Not embedded: code symbols are matched by structure, not meaning"
+ },
+ "usage": {
+  "shown": 0,
+  "consulted_runs": 0,
+  "reused_runs": 0
+ },
+ "provenance": {
+  "created_by": "system",
+  "created_by_kind": "system",
+  "at": "2026-10-24T08:52:25.977498Z",
+  "events": [
+   {
+    "at": "2026-10-24T08:52:25.977498Z",
+    "what": "indexed",
+    "by": null
+   }
+  ]
+ },
+ "lineage": null
+}

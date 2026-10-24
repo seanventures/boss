@@ -1,0 +1,1919 @@
+{
+ "_fixture": {
+  "project_id": "northpeak-bank-b",
+  "repo": "paramg/northpeak-fineract-b",
+  "read_at": "2026-10-24",
+  "source": "live boss-community-db-1, read-only",
+  "composed": "layers[] and their edges mirror kg-rules-review.json and kg-learning-live.json (no rule or learned node exists yet)"
+ },
+ "project_id": "northpeak-bank-b",
+ "repo": "paramg/northpeak-fineract-b",
+ "repos": [
+  "paramg/northpeak-fineract-b"
+ ],
+ "level": "area",
+ "parent": null,
+ "areas": [
+  {
+   "id": "area:paramg/northpeak-fineract-b:fineract-provider",
+   "key": "area:paramg/northpeak-fineract-b:fineract-provider",
+   "kind": "area",
+   "layer": "code",
+   "label": "fineract-provider",
+   "sub": "3,832 classes",
+   "trust_tier": "observed",
+   "counts": {
+    "classes": 3832,
+    "methods": 11622,
+    "packages": 621
+   }
+  },
+  {
+   "id": "area:paramg/northpeak-fineract-b:fineract-core",
+   "key": "area:paramg/northpeak-fineract-b:fineract-core",
+   "kind": "area",
+   "layer": "code",
+   "label": "fineract-core",
+   "sub": "946 classes",
+   "trust_tier": "observed",
+   "counts": {
+    "classes": 946,
+    "methods": 4189,
+    "packages": 232
+   }
+  },
+  {
+   "id": "area:paramg/northpeak-fineract-b:fineract-loan",
+   "key": "area:paramg/northpeak-fineract-b:fineract-loan",
+   "kind": "area",
+   "layer": "code",
+   "label": "fineract-loan",
+   "sub": "869 classes",
+   "trust_tier": "observed",
+   "counts": {
+    "classes": 869,
+    "methods": 3682,
+    "packages": 85
+   }
+  },
+  {
+   "id": "area:paramg/northpeak-fineract-b:integration-tests",
+   "key": "area:paramg/northpeak-fineract-b:integration-tests",
+   "kind": "area",
+   "layer": "code",
+   "label": "integration-tests",
+   "sub": "594 classes",
+   "trust_tier": "observed",
+   "counts": {
+    "classes": 594,
+    "methods": 6275,
+    "packages": 60
+   }
+  },
+  {
+   "id": "area:paramg/northpeak-fineract-b:fineract-working-capital-loan",
+   "key": "area:paramg/northpeak-fineract-b:fineract-working-capital-loan",
+   "kind": "area",
+   "layer": "code",
+   "label": "fineract-working-capital-loan",
+   "sub": "404 classes",
+   "trust_tier": "observed",
+   "counts": {
+    "classes": 404,
+    "methods": 1214,
+    "packages": 47
+   }
+  },
+  {
+   "id": "area:paramg/northpeak-fineract-b:fineract-e2e-tests-core",
+   "key": "area:paramg/northpeak-fineract-b:fineract-e2e-tests-core",
+   "kind": "area",
+   "layer": "code",
+   "label": "fineract-e2e-tests-core",
+   "sub": "266 classes",
+   "trust_tier": "observed",
+   "counts": {
+    "classes": 266,
+    "methods": 2303,
+    "packages": 43
+   }
+  },
+  {
+   "id": "area:paramg/northpeak-fineract-b:fineract-accounting",
+   "key": "area:paramg/northpeak-fineract-b:fineract-accounting",
+   "kind": "area",
+   "layer": "code",
+   "label": "fineract-accounting",
+   "sub": "197 classes",
+   "trust_tier": "observed",
+   "counts": {
+    "classes": 197,
+    "methods": 525,
+    "packages": 63
+   }
+  },
+  {
+   "id": "area:paramg/northpeak-fineract-b:fineract-savings",
+   "key": "area:paramg/northpeak-fineract-b:fineract-savings",
+   "kind": "area",
+   "layer": "code",
+   "label": "fineract-savings",
+   "sub": "192 classes",
+   "trust_tier": "observed",
+   "counts": {
+    "classes": 192,
+    "methods": 1486,
+    "packages": 19
+   }
+  },
+  {
+   "id": "area:paramg/northpeak-fineract-b:fineract-investor",
+   "key": "area:paramg/northpeak-fineract-b:fineract-investor",
+   "kind": "area",
+   "layer": "code",
+   "label": "fineract-investor",
+   "sub": "120 classes",
+   "trust_tier": "observed",
+   "counts": {
+    "classes": 120,
+    "methods": 410,
+    "packages": 20
+   }
+  },
+  {
+   "id": "area:paramg/northpeak-fineract-b:fineract-progressive-loan",
+   "key": "area:paramg/northpeak-fineract-b:fineract-progressive-loan",
+   "kind": "area",
+   "layer": "code",
+   "label": "fineract-progressive-loan",
+   "sub": "112 classes",
+   "trust_tier": "observed",
+   "counts": {
+    "classes": 112,
+    "methods": 928,
+    "packages": 21
+   }
+  },
+  {
+   "id": "area:paramg/northpeak-fineract-b:fineract-document",
+   "key": "area:paramg/northpeak-fineract-b:fineract-document",
+   "kind": "area",
+   "layer": "code",
+   "label": "fineract-document",
+   "sub": "100 classes",
+   "trust_tier": "observed",
+   "counts": {
+    "classes": 100,
+    "methods": 168,
+    "packages": 18
+   }
+  },
+  {
+   "id": "area:paramg/northpeak-fineract-b:fineract-branch",
+   "key": "area:paramg/northpeak-fineract-b:fineract-branch",
+   "kind": "area",
+   "layer": "code",
+   "label": "fineract-branch",
+   "sub": "75 classes",
+   "trust_tier": "observed",
+   "counts": {
+    "classes": 75,
+    "methods": 162,
+    "packages": 10
+   }
+  },
+  {
+   "id": "area:paramg/northpeak-fineract-b:fineract-security",
+   "key": "area:paramg/northpeak-fineract-b:fineract-security",
+   "kind": "area",
+   "layer": "code",
+   "label": "fineract-security",
+   "sub": "75 classes",
+   "trust_tier": "observed",
+   "counts": {
+    "classes": 75,
+    "methods": 203,
+    "packages": 10
+   }
+  },
+  {
+   "id": "area:paramg/northpeak-fineract-b:fineract-loan-origination",
+   "key": "area:paramg/northpeak-fineract-b:fineract-loan-origination",
+   "kind": "area",
+   "layer": "code",
+   "label": "fineract-loan-origination",
+   "sub": "73 classes",
+   "trust_tier": "observed",
+   "counts": {
+    "classes": 73,
+    "methods": 224,
+    "packages": 11
+   }
+  },
+  {
+   "id": "area:paramg/northpeak-fineract-b:fineract-cob",
+   "key": "area:paramg/northpeak-fineract-b:fineract-cob",
+   "kind": "area",
+   "layer": "code",
+   "label": "fineract-cob",
+   "sub": "66 classes",
+   "trust_tier": "observed",
+   "counts": {
+    "classes": 66,
+    "methods": 154,
+    "packages": 14
+   }
+  },
+  {
+   "id": "area:paramg/northpeak-fineract-b:fineract-charge",
+   "key": "area:paramg/northpeak-fineract-b:fineract-charge",
+   "kind": "area",
+   "layer": "code",
+   "label": "fineract-charge",
+   "sub": "58 classes",
+   "trust_tier": "observed",
+   "counts": {
+    "classes": 58,
+    "methods": 185,
+    "packages": 7
+   }
+  },
+  {
+   "id": "area:paramg/northpeak-fineract-b:fineract-client-feign",
+   "key": "area:paramg/northpeak-fineract-b:fineract-client-feign",
+   "kind": "area",
+   "layer": "code",
+   "label": "fineract-client-feign",
+   "sub": "50 classes",
+   "trust_tier": "observed",
+   "counts": {
+    "classes": 50,
+    "methods": 476,
+    "packages": 9
+   }
+  },
+  {
+   "id": "area:paramg/northpeak-fineract-b:fineract-tax",
+   "key": "area:paramg/northpeak-fineract-b:fineract-tax",
+   "kind": "area",
+   "layer": "code",
+   "label": "fineract-tax",
+   "sub": "50 classes",
+   "trust_tier": "observed",
+   "counts": {
+    "classes": 50,
+    "methods": 132,
+    "packages": 7
+   }
+  },
+  {
+   "id": "area:paramg/northpeak-fineract-b:fineract-mix",
+   "key": "area:paramg/northpeak-fineract-b:fineract-mix",
+   "kind": "area",
+   "layer": "code",
+   "label": "fineract-mix",
+   "sub": "34 classes",
+   "trust_tier": "observed",
+   "counts": {
+    "classes": 34,
+    "methods": 39,
+    "packages": 8
+   }
+  },
+  {
+   "id": "area:paramg/northpeak-fineract-b:fineract-command",
+   "key": "area:paramg/northpeak-fineract-b:fineract-command",
+   "kind": "area",
+   "layer": "code",
+   "label": "fineract-command",
+   "sub": "32 classes",
+   "trust_tier": "observed",
+   "counts": {
+    "classes": 32,
+    "methods": 50,
+    "packages": 6
+   }
+  },
+  {
+   "id": "area:paramg/northpeak-fineract-b:fineract-rates",
+   "key": "area:paramg/northpeak-fineract-b:fineract-rates",
+   "kind": "area",
+   "layer": "code",
+   "label": "fineract-rates",
+   "sub": "31 classes",
+   "trust_tier": "observed",
+   "counts": {
+    "classes": 31,
+    "methods": 99,
+    "packages": 8
+   }
+  },
+  {
+   "id": "area:paramg/northpeak-fineract-b:fineract-e2e-tests-runner",
+   "key": "area:paramg/northpeak-fineract-b:fineract-e2e-tests-runner",
+   "kind": "area",
+   "layer": "code",
+   "label": "fineract-e2e-tests-runner",
+   "sub": "25 classes",
+   "trust_tier": "observed",
+   "counts": {
+    "classes": 25,
+    "methods": 51,
+    "packages": 5
+   }
+  },
+  {
+   "id": "area:paramg/northpeak-fineract-b:custom",
+   "key": "area:paramg/northpeak-fineract-b:custom",
+   "kind": "area",
+   "layer": "code",
+   "label": "custom",
+   "sub": "21 classes",
+   "trust_tier": "observed",
+   "counts": {
+    "classes": 21,
+    "methods": 50,
+    "packages": 9
+   }
+  },
+  {
+   "id": "area:paramg/northpeak-fineract-b:fineract-client",
+   "key": "area:paramg/northpeak-fineract-b:fineract-client",
+   "kind": "area",
+   "layer": "code",
+   "label": "fineract-client",
+   "sub": "21 classes",
+   "trust_tier": "observed",
+   "counts": {
+    "classes": 21,
+    "methods": 75,
+    "packages": 4
+   }
+  },
+  {
+   "id": "area:paramg/northpeak-fineract-b:fineract-command-test",
+   "key": "area:paramg/northpeak-fineract-b:fineract-command-test",
+   "kind": "area",
+   "layer": "code",
+   "label": "fineract-command-test",
+   "sub": "15 classes",
+   "trust_tier": "observed",
+   "counts": {
+    "classes": 15,
+    "methods": 14,
+    "packages": 7
+   }
+  },
+  {
+   "id": "area:paramg/northpeak-fineract-b:fineract-validation",
+   "key": "area:paramg/northpeak-fineract-b:fineract-validation",
+   "kind": "area",
+   "layer": "code",
+   "label": "fineract-validation",
+   "sub": "13 classes",
+   "trust_tier": "observed",
+   "counts": {
+    "classes": 13,
+    "methods": 23,
+    "packages": 1
+   }
+  },
+  {
+   "id": "area:paramg/northpeak-fineract-b:fineract-command-jdbc",
+   "key": "area:paramg/northpeak-fineract-b:fineract-command-jdbc",
+   "kind": "area",
+   "layer": "code",
+   "label": "fineract-command-jdbc",
+   "sub": "11 classes",
+   "trust_tier": "observed",
+   "counts": {
+    "classes": 11,
+    "methods": 20,
+    "packages": 6
+   }
+  },
+  {
+   "id": "area:paramg/northpeak-fineract-b:fineract-command-audit",
+   "key": "area:paramg/northpeak-fineract-b:fineract-command-audit",
+   "kind": "area",
+   "layer": "code",
+   "label": "fineract-command-audit",
+   "sub": "7 classes",
+   "trust_tier": "observed",
+   "counts": {
+    "classes": 7,
+    "methods": 5,
+    "packages": 3
+   }
+  },
+  {
+   "id": "area:paramg/northpeak-fineract-b:fineract-command-disruptor",
+   "key": "area:paramg/northpeak-fineract-b:fineract-command-disruptor",
+   "kind": "area",
+   "layer": "code",
+   "label": "fineract-command-disruptor",
+   "sub": "7 classes",
+   "trust_tier": "observed",
+   "counts": {
+    "classes": 7,
+    "methods": 10,
+    "packages": 3
+   }
+  },
+  {
+   "id": "area:paramg/northpeak-fineract-b:fineract-report",
+   "key": "area:paramg/northpeak-fineract-b:fineract-report",
+   "kind": "area",
+   "layer": "code",
+   "label": "fineract-report",
+   "sub": "5 classes",
+   "trust_tier": "observed",
+   "counts": {
+    "classes": 5,
+    "methods": 13,
+    "packages": 2
+   }
+  },
+  {
+   "id": "area:paramg/northpeak-fineract-b:fineract-command-async",
+   "key": "area:paramg/northpeak-fineract-b:fineract-command-async",
+   "kind": "area",
+   "layer": "code",
+   "label": "fineract-command-async",
+   "sub": "4 classes",
+   "trust_tier": "observed",
+   "counts": {
+    "classes": 4,
+    "methods": 2,
+    "packages": 3
+   }
+  },
+  {
+   "id": "area:paramg/northpeak-fineract-b:fineract-progressive-loan-embeddable-schedule-generator",
+   "key": "area:paramg/northpeak-fineract-b:fineract-progressive-loan-embeddable-schedule-generator",
+   "kind": "area",
+   "layer": "code",
+   "label": "fineract-progressive-loan-embeddable-schedule-generator",
+   "sub": "4 classes",
+   "trust_tier": "observed",
+   "counts": {
+    "classes": 4,
+    "methods": 15,
+    "packages": 2
+   }
+  },
+  {
+   "id": "area:paramg/northpeak-fineract-b:fineract-avro-schemas",
+   "key": "area:paramg/northpeak-fineract-b:fineract-avro-schemas",
+   "kind": "area",
+   "layer": "code",
+   "label": "fineract-avro-schemas",
+   "sub": "1 class",
+   "trust_tier": "observed",
+   "counts": {
+    "classes": 1,
+    "methods": 1,
+    "packages": 1
+   }
+  },
+  {
+   "id": "area:paramg/northpeak-fineract-b:oauth2-tests",
+   "key": "area:paramg/northpeak-fineract-b:oauth2-tests",
+   "kind": "area",
+   "layer": "code",
+   "label": "oauth2-tests",
+   "sub": "1 class",
+   "trust_tier": "observed",
+   "counts": {
+    "classes": 1,
+    "methods": 12,
+    "packages": 1
+   }
+  },
+  {
+   "id": "area:paramg/northpeak-fineract-b:twofactor-tests",
+   "key": "area:paramg/northpeak-fineract-b:twofactor-tests",
+   "kind": "area",
+   "layer": "code",
+   "label": "twofactor-tests",
+   "sub": "1 class",
+   "trust_tier": "observed",
+   "counts": {
+    "classes": 1,
+    "methods": 13,
+    "packages": 1
+   }
+  },
+  {
+   "id": "area:paramg/northpeak-fineract-b:.github",
+   "key": "area:paramg/northpeak-fineract-b:.github",
+   "kind": "area",
+   "layer": "code",
+   "label": ".github",
+   "sub": "0 classes",
+   "trust_tier": "observed",
+   "counts": {
+    "classes": 0,
+    "methods": 11,
+    "packages": 1
+   }
+  }
+ ],
+ "layers": [
+  {
+   "id": "layer:rules",
+   "key": "layer:rules",
+   "kind": "layer",
+   "layer": "rules",
+   "label": "Rules",
+   "sub": "1 approved · 4 proposed",
+   "trust_tier": "observed",
+   "counts": {
+    "proposed": 4,
+    "approved": 1,
+    "rejected": 1,
+    "superseded": 0
+   }
+  },
+  {
+   "id": "layer:learning",
+   "key": "layer:learning",
+   "kind": "layer",
+   "layer": "learning",
+   "label": "Learning",
+   "sub": "3 learned",
+   "trust_tier": "observed",
+   "counts": {
+    "test_failure": 1,
+    "fix": 1,
+    "investigation": 1
+   }
+  }
+ ],
+ "edges": [
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-provider",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-core",
+   "kind": "calls",
+   "weight": 16749,
+   "label": "16,749 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-provider",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-loan",
+   "kind": "calls",
+   "weight": 5721,
+   "label": "5,721 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-progressive-loan",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-loan",
+   "kind": "calls",
+   "weight": 2278,
+   "label": "2,278 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-loan",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-core",
+   "kind": "calls",
+   "weight": 2198,
+   "label": "2,198 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-provider",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-savings",
+   "kind": "calls",
+   "weight": 1896,
+   "label": "1,896 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-working-capital-loan",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-core",
+   "kind": "calls",
+   "weight": 1492,
+   "label": "1,492 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-savings",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-core",
+   "kind": "calls",
+   "weight": 1431,
+   "label": "1,431 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-progressive-loan",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-core",
+   "kind": "calls",
+   "weight": 974,
+   "label": "974 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-e2e-tests-core",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-client-feign",
+   "kind": "calls",
+   "weight": 933,
+   "label": "933 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-provider",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-security",
+   "kind": "calls",
+   "weight": 723,
+   "label": "723 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-core",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-provider",
+   "kind": "calls",
+   "weight": 662,
+   "label": "662 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-accounting",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-core",
+   "kind": "calls",
+   "weight": 615,
+   "label": "615 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:integration-tests",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-client-feign",
+   "kind": "calls",
+   "weight": 463,
+   "label": "463 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-provider",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-accounting",
+   "kind": "calls",
+   "weight": 380,
+   "label": "380 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:integration-tests",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-client",
+   "kind": "calls",
+   "weight": 357,
+   "label": "357 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-investor",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-core",
+   "kind": "calls",
+   "weight": 270,
+   "label": "270 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:integration-tests",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-loan",
+   "kind": "calls",
+   "weight": 242,
+   "label": "242 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-core",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-loan",
+   "kind": "calls",
+   "weight": 237,
+   "label": "237 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:integration-tests",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-core",
+   "kind": "calls",
+   "weight": 224,
+   "label": "224 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-loan-origination",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-core",
+   "kind": "calls",
+   "weight": 208,
+   "label": "208 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-provider",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-charge",
+   "kind": "calls",
+   "weight": 199,
+   "label": "199 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-security",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-core",
+   "kind": "calls",
+   "weight": 172,
+   "label": "172 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-charge",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-core",
+   "kind": "calls",
+   "weight": 167,
+   "label": "167 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-provider",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-branch",
+   "kind": "calls",
+   "weight": 151,
+   "label": "151 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-provider",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-progressive-loan",
+   "kind": "calls",
+   "weight": 151,
+   "label": "151 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-tax",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-core",
+   "kind": "calls",
+   "weight": 151,
+   "label": "151 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-branch",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-core",
+   "kind": "calls",
+   "weight": 150,
+   "label": "150 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-provider",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-investor",
+   "kind": "calls",
+   "weight": 136,
+   "label": "136 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-loan",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-provider",
+   "kind": "calls",
+   "weight": 121,
+   "label": "121 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-provider",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-cob",
+   "kind": "calls",
+   "weight": 121,
+   "label": "121 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-provider",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-command",
+   "kind": "calls",
+   "weight": 102,
+   "label": "102 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-provider",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-working-capital-loan",
+   "kind": "calls",
+   "weight": 98,
+   "label": "98 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-rates",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-core",
+   "kind": "calls",
+   "weight": 97,
+   "label": "97 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-provider",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-loan-origination",
+   "kind": "calls",
+   "weight": 85,
+   "label": "85 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-provider",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-client-feign",
+   "kind": "calls",
+   "weight": 81,
+   "label": "81 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-e2e-tests-runner",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-e2e-tests-core",
+   "kind": "calls",
+   "weight": 77,
+   "label": "77 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-investor",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-loan",
+   "kind": "calls",
+   "weight": 77,
+   "label": "77 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-savings",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-provider",
+   "kind": "calls",
+   "weight": 69,
+   "label": "69 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-progressive-loan",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-provider",
+   "kind": "calls",
+   "weight": 62,
+   "label": "62 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-cob",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-provider",
+   "kind": "calls",
+   "weight": 56,
+   "label": "56 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-working-capital-loan",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-provider",
+   "kind": "calls",
+   "weight": 56,
+   "label": "56 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-e2e-tests-runner",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-client-feign",
+   "kind": "calls",
+   "weight": 55,
+   "label": "55 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-loan",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-charge",
+   "kind": "calls",
+   "weight": 49,
+   "label": "49 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-provider",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-document",
+   "kind": "calls",
+   "weight": 48,
+   "label": "48 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-document",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-core",
+   "kind": "calls",
+   "weight": 44,
+   "label": "44 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-working-capital-loan",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-security",
+   "kind": "calls",
+   "weight": 41,
+   "label": "41 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-cob",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-core",
+   "kind": "calls",
+   "weight": 40,
+   "label": "40 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-loan",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-progressive-loan",
+   "kind": "calls",
+   "weight": 40,
+   "label": "40 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-provider",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-command-disruptor",
+   "kind": "calls",
+   "weight": 38,
+   "label": "38 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-cob",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-working-capital-loan",
+   "kind": "calls",
+   "weight": 37,
+   "label": "37 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-working-capital-loan",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-client-feign",
+   "kind": "calls",
+   "weight": 36,
+   "label": "36 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-accounting",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-provider",
+   "kind": "calls",
+   "weight": 35,
+   "label": "35 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-command",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-provider",
+   "kind": "calls",
+   "weight": 35,
+   "label": "35 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-provider",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-command-async",
+   "kind": "calls",
+   "weight": 35,
+   "label": "35 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-branch",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-provider",
+   "kind": "calls",
+   "weight": 32,
+   "label": "32 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-core",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-investor",
+   "kind": "calls",
+   "weight": 32,
+   "label": "32 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-provider",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-tax",
+   "kind": "calls",
+   "weight": 32,
+   "label": "32 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-working-capital-loan",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-loan",
+   "kind": "calls",
+   "weight": 32,
+   "label": "32 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:integration-tests",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-provider",
+   "kind": "calls",
+   "weight": 28,
+   "label": "28 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-loan-origination",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-provider",
+   "kind": "calls",
+   "weight": 27,
+   "label": "27 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-core",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-loan-origination",
+   "kind": "calls",
+   "weight": 26,
+   "label": "26 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-provider",
+   "dst": "area:paramg/northpeak-fineract-b:custom",
+   "kind": "calls",
+   "weight": 26,
+   "label": "26 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-savings",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-charge",
+   "kind": "calls",
+   "weight": 26,
+   "label": "26 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-loan",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-accounting",
+   "kind": "calls",
+   "weight": 25,
+   "label": "25 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-e2e-tests-core",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-e2e-tests-runner",
+   "kind": "calls",
+   "weight": 24,
+   "label": "24 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-loan",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-security",
+   "kind": "calls",
+   "weight": 24,
+   "label": "24 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-investor",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-provider",
+   "kind": "calls",
+   "weight": 23,
+   "label": "23 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-client-feign",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-client",
+   "kind": "calls",
+   "weight": 22,
+   "label": "22 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-core",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-command",
+   "kind": "calls",
+   "weight": 21,
+   "label": "21 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-working-capital-loan",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-accounting",
+   "kind": "calls",
+   "weight": 21,
+   "label": "21 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-charge",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-provider",
+   "kind": "calls",
+   "weight": 20,
+   "label": "20 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-provider",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-report",
+   "kind": "calls",
+   "weight": 20,
+   "label": "20 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:integration-tests",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-charge",
+   "kind": "calls",
+   "weight": 20,
+   "label": "20 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-e2e-tests-core",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-investor",
+   "kind": "calls",
+   "weight": 19,
+   "label": "19 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-core",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-client-feign",
+   "kind": "calls",
+   "weight": 18,
+   "label": "18 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-loan-origination",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-working-capital-loan",
+   "kind": "calls",
+   "weight": 18,
+   "label": "18 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-loan",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-tax",
+   "kind": "calls",
+   "weight": 17,
+   "label": "17 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-accounting",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-security",
+   "kind": "calls",
+   "weight": 16,
+   "label": "16 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-investor",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-accounting",
+   "kind": "calls",
+   "weight": 16,
+   "label": "16 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-provider",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-rates",
+   "kind": "calls",
+   "weight": 16,
+   "label": "16 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-security",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-provider",
+   "kind": "calls",
+   "weight": 16,
+   "label": "16 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-document",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-command",
+   "kind": "calls",
+   "weight": 15,
+   "label": "15 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-tax",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-provider",
+   "kind": "calls",
+   "weight": 15,
+   "label": "15 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-core",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-accounting",
+   "kind": "calls",
+   "weight": 14,
+   "label": "14 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-e2e-tests-core",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-core",
+   "kind": "calls",
+   "weight": 14,
+   "label": "14 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-loan",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-client-feign",
+   "kind": "calls",
+   "weight": 14,
+   "label": "14 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-e2e-tests-core",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-loan",
+   "kind": "calls",
+   "weight": 13,
+   "label": "13 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-investor",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-security",
+   "kind": "calls",
+   "weight": 13,
+   "label": "13 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-progressive-loan-embeddable-schedule-generator",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-progressive-loan",
+   "kind": "calls",
+   "weight": 13,
+   "label": "13 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-loan-origination",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-loan",
+   "kind": "calls",
+   "weight": 12,
+   "label": "12 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-provider",
+   "dst": "area:paramg/northpeak-fineract-b:integration-tests",
+   "kind": "calls",
+   "weight": 12,
+   "label": "12 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-savings",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-tax",
+   "kind": "calls",
+   "weight": 12,
+   "label": "12 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-e2e-tests-core",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-provider",
+   "kind": "calls",
+   "weight": 11,
+   "label": "11 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-working-capital-loan",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-cob",
+   "kind": "calls",
+   "weight": 11,
+   "label": "11 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-command",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-command-test",
+   "kind": "calls",
+   "weight": 10,
+   "label": "10 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-command-disruptor",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-command",
+   "kind": "calls",
+   "weight": 10,
+   "label": "10 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-core",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-branch",
+   "kind": "calls",
+   "weight": 10,
+   "label": "10 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-progressive-loan",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-progressive-loan-embeddable-schedule-generator",
+   "kind": "calls",
+   "weight": 10,
+   "label": "10 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-savings",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-security",
+   "kind": "calls",
+   "weight": 10,
+   "label": "10 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-client-feign",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-provider",
+   "kind": "calls",
+   "weight": 9,
+   "label": "9 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-document",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-provider",
+   "kind": "calls",
+   "weight": 9,
+   "label": "9 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-security",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-client-feign",
+   "kind": "calls",
+   "weight": 9,
+   "label": "9 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-command-async",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-command",
+   "kind": "calls",
+   "weight": 8,
+   "label": "8 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-core",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-command-disruptor",
+   "kind": "calls",
+   "weight": 8,
+   "label": "8 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-core",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-document",
+   "kind": "calls",
+   "weight": 8,
+   "label": "8 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-loan-origination",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-security",
+   "kind": "calls",
+   "weight": 8,
+   "label": "8 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-progressive-loan",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-charge",
+   "kind": "calls",
+   "weight": 8,
+   "label": "8 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-progressive-loan",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-security",
+   "kind": "calls",
+   "weight": 8,
+   "label": "8 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-working-capital-loan",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-charge",
+   "kind": "calls",
+   "weight": 8,
+   "label": "8 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-command",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-core",
+   "kind": "calls",
+   "weight": 7,
+   "label": "7 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-core",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-command-async",
+   "kind": "calls",
+   "weight": 7,
+   "label": "7 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-e2e-tests-core",
+   "dst": "area:paramg/northpeak-fineract-b:integration-tests",
+   "kind": "calls",
+   "weight": 7,
+   "label": "7 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-provider",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-progressive-loan-embeddable-schedule-generator",
+   "kind": "calls",
+   "weight": 7,
+   "label": "7 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-core",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-security",
+   "kind": "calls",
+   "weight": 6,
+   "label": "6 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-savings",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-accounting",
+   "kind": "calls",
+   "weight": 6,
+   "label": "6 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-tax",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-security",
+   "kind": "calls",
+   "weight": 6,
+   "label": "6 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-command",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-document",
+   "kind": "calls",
+   "weight": 5,
+   "label": "5 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-command-test",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-command",
+   "kind": "calls",
+   "weight": 5,
+   "label": "5 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-core",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-savings",
+   "kind": "calls",
+   "weight": 5,
+   "label": "5 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-core",
+   "dst": "area:paramg/northpeak-fineract-b:integration-tests",
+   "kind": "calls",
+   "weight": 5,
+   "label": "5 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-document",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-command-async",
+   "kind": "calls",
+   "weight": 5,
+   "label": "5 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-document",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-command-disruptor",
+   "kind": "calls",
+   "weight": 5,
+   "label": "5 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-e2e-tests-core",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-savings",
+   "kind": "calls",
+   "weight": 5,
+   "label": "5 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-provider",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-e2e-tests-core",
+   "kind": "calls",
+   "weight": 5,
+   "label": "5 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:integration-tests",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-savings",
+   "kind": "calls",
+   "weight": 5,
+   "label": "5 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:integration-tests",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-working-capital-loan",
+   "kind": "calls",
+   "weight": 5,
+   "label": "5 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-command-jdbc",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-e2e-tests-core",
+   "kind": "calls",
+   "weight": 4,
+   "label": "4 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-core",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-working-capital-loan",
+   "kind": "calls",
+   "weight": 4,
+   "label": "4 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-loan",
+   "dst": "area:paramg/northpeak-fineract-b:custom",
+   "kind": "calls",
+   "weight": 4,
+   "label": "4 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-loan",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-rates",
+   "kind": "calls",
+   "weight": 4,
+   "label": "4 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-progressive-loan",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-client-feign",
+   "kind": "calls",
+   "weight": 4,
+   "label": "4 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-validation",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-core",
+   "kind": "calls",
+   "weight": 4,
+   "label": "4 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:twofactor-tests",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-provider",
+   "kind": "calls",
+   "weight": 4,
+   "label": "4 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-charge",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-security",
+   "kind": "calls",
+   "weight": 3,
+   "label": "3 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-cob",
+   "dst": "area:paramg/northpeak-fineract-b:custom",
+   "kind": "calls",
+   "weight": 3,
+   "label": "3 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-cob",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-client-feign",
+   "kind": "calls",
+   "weight": 3,
+   "label": "3 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-cob",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-investor",
+   "kind": "calls",
+   "weight": 3,
+   "label": "3 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-command-audit",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-command",
+   "kind": "calls",
+   "weight": 3,
+   "label": "3 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-command-audit",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-command-jdbc",
+   "kind": "calls",
+   "weight": 3,
+   "label": "3 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-core",
+   "dst": "area:paramg/northpeak-fineract-b:custom",
+   "kind": "calls",
+   "weight": 3,
+   "label": "3 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-core",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-charge",
+   "kind": "calls",
+   "weight": 3,
+   "label": "3 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-core",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-cob",
+   "kind": "calls",
+   "weight": 3,
+   "label": "3 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-core",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-progressive-loan",
+   "kind": "calls",
+   "weight": 3,
+   "label": "3 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-loan-origination",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-client-feign",
+   "kind": "calls",
+   "weight": 3,
+   "label": "3 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-mix",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-command",
+   "kind": "calls",
+   "weight": 3,
+   "label": "3 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-provider",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-mix",
+   "kind": "calls",
+   "weight": 3,
+   "label": "3 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-report",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-core",
+   "kind": "calls",
+   "weight": 3,
+   "label": "3 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:custom",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-cob",
+   "kind": "calls",
+   "weight": 2,
+   "label": "2 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-command",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-command-async",
+   "kind": "calls",
+   "weight": 2,
+   "label": "2 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-command",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-command-disruptor",
+   "kind": "calls",
+   "weight": 2,
+   "label": "2 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-command-jdbc",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-command-test",
+   "kind": "calls",
+   "weight": 2,
+   "label": "2 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-command-test",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-command-async",
+   "kind": "calls",
+   "weight": 2,
+   "label": "2 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-command-test",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-command-disruptor",
+   "kind": "calls",
+   "weight": 2,
+   "label": "2 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-core",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-avro-schemas",
+   "kind": "calls",
+   "weight": 2,
+   "label": "2 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-progressive-loan",
+   "dst": "area:paramg/northpeak-fineract-b:integration-tests",
+   "kind": "calls",
+   "weight": 2,
+   "label": "2 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-rates",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-provider",
+   "kind": "calls",
+   "weight": 2,
+   "label": "2 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-rates",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-security",
+   "kind": "calls",
+   "weight": 2,
+   "label": "2 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-validation",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-provider",
+   "kind": "calls",
+   "weight": 2,
+   "label": "2 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:integration-tests",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-accounting",
+   "kind": "calls",
+   "weight": 2,
+   "label": "2 calls"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-accounting",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-charge",
+   "kind": "calls",
+   "weight": 1,
+   "label": "1 call"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-accounting",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-client-feign",
+   "kind": "calls",
+   "weight": 1,
+   "label": "1 call"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-charge",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-tax",
+   "kind": "calls",
+   "weight": 1,
+   "label": "1 call"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-client",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-core",
+   "kind": "calls",
+   "weight": 1,
+   "label": "1 call"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-command",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-mix",
+   "kind": "calls",
+   "weight": 1,
+   "label": "1 call"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-command-disruptor",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-command-async",
+   "kind": "calls",
+   "weight": 1,
+   "label": "1 call"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-command-disruptor",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-command-test",
+   "kind": "calls",
+   "weight": 1,
+   "label": "1 call"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-command-jdbc",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-client-feign",
+   "kind": "calls",
+   "weight": 1,
+   "label": "1 call"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-command-jdbc",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-provider",
+   "kind": "calls",
+   "weight": 1,
+   "label": "1 call"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-command-test",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-provider",
+   "kind": "calls",
+   "weight": 1,
+   "label": "1 call"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-core",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-e2e-tests-core",
+   "kind": "calls",
+   "weight": 1,
+   "label": "1 call"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-document",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-client-feign",
+   "kind": "calls",
+   "weight": 1,
+   "label": "1 call"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-document",
+   "dst": "area:paramg/northpeak-fineract-b:integration-tests",
+   "kind": "calls",
+   "weight": 1,
+   "label": "1 call"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-e2e-tests-core",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-progressive-loan",
+   "kind": "calls",
+   "weight": 1,
+   "label": "1 call"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-e2e-tests-runner",
+   "dst": "area:paramg/northpeak-fineract-b:integration-tests",
+   "kind": "calls",
+   "weight": 1,
+   "label": "1 call"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-investor",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-client-feign",
+   "kind": "calls",
+   "weight": 1,
+   "label": "1 call"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-investor",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-savings",
+   "kind": "calls",
+   "weight": 1,
+   "label": "1 call"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-loan",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-working-capital-loan",
+   "kind": "calls",
+   "weight": 1,
+   "label": "1 call"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-loan",
+   "dst": "area:paramg/northpeak-fineract-b:integration-tests",
+   "kind": "calls",
+   "weight": 1,
+   "label": "1 call"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-mix",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-command-async",
+   "kind": "calls",
+   "weight": 1,
+   "label": "1 call"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-mix",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-command-disruptor",
+   "kind": "calls",
+   "weight": 1,
+   "label": "1 call"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-progressive-loan",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-rates",
+   "kind": "calls",
+   "weight": 1,
+   "label": "1 call"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-progressive-loan-embeddable-schedule-generator",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-loan",
+   "kind": "calls",
+   "weight": 1,
+   "label": "1 call"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-provider",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-avro-schemas",
+   "kind": "calls",
+   "weight": 1,
+   "label": "1 call"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-provider",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-validation",
+   "kind": "calls",
+   "weight": 1,
+   "label": "1 call"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-savings",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-client-feign",
+   "kind": "calls",
+   "weight": 1,
+   "label": "1 call"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-security",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-e2e-tests-core",
+   "kind": "calls",
+   "weight": 1,
+   "label": "1 call"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-security",
+   "dst": "area:paramg/northpeak-fineract-b:integration-tests",
+   "kind": "calls",
+   "weight": 1,
+   "label": "1 call"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:fineract-working-capital-loan",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-progressive-loan",
+   "kind": "calls",
+   "weight": 1,
+   "label": "1 call"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:integration-tests",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-document",
+   "kind": "calls",
+   "weight": 1,
+   "label": "1 call"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:integration-tests",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-e2e-tests-core",
+   "kind": "calls",
+   "weight": 1,
+   "label": "1 call"
+  },
+  {
+   "src": "area:paramg/northpeak-fineract-b:integration-tests",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-progressive-loan",
+   "kind": "calls",
+   "weight": 1,
+   "label": "1 call"
+  },
+  {
+   "src": "layer:rules",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-core",
+   "kind": "governs",
+   "weight": 1,
+   "label": "1 rule"
+  },
+  {
+   "src": "layer:rules",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-provider",
+   "kind": "governs",
+   "weight": 4,
+   "label": "4 rules"
+  },
+  {
+   "src": "layer:learning",
+   "dst": "area:paramg/northpeak-fineract-b:fineract-provider",
+   "kind": "about",
+   "weight": 3,
+   "label": "3 learnings"
+  }
+ ],
+ "totals": {
+  "nodes": 51319,
+  "edges": 234187
+ },
+ "built_at": "2026-10-24T08:52:25.977498Z",
+ "stale": false
+}
