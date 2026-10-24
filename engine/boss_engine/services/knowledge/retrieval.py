@@ -146,12 +146,13 @@ def blast_radius(
     for depth in range(1, max_depth + 1):
         nxt = []
         for current in frontier:
-            for direction in ("in", "out"):
+            for direction, kind in (("in", "calls"), ("out", "calls"), ("in", "dispatches_to"),
+                                    ("out", "dispatches_to")):
                 rows = store.neighbors(
                     connection,
                     project_id=project_id,
                     node_id=current,
-                    kind="calls",
+                    kind=kind,
                     direction=direction,
                     policy=policy,
                 )

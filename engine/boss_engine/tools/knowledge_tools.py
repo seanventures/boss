@@ -144,7 +144,7 @@ def register_knowledge_tools(reg) -> None:
     specs = [
         ("kg_search", "Search knowledge facts in this project.", _props("query"), _search, "read"),
         ("kg_symbol", "Look up a code symbol by name.", _props("name"), _symbol, "read"),
-        ("kg_callers", "List symbols that call a node.", _props("node_id"), _callers, "read"),
+        ("kg_callers", "List symbols that call a node, directly or by dispatch through a supertype.", _props("node_id"), _callers, "read"),
         ("kg_blast_radius", "Walk call edges out from a symbol.", _props("node_id"), _blast, "read"),
         ("kg_why", "Facts that cite a node.", _props("node_id"), _why, "read"),
         ("kg_precedent", "Similar past facts for a decision, with ids to cite.", _props("query"), _precedent, "read"),
@@ -160,8 +160,8 @@ def register_knowledge_tools(reg) -> None:
         (
             "kg_cypher",
             "Read-only Cypher over this project's knowledge graph (Apache AGE). Vertex labels are the "
-            "layers Code, Lifecycle, Ops and Knowledge; edge labels are kinds (calls, extends, "
-            "implements, about, changed...); kg_schema lists what this graph has, with counts. Use "
+            "layers Code, Lifecycle, Ops and Knowledge; edge labels are kinds (calls, dispatches_to, "
+            "overrides, extends, implements, about, changed...); kg_schema lists what this graph has, with counts. Use "
             "relationships for structure questions (who implements, extends or calls X), not name "
             "matching. A result with truncated=true is a sample, not every match. Name one column per "
             "RETURN item. Writes are refused; 5 s and a row limit apply.",

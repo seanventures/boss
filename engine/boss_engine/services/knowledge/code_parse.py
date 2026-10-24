@@ -43,8 +43,16 @@ SQL_NOT_TABLES = {"select", "where", "set", "values", "the", "a", "an", "lateral
 
 #: The shape of the facts one parse records. A cached file whose facts are of an older shape is
 #: parsed again on the next whole-tree index, even when its content did not change. Bump it
-#: whenever a parse records something new (2: type inheritance, ``FileFacts.bases``).
-FACTS_VERSION = 2
+#: whenever a parse records something new (2: type inheritance, ``FileFacts.bases``; 3: declared
+#: types of fields, parameters and locals, return types, and receivers that are call results).
+FACTS_VERSION = 3
+#: A part of a reference chain meaning "the result of calling what precedes": ``a.b().c()`` is
+#: ("a", "b", CALL, "c"). A part ``#t:pkg.Type`` is a receiver whose type the syntax states
+#: (``new Foo().bar()``, ``((Foo) x).bar()``).
+CALL = "()"
+TYPED = "#t:"
+#: Longest receiver chain recorded; longer fluent chains keep their head and are cut there.
+MAX_CHAIN = 12
 #: A base type's name, once its type arguments are stripped: ``a.b.C``.
 _TYPE_NAME = re.compile(r"^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*$")
 _TYPE_ARGS = re.compile(r"<[^<>]*>|\[[^\[\]]*\]")
@@ -98,6 +106,14 @@ class FileFacts:
     # the base resolves to.
     bases: list[tuple[str, tuple[str, ...], str, int]] = field(default_factory=list)
     types: dict[str, str] = field(default_factory=dict)  # type qualname -> class | interface | enum...
+    # Declared types, for resolving a call by its receiver's type. (type qualname, field name,
+    # type chain, line): a field or property of a type (Python's ``self.x``, a TypeScript
+    # constructor parameter property, a Java record component). (definition qualname, name, type
+    # chain, line): a parameter or local of a function or method. A type chain ending in CALL is
+    # "whatever calling that chain returns" (``var x = factory.make()``).
+    fields: list[tuple[str, str, tuple[str, ...], int]] = field(default_factory=list)
+    vars: list[tuple[str, str, tuple[str, ...], int]] = field(default_factory=list)
+    returns: dict[str, tuple[str, ...]] = field(default_factory=dict)  # function qualname -> type chain
     error: str | None = None
     version: int = FACTS_VERSION
 
@@ -214,6 +230,12 @@ class _Extractor:
     prop_field = "attribute"
     call_fn_field = "function"
     skip_ident_parents: frozenset[str] = frozenset()
+    #: Receiver syntax: node types that mean this/self, super/base, a parenthesised expression,
+    #: and the field naming the type of a `new T()` / cast node.
+    this_types: frozenset[str] = frozenset({"this", "this_expression"})
+    super_types: frozenset[str] = frozenset({"super", "base", "base_expression"})
+    paren_types: frozenset[str] = frozenset({"parenthesized_expression"})
+    typed_exprs: dict[str, str] = {}
 
     def __init__(self, facts: FileFacts, source: bytes):
         self.f = facts
@@ -259,6 +281,78 @@ class _Extractor:
         """Handle a node; True means its children were handled too."""
         return False
 
+    # Declared types ---------------------------------------------------------------------------
+    def type_of(self, type_node) -> tuple[str, ...] | None:
+        """A declared type as a chain. Every declared type is kept, a library's too: a call on a
+        `List` or a `String` is then known to leave the repository, rather than guessed at by
+        name. An array is a type of its own (``#array``); a primitive, `var` or none is None."""
+        if type_node is None or type_node.type in ("integral_type", "floating_point_type", "boolean_type",
+                                                     "void_type", "predefined_type", "implicit_type"):
+            return None
+        raw = _text(type_node)
+        if type_node.type in ("array_type", "slice_type") or raw.rstrip().endswith("]"):
+            return ("#array",)
+        chain = type_chain(raw.removeprefix(":").strip())
+        if not chain or chain in (("var",), ("void",)):
+            return None
+        return chain
+
+    def value_type(self, value) -> tuple[str, ...] | None:
+        """The type an initialiser states or yields: `new T()`, a cast, or a call's result."""
+        if value is None:
+            return None
+        chain = self.recv(value)
+        if chain is None:
+            return None
+        if chain[-1] == CALL or (len(chain) == 1 and chain[0].startswith(TYPED)):
+            return chain
+        return None
+
+    def var(self, name_node, chain, line_node=None, *, field: bool = False, scope: str | None = None) -> None:
+        if name_node is None or not chain:
+            return
+        name = _text(name_node)
+        if not name or not (name[0].isalpha() or name[0] in "_$"):
+            return
+        item = (sys.intern(scope if scope is not None else self.src), sys.intern(name),
+                tuple(sys.intern(p) for p in chain), (line_node or name_node).start_point[0] + 1)
+        (self.f.fields if field else self.f.vars).append(item)
+
+    def recv(self, node, depth: int = 0) -> tuple[str, ...] | None:
+        """A receiver or callee as a chain: identifiers, this/super, field access, a call's result
+        (CALL), and `new T()` / a cast (``#t:T``). None for anything else (an index, a literal)."""
+        if node is None or depth > MAX_CHAIN:
+            return None
+        t = node.type
+        if t in self.ident_types:
+            return (_text(node),)
+        if t in self.this_types:
+            return ("this",)
+        if t in self.super_types:
+            return ("super",)
+        if t in self.paren_types:
+            inner = node.named_children[0] if node.named_children else None
+            return self.recv(inner, depth + 1)
+        if t in self.typed_exprs:
+            chain = self.type_of(node.child_by_field_name(self.typed_exprs[t]))
+            return (TYPED + ".".join(chain),) if chain else None
+        if t in self.attr_types:
+            prop = node.child_by_field_name(self.prop_field)
+            head = self.recv(node.child_by_field_name(self.obj_field), depth + 1)
+            if head is None or prop is None:
+                return None
+            return head + (_text(prop),)
+        if t in self.call_types:
+            fn = node.child_by_field_name(self.call_fn_field)
+            head = self.recv(fn, depth + 1) if fn is not None else None
+            return head + (CALL,) if head else None
+        return None
+
+    @staticmethod
+    def plain(chain: tuple[str, ...] | None) -> bool:
+        """A chain of names only (the walk need not visit its receiver again)."""
+        return bool(chain) and not any(p == CALL or p.startswith(TYPED) for p in chain)
+
     def on_call(self, node, chain: tuple[str, ...] | None) -> None:
         pass
 
@@ -302,16 +396,24 @@ class _Extractor:
         if t in self.call_types:
             fn = node.child_by_field_name(self.call_fn_field)
             chain = _chain(fn, self.attr_types, self.ident_types, self.obj_field, self.prop_field) if fn else None
-            if chain:
-                self.f.refs.append(Ref(self.src, chain, True, node.start_point[0] + 1))
+            full = chain or (self.recv(fn) if fn is not None else None)
+            if full and len(full) <= MAX_CHAIN:
+                # this.repo.save(), factory.make().run(), new Foo().bar(): the resolver follows
+                # the receiver's declared type.
+                self.f.refs.append(Ref(self.src, full, True, node.start_point[0] + 1))
             elif fn is not None and fn.type in self.attr_types and fn.child_by_field_name(self.prop_field) is not None:
-                # A method called on an expression (a call's result, an index): x.filter(...).not_expired().
-                # The receiver's type is unknown; "?" lets the resolver try the unique-name rule.
+                # A method called on an expression (an index, a literal): the receiver's type is
+                # unknown; "?" lets the resolver try the unique-name rule.
                 prop = _text(fn.child_by_field_name(self.prop_field))
                 self.f.refs.append(Ref(self.src, ("?", prop), True, node.start_point[0] + 1))
             self.on_call(node, chain)
             for child in node.children:
                 if chain and _same(child, fn):
+                    continue
+                if full and _same(child, fn) and fn.type in self.attr_types:
+                    # The callee's receiver may hold calls of its own (a().b()): walk it, not the
+                    # member name already recorded.
+                    self.walk(fn.child_by_field_name(self.obj_field))
                     continue
                 self.walk(child)
             return
@@ -376,6 +478,84 @@ class _PythonAst(ast.NodeVisitor):
     def _ref(self, chain: tuple[str, ...], call: bool, node: ast.AST) -> None:
         self.f.refs.append(Ref(self.src, chain, call, getattr(node, "lineno", 0)))
 
+    # declared types -----------------------------------------------------------------------------
+    @classmethod
+    def _annotation(cls, node: ast.AST | None) -> tuple[str, ...] | None:
+        """An annotation as a type chain: `Foo`, `mod.Foo`, `"Foo"`, `Optional[Foo]`, `Foo | None`."""
+        if node is None:
+            return None
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return type_chain(node.value)
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
+            sides = [s for s in (node.left, node.right) if not (isinstance(s, ast.Constant) and s.value is None)]
+            return cls._annotation(sides[0]) if len(sides) == 1 else None
+        if isinstance(node, ast.Subscript):
+            head = cls._chain(node.value)
+            if head and head[-1] == "Optional":
+                return cls._annotation(node.slice)
+            if head and head[-1] in ("list", "List", "dict", "Dict", "set", "Set", "tuple", "Tuple", "Sequence",
+                                     "Iterable", "Mapping"):
+                return ("#array",)
+            return head
+        chain = cls._chain(node)
+        return chain if chain and chain != ("None",) else None
+
+    def _recv(self, node: ast.AST, depth: int = 0) -> tuple[str, ...] | None:
+        """A receiver as a chain, with CALL for a call's result: ``repo.get(x).save``."""
+        if depth > MAX_CHAIN:
+            return None
+        if isinstance(node, ast.Name):
+            return (node.id,)
+        if isinstance(node, ast.Attribute):
+            head = self._recv(node.value, depth + 1)
+            return head + (node.attr,) if head else None
+        if isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Name) and node.func.id == "super":
+                return ("super",)
+            head = self._recv(node.func, depth + 1)
+            return head + (CALL,) if head else None
+        return None
+
+    def _value_type(self, value: ast.AST | None) -> tuple[str, ...] | None:
+        if isinstance(value, ast.Call):
+            chain = self._recv(value)
+            return chain if chain and chain[-1] == CALL else None
+        if isinstance(value, ast.Name):                    # self.repo = repo: the parameter's type
+            for scope, name, chain, _line in reversed(self.f.vars):
+                if scope == self.src and name == value.id:
+                    return chain
+        return None
+
+    def _class_scope(self) -> str | None:
+        """The class a method body belongs to (for ``self.x = ...``)."""
+        if len(self.kinds) >= 2 and self.kinds[-1] == "function" and self.kinds[-2] == "class":
+            return ".".join(self.scope[:-1])
+        return None
+
+    def _declare(self, target: ast.AST, chain: tuple[str, ...] | None, line: int) -> None:
+        if not chain:
+            return
+        item_chain = tuple(sys.intern(p) for p in chain)
+        if isinstance(target, ast.Name):
+            if self.kinds and self.kinds[-1] == "class":
+                self.f.fields.append((sys.intern(self.src), sys.intern(target.id), item_chain, line))
+            else:
+                self.f.vars.append((sys.intern(self.src), sys.intern(target.id), item_chain, line))
+        elif isinstance(target, ast.Attribute) and isinstance(target.value, ast.Name) and target.value.id == "self":
+            owner = self._class_scope()
+            if owner:
+                self.f.fields.append((sys.intern(owner), sys.intern(target.attr), item_chain, line))
+
+    def visit_Assign(self, node: ast.Assign) -> None:
+        chain = self._value_type(node.value)
+        for target in node.targets:
+            self._declare(target, chain, node.lineno)
+        self.generic_visit(node)
+
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+        self._declare(node.target, self._annotation(node.annotation) or self._value_type(node.value), node.lineno)
+        self.generic_visit(node)
+
     def _resolve_relative(self, module: str | None, level: int) -> str:
         if not level:
             return module or ""
@@ -422,6 +602,15 @@ class _PythonAst(ast.NodeVisitor):
 
     def visit_FunctionDef(self, node) -> None:
         def body() -> None:
+            returns = self._annotation(node.returns)
+            if returns:
+                self.f.returns[sys.intern(self.src)] = tuple(sys.intern(p) for p in returns)
+            args = node.args
+            for arg in [*args.posonlyargs, *args.args, *args.kwonlyargs]:
+                chain = self._annotation(arg.annotation)
+                if chain:
+                    self.f.vars.append((sys.intern(self.src), sys.intern(arg.arg),
+                                        tuple(sys.intern(p) for p in chain), arg.lineno))
             self.visit(node.args)
             if node.returns is not None:
                 self.visit(node.returns)
@@ -497,9 +686,12 @@ class _PythonAst(ast.NodeVisitor):
         if chain:
             self._ref(chain, True, node)
         elif isinstance(node.func, ast.Attribute):
-            # A method called on an expression: x.filter(...).not_expired(). The receiver's type is
-            # unknown, so "?" lets the resolver try the unique-name rule.
-            self._ref(("?", node.func.attr), True, node)
+            # A method called on a call's result: repo.get(x).save(), super().save(). The resolver
+            # follows the receiver's declared type; failing that, "?" (or the chain's last name)
+            # lets it try the unique-name rule.
+            receiver = self._recv(node.func.value)
+            self._ref(receiver + (node.func.attr,) if receiver and len(receiver) < MAX_CHAIN
+                      else ("?", node.func.attr), True, node)
             self.visit(node.func.value)
         else:
             self.visit(node.func)
@@ -560,7 +752,9 @@ class _JavaScript(_Extractor):
     lang = "javascript"
     def_types = {"function_declaration": "function", "class_declaration": "class", "method_definition": "function",
                  "generator_function_declaration": "function", "interface_declaration": "class",
-                 "abstract_class_declaration": "class"}
+                 "abstract_class_declaration": "class",
+                 # An interface's or abstract class's method: what a call through that type names.
+                 "method_signature": "function", "abstract_method_signature": "function"}
     attr_types = ("member_expression",)
     ident_types = ("identifier",)
     call_types = ("call_expression",)
@@ -574,8 +768,13 @@ class _JavaScript(_Extractor):
         name = node.child_by_field_name("name")
         return _text(name) if name is not None else None
 
+    typed_exprs = {"new_expression": "constructor"}
+
     def on_def(self, node, qual, kind):
         if kind != "class":
+            chain = self.type_of(node.child_by_field_name("return_type"))
+            if chain:
+                self.f.returns[sys.intern(qual)] = chain
             return
         self.f.types[qual] = "interface" if node.type == "interface_declaration" else "class"
         for child in node.named_children:
@@ -641,9 +840,26 @@ class _JavaScript(_Extractor):
                         name, alias = spec.child_by_field_name("name"), spec.child_by_field_name("alias")
                         self.f.imports.append(Import(_text(alias or name), mod, _text(name)))
             return True
+        if t in ("required_parameter", "optional_parameter"):
+            pattern = node.child_by_field_name("pattern")
+            if pattern is not None and pattern.type == "identifier":
+                chain = self.type_of(node.child_by_field_name("type"))
+                if any(c.type == "accessibility_modifier" or _text(c) == "readonly" for c in node.children):
+                    # constructor(private readonly repo: Repo): a field of the class.
+                    self.var(pattern, chain, field=True, scope=".".join(self.scope[:-1]))
+                else:
+                    self.var(pattern, chain)
+            return False
+        if t == "public_field_definition":
+            self.var(node.child_by_field_name("name"),
+                     self.type_of(node.child_by_field_name("type")) or self.value_type(node.child_by_field_name("value")),
+                     field=True)
+            return False
         if t == "variable_declarator":
             name, value = node.child_by_field_name("name"), node.child_by_field_name("value")
             annotation = node.child_by_field_name("type")       # TS: `const x: HttpTypes.Order[] = ...`
+            if name is not None and name.type == "identifier":
+                self.var(name, self.type_of(annotation) or self.value_type(value))
             if annotation is not None:
                 self.walk(annotation)
             if value is not None and value.type in ("arrow_function", "function_expression", "function") \
@@ -735,6 +951,9 @@ class _Go(_Extractor):
     skip_ident_parents = frozenset({"parameter_declaration", "short_var_declaration", "var_spec", "const_spec",
                                     "import_spec", "range_clause", "labeled_statement", "field_declaration"})
 
+    typed_exprs = {"composite_literal": "type"}
+    paren_types = frozenset({"parenthesized_expression", "unary_expression"})
+
     def def_name(self, node):
         name = node.child_by_field_name("name")
         if name is None:
@@ -746,6 +965,15 @@ class _Go(_Extractor):
         return _text(name)
 
     def on_def(self, node, qual, kind):
+        if node.type in ("function_declaration", "method_declaration"):
+            result = node.child_by_field_name("result")
+            if result is not None and result.type == "parameter_list":
+                first = next((c for c in result.named_children if c.type == "parameter_declaration"), None)
+                result = first.child_by_field_name("type") if first is not None else None
+            chain = self.type_of(result)
+            if chain:
+                self.f.returns[sys.intern(qual)] = chain
+            return
         if node.type != "type_spec":
             return
         body = node.child_by_field_name("type")
@@ -767,6 +995,26 @@ class _Go(_Extractor):
             self.f.types[qual] = "type"
 
     def on_node(self, node):
+        t = node.type
+        if t in ("parameter_declaration", "var_spec", "field_declaration"):
+            chain = self.type_of(node.child_by_field_name("type"))
+            values = node.child_by_field_name("value")
+            values = values.named_children if values is not None else []
+            for i, name in enumerate(node.children_by_field_name("name")):
+                self.var(name, chain or (self.value_type(values[i]) if i < len(values) else None),
+                         field=t == "field_declaration")
+            return False
+        if t == "short_var_declaration":
+            left, right = node.child_by_field_name("left"), node.child_by_field_name("right")
+            names = left.named_children if left is not None else []
+            values = right.named_children if right is not None else []
+            if len(names) == len(values):
+                for name, value in zip(names, values):
+                    if name.type == "identifier":
+                        self.var(name, self.value_type(value))
+            elif len(values) == 1 and names and names[0].type == "identifier":
+                self.var(names[0], self.value_type(values[0]))      # x, err := make()
+            return False
         if node.type == "import_spec":
             path = _string_value(node.child_by_field_name("path")) or ""
             alias = node.child_by_field_name("name")
@@ -805,8 +1053,20 @@ class _Java(_Extractor):
 
     _TYPE_KINDS = {"class_declaration": "class", "interface_declaration": "interface",
                    "enum_declaration": "enum", "record_declaration": "record"}
+    typed_exprs = {"object_creation_expression": "type", "cast_expression": "type"}
+
+    def recv(self, node, depth: int = 0):
+        if node is not None and node.type == "method_invocation" and depth <= MAX_CHAIN:
+            obj = node.child_by_field_name("object")
+            head = () if obj is None else self.recv(obj, depth + 1)
+            return head + (_text(node.child_by_field_name("name")), CALL) if head is not None else None
+        return super().recv(node, depth)
 
     def on_def(self, node, qual, kind):
+        if node.type == "method_declaration":
+            chain = self.type_of(node.child_by_field_name("type"))
+            if chain:
+                self.f.returns[sys.intern(qual)] = chain
         type_kind = self._TYPE_KINDS.get(node.type)
         if type_kind is None:
             return
@@ -838,14 +1098,35 @@ class _Java(_Extractor):
                     pkg, _, member = full.rpartition(".")
                     self.f.imports.append(Import(member, pkg, member))
             return True
+        if t == "field_declaration":
+            chain = self.type_of(node.child_by_field_name("type"))
+            for decl in node.named_children:
+                if decl.type == "variable_declarator":
+                    self.var(decl.child_by_field_name("name"),
+                             chain or self.value_type(decl.child_by_field_name("value")), field=True)
+            return False
+        if t == "local_variable_declaration":
+            chain = self.type_of(node.child_by_field_name("type"))
+            for decl in node.named_children:
+                if decl.type == "variable_declarator":
+                    self.var(decl.child_by_field_name("name"),
+                             chain or self.value_type(decl.child_by_field_name("value")))
+            return False
+        if t in ("formal_parameter", "catch_formal_parameter", "resource", "enhanced_for_statement"):
+            type_node = node.child_by_field_name("type")
+            if t == "catch_formal_parameter":
+                caught = next((c for c in node.named_children if c.type == "catch_type"), None)
+                type_node = caught.named_children[0] if caught is not None and len(caught.named_children) == 1 else None
+            chain = self.type_of(type_node) or (self.value_type(node.child_by_field_name("value"))
+                                                if t == "resource" else None)
+            owner = node.parent.parent if node.parent is not None else None
+            self.var(node.child_by_field_name("name"), chain,
+                     field=t == "formal_parameter" and owner is not None and owner.type == "record_declaration")
+            return False
         if t == "method_invocation":
             obj, name = node.child_by_field_name("object"), node.child_by_field_name("name")
-            chain = None
-            if obj is None:
-                chain = (_text(name),)
-            else:
-                head = _chain(obj, self.attr_types, self.ident_types, self.obj_field, self.prop_field)
-                chain = head + (_text(name),) if head else None
+            head = () if obj is None else self.recv(obj)
+            chain = head + (_text(name),) if head is not None and len(head) < MAX_CHAIN else None
             if chain:
                 self.f.refs.append(Ref(self.src, chain, True, node.start_point[0] + 1))
                 if chain == ("System", "getenv"):
@@ -854,7 +1135,8 @@ class _Java(_Extractor):
                     if key:
                         self.f.config.append((self.src, key))
             for child in node.children:
-                if not _same(child, name) and (obj is None or not chain or not _same(child, obj)):
+                # A receiver of plain names is in the chain already; one holding calls is walked.
+                if not _same(child, name) and (obj is None or not self.plain(head) or not _same(child, obj)):
                     self.walk(child)
             return True
         if t in ("annotation", "marker_annotation"):
@@ -886,8 +1168,22 @@ class _CSharp(_Extractor):
 
     _TYPE_KINDS = {"class_declaration": "class", "interface_declaration": "interface",
                    "struct_declaration": "struct", "record_declaration": "record", "enum_declaration": "enum"}
+    typed_exprs = {"object_creation_expression": "type", "cast_expression": "type"}
+
+    def _declarators(self, decl, *, field: bool) -> None:
+        """`T a = x, b;` in a variable_declaration: each name with T, or with what x yields."""
+        chain = self.type_of(decl.child_by_field_name("type"))
+        for item in decl.named_children:
+            if item.type == "variable_declarator":
+                name = item.child_by_field_name("name")
+                value = next((c for c in reversed(item.named_children) if not _same(c, name)), None)
+                self.var(name, chain or self.value_type(value), field=field)
 
     def on_def(self, node, qual, kind):
+        if node.type == "method_declaration":
+            chain = self.type_of(node.child_by_field_name("returns") or node.child_by_field_name("type"))
+            if chain:
+                self.f.returns[sys.intern(qual)] = chain
         type_kind = self._TYPE_KINDS.get(node.type)
         if type_kind is None:
             return
@@ -902,6 +1198,22 @@ class _CSharp(_Extractor):
 
     def on_node(self, node):
         t = node.type
+        if t in ("field_declaration", "local_declaration_statement", "event_field_declaration"):
+            decl = next((c for c in node.named_children if c.type == "variable_declaration"), None)
+            if decl is not None:
+                self._declarators(decl, field=t != "local_declaration_statement")
+            return False
+        if t == "property_declaration":
+            self.var(node.child_by_field_name("name"), self.type_of(node.child_by_field_name("type")), field=True)
+            return False
+        if t in ("parameter", "catch_declaration"):
+            self.var(node.child_by_field_name("name"), self.type_of(node.child_by_field_name("type")))
+            return False
+        if t == "foreach_statement":
+            left = node.child_by_field_name("left")
+            if left is not None and left.type == "identifier":
+                self.var(left, self.type_of(node.child_by_field_name("type")))
+            return False
         if t in ("namespace_declaration", "file_scoped_namespace_declaration"):
             name = node.child_by_field_name("name")
             if name is not None:

@@ -105,6 +105,51 @@ def _ensure_label(connection: Connection, name: str, label: str, kind: str, have
     have.add(label)
 
 
+# --- indexes ------------------------------------------------------------------------------------
+#: AGE gives each label its own table, inheriting from the graph's base tables, and indexes only
+#: the base tables (which hold no rows). Without these a label table has no index at all: every
+#: hop of a variable-length pattern scanned the whole vertex table (Fineract, 51k vertices:
+#: `(c)-[:extends*1..3]->(a)-[:implements]->(i)` 12.7 s, 0.2 s with them), and a property match
+#: scanned every vertex. Vertex: id, properties (GIN, for `{name: ...}` maps), name and node_id
+#: (for `WHERE n.name = ...`). Edge: id, start_id, end_id.
+_VERTEX_INDEXES = {
+    "id": "USING btree (id)",
+    "props": "USING gin (properties)",
+    "name": "USING btree (ag_catalog.agtype_access_operator(VARIADIC ARRAY[properties, '\"name\"'::ag_catalog.agtype]))",
+    "node_id": "USING btree (ag_catalog.agtype_access_operator(VARIADIC ARRAY[properties, '\"node_id\"'::ag_catalog.agtype]))",
+}
+_EDGE_INDEXES = {"id": "USING btree (id)", "start": "USING btree (start_id)", "end": "USING btree (end_id)"}
+
+
+def _index_name(label: str, what: str) -> str:
+    return "kgix_" + hashlib.sha256(f"{label}|{what}".encode("utf-8")).hexdigest()[:16]
+
+
+def index_graph(connection: Connection, name: str, *, analyze: bool = False) -> int:
+    """Give every label table of graph ``name`` its indexes; idempotent. A table that gains an
+    index (a new label), or every table when ``analyze``, is ANALYZEd: a graph just written has
+    no statistics, and the planner then nested-looped a one-hop match past the time limit."""
+    labels = connection.execute(text(
+        "SELECT l.name, l.kind FROM ag_catalog.ag_label l JOIN ag_catalog.ag_graph g ON g.graphid = l.graph "
+        "WHERE g.name = :n AND l.name NOT LIKE '\\_ag\\_label\\_%'"), {"n": name}).all()
+    have = set(connection.execute(text("SELECT indexname FROM pg_indexes WHERE schemaname = :n"),
+                                  {"n": name}).scalars().all())
+    created = 0
+    for label, kind in labels:
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,62}", label):
+            continue
+        fresh = False
+        for what, spec in (_VERTEX_INDEXES if kind == "v" else _EDGE_INDEXES).items():
+            index = _index_name(label, what)
+            if index not in have:
+                connection.execute(text(f'CREATE INDEX IF NOT EXISTS {index} ON "{name}"."{label}" {spec}'))
+                created += 1
+                fresh = True
+        if fresh or analyze:
+            connection.execute(text(f'ANALYZE "{name}"."{label}"'))
+    return created
+
+
 # --- projection ---------------------------------------------------------------------------------
 def _node_rows(connection: Connection, project_id: str, ids: list[str] | None = None) -> list[dict]:
     where = "" if ids is None else "AND id = ANY(:ids)"
@@ -190,6 +235,34 @@ def _insert_edges(connection: Connection, project_id: str, name: str, edges: lis
     return written
 
 
+def _project_all_edges(connection: Connection, project_id: str, name: str) -> int:
+    """Every current edge into a fresh graph, one statement per relationship type, inside the
+    database: a whole repository's edges (Fineract: 234k) never travel to Python and back.
+    Same rows and properties as _insert_edges over _edge_rows."""
+    have = _labels(connection, name)
+    kinds = connection.execute(text(
+        "SELECT DISTINCT kind FROM kg_edges WHERE project_id = :p AND (valid_to IS NULL OR valid_to > now())"),
+        {"p": project_id}).scalars().all()
+    written = 0
+    for kind in sorted(kinds):
+        _ensure_label(connection, name, kind, "e", have)
+        written += connection.execute(text(
+            f'INSERT INTO "{name}"."{kind}" (start_id, end_id, properties) '
+            "SELECT CAST(sv.graphid AS ag_catalog.graphid), CAST(dv.graphid AS ag_catalog.graphid), "
+            "CAST('{\"edge_id\": ' || to_json(e.id)::text || ', \"kind\": ' || to_json(e.kind)::text "
+            "|| ', \"trust_tier\": ' || to_json(e.trust_tier)::text || ', \"confidence\": ' "
+            "|| CASE WHEN e.confidence = trunc(e.confidence) THEN trunc(e.confidence)::bigint::text || '.0' "
+            "ELSE e.confidence::text END || '}' AS ag_catalog.agtype) "
+            "FROM kg_edges e "
+            "JOIN kg_nodes s ON s.id = e.src_id JOIN kg_nodes d ON d.id = e.dst_id "
+            "JOIN kg_age_vertices sv ON sv.project_id = :p AND sv.node_id = e.src_id "
+            "JOIN kg_age_vertices dv ON dv.project_id = :p AND dv.node_id = e.dst_id "
+            "WHERE e.project_id = :p AND e.kind = :k AND (e.valid_to IS NULL OR e.valid_to > now()) "
+            "AND (s.valid_to IS NULL OR s.valid_to > now()) AND (d.valid_to IS NULL OR d.valid_to > now())"),
+            {"p": project_id, "k": kind}).rowcount
+    return written
+
+
 def _mark(connection: Connection, project_id: str, name: str, synced_at) -> dict[str, int]:
     counts = projection_counts(connection, project_id)
     connection.execute(text(
@@ -220,7 +293,8 @@ def rebuild(connection: Connection, project_id: str) -> dict[str, Any]:
     connection.execute(text("SELECT ag_catalog.create_graph(:g)"), {"g": name})
     connection.execute(text("DELETE FROM kg_age_vertices WHERE project_id = :p"), {"p": project_id})
     nodes = _insert_vertices(connection, project_id, name, _node_rows(connection, project_id))
-    edges = _insert_edges(connection, project_id, name, _edge_rows(connection, project_id))
+    edges = _project_all_edges(connection, project_id, name)
+    index_graph(connection, name, analyze=True)
     _mark(connection, project_id, name, synced_at)
     return {"graph": name, "mode": "rebuild", "nodes": nodes, "edges": edges}
 
@@ -280,6 +354,7 @@ def sync(connection: Connection, project_id: str) -> dict[str, Any]:
         connection, project_id,
         "AND (e.src_id = ANY(:ids) OR e.dst_id = ANY(:ids) OR e.id = ANY(:eids))",
         {"ids": changed, "eids": list(edge_changes)})) if (changed or edge_changes) else 0
+    index_graph(connection, name)            # a label this sync created gets its indexes
     counts = _mark(connection, project_id, name, synced_at)
     return {"graph": name, "mode": "incremental", "nodes_changed": len(changed),
             "edges_written": edges, **counts}
@@ -441,6 +516,11 @@ def run_cypher(
     try:
         connection.exec_driver_sql("SET LOCAL transaction_read_only = on")
         connection.exec_driver_sql(f"SET LOCAL statement_timeout = {timeout}")
+        # Indexed graph lookups gain nothing from parallel workers or JIT (JIT alone added ~0.1 s
+        # per query), and a parallel hash join's shared memory fails a database container's
+        # small /dev/shm outright ("could not resize shared memory segment").
+        connection.exec_driver_sql("SET LOCAL max_parallel_workers_per_gather = 0")
+        connection.exec_driver_sql("SET LOCAL jit = off")
         connection.exec_driver_sql("LOAD 'age'")
         # AGE's operators (agtype and graphid comparisons) resolve through ag_catalog.
         connection.exec_driver_sql('SET LOCAL search_path = ag_catalog, "$user", public')
@@ -511,6 +591,7 @@ __all__ = [
     "extension_version",
     "forget_vertex",
     "graph_name",
+    "index_graph",
     "project_graph",
     "rebuild",
     "reconcile",
