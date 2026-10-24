@@ -298,3 +298,61 @@ def set_mode(db: Any, project_id: str, mode: str, *, actor: str = "operator") ->
     _set_layout(db, project_id, "", mode, actor)
     event(db, project_id, "project.repo_mode_set", actor, "project", project_id, {"repo_mode": mode})
     return {"project_id": project_id, "repo_mode": mode}
+
+
+# ── one entry point per act, for the console route AND the agent's tools ──────────────────────
+#
+# PUT/DELETE /v1/projects/{project_id}/repos/{repo_id} and the agent's register_repository /
+# remove_project_repository call these, so there is one implementation of "add this registry
+# repository to that project" — not a route and a second copy in a tool.
+
+def registry_id_for(db: Any, project_id: str, ref: str) -> str:
+    """The org registry row a reference names: its id (ghr_…) or its owner/name."""
+    from . import registry
+
+    ref = str(ref or "").strip()
+    if not ref:
+        raise MultiRepoError(422, "bad_request", "Name the repository: owner/name or its registry id.")
+    org_id = org_of_project(db, project_id)
+    if not org_id:
+        raise MultiRepoError(404, "unknown_project", "No such project.")
+    if "/" in ref:
+        row = registry.by_full_name(db, org_id, ref)
+        if row is None:
+            raise MultiRepoError(404, "unknown_repository",
+                                 f"{ref} is not in this organization's repository registry. Refresh "
+                                 "the registry; if it is still missing, the GitHub App does not reach it.")
+        return str(row["id"])
+    return str(registry.get_row(db, org_id, ref)["id"])
+
+
+def binding_for(db: Any, project_id: str, ref: str) -> Optional[str]:
+    """The project's active binding a reference names: the binding id, the registry row's id, or
+    the repository's owner/name."""
+    row = db.execute(sql(
+        "SELECT b.id FROM github_repository_bindings b WHERE b.project_id = :p AND b.status = 'active' AND "
+        "(b.id = :r OR b.registry_repo_id = :r OR lower(b.full_name) = lower(:r) OR lower(b.full_name) = "
+        "(SELECT lower(full_name) FROM github_repos WHERE id = :r)) LIMIT 1"),
+        {"p": project_id, "r": str(ref or "").strip()}).scalar()
+    return str(row) if row else None
+
+
+def put(db: Any, settings: Any, project_id: str, ref: str, *, role_hint: Any = ...,
+        base_branch: Optional[str] = None, actor: str = "operator") -> dict[str, Any]:
+    """Add a registry repository to the project, or update the one it already has. The
+    connection is the org's (its GitHub App, else the project's own): none is named here."""
+    binding_id = binding_for(db, project_id, ref)
+    if binding_id is None:
+        add(db, settings, project_id, registry_repo_id=registry_id_for(db, project_id, ref),
+            role_hint=None if role_hint is ... else role_hint, base_branch=base_branch, actor=actor)
+    else:
+        update(db, project_id, binding_id, role_hint=role_hint, base_branch=base_branch or ..., actor=actor)
+    return list_project_repos(db, project_id)
+
+
+def delete(db: Any, project_id: str, ref: str, *, actor: str = "operator") -> dict[str, Any]:
+    binding_id = binding_for(db, project_id, ref)
+    if binding_id is None:
+        raise MultiRepoError(404, "unknown_repository", "That repository is not in this project.")
+    remove(db, project_id, binding_id, actor=actor)
+    return list_project_repos(db, project_id)

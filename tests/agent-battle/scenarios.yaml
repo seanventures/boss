@@ -179,3 +179,21 @@
     - reply with raw tool-protocol JSON
     - claim it cannot read or change another project's repositories or settings
     - guess a setting name that does not exist (e.g. "knowledge")
+
+- id: repositories-blocked-on-a-per-project-connection
+  origin: Metatron exam 2026-10-24 (after a622c5326), project boss-dogfood
+  surface: talk_to_boss
+  context: >-
+    The org has one GitHub App connection (made in another project). The org's repository registry
+    already lists the three projects' repositories, not allowed yet. The agent's only add tool
+    demanded a connection_id, and list_github_connections listed per-project connections only.
+  input: >-
+    What is the state of the three projects' repositories, and can you set them up?
+  expected: >-
+    Reads the org registry (list_org_repositories): the org's connection reaches each repository;
+    each needs allowing (allow_repository, pressed by a person) and adding to its project
+    (register_repository with `project`). No per-project connection is needed.
+  must_not:
+    - say repositories are blocked for want of a per-project GitHub connection
+    - send the operator to the console to create a connection the org already has
+    - offer a button whose label does not say which project, key and value it acts on

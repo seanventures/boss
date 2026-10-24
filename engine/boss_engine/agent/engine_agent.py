@@ -115,6 +115,12 @@ def _jsonable(value):
     return str(value)
 
 
+def _button_label_of(offer: dict) -> str:
+    from ..services.offer_label import button_label
+
+    return button_label(offer.get("label"), str(offer.get("tool") or ""), offer.get("args") or {})
+
+
 def _propose_label(tool: str, args: dict) -> str:
     """Button text a person can act on without reading the arguments."""
     title = str((args or {}).get("title") or "").strip()
@@ -132,7 +138,9 @@ def _propose_label(tool: str, args: dict) -> str:
         key = str((args or {}).get("workflow_key") or "").strip()
         name = key.replace("_", " ").title() if key else "Workflow"
         return f"{name}: {title}"[:70] if title else f"Start {name}"
-    return tool.replace("_", " ")
+    from ..services.offer_label import fallback_label
+
+    return fallback_label(tool, args)
 
 def _report_from_trace(trace: list[dict]) -> str:
     """What BOSS established, when the model would not write it up.
@@ -615,7 +623,7 @@ class EngineAgent:
                 found, fix = _findings_from_trace(trace)
                 if fix and not any(step.get("tool") == "propose_action" for step in trace):
                     offer = {"tool": fix["tool"], "args": fix.get("args") or {},
-                             "label": fix.get("label") or fix["tool"],
+                             "label": _button_label_of(fix),
                              "why": fix.get("why") or ""}
                     trace.append({"tool": "propose_action", "args": offer,
                                   "result": self._run_tool(
@@ -947,8 +955,11 @@ class EngineAgent:
                          "it as something you have already done."),
             }
         if spec.kind == "write" and not allow_writes:
+            # Labelled here, from the call: this is the held write whose button read only
+            # "set project setting" (no project, no key, no value).
             proposal = {"tool": name, "args": args}
             pending.append(proposal)
+            proposal = {**proposal, "label": _propose_label(name, args)}
             return {
                 "ok": False,
                 "status": "confirmation_required",

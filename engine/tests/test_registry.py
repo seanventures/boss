@@ -158,6 +158,10 @@ _EXPECTED_TOOLS: set[str] = {
     "list_decisions",
     "list_discovery",
     "list_github_connections",
+    # The org's repository registry, as the console's routes (multirepo): list, allow, remove.
+    "list_org_repositories",
+    "allow_repository",
+    "remove_project_repository",
     "list_meetings",
     "list_previews",
     "list_repositories",
@@ -233,13 +237,13 @@ def test_default_registry_shape():
     read = {s.name for s in reg.specs(kind="read")}
     write = {s.name for s in reg.specs(kind="write")}
     assert read | write == set(reg.names())
-    assert len(reg.names()) == 148, (
+    assert len(reg.names()) == 151, (
         f"tool set changed: unexpected={sorted(set(reg.names()) - _EXPECTED_TOOLS)}, "
         f"missing={sorted(_EXPECTED_TOOLS - set(reg.names()))}")
-    assert len(read) == 87  # + list_projects, describe_project (a project's real state, any project)
+    assert len(read) == 88  # + list_org_repositories (the org's repository registry) + list_projects, describe_project (a project's real state, any project)
     #                        + captain_goals, + 7 kg reads, + 3 self-fix reads, + read_app_logs, + my_recent_work, + system_health, + 7 template/security reads, + precheck_workflow
     #                        + query_project_data (the agent baseline's fenced row read)
-    assert len(write) == 61  # + 5 captain writes (BOSSAPP-759), + create_project, + kg_propose_fact, + remove_app, + system_doctor_act, + run_security_scan (F4), + apply_template (F2),
+    assert len(write) == 63  # + allow_repository, remove_project_repository + 5 captain writes (BOSSAPP-759), + create_project, + kg_propose_fact, + remove_app, + system_doctor_act, + run_security_scan (F4), + apply_template (F2),
     #                         + review_pull_request_again
     # the capabilities the user explicitly asked the agent to cover
     for name in (
@@ -485,7 +489,9 @@ _SAFE_WRITES = [
     # Re-queues only steps whose recorded blocker has actually cleared — each one something the
     # operator could have retried by hand from the same screen.
     "recheck_workflow_run",
-    "redeploy", "register_repository", "retarget_app", "send_feedback", "set_job_priority",
+    "redeploy", "register_repository", "retarget_app",
+    # Out of one project, still in the org's registry; register_repository puts it back.
+    "remove_project_repository", "send_feedback", "set_job_priority",
     "start_preview", "steer_code_task", "stop_preview",
     # Re-queues ONE already-failed step and keeps everything the run produced. It can only
     # move a step out of failed/deadlettered/cancelled, so it cannot start live work twice.
@@ -511,6 +517,8 @@ def test_the_tools_that_are_never_pressed_by_the_model():
     reg = build_default_registry()
     never = sorted(s.name for s in reg.specs(kind="write") if not s.self_executable)
     assert never == [
+        # gives BOSS's agents reach on a GitHub repository through the org's App
+        "allow_repository",
         # hands an agent an MCP server — its credentials and every action it exposes
         "assign_mcp_to_agent",
         "cancel_code_task",   # throws away a build in flight
@@ -525,3 +533,15 @@ def test_the_tools_that_are_never_pressed_by_the_model():
         "waive_gates",        # removes a check somebody put there
         "write_db",           # arbitrary mutation of any table
     ]
+
+
+def test_the_chat_registry_keeps_every_permission_its_tools_declare():
+    """The pinned chat registry rebuilds each spec; it dropped `permission_by_arg` and
+    `also_requires`, so an operation-dependent key (decide's execute, a registry refresh) was
+    decided on the base key alone in the one registry the chat agent uses."""
+    source = build_default_registry()
+    chat = build_discuss_read_registry()
+    for spec in chat.specs():
+        own = source.get(spec.name)
+        assert (spec.permission, spec.permission_by_arg, spec.also_requires) == \
+            (own.permission, own.permission_by_arg, own.also_requires), spec.name

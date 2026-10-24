@@ -314,8 +314,9 @@ def _register_read_tools(reg: ToolRegistry) -> None:
                 "repository_count": len(repos),
                 "settings": _json_safe(settings_out),
                 "settings_set_on_this_project": sorted(stored),
-                "note": ("No repository is registered yet: register_repository (with a "
-                         "connection from list_github_connections) adds one."
+                "note": ("No repository is in this project yet. The org's GitHub connection "
+                         "serves every project: list_org_repositories shows what it reaches, "
+                         "allow_repository allows one, register_repository adds it here."
                          if not repos else "")}
 
     @reg.tool(
@@ -2655,7 +2656,7 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
                               "the operator cannot actually run is worse than no offer."),
                     "proposed": False}
         return {"ok": True, "proposed": True, "tool": name,
-                "args": call_args, "label": str(args.get("label") or name),
+                "args": call_args, "label": _offer_button_label(args.get("label"), name, call_args),
                 "why": str(args.get("why") or ""),
                 "note": "Offered to the operator as a button. NOT executed."}
 
@@ -3912,45 +3913,168 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
             pass
         return {"project_id": pid, "repositories": _json_safe(acts)}
 
+    # THE ORG'S REPOSITORY REGISTRY, AS TOOLS. Asked to set up three projects, the agent said
+    # their repositories were "blocked, and not something I can fix from here": its only add
+    # tool demanded a `connection_id` and list_github_connections (per project) showed none —
+    # while the org's one GitHub App connection reached all three repositories. The console's
+    # path is the registry (Settings › Repo and models › Repositories, then the project's
+    # Repositories): these tools call the same services as those routes, so there is one way to
+    # add a repository and the agent can take it.
     @reg.tool(
-        "register_repository",
-        "Register a repository against an existing GitHub connection so BOSS can build "
-        "in it. Credentials come from the CONNECTION (a stored SecretRef) — never pass a "
-        "token here. Use list_github_connections to find connection_id.",
-        _obj(
-            {
-                "connection_id": {"type": "string"},
-                "repository": {"type": "string", "description": "owner/name"},
-                "role": {"type": "string", "enum": ["primary", "source", "upstream", "mirror"],
-                         "default": "source",
-                         "description": "primary = the project's default build target"},
-                "default_branch": {"type": "string"},
-                "project_id": {"type": "string"},
-            },
-            ["connection_id", "repository"],
-        ),
-        kind="write",
-        reversibility="safe", permission="repository:register")
-    def register_repository(ctx, *, project_id, actor, args):
-        gc = services_module("github_connections")
-        svc = gc.GitHubConnectionService(ctx.settings)
-        pid = args.get("project_id") or project_id
+        "list_org_repositories",
+        "The ORGANIZATION's repository registry: every repository the org's ONE GitHub "
+        "connection (its GitHub App installation, else the org token) reaches. A project needs "
+        "no GitHub connection of its own. Each row: id (ghr_…), full_name, allowed (whether BOSS "
+        "may build in it), state (working | read_only | needs_fix | checking | not_allowed | "
+        "archived | unreachable), default_branch and used_by (the projects it is in); plus "
+        "`connection`, the org's App or token. To give a project a repository: allow_repository "
+        "if it is not allowed yet, then register_repository with its full_name. refresh=true "
+        "re-reads what GitHub lists first (a repository just added on GitHub).",
+        _obj({"refresh": {"type": "boolean", "default": False,
+                          "description": "re-read GitHub's list before answering"}}),
+        permission="repository:read",
+        # Refreshing writes the registry (the console's Refresh), so it takes the route's key.
+        permission_by_arg=("refresh", (("True", "repository:register"),
+                                       ("true", "repository:register"))))
+    def list_org_repositories(ctx, *, project_id, actor, args):
+        from ..multirepo import registry
+        from ..multirepo.common import MultiRepoError
+
         try:
             with ctx.begin() as c:
-                row = svc.create_repository_binding(
-                    c, project_id=pid, connection_id=args["connection_id"],
-                    repository=args["repository"], role=args.get("role") or "secondary",
-                    default_branch=args.get("default_branch"), metadata={}, actor=actor,
-                )
-        except Exception as exc:
-            return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
-        return {"ok": True, "binding": _json_safe(dict(row))}
+                refreshed = None
+                if args.get("refresh") in (True, "true", "True"):
+                    refreshed = registry.refresh(c, ctx.settings, project_id, actor=actor)
+                out = registry.list_registry(c, project_id)
+        except MultiRepoError as exc:
+            return {"ok": False, **exc.body()}
+        return {"ok": True, "project_id": project_id, **_json_safe(out),
+                **({"refreshed": _json_safe(refreshed)} if refreshed is not None else {}),
+                "note": ("One connection serves every project in the organization. "
+                         "allow_repository ticks a row; register_repository adds an allowed "
+                         "row to a project (pass `project` for another project).")}
+
+    @reg.tool(
+        "allow_repository",
+        "Allow (or, allowed=false, disallow) one repository of the org's registry for BOSS — "
+        "the console's tick in Settings › Repo and models › Repositories. Allowing runs the "
+        "read / write / pull-request checks; disallowing takes it out of EVERY project of the "
+        "org. Org-wide: the GitHub connection is the org's, not a project's. `repository` is "
+        "owner/name or the registry id from list_org_repositories.",
+        _obj({"repository": {"type": "string", "description": "owner/name or ghr_… id"},
+              "allowed": {"type": "boolean", "default": True}},
+             ["repository"]),
+        kind="write",
+        # It gives BOSS's agents reach on a GitHub repository through the org's App: a person
+        # presses it, as for any grant.
+        reversibility="grants_authority", permission="repository:register")
+    def allow_repository(ctx, *, project_id, actor, args):
+        from ..multirepo import project_repos, registry
+        from ..multirepo.common import MultiRepoError
+        from .registry import CURRENT_TOOL_AUTH
+
+        allowed = args.get("allowed")
+        allowed = True if allowed is None else allowed in (True, "true", "True")
+        try:
+            with ctx.begin() as c:
+                rid = project_repos.registry_id_for(c, project_id, str(args.get("repository") or ""))
+                row = registry.allow(c, ctx.settings, project_id, rid, allowed, actor=actor,
+                                     auth=CURRENT_TOOL_AUTH.get())
+        except MultiRepoError as exc:
+            return {"ok": False, **exc.body()}
+        return {"ok": True, "repository": _json_safe(row)}
+
+    @reg.tool(
+        "register_repository",
+        "Add a repository to a project so BOSS can build in it — the console's project "
+        "Repositories › Add. `repository` is owner/name or the registry id from "
+        "list_org_repositories; it must be ALLOWED there (allow_repository). No connection is "
+        "needed: the org's GitHub App (else the project's token) is used. Pass `project` to add "
+        "it to another project. Already in the project: updates its base branch / role. "
+        "connection_id is only for binding under one specific project connection "
+        "(list_github_connections), and never takes a token.",
+        _obj(
+            {
+                "repository": {"type": "string", "description": "owner/name or ghr_… id"},
+                "base_branch": {"type": "string",
+                                "description": "branch BOSS builds on; the repository's default "
+                                               "when omitted"},
+                "role_hint": {"type": "string",
+                              "enum": ["contracts", "backend", "frontend", "deploy_config",
+                                       "library", "service", "other"]},
+                "connection_id": {"type": "string",
+                                  "description": "optional; only to bind under that connection"},
+                "role": {"type": "string", "enum": ["primary", "source", "upstream", "mirror"],
+                         "description": "only with connection_id; primary = the default target"},
+                "project_id": {"type": "string"},
+            },
+            ["repository"],
+        ),
+        kind="write",
+        reversibility="safe", permission="repository:register",
+        # The registry path is the project Repositories route (PUT /v1/projects/{id}/repos/{repo}),
+        # which needs repository:manage; binding under a named connection keeps repository:register.
+        permission_by_arg=("connection_id", (("", "repository:manage"),)))
+    def register_repository(ctx, *, project_id, actor, args):
+        pid = args.get("project_id") or project_id
+        base_branch = args.get("base_branch") or args.get("default_branch")
+        if args.get("connection_id"):
+            gc = services_module("github_connections")
+            svc = gc.GitHubConnectionService(ctx.settings)
+            try:
+                with ctx.begin() as c:
+                    row = svc.create_repository_binding(
+                        c, project_id=pid, connection_id=args["connection_id"],
+                        repository=args["repository"], role=args.get("role") or "secondary",
+                        default_branch=base_branch, metadata={}, actor=actor,
+                    )
+            except Exception as exc:
+                return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+            return {"ok": True, "binding": _json_safe(dict(row))}
+        from ..multirepo import project_repos
+        from ..multirepo.common import MultiRepoError
+
+        try:
+            with ctx.begin() as c:
+                out = project_repos.put(
+                    c, ctx.settings, pid, str(args.get("repository") or ""),
+                    role_hint=args["role_hint"] if args.get("role_hint") else ...,
+                    base_branch=base_branch, actor=actor)
+        except MultiRepoError as exc:
+            return {"ok": False, **exc.body(),
+                    **({"do_this": "allow_repository first (a person presses it), then add it."}
+                       if exc.code == "not_allowed" else {})}
+        return {"ok": True, "project_id": pid, "repositories": _json_safe(out["items"]),
+                "repo_mode": out.get("repo_mode")}
+
+    @reg.tool(
+        "remove_project_repository",
+        "Take a repository out of a project (the console's project Repositories › Remove). It "
+        "stays in the org's registry and in other projects. Refused while an app's component "
+        "uses it. `repository` is owner/name, the registry id or the binding id.",
+        _obj({"repository": {"type": "string"}}, ["repository"]),
+        kind="write",
+        # Undone by adding it again (register_repository); nothing built is lost.
+        reversibility="safe", permission="repository:manage")
+    def remove_project_repository(ctx, *, project_id, actor, args):
+        from ..multirepo import project_repos
+        from ..multirepo.common import MultiRepoError
+
+        try:
+            with ctx.begin() as c:
+                out = project_repos.delete(c, project_id, str(args.get("repository") or ""),
+                                           actor=actor)
+        except MultiRepoError as exc:
+            return {"ok": False, **exc.body()}
+        return {"ok": True, "project_id": project_id, "repositories": _json_safe(out["items"])}
 
     @reg.tool(
         "list_github_connections",
-        "GitHub connections for this project: the credentialed accounts/installations "
-        "repositories are bound to, with status and any missing permissions. Secrets are "
-        "never returned — only the reference and its health.",
+        "A project's OWN GitHub connections (tokens or App bindings made for it), with status "
+        "and any missing permissions — plus `org_connection`, the organization's GitHub App or "
+        "token that every project uses. Zero project connections does NOT mean GitHub is "
+        "unconnected: repositories come from the org registry (list_org_repositories). Secrets "
+        "are never returned — only the reference and its health.",
         _obj({"project_id": {"type": "string"}, "limit": _LIMIT}), permission="github:read")
     def list_github_connections(ctx, *, project_id, actor, args):
         pid = args.get("project_id") or project_id
@@ -3965,8 +4089,10 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
                 ),
                 {"p": pid, "lim": int(args.get("limit") or 50)},
             ).mappings().all()
+            org_connection = _org_github_connection(c, pid)
         return {"project_id": pid, "count": len(rows),
-                "connections": [_json_safe(dict(r)) for r in rows]}
+                "connections": [_json_safe(dict(r)) for r in rows],
+                "org_connection": org_connection}
 
     @reg.tool(
         "get_meeting",
@@ -4212,6 +4338,26 @@ def _slim_run(r: dict) -> dict:
             "created_at", "task_id")
     out = {k: r.get(k) for k in keys if k in r}
     return _json_safe(out)
+
+
+def _offer_button_label(label: Any, tool: str, args: Any) -> str:
+    from ..services.offer_label import button_label
+
+    return button_label(label, tool, args if isinstance(args, dict) else {})
+
+
+def _org_github_connection(c: Any, project_id: str) -> dict:
+    """The organization's GitHub connection as the registry describes it, and how many
+    repositories it reaches / are allowed — the fact a per-project connection list leaves out."""
+    try:
+        from ..multirepo import registry
+
+        with c.begin_nested():
+            reg = registry.list_registry(c, project_id)
+        return {**(reg.get("connection") or {}), "repositories": (reg.get("counts") or {}),
+                "note": "One connection for the whole organization; no project needs its own."}
+    except Exception as exc:  # noqa: BLE001 — no registry here: say so, do not fail the read
+        return {"error": f"{type(exc).__name__}: {exc}"[:200]}
 
 
 def _may_read_project(auth: Any, project_id: str) -> bool:
@@ -7833,7 +7979,11 @@ _DISCUSS_OPERATIONS_TOOLS: frozenset[str] = frozenset({
     "remove_app",
     "start_preview",
     "stop_preview",
+    # Repositories from the org's registry: allow one for BOSS (pressed by a person — it is a
+    # grant), add it to / take it out of a project. The same services as the console's routes.
     "register_repository",
+    "allow_repository",
+    "remove_project_repository",
     # The operator's own authority, exercised on their instruction
     "decide",
     "waive_gates",
@@ -8005,6 +8155,12 @@ def build_discuss_read_registry(*, edition: str | None = None) -> ToolRegistry:
                 # captain's overwatch itself — the very thing BOSSAPP-759 took away from a
                 # sentence.
                 operator_only=spec.operator_only,
+                # ...AND THE PERMISSION EACH OPERATION NEEDS. Both were dropped here, so the chat
+                # registry decided every call on the base key alone: an operation-dependent key
+                # (decide's execute, list_org_repositories' refresh, register_repository's
+                # registry path) and a second key a route checks were never asked for.
+                permission_by_arg=spec.permission_by_arg,
+                also_requires=spec.also_requires,
             )
         )
     return reg

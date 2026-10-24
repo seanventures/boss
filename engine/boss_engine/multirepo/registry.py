@@ -302,6 +302,22 @@ def set_allowed(db: Any, settings: Any, project_id: str, repo_id: str, allowed: 
     return _shape(get_row(db, org_id, repo_id), [])
 
 
+def allow(db: Any, settings: Any, project_id: str, repo_id: str, allowed: bool, *, actor: str = "operator",
+          auth: Any = None, prober: Optional[Prober] = None) -> dict[str, Any]:
+    """Tick / untick one repository for BOSS, with its security audit event. The console's PATCH
+    /v1/github/repos/{id} and the agent's allow_repository both come here."""
+    row = set_allowed(db, settings, project_id, repo_id, allowed, actor=actor, prober=prober)
+    if auth is not None:
+        from ..identity import audit
+
+        audit.record(audit.SecurityEvent.from_context(
+            auth, "repository.allowed" if allowed else "repository.disallowed", audit.Outcome.SUCCESS,
+            target_type="github_repo", target_id=repo_id, permission="repository:register",
+            scope=f"project:{project_id}", details={"repository": row["full_name"], "state": row["state"]}),
+            db=db)
+    return row
+
+
 def _remove_everywhere(db: Any, org_id: str, full_name: str, actor: str) -> list[str]:
     """Unticked: out of every project (bindings disabled; a default moves to the next repo)."""
     from ..services import setup_actions

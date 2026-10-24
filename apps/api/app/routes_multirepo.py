@@ -104,12 +104,8 @@ def build_multirepo_router() -> APIRouter:
             return JSONResponse({"error": "bad_request", "message": "Say allowed: true or false."}, status_code=422)
         try:
             with begin() as db:
-                row = registry.set_allowed(db, _settings(), project_id, repo_id, payload["allowed"],
-                                           actor=_actor(request))
-                _audit(request, db, "repository.allowed" if payload["allowed"] else "repository.disallowed",
-                       target_type="github_repo", target_id=repo_id, permission=P.REPOSITORY_REGISTER.value,
-                       project_id=project_id, details={"repository": row["full_name"], "state": row["state"]})
-                return row
+                return registry.allow(db, _settings(), project_id, repo_id, payload["allowed"],
+                                      actor=_actor(request), auth=_context(request))
         except MultiRepoError as exc:
             return _refuse(exc)
 
@@ -175,16 +171,9 @@ def build_multirepo_router() -> APIRouter:
     def project_repo_put(project_id: str, repo_id: str, request: Request, payload: dict = Body(default={})) -> Any:
         try:
             with begin() as db:
-                binding_id = _binding_for(db, project_id, repo_id)
-                if binding_id is None:
-                    project_repos.add(db, _settings(), project_id, registry_repo_id=repo_id,
-                                      role_hint=payload.get("role_hint"), base_branch=payload.get("base_branch"),
-                                      actor=_actor(request))
-                else:
-                    project_repos.update(db, project_id, binding_id,
+                return project_repos.put(db, _settings(), project_id, repo_id,
                                          role_hint=payload["role_hint"] if "role_hint" in payload else ...,
-                                         base_branch=payload.get("base_branch") or ..., actor=_actor(request))
-                return project_repos.list_project_repos(db, project_id)
+                                         base_branch=payload.get("base_branch"), actor=_actor(request))
         except MultiRepoError as exc:
             return _refuse(exc)
 
@@ -193,11 +182,7 @@ def build_multirepo_router() -> APIRouter:
     def project_repo_delete(project_id: str, repo_id: str, request: Request) -> Any:
         try:
             with begin() as db:
-                binding_id = _binding_for(db, project_id, repo_id)
-                if binding_id is None:
-                    raise MultiRepoError(404, "unknown_repository", "That repository is not in this project.")
-                project_repos.remove(db, project_id, binding_id, actor=_actor(request))
-                return project_repos.list_project_repos(db, project_id)
+                return project_repos.delete(db, project_id, repo_id, actor=_actor(request))
         except MultiRepoError as exc:
             return _refuse(exc)
 
@@ -489,15 +474,6 @@ def _sql(statement: str):
     from sqlalchemy import text
 
     return text(statement)
-
-
-def _binding_for(db: Any, project_id: str, repo_id: str) -> Optional[str]:
-    """The project's active binding a path id names: the binding itself, or the registry row's."""
-    row = db.execute(_sql(
-        "SELECT b.id FROM github_repository_bindings b WHERE b.project_id = :p AND b.status = 'active' AND "
-        "(b.id = :r OR b.registry_repo_id = :r OR lower(b.full_name) = (SELECT lower(full_name) FROM github_repos "
-        "WHERE id = :r)) LIMIT 1"), {"p": project_id, "r": repo_id}).scalar()
-    return str(row) if row else None
 
 
 def _recent_change_sets(db: Any, project_id: str, app_key: str) -> list[dict[str, Any]]:

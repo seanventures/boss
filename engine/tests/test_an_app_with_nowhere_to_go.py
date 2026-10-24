@@ -534,7 +534,7 @@ class TestANamelessButtonMustNotLoseTheTurn:
         from boss_engine.services.intent_router import _button_label
 
         assert _button_label({"tool": "create_deployment_target"}, {}) \
-            == "create deployment target"
+            == "Create deployment target"
 
     def test_what_the_tool_said_wins(self):
         from boss_engine.services.intent_router import _button_label
@@ -545,7 +545,7 @@ class TestANamelessButtonMustNotLoseTheTurn:
     def test_it_falls_back_to_the_step_when_the_result_says_nothing(self):
         from boss_engine.services.intent_router import _button_label
 
-        assert _button_label({}, {"tool": "redeploy"}) == "redeploy"
+        assert _button_label({}, {"tool": "redeploy"}) == "Redeploy"
 
     def test_it_is_never_empty(self):
         from boss_engine.services.intent_router import _button_label

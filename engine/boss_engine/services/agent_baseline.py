@@ -61,6 +61,7 @@ FUNDAMENTALS_TOOLS: tuple[str, ...] = (
     # infra and health
     "inspect_self", "system_health", "diagnose_setup", "list_running_work",
     "consistency_report", "project_status", "list_projects", "describe_project",
+    "list_org_repositories",
     "list_deployments", "describe_deployment_target",
     "list_deployment_hosts", "describe_deployment_host",
     # the database: its shape, and this project's rows (never raw SQL)
@@ -295,7 +296,9 @@ def propose(context: Any, inputs: dict[str, Any]) -> dict[str, Any]:
     # THE RISK FLOOR. Anything that cannot be undone, destroys work or grants authority is
     # tier 3; anything else an agent proposes is still tier 2 — a person decides either way.
     tier = 3 if reversibility in ("irreversible", "destroys_work", "grants_authority") else 2
-    label = str(checked.get("label") or name)
+    from .offer_label import button_label
+
+    label = button_label(checked.get("label"), name, checked.get("args") or {})
     decision_id = create_blocking_decision(
         context.connection, context.project_id, None,
         f"Agent proposal: {label}",

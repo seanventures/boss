@@ -784,7 +784,7 @@
       expected: "A question: lists the projects it can read, changes nothing."
 
 - id: multi-project-status-and-setup
-  covers: [other-projects-state-read-by-creating-them]
+  covers: [other-projects-state-read-by-creating-them, repositories-blocked-on-a-per-project-connection]
   surface: talk_to_boss
   # The other projects' state is the world's: list_projects and describe_project answer from it,
   # so the scenario does not depend on the harness having an identity to cross projects with.
@@ -809,7 +809,28 @@
         - {key: code_agent_max_concurrency, label: Agents at once, stored: null, effective: 3,
            source: deployment default, allowed: "1..16"}
       settings_set_on_this_project: []
-      note: "No repository is registered yet: register_repository (with a connection from list_github_connections) adds one."
+      note: "No repository is in this project yet. The org's GitHub connection serves every project: list_org_repositories shows what it reaches, allow_repository allows one, register_repository adds it here."
+    # The org's ONE connection serves every project: zero per-project connections is not
+    # "GitHub is unconnected", and the registry already lists the repositories.
+    list_github_connections:
+      project_id: shop-red
+      count: 0
+      connections: []
+      org_connection: {kind: app, account_login: acme, account_type: Organization,
+                       repositories: {all: 4, allowed: 1, needs_fix: 0, not_allowed: 3},
+                       note: "One connection for the whole organization; no project needs its own."}
+    list_org_repositories:
+      ok: true
+      org_id: org_acme
+      items:
+        - {id: ghr_ops, full_name: acme/ops-main, allowed: true, state: working, default_branch: main,
+           used_by: [{project_id: ops-main, name: ops-main}]}
+        - {id: ghr_red, full_name: acme/shop-red, allowed: false, state: not_allowed, default_branch: main, used_by: []}
+        - {id: ghr_green, full_name: acme/shop-green, allowed: false, state: not_allowed, default_branch: main, used_by: []}
+        - {id: ghr_blue, full_name: acme/shop-blue, allowed: false, state: not_allowed, default_branch: main, used_by: []}
+      counts: {all: 4, allowed: 1, needs_fix: 0, not_allowed: 3}
+      connection: {kind: app, account_login: acme, account_type: Organization}
+      note: "One connection serves every project in the organization. allow_repository ticks a row; register_repository adds an allowed row to a project (pass `project` for another project)."
   checks:
     no_writes: true
     any_of: [list_projects, describe_project]
@@ -821,11 +842,17 @@
     answers plainly: each project exists, none has a repository registered, and knowledge_graph is
     not set on any (it follows the deployment default). Offers or names the next steps: register
     each project's repository, and set knowledge_graph (on|keyword|off) per project. Changes nothing.
+    Asked about repositories, it reads the org's registry: the org's one GitHub connection already
+    reaches acme/shop-red/-green/-blue, which are not allowed yet — so the step is allow each
+    (allow_repository, a person presses it) and add it to its project (register_repository with
+    `project`), with no per-project connection needed.
   must_not:
     - call or offer create_project for a project that exists, or to check whether one exists
     - reply with raw tool-protocol JSON instead of an answer
     - say it cannot read another project's repositories or settings from this conversation
     - name a setting that does not exist (the knowledge setting is knowledge_graph)
+    - say repositories are blocked because a project has no GitHub connection of its own, or send
+      the operator to the console to create one, when the org's connection reaches the repository
   phrasings:
     - "What's the state of projects shop-red, shop-green and shop-blue — do they exist, what repos are registered, and what's each one's knowledge_graph setting? Check, don't guess."
     - "do shop-red shop-green shop-blue exist? repos? kg setting?"
@@ -835,10 +862,14 @@
     - "I made some projects yesterday, shop-red/-green/-blue. What's set up on them so far?"
     - "Kindly verify the status of projects shop-red, shop-green, shop-blue including the repository and knowledge setting."
     - "Is the knowledge_graph setting on, off or keyword for shop-blue? And does it have a repo yet?"
+    - "none of the shop projects has a repo, right? what is stopping them getting one — can you fix it from here?"
   negatives:
     - input: "Set up the case study: for shop-red set knowledge_graph to off, for shop-green keyword, for shop-blue on."
       checks: {any_of: [set_project_setting], never_execute: [create_code_task, start_workflow], allow_clarify: true}
       expected: "An instruction about existing projects: sets knowledge_graph on each named project (set_project_setting with `project`), with the real key and values, and reports what it set. It does not create the projects again or start any build."
+    - input: "Give shop-green its repository, acme/shop-green, building on main."
+      checks: {any_of: [allow_repository, register_repository], never_execute: [create_project, create_code_task, start_workflow], allow_clarify: true}
+      expected: "An instruction: the repository is in the org registry but not allowed, so it offers allow_repository for acme/shop-green (a person presses it) and adds it to shop-green with register_repository (`project`: shop-green, base_branch main) — or says the add follows the allow. It never asks for a per-project GitHub connection."
     - input: "create a project called shop-purple"
       checks: {any_of: [create_project], allow_clarify: true}
       expected: "A new project: creates (or offers to create) shop-purple."

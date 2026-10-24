@@ -18,6 +18,7 @@ from .capability_manifest import CapabilityManifest
 from . import agent_decision, model_routing
 from .code_task_service import start_code_task
 from .core import stable_dedupe_key, emit_event, make_id
+from .offer_label import button_label as _offer_label
 from .turn_budget import TurnBudget
 from .turn_subject import (
     cites_the_record, id_exists, parse_subject, resolve_subject, stays_on_subject,
@@ -396,7 +397,7 @@ def _recover_tagged_actions(reply: str, known_tools, existing) -> tuple[list, st
                 have.add(key)
                 found.append({
                     "id": make_id("act"), "tool": tool, "args": args,
-                    "label": (_strip_md(attrs.get("label", "")) or tool)[:80],
+                    "label": _offer_label(_strip_md(attrs.get("label", "")), tool, args)[:90],
                     "why": (_strip_md(attrs.get("why", "")) or None),
                 })
         return ""      # strip the markup either way
@@ -509,7 +510,7 @@ def _recover_printed_actions(reply: str, known_tools, existing) -> tuple[list, s
                 have.add(key)
                 found.append({
                     "id": make_id("act"), "tool": tool, "args": args,
-                    "label": str(payload.get("label") or tool.replace("_", " ")),
+                    "label": _offer_label(payload.get("label"), tool, args),
                     "why": str(payload.get("why") or ""),
                 })
         cuts.append((start, end))
@@ -578,10 +579,11 @@ def _recover_described_actions(reply: str, known_tools, existing) -> list:
         args = _loads_object(raw)
         if args is None or _placeholder_argument(args):
             continue
-        label = _strip_md(row.get("button label", "") or row.get("action", "")) or tool
+        label = _offer_label(_strip_md(row.get("button label", "") or row.get("action", "")),
+                             tool, args)
         why = _strip_md(row.get("what it does (cost)", "") or row.get("what it does", ""))
         rows.append({"id": make_id("act"), "tool": tool, "args": args,
-                     "label": label[:80], "why": why[:240]})
+                     "label": label[:90], "why": why[:240]})
     seen, out = set(), []
     for r in rows:
         key = (r["tool"], json.dumps(r["args"], sort_keys=True))
@@ -1034,14 +1036,13 @@ def _offered_args(result: dict, step: dict) -> dict:
 def _button_label(result: dict, step: dict) -> str:
     """Text for an offered action, never empty.
 
-    Prefers what the tool said, then the tool's own name in words — "create deployment target"
-    beats a blank button, and both beat losing the turn to a validation error.
+    Prefers what the tool said, then the call itself in words (services/offer_label: the tool,
+    the project it acts in, its arguments) — never blank, never the bare tool name, and never
+    a reason to lose the turn to a validation error.
     """
-    for candidate in (result.get("label"), result.get("tool"), step.get("tool")):
-        text = str(candidate or "").strip()
-        if text:
-            return text.replace("_", " ")
-    return "run this action"
+    tool = str(result.get("tool") or step.get("tool") or "")
+    held = result.get("proposed") if isinstance(result.get("proposed"), dict) else {}
+    return _offer_label(result.get("label") or held.get("label"), tool, _offered_args(result, step))
 
 
 def _say_what_did_not_work(reply: str, tool_calls: list) -> str:
@@ -2188,7 +2189,10 @@ class IntentRouter:
             f"`{_PROJECT_ARG}` (another project's id or slug) and reads or acts THERE, under "
             "the person's own permission in that project. list_projects says which exist; "
             "describe_project says one project's repositories and settings (with the values "
-            "each setting accepts). Use the real setting key, never a guess.\n"
+            "each setting accepts). Use the real setting key, never a guess. GitHub is "
+            "connected ONCE, for the organization: list_org_repositories is every repository "
+            "that connection reaches; a project gets one by allow_repository then "
+            "register_repository, never by a connection of its own.\n"
             "• search_code / read_code — BOSS's own source AND the customer's application. "
             "Read the implementation rather than describing what it probably does.\n"
             "  WHEN AN OPERATOR QUOTES AN ERROR MESSAGE, SEARCHING FOR IT IS YOUR FIRST MOVE, "
