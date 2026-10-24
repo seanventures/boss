@@ -960,7 +960,43 @@ def acted_without_checking(actions: list, tool_calls: list) -> bool:
     return not any(n and n not in acted for n in names[last_write + 1:])
 
 
-def _same_offer(a: dict, b: dict) -> bool:
+def _strip_private(d: Optional[dict]) -> dict:
+    return {k: v for k, v in (d or {}).items() if not str(k).startswith("_")}
+
+
+def _canonical_args(tool: str, args: Optional[dict], registry: Any = None) -> dict:
+    """`args`, with an omitted optional argument filled in from its schema default.
+
+    SIX BUTTONS FOR THREE GRANTS. `allow_repository`'s held write always renders `allowed`
+    explicitly (`{"repository": r, "allowed": True}`, because the write gate fills every
+    argument for its label), while the model's own `propose_action` for the identical grant
+    left the optional `allowed` out — it meant the same default `True`, just unwritten. Compared
+    literally, `{"repository": r, "allowed": True} != {"repository": r}`, so the same grant
+    survived under two labels.
+
+    Only an argument the tool's own schema marks optional WITH a default is filled in; anything
+    else missing stays missing on both sides, because guessing a default for a required
+    argument (or one with none declared) risks calling two actually-different offers the same
+    one. No registry, or the tool is not in it: no schema to consult, so args are compared as
+    written (never silently treated as duplicates).
+    """
+    stripped = _strip_private(args)
+    if registry is None:
+        return stripped
+    try:
+        spec = registry.get(tool)
+    except Exception:
+        return stripped
+    properties = dict((spec.parameters or {}).get("properties") or {})
+    canonical = dict(stripped)
+    for key, subschema in properties.items():
+        if key in canonical or not isinstance(subschema, dict) or "default" not in subschema:
+            continue
+        canonical[key] = subschema["default"]
+    return canonical
+
+
+def _same_offer(a: dict, b: dict, registry: Any = None) -> bool:
     """Two buttons an operator could not choose between.
 
     ARGS ARE NOT THE ONLY WAY TWO OFFERS COLLIDE. This compared tool and arguments, so two
@@ -978,17 +1014,41 @@ def _same_offer(a: dict, b: dict) -> bool:
     the person pressing one, whatever the arguments behind them are — so showing both asks them
     to guess. If two genuinely different actions want the same label, the fix is a label that
     distinguishes them, not a second identical button.
+
+    SIX BUTTONS FOR THREE GRANTS, take two: labels do not always match either — the write gate's
+    generic fallback label ("Allow repository: X, allowed: yes") and the model's own, more
+    specific one ("Allow repository in northpeak-bank-a: X") describe the identical call. Tool +
+    CANONICAL args (`_canonical_args`, which treats a defaulted optional argument as present) is
+    the one comparison that is agnostic to which of those two sources produced which label.
     """
     if str(a.get("tool") or "") != str(b.get("tool") or ""):
         return False
     label = lambda d: " ".join(str(d.get("label") or "").lower().split())  # noqa: E731
     if label(a) and label(a) == label(b):
         return True
-    strip = lambda d: {k: v for k, v in (d or {}).items() if not str(k).startswith("_")}  # noqa: E731
-    return strip(a.get("args")) == strip(b.get("args"))
+    tool = str(a.get("tool") or "")
+    return (_canonical_args(tool, a.get("args"), registry)
+            == _canonical_args(tool, b.get("args"), registry))
 
 
-def remember_offer(proposed: list, entry: dict) -> None:
+def _richer_label(candidate: dict, incumbent: dict) -> bool:
+    """Does `candidate`'s label describe the offer better than `incumbent`'s?
+
+    Longer is not always better prose, but here it is the available signal: the write gate's
+    fallback label states tool + args generically, while a label written for the specific call
+    (the model's own, or a tool's bespoke one) tends to say more — which project, which target —
+    in more words. Equal length keeps the incumbent, so a tie does not thrash the list.
+    """
+    cand = " ".join(str(candidate.get("label") or "").split())
+    inc = " ".join(str(incumbent.get("label") or "").split())
+    if not inc:
+        return bool(cand)
+    if not cand:
+        return False
+    return len(cand) > len(inc)
+
+
+def remember_offer(proposed: list, entry: dict, registry: Any = None) -> None:
     """Add a proposal unless the same one is already on the list.
 
     THIRTEEN BUTTONS FOR SEVEN DECISIONS. Measured on the Command Center, answering "what is
@@ -1002,12 +1062,18 @@ def remember_offer(proposed: list, entry: dict) -> None:
     contradicts the sentence above it ("seven") is worse than a shorter list, because it makes
     them check every row.
 
-    The FIRST label wins. A continuation's phrasing is not better for having come second, and
-    keeping the earlier one means the button an operator has already started reading does not
-    rename itself underneath them.
+    SIX BUTTONS FOR THREE GRANTS: the same cause, a different pairing — the tool's own held
+    write (always a button, for a `grants_authority` call) and the model's own proposal for the
+    same call, under different labels. `_same_offer` now treats those as one; between them, the
+    RICHER label wins — a continuation's fallback label is not better for having come first, and
+    a specific label (which project, which target) is worth more to the operator reading it than
+    whichever source happened to register its offer earlier.
     """
-    if any(_same_offer(existing, entry) for existing in proposed):
-        return
+    for i, existing in enumerate(proposed):
+        if _same_offer(existing, entry, registry):
+            if _richer_label(entry, existing):
+                proposed[i] = entry
+            return
     proposed.append(entry)
 
 
@@ -2683,7 +2749,7 @@ class IntentRouter:
                                 # the answer is not.
                                 "label": _button_label(result, step),
                                 "why": str(result.get("why") or ""),
-                            })
+                            }, registry=self._answer_agent().registry)
                     # ANSWERED AS A ROLE WITHOUT READING WHAT THAT ROLE HAS SEEN.
                     #
                     # Asked the same question as its colleagues — "what is your biggest concern
@@ -2977,7 +3043,7 @@ class IntentRouter:
                                     "args": _offered_args(result, step),
                                     "label": _button_label(result, step),
                                     "why": str(result.get("why") or ""),
-                                })
+                                }, registry=self._answer_agent().registry)
                         improved = str(getattr(better, "reply", "") or "").strip()
                         # A RE-ASK MAY REFINE AN ANSWER, NOT SWAP ITS SUBJECT. In boss-1 this
                         # line replaced an answer about the Preview step with "Lead Triage Inbox
@@ -3092,8 +3158,10 @@ class IntentRouter:
         try:
             from ..tools import build_discuss_read_registry
             edition = str(getattr(self.settings, "boss_edition", "community") or "community")
-            _known = set(build_discuss_read_registry(edition=edition).names())
+            _known_registry = build_discuss_read_registry(edition=edition)
+            _known = set(_known_registry.names())
         except Exception:  # noqa: BLE001 — recovery is a bonus, never a new failure mode
+            _known_registry = None
             _known = set()
         tagged, reply = _recover_tagged_actions(reply, _known, proposed)
         # THE RECOVERY PATHS FEED THE SAME LIST. Three of them read the reply for offers the
@@ -3101,12 +3169,12 @@ class IntentRouter:
         # real tool call is frequently ALSO described in the sentence above it. Extending
         # blindly is the other half of how seven decisions became thirteen buttons.
         for _found in tagged:
-            remember_offer(proposed, _found)
+            remember_offer(proposed, _found, registry=_known_registry)
         printed, reply = _recover_printed_actions(reply, _known, proposed)
         for _found in printed:
-            remember_offer(proposed, _found)
+            remember_offer(proposed, _found, registry=_known_registry)
         for _found in _recover_described_actions(reply, _known, proposed):
-            remember_offer(proposed, _found)
+            remember_offer(proposed, _found, registry=_known_registry)
         reply = _no_button_was_promised(reply, proposed)
         # AND THAT IT DID NOT CLAIM TO HAVE ACTED. `actions` holds the writes that really ran;
         # a claim of completion with an empty list is a fabrication, and the trace is right

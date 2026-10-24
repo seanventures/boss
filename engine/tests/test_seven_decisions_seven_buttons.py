@@ -110,4 +110,4 @@ class TestEveryPathGoesThroughIt:
 
     def test_both_the_first_pass_and_the_continuation_use_it(self):
         assert self.BODY.count("remember_offer(proposed, {") == 2
-        assert self.BODY.count("remember_offer(proposed, _found)") == 3
+        assert self.BODY.count("remember_offer(proposed, _found, registry=_known_registry)") == 3
