@@ -37,7 +37,9 @@ a project with the switch off is indexed too (the case study compares arms on th
 from __future__ import annotations
 
 import json
+import logging
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -459,6 +461,23 @@ def _now():
     return now_utc()
 
 
+_EXCEPTION_LINE = re.compile(r"^[A-Za-z_][\w.]*(?:Error|Exception|Exit|Interrupt)\b.*")
+
+
+def _child_error(stderr: Optional[str], returncode: int) -> str:
+    """The child's failure in words. Its LAST stderr line was kept before, and for a SQLAlchemy
+    error that line is only "(Background on this error at: https://sqlalche.me/...)", so every
+    failed index said nothing (BOSS's own agent found it). Keep the exception line, and log the
+    traceback's tail for the operator."""
+    lines = [ln.strip() for ln in (stderr or "").strip().splitlines() if ln.strip()]
+    if lines:
+        logging.getLogger(__name__).warning("knowledge index child failed (exit %s):\n%s",
+                                            returncode, "\n".join(lines[-40:]))
+    found = next((ln for ln in reversed(lines) if _EXCEPTION_LINE.match(ln)), None)
+    meaningful = found or next((ln for ln in reversed(lines) if not ln.startswith("(Background on")), None)
+    return (meaningful or f"exit {returncode}")[:500]
+
+
 def _child(project_id: str, repo: str, root: Path, limits: Limits, previous: str, head: str,
            *, timeout: int) -> dict[str, Any]:
     """index_tree in a child process: memory goes back when it ends, the timeout kills it, and a
@@ -478,8 +497,7 @@ def _child(project_id: str, repo: str, root: Path, limits: Limits, previous: str
         raise
     lines = [ln for ln in (proc.stdout or "").splitlines() if ln.startswith("{")]
     if proc.returncode != 0 or not lines:
-        tail = (proc.stderr or "").strip().splitlines()[-1:] or [f"exit {proc.returncode}"]
-        raise RuntimeError(f"the indexer failed: {tail[0][:300]}")
+        raise RuntimeError(f"the indexer failed: {_child_error(proc.stderr, proc.returncode)}")
     out = json.loads(lines[-1])
     if out.get("refused"):
         raise IndexRefused(out["refused"])
