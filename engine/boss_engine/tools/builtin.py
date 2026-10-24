@@ -468,6 +468,154 @@ def _register_read_tools(reg: ToolRegistry) -> None:
                 return _json_safe(am.run_report(c, project_id=pid, run_id=str(args["run_id"])))
             return _json_safe(am.report(c, project_id=pid, window=args.get("window") or "30d"))
 
+    # ── THE DOORWAY: an agent's diagnosis of BOSS itself becomes a self-fix (BOSSAPP-571) ──────
+    # An agent that diagnosed a gap in BOSS from a conversation had no way to write it down for a
+    # self-fix: a recommendation was recorded only by step recovery, and a self-fix started only
+    # from a recommendation already there (Metatron, 2026-10-24). These three close it, for every
+    # agent alike: FILE the gap (a safe write that only queues for a person, so it runs in the
+    # turn that found it), READ what is filed, and REQUEST a self-fix — a press a person makes,
+    # never the model (operator_only), after which the self-fix runs as it always has: its own
+    # budget and time, red test, gates, reviewers, the approval card, install only by policy.
+    @reg.tool(
+        "list_platform_gaps",
+        "The gaps in BOSS ITSELF recorded for BOSS's developers (its recommendations): each one's "
+        "id (brec_…), signature, status (open / fixing / implemented / done / wont_fix), title, "
+        "how often it was seen, its acceptance tests and the self-fix working on it. Read this "
+        "before filing one, so the same cause is counted again rather than filed twice.",
+        _obj({"status": {"type": "string",
+                         "enum": ["open", "fixing", "implemented", "done", "wont_fix"]},
+              "limit": _LIMIT}), permission="improvement:read")
+    def list_platform_gaps(ctx, *, project_id, actor, args):
+        from ..services import boss_recommendations as recs
+
+        with ctx.begin() as c:
+            items = recs.list_recommendations(c, project_id, status=args.get("status") or None)
+        items = list(reversed(items))[: int(args.get("limit") or 25)]
+        keep = ("id", "signature", "status", "title", "symptom", "root_cause",
+                "proposed_change", "acceptance_tests", "files", "occurrences", "self_fix_id",
+                "created_by", "updated_at")
+        return {"count": len(items), "gaps": [{k: _json_safe(i.get(k)) for k in keep}
+                                              for i in items]}
+
+    @reg.tool(
+        "file_platform_gap",
+        "Write down a gap in BOSS ITSELF that you diagnosed — a capability it lacks, a tool that "
+        "refuses what it should allow, a wrong default in BOSS's code — for BOSS to fix itself. "
+        "Not for the app's bugs (fix those in the app) and not for a guess: file it when the "
+        "evidence shows it. It records one recommendation (deduplicated: the same signature "
+        "counts the gap again) with what you saw and where, and changes nothing else — a person "
+        "decides whether BOSS fixes it, so this runs right away. Then offer request_self_fix "
+        "with the id it returns.",
+        _obj({"title": {"type": "string", "description": "the gap in one line"},
+              "symptom": {"type": "string", "description": "what goes wrong, as an operator sees it"},
+              "evidence": {"type": "array", "items": {"type": "string"},
+                           "description": "what shows it, each item quoted exactly: file:line, "
+                                          "run / thread / build ids, log or reply quotes"},
+              "suspected_cause": {"type": "string",
+                                  "description": "where in BOSS's code you think it comes from"},
+              "proposed_design": {"type": "string",
+                                  "description": "the change you would make, and why"},
+              "acceptance_tests": {"type": "array", "items": {"type": "string"},
+                                   "description": "what must be true when it is fixed, each a "
+                                                  "test a fix must make pass"},
+              "files": {"type": "array", "items": {"type": "string"},
+                        "description": "BOSS's files (and functions) involved, when known"},
+              "area": {"type": "string",
+                       "description": "one word: workflow, knowledge, chat, deploy, build, "
+                                      "console, install, ..."},
+              "signature": {"type": "string",
+                            "description": "optional: the signature of a gap list_platform_gaps "
+                                           "already shows, when this is the same cause"},
+              "run_id": {"type": "string",
+                         "description": "optional: the run or build this was seen in"}},
+             ["title", "symptom", "evidence", "suspected_cause", "proposed_design",
+              "acceptance_tests"]),
+        kind="write", reversibility="safe",
+        # A READ PERMISSION FOR A WRITE THAT ONLY QUEUES, like kg_propose_fact (knowledge:read):
+        # it changes nothing until a person acts, and every agent's Passport holds system:read.
+        permission="system:read",
+        queues_for_review=True)
+    def file_platform_gap(ctx, *, project_id, actor, args):
+        from ..services import boss_recommendations as recs
+        from ..services.self_fix import PLATFORM_GAP
+        from ..services.step_recovery import boss_build
+
+        title = str(args.get("title") or "").strip()
+        evidence = [str(e).strip() for e in args.get("evidence") or [] if str(e or "").strip()]
+        tests = [str(t).strip() for t in args.get("acceptance_tests") or []
+                 if str(t or "").strip()]
+        missing = [name for name, value in (("title", title), ("evidence", evidence),
+                                            ("acceptance_tests", tests),
+                                            ("suspected_cause", args.get("suspected_cause")),
+                                            ("proposed_design", args.get("proposed_design")))
+                   if not value or not str(value).strip()]
+        if missing:
+            return {"ok": False, "error": "a gap is filed with what shows it and what fixed "
+                                          f"means; missing: {', '.join(missing)}"}
+        signature = platform_gap_signature(args.get("signature"), args.get("area"), title)
+        # PROVENANCE IS THE PIPELINE'S, never the model's: who filed it, in which turn or run and
+        # stage (the LLM context), the thread the conversation is on. The run the gap was SEEN in
+        # is the model's evidence (`run_id`), kept apart from the one it was filed from.
+        from ..services.llm_telemetry import get_llm_context
+
+        here = get_llm_context() or {}
+        ref = {"thread_id": args.get("_thread_id"),
+               "run_id": here.get("workflow_run_id") or args.get("run_id"),
+               "filed_in_run": here.get("run_id"), "stage": here.get("stage"),
+               "filed_by": here.get("role_key") or actor, "via": "file_platform_gap"}
+        with ctx.begin() as c:
+            out = recs.record(
+                c, getattr(ctx, "settings", None), project_id=project_id, signature=signature,
+                title=title, symptom=str(args.get("symptom") or ""), evidence=evidence,
+                root_cause=str(args.get("suspected_cause") or ""),
+                proposed_change=str(args.get("proposed_design") or ""),
+                files=[str(f) for f in args.get("files") or []], ref=ref, actor=actor,
+                run_id=(str(args["run_id"]) if args.get("run_id") else None),
+                boss_version=boss_build(), acceptance_tests=tests)
+            status = next((r["status"] for r in recs.list_recommendations(c, project_id)
+                           if r["id"] == out.get("id")), None) if out.get("id") else None
+        if not out.get("id"):
+            return {"ok": False, "error": out.get("error") or "the gap was not recorded"}
+        return {"ok": True, "recommendation_id": out["id"], "signature": signature,
+                "status": status, "created": bool(out.get("created")),
+                "occurrences": out.get("occurrences"), "kind": PLATFORM_GAP,
+                "next": ("Offer request_self_fix with this recommendation_id as a button: a "
+                         "person decides whether BOSS fixes itself. Say that it is filed, not "
+                         "that it is fixed.")}
+
+    @reg.tool(
+        "request_self_fix",
+        "Ask for BOSS to fix ITSELF from a gap that is filed (an open recommendation, brec_…): "
+        "BOSS's own agent re-diagnoses it against BOSS's source with its own time and budget, "
+        "writes a failing test, the smallest fix, runs every gate and its reviewers, and puts "
+        "the diff in front of a person for approval; nothing installs without that approval. "
+        "Always a button a person presses — you never start it yourself.",
+        _obj({"recommendation_id": {"type": "string", "description": "brec_… of an open gap"}},
+             ["recommendation_id"]),
+        kind="write", reversibility="costs_money", permission="improvement:manage",
+        operator_only=True)
+    def request_self_fix(ctx, *, project_id, actor, args):
+        sf = services_module("self_fix")
+        rec_id = str(args.get("recommendation_id") or "").strip()
+        if not rec_id:
+            return {"ok": False, "error": "name the recommendation (brec_…) to fix"}
+        jobs = getattr(ctx, "jobs", None)
+        with ctx.begin() as c:
+            try:
+                out = sf.start_from_recommendation(
+                    c, getattr(ctx, "settings", None), project_id=project_id,
+                    recommendation_id=rec_id, actor=actor, jobs=jobs)
+            except sf.SelfFixError as error:
+                return {"ok": False, "error": str(error)}
+        found = out.get("self_fix") or {}
+        if out.get("outcome") == "skipped":
+            return {"ok": False, "outcome": "skipped", "error": out.get("why") or "not started"}
+        return {"ok": True, "outcome": out.get("outcome"), "self_fix_id": found.get("id"),
+                "status": found.get("status"), "line": sf.step_line(found) if found else "",
+                "next": ("Read its progress with get_self_fix: the diagnosis, then the red "
+                         "test, the fix, the gates and the review, and the approval card."),
+                "href": "/?area=self_fixes"}
+
     @reg.tool(
         "list_running_work",
         "Everything actively running in the background right now — running code "
@@ -4447,6 +4595,24 @@ def _may_read_project(auth: Any, project_id: str) -> bool:
         return False
 
 
+def platform_gap_signature(given: Any, area: Any, title: str) -> str:
+    """`platform_gap:<area>:<slug>`: a gap's cause signature. A signature the agent read from
+    list_platform_gaps is kept (re-prefixed), so the same cause is counted again, not filed twice;
+    otherwise BOSS derives it from the area and the title's words (ids and numbers dropped)."""
+    def words(value: Any, limit: int) -> str:
+        found = re.findall(r"[a-z]+", str(value or "").lower())
+        return "_".join(w for w in found if len(w) > 2)[:limit].strip("_")
+
+    raw = str(given or "").strip().lower()
+    if raw:
+        rest = raw.split(":", 1)[1] if raw.startswith("platform_gap:") else raw
+        clean = ":".join(p for p in (re.sub(r"[^a-z0-9_]+", "_", part).strip("_")
+                                     for part in rest.split(":")) if p)
+        if clean:
+            return f"platform_gap:{clean}"[:300]
+    return f"platform_gap:{words(area, 40) or 'engine'}:{words(title, 120) or 'gap'}"
+
+
 def _json_safe(obj: Any) -> Any:
     """Make DB rows JSON-serializable (datetimes -> iso, JSON strings -> parsed)."""
     if isinstance(obj, dict):
@@ -8086,6 +8252,10 @@ _DISCUSS_OPERATIONS_TOOLS: frozenset[str] = frozenset({
     # (operator_only, project:delete), the same service as the project menu's (BOSSAPP-768 S5).
     "archive_project",
     "restore_project",
+    # BOSS FIXES ITSELF FROM A DIAGNOSIS (BOSSAPP-571): the gap an agent found in BOSS, filed in
+    # the turn that found it (it only queues for a person), and the self-fix a person presses.
+    "file_platform_gap",
+    "request_self_fix",
     # The escape hatch from a registry of fixed questions: a real debugging session.
     "investigate",
     # Reconciling a run with a world that has moved on. Named by an investigation as the
@@ -8379,6 +8549,9 @@ def build_discuss_read_registry(*, edition: str | None = None) -> ToolRegistry:
                 # captain's overwatch itself — the very thing BOSSAPP-759 took away from a
                 # sentence.
                 operator_only=spec.operator_only,
+                # ...AND WHETHER IT ONLY QUEUES FOR A PERSON (file_platform_gap): dropped, the
+                # finding would come back as a button on every question that found it.
+                queues_for_review=spec.queues_for_review,
                 # ...AND THE PERMISSION EACH OPERATION NEEDS. Both were dropped here, so the chat
                 # registry decided every call on the base key alone: an operation-dependent key
                 # (decide's execute, list_org_repositories' refresh, register_repository's

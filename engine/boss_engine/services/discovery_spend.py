@@ -86,6 +86,19 @@ class DiscoveryReconciliationRequired(RuntimeError):
 
 
 class DiscoveryStageSpend:
+    #: WHAT IS BEING SPENT ON. One governed model call per stage — reserve, model lease, receipt
+    #: in progress (commit), the call, settle (commit) — is not Discovery's alone: a read-only
+    #: investigation is the same shape (debug_session.InvestigationSpend). These name the work in
+    #: its receipts, reservations, events and decisions; a subclass says its own and checks its
+    #: own lease and row (`check_active`).
+    IDENTITY = "discovery"           # receipt dedupe, model metadata, decision reasons
+    LABEL = "Discovery"              # the words in reservations, decisions and refusals
+    EVENT_PREFIX = "discovery"       # <prefix>.stage_started / _settled / _failed / ...
+    ENTITY = "discovery_run"         # the events' entity
+    AGENT_ID = AGENT_ID
+    SKILL_ID = SKILL_ID
+    CAPABILITIES: tuple[str, ...] = ("research",)
+
     def __init__(
         self,
         settings: Settings,
@@ -138,7 +151,7 @@ class DiscoveryStageSpend:
     def run(self, stage: str, call: Callable[[], dict], *,
             source_id: Optional[str] = None) -> dict:
         """Run one stage's model call under committed spend authority, or replay it."""
-        identity = f"discovery:{self.run_id}:{stage}"
+        identity = f"{self.IDENTITY}:{self.run_id}:{stage}"
         # A refusal is RETURNED from inside the transaction and raised after it commits: raised
         # inside, it rolled back the very event and decision that say why the stage stopped.
         self.commit(self.check_active)
@@ -170,7 +183,7 @@ class DiscoveryStageSpend:
             if _uncertain(reason):
                 self.commit(lambda c: self._reconcile(c, authority, stage, reason))
                 raise DiscoveryReconciliationRequired(
-                    f"Discovery stage '{stage}' may have been charged without an answer "
+                    f"{self.LABEL} stage '{stage}' may have been charged without an answer "
                     f"({reason}); reconcile receipt {authority['receipt_id']} before retrying."
                 ) from reason
             self._finish(authority, stage, None, reason, submitted=True)
@@ -209,7 +222,7 @@ class DiscoveryStageSpend:
             self.commit(lambda c: self._reconcile(c, authority, stage, reason,
                                                   result=result, submitted=submitted))
             raise DiscoveryReconciliationRequired(
-                f"Discovery stage '{stage}' lost settlement authority; reconcile receipt "
+                f"{self.LABEL} stage '{stage}' lost settlement authority; reconcile receipt "
                 f"{authority['receipt_id']} before retrying.") from lost
 
     # -- steps ----------------------------------------------------------------------------------
@@ -226,16 +239,16 @@ class DiscoveryStageSpend:
             if row.get("status") == "succeeded":
                 output = _result_of(row).get("output")
                 if isinstance(output, dict):
-                    self._emit(connection, "discovery.stage_replayed",
+                    self._emit(connection, f"{self.EVENT_PREFIX}.stage_replayed",
                                {"stage": stage, "receipt_id": row["id"]})
                     return {"replay": output, "failed": 0}
         if any(row.get("status") == "in_progress" for row in mine):
-            self._decision(connection, f"Reconcile Discovery {self.run_id} stage {stage}",
-                           "discovery_reconciliation",
+            self._decision(connection, f"Reconcile {self.LABEL} {self.run_id} stage {stage}",
+                           f"{self.IDENTITY}_reconciliation",
                            {"stage": stage, "receipts": [row["id"] for row in mine]})
-            self._emit(connection, "discovery.reconciliation_required", {"stage": stage})
+            self._emit(connection, f"{self.EVENT_PREFIX}.reconciliation_required", {"stage": stage})
             return {"reconcile": (
-                f"Discovery stage '{stage}' has a call in progress from an earlier attempt that "
+                f"{self.LABEL} stage '{stage}' has a call in progress from an earlier attempt that "
                 "may already have been charged; reconcile it before research continues.")}
         return {"replay": None,
                 "failed": sum(1 for row in mine if row.get("status") == "failed")}
@@ -258,7 +271,7 @@ class DiscoveryStageSpend:
         amount = reservation_estimate(connection, self.project_id, source_id, self.estimate)
         reserved = self.budget.reserve(
             connection, self.project_id, "model_gateway", amount,
-            f"Discovery {self.run_id} stage {stage}",
+            f"{self.LABEL} {self.run_id} stage {stage}",
             min(240, max(5, math.ceil(self.ttl_seconds / 60) + 5)),
             job_id=self.job_id, risk_tier=1,
         )
@@ -267,9 +280,9 @@ class DiscoveryStageSpend:
             # The per-minute cap clears within a minute: retry, and no decision for a person.
             transient = bool(reserved.get("transient"))
             if not transient:
-                self._decision(connection, f"Budget refused Discovery {self.run_id} stage {stage}",
+                self._decision(connection, f"Budget refused {self.LABEL} {self.run_id} stage {stage}",
                                "budget_denied", {"stage": stage, "message": message})
-            self._emit(connection, "discovery.spend_refused",
+            self._emit(connection, f"{self.EVENT_PREFIX}.spend_refused",
                        {"stage": stage, "message": message, "transient": transient})
             return {"refused": message, "transient": transient}
         reservation_id = reserved["reservation_id"]
@@ -278,8 +291,8 @@ class DiscoveryStageSpend:
                 connection, self.project_id,
                 job_id=self.job_id, worker_id=self.worker_id,
                 job_lease_token=self.job_lease_token,
-                agent_id=AGENT_ID, skill_id=SKILL_ID,
-                preferred_capabilities=["research"], risk_tier=1,
+                agent_id=self.AGENT_ID, skill_id=self.SKILL_ID,
+                preferred_capabilities=list(self.CAPABILITIES), risk_tier=1,
                 # Owner-scoped capacity is booked for its owner when the research is the
                 # workspace's own; see typed_decision_spend.consumer_for.
                 consumer_owner_id=(self.gateway.consumer_for(
@@ -295,13 +308,13 @@ class DiscoveryStageSpend:
             # Every lease on the source held by other work is a QUEUE, not a verdict: the run
             # waits its turn (model_failures.waiting_for) instead of failing.
             transient = waiting_for(denied) is not None
-            self._emit(connection, "discovery.spend_refused",
+            self._emit(connection, f"{self.EVENT_PREFIX}.spend_refused",
                        {"stage": stage, "message": str(denied), "transient": transient})
             return {"refused": str(denied), "transient": transient}
         if acquired.get("duplicate") or not acquired.get("lease_token"):
             self.budget.release(connection, self.project_id, reservation_id,
                                 "Model lease already existed for this stage.")
-            return {"reconcile": f"Discovery stage '{stage}' already holds a model lease; reconcile it."}
+            return {"reconcile": f"{self.LABEL} stage '{stage}' already holds a model lease; reconcile it."}
         lease_id = acquired["lease"]["id"]
         started = self.gateway.start_invocation(
             connection, self.project_id, lease_id,
@@ -309,10 +322,10 @@ class DiscoveryStageSpend:
             job_lease_token=self.job_lease_token,
             request_hash=hashlib.sha256(dedupe.encode("utf-8")).hexdigest(),
             dedupe_key=dedupe,
-            metadata={"stage": f"discovery:{stage}"[:120], "operation": self.run_id[:256]},
+            metadata={"stage": f"{self.IDENTITY}:{stage}"[:120], "operation": self.run_id[:256]},
         )
         invocation = started["invocation"]
-        self._emit(connection, "discovery.stage_started",
+        self._emit(connection, f"{self.EVENT_PREFIX}.stage_started",
                    {"stage": stage, "receipt_id": invocation["receipt_id"],
                     "reservation_id": reservation_id})
         return {"reservation_id": reservation_id, "lease_id": lease_id, "source_id": source_id,
@@ -329,7 +342,7 @@ class DiscoveryStageSpend:
             connection, self.project_id, authority["lease_id"], authority["invocation_id"],
             worker_id=self.worker_id, lease_token=authority["lease_token"],
             job_lease_token=self.job_lease_token, succeeded=succeeded,
-            provider_ref=(f"discovery:{(result or {}).get('model') or 'research'}"[:200]
+            provider_ref=(f"{self.IDENTITY}:{(result or {}).get('model') or 'research'}"[:200]
                           if succeeded else None),
             usage_units=usage, actual_cost_usd_micros=actual,
             observed_capacity=({"capacity_state": "available"} if succeeded
@@ -346,7 +359,8 @@ class DiscoveryStageSpend:
             self.receipts.merge_result(connection, authority["receipt_id"],
                                        {"stage": stage, "output": result})
         self._emit(connection,
-                   "discovery.stage_settled" if succeeded else "discovery.stage_failed",
+                   f"{self.EVENT_PREFIX}.stage_settled" if succeeded
+                   else f"{self.EVENT_PREFIX}.stage_failed",
                    {"stage": stage, "receipt_id": authority["receipt_id"],
                     "reservation_id": authority["reservation_id"],
                     "actual_cost_usd_micros": actual,
@@ -359,11 +373,11 @@ class DiscoveryStageSpend:
                                    {"stage": stage, "submitted": submitted,
                                     "unsettled_output": result,
                                     "reconciliation_reason": str(error)[:500]})
-        self._decision(connection, f"Reconcile Discovery {self.run_id} stage {stage}",
-                       "discovery_reconciliation",
+        self._decision(connection, f"Reconcile {self.LABEL} {self.run_id} stage {stage}",
+                       f"{self.IDENTITY}_reconciliation",
                        {"stage": stage, "receipt_id": authority["receipt_id"],
                         "message": str(error)[:500]})
-        self._emit(connection, "discovery.reconciliation_required",
+        self._emit(connection, f"{self.EVENT_PREFIX}.reconciliation_required",
                    {"stage": stage, "receipt_id": authority["receipt_id"],
                     "message": str(error)[:500]})
 
@@ -372,10 +386,10 @@ class DiscoveryStageSpend:
         data = {"run_id": self.run_id, "job_id": self.job_id, **data}
         if self.events is not None:
             self.events(connection, self.project_id, event_type, self.actor,
-                        "discovery_run", self.run_id, data)
+                        self.ENTITY, self.run_id, data)
             return
         emit_event(connection, self.project_id, event_type, self.actor,
-                   "discovery_run", self.run_id, data)
+                   self.ENTITY, self.run_id, data)
 
     def _decision(self, connection, question: str, reason: str, detail: dict) -> str:
         if self.decisions is not None:

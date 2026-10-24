@@ -41,7 +41,7 @@ skills:
     risk_tier: 0
     mock_mode: false
     load: eager
-    description: Read BOSS itself — run logs and history, why a run failed, infra and health, the schema and this project's rows, skills and workflows, memory.
+    description: Read BOSS itself — run logs and history, why a run failed, infra and health, the schema and this project's rows, skills and workflows, memory — and file a gap in BOSS itself for BOSS to fix (it only queues for a person).
     data_boundary: internal
     input_schema:
       bundle_tool: string
@@ -65,7 +65,7 @@ skills:
               list_deployment_hosts, describe_deployment_host, describe_schema,
               query_project_data, list_capabilities, list_skills, list_harnesses,
               describe_workflow, describe_role, list_decisions, precheck_workflow, recall,
-              recall_role_experience]
+              recall_role_experience, file_platform_gap]
 
   # KNOWLEDGE: every agent holds this (services/agent_baseline.py, BASELINE_SKILLS). The knowledge
   # graph's read tools, offered by their own names: where a symbol is, who calls it, what a change

@@ -8160,10 +8160,19 @@ def run_code_task_step_endpoint(payload: open_bodies.CodeTaskStepBody):
                          fencing_token=payload.get("fencing_token"))
 
 
+class InvestigationRunBody(BaseModel):
+    """The worker's lease of the investigation's `investigation.run` job. With it the model call
+    is governed (reservation, model lease, settled receipt); Community requires it."""
+    job_id: Optional[str] = None
+    worker_id: Optional[str] = None
+    lease_token: Optional[str] = None
+
+
 @app.post("/v1/investigations/{investigation_id}/run")
 @permit(P.WORKER_LEASE)
-def run_investigation_endpoint(investigation_id: str):
-    """Worker-invoked: perform one investigation.
+def run_investigation_endpoint(investigation_id: str,
+                               payload: Optional[InvestigationRunBody] = None):
+    """Worker-invoked: perform one investigation, under the worker's lease of its job.
 
     It runs HERE, not in the worker, for the same reason code tasks do: the Claude Code CLI is
     installed in this image and not in the worker's. The worker owns the queue; the container
@@ -8185,11 +8194,16 @@ def run_investigation_endpoint(investigation_id: str):
             return {"ok": False, "error": f"no such investigation: {investigation_id}"}
         actor = current_api_principal.get() or "system"
         require_project_actor(connection, project_id, actor, "workflow_execute")
-        blocked = block_community_investigation(connection, settings, investigation_id)
+        lease = ({"job_id": payload.job_id, "worker_id": payload.worker_id,
+                  "lease_token": payload.lease_token}
+                 if payload is not None and payload.job_id and payload.worker_id
+                 and payload.lease_token else None)
+        blocked = block_community_investigation(connection, settings, investigation_id,
+                                                lease=lease)
         if blocked is not None:
             return blocked
 
-    return run_investigation(engine, settings, investigation_id=investigation_id)
+    return run_investigation(engine, settings, investigation_id=investigation_id, lease=lease)
 
 
 def _investigation_caller(investigation_id: str, request: Request) -> dict:

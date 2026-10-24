@@ -6933,6 +6933,9 @@ CREATE INDEX IF NOT EXISTS idx_investigations_status
 -- token authorises exactly one investigation, for as long as it runs, and the endpoints it
 -- reaches enforce that investigation's own read/fix mode server-side.
 ALTER TABLE investigations ADD COLUMN IF NOT EXISTS token TEXT;
+-- The `investigation.run` job it was queued as: only the worker holding that job's lease may spend
+-- for it (debug_session.InvestigationSpend). NULL = opened before investigations were governed.
+ALTER TABLE investigations ADD COLUMN IF NOT EXISTS job_id TEXT;
 CREATE INDEX IF NOT EXISTS idx_investigations_token ON investigations(token)
   WHERE token IS NOT NULL;
 
@@ -9725,6 +9728,10 @@ CREATE TABLE IF NOT EXISTS boss_recommendations (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (project_id, signature)
 );
+-- A gap an agent filed from a diagnosis (tools: file_platform_gap) says what "fixed" means: the
+-- acceptance tests a self-fix must make pass.
+ALTER TABLE boss_recommendations ADD COLUMN IF NOT EXISTS acceptance_tests JSONB NOT NULL
+  DEFAULT '[]'::jsonb;
 
 -- BOSS FIXES ITSELF (BOSSAPP-571, docs/product/BOSS_FIXES_ITSELF.md §11). A recovery decision
 -- that places a failure on BOSS's own code starts a SELF-FIX: Mender re-diagnoses against the

@@ -135,8 +135,19 @@ REFUSALS = ("protected_path", "no_reproduction", "tests", "tests_weakened", "sco
             "dependencies", "too_big", "secrets", "review", "budget", "time", "engine",
             "no_source", "api_suite", "switched_off", "diagnosis", "policy")
 
-#: Step kinds a self-fix answers (review_findings never: those are the app's).
-SELF_FIX_KINDS = ("deploy", "deploy_repair", "build")
+#: Step kinds a self-fix answers (review_findings never: those are the app's). `platform_gap` is
+#: no step: a gap an agent diagnosed and filed (tools: file_platform_gap), started by a person's
+#: press (request_self_fix); its signature starts `platform_gap:`.
+SELF_FIX_KINDS = ("deploy", "deploy_repair", "build", "platform_gap")
+PLATFORM_GAP = "platform_gap"
+
+
+def kind_of_signature(signature: str) -> str:
+    """The self-fix kind a recommendation's cause signature names."""
+    head = str(signature or "").split(":", 1)[0]
+    if head == "deploy":
+        return "deploy"
+    return PLATFORM_GAP if head == PLATFORM_GAP else "build"
 CONFIDENCE = ("low", "medium", "high")
 
 EVENT_PREFIX = "self_fix."
@@ -911,7 +922,10 @@ def propose(connection: Connection, settings: Any, *, project_id: str, run_id: s
         "hypothesis": {"title": str(fix.get("title") or "")[:300],
                        "root_cause": str(fix.get("root_cause") or "")[:1500],
                        "proposed_change": str(fix.get("proposed_change") or "")[:3000],
-                       "files": [str(f)[:200] for f in fix.get("files") or []][:12]},
+                       "files": [str(f)[:200] for f in fix.get("files") or []][:12],
+                       # "Done when" for a gap an agent filed: what the fix must make pass.
+                       "acceptance_tests": [str(t)[:600] for t in
+                                            fix.get("acceptance_tests") or []][:12]},
         "host_state": {k: v for k, v in (evidence.get("host_state") or {}).items()
                        if k in ("port", "port_holders", "own_projects", "keep_project",
                                 "target_dir")},
@@ -930,7 +944,8 @@ def propose(connection: Connection, settings: Any, *, project_id: str, run_id: s
         {"i": sfx_id, "o": _org_id(connection), "p": project_id, "r": recommendation_id,
          "run": run_id, "st": step_id, "k": kind, "sig": signature[:300], "c": klass[:300],
          "a": area_of(fix.get("files") or []) if fix.get("files") else
-         ("deploy" if kind.startswith("deploy") else "build"),
+         ("deploy" if kind.startswith("deploy") else
+          "engine" if kind == PLATFORM_GAP else "build"),
          "status": PROPOSED, "conf": confidence["level"],
          "reasons": json.dumps(confidence["reasons"]), "ev": json.dumps(masked_evidence),
          "base": running_stack_head(), "by": author, "b": budget_micros})
@@ -990,12 +1005,13 @@ def start_from_recommendation(connection: Connection, settings: Any, *, project_
                            "fixed")
     ref = next((r for r in reversed(rec.get("refs") or []) if isinstance(r, Mapping)), {})
     signature = str(rec["signature"])
-    kind = "deploy" if signature.startswith("deploy") else "build"
+    kind = kind_of_signature(signature)
     entry = {"signature": signature, "action": "fix_boss", "by": {"engine": "person"},
              "cause": rec.get("title"), "evidence": rec.get("evidence") or [],
              "boss_fix": {"title": rec.get("title"), "root_cause": rec.get("root_cause"),
                           "proposed_change": rec.get("proposed_change"),
-                          "files": rec.get("files") or []}}
+                          "files": rec.get("files") or [],
+                          "acceptance_tests": rec.get("acceptance_tests") or []}}
     evidence = {"failure": {"headline": rec.get("symptom") or rec.get("title"),
                             "deployment_id": ref.get("deployment_id"),
                             "build_run_id": ref.get("build_id")}}

@@ -145,6 +145,34 @@ skills:
     retry:
       max_attempts: 1
       backoff: none
+  # INVESTIGATIONS ARE GOVERNED WORK TOO (services/debug_session.py InvestigationSpend, BOSSAPP-571):
+  # a read-only investigation's one model call leases capacity under this skill, inside the
+  # worker's lease of its investigation.run job, with its own reservation and receipt.
+  - id: investigation.debug
+    kind: model
+    risk_tier: 1
+    mock_mode: false
+    description: One read-only investigation's debugging session, reserved, leased and receipted on its own.
+    data_boundary: internal
+    input_schema:
+      stage: string
+      prompt: string
+    output_schema:
+      summary: string
+      receipt_id: string
+    cost:
+      estimator: token_estimate
+      category: model
+    permissions:
+      allowed_callers: [worker, control_plane]
+      required_permissions: [model_invoke]
+    policy:
+      requires_budget_reservation: true
+      requires_router_log: true
+      requires_provider_rule_compliance: true
+    retry:
+      max_attempts: 1
+      backoff: none
   - id: model.generate_code
     kind: model
     risk_tier: 1

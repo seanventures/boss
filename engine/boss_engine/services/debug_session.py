@@ -71,6 +71,23 @@ COMMUNITY_INVESTIGATION_BLOCK_REASON = (
     "worker leases, budget reservations, and reconciled receipts. Host and database "
     "writes also require governed effect records."
 )
+#: COMMUNITY RUNS A READ-ONLY INVESTIGATION AS GOVERNED WORK (BOSSAPP-571's doorway). Its one
+#: model call is spent under the worker's lease of its `investigation.run` job, a budget
+#: reservation and a model lease, with a receipt settled at the actual cost (InvestigationSpend,
+#: the same governed stage as Discovery's). What stays closed is what still has no governed
+#: effect record: a FIXING investigation (host shell writes, BOSS's operations).
+COMMUNITY_FIX_BLOCK_REASON = (
+    "A fixing investigation is unavailable in Community: it changes the host or BOSS's data, "
+    "and those writes require governed effect records, which investigations do not have yet. "
+    "Run it read-only "
+    "(leave fix unset): a read-only investigation's model call runs under the worker's lease, "
+    "a budget reservation and a reconciled receipt."
+)
+COMMUNITY_UNGOVERNED_REASON = (
+    "This investigation was not opened as governed work (no worker lease of its own job), so "
+    "Community will not run it: its model call needs a durable worker lease, a budget "
+    "reservation and a reconciled receipt. Open it again."
+)
 _QUALIFIED_INVESTIGATION_EDITIONS = frozenset({
     "cloud", "enterprise", "enterprise_cloud", "enterprise_self_hosted",
 })
@@ -81,13 +98,50 @@ class InvestigationExecutionBlocked(ValueError):
 
 
 def _community_investigations_paused(settings: Settings) -> bool:
-    # Unknown spellings do not silently acquire an unbudgeted model or host shell.
+    """Community (and any unknown spelling): every model call governed, no host or data write.
+    Unknown spellings do not silently acquire an unbudgeted model or host shell."""
     return str(settings.boss_edition).strip().lower() not in _QUALIFIED_INVESTIGATION_EDITIONS
 
 
-def require_investigation_runtime(settings: Settings) -> None:
-    if _community_investigations_paused(settings):
-        raise InvestigationExecutionBlocked(COMMUNITY_INVESTIGATION_BLOCK_REASON)
+def require_investigation_runtime(settings: Settings, *, allow_fix: bool = False) -> None:
+    """Refuse what this edition cannot govern, before a row or a job exists: in Community, a
+    fixing investigation (its host and data writes have no governed effect record yet)."""
+    if _community_investigations_paused(settings) and allow_fix:
+        raise InvestigationExecutionBlocked(COMMUNITY_FIX_BLOCK_REASON)
+
+
+JOB_KIND = "investigation.run"
+
+
+def _spend_class():
+    """InvestigationSpend: Discovery's governed stage, for an investigation's one model call."""
+    from .discovery_spend import DiscoveryStageSpend, DiscoveryStopped
+
+    class InvestigationSpend(DiscoveryStageSpend):
+        IDENTITY = "investigation"
+        LABEL = "Investigation"
+        EVENT_PREFIX = "investigation"
+        ENTITY = "investigation"
+        AGENT_ID = "investigation"
+        SKILL_ID = "investigation.debug"
+        CAPABILITIES = ("research",)
+
+        def check_active(self, connection) -> None:
+            """The worker still holds THIS investigation's job, and the row is still running
+            under it (a cancelled or finished investigation spends nothing more)."""
+            job = self.gateway.jobs.require_active_lease(
+                connection, self.worker_id, self.job_id, self.job_lease_token)
+            payload = job.get("payload") if isinstance(job.get("payload"), dict) else {}
+            if (job["project_id"] != self.project_id or job["kind"] != JOB_KIND
+                    or payload.get("investigation_id") != self.run_id):
+                raise DiscoveryStopped("invalid_lineage")
+            row = connection.execute(sql(
+                "SELECT status, job_id FROM investigations WHERE id = :i AND project_id = :p "
+                "FOR UPDATE"), {"i": self.run_id, "p": self.project_id}).mappings().first()
+            if not row or row["status"] != "running" or row["job_id"] != self.job_id:
+                raise DiscoveryStopped(str(row["status"]) if row else "missing")
+
+    return InvestigationSpend
 
 #: Read commands an investigation may run on a host without an operator's say-so.
 #:
@@ -429,8 +483,9 @@ def run_on_investigation_host(*, host: str, command: str, project_id: str,
     from ..config import get_settings
 
     settings = get_settings()
-    if _community_investigations_paused(settings):
-        return {"ok": False, "error": COMMUNITY_INVESTIGATION_BLOCK_REASON}
+    if _community_investigations_paused(settings) and allow_write:
+        # A READ on a host is not an effect; a write is, and has no governed record yet.
+        return {"ok": False, "error": COMMUNITY_FIX_BLOCK_REASON}
 
     allowed, why = host_command_allowed(command, allow_write=allow_write)
     if not allowed:
@@ -636,8 +691,9 @@ def open_investigation(connection, *, project_id: str, question: str, actor: str
     from .jobs import enqueue_job
 
     # This direct service boundary also covers the engine tool and future callers. Refuse
-    # before touching a row or queueing a job; a read-only investigation still pays a CLI.
-    require_investigation_runtime(settings or get_settings())
+    # before touching a row or queueing a job what this edition cannot govern (Community: a
+    # fixing investigation). A read-only one is queued as governed work below.
+    require_investigation_runtime(settings or get_settings(), allow_fix=allow_fix)
 
     # AN INVESTIGATION THE CONTAINER OUTLIVED IS NOT STILL RUNNING.
     #
@@ -677,8 +733,17 @@ def open_investigation(connection, *, project_id: str, question: str, actor: str
          # The sandbox's only credential, and it authorises exactly this investigation for
          # exactly as long as it runs.
          "k": uuid.uuid4().hex + uuid.uuid4().hex})
-    enqueue_job(connection, project_id, "investigation.run",
-                {"investigation_id": investigation_id}, priority=40)
+    # A DURABLE JOB, and the investigation names it: the worker that leases it is the only one
+    # whose call may spend for this investigation (InvestigationSpend.check_active).
+    job = enqueue_job(connection, project_id, JOB_KIND,
+                      {"investigation_id": investigation_id, "agent_id": "investigation",
+                       "actor": actor},
+                      priority=40, max_attempts=1, dedupe_key=f"investigation:{investigation_id}",
+                      # The workload a model source admits for the install's own work, as
+                      # Discovery's job declares (entitlements: workload_classes_allowed).
+                      workload_class="owner_sandbox", data_boundary="internal")
+    connection.execute(sql("UPDATE investigations SET job_id = :j WHERE id = :i"),
+                       {"j": (job or {}).get("id"), "i": investigation_id})
     emit_event(connection, project_id, "investigation.opened", actor,
                "investigation", investigation_id,
                {"question": question[:500], "allow_fix": bool(allow_fix), "run_id": run_id})
@@ -805,29 +870,42 @@ def _post_to_thread(connection, thread_id: str, investigation_id: str,
 
 
 def block_community_investigation(
-    connection, settings: Settings, investigation_id: str,
+    connection, settings: Settings, investigation_id: str, *,
+    lease: Optional[dict[str, Any]] = None,
 ) -> Optional[dict[str, Any]]:
-    """Retire a legacy queued run before it can reach the model or a host.
+    """In Community, retire a run that cannot be governed before it reaches the model or a host:
+    a fixing one (no governed effect records for its writes), or one with no worker lease of
+    its own job (opened before investigations were governed, or called without the lease). A
+    read-only one under the lease of the job it names runs (None).
 
-    A running row might already have spent money before an upgrade. It needs an operator
-    decision to reconcile that uncertain spend; replaying it would compound the problem.
+    A legacy running row might already have spent money before an upgrade. It needs an
+    operator decision to reconcile that uncertain spend; replaying it would compound it.
     """
     if not _community_investigations_paused(settings):
         return None
     row = connection.execute(
-        sql("SELECT id, project_id, status FROM investigations WHERE id = :i FOR UPDATE"),
+        sql("SELECT id, project_id, status, allow_fix, job_id FROM investigations "
+            "WHERE id = :i FOR UPDATE"),
         {"i": investigation_id},
     ).mappings().first()
     if row is None:
         return {"ok": False, "error": f"no such investigation: {investigation_id}"}
     if row["status"] not in ("queued", "running"):
         return {"ok": True, "status": row["status"], "already_done": True}
+    governed = bool(lease and row["job_id"] and lease.get("job_id") == row["job_id"])
+    if governed and not row["allow_fix"]:
+        return None
+    reason = (COMMUNITY_FIX_BLOCK_REASON if row["allow_fix"] else
+              COMMUNITY_UNGOVERNED_REASON if row["job_id"] else
+              COMMUNITY_INVESTIGATION_BLOCK_REASON)
 
-    was_running = row["status"] == "running"
+    # A governed row that is running spent under its own receipts: those say whether a call
+    # needs reconciling (InvestigationSpend). Only an ungoverned running row's spend is unknown.
+    was_running = row["status"] == "running" and not row["job_id"]
     connection.execute(
         sql("UPDATE investigations SET status = 'failed', error = :reason, "
             "token = NULL, finished_at = now(), updated_at = now() WHERE id = :i"),
-        {"i": investigation_id, "reason": COMMUNITY_INVESTIGATION_BLOCK_REASON},
+        {"i": investigation_id, "reason": reason},
     )
     if was_running:
         create_blocking_decision(
@@ -844,17 +922,23 @@ def block_community_investigation(
          "effect_reconciliation_required": was_running},
     )
     return {"ok": False, "status": "blocked", "investigation_id": investigation_id,
-            "error": COMMUNITY_INVESTIGATION_BLOCK_REASON}
+            "error": reason}
 
 
-def run_investigation(engine, settings: Settings, *, investigation_id: str) -> dict[str, Any]:
-    """Do the work. Runs on the API container, which is where the Claude CLI lives."""
+def run_investigation(engine, settings: Settings, *, investigation_id: str,
+                      lease: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+    """Do the work. Runs on the API container, which is where the Claude CLI lives.
+
+    `lease` is the worker's lease of the investigation's job ({job_id, worker_id,
+    lease_token}). With it, the model call is GOVERNED (InvestigationSpend: budget reservation,
+    model lease and a receipt settled at the actual cost, replayed rather than paid twice);
+    Community requires it."""
     from ..db import begin
 
     # Defense in depth for direct service callers, including any worker path other than HTTP.
     # This must run before importing or invoking the paid CLI or provisioning a sandbox.
     with begin(engine) as c:
-        blocked = block_community_investigation(c, settings, investigation_id)
+        blocked = block_community_investigation(c, settings, investigation_id, lease=lease)
     if blocked is not None:
         return blocked
 
@@ -869,10 +953,25 @@ def run_investigation(engine, settings: Settings, *, investigation_id: str) -> d
         record = dict(row)
         if record["status"] not in ("queued", "running"):
             return {"ok": True, "status": record["status"], "already_done": True}
+        if lease:
+            # The lease first: a worker that lost it starts nothing, not even the row.
+            from .jobs import JobLeaseService, LeaseNotFoundError
+
+            try:
+                JobLeaseService(settings).require_active_lease(
+                    c, str(lease["worker_id"]), str(lease["job_id"]), str(lease["lease_token"]))
+            except LeaseNotFoundError as error:
+                return {"ok": False, "status": "stopped", "error": f"lease: {error}"}
         c.execute(sql("UPDATE investigations SET status = 'running', started_at = now(), "
                       "updated_at = now() WHERE id = :i"), {"i": investigation_id})
 
     project_id = str(record["project_id"])
+    spend = None
+    if lease:
+        spend = _spend_class().for_engine(
+            settings, engine, project_id=project_id, run_id=investigation_id,
+            job_id=str(lease["job_id"]), worker_id=str(lease["worker_id"]),
+            job_lease_token=str(lease["lease_token"]), actor=str(record["actor"]))
     allow_fix = bool(record["allow_fix"])
     started = time.monotonic()
 
@@ -942,16 +1041,36 @@ def run_investigation(engine, settings: Settings, *, investigation_id: str) -> d
                     except Exception:  # noqa: BLE001 — a heartbeat must not fail the work
                         pass
 
-            data = ClaudeCodeAgent(settings)._invoke(  # noqa: SLF001 — the pipeline's own entry
-                prompt, sandbox.path,
-                on_turn=_tell_the_operator,
-                read_only=not allow_fix,
-                allowed_tools=("Read,Grep,Glob,Bash,Write,Edit" if allow_fix
-                               else "Read,Grep,Glob,Bash"),
-                model=(str(getattr(settings, "investigation_model", "") or "") or None),
-                max_turns=int(getattr(settings, "investigation_max_turns", 60) or 60),
-                seat="investigation",
-            )
+            agent = ClaudeCodeAgent(settings)
+
+            def _call() -> dict:
+                data = agent._invoke(  # noqa: SLF001 — the pipeline's own entry
+                    prompt, sandbox.path,
+                    on_turn=_tell_the_operator,
+                    read_only=not allow_fix,
+                    allowed_tools=("Read,Grep,Glob,Bash,Write,Edit" if allow_fix
+                                   else "Read,Grep,Glob,Bash"),
+                    model=(str(getattr(settings, "investigation_model", "") or "") or None),
+                    max_turns=int(getattr(settings, "investigation_max_turns", 60) or 60),
+                    seat="investigation",
+                )
+                usage, cost = agent._usage(data, settings)  # noqa: SLF001
+                return {"result": str(data.get("result") or ""),
+                        "num_turns": int(data.get("num_turns") or 0),
+                        "usage": usage, "cost_usd_micros": int(cost or 0),
+                        "model": data.get("model")}
+
+            if spend is not None:
+                # GOVERNED: reserve, lease the model, receipt in progress (committed), the call,
+                # settle at the actual cost. A receipt that already succeeded replays its answer;
+                # one still in progress blocks for reconciliation, never a second call.
+                from .discovery_spend import research_source_id
+
+                with engine.begin() as _c:
+                    source = research_source_id(_c, settings, project_id)
+                data = spend.run("investigate", _call, source_id=source)
+            else:
+                data = _call()
             summary = str(data.get("result") or "").strip()
             turns = int(data.get("num_turns") or 0)
     except Exception as exc:  # noqa: BLE001

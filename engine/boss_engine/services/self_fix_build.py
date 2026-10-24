@@ -439,6 +439,18 @@ def _entry_rule(entry: Optional[Mapping[str, str]]) -> str:
                       "of these the fix changes;\n" for a in entry.get("also") or []))
 
 
+def acceptance_note(sfx: Mapping[str, Any]) -> str:
+    """A gap an agent filed (file_platform_gap) says what "fixed" means. Shown as the filing
+    agent's claim to check against the code, never as an order; the gates are unchanged."""
+    tests = [str(t) for t in ((sfx.get("evidence") or {}).get("hypothesis") or {})
+             .get("acceptance_tests") or [] if str(t or "").strip()]
+    if not tests:
+        return ""
+    return ("The agent that filed this gap says it is fixed when (its claim, checked against "
+            "the code like the rest of the evidence):\n" + "\n".join(f"- {t[:600]}"
+                                                                     for t in tests[:12]))
+
+
 def diagnose_prompt(sfx: Mapping[str, Any], feedback: str = "",
                     work: Optional[Path] = None, history: str = "") -> str:
     evidence = sfx.get("evidence") or {}
@@ -449,6 +461,7 @@ def diagnose_prompt(sfx: Mapping[str, Any], feedback: str = "",
         "this failure. The recovery agent's proposed change (hypothesis) has been wrong before: "
         "re-derive the cause from the code and the evidence, and say plainly when it was wrong.",
         f"The cause BOSS saw: {sfx.get('signature')}.",
+        acceptance_note(sfx),
         (call_path(work, entry, {}) + "\nTrace the failure from this entry point: the fix must "
          "change what this path does.") if entry and work else "",
         "Answer with ONLY a JSON object: {\"hypothesis\": \"<the cause, in BOSS's code>\", "
@@ -500,6 +513,7 @@ def write_test_prompt(sfx: Mapping[str, Any], diagnosis: Mapping[str, Any],
         adding or "STAGE: WRITE THE FAILING TEST (first; no fix yet).",
         f"Diagnosis: {diagnosis.get('hypothesis')}\nLocation: {loc.get('file')} "
         f"{loc.get('function') or ''}\nTest plan: {diagnosis.get('test_plan') or ''}",
+        acceptance_note(sfx),
         "Rules, each checked by BOSS:\n"
         "- add ONE new test file under engine/tests/ (test_<what it proves>.py), or append new "
         "test functions to an existing file; never edit or remove an existing test;\n"

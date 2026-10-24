@@ -77,7 +77,8 @@ def record(connection: Connection, settings: Any, *, project_id: str, signature:
            root_cause: str = "", proposed_change: str = "",
            files: Optional[list[str]] = None, ref: Optional[Mapping[str, Any]] = None,
            actor: str = "boss", run_id: Optional[str] = None,
-           boss_version: str = "") -> dict[str, Any]:
+           boss_version: str = "",
+           acceptance_tests: Optional[list[str]] = None) -> dict[str, Any]:
     """Record (or count again) BOSS's own cause `signature`. Returns {id, created, occurrences}.
     Never raises: a recommendation not written must not fail the recovery that found it."""
     point = connection.begin_nested()
@@ -85,7 +86,8 @@ def record(connection: Connection, settings: Any, *, project_id: str, signature:
         out = _record(connection, project_id=project_id, signature=signature, title=title,
                       symptom=symptom, evidence=evidence, root_cause=root_cause,
                       proposed_change=proposed_change, files=files, ref=ref, actor=actor,
-                      run_id=run_id, boss_version=boss_version)
+                      run_id=run_id, boss_version=boss_version,
+                      acceptance_tests=acceptance_tests)
         point.commit()
     except Exception as error:  # noqa: BLE001
         point.rollback()
@@ -98,7 +100,8 @@ def record(connection: Connection, settings: Any, *, project_id: str, signature:
 def _record(connection: Connection, *, project_id: str, signature: str, title: str,
             symptom: str, evidence: Optional[list[Any]], root_cause: str,
             proposed_change: str, files: Optional[list[str]], ref: Optional[Mapping[str, Any]],
-            actor: str, run_id: Optional[str], boss_version: str) -> dict[str, Any]:
+            actor: str, run_id: Optional[str], boss_version: str,
+            acceptance_tests: Optional[list[str]] = None) -> dict[str, Any]:
     entry = {**{k: v for k, v in dict(ref or {}).items() if v}, "at": now_utc().isoformat()}
     known = _known(connection)
     row = connection.execute(
@@ -107,8 +110,11 @@ def _record(connection: Connection, *, project_id: str, signature: str, title: s
     ).mappings().first()
     if row:
         refs = [r for r in _json(row["refs"], []) if isinstance(r, dict)]
+        # The same sighting is not counted twice: the same run/step/build/deployment, or (a gap
+        # an agent filed, tools.file_platform_gap) the same conversation or agent run.
         seen = any(all(r.get(k) == entry.get(k) for k in ("run_id", "step_id", "build_id",
-                                                          "deployment_id")) for r in refs)
+                                                          "deployment_id", "thread_id",
+                                                          "filed_in_run")) for r in refs)
         refs = (refs + ([] if seen else [entry]))[-MAX_REFS:]
         occurrences = int(row["occurrences"] or 1) + (0 if seen else 1)
         connection.execute(
@@ -121,15 +127,18 @@ def _record(connection: Connection, *, project_id: str, signature: str, title: s
     rec_id = make_id("brec")
     connection.execute(
         text("INSERT INTO boss_recommendations (id, project_id, signature, title, symptom, "
-             "evidence, root_cause, proposed_change, files, refs, boss_version, created_by) "
+             "evidence, root_cause, proposed_change, files, refs, boss_version, created_by, "
+             "acceptance_tests) "
              "VALUES (:i, :p, :s, :t, :sy, CAST(:e AS JSONB), :rc, :pc, CAST(:f AS JSONB), "
-             "CAST(:r AS JSONB), :v, :by)"),
+             "CAST(:r AS JSONB), :v, :by, CAST(:at AS JSONB))"),
         {"i": rec_id, "p": project_id, "s": signature[:300], "t": _clean(title, 300, known),
          "sy": _clean(symptom, 2000, known),
          "e": json.dumps([_clean(e, 600, known) for e in (evidence or [])[:MAX_EVIDENCE]]),
          "rc": _clean(root_cause, 2000, known), "pc": _clean(proposed_change, 4000, known),
          "f": json.dumps([_clean(f, 300, known) for f in (files or [])[:20]]),
-         "r": json.dumps([entry]), "v": boss_version[:80], "by": actor[:120]})
+         "r": json.dumps([entry]), "v": boss_version[:80], "by": actor[:120],
+         "at": json.dumps([_clean(t, 600, known) for t in (acceptance_tests or [])[:12]
+                           if str(t or "").strip()])})
     emit_event(connection, project_id, EVENT, actor, "workflow_run" if run_id else "project",
                run_id or project_id,
                {"recommendation_id": rec_id, "signature": signature[:300],
@@ -144,7 +153,8 @@ def list_recommendations(connection: Connection, project_id: str, *,
     rows = connection.execute(
         text("SELECT id, signature, status, title, symptom, evidence, root_cause, "
              "proposed_change, files, refs, occurrences, boss_version, created_by, created_at, "
-             "updated_at, self_fix_id, class_signature, attempts FROM boss_recommendations "
+             "updated_at, self_fix_id, class_signature, attempts, acceptance_tests "
+             "FROM boss_recommendations "
              "WHERE project_id = :p "
              "AND (CAST(:s AS TEXT) IS NULL OR status = :s) ORDER BY created_at"),
         {"p": project_id, "s": status}).mappings().all()
@@ -154,11 +164,12 @@ def list_recommendations(connection: Connection, project_id: str, *,
     out = []
     for r in rows:
         item = dict(r)
-        for key in ("evidence", "files", "refs", "attempts"):
+        for key in ("evidence", "files", "refs", "attempts", "acceptance_tests"):
             item[key] = _json(item.get(key), [])
         # Masked on read too: a row written before the rule must never be served with an
         # address (the prose fields only; ids, the signature and the refs are BOSS's own).
-        for key in ("title", "symptom", "root_cause", "proposed_change", "evidence", "files"):
+        for key in ("title", "symptom", "root_cause", "proposed_change", "evidence", "files",
+                    "acceptance_tests"):
             item[key] = mask_value(item.get(key), known)
         for key in ("created_at", "updated_at"):
             value = item.get(key)
@@ -225,6 +236,9 @@ def markdown(items: list[Mapping[str, Any]]) -> str:
             lines += ["**Root cause (hypothesis).** " + str(item["root_cause"]), ""]
         if item.get("proposed_change"):
             lines += ["**Proposed change.** " + str(item["proposed_change"]), ""]
+        tests = [t for t in item.get("acceptance_tests") or [] if t]
+        if tests:
+            lines += ["**Done when.**", ""] + [f"- {t}" for t in tests] + [""]
         files = [f for f in item.get("files") or [] if f]
         if files:
             lines += ["**Where.** " + ", ".join(f"`{f}`" for f in files), ""]

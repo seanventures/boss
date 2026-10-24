@@ -1,4 +1,6 @@
-"""Community investigations cannot spend or act through legacy execution paths."""
+"""Community investigations cannot spend or act through legacy execution paths: a row opened
+before investigations were governed (no job of its own), a call without the worker's lease, a
+fixing investigation, and every host or data write stay blocked."""
 
 from uuid import uuid4
 
@@ -14,7 +16,10 @@ from boss_engine.services import debug_session
 PROJECT = "boss-dogfood"
 
 
-def test_new_community_investigation_rejected_before_db_or_queue(monkeypatch):
+def test_new_community_fixing_investigation_rejected_before_db_or_queue(monkeypatch):
+    """A read-only Community investigation is governed work now
+    (test_a_community_investigation_is_governed); a FIXING one is still refused before a row or
+    a job exists: its host and data writes have no governed effect record yet."""
     settings = get_settings()
     monkeypatch.setattr(settings, "boss_edition", "community")
 
@@ -22,9 +27,11 @@ def test_new_community_investigation_rejected_before_db_or_queue(monkeypatch):
         def execute(self, *_args, **_kwargs):
             raise AssertionError("investigation reached the database")
 
-    with pytest.raises(debug_session.InvestigationExecutionBlocked, match="reservations"):
+    with pytest.raises(debug_session.InvestigationExecutionBlocked,
+                       match="governed effect records"):
         debug_session.open_investigation(
-            NoDatabase(), project_id=PROJECT, question="Why?", actor="ceo"
+            NoDatabase(), project_id=PROJECT, question="Why?", actor="ceo", allow_fix=True,
+            settings=settings,
         )
 
 

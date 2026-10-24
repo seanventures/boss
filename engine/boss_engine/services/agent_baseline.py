@@ -77,7 +77,14 @@ FUNDAMENTALS_TOOLS: tuple[str, ...] = (
     "precheck_workflow",
     # memory
     "recall", "recall_role_experience",
+    # a gap in BOSS itself, diagnosed: written down for BOSS to fix itself (BOSSAPP-571). The one
+    # write here: it only queues for a person (FUNDAMENTALS_WRITES).
+    "file_platform_gap",
 )
+
+#: The writes `boss.fundamentals` may offer, by name: each one a safe write that only queues
+#: something for a person (ToolSpec.queues_for_review). Every other fundamental is a read.
+FUNDAMENTALS_WRITES: tuple[str, ...] = ("file_platform_gap",)
 
 #: Tools the bundle names that may not be registered on every build. Everything else it names
 #: must exist, or the enforcing test fails.
@@ -107,8 +114,16 @@ PROPOSE_FACT_TOOLS: tuple[str, ...] = ("kg_propose_fact",
                                        # it learns it, inferred and forgettable (BOSSAPP-768 §4.1)
                                        "record_learning")
 
-#: Bundles allowed to offer a write tool. Each such tool must declare reversibility "safe".
-WRITE_BUNDLES: frozenset[str] = frozenset({"knowledge.propose"})
+#: Bundles allowed to offer a write tool, and which ones: {bundle: its writes}. Each such tool must
+#: declare reversibility "safe"; any other tool a bundle names must be a read.
+BUNDLE_WRITES: dict[str, tuple[str, ...]] = {"knowledge.propose": PROPOSE_FACT_TOOLS,
+                                             "boss.fundamentals": FUNDAMENTALS_WRITES}
+WRITE_BUNDLES: frozenset[str] = frozenset(BUNDLE_WRITES)
+
+
+def may_write(skill_id: str, tool: str) -> bool:
+    """May this bundle offer `tool` as a write?"""
+    return tool in BUNDLE_WRITES.get(skill_id, ())
 
 #: The input naming which of a bundle's tools a call is (agent_loop sets it). repo.read predates
 #: the bundles and keeps `tool`.
@@ -134,7 +149,7 @@ def bundle_tool_spec(skill_id: str, tool: str, *, edition: str | None = None) ->
     registry = build_discuss_read_registry(edition=edition)
     if tool in registry.names():
         return registry.get(tool)
-    if skill_id in WRITE_BUNDLES:
+    if may_write(skill_id, tool):
         full = build_default_registry()
         if tool in full.names() and getattr(full.get(tool), "reversibility", None) == "safe":
             return full.get(tool)
@@ -297,7 +312,7 @@ def run_bundled_tool(context: Any, skill_id: str, inputs: dict[str, Any]) -> dic
         from .skill_executors import SkillExecutorConfigurationError
 
         raise SkillExecutorConfigurationError(f"this BOSS has no {tool} tool.")
-    if spec.kind != "read" and skill_id not in WRITE_BUNDLES:
+    if spec.kind != "read" and not may_write(skill_id, tool):
         # A BUNDLE IS READ-ONLY BY CONSTRUCTION, except a WRITE_BUNDLES one. propose_action is
         # declared a read: it records an offer and runs nothing.
         raise ValueError(f"{tool} is not a read tool; {skill_id} offers reads only.")

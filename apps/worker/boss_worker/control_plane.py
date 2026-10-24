@@ -158,7 +158,9 @@ class ControlPlaneClient:
     def run_investigation(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Ask the API container to run one investigation — that is where the CLI lives."""
         response = self._client.post(
-            f"/v1/investigations/{payload['investigation_id']}/run", json={})
+            f"/v1/investigations/{payload['investigation_id']}/run",
+            # Its lease: the API spends for the investigation only under it (governed work).
+            json={key: payload.get(key) for key in ("job_id", "worker_id", "lease_token")})
         response.raise_for_status()
         return response.json()
 

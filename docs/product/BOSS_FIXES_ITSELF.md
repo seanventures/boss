@@ -1254,3 +1254,22 @@ Confirmed after attempt 11:
 - scripted Replay A (full, not FAST): 6 passed;
 - the affected self-fix tests with the P0 private-infrastructure tests: 198 passed;
 - `scripts/test-tier.sh P0`: web 148 passed. API: four shards passed; two shards hung on an advisory-lock wait in their test database and were stopped, and their 42 tests passed when rerun alone. Engine: 482 passed, 1 failed. The failure, `test_a_workflow_follows_a_retry.py::…::test_the_governing_run_is_actually_passed_in`, counts `_successor_attempt(...)` calls in `workflow_capability_runner.py` (4, expects 3). It fails the same way at `d3bc9e4fe`, before this work; that file was changed by the earlier phase commits on this branch, not by these.
+
+---
+
+## 18. As built: the doorway from a diagnosis (2026-10-24)
+
+Metatron (installed `b07e24c3e`) diagnosed two gaps in BOSS from a conversation and could not act on either: a recommendation was written only by step recovery, and a self-fix started only from a recommendation already there. Its `investigate` call was refused in Community. This is the one capability built for BOSS's agents; later fixes go through it.
+
+| Piece | As built |
+|---|---|
+| `file_platform_gap` | Every agent (`boss.fundamentals`, its one write: `agent_baseline.FUNDAMENTALS_WRITES`). Title, symptom, evidence (quoted: file:line, run/thread ids, quotes), suspected cause, proposed design, acceptance tests, files, area → `boss_recommendations.record` with signature `platform_gap:<area>:<slug>` (or a signature `list_platform_gaps` showed, so the same cause is counted again). Provenance from the pipeline (`llm_telemetry` context and the thread), never the model. A safe write that only queues for a person (`ToolSpec.queues_for_review`), so it runs in the turn that found it, a question's included. Permission `system:read`, like `kg_propose_fact`'s `knowledge:read` |
+| `acceptance_tests` | A new `boss_recommendations` column; carried into the self-fix's evidence (`hypothesis.acceptance_tests`) and shown to Mender at DIAGNOSE and RED as the filing agent's claim to check against the code. The gates are unchanged |
+| `list_platform_gaps` | Read (`improvement:read`): the recommendations with status, acceptance tests and the self-fix on each |
+| `request_self_fix` | `operator_only`, `costs_money`, `improvement:manage`: the model and MCP get a button, never the run; the press (`POST /v1/engine/agent/action`, or an approved agent-run proposal) runs `self_fix.start_from_recommendation` as the person. A new kind `platform_gap` (no step) joins `SELF_FIX_KINDS`. From there the self-fix is §5 unchanged: its own budget reservation and time cap, the worker's leased `self_fix.build`, DIAGNOSE first (read-only), red, green, gates, reviewers, the card, install only by approval |
+| Reading the result | `get_self_fix` (diagnosis, diff, tests, gates, review, card) for agents; the Self-fixes area for people |
+| Community investigations | A read-only investigation is a durable `investigation.run` job (`investigations.job_id`, workload `owner_sandbox`); its model call runs under that job's lease through `InvestigationSpend`, Discovery's governed stage (`discovery_spend.DiscoveryStageSpend`, now parametrised by the work it spends on): budget reservation, model lease, receipt in progress before the call, settled at the actual cost, a succeeded receipt replayed, an in-progress one held for reconciliation. Skill `investigation.debug` (model gateway). Host reads are allowed; still closed in Community: a fixing investigation, host writes, `boss-do` and SQL (no governed effect records yet), and any row without a job of its own |
+
+Not fixed here, on purpose: the two gaps Metatron found (workflow discoverability; `kg_propose_rule` confirm-gating). They go through this doorway. `queues_for_review` is the generic mechanism the second one may use; it is set only on `file_platform_gap`.
+
+What remains: a platform-gap self-fix has no step to resume, so it stops at `installed` without a verifying run; governed effect records for fixing investigations; the battle family `turns-a-diagnosed-platform-gap-into-a-self-fix-request` needs a real model to run. Tests: `engine/tests/test_an_agent_turns_a_diagnosed_gap_into_a_self_fix.py` (scripted chat model + scripted conformance engine), `apps/api/tests/test_a_community_investigation_is_governed.py`.

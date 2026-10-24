@@ -874,7 +874,10 @@ def execute_job(job: LeasedJob, client: ControlPlaneClient) -> dict[str, Any]:
     if job.kind == "investigation.run":
         # A long one by design: a real debugging session reads the code, the database and the
         # host, and forms more than one hypothesis. The API endpoint owns the timeout.
-        return client.run_investigation({"investigation_id": job.payload["investigation_id"]})
+        # Its model call is governed under this lease (debug_session.InvestigationSpend).
+        return client.run_investigation({"investigation_id": job.payload["investigation_id"],
+                                         "job_id": job.id, "worker_id": client.worker_id,
+                                         "lease_token": job.lease_token})
     if job.kind == "pull_request.review_again":
         # The reviewer and the GitHub connection live in the API container.
         return client.run_pr_review_again({"job_id": job.id, **(job.payload or {})})

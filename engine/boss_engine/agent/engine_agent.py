@@ -967,7 +967,9 @@ class EngineAgent:
                          "plainly that this is what you are offering and why — do not describe "
                          "it as something you have already done."),
             }
-        if spec.kind == "write" and not allow_writes:
+        if spec.kind == "write" and not allow_writes and not spec.queues_for_review:
+            # A write that only QUEUES for a person (spec.queues_for_review: a platform gap filed
+            # for BOSS's developers) runs in any turn: it changes nothing until a person acts.
             # Labelled here, from the call: this is the held write whose button read only
             # "set project setting" (no project, no key, no value).
             proposal = {"tool": name, "args": args}

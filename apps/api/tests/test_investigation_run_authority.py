@@ -66,7 +66,7 @@ def test_investigation_run_requires_worker_and_stored_project_grant(
     calls = []
     sentinel = "private-investigation-result"
 
-    def fake_run(_engine, _settings, *, investigation_id):
+    def fake_run(_engine, _settings, *, investigation_id, **_lease):
         calls.append(investigation_id)
         return {"ok": True, "summary": sentinel, "verdict": {"cause": sentinel}}
 

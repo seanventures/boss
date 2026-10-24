@@ -112,9 +112,23 @@ def test_every_fundamental_is_a_registered_read_tool():
     reg = _registry()
     missing = [t for t in ab.FUNDAMENTALS_TOOLS if t not in reg.names() and t not in ab.OPTIONAL_TOOLS]
     assert not missing, f"named but not registered: {missing}"
-    writes = [t for skill, tools in ab.bundles().items() if skill not in ab.WRITE_BUNDLES for t in tools
-              if t in reg.names() and reg.get(t).kind != "read"]
-    assert not writes, f"a baseline bundle may offer reads only: {writes}"
+    writes = [t for skill, tools in ab.bundles().items() for t in tools
+              if t in reg.names() and reg.get(t).kind != "read" and not ab.may_write(skill, t)]
+    assert not writes, f"a baseline bundle may offer reads only, beyond its named writes: {writes}"
+
+
+def test_every_agent_can_file_a_gap_in_boss_itself():
+    """BOSSAPP-571's doorway: every agent (the fundamentals) can write down a gap it diagnosed in
+    BOSS for BOSS to fix itself. It is the fundamentals' only write, it is safe, and it only
+    queues for a person (queues_for_review), so it runs in the turn that found it."""
+    assert "file_platform_gap" in ab.FUNDAMENTALS_TOOLS
+    assert ab.BUNDLE_WRITES["boss.fundamentals"] == ("file_platform_gap",)
+    spec = ab.bundle_tool_spec("boss.fundamentals", "file_platform_gap")
+    assert spec is not None and spec.kind == "write" and spec.reversibility == "safe"
+    assert spec.queues_for_review and not spec.operator_only
+    assert _registry().get("file_platform_gap").queues_for_review, "the chat registry keeps it"
+    # starting the self-fix is NOT a fundamental: it is a press (propose_action names it)
+    assert all("request_self_fix" not in tools for tools in ab.bundles().values())
 
 
 def test_the_fundamentals_cover_every_area_an_agent_needs():

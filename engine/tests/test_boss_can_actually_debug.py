@@ -149,7 +149,7 @@ class TestARealDebuggingSession:
         from boss_engine.services.debug_session import run_investigation
 
         body = inspect.getsource(run_investigation)
-        assert "ClaudeCodeAgent(settings)._invoke(" in body
+        assert "agent = ClaudeCodeAgent(settings)" in body and "agent._invoke(" in body
         assert "Read,Grep,Glob,Bash" in body
         assert "EphemeralSandbox" in body
 
@@ -208,8 +208,11 @@ class TestARealDebuggingSession:
     def test_it_is_queued_rather_than_awaited(self):
         from boss_engine.services.debug_session import open_investigation
 
+        from boss_engine.services import debug_session
+
         body = inspect.getsource(open_investigation)
-        assert 'enqueue_job(connection, project_id, "investigation.run"' in body
+        assert "enqueue_job(connection, project_id, JOB_KIND" in body
+        assert debug_session.JOB_KIND == "investigation.run"
 
     def test_the_worker_will_actually_lease_that_job(self):
         """Declared nowhere, the job sits queued forever and the investigation never happens."""

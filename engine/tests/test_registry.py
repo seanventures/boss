@@ -29,6 +29,9 @@ _EXPECTED_TOOLS: set[str] = {
     # BOSS FIXES ITSELF (BOSSAPP-571): read the self-fixes and the autonomy metric. Reads only:
     # no tool starts, approves, installs, removes or sends a self-fix.
     "list_self_fixes", "get_self_fix", "autonomy_report",
+    # ...and the doorway (BOSSAPP-571): a gap an agent diagnosed in BOSS, filed in the turn that
+    # found it (it only queues for a person); and the self-fix a person presses to start.
+    "list_platform_gaps", "file_platform_gap", "request_self_fix",
     # Setup, answered and repaired rather than described. `diagnose_setup` is the whole
     # picture in one call; the other two are the actions that used to be instructions.
     "diagnose_setup",
@@ -251,14 +254,14 @@ def test_default_registry_shape():
     read = {s.name for s in reg.specs(kind="read")}
     write = {s.name for s in reg.specs(kind="write")}
     assert read | write == set(reg.names())
-    assert len(reg.names()) == 160, (
+    assert len(reg.names()) == 163, (
         f"tool set changed: unexpected={sorted(set(reg.names()) - _EXPECTED_TOOLS)}, "
         f"missing={sorted(_EXPECTED_TOOLS - set(reg.names()))}")
-    assert len(read) == 93  # + kg_rules (the approved business rules, BOSSAPP-768)
+    assert len(read) == 94  # + list_platform_gaps (BOSSAPP-571's doorway) + kg_rules (the approved business rules, BOSSAPP-768)
     #                         + wait_for (waiting for BOSS's own work) + kg_schema (what the knowledge graph holds) + code_graph_status, index_repository_code (a repository's code graph) + list_org_repositories (the org's repository registry) + list_projects, describe_project (a project's real state, any project)
     #                        + captain_goals, + 7 kg reads, + 3 self-fix reads, + read_app_logs, + my_recent_work, + system_health, + 7 template/security reads, + precheck_workflow
     #                        + query_project_data (the agent baseline's fenced row read)
-    assert len(write) == 67  # + record_learning (BOSSAPP-768 S2b), + kg_propose_rule (BOSSAPP-768 S2a), + archive_project, restore_project (BOSSAPP-768 S5), + allow_repository, remove_project_repository + 5 captain writes (BOSSAPP-759), + create_project, + kg_propose_fact, + remove_app, + system_doctor_act, + run_security_scan (F4), + apply_template (F2),
+    assert len(write) == 69  # + file_platform_gap, request_self_fix (BOSSAPP-571's doorway) + record_learning (BOSSAPP-768 S2b), + kg_propose_rule (BOSSAPP-768 S2a), + archive_project, restore_project (BOSSAPP-768 S5), + allow_repository, remove_project_repository + 5 captain writes (BOSSAPP-759), + create_project, + kg_propose_fact, + remove_app, + system_doctor_act, + run_security_scan (F4), + apply_template (F2),
     #                         + review_pull_request_again
     # the capabilities the user explicitly asked the agent to cover
     for name in (
@@ -444,6 +447,9 @@ def test_every_write_declares_what_pressing_it_costs():
 #: Writes whose effect can be undone or simply redone. These are what "fix it" legitimately
 #: means, and they stay one-shot when the operator asks for them.
 _SAFE_WRITES = [
+    # A GAP IN BOSS ITSELF, FILED (BOSSAPP-571): one recommendation row a person reviews; it changes
+    # nothing else, and filing it again counts the same cause again (queues_for_review).
+    "file_platform_gap",
     # THE CAPTAIN OBSERVES AND KEEPS GOALS (BOSSAPP-759): a watch tick records what it saw and
     # applies nothing; a goal is a row the captain scores. Running either again records again.
     "captain_watch", "captain_set_goal",
@@ -553,6 +559,8 @@ def test_the_tools_that_are_never_pressed_by_the_model():
         "decide",             # approves a gate; an agent that approves its own gates is ungated
         "delete_workflow",    # removes a path a person authored
         "remove_app",         # stops an app and removes it from its host
+        # starts BOSS changing its own code from a filed gap: a person's press (BOSSAPP-571)
+        "request_self_fix",
         "restore_project",    # see archive_project
         "run_on_host",        # arbitrary command on a live machine
         "system_doctor_act",  # may pause or cancel a build to free the machine

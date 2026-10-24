@@ -103,6 +103,11 @@ class ToolSpec:
     #: which can start a factory build): plain text never sets it off; the agent offers it, and
     #: a person's press (or typed /overwatch) runs it (BOSSAPP-759).
     operator_only: bool = False
+    #: A WRITE THAT ONLY QUEUES SOMETHING FOR A PERSON. It records a proposal that changes nothing
+    #: until a person acts on it (a platform gap filed for BOSS's developers, BOSSAPP-571), so it
+    #: runs inside the turn that found it, even a question's: the finding is written down the
+    #: moment it exists, and nothing else moves. Must be `safe` and never `operator_only`.
+    queues_for_review: bool = False
 
     def permission_for(self, args: Optional[dict]) -> Optional[str]:
         """The permission THIS call needs (see `permission_by_arg`)."""
@@ -137,6 +142,10 @@ class ToolSpec:
         elif not self.inherits_route_permission:
             raise CatalogueError(f"tool {self.name!r} declares no permission: pass permission= "
                                  "(a catalogue key) or inherits_route_permission=True")
+        if self.queues_for_review and (self.kind != "write" or self.reversibility != "safe"
+                                       or self.operator_only):
+            raise ValueError(f"tool {self.name!r}: queues_for_review is for a safe write a "
+                             "person reviews, never for one that is operator_only")
 
     @property
     def self_executable(self) -> bool:
@@ -196,6 +205,8 @@ class ToolRegistry:
         org_scope: Any = False,
         permission_by_arg: tuple = (),
         also_requires: tuple = (),
+        operator_only: bool = False,
+        queues_for_review: bool = False,
     ) -> Callable[[ToolHandler], ToolHandler]:
         """Decorator form: @registry.tool("list_x", "…", {...}, kind="read")."""
 
@@ -216,6 +227,8 @@ class ToolRegistry:
                     org_scope=org_scope,
                     permission_by_arg=permission_by_arg,
                     also_requires=tuple(also_requires),
+                    operator_only=operator_only,
+                    queues_for_review=queues_for_review,
                 )
             )
             return fn
