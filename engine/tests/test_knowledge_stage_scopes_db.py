@@ -9,8 +9,10 @@ column drifting from scopes.LAYER_KINDS; a non-code search whose cost grows with
 """
 from __future__ import annotations
 
+import json
 import os
 import re
+import uuid
 from pathlib import Path
 
 import pytest
@@ -211,39 +213,57 @@ def test_the_product_layer_is_one_mapping_on_both_sides():
         assert (f"'{kind}'" in case) == (layer is not None), kind
 
 
-def _buffers(connection, sql: str, params: dict) -> int:
-    """Shared pages the whole plan touched (the root node's Buffers line)."""
-    plan = connection.execute(text("EXPLAIN (ANALYZE, BUFFERS, FORMAT TEXT) " + sql), params).scalars().all()
-    line = next((row for row in plan if "Buffers: shared" in row), "")
-    return sum(int(n) for n in re.findall(r"(?:hit|read)=(\d+)", line))
+def _rows_read(connection, sql: str, params: dict) -> int:
+    """Rows the plan read from kg_nodes and its indexes: what each table or index scan returned,
+    plus what a scan read and threw away (filter, recheck). Unlike pages or a plan's shape, this
+    does not move with the planner's choice between equally narrow indexes, nor with what other
+    tests left in a shared database; an index walk over the code rows (the full-text index
+    without the non-code predicate) counts every code row it returns."""
+    indexes = set(connection.execute(text(
+        "SELECT indexname FROM pg_indexes WHERE tablename = 'kg_nodes'")).scalars().all())
+    plan = connection.execute(text("EXPLAIN (ANALYZE, FORMAT JSON) " + sql), params).scalar_one()
+    plan = json.loads(plan) if isinstance(plan, str) else plan
+    total = 0
+    stack = [plan[0]["Plan"]]
+    while stack:
+        node = stack.pop()
+        stack.extend(node.get("Plans") or [])
+        if node.get("Relation Name") == "kg_nodes" or node.get("Index Name") in indexes:
+            total += int(node.get("Actual Rows", 0)) * int(node.get("Actual Loops", 1) or 1)
+            total += int(node.get("Rows Removed by Filter", 0)) + int(node.get("Rows Removed by Index Recheck", 0))
+    return total
 
 
 def test_a_non_code_search_does_not_read_the_code_rows(connection):
-    """The ops-latency-vs-code-size check, by buffers rather than milliseconds: with 20,000 code
-    nodes of the same word added, the triage search reads about the pages it read before (a
-    planner may pick another index after ANALYZE, so a small difference is allowed), while the
-    same search without the scope reads the code rows."""
+    """The ops-latency-vs-code-size check, by rows read rather than milliseconds: with 20,000 code
+    nodes of the same word added, the triage search reads the rows it read before, while the same
+    search without the scope reads the code rows.
+
+    Deterministic in any order, in a shared database: the word is this run's own (no other test's
+    rows, committed or dead, match it), and what is measured is the rows the plan read, which the
+    planner's choice of index does not change. A plan that reads the code rows to filter them out
+    is counted, so the regression this guards still fails it."""
+    word = f"ledg{uuid.uuid4().hex[:10]}"
+    STORE.upsert_node(connection, project_id="proj_sc", kind="fact", node_key=f"fact:{word}", name=word,
+                      body=f"{word} rounds half-even", trust_tier="observed", actor_kind="system")
     triage = scopes.policy_for(stage="triage")
     scope_sql, scope_params = STORE._scope_sql(connection, "proj_sc", triage)
-    sql = ("SELECT id FROM kg_nodes WHERE project_id = :p AND search_tsv @@ plainto_tsquery('english', 'ledger') "
+    sql = ("SELECT id FROM kg_nodes WHERE project_id = :p AND search_tsv @@ plainto_tsquery('english', :w) "
            "AND (valid_to IS NULL OR valid_to > now())" + scope_sql)
-    params = {"p": "proj_sc", **scope_params}
+    params = {"p": "proj_sc", "w": word, **scope_params}
     # The tables are tiny here, so the planner would scan them whole either way; at size it picks
-    # the index. Disable the sequential scan to compare what the index reads.
+    # an index. Disable the sequential scan, and plan both on fresh statistics.
     connection.execute(text("SET LOCAL enable_seqscan = off"))
-    # Both measurements on fresh statistics: the index also holds the dead entries every earlier
-    # test's rolled-back fixture left, and a plan chosen on stale statistics before the insert
-    # against one chosen on fresh ones after it compared two plans, not two table sizes.
     connection.execute(text("ANALYZE kg_nodes"))
-    before = _buffers(connection, sql, params)
+    before = _rows_read(connection, sql, params)
     connection.execute(text(
         "INSERT INTO kg_nodes (id, project_id, kind, node_key, name, body, search_tsv) "
         "SELECT 'kgn_bulk_' || g, 'proj_sc', 'symbol', 'symbol:bulk.py:ledger_' || g, 'ledger_' || g, "
-        "'python ledger', to_tsvector('english', 'ledger ledger') FROM generate_series(1, 20000) g"))
+        "'python ' || :w, to_tsvector('english', :w || ' ' || :w) FROM generate_series(1, 20000) g"), {"w": word})
     connection.execute(text("ANALYZE kg_nodes"))
-    after = _buffers(connection, sql, params)
-    unscoped = _buffers(connection, sql.replace(scope_sql, ""), {"p": "proj_sc"})
-    assert after <= max(2 * before, before + 10), (before, after)
-    assert unscoped > 10 * after, (after, unscoped)
+    after = _rows_read(connection, sql, params)
+    unscoped = _rows_read(connection, sql.replace(scope_sql, ""), {"p": "proj_sc", "w": word})
+    assert 1 <= before and after <= 2 * before + 2, (before, after)
+    assert unscoped >= 20000, (after, unscoped)
     found = connection.execute(text(sql), params).scalars().all()
     assert found and not any(i.startswith("kgn_bulk_") for i in found)

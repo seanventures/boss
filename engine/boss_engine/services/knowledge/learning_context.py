@@ -7,8 +7,11 @@ stage of a build through ``for_build``), each inside the stage's budget:
 * **Rules in scope** — APPROVED rules whose ``governs`` edges reach the seed symbols (directly,
   through their class, package or area) or whose text matches the task. Quoted ``[R:<id>]``.
   A proposed rule is never injected: it is visible only through ``kg_rules(status='proposed')``.
-* **Learned before** — learned items about the seed symbols or rules, or matching the task,
-  ranked by match, usefulness (``learning.py``: outcomes and decay) and recency. Quoted
+* **Learned before** — learned items about the seed symbols or rules, matching the task's words,
+  or near it in meaning (the org's embedding model, over the learned items' stored vectors), ranked
+  by reciprocal-rank fusion of those lists with usefulness (``learning.py``: outcomes and decay)
+  and recency, as hybrid retrieval fuses its lists. With no embedding model, no vectors in its
+  space, or a model that does not answer, the meaning list is left out and nothing fails. Quoted
   ``[L:<id>]`` with "learned by <agent> in <run>, <date>". An item below
   ``learning_writeback.INJECT_BELOW`` confidence, closed, or one that keeps being followed by
   failure is not injected.
@@ -31,6 +34,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from .learning import apply_learning
+from .store import RRF_K
 from .learning_writeback import INJECT_BELOW, LEARNING_KINDS
 
 LOG = logging.getLogger(__name__)
@@ -40,6 +44,10 @@ DROP_BELOW = 0.3
 SECTION_BUDGET_TOKENS = 800
 MAX_RULES = 8
 MAX_LEARNED = 8
+#: Learned items the meaning list offers, nearest first, and the cosine below which an item is
+#: not near the task by meaning at all.
+VECTOR_TOP = 20
+VECTOR_FLOOR = 0.3
 _WORD = re.compile(r"[A-Za-z][A-Za-z0-9_]{3,}")
 _IDENT = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+\b|\b[a-z]+[A-Z][A-Za-z0-9]+\b|"
                     r"\b[A-Z][a-z0-9]+[A-Z][A-Za-z0-9]+\b")
@@ -122,17 +130,82 @@ def _readable_kinds(policy: Any) -> list[str]:
     return [k for k in kinds if layer_of(k) in policy.layers]
 
 
+def _learned_vectors(connection: Connection, project_id: str, kinds: Sequence[str], query: str,
+                     embedder: Any) -> list[tuple[str, float]]:
+    """(learned item id, cosine) nearest the task by meaning, best first: the task's text embedded
+    with the org's embedding model, against the learned items' vectors in that model's space.
+    Empty — and no model call — when there is no model, or no learned item has a vector in its
+    space; empty when the model does not answer (a refused budget, a provider down)."""
+    if embedder is None:
+        try:
+            from ...config import get_settings
+            from .embeddings import configured_embedder
+
+            with connection.begin_nested():
+                embedder, _reason = configured_embedder(connection, get_settings(), project_id)
+        except Exception:  # noqa: BLE001 — no slot table, no key: the meaning list is left out
+            embedder = None
+    text_ = str(query or "").strip()
+    if embedder is None or not text_:
+        return []
+    model_id = str(getattr(embedder, "model_id", "") or "")
+    dims = connection.execute(text(
+        "SELECT DISTINCT e.dimensions FROM kg_embeddings e JOIN kg_nodes n ON n.id = e.node_id "
+        "WHERE e.project_id = :p AND e.model_id = :m AND n.kind = ANY(:kinds) AND n.node_key LIKE 'learning:%' "
+        "AND n.valid_to IS NULL LIMIT 2"), {"p": project_id, "m": model_id, "kinds": list(kinds)}).scalars().all()
+    if len(dims) != 1:
+        return []
+    try:
+        with connection.begin_nested():
+            vector = [float(x) for x in embedder.embed([text_[:4000]])[0]]
+    except Exception:  # noqa: BLE001 — this pack ranks on words, links, usefulness and recency
+        LOG.info("learned-before: the embedding model did not answer for %s", project_id, exc_info=True)
+        return []
+    if len(vector) != int(dims[0]):
+        return []
+    # Learned items are few beside the code graph: the cosine is computed over them directly.
+    rows = connection.execute(text(
+        """
+        SELECT n.id, (SELECT COALESCE(SUM(a * b), 0) FROM unnest(e.embedding, CAST(:v AS float8[])) AS u(a, b))
+               / NULLIF(sqrt((SELECT SUM(x * x) FROM unnest(e.embedding) AS s(x)))
+                        * sqrt((SELECT SUM(y * y) FROM unnest(CAST(:v AS float8[])) AS t(y))), 0) AS cosine
+        FROM kg_embeddings e
+        JOIN kg_nodes n ON n.id = e.node_id AND n.content_hash = e.content_hash
+        WHERE e.project_id = :p AND e.model_id = :m AND n.project_id = :p AND n.kind = ANY(:kinds)
+          AND n.node_key LIKE 'learning:%' AND n.valid_to IS NULL
+        ORDER BY cosine DESC NULLS LAST, n.id LIMIT :n
+        """), {"p": project_id, "m": model_id, "kinds": list(kinds), "v": vector, "n": VECTOR_TOP}).all()
+    return [(str(r[0]), float(r[1])) for r in rows if r[1] is not None and float(r[1]) >= VECTOR_FLOOR]
+
+
+def _fuse(lists: dict[str, list[str]]) -> dict[str, float]:
+    """Reciprocal-rank fusion (retrieval.fuse_lists): an item high in several lists wins."""
+    score: dict[str, float] = {}
+    for ids in lists.values():
+        for rank, item in enumerate(ids, start=1):
+            score[item] = score.get(item, 0.0) + 1.0 / (RRF_K + rank)
+    return score
+
+
 def learned_before(connection: Connection, project_id: str, *, query: str = "", seeds: Sequence[str] = (),
                    rule_ids: Sequence[str] = (), policy: Any = None, limit: int = MAX_LEARNED,
-                   exclude_run: Optional[str] = None, now: Optional[datetime] = None) -> list[dict[str, Any]]:
+                   exclude_run: Optional[str] = None, now: Optional[datetime] = None,
+                   embedder: Any = None) -> list[dict[str, Any]]:
     """Learned items for the task, best first. Each: ``{id, kind, title, statement, by, run,
-    at, confidence, score}``."""
+    at, confidence, score}``.
+
+    Candidates are the items about the seeds or rules, the items matching the task's words, and
+    the items near it in meaning (``embedder``, else the org's embedding model). They are ranked
+    by fusing five lists by reciprocal rank: word match, code link, meaning, usefulness and
+    recency."""
     kinds = _readable_kinds(policy)
     if not kinds:
         return []
     q = _or_query(query)
     targets = list(dict.fromkeys([*seeds, *rule_ids]))
-    if not (q or targets):
+    near = _learned_vectors(connection, project_id, kinds, query, embedder) if str(query or "").strip() else []
+    cosine = dict(near)
+    if not (q or targets or near):
         return []
     # Learned items are few beside the code graph: their text is read on the fly with paths,
     # dots and underscores as word breaks ("/orders", "test_disburse"), which search_tsv keeps whole.
@@ -159,11 +232,12 @@ def learned_before(connection: Connection, project_id: str, *, query: str = "", 
         WHERE EXISTS (SELECT 1 FROM kg_edges e WHERE e.src_id = n.id AND e.kind = 'about'
                         AND e.dst_id = ANY(:targets) AND e.valid_to IS NULL)
            OR (CAST(:q AS TEXT) IS NOT NULL AND n.doc @@ to_tsquery('english', coalesce(CAST(:q AS TEXT), '')))
+           OR n.id = ANY(:near)
         LIMIT 200
         """), {"p": project_id, "kinds": kinds, "q": q, "targets": targets, "floor": INJECT_BELOW,
-               "skip": exclude_run}).mappings().all()
+               "skip": exclude_run, "near": list(cosine)}).mappings().all()
     now = now or datetime.now(timezone.utc)
-    scored = []
+    kept = []
     for row in rows:
         stat = apply_learning({"success_count": row["success_count"], "failure_count": row["failure_count"],
                                "last_used_at": row["last_used_at"], "trust_tier": row["trust_tier"]}, now=now)
@@ -173,8 +247,17 @@ def learned_before(connection: Connection, project_id: str, *, query: str = "", 
         if seen is not None and seen.tzinfo is None:
             seen = seen.replace(tzinfo=timezone.utc)
         age_days = max(0.0, (now - seen).total_seconds() / 86400.0) if seen else 365.0
-        score = (2.0 if row["about_seed"] else 0.0) + min(1.0, float(row["rank"] or 0) * 4) \
-            + stat["weight"] + 0.5 * math.exp(-age_days / 30.0)
+        kept.append((row, stat["weight"], age_days))
+    by_id = lambda pairs: [i for _k, i in sorted(pairs)]  # noqa: E731 — (sort key, id) → ids
+    score = _fuse({
+        "text": by_id((-float(r["rank"] or 0), r["id"]) for r, _w, _a in kept if float(r["rank"] or 0) > 0),
+        "code": by_id((-w, r["id"]) for r, w, _a in kept if r["about_seed"]),
+        "vector": by_id((-cosine[r["id"]], r["id"]) for r, _w, _a in kept if r["id"] in cosine),
+        "usefulness": by_id((-w, r["id"]) for r, w, _a in kept),
+        "recency": by_id((a, r["id"]) for r, _w, a in kept),
+    })
+    scored = []
+    for row, _weight, _age in kept:
         attrs = row["attrs"] or {}
         prov = attrs.get("provenance") or {}
         scored.append({
@@ -184,7 +267,7 @@ def learned_before(connection: Connection, project_id: str, *, query: str = "", 
             "run": attrs.get("last_seen_run") or prov.get("code_task_run_id") or prov.get("workflow_run_id")
             or prov.get("run_id"),
             "at": str(prov.get("at") or "")[:10], "confidence": float(attrs.get("confidence") or 0.0),
-            "score": round(score, 4),
+            "score": round(score.get(row["id"], 0.0), 6),
         })
     scored.sort(key=lambda item: (-item["score"], item["id"]))
     return scored[:limit]

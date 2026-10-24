@@ -14,6 +14,7 @@ credential is refused here whatever it holds: agents propose rules, people appro
 """
 from __future__ import annotations
 
+import logging
 from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Query
@@ -29,6 +30,7 @@ router = APIRouter(prefix="/v1/knowledge/view", tags=["knowledge"])
 _settings = get_settings()
 _engine = get_engine(_settings)
 REVIEW = "knowledge:review"
+LOG = logging.getLogger(__name__)
 
 
 def _actor(connection, project_id: str, actor: str, permission: str) -> None:
@@ -110,10 +112,29 @@ def _review(body: RuleActionBody, action, **kwargs) -> dict[str, Any]:
     try:
         with begin(_engine) as connection:
             _actor(connection, body.project_id, body.actor, REVIEW)
-            return action(connection, project_id=body.project_id, actor_ref=body.actor,
+            done = action(connection, project_id=body.project_id, actor_ref=body.actor,
                           actor_kind=_actor_kind(), note=body.note, **kwargs)
+            _settle_scan_gate(connection, body.project_id, done)
+            return done
     except Exception as error:  # noqa: BLE001
         raise _http(error) from error
+
+
+def _settle_scan_gate(connection, project_id: str, done: dict[str, Any]) -> None:
+    """The review that empties a business_rules_scan's queue closes that run's review gate in the
+    same act (rule_scan.settle_review_gate), not on the runner's next tick. A gate that cannot be
+    settled now never fails the review: the runner settles it on its tick."""
+    scan_id = next((str(part.get("scan_id")) for part in (done.get("rule"), done.get("previous"))
+                    if isinstance(part, dict) and part.get("scan_id")), "")
+    if not scan_id:
+        return
+    from boss_engine.services.knowledge import rule_scan
+
+    try:
+        with connection.begin_nested():
+            rule_scan.settle_review_gate(connection, _settings, project_id, scan_id)
+    except Exception:  # noqa: BLE001 — settled by the runner's tick instead
+        LOG.warning("rules review: the gate of scan %s was left for the runner", scan_id, exc_info=True)
 
 
 @router.post("/rules/{rule_id}/approve")
