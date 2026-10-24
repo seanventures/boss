@@ -63,6 +63,7 @@ import {
 } from "./workflows/studio-parts";
 import { useOnScreen } from "../lib/area-shown";
 import { forEachProgress } from "../lib/workflow-for-each";
+import { LearnedStrip } from "./knowledge/learned-strip";
 
 // Moved to app/workflows/ (Workflow Studio, phase 0); re-exported so existing imports hold.
 export { CaptainCanRunIt, DefineStepForm };
@@ -1804,6 +1805,7 @@ export function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilit
                   : run.blocked_reason}
               </p>
             ) : null}
+            {open ? <LearnedStrip projectId={projectId} actor={actor} runId={run.id} live={!/^(succeeded|completed|failed|cancelled|canceled|deadlettered)$/.test(run.status)} /> : null}
             {open ? (
               <StepPath run={run} onOpenWorkflow={onOpenWorkflow} actor={actor} roles={roles} capabilities={capabilities} targets={targets} hosts={hosts}
                         onRetryStep={(stepId, note) => onRetryStep(run.id, stepId, note)}

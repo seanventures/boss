@@ -101,6 +101,16 @@ export const WRITE_HELPERS: Readonly<Record<string, WriteGate | readonly Permiss
   "lib/knowledge-graph.ts#seedGraphFromInfra": "observability:manage", // POST /v1/observability-suite/graph-seed
   "lib/security-scan.ts#evaluateSecurityGate": "assurance:run",        // POST /v1/security-scan/runs/{id}/gate
 
+  // lib/kg-view.ts — the Graph area (KNOWLEDGE_GRAPH_PRODUCT_SPEC.md §3, §5.7). Rule review is
+  // owners/admins (operator decision): knowledge:manage until S2a's knowledge:review is generated.
+  "lib/kg-view.ts#approveRule": "knowledge:manage",   // POST /v1/knowledge/view/rules/{id}/approve
+  "lib/kg-view.ts#editRule": "knowledge:manage",      // POST /v1/knowledge/view/rules/{id}/edit
+  "lib/kg-view.ts#rejectRule": "knowledge:manage",    // POST /v1/knowledge/view/rules/{id}/reject
+  "lib/kg-view.ts#indexNow": "knowledge:read",        // POST /v1/knowledge/repositories/index (read-safe)
+  "lib/kg-view.ts#promoteFact": "knowledge:manage",   // POST /v1/knowledge/facts/{id}/promote
+  "lib/kg-view.ts#rejectFact": "knowledge:manage",    // POST /v1/knowledge/facts/{id}/reject
+  "lib/kg-view.ts#forgetFact": "knowledge:manage",    // POST /v1/knowledge/facts/{id}/forget
+
   // app/delivery-workflows-ui.tsx — a run's answer pressed on another screen (Command Center)
   "app/delivery-workflows-ui.tsx#sendRunAnswer": "workflow_run:control", // retry-step / skip-step / recheck / input
 

@@ -3,39 +3,18 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
+/** The knowledge settings moved to Graph › Settings (app/knowledge/kg-settings.tsx, KG spec §5.1);
+ *  these are the same promises, held on their new home. Search, why and blast radius are held by
+ *  tests/kg-parity.test.tsx and tests/kg-node-panel.test.tsx. */
 import { BasedOn } from "../app/knowledge-console";
-import { KnowledgeExplorer, KnowledgeSettings } from "../app/knowledge-console";
+import { KgSettings } from "../app/knowledge/kg-settings";
 
 describe("knowledge console", () => {
-  it("shows a search hit, why, and blast radius from the project", () => {
-    const html = renderToStaticMarkup(
-      createElement(KnowledgeExplorer, {
-        projectId: "proj",
-        actorId: "ceo",
-        initialHits: [
-          {
-            node_id: "sym-1",
-            name: "reserve",
-            body: "def reserve",
-            trust_tier: "observed",
-          },
-        ],
-        initialWhy: [{ name: "Auth sign-off", body: "Auth changes need security sign-off", trust_tier: "governed" }],
-        initialBlast: ["commit", "place"],
-      }),
-    );
-    expect(html).toContain("reserve");
-    expect(html).toContain("Auth changes need security sign-off");
-    expect(html).toContain("commit");
-    expect(html).toContain("place");
-    expect(html).toContain("data-area=\"knowledge-explorer\"");
-  });
-
   it("states the settings that are real and the ones that were not measured", () => {
     const html = renderToStaticMarkup(
-      createElement(KnowledgeSettings, {
+      createElement(KgSettings, {
         projectId: "proj",
-        actorId: "ceo",
+        actor: "ceo",
         initial: {
           retention_years: 1,
           embedding_model: null,
@@ -62,9 +41,9 @@ describe("knowledge console", () => {
       ship_gate: "case_study_primary_not_run", cost_usd: null, sources: [],
     };
     const html = renderToStaticMarkup(
-      createElement(KnowledgeSettings, {
+      createElement(KgSettings, {
         projectId: "proj",
-        actorId: "ceo",
+        actor: "ceo",
         initial: {
           ...base,
           repositories: [
@@ -83,16 +62,16 @@ describe("knowledge console", () => {
     expect(html).toContain("Indexing…");
     expect(html).toContain("No model is called");
     const none = renderToStaticMarkup(
-      createElement(KnowledgeSettings, { projectId: "proj", actorId: "ceo", initial: { ...base, repositories: [] } }),
+      createElement(KgSettings, { projectId: "proj", actor: "ceo", initial: { ...base, repositories: [] } }),
     );
     expect(none).toContain("No repository is registered in this project.");
   });
 
   it("says what agents get under each value of the knowledge_graph setting", () => {
     const render = (agent_access: string) => renderToStaticMarkup(
-      createElement(KnowledgeSettings, {
+      createElement(KgSettings, {
         projectId: "proj",
-        actorId: "ceo",
+        actor: "ceo",
         initial: {
           agent_access,
           retention_years: 1,
@@ -113,9 +92,9 @@ describe("knowledge console", () => {
 
   it("names the embedding slot, and why meaning-based search is off", () => {
     const html = renderToStaticMarkup(
-      createElement(KnowledgeSettings, {
+      createElement(KgSettings, {
         projectId: "proj",
-        actorId: "ceo",
+        actor: "ceo",
         initial: {
           retention_years: 1,
           embedding_model: { provider: "ollama", model: "nomic-embed-text", dimension: 768,
@@ -141,11 +120,13 @@ describe("knowledge console", () => {
     expect(html).toContain("fact-2");
   });
 
-  it("mounts the explorer and settings on the console", () => {
+  it("mounts the Graph on the console, and the old places say where the knowledge screens went", () => {
     // This tree has one console page (app/page.tsx); there is no page-community.tsx.
     const source = readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8");
-    expect(source).toContain("KnowledgeExplorer");
-    expect(source).toContain("KnowledgeSettings");
+    expect(source).toContain("<GraphArea ");
+    expect(source).toContain('<KnowledgeMovedCard to="explorer"');
+    expect(source).toContain('<KnowledgeMovedCard to="facts"');
+    expect(readFileSync(new URL("../app/knowledge/graph-area.tsx", import.meta.url), "utf8")).toContain("<KgSettings ");
     const inbox = readFileSync(new URL("../app/decision-inbox-ui.tsx", import.meta.url), "utf8");
     expect(inbox).toContain("BasedOn");
   });
