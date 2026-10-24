@@ -31,6 +31,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from ..core import now_utc
@@ -716,6 +717,12 @@ def _node_body(node: dict, facts_by_path: dict[str, FileFacts]) -> str:
     return node["name"]
 
 
+#: Files per write batch. A whole tree is written in batches so memory holds the parsed facts
+#: and ONE batch of graph rows, never the whole graph at once (Fineract 1.15.0: 6.5k Java files,
+#: 51k nodes, 156k edges).
+WRITE_BATCH_FILES = 400
+
+
 def _write(
     connection: Connection,
     store: PostgresKnowledgeStore,
@@ -725,26 +732,42 @@ def _write(
     files: Sequence[FileFacts],
     seen_at,
     extra_nodes: Sequence[dict] = (),
+    batch: int = WRITE_BATCH_FILES,
 ) -> dict[str, int]:
-    nodes, edges = graph_for(index, files)
-    facts_by_path = {f.path: f for f in files}
-    rows = []
-    for node in [*nodes, *extra_nodes]:
-        attrs = dict(node.get("attrs") or {})
-        if node["kind"] == "file" and node.get("path") in facts_by_path:
-            f = facts_by_path[node["path"]]
-            # The per-file cache: an unchanged file is never parsed again, and a later commit
-            # resolves against it without re-reading the tree.
-            attrs.update({"content_hash": f.content_hash, "facts": facts_to_row(f), "names": names_of(f)})
-        rows.append({**node, "attrs": attrs, "body": _node_body(node, facts_by_path)})
-    ids = store.upsert_code_nodes(connection, project_id=project_id, rows=rows, seen_at=seen_at)
-    by_key = {key: node_id for (_kind, key), node_id in ids.items()}
-    missing = sorted({e[end] for e in edges for end in ("src", "dst")} - set(by_key))
-    by_key.update(store.code_node_ids(connection, project_id=project_id, keys=missing))
-    resolved = [{**e, "src": by_key[e["src"]], "dst": by_key[e["dst"]]} for e in edges
-                if e["src"] in by_key and e["dst"] in by_key]
-    written = store.upsert_code_edges(connection, project_id=project_id, rows=resolved, seen_at=seen_at)
-    return {"nodes": len(rows), "edges": written}
+    """Nodes of every batch first, then the edges of every batch: an edge may point at a node a
+    later batch defines, so edges are resolved only once every node is written. The graph of a
+    batch is computed again for its edges rather than kept, which is what bounds memory."""
+    parts = [files[i:i + batch] for i in range(0, len(files), max(1, batch))] or [[]]
+    seen: set[tuple[str, str]] = set()
+    for number, part in enumerate(parts):
+        nodes, _edges = graph_for(index, part)
+        facts_by_path = {f.path: f for f in part}
+        rows = []
+        for node in [*nodes, *(extra_nodes if number == len(parts) - 1 else ())]:
+            attrs = dict(node.get("attrs") or {})
+            if node["kind"] == "file" and node.get("path") in facts_by_path:
+                f = facts_by_path[node["path"]]
+                # The per-file cache: an unchanged file is never parsed again, and a later commit
+                # resolves against it without re-reading the tree.
+                attrs.update({"content_hash": f.content_hash, "facts": facts_to_row(f), "names": names_of(f)})
+            rows.append({**node, "attrs": attrs, "body": _node_body(node, facts_by_path)})
+            seen.add((node["kind"], node["key"]))
+        store.upsert_code_nodes(connection, project_id=project_id, rows=rows, seen_at=seen_at)
+        del rows, nodes, _edges
+    if len(parts) > 1:
+        # Thousands of nodes just written in this transaction: the edge upsert joins them by id,
+        # and planned on statistics from before the write it nested-looped over the whole table.
+        connection.execute(text("ANALYZE kg_nodes"))
+    written = 0
+    for part in parts:
+        _nodes, edges = graph_for(index, part)
+        keys = sorted({e[end] for e in edges for end in ("src", "dst")})
+        by_key = store.code_node_ids(connection, project_id=project_id, keys=keys)
+        resolved = [{**e, "src": by_key[e["src"]], "dst": by_key[e["dst"]]} for e in edges
+                    if e["src"] in by_key and e["dst"] in by_key]
+        written += store.upsert_code_edges(connection, project_id=project_id, rows=resolved, seen_at=seen_at)
+        del _nodes, edges, resolved, by_key
+    return {"nodes": len(seen), "edges": written}
 
 
 def _cached(
@@ -801,13 +824,18 @@ def index_repository(
     project_id: str,
     root: Path,
     repo: str | None = None,
+    max_file_bytes: int | None = None,
+    paths: Sequence[str] | None = None,
 ) -> dict[str, Any]:
-    """Index a whole tree. Re-running it on the same tree changes nothing."""
+    """Index a whole tree. Re-running it on the same tree changes nothing. A file larger than
+    ``max_file_bytes`` is left out (generated code); ``paths`` is the tree's file list when the
+    caller already listed it."""
     import hashlib
 
     seen_at = now_utc()
     root = Path(root)
-    paths = repository_paths(root)
+    paths = list(paths) if paths is not None else repository_paths(root)
+    too_big: list[str] = []
     cached = _cached(connection, store, project_id=project_id, repo=repo)
     files: list[FileFacts] = []
     parsed = 0
@@ -821,6 +849,9 @@ def index_repository(
         if not indexable(path):
             continue
         try:
+            if max_file_bytes and (root / path).stat().st_size > max_file_bytes:
+                too_big.append(path)
+                continue
             raw = (root / path).read_bytes()
         except OSError:
             continue
@@ -836,7 +867,8 @@ def index_repository(
     index = RepoIndex(repo, files, go_prefix, workspace)
     run: dict[str, Any] = {"mode": "full", "files": len(files), "parsed": parsed,
                            "symbols": sum(len(f.defs) for f in files),
-                           "unparsed": sorted(f.path for f in files if f.error)[:50]}
+                           "unparsed": sorted(f.path for f in files if f.error)[:50],
+                           "too_large": len(too_big), "too_large_paths": too_big[:20]}
     wrote = _write(connection, store, project_id=project_id, index=index, files=files, seen_at=seen_at,
                    extra_nodes=[_repo_node(repo, workspace, go_prefix, run)])
     closed = store.close_unseen_code(connection, project_id=project_id, repo=repo or "", before=seen_at)

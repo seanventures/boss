@@ -1140,6 +1140,22 @@ class Settings(BaseSettings):
     # BOSSAPP-622: what agents are given from the knowledge graph (project_settings `knowledge_graph`):
     # on | keyword | off (knowledge/runtime.MODES).
     knowledge_graph: str = Field(default="on", alias="BOSS_KNOWLEDGE_GRAPH")
+    # THE CODE GRAPH OF A REGISTERED REPOSITORY (services/knowledge/repo_index.py): every repository
+    # registered in a project is cloned (BOSS's own clone path) and parsed into the graph, and its
+    # base branch is re-checked; parsing only, no model is called. 0 turns it off install-wide.
+    kg_repo_index: int = Field(default=1, alias="BOSS_KG_REPO_INDEX")
+    # Bounds of one index run. A repository with more indexable files, or more source bytes, is
+    # not indexed (status too_large, in words); a single file above the size limit is skipped
+    # (generated code). The run is killed at the timeout and nothing it wrote is kept.
+    kg_index_max_files: int = Field(default=30000, alias="BOSS_KG_INDEX_MAX_FILES")
+    kg_index_max_file_bytes: int = Field(default=1_000_000, alias="BOSS_KG_INDEX_MAX_FILE_BYTES")
+    kg_index_max_total_bytes: int = Field(default=400_000_000, alias="BOSS_KG_INDEX_MAX_TOTAL_BYTES")
+    kg_index_timeout_seconds: int = Field(default=1800, alias="BOSS_KG_INDEX_TIMEOUT_SECONDS")
+    # How often an indexed repository's base branch is looked at again (minutes).
+    kg_index_recheck_minutes: int = Field(default=60, alias="BOSS_KG_INDEX_RECHECK_MINUTES")
+    # Where the shallow checkouts live between runs ("" = the system temp directory), so the next
+    # run fetches one commit instead of cloning again.
+    kg_index_dir: str = Field(default="", alias="BOSS_KG_INDEX_DIR")
     # FIX AND REDEPLOY (services/deploy_repair.py): how many repair builds a workflow's deploy
     # step starts by itself when its deployment fails for the APP's reason (a runtime the machine
     # lacks, a manifest that does not fit, the app's own install/health error). 0 = never; the

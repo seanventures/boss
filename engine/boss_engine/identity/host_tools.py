@@ -136,6 +136,7 @@ def issue_host_key(db: Any, *, org_id: str, revoke_others: bool = True) -> Any:
                     "shell (boss identity host-key); kept in .env as BOSS_HOST_API_KEY.")
     perms = host_tools_permissions()
     role_id = _role(db, org_id, HOST_TOOLS_ROLE_KEY, "Host tools", perms, ("org",))
+    follow_catalogue(db, org_id=org_id)
     bind(db, org_id, HOST_TOOLS_PRINCIPAL, role_id, "org", org_id, granted_by=HOST_CLI_PRINCIPAL,
          reason="host tools (boss identity host-key)")
     return _mint(db, org_id, HOST_TOOLS_PRINCIPAL, "boss host tools", perms, None,
@@ -170,3 +171,68 @@ def issue_mcp_key(db: Any, *, org_id: str, project_id: str,
          reason=f"MCP access to {project_id} (make mcp-setup)")
     return _mint(db, org_id, pid, f"mcp {project_id}"[:120], perms, [project_id],
                  revoke_others=True)
+
+
+
+def _offers() -> list[tuple[str, frozenset[str]]]:
+    """(role key pattern, what BOSS offers it today) for every role made from a code set."""
+    return [(HOST_TOOLS_ROLE_KEY, host_tools_permissions()),
+            # An MCP key's role is the capabilities chosen PLUS the member baseline: the
+            # baseline part follows the catalogue (the chosen part is the person's).
+            ("mcp\\_%", mcp_permissions(()))]
+
+
+def follow_catalogue(db: Any, *, org_id: str) -> dict[str, list[str]]:
+    """Roles made from a code set follow the catalogue as it grows; a person's narrowing stays.
+
+    The Host tools role (and an MCP key's role) is created ONCE, holding exactly what the code
+    offered that day, and was never touched again: a permission added to the catalogue later
+    (knowledge:read, 2026-10-21) never reached it, so the agent behind the host's own key had
+    every kg_* tool refused as forbidden — in every project, whatever `project` it named.
+
+    What is added is what the code offers now that the role NEVER held in any version: a
+    permission an Owner took away (it is in an earlier version) is not given back. The same
+    permissions are added to the live keys issued from the host shell for an account bound to
+    the role, whose scopes were frozen the same way. Audited; the authz epoch moves."""
+    from . import audit
+    from .migration import bump_epoch
+
+    out: dict[str, list[str]] = {}
+    for pattern, offer in _offers():
+        roles = db.execute(_sql(
+            "SELECT id FROM identity_access_roles WHERE org_id = :o AND NOT builtin AND key LIKE :k "
+            "ORDER BY id"), {"o": org_id, "k": pattern}).scalars().all()
+        for role_id in roles:
+            ever = set(db.execute(_sql(
+                "SELECT DISTINCT unnest(permissions) FROM identity_access_role_versions WHERE role_id = :r"),
+                {"r": role_id}).scalars().all())
+            now = set(db.execute(_sql(
+                "SELECT permission_key FROM identity_access_role_permissions WHERE role_id = :r"),
+                {"r": role_id}).scalars().all())
+            new = sorted(set(offer) - ever - now)
+            if not new:
+                continue
+            for key in new:
+                db.execute(_sql("INSERT INTO identity_access_role_permissions (role_id, permission_key) "
+                                "VALUES (:r, :p) ON CONFLICT DO NOTHING"), {"r": role_id, "p": key})
+            version = db.execute(_sql(
+                "UPDATE identity_access_roles SET version = version + 1, updated_at = now() WHERE id = :r "
+                "RETURNING version"), {"r": role_id}).scalar()
+            db.execute(_sql("INSERT INTO identity_access_role_versions (role_id, version, permissions, "
+                            "changed_by) VALUES (:r, :v, :p, :b) ON CONFLICT DO NOTHING"),
+                       {"r": role_id, "v": version, "p": sorted(now | set(new)), "b": HOST_CLI_PRINCIPAL})
+            keys = db.execute(_sql(
+                "UPDATE identity_api_credentials k SET scopes = ARRAY(SELECT DISTINCT x FROM "
+                "unnest(k.scopes || CAST(:new AS TEXT[])) x ORDER BY x) "
+                "WHERE k.revoked_at IS NULL AND k.created_by = :by AND k.principal_id IN ("
+                "  SELECT subject_id FROM identity_role_bindings WHERE role_id = :r AND subject_type = 'principal') "
+                "RETURNING k.id"), {"new": new, "by": HOST_CLI_PRINCIPAL, "r": role_id}).scalars().all()
+            audit.record(audit.SecurityEvent(
+                org_id=org_id, event_type="access_role.updated", outcome=audit.Outcome.SUCCESS,
+                actor_principal_id=HOST_CLI_PRINCIPAL, actor_kind="system", target_type="access_role",
+                target_id=role_id, details={"added": new, "keys": sorted(keys),
+                                            "reason": "the catalogue grew; BOSS defines this role"}), db=db)
+            out[role_id] = new
+    if out:
+        bump_epoch(db, org_id, "host tools roles follow the catalogue")
+    return out

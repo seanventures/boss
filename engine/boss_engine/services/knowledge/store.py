@@ -711,16 +711,23 @@ class PostgresKnowledgeStore:
         """
         self.ensure_schema(connection)
         self._org_id(connection, project_id, None)
+        if paths is None:
+            # A whole-tree index just wrote tens of thousands of rows in this transaction; planned
+            # on the statistics of the empty tables, the joins below went quadratic (Fineract:
+            # 156k edges x 51k nodes, still running after 10 minutes). ANALYZE samples this
+            # transaction's own rows.
+            connection.execute(text("ANALYZE kg_nodes"))
+            connection.execute(text("ANALYZE kg_edges"))
         path_sql = "" if paths is None else "AND n.path = ANY(:paths)"
         params = {"project_id": project_id, "repo": repo, "before": before, "paths": list(paths or [])}
         edges = connection.execute(
             text(
                 f"""
                 UPDATE kg_edges e SET valid_to = now()
-                FROM kg_nodes n
-                WHERE e.src_id = n.id AND n.project_id = :project_id AND n.repo = :repo {path_sql}
-                  AND e.project_id = :project_id AND e.source = 'code_index'
+                WHERE e.project_id = :project_id AND e.source = 'code_index'
                   AND e.valid_to IS NULL AND e.last_seen < :before
+                  AND e.src_id IN (SELECT n.id FROM kg_nodes n
+                                   WHERE n.project_id = :project_id AND n.repo = :repo {path_sql})
                 """
             ),
             params,
@@ -740,10 +747,10 @@ class PostgresKnowledgeStore:
             text(
                 """
                 UPDATE kg_edges e SET valid_to = now()
-                FROM kg_nodes n
-                WHERE e.dst_id = n.id AND n.project_id = :project_id AND n.valid_to = now()
-                  AND e.project_id = :project_id AND e.valid_to IS NULL
+                WHERE e.project_id = :project_id AND e.valid_to IS NULL
                   AND e.trust_tier IN ('observed', 'inferred')
+                  AND e.dst_id IN (SELECT n.id FROM kg_nodes n
+                                   WHERE n.project_id = :project_id AND n.valid_to = now())
                 """
             ),
             params,

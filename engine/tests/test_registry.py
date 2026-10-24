@@ -170,6 +170,8 @@ _EXPECTED_TOOLS: set[str] = {
     "project_status",
     "list_projects",
     "describe_project",
+    "code_graph_status",
+    "index_repository_code",
     "propose_action",
     "write_db",
     "query_db",
@@ -237,10 +239,10 @@ def test_default_registry_shape():
     read = {s.name for s in reg.specs(kind="read")}
     write = {s.name for s in reg.specs(kind="write")}
     assert read | write == set(reg.names())
-    assert len(reg.names()) == 151, (
+    assert len(reg.names()) == 153, (
         f"tool set changed: unexpected={sorted(set(reg.names()) - _EXPECTED_TOOLS)}, "
         f"missing={sorted(_EXPECTED_TOOLS - set(reg.names()))}")
-    assert len(read) == 88  # + list_org_repositories (the org's repository registry) + list_projects, describe_project (a project's real state, any project)
+    assert len(read) == 90  # + code_graph_status, index_repository_code (a repository's code graph) + list_org_repositories (the org's repository registry) + list_projects, describe_project (a project's real state, any project)
     #                        + captain_goals, + 7 kg reads, + 3 self-fix reads, + read_app_logs, + my_recent_work, + system_health, + 7 template/security reads, + precheck_workflow
     #                        + query_project_data (the agent baseline's fenced row read)
     assert len(write) == 63  # + allow_repository, remove_project_repository + 5 captain writes (BOSSAPP-759), + create_project, + kg_propose_fact, + remove_app, + system_doctor_act, + run_security_scan (F4), + apply_template (F2),

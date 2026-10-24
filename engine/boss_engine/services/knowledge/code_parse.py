@@ -22,6 +22,7 @@ from __future__ import annotations
 import ast
 import hashlib
 import re
+import sys
 from dataclasses import dataclass, field
 from functools import cache
 from pathlib import PurePosixPath
@@ -41,7 +42,7 @@ ENV_NAME = re.compile(r"^[A-Z][A-Z0-9_]{2,}$")
 SQL_NOT_TABLES = {"select", "where", "set", "values", "the", "a", "an", "lateral", "unnest", "only", "dual"}
 
 
-@dataclass
+@dataclass(slots=True)
 class Def:
     qualname: str          # "Order", "Order.save", "complete_checkout"
     kind: str              # function | class | method | property
@@ -49,19 +50,25 @@ class Def:
     end_line: int
 
 
-@dataclass
+@dataclass(slots=True)
 class Import:
     alias: str             # the local name ("" for a side-effect import)
     module: str            # the imported module, resolved against the file for relative imports
     name: str | None       # an imported member, or None when the module itself is bound
 
 
-@dataclass
+@dataclass(slots=True)
 class Ref:
     src: str               # qualname of the enclosing definition; "" at file level
     chain: tuple[str, ...] # ("checkout", "complete_checkout") for checkout.complete_checkout
     call: bool
     line: int
+
+    def __post_init__(self) -> None:
+        # A large repository holds hundreds of thousands of refs naming the same few thousand
+        # names: one shared copy of each keeps a whole-tree index in memory (Fineract: 6.5k files).
+        self.src = sys.intern(self.src)
+        self.chain = tuple(sys.intern(part) for part in self.chain)
 
 
 @dataclass

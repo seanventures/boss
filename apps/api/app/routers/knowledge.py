@@ -9,6 +9,9 @@ POST /v1/knowledge/facts/{fact_id}/reject
 POST /v1/knowledge/facts/{fact_id}/forget
 POST /v1/knowledge/ingest/tick     (the worker: drain the finish queue, sweep on request)
 POST /v1/knowledge/cypher          (read-only Cypher over the project's AGE projection)
+GET  /v1/knowledge/repositories    (each registered repository's code graph: state and counts)
+POST /v1/knowledge/repositories/index          (index now: queue the repositories' index jobs)
+POST /v1/knowledge/repositories/index/execute  (the worker: run one leased index job)
 
 Manage calls require knowledge:manage and step_up=confirmed. That confirmation
 is explicit in the body. It is not a WebAuthn ceremony.
@@ -187,3 +190,61 @@ def cypher(body: CypherBody) -> dict[str, Any]:
         raise HTTPException(status_code=503, detail=str(error)) from error
     except Exception as error:  # noqa: BLE001
         raise _http(error) from error
+
+
+@router.get("/repositories")
+@permit(P.KNOWLEDGE_READ, scope=Scope.project(query="project_id"))
+def repositories(project_id: str = Query(...), actor: str = Query(...)) -> dict[str, Any]:
+    """Each registered repository's code graph (services/knowledge/repo_index.py)."""
+    from boss_engine.services.knowledge.repo_index import status as repo_status
+
+    try:
+        with begin(_engine) as connection:
+            _actor(connection, project_id, actor, READ)
+            return repo_status(connection, project_id)
+    except Exception as error:  # noqa: BLE001
+        raise _http(error) from error
+
+
+class RepositoryIndexBody(BaseModel):
+    project_id: str
+    actor: str
+    repository: str = ""
+    force: bool = False
+
+
+@router.post("/repositories/index")
+# A read-safe action (operator decision 2026-10-24): it changes no record anyone made. It queues
+# a refresh of derived data — parsing the repository's branch into the graph, no model, bounded,
+# one in flight per repository — so whoever may read the graph may ask for it to be current.
+@permit(P.KNOWLEDGE_READ, scope=Scope.project(body="project_id"), readonly_post=True)
+def index_repositories(body: RepositoryIndexBody) -> dict[str, Any]:
+    """Index now: the project's repositories, or the one named (owner/name or an id)."""
+    from boss_engine.services.knowledge.repo_index import request as repo_request
+
+    try:
+        with begin(_engine) as connection:
+            _actor(connection, body.project_id, body.actor, READ)
+            return repo_request(connection, _settings, project_id=body.project_id, actor=body.actor,
+                                repository=body.repository, force=body.force)
+    except Exception as error:  # noqa: BLE001
+        raise _http(error) from error
+
+
+class RepositoryIndexExecuteBody(BaseModel):
+    job_id: str
+    worker_id: str
+    lease_token: str
+
+
+@router.post("/repositories/index/execute")
+@permit(P.WORKER_LEASE)
+def execute_repository_index(body: RepositoryIndexExecuteBody) -> dict[str, Any]:
+    """The worker hands its leased `knowledge.repository.index` job here: the GitHub credential
+    and the graph are in this container. Fenced by the lease; parsing only, no model."""
+    from apps.api.app.main import require_worker_principal
+    from boss_engine.services.knowledge.repo_index import execute_job
+
+    require_worker_principal()
+    return execute_job(_engine, _settings, job_id=body.job_id, worker_id=body.worker_id,
+                       lease_token=body.lease_token)

@@ -56,6 +56,38 @@ describe("knowledge console", () => {
     expect(html).toContain("not been measured");
   });
 
+  it("shows each repository's code graph with Index or Re-index", () => {
+    const base = {
+      retention_years: 1, embedding_model: null, vector_index: "not_created", budget_category: "knowledge",
+      ship_gate: "case_study_primary_not_run", cost_usd: null, sources: [],
+    };
+    const html = renderToStaticMarkup(
+      createElement(KnowledgeSettings, {
+        projectId: "proj",
+        actorId: "ceo",
+        initial: {
+          ...base,
+          repositories: [
+            { repo: "bank/core", branch: "main", status: "indexed",
+              summary: "51,221 nodes, 155,764 edges from 6,508 files at d563684 on main" },
+            { repo: "bank/web", branch: "main", status: "pending",
+              summary: "Not indexed yet: queued at the next knowledge tick (within a minute)." },
+            { repo: "bank/batch", branch: "main", status: "running", summary: "Indexing main (running)." },
+          ],
+        },
+      }),
+    );
+    expect(html).toContain("51,221 nodes, 155,764 edges");
+    expect(html).toContain(">Re-index<");
+    expect(html).toContain(">Index<");
+    expect(html).toContain("Indexing…");
+    expect(html).toContain("No model is called");
+    const none = renderToStaticMarkup(
+      createElement(KnowledgeSettings, { projectId: "proj", actorId: "ceo", initial: { ...base, repositories: [] } }),
+    );
+    expect(none).toContain("No repository is registered in this project.");
+  });
+
   it("says what agents get under each value of the knowledge_graph setting", () => {
     const render = (agent_access: string) => renderToStaticMarkup(
       createElement(KnowledgeSettings, {

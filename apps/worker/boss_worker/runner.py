@@ -387,6 +387,9 @@ def capabilities() -> list[str]:
         "docs.update",
         # A security scan (F4): the API runs the scanners in the build sandbox under this lease.
         "security.scan",
+        # The code graph of a registered repository (knowledge/repo_index.py): the API fetches
+        # the branch and indexes it under this lease. Declared here or it sits queued.
+        "knowledge.repository.index",
         # Review this PR again (services/pr_review_again.py): the API runs the reviewer on the
         # pull request's real diff and posts the round. Declared here or it sits queued.
         "pull_request.review_again",
@@ -875,6 +878,14 @@ def execute_job(job: LeasedJob, client: ControlPlaneClient) -> dict[str, Any]:
     if job.kind == "pull_request.review_again":
         # The reviewer and the GitHub connection live in the API container.
         return client.run_pr_review_again({"job_id": job.id, **(job.payload or {})})
+    if job.kind == "knowledge.repository.index":
+        # Parsing only, no model: the GitHub credential and the graph are in the API container.
+        # A run the bounds refuse is a recorded result (status too_large, in words), not a retry.
+        result = client.run_repository_index({"job_id": job.id, "worker_id": client.worker_id,
+                                              "lease_token": job.lease_token})
+        if result.get("status") == "failed" and result.get("retry"):
+            raise RuntimeError(result.get("error") or "Repository index failed.")
+        return result
     if job.kind == "security.scan":
         # The scanners and the sandbox helper are in the api image: the API runs the scan. A
         # scan whose tools failed is a recorded result (status failed, with why), not a retry.

@@ -145,6 +145,15 @@ def tick(engine: Any, *, sweep: bool = False, project_id: str | None = None) -> 
     from .embeddings import embed_due
 
     out: dict[str, Any] = {"queued": ingest_queued(engine, project_id=project_id)}
+    # Registered repositories whose code graph is due (repo_index.py): one governed index job
+    # each. Its own transaction; a failure here never holds the lifecycle ingest back.
+    try:
+        from ...config import get_settings
+        from .repo_index import enqueue_due
+
+        out["repositories"] = enqueue_due(engine, get_settings(), project_id=project_id, sweep=sweep)
+    except Exception as error:  # noqa: BLE001 - reported in the tick's answer, retried next tick
+        out["repositories"] = {"error": f"{type(error).__name__}: {str(error)[:200]}"}
     # Re-embedding runs in the background here: what the project's embedding slot lacks, after
     # a new model or dimension dropped the old space (embeddings.embed_due). Governed calls.
     out["embedded"] = embed_due(engine, project_id=project_id)
