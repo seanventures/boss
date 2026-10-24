@@ -41,6 +41,7 @@ from ..schemas import FileChange
 from ..templates import run_env as _run_env
 from . import agent_acts, ci_gate, design_prompts, plane_sync, review_comments, verification_target
 from . import red_first, review_input
+from .knowledge import learning_context, learning_writeback  # learning while executing (BOSSAPP-768)
 from .bakeoff import (
     fixture_for_run as bakeoff_fixture_for_run,
     stage_fixture as stage_bakeoff_fixture,
@@ -3747,6 +3748,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
     criteria = spec.get("acceptance_criteria", [])
     # A CONNECTOR IS PRE-TESTED, on every entry path and every retry (connector_build_input).
     instructions, criteria = connector_build_input(engine, run, instructions, criteria)
+    # WHAT EARLIER RUNS LEARNED, AND THE RULES THAT GOVERN THIS CODE (knowledge spec §4.2), once.
+    instructions = learning_context.for_build(engine, project_id=project_id, run_id=run_id,
+                                              title=title, instructions=instructions)
     # Infrastructure persona (spec 05 §3.2 / T4): IaC tasks get Terraform-aware role
     # guidance appended to the qa/impl/solo prompts; stage mechanics are unchanged.
     iac_task = is_iac_task(spec, title)
@@ -4450,6 +4454,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # THE ENGINE COULD NOT RUN (harness_failures): a stage that swallowed the failure does
         # not get to start the next one — the build ends here with the harness verdict.
         _stop_on_harness_failure(where)
+        learning_writeback.observe(engine, project_id=project_id, hook="build_stage", run_id=run_id,
+                                   where=where)
         try:
             with _transaction(engine) as c:
                 st = c.execute(sql("SELECT status FROM code_task_runs WHERE id=:id"),
@@ -6236,6 +6242,11 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                "tests_untouched": tests_untouched,
                                "impl_files": len(impl_files),
                                "cost_usd_micros": int(r2.get("cost_usd_micros") or 0)})
+            learning_writeback.observe(engine, project_id=project_id, hook="repair_checkpoint",
+                                       run_id=run_id, attempt=attempt, passed=ok,
+                                       tests_passed=tests_passed, output=fail_output,
+                                       command=test_cmd, failing=failing_tests(fail_output),
+                                       files=impl_files, summary=r2.get("summary"))
             if escalate_impl and ok:
                 escalated_recovered = True
                 with _transaction(engine) as c:
