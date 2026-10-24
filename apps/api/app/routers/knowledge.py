@@ -53,6 +53,10 @@ class ManageBody(BaseModel):
 
 
 def _http(error: Exception) -> HTTPException:
+    from boss_engine.services.projects_archive import ProjectArchived
+
+    if isinstance(error, ProjectArchived):      # index now, in an archived project
+        return HTTPException(status_code=409, detail=error.detail())
     if isinstance(error, PermissionError):
         return HTTPException(status_code=403, detail=str(error))
     if isinstance(error, LookupError):

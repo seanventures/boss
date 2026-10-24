@@ -1794,6 +1794,16 @@ async def authn_error_answers_with_its_own_status(_request: Request, exc: AuthnE
                         headers={"Cache-Control": "no-store"})
 
 
+from boss_engine.services.projects_archive import ProjectArchived as _ProjectArchived  # noqa: E402
+
+
+@app.exception_handler(_ProjectArchived)
+async def archived_project_refuses_new_work(_request: Request, exc: _ProjectArchived):
+    """New work asked of an archived project, from any route (services/projects_archive.py):
+    409 with the sentence the console shows, never a 500 or a 422."""
+    return JSONResponse(status_code=409, content={"detail": exc.detail()})
+
+
 @app.exception_handler(Exception)
 async def unhandled_fail_loudly(_request: Request, exc: Exception):
     """Say what broke.
@@ -2615,6 +2625,8 @@ def project_summary_from_row(row) -> ProjectSummary:
         org_id=row["org_id"],
         org_name=row["org_name"],
         created_at=row["created_at"].isoformat(),
+        archived_at=row["archived_at"].isoformat() if row.get("archived_at") else None,
+        archived_by=row.get("archived_by"),
     )
 
 
@@ -5768,18 +5780,21 @@ def onboard_org_endpoint(payload: OrgOnboardBody):
 
 @app.get("/v1/projects", response_model=ProjectListResponse)
 @authenticated(note="SQL filters projects to the principal's active project/org memberships (catalog_read_scope")
-def list_projects(request: Request) -> ProjectListResponse:
+def list_projects(request: Request, include_archived: bool = False) -> ProjectListResponse:
+    """The projects the caller may read. An archived project (services/projects_archive.py) is
+    left out unless `include_archived=true`; the console's "Show archived" asks for it."""
     authenticated, principal = catalog_read_scope()
     with begin(engine) as connection:
         rows = connection.execute(
             text(
                 """
                 SELECT p.id, p.name, p.slug, p.workspace_id, p.created_at,
+                       p.archived_at, p.archived_by,
                        w.name AS workspace_name, o.id AS org_id, o.name AS org_name
                 FROM projects p
                 JOIN workspaces w ON w.id = p.workspace_id
                 JOIN orgs o ON o.id = w.org_id
-                WHERE NOT :authenticated
+                WHERE (:include_archived OR p.archived_at IS NULL) AND (NOT :authenticated
                    OR EXISTS (
                        SELECT 1 FROM project_members pm
                        WHERE pm.project_id = p.id
@@ -5794,11 +5809,12 @@ def list_projects(request: Request) -> ProjectListResponse:
                              WHERE pm_override.project_id = p.id
                                AND pm_override.member_id = :principal
                          )
-                   )
+                   ))
                 ORDER BY o.name ASC, w.name ASC, p.name ASC
                 """
             ),
-            {"authenticated": authenticated, "principal": principal},
+            {"authenticated": authenticated, "principal": principal,
+             "include_archived": bool(include_archived)},
         ).mappings().all()
         # IDENTITY (S2): only projects the caller holds project:read in (§6.7).
         visible = _readable_projects(request, [str(row["id"]) for row in rows])

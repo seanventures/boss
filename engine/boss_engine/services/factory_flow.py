@@ -416,6 +416,10 @@ class FactoryFlowService:
         self, connection: Any, project_id: str, *, actor: str = "factory_flow",
     ) -> dict[str, Any]:
         """Observe stalls, record findings, attach missing official swarms."""
+        from . import projects_archive
+
+        if projects_archive.is_archived(connection, project_id):
+            return {"recorded": 0, "attached": 0, **projects_archive.skipped(project_id)}
         from .core import emit_event
         board = self.board(connection, project_id)
         recorded = 0

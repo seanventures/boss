@@ -3138,6 +3138,9 @@ def start_run(
     dedupe_key = _clean_text(dedupe_key, "dedupe_key")
     if mode not in ("normal", "test"):
         raise WorkflowValidationError(f"mode must be 'normal' or 'test', not {mode!r}")
+    from . import projects_archive
+
+    projects_archive.refuse_new_work(connection, project_id, "new workflow runs")
     # Identity is never a caller's to set (IDENTITY.md §2): `_identity*` keys are dropped here.
     input_data = {k: v for k, v in (input_data or {}).items()
                   if not str(k).startswith(ADOPT_PREFIX) and not str(k).startswith("_identity")

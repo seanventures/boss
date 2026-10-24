@@ -3,7 +3,7 @@
 # One line per operation: its declaration, then the built-in roles allowed
 # (O owner, A admin, P operator, V viewer, U auditor; '-' none). Every other role is denied
 # 403, or 404 when the operation names an object the role cannot even read.
-# 1635 operations.
+# 1639 operations.
 "GET /.well-known/boss-jwks.json": ["public:jwks", "OAPVU"]
 "GET /docs": ["public:api_description", "OAPVU"]
 "GET /docs/oauth2-redirect": ["public:api_description", "OAPVU"]
@@ -320,6 +320,7 @@
 "GET /v1/change-sets/{cs_id}/deploy-plan": ["permit deployment:read @ project(query=project_id)", "OAPVU"]
 "GET /v1/change-sets/{cs_id}/grant": ["permit repository:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/change-sets/{cs_id}/merge": ["permit github:merge @ project(body=project_id)", "OAP"]
+"POST /v1/change-sets/{cs_id}/merge/execute": ["permit worker:lease @ org", "-"]
 "GET /v1/change-sets/{cs_id}/prs": ["permit code_task:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/change-sets/{cs_id}/rollback": ["permit deployment:rollback @ project(body=project_id)", "OAP"]
 "POST /v1/change-sets/{cs_id}/stop": ["permit code_task:steer @ project(body=project_id)", "OAP"]
@@ -1241,6 +1242,8 @@
 "POST /v1/projects": ["permit project:create @ org", "OA"]
 "GET /v1/projects/{project_id}/agents": ["permit agent:read @ project(path=project_id)", "OAPVU"]
 "POST /v1/projects/{project_id}/agents": ["permit work_item:manage @ project(path=project_id)", "OAP"]
+"GET /v1/projects/{project_id}/archive": ["permit project:read @ project(path=project_id)", "OAPVU"]
+"POST /v1/projects/{project_id}/archive": ["permit project:delete @ org", "O"]
 "GET /v1/projects/{project_id}/change-sets": ["permit code_task:read @ project(path=project_id)", "OAPVU"]
 "GET /v1/projects/{project_id}/host-advice": ["permit system:read @ project(path=project_id)", "OAPVU"]
 "GET /v1/projects/{project_id}/preflight": ["permit project:read @ project(path=project_id)", "OAPVU"]
@@ -1251,6 +1254,7 @@
 "GET /v1/projects/{project_id}/repositories": ["permit repository:read @ project(path=project_id)", "OAPVU"]
 "PUT /v1/projects/{project_id}/settings/builds_at_once": ["permit project:update @ org", "OA"]
 "POST /v1/projects/{project_id}/suggest-components": ["permit repository:read @ project(path=project_id)", "OAPVU"]
+"POST /v1/projects/{project_id}/unarchive": ["permit project:delete @ org", "O"]
 "GET /v1/provider-conformance": ["permit infra:read @ org", "OAPVU"]
 "GET /v1/provider-definitions": ["permit model_provider:read @ org", "OAPVU"]
 "GET /v1/provider-health": ["permit model_provider:read @ project(query=project_id)", "OAPVU"]

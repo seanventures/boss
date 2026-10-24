@@ -187,6 +187,11 @@ def mount_platform_routers(app: FastAPI) -> None:
     except ImportError:
         pass
 
+    # BOSSAPP-768 S5 — archive / restore a project. Unguarded: a broken import fails the boot.
+    from .projects_archive import router as projects_archive_router
+
+    app.include_router(projects_archive_router)
+
     # BOSS-348 — earned autonomy score + value-based schedule preference
     try:
         from .earned_autonomy import router as earned_autonomy_router

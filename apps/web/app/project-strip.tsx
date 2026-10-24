@@ -7,6 +7,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import { searchForProject } from "./url-intent";
 import { appIdentity } from "./app-identity";
+import { ArchivedNotice, useArchived } from "./project-archive";
 
 /**
  * Software projects built inside the selected control project, in the header.
@@ -14,6 +15,10 @@ import { appIdentity } from "./app-identity";
  * v1 makes you open Factory and scroll a list of 74 cards to learn what is running. The strip
  * answers "what is happening right now" without leaving the area you are in, and clicking one
  * opens it.
+ *
+ * AN ARCHIVED PROJECT SAYS SO HERE (BOSSAPP-768 S5, spec §5.8): the strip is in every area's
+ * header, so it carries the read-only notice and Restore while the open project is archived.
+ * Its builds stay listed (reads keep working); nothing new starts until it is restored.
  */
 
 type StripProject = {
@@ -70,6 +75,11 @@ export function ProjectStrip({ projectId, area }: { projectId: string; area?: st
   // True only while a REFRESH is in flight, never during the first load — the first load has
   // its own "loading" state, and showing both makes the header flicker twice.
   const [refreshing, setRefreshing] = useState(false);
+  // Read once per project, not on the 30 s poll: archiving is rare and a page reload follows it.
+  const archived = useArchived(projectId);
+  const notice = archived
+    ? <ArchivedNotice state={archived} onRestored={() => window.location.reload()} />
+    : null;
 
   const scopeGeneration = useRef(0);
   // Visibility and polling can overlap the first request; only the newest request may settle it.
@@ -310,6 +320,7 @@ export function ProjectStrip({ projectId, area }: { projectId: string; area?: st
   if (state === "loading") {
     return (
       <nav className="bx-strip" aria-label={STRIP_LABEL} data-state="loading">
+        {notice}
         <span className="bx-strip-label">{STRIP_LABEL}</span>
         <span className="bx-strip-note">Loading…</span>
       </nav>
@@ -319,6 +330,7 @@ export function ProjectStrip({ projectId, area }: { projectId: string; area?: st
   if (state === "failed") {
     return (
       <nav className="bx-strip" aria-label={STRIP_LABEL} data-state="failed">
+        {notice}
         <span className="bx-strip-label">{STRIP_LABEL}</span>
         {/* The reason, not a shrug. "Could not load" sends the operator to the API to find out
             what this line already knows. */}
@@ -327,10 +339,13 @@ export function ProjectStrip({ projectId, area }: { projectId: string; area?: st
     );
   }
 
-  if (confirmedEmpty) return null;
+  if (confirmedEmpty) {
+    return notice ? <nav className="bx-strip" aria-label={STRIP_LABEL} data-state="archived">{notice}</nav> : null;
+  }
 
   return (
     <nav className="bx-strip" aria-label={STRIP_LABEL} data-state="ready" data-testid="bx-strip" ref={pickerRef}>
+      {notice}
       <button type="button" className="bx-project-trigger" aria-expanded={expanded}
               aria-controls="boss-project-picker" onClick={() => setExpanded((open) => !open)}>
         <span>{STRIP_LABEL}</span><strong>{total}</strong>

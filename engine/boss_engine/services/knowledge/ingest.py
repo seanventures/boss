@@ -106,11 +106,15 @@ def _drain(engine: Any, rows) -> dict[str, int]:
 
 
 def ingest_queued(engine: Any, *, limit: int = 20, project_id: str | None = None) -> dict[str, int]:
-    """The event-driven half: what the finish triggers queued, oldest first."""
+    """The event-driven half: what the finish triggers queued, oldest first. An archived
+    project's rows stay queued until it is restored (projects_archive)."""
+    from .. import projects_archive
+
     with engine.begin() as connection:
         rows = connection.execute(text(
             "SELECT project_id, source_kind, source_id FROM kg_ingest_queue "
             "WHERE attempts < :max AND (CAST(:p AS TEXT) IS NULL OR project_id = :p) "
+            "AND " + projects_archive.live_sql("project_id") + " "
             "ORDER BY finished_at LIMIT :n"),
             {"max": MAX_ATTEMPTS, "n": limit, "p": project_id}).all()
     return _drain(engine, [tuple(r) for r in rows])
@@ -118,7 +122,10 @@ def ingest_queued(engine: Any, *, limit: int = 20, project_id: str | None = None
 
 def ingest_due(engine: Any, *, limit: int = 20, days: int = SWEEP_DAYS,
                project_id: str | None = None) -> dict[str, int]:
-    """The fallback sweep: finished runs and resolved incidents with no capture yet."""
+    """The fallback sweep: finished runs and resolved incidents with no capture yet (an
+    archived project's are left for after its restore, projects_archive)."""
+    from .. import projects_archive
+
     with engine.begin() as connection:
         rows = connection.execute(text(
             """
@@ -130,6 +137,7 @@ def ingest_due(engine: Any, *, limit: int = 20, days: int = SWEEP_DAYS,
               WHERE i.status = 'resolved' AND i.last_seen > now() - make_interval(days => :d)
             ) s
             WHERE (CAST(:p AS TEXT) IS NULL OR s.project_id = :p)
+              AND """ + projects_archive.live_sql("s.project_id") + """
               AND NOT EXISTS (SELECT 1 FROM kg_captures c WHERE c.project_id = s.project_id
                                 AND c.source_kind = s.kind AND c.source_id = s.id)
               AND NOT EXISTS (SELECT 1 FROM kg_ingest_queue q WHERE q.project_id = s.project_id
@@ -141,9 +149,15 @@ def ingest_due(engine: Any, *, limit: int = 20, days: int = SWEEP_DAYS,
 
 def tick(engine: Any, *, sweep: bool = False, project_id: str | None = None) -> dict[str, Any]:
     """The worker's call: drain the queue; on a sweep tick, also catch what the triggers missed.
-    ``project_id`` narrows it to one project (every project when None)."""
+    ``project_id`` narrows it to one project (every project when None). An archived project is
+    skipped by every part of it (projects_archive)."""
+    from .. import projects_archive
     from .embeddings import embed_due
 
+    if project_id:
+        with engine.begin() as connection:
+            if projects_archive.is_archived(connection, project_id):
+                return projects_archive.skipped(project_id)
     out: dict[str, Any] = {"queued": ingest_queued(engine, project_id=project_id)}
     # Registered repositories whose code graph is due (repo_index.py): one governed index job
     # each. Its own transaction; a failure here never holds the lifecycle ingest back.
@@ -164,15 +178,17 @@ def tick(engine: Any, *, sweep: bool = False, project_id: str | None = None) -> 
 
 
 def reconcile_projections(engine: Any, *, project_id: str | None = None) -> dict[str, int]:
-    """Rebuild any project's AGE projection whose counts drifted from the tables."""
+    """Rebuild any project's AGE projection whose counts drifted from the tables (not an
+    archived project's: projects_archive)."""
+    from .. import projects_archive
     from .age import available, reconcile
 
     out = {"current": 0, "rebuilt": 0, "failed": 0}
     with engine.begin() as connection:
         if not available(connection):
             return out
-        projects = [project_id] if project_id else connection.execute(
-            text("SELECT DISTINCT project_id FROM kg_nodes")).scalars().all()
+        projects = projects_archive.live_ids(connection, [project_id] if project_id else connection.execute(
+            text("SELECT DISTINCT project_id FROM kg_nodes")).scalars().all())
     for project_id in projects:
         try:
             with engine.begin() as connection:

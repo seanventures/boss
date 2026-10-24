@@ -82,12 +82,14 @@ def ensure_groups(connection, now: Optional[datetime] = None) -> int:
 
 def claim(engine, owner: str, now: datetime, limit: int = GROUPS_PER_TICK) -> list[dict]:
     from ..db import begin
+    from . import projects_archive    # an archived project's apps are not evaluated
 
     with begin(engine) as c:
         return [dict(r) for r in c.execute(sql(
             "UPDATE rule_groups g SET lease_owner = :o, lease_until = :now + "
             " make_interval(secs => 2 * g.interval_s) WHERE id IN (SELECT id FROM rule_groups "
             " WHERE next_eval_at <= :now AND (lease_until IS NULL OR lease_until < :now) "
+            " AND " + projects_archive.live_sql("rule_groups.project_id") + " "
             " ORDER BY next_eval_at LIMIT :n FOR UPDATE SKIP LOCKED) RETURNING *"),
             {"o": owner, "now": now, "n": limit}).mappings().all()]
 
@@ -426,7 +428,7 @@ def self_check(connection, settings: Any, now: datetime) -> dict[str, bool]:
 def tick(engine, settings: Any, *, now: Optional[datetime] = None,
          owner: Optional[str] = None, adapter: Any = None) -> dict[str, Any]:
     from ..db import begin
-    from . import app_alerts, notify
+    from . import app_alerts, notify, projects_archive
 
     now = now or _now()
     owner = owner or f"{socket.gethostname()}:{id(engine)}"
@@ -453,12 +455,14 @@ def tick(engine, settings: Any, *, now: Optional[datetime] = None,
         with begin(engine) as c:
             rows = [dict(r) for r in c.execute(sql(
                 "UPDATE synthetic_checks SET next_run_at = :lease WHERE id IN (SELECT id FROM "
-                " synthetic_checks WHERE enabled AND next_run_at <= :now ORDER BY next_run_at "
+                " synthetic_checks WHERE enabled AND next_run_at <= :now AND "
+                + projects_archive.live_sql("synthetic_checks.project_id") + " ORDER BY next_run_at "
                 " LIMIT :n FOR UPDATE SKIP LOCKED) RETURNING *"),
                 {"now": now, "lease": now + timedelta(minutes=2), "n": CHECKS_PER_TICK}
             ).mappings().all()]
             scrapes = [dict(r) for r in c.execute(sql(
-                "SELECT * FROM monitored_services WHERE onboarding ? 'scrape_url' AND ("
+                "SELECT * FROM monitored_services WHERE onboarding ? 'scrape_url' AND "
+                + projects_archive.live_sql("monitored_services.project_id") + " AND ("
                 " NOT onboarding ? 'scraped_at' OR (onboarding->>'scraped_at')::timestamptz < "
                 " :due) LIMIT 20"), {"due": now - timedelta(seconds=60)}).mappings().all()]
         for chk in rows:

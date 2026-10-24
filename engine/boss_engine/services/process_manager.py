@@ -314,6 +314,10 @@ class ProcessManagerService:
 
     def tick(self, connection: Connection, *, project_id: str, actor: str) -> dict[str, Any]:
         """Observe → measure → validate → apply-safe → verify."""
+        from . import projects_archive
+
+        if projects_archive.is_archived(connection, project_id):
+            return projects_archive.skipped(project_id)
         self.ensure_schema(connection)
         steward = self.ensure_for_project(connection, project_id, actor)
         observed = self._observe(connection, project_id)

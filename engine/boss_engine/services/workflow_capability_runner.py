@@ -6678,8 +6678,11 @@ def projects_with_work(connection: Connection, asked: str) -> list[str]:
 
     The worker ticks the project it is configured for. A template LAB is a project of its own
     (templates.lab), so its workflow sat at `build: ready` for ever: nothing ever ticked that
-    project. Every project with live work is advanced, whichever one the worker names.
+    project. Every project with live work is advanced, whichever one the worker names. Not an
+    archived one (projects_archive): its runs wait, as they are, until it is restored.
     """
+    from . import projects_archive
+
     others = [str(r[0]) for r in connection.execute(
         text(
             """
@@ -6700,7 +6703,7 @@ def projects_with_work(connection: Connection, asked: str) -> list[str]:
         ),
         {"asked": asked},
     ).all()]
-    return [asked, *others]
+    return projects_archive.live_ids(connection, [asked, *others])
 
 
 def tick(
@@ -6716,6 +6719,10 @@ def tick(
     Returns what it did, per step, so a caller can log something more useful than a count.
     Never raises for a step-level failure: one broken workflow must not stop the others.
     """
+    from . import projects_archive
+
+    if projects_archive.is_archived(connection, project_id):
+        return {"performed": [], "count": 0, **projects_archive.skipped(project_id)}
     runs = connection.execute(
         text(
             """

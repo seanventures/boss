@@ -188,11 +188,14 @@ def _enqueue(connection: Connection, row: dict, *, priority: int) -> Optional[st
 
 def _due_rows(connection: Connection, *, project_id: Optional[str], limit: int,
               bindings: Optional[list[str]] = None) -> list[dict]:
+    from .. import projects_archive    # an archived project's repositories are not indexed
+
     return [dict(r) for r in connection.execute(text(
         """
         SELECT r.* FROM kg_repo_index r
         JOIN github_repository_bindings b ON b.id = r.binding_id AND b.status = 'active'
         WHERE r.due AND (CAST(:p AS TEXT) IS NULL OR r.project_id = :p)
+          AND """ + projects_archive.live_sql("r.project_id") + """
           AND (CAST(:bs AS TEXT[]) IS NULL OR r.binding_id = ANY(CAST(:bs AS TEXT[])))
         ORDER BY r.updated_at LIMIT :n FOR UPDATE OF r SKIP LOCKED
         """), {"p": project_id, "n": limit, "bs": bindings}).mappings().all()]
@@ -202,12 +205,17 @@ def enqueue_due(engine: Any, settings: Any = None, *, project_id: Optional[str] 
                 sweep: bool = False, limit: int = ENQUEUE_PER_TICK) -> dict[str, int]:
     """The worker tick: queue an index job for each due repository (one in flight per
     repository). On a sweep, first mark what may have moved."""
+    from .. import projects_archive
     from ..jobs import JOB_PRIORITY_BACKGROUND
 
     limits = Limits.from_settings(settings) if settings is not None else Limits()
     out = {"observed": 0, "stale": 0, "queued": 0}
     if not limits.enabled:
         return out
+    if project_id:
+        with engine.begin() as connection:
+            if projects_archive.is_archived(connection, project_id):
+                return {**out, **projects_archive.skipped(project_id)}
     with engine.begin() as connection:
         out["observed"] = observe_bindings(connection, project_id)
         if sweep:
@@ -235,8 +243,10 @@ def request(connection: Connection, settings: Any, *, project_id: str, actor: st
     """Index now: the project's repositories (or the one named: owner/name or an id). One job
     per repository; a repository already being indexed is reported, not queued twice. `force`
     re-indexes a head that has not moved."""
+    from .. import projects_archive
     from ..jobs import JOB_PRIORITY_REQUESTED
 
+    projects_archive.refuse_new_work(connection, project_id, "new index jobs")
     limits = Limits.from_settings(settings)
     if not limits.enabled:
         return {**status(connection, project_id), "queued": [],

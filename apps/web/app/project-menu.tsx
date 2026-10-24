@@ -1,11 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import React, { useState } from "react";
 
 import { GatedButton } from "../components/gated";
 import { ActionForm } from "./client-forms";
 import { consoleHref } from "./console-href";
 import { createProjectAction } from "./project-actions";
+import { ArchiveDialog, ArchivedNotice, ArchivedProjects, useArchived } from "./project-archive";
 import { SubmitButton } from "./submit-button";
 
 export type ProjectMenuItem = { id: string; name: string };
@@ -17,23 +18,43 @@ export function projectHref(id: string, homeId: string): string {
 
 const NEW_PROJECT_TIP =
   "A new project in this organization: its own agents, skills, budget, settings and work, set up like the first one";
+const ARCHIVE_TIP = "Hide this project and pause its schedules, monitors and indexing. Nothing is deleted";
+const HOME_TIP = "The home project can't be archived: BOSS's own agent and the worker's schedules live there";
 
 /**
  * THE PROJECT MENU, in the top bar beside the organization: which project is open, the org's
  * other projects, and New project (POST /v1/projects, `project:create`). Short labels, tooltips
  * for the rest. The API decides the permission and its step-up; the button only mirrors it.
+ *
+ * ARCHIVE (BOSSAPP-768 S5, spec §5.9): "Archive project…" opens a confirm that names what stops
+ * for THIS project (project:delete). Archived projects are not in `projects` (GET /v1/projects
+ * leaves them out); "Show archived" lists them with Restore. An open project that is archived
+ * says so in the menu, with Restore.
  */
-export function ProjectMenu({ projects, activeId, homeId }: {
+export function ProjectMenu({ projects, activeId, homeId, orgId }: {
   projects: ProjectMenuItem[];
   activeId: string;
   homeId: string;
+  orgId?: string;
 }) {
   const [creating, setCreating] = useState(false);
+  const [archiving, setArchiving] = useState(false);
+  const [showArchived, setShowArchived] = useState(false);
   const active = projects.find((p) => p.id === activeId);
+  // Not in the list: it may be archived. Asked once per project; never for a listed one.
+  const archived = useArchived(active ? undefined : activeId);
+  const isHome = activeId === homeId;
+  const goHome = () => window.location.assign(projectHref(homeId, homeId));
+  const openProject = (id: string) => window.location.assign(projectHref(id, homeId));
   return (
+    <>
     <details className="bx-project-menu" data-testid="project-menu">
-      <summary title="Project · switch, or create one">{active?.name ?? activeId}</summary>
+      <summary title="Project · switch, create, or archive one">
+        {active?.name ?? archived?.name ?? activeId}
+        {archived ? <span className="bx-project-menu-archived" data-testid="project-menu-archived-badge">Archived</span> : null}
+      </summary>
       <div className="bx-project-menu-panel">
+        {archived ? <ArchivedNotice state={archived} onRestored={openProject} /> : null}
         <ul aria-label="Projects">
           {projects.map((p) => (
             <li key={p.id}>
@@ -62,7 +83,34 @@ export function ProjectMenu({ projects, activeId, homeId }: {
             + New project
           </GatedButton>
         )}
+        {active ? (isHome ? (
+          <button type="button" className="bx-project-menu-new bx-project-menu-archive" aria-disabled="true"
+                  title={HOME_TIP} data-testid="archive-project" onClick={(event) => event.preventDefault()}>
+            Archive project…<span className="sr-only">{HOME_TIP}</span>
+          </button>
+        ) : (
+          <GatedButton permission="project:delete" className="bx-project-menu-new bx-project-menu-archive"
+                       title={ARCHIVE_TIP} data-testid="archive-project" onClick={() => setArchiving(true)}>
+            Archive project…
+          </GatedButton>
+        )) : null}
+        <button type="button" className="bx-project-menu-new bx-project-menu-toggle" aria-expanded={showArchived}
+                aria-controls="boss-archived-projects" data-testid="show-archived"
+                title="Projects that were archived: hidden from this list, restorable"
+                onClick={() => setShowArchived((open) => !open)}>
+          {showArchived ? "Hide archived" : "Show archived"}
+        </button>
+        {showArchived ? (
+          <div id="boss-archived-projects" data-testid="archived-projects">
+            <ArchivedProjects orgId={orgId} onRestored={openProject} />
+          </div>
+        ) : null}
       </div>
     </details>
+    {archiving && active ? (
+      <ArchiveDialog projectId={active.id} name={active.name} onClose={() => setArchiving(false)}
+                     onArchived={goHome} />
+    ) : null}
+    </>
   );
 }

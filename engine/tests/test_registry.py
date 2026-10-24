@@ -82,6 +82,8 @@ _EXPECTED_TOOLS: set[str] = {
     "cancel_code_task",
     # "Create a project called northpeak-bank-a": a new project in the org (project:create).
     "create_project",
+    # Archive / restore a project: offered as a button a person presses (BOSSAPP-768 S5).
+    "archive_project", "restore_project",
     # The first deployment. BOSS could create hosts and targets and could redeploy, and had
     # nothing that performs a deployment which never happened — so "deploy it" had no
     # executable action at all.
@@ -243,13 +245,13 @@ def test_default_registry_shape():
     read = {s.name for s in reg.specs(kind="read")}
     write = {s.name for s in reg.specs(kind="write")}
     assert read | write == set(reg.names())
-    assert len(reg.names()) == 155, (
+    assert len(reg.names()) == 157, (
         f"tool set changed: unexpected={sorted(set(reg.names()) - _EXPECTED_TOOLS)}, "
         f"missing={sorted(_EXPECTED_TOOLS - set(reg.names()))}")
     assert len(read) == 92  # + wait_for (waiting for BOSS's own work) + kg_schema (what the knowledge graph holds) + code_graph_status, index_repository_code (a repository's code graph) + list_org_repositories (the org's repository registry) + list_projects, describe_project (a project's real state, any project)
     #                        + captain_goals, + 7 kg reads, + 3 self-fix reads, + read_app_logs, + my_recent_work, + system_health, + 7 template/security reads, + precheck_workflow
     #                        + query_project_data (the agent baseline's fenced row read)
-    assert len(write) == 63  # + allow_repository, remove_project_repository + 5 captain writes (BOSSAPP-759), + create_project, + kg_propose_fact, + remove_app, + system_doctor_act, + run_security_scan (F4), + apply_template (F2),
+    assert len(write) == 65  # + archive_project, restore_project (BOSSAPP-768 S5), + allow_repository, remove_project_repository + 5 captain writes (BOSSAPP-759), + create_project, + kg_propose_fact, + remove_app, + system_doctor_act, + run_security_scan (F4), + apply_template (F2),
     #                         + review_pull_request_again
     # the capabilities the user explicitly asked the agent to cover
     for name in (
@@ -453,6 +455,9 @@ _SAFE_WRITES = [
     # A NEW PROJECT IS EMPTY. It starts nothing, spends nothing and touches no existing work; the
     # identity gate still decides project:create with the caller's own step-up.
     "create_project",
+    # ARCHIVING DELETES NOTHING: the other tool undoes it. Still operator_only (a person's
+    # press), because it pauses every schedule and monitor of a project at once.
+    "archive_project", "restore_project",
     # CONNECTING A SUBSCRIPTION READS. It probes a CLI the operator already installed, makes
     # it answer once in a read-only sandbox, and records an entitlement row. It stores no
     # credential (there is none to store) and changes no code.
@@ -525,6 +530,8 @@ def test_the_tools_that_are_never_pressed_by_the_model():
     assert never == [
         # gives BOSS's agents reach on a GitHub repository through the org's App
         "allow_repository",
+        # archive / restore a project: pauses or resumes all of its schedulers (BOSSAPP-768 S5)
+        "archive_project",
         # hands an agent an MCP server — its credentials and every action it exposes
         "assign_mcp_to_agent",
         "cancel_code_task",   # throws away a build in flight
@@ -534,6 +541,7 @@ def test_the_tools_that_are_never_pressed_by_the_model():
         "decide",             # approves a gate; an agent that approves its own gates is ungated
         "delete_workflow",    # removes a path a person authored
         "remove_app",         # stops an app and removes it from its host
+        "restore_project",    # see archive_project
         "run_on_host",        # arbitrary command on a live machine
         "system_doctor_act",  # may pause or cancel a build to free the machine
         "waive_gates",        # removes a check somebody put there

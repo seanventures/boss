@@ -288,9 +288,12 @@ def sweep(engine, settings: Settings, *, project_id: Optional[str] = None,
     probed, skipped, failed = 0, 0, 0
     try:
         with begin(engine) as c:
+            from . import projects_archive    # an archived project's apps are not probed
+
             q = ("SELECT t.*, " + STACK_OPEN_URL_COLUMN.format(alias="t")
                  + " FROM deployment_targets t WHERE t.status = 'active'"
-                 " AND " + DEPLOYED_PREDICATE.format(alias="t")
+                 " AND " + projects_archive.live_sql("t.project_id")
+                 + " AND " + DEPLOYED_PREDICATE.format(alias="t")
                  + (" AND t.project_id = :p" if project_id else ""))
             targets = [dict(r) for r in c.execute(
                 sql(q), ({"p": project_id} if project_id else {})).mappings().all()]

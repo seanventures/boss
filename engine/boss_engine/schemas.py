@@ -64,6 +64,10 @@ class ProjectSummary(BaseModel):
     org_id: str
     org_name: str
     created_at: str
+    # Set while the project is archived (services/projects_archive.py); GET /v1/projects lists
+    # archived projects only when asked (include_archived=true).
+    archived_at: Optional[str] = None
+    archived_by: Optional[str] = None
 
 
 class ProjectListResponse(BaseModel):

@@ -1540,7 +1540,7 @@ function ConsoleShellInner({
             </button>
           ) : null}
           {projects && scope.projectId ? (
-            <ProjectMenu projects={projects.items} activeId={scope.projectId} homeId={projects.homeId} />
+            <ProjectMenu projects={projects.items} activeId={scope.projectId} homeId={projects.homeId} orgId={org?.id} />
           ) : null}
 
           <RefreshState coordinator={refreshCoordinator} fallback={refreshing}>{(refreshing) => (

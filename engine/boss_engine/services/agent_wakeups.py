@@ -112,6 +112,9 @@ def arm_monitor(
     deadline_seconds: Optional[int] = None,
 ) -> dict[str, Any]:
     """Keep one conversation checking something until a condition is met."""
+    from . import projects_archive
+
+    projects_archive.refuse_new_work(connection, project_id, "new watches")
     if not thread_id:
         raise WakeupError("a monitor runs inside a conversation, so it needs a thread")
     if not (prompt or "").strip():
@@ -168,6 +171,9 @@ def schedule(
     max_cycles: int = 0,
 ) -> dict[str, Any]:
     """Run something on a clock, in a fresh conversation each time."""
+    from . import projects_archive
+
+    projects_archive.refuse_new_work(connection, project_id, "new schedules")
     if not (prompt or "").strip():
         raise WakeupError("say what to do on each run")
     first = next_scheduled_wake(at_time, days or [], tz_name)
@@ -247,8 +253,11 @@ def due(
     point of a budget is that it is not exceeded by one.
 
     THE PROJECT FILTER IS IN THE QUERY for the same class of reason: applied afterwards, other
-    projects' wakeups consumed the limit and the caller's project ran nothing at all.
+    projects' wakeups consumed the limit and the caller's project ran nothing at all. So is
+    the archive filter: an archived project's wakeups wait for its restore (projects_archive).
     """
+    from . import projects_archive
+
     rows = connection.execute(
         text("SELECT id, project_id, kind, thread_id, actor, prompt, exit_condition, "
              "       interval_seconds, at_time, days, timezone, cycle, max_cycles, "
@@ -258,6 +267,7 @@ def due(
              "   AND (deadline_at IS NULL OR deadline_at > now()) "
              "   AND (max_cycles = 0 OR cycle < max_cycles) "
              "   AND (:p = '' OR project_id = :p) "
+             "   AND " + projects_archive.live_sql("project_id") +
              " ORDER BY next_wake_at LIMIT :l"),
         {"l": max(1, int(limit)), "p": project_id or ""},
     ).mappings().all()

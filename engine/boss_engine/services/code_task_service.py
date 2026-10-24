@@ -515,6 +515,9 @@ def start_code_task(
         raise ValueError(
             "simulated=true cannot open a PR (fail-closed; fixture has no sandbox or model)"
         )
+    from . import projects_archive
+
+    projects_archive.refuse_new_work(connection, project_id, "new code tasks")
     settings = getattr(jobs, "settings", None)
     if settings is not None:
         bad = preflight_test_commands(settings, test_commands)

@@ -445,6 +445,10 @@ class FocusedAgentService:
         self, connection: Connection, *, project_id: str, actor: str,
     ) -> dict[str, Any]:
         """Always-on / hybrid agents whose interval elapsed or a wake event arrived."""
+        from . import projects_archive
+
+        if projects_archive.is_archived(connection, project_id):
+            return {"ran": [], "skipped": [], "active": 0, **projects_archive.skipped(project_id)}
         self.ensure_schema(connection)
         agents = [
             agent for agent in self.list_agents(connection, project_id)

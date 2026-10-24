@@ -119,6 +119,8 @@ EVENT_TYPES: frozenset[str] = frozenset({
     "self_fix.upstream_sent", "self_fix.policy_changed", "self_fix.switch_changed",
     # projects (POST /v1/projects): who made a project in the org, and which
     "project.created",
+    # projects archive (BOSSAPP-768 S5): who archived or restored a project
+    "project.archived", "project.restored",
 })
 
 #: hash of "no previous event" for the first row of an org's chain.

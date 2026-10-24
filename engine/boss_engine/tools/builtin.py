@@ -254,7 +254,8 @@ def _register_read_tools(reg: ToolRegistry) -> None:
     @reg.tool(
         "list_projects",
         "Every project in this organization the caller may read: id, slug, name, how many "
-        "repositories each has registered. The answer to 'which projects exist / does project "
+        "repositories each has registered, and `archived_at` when it is archived (it takes no "
+        "new work until restore_project). The answer to 'which projects exist / does project "
         "X exist?' — never create a project to find out whether it exists.",
         _obj({}), permission="project:read")
     def list_projects(ctx, *, project_id, actor, args):
@@ -265,7 +266,7 @@ def _register_read_tools(reg: ToolRegistry) -> None:
                   or getattr(ctx.settings, "default_org_id", "") or "")
         with ctx.begin() as c:
             rows = c.execute(_text(
-                "SELECT p.id, p.slug, p.name, p.description, "
+                "SELECT p.id, p.slug, p.name, p.description, p.archived_at, "
                 "       (SELECT count(*) FROM github_repository_bindings b "
                 "         WHERE b.project_id = p.id AND b.status = 'active') AS repositories "
                 "  FROM projects p JOIN workspaces w ON w.id = p.workspace_id "
@@ -290,7 +291,8 @@ def _register_read_tools(reg: ToolRegistry) -> None:
 
         with ctx.begin() as c:
             row = c.execute(_text(
-                "SELECT id, slug, name, description, created_at FROM projects WHERE id = :p"),
+                "SELECT id, slug, name, description, created_at, archived_at, archived_by "
+                "FROM projects WHERE id = :p"),
                 {"p": project_id}).mappings().first()
             if row is None:
                 return {"ok": False, "error": "project_not_found", "project": project_id}
@@ -8005,6 +8007,10 @@ def build_default_registry() -> ToolRegistry:
     from .captain_tools import register_captain_tools
 
     register_captain_tools(reg)
+    # Archive / restore a project: the console's buttons, offered by the agent (BOSSAPP-768 S5).
+    from .project_archive_tools import register_project_archive_tools
+
+    register_project_archive_tools(reg)
     return reg
 
 
@@ -8065,6 +8071,10 @@ _DISCUSS_OPERATIONS_TOOLS: frozenset[str] = frozenset({
     "set_project_setting",
     # "Create a project called northpeak-bank-a": a new project in the org (project:create).
     "create_project",
+    # "Archive northpeak-bank-b" / "bring it back": offered as a button a person presses
+    # (operator_only, project:delete), the same service as the project menu's (BOSSAPP-768 S5).
+    "archive_project",
+    "restore_project",
     # The escape hatch from a registry of fixed questions: a real debugging session.
     "investigate",
     # Reconciling a run with a world that has moved on. Named by an investigation as the

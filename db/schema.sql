@@ -10382,3 +10382,13 @@ BEGIN
       FOR EACH ROW EXECUTE FUNCTION kg_repo_index_mark_due();
   END IF;
 END $$;
+
+-- BEGIN projects archive (BOSSAPP-768 S5; KNOWLEDGE_GRAPH_PRODUCT_SPEC.md §2.7) ----------------
+-- An archived project is hidden from GET /v1/projects (unless include_archived=true), refuses new
+-- work (409 project_archived) and is skipped by every scheduler (services/projects_archive.py,
+-- enforced by engine/tests/test_every_scheduler_skips_archived_projects.py). Reads keep working
+-- and nothing is deleted; restoring clears both columns.
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS archived_by TEXT;
+CREATE INDEX IF NOT EXISTS idx_projects_archived ON projects(id) WHERE archived_at IS NOT NULL;
+-- END projects archive ---------------------------------------------------------------------------

@@ -65,9 +65,12 @@ def embed_due(engine: Any, *, project_id: str | None = None, limit: int = BATCH)
     from .embedding_slot import active_embedder, projects_with_a_slot
     from .store import PostgresKnowledgeStore
 
+    from .. import projects_archive    # an archived project is not re-embedded
+
     out = {"projects": 0, "embedded": 0, "dropped": 0, "failed": 0}
     with engine.begin() as connection:
-        projects = [project_id] if project_id else projects_with_a_slot(connection)
+        projects = projects_archive.live_ids(
+            connection, [project_id] if project_id else projects_with_a_slot(connection))
     settings = get_settings()
     for pid in projects:
         try:

@@ -330,6 +330,9 @@ def create(
     workflow_key = str(workflow_key or "").strip()
     if not workflow_key:
         raise ScheduleError("say which workflow this runs.")
+    from . import projects_archive
+
+    projects_archive.refuse_new_work(connection, project_id, "new schedules")
 
     # THE WORKFLOW HAS TO EXIST AND BE RUNNABLE. A schedule pointing at nothing fires forever
     # into an error nobody reads, and the check costs one query now against every tick later.
@@ -568,8 +571,13 @@ def run_due(
     SELECT ... FOR UPDATE SKIP LOCKED because more than one worker may tick at once: two
     workers claiming the same schedule is the same digest sent twice.
     """
+    from . import projects_archive
     from .workflows import start_run
 
+    # AN ARCHIVED PROJECT'S SCHEDULES DO NOT FIRE, and are not advanced either: on restore each
+    # one fires once (next_occurrence is computed from now), never once per missed slot.
+    if projects_archive.is_archived(connection, project_id):
+        return []
     now = now or datetime.now(timezone.utc)
     due_rows = connection.execute(
         text(

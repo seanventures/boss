@@ -599,6 +599,12 @@ class JobLeaseService:
         current_time = now_utc()
         lease_expires_at = current_time + timedelta(seconds=lease_ttl_seconds)
 
+        # AN ARCHIVED PROJECT RUNS NOTHING (projects_archive): its jobs stay queued, untouched,
+        # and run once it is restored. Queueing is not refused here on purpose: a run in flight
+        # when its project was archived keeps its next step, instead of losing it for good. New
+        # work is refused at its doors (start_code_task, start_run, schedules, index requests).
+        from . import projects_archive
+
         candidate_statement = text(
             """
             SELECT id, project_id, task_id, work_item_id, tracker_binding_id,
@@ -607,6 +613,7 @@ class JobLeaseService:
                    last_error, priority
             FROM jobs
             WHERE kind IN :capabilities
+              AND """ + projects_archive.live_sql("jobs.project_id") + """
               AND (
                 (run_after <= :now_utc
                  AND (

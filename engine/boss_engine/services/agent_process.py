@@ -569,6 +569,10 @@ class AgentProcessService:
         return self.get_run(connection, project_id, run_id)
 
     def tick_due(self, connection: Connection, *, project_id: str, actor: str) -> dict[str, Any]:
+        from . import projects_archive
+
+        if projects_archive.is_archived(connection, project_id):
+            return {"ran": 0, "runs": [], **projects_archive.skipped(project_id)}
         ran = []
         for item in self.list_active(connection, project_id):
             ran.append(self.advance(
