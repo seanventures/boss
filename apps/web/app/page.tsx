@@ -3172,7 +3172,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           </div>
           <KnowledgeGraphPanel feed={knowledgeGraphFeed} />
           {/* Search, why, blast radius and the knowledge settings moved to Graph (KG spec §5.1). */}
-          <KnowledgeMovedCard to="explorer" orgId={activeOrgId} />
+          <KnowledgeMovedCard to="explorer" orgId={activeOrgId} projectId={otherProject ? activeProjectId : null} />
         </section>
         ) : null}
 
@@ -3681,7 +3681,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             initialFilter={requestedDecisionFilter}
           />
           {/* Fact promotion moved to Graph › Rules review › Facts (KG spec §5.1). */}
-          <KnowledgeMovedCard to="facts" orgId={activeOrgId} />
+          <KnowledgeMovedCard to="facts" orgId={activeOrgId} projectId={otherProject ? activeProjectId : null} />
         </section>
         ) : null}
 

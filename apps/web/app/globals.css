@@ -6521,7 +6521,12 @@ a.sp-node:hover .sp-label { color: var(--ink); }
   min-width: 260px; padding: 8px 12px;
   border: 1px solid var(--border-strong); border-radius: 8px;
   background: var(--surface); box-shadow: 0 16px 32px rgba(0,0,0,.35);
+  /* Everything the menu holds stays inside its box (KG tester round 1 P0-7: Archive project… and
+     Show archived spilled out over the page below a short header): a column, scrolling if tall. */
+  display: flex; flex-direction: column; max-height: min(70vh, 34rem); overflow-y: auto; box-sizing: border-box;
 }
+.bx-project-menu:not([open]) .bx-project-menu-panel { display: none; }
+.bx-project-menu-panel > * { flex: none; }
 .bx-project-menu-panel ul { list-style: none; margin: 0 0 6px; padding: 0; max-height: 240px; overflow-y: auto; }
 .bx-project-menu-panel li a { display: block; padding: 7px 4px; border-radius: 4px; color: var(--ink-soft); text-decoration: none; }
 .bx-project-menu-panel li a:hover { background: var(--surface-2); color: var(--ink); }
@@ -8737,8 +8742,9 @@ details[open] > .skill-form-summary::before { transform: rotate(90deg); }
 
 /* Another project of the org is open (?project_id=, e.g. a template lab): say which, and the way back. */
 .project-away { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; justify-content: space-between;
-  margin: 0 0 12px; padding: 8px 12px; border: 1px solid var(--border, #d0d4dc); border-radius: 8px;
-  background: var(--surface-warn, #fff8e6); font-size: 0.68421rem; }
+  margin: 0 0 12px; padding: 8px 12px; border: 1px solid color-mix(in srgb, var(--amber) 40%, var(--border));
+  border-radius: 8px; background: var(--amber-soft); color: var(--ink); font-size: 0.68421rem; }
+.project-away strong { color: var(--ink); }
 .project-away a { white-space: nowrap; }
 
 /* The project menu's own rows (app/project-menu.tsx): Archive project…, Show archived, the badge. */

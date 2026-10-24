@@ -31,7 +31,7 @@ export const EDGE_MAX = 3;
 export const LABEL_MAX = 28;
 /** Ceilings (§5.3): the canvas never draws more. */
 export const OVERVIEW_CEILING = 60;
-export const FOCUS_CEILING = 300;
+export const FOCUS_CEILING = 200;
 
 // ── determinism ─────────────────────────────────────────────────────────────────────────────
 
@@ -59,39 +59,55 @@ export function seeded(seed: number): () => number {
 
 // ── layouts ─────────────────────────────────────────────────────────────────────────────────
 
-export type LayoutNode = { id: string; key?: string };
+export type LayoutNode = { id: string; key?: string; /** The label's box, screen px: the layout keeps them apart. */ w?: number; h?: number };
 export type LayoutEdge = { src: string; dst: string; weight: number };
 
+/** A bubble's label box (two lines under a 56 px bubble) when the caller does not measure it. */
+export const OVERVIEW_BOX = { w: 190, h: 56 + 44 };
+
 /**
- * Whole repo: a seeded force layout (Fruchterman–Reingold, fixed iterations) of the area bubbles,
- * with the `pinned` bubbles (Rules, Learning) in a column to the right. Ids are sorted first, so
- * the input order never changes the picture; the seed is the keys themselves.
+ * Whole repo (§5.3, tester round 1 P0-1): every bubble AND its two-line label gets its own room —
+ * nothing overlaps at Fit. World units are screen px at 100%, so the boxes are the labels' real
+ * size. Steps, all deterministic (ids sorted; the seed is the keys):
+ *   1. the most connected area in the middle, the rest on rings around it in connection order;
+ *   2. a short seeded force pass pulls connected areas together;
+ *   3. rectangle separation: no two label boxes overlap;
+ *   4. the Rules and Learning bubbles pinned in a column to the right.
  */
 export function overviewLayout(nodes: LayoutNode[], edges: LayoutEdge[], pinned: string[] = []): Map<string, Pt> {
   const pin = new Set(pinned);
-  const free = nodes.filter((n) => !pin.has(n.id)).map((n) => ({ id: n.id, key: n.key ?? n.id }))
+  const free = nodes.filter((n) => !pin.has(n.id)).map((n) => ({ id: n.id, key: n.key ?? n.id, w: n.w ?? OVERVIEW_BOX.w, h: n.h ?? OVERVIEW_BOX.h }))
     .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
-  const out = new Map<string, Pt>();
   const n = free.length;
-  const K = 130; // ideal distance between bubbles: room for a 16 px label and its count
-  // Gravity pulls harder vertically, so the picture is wider than tall, like the canvas it fills.
-  const GRAVITY_X = 3;
-  const GRAVITY_Y = 4.4;
-  const pos = free.map((f, i) => {
-    const r = seeded(hashSeed(f.key));
-    const angle = (i / Math.max(1, n)) * Math.PI * 2 + r() * 0.6;
-    const radius = K * Math.sqrt(n) * (0.25 + r() * 0.2);
-    return { x: Math.cos(angle) * radius, y: Math.sin(angle) * radius };
-  });
   const index = new Map(free.map((f, i) => [f.id, i]));
   const springs = edges
     .filter((e) => index.has(e.src) && index.has(e.dst) && e.src !== e.dst)
-    .map((e) => ({ a: index.get(e.src)!, b: index.get(e.dst)!, w: 1 + Math.log10(Math.max(1, e.weight)) }))
-    // The input order must not change the sums either.
+    .map((e) => ({ a: index.get(e.src)!, b: index.get(e.dst)!, w: Math.log10(Math.max(1, e.weight)) + 1 }))
     .sort((x, y) => x.a - y.a || x.b - y.b || x.w - y.w);
-  const ITER = 320;
-  let temp = K;
-  for (let it = 0; it < ITER; it += 1) {
+  const degree = new Float64Array(n);
+  for (const s of springs) { degree[s.a] += s.w; degree[s.b] += s.w; }
+  // 1. rings, the most connected first (ties by key).
+  const order = free.map((_, i) => i).sort((a, b) => degree[b] - degree[a] || a - b);
+  const pos: Pt[] = free.map(() => ({ x: 0, y: 0 }));
+  let placed = 0;
+  let ring = 0;
+  while (placed < order.length) {
+    if (ring === 0) { pos[order[0]] = { x: 0, y: 0 }; placed = 1; ring = 1; continue; }
+    const r = ring * 210;
+    const cap = Math.max(6, Math.floor((2 * Math.PI * r) / 230));
+    const take = order.slice(placed, placed + cap);
+    const turn = (hashSeed(free[take[0]].key) / 4294967296) * Math.PI * 2;
+    take.forEach((idx, j) => {
+      const a = turn + (j / take.length) * Math.PI * 2;
+      pos[idx] = { x: Math.cos(a) * r * 1.35, y: Math.sin(a) * r * 0.85 };
+    });
+    placed += take.length;
+    ring += 1;
+  }
+  // 2. a short force pass: connected areas drift together, everything is pulled to the middle.
+  const K = 200;
+  let temp = 60;
+  for (let it = 0; it < 120; it += 1) {
     const dx = new Float64Array(n);
     const dy = new Float64Array(n);
     for (let i = 0; i < n; i += 1) {
@@ -109,14 +125,14 @@ export function overviewLayout(nodes: LayoutNode[], edges: LayoutEdge[], pinned:
       const vx = pos[s.a].x - pos[s.b].x;
       const vy = pos[s.a].y - pos[s.b].y;
       const d = Math.max(0.01, Math.hypot(vx, vy));
-      const f = ((d * d) / K) * 0.12 * s.w;
+      const f = ((d * d) / K) * 0.08 * s.w;
       dx[s.a] -= (vx / d) * f; dy[s.a] -= (vy / d) * f;
       dx[s.b] += (vx / d) * f; dy[s.b] += (vy / d) * f;
     }
     for (let i = 0; i < n; i += 1) {
-      // Gravity keeps the unconnected areas on the page instead of drifting off it.
-      dx[i] -= pos[i].x * GRAVITY_X;
-      dy[i] -= pos[i].y * GRAVITY_Y;
+      // Wider than tall, like the canvas it fills.
+      dx[i] -= pos[i].x * 0.9;
+      dy[i] -= pos[i].y * 1.8;
       const d = Math.hypot(dx[i], dy[i]);
       if (d > 0) {
         const step = Math.min(d, temp);
@@ -124,73 +140,178 @@ export function overviewLayout(nodes: LayoutNode[], edges: LayoutEdge[], pinned:
         pos[i].y += (dy[i] / d) * step;
       }
     }
-    temp = Math.max(1, temp * 0.985);
+    temp = Math.max(2, temp * 0.97);
   }
-  separate(pos, 135, 60);
-  // Centre the free bubbles on the origin.
+  // 3. no two label boxes overlap.
+  separateBoxes(pos, free.map((f) => ({ w: f.w + 24, h: f.h + 20 })));
+  const out = new Map<string, Pt>();
   const bb = bounds(pos);
   const cx = (bb.minX + bb.maxX) / 2;
   const cy = (bb.minY + bb.maxY) / 2;
   free.forEach((f, i) => out.set(f.id, { x: round(pos[i].x - cx), y: round(pos[i].y - cy) }));
-  // The layer bubbles, pinned right, in the order given.
-  const present = new Set(nodes.map((nd) => nd.id));
-  const pins = pinned.filter((id) => present.has(id)).map((id) => ({ id }));
-  const right = (n ? (bb.maxX - cx) : 0) + 190;
-  pins.forEach((p, i) => {
-    const y = (i - (pins.length - 1) / 2) * 150;
-    out.set(p.id, { x: round(right), y: round(y) });
+  // 4. the layer bubbles, pinned right, in the order given.
+  const present = new Map(nodes.map((nd) => [nd.id, nd]));
+  const pins = pinned.filter((id) => present.has(id));
+  const widest = Math.max(OVERVIEW_BOX.w, ...free.map((f) => f.w));
+  const right = (n ? (bb.maxX - cx) : 0) + widest / 2 + Math.max(OVERVIEW_BOX.w, ...pins.map((id) => present.get(id)!.w ?? OVERVIEW_BOX.w)) / 2 + 40;
+  pins.forEach((id, i) => {
+    const y = (i - (pins.length - 1) / 2) * (OVERVIEW_BOX.h + 70);
+    out.set(id, { x: round(n ? right : 0), y: round(y) });
   });
   return out;
 }
 
-/** Push apart any two points closer than `min`: a few deterministic passes. */
-function separate(pos: Pt[], min: number, passes: number) {
+/** Push apart any two boxes (centred on the node's x, from the bubble's top down through its
+ *  label) that overlap, along the axis that needs the smaller move. Deterministic passes. */
+export function separateBoxes(pos: Pt[], box: Array<{ w: number; h: number }>, passes = 200): void {
   for (let p = 0; p < passes; p += 1) {
     let moved = false;
     for (let i = 0; i < pos.length; i += 1) {
       for (let j = i + 1; j < pos.length; j += 1) {
-        const vx = pos[j].x - pos[i].x;
-        const vy = pos[j].y - pos[i].y;
-        const d = Math.hypot(vx, vy);
-        if (d >= min) continue;
+        const ox = (box[i].w + box[j].w) / 2 - Math.abs(pos[i].x - pos[j].x);
+        const oy = (box[i].h + box[j].h) / 2 - Math.abs(pos[i].y - pos[j].y);
+        if (ox <= 0 || oy <= 0) continue;
         moved = true;
-        const ux = d > 0.001 ? vx / d : 1;
-        const uy = d > 0.001 ? vy / d : 0;
-        const push = (min - d) / 2;
-        pos[i].x -= ux * push; pos[i].y -= uy * push;
-        pos[j].x += ux * push; pos[j].y += uy * push;
+        if (ox * 0.6 < oy) {
+          const s = (pos[i].x < pos[j].x || (pos[i].x === pos[j].x && i < j) ? -1 : 1) * (ox / 2 + 0.5);
+          pos[i].x += s; pos[j].x -= s;
+        } else {
+          const s = (pos[i].y < pos[j].y || (pos[i].y === pos[j].y && i < j) ? -1 : 1) * (oy / 2 + 0.5);
+          pos[i].y += s; pos[j].y -= s;
+        }
       }
     }
     if (!moved) return;
   }
 }
 
+/** True when no two boxes overlap (what the overview promises; tests hold it to it). */
+export function boxesClear(pos: Pt[], box: Array<{ w: number; h: number }>): boolean {
+  for (let i = 0; i < pos.length; i += 1) {
+    for (let j = i + 1; j < pos.length; j += 1) {
+      if ((box[i].w + box[j].w) / 2 - Math.abs(pos[i].x - pos[j].x) > 0.5
+        && (box[i].h + box[j].h) / 2 - Math.abs(pos[i].y - pos[j].y) > 0.5) return false;
+    }
+  }
+  return true;
+}
+
 function round(v: number): number {
   return Math.round(v * 100) / 100;
 }
 
-export type FocusNode = { id: string; hop: number };
+// ── the Whole-repo selection: what one overview draws ──────────────────────────────────────
 
-/** The first ring's radius, the gap between rings, and the arc each node needs on a ring. */
-export const RING_FIRST = 190;
-export const RING_STEP = 92;
-export const RING_SLOT = 76;
+/** At most this many areas are drawn at once; the rest fold into one "N more areas" bubble. */
+export const OVERVIEW_AREAS = 10;
+export const MORE_ID = "more:areas";
 
-/** How many nodes fit on a ring of radius r. */
-export function ringCapacity(r: number): number {
-  return Math.max(6, Math.floor((2 * Math.PI * r) / RING_SLOT));
+export type OverviewPick<N, E> = {
+  nodes: N[];
+  /** Edges among what is drawn, those to folded areas summed onto the "more" bubble. */
+  edges: E[];
+  /** The areas folded into the "more" bubble (empty when everything fits). */
+  folded: N[];
+  page: number;
+  pages: number;
+  /** Which page each area is drawn on. */
+  pageOf: Map<string, number>;
+};
+
+/**
+ * Whole repo, readable at any project size (tester round 1 P0-1): the areas are ranked by size
+ * (classes, then methods) and connections; page `page` draws OVERVIEW_AREAS of them — all of them
+ * when there are at most OVERVIEW_AREAS + 2 — and folds the rest into one bubble whose edges are
+ * the sums of theirs. Earlier pages fold into the same bubble, so every area is one press away.
+ */
+export function pickOverview<N extends { id: string; counts?: Record<string, number> }, E extends { src: string; dst: string; kind: string; weight: number; label: string | null }>(
+  areas: N[], layers: N[], edges: E[], page: number, makeMore: (folded: N[], total: number) => N,
+): OverviewPick<N, E> {
+  const size = (n: N) => (n.counts?.classes ?? 0) * 4 + (n.counts?.methods ?? n.counts?.functions ?? 0) + (n.counts?.packages ?? 0);
+  const weight = new Map<string, number>();
+  for (const e of edges) {
+    weight.set(e.src, (weight.get(e.src) ?? 0) + e.weight);
+    weight.set(e.dst, (weight.get(e.dst) ?? 0) + e.weight);
+  }
+  const ranked = [...areas].sort((a, b) => size(b) - size(a) || (weight.get(b.id) ?? 0) - (weight.get(a.id) ?? 0) || (a.id < b.id ? -1 : 1));
+  const fits = ranked.length <= OVERVIEW_AREAS + 2;
+  const pages = fits ? 1 : Math.ceil(ranked.length / OVERVIEW_AREAS);
+  const p = Math.max(0, Math.min(page, pages - 1));
+  const shown = fits ? ranked : ranked.slice(p * OVERVIEW_AREAS, (p + 1) * OVERVIEW_AREAS);
+  const shownIds = new Set(shown.map((n) => n.id));
+  const folded = ranked.filter((n) => !shownIds.has(n.id));
+  const more = folded.length ? makeMore(folded, ranked.length) : null;
+  const into = (id: string) => (shownIds.has(id) || layers.some((l) => l.id === id) ? id : more ? more.id : null);
+  const merged = new Map<string, E>();
+  for (const e of edges) {
+    const s = into(e.src);
+    const d = into(e.dst);
+    if (!s || !d || s === d) continue;
+    const k = `${s}\u0000${d}\u0000${e.kind}`;
+    const prev = merged.get(k);
+    if (!prev) { merged.set(k, { ...e, src: s, dst: d }); continue; }
+    const w = prev.weight + e.weight;
+    merged.set(k, { ...prev, weight: w, label: relabel(prev.label ?? e.label, w) });
+  }
+  const pageOf = new Map(ranked.map((n, i) => [n.id, fits ? 0 : Math.floor(i / OVERVIEW_AREAS)]));
+  return { nodes: [...shown, ...(more ? [more] : []), ...layers], edges: [...merged.values()], folded, page: p, pages, pageOf };
+}
+
+/** "16,749 calls" with a new number: the API's own noun kept. */
+function relabel(label: string | null, weight: number): string | null {
+  if (!label) return null;
+  const noun = label.replace(/^[\d,]+\s*/, "");
+  const one = noun.replace(/s$/, "");
+  return `${weight.toLocaleString("en-US")} ${weight === 1 ? one : noun}`;
 }
 
 /**
- * Focus: radial by hop. The centre is fixed at the origin; the first hop is ordered by its edge
- * weight to the centre, heaviest at the top and clockwise from there; later hops sit at the angle
- * of what they connect to on the hop before. A hop with more nodes than one ring holds continues
- * on the next ring out (staggered), so labels keep their room. Returns positions and the ring
- * radii each hop occupies (the canvas draws them faintly).
+ * Which edges a Whole-repo view draws, and which carry their weight label (P0-1: no hairball).
+ * Each node keeps its `perNode` strongest edges (in or out), plus every edge of the selection;
+ * the `labelled` strongest drawn edges show "N calls" (the rest on hover or selection).
  */
-export function focusLayout(centerId: string, nodes: FocusNode[], edges: LayoutEdge[]): { pos: Map<string, Pt>; rings: number[] } {
+export function pickEdges<E extends { src: string; dst: string; kind: string; weight: number }>(
+  edges: E[], selected: string | null, opts: { perNode?: number; labelled?: number } = {},
+): { drawn: E[]; labelled: Set<E> } {
+  const per = opts.perNode ?? 2;
+  const keep = new Set<E>();
+  const incident = new Map<string, E[]>();
+  for (const e of edges) {
+    incident.set(e.src, [...(incident.get(e.src) ?? []), e]);
+    incident.set(e.dst, [...(incident.get(e.dst) ?? []), e]);
+    if (selected && (e.src === selected || e.dst === selected)) keep.add(e);
+  }
+  // Each bubble's `per` strongest connections, in or out.
+  for (const list of incident.values()) {
+    [...list].sort((a, b) => b.weight - a.weight || (a.src + a.dst < b.src + b.dst ? -1 : 1)).slice(0, per).forEach((e) => keep.add(e));
+  }
+  const drawn = edges.filter((e) => keep.has(e));
+  const labelled = new Set([...drawn].filter((e) => e.weight > 1).sort((a, b) => b.weight - a.weight).slice(0, opts.labelled ?? 8));
+  return { drawn, labelled };
+}
+
+export type FocusNode = { id: string; hop: number };
+
+/** The first ring's least radius, the room between rings, and the arc one radial label needs. */
+export const RING_FIRST = 150;
+export const RING_GAP = 150;
+/** Arc per neighbour: a 28 px node and room either side, so neither nodes nor their radial labels touch. */
+export const LABEL_ARC = 34;
+
+/**
+ * Focus (§5.4, tester round 1 P1-4): radial by hop, ONE ring per hop, each ring large enough that
+ * every node's label fits beside its neighbours' (LABEL_ARC px of arc each, at 100%). The first
+ * hop is ordered by its edge weight to the centre (heaviest at the top, clockwise); a later hop
+ * sits at the angle of what it connects to. Returns positions, the ring radii, each node's angle
+ * (for its radial label) and its ring.
+ */
+export function focusLayout(centerId: string, nodes: FocusNode[], edges: LayoutEdge[]): {
+  pos: Map<string, Pt>; rings: number[]; angle: Map<string, number>; ring: Map<string, number>;
+} {
   const pos = new Map<string, Pt>([[centerId, { x: 0, y: 0 }]]);
   const rings: number[] = [];
+  const angle = new Map<string, number>();
+  const ringOf = new Map<string, number>();
   const byHop = new Map<number, FocusNode[]>();
   for (const nd of nodes) {
     if (nd.id === centerId) continue;
@@ -202,43 +323,50 @@ export function focusLayout(centerId: string, nodes: FocusNode[], edges: LayoutE
     neighbours.set(e.src, [...(neighbours.get(e.src) ?? []), { id: e.dst, w: e.weight }]);
     neighbours.set(e.dst, [...(neighbours.get(e.dst) ?? []), { id: e.src, w: e.weight }]);
   }
-  const angle = new Map<string, number>();
-  let radius = RING_FIRST;
+  let prev = 0;
   const hops = [...byHop.keys()].sort((a, b) => a - b);
   for (const h of hops) {
     const list = byHop.get(h)!;
     let ordered: Array<{ id: string; want: number }>;
-    if (h === 1) {
+    if (h === hops[0]) {
       const w = (id: string) => (neighbours.get(id) ?? []).filter((x) => x.id === centerId).reduce((s, x) => s + x.w, 0);
       ordered = [...list].sort((a, b) => w(b.id) - w(a.id) || (a.id < b.id ? -1 : 1)).map((nd) => ({ id: nd.id, want: 0 }));
     } else {
       ordered = list.map((nd) => {
         const parents = (neighbours.get(nd.id) ?? []).filter((x) => angle.has(x.id));
-        const want = parents.length ? circularMean(parents.map((p) => angle.get(p.id)!)) : hashSeed(nd.id) / 4294967296 * Math.PI * 2;
-        return { id: nd.id, want };
+        const want = parents.length ? circularMean(parents.map((p) => angle.get(p.id)!)) : (hashSeed(nd.id) / 4294967296) * Math.PI * 2;
+        return { id: nd.id, want: (want + Math.PI * 4) % (Math.PI * 2) };
       }).sort((a, b) => a.want - b.want || (a.id < b.id ? -1 : 1));
     }
-    let i = 0;
-    let ring = 0;
-    while (i < ordered.length) {
-      const cap = ringCapacity(radius);
-      const take = ordered.slice(i, i + cap);
-      const step = (Math.PI * 2) / take.length;
-      const stagger = ring % 2 ? step / 2 : 0;
-      const start = h === 1 ? -Math.PI / 2 : take[0].want;
-      take.forEach((t, j) => {
-        const a = start + stagger + j * step;
-        angle.set(t.id, a);
-        pos.set(t.id, { x: round(Math.cos(a) * radius), y: round(Math.sin(a) * radius) });
-      });
-      rings.push(radius);
-      i += take.length;
-      ring += 1;
-      radius += RING_STEP;
-    }
-    radius += 36; // a little air between one hop and the next
+    const need = (ordered.length * LABEL_ARC) / (2 * Math.PI);
+    const radius = round(Math.max(prev ? prev + RING_GAP : RING_FIRST, need));
+    const step = (Math.PI * 2) / ordered.length;
+    const start = h === hops[0] ? -Math.PI / 2 : ordered[0].want;
+    ordered.forEach((t, j) => {
+      const a = start + j * step;
+      angle.set(t.id, a);
+      ringOf.set(t.id, rings.length);
+      pos.set(t.id, { x: round(Math.cos(a) * radius), y: round(Math.sin(a) * radius) });
+    });
+    rings.push(radius);
+    prev = radius;
   }
-  return { pos, rings };
+  return { pos, rings, angle, ring: ringOf };
+}
+
+/** A radial label's rotation and anchor: along its ray, upright on the left half. */
+export function radialLabel(a: number, outward: boolean): { rotate: number; align: "left" | "right" } {
+  const left = Math.cos(a) < -1e-9;
+  const rotate = left ? a + Math.PI : a;
+  const align = outward ? (left ? "right" : "left") : (left ? "left" : "right");
+  return { rotate, align };
+}
+
+/** Where a node with many arrows coming in has its arrowheads: spread on a wider rim so each
+ *  stays a distinct 15 × 10 px head instead of a blob (tester round 1 P1-3). */
+export function arrowRim(r: number, fanIn: number): number {
+  if (fanIn <= 6) return r;
+  return r + Math.min(36, ((fanIn - 6) * ARROW_WIDTH) / (2 * Math.PI) + 4);
 }
 
 function circularMean(angles: number[]): number {
@@ -473,7 +601,7 @@ export function kindToken(kind: string, symbolKind?: string | null, id?: string)
     rule: "--kg-rule", incident: "--kg-incident", root_cause: "--kg-root-cause", fix: "--kg-fix",
     precedent: "--kg-precedent", investigation: "--kg-investigation", test_failure: "--kg-test-failure",
     workaround: "--kg-workaround", review_finding: "--kg-review-finding", decision: "--kg-decision",
-    fact: "--kg-fact", endpoint: "--kg-endpoint", table: "--kg-table",
+    fact: "--kg-fact", endpoint: "--kg-endpoint", table: "--kg-table", file: "--kg-file", module: "--kg-file",
     run: "--kg-anchor", pull_request: "--kg-anchor", release: "--kg-anchor", spec: "--kg-anchor",
     runbook: "--kg-anchor", alert_rule: "--kg-anchor", topic: "--kg-anchor",
   };

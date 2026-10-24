@@ -718,7 +718,7 @@ export function DecisionInboxEmpty({
         <p className="detail">
           <button
             type="button"
-            className="linkish"
+            className="linklike"
             onClick={() => {
               // RESOLVED, as the button says — it opened "all". And a popstate, which the inbox
               // reads, rather than a boss:navigate carrying an object the shell ignores.

@@ -30,11 +30,15 @@ describe("the Graph area's states", () => {
     await open();
     expect($('[data-testid="kg-empty-graph"]')).toBeNull();
     expect($('[data-testid="kg-canvas"]')?.getAttribute("data-mode")).toBe("overview");
-    expect($('[data-testid="kg-canvas"]')?.getAttribute("data-nodes")).toBe(String(FX.overview.areas.length + FX.overview.layers.length));
-    expect($('[data-testid="kg-canvas"]')?.getAttribute("aria-label")).toMatch(/^Whole repository: 36 areas/);
+    // Ten areas, "26 more areas", Rules and Learning (tester round 1 P0-1: never a 38-bubble hairball).
+    expect($('[data-testid="kg-canvas"]')?.getAttribute("data-nodes")).toBe("13");
+    expect($('[data-testid="kg-canvas"]')?.getAttribute("aria-label")).toMatch(/^Whole repository: 13 bubbles and the \d+ strongest of 194 calls/);
+    expect(text("kg-overview-note")).toContain("The 10 largest of 36 areas; the rest are in “26 more”.");
     expect($$('[data-testid="kg-tree-row"]').length).toBeGreaterThan(10);
     expect($$(".kg-legend-item").map((l) => l.textContent)).toEqual(expect.arrayContaining(["Area", "Rules layer", "Learning layer"]));
     expect(text("kg-built")).toMatch(/^Built .* agoRebuild$/);
+    // One toolbar row: Built · Rebuild sits on the line under it (P1-10).
+    expect($('[data-testid="kg-built"]')?.closest(".kg-subbar")).not.toBeNull();
     expect(text("kg-panel-none")).toMatch(/Select a node/);
     expect(text("kg-head-counts")).toBe("51,319 code nodes");
   });
@@ -138,16 +142,18 @@ describe("the Graph area's states", () => {
     expect(text("kg-notice")).toContain("Indexing started");
   });
 
-  it("large neighbourhood: the truncation note and Show more (to 300, never past it)", async () => {
+  it("large neighbourhood: the truncation note and Show more — up to the server's 200, never past it (P0-4)", async () => {
     window.history.replaceState(null, "", `/?area=knowledge&kg_node=${FX.hood.center.id}`);
     mockKgFetch();
     await open();
     expect($('[data-testid="kg-canvas"]')?.getAttribute("data-mode")).toBe("focus");
+    expect(calls.some((c) => c.includes("/view/neighbourhood") && c.includes("limit=40"))).toBe(true);
     expect(text("kg-truncated")).toContain(`Showing 80 of ${80 + FX.hood.hidden.nodes} connected classes`);
     await act(async () => ($('[data-testid="kg-show-more"]') as HTMLButtonElement).click());
     await settle();
-    expect(calls.some((c) => c.includes("/view/neighbourhood") && c.includes("limit=300"))).toBe(true);
-    expect(text("kg-truncated")).toContain("300 is the most one view draws");
+    expect(calls.some((c) => c.includes("/view/neighbourhood") && c.includes("limit=200"))).toBe(true);
+    expect(calls.some((c) => /limit=(2[0-9][1-9]|[3-9]\d\d)/.test(c))).toBe(false);
+    expect(text("kg-truncated")).toContain("200 is the most one view reads");
     expect($('[data-testid="kg-show-more"]')).toBeNull();
   });
 

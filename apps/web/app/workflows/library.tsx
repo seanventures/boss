@@ -37,6 +37,7 @@ import {
   type CustomStepDef, type WorkflowSummary,
 } from "./studio-parts";
 import type { CustomStep } from "../delivery-workflows-ui";
+import { useAreaKeydown } from "../../lib/area-keys";
 
 /* ── Schedules (moved here with the Yours tab they lived on) ─────────────────────── */
 
@@ -303,18 +304,14 @@ export function Library(props: LibraryProps) {
 
   // `/` finds, `N` starts a new workflow — only while this area is the one on screen and the
   // operator is not typing somewhere.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.metaKey || e.ctrlKey || e.altKey || e.defaultPrevented) return;
-      const t = e.target as HTMLElement | null;
-      if (t && (/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) || t.isContentEditable)) return;
-      if (!onScreen(rootRef.current)) return;
-      if (e.key === "/") { e.preventDefault(); setView("workflows"); searchRef.current?.focus(); }
-      else if (e.key === "n" || e.key === "N") { e.preventDefault(); onNew(); }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onNew]);
+  useAreaKeydown((e: KeyboardEvent) => {
+    if (e.metaKey || e.ctrlKey || e.altKey || e.defaultPrevented) return;
+    const t = e.target as HTMLElement | null;
+    if (t && (/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) || t.isContentEditable)) return;
+    if (!onScreen(rootRef.current)) return;
+    if (e.key === "/") { e.preventDefault(); setView("workflows"); searchRef.current?.focus(); }
+    else if (e.key === "n" || e.key === "N") { e.preventDefault(); onNew(); }
+  });
 
   const shown = useMemo(() => (items ?? []).filter((w) => matches(w, query.trim())), [items, query]);
   const groups = useMemo(() => groupLibrary(shown), [shown]);

@@ -28,6 +28,7 @@ import { notifyChanged } from "../changed";
 import { showToast } from "../client-forms";
 import { BuildRow, buildAnimates } from "./build-row";
 import { retryBuildAction } from "./floor-actions";
+import { useAreaKeydown } from "../../lib/area-keys";
 
 export const CARDS_SHOWN = 4;
 export const ROWS_SHOWN = 8;
@@ -213,25 +214,21 @@ export function FloorView({ projectId, actor, floor, error, loading, refresh, pa
     && matches(query, a.build?.app, a.title, a.run?.subject, a.detail)), [floor, gone, query]);
   const box = useRef<HTMLDivElement>(null);
   // J / K move between cards and rows from anywhere on the Floor — no click first (walk D17).
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      const key = e.key.toLowerCase();
-      if ((key !== "j" && key !== "k") || e.metaKey || e.ctrlKey || e.altKey || e.defaultPrevented) return;
-      const t = e.target as HTMLElement | null;
-      if (t?.closest?.("input, textarea, select, [contenteditable='true'], [role='dialog']")) return;
-      const root = box.current;
-      if (!root || !root.isConnected) return;
-      const all = [...root.querySelectorAll<HTMLElement>("[data-att-card], .fx-row-open")];
-      if (!all.length) return;
-      const at = all.findIndex((el) => el.contains(document.activeElement) || el === document.activeElement);
-      const next = at < 0 ? (key === "j" ? 0 : all.length - 1)
-        : key === "j" ? Math.min(all.length - 1, at + 1) : Math.max(0, at - 1);
-      e.preventDefault();
-      all[next]?.focus();
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, []);
+  useAreaKeydown((e: KeyboardEvent) => {
+    const key = e.key.toLowerCase();
+    if ((key !== "j" && key !== "k") || e.metaKey || e.ctrlKey || e.altKey || e.defaultPrevented) return;
+    const t = e.target as HTMLElement | null;
+    if (t?.closest?.("input, textarea, select, [contenteditable='true'], [role='dialog']")) return;
+    const root = box.current;
+    if (!root || !root.isConnected) return;
+    const all = [...root.querySelectorAll<HTMLElement>("[data-att-card], .fx-row-open")];
+    if (!all.length) return;
+    const at = all.findIndex((el) => el.contains(document.activeElement) || el === document.activeElement);
+    const next = at < 0 ? (key === "j" ? 0 : all.length - 1)
+      : key === "j" ? Math.min(all.length - 1, at + 1) : Math.max(0, at - 1);
+    e.preventDefault();
+    all[next]?.focus();
+  }, { target: "document" });
   useEffect(() => {
     if (!floor) return;
     setGone((g) => {

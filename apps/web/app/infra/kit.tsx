@@ -13,6 +13,7 @@ import { createPortal } from "react-dom";
 import type { AttentionItem } from "../../lib/agents-live-board";
 import type { Tone, Word } from "../../lib/infra-view";
 import { AttentionCard } from "../agents/attention-card";
+import { useAreaKeydown } from "../../lib/area-keys";
 
 // ── URL state ───────────────────────────────────────────────────────────────────────────────
 
@@ -114,17 +115,13 @@ export function AreaHead({ area, title, tabs, active, onTab, counts, children }:
 /** `/` focuses Find (§7). */
 export function FindBox({ value, onChange, label, testId }: { value: string; onChange: (v: string) => void; label: string; testId: string }) {
   const ref = useRef<HTMLInputElement>(null);
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      const t = e.target as HTMLElement | null;
-      if (e.key === "/" && !t?.closest?.("input, textarea, select, [contenteditable=true]") && !e.metaKey && !e.ctrlKey) {
-        e.preventDefault();
-        ref.current?.focus();
-      }
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, []);
+  useAreaKeydown((e: KeyboardEvent) => {
+    const t = e.target as HTMLElement | null;
+    if (e.key === "/" && !t?.closest?.("input, textarea, select, [contenteditable=true]") && !e.metaKey && !e.ctrlKey) {
+      e.preventDefault();
+      ref.current?.focus();
+    }
+  }, { target: "document" });
   return (
     <label className="inf-find">
       <span className="ag-sr">{label}</span>

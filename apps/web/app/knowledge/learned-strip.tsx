@@ -12,9 +12,8 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
 import { useOnScreen } from "../../lib/area-shown";
-import { formatDateTimeShort } from "../../lib/datetime";
 import { kindName, kindToken } from "../../lib/kg-layout";
-import { getLive, kgNodeHref } from "../../lib/kg-view";
+import { getLive, kgNodeHref, kgWhen } from "../../lib/kg-view";
 import type { KgLearningItem, KgLiveEdge, KgRule } from "../../lib/kg-view-types";
 import "./kg.css";
 
@@ -37,10 +36,8 @@ function merge(prev: Item[], learnings: KgLearningItem[], rules: KgRule[], edges
   return [...by.values()].sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0));
 }
 
-/** "Oct 24, 10:02 AM UTC": one zone and locale, so the server and the browser agree. */
-function clock(at: string): string {
-  return formatDateTimeShort(at, "");
-}
+/** The viewer's own zone, labelled (lib/kg-view.ts kgWhen). */
+const clock = kgWhen;
 
 export function LearnedStrip({ projectId, actor, runId, live, orgId }: {
   projectId: string; actor: string;

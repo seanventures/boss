@@ -26,6 +26,7 @@ import { useIdentityVersion } from "../../lib/use-agent-identities";
 import { buildIndex, type LogLine, type ToolLog } from "../../lib/build-detail";
 import { ToolList } from "./tool-log";
 import { SearchBox, SearchResults, useLogSearch } from "./log-search";
+import { useAreaKeydown } from "../../lib/area-keys";
 
 
 
@@ -342,17 +343,13 @@ export function Story(props: StoryProps) {
   const search = useLogSearch(index);
   const input = useRef<HTMLInputElement>(null);
   const [jump, setJump] = useState<Jump | null>(null);
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "/" || e.altKey || e.metaKey || e.ctrlKey || e.defaultPrevented) return;
-      const t = e.target as HTMLElement | null;
-      if (t?.closest?.("input, textarea, select, [contenteditable='true']")) return;
-      e.preventDefault();
-      input.current?.focus();
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, []);
+  useAreaKeydown((e: KeyboardEvent) => {
+    if (e.key !== "/" || e.altKey || e.metaKey || e.ctrlKey || e.defaultPrevented) return;
+    const t = e.target as HTMLElement | null;
+    if (t?.closest?.("input, textarea, select, [contenteditable='true']")) return;
+    e.preventDefault();
+    input.current?.focus();
+  }, { target: "document" });
   const pick = (hit: LogLine, i: number) => {
     search.setCurrent(i);
     if (hit.call === undefined) return;

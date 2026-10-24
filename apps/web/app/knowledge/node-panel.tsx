@@ -13,12 +13,12 @@ import { Copy, X } from "@phosphor-icons/react";
 import { GatedButton } from "../../components/gated";
 import { roleWords } from "../agents/chain-model";
 import { actorWords } from "../../lib/actor-words";
-import { formatDateTimeShort } from "../../lib/datetime";
 import { isLearnedKind, type KgConnectionGroup, type KgNodeDetailResponse, type KgProvenance, type KgViewEdge, type KgViewNode } from "../../lib/kg-view-types";
 import { kindName, kindToken } from "../../lib/kg-layout";
 import {
   FACT_MANAGE, RULE_REVIEW, SCAN_START, approveRule, codeHref, forgetFact, getBlastRadius, getNode, getWhy,
   kgRunHref, rejectRule,
+  kgWhen,
 } from "../../lib/kg-view";
 import { post } from "../workflows/delivery-api";
 import { StartRefusal, asReadiness, type PendingRefusal } from "../workflow-readiness-ui";
@@ -26,16 +26,16 @@ import { edgeWords } from "./graph-canvas";
 
 export type BubbleSummary = {
   node: KgViewNode;
+  /** The "N more areas" bubble: the areas it holds, each one press from its own page. */
+  members?: KgViewNode[];
   out: Array<{ edge: KgViewEdge; other: KgViewNode }>;
   in: Array<{ edge: KgViewEdge; other: KgViewNode }>;
 };
 
 const LAYER_NAME: Record<string, string> = { code: "Code", rules: "Rules", learning: "Learning", domain: "Domain" };
 
-/** "Oct 24, 9:40 AM UTC": one zone and locale, so the server and the browser agree. */
-function when(at: string | null | undefined): string {
-  return formatDateTimeShort(at, at ?? "");
-}
+/** One formatter for the area: the viewer's own zone, labelled (lib/kg-view.ts kgWhen). */
+const when = kgWhen;
 
 function agentWords(p: { agent_name?: string | null; agent_role?: string | null }): string {
   const role = p.agent_role ? roleWords(p.agent_role) : "";
@@ -50,7 +50,7 @@ function who(p: KgProvenance): string {
 }
 
 export function NodePanel({ projectId, actor, orgId, nodeId, preview, bubble, archived, rulesLocked,
-  onFocusNode, onShowConnected, onDrill, onEditRule, onClose, onChanged }: {
+  onFocusNode, onShowConnected, onDrill, onEditRule, onClose, onChanged, viewEdges, onDetail }: {
   projectId: string; actor: string; orgId?: string | null;
   nodeId: string | null;
   /** What the canvas already knows (label, kind), shown while the detail loads. */
@@ -67,6 +67,10 @@ export function NodePanel({ projectId, actor, orgId, nodeId, preview, bubble, ar
   onClose?: () => void;
   /** A write changed the graph (a rule approved): the views reload. */
   onChanged?: () => void;
+  /** Its edges in the canvas's current view, so the panel and the canvas never disagree (P1-5). */
+  viewEdges?: Array<{ edge: KgViewEdge; other: KgViewNode; out: boolean }> | null;
+  /** The detail, once read: the canvas draws the connections it lists (one source of truth). */
+  onDetail?: (d: KgNodeDetailResponse) => void;
 }) {
   const w = useMemo(() => ({ projectId, actor }), [projectId, actor]);
   const [detail, setDetail] = useState<KgNodeDetailResponse | null>(null);
@@ -87,11 +91,12 @@ export function NodePanel({ projectId, actor, orgId, nodeId, preview, bubble, ar
     const ctl = typeof AbortController !== "undefined" ? new AbortController() : null;
     if (fresh || !detailRef.current) setLoading(true);
     void getNode(w, nodeId, undefined, ctl?.signal).then((r) => {
-      if (r.ok) setDetail(r.data);
+      if (r.ok) { setDetail(r.data); onDetail?.(r.data); }
       else if (r.status !== -1) setError({ status: r.status, text: r.error });
       if (r.ok || r.status !== -1) setLoading(false);
     });
     return () => ctl?.abort();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [w, nodeId, isBubble, attempt]);
 
   if (!nodeId) {
@@ -125,7 +130,7 @@ export function NodePanel({ projectId, actor, orgId, nodeId, preview, bubble, ar
           <CopyId id={nodeId} />
           {close}
         </div>
-        <h3 className="kg-panel-title" data-testid="kg-panel-title" data-user-text>{node?.label ?? "…"}</h3>
+        <h3 className="kg-panel-title" data-testid="kg-panel-title" data-user-text>{soft(node?.label ?? "…")}</h3>
         {node?.sub && !isBubble ? <p className="kg-panel-sub inf-mono" title={node.sub}>{node.sub}</p> : null}
         <div className="kg-panel-actions">
           {onShowConnected ? (
@@ -147,13 +152,21 @@ export function NodePanel({ projectId, actor, orgId, nodeId, preview, bubble, ar
         </div>
       ) : null}
       {!isBubble && detail ? (
-        <DetailBody d={detail} w={w} orgId={orgId} onFocusNode={onFocusNode} />
+        <DetailBody d={detail} w={w} orgId={orgId} onFocusNode={onFocusNode} viewEdges={viewEdges ?? null} />
       ) : null}
 
       <PanelActions w={w} node={node} detail={detail} archived={!!archived} rulesLocked={rulesLocked ?? null}
                     onEditRule={onEditRule} onChanged={() => { setAttempt((a) => a + 1); onChanged?.(); }} orgId={orgId} />
     </aside>
   );
+}
+
+/** Long identifiers and paths break at their own seams (a capital, a dot, a slash), never
+ *  mid-word (tester round 1 P2). */
+export function soft(text: string): React.ReactNode {
+  const parts = text.split(/(?<=[/._])|(?<=[a-z0-9])(?=[A-Z])/);
+  if (parts.length < 2) return text;
+  return parts.map((p, i) => <React.Fragment key={i}>{i ? <wbr /> : null}{p}</React.Fragment>);
 }
 
 function cap(s: string) { return s.charAt(0).toUpperCase() + s.slice(1); }
@@ -212,6 +225,13 @@ function BubbleBody({ b, onFocusNode }: { b: BubbleSummary; onFocusNode: (id: st
           {b.node.sub ? <div className="kg-attr"><dt>summary</dt><dd>{b.node.sub}</dd></div> : null}
         </dl>
       </Section>
+      {b.members?.length ? (
+        <Section title={`In "${b.node.label}"`} testId="kg-panel-members">
+          <ul className="kg-conn-list">
+            {b.members.map((m) => <NodeRow key={m.id} n={m} note={m.sub} onPick={() => onFocusNode(m.id, m)} />)}
+          </ul>
+        </Section>
+      ) : null}
       <Section title="Connections" testId="kg-panel-connections">
         {!b.out.length && !b.in.length ? <p className="kg-quiet">Nothing in this view connects to it.</p> : null}
         {b.out.length ? <h5 className="kg-group-head">Out <span>{b.out.length}</span></h5> : null}
@@ -224,7 +244,7 @@ function BubbleBody({ b, onFocusNode }: { b: BubbleSummary; onFocusNode: (id: st
         </ul>
       </Section>
       <Section title="Vector" testId="kg-panel-vector">
-        <p className="kg-quiet">{b.node.kind === "layer" ? "Each item in this layer is embedded on its own when an embedding model is set." : "An area is a summary of its classes; each class is matched by structure, not meaning."}</p>
+        <p className="kg-quiet">{b.node.kind === "layer" ? "Each item in this layer carries its own vector when an embedding model is set (Settings); open one to see its model and nearest items." : "An area is a summary of what it holds; code symbols are matched by structure, not meaning."}</p>
       </Section>
       <Section title="Provenance" testId="kg-panel-provenance">
         <p className="kg-quiet">{b.node.kind === "layer" ? (b.node.id === "layer:rules" ? "Proposed by agents, approved by people in Rules review." : "Written by agents while they work, with the run and step that wrote it.") : "Rolled up from the code index after each index."}</p>
@@ -233,11 +253,12 @@ function BubbleBody({ b, onFocusNode }: { b: BubbleSummary; onFocusNode: (id: st
   );
 }
 
-const ATTR_SKIP = new Set(["line", "end_line", "module", "lang", "language", "symbol_kind", "statement", "provenance", "review", "scope", "detail", "about", "evidence", "category", "confidence", "status"]);
+const ATTR_SKIP = new Set(["line", "end_line", "module", "lang", "language", "symbol_kind", "type_kind", "kind", "statement", "provenance", "review", "scope", "detail", "about", "evidence", "category", "confidence", "status"]);
 
-function DetailBody({ d, w, orgId, onFocusNode }: {
+function DetailBody({ d, w, orgId, onFocusNode, viewEdges }: {
   d: KgNodeDetailResponse; w: { projectId: string; actor: string }; orgId?: string | null;
   onFocusNode: (id: string, n?: KgViewNode) => void;
+  viewEdges: Array<{ edge: KgViewEdge; other: KgViewNode; out: boolean }> | null;
 }) {
   const a = d.attrs ?? {};
   const href = codeHref(d.repo, d.path, d.line && d.end_line ? [d.line, d.end_line] : d.line);
@@ -281,7 +302,7 @@ function DetailBody({ d, w, orgId, onFocusNode }: {
           {extra.map(([k, v]) => <div key={k} className="kg-attr"><dt>{k.replace(/_/g, " ")}</dt><dd className="inf-mono">{String(v)}</dd></div>)}
         </dl>
       </Section>
-      <Connections d={d} w={w} onFocusNode={onFocusNode} />
+      <Connections d={d} w={w} onFocusNode={onFocusNode} viewEdges={viewEdges} />
       <Section title="Vector" testId="kg-panel-vector">
         {d.vector.embedded ? (
           <>
@@ -306,7 +327,10 @@ function DetailBody({ d, w, orgId, onFocusNode }: {
   );
 }
 
-function Connections({ d, w, onFocusNode }: { d: KgNodeDetailResponse; w: { projectId: string; actor: string }; onFocusNode: (id: string, n?: KgViewNode) => void }) {
+function Connections({ d, w, onFocusNode, viewEdges }: {
+  d: KgNodeDetailResponse; w: { projectId: string; actor: string }; onFocusNode: (id: string, n?: KgViewNode) => void;
+  viewEdges: Array<{ edge: KgViewEdge; other: KgViewNode; out: boolean }> | null;
+}) {
   const [groups, setGroups] = useState<KgConnectionGroup[]>(d.connections);
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -325,7 +349,20 @@ function Connections({ d, w, onFocusNode }: { d: KgNodeDetailResponse; w: { proj
   };
   return (
     <Section title="Connections" testId="kg-panel-connections">
-      {groups.length ? <p className="kg-quiet" data-testid="kg-panel-conn-summary">{summary}</p> : <p className="kg-quiet">Nothing connects to it.</p>}
+      {groups.length ? <p className="kg-quiet" data-testid="kg-panel-conn-summary">{summary}</p> : !viewEdges?.length ? <p className="kg-quiet">Nothing connects to it.</p> : null}
+      {viewEdges?.length ? (
+        // What the canvas draws for it right now — class calls rolled up from its methods
+        // included — so a line on the canvas is always a row here.
+        <div className="kg-group" data-testid="kg-conn-view">
+          <h5 className="kg-group-head" title="The connections drawn on the canvas now">In this view <span>{viewEdges.length.toLocaleString("en-US")}</span></h5>
+          <ul className="kg-conn-list">
+            {viewEdges.map(({ edge, other, out }) => (
+              <NodeRow key={`v-${other.id}-${edge.kind}-${out}`} n={other}
+                       note={`${out ? "" : "← "}${edge.label ?? edgeWords(edge.kind)}`} onPick={() => onFocusNode(other.id, other)} />
+            ))}
+          </ul>
+        </div>
+      ) : null}
       {groups.map((g) => {
         const k = `${g.kind}:${g.direction}`;
         return (

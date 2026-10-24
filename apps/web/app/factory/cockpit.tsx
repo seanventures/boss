@@ -55,6 +55,7 @@ import { plural } from "../../lib/factory-floor";
 import { useIdentityVersion } from "../../lib/use-agent-identities";
 import { ChangeSetCockpit, useRunChangeSet } from "../multirepo/change-set-cockpit";
 import { LearnedStrip } from "../knowledge/learned-strip";
+import { useAreaKeydown } from "../../lib/area-keys";
 
 export type CockpitProps = {
   projectId: string;
@@ -299,35 +300,31 @@ function CockpitView({ c, projectId, runId, actor, onClose, onOpenBuild, refresh
 
   // Keyboard (spec §7): L toggles Logs, G then O focuses Outputs, Esc closes drawer → clears the
   // filter → back to the Floor. Never while typing.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      const t = e.target as HTMLElement | null;
-      if (e.altKey || e.metaKey || e.ctrlKey) return;
-      if (t?.closest?.("input, textarea, select, [contenteditable='true']")) {
-        if (e.key === "Escape" && steering) { setSteering(false); e.preventDefault(); }
-        return;
-      }
-      if (e.defaultPrevented) return;
-      const key = e.key;
-      if (key === "Escape") {
-        if (pop || changeIt) return;
-        e.preventDefault();
-        if (menu || attempts || confirmStop) { setMenu(false); setAttempts(false); setConfirmStop(false); return; }
-        if (logs) { setLogs(null); return; }
-        if (filter) { setFilter(null); return; }
-        onClose();
-        return;
-      }
-      if (key === "l" || key === "L") { setLogs((v) => (v ? null : "build")); return; }
-      if (key === "g" || key === "G") { gPressed.current = true; window.setTimeout(() => { gPressed.current = false; }, 800); return; }
-      if ((key === "o" || key === "O") && gPressed.current) {
-        gPressed.current = false;
-        root.current?.querySelector<HTMLElement>(".fx-outputs")?.focus();
-      }
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [pop, changeIt, menu, attempts, confirmStop, logs, filter, steering, onClose]);
+  useAreaKeydown((e: KeyboardEvent) => {
+    const t = e.target as HTMLElement | null;
+    if (e.altKey || e.metaKey || e.ctrlKey) return;
+    if (t?.closest?.("input, textarea, select, [contenteditable='true']")) {
+      if (e.key === "Escape" && steering) { setSteering(false); e.preventDefault(); }
+      return;
+    }
+    if (e.defaultPrevented) return;
+    const key = e.key;
+    if (key === "Escape") {
+      if (pop || changeIt) return;
+      e.preventDefault();
+      if (menu || attempts || confirmStop) { setMenu(false); setAttempts(false); setConfirmStop(false); return; }
+      if (logs) { setLogs(null); return; }
+      if (filter) { setFilter(null); return; }
+      onClose();
+      return;
+    }
+    if (key === "l" || key === "L") { setLogs((v) => (v ? null : "build")); return; }
+    if (key === "g" || key === "G") { gPressed.current = true; window.setTimeout(() => { gPressed.current = false; }, 800); return; }
+    if ((key === "o" || key === "O") && gPressed.current) {
+      gPressed.current = false;
+      root.current?.querySelector<HTMLElement>(".fx-outputs")?.focus();
+    }
+  }, { target: "document" });
 
   const settled = c.state.state === "cancelled" || c.state.state === "failed";
   const s = stopped && !settled

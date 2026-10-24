@@ -48,7 +48,9 @@ export function ProjectTree({ projectId, actor, tab, onTab, query, selectedId, o
   onPick: (pick: TreePick) => void;
   /** Bumped when live learnings arrive: the open Learning/Rules lists reload. */
   refreshKey?: number;
-  /** A node to open the tree to (a search pick): its label is searched and its ancestors expanded. */
+  /** The selection to open the tree to (a search pick, a panel connection, a canvas click): its
+   *  ancestors are found by its label and expanded, and it is scrolled into view — the tree's
+   *  own filter is untouched (tester round 1 P1-7). */
   reveal?: { label: string; nodeId: string } | null;
 }) {
   const who = useMemo(() => ({ projectId, actor }), [projectId, actor]);
@@ -58,7 +60,11 @@ export function ProjectTree({ projectId, actor, tab, onTab, query, selectedId, o
   const [cursor, setCursor] = useState<string | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
   const [scroll, setScroll] = useState({ top: 0, height: 600 });
-  const q = (reveal?.label ?? query).trim();
+  const q = query.trim();
+  const pagesRef = useRef(pages);
+  pagesRef.current = pages;
+  // Set by a key press: after the next render, the cursor row (now drawn) takes the focus.
+  const focusWanted = useRef(false);
 
   const load = useCallback(async (parent: string | null, offset = 0) => {
     const key = parent ?? ROOT;
@@ -76,6 +82,7 @@ export function ProjectTree({ projectId, actor, tab, onTab, query, selectedId, o
       else next.set(key, { rows: offset ? [...(prev?.rows ?? []), ...r.data.rows] : r.data.rows, total: r.data.total, next: r.data.next_offset, loading: false, error: null });
       return next;
     });
+    return r.ok ? r.data.rows : [];
   }, [who, tab]);
 
   // A new tab (or project) starts from its roots.
@@ -142,6 +149,30 @@ export function ProjectTree({ projectId, actor, tab, onTab, query, selectedId, o
     return m;
   }, [pages, filtered]);
 
+  // Open the tree to the selection: its ancestors (from one search on its label) are loaded and
+  // expanded, then it is the cursor and in view. Nothing to do while it is already drawn.
+  const revealing = useRef<string | null>(null);
+  useEffect(() => {
+    if (!reveal || filtered) return;
+    const target = reveal.nodeId;
+    if (flat.some((f) => f.row.node_id === target || f.row.key === target)) { revealing.current = null; return; }
+    if (revealing.current === target) return;
+    revealing.current = target;
+    void (async () => {
+      const r = await getTreeChildren(who, { tab, q: reveal.label });
+      if (!r.ok || revealing.current !== target) return;
+      const byKey = new Map(r.data.rows.map((x) => [x.key, x]));
+      const hit = r.data.rows.find((x) => x.node_id === target || x.key === target);
+      if (!hit) return;
+      const chain: string[] = [];
+      for (let p = hit.parent_key; p; p = byKey.get(p)?.parent_key ?? null) chain.unshift(p);
+      for (const key of chain) if (!pagesRef.current.has(key)) await load(key);
+      setOpen((s) => new Set([...s, ...chain]));
+      setCursor(hit.key);
+    })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reveal, filtered, who, tab]);
+
   const toggle = (row: KgTreeRow) => {
     if (!row.has_children || filtered) return;
     setOpen((s) => {
@@ -155,45 +186,62 @@ export function ProjectTree({ projectId, actor, tab, onTab, query, selectedId, o
     });
   };
 
+  /** Enter / Space (the WAI-ARIA tree pattern): select the row — a node is focused on the canvas,
+   *  an area, package or group fills the panel. Expanding is the arrows' and the chevron's job. */
   const activate = (row: KgTreeRow) => {
     setCursor(row.key);
-    if (row.node_id) onPick({ nodeId: row.node_id, row });
-    else if (row.has_children) {
-      toggle(row);
-      onPick({ nodeId: null, row });
-    }
+    onPick({ nodeId: row.node_id, row });
+  };
+  /** A click selects too, and opens a closed row (the mouse has no Right arrow). */
+  const click = (row: KgTreeRow) => {
+    activate(row);
+    if (row.has_children && !row.node_id && !open.has(row.key)) toggle(row);
   };
 
   // Selection follows the canvas: the row holding the selected node becomes the cursor and is
   // scrolled into view.
-  const selectedIndex = flat.findIndex((f) => f.row.node_id && f.row.node_id === selectedId);
+  const isSelected = (row: KgTreeRow) => !!selectedId && (row.node_id === selectedId || row.key === selectedId);
+  const selectedIndex = flat.findIndex((f) => isSelected(f.row));
+  /** Bring row `i` into the virtualised window (and say so to the window at once). */
+  const scrollTo = (i: number, centre: boolean) => {
+    const el = scroller.current;
+    if (!el) return;
+    const top = i * ROW_H;
+    const h = el.clientHeight || 600;
+    if (top < el.scrollTop || top > el.scrollTop + h - ROW_H) {
+      const want = Math.max(0, centre ? top - h / 2 : top < el.scrollTop ? top : top - h + ROW_H);
+      el.scrollTop = want;
+      // The window of drawn rows follows where we asked to be, even before the browser scrolls.
+      setScroll({ top: want, height: h });
+    }
+  };
+  // Selection follows the canvas: its row becomes the cursor and is scrolled into view.
   useEffect(() => {
     if (selectedIndex < 0) return;
     setCursor(flat[selectedIndex].row.key);
-    const el = scroller.current;
-    if (!el) return;
-    const top = selectedIndex * ROW_H;
-    if (top < el.scrollTop || top > el.scrollTop + el.clientHeight - ROW_H) el.scrollTop = Math.max(0, top - el.clientHeight / 2);
+    scrollTo(selectedIndex, true);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedIndex, selectedId]);
 
-  const cursorIndex = Math.max(0, flat.findIndex((f) => f.row.key === cursor));
+  const cursorAt = flat.findIndex((f) => f.row.key === cursor);
+  const cursorIndex = cursorAt >= 0 ? cursorAt : Math.max(0, selectedIndex);
   const focusRow = (i: number) => {
     const target = flat[Math.max(0, Math.min(flat.length - 1, i))];
     if (!target) return;
+    focusWanted.current = true;
     setCursor(target.row.key);
-    requestAnimationFrame?.(() => {
-      scroller.current?.querySelector<HTMLElement>(`[data-key="${CSS?.escape ? CSS.escape(target.row.key) : target.row.key}"]`)?.focus();
-    });
-    const el = scroller.current;
-    if (el) {
-      const top = flat.indexOf(target) * ROW_H;
-      if (top < el.scrollTop) el.scrollTop = top;
-      else if (top > el.scrollTop + el.clientHeight - ROW_H) el.scrollTop = top - el.clientHeight + ROW_H;
-    }
+    scrollTo(flat.indexOf(target), false);
   };
+  // After the render that draws it, the cursor row takes the focus (a key press asked for it).
+  useEffect(() => {
+    if (!focusWanted.current || !cursor) return;
+    const el = scroller.current?.querySelector<HTMLElement>(`[data-key="${typeof CSS !== "undefined" && CSS.escape ? CSS.escape(cursor) : cursor}"]`);
+    if (el) { focusWanted.current = false; el.focus(); }
+  });
 
-  const onKey = (e: React.KeyboardEvent, i: number) => {
+  const onKey = (e: React.KeyboardEvent, key: string) => {
+    // The row's index now, not when it was drawn: the list may have changed under it.
+    const i = flat.findIndex((x) => x.row.key === key);
     const f = flat[i];
     if (!f) return;
     const { row } = f;
@@ -204,6 +252,7 @@ export function ProjectTree({ projectId, actor, tab, onTab, query, selectedId, o
       case "End": e.preventDefault(); focusRow(flat.length - 1); break;
       case "ArrowRight":
         e.preventDefault();
+        // Closed: open it (the cursor stays). Open: to its first child.
         if (row.has_children && !filtered && !open.has(row.key)) toggle(row);
         else if (flat[i + 1]?.parentKey === row.key) focusRow(i + 1);
         break;
@@ -280,16 +329,17 @@ export function ProjectTree({ projectId, actor, tab, onTab, query, selectedId, o
             const { row, depth } = f;
             const isOpen = open.has(row.key) || !!filtered;
             const page = pages.get(row.key);
-            const selected = !!row.node_id && row.node_id === selectedId;
+            const selected = isSelected(row);
             const match = filtered && row.match;
             return (
                 <div key={row.key} role="treeitem" className="kg-row" data-key={row.key} data-testid="kg-tree-row" data-level={row.level}
                      data-kind={row.kind} data-match={match || undefined}
                      aria-level={depth + 1} aria-selected={selected} aria-expanded={row.has_children ? isOpen : undefined}
-                     tabIndex={i === (selectedIndex >= 0 ? selectedIndex : cursorIndex) ? 0 : -1}
+                     tabIndex={i === cursorIndex ? 0 : -1}
                      style={{ top: i * ROW_H, paddingLeft: 6 + depth * 14 }}
                      title={`${kindName(row.kind)} · ${row.label}`}
-                     onClick={() => activate(row)} onKeyDown={(e) => onKey(e, i)}>
+                     onClick={() => click(row)} onKeyDown={(e) => onKey(e, row.key)}
+                     onFocus={() => { if (cursor !== row.key) setCursor(row.key); }}>
                   <span className="kg-row-caret" aria-hidden
                         onClick={(e) => { if (row.has_children) { e.stopPropagation(); setCursor(row.key); toggle(row); } }}>
                     {row.has_children ? (page?.loading && isOpen ? "…" : isOpen ? "▾" : "▸") : ""}
