@@ -597,6 +597,10 @@ def _finish(engine: Any, row: dict, job_id: str, *, state: str, error: Optional[
         emit_event(c, row["project_id"], "knowledge.repository.indexed" if state == "indexed"
                    else "knowledge.repository.index_failed", "control_plane", "repository",
                    row["binding_id"], payload)
+    if state == "indexed":   # the Graph area's rollups, in their own transaction (view_rollup.py)
+        from .view_rollup import rebuild_after_index
+
+        rebuild_after_index(engine, row["project_id"], run)
 
 
 def execute_job(engine: Any, settings: Any, *, job_id: str, worker_id: str, lease_token: str,

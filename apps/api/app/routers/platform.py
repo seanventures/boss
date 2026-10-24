@@ -186,6 +186,13 @@ def mount_platform_routers(app: FastAPI) -> None:
         app.include_router(knowledge_router)
     except ImportError:
         pass
+    # BOSSAPP-768 — the Graph area's read path (overview, neighbourhood, node, tree, search)
+    try:
+        from .knowledge_view import router as knowledge_view_router
+
+        app.include_router(knowledge_view_router)
+    except ImportError:
+        pass
 
     # BOSSAPP-768 S5 — archive / restore a project. Unguarded: a broken import fails the boot.
     from .projects_archive import router as projects_archive_router
