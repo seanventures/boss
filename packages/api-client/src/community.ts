@@ -5677,6 +5677,51 @@ export type KgLiveResponse = {
   poll_after_ms: number;
 };
 
+/** An item a run consulted or reused, with where it was learned (spec §4.6). */
+export type KgRunProofItem = {
+  id: string;
+  kind: string;
+  title: string;
+  how: "pack" | "tool" | "cited" | null;
+  /** The run that learned it (its produced edge); null for a rule. */
+  learned_in: string | null;
+  learned_by: string | null;
+};
+
+/** One run's scorecard: what it used, and what it cost. */
+export type KgRunProof = {
+  run_id: string;
+  status: string | null;
+  /** The project's knowledge_graph switch now: on (arm A) | keyword (arm A′) | off. */
+  knowledge_graph: "on" | "keyword" | "off";
+  /** Model calls (llm_calls rows) across the run and the builds it started. */
+  steps: number;
+  turns: number;
+  tokens: number;
+  cost_usd: number;
+  wall_seconds: number | null;
+  repair_rounds: number;
+  /** Learned items the run produced. */
+  learned: number;
+  consulted: KgRunProofItem[];
+  reused: KgRunProofItem[];
+};
+
+export type KgRunComparison = {
+  run: KgRunProof;
+  baseline: KgRunProof;
+  /** run − baseline, per metric; negative is better. */
+  delta: Record<"steps" | "turns" | "tokens" | "cost_usd" | "wall_seconds" | "repair_rounds", number | null>;
+  /** What `run` consulted or reused that `baseline` learned. */
+  carried: KgRunProofItem[];
+  /** Better, AND it carried the edge to the baseline's learning (the claim rule). */
+  attributed: boolean;
+  verdict: string;
+};
+
+/** GET /v1/knowledge/view/proof?project_id&actor&run=&baseline= */
+export type KgRunProofResponse = { run: KgRunProof | null; comparison: KgRunComparison | null };
+
 /** POST /v1/projects/{id}/archive · /unarchive (project:delete, step-up confirmed). */
 export type ProjectArchiveRequest = { actor?: string; step_up: "confirmed" };
 export type ProjectArchiveResponse = {
@@ -8982,6 +9027,11 @@ export function createBossApiClient(config: BossApiClientConfig) {
     },
     getKnowledgeLive(projectId: string, options: { actor?: string; since?: string; run?: string } = {}) {
       return request<KgLiveResponse>("GET", "/v1/knowledge/view/live", {
+        query: { project_id: projectId, ...options },
+      });
+    },
+    getKnowledgeRunProof(projectId: string, options: { actor?: string; run: string; baseline?: string }) {
+      return request<KgRunProofResponse>("GET", "/v1/knowledge/view/proof", {
         query: { project_id: projectId, ...options },
       });
     },

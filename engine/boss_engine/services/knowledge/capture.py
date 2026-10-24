@@ -151,11 +151,21 @@ def capture_lifecycle(
             kind="decided_by",
             actor_kind="person",
         )
+    usage_edges = 0
+    if kind == "run":
+        # WHAT THE RUN USED (spec §2.5): its consulted / reused edges, derived from kg_usage the
+        # way `changed` is from kg_change_links, so a use recorded before this node existed is
+        # never lost and a re-ingest only refreshes them.
+        from .learning_writeback import sync_usage_edges
+
+        with connection.begin_nested():
+            usage_edges = sync_usage_edges(connection, project_id=project_id, run_ref=source_id)
     from .age import after_write
 
     after_write(connection, project_id)
     return {
         "id": node_id,
+        "usage_edges": usage_edges,
         "replayed": bool(captured["replayed"]),
         "linked": linked,
         "scrub_counts": counts,

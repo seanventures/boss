@@ -98,7 +98,7 @@ skills:
     risk_tier: 0
     mock_mode: false
     load: eager
-    description: Propose a fact you learned, or a business rule you found in the code, to the knowledge graph — stored as inferred/proposed until a person approves it.
+    description: Propose a fact you learned, or a business rule you found in the code, and record what you learned while working (what you ruled out, a failure and its fix, a workaround, a decision) — stored as inferred/proposed until a person approves it.
     data_boundary: internal
     input_schema:
       bundle_tool: string
@@ -110,7 +110,7 @@ skills:
       required_permissions: [repo_read]
     policy:
       requires_receipt: false
-      tools: [kg_propose_fact, kg_propose_rule]
+      tools: [kg_propose_fact, kg_propose_rule, record_learning]
 
   # PROPOSE A FIX: every agent holds this too. The agent proposes a BOSS action with exact
   # arguments; a person approves it (a hold-default decision in a run, a button in chat) and it

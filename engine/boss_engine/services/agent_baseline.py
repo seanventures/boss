@@ -102,7 +102,10 @@ KNOWLEDGE_TOOLS: tuple[str, ...] = ("kg_symbol", "kg_callers", "kg_blast_radius"
 PROPOSE_FACT_TOOLS: tuple[str, ...] = ("kg_propose_fact",
                                        # a business rule found in code, proposed for a person to
                                        # approve; the agent can never approve it (BOSSAPP-768)
-                                       "kg_propose_rule")
+                                       "kg_propose_rule",
+                                       # what the agent learned while working, recorded the moment
+                                       # it learns it, inferred and forgettable (BOSSAPP-768 §4.1)
+                                       "record_learning")
 
 #: Bundles allowed to offer a write tool. Each such tool must declare reversibility "safe".
 WRITE_BUNDLES: frozenset[str] = frozenset({"knowledge.propose"})
@@ -170,6 +173,18 @@ PRIMER = (
     "earlier failure. Read state again (a status, a count, a setting) before you report it, and "
     "check what a tool offers now (a schema or a describe tool) before reusing an earlier query "
     "or approach.\n"
+    "LEARN AS YOU WORK, AND USE WHAT OTHERS LEARNED: before you act on code, read what governs it "
+    "and what earlier runs learned about it — the Rules in scope and Learned before you are given, "
+    "kg_rules for the approved rules of the code you touch, kg_precedent for past causes and fixes "
+    "— and when one of them shapes what you do, cite it by its tag ([R:...] for a rule, [L:...] for "
+    "a learning) in your answer or summary. An approved rule is trusted; a learning is another "
+    "agent's inference, so check it against what you see. The moment you learn something the next "
+    "agent would otherwise have to learn again — a hypothesis you ruled out and why, a cause you "
+    "found, a failing test and what made it pass, a build or deploy problem and what worked "
+    "instead, a choice and its reasons, an approved rule you found wrong or incomplete — record it "
+    "with record_learning (or kg_propose_rule for a rule), with its evidence and the code it is "
+    "about. One record per thing learned, said plainly; never a secret, and never what you merely "
+    "assumed.\n"
     "TO FIX, propose — never improvise: name the cause, then call propose_action with the BOSS "
     "action that fixes it (retry, redeploy, set a setting...) and exact arguments. A person or "
     "policy approves; you do not run it, raise your own authority, or ask anyone to paste a "
@@ -186,7 +201,9 @@ BUILD_PRIMER = (
     "or a deploy. BOSS records every stage, log and gate result against the run; a gate that "
     "fails names the check. When something outside the repository blocks you — a secret only a "
     "person holds, an account, a host — do not work around it: say exactly what is missing and "
-    "where in BOSS it is set, and stop.\n\n"
+    "where in BOSS it is set, and stop. When the task context quotes rules or what earlier runs "
+    "learned and one of them shapes your change, name it by its [R:...] or [L:...] tag in your "
+    "summary.\n\n"
 )
 
 

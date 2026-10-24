@@ -371,13 +371,24 @@ class KnowledgeService:
             budget_tokens = min(budget_tokens, policy.budget_tokens)
         found = self.search(connection, project_id=project_id, query=query, limit=20, policy=policy,
                             mode=mode)
-        return knowledge_pack(
+        packed = knowledge_pack(
             role=role,
             stage=stage,
             hits=found["hits"],
             budget_tokens=budget_tokens,
             ceiling=ceiling,
         )
+        # Rules in scope and Learned before (KNOWLEDGE_GRAPH_PRODUCT_SPEC.md §4.2), each inside the
+        # stage budget: approved rules governing the task's code, and what earlier runs learned
+        # about it. A lookup failure leaves the pack as it was.
+        from .learning_context import sections
+
+        try:
+            with connection.begin_nested():
+                packed["sections"] = sections(connection, project_id, query=query, mode=mode, policy=policy)
+        except Exception:  # noqa: BLE001
+            packed["sections"] = {"text": "", "rule_ids": [], "learning_ids": [], "rules": [], "learned": []}
+        return packed
 
     def precedent(
         self, connection: Connection, *, project_id: str, query: str, limit: int = 5, policy=None,
@@ -394,9 +405,23 @@ class KnowledgeService:
             if str(hit.get("node_key") or "").startswith("fact:")
             or hit.get("trust_tier") in {"governed", "approved"}
         ][:limit]
+        # What earlier runs LEARNED comes first (spec §4.2: precedents, root causes, fixes, test
+        # failures and the rest, ranked by match, usefulness and recency), quoted [L:<id>].
+        from .learning_context import learned_before
+
+        try:
+            with connection.begin_nested():
+                learned = learned_before(connection, project_id, query=query, policy=policy, limit=limit)
+        except Exception:  # noqa: BLE001 — precedent without learnings is still precedent
+            learned = []
+        lines = [f"- [L:{item['id']}] ({item['kind'].replace('_', ' ')}) {item['title']}: {item['statement']} "
+                 f"(learned by {item['by']}{' in ' + item['run'] if item.get('run') else ''})"
+                 for item in learned]
+        section = "\n".join([*lines, precedent_section(decisions)] if decisions else lines)
         return {
-            "cited_fact_ids": [hit["node_id"] for hit in decisions],
-            "section": precedent_section(decisions),
+            "cited_fact_ids": [item["id"] for item in learned] + [hit["node_id"] for hit in decisions],
+            "learned": learned,
+            "section": section,
         }
 
     def status(self, connection: Connection, *, project_id: str) -> dict[str, Any]:

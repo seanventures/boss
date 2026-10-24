@@ -8003,6 +8003,10 @@ def build_default_registry() -> ToolRegistry:
     from .knowledge_tools import register_knowledge_tools
 
     register_knowledge_tools(reg)
+    # Learning while executing: record_learning, in every agent's knowledge.propose (BOSSAPP-768).
+    from .learning_tools import register_learning_tools
+
+    register_learning_tools(reg)
     # The captain's powers are the BOSS agent's actions now, not a second engine (BOSSAPP-759).
     from .captain_tools import register_captain_tools
 
@@ -8063,6 +8067,10 @@ _DISCUSS_OPERATIONS_TOOLS: frozenset[str] = frozenset({
     # "That's a rule: ..." from chat: one business rule, with code evidence, stored proposed and
     # untrusted until a person approves it in Rules review (BOSSAPP-768). Chat cannot approve it.
     "kg_propose_rule",
+    # "That didn't work because ..." while investigating in chat: one learned item (an
+    # investigation, a cause, a workaround), stored inferred with its evidence, so the next agent
+    # on this code is given it (BOSSAPP-768). Never above a governed or approved fact.
+    "record_learning",
     # "Scan my app" from chat: the pinned scanners on the app's own code, BOSS's own targets only.
     "run_security_scan",
     # SETUP REPAIR, because a diagnosis with no matching capability is a loop — and setup is

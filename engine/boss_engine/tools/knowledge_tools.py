@@ -104,7 +104,15 @@ def _precedent(ctx, *, project_id, actor, args, policy=None, mode="on"):
     if not query:
         return {"error": "query is required"}
     with ctx.begin() as connection:
-        return _SERVICE.precedent(connection, project_id=project_id, query=query, policy=policy, mode=mode)
+        found = _SERVICE.precedent(connection, project_id=project_id, query=query, policy=policy, mode=mode)
+        learned = [item["id"] for item in found.get("learned") or []]
+        if learned:
+            # What earlier runs learned, returned to this run: "consulted" (spec §2.5), its edge now.
+            from ..services.knowledge.learning_writeback import log_use
+
+            with connection.begin_nested():
+                log_use(connection, project_id=project_id, ids=learned, use_kind="consulted")
+        return found
 
 
 def _cypher(ctx, *, project_id, actor, args, policy=None, mode="on"):

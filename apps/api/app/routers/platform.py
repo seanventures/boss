@@ -207,6 +207,14 @@ def mount_platform_routers(app: FastAPI) -> None:
     except ImportError:
         pass
 
+    # BOSSAPP-768 — learning while executing: the live feed and the before/after proof
+    try:
+        from .knowledge_learning import router as knowledge_learning_router
+
+        app.include_router(knowledge_learning_router)
+    except ImportError:
+        pass
+
     # BOSS-348 — earned autonomy score + value-based schedule preference
     try:
         from .earned_autonomy import router as earned_autonomy_router
