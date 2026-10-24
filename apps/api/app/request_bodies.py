@@ -523,11 +523,14 @@ class DecisionModelKeyBody(OpenProjectBody):
 
 
 class EmbeddingModelBody(OpenProjectBody):
-    """Setup › Embedding model (knowledge/embedding_slot.py). The key is write-only."""
+    """Setup › Repo and models › Embedding model, the org's (knowledge/embedding_slot.py). The key
+    is write-only. `url` is one pasted URL (for Azure the whole Target URI); the dimension is
+    learned from the check unless one is given."""
 
-    model_config = ConfigDict(json_schema_extra={"required": ["project_id", "provider", "dimension"]})
+    model_config = ConfigDict(json_schema_extra={"required": ["project_id", "provider"]})
 
     provider: SkipValidation[str | None] = None
+    url: SkipValidation[str | None] = None
     model: SkipValidation[str | None] = None
     dimension: SkipValidation[int | str | None] = None
     base_url: SkipValidation[str | None] = None

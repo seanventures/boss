@@ -6723,6 +6723,17 @@ CREATE TABLE IF NOT EXISTS project_settings (
   PRIMARY KEY (project_id, key)
 );
 
+-- The same, for a setting that is the whole ORG's: set once, and every project of the org uses
+-- it (the embedding model, knowledge/embedding_slot.py — "so all projects can use it").
+CREATE TABLE IF NOT EXISTS org_settings (
+  org_id TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+  key TEXT NOT NULL,
+  value JSONB NOT NULL,
+  updated_by TEXT NOT NULL DEFAULT 'operator',
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (org_id, key)
+);
+
 -- ONE-TIME DATA STEPS, each run on the first apply that knows it and never again (the key is
 -- recorded in the same statement). A schema re-applied on every deploy cannot otherwise tell
 -- "an install that existed before this change" from "a project created since".

@@ -58,7 +58,8 @@ This replaces "keep A's opt-in image, leave it open". Commits `a714b07f8`, `2db2
 Each is a separate commit with a test that fails without it.
 
 1. **The embedding model is its own slot** (`8ca2d6f83`). It mirrors the decision model's slot.
-   - **Setup › Advanced › Embedding model** offers three providers:
+   - **Since 2026-10-23 it is ONE slot for the whole org**, in **Setup › Repo and models › Embedding model** (the Models step, not Advanced): an `org_settings` row and one org-scoped key, used by every project. An older install's per-project row is read as a fallback and promoted to the org on the next save or check. Azure takes one pasted URL (the endpoint or the whole Target URI) and the key; the dimension is learned from the check (an override sits under "More"). Changing it needs `model_provider:manage` for the whole org.
+   - It offers three providers:
      - Azure OpenAI: an endpoint, a deployment and an API version;
      - OpenAI, or any OpenAI-compatible endpoint (a base URL);
      - Ollama (local), for example `nomic-embed-text`.

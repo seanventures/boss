@@ -2,7 +2,8 @@
 
 The database image always has pgvector, so a stored embedding is searched through the HNSW
 index (``PostgresKnowledgeStore.sync_vector_index``). The embedding model is its own slot,
-Setup › Embedding model (embedding_slot.py): ``configured_embedder`` answers with that slot's
+Setup › Repo and models › Embedding model, one per org (embedding_slot.py):
+``configured_embedder`` answers with that slot's
 governed embedder when its check passed, or None and the reason in words, and retrieval then runs
 on full text and the graph and says so in status.
 
@@ -57,16 +58,16 @@ def drop_other_spaces(connection: Connection, *, project_id: str, model_id: str)
 
 
 def embed_due(engine: Any, *, project_id: str | None = None, limit: int = BATCH) -> dict[str, int]:
-    """Re-embed in the background, per project whose slot passed its check. One project's
+    """Re-embed in the background, per project whose slot (its org's, or an older install's own
+    row) passed its check: a new org slot is a new space for EVERY project of the org. One project's
     refusal (budget, a provider down) never holds the others back; nothing raises."""
     from ...config import get_settings
-    from .embedding_slot import SETTING_KEY, active_embedder
+    from .embedding_slot import active_embedder, projects_with_a_slot
     from .store import PostgresKnowledgeStore
 
     out = {"projects": 0, "embedded": 0, "dropped": 0, "failed": 0}
     with engine.begin() as connection:
-        projects = [project_id] if project_id else connection.execute(text(
-            "SELECT project_id FROM project_settings WHERE key = :k"), {"k": SETTING_KEY}).scalars().all()
+        projects = [project_id] if project_id else projects_with_a_slot(connection)
     settings = get_settings()
     for pid in projects:
         try:

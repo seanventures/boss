@@ -1,6 +1,12 @@
 // @vitest-environment happy-dom
 /**
- * Setup › Embedding model: its own slot, like Decisions (operator decision 2026-10-22).
+ * Setup › Repo and models › Embedding model: ONE for the org, in the Models step (operator
+ * decisions 2026-10-22/23: "why is it not in Repo and models, so all projects can use it?").
+ *
+ * The row sits in the Models step, never under Advanced, and `focus=embedding_model` lands on
+ * it. Azure asks for one URL (the endpoint or the whole Target URI) and the key: the deployment
+ * is read out of the URI, the dimension is not asked (the check learns it), and both sit under
+ * "More" for an override.
  *
  * With no model the row says meaning-based search is off and why, in the server's words, and
  * offers the three providers. Save & check sends the provider's fields (the key in the body, then
@@ -10,6 +16,8 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { parseUrl } from "../app/setup/embedding-model-row";
+import { readParams } from "../lib/setup-stepper";
 import type { EmbeddingModel } from "../lib/setup-types";
 import { click, fakeApi, mountBoard, q, type, type Mounted } from "./_helpers/setup-board";
 import { board } from "./_helpers/setup-fixtures";
@@ -18,20 +26,19 @@ let mounted: Mounted | null = null;
 afterEach(() => { mounted?.unmount(); mounted = null; vi.restoreAllMocks(); });
 
 const PROVIDERS = [
-  { provider: "azure", label: "Azure OpenAI", needs_key: true,
-    fields: ["endpoint", "deployment", "api_version", "api_key", "dimension"],
-    example_model: "text-embedding-3-small", example_dimension: 1536 },
-  { provider: "openai", label: "OpenAI or compatible", needs_key: true,
-    fields: ["base_url", "model", "api_key", "dimension"], example_model: "text-embedding-3-small",
-    example_dimension: 1536 },
-  { provider: "ollama", label: "Ollama (local)", needs_key: false, fields: ["base_url", "model", "dimension"],
-    example_model: "nomic-embed-text", example_dimension: 768, example_base_url: "http://localhost:11434" },
+  { provider: "azure", label: "Azure OpenAI", needs_key: true, fields: ["url", "api_key"],
+    more: ["deployment", "api_version", "dimension"], example_model: "text-embedding-3-small" },
+  { provider: "openai", label: "OpenAI or compatible", needs_key: true, fields: ["url", "model", "api_key"],
+    more: ["dimension"], example_model: "text-embedding-3-small", example_base_url: "https://api.openai.com/v1" },
+  { provider: "ollama", label: "Ollama (local)", needs_key: false, fields: ["url", "model"], more: ["dimension"],
+    example_model: "nomic-embed-text", example_base_url: "http://localhost:11434" },
 ];
 const NONE: EmbeddingModel = {
   key: "knowledge.embedding_model", configured: false, permission: "model_provider:manage",
   budget_category: "knowledge", search: false, providers: PROVIDERS,
-  reason: "meaning-based search is off: no embedding model is set (Setup › Embedding model)",
+  scope: "org", reason: "meaning-based search is off: no embedding model is set (Setup › Repo and models › Embedding model)",
 };
+const URI = "https://boss-kg.cognitiveservices.azure.com/openai/deployments/text-embedding-3-small/embeddings?api-version=2023-05-15";
 const WORKING: EmbeddingModel = {
   ...NONE, configured: true, search: true, reason: "", provider: "ollama", label: "Ollama (local)",
   model: "nomic-embed-text", dimension: 768, base_url: "http://localhost:11434", has_key: false,
@@ -56,6 +63,52 @@ describe("Setup › Embedding model", () => {
     for (const p of ["azure", "openai", "ollama"]) expect(q(document, `su-embedding-provider-${p}`)).not.toBeNull();
   });
 
+  it("sits in the Models step, not under Advanced, and the deep link lands on it", async () => {
+    expect(readParams(open).focus).toBe("embedding_model");
+    const view = { ...board(), embedding_model: WORKING };
+    fakeApi(view);
+    mounted = await mountBoard(view, open);
+    const row = q(document, "su-row-embedding-model")!;
+    expect(row.closest('[data-testid="su-advanced"]')).toBeNull();
+    expect(q(document, "su-row-models")!.contains(row)).toBe(true);
+    expect(row.textContent).toContain("All projects");
+  });
+
+  it("reads the Azure Target URI apart, as the engine does", () => {
+    expect(parseUrl("azure", URI)).toEqual({ endpoint: "https://boss-kg.cognitiveservices.azure.com",
+                                             deployment: "text-embedding-3-small", api_version: "2024-10-21" });
+    expect(parseUrl("azure", "https://boss-kg.openai.azure.com/")).toEqual({
+      endpoint: "https://boss-kg.openai.azure.com", api_version: "2024-10-21" });
+    expect(parseUrl("ollama", "http://localhost:11434/v1/embeddings")).toEqual({ base_url: "http://localhost:11434" });
+  });
+
+  it("Azure asks for one URL and the key; the deployment comes from the URI, no dimension", async () => {
+    const view = { ...board(), embedding_model: NONE };
+    const api = fakeApi(view);
+    mounted = await mountBoard(view, open);
+    await click(q(document, "su-embedding-provider-azure"));
+    expect(q(document, "su-embedding-dimension")).toBeNull();
+    expect(q(document, "su-embedding-deployment")).toBeNull();
+    await type(q(document, "su-embedding-url"), URI);
+    await type(q(document, "su-embedding-api_key"), KEY);
+    await click(q(document, "su-embedding-more"));
+    expect((q(document, "su-embedding-deployment") as HTMLInputElement).value).toBe("text-embedding-3-small");
+    expect((q(document, "su-embedding-dimension") as HTMLInputElement).value).toBe("");
+    await click(q(document, "su-embedding-save"));
+    const sent = api.calls.find((c) => c.op === "embedding_model")!;
+    expect(sent.body).toMatchObject({ provider: "azure", url: URI, api_key: KEY });
+    expect(sent.body).not.toHaveProperty("dimension");
+  });
+
+  it("a base Azure endpoint asks for the deployment in the row", async () => {
+    const view = { ...board(), embedding_model: NONE };
+    fakeApi(view);
+    mounted = await mountBoard(view, open);
+    await click(q(document, "su-embedding-provider-azure"));
+    await type(q(document, "su-embedding-url"), "https://boss-kg.openai.azure.com/");
+    expect(q(document, "su-embedding-deployment")).not.toBeNull();
+  });
+
   it("Save & check sends the provider's fields with the key, then clears the key", async () => {
     const view = { ...board(), embedding_model: NONE };
     const api = fakeApi(view);
@@ -64,14 +117,12 @@ describe("Setup › Embedding model", () => {
                                                            model: "text-embedding-3-small", search: true, reason: "" } } }
       : null;
     mounted = await mountBoard(view, open);
-    await click(q(document, "su-embedding-provider-azure"));
-    await type(q(document, "su-embedding-endpoint"), "https://example.openai.azure.com");
-    await type(q(document, "su-embedding-deployment"), "embed-small");
+    await click(q(document, "su-embedding-provider-openai"));
     await type(q(document, "su-embedding-api_key"), KEY);
     await click(q(document, "su-embedding-save"));
     const sent = api.calls.find((c) => c.op === "embedding_model")!;
-    expect(sent.body).toMatchObject({ provider: "azure", endpoint: "https://example.openai.azure.com",
-                                      deployment: "embed-small", api_key: KEY, dimension: "1536" });
+    expect(sent.body).toMatchObject({ provider: "openai", url: "https://api.openai.com/v1",
+                                      model: "text-embedding-3-small", api_key: KEY });
     expect(q(document, "su-embedding-check")!.textContent).toContain("Working");
     expect(q(document, "su-embedding-reply")!.textContent).toBe("1536 numbers from text-embedding-3-small");
     expect(document.body.innerHTML).not.toContain(KEY);

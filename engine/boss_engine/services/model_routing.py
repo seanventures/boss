@@ -784,8 +784,8 @@ def governed(adapter: Any, connection: Any, settings: Any, project_id: str, *,
 
 # ── The embedding model ────────────────────────────────────────────────────────────────────────
 #
-# ITS OWN SLOT, like the decision model (operator decision 2026-10-22): Setup › Embedding model
-# stores a provider, a model and its dimension (knowledge/embedding_slot.py). Every embedding
+# ITS OWN SLOT, one per org (operator decisions 2026-10-22/23): Setup › Repo and models ›
+# Embedding model stores a provider, a model and its dimension (knowledge/embedding_slot.py). Every embedding
 # call is built HERE from that slot and governed: reserved in the budget category `knowledge`,
 # receipted and settled. Nothing else builds an EmbeddingAdapter
 # (engine/tests/test_embedding_model_slot.py).
@@ -831,7 +831,9 @@ def project_embedder(connection: Any, settings: Any, project_id: str, slot: dict
                                base_url=str(slot.get("base_url") or ""),
                                endpoint=str(slot.get("endpoint") or ""),
                                deployment=str(slot.get("deployment") or ""),
-                               api_version=str(slot.get("api_version") or ""), api_key=key)
+                               api_version=str(slot.get("api_version") or ""), api_key=key,
+                               request_dimensions=(int(slot.get("dimension") or 0) or None)
+                               if slot.get("dimension_set") else None)
     adapter._boss_choice = ModelChoice(provider if provider in LOCAL_PROVIDERS else f"embedding:{provider}",
                                        "the project's embedding model")
     wrapped = governed(adapter, connection, settings, project_id, skill_id=skill_id, ref=ref,

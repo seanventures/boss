@@ -1053,7 +1053,7 @@ def build_database(connection: Connection, settings: Any, project_id: str) -> di
 
 
 def embedding_model(connection: Connection, settings: Any, project_id: str) -> Optional[dict[str, Any]]:
-    """Setup › Embedding model. None only when it cannot be read (the rest still renders)."""
+    """Setup › Repo and models › Embedding model (the org's). None only when it cannot be read (the rest still renders)."""
     from .knowledge import embedding_slot
 
     try:

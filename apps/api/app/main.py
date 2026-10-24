@@ -18195,10 +18195,12 @@ def setup_decisions_key(payload: DecisionModelKeyBody) -> dict:
 @app.post("/v1/setup/embedding-model")
 @permit(P.MODEL_PROVIDER_MANAGE, scope=Scope.project(body="project_id"))
 def setup_embedding_model(payload: open_bodies.EmbeddingModelBody) -> dict:
-    """Setup › Embedding model: store the slot (the key into the vault, never returned), check it
-    with one tiny embedding through the gateway (budget category `knowledge`, receipted), and
-    answer with the Repo and models view. A failed check is stored and shown, not refused:
-    meaning-based search then stays off and says why."""
+    """Setup › Repo and models › Embedding model: store the ORG's slot, which every project of
+    the org uses (the key into the vault at org scope, never returned; `url` may be the whole
+    Azure Target URI), check it with one tiny embedding through the gateway (budget category
+    `knowledge`, receipted; the dimension is learned from the reply), and answer with the Repo
+    and models view. A failed check is stored and shown, not refused: meaning-based search then
+    stays off and says why. Changing it needs model_provider:manage for the whole org."""
     from boss_engine.services import setup_view
     from boss_engine.services.knowledge import embedding_slot
     from boss_engine.services.setup_service import SecretFallbackNotAccepted
@@ -18214,7 +18216,8 @@ def setup_embedding_model(payload: open_bodies.EmbeddingModelBody) -> dict:
             embedding_slot.save(
                 connection, get_settings(), project_id,
                 provider=str(body.get("provider") or ""), model=str(body.get("model") or ""),
-                dimension=body.get("dimension"), base_url=str(body.get("base_url") or ""),
+                dimension=body.get("dimension"), url=str(body.get("url") or ""),
+                base_url=str(body.get("base_url") or ""),
                 endpoint=str(body.get("endpoint") or ""), deployment=str(body.get("deployment") or ""),
                 api_version=str(body.get("api_version") or ""), api_key=body.get("api_key"),
                 accept_database_fallback=bool(body.get("accept_database_fallback")), actor=actor)
@@ -18223,6 +18226,8 @@ def setup_embedding_model(payload: open_bodies.EmbeddingModelBody) -> dict:
                 "error": "secret_store_fallback_not_accepted", "message": str(exc),
                 "backend": exc.backend, "resend_with": {"accept_database_fallback": True},
             }) from exc
+        except embedding_slot.EmbeddingSlotForbidden as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
         except embedding_slot.EmbeddingSlotError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         return setup_view.build(connection, get_settings(), project_id)
@@ -18231,8 +18236,9 @@ def setup_embedding_model(payload: open_bodies.EmbeddingModelBody) -> dict:
 @app.post("/v1/setup/embedding-model/check")
 @permit(P.MODEL_PROVIDER_MANAGE, scope=Scope.project(body="project_id"))
 def setup_embedding_model_check(payload: open_bodies.OpenProjectBody) -> dict:
-    """Setup › Embedding model › Check: one tiny embedding through the gateway, its real reply or
-    error stored and shown. Answers with the Repo and models view."""
+    """Setup › Repo and models › Embedding model › Check: one tiny embedding through the gateway
+    on the org's slot, its real reply or error stored and shown (an older install's project slot
+    is promoted to the org on the way). Answers with the Repo and models view."""
     from boss_engine.services import setup_view
     from boss_engine.services.knowledge import embedding_slot
 
@@ -18245,6 +18251,8 @@ def setup_embedding_model_check(payload: open_bodies.OpenProjectBody) -> dict:
         require_project_actor(connection, project_id, actor, "entitlement_manage")
         try:
             embedding_slot.check(connection, get_settings(), project_id, actor=actor)
+        except embedding_slot.EmbeddingSlotForbidden as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
         except embedding_slot.EmbeddingSlotError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         return setup_view.build(connection, get_settings(), project_id)
@@ -18253,14 +18261,20 @@ def setup_embedding_model_check(payload: open_bodies.OpenProjectBody) -> dict:
 @app.delete("/v1/setup/embedding-model")
 @permit(P.MODEL_PROVIDER_MANAGE, scope=Scope.project(query="project_id"))
 def setup_embedding_model_clear(project_id: str) -> dict:
-    """Setup › Embedding model › Remove: the slot and its key go; meaning-based search is off."""
+    """Setup › Repo and models › Embedding model › Remove: the org's slot and its key go;
+    meaning-based search is off in every project of the org."""
     from boss_engine.services import setup_view
     from boss_engine.services.knowledge import embedding_slot
 
     actor = str(current_api_principal.get() or "ceo")
     with begin() as connection:
         require_project_actor(connection, project_id, actor, "entitlement_manage")
-        embedding_slot.clear(connection, get_settings(), project_id, actor=actor)
+        try:
+            embedding_slot.clear(connection, get_settings(), project_id, actor=actor)
+        except embedding_slot.EmbeddingSlotForbidden as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except embedding_slot.EmbeddingSlotError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         return setup_view.build(connection, get_settings(), project_id)
 
 

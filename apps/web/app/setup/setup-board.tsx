@@ -11,9 +11,10 @@
  * request it is a board. Everything else (the org's own GitHub App, the multi-repo registry, CI
  * permission, build database, toolchains, routing, budget, public URL) folds under ADVANCED,
  * each with one plain line; a deep link to any of them opens the fold on it. The model sources
- * (capacity) sit inside 3 Model since rc9, so `focus=capacity` lands there.
+ * (capacity) sit inside 3 Model since rc9, so `focus=capacity` lands there; so does the org's ONE
+ * embedding model (2026-10-23, "so all projects can use it"), so `focus=embedding_model` lands there.
  *
- * Deep links: `?area=setup&focus=repository|repositories|models|jobs|routing|budget|try` (routing = jobs), `&add=<provider>` opens Add a
+ * Deep links: `?area=setup&focus=repository|repositories|models|embedding_model|jobs|routing|budget|try` (routing = jobs), `&add=<provider>` opens Add a
  * model on that provider, `&source=<id>` opens that model's menu, legacy `step=github|model` maps
  * to focus. Rows whose last check is over a day old are re-checked in the background on open.
  */
@@ -60,8 +61,6 @@ const ADVANCED: Record<string, { line: string; tip: string }> = {
   build_speed: { line: "How many agents write a build at once", tip: "Balanced or Fastest." },
   toolchains: { line: "What builds can compile and run", tip: "Python and Node always; others on the host." },
   jobs: { line: "Which model does which job", tip: "Pin a model to a job, or let BOSS route." },
-  embedding_model: { line: "Model for meaning-based search",
-                     tip: "Azure OpenAI, OpenAI-compatible or Ollama. Without one, search uses text and graph." },
   budget: { line: "Monthly spend cap", tip: "BOSS pauses model spend at the cap." },
   public_url: { line: "Address used in emailed links", tip: "Sign-in, passkeys and emailed links use it." },
 };
@@ -327,6 +326,8 @@ export function SetupBoard({ projectId, actor, initialView = null }: {
                    onAddHandled={() => setParams((p) => ({ ...p, add: null }))}>
           {/* rc9 (BOSS-434/437): the model sources sit inside Models, one heading and panel. */}
           <CapacityRow ref={ref("capacity")} actor={actor} focused={focus === "capacity"} />
+          {/* The org's one embedding model (meaning search), set once for every project. */}
+          <div ref={ref("embedding_model")} data-focused={focus === "embedding_model" || undefined}><EmbeddingModelRow /></div>
         </ModelsRow>
         <TryRow ref={ref("try")} mode={rowMode(view, "try")} step={shift(stepNumber(view, "try"))}
                 focused={focus === "try"} />
@@ -347,8 +348,6 @@ export function SetupBoard({ projectId, actor, initialView = null }: {
           <div className="su-adv-item" ref={ref("toolchains")}><Why id="toolchains" /><ToolchainsRow /></div>
           {/* Model routing — where "Who does what" lived; its rows are "Pin a job" inside. */}
           <div className="su-adv-item"><Why id="jobs" /><RoutingRow ref={ref("jobs")} mode={rowMode(view, "jobs")} focused={focus === "jobs"} /></div>
-          {/* The embedding model: its own slot, like Decisions (knowledge search). */}
-          <div className="su-adv-item" ref={ref("embedding_model")}><Why id="embedding_model" /><EmbeddingModelRow /></div>
           <div className="su-adv-item"><Why id="budget" /><BudgetRow ref={ref("budget")} mode={rowMode(view, "budget")} focused={focus === "budget"} /></div>
           <div className="su-adv-item" ref={ref("public_url")}><Why id="public_url" /><PublicUrlRow /></div>
         </details>

@@ -13,6 +13,9 @@ Providers:
   * `scripted` BOSS's conformance engine: deterministic vectors and no model. It runs only under
               BOSS_SCRIPTED_ENGINE=1 (tests and the conformance gate), never as an operator's choice.
 
+The vector's length is the model's own unless the slot asks for one (`request_dimensions`,
+the `dimensions` parameter text-embedding-3 models take): Setup learns it from the check.
+
 `create_embeddings(texts) -> (vectors, usage)`. `usage["billing"]` says whether the call was
 money: Ollama and the scripted engine are local, every hosted endpoint is metered.
 """
@@ -41,6 +44,8 @@ UNKNOWN_PRICE_MICROS_PER_TOKEN = 0.13
 #: The scripted engine's model that answers chat only: its embedding check fails, as a real
 #: chat-only model's does.
 SCRIPTED_CHAT_ONLY = "scripted-chat-only"
+#: The scripted engine's own vector length, when the slot asks for none (a real model has one too).
+SCRIPTED_NATIVE_DIMENSION = 8
 
 
 class EmbeddingsUnsupported(RuntimeError):
@@ -65,7 +70,7 @@ def _scripted_vector(text: str, dimension: int) -> list[float]:
 class EmbeddingAdapter:
     def __init__(self, provider: str, model: str, dimension: int, *, base_url: str = "",
                  endpoint: str = "", deployment: str = "", api_version: str = "",
-                 api_key: Optional[str] = None):
+                 api_key: Optional[str] = None, request_dimensions: Optional[int] = None):
         self.provider = str(provider or "").strip().lower()
         if self.provider not in PROVIDERS:
             raise IntegrationConfigurationError(f"'{provider}' is not an embedding provider BOSS knows.")
@@ -76,6 +81,7 @@ class EmbeddingAdapter:
         self.deployment = str(deployment or "").strip()
         self.api_version = str(api_version or "").strip() or DEFAULT_AZURE_API_VERSION
         self._api_key = api_key
+        self.request_dimensions = int(request_dimensions) if request_dimensions else None
 
     def _billing(self) -> str:
         from .included_spend import BILLING_LOCAL, BILLING_METERED
@@ -87,7 +93,8 @@ class EmbeddingAdapter:
         if self.provider == "scripted":
             return self._scripted(texts)
         client, used = self._client()
-        response = client.embeddings.create(model=used, input=texts)
+        extra = {"dimensions": self.request_dimensions} if self.request_dimensions else {}
+        response = client.embeddings.create(model=used, input=texts, **extra)
         vectors = [list(item.embedding) for item in sorted(response.data, key=lambda d: d.index)]
         tokens = int(getattr(getattr(response, "usage", None), "prompt_tokens", 0) or 0)
         usage = {"model": used, "provider": self.provider, "prompt_tokens": tokens, "completion_tokens": 0,
@@ -109,7 +116,8 @@ class EmbeddingAdapter:
         usage = {"model": self.model, "provider": "scripted", "prompt_tokens": tokens, "completion_tokens": 0,
                  "total_tokens": tokens, "operation": "embeddings", "billing": self._billing(),
                  "cost_usd_micros": 0}
-        return [_scripted_vector(t, self.dimension) for t in texts], usage
+        size = self.request_dimensions or SCRIPTED_NATIVE_DIMENSION
+        return [_scripted_vector(t, size) for t in texts], usage
 
     def _client(self) -> tuple[Any, str]:
         from .env_refs import check_outbound

@@ -47,13 +47,13 @@ describe("the board stays within the copy budget", () => {
 
   it("with the embedding model open, unset, working and failed", async () => {
     const providers = [
-      { provider: "azure", label: "Azure OpenAI", needs_key: true,
-        fields: ["endpoint", "deployment", "api_version", "api_key", "dimension"] },
-      { provider: "ollama", label: "Ollama (local)", needs_key: false, fields: ["base_url", "model", "dimension"] },
+      { provider: "azure", label: "Azure OpenAI", needs_key: true, fields: ["url", "api_key"],
+        more: ["deployment", "api_version", "dimension"] },
+      { provider: "ollama", label: "Ollama (local)", needs_key: false, fields: ["url", "model"], more: ["dimension"] },
     ];
     const none = { key: "knowledge.embedding_model", configured: false, permission: "model_provider:manage",
                    budget_category: "knowledge", search: false, providers,
-                   reason: "meaning-based search is off: no embedding model is set (Setup › Embedding model)" };
+                   reason: "meaning-based search is off: no embedding model is set (Setup › Repo and models › Embedding model)" };
     const failed = { ...none, configured: true, provider: "azure", label: "Azure OpenAI", model: "embed-small",
                      dimension: 1536, has_key: true,
                      check: { state: "failed" as const, error: "AuthenticationError: 401 the key was refused by the provider" },
@@ -66,6 +66,8 @@ describe("the board stays within the copy budget", () => {
       mounted = await mountBoard(view, "?area=setup&focus=embedding_model");
       if (slot.configured) await click(q(document.body, "su-embedding-change"));
       await click(q(document.body, "su-embedding-provider-azure"));
+      audit(document.body);
+      await click(q(document.body, "su-embedding-more"));             // and with More open
       audit(document.body);
       mounted.unmount();
       mounted = null;
