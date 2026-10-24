@@ -60,7 +60,8 @@ FUNDAMENTALS_TOOLS: tuple[str, ...] = (
     "diagnose_run", "explain_run", "read_run_turns",
     # infra and health
     "inspect_self", "system_health", "diagnose_setup", "list_running_work",
-    "consistency_report", "project_status", "list_deployments", "describe_deployment_target",
+    "consistency_report", "project_status", "list_projects", "describe_project",
+    "list_deployments", "describe_deployment_target",
     "list_deployment_hosts", "describe_deployment_host",
     # the database: its shape, and this project's rows (never raw SQL)
     "describe_schema", "query_project_data",

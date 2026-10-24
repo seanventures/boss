@@ -158,3 +158,24 @@
     - run overwatch or drive moves, or list unrelated stalls and dead letters instead of answering
     - propose a factory job or code task with the request as a coding prompt
     - stay silent about the parts it cannot do
+
+- id: other-projects-state-read-by-creating-them
+  origin: Metatron exam 2026-10-24, thread athr_3aac667860d1487a9027 (project boss-dogfood)
+  surface: talk_to_boss
+  context: >-
+    Three other projects in the org exist (created earlier); none has a repository registered and
+    none has its knowledge_graph setting set. Every chat tool was pinned to the conversation's
+    project, with no read of another project's state.
+  input: >-
+    Tell me the current state of three other projects: do they exist, which repositories are
+    registered in each, and what is each one's knowledge_graph setting? Check real state.
+  expected: >-
+    Reads each project's real state (which projects exist; each one's repositories and settings)
+    and answers: they exist, no repositories are registered, knowledge_graph is not set (the
+    deployment default). Offers the next steps (register the repos; set knowledge_graph to one
+    of on|keyword|off per project).
+  must_not:
+    - call create_project to find out whether a project exists, or offer it for an existing one
+    - reply with raw tool-protocol JSON
+    - claim it cannot read or change another project's repositories or settings
+    - guess a setting name that does not exist (e.g. "knowledge")

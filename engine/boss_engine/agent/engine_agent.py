@@ -30,6 +30,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
 from .._compat import services_module
+from ..services import protocol_reply
 from ..tools import ToolError, ToolRegistry, build_discuss_read_registry
 
 
@@ -181,6 +182,37 @@ def _report_from_trace(trace: list[dict]) -> str:
 @contextlib.contextmanager
 def _no_deadline():
     yield
+
+
+_PROSE_PLEASE = (
+    "Your last message was your internal decision format (JSON with thought/tool_calls), not "
+    "an answer, and no tool can run now. Write the answer to the person in plain prose from "
+    "what you have already established: the answer first, then what you could not check and "
+    "why, then the next step. No JSON.")
+
+
+def _calls_meant(structure: dict) -> list[dict]:
+    """The tool calls a decision structure holds, in the loop's own shape."""
+    raw = structure.get("tool_calls")
+    if not raw and isinstance(structure.get("tool_call"), dict):
+        raw = [structure["tool_call"]]
+    calls = []
+    for i, call in enumerate(raw or []):
+        if not isinstance(call, dict) or not call.get("name"):
+            continue
+        args = call.get("arguments")
+        calls.append({"id": f"call_meant_{i + 1}", "name": str(call["name"]),
+                      "arguments": args if isinstance(args, str) else json.dumps(args or {})})
+    return calls
+
+
+def _assistant_calling(structure: dict, calls: list[dict]) -> dict:
+    """The assistant message that made `calls`, so each tool result answers a call it made."""
+    thought = structure.get("thought")
+    return {"role": "assistant", "content": thought if isinstance(thought, str) else None,
+            "tool_calls": [{"id": c["id"], "type": "function",
+                            "function": {"name": c["name"], "arguments": c["arguments"]}}
+                           for c in calls]}
 
 
 def _findings_from_trace(trace: list[dict]) -> tuple[list[str], Optional[dict]]:
@@ -453,6 +485,8 @@ class EngineAgent:
         steps = 0
         #: Completions that came back with neither text nor a tool call. Two are tolerated.
         empty_completions = 0
+        #: The one re-ask a decision structure written as the answer gets (protocol_reply).
+        protocol_reasked = False
 
         # A TURN MUST NEVER END WITHOUT AN ANSWER.
         #
@@ -616,6 +650,24 @@ class EngineAgent:
             tool_calls = None if last else msg.get("tool_calls")
             if not tool_calls:
                 final_text = msg.get("content") or ""
+                # A DECISION STRUCTURE IS NOT AN ANSWER (services/protocol_reply.py). The model
+                # wrote the tool protocol's JSON as its text — well formed or not. A tool call
+                # it meant, while tools are still allowed, is RUN; otherwise its final answer is
+                # the answer, and with none it is asked once for prose. Never printed raw.
+                structure = msg.get("protocol") or protocol_reply.parse(final_text)
+                if isinstance(structure, dict):
+                    meant = [] if last else _calls_meant(structure)
+                    if meant:
+                        tool_calls = meant
+                        messages[-1] = _assistant_calling(structure, meant)
+                    else:
+                        final_text = protocol_reply.prose_of_final(structure) or (
+                            "" if protocol_reasked else self._prose_again(
+                                messages, budget=budget))
+                        protocol_reasked = True
+                        # Still nothing a person can read: the report from the trace below.
+                        break
+            if not tool_calls:
                 if final_text.strip():
                     break
                 # AN EMPTY COMPLETION IS NOT AN ANSWER, AND `break` MADE IT ONE.
@@ -751,6 +803,26 @@ class EngineAgent:
 
         return AgentTurn(reply=final_text, trace=trace, pending_writes=pending, steps=steps)
 
+    def _prose_again(self, messages: list[dict], *, budget: Any = None) -> str:
+        """One more call, with no tools, asking for the answer in prose — after the model wrote
+        its decision structure as the answer. Any failure is an empty answer, which the turn
+        reports from its trace."""
+        from ..services.call_deadline import until
+        from .transient import _with_transient_retry
+
+        messages.append({"role": "user", "content": _PROSE_PLEASE})
+        try:
+            with until(budget.deadline(answering=True)) if budget is not None \
+                    else _no_deadline():
+                msg, _usage = _with_transient_retry(
+                    lambda: self._adapter_obj().create_chat_completion(messages, tools=None))
+        except Exception:  # noqa: BLE001 — the trace still holds what was found
+            return ""
+        messages.append(msg.get("raw") or {"role": "assistant", "content": msg.get("content")})
+        text = str(msg.get("content") or "")
+        return protocol_reply.prose_of_final(protocol_reply.parse(text)) or (
+            "" if protocol_reply.is_decision_structure(text) else text)
+
     #: Tools that START EXPENSIVE, LONG-RUNNING WORK. From chat these are OFFERED, never taken.
     #:
     #: Asked to "deploy Living Colors to live", the agent tried redeploy, found the app had
@@ -881,8 +953,9 @@ class EngineAgent:
                 "ok": False,
                 "status": "confirmation_required",
                 "note": (
-                    f"'{name}' would create/mutate workflow state. It was NOT run. "
-                    "Confirm to proceed (or re-run the turn with writes allowed)."
+                    f"'{name}' was NOT run (this turn changes nothing); it is offered as a "
+                    "button. A write never finds anything out: to check state, call a read "
+                    "tool."
                 ),
                 "proposed": proposal,
             }

@@ -130,7 +130,11 @@ _DECIDED_MEANS = {
                        "create_project once, with the name they gave (and the slug, when they "
                        "named a kebab-case one). Report the project it made and its id, or its "
                        "refusal in their words: a slug in use, a missing permission, or a "
-                       "confirmation they must give first. Start no build."),
+                       "confirmation they must give first. A project that already exists is "
+                       "that project, ready to use. Then do the rest of what they asked on "
+                       "those projects (repositories, settings) with each tool's `project` "
+                       "argument, and say plainly anything you could not do and why. Start no "
+                       "build."),
     "new_code_change": ("a request for NEW work. Offer it: create_code_task for one scoped "
                         "change, start_workflow for a whole delivery — both come back as a "
                         "button the person presses; say it is offered, not started. Do not "
@@ -1590,8 +1594,9 @@ class IntentRouter:
         inside the method to avoid any services<->agent import cycle.
 
         Uses ``build_discuss_read_registry`` (not the full read set): unrestricted
-        ``query_db`` and cross-project ``project_id`` overrides are excluded so a
-        chat actor authorized for one project cannot read another tenant.
+        ``query_db`` and silent ``project_id`` overrides are excluded; another project is
+        reached only through the generic ``project`` argument, which the registry authorizes
+        against the actor's own permission in that project.
         """
         if self._answer_agent_obj is None:
             from ..agent.engine_agent import EngineAgent
@@ -2104,6 +2109,7 @@ class IntentRouter:
         """Conversational answer — DISCUSS/answer without creating any task. Grounded in the recent
         thread (a task-scoped thread carries that task's history), gated on the model budget. Only an
         explicit build intent (handled in route_turn) actuates work."""
+        from ..tools.registry import PROJECT_ARG as _PROJECT_ARG
         # AN OPERATOR WITH CONSOLE ACCESS, not a menu of canned reports.
         #
         # The tools now reach everything: arbitrary SQL over every table, both source trees
@@ -2178,6 +2184,11 @@ class IntentRouter:
             "• Project-scoped reads — list_code_tasks, get_code_task, project_status, "
             "get_costs and the other available read tools. Do not request raw SQL against "
             "the control-plane database; it cannot enforce this project's boundary.\n"
+            f"• EVERY PROJECT YOU MAY REACH, not only this one: each project tool takes "
+            f"`{_PROJECT_ARG}` (another project's id or slug) and reads or acts THERE, under "
+            "the person's own permission in that project. list_projects says which exist; "
+            "describe_project says one project's repositories and settings (with the values "
+            "each setting accepts). Use the real setting key, never a guess.\n"
             "• search_code / read_code — BOSS's own source AND the customer's application. "
             "Read the implementation rather than describing what it probably does.\n"
             "  WHEN AN OPERATOR QUOTES AN ERROR MESSAGE, SEARCHING FOR IT IS YOUR FIRST MOVE, "

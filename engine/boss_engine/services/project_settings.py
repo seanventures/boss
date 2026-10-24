@@ -491,6 +491,31 @@ def _allowed_choices(spec: dict[str, Any]) -> list[str]:
         return []
 
 
+def allowed_values_said(spec: dict[str, Any]) -> str:
+    """The values a knob accepts, in a few words, from its own spec (no registry calls): what
+    an agent reads before it sets one, so it never guesses a name or a value."""
+    kind = spec.get("kind")
+    if kind == "int":
+        return f"{spec.get('min')}..{spec.get('max')}"
+    choices = spec.get("choices")
+    if isinstance(choices, (list, tuple)):
+        return "|".join(str(c) for c in choices)
+    if choices == "harnesses":
+        return "a connected coding harness"
+    if choices == "chat_engines":
+        return "a chat engine"
+    if str(choices or "").startswith(("models_for:", "models_for_harness:")):
+        return "a model name"
+    return "a value"
+
+
+def catalogue_said() -> str:
+    """Every key `set_project_setting` accepts with its allowed values, ONE line, generated from
+    KNOBS. Asked to "set the knowledge setting", the agent guessed the key `knowledge`; the real
+    one (`knowledge_graph`, on|keyword|off) was in this table and nowhere it could read."""
+    return "; ".join(f"{key}={allowed_values_said(spec)}" for key, spec in KNOBS.items())
+
+
 def offered_choices(connection, settings, project_id: str,
                     spec: dict[str, Any], current: Any = None) -> list[str]:
     """The values worth OFFERING for this knob on this project, as opposed to accepting.

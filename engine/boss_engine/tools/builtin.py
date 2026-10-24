@@ -28,12 +28,18 @@ from ..services.workflow_drafting import (
     _resolve_subworkflows,
     _spec_from_steps,
 )
-from .registry import ToolRegistry, ToolSpec
+from .registry import PROJECT_ARG, PROJECT_ARG_SCHEMA, ToolRegistry, ToolSpec
 
 
 # ---------------------------------------------------------------------------
 # schema fragments
 # ---------------------------------------------------------------------------
+def _project_settings_catalogue() -> str:
+    from ..services import project_settings
+
+    return project_settings.catalogue_said()
+
+
 def _obj(props: dict, required: list[str] | None = None) -> dict:
     return {
         "type": "object",
@@ -244,6 +250,73 @@ def _register_read_tools(reg: ToolRegistry) -> None:
             "live_previews": live_prev,
             "total_running": running_code + running_disc + running_meet,
         }
+
+    @reg.tool(
+        "list_projects",
+        "Every project in this organization the caller may read: id, slug, name, how many "
+        "repositories each has registered. The answer to 'which projects exist / does project "
+        "X exist?' — never create a project to find out whether it exists.",
+        _obj({}), permission="project:read")
+    def list_projects(ctx, *, project_id, actor, args):
+        from .registry import CURRENT_TOOL_AUTH
+
+        auth = CURRENT_TOOL_AUTH.get()
+        org = str(getattr(getattr(auth, "principal", None), "org_id", "")
+                  or getattr(ctx.settings, "default_org_id", "") or "")
+        with ctx.begin() as c:
+            rows = c.execute(_text(
+                "SELECT p.id, p.slug, p.name, p.description, "
+                "       (SELECT count(*) FROM github_repository_bindings b "
+                "         WHERE b.project_id = p.id AND b.status = 'active') AS repositories "
+                "  FROM projects p JOIN workspaces w ON w.id = p.workspace_id "
+                " WHERE (:org = '' OR w.org_id = :org) ORDER BY p.slug"),
+                {"org": org}).mappings().all()
+        readable = [dict(r) for r in rows if _may_read_project(auth, str(r["id"]))]
+        return {"count": len(readable), "projects": _json_safe(readable),
+                "current_project": project_id,
+                "note": "Every project tool takes `project` (an id or slug from this list) to "
+                        "read or act in that project."}
+
+    @reg.tool(
+        "describe_project",
+        "One project's real state in one call: whether it exists, its name and description, "
+        "the repositories registered to it (with role, status and default branch), and EVERY "
+        "project setting with its stored value, its effective value and the values it accepts. "
+        "Pass `project` for a project other than this conversation's. Read this before "
+        "reporting on or changing a project's repositories or settings.",
+        _obj({}), permission="project:read")
+    def describe_project(ctx, *, project_id, actor, args):
+        from ..services import project_settings as ps
+
+        with ctx.begin() as c:
+            row = c.execute(_text(
+                "SELECT id, slug, name, description, created_at FROM projects WHERE id = :p"),
+                {"p": project_id}).mappings().first()
+            if row is None:
+                return {"ok": False, "error": "project_not_found", "project": project_id}
+            repos = c.execute(_text(
+                "SELECT full_name, role, status, default_branch, connection_id, created_at "
+                "  FROM github_repository_bindings WHERE project_id = :p "
+                " ORDER BY (role = 'primary') DESC, full_name"),
+                {"p": project_id}).mappings().all()
+            stored = ps.get_all(c, project_id)
+        settings_out = []
+        for key, spec in ps.KNOBS.items():
+            default = getattr(ctx.settings, spec["attr"], None)
+            settings_out.append({
+                "key": key, "label": spec.get("label"),
+                "stored": stored.get(key),
+                "effective": stored[key] if key in stored else default,
+                "source": "project" if key in stored else "deployment default",
+                "allowed": ps.allowed_values_said(spec)})
+        return {"ok": True, "project": _json_safe(dict(row)),
+                "repositories": _json_safe([dict(r) for r in repos]),
+                "repository_count": len(repos),
+                "settings": _json_safe(settings_out),
+                "settings_set_on_this_project": sorted(stored),
+                "note": ("No repository is registered yet: register_repository (with a "
+                         "connection from list_github_connections) adds one."
+                         if not repos else "")}
 
     @reg.tool(
         "list_code_tasks",
@@ -2653,8 +2726,11 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
         "review-round budgets. Takes effect on the next run, no restart. Use it to APPLY a "
         "change you have recommended once the operator agrees, instead of describing where "
         "they could click. Send an empty value to hand a setting back to the deployment "
-        "default. Refuses a key or a value that is not allowed, and says what is.",
-        _obj({"key": {"type": "string", "description": "the setting, e.g. code_review_engine"},
+        "default. Refuses a key or a value that is not allowed, and says what is. "
+        # GENERATED FROM THE SETTINGS TABLE, so the agent reads the real names and values
+        # instead of guessing one (`knowledge` for `knowledge_graph`).
+        "Keys and allowed values: " + _project_settings_catalogue() + ".",
+        _obj({"key": {"type": "string", "description": "the setting key, exactly as listed"},
               "value": {"type": "string",
                         "description": "the new value; empty to use the deployment default"}},
              required=["key"]),
@@ -2695,7 +2771,8 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
         "northpeak-bank-a\"). NOT for a new app — an app is built with start_workflow or "
         "create_code_task inside a project. The slug is kebab-case and becomes the project's "
         "id; give it when they named one, else it is made from the name. A slug already in use "
-        "comes back with the existing project's id.",
+        "comes back with the existing project's id. Never call it to check whether a project "
+        "exists: list_projects and describe_project say that.",
         _obj({"name": {"type": "string", "description": "the project's name, as they said it"},
               "slug": {"type": "string",
                        "description": "kebab-case id, e.g. northpeak-bank-a (optional)"},
@@ -4135,6 +4212,22 @@ def _slim_run(r: dict) -> dict:
             "created_at", "task_id")
     out = {k: r.get(k) for k in keys if k in r}
     return _json_safe(out)
+
+
+def _may_read_project(auth: Any, project_id: str) -> bool:
+    """Whether this caller holds project:read in that project (the console's project list uses
+    the same permission). No verified identity means the gate already let the call through
+    unenforced, so the list is not narrowed further."""
+    if auth is None:
+        return True
+    from ..identity import authz
+    from ..identity.scope import ResolvedScope
+
+    try:
+        return bool(authz.check(auth, "project:read",
+                                ResolvedScope.in_project(auth.principal.org_id, project_id)).allowed)
+    except Exception:  # noqa: BLE001 — a decision that cannot be made is not an allow
+        return False
 
 
 def _json_safe(obj: Any) -> Any:
@@ -7832,8 +7925,11 @@ def build_discuss_read_registry(*, edition: str | None = None) -> ToolRegistry:
     Project-safe read tools, plus the operational writes in
     ``_DISCUSS_OPERATIONS_TOOLS``.
     ``project_id`` is stripped from schemas/args so the model cannot override the authorised
-    project. Raw SQL is excluded in every edition because its handlers cannot
-    enforce that project boundary. Community also excludes arbitrary URL probes;
+    project silently. Every tool that acts in one project instead takes the one generic
+    ``project`` argument (registry.PROJECT_ARG): another project's id or slug, which
+    ``ToolRegistry.invoke`` resolves in the caller's organization and authorizes against the
+    caller's own permission IN THAT project. Raw SQL is excluded in every edition because its
+    handlers cannot enforce that project boundary. Community also excludes arbitrary URL probes;
     direct Community SQL invocations are separately rejected by the handlers.
     """
     source = build_default_registry()
@@ -7852,6 +7948,10 @@ def build_discuss_read_registry(*, edition: str | None = None) -> ToolRegistry:
             continue
         properties = dict((spec.parameters or {}).get("properties") or {})
         properties.pop("project_id", None)
+        if spec.org_scope is not True:
+            # A tool that acts in one project can act in another the caller may: said in its
+            # own schema, so the model knows it from the tool and not from a prompt.
+            properties[PROJECT_ARG] = dict(PROJECT_ARG_SCHEMA)
         parameters = {**(spec.parameters or {}), "properties": properties}
         required = [
             item

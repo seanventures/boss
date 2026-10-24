@@ -782,3 +782,63 @@
     - input: "what projects do I have?"
       checks: {no_writes: true}
       expected: "A question: lists the projects it can read, changes nothing."
+
+- id: multi-project-status-and-setup
+  covers: [other-projects-state-read-by-creating-them]
+  surface: talk_to_boss
+  # The other projects' state is the world's: list_projects and describe_project answer from it,
+  # so the scenario does not depend on the harness having an identity to cross projects with.
+  tools:
+    list_projects:
+      ok: true
+      count: 4
+      projects:
+        - {id: ops-main, slug: ops-main, name: ops-main, repositories: 1}
+        - {id: shop-red, slug: shop-red, name: shop-red, repositories: 0}
+        - {id: shop-green, slug: shop-green, name: shop-green, repositories: 0}
+        - {id: shop-blue, slug: shop-blue, name: shop-blue, repositories: 0}
+      note: "Every project tool takes `project` (an id or slug from this list) to read or act in that project."
+    describe_project:
+      ok: true
+      project: {id: shop-red, slug: shop-red, name: shop-red, description: null}
+      repositories: []
+      repository_count: 0
+      settings:
+        - {key: knowledge_graph, label: Knowledge graph, stored: null, effective: "on",
+           source: deployment default, allowed: "on|keyword|off"}
+        - {key: code_agent_max_concurrency, label: Agents at once, stored: null, effective: 3,
+           source: deployment default, allowed: "1..16"}
+      settings_set_on_this_project: []
+      note: "No repository is registered yet: register_repository (with a connection from list_github_connections) adds one."
+  checks:
+    no_writes: true
+    any_of: [list_projects, describe_project]
+    never_execute: [create_project, create_code_task, start_workflow]
+    never_offer: [create_project, create_code_task]
+    mentions_any: [repositor, Repositor]
+  expected: >-
+    Reads the projects' real state (list_projects, describe_project with `project` for each) and
+    answers plainly: each project exists, none has a repository registered, and knowledge_graph is
+    not set on any (it follows the deployment default). Offers or names the next steps: register
+    each project's repository, and set knowledge_graph (on|keyword|off) per project. Changes nothing.
+  must_not:
+    - call or offer create_project for a project that exists, or to check whether one exists
+    - reply with raw tool-protocol JSON instead of an answer
+    - say it cannot read another project's repositories or settings from this conversation
+    - name a setting that does not exist (the knowledge setting is knowledge_graph)
+  phrasings:
+    - "What's the state of projects shop-red, shop-green and shop-blue — do they exist, what repos are registered, and what's each one's knowledge_graph setting? Check, don't guess."
+    - "do shop-red shop-green shop-blue exist? repos? kg setting?"
+    - "Before we start the case study: tell me for each of shop-red, shop-green and shop-blue which repositories are connected and how the knowledge graph is set."
+    - "pls check the 3 shop projects (red green blue), are they there and is there any repo on them"
+    - "Which repositories does shop-green have registered, and is its knowledge graph on?"
+    - "I made some projects yesterday, shop-red/-green/-blue. What's set up on them so far?"
+    - "Kindly verify the status of projects shop-red, shop-green, shop-blue including the repository and knowledge setting."
+    - "Is the knowledge_graph setting on, off or keyword for shop-blue? And does it have a repo yet?"
+  negatives:
+    - input: "Set up the case study: for shop-red set knowledge_graph to off, for shop-green keyword, for shop-blue on."
+      checks: {any_of: [set_project_setting], never_execute: [create_code_task, start_workflow], allow_clarify: true}
+      expected: "An instruction about existing projects: sets knowledge_graph on each named project (set_project_setting with `project`), with the real key and values, and reports what it set. It does not create the projects again or start any build."
+    - input: "create a project called shop-purple"
+      checks: {any_of: [create_project], allow_clarify: true}
+      expected: "A new project: creates (or offers to create) shop-purple."

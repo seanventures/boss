@@ -318,6 +318,16 @@ class ToolRegistry:
         project_id = acting_project(spec, project_id, safe_args)
         if operator_confirmed:
             safe_args["_operator_confirmed"] = True
+        # ANOTHER PROJECT, NAMED ON PURPOSE. A pinned registry discards `project_id`, but takes
+        # the one generic `project` argument (PROJECT_ARG): the caller's id or slug for another
+        # project in their organization. It is resolved here, for every tool, and the call acts
+        # there only if the caller holds the tool's permission IN THAT PROJECT (decided whatever
+        # the authz mode — a cross-project call is never passed through on trust). The offer
+        # below keeps the argument, so a button pressed later acts where it said it would.
+        effective_auth = auth if auth is not None else CURRENT_TOOL_AUTH.get()
+        named_project = ""
+        if getattr(spec, "pinned_project", False):
+            named_project = str(safe_args.get(PROJECT_ARG) or "").strip()
         if not spec.self_executable and not operator_confirmed:
             return {
                 "ok": False, "tool": name, "status": "confirmation_required",
@@ -347,11 +357,21 @@ class ToolRegistry:
                     + " — so it runs only when an operator clicks it."
                 ),
             }
+        if getattr(spec, "pinned_project", False):
+            safe_args.pop(PROJECT_ARG, None)
+        if named_project:
+            target, refusal = resolve_named_project(ctx, named_project, effective_auth)
+            if refusal is not None:
+                return {"tool": name, **refusal}
+            if target != project_id:
+                refusal = cross_project_refusal(spec, effective_auth, target, safe_args)
+                if refusal is not None:
+                    return refusal
+                project_id = target
         # IDENTITY (IDENTITY.md §6.4): the caller must hold the tool's permission at the
         # session's project before the handler runs. An agent run is checked against its run
         # token, so a non-delegable permission is always refused to an agent.
-        refused = identity_gate(spec, auth if auth is not None else CURRENT_TOOL_AUTH.get(),
-                                project_id, safe_args)
+        refused = identity_gate(spec, effective_auth, project_id, safe_args)
         if refused is not None:
             return refused
         # The handler sees the identity the gate decided: an explicit `auth` is this call's
@@ -388,6 +408,81 @@ def acting_project(spec: "ToolSpec", session_project: Optional[str], args: dict)
         return supplied
     args.pop("project_id", None)
     return session_project
+
+
+#: THE ONE ARGUMENT THAT POINTS A PINNED TOOL AT ANOTHER PROJECT. Every project-scoped tool in a
+#: pinned registry carries it (tools/builtin.build_discuss_read_registry adds it from the spec, so
+#: a tool added tomorrow has it too), and `invoke` resolves and authorizes it. Asked about three
+#: projects from a conversation in a fourth, the agent said it "has no tool that lets one
+#: conversation act on a different project's settings or repositories" — true, and the cause of
+#: every guess that followed.
+PROJECT_ARG = "project"
+
+PROJECT_ARG_SCHEMA: dict = {
+    "type": "string",
+    # Short on purpose: it is repeated on every project tool the model is shown.
+    "description": "other project id/slug",
+}
+
+
+def resolve_named_project(ctx: Any, ref: str, auth: Any) -> tuple[Optional[str], Optional[dict]]:
+    """(project id, None) for a project id or slug in the caller's organization, else
+    (None, the refusal). A project that does not exist is a FACT to report, not an error to
+    retry: the refusal names it and the projects the organization does have."""
+    ref = str(ref or "").strip()
+    begin = getattr(ctx, "begin", None)
+    if not callable(begin) or getattr(ctx, "engine", True) is None:
+        return None, {"ok": False, "error": "project_lookup_unavailable",
+                      "message": f"Cannot look up project {ref!r} here: no database."}
+    org = str(getattr(getattr(auth, "principal", None), "org_id", "") or "")
+    if not org:
+        org = str(getattr(getattr(ctx, "settings", None), "default_org_id", "") or "")
+    from sqlalchemy import text as _sql
+
+    with begin() as c:
+        rows = c.execute(_sql(
+            "SELECT p.id, p.slug FROM projects p JOIN workspaces w ON w.id = p.workspace_id "
+            " WHERE (:org = '' OR w.org_id = :org) "
+            "   AND (p.id = :r OR lower(p.slug) = lower(:r)) "
+            " ORDER BY (p.id = :r) DESC LIMIT 1"), {"r": ref, "org": org}).mappings().all()
+        if rows:
+            return str(rows[0]["id"]), None
+        known = [str(r[0]) for r in c.execute(_sql(
+            "SELECT p.slug FROM projects p JOIN workspaces w ON w.id = p.workspace_id "
+            " WHERE (:org = '' OR w.org_id = :org) ORDER BY p.slug LIMIT 50"), {"org": org})]
+    return None, {"ok": False, "error": "project_not_found", "project": ref,
+                  "message": f"There is no project {ref!r} in this organization.",
+                  "projects_in_this_organization": known}
+
+
+def cross_project_refusal(spec: "ToolSpec", auth: Any, project_id: str,
+                          args: Optional[dict] = None) -> Optional[dict]:
+    """A call pointed at another project with PROJECT_ARG: refused unless a verified caller holds
+    the tool's permission in that project. Decided in every authz mode; `identity_gate` then
+    decides the call as usual at that project."""
+    from ..identity import authz
+    from ..identity.scope import ResolvedScope
+
+    name = getattr(spec, "name", "?")
+    permission_for = getattr(spec, "permission_for", None)
+    permission = str((permission_for(args) if permission_for else spec.permission)
+                     or "project:read")
+    if auth is None:
+        return {"ok": False, "tool": name, "error": "identity_unavailable",
+                "message": (f"'{name}' in project {project_id}: acting in another project needs "
+                            "a verified caller, and this call has none.")}
+    try:
+        decision = authz.check(auth, permission,
+                               ResolvedScope.in_project(auth.principal.org_id, project_id))
+        allowed = bool(decision.allowed)
+    except Exception:  # noqa: BLE001 — a decision that cannot be made is not an allow
+        allowed = False
+    if allowed:
+        return None
+    return {"ok": False, "tool": name, "error": "forbidden", "permission": permission,
+            "project": project_id,
+            "message": (permission_refusal_words(name, permission)
+                        + f" (in project {project_id})")}
 
 
 #: The verified identity of whoever is calling tools on this thread (an AuthContext). Set by the

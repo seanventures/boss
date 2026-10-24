@@ -29,6 +29,7 @@ from typing import Any, Iterator, Optional, Tuple
 from ..config import Settings
 from . import owned_process
 from .included_spend import BILLING_SUBSCRIPTION
+from . import protocol_reply
 from .scheduling import low_priority
 
 _log = logging.getLogger(__name__)
@@ -44,27 +45,16 @@ def _strip_fences(text: str) -> str:
 
 
 def _unwrapped_final(text: str) -> str:
-    """A tool-less reply that came back in the tool protocol's JSON, as the plain answer."""
-    stripped = _strip_fences(str(text or "")).strip()
-    if not (stripped.startswith("{") and stripped.endswith("}")):
+    """A tool-less reply that came back in the tool protocol's JSON, as the plain answer.
+
+    The protocol object is read at the TOP of the text (protocol_reply.parse), never as the first
+    balanced object inside it: a malformed reply's nested `arguments` object used to be taken
+    for the whole reply, and the raw protocol JSON reached the person. Other JSON is left alone.
+    """
+    obj = protocol_reply.parse(text)
+    if not obj or not (protocol_reply.PROTOCOL_KEYS & set(obj)):
         return text
-    obj = _first_json_object(stripped)
-    if not isinstance(obj, dict):
-        # Malformed protocol JSON (a misplaced brace): its final or thought is still the answer.
-        for key in ("final", "thought"):
-            found = re.search(r'"%s"\s*:\s*"((?:[^"\\]|\\.)*)"' % key, stripped)
-            if found and stripped.startswith('{"thought"'):
-                try:
-                    return json.loads(f'"{found.group(1)}"')
-                except ValueError:
-                    return found.group(1)
-        return text
-    if not ({"final", "tool_calls", "tool_call"} & set(obj)):
-        return text
-    final = obj.get("final")
-    if isinstance(final, str) and final.strip():
-        return final
-    return str(obj.get("thought") or "").strip() or text
+    return protocol_reply.prose_of_final(obj) or str(obj.get("thought") or "").strip() or text
 
 
 def _first_json_object(text: str) -> Optional[dict]:
@@ -272,13 +262,19 @@ class CliChatBrain:
             # reached the person as the reply (battle test, retry-existing-step). Its "final"
             # is the answer; a call it can no longer make is dropped and its thought kept.
             text_out = _unwrapped_final(result_text)
-            return (
-                {"content": text_out, "tool_calls": None,
-                 "raw": {"role": "assistant", "content": text_out}},
-                usage,
-            )
+            message = {"content": text_out, "tool_calls": None,
+                       "raw": {"role": "assistant", "content": text_out}}
+            structure = protocol_reply.parse(result_text)
+            if structure and protocol_reply.PROTOCOL_KEYS & set(structure):
+                # The loop must know this was a decision structure, not an answer: its thought
+                # is not one (agent/engine_agent.py asks again for prose).
+                message["protocol"] = structure
+            return message, usage
 
-        obj = _first_json_object(result_text)
+        # THE PROTOCOL OBJECT, READ AT ITS START (protocol_reply): at the top of the reply, or
+        # where it begins after some prose — never the first balanced object nested inside it,
+        # which for a reply missing one brace was a tool call's `arguments`.
+        obj = protocol_reply.parse_embedded(result_text)
         if not isinstance(obj, dict):
             # Could not parse an action — treat the text as a final answer so the
             # loop terminates gracefully rather than spinning (never the raw protocol JSON).

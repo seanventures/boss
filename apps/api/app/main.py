@@ -29822,8 +29822,11 @@ def intent_route(payload: IntentRouteRequest) -> IntentRouteResponse:
             pending_plan_id=payload.pending_plan_id,
             external_ref=payload.external_ref,
         )
+        from boss_engine.services.agent_service import readable_reply
+
         return IntentRouteResponse(
-            reply=turn.reply,
+            # The same last door as a threaded turn: a decision structure is never the reply.
+            reply=readable_reply(turn.reply, turn.tool_calls),
             actions=list(turn.actions or []),
             pending_confirmation=turn.pending_confirmation,
             tool_calls=list(turn.tool_calls or []),

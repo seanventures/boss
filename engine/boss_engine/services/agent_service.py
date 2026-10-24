@@ -9,7 +9,7 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.exc import IntegrityError
 
 from ..config import Settings
-from . import agent_decision
+from . import agent_decision, protocol_reply
 from .capability_manifest import build_manifest
 from .core import emit_event, make_id
 from .intent_router import IntentRouter
@@ -34,6 +34,28 @@ SpendEnvelope = agent_decision.SpendEnvelope
 
 #: The surface a domain agent's turns are kept on: its own threads, never the chat rail's.
 DOMAIN_SURFACE = "agent"
+
+
+def readable_reply(reply: Any, tool_calls: Any = None) -> str:
+    """The reply a person may read. A model's decision structure (the tool protocol's JSON, or
+    the decision contract's), however it got this far, becomes its final answer, else an honest
+    account of what was checked — never the raw JSON."""
+    text_reply = str(reply or "")
+    structure = protocol_reply.parse(text_reply)
+    if structure is None:
+        return text_reply
+    final = protocol_reply.prose_of_final(structure)
+    if final:
+        return final
+    LOGGER.warning("a decision structure reached the reply; replaced (%s)",
+                   sorted(structure)[:6])
+    checked = [f"- {c.get('tool')}" + ("" if c.get("ok", True) else " (failed)")
+               for c in (tool_calls or []) if isinstance(c, dict) and c.get("tool")][:12]
+    return "\n".join([
+        "The model returned its internal decision instead of an answer, so I have no written "
+        "answer for this turn. That is a fault on my side; asking again should work.",
+        *(["", "What I checked:", *checked] if checked else []),
+    ])
 
 
 class AgentThreadNotFoundError(ValueError):
@@ -855,6 +877,9 @@ class AgentService:
                 thread_id=thread["id"],
                 depth=depth,
             )
+        # THE LAST DOOR BEFORE A PERSON READS IT, for every surface (console, Metatron, API,
+        # wakeups): a decision structure is never the reply (protocol_reply.py).
+        turn.reply = readable_reply(turn.reply, turn.tool_calls)
         assistant = self.append_message(
             connection,
             thread_id=thread["id"],

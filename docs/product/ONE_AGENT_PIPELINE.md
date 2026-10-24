@@ -22,6 +22,10 @@ Plane BOSSAPP-759. Operator decisions, 2026-10-23:
 
 Governance is the same for every caller: permission and identity gate, consent (`propose_action` and `operator_only`), step-up, budget, receipts and Passport ceilings.
 
+**Every project the caller may reach.** The chat registry is pinned to the conversation's project, and every tool that acts in one project also takes one generic `project` argument (another project's id or slug, `registry.PROJECT_ARG`, added to each schema from the spec). `ToolRegistry.invoke` resolves it in the caller's organization and runs the call there only if the caller holds the tool's permission in that project, in every authz mode. `list_projects` and `describe_project` report which projects exist and each one's repositories and settings; `set_project_setting` lists every real key and its values, generated from `project_settings.KNOBS`. Tests: `test_an_agent_reaches_every_project_it_may`, `apps/api/tests/test_an_agent_reads_and_sets_up_other_projects`.
+
+**A decision structure is never the reply.** A model that writes its tool-protocol JSON (well formed or not) as its text has the calls it meant executed while tools are allowed; otherwise its `final` is the answer, or it is asked once for prose (`engine_agent`). `services/protocol_reply.py` reads the object at its start, never an object nested in it. `AgentService.chat` and `POST /v1/intent/route` pass every reply through `readable_reply`, so no surface prints the JSON. Test: `test_a_decision_structure_is_never_the_reply`.
+
 ## Entry points
 
 "Before" means the entry point had its own decision path. "Now" names the path it takes today.
