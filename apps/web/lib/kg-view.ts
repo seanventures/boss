@@ -22,10 +22,9 @@ import type {
 } from "./kg-view-types";
 import { KG_VIEW_BASE } from "./kg-view-types";
 
-/** Rule review (§3, §5.7). The operator's decision: owners and admins only. `knowledge:review`
- *  (S2a) is held by exactly those roles; until it is in the generated catalogue the console
- *  mirrors the same people through `knowledge:manage`. One constant, so the switch is one line. */
-export const RULE_REVIEW: Permission = "knowledge:manage";
+/** Rule review (§3, §5.7). The operator's decision: owners and admins only — exactly the holders
+ *  of `knowledge:review` (step-up, never delegable: no agent run can hold it). */
+export const RULE_REVIEW: Permission = "knowledge:review";
 /** Promote, reject and forget a fact (§3 "Forget/promote facts: stays knowledge:manage"). */
 export const FACT_MANAGE: Permission = "knowledge:manage";
 /** Index now / Rebuild: a read-safe action (apps/api knowledge.py: whoever may read may refresh). */

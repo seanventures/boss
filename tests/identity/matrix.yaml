@@ -3,7 +3,7 @@
 # One line per operation: its declaration, then the built-in roles allowed
 # (O owner, A admin, P operator, V viewer, U auditor; '-' none). Every other role is denied
 # 403, or 404 when the operation names an object the role cannot even read.
-# 1639 operations.
+# 1648 operations.
 "GET /.well-known/boss-jwks.json": ["public:jwks", "OAPVU"]
 "GET /docs": ["public:api_description", "OAPVU"]
 "GET /docs/oauth2-redirect": ["public:api_description", "OAPVU"]
@@ -1019,6 +1019,15 @@
 "POST /v1/knowledge/repositories/index/execute": ["permit worker:lease @ org", "-"]
 "GET /v1/knowledge/search": ["permit knowledge:read @ project(query=project_id)", "OAPVU"]
 "GET /v1/knowledge/status": ["permit reliability:read @ project(query=project_id)|org", "OAPVU"]
+"GET /v1/knowledge/view/neighbourhood": ["permit knowledge:read @ project(query=project_id)", "OAPVU"]
+"GET /v1/knowledge/view/node/{node_id:path}": ["permit knowledge:read @ project(query=project_id)", "OAPVU"]
+"GET /v1/knowledge/view/overview": ["permit knowledge:read @ project(query=project_id)", "OAPVU"]
+"GET /v1/knowledge/view/rules": ["permit knowledge:read @ project(query=project_id)", "OAPVU"]
+"POST /v1/knowledge/view/rules/{rule_id}/approve": ["permit knowledge:review @ project(body=project_id)", "OA"]
+"POST /v1/knowledge/view/rules/{rule_id}/edit": ["permit knowledge:review @ project(body=project_id)", "OA"]
+"POST /v1/knowledge/view/rules/{rule_id}/reject": ["permit knowledge:review @ project(body=project_id)", "OA"]
+"GET /v1/knowledge/view/search": ["permit knowledge:read @ project(query=project_id)", "OAPVU"]
+"GET /v1/knowledge/view/tree/children": ["permit knowledge:read @ project(query=project_id)", "OAPVU"]
 "GET /v1/kpis": ["permit work_item:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/kpis": ["permit work_item:manage @ project(body=project_id)", "OAP"]
 "GET /v1/learning/corpus": ["permit observability:read @ project(query=project_id)", "OAPVU"]

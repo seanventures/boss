@@ -195,7 +195,7 @@ describe("the detail panel", () => {
     );
     const approve = $('[data-testid="kg-panel-approve"]')!;
     expect(approve.getAttribute("aria-disabled")).toBe("true");
-    expect(approve.getAttribute("data-permission")).toBe("knowledge:manage");
+    expect(approve.getAttribute("data-permission")).toBe("knowledge:review");
     expect(approve.getAttribute("title")).toMatch(/^Needs “.+” · ask an /);
     await act(async () => approve.click());
     await settle();

@@ -81,7 +81,9 @@ def _clean(value: Any, *, field: str, limit: int, required: bool = True) -> str:
     return scrub(raw)[0]
 
 
-def _entitled(project_id: str) -> None:
+def entitlement(project_id: str) -> dict[str, Any]:
+    """The entitlement port's answer for ``knowledge.rules`` (spec §3.7), as the console reads it
+    from /v1/knowledge/graph-status: ``{allowed, reason}``. Community allows everything."""
     from ...ports import get_engine_ports
 
     ports = get_engine_ports()
@@ -92,9 +94,17 @@ def _entitled(project_id: str) -> None:
     else:
         port = ports.entitlement
     verdict = port.check(project_id, ENTITLEMENT) or {}
-    if not verdict.get("allowed", False):
-        raise PermissionError(str(verdict.get("reason") or
-                                  "Business rules are not included in this edition (knowledge.rules)."))
+    allowed = bool(verdict.get("allowed", False))
+    reason = str(verdict.get("reason") or (
+        "Business rules are included in this edition." if allowed else
+        "Business rules are not included in this edition (knowledge.rules)."))
+    return {"allowed": allowed, "reason": reason}
+
+
+def _entitled(project_id: str) -> None:
+    verdict = entitlement(project_id)
+    if not verdict["allowed"]:
+        raise PermissionError(verdict["reason"])
 
 
 def _content_key(scope: Mapping[str, Any], statement: str) -> str:

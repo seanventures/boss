@@ -431,3 +431,26 @@ def test_promoting_a_fact_audits_who_did_it(connection):
     assert connection.execute(text(
         "SELECT actor_ref FROM kg_audit WHERE entity_id = :i AND action = 'knowledge.promote'"),
         {"i": fact}).scalar_one() == "usr_param"
+
+
+def test_graph_status_says_whether_rules_are_entitled(connection):
+    status = SERVICE.status(connection, project_id=P)
+    assert status["entitlements"] == {"knowledge.rules": {
+        "allowed": True, "reason": "Business rules are included in this edition."}}
+
+    from boss_engine.ports import composition
+
+    class _Locked:
+        def check(self, project_id, capability):
+            return {"allowed": capability != "knowledge.rules", "reason": "Rules are an add-on."}
+
+    saved = composition.get_engine_ports()
+    try:
+        composition.configure_engine_ports(composition.EnginePorts(
+            budget=None, entitlement=_Locked(), persistence=None, events=None, decisions=None))
+        assert SERVICE.status(connection, project_id=P)["entitlements"]["knowledge.rules"] == {
+            "allowed": False, "reason": "Rules are an add-on."}
+        with pytest.raises(PermissionError, match="Rules are an add-on"):
+            _propose(connection)
+    finally:
+        composition.configure_engine_ports(saved)

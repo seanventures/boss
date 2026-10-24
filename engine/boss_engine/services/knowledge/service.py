@@ -456,6 +456,9 @@ class KnowledgeService:
             "sources": ["adr folder", "connector document"],
             # Each registered repository's code graph (repo_index.py): state, commit, counts.
             "repositories": _repositories(connection, project_id),
+            # The add-ons' entitlement (spec §3.7): the console shows a designed locked state, never
+            # a broken button. Community allows them.
+            "entitlements": {"knowledge.rules": _rules_entitlement(project_id)},
         }
 
     def log_pack(
@@ -621,6 +624,12 @@ def _public_node(node: dict) -> dict:
         "body": node["body"],
         "valid_to": node.get("valid_to"),
     }
+
+
+def _rules_entitlement(project_id: str) -> dict[str, Any]:
+    from .rules import entitlement
+
+    return entitlement(project_id)
 
 
 def require_confirmation(step_up: str | None) -> None:
