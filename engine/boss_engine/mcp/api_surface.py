@@ -94,6 +94,9 @@ _EXCLUDED_EXACT = {
     "/v1/orchestration/next-move/execute": "orchestration_worker_lease_protocol",
     "/v1/work-orchestration/tracker-sync/execute": "tracker_worker_lease_protocol",
     "/v1/activity/retention/prune": "activity_worker_protocol",
+    # The worker hands its leased knowledge.repository.index job to the API, which holds the
+    # GitHub credential and the graph (services/knowledge/repo_index.py): a worker protocol.
+    "/v1/knowledge/repositories/index/execute": "knowledge_index_worker_lease_protocol",
 }
 _EXCLUDED_FRAGMENTS = (
     ("/steps/claim", "workflow_worker_protocol"),
