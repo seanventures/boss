@@ -37,7 +37,7 @@ EDGE_KINDS = frozenset({
     "depends_on", "runs_on", "deployed_from", "owns", "emits", "caused_by",
     "correlates_with",
     "defines", "calls", "references", "imports", "reads", "writes", "publishes", "subscribes",
-    "exposes", "tests",
+    "exposes", "tests", "extends",
     "specifies", "implements", "changed", "reviewed", "found_in", "shipped",
     "fired_on", "fixed_by", "decided_by", "approved_by", "about", "supersedes",
     "evidenced_by",

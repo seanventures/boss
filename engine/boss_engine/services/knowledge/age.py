@@ -7,7 +7,9 @@ tools keep traversing with the recursive CTE (measured faster). AGE holds a proj
   one project's graph and cannot name another.
 * A vertex's label is its knowledge layer (``Code``, ``Lifecycle``, ``Ops``, ``Knowledge``), so
   the code layer is its own label and a stage scope can refuse it by name. An edge's label is its
-  kind. Properties carry the node id, kind, key, name and trust tier.
+  kind. Properties carry the node id, kind, key, name and trust tier, and where the node has
+  them its repo, path, line, lang, symbol_kind (function/method/class/property) and type_kind
+  (class/interface/enum/record/struct). An edge carries its kind, trust tier and confidence.
 * **Incremental**: ``after_write`` re-projects what changed since the last sync (the knowledge
   write paths call it); a large change, or a first sync, rebuilds the graph. ``forget_vertex``
   drops a deleted node at once. ``reconcile`` (the worker's 10-minute sweep) rebuilds a graph
@@ -57,6 +59,7 @@ _WRITE_WORDS = re.compile(r"(?i)\b(CREATE|MERGE|SET|DELETE|DETACH|REMOVE|DROP|LO
 _STRINGS = re.compile(r"'(?:\\.|[^'\\])*'|\"(?:\\.|[^\"\\])*\"")
 _NODE = re.compile(r"(?<![\w`])\(\s*([A-Za-z_]\w*)?\s*(?::\s*`?([A-Za-z_]\w*)`?)?\s*(\{[^{}]*\})?\s*\)")
 _COLUMN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,30}$")
+_TRAILING_LIMIT = re.compile(r"(?i)\bLIMIT\s+(\d+)\s*;?\s*$")
 
 
 # --- availability and names -------------------------------------------------------------------
@@ -107,7 +110,9 @@ def _node_rows(connection: Connection, project_id: str, ids: list[str] | None = 
     where = "" if ids is None else "AND id = ANY(:ids)"
     return [dict(r) for r in connection.execute(text(
         f"""
-        SELECT id, kind, node_key, name, trust_tier FROM kg_nodes
+        SELECT id, kind, node_key, name, trust_tier, repo, path, attrs->>'symbol_kind' AS symbol_kind,
+               attrs->>'type_kind' AS type_kind, attrs->>'lang' AS lang, attrs->>'line' AS line
+        FROM kg_nodes
         WHERE project_id = :p AND (valid_to IS NULL OR valid_to > now()) {where}
         """), {"p": project_id, "ids": list(ids or [])}).mappings()]
 
@@ -115,12 +120,26 @@ def _node_rows(connection: Connection, project_id: str, ids: list[str] | None = 
 def _edge_rows(connection: Connection, project_id: str, where: str = "", params: dict | None = None) -> list[dict]:
     return [dict(r) for r in connection.execute(text(
         f"""
-        SELECT e.id, e.src_id, e.dst_id, e.kind, e.trust_tier FROM kg_edges e
+        SELECT e.id, e.src_id, e.dst_id, e.kind, e.trust_tier, e.confidence FROM kg_edges e
         JOIN kg_nodes s ON s.id = e.src_id JOIN kg_nodes d ON d.id = e.dst_id
         WHERE e.project_id = :p AND (e.valid_to IS NULL OR e.valid_to > now())
           AND (s.valid_to IS NULL OR s.valid_to > now()) AND (d.valid_to IS NULL OR d.valid_to > now())
           {where}
         """), {"p": project_id, **(params or {})}).mappings()]
+
+
+#: Optional vertex properties, copied when the node has them (a code node's location and shape).
+VERTEX_EXTRAS = ("repo", "path", "line", "lang", "symbol_kind", "type_kind")
+
+
+def _vertex_props(node: dict) -> dict:
+    props = {"node_id": node["id"], "kind": node["kind"], "node_key": node["node_key"],
+             "name": node["name"], "trust_tier": node["trust_tier"]}
+    for key in VERTEX_EXTRAS:
+        value = node.get(key)
+        if value not in (None, ""):
+            props[key] = int(value) if key == "line" and str(value).isdigit() else value
+    return props
 
 
 def _insert_vertices(connection: Connection, project_id: str, name: str, nodes: list[dict]) -> int:
@@ -131,8 +150,7 @@ def _insert_vertices(connection: Connection, project_id: str, name: str, nodes: 
     written = 0
     for label, group in by_label.items():
         _ensure_label(connection, name, label, "v", have)
-        props = [json.dumps({"node_id": n["id"], "kind": n["kind"], "node_key": n["node_key"],
-                             "name": n["name"], "trust_tier": n["trust_tier"]}) for n in group]
+        props = [json.dumps(_vertex_props(n)) for n in group]
         for start in range(0, len(props), 2000):
             rows = connection.execute(text(
                 f'INSERT INTO "{name}"."{label}" (properties) '
@@ -166,7 +184,8 @@ def _insert_edges(connection: Connection, project_id: str, name: str, edges: lis
                 "JOIN kg_age_vertices s ON s.project_id = :p AND s.node_id = u.src "
                 "JOIN kg_age_vertices d ON d.project_id = :p AND d.node_id = u.dst"),
                 {"p": project_id, "srcs": [e["src_id"] for e in part], "dsts": [e["dst_id"] for e in part],
-                 "props": [json.dumps({"edge_id": e["id"], "kind": e["kind"], "trust_tier": e["trust_tier"]})
+                 "props": [json.dumps({"edge_id": e["id"], "kind": e["kind"], "trust_tier": e["trust_tier"],
+                                       "confidence": float(e.get("confidence") if e.get("confidence") is not None else 1.0)})
                            for e in part]}).rowcount
     return written
 
@@ -396,6 +415,15 @@ def run_cypher(
     if not available(connection):
         raise RuntimeError("apache age is not installed")
     name = graph_name(project_id)
+    # The query's own trailing LIMIT is asked for one row more, so the result can say whether
+    # more matched: a model read a LIMIT 50 sample as "the only ones" (exam, 2026-10-24).
+    query_limit = None
+    # Positions from the query itself; the string-blanked copy only confirms the LIMIT is not
+    # inside a string literal.
+    trailing = _TRAILING_LIMIT.search(query) if _TRAILING_LIMIT.search(_STRINGS.sub("''", query)) else None
+    if trailing:
+        query_limit = int(trailing.group(1))
+        query = query[:trailing.start()] + f"LIMIT {query_limit + 1}"
     tag = "$kgq" + secrets.token_hex(6) + "$"
     if tag in query:
         raise ValueError("query is refused")
@@ -423,11 +451,41 @@ def run_cypher(
             raise TimeoutError(f"the query ran past {timeout} ms") from error
         if code == "25006":
             raise ValueError("Cypher here is read-only.") from error
-        raise ValueError(f"the query did not run: {str(getattr(error, 'orig', error)).splitlines()[0]}") from error
+        said = str(getattr(error, "orig", error)).splitlines()[0]
+        raise ValueError(f"the query did not run: {said}{_dialect_hint(query)}") from error
     finally:
         savepoint.rollback()
-    out = [{c: _ag(v) for c, v in zip(cols, row)} for row in rows[:limit]]
-    return {"columns": cols, "rows": out, "truncated": len(rows) > limit, "graph": name}
+    cap = min(limit, query_limit) if query_limit is not None else limit
+    out = [{c: _ag(v) for c, v in zip(cols, row)} for row in rows[:cap]]
+    result = {"columns": cols, "rows": out, "rows_returned": len(out), "row_limit": limit,
+              "query_limit": query_limit, "truncated": len(rows) > cap, "graph": name}
+    if result["truncated"]:
+        by = f"the query's LIMIT {query_limit}" if query_limit is not None and query_limit <= limit \
+            else f"the row limit of {limit}"
+        result["truncated_by"] = by
+        result["note"] = (f"TRUNCATED: {len(out)} rows returned and more matched ({by}). This is a sample, "
+                          "not every match: absence from it proves nothing. Count with RETURN count(*), "
+                          "narrow the pattern, or raise the limit.")
+    return result
+
+
+#: What Apache AGE's Cypher does not have, said where a query trips on it. General: about the
+#: dialect, never about one graph.
+DIALECT_NOTES = (
+    "Apache AGE Cypher: no relationship-type alternation [:a|b] and no all()/any()/none() "
+    "predicates; match each relationship type in its own pattern and combine with UNION, or chain "
+    "them, e.g. (c)-[:extends*0..3]->()-[:implements]->(i).",
+    "Each RETURN item needs its own name in columns.",
+)
+_ALTERNATION = re.compile(r"\[[^\]]*:[^\]]*\|[^\]]*\]")
+_QUANTIFIER = re.compile(r"(?i)\b(?:all|any|none|single)\s*\(")
+
+
+def _dialect_hint(query: str) -> str:
+    stripped = _STRINGS.sub("''", query)
+    if _ALTERNATION.search(stripped) or _QUANTIFIER.search(stripped):
+        return " — " + DIALECT_NOTES[0]
+    return ""
 
 
 def _ag(value: Any) -> Any:

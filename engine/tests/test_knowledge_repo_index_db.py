@@ -328,3 +328,44 @@ def test_a_job_that_ended_without_reporting_is_due_again(pg_engine, world):
     assert _row(pg_engine, world, bid)["reason"] == "retry"
     assert repo_index.enqueue_due(pg_engine, world["settings"], project_id=world["project"])["queued"] == 1
 
+
+
+def test_a_graph_from_an_older_indexer_is_indexed_whole_again_on_the_next_tick(pg_engine, world, remote):
+    """The live graphs were built before extends/implements existed. After an install with a newer
+    INDEXER_VERSION, the next tick (not the 10-minute sweep) queues each such repository, and the
+    run re-parses the whole tree although its head did not move."""
+    from boss_engine.services.knowledge.code_index import INDEXER_VERSION
+
+    _commit(remote, {"src/main/java/org/bank/loan/EarlyLoanService.java": """
+        package org.bank.loan;
+
+        public class EarlyLoanService extends LoanService {
+            public EarlyLoanService() { super(null); }
+        }
+        """}, "subclass")
+    bid = _register(pg_engine, world)
+    repo_index.enqueue_due(pg_engine, world["settings"], project_id=world["project"])
+    assert _run_job(pg_engine, world, remote, inline=True)["status"] == "succeeded"
+    row = _row(pg_engine, world, bid)
+    assert row["indexer_version"] == INDEXER_VERSION and not row["due"]
+    # A current graph is left alone by the tick.
+    assert repo_index.enqueue_due(pg_engine, world["settings"], project_id=world["project"])["queued"] == 0
+
+    # As the banking projects were: indexed by version 1 (no version recorded), no inheritance edges.
+    with pg_engine.begin() as c:
+        c.execute(text("UPDATE kg_repo_index SET indexer_version = NULL WHERE binding_id = :b"), {"b": bid})
+        c.execute(text("UPDATE kg_edges SET valid_to = now() WHERE project_id = :p AND kind = 'extends'"),
+                  {"p": world["project"]})
+    assert repo_index.enqueue_due(pg_engine, world["settings"], project_id=world["project"])["queued"] == 1
+    row = _row(pg_engine, world, bid)
+    assert row["reason"] == "indexer_upgraded" and row["force"] is True
+    out = _run_job(pg_engine, world, remote, inline=True)
+    assert out["status"] == "succeeded" and out["mode"] == "full", out
+    row = _row(pg_engine, world, bid)
+    assert row["indexer_version"] == INDEXER_VERSION and row["force"] is False
+    with pg_engine.begin() as c:
+        assert c.execute(text(
+            "SELECT count(*) FROM kg_edges e JOIN kg_nodes s ON s.id = e.src_id JOIN kg_nodes d ON d.id = e.dst_id "
+            "WHERE e.project_id = :p AND e.kind = 'extends' AND e.valid_to IS NULL "
+            "AND s.name = 'EarlyLoanService' AND d.name = 'LoanService'"), {"p": world["project"]}).scalar() == 1
+    assert repo_index.enqueue_due(pg_engine, world["settings"], project_id=world["project"])["queued"] == 0

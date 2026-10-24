@@ -41,6 +41,14 @@ SQL_SHAPE = re.compile(r"\bSELECT\b[\s\S]+?\bFROM\b|\bINSERT\s+INTO\b|\bUPDATE\s
 ENV_NAME = re.compile(r"^[A-Z][A-Z0-9_]{2,}$")
 SQL_NOT_TABLES = {"select", "where", "set", "values", "the", "a", "an", "lateral", "unnest", "only", "dual"}
 
+#: The shape of the facts one parse records. A cached file whose facts are of an older shape is
+#: parsed again on the next whole-tree index, even when its content did not change. Bump it
+#: whenever a parse records something new (2: type inheritance, ``FileFacts.bases``).
+FACTS_VERSION = 2
+#: A base type's name, once its type arguments are stripped: ``a.b.C``.
+_TYPE_NAME = re.compile(r"^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*$")
+_TYPE_ARGS = re.compile(r"<[^<>]*>|\[[^\[\]]*\]")
+
 
 @dataclass(slots=True)
 class Def:
@@ -85,7 +93,13 @@ class FileFacts:
     tables: list[tuple[str, str, str]] = field(default_factory=list)      # (src, table, reads|writes|defines)
     queues: list[tuple[str, str, str]] = field(default_factory=list)      # (src, queue, publishes|subscribes)
     config: list[tuple[str, str]] = field(default_factory=list)           # (src, KEY)
+    # (type qualname, base name chain, extends | implements | inherits, line). "inherits" is a
+    # base whose syntax does not say which (C#'s `class A : B, IC`): the index decides by what
+    # the base resolves to.
+    bases: list[tuple[str, tuple[str, ...], str, int]] = field(default_factory=list)
+    types: dict[str, str] = field(default_factory=dict)  # type qualname -> class | interface | enum...
     error: str | None = None
+    version: int = FACTS_VERSION
 
 
 def language_for(path: str) -> str | None:
@@ -160,6 +174,18 @@ def _string_value(node) -> str | None:
     return None
 
 
+def type_chain(raw: str) -> tuple[str, ...] | None:
+    """A base type written in source, as a name chain: ``pkg.Base<T>`` -> ("pkg", "Base"),
+    ``*pkg.T`` -> ("pkg", "T"). None for an expression (a mixin call) or nothing nameable."""
+    name = re.sub(r"\s+", "", raw or "").lstrip("*&").removeprefix("global::")
+    prev = None
+    while prev != name:
+        prev, name = name, _TYPE_ARGS.sub("", name)
+    if not _TYPE_NAME.match(name):
+        return None
+    return tuple(name.split("."))
+
+
 def _chain(node, attr_types: tuple[str, ...], ident_types: tuple[str, ...], obj_field: str,
            prop_field: str) -> tuple[str, ...] | None:
     """a.b.c as ("a", "b", "c") when built only from identifiers; None otherwise."""
@@ -212,6 +238,12 @@ class _Extractor:
     def is_property(self, node) -> bool:
         """A method read as an attribute (no call), e.g. Python's @property."""
         return False
+
+    def base(self, qual: str, type_node, rel: str) -> None:
+        """Record that the type ``qual`` extends or implements the type written at ``type_node``."""
+        chain = type_chain(_text(type_node)) if type_node is not None else None
+        if chain and chain[-1] not in ("Object", "object"):
+            self.f.bases.append((qual, chain, rel, type_node.start_point[0] + 1))
 
     def _annotated(self, name_node) -> str:
         """The definition an annotation/attribute belongs to. Annotations sit inside the definition,
@@ -409,6 +441,12 @@ class _PythonAst(ast.NodeVisitor):
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
         qual = f"{self.src}.{node.name}" if self.scope else node.name
         bases = [self._chain(b) or () for b in node.bases]
+        self.f.types[qual] = "class"
+        for b in node.bases:
+            # Generic[T], Base[int]: the subscripted name is the base.
+            chain = self._chain(b.value if isinstance(b, ast.Subscript) else b)
+            if chain and chain not in (("object",), ("Generic",), ("typing", "Generic")):
+                self.f.bases.append((qual, chain, "extends", b.lineno))
         if any(b in (("models", "Model"), ("Model",)) or (len(b) > 1 and b[-1] == "Model") for b in bases):
             self.f.tables.append((qual, self._django_table(node, qual), "defines"))
 
@@ -535,6 +573,26 @@ class _JavaScript(_Extractor):
     def def_name(self, node):
         name = node.child_by_field_name("name")
         return _text(name) if name is not None else None
+
+    def on_def(self, node, qual, kind):
+        if kind != "class":
+            return
+        self.f.types[qual] = "interface" if node.type == "interface_declaration" else "class"
+        for child in node.named_children:
+            if child.type == "class_heritage":
+                clauses = [c for c in child.named_children if c.type in ("extends_clause", "implements_clause")]
+                if not clauses:                       # JavaScript: `class A extends B`
+                    for base in child.named_children[:1]:
+                        self.base(qual, base, "extends")
+                for clause in clauses:
+                    if clause.type == "extends_clause":
+                        self.base(qual, clause.child_by_field_name("value"), "extends")
+                    else:
+                        for base in clause.named_children:
+                            self.base(qual, base, "implements")
+            elif child.type in ("extends_type_clause", "extends_clause"):   # interface E extends F, G
+                for base in child.named_children:
+                    self.base(qual, base, "extends")
 
     def on_node(self, node):
         t = node.type
@@ -687,6 +745,27 @@ class _Go(_Extractor):
             return f"{rtype[-1]}.{_text(name)}" if rtype else _text(name)
         return _text(name)
 
+    def on_def(self, node, qual, kind):
+        if node.type != "type_spec":
+            return
+        body = node.child_by_field_name("type")
+        if body is None:
+            return
+        if body.type == "struct_type":
+            self.f.types[qual] = "struct"
+            fields = next((c for c in body.named_children if c.type == "field_declaration_list"), None)
+            for decl in (fields.named_children if fields is not None else []):
+                # An embedded field (no name): its methods are promoted onto this type.
+                if decl.type == "field_declaration" and decl.child_by_field_name("name") is None:
+                    self.base(qual, decl.child_by_field_name("type"), "extends")
+        elif body.type == "interface_type":
+            self.f.types[qual] = "interface"
+            for elem in body.named_children:
+                if elem.type == "type_elem" and len(elem.named_children) == 1:
+                    self.base(qual, elem.named_children[0], "extends")
+        else:
+            self.f.types[qual] = "type"
+
     def on_node(self, node):
         if node.type == "import_spec":
             path = _string_value(node.child_by_field_name("path")) or ""
@@ -723,6 +802,24 @@ class _Java(_Extractor):
     skip_ident_parents = frozenset({"formal_parameter", "variable_declarator", "catch_formal_parameter",
                                     "import_declaration", "package_declaration", "scoped_identifier",
                                     "enhanced_for_statement", "lambda_expression", "inferred_parameters"})
+
+    _TYPE_KINDS = {"class_declaration": "class", "interface_declaration": "interface",
+                   "enum_declaration": "enum", "record_declaration": "record"}
+
+    def on_def(self, node, qual, kind):
+        type_kind = self._TYPE_KINDS.get(node.type)
+        if type_kind is None:
+            return
+        self.f.types[qual] = type_kind
+        superclass = node.child_by_field_name("superclass")
+        if superclass is not None and superclass.named_children:
+            self.base(qual, superclass.named_children[0], "extends")
+        for child in node.named_children:
+            if child.type in ("super_interfaces", "extends_interfaces"):
+                rel = "implements" if child.type == "super_interfaces" else "extends"
+                for types in child.named_children:
+                    for base in (types.named_children if types.type == "type_list" else [types]):
+                        self.base(qual, base, rel)
 
     def on_node(self, node):
         t = node.type
@@ -786,6 +883,22 @@ class _CSharp(_Extractor):
     skip_ident_parents = frozenset({"parameter", "variable_declarator", "using_directive", "namespace_declaration",
                                     "file_scoped_namespace_declaration", "qualified_name", "for_each_statement",
                                     "catch_declaration", "name_equals", "argument_list_name"})
+
+    _TYPE_KINDS = {"class_declaration": "class", "interface_declaration": "interface",
+                   "struct_declaration": "struct", "record_declaration": "record", "enum_declaration": "enum"}
+
+    def on_def(self, node, qual, kind):
+        type_kind = self._TYPE_KINDS.get(node.type)
+        if type_kind is None:
+            return
+        self.f.types[qual] = type_kind
+        for child in node.named_children:
+            if child.type == "base_list":
+                for base in child.named_children:
+                    if base.type == "primary_constructor_base_type":     # record R(int X) : Base(X)
+                        base = base.named_children[0] if base.named_children else None
+                    # `class A : B, IC` does not say which is the class: the index decides.
+                    self.base(qual, base, "extends" if type_kind == "interface" else "inherits")
 
     def on_node(self, node):
         t = node.type

@@ -121,6 +121,11 @@ def _cypher(ctx, *, project_id, actor, args, policy=None, mode="on"):
             return {"error": str(error)}
 
 
+def _schema(ctx, *, project_id, actor, args, policy=None, mode="on"):
+    with ctx.begin() as connection:
+        return _SERVICE.schema(connection, project_id=project_id, policy=policy)
+
+
 def _propose(ctx, *, project_id, actor, args, policy=None, mode="on"):
     # The payload cannot choose a tier. The service stores inferred.
     with ctx.begin() as connection:
@@ -144,10 +149,22 @@ def register_knowledge_tools(reg) -> None:
         ("kg_why", "Facts that cite a node.", _props("node_id"), _why, "read"),
         ("kg_precedent", "Similar past facts for a decision, with ids to cite.", _props("query"), _precedent, "read"),
         (
+            "kg_schema",
+            "What this project's knowledge graph holds, counted from its rows: vertex labels and node "
+            "kinds, relationship types with counts and the labels they join, the properties a query "
+            "can read, and the repositories indexed. Read it before a kg_cypher query.",
+            _OBJECT,
+            _schema,
+            "read",
+        ),
+        (
             "kg_cypher",
             "Read-only Cypher over this project's knowledge graph (Apache AGE). Vertex labels are the "
-            "layers Code, Lifecycle, Ops and Knowledge; edge labels are kinds (calls, about, changed...). "
-            "Name one column per RETURN item. Writes are refused; 5 s and a row limit apply.",
+            "layers Code, Lifecycle, Ops and Knowledge; edge labels are kinds (calls, extends, "
+            "implements, about, changed...); kg_schema lists what this graph has, with counts. Use "
+            "relationships for structure questions (who implements, extends or calls X), not name "
+            "matching. A result with truncated=true is a sample, not every match. Name one column per "
+            "RETURN item. Writes are refused; 5 s and a row limit apply.",
             {"type": "object", "properties": {
                 "query": {"type": "string"},
                 "columns": {"type": "array", "items": {"type": "string"}},

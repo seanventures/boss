@@ -10299,6 +10299,8 @@ CREATE TABLE IF NOT EXISTS kg_repo_index (
   PRIMARY KEY (project_id, binding_id)
 );
 CREATE INDEX IF NOT EXISTS idx_kg_repo_index_due ON kg_repo_index(updated_at) WHERE due;
+-- The code_index.INDEXER_VERSION that wrote the last successful index: an older one is due again.
+ALTER TABLE kg_repo_index ADD COLUMN IF NOT EXISTS indexer_version INTEGER;
 CREATE OR REPLACE FUNCTION kg_repo_index_mark_due() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
   IF NEW.status = 'active' AND (TG_OP = 'INSERT' OR OLD.status IS DISTINCT FROM NEW.status
