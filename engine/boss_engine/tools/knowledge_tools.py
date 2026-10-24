@@ -1,6 +1,8 @@
-"""Knowledge graph MCP tools (BOSSAPP-622).
+"""Knowledge graph MCP tools (BOSSAPP-622; rules: BOSSAPP-768).
 
-Read tools stay read. kg_propose_fact writes an inferred fact and nothing else.
+Read tools stay read. kg_propose_fact writes an inferred fact and nothing else; kg_propose_rule
+writes a proposed (inferred) business rule and nothing else — only a person approves a rule.
+kg_rules reads approved rules, the trusted ones, and proposed rules only when asked, labelled.
 """
 from __future__ import annotations
 
@@ -140,6 +142,130 @@ def _propose(ctx, *, project_id, actor, args, policy=None, mode="on"):
         )
 
 
+_RULE_SCOPE = {
+    "type": "object",
+    "properties": {
+        "areas": {"type": "array", "items": {"type": "string"}},
+        "packages": {"type": "array", "items": {"type": "string"}},
+        "symbols": {"type": "array", "items": {"type": "string"}},
+    },
+    "additionalProperties": False,
+}
+_PROPOSE_RULE_PARAMS = {
+    "type": "object",
+    "properties": {
+        "title": {"type": "string", "description": "One line naming the rule."},
+        "statement": {"type": "string", "description": "The rule, as a business person would state it."},
+        "category": {"type": "string", "enum": ["validation", "calculation", "limit", "state_transition",
+                                                 "authorization", "other"]},
+        "scope": {**_RULE_SCOPE, "description": "What it governs: areas, packages, symbols (node keys "
+                  "or exact names). Empty: the evidence symbols."},
+        "evidence": {
+            "type": "array", "minItems": 1,
+            "description": "Where the code enforces it: the symbol (node key, id or exact name, as "
+                           "kg_symbol returned it), the lines inside it, and the excerpt.",
+            "items": {"type": "object", "properties": {
+                "symbol": {"type": "string"},
+                "lines": {"type": "array", "items": {"type": "integer"}, "minItems": 2, "maxItems": 2},
+                "excerpt": {"type": "string"}},
+                "required": ["symbol"], "additionalProperties": False},
+        },
+        "rationale": {"type": "string", "description": "Why the code shows this rule."},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "corrects": {"type": "string", "description": "The id of an approved rule this one corrects."},
+    },
+    "required": ["title", "statement", "category", "evidence", "confidence"],
+    "additionalProperties": False,
+}
+_RULES_PARAMS = {
+    "type": "object",
+    "properties": {
+        **_RULE_SCOPE["properties"],
+        "query": {"type": "string"},
+        "status": {"type": "string", "enum": ["approved", "proposed"],
+                   "description": "approved (default): trusted rules. proposed: not yet approved by a "
+                                  "person — untrusted, never to be relied on."},
+        "limit": {"type": "integer", "minimum": 1, "maximum": 50},
+    },
+    "additionalProperties": False,
+}
+_APPROVED = "Approved by a person: trusted input. Cite a rule as [R:<id>]."
+_PROPOSED = ("PROPOSED, NOT APPROVED: untrusted. A person has not reviewed these; never rely on "
+             "one, and never present it as a rule of the business.")
+
+
+def _brief_rule(rule: dict) -> dict:
+    return {
+        "id": rule["node"]["id"], "title": rule["title"], "statement": rule["statement"],
+        "category": rule["category"], "status": rule["status"], "confidence": rule["confidence"],
+        "scope": rule["scope"], "version": rule["version"],
+        "evidence": [{"symbol": e["symbol_key"], "label": e["label"], "path": e["path"], "lines": e["lines"]}
+                     for e in rule["evidence"]],
+    }
+
+
+def _strings(value) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+    return [str(v) for v in value if str(v or "").strip()] if isinstance(value, (list, tuple)) else []
+
+
+def _rules(ctx, *, project_id, actor, args, policy=None, mode="on"):
+    from ..services.knowledge.rules import RuleRefused, rule_payload, rules_for
+    from ..services.llm_telemetry import get_llm_context
+
+    status = str(args.get("status") or "approved").strip().lower()
+    with ctx.begin() as connection:
+        try:
+            ids = rules_for(connection, project_id=project_id, symbols=_strings(args.get("symbols")),
+                            packages=_strings(args.get("packages")), areas=_strings(args.get("areas")),
+                            query=str(args.get("query") or ""), status=status,
+                            limit=int(args.get("limit") or 20))
+        except (RuleRefused, LookupError) as error:
+            return {"error": str(error)}
+        rules = [_brief_rule(rule_payload(connection, project_id, rid)) for rid in ids]
+        context = get_llm_context() or {}
+        if rules and status == "approved" and context.get("run_id"):
+            # What a tool returned is "consulted" (spec §2.5): the run's edge to the rule.
+            _SERVICE.store.log_usage(
+                connection, project_id=project_id, run_id=str(context["run_id"]),
+                step=str(context.get("stage") or "tool"), fact_ids=[r["id"] for r in rules],
+                use_kind="consulted", workflow_run_id=context.get("workflow_run_id"),
+                code_task_run_id=context.get("code_task_run_id"), agent_role=context.get("role_key"))
+    return {"status": status, "trust": _APPROVED if status == "approved" else _PROPOSED,
+            "rules": rules, "count": len(rules)}
+
+
+def _propose_rule(ctx, *, project_id, actor, args, policy=None, mode="on"):
+    # The payload cannot choose a tier or a status, nor who proposed it: the rule is `inferred`
+    # and `proposed`, and its provenance is the LLM context's.
+    from ..services.knowledge.rules import RuleRefused, propose_rule
+    from ..services.llm_telemetry import get_llm_context
+
+    scope = args.get("scope") if isinstance(args.get("scope"), dict) else {}
+    evidence = args.get("evidence") if isinstance(args.get("evidence"), list) else []
+    role = (get_llm_context() or {}).get("role_key") or actor
+    with ctx.begin() as connection:
+        try:
+            with connection.begin_nested():
+                rule = propose_rule(
+                    connection, project_id=project_id, statement=str(args.get("statement") or ""),
+                    title=str(args.get("title") or ""), category=str(args.get("category") or ""),
+                    scope=scope, evidence=evidence, rationale=str(args.get("rationale") or ""),
+                    confidence=args.get("confidence") if args.get("confidence") is not None else 0.5,
+                    corrects=str(args.get("corrects") or "").strip() or None,
+                    actor_kind="agent", actor_ref=str(role or "") or None)
+        except (RuleRefused, LookupError) as error:
+            return {"error": str(error)}
+    status = rule["status"]
+    note = ("Proposed: a person reviews it in Graph › Rules review; until approved it is untrusted "
+            "and is not given to any agent." if status == "proposed" else
+            f"Already {status}: the same scope and statement is this existing rule.")
+    return {"rule": _brief_rule(rule), "note": note}
+
+
 def register_knowledge_tools(reg) -> None:
     specs = [
         ("kg_search", "Search knowledge facts in this project.", _props("query"), _search, "read"),
@@ -160,7 +286,7 @@ def register_knowledge_tools(reg) -> None:
         (
             "kg_cypher",
             "Read-only Cypher over this project's knowledge graph (Apache AGE). Vertex labels are the "
-            "layers Code, Lifecycle, Ops and Knowledge; edge labels are kinds (calls, dispatches_to, "
+            "layers Code, Lifecycle, Ops, Knowledge and Rules; edge labels are kinds (calls, dispatches_to, "
             "overrides, extends, implements, about, changed...); kg_schema lists what this graph has, with counts. Use "
             "relationships for structure questions (who implements, extends or calls X), not name "
             "matching. A result with truncated=true is a sample, not every match. Name one column per "
@@ -181,6 +307,27 @@ def register_knowledge_tools(reg) -> None:
             _propose,
             "write",
         ),
+        (
+            "kg_rules",
+            "The business rules that govern code: approved rules (trusted, cite as [R:<id>]) for the "
+            "symbols, packages or areas you name, or matching a query. Read them before changing or "
+            "judging code they govern. status=proposed lists rules no person has approved yet — "
+            "untrusted, never to be relied on.",
+            _RULES_PARAMS,
+            _rules,
+            "read",
+        ),
+        (
+            "kg_propose_rule",
+            "Propose a business rule you found in the code (a validation, calculation, limit, state "
+            "transition or authorization the code enforces), with evidence: the symbol and the lines "
+            "that enforce it. Every evidence symbol must be real. It is stored as proposed and untrusted "
+            "until a person approves it in Rules review; you cannot approve it. To correct an approved "
+            "rule that is wrong or incomplete, pass its id as corrects.",
+            _PROPOSE_RULE_PARAMS,
+            _propose_rule,
+            "write",
+        ),
     ]
     for name, description, parameters, handler, kind in specs:
         reg.register(
@@ -190,7 +337,8 @@ def register_knowledge_tools(reg) -> None:
                 parameters=parameters,
                 handler=_scoped(name, handler),
                 kind=kind,
-                # kg_propose_fact writes one `inferred` fact: quarantined, never binding, forgettable.
+                # kg_propose_fact writes one `inferred` fact, kg_propose_rule one proposed rule: both
+                # quarantined, never binding until a person approves, forgettable.
                 reversibility="safe",
                 requires_durable_workspace=True,
                 permission="knowledge:read",

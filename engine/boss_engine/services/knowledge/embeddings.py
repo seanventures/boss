@@ -20,7 +20,9 @@ from sqlalchemy.engine import Connection
 
 from .embedding_slot import NO_MODEL, UNCHECKED  # noqa: F401 — the reasons, in words
 
-EMBEDDED_KINDS = ("fact", "decision", "incident", "runbook", "spec", "review_finding")
+#: Rules (BOSSAPP-768) are embedded with the org's embedding model like any fact: a proposed rule
+#: so review can find its near-duplicates by meaning, an approved one so a task finds it.
+EMBEDDED_KINDS = ("fact", "decision", "incident", "runbook", "spec", "review_finding", "rule")
 #: Summaries embedded per project per tick: a few governed calls, never a burst.
 BATCH = 64
 

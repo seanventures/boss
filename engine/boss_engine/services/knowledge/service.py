@@ -264,7 +264,8 @@ class KnowledgeService:
         return {"trust_tier": "inferred", **result}
 
     def promote(
-        self, connection: Connection, *, project_id: str, fact_id: str, actor_kind: str
+        self, connection: Connection, *, project_id: str, fact_id: str, actor_kind: str,
+        actor_ref: Optional[str] = None,
     ) -> dict[str, Any]:
         self.store.set_trust(
             connection,
@@ -279,6 +280,7 @@ class KnowledgeService:
             action="knowledge.promote",
             entity_id=fact_id,
             actor_kind=actor_kind,
+            actor_ref=actor_ref,
             detail={},
         )
         from .age import after_write
@@ -287,7 +289,8 @@ class KnowledgeService:
         return {"id": fact_id, "trust_tier": "approved"}
 
     def reject(
-        self, connection: Connection, *, project_id: str, fact_id: str, actor_kind: str
+        self, connection: Connection, *, project_id: str, fact_id: str, actor_kind: str,
+        actor_ref: Optional[str] = None,
     ) -> dict[str, Any]:
         self.store.close_validity(
             connection,
@@ -302,6 +305,7 @@ class KnowledgeService:
             action="knowledge.reject",
             entity_id=fact_id,
             actor_kind=actor_kind,
+            actor_ref=actor_ref,
             detail={},
         )
         from .age import after_write
@@ -316,6 +320,7 @@ class KnowledgeService:
         project_id: str,
         fact_id: str,
         actor_kind: str,
+        actor_ref: Optional[str] = None,
     ) -> dict[str, Any]:
         self.store.delete_node(
             connection, project_id=project_id, node_id=fact_id, actor_kind=actor_kind
@@ -326,6 +331,7 @@ class KnowledgeService:
             action="knowledge.forget",
             entity_id=fact_id,
             actor_kind=actor_kind,
+            actor_ref=actor_ref,
             detail={},
         )
         return {"forgotten": [fact_id]}

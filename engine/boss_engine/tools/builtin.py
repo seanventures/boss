@@ -8060,6 +8060,9 @@ _DISCUSS_OPERATIONS_TOOLS: frozenset[str] = frozenset({
     # "Remember that ..." from chat: one fact, stored `inferred` (quarantined, forgettable, never
     # above a governed or approved fact) until a person promotes it (BOSSAPP-622).
     "kg_propose_fact",
+    # "That's a rule: ..." from chat: one business rule, with code evidence, stored proposed and
+    # untrusted until a person approves it in Rules review (BOSSAPP-768). Chat cannot approve it.
+    "kg_propose_rule",
     # "Scan my app" from chat: the pinned scanners on the app's own code, BOSS's own targets only.
     "run_security_scan",
     # SETUP REPAIR, because a diagnosis with no matching capability is a loop — and setup is

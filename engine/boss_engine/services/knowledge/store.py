@@ -50,6 +50,8 @@ EDGE_KINDS = frozenset({
     "consulted", "reused", "proposed_by", "produced", "ruled_out", "corrects", "governs",
 })
 TRUST_TIERS = frozenset({"observed", "governed", "inferred", "approved"})
+#: kg_usage.use_kind (spec §2.5; the CHECK in db/schema.sql block "BOSSAPP-KGR rules + usage").
+USE_KINDS = frozenset({"shown", "consulted", "cited", "reused"})
 _IDENT_SPLIT = re.compile(r"[^A-Za-z0-9_]+")
 _IDENT_WORD = re.compile(r"[A-Z]+(?=[A-Z][a-z])|[A-Z]?[a-z]+|[A-Z]+|[0-9]+")
 
@@ -1539,17 +1541,27 @@ class PostgresKnowledgeStore:
         run_id: str,
         step: str,
         fact_ids: list[str],
+        use_kind: str = "shown",
+        workflow_run_id: Optional[str] = None,
+        code_task_run_id: Optional[str] = None,
+        agent_role: Optional[str] = None,
     ) -> int:
+        """Record that a run used these items (spec §2.5): ``shown`` (in the injected pack, no
+        edge), ``consulted`` (a tool returned it), ``cited`` (the output named it), ``reused``."""
         self.ensure_schema(connection)
         self._org_id(connection, project_id, None)
+        if use_kind not in USE_KINDS:
+            raise ValueError(f"unknown use_kind {use_kind!r}")
         written = 0
         for fact_id in fact_ids:
             self._node_in_project(connection, project_id, fact_id)
             connection.execute(
                 text(
                     """
-                    INSERT INTO kg_usage (id, project_id, run_id, step, fact_id)
-                    VALUES (:id, :project_id, :run_id, :step, :fact_id)
+                    INSERT INTO kg_usage (id, project_id, run_id, step, fact_id, use_kind,
+                                          workflow_run_id, code_task_run_id, agent_role)
+                    VALUES (:id, :project_id, :run_id, :step, :fact_id, :use_kind,
+                            :workflow_run_id, :code_task_run_id, :agent_role)
                     """
                 ),
                 {
@@ -1558,6 +1570,10 @@ class PostgresKnowledgeStore:
                     "run_id": run_id,
                     "step": step,
                     "fact_id": fact_id,
+                    "use_kind": use_kind,
+                    "workflow_run_id": workflow_run_id,
+                    "code_task_run_id": code_task_run_id,
+                    "agent_role": agent_role,
                 },
             )
             connection.execute(

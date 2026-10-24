@@ -199,6 +199,14 @@ def mount_platform_routers(app: FastAPI) -> None:
 
     app.include_router(projects_archive_router)
 
+    # BOSSAPP-768 — Rules review: the business rules agents propose, approved by a person
+    try:
+        from .knowledge_rules import router as knowledge_rules_router
+
+        app.include_router(knowledge_rules_router)
+    except ImportError:
+        pass
+
     # BOSS-348 — earned autonomy score + value-based schedule preference
     try:
         from .earned_autonomy import router as earned_autonomy_router

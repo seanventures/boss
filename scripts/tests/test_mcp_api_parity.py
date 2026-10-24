@@ -148,5 +148,9 @@ def test_operator_boundary_preserves_human_and_api_policy_gates():
     assert rows[("POST", "/v1/projects")]["mcp_status"] == "human_confirmation_gated"
     assert sum(row["mcp_status"] == "human_confirmation_gated"
                for row in community["operations"]) == 72
+    # +3 operator-only: Rules review's approve / edit / reject (BOSSAPP-768), a person's step-up.
+    for action in ("approve", "edit", "reject"):
+        assert rows[("POST", f"/v1/knowledge/view/rules/{{rule_id}}/{action}")]["mcp_status"] == (
+            "operator_only_unavailable")
     assert sum(row["mcp_status"] == "operator_only_unavailable"
-               for row in community["operations"]) == 68
+               for row in community["operations"]) == 71

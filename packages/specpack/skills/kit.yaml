@@ -88,7 +88,7 @@ skills:
       required_permissions: [repo_read]
     policy:
       requires_receipt: false
-      tools: [kg_symbol, kg_callers, kg_blast_radius, kg_why, kg_search, kg_precedent, kg_cypher, kg_schema]
+      tools: [kg_symbol, kg_callers, kg_blast_radius, kg_why, kg_search, kg_precedent, kg_cypher, kg_schema, kg_rules]
 
   # PROPOSE A FACT: every agent holds this (the baseline). It was granted to six named roles
   # (2026-10-21); every shipped agent has the same base (operator, 2026-10-23). What it writes is
@@ -98,7 +98,7 @@ skills:
     risk_tier: 0
     mock_mode: false
     load: eager
-    description: Propose a fact you learned to the knowledge graph — stored as inferred until a person approves it.
+    description: Propose a fact you learned, or a business rule you found in the code, to the knowledge graph — stored as inferred/proposed until a person approves it.
     data_boundary: internal
     input_schema:
       bundle_tool: string
@@ -110,7 +110,7 @@ skills:
       required_permissions: [repo_read]
     policy:
       requires_receipt: false
-      tools: [kg_propose_fact]
+      tools: [kg_propose_fact, kg_propose_rule]
 
   # PROPOSE A FIX: every agent holds this too. The agent proposes a BOSS action with exact
   # arguments; a person approves it (a hold-default decision in a run, a button in chat) and it

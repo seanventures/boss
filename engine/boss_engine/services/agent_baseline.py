@@ -90,14 +90,19 @@ PROPOSE_TOOLS: tuple[str, ...] = ("propose_action",)
 #: a change can break, and the history behind it. Every role holds it; what a stage may read of
 #: it is the stage's knowledge scope (services/knowledge/scopes.py).
 KNOWLEDGE_TOOLS: tuple[str, ...] = ("kg_symbol", "kg_callers", "kg_blast_radius", "kg_why",
-                                     "kg_search", "kg_precedent", "kg_cypher", "kg_schema")
+                                     "kg_search", "kg_precedent", "kg_cypher", "kg_schema",
+                                     # the approved business rules that govern code (BOSSAPP-768)
+                                     "kg_rules")
 
 #: `knowledge.propose` offers `kg_propose_fact`: the one bundle that writes. What it writes is
 #: always `inferred` (quarantined, forgettable, never above governed or approved), so it is
 #: tier 0. It is in the baseline: it was granted to six named roles (2026-10-21), and a shipped
 #: agent is not handicapped by a role list in code (operator, 2026-10-23). The governance on
 #: what it writes is the same for every agent.
-PROPOSE_FACT_TOOLS: tuple[str, ...] = ("kg_propose_fact",)
+PROPOSE_FACT_TOOLS: tuple[str, ...] = ("kg_propose_fact",
+                                       # a business rule found in code, proposed for a person to
+                                       # approve; the agent can never approve it (BOSSAPP-768)
+                                       "kg_propose_rule")
 
 #: Bundles allowed to offer a write tool. Each such tool must declare reversibility "safe".
 WRITE_BUNDLES: frozenset[str] = frozenset({"knowledge.propose"})

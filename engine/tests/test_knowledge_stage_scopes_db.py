@@ -1,6 +1,8 @@
 """Stage knowledge scopes are enforced where data is read (BOSSAPP-622; PR #14's PHASE3 "Next" 5).
 
-Breaks covered: a triage pack or tool that reads the code layer; an RCA read that walks the whole
+Breaks covered: a triage pack or tool that reads the code layer; a stage that cannot read
+approved rules, or a declaration that cannot refuse them; the product layer drifting between the
+engine and the console; an RCA read that walks the whole
 code graph instead of the incident's seeds, or past its hop and node bounds; a review read wider
 than the diff and one hop; a declared step policy with a key nobody reads; the generated layer
 column drifting from scopes.LAYER_KINDS; a non-code search whose cost grows with the code graph.
@@ -162,6 +164,53 @@ def test_the_generated_layer_column_matches_the_layer_kinds():
     assert scopes.layer_of("something_new") == "knowledge"
 
 
+def test_the_live_column_is_the_layer_kinds_for_every_kind(connection):
+    """The database's generated column, not only the text: every node kind the store accepts lands
+    in the layer scopes.layer_of names (the KGR block rebuilt the column for `rules`)."""
+    from boss_engine.services.knowledge.store import NODE_KINDS
+
+    for kind in sorted(NODE_KINDS):
+        node = STORE.upsert_node(connection, project_id="proj_sc", kind=kind, node_key=f"{kind}:layer-probe",
+                                 name=kind, body="", trust_tier="observed", actor_kind="system")
+        assert _layers(connection, [node]) == [scopes.layer_of(kind)], kind
+    assert scopes.layer_of("rule") == "rules"
+
+
+def test_every_default_stage_reads_approved_rules_and_a_declaration_can_refuse_them():
+    for name, policy in scopes.DEFAULTS.items():
+        assert "rules" in policy.layers, name
+        assert scopes.offers_tool(policy, "kg_rules") and scopes.offers_tool(policy, "kg_propose_rule")
+    assert "rules" in scopes.policy_for(step={"kind": "something_custom", "knowledge": {"budget_tokens": 10}}).layers
+    refused = scopes.policy_for(step={"kind": "triage", "knowledge": {"layers": ["ops", "lifecycle"]}})
+    assert not scopes.offers_tool(refused, "kg_rules")
+
+
+def test_the_product_layer_is_one_mapping_on_both_sides():
+    """scopes.product_layer (engine) and productLayerOf (apps/web/lib/kg-view-types.ts) agree on
+    every kind either side names; the SQL CASE says the same."""
+    from boss_engine.services.knowledge.store import NODE_KINDS
+
+    ts = (ROOT / "apps" / "web" / "lib" / "kg-view-types.ts").read_text()
+
+    def ts_list(name: str) -> set[str]:
+        block = re.search(rf"{name}\s*=\s*(?:new Set\()?\[([^\]]*)\]", ts, re.S)
+        assert block, name
+        return set(re.findall(r'"([a-z_]+)"', block.group(1)))
+
+    assert ts_list("KG_LEARNING_KINDS") == scopes.LEARNED_KINDS
+    assert ts_list("KG_ANCHOR_KINDS") == scopes.ANCHOR_KINDS
+    assert ts_list("CODE_TOPOLOGY") == scopes.CODE_TOPOLOGY_KINDS
+    assert ts_list("CODE_STORAGE") == scopes.LAYER_KINDS["code"]
+    assert ts_list("DOMAIN") == scopes.DOMAIN_KINDS
+    assert scopes.product_layer("rule") == "rules" and scopes.product_layer("symbol") == "code"
+    assert scopes.product_layer("service") == "code" and scopes.product_layer("run") == "learning"
+    assert scopes.product_layer("person") is None
+    case = scopes.product_layer_sql_case("k")
+    for kind in sorted(NODE_KINDS):
+        layer = scopes.product_layer(kind)
+        assert (f"'{kind}'" in case) == (layer is not None), kind
+
+
 def _buffers(connection, sql: str, params: dict) -> int:
     """Shared pages the whole plan touched (the root node's Buffers line)."""
     plan = connection.execute(text("EXPLAIN (ANALYZE, BUFFERS, FORMAT TEXT) " + sql), params).scalars().all()
@@ -182,6 +231,10 @@ def test_a_non_code_search_does_not_read_the_code_rows(connection):
     # The tables are tiny here, so the planner would scan them whole either way; at size it picks
     # the index. Disable the sequential scan to compare what the index reads.
     connection.execute(text("SET LOCAL enable_seqscan = off"))
+    # Both measurements on fresh statistics: the index also holds the dead entries every earlier
+    # test's rolled-back fixture left, and a plan chosen on stale statistics before the insert
+    # against one chosen on fresh ones after it compared two plans, not two table sizes.
+    connection.execute(text("ANALYZE kg_nodes"))
     before = _buffers(connection, sql, params)
     connection.execute(text(
         "INSERT INTO kg_nodes (id, project_id, kind, node_key, name, body, search_tsv) "

@@ -130,7 +130,9 @@ def _manage(body: ManageBody, action, **kwargs) -> dict[str, Any]:
     try:
         with begin(_engine) as connection:
             _actor(connection, body.project_id, body.actor, MANAGE)
-            return action(connection, project_id=body.project_id, actor_kind="person", **kwargs)
+            # actor_ref: who did it, on kg_audit (the verified actor), not only that a person did.
+            return action(connection, project_id=body.project_id, actor_kind="person",
+                          actor_ref=body.actor, **kwargs)
     except Exception as error:  # noqa: BLE001
         raise _http(error) from error
 

@@ -139,6 +139,9 @@ _OPERATOR_ONLY_EXACT = frozenset({
     "/v1/budget/allocations", "/v1/budget/set_intensity",
     "/v1/console/v2/autonomy", "/v1/console/v2/autonomy/apply",
     "/v1/enterprise/identity-providers",
+    # Editing a business rule approves the new version in the same act (BOSSAPP-768): a person's
+    # review, like .../approve and .../reject beside it, never an MCP tool.
+    "/v1/knowledge/view/rules/{rule_id}/edit",
 } | {path for _, path in ROSTER_AUTHORITY_WRITES})
 _GOVERNED_EFFECT_ALLOWLIST = frozenset({
     ("POST", "/v1/changesets/{changeset_id}/apply"),

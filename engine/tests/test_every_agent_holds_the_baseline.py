@@ -61,7 +61,8 @@ def test_every_agent_holds_the_knowledge_graph():
     on it, what a change breaks and why it is so; every tool it offers is a read."""
     assert "knowledge.read" in ab.BASELINE_SKILLS
     assert ab.bundles()["knowledge.read"] == ("kg_symbol", "kg_callers", "kg_blast_radius", "kg_why",
-                                              "kg_search", "kg_precedent", "kg_cypher", "kg_schema")
+                                              "kg_search", "kg_precedent", "kg_cypher", "kg_schema",
+                                              "kg_rules")
     reg = _registry()
     assert all(reg.get(t).kind == "read" for t in ab.KNOWLEDGE_TOOLS)
 
@@ -75,11 +76,14 @@ def test_kg_propose_fact_is_in_every_agents_baseline():
                      if "knowledge.propose" in (((yaml.safe_load(p.read_text()) or {}).get("permissions") or {})
                                                 .get("allowed_skills") or []))
     assert holders == []
-    assert ab.bundles()["knowledge.propose"] == ("kg_propose_fact",)
-    spec = ab.bundle_tool_spec("knowledge.propose", "kg_propose_fact")
-    assert spec is not None and spec.kind == "write" and spec.reversibility == "safe"
-    assert all("kg_propose_fact" not in tools for skill, tools in ab.bundles().items()
-               if skill != "knowledge.propose")                               # no other bundle offers it
+    # BOSSAPP-768: proposing a business rule rides the same bundle — every agent may propose one,
+    # none may approve one (knowledge:review is never delegable).
+    assert ab.bundles()["knowledge.propose"] == ("kg_propose_fact", "kg_propose_rule")
+    for tool in ab.PROPOSE_FACT_TOOLS:
+        spec = ab.bundle_tool_spec("knowledge.propose", tool)
+        assert spec is not None and spec.kind == "write" and spec.reversibility == "safe", tool
+        assert all(tool not in tools for skill, tools in ab.bundles().items()
+                   if skill != "knowledge.propose")                           # no other bundle offers it
     from boss_engine.services.skill_executors import registered_executor_ids
 
     assert "knowledge.propose" in set(registered_executor_ids())
